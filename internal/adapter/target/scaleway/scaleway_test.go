@@ -406,9 +406,6 @@ func TestCatalogStoragePriceCoverage(t *testing.T) {
 
 	tests := []struct {
 		offering string
-		// wantPrice is true for the offerings issue #219 requires a storage price
-		// on, which a SOURCES.md reason may not waive.
-		wantPrice bool
 	}{
 		{offering: "Elastic Metal"},
 	}
@@ -428,13 +425,6 @@ func TestCatalogStoragePriceCoverage(t *testing.T) {
 			}
 
 			if len(missing) == 0 {
-				return
-			}
-
-			if tc.wantPrice {
-				t.Errorf("offering %s has no per-GiB storage price in region(s) %s, want one in each of its regions %v: extra storage beyond what its plans include cannot be priced otherwise (issue #219)",
-					text.Quote(o.Name), strings.Join(missing, ", "), o.Regions)
-
 				return
 			}
 
@@ -494,6 +484,16 @@ func TestElasticMetalExtraStorageIsNotEstimated(t *testing.T) {
 	if got.Estimated {
 		t.Errorf("For() Estimated = true with monthly %v, want false: no storage price means no estimate, never one at 0 EUR",
 			got.Monthly)
+	}
+
+	if got.Plan == nil {
+		t.Fatalf("For() Plan = nil, want the plan the resource fits: %s, whose disks its 2100 GiB exceed",
+			text.Quote("EM-A410X-SSD"))
+	}
+
+	if got.Plan.Name != "EM-A410X-SSD" {
+		t.Errorf("For() Plan.Name = %s, want %s: it is the plan covering 8 vCPU and 64 GiB, whose 2040 GiB of disks the resource's 2100 GiB exceed",
+			text.Quote(got.Plan.Name), text.Quote("EM-A410X-SSD"))
 	}
 
 	if got.Offering != "Elastic Metal" {
