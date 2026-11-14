@@ -62,6 +62,12 @@ type Offering struct {
 	// once. In a Catalog they are sorted by their first region, the every-region
 	// fee first, and nil when the offering charges no fixed fee.
 	FixedFees []Price
+	// PlanBillingCapHours is the most hours a month the target bills for one
+	// instance of one of the offering's plans, whose monthly prices are the price
+	// of that many hours; 0 means uncapped, the prices standing for 730 hours.
+	// It applies to plan prices only, never to StoragePrices or FixedFees
+	// (ADR 0029). In a Catalog it is 0 or from 1 to MaxBillingCapHours.
+	PlanBillingCapHours int64
 }
 
 // FixedFee returns the fixed monthly fee the offering charges per instance in
@@ -672,6 +678,11 @@ func normalise(o Offering) (Offering, error) {
 	fixedFees, err := normaliseFixedFees(o.FixedFees, regions)
 	if err != nil {
 		return Offering{}, err
+	}
+
+	if o.PlanBillingCapHours < 0 || o.PlanBillingCapHours > MaxBillingCapHours {
+		return Offering{}, fmt.Errorf("planBillingCapHours: %w: %d, want 0 (uncapped) or 1 to %d",
+			ErrInvalidBillingCap, o.PlanBillingCapHours, MaxBillingCapHours)
 	}
 
 	o = clone(o)

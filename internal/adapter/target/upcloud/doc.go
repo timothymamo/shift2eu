@@ -8,9 +8,11 @@
 // page, and the product pages that describe its plans and features) and from
 // its pricing page, https://upcloud.com/pricing/. Its plans and prices are
 // monthly EUR list prices excluding VAT (ADR 0024): the pricing page's figure
-// for a plan capped at 672 hours a month, and for a service billed hourly
-// without a cap the page's 30-day figure converted to 730 hours (x 730 / 720,
-// rounded half up to 4 decimal places). The adapter makes no network calls and
+// for a plan capped at 672 hours a month, recorded as the offering's
+// planBillingCapHours on Cloud Servers and both Managed Kubernetes offerings
+// (ADR 0029), and for a service billed hourly without a cap the page's 30-day
+// figure converted to 730 hours (x 730 / 720, rounded half up to 4 decimal
+// places). The adapter makes no network calls and
 // needs no credentials. SOURCES.md records where each offering, capability,
 // zone, plan and price comes from, and the licence of each source. A region of
 // the catalog is an UpCloud zone, one data centre such as de-fra1; only zones

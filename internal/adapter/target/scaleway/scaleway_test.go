@@ -171,6 +171,14 @@ func TestCatalogPlansAndPrices(t *testing.T) {
 				text.Quote(o.Name))
 		}
 
+		// ADR 0029: a plan billing cap is UpCloud's alone. Scaleway publishes every
+		// recorded price per hour and calls its monthly figure that price × 730,
+		// with no maximum, so no offering may cap the hours it bills a plan for.
+		if o.PlanBillingCapHours != 0 {
+			t.Errorf("offering %s has PlanBillingCapHours %d, want 0: Scaleway records no monthly billing cap",
+				text.Quote(o.Name), o.PlanBillingCapHours)
+		}
+
 		// A plan that includes no storage leaves every GiB of the resource to be
 		// priced on its own: under ADR 0024 an empty storagePrices is not estimated,
 		// never zero, so a sized resource on such a plan could not be estimated at

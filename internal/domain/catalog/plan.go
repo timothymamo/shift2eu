@@ -32,6 +32,9 @@ const (
 	MaxPlanMemoryMilliGiB = (1 << 24) * 1_000
 	// MaxIncludedStorageGiB is the most storage a plan may include, in GiB.
 	MaxIncludedStorageGiB = 1 << 30
+	// MaxBillingCapHours is the largest PlanBillingCapHours: the hours of a
+	// 31-day month.
+	MaxBillingCapHours = 744
 )
 
 // String formats a as a plain decimal: the integer part, a point, and the
@@ -97,6 +100,9 @@ var (
 	// ErrMissingFee is returned for an offering whose fixed fees leave one of its
 	// regions without a fee: a region with no fee would read as free.
 	ErrMissingFee = errors.New("offering region has no fixed fee")
+	// ErrInvalidBillingCap is returned for an offering whose PlanBillingCapHours
+	// is negative or above MaxBillingCapHours.
+	ErrInvalidBillingCap = errors.New("invalid plan billing cap")
 )
 
 // regionSet holds an offering's regions, each once, so a price region is

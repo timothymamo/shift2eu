@@ -31,7 +31,9 @@
 // the same region (a price with no region applies to every one). An offering's
 // fixed fees, its monthly fee per instance such as a Kubernetes control plane
 // (ADR 0026), are a price list too, and when there are any they must cover
-// every region of the offering, so no region reads as free by omission. It keeps each
+// every region of the offering, so no region reads as free by omission. An
+// offering's PlanBillingCapHours, the most hours a month its plans are billed
+// (ADR 0029), is 0 for uncapped or from 1 to MaxBillingCapHours. It keeps each
 // offering's plans sorted by name and every price list sorted by first region,
 // the every-region price first, and a snapshot's default region as given. A
 // zero Catalog has not been validated; later layers only receive catalogs built

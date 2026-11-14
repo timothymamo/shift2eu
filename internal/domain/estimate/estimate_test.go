@@ -149,8 +149,9 @@ func computeResource(size *inventory.Size, usage *inventory.Usage) inventory.Res
 }
 
 // TestFor pins one estimate per priced category, the plan choice and its tie
-// breaks, every "not estimated" reason and its precedence, and the exact
-// arithmetic with the display rounding that follows it.
+// breaks, every "not estimated" reason and its precedence, the plan share hours
+// scale a plan price by (capped by an offering's PlanBillingCapHours, ADR 0029)
+// and the exact arithmetic with the display rounding that follows it.
 func TestFor(t *testing.T) {
 	t.Parallel()
 
@@ -329,6 +330,208 @@ func TestFor(t *testing.T) {
 			},
 			wantMonthly: "52.20",
 			wantExact:   "261/5",
+		},
+		// ADR 0029: an offering may cap the hours a month it bills a plan for, and
+		// its plan prices are then the price of that many hours. The cap applies to
+		// plan prices alone, never to fixed fees or storage, and an offering without
+		// a cap estimates as it always did.
+		{
+			name:      "plan billing cap: half the cap costs half the plan price",
+			resource:  computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, &inventory.Usage{HoursPerMonth: f(336)}),
+			offerings: []catalog.Offering{cappedComputeOffering(672)},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:    testutil.PricedDefaultRegion,
+				Estimated: true,
+				Offering:  "Example Compute Plans",
+				Plan:      pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				// 38.00 × min(336, 672) / 672 = 19.00, exactly half.
+				Monthly:      estimate.FromAmount(190000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(190000)},
+				CountAssumed: true,
+			},
+			wantMonthly:   "19.00",
+			wantExact:     "19",
+			wantPlanExact: "19",
+		},
+		{
+			name:      "plan billing cap: exactly the cap costs the whole plan price",
+			resource:  computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, &inventory.Usage{HoursPerMonth: f(672)}),
+			offerings: []catalog.Offering{cappedComputeOffering(672)},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Compute Plans",
+				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				Monthly:      estimate.FromAmount(380000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(380000)},
+				CountAssumed: true,
+			},
+			wantMonthly:   "38.00",
+			wantExact:     "38",
+			wantPlanExact: "38",
+		},
+		{
+			name:      "plan billing cap: a 730-hour month costs the whole plan price",
+			resource:  computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, &inventory.Usage{HoursPerMonth: f(730)}),
+			offerings: []catalog.Offering{cappedComputeOffering(672)},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Compute Plans",
+				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				Monthly:      estimate.FromAmount(380000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(380000)},
+				CountAssumed: true,
+			},
+			wantMonthly:   "38.00",
+			wantExact:     "38",
+			wantPlanExact: "38",
+		},
+		{
+			// 744 is more hours than the cap, and the plan is never priced above its
+			// monthly price: the share stops at 1.
+			name:      "plan billing cap: 744 hours never costs more than the plan price",
+			resource:  computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, &inventory.Usage{HoursPerMonth: f(744)}),
+			offerings: []catalog.Offering{cappedComputeOffering(672)},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Compute Plans",
+				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				Monthly:      estimate.FromAmount(380000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(380000)},
+				CountAssumed: true,
+			},
+			wantMonthly:   "38.00",
+			wantExact:     "38",
+			wantPlanExact: "38",
+		},
+		{
+			// Hours not given are the average month of 730 hours, which reaches the
+			// cap: the whole plan price, and no hours are assumed beyond ADR 0025.
+			name:      "plan billing cap: no hoursPerMonth costs the whole plan price",
+			resource:  computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, nil),
+			offerings: []catalog.Offering{cappedComputeOffering(672)},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Compute Plans",
+				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				Monthly:      estimate.FromAmount(380000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(380000)},
+				CountAssumed: true,
+				HoursAssumed: true,
+			},
+			wantMonthly:   "38.00",
+			wantExact:     "38",
+			wantPlanExact: "38",
+		},
+		{
+			// The same offering without a cap keeps the old arithmetic: the plan
+			// price is the price of 730 hours, so 336 hours cost 38 × 336 / 730.
+			name:      "no plan billing cap: 336 hours scale the plan price by 336/730",
+			resource:  computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, &inventory.Usage{HoursPerMonth: f(336)}),
+			offerings: []catalog.Offering{cappedComputeOffering(0)},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Compute Plans",
+				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				Monthly:      estimate.Ratio(6384, 365),
+				Breakdown:    estimate.Breakdown{Plan: estimate.Ratio(6384, 365)},
+				CountAssumed: true,
+			},
+			wantMonthly:   "17.49",
+			wantExact:     "6384/365",
+			wantPlanExact: "6384/365",
+		},
+		{
+			name: "plan billing cap: the count multiplies the capped plan price",
+			resource: computeResource(&inventory.Size{
+				VCPUs:     f(2),
+				MemoryGiB: f(4),
+				Count:     n(3),
+			}, &inventory.Usage{HoursPerMonth: f(336)}),
+			offerings: []catalog.Offering{cappedComputeOffering(672)},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:    testutil.PricedDefaultRegion,
+				Estimated: true,
+				Offering:  "Example Compute Plans",
+				Plan:      pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				// 38.00 × 3 × 336 / 672 = 57.00.
+				Monthly:   estimate.FromAmount(570000),
+				Breakdown: estimate.Breakdown{Plan: estimate.FromAmount(570000)},
+			},
+			wantMonthly:   "57.00",
+			wantExact:     "57",
+			wantPlanExact: "57",
+		},
+		{
+			// The cap applies to plan prices only: the fixed fee stays fee × hours /
+			// 730 — 9 × 336 / 730, not 9 × 336 / 672 — and storage is never scaled by
+			// hours at all (ADR 0026, ADR 0029).
+			name: "plan billing cap: the fixed fee keeps hours/730 and storage is unscaled",
+			resource: inventory.Resource{
+				ID:       "cluster-example",
+				RawType:  "AWS::EKS::Cluster",
+				Category: taxonomy.KubernetesManaged,
+				Region:   "eu-west-1",
+				Size: &inventory.Size{
+					VCPUs:      f(4),
+					MemoryGiB:  f(8),
+					StorageGiB: f(80),
+					Count:      n(3),
+				},
+				Usage: &inventory.Usage{HoursPerMonth: f(336)},
+			},
+			offerings: []catalog.Offering{kubernetesOfferingWithCap(672)},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:    testutil.PricedDefaultRegion,
+				Estimated: true,
+				Offering:  "Example Kubernetes",
+				Plan:      pricedPlan("NK-1", 4, 8000, 50, 300000),
+				// 30 × 3 × 336/672 = 45; (80 − 50) × 0.03 × 3 = 2.7, unscaled;
+				// the fee 9 × 336/730 = 1512/365, not 9 × 336/672 = 4.5.
+				Monthly: estimate.Ratio(7569, 146),
+				Breakdown: estimate.Breakdown{
+					Plan:     estimate.FromAmount(450000),
+					Storage:  estimate.Ratio(27, 10),
+					FixedFee: estimate.Ratio(1512, 365),
+				},
+			},
+			wantMonthly:   "51.84",
+			wantExact:     "7569/146",
+			wantPlanExact: "45",
+		},
+		{
+			// The plan choice compares monthly list prices, not the hours-scaled
+			// cost a cap gives them (ADR 0029): the capped plan at 38.00 is chosen
+			// though 336 hours cost 19.00 on it and only 18.41 (40 × 336/730) on the
+			// uncapped 40.00 plan.
+			name:      "plan billing cap: the plan choice compares monthly list prices, not scaled costs",
+			resource:  computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, &inventory.Usage{HoursPerMonth: f(336)}),
+			offerings: []catalog.Offering{cappedComputeOffering(672), uncappedComputeOffering()},
+			region:    testutil.PricedDefaultRegion,
+			want: estimate.Estimate{
+				Region:       testutil.PricedDefaultRegion,
+				Estimated:    true,
+				Offering:     "Example Compute Plans",
+				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				Monthly:      estimate.FromAmount(190000),
+				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(190000)},
+				CountAssumed: true,
+			},
+			wantMonthly:   "19.00",
+			wantExact:     "19",
+			wantPlanExact: "19",
 		},
 		{
 			// Database storage is the service's data, not one volume per node
@@ -1196,6 +1399,30 @@ func namedComputeOffering(name string, plans ...catalog.Plan) catalog.Offering {
 		Regions:    []string{testutil.PricedDefaultRegion},
 		Plans:      plans,
 	}
+}
+
+// cappedComputeOffering sells one compute.vm plan at 38.00 EUR a month and bills
+// its plans for at most capHours hours a month (ADR 0029); 0 means uncapped.
+func cappedComputeOffering(capHours int64) catalog.Offering {
+	o := namedComputeOffering("Example Compute Plans", plan("CAP-M", 2, 4000, 20, 380000))
+	o.PlanBillingCapHours = capHours
+
+	return o
+}
+
+// uncappedComputeOffering sells one compute.vm plan at 40.00 EUR a month and
+// bills it without a cap (ADR 0029): its plan price is the price of 730 hours.
+func uncappedComputeOffering() catalog.Offering {
+	return namedComputeOffering("Example Uncapped Compute Plans", plan("UNC-M", 2, 4000, 20, 400000))
+}
+
+// kubernetesOfferingWithCap is kubernetesOffering with its node plans billed for
+// at most capHours hours a month (ADR 0029); 0 means uncapped.
+func kubernetesOfferingWithCap(capHours int64) catalog.Offering {
+	o := kubernetesOffering()
+	o.PlanBillingCapHours = capHours
+
+	return o
 }
 
 // singlePlanOffering is a compute.vm offering sold in the default region with one
