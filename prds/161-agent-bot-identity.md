@@ -81,8 +81,9 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
   `run list/view/watch`, `issue create/view`, and the `release-tag` skill's reads of rulesets, environments
   and releases. Any call that needs a permission the App lacks is listed with the permission, and the
   maintainer's App permissions in `docs/dev-environment.md` cover them. *The calls and their permissions
-  are listed in ADR 0029 (d) and `docs/dev-environment.md` (Attestations read and Actions write added; the
-  rulesets' bypass lists stay a maintainer check); that each works is checked at runbook step 3.*
+  are listed in ADR 0029 (d) and `docs/dev-environment.md` (Attestations read added; Actions stays read, so
+  `gh run rerun` and the rulesets' bypass lists stay maintainer steps); that each works is checked at
+  runbook step 3.*
 - [ ] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
   `true`). No ruleset requires signed commits. *Nothing in milestone 1 signs a commit (ADR 0029); the
   repository's rulesets and `main`'s commits are checked at runbook step 3.*
@@ -154,10 +155,12 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
    the `gh` and git credential path with the `GITHUB_TOKEN` fallback, the bot git author,
    `make vm-env`/`vm-init` changes, tests, an ADR (identity, token model, why not a machine user, why the
    reviewer never approves), and `docs/dev-environment.md`. Merged under the old token; nothing is
-   enforced yet.
+   enforced yet. *Code merged; criteria marked "runbook step 3" are checked there.*
 2. [ ] **Gate checks, CODEOWNERS, skills and docs.** `.github/CODEOWNERS`, the `Protect main` check with
    its transition flag, `pr-create` and `release-tag` changes, CLAUDE.md, `docs/contributing/agents.md`,
-   the switch-over runbook. Depends on 1.
+   the switch-over runbook. Depends on 1. *Note from milestone 1 (ADR 0029, d): the App keeps Actions
+   read, so `release-tag` hands a re-run of a failed run (`gh run rerun <id>`) to the maintainer instead
+   of running it.*
 3. [ ] **Remove the maintainer's token.** After the maintainer's runbook step 6: drop `GITHUB_TOKEN` from
    `VM_ENV` and the fallback, turn the check's transition flag off, update the docs. Opened by the App and
    approved by the maintainer: the first change through the new gate. Depends on 2 and the runbook.
@@ -175,7 +178,10 @@ Agreed with the maintainer on 2026-11-14. Each step is safe to stop at.
    statuses read, and whatever else milestone 1 lists. Generate its private key; store the key and the IDs
    as the acceptance criteria say. Nothing changes yet.
 2. Merge milestone 1 (still opened under the maintainer's token).
-3. Run the token target, reload the VM's credentials and restart the deck **between tasks**. A test pull
+3. First give a VM created before milestone 1 the gh wrapper: `make vm-gh-wrapper` (or
+   `make vm-delete vm-create`); `make agents-token` warns about a VM without it. Run the token target from
+   a checkout that matches reviewed `main` (`docs/dev-environment.md`, Before you run the token targets),
+   reload the VM's credentials and restart the deck **between tasks**. A test pull
    request proves the App is the author. Merge milestone 2 (the first PR the App opens).
 4. Merge or close every open pull request **authored by the maintainer**: with no bypass actor, one left
    open after step 5 can never be approved. Release-please's and Renovate's pull requests are not affected.
