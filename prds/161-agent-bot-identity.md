@@ -55,33 +55,37 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 
 ### The agents App's credential (milestone 1)
 
-- [ ] The maintainer's `.envrc` **above the workspace** names the App ID, the installation ID and the
+- [x] The maintainer's `.envrc` **above the workspace** names the App ID, the installation ID and the
   **path** of the App's private key file, itself outside the workspace and readable only by the
   maintainer. No file in the workspace holds any of them, and `make vm-env` never copies the key or its
   path into the VM.
-- [ ] A make target on the Mac mints an installation token from the key (standard library or tools the
+- [x] A make target on the Mac mints an installation token from the key (standard library or tools the
   Mac already has, no new third-party dependency without a reason in the commit message) and writes it
   into the VM over standard input, never on a command line, to a file readable only by the VM user.
-- [ ] While the VM runs, the token is refreshed before it expires, without restarting the deck: a running
+- [x] While the VM runs, the token is refreshed before it expires, without restarting the deck: a running
   agent's next `gh` or `git push` uses the new token. Given a stopped refresh, the next call after expiry
   fails with an error that names the refresh target, not a generic 401.
-- [ ] No command prints a token, the key or its contents; nothing writes them to a log, the workspace or a
+- [x] No command prints a token, the key or its contents; nothing writes them to a log, the workspace or a
   test. Tests use invented keys generated in `t.TempDir()`.
 
 ### The agents' identity (milestone 1)
 
-- [ ] In the VM, `gh` and the git credential helper (`gh auth git-credential`) use the App token when its
+- [x] In the VM, `gh` and the git credential helper (`gh auth git-credential`) use the App token when its
   file is present and fall back to `GITHUB_TOKEN` otherwise, so milestone 1 can merge and be switched on
   without a gap. `make vm-init`'s credential check passes with either.
 - [ ] A pull request opened by an agent after the switch shows the App as its author
   (`gh pr view --json author` gives `is_bot` `true` and the App's login), and its commits' author is the
-  App's bot identity (`<app id>+<slug>[bot]@users.noreply.github.com`), set by `make vm-init`.
+  App's bot identity (`<bot user id>+<slug>[bot]@users.noreply.github.com`, the id of the bot user
+  `<slug>[bot]`, not the App ID: ADR 0029), set by `make vm-init`. *Checked at runbook step 3.*
 - [ ] Every `gh` call the skills make works with the App token: push, `pr create`, `pr view`, `pr checks`,
   `run list/view/watch`, `issue create/view`, and the `release-tag` skill's reads of rulesets, environments
   and releases. Any call that needs a permission the App lacks is listed with the permission, and the
-  maintainer's App permissions in `docs/dev-environment.md` cover them.
+  maintainer's App permissions in `docs/dev-environment.md` cover them. *The calls and their permissions
+  are listed in ADR 0029 (d) and `docs/dev-environment.md` (Attestations read and Actions write added; the
+  rulesets' bypass lists stay a maintainer check); that each works is checked at runbook step 3.*
 - [ ] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
-  `true`). No ruleset requires signed commits.
+  `true`). No ruleset requires signed commits. *Nothing in milestone 1 signs a commit (ADR 0029); the
+  repository's rulesets and `main`'s commits are checked at runbook step 3.*
 
 ### The gate (milestone 2)
 
@@ -146,7 +150,7 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 
 ## Milestones
 
-1. [ ] **Agents App token plumbing and bot identity.** The host-side mint and refresh, the VM token file,
+1. [x] **Agents App token plumbing and bot identity.** The host-side mint and refresh, the VM token file,
    the `gh` and git credential path with the `GITHUB_TOKEN` fallback, the bot git author,
    `make vm-env`/`vm-init` changes, tests, an ADR (identity, token model, why not a machine user, why the
    reviewer never approves), and `docs/dev-environment.md`. Merged under the old token; nothing is
