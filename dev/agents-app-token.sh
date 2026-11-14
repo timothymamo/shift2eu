@@ -10,7 +10,8 @@
 # Inputs, from the maintainer's direnv .envrc above the workspace, never from the workspace:
 #   SHIFT2EU_AGENTS_APP_ID               the App ID
 #   SHIFT2EU_AGENTS_APP_INSTALLATION_ID  the ID of the App's installation on this repository
-#   SHIFT2EU_AGENTS_APP_KEY_FILE         the path of the App's PEM private key, readable only by its owner
+#   SHIFT2EU_AGENTS_APP_KEY_FILE         the path of the App's PEM private key: a regular file, not a symlink,
+#                                        readable only by its owner
 # and, for refresh:
 #   SHIFT2EU_AGENTS_TOKEN_CHECK_SECONDS  how often the wall clock is compared with the expiry (default 60)
 #   SHIFT2EU_AGENTS_TOKEN_MARGIN_SECONDS mint again when fewer seconds than this remain (default 1200)
@@ -80,6 +81,8 @@ check_inputs() {
   key="${SHIFT2EU_AGENTS_APP_KEY_FILE:-}"
   [ -n "${key}" ] ||
     die "SHIFT2EU_AGENTS_APP_KEY_FILE is not set: export the path of the App's private key, kept outside the workspace, from the .envrc above the workspace"
+  [ ! -L "${key}" ] ||
+    die "SHIFT2EU_AGENTS_APP_KEY_FILE names a symlink: name the key file itself, a regular file of mode 0600"
   [ -f "${key}" ] && [ -r "${key}" ] ||
     die "SHIFT2EU_AGENTS_APP_KEY_FILE does not name a readable file"
   # Only the owner may read or write the key: chmod 600 it. POSIX find tests, the same on macOS and Linux.
