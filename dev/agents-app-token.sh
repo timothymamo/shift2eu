@@ -5,9 +5,11 @@
 #
 # Usage: dev/agents-app-token.sh mint      mint one token (make agents-token)
 #        dev/agents-app-token.sh refresh   mint now, then again before each token expires, until stopped
-#                                          (make agents-token-refresh; make deck starts it in the background)
+#                                          (make agents-token-refresh; in the background,
+#                                          make agents-token-refresh-start)
 #
-# Inputs, from the maintainer's direnv .envrc above the workspace, never from the workspace:
+# Inputs, from the direnv .envrc of the maintainer's host clone (outside the workspace, where the VM cannot
+# reach), never from the workspace or the .envrc above it (docs/dev-environment.md, The host clone):
 #   SHIFT2EU_AGENTS_APP_ID               the App ID
 #   SHIFT2EU_AGENTS_APP_INSTALLATION_ID  the ID of the App's installation on this repository
 #   SHIFT2EU_AGENTS_APP_KEY_FILE         the path of the App's PEM private key: a regular file, not a symlink,
@@ -21,17 +23,20 @@
 # it has the gh wrapper, default /usr/local/libexec/shift2eu/gh; mint warns when it is missing) and
 # XDG_STATE_HOME (refresh keeps its lock in ${XDG_STATE_HOME:-$HOME/.local/state}/shift2eu).
 #
-# refresh tells failures apart. A transient one (GitHub unreachable or answering 5xx or 429, limactl failing
-# or the VM not running) never stops it, even with no valid token left: it says so in one line and tries
-# again, at every check at first and then less often, at most every 5 checks. A permanent one (GitHub
-# refusing the JWT, the installation or the App with a 4xx, a key that cannot sign, a VM that refuses to
-# write through a symlink) stops it with "agents App token refresh stopped" and status 1. One refresher
-# runs per VM instance: a second one finds the first one's lock, says so, and exits 0.
+# refresh tells failures apart. A transient one (GitHub unreachable or answering 5xx or 429, a 403 that is a
+# rate limit, limactl failing or the VM not running) never stops it, even with no valid token left: it says
+# so in one line and tries again, at every check at first and then less often, at most every 5 checks, and
+# after a rate limit's retry-after when that is longer, but never past the 5 checks. A permanent one (GitHub
+# refusing the JWT, the installation or the App with any other 4xx, a key that cannot sign, a VM that
+# refuses to write through a symlink) stops it with "agents App token refresh stopped" and status 1. One
+# refresher runs per VM instance: a second one finds the first one's lock, says so, and exits 0.
 #
 # What it writes into the VM user's home, each file mode 0600 in a 0700 directory, replaced atomically:
 #   ~/.config/shift2eu/agents-app-token     the token, then its expiry as Unix seconds
 #   ~/.config/shift2eu/agents-app-identity  the git user.name <slug>[bot], then the git user.email
 #                                           <bot user id>+<slug>[bot]@users.noreply.github.com
+#
+# The bot user is looked up after the mint, with the installation token, never with the JWT or without one.
 #
 # Secrets: the JWT and the token live only in shell variables. They reach curl through its standard input
 # (--config -) and the VM through limactl's standard input, never a command line, a file on the Mac, or
@@ -42,6 +47,10 @@ api="${SHIFT2EU_AGENTS_GITHUB_API_URL:-https://api.github.com}"
 limactl="${LIMACTL:-limactl}"
 instance="${LIMA_INSTANCE:-shift2eu}"
 vm_real_gh="${SHIFT2EU_VM_REAL_GH_PATH:-/usr/local/libexec/shift2eu/gh}"
+
+# nl is a newline, for the parameter expansions that split curl's answer and the URL check.
+nl="$(printf '\nx')"
+nl="${nl%x}"
 
 say() { printf 'agents-token: %s\n' "$*" >&2; }
 die() {
@@ -75,12 +84,12 @@ is_number() {
 
 check_inputs() {
   is_number "${SHIFT2EU_AGENTS_APP_ID:-}" ||
-    die "SHIFT2EU_AGENTS_APP_ID is not set, or not a number: export the agents App's ID from the .envrc above the workspace (docs/dev-environment.md, The agents App)"
+    die "SHIFT2EU_AGENTS_APP_ID is not set, or not a number: export the agents App's ID from the .envrc of your host clone, outside the workspace (docs/dev-environment.md, The agents App)"
   is_number "${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ||
-    die "SHIFT2EU_AGENTS_APP_INSTALLATION_ID is not set, or not a number: export the ID of the App's installation from the .envrc above the workspace"
+    die "SHIFT2EU_AGENTS_APP_INSTALLATION_ID is not set, or not a number: export the ID of the App's installation from the .envrc of your host clone, outside the workspace"
   key="${SHIFT2EU_AGENTS_APP_KEY_FILE:-}"
   [ -n "${key}" ] ||
-    die "SHIFT2EU_AGENTS_APP_KEY_FILE is not set: export the path of the App's private key, kept outside the workspace, from the .envrc above the workspace"
+    die "SHIFT2EU_AGENTS_APP_KEY_FILE is not set: export the path of the App's private key, kept outside the workspace, from the .envrc of your host clone, outside the workspace"
   [ ! -L "${key}" ] ||
     die "SHIFT2EU_AGENTS_APP_KEY_FILE names a symlink: name the key file itself, a regular file of mode 0600"
   [ -f "${key}" ] && [ -r "${key}" ] ||
@@ -107,8 +116,6 @@ check_inputs() {
 # this machine, and no https at all. It sets proto, the only scheme curl may use.
 check_api_url() {
   tab="$(printf '\t')"
-  nl="$(printf '\nx')"
-  nl="${nl%x}"
   case "${api}" in
   *@* | *\"* | *\\* | *" "* | *"${tab}"* | *"${nl}"*)
     die "SHIFT2EU_AGENTS_GITHUB_API_URL must not contain an @, a quote, a backslash or whitespace"
@@ -139,31 +146,37 @@ make_jwt() {
   jwt="${head}.${claims}.${signature}"
 }
 
-# call <method> <path> [bearer|none] sets status and body. The headers, the URL and the method reach curl
-# on its standard input, so the JWT never is on a command line. -q comes first, so curl reads no ~/.curlrc
-# that could log the Authorization header or send the request elsewhere.
+# call <method> <path> <bearer> sets status, body, and the rate limit headers remaining (x-ratelimit-remaining)
+# and retry_after (retry-after), each empty unless a number. The bearer is the JWT or the installation token.
+# The headers, the URL and the method reach curl on its standard input, so neither secret is ever on a
+# command line. -q comes first, so curl reads no ~/.curlrc that could log the Authorization header or send
+# the request elsewhere. %header{} needs curl 7.84 or later; an older curl prints no number there, which
+# reads as no rate limit header.
 call() {
-  auth_header=""
-  if [ "${3:-bearer}" = bearer ]; then
-    auth_header="header = \"Authorization: Bearer ${jwt}\""
-  fi
+  remaining=""
+  retry_after=""
   response="$(
     printf '%s\n' \
       "url = \"${api}$2\"" \
       "request = \"$1\"" \
-      "${auth_header}" \
+      "header = \"Authorization: Bearer $3\"" \
       'header = "Accept: application/vnd.github+json"' \
       'header = "X-GitHub-Api-Version: 2022-11-28"' |
-      curl -q --silent --show-error --max-time 30 --proto "${proto}" --write-out '\n%{http_code}' --config -
+      curl -q --silent --show-error --max-time 30 --proto "${proto}" \
+        --write-out '\n%header{x-ratelimit-remaining}\n%header{retry-after}\n%{http_code}' --config -
   )" || {
     status=000
     body=""
     return 0
   }
-  status="${response##*
-}"
-  body="${response%
-*}"
+  status="${response##*"${nl}"}"
+  response="${response%"${nl}"*}"
+  header="${response##*"${nl}"}"
+  ! is_number "${header}" || retry_after="${header}"
+  response="${response%"${nl}"*}"
+  header="${response##*"${nl}"}"
+  ! is_number "${header}" || remaining="${header}"
+  body="${response%"${nl}"*}"
 }
 
 # json_string <name> prints the value of the string field <name> of body. The greedy .* makes it the last
@@ -177,20 +190,36 @@ json_number() {
   printf '%s' "${body}" | tr -d '\n' | sed -n "s/.*\"$1\"[[:space:]]*:[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p"
 }
 
-# classify <HTTP status> sets failure: transient for what goes away by itself (000: no answer at all, 408,
-# 429, 5xx), permanent for any other refusal, which only the maintainer can fix (401: the JWT, 403, 404: the
-# App or its installation, any other 4xx).
-classify() {
-  case "$1" in
-  000 | 408 | 429 | 5??) failure=transient ;;
-  *) failure=permanent ;;
-  esac
+# rate_limited tells whether the last answer was GitHub's rate limit: a 403 (or 429) whose body mentions a
+# rate limit, or whose headers say no request is left or when to try again.
+rate_limited() {
+  [ "${remaining}" = 0 ] || [ -n "${retry_after}" ] ||
+    printf '%s' "${body}" | grep -qi 'rate limit'
 }
 
-# lookup_identity sets bot_name and bot_email from GET /app (the slug) and GET /users/<slug>[bot] (the bot
-# user's id). GitHub's noreply address for the bot is numbered with the bot user's id, not the App ID.
-lookup_identity() {
-  call GET /app
+# classify <HTTP status> sets failure: transient for what goes away by itself (000: no answer at all, 408,
+# 429, 5xx, a 403 that is a rate limit), permanent for any other refusal, which only the maintainer can fix
+# (401: the JWT, 403, 404: the App or its installation, any other 4xx). It keeps the retry-after GitHub asked
+# for in wait_hint, which the refresh honours within its backoff cap.
+classify() {
+  wait_hint=""
+  case "$1" in
+  000 | 408 | 429 | 5??) failure=transient ;;
+  403)
+    if rate_limited; then
+      failure=transient
+    else
+      failure=permanent
+    fi
+    ;;
+  *) failure=permanent ;;
+  esac
+  [ "${failure}" = permanent ] || wait_hint="${retry_after}"
+}
+
+# lookup_slug sets slug from GET /app, with the App's JWT.
+lookup_slug() {
+  call GET /app "${jwt}"
   [ "${status}" = 200 ] || {
     classify "${status}"
     say "GET /app answered HTTP ${status}: cannot read the agents App's slug with SHIFT2EU_AGENTS_APP_ID and its key"
@@ -204,14 +233,21 @@ lookup_identity() {
     return 1
     ;;
   esac
-  call GET "/users/${slug}%5Bbot%5D"
-  if [ "${status}" != 200 ]; then
-    # The bot's user is public: when GitHub refuses an App JWT on /users, ask without one.
-    call GET "/users/${slug}%5Bbot%5D" none
-  fi
+}
+
+# lookup_identity sets bot_name and bot_email from GET /users/<slug>[bot] (the bot user's id), asked with the
+# installation token just minted: GitHub refuses the App's JWT there, and the token has a rate limit of its
+# own, where an unauthenticated call shares one with everything behind the same address. GitHub's noreply
+# address for the bot is numbered with the bot user's id, not the App ID.
+lookup_identity() {
+  call GET "/users/${slug}%5Bbot%5D" "${token}"
   [ "${status}" = 200 ] || {
     classify "${status}"
-    say "GET /users/${slug}[bot] answered HTTP ${status}: cannot read the bot user's id"
+    if [ "${failure}" = transient ] && [ "${status}" = 403 ]; then
+      say "GET /users/${slug}[bot] answered HTTP 403, a rate limit: cannot read the bot user's id yet"
+    else
+      say "GET /users/${slug}[bot] answered HTTP ${status}: cannot read the bot user's id"
+    fi
     return 1
   }
   bot_id="$(json_number id)"
@@ -226,8 +262,10 @@ lookup_identity() {
 
 # The script the VM runs: it reads four lines from its standard input and writes the two files atomically
 # (a temporary file beside each, then mv), so a gh running at the same time never reads half a token. It
-# refuses, with status 3, a ~/.config/shift2eu that is a symlink and a token or identity file that is a
-# symlink or not a regular file, so the token never lands where an agent points it (the workspace mount, say).
+# refuses, with status 3, a ~/.config/shift2eu that is a symlink or that resolves (pwd -P) outside the VM
+# user's real home, and a token or identity file that is a symlink or not a regular file. That keeps the token
+# from being written through a symlink by mistake; it is no boundary against the VM user, who can read the
+# token anyway and could swap a path between the check and the mv.
 # It then prints, never a secret, the VM's clock as clock=<Unix seconds> and, when the real gh is not where
 # the gh wrapper keeps it ($1), gh-wrapper=missing: a VM created before the wrapper.
 # shellcheck disable=SC2016 # expanded by the VM's sh, not here
@@ -238,7 +276,26 @@ if [ -L "$dir" ]; then
   echo "agents-token: $dir is a symlink; the VM writes no token through it: remove it in the VM" >&2
   exit 3
 fi
+home="$(cd "$HOME" && pwd -P)"
+inside() {
+  [ ! -e "$1" ] && [ ! -L "$1" ] && return 0
+  real="$(cd "$1" && pwd -P)" || return 1
+  case "$real/" in
+  "$home"/*) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+for d in "$HOME/.config" "$dir"; do
+  if ! inside "$d"; then
+    echo "agents-token: $d resolves outside $HOME; the VM writes no token there: make it a directory in the VM user home" >&2
+    exit 3
+  fi
+done
 mkdir -p "$dir"
+if ! inside "$dir"; then
+  echo "agents-token: $dir resolves outside $HOME; the VM writes no token there: make it a directory in the VM user home" >&2
+  exit 3
+fi
 chmod 700 "$dir"
 for name in agents-app-identity agents-app-token; do
   if [ -L "$dir/$name" ] || { [ -e "$dir/$name" ] && [ ! -f "$dir/$name" ]; }; then
@@ -270,7 +327,8 @@ check_vm() {
     say "warning: the VM ${instance} has no ${vm_real_gh}: this VM predates the gh wrapper, so its gh and git push ignore the token and keep using GITHUB_TOKEN. Upgrade it with make vm-gh-wrapper (or make vm-delete vm-create)"
     ;;
   esac
-  vm_clock="$(printf '%s\n' "$1" | sed -n 's/^clock=\([0-9][0-9]*\)$/\1/p')"
+  # 1 to 12 digits only: a longer reading is no clock, and could overflow the shell's arithmetic.
+  vm_clock="$(printf '%s\n' "$1" | sed -n 's/^clock=\([0-9]\{1,12\}\)$/\1/p')"
   if is_number "${vm_clock}"; then
     offset="$((vm_clock - $(now)))"
     if [ "${offset}" -gt 60 ] || [ "${offset}" -lt -60 ]; then
@@ -289,10 +347,11 @@ mint_once() {
     say "cannot sign a JWT with SHIFT2EU_AGENTS_APP_KEY_FILE: is it the App's PEM private key?"
     return 1
   }
-  if [ -z "${bot_email:-}" ]; then
-    lookup_identity || return 1
+  if [ -z "${slug}" ]; then
+    lookup_slug || return 1
   fi
-  call POST "/app/installations/${SHIFT2EU_AGENTS_APP_INSTALLATION_ID}/access_tokens"
+  call POST "/app/installations/${SHIFT2EU_AGENTS_APP_INSTALLATION_ID}/access_tokens" "${jwt}"
+  jwt=""
   classify "${status}"
   case "${status}" in
   201) ;;
@@ -305,7 +364,11 @@ mint_once() {
     return 1
     ;;
   403)
-    say "no installation token minted: GitHub forbids this App's installation SHIFT2EU_AGENTS_APP_INSTALLATION_ID a token (HTTP 403); is it suspended?"
+    if [ "${failure}" = transient ]; then
+      say "no installation token minted: GitHub's rate limit (HTTP 403); trying again later"
+    else
+      say "no installation token minted: GitHub forbids this App's installation SHIFT2EU_AGENTS_APP_INSTALLATION_ID a token (HTTP 403); is it suspended?"
+    fi
     return 1
     ;;
   404)
@@ -318,6 +381,7 @@ mint_once() {
     ;;
   esac
   token="$(json_string token)"
+  expires_at="$(json_string expires_at)"
   case "${token}" in
   '' | *[!A-Za-z0-9_]*)
     failure=transient
@@ -325,10 +389,16 @@ mint_once() {
     return 1
     ;;
   esac
+  if [ -z "${bot_email}" ]; then
+    lookup_identity || {
+      token=""
+      return 1
+    }
+  fi
   # Five minutes early, of the Mac's hour and of GitHub's own expires_at, whichever ends first: a call
   # started just before the expiry still has a valid token, and so does a VM whose clock lags a little.
   expiry="$((started + 3600 - 300))"
-  if stated="$(parse_time "$(json_string expires_at)")" && is_number "${stated}" && [ "$((stated - 300))" -lt "${expiry}" ]; then
+  if stated="$(parse_time "${expires_at}")" && is_number "${stated}" && [ "$((stated - 300))" -lt "${expiry}" ]; then
     expiry="$((stated - 300))"
   fi
   written="$(printf '%s\n%s\n%s\n%s\n' "${token}" "${expiry}" "${bot_name}" "${bot_email}" |
@@ -350,42 +420,67 @@ mint_once() {
 }
 
 # stopped <why> says the refresh stopped, when, until when the VM's token is valid, and how to start it
-# again. make deck sends it to the refresh's log too.
+# again. make agents-token-refresh-start sends it to the refresh's log too. It names the token's expiry only
+# while that is still ahead: a token GitHub already expired, or one from before a long sleep, is not valid.
 stopped() {
-  if [ -n "${expiry:-}" ]; then
+  if [ -n "${expiry:-}" ] && [ "${expiry}" -gt "$(now)" ]; then
     left="the VM's token is valid until $(show_time "${expiry}")"
+  elif [ -n "${expiry:-}" ]; then
+    left="the VM's token from this refresh has expired"
   else
     left="the VM holds no token from this refresh"
   fi
   say "agents App token refresh stopped at $(show_time "$(now)") ($1); ${left}; start it again with make agents-token-refresh"
 }
 
-# take_lock makes this the only refresher of the VM instance: it creates the lock directory, with this
-# shell's pid inside, under the state directory on the Mac. A lock whose pid is no longer a running refresh
-# (one killed without its trap) is taken over. While another refresher holds it, it says so and exits 0:
-# that VM's token is already being refreshed.
+# is_refresh <pid> tells whether pid is a running refresh.
+is_refresh() {
+  is_number "$1" && kill -0 "$1" 2>/dev/null &&
+    ps -p "$1" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'
+}
+
+# take_lock makes this the only refresher of the VM instance: the lock is a directory under the state
+# directory on the Mac holding the owner's pid. It is created whole: a temporary directory with this shell's
+# pid already inside is renamed to the lock, so no reader ever sees a lock without its pid. When the lock
+# exists, mv moves the temporary directory into it instead, and the pid file shows this one lost: it removes
+# its own directory again. A lock whose pid is no longer a running refresh (one killed without its trap) is
+# taken over atomically: it is renamed aside, which only one contender can do; the one that did checks that
+# what it moved still holds the stale owner (and puts it back if not), removes it, and tries again. While
+# another refresher holds the lock, this one says so and exits 0: that VM's token is already being refreshed.
 take_lock() {
   state="${XDG_STATE_HOME:-${HOME:?set HOME}/.local/state}/shift2eu"
   lock="${state}/agents-token-refresh-${instance}.lock"
+  new="${state}/.agents-token-refresh-${instance}.lock.new.$$"
+  aside="${state}/.agents-token-refresh-${instance}.lock.stale.$$"
   (umask 077 && mkdir -p "${state}") || die "cannot create ${state} for the refresh's lock"
   attempts=0
-  until (umask 077 && mkdir "${lock}") 2>/dev/null; do
-    attempts=$((attempts + 1))
-    owner="$(cat "${lock}/pid" 2>/dev/null || true)"
-    if [ -z "${owner}" ] && [ "${attempts}" -lt 3 ]; then
-      sleep 1 # the owner may have just created the lock and not written its pid yet
-      continue
+  while :; do
+    rm -rf "${new}" "${aside}"
+    (umask 077 && mkdir "${new}" && printf '%s\n' "$$" >"${new}/pid") ||
+      die "cannot create ${new} for the refresh's lock"
+    if mv "${new}" "${lock}" 2>/dev/null && [ "$(cat "${lock}/pid" 2>/dev/null || true)" = "$$" ]; then
+      break
     fi
-    if is_number "${owner}" && kill -0 "${owner}" 2>/dev/null &&
-      ps -p "${owner}" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then
+    # Lost: the temporary directory is still there, or inside the other refresher's lock.
+    rm -rf "${new}" "${lock:?}/${new##*/}"
+    attempts=$((attempts + 1))
+    [ "${attempts}" -le 5 ] || die "cannot take the lock ${lock}; remove it if no refresh for the VM ${instance} runs"
+    owner="$(cat "${lock}/pid" 2>/dev/null || true)"
+    if is_refresh "${owner}"; then
       say "another agents App token refresh for the VM ${instance} is running (pid ${owner}, lock ${lock}); this one exits and leaves it to that one"
       exit 0
     fi
-    [ "${attempts}" -lt 5 ] || die "cannot take the lock ${lock}; remove it if no refresh for the VM ${instance} runs"
+    [ -d "${lock}" ] || continue # released or moved aside meanwhile: try again
     say "taking over the lock ${lock} of a refresh that is no longer running (pid ${owner:-unknown})"
-    rm -rf "${lock}"
+    if mv "${lock}" "${aside}" 2>/dev/null; then
+      if [ "$(cat "${aside}/pid" 2>/dev/null || true)" = "${owner}" ]; then
+        rm -rf "${aside}"
+      else
+        # Another contender took the stale lock over first and this moved its new one: put it back.
+        mv "${aside}" "${lock}" 2>/dev/null || true
+      fi
+    fi
   done
-  printf '%s\n' "$$" >"${lock}/pid"
   locked=1
 }
 
@@ -433,6 +528,11 @@ refresh() {
           n=$((n + 1))
         done
         [ "${wait_seconds}" -le "$((check_seconds * 5))" ] || wait_seconds=$((check_seconds * 5))
+        # A rate limit's retry-after is honoured, but never past the cap of five checks.
+        if is_number "${wait_hint:-}" && [ "${wait_hint}" -gt "${wait_seconds}" ]; then
+          wait_seconds="${wait_hint}"
+          [ "${wait_seconds}" -le "$((check_seconds * 5))" ] || wait_seconds=$((check_seconds * 5))
+        fi
         if [ -n "${expiry}" ] && [ "${expiry}" -gt "${current}" ]; then
           left="the VM's token is valid until $(show_time "${expiry}")"
         else
@@ -450,8 +550,11 @@ refresh() {
 
 check_seconds="${SHIFT2EU_AGENTS_TOKEN_CHECK_SECONDS:-60}"
 margin_seconds="${SHIFT2EU_AGENTS_TOKEN_MARGIN_SECONDS:-1200}"
+slug=""
 bot_name=""
 bot_email=""
+jwt=""
+token=""
 
 case "${1:-}" in
 mint)

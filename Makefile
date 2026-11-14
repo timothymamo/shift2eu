@@ -236,51 +236,74 @@ vm-create: ## Create and set up the VM, ready for make deck: vm-up, vm-env, vm-c
 	$(MAKE) vm-claude-settings
 	$(MAKE) vm-init
 
-# Where make deck keeps the pid and the log of the agents App token refresh, and the refresh its lock, one
-# set per VM instance: on the Mac, outside the workspace (ADR 0029).
+# Where make agents-token-refresh-start keeps the pid and the log of the agents App token refresh, and the
+# refresh its lock, one set per VM instance: on the Mac, outside the workspace (ADR 0029).
 AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2eu
 
-# Run the token targets, and make deck with the App's variables set, only from a checkout whose Makefile and
-# dev/ match reviewed main: they run on the Mac with the App's key in reach, and the agents can edit the
-# workspace (ADR 0029; docs/dev-environment.md, Before you run the token targets).
+# The token targets run on the Mac with the App's key in reach, so run them only from the host clone: a clone
+# outside the workspace, updated only with git pull --ff-only from GitHub, whose own direnv .envrc holds the
+# three SHIFT2EU_AGENTS_APP_* variables (docs/dev-environment.md, The host clone). No check run in the mounted
+# workspace can vouch for it: the agents can edit its Makefile, dev/ and .git/config, and git and make run
+# what those say. The token targets need only limactl and LIMA_INSTANCE, never WORKSPACE or REPO_ROOT.
 
 .PHONY: agents-token
-agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM
+agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM (host clone)
 	@LIMA_INSTANCE="$(LIMA_INSTANCE)" sh dev/agents-app-token.sh mint
 
 .PHONY: agents-token-refresh
-agents-token-refresh: ## Mint the agents App token now and again before each one expires, in the foreground, until stopped
+agents-token-refresh: ## Mint the agents App token now and again before each one expires, in the foreground, until stopped (host clone)
 	@LIMA_INSTANCE="$(LIMA_INSTANCE)" sh dev/agents-app-token.sh refresh
+
+# Starts the refresh of this VM instance in the background unless one already runs: the one whose pid the
+# instance's lock holds (a refresh started by hand with make agents-token-refresh holds it too), or the one
+# this target started earlier. It warns when that one has stopped, and prints where the log is.
+.PHONY: agents-token-refresh-start
+agents-token-refresh-start: ## Start the agents App token refresh in the background, one per VM instance, and print where its log is (host clone)
+	@if [ -z "$${SHIFT2EU_AGENTS_APP_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
+		echo "agents-token-refresh-start: set SHIFT2EU_AGENTS_APP_ID, SHIFT2EU_AGENTS_APP_INSTALLATION_ID and SHIFT2EU_AGENTS_APP_KEY_FILE in the host clone's .envrc (docs/dev-environment.md, The host clone)" >&2; \
+		exit 1; \
+	fi; \
+	state="$(AGENTS_TOKEN_STATE)"; pid_file="$$state/agents-token-refresh-$(LIMA_INSTANCE).pid"; log="$$state/agents-token-refresh-$(LIMA_INSTANCE).log"; \
+	lock_pid="$$state/agents-token-refresh-$(LIMA_INSTANCE).lock/pid"; \
+	(umask 077 && mkdir -p "$$state" && : >>"$$log") || exit 1; \
+	started="$$(cat "$$pid_file" 2>/dev/null || true)"; \
+	for pid in "$$(cat "$$lock_pid" 2>/dev/null || true)" "$$started"; do \
+		case "$$pid" in ''|*[!0-9]*) continue ;; esac; \
+		if kill -0 "$$pid" 2>/dev/null && ps -p "$$pid" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
+			echo "agents-token-refresh-start: the agents App token refresh of $(LIMA_INSTANCE) is already running (pid $$pid); its log is $$log"; \
+			exit 0; \
+		fi; \
+	done; \
+	if [ -n "$$started" ]; then \
+		echo "agents-token-refresh-start: warning: the agents App token refresh of $(LIMA_INSTANCE) (pid $$started) had stopped; its log's last lines:" >&2; \
+		tail -n 3 "$$log" 2>/dev/null | sed 's/^/  /' >&2 || true; \
+	fi; \
+	LIMA_INSTANCE="$(LIMA_INSTANCE)" nohup sh dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
+	pid="$$!"; \
+	(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
+	echo "agents-token-refresh-start: started the agents App token refresh of $(LIMA_INSTANCE) (pid $$pid); its log is $$log"
 
 # For a VM created before dev/lima.yaml installed the gh wrapper: moves the real gh off the PATH, installs the
 # wrapper with the real gh's path pinned and points the git credential helper at it, all over limactl's
-# standard input (dev/vm-gh-wrapper.sh). Safe to run again.
+# standard input (dev/vm-gh-wrapper.sh). The script is generated first and sent only when it is whole (its
+# last line is the call that runs it), so a generator that fails fails make before the VM is touched. Safe to
+# run again.
 .PHONY: vm-gh-wrapper
 vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it (instead of make vm-delete vm-create)
-	@sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh | limactl shell --workdir / "$(LIMA_INSTANCE)" sh -s
+	@script="$$(sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh)" || exit 1; \
+	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_gh_wrapper ]; then \
+		echo "vm-gh-wrapper: dev/vm-gh-wrapper.sh printed no whole script (its last line is not vm_gh_wrapper); nothing sent to the VM" >&2; \
+		exit 1; \
+	fi; \
+	printf '%s\n' "$$script" | limactl shell --workdir / "$(LIMA_INSTANCE)" sh -s
 
-# With the three SHIFT2EU_AGENTS_APP_* variables set, deck first starts the token refresh of this VM
-# instance in the background unless it already runs, and warns when the one it started earlier has stopped.
-# A refresh started by hand (make agents-token-refresh) holds the instance's lock, so the one deck starts
-# then says so in its log and exits. Without the variables deck opens the deck as before.
+# deck opens the deck and starts no token refresh: that is make agents-token-refresh-start's, in the host
+# clone. When a SHIFT2EU_AGENTS_APP_* variable reaches it, it warns that the variable is visible in the
+# workspace's shell, and still opens the deck.
 .PHONY: deck
-deck: ## Open the dot-agent-deck TUI in the VM (attaches to the daemon service); starts the agents App token refresh when its variables are set
-	@if [ -n "$${SHIFT2EU_AGENTS_APP_ID:-}" ] && [ -n "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] && [ -n "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
-		state="$(AGENTS_TOKEN_STATE)"; pid_file="$$state/agents-token-refresh-$(LIMA_INSTANCE).pid"; log="$$state/agents-token-refresh-$(LIMA_INSTANCE).log"; \
-		(umask 077 && mkdir -p "$$state" && : >>"$$log") || exit 1; \
-		pid="$$(cat "$$pid_file" 2>/dev/null || true)"; \
-		if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null && ps -p "$$pid" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
-			echo "deck: the agents App token refresh of $(LIMA_INSTANCE) is running (pid $$pid); its log is $$log"; \
-		else \
-			if [ -n "$$pid" ]; then \
-				echo "deck: warning: the agents App token refresh of $(LIMA_INSTANCE) (pid $$pid) had stopped; its log's last lines:" >&2; \
-				tail -n 3 "$$log" 2>/dev/null | sed 's/^/  /' >&2 || true; \
-			fi; \
-			LIMA_INSTANCE="$(LIMA_INSTANCE)" nohup sh dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
-			pid="$$!"; \
-			(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
-			echo "deck: started the agents App token refresh of $(LIMA_INSTANCE) (pid $$pid); its log is $$log"; \
-		fi; \
+deck: ## Open the dot-agent-deck TUI in the VM (attaches to the daemon service)
+	@if [ -n "$${SHIFT2EU_AGENTS_APP_ID:-}$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
+		echo "deck: warning: a SHIFT2EU_AGENTS_APP_* variable is set in this shell, where the workspace's code runs: move the three into the direnv .envrc of your host clone, outside the workspace, never into the .envrc above it, and run make agents-token-refresh-start there (docs/dev-environment.md, The host clone)" >&2; \
 	fi
 	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)" dot-agent-deck
 
