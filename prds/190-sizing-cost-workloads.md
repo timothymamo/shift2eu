@@ -73,7 +73,7 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   - `monthlyCost`: `{"amount", "currency"}`.
 
   It's read with the same strict rules and caps as version 1.
-- [ ] A version 1 inventory gives the same verdicts as today. Its resources get no plan and no estimate,
+- [x] A version 1 inventory gives the same verdicts as today. Its resources get no plan and no estimate,
   and the report says that the sizes are unknown.
 - [x] Given a relation whose `target` names no resource, a resource that relates to itself, an unknown
   relation `type`, a negative or non-numeric size, or a `size` field that makes no sense for the
@@ -99,51 +99,51 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 
 **Plan matching and estimates**
 
-- [ ] Given a sized resource with a fit other than `none`, the report names the plan on the best
+- [x] Given a sized resource with a fit other than `none`, the report names the plan on the best
   offering: the cheapest plan whose vCPU and memory are each at least the resource's. Ties are broken by
   fewer vCPU, then less memory, then name.
-- [ ] Given a size that no plan covers, the resource shows "no plan large enough" with the largest plan's
+- [x] Given a size that no plan covers, the resource shows "no plan large enough" with the largest plan's
   size, and gets no estimate. Its fit is unchanged.
 - [ ] The monthly estimate of a resource is plan price × `count` × `hoursPerMonth` / 730, plus storage
   above what the plan includes × the per-GiB price. It's rounded to the cent only for display. A test
   table pins one example per priced category on each target.
-- [ ] A resource with no size, no fit, a usage-priced category or no price for its region shows "not
+- [x] A resource with no size, no fit, a usage-priced category or no price for its region shows "not
   estimated" with that reason. Totals sum only the estimated resources and say how many weren't
   estimated ("€1,234.56 per month for 9 of 13 resources").
-- [ ] The report states, next to every total, that it is an estimate: list prices on the snapshot's
+- [x] The report states, next to every total, that it is an estimate: list prices on the snapshot's
   retrieval date, excluding VAT and discounts. It also names, per target, the region the prices are for.
 
 **Regions and the estimate switch**
 
-- [ ] `--region` takes one `<target>=<region>` pair per target, comma-separated
+- [x] `--region` takes one `<target>=<region>` pair per target, comma-separated
   (`--region scaleway=fr-par,ovhcloud=GRA`). A region the target doesn't list, a target that isn't
   selected, or a target named twice is a usage error: exit 2, naming the bad element and listing that
   target's regions. Nothing is read.
-- [ ] Given `--region` for a target, an offering not available in that region is not a candidate. A
+- [x] Given `--region` for a target, an offering not available in that region is not a candidate. A
   resource whose only offerings are elsewhere gets fit `none`, with the reason "not offered in
   `<region>`". A resource with an offering in the region keeps the fit it gets from that offering's
   capabilities. The report header names the region per target.
-- [ ] Without `--region`, fits are exactly as today: availability is judged across all of a target's
+- [x] Without `--region`, fits are exactly as today: availability is judged across all of a target's
   regions. A test pins that the existing goldens, other than the new plan and estimate columns, don't
   change.
-- [ ] Estimates use the region named with `--region`, or else the target's default region from its
+- [x] Estimates use the region named with `--region`, or else the target's default region from its
   snapshot. A plan without a price in that region is "not estimated" with that reason.
-- [ ] Given the same inventory and target with two different `--region` values, the two reports differ
+- [x] Given the same inventory and target with two different `--region` values, the two reports differ
   only in the region names and in the resources whose offerings differ between the regions. Pinned
   with an invented catalog in which one offering exists in one region only.
-- [ ] With `--no-estimate`, the report has no plan or estimate column and no cost summary, and says
+- [x] With `--no-estimate`, the report has no plan or estimate column and no cost summary, and says
   nothing about prices. Fits, workloads and relations are unchanged. A version 2 inventory with sizes
   then gives the same fits as the same inventory with its sizes removed.
 
 **Workloads and relations**
 
-- [ ] Resources with the same `workload` are reported together. Each workload gets its fit counts, its
+- [x] Resources with the same `workload` are reported together. Each workload gets its fit counts, its
   blockers and its estimate. Resources without a workload are grouped under "No workload". A version 1
   inventory has only that group, and the per-workload section is left out.
-- [ ] Each resource's row lists its relations. A blocker on a resource is also listed under every
+- [x] Each resource's row lists its relations. A blocker on a resource is also listed under every
   resource that `depends-on` it, or that is a `replica-of` it, as "affected by a blocker on `<id>`". No
   fit changes.
-- [ ] Given a `monthlyCost` on resources, each workload and the total show the source's cost next to the
+- [x] Given a `monthlyCost` on resources, each workload and the total show the source's cost next to the
   estimate, per currency, with no conversion. Where some resources have no `monthlyCost`, the total says
   how many it covers.
 
@@ -152,19 +152,19 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 - [ ] The Markdown report adds a plan and an estimate column to the resources table, a "Workloads"
   section, and a cost summary. Golden files pin a single-target and a comparison report for each sample
   inventory under `examples/` (updated to version 2 with sizes, workloads and relations).
-- [ ] The comparison report adds one estimate column per target in its summary and resources tables,
+- [x] The comparison report adds one estimate column per target in its summary and resources tables,
   and the per-workload estimates per target. It contains no ranking, "cheapest" or recommendation: the
   "no ranking" test from PRD #89 gains "cheapest" and "best price".
 - [ ] The JSON report moves to schema version 2 (ADR 0018) with the plan, the estimate, its basis
   (price date, currency, excluded items), the workloads and the relations. Its JSON Schemas are updated
   and the examples validate against them.
-- [ ] `POST /v1/assessments` accepts version 1 and version 2 inventories and returns the version 2
+- [x] `POST /v1/assessments` accepts version 1 and version 2 inventories and returns the version 2
   report. Its request takes the same choices as the CLI: optional `regions` (an object from target key to
   region) and `estimate` (default `true`), with the same validation and errors. The path stays `/v1`:
   the report's `schemaVersion` says which version a response is, and the new request fields are
   optional. *Review:* if ADR 0019's versioning rules don't allow that, an ADR records why and what
   changes.
-- [ ] Given the same inventory twice, the reports are byte-identical. Nothing depends on the current
+- [x] Given the same inventory twice, the reports are byte-identical. Nothing depends on the current
   date, so a snapshot's age is shown as its retrieval date, never "N days old".
 
 **Architecture**
@@ -215,7 +215,7 @@ Each milestone ships as one PR, in dependency order. Milestones 3, 4 and 5 can r
    when estimates are on. Design and API: ADR
    [0028](../docs/adr/0028-group-workloads-note-blocked-relations-and-sum-the-source-cost-in-the-assessment.md).
    Depends on 6.
-8. [ ] **Markdown and JSON reports, CLI and API options.** Both renderers, the comparison, JSON report
+8. [x] **Markdown and JSON reports, CLI and API options.** Both renderers, the comparison, JSON report
    schema version 2 and its Schemas. The CLI's `--region` and `--no-estimate`, and the HTTP API's
    `regions` and `estimate` request fields, on `/v1`. Depends on 7 and on 3, 4 and 5 for the real-price
    goldens.

@@ -67,8 +67,8 @@ type segment struct {
 // Object reads the next value, which must be an object whose keys are among
 // keys (at most MaxKeys). For each key of the object, in document order, it
 // calls value with the key's Name, with the walker at the key's value and Path
-// naming it. value must read that value whole, with one call of Object, Array,
-// String, Raw or Version, or with Null and, when Null returns false, one of
+// naming it. value must read that value whole, with one call of Object,
+// Members, Array, String, Bool, Raw or Version, or with Null and, when Null returns false, one of
 // those, or return an error.
 //
 // Object refuses, with an error that wraps the format's sentinel: a value that
@@ -211,6 +211,103 @@ func (w *Walker) String() (_ string, err error) {
 	}
 
 	return s, nil
+}
+
+// Bool reads the next value, which must be true or false, and returns it. It
+// refuses a value that is not a boolean, null included, as String refuses a
+// value that is not a string.
+func (w *Walker) Bool() (_ bool, err error) {
+	defer w.stop(&err)
+
+	tok, at, err := w.value()
+	if err != nil {
+		return false, err
+	}
+
+	b, ok := tok.(bool)
+	if !ok {
+		return false, w.wrongType(at, "a boolean")
+	}
+
+	return b, nil
+}
+
+// Members reads the next value, which must be an object whose keys are data
+// rather than names a format lists, such as a map from a target key to a
+// region. For each member, in document order, it calls value with the
+// member's index in the object and its key, JSON escapes decoded, with the
+// walker at the member's value. value must read that value whole, as Object's
+// value must, or return an error; a format caps the members by returning an
+// error at the first index past its cap, before it reads that value.
+//
+// Because the keys are data, no error of this package quotes one: Path names a
+// member's value by its index in brackets, as an array element is named
+// (regions[0]), and a repeated key is placed by line and column only. Members
+// refuses, with an error that wraps the format's sentinel: a value that is not
+// an object, null included, as not want, which names the type with its
+// article ("an object of strings"); a key that escapes a lone surrogate; and a
+// key the object already has, character for character. Misuse is refused as
+// Object refuses it.
+func (w *Walker) Members(want string, value func(i int, key string) error) (err error) {
+	defer w.stop(&err)
+
+	tok, start, err := w.value()
+	if err != nil {
+		return err
+	}
+
+	if tok != json.Delim('{') {
+		return w.wrongType(start, want)
+	}
+
+	seen := make(map[string]struct{})
+
+	for i := 0; w.dec.More(); i++ {
+		key, err := w.member(seen)
+		if err != nil {
+			return err
+		}
+
+		w.enter(segment{index: i})
+
+		if err := w.leave(value(i, key)); err != nil {
+			return err
+		}
+	}
+
+	_, _, err = w.next()
+
+	return err
+}
+
+// member reads the next key of an object Members reads, of which seen holds
+// the keys the object has had so far, and adds it to seen. It refuses a key
+// that escapes a lone surrogate or that seen holds already, naming neither key.
+func (w *Walker) member(seen map[string]struct{}) (string, error) {
+	tok, at, err := w.next()
+	if err != nil {
+		return "", err
+	}
+
+	key, ok := tok.(string)
+	if !ok {
+		// Only a value a callback left unread puts anything but a string here.
+		return "", w.lost(at)
+	}
+
+	what := func() string { return "a key of " + text.Quote(w.Path()) }
+
+	if err := w.checkString(key, at, what); err != nil {
+		return "", err
+	}
+
+	if _, ok := seen[key]; ok {
+		return "", fmt.Errorf("%w: repeated key in %s at %s", w.invalid, text.Quote(w.Path()), position(w.data, at))
+	}
+
+	seen[key] = struct{}{}
+
+	return key, nil
 }
 
 // Null reads the next value if it is null, and reports whether it was. When it

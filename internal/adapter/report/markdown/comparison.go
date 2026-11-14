@@ -83,11 +83,19 @@ func writeComparisonHeader(b *strings.Builder, targets []assessment.TargetAssess
 			", retrieved " + a.Snapshot.RetrievedOn.UTC().Format(dateLayout) + "\n")
 	}
 
+	for i, t := range targets {
+		if region := renderRegion(t.Assessment); region != "" {
+			b.WriteString("- Region: " + names[i] + ": " + region + "\n")
+		}
+	}
+
 	b.WriteString("\n")
 }
 
 // writeComparisonSummary writes one row per fit, and a total, with one column
-// per target holding that target's count.
+// per target holding that target's count, then one estimate row per target with
+// estimates, holding that target's total in its own column and nothing in the
+// others, and the basis the totals are given on. It ranks no target.
 func writeComparisonSummary(b *strings.Builder, targets []assessment.TargetAssessment) {
 	b.WriteString(subsectionHeading + " Summary\n\n")
 
@@ -112,13 +120,34 @@ func writeComparisonSummary(b *strings.Builder, targets []assessment.TargetAsses
 	writeRow(b, partial...)
 	writeRow(b, none...)
 	writeRow(b, total...)
+
+	estimated := false
+
+	for i, t := range targets {
+		if !hasEstimates(t.Assessment) {
+			continue
+		}
+
+		estimated = true
+		row := make([]string, len(targets)+1)
+		row[0] = codeSpan(t.Assessment.Target, true) + " estimate"
+		row[i+1] = renderTotal(*t.Assessment.Total)
+		writeRow(b, row...)
+	}
+
 	b.WriteString("\n")
+
+	if estimated {
+		b.WriteString("Estimates are list prices on each catalog's retrieval date, " + excludedNote +
+			"; each target's own section gives its basis.\n\n")
+	}
 }
 
 // writeComparisonResources writes one row per resource, in the first target's
 // verdict order, which is the inventory's and, as assessment.Comparison.Validate checks,
 // every target's: the ID, the category, and each target's fit and best
-// offering, without the tie note.
+// offering, without the tie note, and its monthly estimate when that target has
+// estimates.
 func writeComparisonResources(b *strings.Builder, targets []assessment.TargetAssessment) {
 	b.WriteString(subsectionHeading + " Resources\n\n")
 
@@ -127,6 +156,10 @@ func writeComparisonResources(b *strings.Builder, targets []assessment.TargetAss
 	for _, t := range targets {
 		name := codeSpan(t.Assessment.Target, true)
 		header = append(header, name+" fit", name+" best offering")
+
+		if hasEstimates(t.Assessment) {
+			header = append(header, name+" monthly estimate")
+		}
 	}
 
 	writeRow(b, header...)
@@ -141,6 +174,10 @@ func writeComparisonResources(b *strings.Builder, targets []assessment.TargetAss
 		for _, t := range targets {
 			v := t.Assessment.Verdicts[i]
 			row = append(row, escapeText(string(v.Fit)), codeSpan(v.BestOffering, true))
+
+			if hasEstimates(t.Assessment) {
+				row = append(row, renderEstimate(v.Estimate))
+			}
 		}
 
 		writeRow(b, row...)

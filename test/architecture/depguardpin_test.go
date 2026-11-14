@@ -793,6 +793,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"encoding/json$",
 			"github.com/timothymamo/shift2eu/internal/app/analysis$",
 			"github.com/timothymamo/shift2eu/internal/domain/assessment$",
+			"github.com/timothymamo/shift2eu/internal/domain/estimate$",
 			"github.com/timothymamo/shift2eu/internal/domain/mapping$",
 		},
 		Deny: []string{

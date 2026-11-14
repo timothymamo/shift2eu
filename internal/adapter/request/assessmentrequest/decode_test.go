@@ -1,8 +1,8 @@
 // Package assessmentrequest_test pins the strict decoder of a
 // POST /v1/assessments request body (PRD #103 milestone 2): the envelope it
-// accepts, the inventory bytes and target keys it returns, and its refusal of
-// everything else, with an error that never echoes a value from the body. It is
-// black-box: only the package's exported API is used.
+// accepts, the inventory bytes, target keys and estimate options it returns, and
+// its refusal of everything else, with an error that never echoes a value from
+// the body. It is black-box: only the package's exported API is used.
 
 package assessmentrequest_test
 
@@ -15,6 +15,7 @@ import (
 	"unicode"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/timothymamo/shift2eu/internal/adapter/request/assessmentrequest"
 	"github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile"
@@ -134,7 +135,7 @@ func TestDecode(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			gotInventory, gotTargets, err := assessmentrequest.Decode([]byte(tt.body))
+			got, err := assessmentrequest.Decode([]byte(tt.body))
 			if err != nil {
 				t.Fatalf("Decode() returned unexpected error: %v", err)
 			}
@@ -142,14 +143,14 @@ func TestDecode(t *testing.T) {
 			wantInventory := []byte(tt.wantInventory)
 			if tt.normalise {
 				wantInventory = compact(t, wantInventory)
-				gotInventory = compact(t, gotInventory)
+				got.Inventory = compact(t, got.Inventory)
 			}
 
-			if diff := cmp.Diff(string(wantInventory), string(gotInventory)); diff != "" {
+			if diff := cmp.Diff(string(wantInventory), string(got.Inventory)); diff != "" {
 				t.Errorf("Decode() inventory differs (-want +got):\n%s", diff)
 			}
 
-			if diff := cmp.Diff(tt.wantTargets, gotTargets); diff != "" {
+			if diff := cmp.Diff(tt.wantTargets, got.Targets); diff != "" {
 				t.Errorf("Decode() targets differ (-want +got):\n%s", diff)
 			}
 		})
@@ -166,6 +167,92 @@ func compact(t *testing.T, data []byte) []byte {
 	}
 
 	return buf.Bytes()
+}
+
+// TestDecodeEstimateOptions pins the two optional keys of the envelope that PRD
+// #190 milestone 8 adds: regions, an object that maps a target key to the region
+// to assess that target in, and estimate, which is on unless the body says
+// false. This package validates neither the target key nor the region: whether a
+// key names a target and a region is one the catalog lists is the HTTP layer's
+// decision, as it is for the target keys themselves.
+func TestDecodeEstimateOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		// wantRegions is the map the body asks for, nil when it asks for none.
+		wantRegions map[string]string
+		// wantEstimate is the estimate switch: true unless the body says false.
+		wantEstimate bool
+	}{
+		{
+			name:         "no options at all: estimates are on",
+			body:         `{"inventory":` + compactInventory + `,"targets":["scaleway"]}`,
+			wantEstimate: true,
+		},
+		{
+			name:         "estimate given true",
+			body:         `{"inventory":` + compactInventory + `,"targets":["scaleway"],"estimate":true}`,
+			wantEstimate: true,
+		},
+		{
+			name:         "estimate given false",
+			body:         `{"inventory":` + compactInventory + `,"targets":["scaleway"],"estimate":false}`,
+			wantEstimate: false,
+		},
+		{
+			name:         "one region",
+			body:         `{"inventory":` + compactInventory + `,"targets":["scaleway"],"regions":{"scaleway":"fr-par"}}`,
+			wantRegions:  map[string]string{"scaleway": "fr-par"},
+			wantEstimate: true,
+		},
+		{
+			name: "a region per target, with estimates off",
+			body: `{"inventory":` + compactInventory + `,"targets":["ovhcloud","scaleway"],` +
+				`"regions":{"scaleway":"nl-ams","ovhcloud":"GRA"},"estimate":false}`,
+			wantRegions:  map[string]string{"scaleway": "nl-ams", "ovhcloud": "GRA"},
+			wantEstimate: false,
+		},
+		{
+			name:         "an empty regions object",
+			body:         `{"inventory":` + compactInventory + `,"targets":["scaleway"],"regions":{}}`,
+			wantRegions:  map[string]string{},
+			wantEstimate: true,
+		},
+		{
+			// The options do not change what the rest of the envelope decodes to.
+			name: "the inventory and targets beside the options",
+			body: `{"regions":{"ovhcloud":"GRA"},"estimate":false,"targets":["ovhcloud"],"inventory":` +
+				compactInventory + `}`,
+			wantRegions:  map[string]string{"ovhcloud": "GRA"},
+			wantEstimate: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := assessmentrequest.Decode([]byte(tt.body))
+			if err != nil {
+				t.Fatalf("Decode() returned unexpected error: %v", err)
+			}
+
+			if diff := cmp.Diff(tt.wantRegions, got.Regions, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("Decode() regions differ (-want +got):\n%s", diff)
+			}
+
+			if got.Estimate != tt.wantEstimate {
+				t.Errorf("Decode() Estimate = %t, want %t", got.Estimate, tt.wantEstimate)
+			}
+
+			if len(got.Inventory) == 0 || len(got.Targets) == 0 {
+				t.Errorf("Decode() returned inventory %q and targets %q, want both beside the options",
+					got.Inventory, got.Targets)
+			}
+		})
+	}
 }
 
 // TestDecodeErrors pins every request body the decoder refuses: the envelope
@@ -220,6 +307,58 @@ func TestDecodeErrors(t *testing.T) {
 			body: []byte(`{"inventory":{},"Targets":["scaleway"],"targets":["ovhcloud"]}`),
 		},
 		{
+			name: "estimate is a string",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"estimate":"yes"}`),
+		},
+		{
+			name: "estimate is a number",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"estimate":0}`),
+		},
+		{
+			name: "estimate is null",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"estimate":null}`),
+		},
+		{
+			name: "regions is an array",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"regions":[]}`),
+		},
+		{
+			name: "regions is a string",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"regions":"scaleway=fr-par"}`),
+		},
+		{
+			name: "regions is null",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"regions":null}`),
+		},
+		{
+			name: "a region is a number",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"regions":{"scaleway":42}}`),
+		},
+		{
+			name: "a region is an array",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"regions":{"scaleway":["fr-par"]}}`),
+		},
+		{
+			name: "a region is null",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"regions":{"scaleway":null}}`),
+		},
+		{
+			// A region is at least one character, as the CLI's --region requires: an
+			// empty one would otherwise mean "every region", so a client that thought
+			// it pinned one would get an estimate in the default region instead.
+			name: "a region is empty",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"regions":{"scaleway":""}}`),
+		},
+		{
+			name: "duplicate regions key",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"regions":{"scaleway":"fr-par"},` +
+				`"regions":{"scaleway":"nl-ams"}}`),
+		},
+		{
+			name: "duplicate estimate key",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"estimate":true,"estimate":false}`),
+		},
+		{
 			name: "trailing data after the object",
 			body: []byte(`{"inventory":{},"targets":["scaleway"]} {}`),
 		},
@@ -243,10 +382,9 @@ func TestDecodeErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			inventoryBytes, targets, err := assessmentrequest.Decode(tt.body)
+			got, err := assessmentrequest.Decode(tt.body)
 			if err == nil {
-				t.Fatalf("Decode() returned inventory %q and targets %q, want an error wrapping %v",
-					inventoryBytes, targets, assessmentrequest.ErrDecode)
+				t.Fatalf("Decode() returned %+v, want an error wrapping %v", got, assessmentrequest.ErrDecode)
 			}
 
 			if !errors.Is(err, assessmentrequest.ErrDecode) {
@@ -259,9 +397,132 @@ func TestDecodeErrors(t *testing.T) {
 
 			// A refused body yields nothing: a caller that ignores the error must
 			// not get a half-decoded envelope.
-			if len(inventoryBytes) != 0 || len(targets) != 0 {
-				t.Errorf("Decode() returned inventory %q and targets %q beside an error, want neither",
-					inventoryBytes, targets)
+			if diff := cmp.Diff(assessmentrequest.Request{}, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("Decode() returned a request beside an error (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestDecodeRefusesAnEmptyRegion pins that a region is one character or more,
+// as the CLI's --region is: an empty one would silently mean "every region", so
+// a client that believed it had pinned a region would be assessed in all of them
+// and estimated in the target's default. The refusal wraps ErrDecode and names
+// the member by its index, never by the key the client sent, and repeats no value
+// from the body (PRD #190 milestone 8, security-audit follow-up L2).
+func TestDecodeRefusesAnEmptyRegion(t *testing.T) {
+	t.Parallel()
+
+	const marker = "MARKER-KEY-7"
+
+	tests := []struct {
+		name string
+		body string
+		// want is the member the error must name, by its index.
+		want string
+	}{
+		{
+			name: "the only region is empty",
+			body: `{"inventory":{},"targets":["scaleway"],"regions":{"scaleway":""}}`,
+			want: "regions[0]",
+		},
+		{
+			name: "the second region is empty",
+			body: `{"inventory":{},"targets":["scaleway","ovhcloud"],` +
+				`"regions":{"scaleway":"fr-par","ovhcloud":""}}`,
+			want: "regions[1]",
+		},
+		{
+			name: "an empty region under a hostile key",
+			body: `{"inventory":{},"targets":["scaleway"],"regions":{"` + marker + `":""}}`,
+			want: "regions[0]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := assessmentrequest.Decode([]byte(tt.body))
+			if err == nil {
+				t.Fatalf("Decode() returned %+v, want an error wrapping %v for an empty region",
+					got, assessmentrequest.ErrDecode)
+			}
+
+			if !errors.Is(err, assessmentrequest.ErrDecode) {
+				t.Errorf("Decode() error = %v, want it to wrap %v", err, assessmentrequest.ErrDecode)
+			}
+
+			msg := err.Error()
+
+			if !strings.Contains(msg, tt.want) {
+				t.Errorf("Decode() error = %q, want it to name the member %s", msg, tt.want)
+			}
+
+			if strings.Contains(msg, marker) {
+				t.Errorf("Decode() error = %q, want it not to echo the body key %q", msg, marker)
+			}
+
+			if strings.ContainsAny(msg, "\r\n") {
+				t.Errorf("Decode() error = %q, want a single line", msg)
+			}
+
+			// A refused body yields nothing: a caller that ignores the error must
+			// not get a half-decoded envelope.
+			if diff := cmp.Diff(assessmentrequest.Request{}, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("Decode() returned a request beside an error (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestDecodeOptionErrorsNameTheType pins how a wrong JSON type of one of the
+// options is refused: by the type the value is and the type the format wants, as
+// every other wrong type of the envelope is refused, never by the value.
+func TestDecodeOptionErrorsNameTheType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		// want is what the error must say: the type the value is, then the type
+		// the format wants.
+		want []string
+	}{
+		{
+			name: "estimate is a string",
+			body: `{"inventory":{},"targets":["scaleway"],"estimate":"yes"}`,
+			want: []string{"string", "boolean"},
+		},
+		{
+			name: "regions is an array",
+			body: `{"inventory":{},"targets":["scaleway"],"regions":[]}`,
+			want: []string{"array", "object"},
+		},
+		{
+			name: "a region is a number",
+			body: `{"inventory":{},"targets":["scaleway"],"regions":{"scaleway":42}}`,
+			want: []string{"number", "string"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := assessmentrequest.Decode([]byte(tt.body))
+			if err == nil {
+				t.Fatalf("Decode() returned no error, want one wrapping %v", assessmentrequest.ErrDecode)
+			}
+
+			if !errors.Is(err, assessmentrequest.ErrDecode) {
+				t.Errorf("Decode() error = %v, want it to wrap %v", err, assessmentrequest.ErrDecode)
+			}
+
+			for _, want := range tt.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Decode() error = %q, want it to name %q", err.Error(), want)
+				}
 			}
 		})
 	}
@@ -311,13 +572,25 @@ func TestDecodeErrorNeverEchoesAValue(t *testing.T) {
 			name: "data after the object holding it",
 			body: `{"inventory":{},"targets":["ovhcloud"]} "` + marker + `"`,
 		},
+		{
+			name: "an estimate that is a string",
+			body: `{"inventory":{},"targets":["ovhcloud"],"estimate":"` + marker + `"}`,
+		},
+		{
+			name: "regions that are an array holding it",
+			body: `{"inventory":{},"targets":["ovhcloud"],"regions":["` + marker + `"]}`,
+		},
+		{
+			name: "a region that is an array holding it",
+			body: `{"inventory":{},"targets":["ovhcloud"],"regions":{"ovhcloud":["` + marker + `"]}}`,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, _, err := assessmentrequest.Decode([]byte(tt.body))
+			_, err := assessmentrequest.Decode([]byte(tt.body))
 			if err == nil {
 				t.Fatalf("Decode() returned no error, want one wrapping %v", assessmentrequest.ErrDecode)
 			}
@@ -378,7 +651,7 @@ func TestDecodeErrorEscapesAKey(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			_, _, err := assessmentrequest.Decode([]byte(tt.body))
+			_, err := assessmentrequest.Decode([]byte(tt.body))
 			if err == nil {
 				t.Fatalf("Decode() returned no error, want one wrapping %v", assessmentrequest.ErrDecode)
 			}

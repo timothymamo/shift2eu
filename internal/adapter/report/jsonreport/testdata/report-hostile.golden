@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "assessment",
   "inventoryName": "inv\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�.json",
   "source": "aws\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�",
@@ -34,7 +34,14 @@
           "offering": "Off\"er\\ing\u0000\u001b\u2028\u003c/script\u003e�"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "db-\"rel\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�"
+        }
+      ],
+      "affectedBy": []
     },
     {
       "id": "partial-example",
@@ -54,7 +61,9 @@
       ],
       "requiredChanges": [
         "cap\"a\\b\n\t\u0000\u001b\u2028\u003c/script\u003e�"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "fn\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�",
@@ -76,7 +85,9 @@
           "category": "cat\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     }
   ],
   "blockers": [
@@ -95,6 +106,20 @@
         "target": "Evil \"target\" \\ \t\u0000\u001b\u2028\u003c/script\u003e�",
         "category": "cat\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�"
       }
+    }
+  ],
+  "workloads": [
+    {
+      "name": "ws|`x`[a](b)\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": []
     }
   ]
 }

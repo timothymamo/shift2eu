@@ -1,0 +1,417 @@
+{
+  "schemaVersion": 2,
+  "kind": "assessment",
+  "inventoryName": "inventory.json",
+  "source": "aws",
+  "target": {
+    "name": "Example Cloud",
+    "snapshot": {
+      "source": "https://www.example.com/pricing/",
+      "retrieved": "2026-11-13"
+    }
+  },
+  "summary": {
+    "direct": 7,
+    "partial": 0,
+    "none": 1,
+    "total": 8
+  },
+  "resources": [
+    {
+      "id": "bucket-storage",
+      "rawType": "AWS::S3::Bucket",
+      "category": "storage.object",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Example Object Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Example Object Storage offers every capability the resource uses",
+          "offering": "Example Object Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": true,
+        "amount": "2500.00",
+        "countAssumed": false,
+        "hoursAssumed": false,
+        "breakdown": {
+          "plan": "0.00",
+          "storage": "2500.00",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "cluster-small",
+      "rawType": "Scaleway::Kubernetes::Cluster",
+      "category": "kubernetes.managed",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Example Kubernetes",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Example Kubernetes offers every capability the resource uses",
+          "offering": "Example Kubernetes"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "KN-S",
+        "vcpus": 1,
+        "memoryGiB": "2",
+        "includedStorageGiB": 0,
+        "price": "10.00"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "15.00",
+        "countAssumed": true,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "10.00",
+          "storage": "0.00",
+          "fixedFee": "5.00"
+        }
+      }
+    },
+    {
+      "id": "function-orders",
+      "rawType": "AWS::Lambda::Function",
+      "category": "serverless.function",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Example Functions",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Example Functions offers every capability the resource uses",
+          "offering": "Example Functions"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "usage-priced"
+      }
+    },
+    {
+      "id": "legacy-nosize",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Example Virtual Machines",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Example Virtual Machines offers every capability the resource uses",
+          "offering": "Example Virtual Machines"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
+    },
+    {
+      "id": "queue-jobs",
+      "rawType": "AWS::SQS::Queue",
+      "category": "messaging.queue",
+      "region": "eu-west-1",
+      "fit": "none",
+      "bestOffering": "",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "no-offering",
+          "text": "no offering in the Example Cloud catalog for messaging.queue",
+          "target": "Example Cloud",
+          "category": "messaging.queue"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
+      }
+    },
+    {
+      "id": "server-huge",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Example Virtual Machines",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Example Virtual Machines offers every capability the resource uses",
+          "offering": "Example Virtual Machines"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "EX-L",
+        "vcpus": 4,
+        "memoryGiB": "8",
+        "includedStorageGiB": 80,
+        "price": "40.00"
+      },
+      "estimate": {
+        "estimated": false,
+        "reason": "no-plan-large-enough"
+      }
+    },
+    {
+      "id": "server-small",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Example Virtual Machines",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Example Virtual Machines offers every capability the resource uses",
+          "offering": "Example Virtual Machines"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "EX-S",
+        "vcpus": 1,
+        "memoryGiB": "2",
+        "includedStorageGiB": 20,
+        "price": "10.00"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "10.00",
+        "countAssumed": true,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "10.00",
+          "storage": "0.00",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "worker-jobs",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Example Virtual Machines",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Example Virtual Machines offers every capability the resource uses",
+          "offering": "Example Virtual Machines"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "queue-jobs"
+        },
+        {
+          "type": "replica-of",
+          "target": "server-small"
+        }
+      ],
+      "affectedBy": [
+        "queue-jobs"
+      ],
+      "plan": {
+        "name": "EX-S",
+        "vcpus": 1,
+        "memoryGiB": "2",
+        "includedStorageGiB": 20,
+        "price": "10.00"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "10.00",
+        "countAssumed": true,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "10.00",
+          "storage": "0.00",
+          "fixedFee": "0.00"
+        }
+      }
+    }
+  ],
+  "blockers": [
+    {
+      "resourceId": "queue-jobs",
+      "reason": {
+        "code": "no-offering",
+        "text": "no offering in the Example Cloud catalog for messaging.queue",
+        "target": "Example Cloud",
+        "category": "messaging.queue"
+      }
+    }
+  ],
+  "workloads": [
+    {
+      "name": "orders",
+      "noWorkload": false,
+      "resources": 4,
+      "summary": {
+        "direct": 3,
+        "partial": 0,
+        "none": 1,
+        "total": 4
+      },
+      "blockers": [
+        {
+          "resourceId": "queue-jobs",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the Example Cloud catalog for messaging.queue",
+            "target": "Example Cloud",
+            "category": "messaging.queue"
+          }
+        }
+      ],
+      "estimate": {
+        "amount": "10.00",
+        "estimated": 1,
+        "resources": 4
+      },
+      "sourceCost": {
+        "covered": 1,
+        "resources": 4,
+        "currencies": [
+          {
+            "currency": "USD",
+            "amount": "1200.00",
+            "resources": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "shop",
+      "noWorkload": false,
+      "resources": 3,
+      "summary": {
+        "direct": 3,
+        "partial": 0,
+        "none": 0,
+        "total": 3
+      },
+      "blockers": [],
+      "estimate": {
+        "amount": "2525.00",
+        "estimated": 3,
+        "resources": 3
+      },
+      "sourceCost": {
+        "covered": 3,
+        "resources": 3,
+        "currencies": [
+          {
+            "currency": "EUR",
+            "amount": "2415.00",
+            "resources": 2
+          },
+          {
+            "currency": "USD",
+            "amount": "40.00",
+            "resources": 1
+          }
+        ]
+      }
+    },
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "amount": "0.00",
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 1,
+        "resources": 1,
+        "currencies": [
+          {
+            "currency": "USD",
+            "amount": "200.00",
+            "resources": 1
+          }
+        ]
+      }
+    }
+  ],
+  "estimate": {
+    "region": "xx-par",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "amount": "2535.00",
+      "estimated": 4,
+      "resources": 8
+    }
+  },
+  "sourceCost": {
+    "covered": 5,
+    "resources": 8,
+    "currencies": [
+      {
+        "currency": "EUR",
+        "amount": "2415.00",
+        "resources": 2
+      },
+      {
+        "currency": "USD",
+        "amount": "1440.00",
+        "resources": 3
+      }
+    ]
+  }
+}

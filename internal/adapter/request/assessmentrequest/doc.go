@@ -7,8 +7,8 @@
 //
 // The body is untrusted input and is decoded only through jsondoc, never with
 // encoding/json of its own. It must be one JSON object, valid UTF-8 without a
-// byte order mark, with nothing after it but white space, holding exactly two
-// keys:
+// byte order mark, with nothing after it but white space, holding the keys
+// below, and Decode returns them as a Request:
 //
 //   - inventory: a JSON object, returned as its raw bytes, unchanged. This
 //     package checks only that it is an object; the inventory reader
@@ -16,8 +16,15 @@
 //   - targets: a non-empty array of strings, returned in order. Whether each
 //     is a known target, repeated, empty or all with another key is the
 //     caller's to check, with the CLI's rules.
+//   - regions (optional, PRD #190): an object of strings mapping a target key
+//     to the one region to assess that target in, at most MaxRegions members,
+//     no key twice, no region empty (an empty one would mean every region).
+//     Whether a key is a selected target and the region one the
+//     target lists is the caller's to check. The keys are data, so an error
+//     names a member by its index (regions[0]), never by its key.
+//   - estimate (optional, PRD #190): a boolean, true when absent.
 //
-// Both keys are required. Malformed JSON, invalid UTF-8, a missing key, a value
+// inventory and targets are required. Malformed JSON, invalid UTF-8, a missing key, a value
 // of the wrong JSON type (null included), an unknown key, a key repeated
 // (also when it equals another ignoring case, as jsondoc refuses), an escaped
 // lone surrogate and trailing data are refused, each with an error that wraps

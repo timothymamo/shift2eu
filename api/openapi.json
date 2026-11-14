@@ -58,7 +58,7 @@
         },
         "responses": {
           "200": {
-            "description": "The report.",
+            "description": "The report. The JSON report is schemaVersion 2 (docs/adr/0018, docs/adr/0030); a client reads schemaVersion to know which version it holds.",
             "headers": {
               "Cache-Control": {
                 "$ref": "#/components/headers/Cache-Control"
@@ -72,10 +72,10 @@
                 "schema": {
                   "oneOf": [
                     {
-                      "$ref": "../internal/adapter/report/jsonreport/schema/assessment-v1.schema.json"
+                      "$ref": "../internal/adapter/report/jsonreport/schema/assessment-v2.schema.json"
                     },
                     {
-                      "$ref": "../internal/adapter/report/jsonreport/schema/comparison-v1.schema.json"
+                      "$ref": "../internal/adapter/report/jsonreport/schema/comparison-v2.schema.json"
                     }
                   ]
                 }
@@ -416,6 +416,32 @@
             "items": {
               "type": "string"
             }
+          },
+          "regions": {
+            "type": "object",
+            "description": "Optional (PRD #190). Maps a selected target key to the one region of that target to assess and estimate in, such as {\"scaleway\": \"nl-ams\"}; a target without one is assessed in all its regions, with estimates in its catalog's default region. Its keys are target keys (see GET /v1/targets). An empty region is 400 invalid_request. A key the request does not select, or a region the target does not list, is 400 invalid_region, whose message names the target and the target's regions; nothing is assessed.",
+            "properties": {
+              "ovhcloud": {
+                "type": "string",
+                "minLength": 1,
+                "description": "An OVHcloud region, such as GRA."
+              },
+              "scaleway": {
+                "type": "string",
+                "minLength": 1,
+                "description": "A Scaleway region, such as nl-ams."
+              },
+              "upcloud": {
+                "type": "string",
+                "minLength": 1,
+                "description": "An UpCloud region, such as de-fra1."
+              }
+            },
+            "additionalProperties": false
+          },
+          "estimate": {
+            "type": "boolean",
+            "description": "Optional (PRD #190). Plans and monthly estimates (list prices on the catalog's retrieval date, excluding VAT and discounts) are in the report unless this is false; with false the report holds no price. Absent means true."
           }
         },
         "required": [
@@ -552,7 +578,7 @@
     },
     "responses": {
       "BadRequest": {
-        "description": "The body, the inventory or the target list is invalid. Codes: invalid_request, invalid_inventory, invalid_targets.",
+        "description": "The body, the inventory, the target list or a region is invalid. Codes: invalid_request, invalid_inventory, invalid_targets, invalid_region.",
         "headers": {
           "Cache-Control": {
             "$ref": "#/components/headers/Cache-Control"

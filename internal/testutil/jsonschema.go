@@ -24,7 +24,7 @@ import (
 // any other keyword is refused.
 var schemaKeywords = []string{
 	"$schema", "$id", "title", "description", "$defs", "$ref", "type", "properties",
-	"required", "additionalProperties", "items", "minItems", "enum", "const", "minimum", "pattern",
+	"required", "additionalProperties", "items", "minItems", "minLength", "enum", "const", "minimum", "pattern",
 }
 
 // schemaTypes are the type names a schema's "type" may hold.
@@ -46,6 +46,8 @@ type Schema struct {
 	// items is the schema of an array's elements and minItems its least length.
 	items    *Schema
 	minItems *int
+	// minLength is the least number of characters of a string.
+	minLength *int
 	// enum and const restrict the value itself.
 	enum       []any
 	hasEnum    bool
@@ -382,6 +384,15 @@ func (s *Schema) parseKeyword(keyword string, value json.RawMessage) error {
 		s.minItems = &least
 
 		return nil
+	case "minLength":
+		var least int
+		if err := json.Unmarshal(value, &least); err != nil {
+			return fmt.Errorf("minLength must be an integer: %w", err)
+		}
+
+		s.minLength = &least
+
+		return nil
 	case "enum":
 		if err := json.Unmarshal(value, &s.enum); err != nil {
 			return fmt.Errorf("enum must be a list of values: %w", err)
@@ -535,6 +546,17 @@ func (s *Schema) validate(value any, path string) []string {
 		if text, ok := value.(string); ok && !s.pattern.MatchString(text) {
 			problems = append(problems, fmt.Sprintf("%s: %s does not match the pattern %q",
 				path, jsonText(text), s.pattern.String()))
+		}
+	}
+
+	if s.minLength != nil {
+		// JSON Schema counts characters, not bytes, so a string of multi-byte
+		// runes is as long as its runes.
+		if text, ok := value.(string); ok {
+			if length := len([]rune(text)); length < *s.minLength {
+				problems = append(problems, fmt.Sprintf("%s: want at least %d characters, got %d",
+					path, *s.minLength, length))
+			}
 		}
 	}
 

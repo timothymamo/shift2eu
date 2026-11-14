@@ -243,10 +243,11 @@ type fakeReporter struct {
 
 	once sync.Once
 
-	mu      sync.Mutex
-	calls   int
-	metas   []analysis.ReportMeta
-	targets []string
+	mu          sync.Mutex
+	calls       int
+	metas       []analysis.ReportMeta
+	targets     []string
+	assessments []assessment.Assessment
 }
 
 func (r *fakeReporter) Report(_ context.Context, w io.Writer, a assessment.Assessment,
@@ -256,6 +257,7 @@ func (r *fakeReporter) Report(_ context.Context, w io.Writer, a assessment.Asses
 	r.calls++
 	r.metas = append(r.metas, meta)
 	r.targets = append(r.targets, a.Target)
+	r.assessments = append(r.assessments, a)
 	r.mu.Unlock()
 
 	if r.started != nil {
@@ -295,6 +297,19 @@ func (r *fakeReporter) lastMeta() analysis.ReportMeta {
 	}
 
 	return r.metas[len(r.metas)-1]
+}
+
+// lastAssessment returns the assessment the last report was rendered for, so a
+// test can see the options the handler assessed with.
+func (r *fakeReporter) lastAssessment() assessment.Assessment {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(r.assessments) == 0 {
+		return assessment.Assessment{}
+	}
+
+	return r.assessments[len(r.assessments)-1]
 }
 
 func (r *fakeReporter) targetsSeen() []string {
@@ -357,30 +372,38 @@ type fakeDecoder struct {
 	bodies [][]byte
 }
 
-func (d *fakeDecoder) decode(body []byte) ([]byte, []string, error) {
+func (d *fakeDecoder) decode(body []byte) (httpapi.Request, error) {
 	d.mu.Lock()
 	d.calls++
 	d.bodies = append(d.bodies, slices.Clone(body))
 	d.mu.Unlock()
 
 	if d.err != nil {
-		return nil, nil, d.err
+		return httpapi.Request{}, d.err
 	}
 
-	var envelope struct {
-		Inventory json.RawMessage `json:"inventory"`
-		Targets   []string        `json:"targets"`
-	}
+	// estimate defaults to true, as the real decoder's does (PRD #190).
+	envelope := struct {
+		Inventory json.RawMessage   `json:"inventory"`
+		Targets   []string          `json:"targets"`
+		Regions   map[string]string `json:"regions"`
+		Estimate  *bool             `json:"estimate"`
+	}{Estimate: &[]bool{true}[0]}
 
 	if err := json.Unmarshal(body, &envelope); err != nil {
-		return nil, nil, fmt.Errorf("decode request: %w", err)
+		return httpapi.Request{}, fmt.Errorf("decode request: %w", err)
 	}
 
 	if len(envelope.Inventory) == 0 {
-		return nil, nil, errors.New(`decode request: missing field "inventory"`)
+		return httpapi.Request{}, errors.New(`decode request: missing field "inventory"`)
 	}
 
-	return envelope.Inventory, envelope.Targets, nil
+	return httpapi.Request{
+		Inventory: envelope.Inventory,
+		Targets:   envelope.Targets,
+		Regions:   envelope.Regions,
+		Estimate:  *envelope.Estimate,
+	}, nil
 }
 
 func (d *fakeDecoder) callCount() int {

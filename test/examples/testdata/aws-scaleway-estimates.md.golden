@@ -1,0 +1,55 @@
+# Migration assessment: `Scaleway`
+
+- Inventory file: `inventory.json`
+- Source: `aws`
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Region: `fr-par` (the target's default for estimates)
+
+## Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 5 |
+| partial | 6 |
+| none | 2 |
+| total | 13 |
+
+## Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule Dedicated` |  | not estimated: size unknown | `Kubernetes Kapsule Dedicated` offers every capability the resource uses |
+| `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced | `Queues` does not offer `encryption-at-rest` |
+| `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced | `Queues` does not offer `encryption-at-rest` |
+| `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` offers every capability the resource uses |
+| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | partial | `Block Storage` |  | not estimated: size unknown | `Block Storage` does not offer `encryption-at-rest` |
+| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `shop-web-asg` | `AWS::AutoScaling::AutoScalingGroup` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop.example.com` | `AWS::Route53::HostedZone` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+
+## Required changes
+
+- `shop-db`: `point-in-time-restore`, `zone-high-availability` (not offered by `Managed Database for PostgreSQL and MySQL`)
+- `shop-legacy-mysql`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
+- `shop-orders`: `encryption-at-rest` (not offered by `Queues`)
+- `shop-orders-dlq`: `encryption-at-rest` (not offered by `Queues`)
+- `shop-web-1-data`: `encryption-at-rest` (not offered by `Block Storage`)
+- `shop-web-asg`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
+
+## Blockers
+
+- `shop-cdn`: not classified
+- `shop.example.com`: not classified
+
+## Cost estimate
+
+- Total: €0.00 per month for 0 of 13 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
