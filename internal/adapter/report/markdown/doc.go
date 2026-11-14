@@ -37,8 +37,9 @@
 //   - "## Cost estimate", only with estimates on: the total "for N of M
 //     resources" ("resource" when M is 1), the basis (list prices on the retrieval date, excluding VAT
 //     and discounts, a fixed fee as the offering's listed fee), the region the
-//     prices are for, the hours basis, and the source's cost per currency, never
-//     converted.
+//     prices are for, the hours basis, followed by one clause per distinct
+//     billing cap of the estimated resources' plans, ascending (ADR 0029), and
+//     the source's cost per currency, never converted.
 //
 // Estimates are on exactly when the assessment's Total is set
 // (assessment.AssessWith). With estimates off and no relation and no workload,

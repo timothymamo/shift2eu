@@ -266,13 +266,57 @@ func writeWorkloads(b *strings.Builder, a assessment.Assessment, heading string)
 
 // writeCostEstimate writes the cost summary of an assessment with estimates: the
 // total, the basis it is given on, the region the prices are for, the hours
-// basis and the source's cost per currency. It starts with the blank line that
+// basis with any billing cap (hoursLine) and the source's cost per currency. It starts with the blank line that
 // ends the section before it and ends with a single newline.
 func writeCostEstimate(b *strings.Builder, a assessment.Assessment, heading string) {
 	b.WriteString("\n" + heading + " Cost estimate\n\n")
 	b.WriteString("- Total: " + renderTotal(*a.Total) + "\n")
 	b.WriteString("- Estimate: " + basisNote(a) + "; " + fixedFeeNote + "\n")
 	b.WriteString("- Prices in " + codeSpan(a.EstimateRegion, false) + "\n")
-	b.WriteString("- Hours: " + hoursNote + "\n")
+	b.WriteString("- Hours: " + hoursLine(a) + "\n")
 	writeSourceCost(b, a.SourceCost, "")
+}
+
+// hoursLine is the hours basis of a's plan prices: hoursNote, then one clause
+// per distinct billing cap of a's estimated resources, ascending and joined with
+// "; ", saying how a plan with that cap is priced (ADR 0029). Without a capped
+// resource it is hoursNote alone.
+func hoursLine(a assessment.Assessment) string {
+	var caps []int64
+
+	for _, v := range a.Verdicts {
+		if v.Estimate == nil || !v.Estimate.Estimated || v.Estimate.BillingCapHours <= 0 {
+			continue
+		}
+
+		caps = insertCap(caps, v.Estimate.BillingCapHours)
+	}
+
+	line := hoursNote
+
+	for _, c := range caps {
+		h := strconv.FormatInt(c, 10)
+		line += "; a plan billed for at most " + h + " hours a month costs plan price × count × min(hours, " +
+			h + ") / " + h
+	}
+
+	return line
+}
+
+// insertCap returns caps, ascending and without repeats, with c in it.
+func insertCap(caps []int64, c int64) []int64 {
+	i := 0
+	for i < len(caps) && caps[i] < c {
+		i++
+	}
+
+	if i < len(caps) && caps[i] == c {
+		return caps
+	}
+
+	caps = append(caps, 0)
+	copy(caps[i+1:], caps[i:])
+	caps[i] = c
+
+	return caps
 }

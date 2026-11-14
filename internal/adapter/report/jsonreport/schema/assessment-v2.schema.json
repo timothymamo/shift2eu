@@ -364,6 +364,11 @@
           "type": "boolean",
           "description": "Whether the estimate assumed 730 hours a month because the resource gives none; present only when estimated."
         },
+        "billingCapHours": {
+          "type": "integer",
+          "description": "The most hours a month the estimated plan is billed for: its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
+          "minimum": 1
+        },
         "breakdown": {
           "$ref": "#/$defs/breakdown"
         },
@@ -461,7 +466,7 @@
         },
         "hoursBasis": {
           "type": "integer",
-          "description": "The hours a month a plan price is for: a plan is priced price × count × hours / hoursBasis.",
+          "description": "The hours a month a plan price is for: a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
           "const": 730
         },
         "total": {

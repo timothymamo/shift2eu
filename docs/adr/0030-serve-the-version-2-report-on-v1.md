@@ -65,8 +65,10 @@ The report itself:
   "(count assumed 1)" and "(730 hours assumed)" after the fixed-fee note, so a reader sees which rows
   rest on an assumption.
 - **The basis is stated next to every total**: list prices on the snapshot's retrieval date (never an
-  age), excluding VAT and discounts, the hours basis "plan price × count × hours / 730" (no cap), and a
-  fixed fee as the offering's listed fee. A fee recorded as the smallest paid size of a tier, such as
+  age), excluding VAT and discounts, the hours basis "plan price × count × hours / 730", and a
+  fixed fee as the offering's listed fee. A plan whose offering caps its billed hours (ADR 0029) has
+  its cap stated: the JSON `estimate` carries `billingCapHours`, and the Markdown hours line adds, per
+  distinct cap, that such a plan costs plan price × count × min(hours, cap) / cap. A fee recorded as the smallest paid size of a tier, such as
   Scaleway Kubernetes Kapsule Dedicated (its catalog's `SOURCES.md`), is a lower bound; the domain does
   not mark which fees are, so the JSON Schema's `fixedFee` description says so and no new price rule is
   invented.

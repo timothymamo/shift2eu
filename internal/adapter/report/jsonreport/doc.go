@@ -29,8 +29,9 @@
 // each only when set. A resource always carries its relations and its
 // "affected by" notes ([] when none); with estimates on it carries its estimate
 // (estimated with amount, breakdown and the countAssumed and hoursAssumed
-// flags, both always written, or the reason code when not) and the
-// plan the estimate names, if any.
+// flags, both always written, and billingCapHours when the plan's offering caps
+// its billed hours (ADR 0029), or the reason code when not) and the plan the
+// estimate names, if any.
 //
 // # Estimates
 //

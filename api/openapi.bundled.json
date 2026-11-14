@@ -375,7 +375,7 @@
               },
               "hoursBasis": {
                 "const": 730,
-                "description": "The hours a month a plan price is for: a plan is priced price × count × hours / hoursBasis.",
+                "description": "The hours a month a plan price is for: a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
                 "type": "integer"
               },
               "priceDate": {
@@ -595,6 +595,11 @@
                 "description": "The monthly list price in EUR, excluding VAT and discounts, a decimal string rounded to the cent (half away from zero); present only when estimated.",
                 "pattern": "^[0-9]+\\.[0-9]{2}$",
                 "type": "string"
+              },
+              "billingCapHours": {
+                "description": "The most hours a month the estimated plan is billed for: its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
+                "minimum": 1,
+                "type": "integer"
               },
               "breakdown": {
                 "$ref": "#/components/schemas/AssessmentReportV2/$defs/breakdown"
@@ -1003,7 +1008,7 @@
               },
               "hoursBasis": {
                 "const": 730,
-                "description": "The hours a month a plan price is for: a plan is priced price × count × hours / hoursBasis.",
+                "description": "The hours a month a plan price is for: a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
                 "type": "integer"
               },
               "priceDate": {
@@ -1223,6 +1228,11 @@
                 "description": "The monthly list price in EUR, excluding VAT and discounts, a decimal string rounded to the cent (half away from zero); present only when estimated.",
                 "pattern": "^[0-9]+\\.[0-9]{2}$",
                 "type": "string"
+              },
+              "billingCapHours": {
+                "description": "The most hours a month the estimated plan is billed for: its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
+                "minimum": 1,
+                "type": "integer"
               },
               "breakdown": {
                 "$ref": "#/components/schemas/ComparisonReportV2/$defs/breakdown"
