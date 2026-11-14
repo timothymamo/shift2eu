@@ -183,7 +183,8 @@ provision:
       # gh release binary, pinned by its SHA-256 above. Its attestation is not checked here, as `gh
       # attestation verify` needs a trusted gh and a GitHub token; the vm-tools workflow checks it for
       # every pinned digest on every PR, and a pin is merged only with that check green (ADR 0017).
-      if ! /usr/local/bin/gh --version 2>/dev/null | grep -q "^gh version ${PARAM_ghVersion#v} "; then
+      # Installed off the PATH, in /usr/local/libexec/shift2eu: /usr/local/bin/gh is the wrapper below.
+      if ! /usr/local/libexec/shift2eu/gh --version 2>/dev/null | grep -q "^gh version ${PARAM_ghVersion#v} "; then
         (
           name="gh_${PARAM_ghVersion#v}_linux_${arch}"
           base="https://github.com/cli/cli/releases/download/${PARAM_ghVersion}"
@@ -193,9 +194,87 @@ provision:
           check_pinned_sha256 "${tmp}/${name}.tar.gz" ghSha256 \
             "$(name=PARAM_ghSha256; name+=Amd64; echo "${!name}")" "${PARAM_ghSha256Arm64}"
           tar -C "${tmp}" --no-same-owner -xzf "${tmp}/${name}.tar.gz"
-          install -m 0755 "${tmp}/${name}/bin/gh" /usr/local/bin/gh
+          install -D -m 0755 "${tmp}/${name}/bin/gh" /usr/local/libexec/shift2eu/gh
         )
       fi
+
+      # The gh every agent, the deck, the git credential helper and make vm-init run: the wrapper of
+      # dev/gh-app-token.sh, which hands the real gh the agents App's token from ~/.config/shift2eu, or
+      # falls back to GITHUB_TOKEN (PRD #161, ADR 0031). Root-owned and outside the workspace mount, so an
+      # agent's edit of the workspace copy never changes the gh in use; plumbing, not a security boundary,
+      # as the VM user has sudo. Copied into the template, as a VM keeps the template it was created with.
+      # Keep the text between the GHWRAPPER lines identical to dev/gh-app-token.sh, which the tests run. The
+      # one sed script pins the real gh's path, so the installed copy reads no SHIFT2EU_REAL_GH, and drops the
+      # comment naming it; make vm-gh-wrapper (dev/vm-gh-wrapper.sh) applies the same script.
+      (
+        tmp="$(mktemp)"
+        trap 'rm -f "${tmp}"' EXIT
+        sed 's|^real=.*|real=/usr/local/libexec/shift2eu/gh|;/^# SHIFT2EU_REAL_GH /d' >"${tmp}" <<'GHWRAPPER'
+      #!/bin/sh
+      # The gh of the Lima VM (PRD #161 milestone 1,
+      # docs/adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md). dev/lima.yaml
+      # installs a copy of this file, root-owned, as /usr/local/bin/gh (make vm-gh-wrapper does it for a VM created
+      # before), and the real gh as /usr/local/libexec/shift2eu/gh, off the PATH: every agent, the deck, the git
+      # credential helper and make vm-init run this wrapper. It is plumbing, not a security boundary: the VM user
+      # has passwordless sudo and can run the real gh, or delete the token file, at will (ADR 0031).
+      #
+      # On every call it reads ~/.config/shift2eu/agents-app-token (the agents App's installation token, then
+      # its expiry as Unix seconds, written by make agents-token on the Mac) and:
+      #   - file absent: runs the real gh unchanged, so it falls back to GITHUB_TOKEN (milestone 3 removes this);
+      #   - file present, well formed, mode 0600, the VM user's own and not expired: runs the real gh with the
+      #     token as GH_TOKEN and GITHUB_TOKEN unset, every argument and standard input passed through;
+      #   - anything else: fails without running gh, asking the maintainer to run
+      #     make agents-token-refresh-start in the host clone on the Mac, never printing the file's content.
+      # SHIFT2EU_REAL_GH names another real gh, for the tests: the installed copies pin real= and drop this line.
+
+      real="${SHIFT2EU_REAL_GH:-/usr/local/libexec/shift2eu/gh}"
+      file="${HOME:?HOME is not set}/.config/shift2eu/agents-app-token"
+
+      if [ ! -e "${file}" ] && [ ! -L "${file}" ]; then
+        exec "${real}" "$@"
+      fi
+
+      refuse() {
+        printf 'gh: %s is %s, so gh cannot use the agents App token; ask the maintainer to run make agents-token-refresh-start in the host clone on the Mac\n' \
+          "${file}" "$1" >&2
+        exit 1
+      }
+
+      [ -f "${file}" ] && [ ! -L "${file}" ] || refuse "not a regular file"
+      [ -z "$(find "${file}" -prune \( -perm -0040 -o -perm -0020 -o -perm -0010 -o -perm -0004 -o -perm -0002 -o -perm -0001 \) -print)" ] ||
+        refuse "readable or writable by other accounts (want mode 0600)"
+      [ -n "$(find "${file}" -prune -user "$(id -u)" -print)" ] || refuse "owned by another account"
+      [ -r "${file}" ] || refuse "not readable"
+
+      token=""
+      expiry=""
+      extra=""
+      {
+        IFS= read -r token || :
+        IFS= read -r expiry || :
+        IFS= read -r extra || :
+      } <"${file}"
+
+      case "${token}" in
+      '' | *[!A-Za-z0-9_]*) refuse "malformed (want two lines: the token, then its expiry as Unix seconds)" ;;
+      esac
+      case "${expiry}" in
+      '' | *[!0-9]*) refuse "malformed (want two lines: the token, then its expiry as Unix seconds)" ;;
+      esac
+      [ -z "${extra}" ] || refuse "malformed (want exactly two lines)"
+
+      if [ "$(date +%s)" -ge "${expiry}" ]; then
+        when="$(date -u -d "@${expiry}" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || date -u -r "${expiry}" '+%Y-%m-%d %H:%M:%S UTC' 2>/dev/null || echo "${expiry}")"
+        refuse "expired since ${when} (the refresh on the Mac may have stopped)"
+      fi
+
+      GH_TOKEN="${token}"
+      export GH_TOKEN
+      unset GITHUB_TOKEN token
+      exec "${real}" "$@"
+      GHWRAPPER
+        install -o root -g root -m 0755 "${tmp}" /usr/local/bin/gh
+      )
 
       # The shellcheck release binary, pinned by its SHA-256 above, root-owned in /usr/local/bin like gh. make
       # lint runs it, and dev/actionlint.sh hands actionlint its path, failing without one.
@@ -315,8 +394,10 @@ provision:
 
       go install "golang.org/x/vuln/cmd/govulncheck@${PARAM_govulncheckVersion}"
 
-      # git push over HTTPS authenticates through gh, with the GITHUB_TOKEN copied in by `make vm-env`.
-      git config --global credential.https://github.com.helper '!gh auth git-credential'
+      # git push over HTTPS authenticates through the gh wrapper, by its absolute path: with the agents
+      # App's token from `make agents-token`, else the GITHUB_TOKEN copied in by `make vm-env` (ADR 0031).
+      # Not `gh auth setup-git`, which would name the real gh and skip the wrapper.
+      git config --global credential.https://github.com.helper '!/usr/local/bin/gh auth git-credential'
 
       # The deck's daemon runs as a systemd user service (`dot-agent-deck daemon install`, once). This
       # drop-in gives it the credentials from `make vm-env`. Lima enables lingering, so it starts at boot.
@@ -390,6 +471,7 @@ probes:
       done
       # The release check (release-tag skill) calls these root-owned binaries by absolute path.
       /usr/local/bin/gh attestation --help >/dev/null
+      /usr/local/libexec/shift2eu/gh --version >/dev/null
       /usr/local/bin/cosign version >/dev/null 2>&1
       /usr/local/bin/crane version >/dev/null
       export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"

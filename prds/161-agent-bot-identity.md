@@ -55,33 +55,39 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 
 ### The agents App's credential (milestone 1)
 
-- [ ] The maintainer's `.envrc` **above the workspace** names the App ID, the installation ID and the
-  **path** of the App's private key file, itself outside the workspace and readable only by the
-  maintainer. No file in the workspace holds any of them, and `make vm-env` never copies the key or its
+- [x] A direnv `.envrc` **outside the workspace, in a host clone the VM cannot reach** names the App ID,
+  the installation ID and the **path** of the App's private key file, itself outside the workspace and
+  readable only by the maintainer (amended in milestone 1's review: the targets that read the key must run
+  code the agents cannot edit, and the workspace and its `.git` are theirs to edit; ADR 0031). No file in the workspace holds any of them, and `make vm-env` never copies the key or its
   path into the VM.
-- [ ] A make target on the Mac mints an installation token from the key (standard library or tools the
+- [x] A make target on the Mac mints an installation token from the key (standard library or tools the
   Mac already has, no new third-party dependency without a reason in the commit message) and writes it
   into the VM over standard input, never on a command line, to a file readable only by the VM user.
-- [ ] While the VM runs, the token is refreshed before it expires, without restarting the deck: a running
+- [x] While the VM runs, the token is refreshed before it expires, without restarting the deck: a running
   agent's next `gh` or `git push` uses the new token. Given a stopped refresh, the next call after expiry
   fails with an error that names the refresh target, not a generic 401.
-- [ ] No command prints a token, the key or its contents; nothing writes them to a log, the workspace or a
+- [x] No command prints a token, the key or its contents; nothing writes them to a log, the workspace or a
   test. Tests use invented keys generated in `t.TempDir()`.
 
 ### The agents' identity (milestone 1)
 
-- [ ] In the VM, `gh` and the git credential helper (`gh auth git-credential`) use the App token when its
+- [x] In the VM, `gh` and the git credential helper (`gh auth git-credential`) use the App token when its
   file is present and fall back to `GITHUB_TOKEN` otherwise, so milestone 1 can merge and be switched on
   without a gap. `make vm-init`'s credential check passes with either.
 - [ ] A pull request opened by an agent after the switch shows the App as its author
   (`gh pr view --json author` gives `is_bot` `true` and the App's login), and its commits' author is the
-  App's bot identity (`<app id>+<slug>[bot]@users.noreply.github.com`), set by `make vm-init`.
+  App's bot identity (`<bot user id>+<slug>[bot]@users.noreply.github.com`, the id of the bot user
+  `<slug>[bot]`, not the App ID: ADR 0031), set by `make vm-init`. *Checked at runbook step 3.*
 - [ ] Every `gh` call the skills make works with the App token: push, `pr create`, `pr view`, `pr checks`,
   `run list/view/watch`, `issue create/view`, and the `release-tag` skill's reads of rulesets, environments
   and releases. Any call that needs a permission the App lacks is listed with the permission, and the
-  maintainer's App permissions in `docs/dev-environment.md` cover them.
+  maintainer's App permissions in `docs/dev-environment.md` cover them. *The calls and their permissions
+  are listed in ADR 0031 (d) and `docs/dev-environment.md` (Attestations read added; Actions stays read, so
+  `gh run rerun` and the rulesets' bypass lists stay maintainer steps); that each works is checked at
+  runbook step 3.*
 - [ ] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
-  `true`). No ruleset requires signed commits.
+  `true`). No ruleset requires signed commits. *Nothing in milestone 1 signs a commit (ADR 0031); the
+  repository's rulesets and `main`'s commits are checked at runbook step 3.*
 
 ### The gate (milestone 2)
 
@@ -146,14 +152,16 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 
 ## Milestones
 
-1. [ ] **Agents App token plumbing and bot identity.** The host-side mint and refresh, the VM token file,
+1. [x] **Agents App token plumbing and bot identity.** The host-side mint and refresh, the VM token file,
    the `gh` and git credential path with the `GITHUB_TOKEN` fallback, the bot git author,
    `make vm-env`/`vm-init` changes, tests, an ADR (identity, token model, why not a machine user, why the
    reviewer never approves), and `docs/dev-environment.md`. Merged under the old token; nothing is
-   enforced yet.
+   enforced yet. *Code merged; criteria marked "runbook step 3" are checked there.*
 2. [ ] **Gate checks, CODEOWNERS, skills and docs.** `.github/CODEOWNERS`, the `Protect main` check with
    its transition flag, `pr-create` and `release-tag` changes, CLAUDE.md, `docs/contributing/agents.md`,
-   the switch-over runbook. Depends on 1.
+   the switch-over runbook. Depends on 1. *Note from milestone 1 (ADR 0031, d): the App keeps Actions
+   read, so `release-tag` hands a re-run of a failed run (`gh run rerun <id>`) to the maintainer instead
+   of running it.*
 3. [ ] **Remove the maintainer's token.** After the maintainer's runbook step 6: drop `GITHUB_TOKEN` from
    `VM_ENV` and the fallback, turn the check's transition flag off, update the docs. Opened by the App and
    approved by the maintainer: the first change through the new gate. Depends on 2 and the runbook.
@@ -171,7 +179,10 @@ Agreed with the maintainer on 2026-11-14. Each step is safe to stop at.
    statuses read, and whatever else milestone 1 lists. Generate its private key; store the key and the IDs
    as the acceptance criteria say. Nothing changes yet.
 2. Merge milestone 1 (still opened under the maintainer's token).
-3. Run the token target, reload the VM's credentials and restart the deck **between tasks**. A test pull
+3. First give a VM created before milestone 1 the gh wrapper: `make vm-gh-wrapper` (or
+   `make vm-delete vm-create`); `make agents-token` warns about a VM without it. Run the token targets
+   from the host clone (`docs/dev-environment.md`, The host clone; `make agents-token-refresh-start` keeps
+   the token fresh), reload the VM's credentials and restart the deck **between tasks**. A test pull
    request proves the App is the author. Merge milestone 2 (the first PR the App opens).
 4. Merge or close every open pull request **authored by the maintainer**: with no bypass actor, one left
    open after step 5 can never be approved. Release-please's and Renovate's pull requests are not affected.
@@ -197,7 +208,9 @@ never a required check.
   A (the key in the VM, tokens minted there) was simpler but would give every agent a credential that
   never expires.
 - **The credential lives in the maintainer's direnv `.envrc` above the workspace**, as `GITHUB_TOKEN`,
-  the Claude token and the DeepSeek key do today (`docs/dev-environment.md`, Credentials).
+  the Claude token and the DeepSeek key do today (`docs/dev-environment.md`, Credentials). Amended in
+  milestone 1's review: in the `.envrc` of a host clone outside the workspace instead, as any command run
+  in the workspace runs code the agents can edit (ADR 0031).
 - **Renovate pull requests are not exempt** from the approval (reconsidered and kept the same day). An
   exemption needs Renovate's App as a bypass actor, and a bypass skips every rule of its ruleset, the
   reviewer's change request included. A compromised GitHub Action merged to `main` would run in the
