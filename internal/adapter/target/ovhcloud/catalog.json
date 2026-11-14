@@ -73,7 +73,7 @@
         { "name": "r3-512", "vcpus": 64, "memoryGiB": 512, "storageGiB": 0, "prices": [{ "amount": 1546.14, "currency": "EUR", "regions": [] }] },
         { "name": "r3-1024", "vcpus": 128, "memoryGiB": 1024, "storageGiB": 0, "prices": [{ "amount": 3092.28, "currency": "EUR", "regions": [] }] }
       ],
-      "storagePrices": []
+      "storagePrices": [{ "amount": 0.0431, "currency": "EUR", "regions": [] }]
     },
     {
       "name": "Managed Kubernetes Service",
@@ -110,7 +110,7 @@
         { "name": "r3-512", "vcpus": 64, "memoryGiB": 512, "storageGiB": 0, "prices": [{ "amount": 1546.14, "currency": "EUR", "regions": ["GRA", "LIM", "WAW"] }] },
         { "name": "r3-1024", "vcpus": 128, "memoryGiB": 1024, "storageGiB": 0, "prices": [{ "amount": 3092.28, "currency": "EUR", "regions": ["GRA", "LIM", "WAW"] }] }
       ],
-      "storagePrices": [],
+      "storagePrices": [{ "amount": 0.0431, "currency": "EUR", "regions": [] }],
       "fixedFees": [
         { "amount": 0, "currency": "EUR", "regions": ["GRA", "LIM", "SBG", "WAW"] },
         { "amount": 65.7, "currency": "EUR", "regions": ["RBX"] }
@@ -146,7 +146,7 @@
         { "name": "r3-512", "vcpus": 64, "memoryGiB": 512, "storageGiB": 0, "prices": [{ "amount": 1546.14, "currency": "EUR", "regions": [] }] },
         { "name": "r3-1024", "vcpus": 128, "memoryGiB": 1024, "storageGiB": 0, "prices": [{ "amount": 3092.28, "currency": "EUR", "regions": [] }] }
       ],
-      "storagePrices": [],
+      "storagePrices": [{ "amount": 0.0431, "currency": "EUR", "regions": [] }],
       "fixedFees": [{ "amount": 65.7, "currency": "EUR", "regions": [] }]
     },
     {
