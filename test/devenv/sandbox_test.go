@@ -588,6 +588,22 @@ func nonEmptyLines(text string) int {
 	return count
 }
 
+// zeroPadWithAnEightOrNine formats a Unix time near n as a zero-padded decimal: n itself when its digits
+// already hold an 8 or a 9, the next such value otherwise. The leading 0 makes a shell read the number as
+// octal, and a digit 8 or 9 then an illegal octal digit that ends the shell doing arithmetic on it (reviewer
+// N-a, auditor L-A). Stripping the padding gives back a value within a few seconds of n, so a test that waits
+// it out waits seconds, not hours.
+func zeroPadWithAnEightOrNine(n int64) string {
+	for {
+		digits := strconv.FormatInt(n, 10)
+		if strings.ContainsAny(digits, "89") {
+			return "0" + digits
+		}
+
+		n++
+	}
+}
+
 // toolDir returns the directory of a tool the machine has, for a PATH a script needs it on.
 func toolDir(t *testing.T, name string) string {
 	t.Helper()

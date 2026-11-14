@@ -295,6 +295,153 @@ func TestAgentsAppTokenRefreshWaitsOutARateLimit(t *testing.T) {
 	}
 }
 
+// TestAgentsAppTokenRefreshSurvivesAZeroPaddedRateLimitReset pins the reviewer's N-a and the auditor's L-A: a
+// zero-padded x-ratelimit-reset is a number like any other, so a rate limit whose header is padded must not end
+// the loop. The shell reads a leading 0 as octal and dies on a digit 8 or 9 ("Illegal number" in dash, "value
+// too great for base" in bash), which is what such a header used to do: no stop line, no refresher, and a stale
+// pid for make agents-token-refresh-start.
+func TestAgentsAppTokenRefreshSurvivesAZeroPaddedRateLimitReset(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		reset string
+	}{
+		{
+			// Nothing to wait for: a padded reset in the past, which the loop must read as the number it is.
+			name:  "a padded reset in the past",
+			reset: "0000000009",
+		},
+		{
+			// A padded reset a few seconds ahead: the digits still say when the rate limit ends.
+			name:  "a padded reset a few seconds ahead",
+			reset: zeroPadWithAnEightOrNine(time.Now().Add(3 * time.Second).Unix()),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			env := f.refreshEnv()
+
+			f.api.failNextMintsWith(http.StatusForbidden,
+				`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`,
+				map[string]string{"X-RateLimit-Remaining": "0", "X-RateLimit-Reset": tc.reset}, 1)
+
+			refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+			// The loop either mints again or ends, so a crash fails the test at once instead of at the timeout.
+			waitFor(t, 60*time.Second, "the refresh to mint again after a zero-padded X-RateLimit-Reset", func() bool {
+				return len(f.api.postTimes()) >= 2 || !refresh.running()
+			})
+
+			if !refresh.running() {
+				t.Fatalf("the refresh exited on a rate limit whose X-RateLimit-Reset was zero-padded (%s), although a rate limit is transient and must never stop it: the shell reads the leading 0 as octal, and a digit 8 or 9 then ends it without a stop line (reviewer N-a, auditor L-A)\nstderr:\n%s",
+					tc.reset, refresh.errOut())
+			}
+
+			if strings.Contains(refresh.errOut(), "agents App token refresh stopped") {
+				t.Errorf("the refresh said it stopped after a zero-padded X-RateLimit-Reset (%s): the padding says nothing about the rate limit, so the loop keeps running\nstderr:\n%s",
+					tc.reset, refresh.errOut())
+			}
+
+			waitFor(t, 30*time.Second, "the refresh to write the token of the mint that followed the rate limit", func() bool {
+				token, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
+				tokens := f.api.minted()
+
+				return ok && token != "" && len(tokens) > 0 && token == tokens[len(tokens)-1]
+			})
+
+			if got := len(f.api.postTimes()); got < 2 {
+				t.Errorf("the refresh asked GitHub for a token %d time(s), want at least two: the first was rate limited by a padded header, and the second is the loop still minting", got)
+			}
+
+			f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+		})
+	}
+}
+
+// TestAgentsAppTokenRefreshSaysItWaitsAnHourAtMost pins the reviewer's N-b and the third review's item 2 from
+// the side a test can see: neither a wait of 99999999 seconds nor a reset a month away can be waited out, so
+// the loop must say what it will do - try again in 3600s, the cap - and then keep running, without asking
+// GitHub for a token before the hour is over.
+func TestAgentsAppTokenRefreshSaysItWaitsAnHourAtMost(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		fail func(api *fakeGitHub)
+	}{
+		{
+			name: "a retry-after of 99999999 seconds",
+			fail: func(api *fakeGitHub) {
+				api.failNextMintsWith(http.StatusForbidden, "", map[string]string{"Retry-After": "99999999"}, 1)
+			},
+		},
+		{
+			name: "an X-RateLimit-Reset a month away",
+			fail: func(api *fakeGitHub) {
+				api.failNextMintsWithRateLimit(0, time.Now().Add(30*24*time.Hour).Unix(), 1)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			env := f.refreshEnv()
+			tc.fail(f.api)
+
+			refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+			waitFor(t, 30*time.Second, "the refresh to say how long it will wait before trying again", func() bool {
+				return waitLine(refresh.errOut()) != ""
+			})
+
+			line := waitLine(refresh.errOut())
+			if !strings.Contains(line, "3600s") {
+				t.Errorf("the refresh says %q after %s, want a wait of 3600s: a retry-after and an x-ratelimit-reset are honoured up to an hour, and neither can be outlasted here (third review, item 2)\nstderr:\n%s",
+					line, tc.name, refresh.errOut())
+			}
+
+			if !refresh.running() {
+				t.Fatalf("the refresh exited instead of waiting out %s for an hour; stderr:\n%s", tc.name, refresh.errOut())
+			}
+
+			// The wait it announced is the wait it takes: no second request while the hour is still ahead.
+			if got := len(f.api.postTimes()); got != 1 {
+				t.Errorf("the refresh asked GitHub for a token %d time(s) while it said it waits 3600s, want one: a rate limit is never retried before its wait is over", got)
+			}
+
+			refresh.signal(t, syscall.SIGTERM)
+
+			if !refresh.waitExit(30 * time.Second) {
+				t.Fatalf("the refresh did not stop on SIGTERM after waiting out %s; stderr:\n%s", tc.name, refresh.errOut())
+			}
+
+			assertStopLineNamesWhereToRestart(t, refresh.errOut())
+
+			f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+		})
+	}
+}
+
+// waitLine is the refresh's line that says how long it will wait before it tries again, and "" until it has
+// written one.
+func waitLine(text string) string {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "will try again in") {
+			return line
+		}
+	}
+
+	return ""
+}
+
 // TestAgentsAppTokenRefreshKeepsTheTokenWhenTheLookupFails pins the third review's item 3 (L-2, N1): a minted
 // token is written into the VM as soon as GitHub hands it out, before the bot user is looked up, so a lookup that
 // fails costs the agents their identity for one check, never the token. The next check looks the bot user up

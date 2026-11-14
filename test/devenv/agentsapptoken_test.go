@@ -6,6 +6,7 @@ package devenv_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -698,6 +699,60 @@ func TestAgentsAppTokenRefusesToWriteThroughASymlink(t *testing.T) {
 	}
 }
 
+// TestAgentsAppTokenMintExitsOneWhenTheBotUserLookupFails pins the reviewer's N-b and the third review's item 3
+// for mint: the token is written before the bot user is looked up, so a failed lookup costs the identity, never
+// the token, and the run still fails with status 1 - the status a failed mint has (design, host side) - because
+// a caller and the maintainer reading the log have to see that the identity is not there.
+func TestAgentsAppTokenMintExitsOneWhenTheBotUserLookupFails(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		status int
+	}{
+		{name: "the lookup answers 404", status: http.StatusNotFound},
+		{name: "the lookup answers 503", status: http.StatusServiceUnavailable},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			f.api.failNextUserLookups(tc.status, 1)
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+
+			if err == nil {
+				t.Fatalf("mint exited 0 although the bot user lookup answered HTTP %d: the identity file is not written, and no retry in this run can write it\nstdout: %s\nstderr: %s",
+					tc.status, stdout, stderr)
+			}
+
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+				t.Errorf("mint exited with %v after a bot user lookup that answered HTTP %d, want status 1: a failed mint is a failed run (design, host side)\nstderr: %s",
+					err, tc.status, stderr)
+			}
+
+			tokens := f.api.minted()
+			if len(tokens) == 0 {
+				t.Fatalf("the fake API minted no token, so this test cannot tell whether a minted token reaches the VM; stderr:\n%s", stderr)
+			}
+
+			if token := readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600); token[0] != tokens[0] {
+				t.Errorf("%s does not hold the token the fake API minted before the bot user lookup failed: a failed lookup must never discard a minted token (third review, item 3)\nstderr:\n%s",
+					agentsTokenFile, stderr)
+			}
+
+			if _, err := os.Stat(f.sb.vmPath(agentsIdentityFile)); err == nil {
+				t.Errorf("%s is there although no bot user lookup succeeded", agentsIdentityFile)
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
+}
+
 // TestAgentsAppTokenRefreshReplacesTheTokenAndSaysHowToStartItAgain pins the loop make deck starts: it mints
 // again before the token expires, replaces the VM's copy, and on SIGTERM says it stopped and names the
 // command that starts it again.
@@ -858,6 +913,10 @@ func TestAgentsAppTokenIgnoresAClockThatIsNotAClock(t *testing.T) {
 		{name: "a 14-digit reading is no clock", clock: "17000000000000000"},
 		{name: "a 13-digit reading is no clock", clock: "17000000000000"},
 		{name: "a 12-digit reading is the last one accepted", clock: "170000000000", wantWarning: true},
+		// A zero-padded reading with an 8 or a 9: the shell would read the leading 0 as octal and end on the
+		// digit, so it is read as the number its digits are, which is the Mac's clock and no warning at all
+		// (reviewer N-a, auditor L-A).
+		{name: "a zero-padded reading with an 8 or a 9 is the clock it says", clock: zeroPadWithAnEightOrNine(time.Now().Unix())},
 	}
 
 	for _, tc := range cases {
