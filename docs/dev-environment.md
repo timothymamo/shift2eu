@@ -78,10 +78,10 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 |---|---|
 | `theme` | Sets `theme` in Claude Code's `~/.claude/settings.json` to `CLAUDE_THEME` (default `dark`; `make vm-init CLAUDE_THEME=light`) |
 | `claude` | Marks Claude Code's onboarding done and trusts the workspace and the repository, in `~/.claude.json`, so the Claude Code roles start without first-run screens (see below) |
-| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept |
+| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours |
 | `claude auth` | Checks that Claude Code uses the OAuth token (your subscription), not an API key |
 | `pi` | `pi auth check --provider deepseek` |
-| `gh` | `gh auth status`: logged in to github.com (`GITHUB_TOKEN`) |
+| `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository, with the agents App's token when its file is in the VM, otherwise `GITHUB_TOKEN`. Not `gh auth status`, which an installation token may fail (ADR 0029) |
 | `deck` | `dot-agent-deck validate`: checks `.dot-agent-deck.toml` |
 | `deck command` | Sets the deck's `default_command` to `claude --model opus --permission-mode auto`, the orchestrator's command: the New Agent form pre-fills it, and a dispatcher started with a blank command, and the single units it dispatches, run it. A command already set in the VM is kept (`dot-agent-deck config set default_command ...` changes it) |
 | `daemon` | `dot-agent-deck daemon install`, unless `dot-agent-deck.service` is already installed |
@@ -265,6 +265,87 @@ that is not set is skipped. Two things read the file:
   (`ReadOnlyAccess` or narrower on AWS, `Reader` on Azure, `roles/viewer` or narrower on GCP). Do not
   copy your personal admin credentials in.
 
+### The agents App
+
+PRD #161 moves the agents from your `GITHUB_TOKEN` to a GitHub App of yours, the **agents App**, so their
+pull requests are the App's and you can approve them
+([ADR 0029](adr/0029-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)). Its
+private key stays on the Mac: a job there mints installation tokens, valid for an hour, and writes only
+those into the VM. Until you switch (the runbook in PRD #161; milestone 2 puts it here), nothing changes:
+without a token file in the VM, `gh` and `git push` use `GITHUB_TOKEN` as before.
+
+**Creating the App** (runbook step 1): install it on this repository only, with these repository
+permissions:
+
+| Permission | Access | Why |
+|---|---|---|
+| Contents | Read and write | Push branches; releases and their assets |
+| Pull requests | Read and write | Open, view and merge pull requests |
+| Issues | Read and write | File and read issues |
+| Workflows | Write | Agents edit `.github/workflows/` |
+| Actions | Read and write | Runs and environments (read); `gh run rerun` in the release-tag skill (write) |
+| Checks | Read | `gh pr checks`, check-run annotations |
+| Commit statuses | Read | `gh pr checks` |
+| Attestations | Read | `gh attestation verify` in the release-tag skill |
+| Metadata | Read | Required; rulesets, the repository itself |
+
+Never give it Administration: the rulesets' bypass lists need Administration write, which could change
+`Protect main`, so those checks stay yours (ADR 0029, d). Secrets and Variables are not needed either.
+Generate a private key and keep the `.pem` **outside the workspace**, readable only by you
+(`chmod 600`). The App's slug is never configured: the token script reads it from the App (`GET /app`).
+
+**On the Mac**, in the direnv `.envrc` above the workspace, beside the other credentials:
+
+```bash
+export SHIFT2EU_AGENTS_APP_ID=...               # the App's settings page: App ID
+export SHIFT2EU_AGENTS_APP_INSTALLATION_ID=...  # the number at the end of the installation's settings URL
+export SHIFT2EU_AGENTS_APP_KEY_FILE=...         # the path of the .pem, outside the workspace
+```
+
+Never add them to `VM_ENV`: `make vm-env` refuses any `SHIFT2EU_AGENTS_APP_*` name, so neither the key
+nor its path enters the VM.
+
+| Command | Does |
+|---|---|
+| `make agents-token` | Mints one token and writes it, and the bot's identity, into the VM |
+| `make agents-token-refresh` | Mints now and again before each token expires, in the foreground, until stopped |
+| `make deck` | With the three variables set, also starts the refresh in the background, unless it already runs |
+
+`make deck` keeps the refresh's pid and log in `${XDG_STATE_HOME:-~/.local/state}/shift2eu/` on the
+Mac (`agents-token-refresh.pid`, `agents-token-refresh.log`) and prints where the log is. The refresh
+checks the wall clock every minute and mints again when fewer than 20 minutes are left, so it carries on
+after the Mac sleeps. When it stops, on a signal or after a mint fails with no valid token left, it writes
+`agents App token refresh stopped` and the time to the log; the next `make deck` warns that it stopped,
+shows the log's last lines and starts a new one. Stop it with
+`kill "$(cat ~/.local/state/shift2eu/agents-token-refresh.pid)"`. No command prints a token, the JWT or the
+key, and nothing writes them to a log or the workspace.
+
+**In the VM**, both files are readable only by the VM user and replaced atomically:
+
+| File | Holds | Read by |
+|---|---|---|
+| `~/.config/shift2eu/agents-app-token` | The token, then its expiry in Unix seconds | `gh`, on every call |
+| `~/.config/shift2eu/agents-app-identity` | `<slug>[bot]`, then `<bot user id>+<slug>[bot]@users.noreply.github.com` | `make vm-init` (the `git` step) |
+
+`/usr/local/bin/gh` is a root-owned wrapper (`dev/gh-app-token.sh`); the real gh is
+`/usr/local/libexec/shift2eu/gh`. With the token file it runs gh with that token and without
+`GITHUB_TOKEN`; without it, gh falls back to `GITHUB_TOKEN`; with a file that is expired, malformed or not
+mode 0600, it fails and names `make agents-token-refresh`. The git credential helper calls the wrapper,
+so `git push` follows the same rule, and a running agent's next call uses the newest token without
+restarting the deck. A VM created before this change keeps the real gh at `/usr/local/bin/gh`: recreate it
+(`make vm-delete vm-create`) to get the wrapper. After the first `make agents-token`, run `make vm-init`
+so the agents commit as the App's bot.
+
+**Rolling back**: delete the token file in the VM and gh falls back to `GITHUB_TOKEN`; delete the identity
+file too and run `make vm-init` to commit as yourself again:
+
+```bash
+limactl shell --workdir / shift2eu sh -c 'rm -f "$HOME/.config/shift2eu/agents-app-token" "$HOME/.config/shift2eu/agents-app-identity"'
+make vm-init
+```
+
+Stop the refresh first, or it writes a new token within a minute.
+
 ## Agent permissions
 
 Each role's command in `.dot-agent-deck.toml` sets its permission mode explicitly, so no role depends
@@ -399,7 +480,7 @@ recreate it to get, and verify, the pinned ones. After recreating, confirm them:
 
 ```bash
 /usr/local/bin/cosign version | grep GitVersion   # the cosignVersion in dev/lima.yaml
-/usr/local/bin/gh --version                       # the ghVersion in dev/lima.yaml
+/usr/local/libexec/shift2eu/gh --version          # the ghVersion in dev/lima.yaml (/usr/local/bin/gh is the wrapper, ADR 0029)
 sha256sum /usr/local/bin/cosign                   # cosignSha256<Arch> for this VM's architecture
 # The provisioning output: one of these holds it. Check which one does on your VM. Not `journalctl -b`:
 # that shows only the current boot, and the self-check runs on the boot that installs cosign.
