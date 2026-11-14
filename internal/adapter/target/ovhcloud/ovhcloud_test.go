@@ -127,7 +127,7 @@ func TestCatalogSnapshotHeader(t *testing.T) {
 		t.Errorf("Snapshot().SourceURL = %s, want %s", text.Quote(snapshot.SourceURL), text.Quote(wantSourceURL))
 	}
 
-	wantRetrievedOn := time.Date(2026, time.November, 13, 0, 0, 0, 0, time.UTC)
+	wantRetrievedOn := time.Date(2026, time.November, 14, 0, 0, 0, 0, time.UTC)
 	if !snapshot.RetrievedOn.Equal(wantRetrievedOn) {
 		t.Errorf("Snapshot().RetrievedOn = %s, want %s",
 			snapshot.RetrievedOn.Format(time.RFC3339), wantRetrievedOn.Format(time.RFC3339))
