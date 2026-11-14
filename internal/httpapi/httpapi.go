@@ -18,14 +18,27 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 )
 
+// Request is a decoded body of POST /v1/assessments.
+type Request struct {
+	// Inventory is the inventory document, as the raw bytes the body holds.
+	Inventory []byte
+	// Targets are the target keys in the order sent.
+	Targets []string
+	// Regions maps a target key to the one region to assess that target in;
+	// nil when the body names none. The API checks every key against the
+	// selected targets, and every region against its target's catalog.
+	Regions map[string]string
+	// Estimate turns plans and estimates on: true unless the body says false.
+	Estimate bool
+}
+
 // Deps are the adapters the API runs with. The composition root
 // (cmd/shift2eu-server) builds them; the API never constructs an adapter itself.
 // New refuses a Deps that lacks any of them.
 type Deps struct {
-	// DecodeRequest strictly decodes the body of POST /v1/assessments into the
-	// inventory document, as raw bytes, and the target keys in the order sent
-	// (assessmentrequest.Decode).
-	DecodeRequest func(body []byte) (inventory []byte, targets []string, err error)
+	// DecodeRequest strictly decodes the body of POST /v1/assessments into a
+	// Request (assessmentrequest.Decode, converted by the composition root).
+	DecodeRequest func(body []byte) (Request, error)
 	// NewInventorySource returns the inventory source over one inventory
 	// document (inventoryfile.FromBytes).
 	NewInventorySource func(doc []byte) analysis.InventorySource

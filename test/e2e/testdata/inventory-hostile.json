@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": "aws",
   "resources": [
     {
@@ -7,7 +7,9 @@
       "rawType": "$\\Huge X$",
       "category": "storage.object",
       "region": "eu-west-1",
-      "capabilities": ["object-versioning"]
+      "capabilities": ["object-versioning"],
+      "workload": "ws|`x`[a](b) # h",
+      "relations": [{ "type": "depends-on", "target": "a|b" }]
     },
     {
       "id": "[ ] x",

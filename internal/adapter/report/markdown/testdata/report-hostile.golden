@@ -15,18 +15,18 @@
 
 ## Resources
 
-| ID | Raw type | Category | Fit | Best offering | Reasons |
-|---|---|---|---|---|---|
-| `#1` | `$\Huge X$` | `serverless.function` | none |  | no offering in the ``Evil \| `x` <b> [a](b) *s*`` catalog for `serverless.function` |
-| `[ ] x` | `@octocat` | `unclassified` | none |  | not classified |
-| `[l](javascript:x)` | ``` `` ``` | `serverless.function` | none |  | no offering in the ``Evil \| `x` <b> [a](b) *s*`` catalog for `serverless.function` |
-| `[x] done` | `:x:` | `storage.object` | direct | `` `tick` [row](x) \| Name `` | `` `tick` [row](x) \| Name `` offers every capability the resource uses |
-| `` `tick` `` | `a*b_c` | `unclassified` | none |  | not classified |
-| `a*b_c` | `AWS::X.Y <img src=x>` | `compute.vm` | direct | ``Evil \| `x` <b> [a](b) *s*`` | ``Evil \| `x` <b> [a](b) *s*`` offers every capability the resource uses |
-| ``a`b`` | `https://evil.example/%E2%80%AEmoc.elgoog` | `compute.vm` | partial | ``Evil \| `x` <b> [a](b) *s*`` | ``Evil \| `x` <b> [a](b) *s*`` does not offer `node-high-availability` |
-| `a\|b` | `x&#x202E;y` | `storage.object` | partial | `` `tick` [row](x) \| Name `` | `` `tick` [row](x) \| Name `` does not offer `object-versioning` |
-| `back\slash` | `# heading` | `storage.object` | direct | `` `tick` [row](x) \| Name `` | `` `tick` [row](x) \| Name `` offers every capability the resource uses |
-| `i-1 \| x` | `[l](javascript:x)` | `compute.vm` | direct | ``Evil \| `x` <b> [a](b) *s*`` | ``Evil \| `x` <b> [a](b) *s*`` offers every capability the resource uses |
+| ID | Raw type | Category | Fit | Best offering | Relations | Reasons |
+|---|---|---|---|---|---|---|
+| `#1` | `$\Huge X$` | `serverless.function` | none |  | depends-on `[l](javascript:x)` | no offering in the ``Evil \| `x` <b> [a](b) *s*`` catalog for `serverless.function` |
+| `[ ] x` | `@octocat` | `unclassified` | none |  |  | not classified |
+| `[l](javascript:x)` | ``` `` ``` | `serverless.function` | none |  |  | no offering in the ``Evil \| `x` <b> [a](b) *s*`` catalog for `serverless.function` |
+| `[x] done` | `:x:` | `storage.object` | direct | `` `tick` [row](x) \| Name `` |  | `` `tick` [row](x) \| Name `` offers every capability the resource uses |
+| `` `tick` `` | `a*b_c` | `unclassified` | none |  |  | not classified |
+| `a*b_c` | `AWS::X.Y <img src=x>` | `compute.vm` | direct | ``Evil \| `x` <b> [a](b) *s*`` |  | ``Evil \| `x` <b> [a](b) *s*`` offers every capability the resource uses |
+| ``a`b`` | `https://evil.example/%E2%80%AEmoc.elgoog` | `compute.vm` | partial | ``Evil \| `x` <b> [a](b) *s*`` |  | ``Evil \| `x` <b> [a](b) *s*`` does not offer `node-high-availability` |
+| `a\|b` | `x&#x202E;y` | `storage.object` | partial | `` `tick` [row](x) \| Name `` |  | `` `tick` [row](x) \| Name `` does not offer `object-versioning` |
+| `back\slash` | `# heading` | `storage.object` | direct | `` `tick` [row](x) \| Name `` |  | `` `tick` [row](x) \| Name `` offers every capability the resource uses |
+| `i-1 \| x` | `[l](javascript:x)` | `compute.vm` | direct | ``Evil \| `x` <b> [a](b) *s*`` |  | ``Evil \| `x` <b> [a](b) *s*`` offers every capability the resource uses |
 
 ## Required changes
 
@@ -39,3 +39,20 @@
 - `[ ] x`: not classified
 - `[l](javascript:x)`: no offering in the ``Evil | `x` <b> [a](b) *s*`` catalog for `serverless.function`
 - `` `tick` ``: not classified
+- `#1`: affected by a blocker on `[l](javascript:x)`
+
+## Workloads
+
+### ``ws|`x`[a](b) # h``
+
+- Fit: 0 direct, 0 partial, 1 none
+- Blockers:
+  - `#1`: no offering in the ``Evil | `x` <b> [a](b) *s*`` catalog for `serverless.function`
+
+### No workload
+
+- Fit: 4 direct, 2 partial, 3 none
+- Blockers:
+  - `[ ] x`: not classified
+  - `[l](javascript:x)`: no offering in the ``Evil | `x` <b> [a](b) *s*`` catalog for `serverless.function`
+  - `` `tick` ``: not classified

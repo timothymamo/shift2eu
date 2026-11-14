@@ -74,6 +74,13 @@ type apiDocument struct {
 type apiOperation struct {
 	OperationID string                 `json:"operationId"`
 	Responses   map[string]apiResponse `json:"responses"`
+	RequestBody apiRequestBody         `json:"requestBody"`
+}
+
+// apiRequestBody is the body an operation declares.
+type apiRequestBody struct {
+	Required bool                  `json:"required"`
+	Content  map[string]apiContent `json:"content"`
 }
 
 // apiResponse is one declared response of an operation, or one of
@@ -1080,5 +1087,179 @@ func requireEveryDeclaredStatusIsDriven(t *testing.T, doc *apiDocument, seen map
 			t.Errorf("%s declares %d, which no scenario in apiScenarios produces: add one, "+
 				"or say in unreachableStatuses why it cannot be reached", route.name(), status)
 		}
+	}
+}
+
+// TestOpenAPIDocumentsTheEstimateOptions pins that the document describes the two
+// request fields PRD #190 milestone 8 adds, regions and estimate, as optional,
+// and that the body schema it declares accepts a request that sends them: the
+// document is the contract a client reads, so a field the API honours and the
+// document does not describe is a contract that fails closed.
+func TestOpenAPIDocumentsTheEstimateOptions(t *testing.T) {
+	t.Parallel()
+
+	doc, data := loadOpenAPI(t)
+	op := doc.operation(t, reportsOperation)
+
+	content, ok := op.RequestBody.Content["application/json"]
+	if !ok {
+		t.Fatalf("the document declares no JSON request body for %s", reportsOperation)
+	}
+
+	// The operation's body schema is a reference to the one the document keeps
+	// in components.schemas, as every other body schema of the document is.
+	var ref struct {
+		Ref string `json:"$ref"`
+	}
+
+	if err := json.Unmarshal(content.Schema, &ref); err != nil {
+		t.Fatalf("decoding the request body schema %s: %v", content.Schema, err)
+	}
+
+	const schemasPrefix = "#/components/schemas/"
+
+	if !strings.HasPrefix(ref.Ref, schemasPrefix) {
+		t.Fatalf("the request body schema is %q, want a reference to %s<name>", ref.Ref, schemasPrefix)
+	}
+
+	var document struct {
+		Components struct {
+			Schemas map[string]json.RawMessage `json:"schemas"`
+		} `json:"components"`
+	}
+
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatalf("decoding the document: %v", err)
+	}
+
+	name := strings.TrimPrefix(ref.Ref, schemasPrefix)
+
+	raw, ok := document.Components.Schemas[name]
+	if !ok {
+		t.Fatalf("the request body schema refers to %q, which components.schemas does not declare", name)
+	}
+
+	var body struct {
+		Properties map[string]struct {
+			Type string `json:"type"`
+			// Properties describes the properties of a nested object, such as the
+			// regions object's per-target region strings.
+			Properties map[string]struct {
+				MinLength *int `json:"minLength"`
+			} `json:"properties"`
+		} `json:"properties"`
+		Required []string `json:"required"`
+	}
+
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("decoding components.schemas.%s: %v", name, err)
+	}
+
+	if len(body.Properties) == 0 {
+		t.Fatalf("components.schemas.%s describes no property", name)
+	}
+
+	for _, name := range []string{"regions", "estimate"} {
+		property, ok := body.Properties[name]
+		if !ok {
+			t.Errorf("the request body schema describes no %q, which the API honours", name)
+
+			continue
+		}
+
+		if slices.Contains(body.Required, name) {
+			t.Errorf("the request body schema requires %q, which a request may leave out", name)
+		}
+
+		want := map[string]string{"regions": "object", "estimate": "boolean"}[name]
+		if property.Type != want {
+			t.Errorf("%q is declared as %q, want %q", name, property.Type, want)
+		}
+	}
+
+	// A region is at least one character, as assessmentrequest.Decode requires: an
+	// empty one would otherwise mean "every region", so a client that thought it
+	// had pinned a region would be assessed in all of them (PRD #190 milestone 8,
+	// security-audit follow-up L2). Every target's property says so.
+	regions := body.Properties["regions"].Properties
+	if len(regions) == 0 {
+		t.Error("the request body schema describes no property of the regions object")
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(regions)) {
+		if property := regions[name]; property.MinLength == nil || *property.MinLength != 1 {
+			t.Errorf("regions.%s declares minLength %v, want 1: an empty region must not mean every region",
+				name, property.MinLength)
+		}
+	}
+
+	schemas, err := testutil.ParseOpenAPISchemas(data)
+	if err != nil {
+		t.Fatalf("parsing the document's schemas: %v", err)
+	}
+
+	schema := schemas.ParseSchemaObject(t, content.Schema)
+
+	requests := []struct {
+		name string
+		body string
+		// wantMismatches is whether the schema must refuse the body.
+		wantMismatches bool
+	}{
+		{
+			name: "both options",
+			body: `{"inventory":{"source":"aws","resources":[]},"targets":["scaleway"],` +
+				`"regions":{"scaleway":"fr-par"},"estimate":false}`,
+		},
+		{
+			name: "no options",
+			body: `{"inventory":{"source":"aws","resources":[]},"targets":["scaleway"]}`,
+		},
+		{
+			name: "an empty regions object",
+			body: `{"inventory":{"source":"aws","resources":[]},"targets":["scaleway"],"regions":{}}`,
+		},
+		{
+			// The body is closed: a key the document does not describe is
+			// refused, so the two above were accepted because it describes them.
+			name:           "a key the document does not describe",
+			body:           `{"inventory":{"source":"aws","resources":[]},"targets":["scaleway"],"region":"fr-par"}`,
+			wantMismatches: true,
+		},
+		{
+			name:           "a region that is not a string",
+			body:           `{"inventory":{"source":"aws","resources":[]},"targets":["scaleway"],"regions":{"scaleway":1}}`,
+			wantMismatches: true,
+		},
+		{
+			// The decoder refuses an empty region, so the document does too: a client
+			// that reads it never sends one.
+			name:           "an empty region",
+			body:           `{"inventory":{"source":"aws","resources":[]},"targets":["scaleway"],"regions":{"scaleway":""}}`,
+			wantMismatches: true,
+		},
+		{
+			// A region of one character is the shortest one any target could list,
+			// and the schema accepts it: the minimum is a length, not a shape.
+			name: "a one-character region",
+			body: `{"inventory":{"source":"aws","resources":[]},"targets":["scaleway"],` +
+				`"regions":{"scaleway":"r"}}`,
+		},
+	}
+
+	for _, req := range requests {
+		t.Run(req.name, func(t *testing.T) {
+			t.Parallel()
+
+			mismatches, err := schema.Mismatches([]byte(req.body))
+			if err != nil {
+				t.Fatalf("validating the request %s: %v", req.body, err)
+			}
+
+			if req.wantMismatches != (len(mismatches) > 0) {
+				t.Errorf("the request %s has %d mismatches %q, want mismatches = %t",
+					req.body, len(mismatches), mismatches, req.wantMismatches)
+			}
+		})
 	}
 }

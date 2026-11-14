@@ -3,6 +3,7 @@
 - Inventory file: `inventory.json`
 - Source: `aws`
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
+- Region: `de-fra1` (the target's default for estimates)
 
 ## Summary
 
@@ -15,19 +16,19 @@
 
 ## Resources
 
-| ID | Raw type | Category | Fit | Best offering | Reasons |
-|---|---|---|---|---|---|
-| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Managed Object Storage` | `Managed Object Storage` offers every capability the resource uses |
-| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Production` | `Managed Kubernetes Production` offers every capability the resource uses |
-| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) | `Managed PostgreSQL` does not offer `autoscaling` |
-| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
-| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
-| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) | `Managed PostgreSQL` does not offer `zone-high-availability` |
-| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | none |  | no offering in the `UpCloud` catalog for `serverless.function` |
-| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | none |  | no offering in the `UpCloud` catalog for `serverless.function` |
-| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` | `Cloud Servers` offers every capability the resource uses |
-| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  | not classified |
-| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Cloud Servers` | `Cloud Servers` does not offer `node-high-availability` |
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Managed Object Storage` |  | not estimated: size unknown | `Managed Object Storage` offers every capability the resource uses |
+| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Production` |  | not estimated: size unknown | `Managed Kubernetes Production` offers every capability the resource uses |
+| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) |  | not estimated: size unknown | `Managed PostgreSQL` does not offer `autoscaling` |
+| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
+| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
+| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) |  | not estimated: size unknown | `Managed PostgreSQL` does not offer `zone-high-availability` |
+| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `serverless.function` |
+| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `serverless.function` |
+| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` offers every capability the resource uses |
+| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` does not offer `node-high-availability` |
 
 ## Required changes
 
@@ -40,3 +41,11 @@
 - `fn-example`: no offering in the `UpCloud` catalog for `serverless.function`
 - `fn-ipv6-example`: no offering in the `UpCloud` catalog for `serverless.function`
 - `misc-example`: not classified
+
+## Cost estimate
+
+- Total: €0.00 per month for 0 of 11 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `de-fra1`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

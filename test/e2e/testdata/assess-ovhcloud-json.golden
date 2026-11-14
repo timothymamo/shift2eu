@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "assessment",
   "inventoryName": "inventory.json",
   "source": "aws",
@@ -34,7 +34,13 @@
           "offering": "Object Storage"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "cluster-example",
@@ -51,7 +57,13 @@
           "offering": "Managed Kubernetes Service 3-AZ"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "db-autoscaling-example",
@@ -76,7 +88,13 @@
       ],
       "requiredChanges": [
         "autoscaling"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "db-example",
@@ -95,7 +113,13 @@
           "offering": "Managed PostgreSQL Multi-node Advanced"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "db-node-example",
@@ -116,7 +140,13 @@
           "offering": "Managed PostgreSQL Multi-node"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "db-zone-example",
@@ -135,7 +165,13 @@
           "offering": "Managed PostgreSQL Multi-node 3-AZ"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "fn-example",
@@ -153,7 +189,13 @@
           "category": "serverless.function"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
+      }
     },
     {
       "id": "fn-ipv6-example",
@@ -171,7 +213,13 @@
           "category": "serverless.function"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
+      }
     },
     {
       "id": "i-0123456789abcdef0",
@@ -188,7 +236,13 @@
           "offering": "Instances"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "misc-example",
@@ -204,7 +258,13 @@
           "text": "not classified"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
+      }
     },
     {
       "id": "partial-example",
@@ -224,7 +284,13 @@
       ],
       "requiredChanges": [
         "node-high-availability"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     }
   ],
   "blockers": [
@@ -253,5 +319,76 @@
         "text": "not classified"
       }
     }
-  ]
+  ],
+  "workloads": [
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 11,
+      "summary": {
+        "direct": 6,
+        "partial": 2,
+        "none": 3,
+        "total": 11
+      },
+      "blockers": [
+        {
+          "resourceId": "fn-example",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the OVHcloud catalog for serverless.function",
+            "target": "OVHcloud",
+            "category": "serverless.function"
+          }
+        },
+        {
+          "resourceId": "fn-ipv6-example",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the OVHcloud catalog for serverless.function",
+            "target": "OVHcloud",
+            "category": "serverless.function"
+          }
+        },
+        {
+          "resourceId": "misc-example",
+          "reason": {
+            "code": "not-classified",
+            "text": "not classified"
+          }
+        }
+      ],
+      "estimate": {
+        "amount": "0.00",
+        "estimated": 0,
+        "resources": 11
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 11,
+        "currencies": []
+      }
+    }
+  ],
+  "estimate": {
+    "region": "GRA",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "amount": "0.00",
+      "estimated": 0,
+      "resources": 11
+    }
+  },
+  "sourceCost": {
+    "covered": 0,
+    "resources": 11,
+    "currencies": []
+  }
 }

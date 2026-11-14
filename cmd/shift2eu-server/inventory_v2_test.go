@@ -1,10 +1,12 @@
 // White-box tests of the composition root for inventory format version 2 (PRD
-// #190, milestone 1): cmd/shift2eu-server wires the real
+// #190, milestones 1 and 8): cmd/shift2eu-server wires the real
 // internal/adapter/source/inventoryfile.FromBytes, so the running server is the
 // only place the API's acceptance of a version 2 inventory is pinned end to end.
-// A version 2 inventory gives the report its version 1 twin gives, byte for
-// byte; an invalid version 2 inventory is 400 invalid_inventory, and the message
-// names the field by path, never the value (ADR 0019).
+// A version 2 inventory is accepted and gives the same fits, summary, required
+// changes and blockers as its version 1 twin: milestone 8 lets its relations,
+// workloads and sizes reach the report, so the documents differ in those. An
+// invalid version 2 inventory is 400 invalid_inventory, and the message names
+// the field by path, never the value (ADR 0019).
 
 package main
 
@@ -16,6 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // twinInventory returns one of the version 1 and version 2 twins the e2e suite
@@ -73,8 +77,11 @@ func decodeErrorMessage(t *testing.T, body []byte) errorMessage {
 }
 
 // TestServerAcceptsInventoryVersion2 pins that POST /v1/assessments takes a
-// version 2 inventory and answers with the report its version 1 twin gets, byte
-// for byte, as JSON and as Markdown: milestone 1 changes no report.
+// version 2 inventory, as it takes its version 1 twin, and that the version 2
+// fields change no verdict: both documents are the version 2 report (ADR 0030)
+// with the same fits, summary, required changes and blockers. The reports
+// themselves differ, because a version 2 inventory's relations, workloads and
+// sizes reach them (PRD #190 milestone 8), which a byte comparison would miss.
 func TestServerAcceptsInventoryVersion2(t *testing.T) {
 	t.Parallel()
 
@@ -89,30 +96,78 @@ func TestServerAcceptsInventoryVersion2(t *testing.T) {
 
 	s := startServer(t, loopbackListen, nil)
 
-	for _, accept := range []string{"application/json", "text/markdown"} {
-		t.Run(accept, func(t *testing.T) {
-			t.Parallel()
+	twoAccept := "application/json"
+	fromOne := postAccepting(t, s, version1, twoAccept)
+	fromTwo := postAccepting(t, s, version2, twoAccept)
 
-			fromOne := postAccepting(t, s, version1, accept)
-			fromTwo := postAccepting(t, s, version2, accept)
+	for name, got := range map[string]answer{"version 1": fromOne, "version 2": fromTwo} {
+		if got.status != http.StatusOK {
+			t.Fatalf("POST /v1/assessments with the %s inventory = %d, want %d; body: %q",
+				name, got.status, http.StatusOK, got.body)
+		}
 
-			for name, got := range map[string]answer{"version 1": fromOne, "version 2": fromTwo} {
-				if got.status != http.StatusOK {
-					t.Fatalf("POST /v1/assessments with the %s inventory = %d, want %d; body: %q",
-						name, got.status, http.StatusOK, got.body)
-				}
+		if len(got.body) == 0 {
+			t.Fatalf("POST /v1/assessments with the %s inventory returned an empty body", name)
+		}
 
-				if len(got.body) == 0 {
-					t.Fatalf("POST /v1/assessments with the %s inventory returned an empty body", name)
-				}
-			}
+		var header struct {
+			SchemaVersion int `json:"schemaVersion"`
+		}
 
-			if !bytes.Equal(fromOne.body, fromTwo.body) {
-				t.Errorf("the version 2 %s report differs from its version 1 twin:\nversion 1:\n%s\nversion 2:\n%s",
-					accept, fromOne.body, fromTwo.body)
-			}
-		})
+		if err := json.Unmarshal(got.body, &header); err != nil {
+			t.Fatalf("decoding the %s report: %v", name, err)
+		}
+
+		if header.SchemaVersion != 2 {
+			t.Errorf("the %s report declares schemaVersion %d, want 2 (docs/adr/0030)",
+				name, header.SchemaVersion)
+		}
 	}
+
+	v1, v2 := decodeVerdicts(t, fromOne.body), decodeVerdicts(t, fromTwo.body)
+
+	if diff := cmp.Diff(v1.Summary, v2.Summary); diff != "" {
+		t.Errorf("the version 2 inventory's summary differs from its version 1 twin (-v1 +v2):\n%s", diff)
+	}
+
+	if diff := cmp.Diff(v1.Resources, v2.Resources); diff != "" {
+		t.Errorf("the version 2 inventory's fits and required changes differ from its version 1 twin (-v1 +v2):\n%s", diff)
+	}
+
+	if diff := cmp.Diff(v1.Blockers, v2.Blockers); diff != "" {
+		t.Errorf("the version 2 inventory's blockers differ from its version 1 twin (-v1 +v2):\n%s", diff)
+	}
+}
+
+// verdicts are the parts of a report two inventories must agree on: the verdict
+// per resource, its required changes and the blockers, never the estimate or the
+// relations, which a version 2 inventory adds.
+type verdicts struct {
+	Summary   json.RawMessage `json:"summary"`
+	Resources []struct {
+		ID              string          `json:"id"`
+		Fit             string          `json:"fit"`
+		RequiredChanges []string        `json:"requiredChanges"`
+		Reasons         json.RawMessage `json:"reasons"`
+	} `json:"resources"`
+	Blockers json.RawMessage `json:"blockers"`
+}
+
+// decodeVerdicts decodes the verdict part of a JSON report, failing the test on
+// a body that is not the documented document.
+func decodeVerdicts(t *testing.T, body []byte) verdicts {
+	t.Helper()
+
+	var v verdicts
+	if err := json.Unmarshal(body, &v); err != nil {
+		t.Fatalf("decoding the report %q: %v", body, err)
+	}
+
+	if len(v.Resources) == 0 {
+		t.Fatalf("the report holds no resource: %s", body)
+	}
+
+	return v
 }
 
 // TestServerRefusesInvalidInventoryVersion2 pins the error side: a version 2

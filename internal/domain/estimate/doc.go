@@ -11,7 +11,9 @@
 // ADR 0029), plus the storage above what the plan includes × the offering's
 // per-GiB price, plus the offering's fixed fee once per resource ×
 // hoursPerMonth / 730, never capped (ADR 0026). Storage categories have no
-// plan: their estimate is the stored GiB × the per-GiB price.
+// plan: their estimate is the stored GiB × the per-GiB price. An estimate on a
+// capped offering records the cap (Estimate.BillingCapHours), so a report can
+// state it.
 //
 // A resource that cannot be priced is never priced at 0: its Estimate says it
 // is not estimated, and why (Reason). Sum totals only the estimated resources

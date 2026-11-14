@@ -28,6 +28,12 @@ type assessOptions struct {
 	output string
 	// format is the key of the selected report format in Deps.Formats.
 	format string
+	// regions maps a selected target's key to the one region --region chose
+	// for it; a target without an entry is assessed across all its regions.
+	regions map[string]string
+	// estimate turns plan matching and monthly estimates on: true unless
+	// --no-estimate was given (PRD #190).
+	estimate bool
 }
 
 // runAssess runs the assess command with args, the arguments after "assess",
@@ -45,6 +51,13 @@ func runAssess(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 	}
 
 	if err := assess(ctx, opts, stdout, deps); err != nil {
+		// A --region the target's catalog does not list is only found once
+		// the catalog is loaded, before the inventory is read, but it is
+		// still a mistake on the command line.
+		if regionErr := regionUsageError(err, opts); regionErr != nil {
+			return usageError(stderr, deps, regionErr)
+		}
+
 		return runError(stderr, err)
 	}
 
@@ -62,12 +75,16 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 	// prints nothing: its errors reach the user through printError.
 	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
-	var target string
+	var target, region string
+
+	noEstimate := false
 
 	flags.StringVar(&opts.inventory, "inventory", "", "the inventory file")
 	flags.StringVar(&target, "target", "", "the targets to compare with")
 	flags.StringVar(&opts.output, "output", "", "the report file")
 	flags.StringVar(&opts.format, "format", defaultFormat, "the report format")
+	flags.StringVar(&region, "region", "", "the region per target, <target>=<region>,...")
+	flags.BoolVar(&noEstimate, "no-estimate", false, "leave out plans and estimates")
 
 	if err := flags.Parse(args); err != nil {
 		return assessOptions{}, err
@@ -88,6 +105,14 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 	}
 
 	opts.targets = targets
+	opts.estimate = !noEstimate
+
+	regions, err := parseRegions(region, targets)
+	if err != nil {
+		return assessOptions{}, err
+	}
+
+	opts.regions = regions
 
 	// A Deps without any format is a wiring mistake that newRunner reports,
 	// not a usage error.
@@ -145,6 +170,59 @@ func parseTargets(value string, deps Deps) ([]string, error) {
 	return selected, nil
 }
 
+// parseRegions parses the --region value: comma-separated <target>=<region>
+// pairs, each naming one of the selected targets at most once. Spaces around a
+// pair, its key and its region are dropped, so "a=x, b=y" is two pairs. It
+// returns nil for an empty value. Whether the target lists the region is checked against
+// its catalog once loaded (analysis.RegionError), before the inventory is read.
+// Every error it returns is a usage error.
+func parseRegions(value string, selected []string) (map[string]string, error) {
+	if value == "" {
+		return nil, nil
+	}
+
+	regions := make(map[string]string)
+
+	for _, pair := range strings.Split(value, ",") {
+		key, region, found := strings.Cut(pair, "=")
+		key, region = strings.TrimSpace(key), strings.TrimSpace(region)
+
+		switch {
+		case !found || key == "" || region == "":
+			return nil, fmt.Errorf("--region %s is not <target>=<region>; selected targets: %s",
+				text.Quote(pair), strings.Join(selected, ", "))
+		case !slices.Contains(selected, key):
+			return nil, fmt.Errorf("--region names target %s, which --target does not select; selected targets: %s",
+				text.Quote(key), strings.Join(selected, ", "))
+		}
+
+		if _, ok := regions[key]; ok {
+			return nil, fmt.Errorf("--region names target %s more than once", text.Quote(key))
+		}
+
+		regions[key] = region
+	}
+
+	return regions, nil
+}
+
+// regionUsageError returns the usage error for an *analysis.RegionError inside
+// err, naming the target by its --target key also for a single-target run, and
+// nil when err holds none.
+func regionUsageError(err error, opts assessOptions) error {
+	var regionErr *analysis.RegionError
+	if !errors.As(err, &regionErr) {
+		return nil
+	}
+
+	named := *regionErr
+	if named.Target == "" && len(opts.targets) == 1 {
+		named.Target = opts.targets[0]
+	}
+
+	return fmt.Errorf("--region: %w", &named)
+}
+
 // runFunc runs the use case assess built, the Run method of analysis.Analysis
 // for one target or of analysis.Comparison for several.
 type runFunc func(ctx context.Context, w io.Writer, meta analysis.ReportMeta) error
@@ -174,7 +252,11 @@ func newRunner(opts assessOptions, deps Deps) (runFunc, error) {
 			return nil, err
 		}
 
-		return single.Run, nil
+		options := analysis.Options{Region: opts.regions[opts.targets[0]], Estimate: opts.estimate}
+
+		return func(ctx context.Context, w io.Writer, meta analysis.ReportMeta) error {
+			return single.RunWith(ctx, w, meta, options)
+		}, nil
 	}
 
 	if format.NewComparisonReporter == nil {
@@ -189,7 +271,7 @@ func newRunner(opts assessOptions, deps Deps) (runFunc, error) {
 
 	targets := make([]analysis.Target, 0, len(opts.targets))
 	for _, key := range opts.targets {
-		targets = append(targets, analysis.Target{Key: key, Catalog: deps.Targets[key]()})
+		targets = append(targets, analysis.Target{Key: key, Catalog: deps.Targets[key](), Region: opts.regions[key]})
 	}
 
 	comparison, err := analysis.NewComparison(deps.NewInventorySource(opts.inventory), targets,
@@ -198,7 +280,11 @@ func newRunner(opts assessOptions, deps Deps) (runFunc, error) {
 		return nil, err
 	}
 
-	return comparison.Run, nil
+	options := analysis.ComparisonOptions{Estimate: opts.estimate}
+
+	return func(ctx context.Context, w io.Writer, meta analysis.ReportMeta) error {
+		return comparison.RunWith(ctx, w, meta, options)
+	}, nil
 }
 
 // assess builds the adapters from deps, runs the analysis, or the comparison of

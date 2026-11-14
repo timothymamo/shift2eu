@@ -1,0 +1,210 @@
+# Migration assessment: `OVHcloud`, `Scaleway`, `UpCloud`
+
+- Inventory file: `inventory.json`
+- Source: `gcp`
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
+- Region: `OVHcloud`: `GRA` (the target's default for estimates)
+- Region: `Scaleway`: `fr-par` (the target's default for estimates)
+- Region: `UpCloud`: `de-fra1` (the target's default for estimates)
+
+## Comparison
+
+### Summary
+
+| Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
+|---|---|---|---|
+| direct | 8 | 7 | 5 |
+| partial | 1 | 5 | 3 |
+| none | 5 | 2 | 6 |
+| total | 14 | 14 | 14 |
+| `OVHcloud` estimate | €0.00 per month for 0 of 14 resources |  |  |
+| `Scaleway` estimate |  | €0.00 per month for 0 of 14 resources |  |
+| `UpCloud` estimate |  |  | €0.00 per month for 0 of 14 resources |
+
+Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
+
+### Resources
+
+| ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `OVHcloud` monthly estimate | `Scaleway` fit | `Scaleway` best offering | `Scaleway` monthly estimate | `UpCloud` fit | `UpCloud` best offering | `UpCloud` monthly estimate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `shop-assets` | `storage.object` | direct | `Object Storage` | not estimated: size unknown | direct | `Object Storage` | not estimated: size unknown | direct | `Managed Object Storage` | not estimated: size unknown |
+| `shop-catalog-mysql` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` | not estimated: size unknown | partial | `Managed Database for PostgreSQL and MySQL` | not estimated: size unknown | direct | `Managed MySQL Multi-node` | not estimated: size unknown |
+| `shop-cdn-backend` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` | not estimated: size unknown | partial | `Managed Database for PostgreSQL and MySQL` | not estimated: size unknown | partial | `Managed PostgreSQL Multi-node` | not estimated: size unknown |
+| `shop-db-replica` | `database.postgresql` | direct | `Managed PostgreSQL` | not estimated: size unknown | direct | `Managed Database for PostgreSQL and MySQL` | not estimated: size unknown | direct | `Managed PostgreSQL` | not estimated: size unknown |
+| `shop-gke` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` | not estimated: size unknown | partial | `Kubernetes Kapsule` | not estimated: size unknown | partial | `Managed Kubernetes` | not estimated: size unknown |
+| `shop-orders` | `messaging.queue` | none |  | not estimated: no fit | direct | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `shop-orders-dlq` | `messaging.queue` | none |  | not estimated: no fit | direct | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `shop-resize-images` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `shop-search-bms` | `compute.baremetal` | direct | `Metal Instances` | not estimated: size unknown | direct | `Elastic Metal` | not estimated: size unknown | none |  | not estimated: no fit |
+| `shop-web-1` | `compute.vm` | direct | `Instances` | not estimated: size unknown | direct | `Instances` | not estimated: size unknown | direct | `Cloud Servers` | not estimated: size unknown |
+| `shop-web-1-data` | `storage.block` | direct | `Block Storage LUKS` | not estimated: size unknown | partial | `Block Storage` | not estimated: size unknown | direct | `Block Storage Encrypted` | not estimated: size unknown |
+| `shop-web-mig` | `compute.vm` | partial | `Instances` | not estimated: size unknown | partial | `Instances` | not estimated: size unknown | partial | `Cloud Servers` | not estimated: size unknown |
+| `shop-zone` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+
+### Blockers on every target
+
+- `shop-cdn-backend`
+  - `OVHcloud`: not classified
+  - `Scaleway`: not classified
+  - `UpCloud`: not classified
+- `shop-zone`
+  - `OVHcloud`: not classified
+  - `Scaleway`: not classified
+  - `UpCloud`: not classified
+
+## `OVHcloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 8 |
+| partial | 1 |
+| none | 5 |
+| total | 14 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `shop-assets` | `storage.googleapis.com/Bucket` | `storage.object` | direct | `Object Storage` (tie: `Object Storage 3-AZ`) |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` (tie: `Managed MySQL Multi-node Advanced 3-AZ`) |  | not estimated: size unknown | `Managed MySQL Multi-node Advanced` offers every capability the resource uses |
+| `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node Advanced 3-AZ` offers every capability the resource uses |
+| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`, `Managed PostgreSQL Multi-node 3-AZ`, `Managed PostgreSQL Multi-node Advanced`, `Managed PostgreSQL Multi-node Advanced 3-AZ`) |  | not estimated: size unknown | `Managed PostgreSQL` offers every capability the resource uses |
+| `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` |  | not estimated: size unknown | `Managed Kubernetes Service 3-AZ` offers every capability the resource uses |
+| `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `messaging.queue` |
+| `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `messaging.queue` |
+| `shop-resize-images` | `cloudfunctions.googleapis.com/Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `serverless.function` |
+| `shop-search-bms` | `baremetalsolution.googleapis.com/Instance` | `compute.baremetal` | direct | `Metal Instances` |  | not estimated: size unknown | `Metal Instances` offers every capability the resource uses |
+| `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | direct | `Block Storage LUKS` |  | not estimated: size unknown | `Block Storage LUKS` offers every capability the resource uses |
+| `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+
+### Required changes
+
+- `shop-web-mig`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
+
+### Blockers
+
+- `shop-cdn-backend`: not classified
+- `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
+- `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
+- `shop-resize-images`: no offering in the `OVHcloud` catalog for `serverless.function`
+- `shop-zone`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 14 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `GRA`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
+
+## `Scaleway`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 7 |
+| partial | 5 |
+| none | 2 |
+| total | 14 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `shop-assets` | `storage.googleapis.com/Bucket` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
+| `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` offers every capability the resource uses |
+| `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | partial | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) |  | not estimated: size unknown | `Kubernetes Kapsule` does not offer `zone-high-availability` |
+| `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | `Queues` offers every capability the resource uses |
+| `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | `Queues` offers every capability the resource uses |
+| `shop-resize-images` | `cloudfunctions.googleapis.com/Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` offers every capability the resource uses |
+| `shop-search-bms` | `baremetalsolution.googleapis.com/Instance` | `compute.baremetal` | direct | `Elastic Metal` |  | not estimated: size unknown | `Elastic Metal` offers every capability the resource uses |
+| `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | partial | `Block Storage` |  | not estimated: size unknown | `Block Storage` does not offer `encryption-at-rest` |
+| `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+
+### Required changes
+
+- `shop-catalog-mysql`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL`)
+- `shop-db`: `point-in-time-restore`, `zone-high-availability` (not offered by `Managed Database for PostgreSQL and MySQL`)
+- `shop-gke`: `zone-high-availability` (not offered by `Kubernetes Kapsule`)
+- `shop-web-1-data`: `encryption-at-rest` (not offered by `Block Storage`)
+- `shop-web-mig`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
+
+### Blockers
+
+- `shop-cdn-backend`: not classified
+- `shop-zone`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 14 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
+
+## `UpCloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 5 |
+| partial | 3 |
+| none | 6 |
+| total | 14 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `shop-assets` | `storage.googleapis.com/Bucket` | `storage.object` | direct | `Managed Object Storage` |  | not estimated: size unknown | `Managed Object Storage` offers every capability the resource uses |
+| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | direct | `Managed MySQL Multi-node` |  | not estimated: size unknown | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed PostgreSQL Multi-node` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node` does not offer `zone-high-availability` |
+| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) |  | not estimated: size unknown | `Managed PostgreSQL` offers every capability the resource uses |
+| `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | partial | `Managed Kubernetes` (tie: `Managed Kubernetes Production`) |  | not estimated: size unknown | `Managed Kubernetes` does not offer `autoscaling`; `Managed Kubernetes` does not offer `zone-high-availability` |
+| `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `messaging.queue` |
+| `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `messaging.queue` |
+| `shop-resize-images` | `cloudfunctions.googleapis.com/Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `serverless.function` |
+| `shop-search-bms` | `baremetalsolution.googleapis.com/Instance` | `compute.baremetal` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `compute.baremetal` |
+| `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` offers every capability the resource uses |
+| `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | direct | `Block Storage Encrypted` |  | not estimated: size unknown | `Block Storage Encrypted` offers every capability the resource uses |
+| `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` does not offer `autoscaling`; `Cloud Servers` does not offer `zone-high-availability` |
+| `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+
+### Required changes
+
+- `shop-db`: `zone-high-availability` (not offered by `Managed PostgreSQL Multi-node`)
+- `shop-gke`: `autoscaling`, `zone-high-availability` (not offered by `Managed Kubernetes`)
+- `shop-web-mig`: `autoscaling`, `zone-high-availability` (not offered by `Cloud Servers`)
+
+### Blockers
+
+- `shop-cdn-backend`: not classified
+- `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
+- `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
+- `shop-resize-images`: no offering in the `UpCloud` catalog for `serverless.function`
+- `shop-search-bms`: no offering in the `UpCloud` catalog for `compute.baremetal`
+- `shop-zone`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 14 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `de-fra1`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

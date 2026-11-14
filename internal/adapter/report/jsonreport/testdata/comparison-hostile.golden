@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "comparison",
   "inventoryName": "inv\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�.json",
   "source": "aws\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�",
@@ -36,7 +36,9 @@
               "category": "cat\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "fn\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�",
@@ -52,7 +54,9 @@
               "text": "not classified"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "i-\"1\"\\x\n\t\u0000\u001b\u2028\u2029\u003c/script\u003e\u0026x�-v",
@@ -69,7 +73,9 @@
               "offering": "Off\"er\\ing\u0000\u001b\u2028\u003c/script\u003e�"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         }
       ],
       "blockers": [
@@ -89,7 +95,8 @@
             "text": "not classified"
           }
         }
-      ]
+      ],
+      "workloads": []
     },
     {
       "key": "k\"ey\u0000\u001b\u2028\u003c/script\u003e�",
@@ -123,7 +130,9 @@
               "category": "cat\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "fn\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�",
@@ -139,7 +148,9 @@
               "text": "not classified"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "i-\"1\"\\x\n\t\u0000\u001b\u2028\u2029\u003c/script\u003e\u0026x�-v",
@@ -159,7 +170,9 @@
           ],
           "requiredChanges": [
             "cap\"a\\b\n\t\u0000\u001b\u2028\u003c/script\u003e�"
-          ]
+          ],
+          "relations": [],
+          "affectedBy": []
         }
       ],
       "blockers": [
@@ -179,7 +192,8 @@
             "text": "not classified"
           }
         }
-      ]
+      ],
+      "workloads": []
     },
     {
       "key": "z\u003cz|`\n\u001b�",
@@ -213,7 +227,9 @@
               "category": "cat\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "fn\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�",
@@ -229,7 +245,9 @@
               "text": "not classified"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "i-\"1\"\\x\n\t\u0000\u001b\u2028\u2029\u003c/script\u003e\u0026x�-v",
@@ -245,7 +263,9 @@
               "text": "reason\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         }
       ],
       "blockers": [
@@ -272,7 +292,8 @@
             "text": "reason\"\\\n\t\u0000\u001b\u2028\u003c/script\u003e�"
           }
         }
-      ]
+      ],
+      "workloads": []
     }
   ],
   "sharedBlockers": [

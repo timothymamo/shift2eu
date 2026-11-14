@@ -46,8 +46,8 @@ const updateCommand = "go test ./test/openapibundle -update"
 // the base name of the file, its kebab parts title-cased, Report inserted
 // before the version.
 var reportSchemas = map[string]string{
-	"AssessmentReportV1": "assessment-v1.schema.json",
-	"ComparisonReportV1": "comparison-v1.schema.json",
+	"AssessmentReportV2": "assessment-v2.schema.json",
+	"ComparisonReportV2": "comparison-v2.schema.json",
 }
 
 // TestBundleIsCommitted pins the self-contained OpenAPI document of issue

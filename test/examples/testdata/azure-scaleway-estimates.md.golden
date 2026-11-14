@@ -1,0 +1,52 @@
+# Migration assessment: `Scaleway`
+
+- Inventory file: `inventory.json`
+- Source: `azure`
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Region: `fr-par` (the target's default for estimates)
+
+## Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 4 |
+| partial | 5 |
+| none | 2 |
+| total | 11 |
+
+## Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `aks-shop` | `Microsoft.ContainerService/managedClusters` | `kubernetes.managed` | partial | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) |  | not estimated: size unknown | `Kubernetes Kapsule` does not offer `zone-high-availability` |
+| `cdn-shop` | `Microsoft.Cdn/profiles` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `disk-shop-web-1-data` | `Microsoft.Compute/disks` | `storage.block` | partial | `Block Storage` |  | not estimated: size unknown | `Block Storage` does not offer `encryption-at-rest` |
+| `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` offers every capability the resource uses |
+| `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | `Queues` offers every capability the resource uses |
+| `stshopassets` | `Microsoft.Storage/storageAccounts` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `vm-shop-web-1` | `Microsoft.Compute/virtualMachines` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `vmss-shop-web` | `Microsoft.Compute/virtualMachineScaleSets` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+
+## Required changes
+
+- `aks-shop`: `zone-high-availability` (not offered by `Kubernetes Kapsule`)
+- `disk-shop-web-1-data`: `encryption-at-rest` (not offered by `Block Storage`)
+- `mysql-shop-catalog`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
+- `psql-shop`: `point-in-time-restore`, `zone-high-availability` (not offered by `Managed Database for PostgreSQL and MySQL`)
+- `vmss-shop-web`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
+
+## Blockers
+
+- `cdn-shop`: not classified
+- `dns-shop`: not classified
+
+## Cost estimate
+
+- Total: €0.00 per month for 0 of 11 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

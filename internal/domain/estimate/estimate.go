@@ -160,6 +160,11 @@ type Estimate struct {
 	// no hoursPerMonth as running 730 hours (ADR 0025). It is set only when
 	// Estimated.
 	HoursAssumed bool
+	// BillingCapHours is the PlanBillingCapHours of the chosen plan's offering
+	// when the resource is estimated ByPlan on an offering that caps the billed
+	// hours of its plans (ADR 0029), so a report can state the cap. It is 0 for
+	// an uncapped offering, for ByStorage and for a resource not estimated.
+	BillingCapHours int64
 }
 
 // For estimates the resource of result, a mapping onto a target's catalog, in
@@ -328,6 +333,7 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 	e.Monthly = e.Breakdown.Plan.Add(e.Breakdown.Storage).Add(e.Breakdown.FixedFee)
 	e.CountAssumed = countAssumed
 	e.HoursAssumed = hoursAssumed
+	e.BillingCapHours = chosen.offering.PlanBillingCapHours
 
 	return e
 }

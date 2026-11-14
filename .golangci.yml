@@ -1208,6 +1208,7 @@ linters:
             - encoding/json$
             - github.com/timothymamo/shift2eu/internal/app/analysis$
             - github.com/timothymamo/shift2eu/internal/domain/assessment$
+            - github.com/timothymamo/shift2eu/internal/domain/estimate$
             - github.com/timothymamo/shift2eu/internal/domain/mapping$
           deny:
             - pkg: io/fs

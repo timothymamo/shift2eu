@@ -3,6 +3,7 @@
 - Inventory file: `inventory.json`
 - Source: `aws`
 - Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Region: `fr-par` (the target's default for estimates)
 
 ## Summary
 
@@ -15,19 +16,19 @@
 
 ## Resources
 
-| ID | Raw type | Category | Fit | Best offering | Reasons |
-|---|---|---|---|---|---|
-| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` | `Object Storage` offers every capability the resource uses |
-| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule Dedicated` | `Kubernetes Kapsule Dedicated` offers every capability the resource uses |
-| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `Managed Database for PostgreSQL and MySQL` does not offer `autoscaling` |
-| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
-| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL High Availability` | `Managed Database for PostgreSQL and MySQL High Availability` offers every capability the resource uses |
-| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
-| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` | `Serverless Functions` offers every capability the resource uses |
-| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | partial | `Serverless Functions` | `Serverless Functions` does not offer `ipv6` |
-| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `Instances` offers every capability the resource uses |
-| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  | not classified |
-| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Instances` | `Instances` does not offer `node-high-availability` |
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule Dedicated` |  | not estimated: size unknown | `Kubernetes Kapsule Dedicated` offers every capability the resource uses |
+| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `autoscaling` |
+| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
+| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL High Availability` |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL High Availability` offers every capability the resource uses |
+| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` offers every capability the resource uses |
+| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | partial | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` does not offer `ipv6` |
+| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `node-high-availability` |
 
 ## Required changes
 
@@ -40,3 +41,11 @@
 ## Blockers
 
 - `misc-example`: not classified
+
+## Cost estimate
+
+- Total: €0.00 per month for 0 of 11 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

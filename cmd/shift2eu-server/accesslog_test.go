@@ -27,6 +27,11 @@ var durationToken = regexp.MustCompile(`\d+(?:\.\d+)?(?:ns|µs|μs|us|ms|s)\b`)
 // quotedPathField matches the quoted path an access log line carries.
 var quotedPathField = regexp.MustCompile(`path=("(?:[^"\\]|\\.)*")`)
 
+// accessLogBound is how long a test waits for the access log line of a request the
+// server has already answered: the handler writes the line in a defer, so the
+// line exists only a moment after the client holds the whole body.
+const accessLogBound = 5 * time.Second
+
 // TestServerAccessLog pins the access log of an assessment: one line per
 // request holding the method, the path, the status, a duration and the size of
 // the answer, and no value of the request at all, neither from the body (an
@@ -68,21 +73,18 @@ func TestServerAccessLog(t *testing.T) {
 		t.Fatalf("the report does not hold the marker %q, so the log had nothing to leak:\n%s", accessMarker, got.body)
 	}
 
-	// Read the log before the server is stopped: the shutdown may write a line
-	// of its own, which is no access log line.
+	// Wait for the request's line before reading the log, and read it before the
+	// server is stopped: the shutdown may write a line of its own, which is no
+	// access log line.
+	lines := accessLines(t, s, 1)
+
 	logged := s.stderr.String()
 
 	if strings.Contains(logged, accessMarker) {
 		t.Errorf("the log holds the marker %q, so it quotes the request:\n%s", accessMarker, logged)
 	}
 
-	accessLines := startLines(logged)
-
-	if len(accessLines) == 0 {
-		t.Fatalf("the log holds no access log line for the request; stderr = %q", logged)
-	}
-
-	for _, line := range accessLines {
+	for _, line := range lines {
 		if !holdsValue(line, http.MethodPost) {
 			t.Errorf("the access log line %q does not hold the method %s", line, http.MethodPost)
 		}
@@ -115,7 +117,7 @@ func TestServerAccessLog(t *testing.T) {
 		t.Errorf("GET /healthz = %d, want %d", status, http.StatusOK)
 	}
 
-	if got, want := len(startLines(s.stderr.String())), len(accessLines)+1; got != want {
+	if got, want := len(accessLines(t, s, len(lines)+1)), len(lines)+1; got != want {
 		t.Errorf("the log holds %d access log lines after two requests, want %d:\n%s",
 			got, want, s.stderr.String())
 	}
@@ -173,17 +175,9 @@ func TestServerAccessLogTruncatesLongPath(t *testing.T) {
 		t.Fatalf("GET /healthz = %d, want %d; body: %q", status, http.StatusOK, body)
 	}
 
-	var shortLine string
-
-	for _, candidate := range strings.Split(s.stderr.String(), "\n") {
-		if strings.Contains(candidate, "/healthz") && strings.Contains(candidate, "path=") {
-			shortLine = candidate
-		}
-	}
-
-	if shortLine == "" {
-		t.Fatalf("the log holds no access log line for GET /healthz; stderr = %q", s.stderr.String())
-	}
+	// The handler writes the line after the client holds the body, so wait for it
+	// rather than reading stderr the moment the request returns.
+	shortLine := accessLineHolding(t, s, "/healthz")
 
 	if !strings.Contains(shortLine, "/healthz") {
 		t.Errorf("the access log line %q does not hold the whole path /healthz", shortLine)
@@ -199,15 +193,40 @@ func TestServerAccessLogTruncatesLongPath(t *testing.T) {
 	}
 }
 
+// accessLines returns the access log lines s has written, polling until it holds
+// at least want of them and failing the test when they do not appear within
+// accessLogBound. A client holds its whole answer before the handler runs the
+// deferred write of its line, so a test that read stderr the moment a request
+// returned would race the handler: this is that wait, and no fixed sleep stands
+// in for it, so a line that is never written still fails the test.
+func accessLines(t *testing.T, s *server, want int) []string {
+	t.Helper()
+
+	deadline := time.Now().Add(accessLogBound)
+
+	for {
+		lines := startLines(s.stderr.String())
+
+		if len(lines) >= want {
+			return lines
+		}
+
+		if time.Now().After(deadline) {
+			t.Fatalf("the log holds %d access log lines within %s, want at least %d; stderr = %q",
+				len(lines), accessLogBound, want, s.stderr.String())
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // accessLineHolding returns the access log line s wrote that holds want, polling
 // until the request's handler has written it, and fails the test when none
 // appears.
 func accessLineHolding(t *testing.T, s *server, want string) string {
 	t.Helper()
 
-	const bound = 5 * time.Second
-
-	deadline := time.Now().Add(bound)
+	deadline := time.Now().Add(accessLogBound)
 
 	for {
 		logged := s.stderr.String()
@@ -219,7 +238,7 @@ func accessLineHolding(t *testing.T, s *server, want string) string {
 		}
 
 		if time.Now().After(deadline) {
-			t.Fatalf("the log holds no access log line holding %q within %s; stderr = %q", want, bound, logged)
+			t.Fatalf("the log holds no access log line holding %q within %s; stderr = %q", want, accessLogBound, logged)
 		}
 
 		time.Sleep(10 * time.Millisecond)

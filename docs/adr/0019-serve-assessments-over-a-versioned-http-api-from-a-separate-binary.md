@@ -2,7 +2,10 @@
 
 - Status: Accepted; amended 2026-11-12: the bundled OpenAPI document moves from milestone 4 to [issue #139](https://github.com/timothymamo/shift2eu/issues/139),
   which publishes it as the release asset `shift2eu-server_openapi.json` (Consequences);
-  amended by issue #147: `shift2eu-server` ships in release archives of its own (Consequences)
+  amended by issue #147: `shift2eu-server` ships in release archives of its own (Consequences);
+  amended by [ADR 0030](0030-serve-the-version-2-report-on-v1.md) (PRD #190): `/v1` serves the JSON report
+  `schemaVersion` 2 (Versioning), and an `invalid_region` message may name a region-shaped region the
+  client sent (Errors)
 - Date: 2026-11-11 (accepted 2026-11-12, issue #112; milestone 3 decisions added 2026-11-12)
 
 ## Context

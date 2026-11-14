@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "assessment",
   "inventoryName": "inventory.json",
   "source": "aws",
@@ -32,7 +32,9 @@
           "offering": "Object Storage"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-cdn",
@@ -48,7 +50,9 @@
           "text": "not classified"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-db",
@@ -77,7 +81,9 @@
       "requiredChanges": [
         "point-in-time-restore",
         "zone-high-availability"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-eks",
@@ -94,7 +100,9 @@
           "offering": "Kubernetes Kapsule Dedicated"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-legacy-mysql",
@@ -114,7 +122,9 @@
       ],
       "requiredChanges": [
         "point-in-time-restore"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-orders",
@@ -134,7 +144,9 @@
       ],
       "requiredChanges": [
         "encryption-at-rest"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-orders-dlq",
@@ -154,7 +166,9 @@
       ],
       "requiredChanges": [
         "encryption-at-rest"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-thumbnailer",
@@ -171,7 +185,9 @@
           "offering": "Serverless Functions"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-web-1",
@@ -188,7 +204,9 @@
           "offering": "Instances"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-web-1-data",
@@ -208,7 +226,9 @@
       ],
       "requiredChanges": [
         "encryption-at-rest"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-web-2",
@@ -225,7 +245,9 @@
           "offering": "Instances"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop-web-asg",
@@ -252,7 +274,9 @@
       "requiredChanges": [
         "autoscaling",
         "zone-high-availability"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "shop.example.com",
@@ -268,7 +292,9 @@
           "text": "not classified"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     }
   ],
   "blockers": [
@@ -285,6 +311,35 @@
         "code": "not-classified",
         "text": "not classified"
       }
+    }
+  ],
+  "workloads": [
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 13,
+      "summary": {
+        "direct": 5,
+        "partial": 6,
+        "none": 2,
+        "total": 13
+      },
+      "blockers": [
+        {
+          "resourceId": "shop-cdn",
+          "reason": {
+            "code": "not-classified",
+            "text": "not classified"
+          }
+        },
+        {
+          "resourceId": "shop.example.com",
+          "reason": {
+            "code": "not-classified",
+            "text": "not classified"
+          }
+        }
+      ]
     }
   ]
 }

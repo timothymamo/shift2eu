@@ -20,14 +20,22 @@ type comparisonDocument struct {
 }
 
 // targetEntry is one target of a comparison: its key and the target, summary,
-// resources and blockers of its assessment, as a single-target document holds
-// them.
+// resources, blockers, workloads, estimate basis and source cost of its
+// assessment, as a single-target document holds them.
 type targetEntry struct {
-	Key       string     `json:"key"`
-	Target    target     `json:"target"`
+	Key    string `json:"key"`
+	Target target `json:"target"`
+	// Region is the region chosen for the target, written only when one was
+	// chosen, with or without estimates.
+	Region    string     `json:"region,omitempty"`
 	Summary   summary    `json:"summary"`
 	Resources []resource `json:"resources"`
 	Blockers  []blocker  `json:"blockers"`
+	Workloads []workload `json:"workloads"`
+	// Estimate and SourceCost are written only when the target's assessment
+	// has estimates.
+	Estimate   *estimateBasis `json:"estimate,omitempty"`
+	SourceCost *sourceCost    `json:"sourceCost,omitempty"`
 }
 
 // sharedBlocker is a resource blocked on every target, with each target's
@@ -68,11 +76,15 @@ func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment
 	targets := make([]targetEntry, 0, len(c.Targets))
 	for _, t := range c.Targets {
 		targets = append(targets, targetEntry{
-			Key:       t.Key,
-			Target:    newTarget(t.Assessment),
-			Summary:   newSummary(t.Assessment.Summary),
-			Resources: newResources(t.Assessment.Verdicts),
-			Blockers:  newBlockers(t.Assessment.Blockers),
+			Key:        t.Key,
+			Target:     newTarget(t.Assessment),
+			Region:     t.Assessment.Region,
+			Summary:    newSummary(t.Assessment.Summary),
+			Resources:  newResources(t.Assessment.Verdicts),
+			Blockers:   newBlockers(t.Assessment.Blockers),
+			Workloads:  newWorkloads(t.Assessment.Workloads),
+			Estimate:   newEstimateBasis(t.Assessment),
+			SourceCost: newAssessmentSourceCost(t.Assessment),
 		})
 	}
 

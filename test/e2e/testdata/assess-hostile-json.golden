@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "assessment",
   "inventoryName": "inventory-hostile.json",
   "source": "aws",
@@ -32,7 +32,18 @@
           "offering": "Object Storage"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "a|b"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "[ ] x",
@@ -49,7 +60,13 @@
           "offering": "Instances"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "a|b",
@@ -69,7 +86,13 @@
       ],
       "requiredChanges": [
         "node-high-availability"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     },
     {
       "id": "tick`x",
@@ -86,8 +109,81 @@
           "offering": "Object Storage"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-size"
+      }
     }
   ],
-  "blockers": []
+  "blockers": [],
+  "workloads": [
+    {
+      "name": "ws|`x`[a](b) # h",
+      "noWorkload": false,
+      "resources": 1,
+      "summary": {
+        "direct": 1,
+        "partial": 0,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "amount": "0.00",
+        "estimated": 0,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    },
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 3,
+      "summary": {
+        "direct": 2,
+        "partial": 1,
+        "none": 0,
+        "total": 3
+      },
+      "blockers": [],
+      "estimate": {
+        "amount": "0.00",
+        "estimated": 0,
+        "resources": 3
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 3,
+        "currencies": []
+      }
+    }
+  ],
+  "estimate": {
+    "region": "fr-par",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "amount": "0.00",
+      "estimated": 0,
+      "resources": 4
+    }
+  },
+  "sourceCost": {
+    "covered": 0,
+    "resources": 4,
+    "currencies": []
+  }
 }
