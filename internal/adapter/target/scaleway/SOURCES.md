@@ -34,6 +34,15 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   2026-11-11, until the prices were added.
 - **Prices read on 2026-11-13 for PRD #190 milestone 4.** The plans and prices, with the pages under
   *Prices*. No offering, capability or region changed.
+- **Elastic Metal storage re-examined on 2026-11-14 for issue #219.** The *Elastic Metal* price page and
+  the Elastic Metal FAQ were read again, from the maintainer's saved browser copies (`www.scaleway.com`
+  answered automated clients with HTTP 403 that day), to find a price for storage beyond a server's
+  disks. There is none, and *Elastic Metal* says why. The same read re-checked the eight recorded Elastic
+  Metal plans: each server's hourly price, disks, cores, threads, memory and zones still match the page,
+  so no plan price or included storage changed. No offering, capability, region or price changed, so
+  `retrievedOn` stays 2026-11-13. The copies are not in the repository and were read as data; a refresh
+  saves them the same way, from a logged-out browser session into a scratch directory outside the
+  repository, and never commits them.
 - **Availability page:** <https://www.scaleway.com/en/product-availability-by-region/>, where every
   offering's regions come from, subject to the API check under *Rules applied*. It has one column per
   region (Paris, Amsterdam, Warsaw, Milan). For a zonal product it gives one mark per zone, and for a
@@ -309,6 +318,17 @@ fact. Pages:
 | `EM-I220E-NVMe` | 16C / 32T | 128 GB | 2 × 960 GB NVMe (`storageGiB` 1920) | 0.63 | `459.90` | €229.99 | all |
 | `EM-I320E-NVMe` | 24C / 48T | 192 GB | 2 × 1.92 TB NVMe (`storageGiB` 3840) | 0.959 | `700.07` | €349.99 | all |
 | `EM-I420E-NVMe` | 32C / 64T | 256 GB | 2 × 1.92 TB NVMe (`storageGiB` 3840) | 1.233 | `900.09` | €449.99 | all |
+
+- **No storage price.** Re-examined on 2026-11-14 (issue #219): an Elastic Metal server's storage is the
+  fixed local disks of its plan, and Scaleway sells no volume to extend it. The FAQ (saved copy of
+  <https://www.scaleway.com/en/docs/elastic-metal/faq/>, read 2026-11-14) says "Elastic Metal is not
+  currently compatible with Block Storage, but this functionality is planned for the future." The price
+  page (saved copy of <https://www.scaleway.com/en/pricing/elastic-metal/>, read 2026-11-14) lists only
+  Network and Windows Licences add-ons, with no storage, disk or volume row, and every server in its
+  embedded data has `fixedLocal` storage only. A resource needing more than its plan's included storage
+  is therefore "not estimated" on the storage, rather than priced at a Block Storage volume it cannot
+  attach. When the FAQ's planned Block Storage support ships, this offering may take the *Block Storage*
+  price.
 
 ### Instances
 
@@ -771,5 +791,8 @@ Prices and plans left out (PRD #190 milestone 4, read 2026-11-13):
   includes storage. Their root and data volumes are *Block Storage* volumes billed separately, so each
   of those offerings records the *Block Storage* 5K price as its storage price (`0.0949`). Block Storage
   15K, and the higher price of a node volume placed on it, are left out, as for *Block Storage*.
+- **Elastic Metal storage beyond a server's disks** (issue #219, read 2026-11-14): not priced, because
+  Elastic Metal is not compatible with Block Storage and sells no other storage option (*Elastic Metal*,
+  *No storage price*).
 - **Usage-priced offerings:** Queues and Serverless Functions are priced by use (PRD #190) and have no
   plans or storage prices.
