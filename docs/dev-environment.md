@@ -294,57 +294,77 @@ Never give it Administration: the rulesets' bypass lists need Administration wri
 Generate a private key and keep the `.pem` **outside the workspace**, a regular file (not a symlink: the
 script refuses one), readable only by you (`chmod 600`). The App's slug is never configured: the token script reads it from the App (`GET /app`).
 
-**On the Mac**, in the direnv `.envrc` above the workspace, beside the other credentials:
+**The host clone.** The token targets run on the Mac, as you, with the key's path in their environment,
+so they must run code the agents cannot edit. The workspace is mounted read-write into the VM, `.git`
+included: an agent can change its `Makefile` (or add a `GNUmakefile`, which make reads first), `dev/`, and
+`.git/config`, whose `core.fsmonitor`, `core.pager`, hooks and remote URL make `git` itself run commands
+or fetch another `main`. So no check run in the workspace helps: a `git diff` against `origin/main`, or any
+other `git` or `make` command there, is agent-controlled code the moment an agent wants it to be. Keep a
+second clone outside the workspace instead, which the VM never mounts, for example `~/src/shift2eu-host`:
+
+```bash
+git clone https://github.com/timothymamo/shift2eu.git ~/src/shift2eu-host   # once
+git -C ~/src/shift2eu-host pull --ff-only                                  # before each use: reviewed main from GitHub
+```
+
+Update it only like that, never from the workspace, and never edit it. Give it its own direnv `.envrc`
+(`~/src/shift2eu-host/.envrc`, then `direnv allow` there) with the App's three variables, and only there,
+**never in the `.envrc` above the workspace**, so no shell in the workspace ever has the key's path:
 
 ```bash
 export SHIFT2EU_AGENTS_APP_ID=...               # the App's settings page: App ID
 export SHIFT2EU_AGENTS_APP_INSTALLATION_ID=...  # the number at the end of the installation's settings URL
-export SHIFT2EU_AGENTS_APP_KEY_FILE=...         # the path of the .pem, outside the workspace
+export SHIFT2EU_AGENTS_APP_KEY_FILE=...         # the path of the .pem, outside the workspace and the clone
 ```
 
 Never add them to `VM_ENV`: `make vm-env` refuses any `SHIFT2EU_AGENTS_APP_*` name, so neither the key
-nor its path enters the VM.
+nor its path enters the VM. `make deck` warns when one of them reaches it (it still opens the deck).
+
+Run these from the host clone (`cd ~/src/shift2eu-host`); they need only `limactl` and `LIMA_INSTANCE`,
+nothing of the workspace:
 
 | Command | Does |
 |---|---|
 | `make agents-token` | Mints one token and writes it, and the bot's identity, into the VM |
 | `make agents-token-refresh` | Mints now and again before each token expires, in the foreground, until stopped |
-| `make deck` | With the three variables set, also starts the refresh in the background, unless it already runs |
+| `make agents-token-refresh-start` | Starts that refresh in the background, unless one already runs for the VM, and prints where its log is |
+
+And from the workspace, as before:
+
+| Command | Does |
+|---|---|
 | `make vm-gh-wrapper` | Gives a VM created before the gh wrapper the wrapper, without recreating it |
+| `make deck` | Opens the deck; it starts no refresh |
 
-**Before you run the token targets.** `make agents-token`, `make agents-token-refresh` and `make deck`
-with the App's variables run the workspace's `Makefile` and `dev/agents-app-token.sh` on the Mac, as you,
-with the key's path in the environment. The agents can edit the workspace, so the key is only as safe as
-that code: a changed script could read the key and send it anywhere, as it could any credential
-`make vm-env` copies. Run them only from a checkout that matches reviewed `main`. In the main checkout,
-this prints nothing:
+The same holds for every host target run from the workspace (`make vm-env`, `make vm-init`,
+`make vm-gh-wrapper`, `make deck`): it runs workspace code on the Mac with the `.envrc` above the workspace
+loaded, and so with every credential `make vm-env` copies (`GITHUB_TOKEN`, the Claude token). That is not
+new with the App, and milestone 3 removes `GITHUB_TOKEN`; running every host target from the host clone is
+an open follow-up (ADR 0029, Consequences).
 
-```bash
-git fetch && git diff --stat origin/main -- Makefile dev/
-```
-
-Running the host targets from a pinned copy outside the mount is an open follow-up (ADR 0029,
-Consequences).
-
-`make deck` keeps the refresh's pid and log in `${XDG_STATE_HOME:-~/.local/state}/shift2eu/` on the
-Mac, named after the VM instance (`agents-token-refresh-shift2eu.pid`, `agents-token-refresh-shift2eu.log`,
-mode 0600), and prints where the log is. The refresh checks the wall clock every minute and mints again
-when fewer than 20 minutes are left, so it carries on after the Mac sleeps. A failure that goes away by
-itself (no network yet after a wake, GitHub answering 5xx or 429, the VM stopped) never stops it, even once
-the token has expired: it logs one line and tries again, every minute at first and at most every five. It
-stops only on what you have to fix (GitHub refusing the App's key, the App or its installation, a key that
-cannot sign, a symlink in the VM's `~/.config/shift2eu`), or on a signal, and then writes
-`agents App token refresh stopped` and the time to the log; the next `make deck` warns that it stopped,
-shows the log's last lines and starts a new one. One refresh runs per VM: it holds the lock
-`agents-token-refresh-shift2eu.lock` in the same directory, and a second one (a `make agents-token-refresh`
-while the deck's runs, say) says that another refresher for that VM is running and exits with status 0. A
-lock left by a killed refresh is taken over. Stop it with
-`kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.pid)"`. No command prints a token, the
-JWT or the key, and nothing writes them to a log or the workspace.
+`make agents-token-refresh-start` keeps the refresh's pid and log in
+`${XDG_STATE_HOME:-~/.local/state}/shift2eu/` on the Mac, named after the VM instance
+(`agents-token-refresh-shift2eu.pid`, `agents-token-refresh-shift2eu.log`, mode 0600), and prints where
+the log is. The refresh checks the wall clock every minute and mints again when fewer than 20 minutes are
+left, so it carries on after the Mac sleeps. A failure that goes away by itself (no network yet after a
+wake, GitHub answering 5xx or 429, a 403 that is GitHub's rate limit, the VM stopped) never stops it, even
+once the token has expired: it logs one line and tries again, every minute at first and at most every
+five, or after the rate limit's `retry-after` if that is longer, but never past five. It stops only on what
+you have to fix (GitHub refusing the App's key, the App or its installation, a key that cannot sign, a
+symlink in the VM's `~/.config/shift2eu`), or on a signal, and then writes
+`agents App token refresh stopped` and the time to the log; the next `make agents-token-refresh-start`
+warns that it stopped, shows the log's last lines and starts a new one. One refresh runs per VM: it holds
+the lock `agents-token-refresh-shift2eu.lock` in the same directory, with its pid inside. A second one (a
+`make agents-token-refresh` while the background one runs, say) says that another refresher for that VM
+is running and exits with status 0, and `make agents-token-refresh-start` names the pid in the lock and
+starts nothing. A lock left by a killed refresh is taken over, by one refresh only. Stop it with
+`kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,
+the JWT or the key, and nothing writes them to a log or the workspace.
 
 **In the VM**, both files are readable only by the VM user and replaced atomically; the write refuses a
-`~/.config/shift2eu` that is a symlink, or a token or identity file that is a symlink or not a regular
-file:
+`~/.config/shift2eu` that is a symlink or resolves outside the VM user's home, or a token or identity file
+that is a symlink or not a regular file (a guard against a symlink left by mistake, not against the VM
+user):
 
 | File | Holds | Read by |
 |---|---|---|
@@ -361,18 +381,20 @@ and until milestone 3 an agent can delete the token file and fall back to `GITHU
 
 A VM created before this change keeps the real gh at `/usr/local/bin/gh`, and `make agents-token` warns
 that it "predates the gh wrapper". Run `make vm-gh-wrapper` (it moves the real gh, installs the wrapper
-and points the git credential helper at it; safe to run again), or recreate the VM with
+and points the git credential helper at it, whole or not at all, and ends with `vm-gh-wrapper: done`; safe
+to run again), or recreate the VM with
 `make vm-delete vm-create`, **before runbook step 3**. `make agents-token` also warns when the VM's clock
-is more than a minute off the Mac's. After the first `make agents-token`, run `make vm-init` so the agents
-commit as the App's bot.
+is more than a minute off the Mac's. After the first `make agents-token` (from the host clone), run
+`make vm-init` so the agents commit as the App's bot.
 
-**Rolling back**: stop the refresh first, and unset the App's variables so `make deck` does not start it again: it mints again whenever the token in the VM is within 20 minutes
+**Rolling back**: stop the refresh first, and do not start it again from the host clone: it mints again
+whenever the token in the VM is within 20 minutes
 of expiring, so up to 40 minutes after a rollback it would quietly write a new one. Then delete the token
 file in the VM, and gh falls back to `GITHUB_TOKEN`; delete the identity file too and run `make vm-init` to
 commit as yourself again:
 
 ```bash
-kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.pid)"
+kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"
 limactl shell --workdir / shift2eu sh -c 'rm -f "$HOME/.config/shift2eu/agents-app-token" "$HOME/.config/shift2eu/agents-app-identity"'
 make vm-init
 ```
