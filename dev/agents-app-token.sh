@@ -25,18 +25,22 @@
 #
 # refresh tells failures apart. A transient one (GitHub unreachable or answering 5xx or 429, a 403 that is a
 # rate limit, limactl failing or the VM not running) never stops it, even with no valid token left: it says
-# so in one line and tries again, at every check at first and then less often, at most every 5 checks, and
-# after a rate limit's retry-after when that is longer, but never past the 5 checks. A permanent one (GitHub
-# refusing the JWT, the installation or the App with any other 4xx, a key that cannot sign, a VM that
-# refuses to write through a symlink) stops it with "agents App token refresh stopped" and status 1. One
-# refresher runs per VM instance: a second one finds the first one's lock, says so, and exits 0.
+# so in one line and tries again, at every check at first and then less often, at most every 5 checks. A rate
+# limit is waited out instead: never earlier than its retry-after, nor, when it says no request is left
+# (x-ratelimit-remaining 0), than its x-ratelimit-reset, each honoured up to 3600 seconds. A permanent one
+# (GitHub refusing the JWT, the installation, the App or the bot user with any other 4xx, a key that cannot
+# sign, a VM that refuses to write through a symlink) stops it with "agents App token refresh stopped" and
+# status 1. One refresher runs per VM instance: a second one finds the first one's lock, says so, and exits 0.
 #
 # What it writes into the VM user's home, each file mode 0600 in a 0700 directory, replaced atomically:
 #   ~/.config/shift2eu/agents-app-token     the token, then its expiry as Unix seconds
 #   ~/.config/shift2eu/agents-app-identity  the git user.name <slug>[bot], then the git user.email
 #                                           <bot user id>+<slug>[bot]@users.noreply.github.com
 #
-# The bot user is looked up after the mint, with the installation token, never with the JWT or without one.
+# The token is written into the VM as soon as it is minted. The bot user is looked up after that, with the
+# installation token, never with the JWT or without one, and its identity file is written once the lookup
+# works: a failed lookup never discards the token, and refresh retries it at its next check, with the token
+# it holds, without minting another one. The identity is kept for the life of the process.
 #
 # Secrets: the JWT and the token live only in shell variables. They reach curl through its standard input
 # (--config -) and the VM through limactl's standard input, never a command line, a file on the Mac, or
@@ -146,14 +150,16 @@ make_jwt() {
   jwt="${head}.${claims}.${signature}"
 }
 
-# call <method> <path> <bearer> sets status, body, and the rate limit headers remaining (x-ratelimit-remaining)
-# and retry_after (retry-after), each empty unless a number. The bearer is the JWT or the installation token.
+# call <method> <path> <bearer> sets status, body, and the rate limit headers remaining (x-ratelimit-remaining),
+# reset (x-ratelimit-reset, Unix seconds) and retry_after (retry-after), each empty unless a number. The bearer
+# is the JWT or the installation token.
 # The headers, the URL and the method reach curl on its standard input, so neither secret is ever on a
 # command line. -q comes first, so curl reads no ~/.curlrc that could log the Authorization header or send
 # the request elsewhere. %header{} needs curl 7.84 or later; an older curl prints no number there, which
 # reads as no rate limit header.
 call() {
   remaining=""
+  reset=""
   retry_after=""
   response="$(
     printf '%s\n' \
@@ -163,7 +169,7 @@ call() {
       'header = "Accept: application/vnd.github+json"' \
       'header = "X-GitHub-Api-Version: 2022-11-28"' |
       curl -q --silent --show-error --max-time 30 --proto "${proto}" \
-        --write-out '\n%header{x-ratelimit-remaining}\n%header{retry-after}\n%{http_code}' --config -
+        --write-out '\n%header{x-ratelimit-remaining}\n%header{x-ratelimit-reset}\n%header{retry-after}\n%{http_code}' --config -
   )" || {
     status=000
     body=""
@@ -173,6 +179,9 @@ call() {
   response="${response%"${nl}"*}"
   header="${response##*"${nl}"}"
   ! is_number "${header}" || retry_after="${header}"
+  response="${response%"${nl}"*}"
+  header="${response##*"${nl}"}"
+  ! is_number "${header}" || reset="${header}"
   response="${response%"${nl}"*}"
   header="${response##*"${nl}"}"
   ! is_number "${header}" || remaining="${header}"
@@ -199,8 +208,9 @@ rate_limited() {
 
 # classify <HTTP status> sets failure: transient for what goes away by itself (000: no answer at all, 408,
 # 429, 5xx, a 403 that is a rate limit), permanent for any other refusal, which only the maintainer can fix
-# (401: the JWT, 403, 404: the App or its installation, any other 4xx). It keeps the retry-after GitHub asked
-# for in wait_hint, which the refresh honours within its backoff cap.
+# (401: the JWT, 403, 404: the App or its installation, any other 4xx). For a transient one it sets wait_hint
+# to the seconds GitHub asked to wait, the later of the retry-after and, when no request is left, the
+# x-ratelimit-reset (a second after it, as reset is rounded down), at most 3600; empty when it asked for none.
 classify() {
   wait_hint=""
   case "$1" in
@@ -214,7 +224,29 @@ classify() {
     ;;
   *) failure=permanent ;;
   esac
-  [ "${failure}" = permanent ] || wait_hint="${retry_after}"
+  [ "${failure}" = transient ] || return 0
+  # At most 5 digits for a retry-after and 12 for a reset (the clock's own length): a longer one is waited
+  # out for the full 3600 seconds, and never reaches the shell's arithmetic, where it could overflow.
+  if is_number "${retry_after}"; then
+    if [ "${#retry_after}" -gt 5 ]; then
+      wait_hint=3600
+    elif [ "${retry_after}" -gt 0 ]; then
+      wait_hint="${retry_after}"
+    fi
+  fi
+  if [ "${remaining}" = 0 ] && is_number "${reset}"; then
+    if [ "${#reset}" -gt 12 ]; then
+      wait_hint=3600
+    else
+      until_reset="$((reset - $(now) + 1))"
+      if [ "${until_reset}" -gt "${wait_hint:-0}" ]; then
+        wait_hint="${until_reset}"
+      fi
+    fi
+  fi
+  if [ -n "${wait_hint}" ] && [ "${wait_hint}" -gt 3600 ]; then
+    wait_hint=3600
+  fi
 }
 
 # lookup_slug sets slug from GET /app, with the App's JWT.
@@ -236,11 +268,12 @@ lookup_slug() {
 }
 
 # lookup_identity sets bot_name and bot_email from GET /users/<slug>[bot] (the bot user's id), asked with the
-# installation token just minted: GitHub refuses the App's JWT there, and the token has a rate limit of its
-# own, where an unauthenticated call shares one with everything behind the same address. GitHub's noreply
-# address for the bot is numbered with the bot user's id, not the App ID.
+# installation token minted last (held): GitHub refuses the App's JWT there, and the token has a rate limit of
+# its own, where an unauthenticated call shares one with everything behind the same address. GitHub's noreply
+# address for the bot is numbered with the bot user's id, not the App ID. On failure it sets failure, and
+# wait_hint for a rate limit, as classify does.
 lookup_identity() {
-  call GET "/users/${slug}%5Bbot%5D" "${token}"
+  call GET "/users/${slug}%5Bbot%5D" "${held}"
   [ "${status}" = 200 ] || {
     classify "${status}"
     if [ "${failure}" = transient ] && [ "${status}" = 403 ]; then
@@ -253,6 +286,7 @@ lookup_identity() {
   bot_id="$(json_number id)"
   is_number "${bot_id}" || {
     failure=transient
+    wait_hint=""
     say "GET /users/${slug}[bot] gave no numeric id"
     return 1
   }
@@ -260,8 +294,10 @@ lookup_identity() {
   bot_email="${bot_id}+${slug}[bot]@users.noreply.github.com"
 }
 
-# The script the VM runs: it reads four lines from its standard input and writes the two files atomically
-# (a temporary file beside each, then mv), so a gh running at the same time never reads half a token. It
+# The script the VM runs: it reads four lines from its standard input (the token, its expiry, the git
+# user.name, the git user.email) and writes the identity file when the name is not empty and the token file
+# when the token is not empty, each atomically (a temporary file beside it, then mv), so a gh running at the
+# same time never reads half a token. It
 # refuses, with status 3, a ~/.config/shift2eu that is a symlink or that resolves (pwd -P) outside the VM
 # user's real home, and a token or identity file that is a symlink or not a regular file. That keeps the token
 # from being written through a symlink by mistake; it is no boundary against the VM user, who can read the
@@ -307,14 +343,18 @@ IFS= read -r token
 IFS= read -r expiry
 IFS= read -r name
 IFS= read -r email
-tmp="$(mktemp "$dir/.agents-app-identity.XXXXXX")"
-printf "%s\n%s\n" "$name" "$email" >"$tmp"
-chmod 600 "$tmp"
-mv -f "$tmp" "$dir/agents-app-identity"
-tmp="$(mktemp "$dir/.agents-app-token.XXXXXX")"
-printf "%s\n%s\n" "$token" "$expiry" >"$tmp"
-chmod 600 "$tmp"
-mv -f "$tmp" "$dir/agents-app-token"
+if [ -n "$name" ]; then
+  tmp="$(mktemp "$dir/.agents-app-identity.XXXXXX")"
+  printf "%s\n%s\n" "$name" "$email" >"$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$dir/agents-app-identity"
+fi
+if [ -n "$token" ]; then
+  tmp="$(mktemp "$dir/.agents-app-token.XXXXXX")"
+  printf "%s\n%s\n" "$token" "$expiry" >"$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$dir/agents-app-token"
+fi
 printf "clock=%s\n" "$(date +%s)"
 [ -e "$1" ] || printf "gh-wrapper=missing\n"'
 
@@ -337,11 +377,31 @@ check_vm() {
   fi
 }
 
-# mint_once mints one installation token and writes it, and the bot identity, into the VM. It sets expiry
-# to the token's expiry, and prints why when it fails, never a secret. On failure it sets failure to
-# transient or permanent, which refresh tells apart.
+# vm_send <token> <expiry> <name> <email> runs vm_write in the VM, which writes each file whose first field is
+# not empty, and sets written to what it printed. On failure it says why, never a secret, and sets failure:
+# permanent when the VM refused the write (status 3), transient otherwise.
+vm_send() {
+  written="$(printf '%s\n%s\n%s\n%s\n' "$1" "$2" "$3" "$4" |
+    "${limactl}" shell --workdir / "${instance}" sh -c "${vm_write}" vm-write "${vm_real_gh}")" || {
+    written=$?
+    if [ "${written}" -eq 3 ]; then
+      failure=permanent
+      say "the VM ${instance} refused to write the ${5} (see above)"
+    else
+      failure=transient
+      say "could not write the ${5} into the VM ${instance}: is it running (make vm-up)?"
+    fi
+    return 1
+  }
+}
+
+# mint_once mints one installation token and writes it into the VM at once, with the bot identity when that
+# is known already. It sets expiry to the token's expiry, and prints why when it fails, never a secret. On
+# failure it sets failure to transient or permanent, which refresh tells apart. While the bot identity is not
+# known it keeps the token in held, for identify.
 mint_once() {
   failure=permanent
+  wait_hint=""
   started="$(now)"
   make_jwt || {
     say "cannot sign a JWT with SHIFT2EU_AGENTS_APP_KEY_FILE: is it the App's PEM private key?"
@@ -389,34 +449,41 @@ mint_once() {
     return 1
     ;;
   esac
-  if [ -z "${bot_email}" ]; then
-    lookup_identity || {
-      token=""
-      return 1
-    }
-  fi
   # Five minutes early, of the Mac's hour and of GitHub's own expires_at, whichever ends first: a call
   # started just before the expiry still has a valid token, and so does a VM whose clock lags a little.
   expiry="$((started + 3600 - 300))"
   if stated="$(parse_time "${expires_at}")" && is_number "${stated}" && [ "$((stated - 300))" -lt "${expiry}" ]; then
     expiry="$((stated - 300))"
   fi
-  written="$(printf '%s\n%s\n%s\n%s\n' "${token}" "${expiry}" "${bot_name}" "${bot_email}" |
-    "${limactl}" shell --workdir / "${instance}" sh -c "${vm_write}" vm-write "${vm_real_gh}")" || {
-    written=$?
+  # A token the VM did not take is dropped: the next try mints another one.
+  vm_send "${token}" "${expiry}" "${bot_name}" "${bot_email}" "token minted just now" || {
     token=""
-    if [ "${written}" -eq 3 ]; then
-      failure=permanent
-      say "minted a token but the VM ${instance} refused to write it (see above)"
-    else
-      failure=transient
-      say "minted a token but could not write it into the VM ${instance}: is it running (make vm-up)?"
-    fi
     return 1
   }
+  if [ -n "${bot_email}" ]; then
+    identity_written=1
+    held=""
+    say "wrote a token for ${bot_name} into the VM ${instance}, valid until $(show_time "${expiry}")"
+  else
+    held="${token}"
+    say "wrote a token into the VM ${instance}, valid until $(show_time "${expiry}"); looking up the bot user next"
+  fi
   token=""
-  say "wrote a token for ${bot_name} into the VM ${instance}, valid until $(show_time "${expiry}")"
   check_vm "${written}"
+}
+
+# identify looks the bot user up with the held token, once per process, and writes the identity file into
+# the VM; with both done already it does nothing. It fails like mint_once, never touching the VM's token.
+identify() {
+  wait_hint=""
+  if [ -z "${bot_email}" ]; then
+    lookup_identity || return 1
+    held=""
+  fi
+  [ "${identity_written}" -eq 0 ] || return 0
+  vm_send "" "" "${bot_name}" "${bot_email}" "bot identity" || return 1
+  identity_written=1
+  say "wrote the bot identity ${bot_name} into the VM ${instance}"
 }
 
 # stopped <why> says the refresh stopped, when, until when the VM's token is valid, and how to start it
@@ -430,7 +497,7 @@ stopped() {
   else
     left="the VM holds no token from this refresh"
   fi
-  say "agents App token refresh stopped at $(show_time "$(now)") ($1); ${left}; start it again with make agents-token-refresh"
+  say "agents App token refresh stopped at $(show_time "$(now)") ($1); ${left}; start it again from the host clone on the Mac with make agents-token-refresh-start"
 }
 
 # is_refresh <pid> tells whether pid is a running refresh.
@@ -507,39 +574,52 @@ refresh() {
     # The wall clock, not a sleep of the token's lifetime: after the Mac sleeps, the first check sees how
     # little is left and mints at once.
     current="$(now)"
+    ok=1
+    why="no token could be minted, and trying again cannot fix it"
     if [ -z "${expiry}" ] || [ "$((expiry - current))" -lt "${margin_seconds}" ]; then
       previous="${expiry}"
-      if mint_once; then
-        failures=0
-      else
+      if ! mint_once; then
         expiry="${previous}"
-        if [ "${failure}" = permanent ]; then
-          stopped "no token could be minted, and trying again cannot fix it"
-          release_lock
-          exit 1
-        fi
-        # Transient: never stop, even with no valid token left (a Mac waking before its network). Back off
-        # from one check to at most five.
-        failures=$((failures + 1))
-        wait_seconds="${check_seconds}"
-        n=1
-        while [ "${n}" -lt "${failures}" ] && [ "${wait_seconds}" -lt "$((check_seconds * 5))" ]; do
-          wait_seconds=$((wait_seconds * 2))
-          n=$((n + 1))
-        done
-        [ "${wait_seconds}" -le "$((check_seconds * 5))" ] || wait_seconds=$((check_seconds * 5))
-        # A rate limit's retry-after is honoured, but never past the cap of five checks.
-        if is_number "${wait_hint:-}" && [ "${wait_hint}" -gt "${wait_seconds}" ]; then
-          wait_seconds="${wait_hint}"
-          [ "${wait_seconds}" -le "$((check_seconds * 5))" ] || wait_seconds=$((check_seconds * 5))
-        fi
-        if [ -n "${expiry}" ] && [ "${expiry}" -gt "${current}" ]; then
-          left="the VM's token is valid until $(show_time "${expiry}")"
-        else
-          left="the VM has no valid token until then"
-        fi
-        say "will try again in ${wait_seconds}s (failure ${failures} in a row); ${left}"
+        ok=0
       fi
+    fi
+    # The bot identity, until it is in the VM: looked up with the token held from the mint, which is valid
+    # here, as the check above mints a new one first when it is not.
+    if [ "${ok}" -eq 1 ] && [ -n "${expiry}" ] && [ "${identity_written}" -eq 0 ]; then
+      if ! identify; then
+        ok=0
+        why="the bot user's identity cannot be read, and trying again cannot fix it"
+      fi
+    fi
+    if [ "${ok}" -eq 1 ]; then
+      failures=0
+    else
+      if [ "${failure}" = permanent ]; then
+        stopped "${why}"
+        release_lock
+        exit 1
+      fi
+      # Transient: never stop, even with no valid token left (a Mac waking before its network). Back off
+      # from one check to at most five.
+      failures=$((failures + 1))
+      wait_seconds="${check_seconds}"
+      n=1
+      while [ "${n}" -lt "${failures}" ] && [ "${wait_seconds}" -lt "$((check_seconds * 5))" ]; do
+        wait_seconds=$((wait_seconds * 2))
+        n=$((n + 1))
+      done
+      [ "${wait_seconds}" -le "$((check_seconds * 5))" ] || wait_seconds=$((check_seconds * 5))
+      # A rate limit is waited out: never retried before its retry-after or its reset (classify caps
+      # either at 3600 seconds), however many checks that is.
+      if is_number "${wait_hint:-}" && [ "${wait_hint}" -gt "${wait_seconds}" ]; then
+        wait_seconds="${wait_hint}"
+      fi
+      if [ -n "${expiry}" ] && [ "${expiry}" -gt "${current}" ]; then
+        left="the VM's token is valid until $(show_time "${expiry}")"
+      else
+        left="the VM has no valid token until then"
+      fi
+      say "will try again in ${wait_seconds}s (failure ${failures} in a row); ${left}"
     fi
     sleep "${wait_seconds}" &
     sleeper=$!
@@ -555,11 +635,14 @@ bot_name=""
 bot_email=""
 jwt=""
 token=""
+held=""
+identity_written=0
 
 case "${1:-}" in
 mint)
   check_inputs
   mint_once
+  identify
   ;;
 refresh)
   check_inputs
