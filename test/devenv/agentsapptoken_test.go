@@ -759,9 +759,7 @@ func TestAgentsAppTokenRefreshReplacesTheTokenAndSaysHowToStartItAgain(t *testin
 		t.Errorf("the refresh's stderr does not say 'agents App token refresh stopped', so a stopped refresh is invisible: %s", stopped)
 	}
 
-	if !strings.Contains(stopped, "make agents-token-refresh") {
-		t.Errorf("the refresh's stderr does not name make agents-token-refresh, the command that starts it again: %s", stopped)
-	}
+	assertStopLineNamesWhereToRestart(t, stopped)
 
 	tokens := f.api.minted()
 	if len(tokens) < 2 {

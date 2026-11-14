@@ -284,40 +284,121 @@ func TestVMGHWrapperScriptInstallsIntoTheVMsTree(t *testing.T) {
 	}
 }
 
-// TestVMGHWrapperScriptRunsNothingOnATruncatedStream pins the first half of second review item 2: the
-// generated script is one function called on its last line, so a stream that stops early installs nothing and
-// prints no done line. A flat script would have installed the wrapper from the lines that did arrive.
+// lineIndex returns the index of the first line of stream that is want, ignoring the indentation the generated
+// script gives it, and fails the test when there is none: a cut point the test cannot find is no cut point at
+// all.
+func lineIndex(t *testing.T, stream, want string) int {
+	t.Helper()
+
+	for i, line := range strings.Split(stream, "\n") {
+		if strings.TrimSpace(line) == want {
+			return i
+		}
+	}
+
+	t.Fatalf("the generated script has no line %q, so this test cannot cut the stream there:\n%s", want, stream)
+
+	return -1
+}
+
+// TestVMGHWrapperScriptRunsNothingOnATruncatedStream pins the first half of second review item 2 and the third
+// review's item 5: the generated script is one function called on its last line, so a stream that stops anywhere
+// before that call - inside the function, inside the SHIFT2EU_GH_WRAPPER here-document that carries the wrapper,
+// or just before the call itself - installs nothing and prints no done line. A stream cut inside a function or a
+// here-document is a syntax error, and without the call nothing runs at all.
 func TestVMGHWrapperScriptRunsNothingOnATruncatedStream(t *testing.T) {
 	t.Parallel()
 
-	sb := newSandbox(t)
-	sb.useFakeSudo(t)
-
-	r := newVMRoot(t)
-	writeFileMode(t, r.bin, []byte(realGHBinary), 0o700)
-
-	stream := vmGHWrapperStream(t, sb, scriptPath(t, ghWrapperScript))
-
-	// The last line is the call that runs everything.
-	lines := strings.Split(strings.TrimRight(stream, "\n"), "\n")
-	if len(lines) < 2 {
-		t.Fatalf("dev/%s printed %d line(s): the script cannot be one function called on its last line", vmGHWrapperScript, len(lines))
+	cases := []struct {
+		name string
+		// cutAt is the line that is matched exactly to find the cut point: the last line to arrive, unless
+		// cutBefore says the stream stops just before it.
+		cutAt     string
+		cutBefore bool
+		reason    string // what the cut leaves behind, for the failure message
+	}{
+		{
+			name:   "inside the here-document, after the wrapper's real gh line",
+			cutAt:  "real=/usr/local/libexec/shift2eu/gh",
+			reason: "the here-document the wrapper travels in never reaches its delimiter",
+		},
+		{
+			name:   "inside the here-document, near the wrapper's end",
+			cutAt:  "unset GITHUB_TOKEN token",
+			reason: "the here-document stops two lines before its delimiter",
+		},
+		{
+			name:   "inside the function, before the wrapper is moved into place",
+			cutAt:  `sudo mv -f "${new_gh}" "${bin_gh}"`,
+			reason: "the function is never closed",
+		},
+		{
+			name:   "inside the function, after the done line it prints",
+			cutAt:  `echo "vm-gh-wrapper: done"`,
+			reason: "the function is never closed, and the done line arrived without the installation",
+		},
+		{
+			name:      "just before the call that runs the function",
+			cutAt:     "vm_gh_wrapper",
+			cutBefore: true,
+			reason:    "the script is whole but nothing calls the function",
+		},
 	}
 
-	truncated := strings.Join(lines[:len(lines)-1], "\n") + "\n"
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	stdout, stderr, _ := sb.runStream(t, sb.vmEnv(r), truncated)
+			sb := newSandbox(t)
+			sb.useFakeSudo(t)
 
-	if got := installed(t, r.bin); got != realGHBinary {
-		t.Errorf("a stream that stopped before its last line replaced %s with %q: a transfer cut short must install nothing (second review, item 2)\nstdout: %s\nstderr: %s", r.bin, got, stdout, stderr)
-	}
+			r := newVMRoot(t)
+			writeFileMode(t, r.bin, []byte(realGHBinary), 0o700)
 
-	if _, err := os.Stat(r.libexec); err == nil {
-		t.Errorf("a stream that stopped before its last line moved the real gh to %s: a transfer cut short must change nothing", r.libexec)
-	}
+			stream := vmGHWrapperStream(t, sb, scriptPath(t, ghWrapperScript))
+			lines := strings.Split(stream, "\n")
 
-	if strings.Contains(stdout+stderr, doneLine) {
-		t.Errorf("a truncated stream prints %q: make would take that for a finished installation\nstdout: %s\nstderr: %s", doneLine, stdout, stderr)
+			cut := lineIndex(t, stream, tc.cutAt)
+			if tc.cutBefore {
+				cut--
+			}
+
+			truncated := strings.Join(lines[:cut+1], "\n") + "\n"
+
+			stdout, stderr, _ := sb.runStream(t, sb.vmEnv(r), truncated)
+
+			if got := installed(t, r.bin); got != realGHBinary {
+				t.Errorf("a stream cut %s replaced %s with %q, although %s: a transfer cut short must install nothing (third review, item 5)\nstdout: %s\nstderr: %s",
+					tc.name, r.bin, got, tc.reason, stdout, stderr)
+			}
+
+			if _, err := os.Stat(r.libexec); err == nil {
+				t.Errorf("a stream cut %s moved the real gh to %s: a transfer cut short must change nothing", tc.name, r.libexec)
+			}
+
+			if strings.Contains(stdout+stderr, doneLine) {
+				t.Errorf("a stream cut %s prints %q, although %s: make would take that for a finished installation\nstdout: %s\nstderr: %s",
+					tc.name, doneLine, tc.reason, stdout, stderr)
+			}
+
+			if helper := gitCredentialHelper(t, sb.vmHome); helper != "" {
+				t.Errorf("a stream cut %s pointed the git credential helper at %q: a transfer cut short must change nothing", tc.name, helper)
+			}
+
+			entries, err := os.ReadDir(filepath.Dir(r.bin))
+			if err != nil {
+				t.Fatalf("read %s: %v", filepath.Dir(r.bin), err)
+			}
+
+			var names []string
+			for _, entry := range entries {
+				names = append(names, entry.Name())
+			}
+
+			if !slices.Equal(names, []string{"gh"}) {
+				t.Errorf("a stream cut %s left %v in %s, want only the gh that was there: nothing half-installed may stay behind", tc.name, names, filepath.Dir(r.bin))
+			}
+		})
 	}
 }
 

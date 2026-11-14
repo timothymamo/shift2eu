@@ -198,7 +198,8 @@ func TestGHAppTokenFallsBackToGITHUBToken(t *testing.T) {
 }
 
 // TestGHAppTokenRefusesABadTokenFile pins that an expired, malformed or group-readable token file makes the
-// wrapper fail without running gh, name make agents-token-refresh, and never print the file's content.
+// wrapper fail without running gh, name make agents-token-refresh-start in the host clone on the Mac, and never
+// print the file's content.
 func TestGHAppTokenRefusesABadTokenFile(t *testing.T) {
 	t.Parallel()
 
@@ -238,8 +239,12 @@ func TestGHAppTokenRefusesABadTokenFile(t *testing.T) {
 				t.Fatalf("the wrapper ran the real gh with a token file that is %s: it must refuse it and exit without calling gh", tc.name)
 			}
 
-			if !strings.Contains(stderr, "make agents-token-refresh") {
-				t.Errorf("the wrapper's stderr does not name make agents-token-refresh, the command that mints a new token: %s", stderr)
+			// Third review, item 4: the refusal names the command AND where to run it - the host clone on the
+			// Mac, the only place the App's key and its path live.
+			for _, want := range []string{"make agents-token-refresh-start", "host clone on the Mac"} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("the wrapper's stderr does not hold %q, so a maintainer cannot tell where to start the refresh again (third review, item 4): %s", want, stderr)
+				}
 			}
 
 			// Review item 10: the refusal must not teach an agent to delete the token file or to fall back to the
@@ -253,7 +258,7 @@ func TestGHAppTokenRefusesABadTokenFile(t *testing.T) {
 			}
 
 			if !strings.Contains(stderr, "maintainer") {
-				t.Errorf("the wrapper's stderr does not say who can fix it: ask the maintainer to run make agents-token-refresh on the Mac (review item 10): %s", stderr)
+				t.Errorf("the wrapper's stderr does not say who can fix it: ask the maintainer to run make agents-token-refresh-start in the host clone on the Mac (review item 10): %s", stderr)
 			}
 
 			if tc.token == "" {

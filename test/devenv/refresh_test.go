@@ -35,6 +35,19 @@ func (f *mintFixture) refreshEagerEnv() map[string]string {
 	return f.env
 }
 
+// assertStopLineNamesWhereToRestart fails unless text holds the refresh's stop line and names both the host
+// clone and make agents-token-refresh-start: the command a maintainer runs again, and the only place it may run
+// from, where the App's key and its path live (PRD #161 milestone 1 third review, item 4).
+func assertStopLineNamesWhereToRestart(t *testing.T, text string) {
+	t.Helper()
+
+	for _, want := range []string{"agents App token refresh stopped", "make agents-token-refresh-start", "host clone"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the refresh's stderr does not hold %q, so a maintainer cannot tell where to start it again after it stopped (third review, item 4): %s", want, text)
+		}
+	}
+}
+
 // refreshLockDir is the lock the refresh takes, one per VM instance, so two refreshers of the same VM cannot
 // both write its token file (PRD #161 milestone 1 review, item 7).
 func (sb *sandbox) refreshLockDir(instance string) string {
@@ -198,6 +211,220 @@ func TestAgentsAppTokenRefreshSurvivesAVMThatIsNotRunning(t *testing.T) {
 	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
 }
 
+// TestAgentsAppTokenRefreshWaitsOutARateLimit pins the third review's item 2 (S1), which replaces the five-check
+// cap of the second review: a rate limit's wait is honoured up to an hour. A refresh that still capped it would
+// retry about two seconds before this test allows, because five checks of one second are five seconds.
+func TestAgentsAppTokenRefreshWaitsOutARateLimit(t *testing.T) {
+	t.Parallel()
+
+	// The wait GitHub asks for is seven seconds and the check is one second (refreshEnv), so the second POST
+	// belongs about seven seconds after the first. Six seconds is the bound a retry cut down to the old cap of
+	// five checks misses, and a bound a load spike or -race cannot push past: sleep only ever lasts longer.
+	const (
+		minWait = 6 * time.Second
+		wait    = 7 * time.Second
+	)
+
+	cases := []struct {
+		name string
+		fail func(api *fakeGitHub)
+	}{
+		{
+			name: "a retry-after longer than five checks",
+			fail: func(api *fakeGitHub) { api.failNextMintsWithRateLimit(7, 0, 1) },
+		},
+		{
+			name: "no request left until the reset",
+			fail: func(api *fakeGitHub) { api.failNextMintsWithRateLimit(0, time.Now().Add(wait).Unix(), 1) },
+		},
+		{
+			// Never earlier than either: the retry-after asks for two seconds, the reset lies seven away.
+			name: "both, and the reset is the later one",
+			fail: func(api *fakeGitHub) { api.failNextMintsWithRateLimit(2, time.Now().Add(wait).Unix(), 1) },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			env := f.refreshEnv()
+			tc.fail(f.api)
+
+			refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+			// One line for the start and one for the rate limit, then nothing until the wait is over.
+			waitFor(t, 30*time.Second, "one line on stderr for the start and for the rate limit", func() bool {
+				return nonEmptyLines(refresh.errOut()) >= 2
+			})
+
+			if !refresh.running() {
+				t.Fatalf("the refresh exited on a 403 that says it is a rate limit, which it must survive; stderr:\n%s", refresh.errOut())
+			}
+
+			// The wait is generous against -race; what it must not do is come back early.
+			waitFor(t, 90*time.Second, "the refresh's second access_tokens request after the rate limit", func() bool {
+				return len(f.api.postTimes()) >= 2
+			})
+
+			posts := f.api.postTimes()
+
+			if waited := posts[1].Sub(posts[0]); waited < minWait {
+				t.Errorf("the refresh asked GitHub for a token again %s after the rate-limited request, want at least %s: a rate limit's retry-after and its x-ratelimit-reset are honoured up to 3600s and never cut down to a few checks (third review, item 2)\nstderr:\n%s",
+					waited.Round(time.Millisecond), minWait, refresh.errOut())
+			}
+
+			waitFor(t, 30*time.Second, "the refresh to write the token GitHub minted after the wait", func() bool {
+				line, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
+
+				return ok && line != ""
+			})
+
+			if !refresh.running() {
+				t.Fatalf("the refresh exited after it recovered from the rate limit; stderr:\n%s", refresh.errOut())
+			}
+
+			token := readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
+			if tokens := f.api.minted(); token[0] != tokens[len(tokens)-1] {
+				t.Errorf("%s does not hold the token the fake API minted after the wait", agentsTokenFile)
+			}
+
+			f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+		})
+	}
+}
+
+// TestAgentsAppTokenRefreshKeepsTheTokenWhenTheLookupFails pins the third review's item 3 (L-2, N1): a minted
+// token is written into the VM as soon as GitHub hands it out, before the bot user is looked up, so a lookup that
+// fails costs the agents their identity for one check, never the token. The next check looks the bot user up
+// again without minting a second token.
+func TestAgentsAppTokenRefreshKeepsTheTokenWhenTheLookupFails(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		fail func(api *fakeGitHub)
+	}{
+		{
+			name: "the lookup answers 503",
+			fail: func(api *fakeGitHub) { api.failNextUserLookups(http.StatusServiceUnavailable, 1) },
+		},
+		{
+			name: "the lookup is rate limited",
+			fail: func(api *fakeGitHub) {
+				api.failNextUserLookupsWith(http.StatusForbidden,
+					`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`,
+					nil, 1)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			// The margin is under the hour a token lives, so one mint is enough for the whole test: a second
+			// access_tokens request can only come from the retry of the lookup, which is what this test forbids.
+			env := f.refreshEnv()
+			tc.fail(f.api)
+
+			refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+			// The failure is logged: at that moment the token belongs in the VM already, and the identity - the
+			// fruit of the lookup that failed - must not be there yet.
+			waitFor(t, 30*time.Second, "the refresh to log the failed bot user lookup", func() bool {
+				return nonEmptyLines(refresh.errOut()) >= 2
+			})
+
+			tokens := f.api.minted()
+			if len(tokens) == 0 {
+				t.Fatalf("the fake API minted no token, so this test cannot tell whether a minted token reaches the VM; stderr:\n%s", refresh.errOut())
+			}
+
+			line, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
+			if !ok || line != tokens[0] {
+				t.Fatalf("%s does not hold the token the fake API minted before the bot user lookup failed: a failed lookup must never discard a minted token, so the token is written as soon as it is minted (third review, item 3)\nstderr:\n%s",
+					agentsTokenFile, refresh.errOut())
+			}
+
+			if _, err := os.Stat(f.sb.vmPath(agentsIdentityFile)); err == nil {
+				t.Errorf("%s is there although the bot user lookup failed: the identity file is written from a lookup that succeeded, which is the next check's", agentsIdentityFile)
+			}
+
+			waitFor(t, 30*time.Second, "the refresh to look the bot user up again at its next check", func() bool {
+				_, err := os.Stat(f.sb.vmPath(agentsIdentityFile))
+
+				return err == nil
+			})
+
+			if got := len(f.api.posted()); got != 1 {
+				t.Errorf("the refresh posted to access_tokens %d times, want one: retrying the lookup must not mint a second token while the one in the VM is still valid (third review, item 3)", got)
+			}
+
+			if got := f.api.botUserLookups(); got != 1 {
+				t.Errorf("the fake API answered %d bot user lookups with the bot user, want one: one lookup failed, the next one worked", got)
+			}
+
+			if refreshed, ok := tokenLine(f.sb.vmPath(agentsTokenFile)); !ok || refreshed != tokens[0] {
+				t.Errorf("%s no longer holds the token the failed lookup must have kept", agentsTokenFile)
+			}
+
+			identity := readTwoLines(t, f.sb.vmPath(agentsIdentityFile), 0o600)
+			if want := f.api.slug + "[bot]"; identity[0] != want {
+				t.Errorf("%s's first line is %q, want the App's bot user.name %q", agentsIdentityFile, identity[0], want)
+			}
+
+			if !refresh.running() {
+				t.Fatalf("the refresh exited after a failed bot user lookup and its retry; it must keep running; stderr:\n%s", refresh.errOut())
+			}
+
+			f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+		})
+	}
+}
+
+// TestAgentsAppTokenRefreshStopsOnAPermanentLookupFailure pins the other half of the third review's item 3: a
+// lookup error no retry fixes (4xx other than a rate limit) still stops the refresh with the stop line and
+// status 1, and the token the mint already wrote stays in the VM for the agents to use meanwhile.
+func TestAgentsAppTokenRefreshStopsOnAPermanentLookupFailure(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	f.api.refuseUserLookupsWith(http.StatusNotFound)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh was still running 30s after the bot user lookup answered 404, which no retry can fix; stderr:\n%s", refresh.errOut())
+	}
+
+	if code := refresh.exitCode(t); code != 1 {
+		t.Errorf("the refresh exited with %d after a bot user lookup GitHub answered 404, want 1: make deck, and the maintainer reading its log, relies on a stopped refresh being a failure", code)
+	}
+
+	assertStopLineNamesWhereToRestart(t, refresh.errOut())
+
+	tokens := f.api.minted()
+	if len(tokens) == 0 {
+		t.Fatalf("the fake API minted no token, so this test cannot tell whether a minted token survives the lookup; stderr:\n%s", refresh.errOut())
+	}
+
+	if line, ok := tokenLine(f.sb.vmPath(agentsTokenFile)); !ok || line != tokens[0] {
+		t.Errorf("%s does not hold the token the mint wrote before the bot user lookup was refused: a failed lookup never discards a minted token, not even one that stops the refresh (third review, item 3)\nstderr:\n%s",
+			agentsTokenFile, refresh.errOut())
+	}
+
+	if _, err := os.Stat(f.sb.vmPath(agentsIdentityFile)); err == nil {
+		t.Errorf("%s is there although no bot user lookup succeeded", agentsIdentityFile)
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
 // TestAgentsAppTokenRefreshStopsOnAPermanentFailure pins the second half of review item 1: only an error a
 // maintainer has to fix stops the loop, with the stop line and status 1, even while the VM's token would still
 // be valid for a while.
@@ -254,9 +481,7 @@ func TestAgentsAppTokenRefreshStopsOnAPermanentFailure(t *testing.T) {
 				t.Errorf("the refresh's stderr does not say 'agents App token refresh stopped' after HTTP %d: %s", tc.status, stopped)
 			}
 
-			if !strings.Contains(stopped, "make agents-token-refresh") {
-				t.Errorf("the refresh's stderr does not name make agents-token-refresh, the command that starts it again: %s", stopped)
-			}
+			assertStopLineNamesWhereToRestart(t, stopped)
 
 			f.assertNoLeaks(t, refresh.out(), stopped)
 		})
@@ -373,46 +598,6 @@ func TestAgentsAppTokenRefreshTakesOverAStaleLock(t *testing.T) {
 	}
 
 	f.assertNoLeaks(t, second.out(), second.errOut())
-}
-
-// TestAgentsAppTokenRefreshCapsARetryAfter pins the last half of the second review's item 4: a 403 that carries
-// retry-after is transient, and the wait it asks for stays inside the loop's own backoff cap (five checks), so a
-// GitHub that asks for minutes does not leave the VM without a token for minutes.
-func TestAgentsAppTokenRefreshCapsARetryAfter(t *testing.T) {
-	t.Parallel()
-
-	f := newMintFixture(t)
-	env := f.refreshEnv()
-
-	// Twenty seconds is four times the cap a loop with a one-second check may wait: one that slept the whole
-	// retry-after would write no token inside the twelve seconds this test waits.
-	f.api.failNextMintsWith(http.StatusForbidden,
-		`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`,
-		map[string]string{"Retry-After": "20"}, 1)
-
-	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
-
-	waitFor(t, 30*time.Second, "one line on stderr for the start and for the rate limit", func() bool {
-		return nonEmptyLines(refresh.errOut()) >= 2
-	})
-
-	// A refresh that took the 403 for permanent prints its stop line and exits within a moment; give it that
-	// moment, so the failure names the stop instead of the wait for a token that never comes.
-	if refresh.waitExit(2 * time.Second) {
-		t.Fatalf("the refresh exited on a 403 that says it is a rate limit, which it must survive; stderr:\n%s", refresh.errOut())
-	}
-
-	waitFor(t, 12*time.Second, "the refresh to retry inside its backoff cap instead of sleeping the whole retry-after", func() bool {
-		line, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
-
-		return ok && line != ""
-	})
-
-	if !refresh.running() {
-		t.Fatalf("the refresh exited after it recovered from the rate limit; stderr:\n%s", refresh.errOut())
-	}
-
-	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
 }
 
 // TestAgentsAppTokenRefreshNeverClaimsAPastExpiryWhenItStops pins the second review's item 9: the stop line must

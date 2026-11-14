@@ -876,6 +876,7 @@ type fakeGitHub struct {
 	mu             sync.Mutex
 	requests       []string         // "<method> <path>" of every request, in request order
 	posts          []string         // the path of every POST
+	postsAt        []time.Time      // when each POST arrived, in request order
 	accepts        []string         // the Accept header of every request, in request order
 	jwts           []string         // the Bearer value of every request the JWT check accepted
 	complaints     []string         // what was wrong with a request, for the test to report without the secret
@@ -883,7 +884,10 @@ type fakeGitHub struct {
 	expiresAt      []int64          // the expires_at of each token, Unix seconds
 	failures       []requestFailure // the failures still to answer a mint with, one per mint
 	lookupFailures []requestFailure // the failures still to answer the bot user's lookup with
-	lookups        int              // the bot user lookups the fake API answered with the bot user
+	// lookupStatus, when non-zero, is the status every bot user lookup gets instead of the bot user, so a
+	// test can pin a refusal no retry fixes (third review, item 3).
+	lookupStatus int
+	lookups      int // the bot user lookups the fake API answered with the bot user
 }
 
 // requestFailure is one request the fake API answers with a failure instead of its own answer: a status with
@@ -973,6 +977,7 @@ func (f *fakeGitHub) record(r *http.Request) {
 
 	if r.Method == http.MethodPost {
 		f.posts = append(f.posts, r.URL.Path)
+		f.postsAt = append(f.postsAt, time.Now())
 	}
 }
 
@@ -1015,6 +1020,16 @@ func (f *fakeGitHub) serveBotUser(w http.ResponseWriter, r *http.Request) {
 
 	if failure, failed := f.takeFailure(&f.lookupFailures, true); failed {
 		f.answerFailure(w, failure)
+
+		return
+	}
+
+	f.mu.Lock()
+	refuse := f.lookupStatus
+	f.mu.Unlock()
+
+	if refuse != 0 {
+		http.Error(w, `{"message":"Not Found"}`, refuse)
 
 		return
 	}
@@ -1138,6 +1153,41 @@ func (f *fakeGitHub) failNextMintsWith(status int, body string, headers map[stri
 	}
 }
 
+// failNextMintsWithRateLimit makes the next count access_tokens requests answer a 403 that is GitHub's rate
+// limit: no request left (X-RateLimit-Remaining: 0) until reset as Unix seconds when that is not 0, and try
+// again after retryAfter seconds when that is not 0 - the two waits a refresh must honour (third review,
+// item 2).
+func (f *fakeGitHub) failNextMintsWithRateLimit(retryAfter, reset int64, count int) {
+	headers := map[string]string{}
+
+	if retryAfter > 0 {
+		headers["Retry-After"] = strconv.FormatInt(retryAfter, 10)
+	}
+
+	if reset > 0 {
+		headers["X-RateLimit-Remaining"] = "0"
+		headers["X-RateLimit-Reset"] = strconv.FormatInt(reset, 10)
+	}
+
+	f.failNextMintsWith(http.StatusForbidden,
+		`{"message":"API rate limit exceeded for this installation token"}`, headers, count)
+}
+
+// failNextUserLookups makes the next count bot user lookups answer status instead of the bot user: the lookup
+// that follows a mint whose token was already written into the VM (third review, item 3).
+func (f *fakeGitHub) failNextUserLookups(status, count int) {
+	f.failNextUserLookupsWith(status, "", nil, count)
+}
+
+// refuseUserLookupsWith makes every bot user lookup answer status instead of the bot user, so a test can pin
+// what the refresh does when no retry can fix the lookup (third review, item 3).
+func (f *fakeGitHub) refuseUserLookupsWith(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.lookupStatus = status
+}
+
 // failNextUserLookupsWith makes the next count bot user lookups answer status, with body and headers, instead
 // of the bot user: a rate limit at the lookup must not stop the refresh either (item 4).
 func (f *fakeGitHub) failNextUserLookupsWith(status int, body string, headers map[string]string, count int) {
@@ -1253,6 +1303,15 @@ func (f *fakeGitHub) posted() []string {
 	defer f.mu.Unlock()
 
 	return slices.Clone(f.posts)
+}
+
+// postTimes returns when each POST the fake API saw arrived, in request order, so a test can pin how long the
+// refresh waited before it tried again (third review, item 2).
+func (f *fakeGitHub) postTimes() []time.Time {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.postsAt)
 }
 
 // accepted returns the Accept header of every request, in request order.
