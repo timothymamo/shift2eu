@@ -55,9 +55,10 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 
 ### The agents App's credential (milestone 1)
 
-- [x] The maintainer's `.envrc` **above the workspace** names the App ID, the installation ID and the
-  **path** of the App's private key file, itself outside the workspace and readable only by the
-  maintainer. No file in the workspace holds any of them, and `make vm-env` never copies the key or its
+- [x] A direnv `.envrc` **outside the workspace, in a host clone the VM cannot reach** names the App ID,
+  the installation ID and the **path** of the App's private key file, itself outside the workspace and
+  readable only by the maintainer (amended in milestone 1's review: the targets that read the key must run
+  code the agents cannot edit, and the workspace and its `.git` are theirs to edit; ADR 0029). No file in the workspace holds any of them, and `make vm-env` never copies the key or its
   path into the VM.
 - [x] A make target on the Mac mints an installation token from the key (standard library or tools the
   Mac already has, no new third-party dependency without a reason in the commit message) and writes it
@@ -179,9 +180,9 @@ Agreed with the maintainer on 2026-11-14. Each step is safe to stop at.
    as the acceptance criteria say. Nothing changes yet.
 2. Merge milestone 1 (still opened under the maintainer's token).
 3. First give a VM created before milestone 1 the gh wrapper: `make vm-gh-wrapper` (or
-   `make vm-delete vm-create`); `make agents-token` warns about a VM without it. Run the token target from
-   a checkout that matches reviewed `main` (`docs/dev-environment.md`, Before you run the token targets),
-   reload the VM's credentials and restart the deck **between tasks**. A test pull
+   `make vm-delete vm-create`); `make agents-token` warns about a VM without it. Run the token targets
+   from the host clone (`docs/dev-environment.md`, The host clone; `make agents-token-refresh-start` keeps
+   the token fresh), reload the VM's credentials and restart the deck **between tasks**. A test pull
    request proves the App is the author. Merge milestone 2 (the first PR the App opens).
 4. Merge or close every open pull request **authored by the maintainer**: with no bypass actor, one left
    open after step 5 can never be approved. Release-please's and Renovate's pull requests are not affected.
@@ -207,7 +208,9 @@ never a required check.
   A (the key in the VM, tokens minted there) was simpler but would give every agent a credential that
   never expires.
 - **The credential lives in the maintainer's direnv `.envrc` above the workspace**, as `GITHUB_TOKEN`,
-  the Claude token and the DeepSeek key do today (`docs/dev-environment.md`, Credentials).
+  the Claude token and the DeepSeek key do today (`docs/dev-environment.md`, Credentials). Amended in
+  milestone 1's review: in the `.envrc` of a host clone outside the workspace instead, as any command run
+  in the workspace runs code the agents can edit (ADR 0029).
 - **Renovate pull requests are not exempt** from the approval (reconsidered and kept the same day). An
   exemption needs Renovate's App as a bypass actor, and a bypass skips every rule of its ruleset, the
   reviewer's change request included. A compromised GitHub Action merged to `main` would run in the
