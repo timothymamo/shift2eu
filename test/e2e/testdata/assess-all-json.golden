@@ -10,7 +10,7 @@
         "name": "OVHcloud",
         "snapshot": {
           "source": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
-          "retrieved": "2026-11-13"
+          "retrieved": "2026-11-14"
         }
       },
       "summary": {

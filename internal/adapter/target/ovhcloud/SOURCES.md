@@ -5,10 +5,11 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
 
 ## How it was compiled
 
-- **Retrieved on:** 2026-11-13, the date the plans and prices were read (PRD #190 milestone 3, ADR 0024).
-  The snapshot's `retrievedOn` and `sourceURL` now name the prices, the facts most likely to change. The
+- **Retrieved on:** 2026-11-14, the date the extra-storage prices were read and every compute plan price
+  re-checked (issue #219, below); the other plans and prices were read on 2026-11-13 (PRD #190 milestone 3,
+  ADR 0024). The snapshot's `retrievedOn` and `sourceURL` name the prices, the facts most likely to change. The
   regions come from the regions page, read on 2026-11-10, and the capabilities were last re-verified on
-  2026-11-11 (below). Every page cited below was fetched on one of those three dates, without credentials
+  2026-11-11 (below). Every page cited below was fetched on one of those four dates, without credentials
   and without calling any OVHcloud API. A page fetched or saved to read the data from, such as a browser
   copy of a price page, is kept in a scratch directory outside the repository, treated as data, and never
   committed (`TestNoTrackedSavedPages` in `test/lint`, issue #212).
@@ -24,7 +25,7 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
   available product.
 - **Product pages** on `www.ovhcloud.com` and **documentation** on `docs.ovhcloud.com` give the
   capabilities. They were read live on 2026-11-10 or, for the re-verification below, 2026-11-11; the
-  prices were read on 2026-11-13.
+  prices were read on 2026-11-13, and the extra-storage prices on 2026-11-14.
 - **Documentation source.** `docs.ovhcloud.com` is built from `ovh/ovhcloud-docs`. Its files were read at
   commit
   [`2df4cc152902b880880b77955ab9e52de4a2c2ff`](https://github.com/ovh/ovhcloud-docs/tree/2df4cc152902b880880b77955ab9e52de4a2c2ff)
@@ -47,12 +48,20 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
   `retrievedOn` in `catalog.json` was its date, 2026-11-11, until the prices were added. No region
   changed; the regions page was read on 2026-11-10.
 - **Prices read on 2026-11-13 for PRD #190 milestone 3.** The plans and prices, with the pages under
-  *Prices*. No offering, capability or region changed.
+  *Prices*. No offering, capability or region changed. `retrievedOn` was this date until issue #219.
+- **Extra-storage prices read on 2026-11-14 for issue #219.** The prices page was read again, with the
+  product pages and documentation cited in each section, to price the storage beyond what a plan includes.
+  *Instances*, *Managed Kubernetes Service* and *Managed Kubernetes Service 3-AZ* gained a storage price;
+  *Metal Instances*, *Block Storage LUKS* and *Block Storage LUKS Zonal* say why they have none. The same
+  read re-checked every plan price of those four compute offerings (82 prices): each still equals the
+  page's Linux hourly price × 730, so no plan price or included storage changed. No offering, capability
+  or region changed. Because it priced new facts, `retrievedOn` in `catalog.json` is its date, 2026-11-14.
 
 ## Prices
 
 Every plan and storage price in `catalog.json` is a monthly list price in EUR, excluding VAT (ADR 0024),
-read on 2026-11-13. "The prices page" below is <https://www.ovhcloud.com/en-ie/public-cloud/prices/>.
+read on 2026-11-13, or on 2026-11-14 where a section says so (issue #219). "The prices page" below is
+<https://www.ovhcloud.com/en-ie/public-cloud/prices/>.
 
 - **Which edition.** The page exists in one edition per OVHcloud market. The `/en/` edition
   (<https://www.ovhcloud.com/en/public-cloud/prices/>) is the "World [$]" market and shows US dollars, so
@@ -325,7 +334,7 @@ every 1-AZ region. Pages: <https://docs.ovhcloud.com/en/guides/public-cloud/comp
   EU-SOUTH-MIL, but volume snapshots are not offered there, so encrypted volumes in Paris and Milan make an
   offering of their own, *Block Storage LUKS Zonal*.
 
-- **No storage price.** The prices page lists the Classic, High Speed and High Speed Gen2 volumes, and no encrypted (`-luks`) volume type; the storage class page says each class "is also available in an encrypted version (LUKS)" but gives no price. No price is recorded rather than the unencrypted class's (*Left out on purpose*).
+- **No storage price.** Re-examined on 2026-11-14 (issue #219): the prices page's *Block Storage* table and the price data behind it list the Classic, High Speed and High Speed Gen2 volumes (`volume.classic`, `volume.high-speed`, `volume.high-speed-gen2`) and no encrypted (`-luks`) volume type. The storage class page (<https://docs.ovhcloud.com/en/guides/storage-and-backup/block-storage/block-storage-the-right-storage-class>) says each class "is also available in an encrypted version (LUKS), depending on the region", "leveraging the same performance and features as standard volumes", but gives no price, and the encryption page (<https://docs.ovhcloud.com/en/guides/public-cloud/compute/encrypting-a-block-storage-volume-with-luks>) says nothing about billing. No page read states that an encrypted volume costs what its unencrypted class costs, so no price is recorded rather than the unencrypted class's (*Left out on purpose*).
 
 ### Block Storage LUKS Zonal
 
@@ -352,7 +361,7 @@ type `high-speed-gen2-luks`). Each volume sits in one availability zone of the r
 - The unencrypted zonal volumes in these regions have no offering of their own: they have no capability
   that this offering lacks.
 
-- **No storage price**, as for *Block Storage LUKS*: no page read gives a price for `high-speed-gen2-luks` volumes (*Left out on purpose*).
+- **No storage price**, as for *Block Storage LUKS*, re-examined on 2026-11-14 (issue #219): the prices page, with its *Locations* filter on Paris or Milan, lists the High Speed Gen2 volume (`volume.high-speed-gen2`, €0.000119 per GB and hour) and no `high-speed-gen2-luks` type, and neither the storage class page nor the encryption page gives a price for encrypted volumes (*Left out on purpose*).
 
 ### Instances
 
@@ -409,6 +418,8 @@ page is titled "Virtual Machine Instances". Pages:
 | `r3-512` | 64 | 512 GB | local storage, priced apart | 2.118 | `1546.14` | all |
 | `r3-1024` | 128 | 1024 GB | local storage, priced apart | 4.236 | `3092.28` | all |
 
+- **Storage price** (prices page, *Block Storage*, read 2026-11-14, issue #219): the Classic volume row, €0.000059 per GB and hour, × 730 = 0.04307, rounded half up to `0.0431` per GiB a month, one price in all seven regions (the page's data prices `volume.classic` the same in DE1, EU-SOUTH-MIL, EU-WEST-PAR, GRA, RBX-A, SBG and WAW1). It is the price of the storage beyond what a plan includes: all of a B3, C3 or R3 instance's disk, and a B2 instance's disk above its SSD. A Public Cloud instance's persistent disks beyond its plan are Block Storage volumes: an additional disk is a volume attached to the instance (<https://docs.ovhcloud.com/en/guides/public-cloud/compute/create-and-configure-an-additional-disk-on-an-instance>), and an instance can boot from a volume (<https://docs.ovhcloud.com/en/guides/public-cloud/compute/start-instance-on-attached-volume>). Classic is the base class, as under *Block Storage*. The Gen 3 *Local Storage* option (`instance.local-storage-gen3-gb`, "Local storage low latency", €0.0001458 per GB and hour, × 730 = 0.106434) is not the price recorded: the prices page calls it "Ephemeral local storage, designed for hot, temporary data directly on your instances", so it does not hold a migrated machine's persistent disk (*Left out on purpose*). A resource with no storage size gets no volume priced (an absent `storageGiB` is no storage beyond the plan, ADR 0027), although a Gen 3 instance, whose plan includes none of its disk, needs a boot volume, so the estimate for such a VM is its plan price alone, which is too low.
+
 ### Managed Kubernetes Service
 
 Category `kubernetes.managed`: Managed Kubernetes in the 1-AZ regions (Free plan, and the Standard plan in
@@ -461,6 +472,8 @@ Roubaix). Pages: <https://www.ovhcloud.com/en/public-cloud/kubernetes/>,
 | `r3-256` | 32 | 256 GB | local storage, priced apart | 1.059 | `773.07` | `GRA`, `LIM`, `WAW` |
 | `r3-512` | 64 | 512 GB | local storage, priced apart | 2.118 | `1546.14` | `GRA`, `LIM`, `WAW` |
 | `r3-1024` | 128 | 1024 GB | local storage, priced apart | 4.236 | `3092.28` | `GRA`, `LIM`, `WAW` |
+
+- **Storage price** (prices page, *Block Storage*, read 2026-11-14, issue #219): the Classic volume row, €0.000059 per GB and hour, × 730 = 0.04307, rounded half up to `0.0431` per GiB a month, one price in all five regions. The prices page's *Managed Kubernetes Service* section says "Block Storage volumes and Public IP addresses (Floating IPs) used by your Kubernetes nodes on Public Cloud instances are billed individually", and the Kubernetes regions page says a persistent volume "will actually be deployed using Public Cloud additional disks (Cinder Volumes)", whose classes are the Block Storage classes (`csi-cinder-classic`, `csi-cinder-high-speed`, `csi-cinder-high-speed-gen2`). So storage beyond a node's plan is a Block Storage volume, priced at its base class, Classic, as for *Instances*. It is counted per node (ADR 0027).
 
 ### Managed Kubernetes Service 3-AZ
 
@@ -525,6 +538,8 @@ Category `kubernetes.managed`: Managed Kubernetes on the Standard plan in the 3-
 | `r3-256` | 32 | 256 GB | local storage, priced apart | 1.059 | `773.07` | all |
 | `r3-512` | 64 | 512 GB | local storage, priced apart | 2.118 | `1546.14` | all |
 | `r3-1024` | 128 | 1024 GB | local storage, priced apart | 4.236 | `3092.28` | all |
+
+- **Storage price** (prices page, *Block Storage*, read 2026-11-14, issue #219): as for *Managed Kubernetes Service*, a node's storage beyond its plan is a Block Storage volume. The Classic volume row, which the page prices the same with its *Locations* filter on Paris or Milan, €0.000059 per GB and hour, × 730 = 0.04307, rounded half up to `0.0431` per GiB a month, one price in both regions. The page has no separate Regional Classic row (as under *Block Storage 3-AZ Regional Classic*), so the Classic row's price is also the price of a Regional Classic volume, the class a persistent volume must use to survive the loss of a zone (the caveat under `zone-high-availability` above). Paris and Milan also offer zonal High Speed Gen2 volumes, and no page names Regional Classic as the default class there; Classic is recorded as the base class, as under *Block Storage*.
 
 ### Managed MySQL
 
@@ -1015,6 +1030,8 @@ Pages: <https://www.ovhcloud.com/en/public-cloud/metal-instances/>,
 | `bm-m1` | 8 | 64 GB | 2 x 960 GB SSD | 0.85 | `620.50` | all |
 | `bm-l1` | 16 | 128 GB | 2 x 960 GB SSD | 1.45 | `1058.50` | all |
 
+- **No storage price.** Checked on 2026-11-14 (issue #219): a Metal Instance's storage is the fixed "2 x 960 GB SSD" of its flavour, and it cannot be extended with a volume. The product page's FAQ (<https://www.ovhcloud.com/en-ie/public-cloud/metal-instances/>) answers "Can I add block storage to a Metal Instance?" with "This feature is currently unavailable", and the prices page's *Metal Instances* table prices no storage option. A resource needing more than its plan's 1920 GiB is therefore "not estimated" on the storage, rather than priced at a volume it cannot attach.
+
 ### Object Storage
 
 Category `storage.object`: S3-compatible Object Storage in the 1-AZ regions (High Performance, Standard and
@@ -1190,12 +1207,14 @@ Active Archive, and Cold Archive in Paris only). Pages: <https://www.ovhcloud.co
 
 Prices and plans left out (PRD #190 milestone 3, read 2026-11-13):
 
-- **Block Storage LUKS and Block Storage LUKS Zonal: no storage price.** The prices page lists Classic, High
-  Speed and High Speed Gen2 volumes and no encrypted volume type, and the storage class page
+- **Block Storage LUKS and Block Storage LUKS Zonal: no storage price.** The prices page, read again on
+  2026-11-14 (issue #219), lists Classic, High Speed and High Speed Gen2 volumes and no encrypted volume
+  type, and neither the storage class page
   (<https://docs.ovhcloud.com/en/guides/storage-and-backup/block-storage/block-storage-the-right-storage-class>)
-  says only that each class has an encrypted version "depending on the region". Reusing the unencrypted
-  class's price would be an inferred price, so none is recorded, and an estimate for these volumes is "not
-  estimated".
+  nor the encryption page prices encrypted volumes. Reusing the unencrypted class's price would be an
+  inferred price, so none is recorded, and an estimate for these volumes is "not estimated".
+- **Metal Instances: no storage price.** Its flavours come with fixed disks and block storage cannot be
+  attached (its section).
 - **B3, C3 and R3 Kubernetes nodes in `RBX` and `SBG`.** The Kubernetes regions page's flavour table offers
   them in "DE1 / GRA11 / UK1 / WAW1" only, so *Managed Kubernetes Service* prices them in `GRA`, `LIM` and
   `WAW`; B2 nodes are priced in all five 1-AZ regions. The same table names no 3-AZ region at all, so
@@ -1205,9 +1224,11 @@ Prices and plans left out (PRD #190 milestone 3, read 2026-11-13):
   environments"), the older Compute and Memory ranges (C2, R2), Storage Optimized (I1) and the GPU
   instances. The B3, C3, R3 and B2 ranges cover general workloads; a workload that needs a GPU or NVMe
   storage is not matched by vCPU and memory alone.
-- **Instance storage:** *Instances* has no storage price. The B3, C3 and R3 plans include none, and a disk
-  is either the *Local Storage* NVMe option (€0.0001458 per GB and hour) or a Block Storage volume, which
-  the snapshot prices under *Block Storage*.
+- **Instance local storage:** the B3, C3 and R3 plans include no disk. Since issue #219 *Instances* and
+  both Managed Kubernetes offerings price storage beyond a plan at the Classic Block Storage volume price.
+  The *Local Storage* NVMe option for Gen 3 instances (€0.0001458 per GB and hour, sold in 50, 100, 200 and
+  400 GB steps on the prices page) is ephemeral, so it is not recorded; a workload that keeps hot,
+  temporary data on it pays more per GiB than the estimate shows.
 - **Savings Plans and monthly billing:** commitment prices, not list prices (*Prices*).
 - **Windows licences:** see *Prices*.
 - **Block Storage High Speed and High Speed Gen2, Object Storage High Performance, Infrequent Access,
