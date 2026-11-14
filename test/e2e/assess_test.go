@@ -495,6 +495,93 @@ func TestAssessEstimatesAreOnByDefault(t *testing.T) {
 	})
 }
 
+// TestAssessExtraStorageEstimate pins issue #219 end to end on the sized version 2
+// inventory: assessed at OVHcloud, the 2 vCPU, 8 GiB instance with 100 GiB of
+// storage is estimated on plan `b3-8` at EUR 41.69 a month, which is the plan's
+// 37.376 plus 100 GiB x 0.0431 EUR/GiB-month = 4.31 EUR of Classic Block Storage,
+// and the report never says its storage has no price. The plan of a Gen 3
+// instance includes no storage (it boots from a Block Storage volume), so the
+// whole 100 GiB is extra storage the Instances offering prices per GiB (ADR 0027).
+// The case is a table so a later sized fixture pins its own row without a new
+// golden file: this is the binary's output, not a renderer's.
+func TestAssessExtraStorageEstimate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		target   string
+		resource string
+		plan     string
+		monthly  string
+	}{
+		{
+			name:     "instance with more disk than its plan includes",
+			target:   ovhcloudKey,
+			resource: "i-0123456789abcdef0",
+			plan:     "`b3-8` (2 vCPU, 8 GiB)",
+			monthly:  "€41.69",
+		},
+	}
+
+	inventory := filepath.Join("testdata", "twin-v2", "inventory.json")
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := assess(t, tc.target, inventory)
+			if got.code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr = %q", got.code, got.stderr)
+			}
+
+			if got.stderr != "" {
+				t.Errorf("stderr = %q, want empty", got.stderr)
+			}
+
+			// A resource whose storage cannot be priced is shown "not
+			// estimated: no storage price in <region>": the fixture must
+			// never show that, since its offering prices the GiB.
+			if unwanted := "no storage price"; strings.Contains(got.stdout, unwanted) {
+				t.Errorf("the report says %q for a sized resource whose offering prices its storage (issue #219):\n%s",
+					unwanted, got.stdout)
+			}
+
+			columns := make(map[string]int)
+
+			for i, name := range tableColumns(t, got.stdout, resourcesHeading) {
+				columns[name] = i
+			}
+
+			for _, name := range []string{"ID", "Plan", "Monthly estimate"} {
+				if _, ok := columns[name]; !ok {
+					t.Fatalf("the Resources table has no %q column: %v", name, columns)
+				}
+			}
+
+			rows := tableDataRows(t, got.stdout, resourcesHeading)
+
+			i := slices.IndexFunc(rows, func(cells []string) bool {
+				return codeSpanText(cells[columns["ID"]]) == tc.resource
+			})
+			if i < 0 {
+				t.Fatalf("the Resources table has no row for %q:\n%s", tc.resource, got.stdout)
+			}
+
+			row := rows[i]
+
+			if g, w := row[columns["Plan"]], tc.plan; g != w {
+				t.Errorf("the plan of %q = %q, want %q: it is the cheapest plan covering the resource's 2 vCPU and 8 GiB",
+					tc.resource, g, w)
+			}
+
+			if g, w := row[columns["Monthly estimate"]], tc.monthly; g != w {
+				t.Errorf("the monthly estimate of %q = %q, want %q: the plan price plus 100 GiB of Block Storage at 0.0431 EUR a GiB (issue #219)",
+					tc.resource, g, w)
+			}
+		})
+	}
+}
+
 // TestAssessRegion pins --region end to end: a region the target lists is the
 // region the report names, and a region it does not list, or one named for a
 // target the run does not select, is a usage error (exit 2) whose one error line
