@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prints the script make vm-gh-wrapper runs in the Lima VM over limactl's standard input (PRD #161 milestone
-# 1, ADR 0029): it gives a VM created before dev/lima.yaml installed the gh wrapper the same layout a new VM
+# 1, ADR 0030): it gives a VM created before dev/lima.yaml installed the gh wrapper the same layout a new VM
 # gets, without recreating it.
 #
 # Usage: dev/vm-gh-wrapper.sh <dev/gh-app-token.sh> | limactl shell --workdir / <instance> sh -s

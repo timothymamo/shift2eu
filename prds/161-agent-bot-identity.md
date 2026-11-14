@@ -58,7 +58,7 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 - [x] A direnv `.envrc` **outside the workspace, in a host clone the VM cannot reach** names the App ID,
   the installation ID and the **path** of the App's private key file, itself outside the workspace and
   readable only by the maintainer (amended in milestone 1's review: the targets that read the key must run
-  code the agents cannot edit, and the workspace and its `.git` are theirs to edit; ADR 0029). No file in the workspace holds any of them, and `make vm-env` never copies the key or its
+  code the agents cannot edit, and the workspace and its `.git` are theirs to edit; ADR 0030). No file in the workspace holds any of them, and `make vm-env` never copies the key or its
   path into the VM.
 - [x] A make target on the Mac mints an installation token from the key (standard library or tools the
   Mac already has, no new third-party dependency without a reason in the commit message) and writes it
@@ -77,16 +77,16 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 - [ ] A pull request opened by an agent after the switch shows the App as its author
   (`gh pr view --json author` gives `is_bot` `true` and the App's login), and its commits' author is the
   App's bot identity (`<bot user id>+<slug>[bot]@users.noreply.github.com`, the id of the bot user
-  `<slug>[bot]`, not the App ID: ADR 0029), set by `make vm-init`. *Checked at runbook step 3.*
+  `<slug>[bot]`, not the App ID: ADR 0030), set by `make vm-init`. *Checked at runbook step 3.*
 - [ ] Every `gh` call the skills make works with the App token: push, `pr create`, `pr view`, `pr checks`,
   `run list/view/watch`, `issue create/view`, and the `release-tag` skill's reads of rulesets, environments
   and releases. Any call that needs a permission the App lacks is listed with the permission, and the
   maintainer's App permissions in `docs/dev-environment.md` cover them. *The calls and their permissions
-  are listed in ADR 0029 (d) and `docs/dev-environment.md` (Attestations read added; Actions stays read, so
+  are listed in ADR 0030 (d) and `docs/dev-environment.md` (Attestations read added; Actions stays read, so
   `gh run rerun` and the rulesets' bypass lists stay maintainer steps); that each works is checked at
   runbook step 3.*
 - [ ] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
-  `true`). No ruleset requires signed commits. *Nothing in milestone 1 signs a commit (ADR 0029); the
+  `true`). No ruleset requires signed commits. *Nothing in milestone 1 signs a commit (ADR 0030); the
   repository's rulesets and `main`'s commits are checked at runbook step 3.*
 
 ### The gate (milestone 2)
@@ -159,7 +159,7 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
    enforced yet. *Code merged; criteria marked "runbook step 3" are checked there.*
 2. [ ] **Gate checks, CODEOWNERS, skills and docs.** `.github/CODEOWNERS`, the `Protect main` check with
    its transition flag, `pr-create` and `release-tag` changes, CLAUDE.md, `docs/contributing/agents.md`,
-   the switch-over runbook. Depends on 1. *Note from milestone 1 (ADR 0029, d): the App keeps Actions
+   the switch-over runbook. Depends on 1. *Note from milestone 1 (ADR 0030, d): the App keeps Actions
    read, so `release-tag` hands a re-run of a failed run (`gh run rerun <id>`) to the maintainer instead
    of running it.*
 3. [ ] **Remove the maintainer's token.** After the maintainer's runbook step 6: drop `GITHUB_TOKEN` from
@@ -210,7 +210,7 @@ never a required check.
 - **The credential lives in the maintainer's direnv `.envrc` above the workspace**, as `GITHUB_TOKEN`,
   the Claude token and the DeepSeek key do today (`docs/dev-environment.md`, Credentials). Amended in
   milestone 1's review: in the `.envrc` of a host clone outside the workspace instead, as any command run
-  in the workspace runs code the agents can edit (ADR 0029).
+  in the workspace runs code the agents can edit (ADR 0030).
 - **Renovate pull requests are not exempt** from the approval (reconsidered and kept the same day). An
   exemption needs Renovate's App as a bypass actor, and a bypass skips every rule of its ruleset, the
   reviewer's change request included. A compromised GitHub Action merged to `main` would run in the

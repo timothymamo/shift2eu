@@ -34,7 +34,7 @@ REPO_NAME := $(notdir $(REPO_ROOT))
 # Credentials vm-env copies from your shell (e.g. direnv) into the VM, by name. Never add
 # ANTHROPIC_API_KEY: Claude Code prefers it over the subscription token and bills per call. Never add a
 # SHIFT2EU_AGENTS_APP_* variable either: vm-env refuses them, as the agents App's key and its path stay on
-# the Mac and only its one-hour tokens enter the VM (make agents-token, PRD #161, ADR 0029).
+# the Mac and only its one-hour tokens enter the VM (make agents-token, PRD #161, ADR 0030).
 VM_ENV ?= CLAUDE_CODE_OAUTH_TOKEN,DEEPSEEK_API_KEY,GITHUB_TOKEN
 # The git identity vm-init gives the VM, so the agents commit as you: the Mac's own by default.
 GIT_USER_NAME  ?= $(shell git config user.name 2>/dev/null)
@@ -237,7 +237,7 @@ vm-create: ## Create and set up the VM, ready for make deck: vm-up, vm-env, vm-c
 	$(MAKE) vm-init
 
 # Where make agents-token-refresh-start keeps the pid and the log of the agents App token refresh, and the
-# refresh its lock, one set per VM instance: on the Mac, outside the workspace (ADR 0029).
+# refresh its lock, one set per VM instance: on the Mac, outside the workspace (ADR 0030).
 AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2eu
 
 # The token targets run on the Mac with the App's key in reach, so run them only from the host clone: a clone
@@ -245,7 +245,7 @@ AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2e
 # three SHIFT2EU_AGENTS_APP_* variables (docs/dev-environment.md, The host clone). No check run in the mounted
 # workspace can vouch for it: the agents can edit its Makefile, dev/ and .git/config, and git and make run
 # what those say. Nor does the host clone put the key out of their reach: any target run from the workspace
-# runs as you, can read the key file and can tamper with the host clone (ADR 0029, Consequences). The token
+# runs as you, can read the key file and can tamper with the host clone (ADR 0030, Consequences). The token
 # targets need only limactl and LIMA_INSTANCE, never WORKSPACE or REPO_ROOT.
 
 .PHONY: agents-token

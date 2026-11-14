@@ -1,4 +1,4 @@
-# 0029. Agents open pull requests as a GitHub App, with one-hour tokens minted on the Mac
+# 0030. Agents open pull requests as a GitHub App, with one-hour tokens minted on the Mac
 
 - Status: Accepted
 - Date: 2026-11-14

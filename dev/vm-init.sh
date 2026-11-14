@@ -93,7 +93,7 @@ else
 fi
 
 # 3. git: the agents App's bot when make agents-token has written its identity into the VM (PRD #161,
-# ADR 0029), otherwise the identity passed in; a script of its own, so its cases are tested without a VM.
+# ADR 0030), otherwise the identity passed in; a script of its own, so its cases are tested without a VM.
 bash "${repo}/dev/vm-git-identity.sh" "${git_name}" "${git_email}" || exit 1
 
 # 4. claude auth: filtered to the one field checked.
@@ -107,7 +107,7 @@ pi auth check --provider deepseek >/dev/null 2>&1 ||
   fail "pi: no DeepSeek key; set DEEPSEEK_API_KEY for make vm-env, then run make vm-env and make vm-init again"
 say "pi: DeepSeek key ready"
 
-# 6. gh: a read of this repository, which works with both credentials the gh wrapper hands gh (ADR 0029):
+# 6. gh: a read of this repository, which works with both credentials the gh wrapper hands gh (ADR 0030):
 # the agents App's installation token, which cannot call GET /user and so may fail gh auth status, and
 # GITHUB_TOKEN. Only the repository's name is printed.
 origin="$(git -C "${main_checkout}" remote get-url origin 2>/dev/null || true)"
