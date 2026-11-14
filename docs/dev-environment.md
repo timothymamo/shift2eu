@@ -78,7 +78,7 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 |---|---|
 | `theme` | Sets `theme` in Claude Code's `~/.claude/settings.json` to `CLAUDE_THEME` (default `dark`; `make vm-init CLAUDE_THEME=light`) |
 | `claude` | Marks Claude Code's onboarding done and trusts the workspace and the repository, in `~/.claude.json`, so the Claude Code roles start without first-run screens (see below) |
-| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours |
+| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`) |
 | `claude auth` | Checks that Claude Code uses the OAuth token (your subscription), not an API key |
 | `pi` | `pi auth check --provider deepseek` |
 | `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository, with the agents App's token when its file is in the VM, otherwise `GITHUB_TOKEN`. Not `gh auth status`, which an installation token may fail (ADR 0029) |
@@ -283,7 +283,7 @@ permissions:
 | Pull requests | Read and write | Open, view and merge pull requests |
 | Issues | Read and write | File and read issues |
 | Workflows | Write | Agents edit `.github/workflows/` |
-| Actions | Read and write | Runs and environments (read); `gh run rerun` in the release-tag skill (write) |
+| Actions | Read | Runs and environments. Not write: a re-run (`gh run rerun`) stays yours, as write would also let an agent cancel runs, delete runs and logs, and disable or dispatch workflows (ADR 0029, d) |
 | Checks | Read | `gh pr checks`, check-run annotations |
 | Commit statuses | Read | `gh pr checks` |
 | Attestations | Read | `gh attestation verify` in the release-tag skill |
@@ -291,8 +291,8 @@ permissions:
 
 Never give it Administration: the rulesets' bypass lists need Administration write, which could change
 `Protect main`, so those checks stay yours (ADR 0029, d). Secrets and Variables are not needed either.
-Generate a private key and keep the `.pem` **outside the workspace**, readable only by you
-(`chmod 600`). The App's slug is never configured: the token script reads it from the App (`GET /app`).
+Generate a private key and keep the `.pem` **outside the workspace**, a regular file (not a symlink: the
+script refuses one), readable only by you (`chmod 600`). The App's slug is never configured: the token script reads it from the App (`GET /app`).
 
 **On the Mac**, in the direnv `.envrc` above the workspace, beside the other credentials:
 
@@ -310,41 +310,72 @@ nor its path enters the VM.
 | `make agents-token` | Mints one token and writes it, and the bot's identity, into the VM |
 | `make agents-token-refresh` | Mints now and again before each token expires, in the foreground, until stopped |
 | `make deck` | With the three variables set, also starts the refresh in the background, unless it already runs |
+| `make vm-gh-wrapper` | Gives a VM created before the gh wrapper the wrapper, without recreating it |
+
+**Before you run the token targets.** `make agents-token`, `make agents-token-refresh` and `make deck`
+with the App's variables run the workspace's `Makefile` and `dev/agents-app-token.sh` on the Mac, as you,
+with the key's path in the environment. The agents can edit the workspace, so the key is only as safe as
+that code: a changed script could read the key and send it anywhere, as it could any credential
+`make vm-env` copies. Run them only from a checkout that matches reviewed `main`. In the main checkout,
+this prints nothing:
+
+```bash
+git fetch && git diff --stat origin/main -- Makefile dev/
+```
+
+Running the host targets from a pinned copy outside the mount is an open follow-up (ADR 0029,
+Consequences).
 
 `make deck` keeps the refresh's pid and log in `${XDG_STATE_HOME:-~/.local/state}/shift2eu/` on the
-Mac (`agents-token-refresh.pid`, `agents-token-refresh.log`) and prints where the log is. The refresh
-checks the wall clock every minute and mints again when fewer than 20 minutes are left, so it carries on
-after the Mac sleeps. When it stops, on a signal or after a mint fails with no valid token left, it writes
+Mac, named after the VM instance (`agents-token-refresh-shift2eu.pid`, `agents-token-refresh-shift2eu.log`,
+mode 0600), and prints where the log is. The refresh checks the wall clock every minute and mints again
+when fewer than 20 minutes are left, so it carries on after the Mac sleeps. A failure that goes away by
+itself (no network yet after a wake, GitHub answering 5xx or 429, the VM stopped) never stops it, even once
+the token has expired: it logs one line and tries again, every minute at first and at most every five. It
+stops only on what you have to fix (GitHub refusing the App's key, the App or its installation, a key that
+cannot sign, a symlink in the VM's `~/.config/shift2eu`), or on a signal, and then writes
 `agents App token refresh stopped` and the time to the log; the next `make deck` warns that it stopped,
-shows the log's last lines and starts a new one. Stop it with
-`kill "$(cat ~/.local/state/shift2eu/agents-token-refresh.pid)"`. No command prints a token, the JWT or the
-key, and nothing writes them to a log or the workspace.
+shows the log's last lines and starts a new one. One refresh runs per VM: it holds the lock
+`agents-token-refresh-shift2eu.lock` in the same directory, and a second one (a `make agents-token-refresh`
+while the deck's runs, say) says that another refresher for that VM is running and exits with status 0. A
+lock left by a killed refresh is taken over. Stop it with
+`kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.pid)"`. No command prints a token, the
+JWT or the key, and nothing writes them to a log or the workspace.
 
-**In the VM**, both files are readable only by the VM user and replaced atomically:
+**In the VM**, both files are readable only by the VM user and replaced atomically; the write refuses a
+`~/.config/shift2eu` that is a symlink, or a token or identity file that is a symlink or not a regular
+file:
 
 | File | Holds | Read by |
 |---|---|---|
-| `~/.config/shift2eu/agents-app-token` | The token, then its expiry in Unix seconds | `gh`, on every call |
-| `~/.config/shift2eu/agents-app-identity` | `<slug>[bot]`, then `<bot user id>+<slug>[bot]@users.noreply.github.com` | `make vm-init` (the `git` step) |
+| `~/.config/shift2eu/agents-app-token` | The token, then its expiry in Unix seconds, five minutes before GitHub's | `gh`, on every call |
+| `~/.config/shift2eu/agents-app-identity` | `<slug>[bot]`, then `<bot user id>+<slug>[bot]@users.noreply.github.com` | `make vm-init` (the `git` step, `dev/vm-git-identity.sh`) |
 
-`/usr/local/bin/gh` is a root-owned wrapper (`dev/gh-app-token.sh`); the real gh is
-`/usr/local/libexec/shift2eu/gh`. With the token file it runs gh with that token and without
+`/usr/local/bin/gh` is a root-owned wrapper (`dev/gh-app-token.sh`, with the real gh's path pinned); the
+real gh is `/usr/local/libexec/shift2eu/gh`. With the token file it runs gh with that token and without
 `GITHUB_TOKEN`; without it, gh falls back to `GITHUB_TOKEN`; with a file that is expired, malformed or not
-mode 0600, it fails and names `make agents-token-refresh`. The git credential helper calls the wrapper,
-so `git push` follows the same rule, and a running agent's next call uses the newest token without
-restarting the deck. A VM created before this change keeps the real gh at `/usr/local/bin/gh`: recreate it
-(`make vm-delete vm-create`) to get the wrapper. After the first `make agents-token`, run `make vm-init`
-so the agents commit as the App's bot.
+mode 0600, it fails and asks for you to run `make agents-token-refresh` on the Mac. The git credential
+helper calls the wrapper, so `git push` follows the same rule, and a running agent's next call uses the
+newest token without restarting the deck. The wrapper is plumbing, not a boundary: the VM user has `sudo`,
+and until milestone 3 an agent can delete the token file and fall back to `GITHUB_TOKEN`.
 
-**Rolling back**: delete the token file in the VM and gh falls back to `GITHUB_TOKEN`; delete the identity
-file too and run `make vm-init` to commit as yourself again:
+A VM created before this change keeps the real gh at `/usr/local/bin/gh`, and `make agents-token` warns
+that it "predates the gh wrapper". Run `make vm-gh-wrapper` (it moves the real gh, installs the wrapper
+and points the git credential helper at it; safe to run again), or recreate the VM with
+`make vm-delete vm-create`, **before runbook step 3**. `make agents-token` also warns when the VM's clock
+is more than a minute off the Mac's. After the first `make agents-token`, run `make vm-init` so the agents
+commit as the App's bot.
+
+**Rolling back**: stop the refresh first, and unset the App's variables so `make deck` does not start it again: it mints again whenever the token in the VM is within 20 minutes
+of expiring, so up to 40 minutes after a rollback it would quietly write a new one. Then delete the token
+file in the VM, and gh falls back to `GITHUB_TOKEN`; delete the identity file too and run `make vm-init` to
+commit as yourself again:
 
 ```bash
+kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.pid)"
 limactl shell --workdir / shift2eu sh -c 'rm -f "$HOME/.config/shift2eu/agents-app-token" "$HOME/.config/shift2eu/agents-app-identity"'
 make vm-init
 ```
-
-Stop the refresh first, or it writes a new token within a minute.
 
 ## Agent permissions
 
