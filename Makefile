@@ -286,7 +286,9 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # For a VM created before dev/lima.yaml installed the gh wrapper: moves the real gh off the PATH, installs the
 # wrapper with the real gh's path pinned and points the git credential helper at it, all over limactl's
 # standard input (dev/vm-gh-wrapper.sh). The script is generated first and sent only when it is whole (its
-# last line is the call that runs it), so a generator that fails fails make before the VM is touched. Safe to
+# last line is the call that runs it), so a generator that fails fails make before the VM is touched. The VM's
+# output is captured and printed, and make fails unless it holds the line "vm-gh-wrapper: done", so a
+# connection that drops after the stream arrived (sh -s exits 0 having run nothing) is no success. Safe to
 # run again.
 .PHONY: vm-gh-wrapper
 vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it (instead of make vm-delete vm-create)
@@ -295,7 +297,13 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 		echo "vm-gh-wrapper: dev/vm-gh-wrapper.sh printed no whole script (its last line is not vm_gh_wrapper); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	printf '%s\n' "$$script" | limactl shell --workdir / "$(LIMA_INSTANCE)" sh -s
+	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$(LIMA_INSTANCE)" sh -s)"; status=$$?; \
+	if [ -n "$$out" ]; then printf '%s\n' "$$out"; fi; \
+	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-gh-wrapper: done'; then \
+		echo "vm-gh-wrapper: the VM never printed vm-gh-wrapper: done, so the installation may not have finished; run make vm-gh-wrapper again" >&2; \
+		exit 1; \
+	fi
 
 # deck opens the deck and starts no token refresh: that is make agents-token-refresh-start's, in the host
 # clone. When a SHIFT2EU_AGENTS_APP_* variable reaches it, it warns that the variable is visible in the

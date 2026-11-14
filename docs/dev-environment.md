@@ -381,7 +381,7 @@ and until milestone 3 an agent can delete the token file and fall back to `GITHU
 
 A VM created before this change keeps the real gh at `/usr/local/bin/gh`, and `make agents-token` warns
 that it "predates the gh wrapper". Run `make vm-gh-wrapper` (it moves the real gh, installs the wrapper
-and points the git credential helper at it, whole or not at all, and ends with `vm-gh-wrapper: done`; safe
+and points the git credential helper at it, whole or not at all, and ends with `vm-gh-wrapper: done`, without which `make` fails; safe
 to run again), or recreate the VM with
 `make vm-delete vm-create`, **before runbook step 3**. `make agents-token` also warns when the VM's clock
 is more than a minute off the Mac's. After the first `make agents-token` (from the host clone), run

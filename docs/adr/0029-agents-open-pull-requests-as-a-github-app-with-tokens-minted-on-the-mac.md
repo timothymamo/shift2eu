@@ -78,7 +78,8 @@ maintainer can, and the agents can edit the workspace (see Consequences).
   nothing; it checks the wrapper with `sh -n` and for its final `exec` line, installs it as
   `/usr/local/bin/.gh.new` and `mv`s it into place, and ends with `vm-gh-wrapper: done`. The recipe
   generates the script first and sends it only when its last line is that call, so a generator that fails
-  fails `make` before the VM is touched. The git credential helper is `!/usr/local/bin/gh auth git-credential`, by absolute path
+  fails `make` before the VM is touched, and `make` also fails unless the VM's output, which it prints,
+  holds `vm-gh-wrapper: done`, so a connection that drops after the stream arrived is no success. The git credential helper is `!/usr/local/bin/gh auth git-credential`, by absolute path
   (`gh auth setup-git` would name the real binary). On every call the wrapper reads the token file:
   absent, it runs the real gh unchanged; well formed, the VM user's own, mode 0600 and not expired, it runs
   the real gh with `GH_TOKEN` set to the token and `GITHUB_TOKEN` unset, arguments and standard input
