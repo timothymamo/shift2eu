@@ -9,7 +9,11 @@
 // offering whose tier provides it. Since ADR 0011 that tier is the 3-AZ variant
 // for zone level and a multi-node plan for the databases, and a capability is
 // listed only where the documentation states it in full, which puts read replicas
-// on the Advanced database plan alone. The snapshot document
+// on the Advanced database plan alone. The storage an offering charges beyond what
+// a plan includes is pinned against the embedded snapshot too (issue #219): a
+// compute.vm with a disk is estimated with its storage priced, and every offering
+// in scope carries a per-GiB storage price or says in SOURCES.md why it has none.
+// The snapshot document
 // format itself, its strictness, its errors and
 // the SOURCES.md rule are pinned once, in the shared reader's own tests
 // (internal/adapter/target/snapshot). It is black-box: only the package's
@@ -34,6 +38,7 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
+	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
@@ -48,6 +53,7 @@ var _ analysis.CatalogSource = ovhcloud.New()
 // Both are relative to this package's directory.
 const (
 	catalogFile = "catalog.json"
+	sourcesFile = "SOURCES.md"
 	goldenFile  = "testdata/catalog.golden"
 )
 
@@ -1060,4 +1066,229 @@ func TestKubernetesTierVariantIsBestOffering(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestExtraStorageEstimateThroughEmbeddedCatalog pins issue #219 on the snapshot
+// the adapter embeds: a compute.vm resource with more disk than the plan it fits
+// includes is estimated with that storage priced, and not reported "not
+// estimated" with estimate.NoStoragePrice (ADR 0027). The resource is 2 vCPU and
+// 8 GiB, which the Gen 3 plan b3-8 covers at the lowest monthly price; a Gen 3
+// instance boots from a Block Storage volume, so its plan includes no storage
+// (storageGiB 0) and the resource's 100 GiB is extra storage the Instances
+// offering must price per GiB, most likely at its Block Storage volume price. The
+// euro amount is not pinned here because it is still to be verified against the
+// prices page: the test pins the structure, that the plan is priced, that the
+// storage costs more than nothing and that no reason is given for leaving it out.
+func TestExtraStorageEstimateThroughEmbeddedCatalog(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+	region := cat.Snapshot().DefaultRegion
+
+	// The resource is a source hyperscaler's virtual machine: the estimate is
+	// through the target's catalog, so only the category and the size matter.
+	r := inventory.Resource{
+		ID:       "res-example",
+		RawType:  "AWS::EC2::Instance",
+		Category: taxonomy.ComputeVM,
+		Region:   "eu-west-1",
+		Size: &inventory.Size{
+			VCPUs:      number(2),
+			MemoryGiB:  number(8),
+			StorageGiB: number(100),
+		},
+	}
+
+	inv, err := inventory.New("aws", []inventory.Resource{r})
+	if err != nil {
+		t.Fatalf("inventory.New() returned unexpected error: %v", err)
+	}
+
+	got := estimate.For(mapping.Map(inv.Resources()[0], cat), region)
+
+	if got.Reason == estimate.NoStoragePrice {
+		t.Fatalf("For() reason = %s, want an estimate: offering %s has no per-GiB storage price in region %s, so the storage above what plan %s includes cannot be priced (issue #219)",
+			text.Quote(string(got.Reason)), text.Quote(got.Offering), text.Quote(region), planName(got.Plan))
+	}
+
+	if !got.Estimated {
+		t.Fatalf("For() Estimated = false, reason %s, want the resource estimated on a plan with its storage",
+			text.Quote(string(got.Reason)))
+	}
+
+	if got.Reason != "" {
+		t.Errorf("For() Reason = %s on an estimate, want it empty", text.Quote(string(got.Reason)))
+	}
+
+	if got.Plan == nil {
+		t.Fatalf("For() Plan = nil, want the plan the estimate priced")
+	}
+
+	if !got.Plan.Priced {
+		t.Errorf("For() Plan.Priced = false for plan %s, want a priced plan", text.Quote(got.Plan.Name))
+	}
+
+	// The storage part is what the extra 100 GiB cost: zero would mean the
+	// estimate priced the plan alone and left the disk out.
+	if got.Breakdown.Storage.IsZero() {
+		t.Errorf("For() Breakdown.Storage = %s, want the 100 GiB of storage priced above zero on plan %s",
+			got.Breakdown.Storage, text.Quote(got.Plan.Name))
+	}
+
+	wantMonthly := got.Breakdown.Plan.Add(got.Breakdown.Storage).Add(got.Breakdown.FixedFee)
+	if diff := cmp.Diff(wantMonthly, got.Monthly); diff != "" {
+		t.Errorf("For() Monthly mismatch, want the breakdown's sum (plan + storage + fixed fee) (-want +got):\n%s", diff)
+	}
+}
+
+// planName names p for a message, or says there is none.
+func planName(p *estimate.Plan) string {
+	if p == nil {
+		return "none"
+	}
+
+	return text.Quote(p.Name)
+}
+
+// number returns v as the inventory number the size fields take: a pointer to it.
+func number(v float64) *float64 {
+	return &v
+}
+
+// noStoragePriceMarker is the convention an offering's section of SOURCES.md
+// follows when the snapshot deliberately records no per-GiB storage price for it:
+// a bullet whose text, once the Markdown bullet and any bold markers are removed,
+// begins with these words (today's form is "- **No storage price.** ..."). The
+// bullet states which page was read and why no price follows from it (ADR 0024),
+// so a missing price is a finding, never an omission.
+const noStoragePriceMarker = "No storage price"
+
+// TestCatalogStoragePriceCoverage pins issue #219's acceptance on the embedded
+// snapshot: every offering in scope either has a per-GiB storage price applying in
+// each of its regions, so an estimate can price the storage above what a plan
+// includes (ADR 0027), or its own section of SOURCES.md says why it has none.
+// Instances, Managed Kubernetes Service and its 3-AZ variant must have the price:
+// their Gen 3 and B3 plans include no storage and boot from a Block Storage volume,
+// whose per-GiB price OVHcloud publishes. Metal Instances and the LUKS volumes may
+// have none if SOURCES.md says why: Metal plans include their local SSD, and the
+// prices page lists no encrypted volume class. A price the snapshot gains must
+// still be sourced in SOURCES.md, which TestEveryOfferingHasASourcesSection pins.
+func TestCatalogStoragePriceCoverage(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+	sections := sourcesSections(t)
+
+	tests := []struct {
+		offering string
+		// wantPrice is true for the offerings issue #219 requires a storage price
+		// on, which a SOURCES.md reason may not waive: OVHcloud publishes the
+		// Block Storage volume price their extra storage is billed at.
+		wantPrice bool
+	}{
+		{offering: "Instances", wantPrice: true},
+		{offering: "Managed Kubernetes Service", wantPrice: true},
+		{offering: "Managed Kubernetes Service 3-AZ", wantPrice: true},
+		{offering: "Metal Instances"},
+		{offering: "Block Storage LUKS"},
+		{offering: "Block Storage LUKS Zonal"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.offering, func(t *testing.T) {
+			t.Parallel()
+
+			o := offeringNamed(t, cat, tc.offering)
+
+			var missing []string
+
+			for _, region := range o.Regions {
+				if _, ok := o.StoragePrice(region); !ok {
+					missing = append(missing, region)
+				}
+			}
+
+			if len(missing) == 0 {
+				return
+			}
+
+			if tc.wantPrice {
+				t.Errorf("offering %s has no per-GiB storage price in region(s) %s, want one in each of its regions %v: extra storage beyond what its plans include cannot be priced otherwise (issue #219)",
+					text.Quote(o.Name), strings.Join(missing, ", "), o.Regions)
+
+				return
+			}
+
+			body, documented := sections[tc.offering]
+			if !documented {
+				t.Errorf("offering %s has no per-GiB storage price in region(s) %s and no section %s in %s, want a section saying why it has none",
+					text.Quote(o.Name), strings.Join(missing, ", "), text.Quote("### "+o.Name), text.Quote(sourcesFile))
+
+				return
+			}
+
+			if !hasNoStoragePriceMarker(body) {
+				t.Errorf("offering %s has no per-GiB storage price in region(s) %s and its section of %s does not say why, want a bullet whose text begins %q (the reason no price is recorded, and the page it was looked for on)",
+					text.Quote(o.Name), strings.Join(missing, ", "), text.Quote(sourcesFile), noStoragePriceMarker)
+			}
+		})
+	}
+}
+
+// sourcesSections returns the body lines of each "### <name>" section of the
+// SOURCES.md beside the snapshot, by the heading's name: the lines under it, up to
+// the next heading of the same or a higher level.
+func sourcesSections(t *testing.T) map[string][]string {
+	t.Helper()
+
+	data, err := os.ReadFile(sourcesFile)
+	if err != nil {
+		t.Fatalf("reading %s: %v", text.Quote(sourcesFile), err)
+	}
+
+	sections := make(map[string][]string)
+
+	current := ""
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if name, ok := strings.CutPrefix(line, "### "); ok {
+			current = strings.TrimSpace(name)
+			sections[current] = nil
+
+			continue
+		}
+
+		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "# ") {
+			current = ""
+
+			continue
+		}
+
+		if current != "" {
+			sections[current] = append(sections[current], line)
+		}
+	}
+
+	return sections
+}
+
+// hasNoStoragePriceMarker reports whether body, the lines of one offering's
+// section of SOURCES.md, carries the convention's bullet: a line whose text, after
+// the Markdown bullet and any leading bold markers, begins with
+// noStoragePriceMarker.
+func hasNoStoragePriceMarker(body []string) bool {
+	for _, line := range body {
+		rest := strings.TrimSpace(line)
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, "-"))
+
+		for strings.HasPrefix(rest, "**") {
+			rest = strings.TrimPrefix(rest, "**")
+		}
+
+		if strings.HasPrefix(rest, noStoragePriceMarker) {
+			return true
+		}
+	}
+
+	return false
 }
