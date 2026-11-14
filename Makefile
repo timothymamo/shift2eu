@@ -244,7 +244,9 @@ AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2e
 # outside the workspace, updated only with git pull --ff-only from GitHub, whose own direnv .envrc holds the
 # three SHIFT2EU_AGENTS_APP_* variables (docs/dev-environment.md, The host clone). No check run in the mounted
 # workspace can vouch for it: the agents can edit its Makefile, dev/ and .git/config, and git and make run
-# what those say. The token targets need only limactl and LIMA_INSTANCE, never WORKSPACE or REPO_ROOT.
+# what those say. Nor does the host clone put the key out of their reach: any target run from the workspace
+# runs as you, can read the key file and can tamper with the host clone (ADR 0029, Consequences). The token
+# targets need only limactl and LIMA_INSTANCE, never WORKSPACE or REPO_ROOT.
 
 .PHONY: agents-token
 agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM (host clone)

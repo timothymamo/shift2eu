@@ -31,13 +31,16 @@ No step of this design copies the key into the VM. That protects the key only as
 that runs with it is the reviewed code, so the token targets run from the **host clone**: a second clone
 of the repository on the Mac, outside the workspace and never mounted into the VM, updated only with
 `git pull --ff-only` from GitHub. Anything run from the workspace instead can read every file the
-maintainer can, and the agents can edit the workspace (see Consequences).
+maintainer can, and the agents can edit the workspace. The host clone keeps the key's path out of the
+workspace's shells and the token targets on code the agents cannot edit; it does not put the key out of
+reach of code run from the workspace on the Mac (see Consequences).
 
 - **Inputs, on the Mac only.** `SHIFT2EU_AGENTS_APP_ID`, `SHIFT2EU_AGENTS_APP_INSTALLATION_ID` and
   `SHIFT2EU_AGENTS_APP_KEY_FILE` (the path of the PEM key, outside the workspace, a regular file, not a
   symlink, of mode 0600, which the script checks) come from the host clone's own direnv `.envrc`, outside
-  the workspace, and never from the `.envrc` above the workspace: no shell in the workspace ever has the
-  key's path. `make deck` warns when any `SHIFT2EU_AGENTS_APP_*` variable reaches it (and still opens the
+  the workspace, and never from the `.envrc` above the workspace, so a shell in the workspace does not
+  have the key's path in its environment (code run from the workspace can still find it: Consequences).
+  `make deck` warns when any `SHIFT2EU_AGENTS_APP_*` variable reaches it (and still opens the
   deck), and `make vm-env` refuses any such name in `VM_ENV`, so neither the key nor its path can be copied
   into the VM.
 - **Minting** (`dev/agents-app-token.sh mint`, `make agents-token`). An RS256 JWT (`iat` now − 60 s,
@@ -50,7 +53,12 @@ maintainer can, and the agents can edit the workspace (see Consequences).
   a line to curl's config), or is plain http to anything but `127.0.0.1` or `localhost`. The slug comes from
   `GET /app`, never hard-coded, and the bot user's id from `GET /users/<slug>[bot]`, asked **after** the
   mint with the installation token just minted: GitHub refuses the App's JWT there, and an unauthenticated
-  call would share the 60-an-hour limit of everything behind the Mac's address.
+  call would share the 60-an-hour limit of everything behind the Mac's address. The token is written into
+  the VM as soon as it is minted, before that lookup, so a failed lookup never discards it; the identity
+  file follows once a lookup works, and the identity is kept for the life of the process. The refresh
+  retries a failed lookup at its next check with the token it holds, without minting another one; a lookup
+  refused with a 4xx other than a rate limit stops it, and the token already written stays in the VM until
+  it expires, within the hour.
 - **In the VM**, written by a fixed `sh -c` script that `limactl shell` runs, its content on standard
   input, atomically (a temporary file beside each, then `mv`) under umask 077:
   `~/.config/shift2eu/agents-app-token` (the token, then its expiry in Unix seconds: the earlier of mint
@@ -84,7 +92,7 @@ maintainer can, and the agents can edit the workspace (see Consequences).
   absent, it runs the real gh unchanged; well formed, the VM user's own, mode 0600 and not expired, it runs
   the real gh with `GH_TOKEN` set to the token and `GITHUB_TOKEN` unset, arguments and standard input
   passed through; anything else, it fails without running gh and asks for the maintainer to run
-  `make agents-token-refresh` on the Mac, never printing the file's content, and never suggesting to
+  `make agents-token-refresh-start` in the host clone on the Mac, never printing the file's content, and never suggesting to
   delete the file: an agent that followed that advice would silently push as the maintainer again. A
   running agent's next `gh` or `git push` therefore uses the newest token, with no restart.
 - **Fallback until milestone 3.** With no token file the wrapper falls back to `GITHUB_TOKEN`, so this
@@ -115,8 +123,11 @@ sleep leaves no valid token at all, so the loop tells failures apart. A **transi
 GitHub, HTTP 408, 429 or 5xx, a 403 that is a rate limit, `limactl` failing or the VM not running) never
 stops it, with or without a valid token left: it logs one line and tries again, at every check at first,
 then doubling the wait up to five checks. A 403 is a rate limit when its body mentions one or its headers
-carry `x-ratelimit-remaining: 0` or a `retry-after`; a `retry-after` longer than the backoff is honoured,
-but never past the five checks. Only a **permanent** one stops it, with exit 1: GitHub refusing the mint
+carry `x-ratelimit-remaining: 0` or a `retry-after`. A rate limit, of the mint or of the bot-user lookup,
+is waited out, as GitHub asks: the loop never tries again before the `retry-after`, nor, when
+`x-ratelimit-remaining` is 0, before the `x-ratelimit-reset` time (Unix seconds), whichever is later,
+each honoured up to 3600 s however many checks that is (a longer one, or one too long to be a number of
+seconds, is cut to 3600 s). Only a **permanent** one stops it, with exit 1: GitHub refusing the mint
 with 401 (the JWT), any other 403 or 404 (the App or its installation) or another 4xx, such a 4xx from the
 slug or bot-user lookup, a key that cannot sign, a VM refusing to write through a symlink, or bad inputs at
 the start. Its stop line names the token's expiry only while that is still ahead.
@@ -127,15 +138,19 @@ already inside, renamed to the lock), so no reader sees a lock without its pid. 
 same instance says that another refresher for that VM is running and exits **0**: the VM's token is being
 refreshed, which is what was asked. A lock whose pid is no longer a running refresh (a refresher killed
 without its trap) is taken over atomically: it is renamed aside, which only one contender can do, checked
-to still hold the stale pid, removed, and the lock is created again.
+to still hold the stale pid, removed, and the lock is created again. A known residue, accepted as
+negligible: three refreshers starting within milliseconds of each other against a stale lock can end with
+two running (one contender puts back a lock it moved aside after a third has created a new one, and the
+put-back lands inside it). That costs two mints an hour and corrupts nothing, as every write into the VM
+is atomic; a refresher's exit trap removes only a lock that holds its own pid.
 `make agents-token-refresh-start` starts the refresh in the background with `nohup`, unless the lock's pid,
 or the pid it recorded itself, is a running refresh, in which case it names that pid; its pid and log are
 `agents-token-refresh-<instance>.{pid,log}` in the same directory (mode 0600), and it says where the log
 is. It says when the refresh stopped, four ways: a line on the refresh's standard error (so in the log)
-with `agents App token refresh stopped`, the time, the token's state and `make agents-token-refresh`, on a
-signal and on a permanent failure; `make agents-token-refresh-start` warns when its pid file is stale and
+with `agents App token refresh stopped`, the time, the token's state and where to start it again (from the
+host clone on the Mac with `make agents-token-refresh-start`), on a signal and on a permanent failure; `make agents-token-refresh-start` warns when its pid file is stale and
 shows the log's last lines before starting a new one; and once the token has expired the wrapper's error
-asks for `make agents-token-refresh`.
+asks the maintainer to run `make agents-token-refresh-start` in the host clone on the Mac.
 Why there: the refresh needs the App's variables, which live only in the host clone's `.envrc`, and runs
 the clone's own reviewed code; `make deck` runs in the workspace, where neither holds. `make deck` starts
 nothing (the first version of this change had it start the refresh). launchd lost: a launch agent gets no
@@ -232,11 +247,26 @@ the table with the App token, and that `bypass_actors` is absent or empty for th
   updated only with `git -C <clone> pull --ff-only` from GitHub, the only place the three App variables
   are set (its own `.envrc`), and where `make agents-token`, `make agents-token-refresh` and
   `make agents-token-refresh-start` run; they need only `limactl` and `LIMA_INSTANCE`, nothing of the
-  workspace. The same is true, already before this change, of every host target run from the workspace
-  (`make vm-env`, `make vm-init`, `make vm-gh-wrapper`, `make deck`) and of every credential `make vm-env`
-  copies from the `.envrc` above the workspace (`GITHUB_TOKEN`, the Claude token; milestone 3 removes
-  `GITHUB_TOKEN`): this change does not widen that class, but the App key never expires, so it is kept out
-  of it. **Open follow-up, not in this change:** run every host target from the host clone.
+  workspace.
+- **The host clone does not put the key out of reach of code run from the workspace.** It keeps the key's
+  path out of the workspace's shells and keeps the token targets on code the agents cannot edit. But every
+  host target the maintainer still runs from the workspace (`make deck`, `make vm-env`, `make vm-init`,
+  `make vm-gh-wrapper`) runs agent-editable code on the Mac as the maintainer's uid. That code needs no
+  variable: it can read the key file, whose path is in the host clone's `.envrc` and in the running
+  refresher's environment, and it can tamper with the host clone itself (`.git/hooks`, `.git/config`, its
+  files), which `git pull --ff-only` does not undo, so the next token target there would run the agents'
+  code with the key. The App key is therefore in the same class as the credentials `make vm-env` copies
+  from the `.envrc` above the workspace (`GITHUB_TOKEN`, the Claude token; milestone 3 removes
+  `GITHUB_TOKEN`), and it never expires. This change narrows the easiest route (the key's path in a
+  workspace shell's environment), not the class. Mitigations until the follow-ups: open the deck by typing
+  `limactl shell --workdir <path of the main checkout> <instance> dot-agent-deck` (what `make deck` runs)
+  directly, not through `make` in the workspace, and run `make vm-env`, `make vm-init` and
+  `make vm-gh-wrapper` only rarely, and only after reading the diff of the `Makefile` and `dev/` on
+  GitHub. No git check run in the host clone is a safeguard: once the clone is tampered with, git there
+  runs the tampered hooks and config too. **Open follow-ups, not in this change:** run every host target
+  from the host clone (`make deck` needs a variable for the workspace path instead of `CURDIR`), and keep
+  the key where the maintainer's uid cannot read it silently (a Keychain item or a password-manager read
+  that prompts, or a separate macOS account running the refresher).
 - Every `gh` in the VM, the deck's included, goes through the wrapper. `/usr/local/bin/gh` is still the
   absolute path the release-tag skill calls; it is root-owned, as is the real gh behind it. Like
   everything else in the VM, an agent with the VM user's passwordless `sudo` could change either (ADR

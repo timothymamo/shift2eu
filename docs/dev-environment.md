@@ -309,7 +309,8 @@ git -C ~/src/shift2eu-host pull --ff-only                                  # bef
 
 Update it only like that, never from the workspace, and never edit it. Give it its own direnv `.envrc`
 (`~/src/shift2eu-host/.envrc`, then `direnv allow` there) with the App's three variables, and only there,
-**never in the `.envrc` above the workspace**, so no shell in the workspace ever has the key's path:
+**never in the `.envrc` above the workspace**, so a shell in the workspace does not have the key's path in
+its environment (code run from the workspace can still find it and read the key: see below):
 
 ```bash
 export SHIFT2EU_AGENTS_APP_ID=...               # the App's settings page: App ID
@@ -336,11 +337,36 @@ And from the workspace, as before:
 | `make vm-gh-wrapper` | Gives a VM created before the gh wrapper the wrapper, without recreating it |
 | `make deck` | Opens the deck; it starts no refresh |
 
-The same holds for every host target run from the workspace (`make vm-env`, `make vm-init`,
-`make vm-gh-wrapper`, `make deck`): it runs workspace code on the Mac with the `.envrc` above the workspace
-loaded, and so with every credential `make vm-env` copies (`GITHUB_TOKEN`, the Claude token). That is not
-new with the App, and milestone 3 removes `GITHUB_TOKEN`; running every host target from the host clone is
-an open follow-up (ADR 0029, Consequences).
+**What the host clone does not do.** It keeps the key's path out of the workspace's shells and keeps the
+token targets on code the agents cannot edit. It does not put the key out of reach of code run from the
+workspace. Every host target you still run from the workspace (`make deck`, `make vm-env`, `make vm-init`,
+`make vm-gh-wrapper`) runs agent-editable code on the Mac as you, and so with your uid, which can read the
+key file: its path is in the host clone's `.envrc` and in the running refresher's environment. That code
+can also tamper with the host clone itself (its `.git/hooks`, its `.git/config`, its files), which
+`git pull --ff-only` does not undo, so the next token target there would run it with the key. The App key
+is therefore one of the credentials code run from the workspace on the Mac can reach, with every
+credential `make vm-env` copies from the `.envrc` above the workspace:
+
+- `GITHUB_TOKEN` (milestone 3 removes it);
+- the Claude token;
+- the agents App's private key, the file `SHIFT2EU_AGENTS_APP_KEY_FILE` names, which never expires.
+
+Until the follow-ups below, keep that code's chances few:
+
+- Open the deck by typing what `make deck` runs, directly, not through `make` in the workspace:
+
+  ```bash
+  limactl shell --workdir <path of the main checkout> shift2eu dot-agent-deck   # the VM instance's name, LIMA_INSTANCE
+  ```
+
+- Run `make vm-env`, `make vm-init` and `make vm-gh-wrapper` only rarely, and only after reading the diff
+  of the `Makefile` and `dev/` on GitHub.
+
+No git check in the host clone is a safeguard: once the clone is tampered with, git there runs the
+tampered hooks and config too. The open follow-ups (ADR 0029, Consequences): run every host target from
+the host clone (`make deck` needs a variable for the workspace path instead of `CURDIR`), and keep the key
+where your uid cannot read it silently (a Keychain item or a password-manager read that prompts, or a
+separate macOS account running the refresher).
 
 `make agents-token-refresh-start` keeps the refresh's pid and log in
 `${XDG_STATE_HOME:-~/.local/state}/shift2eu/` on the Mac, named after the VM instance
@@ -349,10 +375,13 @@ the log is. The refresh checks the wall clock every minute and mints again when 
 left, so it carries on after the Mac sleeps. A failure that goes away by itself (no network yet after a
 wake, GitHub answering 5xx or 429, a 403 that is GitHub's rate limit, the VM stopped) never stops it, even
 once the token has expired: it logs one line and tries again, every minute at first and at most every
-five, or after the rate limit's `retry-after` if that is longer, but never past five. It stops only on what
-you have to fix (GitHub refusing the App's key, the App or its installation, a key that cannot sign, a
-symlink in the VM's `~/.config/shift2eu`), or on a signal, and then writes
-`agents App token refresh stopped` and the time to the log; the next `make agents-token-refresh-start`
+five. A rate limit is waited out: never before its `retry-after`, nor, when no request is left, before its
+`x-ratelimit-reset`, whichever is later, each up to an hour. The token is written into the VM as soon as
+it is minted; if the bot user's lookup then fails, the token stays and the lookup is tried again at the
+next check, without a new mint. It stops only on what you have to fix (GitHub refusing the App's key, the
+App, its installation or the bot user, a key that cannot sign, a symlink in the VM's `~/.config/shift2eu`),
+or on a signal, and then writes `agents App token refresh stopped`, the time and where to start it again
+(the host clone on the Mac, `make agents-token-refresh-start`) to the log; the next `make agents-token-refresh-start`
 warns that it stopped, shows the log's last lines and starts a new one. One refresh runs per VM: it holds
 the lock `agents-token-refresh-shift2eu.lock` in the same directory, with its pid inside. A second one (a
 `make agents-token-refresh` while the background one runs, say) says that another refresher for that VM
@@ -374,7 +403,8 @@ user):
 `/usr/local/bin/gh` is a root-owned wrapper (`dev/gh-app-token.sh`, with the real gh's path pinned); the
 real gh is `/usr/local/libexec/shift2eu/gh`. With the token file it runs gh with that token and without
 `GITHUB_TOKEN`; without it, gh falls back to `GITHUB_TOKEN`; with a file that is expired, malformed or not
-mode 0600, it fails and asks for you to run `make agents-token-refresh` on the Mac. The git credential
+mode 0600, it fails and asks for you to run `make agents-token-refresh-start` in the host clone on the
+Mac. The git credential
 helper calls the wrapper, so `git push` follows the same rule, and a running agent's next call uses the
 newest token without restarting the deck. The wrapper is plumbing, not a boundary: the VM user has `sudo`,
 and until milestone 3 an agent can delete the token file and fall back to `GITHUB_TOKEN`.
