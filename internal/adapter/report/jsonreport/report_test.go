@@ -1735,6 +1735,47 @@ func TestReportEstimateAssumptionFlags(t *testing.T) {
 	}
 }
 
+// TestReportBillingCapHours pins that an estimate priced by plan on an offering
+// that bills a plan for at most a number of hours a month says so in the
+// document itself (billingCapHours, ADR 0029), and that no other estimate
+// writes the key: a consumer that reads it learns of a cap and never of the
+// absence of one.
+func TestReportBillingCapHours(t *testing.T) {
+	t.Parallel()
+
+	got := render(t, assessment.AssessWith(newInventory(t, sourceName, estimateResources()),
+		testutil.ReportCappedCatalog(t), assessment.Options{Estimate: true}),
+		analysis.ReportMeta{InventoryName: inventoryFileName})
+	checkDocument(t, got)
+
+	document := decodeJSON(t, got)
+
+	// server-small and worker-jobs are the compute.vm resources, which this
+	// catalog prices by plan on its capped offering.
+	for _, id := range []string{"server-small", "worker-jobs"} {
+		at := extend(resourceIndex(t, document, id), "estimate")
+
+		if diff := cmp.Diff([]string{"amount", "billingCapHours", "breakdown", "countAssumed", "estimated", "hoursAssumed"},
+			objectKeysAt(t, document, at...)); diff != "" {
+			t.Errorf("%q estimate keys mismatch (-want +got):\n%s", id, diff)
+		}
+
+		if diff := cmp.Diff(float64(testutil.ReportCapHours), valueAt(t, document, extend(at, "billingCapHours")...)); diff != "" {
+			t.Errorf("%q billingCapHours mismatch (-want +got):\n%s", id, diff)
+		}
+	}
+
+	// No other resource's estimate carries the key: bucket-storage is priced by
+	// storage, cluster-small is on the fixture's uncapped Kubernetes offering,
+	// and server-huge is not estimated at all.
+	for _, id := range []string{"bucket-storage", "cluster-small", "server-huge"} {
+		keys := objectKeysAt(t, document, extend(resourceIndex(t, document, id), "estimate")...)
+		if slices.Contains(keys, "billingCapHours") {
+			t.Errorf("%q estimate keys = %q, want none of them billingCapHours", id, keys)
+		}
+	}
+}
+
 // counted is a given int, as an inventory count carries it.
 func counted(v int) *int { return &v }
 

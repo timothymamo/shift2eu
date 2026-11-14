@@ -1082,6 +1082,65 @@ func TestReportComparisonWithEstimates(t *testing.T) {
 	testutil.Golden(t, "testdata/comparison-estimates.golden", got)
 }
 
+// TestReportComparisonBillingCapHours pins that a cap belongs to a target's
+// estimate in a comparison document too (billingCapHours, ADR 0029): the capped
+// target's plan-priced estimates carry it, the uncapped target's do not, and the
+// whole document matches the comparison schema, which declares the key.
+func TestReportComparisonBillingCapHours(t *testing.T) {
+	t.Parallel()
+
+	inv := newInventory(t, sourceName, estimateResources())
+
+	targets := []assessment.TargetAssessment{
+		{
+			Key:        reportKey,
+			Assessment: assessment.AssessWith(inv, testutil.ReportCatalog(t), assessment.Options{Estimate: true}),
+		},
+		{
+			Key: reportNorthKey,
+			Assessment: assessment.AssessWith(inv,
+				testutil.ReportCappedCatalogIn(t, reportTwoTarget, reportTwoSnapshot()),
+				assessment.Options{Estimate: true}),
+		},
+	}
+
+	got := renderComparison(t, assessment.Compare(targets), analysis.ReportMeta{InventoryName: inventoryFileName})
+	checkDocument(t, got)
+
+	document := decodeJSON(t, got)
+
+	// Compare sorts the targets by key, so example comes before example-north.
+	tests := []struct {
+		key  string
+		want bool
+	}{
+		{key: reportKey, want: false},
+		{key: reportNorthKey, want: true},
+	}
+
+	for i, test := range tests {
+		at := extend(resourceIndexAt(t, document, []any{"targets", i}, "server-small"), "estimate")
+
+		if !test.want {
+			if keys := objectKeysAt(t, document, at...); slices.Contains(keys, "billingCapHours") {
+				t.Errorf("%q estimate keys = %q, want none of them billingCapHours", test.key, keys)
+			}
+
+			continue
+		}
+
+		if diff := cmp.Diff(float64(testutil.ReportCapHours), valueAt(t, document, extend(at, "billingCapHours")...)); diff != "" {
+			t.Errorf("%q billingCapHours mismatch (-want +got):\n%s", test.key, diff)
+		}
+	}
+
+	s := readSchema(t, filepath.Join("schema", schemaFileFor("comparison", currentSchemaVersion)))
+
+	for _, problem := range s.validate(document, "$") {
+		t.Errorf("the document does not match the schema: %s", problem)
+	}
+}
+
 // resourceIndexAt returns the path of the resource with ID id inside the target
 // at path, failing the test when that target holds no such resource.
 func resourceIndexAt(tb testing.TB, document any, path []any, id string) []any {

@@ -1014,3 +1014,71 @@ func TestReportComparisonWithEstimates(t *testing.T) {
 
 	testutil.Golden(t, "testdata/comparison-estimates.golden", out)
 }
+
+// TestReportComparisonWithBillingCapHours pins that a billing cap belongs to a
+// target, not to a comparison (ADR 0029): each target's own section carries its
+// own hours line, with one clause per distinct cap of that target, ascending.
+func TestReportComparisonWithBillingCapHours(t *testing.T) {
+	t.Parallel()
+
+	inv := newInventory(t, sourceName, estimateResources())
+
+	capped := testutil.ReportCappedCatalogIn(t, reportTwoTarget, reportTwoSnapshot())
+	offerings := capped.Offerings()
+	// The report fixture's second offering, the Kubernetes one, bills its node
+	// plans for 336 hours a month too, so this target's line carries two caps,
+	// out of ascending order in the catalog.
+	offerings[1].PlanBillingCapHours = 336
+
+	twoCaps, err := catalog.New(capped.Target(), capped.Snapshot(), offerings)
+	if err != nil {
+		t.Fatalf("catalog.New() returned unexpected error: %v", err)
+	}
+
+	c := assessment.Compare([]assessment.TargetAssessment{
+		{
+			Key:        reportKey,
+			Assessment: assessment.AssessWith(inv, testutil.ReportCatalog(t), assessment.Options{Estimate: true}),
+		},
+		{
+			Key:        reportNorthKey,
+			Assessment: assessment.AssessWith(inv, twoCaps, assessment.Options{Estimate: true}),
+		},
+	})
+	out := renderComparison(t, c, analysis.ReportMeta{InventoryName: inventoryFileName})
+
+	plain := "- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none"
+	cappedLine := plain + "; a plan billed for at most 336 hours a month costs plan price × count × " +
+		"min(hours, 336) / 336; a plan billed for at most 672 hours a month costs plan price × count × " +
+		"min(hours, 672) / 672"
+
+	tests := []struct {
+		target string
+		want   string
+	}{
+		{target: reportTarget, want: plain},
+		{target: reportTwoTarget, want: cappedLine},
+	}
+
+	for _, test := range tests {
+		t.Run(test.target, func(t *testing.T) {
+			t.Parallel()
+
+			var found []string
+
+			for _, line := range sectionLines(t, out, targetSectionHeading(test.target)) {
+				if strings.HasPrefix(line, "- Hours: ") {
+					found = append(found, line)
+				}
+			}
+
+			if len(found) != 1 {
+				t.Fatalf("the %q section has %d hours lines, want 1:\n%s", test.target, len(found), out)
+			}
+
+			if found[0] != test.want {
+				t.Errorf("hours line of %q = %q, want %q", test.target, found[0], test.want)
+			}
+		})
+	}
+}

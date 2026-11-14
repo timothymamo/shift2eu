@@ -134,6 +134,51 @@ func ReportCatalogIn(tb testing.TB, target string, snapshot catalog.Snapshot) ca
 	cat, err := catalog.New(target, snapshot, ReportOfferings())
 	if err != nil {
 		tb.Fatalf("catalog.New() returned unexpected error: %v", err)
+
+		return catalog.Catalog{}
+	}
+
+	return cat
+}
+
+// ReportCapHours is the hours a month the report fixture's capped compute
+// offering bills its plans for (ADR 0029): 672, the hours of four weeks. Every
+// value of the fixture is invented, the cap included, so a test states the
+// capped arithmetic exactly.
+const ReportCapHours int64 = 672
+
+// ReportCappedOfferings is ReportOfferings with its compute offering billing a
+// plan for at most ReportCapHours hours a month (ADR 0029). Every plan, price
+// and region is the report fixture's, so a report built on it differs from the
+// report fixture's exactly where the cap shows: in the hours line's cap clause,
+// and in the billingCapHours of a plan-priced estimate.
+func ReportCappedOfferings() []catalog.Offering {
+	offerings := ReportOfferings()
+	// ReportOfferings puts the compute offering first. It is the offering the
+	// fixture's compute.vm resources are priced on, which is the cap a report
+	// shows.
+	offerings[0].PlanBillingCapHours = ReportCapHours
+
+	return offerings
+}
+
+// ReportCappedCatalog is ReportCappedOfferings as the report fixture's catalog:
+// the target Example Cloud, on the priced fixture's snapshot.
+func ReportCappedCatalog(tb testing.TB) catalog.Catalog {
+	tb.Helper()
+
+	return ReportCappedCatalogIn(tb, pricedTarget, PricedSnapshot())
+}
+
+// ReportCappedCatalogIn is the capped report fixture's offerings as the catalog
+// of target, taken from snapshot, so a comparison test gives the cap to one
+// target and not to another.
+func ReportCappedCatalogIn(tb testing.TB, target string, snapshot catalog.Snapshot) catalog.Catalog {
+	tb.Helper()
+
+	cat, err := catalog.New(target, snapshot, ReportCappedOfferings())
+	if err != nil {
+		tb.Fatalf("catalog.New() returned unexpected error: %v", err)
 	}
 
 	return cat

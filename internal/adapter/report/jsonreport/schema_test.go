@@ -796,18 +796,20 @@ func checkGoldenAgainstSchema(t *testing.T, path, schemaFile string) {
 // requiring them, because the document writes them only when it has something to
 // say. They are the reason object's names, each written only when the reason sets
 // it, the flags an estimate writes only when it estimated the resource
-// (countAssumed and hoursAssumed), and the schema version 2 keys of a resource
-// that cannot be priced: a resource priced by storage has no plan, an estimate
-// that is not estimated has no amount, and a plan with no price in the estimate
-// region has no price. Any other property a schema declares must be required, so a
-// document can neither omit a key the format always writes nor gain one nobody
-// checks.
+// (countAssumed and hoursAssumed), the cap an estimate writes only when the plan's
+// offering bills a plan for at most that many hours a month (billingCapHours,
+// ADR 0029), and the schema version 2 keys of a resource that cannot be priced: a
+// resource priced by storage has no plan, an estimate that is not estimated has no
+// amount, and a plan with no price in the estimate region has no price. Any other
+// property a schema declares must be required, so a document can neither omit a
+// key the format always writes nor gain one nobody checks.
 var optionalProperties = []string{
 	"target", "category", "offering", "capability",
 	"plan", "estimate", "amount", "breakdown", "reason", "price",
 	// The two assumptions an estimate records, written only when the resource is
-	// estimated (ADR 0025).
-	"countAssumed", "hoursAssumed",
+	// estimated (ADR 0025), and the cap it was scaled by, written only when the
+	// plan's offering caps its hours (ADR 0029).
+	"countAssumed", "hoursAssumed", "billingCapHours",
 	// A document names the region a run chose, at the top level and per
 	// comparison target, only when --region chose one; sourceCost is written
 	// only with estimates on.

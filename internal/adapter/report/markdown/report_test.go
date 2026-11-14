@@ -1537,6 +1537,40 @@ func TestReportWithEstimates(t *testing.T) {
 	testutil.Golden(t, "testdata/report-estimates.golden", out)
 }
 
+// TestReportWithBillingCapHours pins the hours line of a target that bills a
+// plan for at most a number of hours a month (ADR 0029): the plain note gains
+// one clause per distinct cap, and the cap changes that line and nothing else in
+// the report — the fixture's resources give no hours, which the cap already
+// reaches, so every estimate is the uncapped report's.
+func TestReportWithBillingCapHours(t *testing.T) {
+	t.Parallel()
+
+	out := render(t, assessment.AssessWith(newInventory(t, sourceName, estimateResources()),
+		testutil.ReportCappedCatalog(t), assessment.Options{Estimate: true}),
+		analysis.ReportMeta{InventoryName: inventoryFileName})
+
+	want := "- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none; " +
+		"a plan billed for at most 672 hours a month costs plan price × count × min(hours, 672) / 672"
+
+	if got := lineWithPrefix(t, out, "- Hours: "); got != want {
+		t.Errorf("hours line = %q, want %q", got, want)
+	}
+
+	// The cap is a property of one offering's plan prices, so the report is the
+	// uncapped report's line for line apart from the hours line.
+	uncapped := render(t, assessEstimates(t, ""), analysis.ReportMeta{InventoryName: inventoryFileName})
+
+	withoutHoursLine := func(report []byte) []string {
+		return slices.DeleteFunc(strings.Split(string(report), "\n"), func(line string) bool {
+			return strings.HasPrefix(line, "- Hours: ")
+		})
+	}
+
+	if diff := cmp.Diff(withoutHoursLine(uncapped), withoutHoursLine(out)); diff != "" {
+		t.Errorf("the cap changed more than the hours line (-want +got):\n%s", diff)
+	}
+}
+
 // TestReportWithChosenRegion pins that a region chosen with --region is the one
 // line that says so, and is the region the prices are for: the same inventory
 // costs more in the report fixture's second region, and only the region line and
