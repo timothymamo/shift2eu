@@ -14,9 +14,9 @@ import (
 // has found to be 2. jsondoc refuses an unknown, inexact or repeated key, a
 // value of the wrong JSON type, a missing key and a string that escapes a lone
 // surrogate; walk decides the keys, all of them required but an offering's
-// fixedFees (ADR 0026), and reads every value without jsondoc.Walker.Null, so
-// null is refused like any other value of the wrong type, and is never read as
-// an absent fixedFees.
+// fixedFees (ADR 0026) and planBillingCapHours (ADR 0029), and reads every
+// value without jsondoc.Walker.Null, so null is refused like any other value of
+// the wrong type, and is never read as an absent optional key.
 func walk(w *jsondoc.Walker) (document, error) {
 	var doc document
 
@@ -95,6 +95,8 @@ func readOffering(w *jsondoc.Walker) (offering, error) {
 		o offering
 		// emptyFees refuses an empty fixedFees array, once the object is read.
 		emptyFees error
+		// zeroCap refuses a planBillingCapHours of 0, once the object is read.
+		zeroCap error
 	)
 
 	err := w.Object(offeringKeys, func(key string) error {
@@ -115,6 +117,8 @@ func readOffering(w *jsondoc.Walker) (offering, error) {
 			o.storagePrices, err = prices(w)
 		case keyFixedFees:
 			o.fixedFees, emptyFees, err = fixedFees(w)
+		case keyPlanBillingCapHours:
+			o.planBillingCapHours, zeroCap, err = planBillingCapHours(w)
 		}
 
 		return err
@@ -127,7 +131,34 @@ func readOffering(w *jsondoc.Walker) (offering, error) {
 		return offering{}, emptyFees
 	}
 
+	if zeroCap != nil {
+		return offering{}, zeroCap
+	}
+
 	return o, nil
+}
+
+// planBillingCapHours reads the next value: an integer, the most hours a month
+// the offering bills one instance of one of its plans (ADR 0029). For 0 it
+// returns, besides the value, the ErrDecode error that refuses it, so
+// "uncapped" has one spelling (the key left out); the caller reports that error
+// once the offering's object has been read, as it does an empty fixedFees. A
+// negative value or one above catalog.MaxBillingCapHours is returned: that is
+// catalog.New's rule.
+func planBillingCapHours(w *jsondoc.Walker) (hours int64, zero, err error) {
+	path, at := w.Path(), w.Position()
+
+	hours, err = integer(w)
+	if err != nil {
+		return 0, nil, err
+	}
+
+	if hours == 0 {
+		zero = fmt.Errorf("%w: %s at %s is 0, want 1 to %d (leave the key out for no cap)",
+			ErrDecode, text.Quote(path), at, catalog.MaxBillingCapHours)
+	}
+
+	return hours, zero, nil
 }
 
 // fixedFees reads the next value: an array of price objects, an offering's

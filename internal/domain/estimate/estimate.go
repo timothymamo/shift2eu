@@ -106,7 +106,10 @@ type Plan struct {
 
 // Breakdown is what an estimate is made of. Its parts sum to Estimate.Monthly.
 type Breakdown struct {
-	// Plan is the plan price × count × hoursPerMonth / 730; zero for ByStorage.
+	// Plan is the plan price × count × hoursPerMonth / 730 on an uncapped
+	// offering, and the plan price × count × min(hoursPerMonth, cap) / cap on an
+	// offering whose PlanBillingCapHours is cap (ADR 0029); zero for ByStorage.
+	// The plan is chosen by monthly price, before this scaling (see cheapest).
 	Plan Money
 	// Storage is the storage the estimate prices × the per-GiB price, never
 	// scaled by hours: for compute.vm, compute.baremetal and kubernetes.managed
@@ -117,7 +120,8 @@ type Breakdown struct {
 	// the volume's GiB × count; for storage.object the stored GiB.
 	Storage Money
 	// FixedFee is the offering's fixed fee in the estimate region × hoursPerMonth
-	// / 730, once per resource and never × count (ADR 0026); zero when the
+	// / 730, never capped by PlanBillingCapHours, once per resource and never ×
+	// count (ADR 0026); zero when the
 	// offering charges none.
 	FixedFee Money
 }
@@ -312,7 +316,7 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 
 	planPrice := e.Plan.Price.rat()
 	planPrice.Mul(planPrice, count)
-	planPrice.Mul(planPrice, monthShare(hours))
+	planPrice.Mul(planPrice, planShare(hours, chosen.offering.PlanBillingCapHours))
 
 	fee := new(big.Rat)
 	if a, ok := chosen.offering.FixedFee(region); ok {
@@ -387,7 +391,12 @@ func byStorage(r inventory.Resource, offerings []catalog.Offering, region string
 }
 
 // cheapest returns the covering plan priced in region that is cheapest, ties
-// broken by smaller, and false when none is priced there.
+// broken by smaller, and false when none is priced there. It compares monthly
+// plan prices, not the hours-scaled Breakdown.Plan: that picks the cheapest
+// estimate only while every covering offering bills the same share, which
+// holds while the offerings of a category in one target share one
+// PlanBillingCapHours (ADR 0029). A target mixing capped and uncapped
+// offerings in one category could get a plan that is dearer at partial hours.
 func cheapest(covering []offeredPlan, region string) (offeredPlan, bool) {
 	var (
 		best      offeredPlan
@@ -513,9 +522,28 @@ func hoursOf(usage *inventory.Usage) (*big.Rat, bool, bool) {
 }
 
 // monthShare returns hours / HoursPerMonth, the share of a monthly price that
-// many hours cost.
+// many hours cost when the price stands for HoursPerMonth hours.
 func monthShare(hours *big.Rat) *big.Rat {
 	return new(big.Rat).Quo(hours, big.NewRat(HoursPerMonth, 1))
+}
+
+// planShare returns the share of a plan's monthly price that hours cost on an
+// offering whose plans are billed at most capHours a month: min(hours,
+// capHours) / capHours, or monthShare(hours) when capHours is 0, uncapped
+// (ADR 0029).
+func planShare(hours *big.Rat, capHours int64) *big.Rat {
+	if capHours <= 0 {
+		return monthShare(hours)
+	}
+
+	limit := big.NewRat(capHours, 1)
+
+	billed := hours
+	if hours.Cmp(limit) > 0 {
+		billed = limit
+	}
+
+	return new(big.Rat).Quo(billed, limit)
 }
 
 // amount returns the catalog amount a in euros, exactly.

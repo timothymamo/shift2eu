@@ -203,6 +203,30 @@ func catalogWithFixedFee(t *testing.T, amount catalog.Amount) catalog.Catalog {
 	return newCatalog(t, scalewayTarget, feeOfferings(amount))
 }
 
+// cappedOfferings is the priced fixture offerings with the monthly billing cap
+// of the Instances offering's plans set to hours (ADR 0029), so two catalogs can
+// differ in a plan billing cap alone.
+func cappedOfferings(hours int64) []catalog.Offering {
+	offerings := pricedOfferings()
+
+	for i, o := range offerings {
+		if o.Name == "Instances" {
+			offerings[i].PlanBillingCapHours = hours
+		}
+	}
+
+	return offerings
+}
+
+// catalogWithPlanBillingCap is the priced fixture catalog whose Instances
+// offering bills one instance of one of its plans for at most hours a month,
+// built through catalog.New like every catalog an adapter returns.
+func catalogWithPlanBillingCap(t *testing.T, hours int64) catalog.Catalog {
+	t.Helper()
+
+	return newCatalog(t, scalewayTarget, cappedOfferings(hours))
+}
+
 // catalogWithStoragePrice is the priced fixture catalog with its first storage
 // price changed, so two catalogs can differ in a storage price alone.
 func catalogWithStoragePrice(t *testing.T, amount catalog.Amount) catalog.Catalog {
@@ -534,6 +558,19 @@ func TestCheck(t *testing.T) {
 			}},
 			wantErr:      true,
 			wantMentions: [][]string{{"repeat"}, {"FixedFees"}, {"15.00"}, {"25.00"}},
+		},
+		// A plan billing cap is part of an offering too, so an adapter that
+		// rewrites the cap alone between calls is not stable (ADR 0029). The
+		// violation shows it: both catalogs' PlanBillingCapHours appear as describe
+		// renders them.
+		{
+			name: "changes one offering's plan billing cap between calls",
+			tgt: &fakeTarget{catalogs: []catalog.Catalog{
+				catalogWithPlanBillingCap(t, 672),
+				catalogWithPlanBillingCap(t, 744),
+			}},
+			wantErr:      true,
+			wantMentions: [][]string{{"repeat"}, {"PlanBillingCapHours: 672"}, {"PlanBillingCapHours: 744"}},
 		},
 		{
 			// The default region is part of the snapshot the catalog describes, so a

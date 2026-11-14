@@ -1,8 +1,10 @@
 // Package upcloud_test pins the UpCloud catalog adapter: the target contract in
 // internal/adapter/target/targettest, the snapshot header the catalog reports, the
 // plans, prices and fixed monthly fees the snapshot records and the default region
-// they estimate in, the rule the multi-node database prices follow from the
-// single-node ones, a golden change detector for the parsed catalog, the declared EU zones, that a
+// they estimate in, the monthly billing cap of its server and node plans (ADR 0029)
+// and the estimate that cap gives through the embedded catalog, the rule the
+// multi-node database prices follow from the single-node ones, a golden change
+// detector for the parsed catalog, the declared EU zones, that a
 // cancelled run reads nothing, that no error of one target names another, and the
 // verdicts PRD 77 asks of the data: categories UpCloud does not serve are a
 // blocker, no offering claims zone-level high availability, and every capability
@@ -32,6 +34,7 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
+	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
@@ -475,6 +478,161 @@ func TestCatalogFixedFees(t *testing.T) {
 				text.Quote(name))
 		}
 	}
+}
+
+// TestCatalogPlanBillingCapHours pins ADR 0029's data: UpCloud bills Cloud
+// Servers and Kubernetes nodes by the hour, capped at 672 hours (24 h × 28 days)
+// a month, so the three offerings whose plans are server or node plans carry
+// that cap. Its databases, block storage and object storage are charged by the
+// hour with no cap, their monthly figures being for a 30-day, 730-hour month, so
+// they carry none. The map names every offering, so a refresh that adds one
+// cannot slip past the rule.
+func TestCatalogPlanBillingCapHours(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]int64{
+		"Cloud Servers":                 672,
+		"Managed Kubernetes":            672,
+		"Managed Kubernetes Production": 672,
+		"Block Storage":                 0,
+		"Block Storage Encrypted":       0,
+		"Managed Object Storage":        0,
+		"Managed PostgreSQL":            0,
+		"Managed PostgreSQL Multi-node": 0,
+		"Managed MySQL":                 0,
+		"Managed MySQL Multi-node":      0,
+	}
+
+	offerings := catalogOf(t).Offerings()
+	if len(offerings) != len(want) {
+		t.Fatalf("Catalog.Offerings() returned %d offerings, want %d: every offering needs a billing-cap expectation",
+			len(offerings), len(want))
+	}
+
+	for _, o := range offerings {
+		hours, found := want[o.Name]
+		if !found {
+			t.Errorf("offering %s has no plan billing cap expectation, want one: the catalog changed",
+				text.Quote(o.Name))
+
+			continue
+		}
+
+		if o.PlanBillingCapHours != hours {
+			t.Errorf("offering %s has PlanBillingCapHours %d, want %d",
+				text.Quote(o.Name), o.PlanBillingCapHours, hours)
+		}
+	}
+}
+
+// TestBillingCapEstimateThroughEmbeddedCatalog pins ADR 0029's acceptance on the
+// snapshot the adapter embeds: UpCloud bills one Cloud Servers server for at most
+// 672 hours a month, so a server that runs half of that is estimated at half its
+// plan's monthly price, and one that runs the cap, or the 730 hours of an average
+// month, at all of it. The domain rule and the snapshot data are pinned apart, in
+// internal/domain/estimate and TestCatalogPlanBillingCapHours; this joins the two
+// through the real embedded catalog, mapped and estimated the way an assessment
+// does it.
+func TestBillingCapEstimateThroughEmbeddedCatalog(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+	region := cat.Snapshot().DefaultRegion
+
+	// STARTER-1xCPU-1GB is the cheapest Cloud Servers plan that covers the one
+	// vCPU and one GiB the resource has, at 3.00 EUR a month, and it includes the
+	// 10 GiB the resource has, so the plan price is the whole estimate.
+	tests := []struct {
+		name        string
+		hours       float64
+		wantMonthly string
+		wantExact   string
+	}{
+		{
+			name:        "336 hours is half the 672-hour cap, so half the plan price",
+			hours:       336,
+			wantMonthly: "1.50",
+			wantExact:   "3/2",
+		},
+		{
+			name:        "672 hours, the cap, is the whole plan price",
+			hours:       672,
+			wantMonthly: "3.00",
+			wantExact:   "3",
+		},
+		{
+			name:        "730 hours, an average month, is the whole plan price",
+			hours:       730,
+			wantMonthly: "3.00",
+			wantExact:   "3",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := inventory.Resource{
+				ID:       "server-example",
+				RawType:  "AWS::EC2::Instance",
+				Category: taxonomy.ComputeVM,
+				Region:   "eu-west-1",
+				Size: &inventory.Size{
+					VCPUs:      number(1),
+					MemoryGiB:  number(1),
+					StorageGiB: number(10),
+					Count:      countOf(1),
+				},
+				Usage: &inventory.Usage{HoursPerMonth: number(tc.hours)},
+			}
+
+			inv, err := inventory.New("aws", []inventory.Resource{r})
+			if err != nil {
+				t.Fatalf("inventory.New() returned unexpected error: %v", err)
+			}
+
+			got := estimate.For(mapping.Map(inv.Resources()[0], cat), region)
+
+			if !got.Estimated {
+				t.Fatalf("For() Estimated = false, reason %s, want an estimate on a Cloud Servers plan",
+					text.Quote(string(got.Reason)))
+			}
+
+			if got.Offering != "Cloud Servers" {
+				t.Errorf("For() Offering = %s, want %s", text.Quote(got.Offering), text.Quote("Cloud Servers"))
+			}
+
+			const wantPlan = "STARTER-1xCPU-1GB"
+			if got.Plan == nil || got.Plan.Name != wantPlan {
+				t.Fatalf("For() Plan = %v, want %s", got.Plan, text.Quote(wantPlan))
+			}
+
+			if want := tc.wantMonthly; got.Monthly.String() != want {
+				t.Errorf("For() Monthly.String() = %q, want %q", got.Monthly.String(), want)
+			}
+
+			if want := tc.wantExact; got.Monthly.Exact() != want {
+				t.Errorf("For() Monthly.Exact() = %q, want %q", got.Monthly.Exact(), want)
+			}
+
+			// The plan is the whole estimate: it includes the resource's 10 GiB of
+			// storage and Cloud Servers charges no fixed monthly fee.
+			if diff := cmp.Diff(estimate.Breakdown{Plan: got.Monthly}, got.Breakdown); diff != "" {
+				t.Errorf("For() Breakdown mismatch, want the plan alone (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// number returns v as the inventory number the size and usage fields take: a
+// pointer to it.
+func number(v float64) *float64 {
+	return &v
+}
+
+// countOf returns n as the count of a resource's size.
+func countOf(n int) *int {
+	return &n
 }
 
 // feeRegions lists, sorted, the regions o's fixed fees name, with an every-region

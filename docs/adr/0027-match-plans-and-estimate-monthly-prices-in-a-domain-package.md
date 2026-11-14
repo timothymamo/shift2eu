@@ -1,6 +1,9 @@
 # 0027. Match plans and estimate monthly prices in a domain package, with exact money
 
-- Status: Accepted
+- Status: Accepted. Amended by
+  [0029](0029-cap-the-billed-hours-of-an-offerings-plans-in-target-snapshot-format-v2.md): on an offering with
+  `planBillingCapHours`, the plan part of a `ByPlan` estimate is min(hours, cap) / cap of the plan price;
+  fixed fees and storage are unchanged
 - Date: 2026-11-14
 
 ## Context
@@ -220,5 +223,6 @@ no total. Sizes never reach the mapping, so the fits are those of the same inven
   the verdict, so a report's plan and its fit never disagree.
 - UpCloud caps a month's bill at 672 hours; the formula is applied as the PRD writes it (price ×
   hours / 730), so an UpCloud estimate for more than 672 hours a month is above UpCloud's capped bill.
-  No rule handles it; the PR notes it.
+  No rule handles it; the PR notes it. (Handled by ADR 0029: plan prices on a capped offering scale
+  by min(hours, cap) / cap.)
 - Milestone 7 builds per-workload totals with `estimate.Sum` over a workload's verdicts.

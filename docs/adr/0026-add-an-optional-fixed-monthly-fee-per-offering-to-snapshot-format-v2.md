@@ -4,7 +4,10 @@
   an offering may carry an optional `fixedFees` key, within schema version 2. This is a recorded
   exception to the schema version policy of [0007](0007-shared-target-catalog-snapshot-format-v1.md)
   ("any change to the format, even a new optional field, is a new version") and to its "every key
-  required" rule, for this one key only
+  required" rule, for this one key only. Amended by
+  [0029](0029-cap-the-billed-hours-of-an-offerings-plans-in-target-snapshot-format-v2.md): a second optional key,
+  `planBillingCapHours`, is recorded as the same kind of exception; fixed fees are never capped and stay
+  scaled by hours / 730
 - Date: 2026-11-13
 
 ## Context

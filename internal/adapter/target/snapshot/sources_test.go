@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -192,14 +193,17 @@ func checkSnapshotSources(t *testing.T, catalogPath string) {
 	}
 }
 
-// priceCitationViolations returns every way a snapshot's plans, prices and fixed
-// fees are not cited in the SOURCES.md beside it: in each offering's own "### "
-// subsection, every plan name appears exactly as the catalog holds it and every
-// price amount as Amount.String renders it, as a Markdown code span, so a price
-// in SOURCES.md and a price in catalog.json can be compared as text (ADR 0024).
-// A fixed monthly fee of an offering is a price and is cited the same way
-// (ADR 0026). An offering with no plans, storage prices and fixed fees has
-// nothing to cite.
+// priceCitationViolations returns every way a snapshot's plans, prices, fixed
+// fees and plan billing cap are not cited in the SOURCES.md beside it: in each
+// offering's own "### " subsection, every plan name appears exactly as the
+// catalog holds it and every price amount as Amount.String renders it, as a
+// Markdown code span, so a price in SOURCES.md and a price in catalog.json can be
+// compared as text (ADR 0024). A fixed monthly fee of an offering is a price and
+// is cited the same way (ADR 0026). The most hours a month an offering bills one
+// instance of one of its plans for is cited as a code span too, as the number of
+// hours, so the cap behind a plan price is as traceable as the price (ADR 0029).
+// An offering with no plans, storage prices, fixed fees and no cap has nothing to
+// cite.
 //
 // It is a pure function so the rule can be pinned on an invented priced document:
 // the invented document pins the rule independently of the embedded snapshots'
@@ -251,6 +255,18 @@ func priceCitationViolations(doc snapshot.Document, sources string) []string {
 				violations = append(violations, fmt.Sprintf(
 					"offering %s: price %s has no code span in its section, so the amount is untraceable",
 					text.Quote(offering.Name), text.Quote(amount)))
+			}
+		}
+
+		// A cap is cited as the number of hours, so a reader can find the sentence
+		// that states it beside the plan prices it applies to (ADR 0029).
+		if offering.PlanBillingCapHours > 0 {
+			hours := strconv.FormatInt(offering.PlanBillingCapHours, 10)
+
+			if _, ok := spans[hours]; !ok {
+				violations = append(violations, fmt.Sprintf(
+					"offering %s: plan billing cap %s has no code span in its section, so the cap is untraceable",
+					text.Quote(offering.Name), text.Quote(hours)))
 			}
 		}
 	}
@@ -447,11 +463,11 @@ func TestSourcesHelpers(t *testing.T) {
 }
 
 // sourcesPricedDocument is a version 2 snapshot that sells a plan, publishes a
-// storage price and charges a fixed fee per instance, so the rule that all three
-// are cited in the SOURCES.md can be pinned on a document that exercises it,
-// independently of the embedded snapshots' data: the plan's amount is written
-// 12.5 in the document but rendered 12.50 by Amount.String. Every name, region
-// and amount is invented.
+// storage price, charges a fixed fee per instance and caps the hours it bills a
+// plan for, so the rule that all four are cited in the SOURCES.md can be pinned
+// on a document that exercises it, independently of the embedded snapshots' data:
+// the plan's amount is written 12.5 in the document but rendered 12.50 by
+// Amount.String. Every name, region and amount is invented.
 const sourcesPricedDocument = `{
   "schemaVersion": 2,
   "target": "Example Cloud",
@@ -475,7 +491,8 @@ const sourcesPricedDocument = `{
         }
       ],
       "storagePrices": [{ "amount": 0.04, "currency": "EUR", "regions": ["xx-par"] }],
-      "fixedFees": [{ "amount": 65.7, "currency": "EUR", "regions": ["xx-par"] }]
+      "fixedFees": [{ "amount": 65.7, "currency": "EUR", "regions": ["xx-par"] }],
+      "planBillingCapHours": 672
     }
   ]
 }`
@@ -507,10 +524,12 @@ func inventedSources(spans ...string) string {
 // price amount of it, plan prices, storage prices and fixed fees alike, is a code
 // span in the offering's own subsection, the plan by its name exactly as the
 // catalog holds it and the amount as Amount.String renders it, so a reader can
-// trace each price in the snapshot to the page it came from. A plan name that is
-// not cited, an amount cited as the document writes it rather than as the catalog
-// renders it, and a missing storage-price or fixed-fee amount are each reported;
-// a section that cites them all is not.
+// trace each price in the snapshot to the page it came from. An offering's plan
+// billing cap is cited as the number of hours it bills a plan for, so the cap the
+// plan part of an estimate follows is traceable too (ADR 0029). A plan name that
+// is not cited, an amount cited as the document writes it rather than as the
+// catalog renders it, a missing storage-price or fixed-fee amount, and a cap with
+// no code span are each reported; a section that cites them all is not.
 func TestPriceCitations(t *testing.T) {
 	t.Parallel()
 
@@ -529,11 +548,11 @@ func TestPriceCitations(t *testing.T) {
 	}{
 		{
 			name:    "every plan name and amount cited",
-			sources: inventedSources("EX-M", "12.50", "0.04", "65.70"),
+			sources: inventedSources("EX-M", "12.50", "0.04", "65.70", "672"),
 		},
 		{
 			name:    "plan name with no code span",
-			sources: inventedSources("12.50", "0.04", "65.70"),
+			sources: inventedSources("12.50", "0.04", "65.70", "672"),
 			want:    []string{`plan "EX-M" has no code span in its section`},
 		},
 		{
@@ -541,20 +560,28 @@ func TestPriceCitations(t *testing.T) {
 			// price can only be compared with its source when it is cited as
 			// Amount.String renders it.
 			name:    "amount cited as the document writes it",
-			sources: inventedSources("EX-M", "12.5", "0.04", "65.70"),
+			sources: inventedSources("EX-M", "12.5", "0.04", "65.70", "672"),
 			want:    []string{`price "12.50" has no code span in its section`},
 		},
 		{
 			name:    "storage price amount with no code span",
-			sources: inventedSources("EX-M", "12.50", "65.70"),
+			sources: inventedSources("EX-M", "12.50", "65.70", "672"),
 			want:    []string{`price "0.04" has no code span in its section`},
 		},
 		{
 			// A fixed monthly fee is a price of its offering, so its amount is
 			// cited as Amount.String renders it too (ADR 0026).
 			name:    "fixed fee amount with no code span",
-			sources: inventedSources("EX-M", "12.50", "0.04"),
+			sources: inventedSources("EX-M", "12.50", "0.04", "672"),
 			want:    []string{`price "65.70" has no code span in its section`},
+		},
+		{
+			// The cap is the number of hours the plan prices are the price of, so a
+			// reader can trace the plan part of an estimate back to its page
+			// (ADR 0029).
+			name:    "plan billing cap with no code span",
+			sources: inventedSources("EX-M", "12.50", "0.04", "65.70"),
+			want:    []string{`plan billing cap "672" has no code span in its section`},
 		},
 	}
 

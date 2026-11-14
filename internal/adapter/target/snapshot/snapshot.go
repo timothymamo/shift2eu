@@ -101,13 +101,14 @@ func Parse(data []byte) (Document, error) {
 		}
 
 		offerings[i] = catalog.Offering{
-			Name:          o.name,
-			Categories:    o.categories,
-			Capabilities:  o.capabilities,
-			Regions:       o.regions,
-			Plans:         o.plans,
-			StoragePrices: o.storagePrices,
-			FixedFees:     o.fixedFees,
+			Name:                o.name,
+			Categories:          o.categories,
+			Capabilities:        o.capabilities,
+			Regions:             o.regions,
+			Plans:               o.plans,
+			StoragePrices:       o.storagePrices,
+			FixedFees:           o.fixedFees,
+			PlanBillingCapHours: o.planBillingCapHours,
 		}
 	}
 
@@ -126,9 +127,10 @@ func Parse(data []byte) (Document, error) {
 }
 
 // document is a snapshot of schema version 2 as the walk reads it, before its
-// values are checked. Every field but an offering's fixedFees is required by
-// the format (ADR 0026); the walk refuses a document that leaves one out or
-// gives any field, fixedFees included, as null.
+// values are checked. Every field but an offering's fixedFees and
+// planBillingCapHours is required by the format (ADR 0026, ADR 0029); the walk
+// refuses a document that leaves one out or gives any field, the optional ones
+// included, as null.
 type document struct {
 	target        string
 	sourceURL     string
@@ -149,36 +151,41 @@ type offering struct {
 	storagePrices []catalog.Price
 	// fixedFees is nil when the offering has no fixedFees key (ADR 0026).
 	fixedFees []catalog.Price
+	// planBillingCapHours is 0 when the offering has no planBillingCapHours key
+	// (ADR 0029).
+	planBillingCapHours int64
 }
 
-// The keys of schema version 2, spelt exactly as ADR 0007, ADR 0024 and ADR
-// 0026 record them.
+// The keys of schema version 2, spelt exactly as ADR 0007, ADR 0024, ADR 0026
+// and ADR 0029 record them.
 const (
-	keySchemaVersion = "schemaVersion"
-	keyTarget        = "target"
-	keySourceURL     = "sourceURL"
-	keyRetrievedOn   = "retrievedOn"
-	keyRegions       = "regions"
-	keyOfferings     = "offerings"
-	keyName          = "name"
-	keyCategories    = "categories"
-	keyCapabilities  = "capabilities"
-	keyDefaultRegion = "defaultRegion"
-	keyPlans         = "plans"
-	keyStoragePrices = "storagePrices"
-	keyFixedFees     = "fixedFees"
-	keyVCPUs         = "vcpus"
-	keyMemoryGiB     = "memoryGiB"
-	keyStorageGiB    = "storageGiB"
-	keyPrices        = "prices"
-	keyAmount        = "amount"
-	keyCurrency      = "currency"
+	keySchemaVersion       = "schemaVersion"
+	keyTarget              = "target"
+	keySourceURL           = "sourceURL"
+	keyRetrievedOn         = "retrievedOn"
+	keyRegions             = "regions"
+	keyOfferings           = "offerings"
+	keyName                = "name"
+	keyCategories          = "categories"
+	keyCapabilities        = "capabilities"
+	keyDefaultRegion       = "defaultRegion"
+	keyPlans               = "plans"
+	keyStoragePrices       = "storagePrices"
+	keyFixedFees           = "fixedFees"
+	keyPlanBillingCapHours = "planBillingCapHours"
+	keyVCPUs               = "vcpus"
+	keyMemoryGiB           = "memoryGiB"
+	keyStorageGiB          = "storageGiB"
+	keyPrices              = "prices"
+	keyAmount              = "amount"
+	keyCurrency            = "currency"
 )
 
 // documentKeys, offeringKeys, planKeys and priceKeys list the keys of the
 // document object, an offering, a plan and a price, every one of them required
-// but one: an offering's fixedFees, the format's only optional key, a recorded
-// exception to ADR 0007 (ADR 0026). They are never modified.
+// but two: an offering's fixedFees (ADR 0026) and planBillingCapHours
+// (ADR 0029), the format's only optional keys, recorded exceptions to ADR 0007.
+// They are never modified.
 var (
 	documentKeys = []jsondoc.Key{
 		{Name: keySchemaVersion, Required: true},
@@ -197,6 +204,7 @@ var (
 		{Name: keyPlans, Required: true},
 		{Name: keyStoragePrices, Required: true},
 		{Name: keyFixedFees, Required: false},
+		{Name: keyPlanBillingCapHours, Required: false},
 	}
 	planKeys = []jsondoc.Key{
 		{Name: keyName, Required: true},
