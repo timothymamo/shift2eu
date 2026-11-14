@@ -14,7 +14,7 @@
 #                  is a manual `claude` run in each of the two directories (docs/dev-environment.md).
 #   3. git         The git identity the agents commit with (git config --global), where the VM has none:
 #                  the agents App's bot from ~/.config/shift2eu/agents-app-identity when make agents-token
-#                  wrote it (it replaces any other), otherwise the one passed in.
+#                  wrote it (it replaces any other), otherwise the one passed in (step 3 below runs it).
 #   4. claude auth Claude Code uses the subscription's OAuth token, not an API key.
 #   5. pi          pi has the DeepSeek key.
 #   6. gh          gh can read this repository, with the agents App's token or GITHUB_TOKEN.
@@ -93,40 +93,8 @@ else
 fi
 
 # 3. git: the agents App's bot when make agents-token has written its identity into the VM (PRD #161,
-# ADR 0029), otherwise the identity passed in.
-identity_file="${HOME}/.config/shift2eu/agents-app-identity"
-bot_identity=0
-if [ -e "${identity_file}" ]; then
-  { IFS= read -r git_name && IFS= read -r git_email; } <"${identity_file}" ||
-    fail "git: ${identity_file} does not hold two lines; run make agents-token on the Mac, or delete it to commit as yourself"
-  [[ "${git_name}" =~ ^[A-Za-z0-9-]+\[bot\]$ ]] ||
-    fail "git: the first line of ${identity_file} is not an App's bot name (<slug>[bot]); run make agents-token on the Mac"
-  [[ "${git_email}" =~ ^[0-9]+\+[A-Za-z0-9-]+\[bot\]@users\.noreply\.github\.com$ ]] ||
-    fail "git: the second line of ${identity_file} is not a bot's noreply address; run make agents-token on the Mac"
-  bot_identity=1
-fi
-[ -n "${git_name}" ] || fail "git: no user.name; set it on the Mac (git config --global user.name) or pass GIT_USER_NAME=..."
-[ -n "${git_email}" ] || fail "git: no user.email; set it on the Mac (git config --global user.email) or pass GIT_USER_EMAIL=..."
-# Set only where the VM has none, so a re-run never replaces an identity chosen in the VM. Two exceptions,
-# for the switch to the App and back: the bot's identity replaces any other, and with no identity file a
-# bot's identity left from an earlier run gives way to the one passed in.
-for pair in "user.name=${git_name}" "user.email=${git_email}"; do
-  key="${pair%%=*}"
-  value="${pair#*=}"
-  current="$(git config --global --get "${key}" || true)"
-  if [ -n "${current}" ] && [ "${current}" != "${value}" ] &&
-    { [ "${bot_identity}" -eq 1 ] || [[ "${current}" == *"[bot]"* ]]; }; then
-    git config --global "${key}" "${value}"
-    say "git: replaced ${key} ${current} with ${value}"
-  elif [ -z "${current}" ]; then
-    git config --global "${key}" "${value}"
-    say "git: set ${key} to ${value}"
-  elif [ "${current}" = "${value}" ]; then
-    say "git: ${key} already ${value}"
-  else
-    say "git: kept ${key} ${current}, not ${value}; change it with git config --global ${key} in the VM"
-  fi
-done
+# ADR 0029), otherwise the identity passed in; a script of its own, so its cases are tested without a VM.
+bash "${repo}/dev/vm-git-identity.sh" "${git_name}" "${git_email}" || exit 1
 
 # 4. claude auth: filtered to the one field checked.
 method="$({ claude auth status --json 2>/dev/null || true; } | jq -r '.authMethod // "none"' 2>/dev/null || true)"

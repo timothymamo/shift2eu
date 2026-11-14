@@ -236,9 +236,13 @@ vm-create: ## Create and set up the VM, ready for make deck: vm-up, vm-env, vm-c
 	$(MAKE) vm-claude-settings
 	$(MAKE) vm-init
 
-# Where make deck keeps the pid and the log of the agents App token refresh: on the Mac, outside the
-# workspace (ADR 0029).
+# Where make deck keeps the pid and the log of the agents App token refresh, and the refresh its lock, one
+# set per VM instance: on the Mac, outside the workspace (ADR 0029).
 AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2eu
+
+# Run the token targets, and make deck with the App's variables set, only from a checkout whose Makefile and
+# dev/ match reviewed main: they run on the Mac with the App's key in reach, and the agents can edit the
+# workspace (ADR 0029; docs/dev-environment.md, Before you run the token targets).
 
 .PHONY: agents-token
 agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM
@@ -248,25 +252,34 @@ agents-token: ## Mint one agents App installation token on the Mac and write it,
 agents-token-refresh: ## Mint the agents App token now and again before each one expires, in the foreground, until stopped
 	@LIMA_INSTANCE="$(LIMA_INSTANCE)" sh dev/agents-app-token.sh refresh
 
-# With the three SHIFT2EU_AGENTS_APP_* variables set, deck first starts the token refresh in the background
-# unless it already runs, and warns when the one it started earlier has stopped. Without them it opens the
-# deck as before.
+# For a VM created before dev/lima.yaml installed the gh wrapper: moves the real gh off the PATH, installs the
+# wrapper with the real gh's path pinned and points the git credential helper at it, all over limactl's
+# standard input (dev/vm-gh-wrapper.sh). Safe to run again.
+.PHONY: vm-gh-wrapper
+vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it (instead of make vm-delete vm-create)
+	@sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh | limactl shell --workdir / "$(LIMA_INSTANCE)" sh -s
+
+# With the three SHIFT2EU_AGENTS_APP_* variables set, deck first starts the token refresh of this VM
+# instance in the background unless it already runs, and warns when the one it started earlier has stopped.
+# A refresh started by hand (make agents-token-refresh) holds the instance's lock, so the one deck starts
+# then says so in its log and exits. Without the variables deck opens the deck as before.
 .PHONY: deck
 deck: ## Open the dot-agent-deck TUI in the VM (attaches to the daemon service); starts the agents App token refresh when its variables are set
 	@if [ -n "$${SHIFT2EU_AGENTS_APP_ID:-}" ] && [ -n "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] && [ -n "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
-		state="$(AGENTS_TOKEN_STATE)"; pid_file="$$state/agents-token-refresh.pid"; log="$$state/agents-token-refresh.log"; \
+		state="$(AGENTS_TOKEN_STATE)"; pid_file="$$state/agents-token-refresh-$(LIMA_INSTANCE).pid"; log="$$state/agents-token-refresh-$(LIMA_INSTANCE).log"; \
 		(umask 077 && mkdir -p "$$state" && : >>"$$log") || exit 1; \
 		pid="$$(cat "$$pid_file" 2>/dev/null || true)"; \
 		if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null && ps -p "$$pid" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
-			echo "deck: the agents App token refresh is running (pid $$pid); its log is $$log"; \
+			echo "deck: the agents App token refresh of $(LIMA_INSTANCE) is running (pid $$pid); its log is $$log"; \
 		else \
 			if [ -n "$$pid" ]; then \
-				echo "deck: warning: the agents App token refresh (pid $$pid) had stopped; its log's last lines:" >&2; \
+				echo "deck: warning: the agents App token refresh of $(LIMA_INSTANCE) (pid $$pid) had stopped; its log's last lines:" >&2; \
 				tail -n 3 "$$log" 2>/dev/null | sed 's/^/  /' >&2 || true; \
 			fi; \
 			LIMA_INSTANCE="$(LIMA_INSTANCE)" nohup sh dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
-			echo "$$!" >"$$pid_file"; \
-			echo "deck: started the agents App token refresh (pid $$!); its log is $$log"; \
+			pid="$$!"; \
+			(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
+			echo "deck: started the agents App token refresh of $(LIMA_INSTANCE) (pid $$pid); its log is $$log"; \
 		fi; \
 	fi
 	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)" dot-agent-deck
