@@ -40,7 +40,11 @@ func newMintFixture(t *testing.T) *mintFixture {
 	env["SHIFT2EU_AGENTS_APP_ID"] = api.appID
 	env["SHIFT2EU_AGENTS_APP_INSTALLATION_ID"] = api.installationID
 	env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = key.path
-	env["GITHUB_API_URL"] = api.url
+	env["SHIFT2EU_AGENTS_GITHUB_API_URL"] = api.url
+	// The gh the VM runs, checked by mint before it warns that this VM predates the wrapper: a path that is
+	// not there unless a test creates it keeps the warning independent of what this machine has installed
+	// (PRD #161 milestone 1 review, item 3).
+	env["SHIFT2EU_VM_REAL_GH_PATH"] = filepath.Join(sb.root, "vm-real-gh")
 
 	return &mintFixture{sb: sb, api: api, key: key, env: env}
 }
@@ -296,6 +300,357 @@ func TestAgentsAppTokenMintReportsARefusedMint(t *testing.T) {
 	}
 
 	f.assertNoLeaks(t, stdout, stderr)
+}
+
+// TestAgentsAppTokenMintWarnsAboutAVMWithoutTheGHWrapper pins review item 3: a VM created before the gh wrapper
+// existed keeps gh only where dev/lima.yaml puts it, so the git credential helper runs the real gh and no token
+// reaches it. mint must say so, name the target that upgrades the VM, and still write the token.
+func TestAgentsAppTokenMintWarnsAboutAVMWithoutTheGHWrapper(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		prepare func(t *testing.T, path string)
+		want    bool
+	}{
+		{
+			name:    "the VM predates the gh wrapper",
+			prepare: func(*testing.T, string) {},
+			want:    true,
+		},
+		{
+			name: "the VM has the wrapper's real gh",
+			prepare: func(t *testing.T, path string) {
+				t.Helper()
+
+				writeFileMode(t, path, []byte("#!/bin/sh\n"), 0o755)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			tc.prepare(t, f.env["SHIFT2EU_VM_REAL_GH_PATH"])
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+			if err != nil {
+				t.Fatalf("mint exited non-zero: a VM that predates the gh wrapper is a warning, not a failure: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			}
+
+			// The warning is worth nothing if the token was not written: the agents' work goes on either way.
+			readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
+
+			got := strings.Contains(stderr, "predates the gh wrapper")
+			if got != tc.want {
+				t.Fatalf("mint says %s the VM predates the gh wrapper, want %v: a VM created before dev/lima.yaml installed the wrapper has no token plumbing, and one that has it must not see the warning\nstderr: %s",
+					map[bool]string{true: "nothing about", false: "that"}[got], tc.want, stderr)
+			}
+
+			if !tc.want {
+				return
+			}
+
+			for _, want := range []string{"make vm-gh-wrapper", "make vm-delete vm-create"} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("the warning does not name %q, so a maintainer cannot upgrade the VM (review item 3): %s", want, stderr)
+				}
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
+}
+
+// TestAgentsAppTokenMintWritesAnExpiryInsideTheMargin pins review item 4: the expiry the VM holds is a margin
+// short of both the Mac's own hour and GitHub's expires_at, so a VM whose clock lags does not lose the token
+// before the refresh replaces it.
+func TestAgentsAppTokenMintWritesAnExpiryInsideTheMargin(t *testing.T) {
+	t.Parallel()
+
+	// 300 seconds of the token's life are given up (PRD #161 milestone 1 review, item 4), and the script reads
+	// the clock on its own, so the bounds allow a few seconds of drift between this test's clock reads and the
+	// script's.
+	const (
+		margin    int64 = 300
+		tolerance int64 = 3
+	)
+
+	cases := []struct {
+		name     string
+		lifetime time.Duration
+	}{
+		{name: "the hour GitHub hands out", lifetime: time.Hour},
+		{name: "a token GitHub says lasts half an hour", lifetime: 30 * time.Minute},
+		{name: "a token GitHub says lasts two hours", lifetime: 2 * time.Hour},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			f.api.setTokenLifetime(tc.lifetime)
+
+			startedAt := time.Now().Unix()
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+			if err != nil {
+				t.Fatalf("mint exited non-zero: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			}
+
+			token := readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
+
+			expiry, err := strconv.ParseInt(token[1], 10, 64)
+			if err != nil {
+				t.Fatalf("%s's second line is not the expiry as Unix seconds: %v", agentsTokenFile, err)
+			}
+
+			apiExpiry := f.api.expiryOf(0)
+			want := min(startedAt+3600-margin, apiExpiry-margin)
+
+			if expiry > want+tolerance {
+				t.Errorf("%s's expiry is %d, want at most %d: that is the earlier of the Mint's own now - %d (%d) and expires_at - %d (%d). A token that outlives the margin in the VM fails the moment the VM's clock lags the Mac's (review item 4)",
+					agentsTokenFile, expiry, want+tolerance, margin, startedAt+3600-margin, margin, apiExpiry-margin)
+			}
+
+			if expiry < want-tolerance {
+				t.Errorf("%s's expiry is %d, want at least %d: the token is given up earlier than the margin alone explains", agentsTokenFile, expiry, want-tolerance)
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
+}
+
+// TestAgentsAppTokenRefusesADangerousAPIURL pins review item 9: the API URL hook is renamed to
+// SHIFT2EU_AGENTS_GITHUB_API_URL, and a value that could make curl talk to another host (an @, a quote, a
+// backslash, whitespace, a newline) or plain http to anything but this machine is refused before any request.
+func TestAgentsAppTokenRefusesADangerousAPIURL(t *testing.T) {
+	t.Parallel()
+
+	refused := []struct {
+		name string
+		url  string
+	}{
+		{name: "plain http to a remote host", url: "http://example.com/"},
+		{name: "plain http to a remote host with a port", url: "http://example.com:8080/api/v3"},
+		//nolint:gosec // G101: this is a URL the script must refuse, not a credential
+		{name: "an @ that makes the authority look like a user name", url: "http://localhost:8080@evil.example/"},
+		{name: "an @ over https", url: "https://agents@evil.example/"},
+		{name: "a double quote", url: `http://127.0.0.1:8080/"`},
+		{name: "a backslash", url: `http://127.0.0.1:8080/\`},
+		{name: "a space", url: "http://127.0.0.1:8080/a b"},
+		{name: "a tab", url: "http://127.0.0.1:8080/a\tb"},
+		{name: "a newline", url: "http://127.0.0.1:8080/a\nb"},
+		{name: "no scheme at all", url: "api.github.com"},
+	}
+
+	for _, tc := range refused {
+		t.Run("refuses "+tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			f.env["SHIFT2EU_AGENTS_GITHUB_API_URL"] = tc.url
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+			if err == nil {
+				t.Fatalf("mint exited 0 with the API URL %q, which can send the App's JWT to another host\nstdout: %s", tc.url, stdout)
+			}
+
+			if !strings.Contains(stderr, "SHIFT2EU_AGENTS_GITHUB_API_URL") {
+				t.Errorf("the refusal does not name SHIFT2EU_AGENTS_GITHUB_API_URL, so a maintainer cannot tell what to fix: %s", stderr)
+			}
+
+			if calls := invocations(f.sb.argvLogText(t), "curl"); len(calls) != 0 {
+				t.Errorf("mint ran curl %d time(s) with the API URL %q: a refused URL must not reach the network", len(calls), tc.url)
+			}
+
+			if _, err := os.Stat(f.sb.vmPath(agentsTokenFile)); err == nil {
+				t.Errorf("mint wrote %s although it refused the API URL", agentsTokenFile)
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
+
+	t.Run("accepts the fake API on this machine", func(t *testing.T) {
+		t.Parallel()
+
+		f := newMintFixture(t)
+
+		stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+		if err != nil {
+			t.Fatalf("mint exited non-zero with the fake API's own URL %q: %v\nstdout: %s\nstderr: %s", f.env["SHIFT2EU_AGENTS_GITHUB_API_URL"], err, stdout, stderr)
+		}
+
+		readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
+	})
+
+	t.Run("accepts https://api.github.com", func(t *testing.T) {
+		t.Parallel()
+
+		f := newMintFixture(t)
+		f.env["SHIFT2EU_AGENTS_GITHUB_API_URL"] = "https://api.github.com"
+
+		// curl cannot leave this machine: the test must never reach the real GitHub API, and the URL being
+		// refused is what it proves cannot have happened.
+		f.sb.blockCurl(t)
+
+		stdout, stderr, _ := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+
+		if strings.Contains(stderr, "SHIFT2EU_AGENTS_GITHUB_API_URL") {
+			t.Fatalf("mint refused https://api.github.com, the API the App is meant to talk to: %s", stderr)
+		}
+
+		if calls := invocations(f.sb.argvLogText(t), "curl"); len(calls) == 0 {
+			t.Fatalf("mint never ran curl with https://api.github.com, so this test cannot tell whether the URL was accepted\nstdout: %s\nstderr: %s", stdout, stderr)
+		}
+
+		f.assertNoLeaks(t, stdout, stderr)
+	})
+}
+
+// TestAgentsAppTokenGivesCurlTheQFirst pins review item 11 (N1): curl must not read the maintainer's ~/.curlrc,
+// which can redirect a request or add a header, so -q comes before every other argument.
+func TestAgentsAppTokenGivesCurlTheQFirst(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+
+	stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+	if err != nil {
+		t.Fatalf("mint exited non-zero: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	calls := invocations(f.sb.argvLogText(t), "curl")
+	if len(calls) == 0 {
+		t.Fatalf("mint ran no curl at all")
+	}
+
+	for i, args := range calls {
+		if len(args) == 0 || args[0] != "-q" {
+			t.Errorf("curl call %d starts with %v, want -q first: otherwise curl reads ~/.curlrc, which can send the App's JWT somewhere else (review item 11, N1)", i+1, args)
+		}
+	}
+
+	f.assertNoLeaks(t, stdout, stderr)
+}
+
+// TestAgentsAppTokenRefusesToWriteThroughASymlink pins review item 11 (N4): the VM's write script refuses a
+// symlinked ~/.config/shift2eu and a token or identity file that is a symlink or not a regular file, so nothing
+// an agent points at receives the token.
+func TestAgentsAppTokenRefusesToWriteThroughASymlink(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		prepare func(t *testing.T, sb *sandbox)
+		check   func(t *testing.T, sb *sandbox)
+	}{
+		{
+			name: "the config directory is a symlink",
+			prepare: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				elsewhere := filepath.Join(sb.vmHome, "elsewhere")
+				if err := os.MkdirAll(elsewhere, 0o700); err != nil {
+					t.Fatalf("create %s: %v", elsewhere, err)
+				}
+
+				if err := os.MkdirAll(sb.vmPath(".config"), 0o700); err != nil {
+					t.Fatalf("create %s/.config: %v", sb.vmHome, err)
+				}
+
+				if err := os.Symlink(elsewhere, sb.vmPath(filepath.Join(".config", "shift2eu"))); err != nil {
+					t.Fatalf("symlink the config directory: %v", err)
+				}
+			},
+			check: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				for _, name := range []string{"agents-app-token", "agents-app-identity"} {
+					if _, err := os.Stat(filepath.Join(sb.vmHome, "elsewhere", name)); err == nil {
+						t.Errorf("the mint wrote %s through the symlinked config directory, so an agent that points it elsewhere receives the token", name)
+					}
+				}
+			},
+		},
+		{
+			name: "the token file is a symlink",
+			prepare: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				target := filepath.Join(sb.root, "outside-token")
+				writeFileMode(t, target, []byte("unchanged\n"), 0o600)
+
+				if err := os.MkdirAll(filepath.Dir(sb.vmPath(agentsTokenFile)), 0o700); err != nil {
+					t.Fatalf("create the config directory: %v", err)
+				}
+
+				if err := os.Symlink(target, sb.vmPath(agentsTokenFile)); err != nil {
+					t.Fatalf("symlink %s: %v", agentsTokenFile, err)
+				}
+			},
+			check: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				body, err := os.ReadFile(filepath.Join(sb.root, "outside-token"))
+				if err != nil {
+					t.Fatalf("read the symlink's target: %v", err)
+				}
+
+				if string(body) != "unchanged\n" {
+					t.Errorf("the mint wrote through the symlinked token file, so the token landed wherever an agent pointed it")
+				}
+			},
+		},
+		{
+			name: "the token file is not a regular file",
+			prepare: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				if err := os.MkdirAll(sb.vmPath(agentsTokenFile), 0o700); err != nil {
+					t.Fatalf("create %s as a directory: %v", agentsTokenFile, err)
+				}
+			},
+			check: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				info, err := os.Lstat(sb.vmPath(agentsTokenFile))
+				if err != nil {
+					t.Fatalf("stat %s: %v", agentsTokenFile, err)
+				}
+
+				if !info.IsDir() {
+					t.Errorf("the mint replaced the directory at %s, which is not a token file it may overwrite", agentsTokenFile)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			tc.prepare(t, f.sb)
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+			if err == nil {
+				t.Fatalf("mint exited 0 although %s: the VM's write script must refuse it\nstdout: %s\nstderr: %s", tc.name, stdout, stderr)
+			}
+
+			if strings.TrimSpace(stderr) == "" {
+				t.Errorf("mint says nothing about refusing to write: %s", tc.name)
+			}
+
+			tc.check(t, f.sb)
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
 }
 
 // TestAgentsAppTokenRefreshReplacesTheTokenAndSaysHowToStartItAgain pins the loop make deck starts: it mints

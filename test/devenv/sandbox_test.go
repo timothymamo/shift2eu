@@ -32,6 +32,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -150,14 +151,22 @@ func (sb *sandbox) baseEnv() map[string]string {
 		"TMPDIR":                 filepath.Join(sb.root, "tmp"),
 		"SHIFT2EU_TEST_ARGV_LOG": sb.argvLog,
 		"SHIFT2EU_TEST_VM_HOME":  sb.vmHome,
-		"LIMA_INSTANCE":          "shift2eu",
-		"LIMACTL":                filepath.Join(sb.binDir, "limactl"),
+		// The state dir of the refresh's pid, log and lock files, outside the workspace and never the
+		// test machine's own (PRD #161 milestone 1 review, item 7).
+		"XDG_STATE_HOME": filepath.Join(sb.root, "state"),
+		"LIMA_INSTANCE":  "shift2eu",
+		"LIMACTL":        filepath.Join(sb.binDir, "limactl"),
 	}
 }
 
 // vmPath is a path inside the fake VM user's home, such as agentsTokenFile.
 func (sb *sandbox) vmPath(rel string) string {
 	return filepath.Join(sb.vmHome, filepath.FromSlash(rel))
+}
+
+// stateDir is where the refresh keeps its pid, log and lock files: ${XDG_STATE_HOME}/shift2eu.
+func (sb *sandbox) stateDir() string {
+	return filepath.Join(sb.root, "state", "shift2eu")
 }
 
 // argvLogText is what the recording shims and the fake limactl have logged so far.
@@ -222,6 +231,13 @@ const fakeLimactl = `#!/bin/sh
   printf 'tool=limactl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+if [ -n "${SHIFT2EU_TEST_LIMA_CAPTURE:-}" ]; then
+  # Capture mode: a test that only wants what a recipe sends over standard input (make deck, make
+  # vm-gh-wrapper) records it and runs nothing on this machine.
+  cat >> "${SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
+  printf '\n--- end of call ---\n' >> "${SHIFT2EU_TEST_LIMA_CAPTURE}"
+  exit 0
+fi
 HOME="${SHIFT2EU_TEST_VM_HOME:?set SHIFT2EU_TEST_VM_HOME}"
 export HOME
 at=0
@@ -280,15 +296,286 @@ func (sb *sandbox) writeTripwireGH(t *testing.T) {
 	}
 }
 
+// blockedCurlShim logs its argv and then fails the way curl reports a connection it never made, so a test
+// can prove a URL was accepted while it proves nothing reached that URL: no test calls the real GitHub API
+// (PRD #161 milestone 1's security rules).
+const blockedCurlShim = `#!/bin/sh
+{
+  printf 'tool=curl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+echo 'curl: (7) Failed to connect: blocked by the devenv tests' >&2
+exit 7
+`
+
+// blockCurl makes curl unable to reach anything, so a test can pin that a URL was accepted without ever
+// sending a request to it.
+func (sb *sandbox) blockCurl(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "curl")
+
+	//nolint:gosec // the blocked curl is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(blockedCurlShim), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// failingLimactl stands in for a VM that is not running: it fails while the file SHIFT2EU_TEST_LIMA_FAIL_WHILE
+// names exists, and runs the command otherwise, so a test can let a loop hit the failure and then recover.
+const failingLimactl = `#!/bin/sh
+{
+  printf 'tool=limactl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+if [ -e "${SHIFT2EU_TEST_LIMA_FAIL_WHILE:?set SHIFT2EU_TEST_LIMA_FAIL_WHILE}" ]; then
+  echo 'limactl: the instance is not running' >&2
+  exit 1
+fi
+exec "${SHIFT2EU_TEST_REAL_LIMACTL:?set SHIFT2EU_TEST_REAL_LIMACTL}" "$@"
+`
+
+// useFailingLimactl makes the sandbox's limactl fail while the file at marker exists, and returns the fake
+// limactl it delegates to once the marker is gone.
+func (sb *sandbox) useFailingLimactl(t *testing.T, marker string) {
+	t.Helper()
+
+	real := filepath.Join(sb.binDir, "limactl-real")
+
+	//nolint:gosec // the fake limactl is a script the tests run, so it must be executable
+	if err := os.WriteFile(real, []byte(fakeLimactl), 0o700); err != nil {
+		t.Fatalf("write %s: %v", real, err)
+	}
+
+	path := filepath.Join(sb.binDir, "limactl")
+
+	//nolint:gosec // the failing limactl is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(failingLimactl), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	if err := os.WriteFile(marker, nil, 0o600); err != nil {
+		t.Fatalf("create %s: %v", marker, err)
+	}
+}
+
 func (sb *sandbox) writeRecordingShim(t *testing.T, name string) {
 	t.Helper()
 
 	real := realTool(t, name)
 	path := filepath.Join(sb.binDir, name)
 
+	shim := fmt.Sprintf(recordingShim, name, strconv.Quote(real))
+	if name == "curl" {
+		shim = fmt.Sprintf(recordingCurlShim, strconv.Quote(real))
+	}
+
 	//nolint:gosec // the recording shim is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, fmt.Appendf(nil, recordingShim, name, strconv.Quote(real)), 0o700); err != nil {
+	if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
 		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// recordingCurlShim is the recording stand-in for curl. It logs its argv, and it refuses any URL that is not
+// the fake API on this machine: no devenv test may reach the real GitHub API, not even when the script under
+// test reads an API URL hook of another name and so falls back to https://api.github.com (PRD #161 milestone
+// 1's security rules). The URL reaches curl on its standard input, so the shim reads it there and hands it on
+// from a shell variable: no copy of it, and so of the JWT it carries, is ever written to a file.
+const recordingCurlShim = `#!/bin/sh
+{
+  printf 'tool=curl\n'
+  for a in "$@"; do printf 'arg=%%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+cfg="$(cat)"
+if printf '%%s\n' "${cfg}" | grep -E '^[[:space:]]*url[[:space:]]*=' | grep -vE '^[[:space:]]*url[[:space:]]*=[[:space:]]*"https?://(127\.0\.0\.1|localhost)([:/"]|$)' >/dev/null; then
+  echo 'the devenv tests refuse to reach any URL but the fake API on this machine' >&2
+  exit 7
+fi
+printf '%%s\n' "${cfg}" | %s "$@"
+`
+
+// invocations returns the argv of every call of one tool the recording shims logged, in call order.
+func invocations(log, tool string) [][]string {
+	var (
+		calls  [][]string
+		cur    []string
+		ofTool bool
+	)
+
+	for _, line := range strings.Split(log, "\n") {
+		switch {
+		case strings.HasPrefix(line, "tool="):
+			if ofTool {
+				calls = append(calls, cur)
+			}
+
+			cur, ofTool = nil, line == "tool="+tool
+		case ofTool && strings.HasPrefix(line, "arg="):
+			cur = append(cur, strings.TrimPrefix(line, "arg="))
+		}
+	}
+
+	if ofTool {
+		calls = append(calls, cur)
+	}
+
+	return calls
+}
+
+// nonEmptyLines counts the lines of text that hold anything.
+func nonEmptyLines(text string) int {
+	count := 0
+
+	for _, line := range strings.Split(text, "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+
+	return count
+}
+
+// toolDir returns the directory of a tool the machine has, for a PATH a script needs it on.
+func toolDir(t *testing.T, name string) string {
+	t.Helper()
+
+	path, err := exec.LookPath(name)
+	if err != nil {
+		t.Fatalf("%s is not installed: the test needs it", name)
+	}
+
+	return filepath.Dir(path)
+}
+
+// safeBuffer is a buffer two goroutines share: one copies a running script's output into it, the test reads
+// it while the script runs.
+type safeBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *safeBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.Write(p)
+}
+
+func (b *safeBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.buf.String()
+}
+
+// runningScript is a script a test started and keeps watching: a refresh loop is meant to keep running, so a
+// test reads its output while it runs and can see it survive a failure instead of returning.
+type runningScript struct {
+	cmd    *exec.Cmd
+	stdout safeBuffer
+	stderr safeBuffer
+	exited chan struct{} // closed once Wait has returned
+	status error         // what Wait returned; read it only after exited is closed
+}
+
+// start runs a script of dev/ in the background, under env alone, from the sandbox's host home, and removes
+// it with the test.
+func (sb *sandbox) start(t *testing.T, script string, args []string, env map[string]string) *runningScript {
+	t.Helper()
+
+	r := &runningScript{
+		cmd:    exec.Command("sh", append([]string{script}, args...)...),
+		exited: make(chan struct{}),
+	}
+	r.cmd.Env = envList(env)
+	r.cmd.Dir = sb.hostHome
+	r.cmd.Stdout = &r.stdout
+	r.cmd.Stderr = &r.stderr
+
+	if err := r.cmd.Start(); err != nil {
+		t.Fatalf("start %s %s: %v", script, strings.Join(args, " "), err)
+	}
+
+	go func() {
+		r.status = r.cmd.Wait()
+		close(r.exited)
+	}()
+
+	t.Cleanup(func() { r.kill(t) })
+
+	return r
+}
+
+// out and errOut are the script's stdout and stderr so far.
+func (r *runningScript) out() string    { return r.stdout.String() }
+func (r *runningScript) errOut() string { return r.stderr.String() }
+
+// running reports whether the script is still running.
+func (r *runningScript) running() bool {
+	select {
+	case <-r.exited:
+		return false
+	default:
+		return true
+	}
+}
+
+// waitExit waits up to timeout for the script to exit and reports whether it did.
+func (r *runningScript) waitExit(timeout time.Duration) bool {
+	select {
+	case <-r.exited:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+// signal sends sig to the script.
+func (r *runningScript) signal(t *testing.T, sig syscall.Signal) {
+	t.Helper()
+
+	if !r.running() {
+		return
+	}
+
+	if err := r.cmd.Process.Signal(sig); err != nil && r.running() {
+		t.Fatalf("send %v to the script: %v", sig, err)
+	}
+}
+
+// exitCode is the script's exit status: 0, the status it exited with, or -1 when a signal ended it. It waits
+// for the exit, so call it after waitExit or signal.
+func (r *runningScript) exitCode(t *testing.T) int {
+	t.Helper()
+
+	<-r.exited
+
+	var exitErr *exec.ExitError
+
+	switch {
+	case r.status == nil:
+		return 0
+	case errors.As(r.status, &exitErr):
+		return exitErr.ExitCode()
+	default:
+		t.Fatalf("wait for the script: %v", r.status)
+
+		return 0
+	}
+}
+
+// kill ends the script if it is still running: the cleanup of every started script.
+func (r *runningScript) kill(t *testing.T) {
+	t.Helper()
+
+	if !r.running() {
+		return
+	}
+
+	_ = r.cmd.Process.Kill()
+
+	if !r.waitExit(30 * time.Second) {
+		t.Errorf("a script the test started did not exit even after a kill")
 	}
 }
 
@@ -423,15 +710,25 @@ type fakeGitHub struct {
 	// status, when non-zero, is the status every access_tokens request gets instead of a token, so a test
 	// can pin what the script does when GitHub refuses to mint.
 	status int
+	// lifetime is how long the tokens the fake API hands out last; the zero value is GitHub's hour.
+	lifetime time.Duration
 
 	mu         sync.Mutex
-	requests   []string // "<method> <path>" of every request
-	posts      []string // the path of every POST
-	accepts    []string // the Accept header of every request, in request order
-	jwts       []string // the Bearer value of every request the JWT check accepted
-	complaints []string // what was wrong with a request, for the test to report without the secret
-	tokens     []string // the tokens handed out, in order
-	expiresAt  []int64  // the expires_at of each token, Unix seconds
+	requests   []string      // "<method> <path>" of every request
+	posts      []string      // the path of every POST
+	accepts    []string      // the Accept header of every request, in request order
+	jwts       []string      // the Bearer value of every request the JWT check accepted
+	complaints []string      // what was wrong with a request, for the test to report without the secret
+	tokens     []string      // the tokens handed out, in order
+	expiresAt  []int64       // the expires_at of each token, Unix seconds
+	failures   []mintFailure // the transient failures still to answer, one per mint
+}
+
+// mintFailure is one access_tokens request the fake API answers with a failure instead of a token: a status,
+// or a dropped connection, which curl reports as status 000.
+type mintFailure struct {
+	status int  // the status to answer with; ignored when drop is set
+	drop   bool // close the connection without a reply instead of answering
 }
 
 // newFakeGitHub starts the fake API for one test and stops it with the test.
@@ -487,6 +784,18 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if failure, failed := f.takeMintFailure(r.Method); failed {
+		if failure.drop {
+			dropConnection(w)
+
+			return
+		}
+
+		http.Error(w, `{"message":"GitHub is having trouble"}`, failure.status)
+
+		return
+	}
+
 	switch {
 	case r.Method == http.MethodPost && r.URL.Path == "/app/installations/"+f.installationID+"/access_tokens":
 		f.mint(w)
@@ -523,10 +832,86 @@ func (f *fakeGitHub) checkAuthorization(r *http.Request) (string, error) {
 	return raw, nil
 }
 
-// mint answers one access_tokens request with a new token, valid for an hour.
+// takeMintFailure returns the failure the next access_tokens request must get, consuming it.
+func (f *fakeGitHub) takeMintFailure(method string) (mintFailure, bool) {
+	if method != http.MethodPost {
+		return mintFailure{}, false
+	}
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if len(f.failures) == 0 {
+		return mintFailure{}, false
+	}
+
+	failure := f.failures[0]
+	f.failures = f.failures[1:]
+
+	return failure, true
+}
+
+// failNextMints makes the next count access_tokens requests answer status instead of minting: the transient
+// failure a long-lived refresh must survive (PRD #161 milestone 1 review, item 1).
+func (f *fakeGitHub) failNextMints(status, count int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for range count {
+		f.failures = append(f.failures, mintFailure{status: status})
+	}
+}
+
+// dropNextMints makes the next count access_tokens requests answer by closing the connection, which curl sees
+// as status 000, the way a Mac that went to sleep or a network that went away shows up.
+func (f *fakeGitHub) dropNextMints(count int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for range count {
+		f.failures = append(f.failures, mintFailure{drop: true})
+	}
+}
+
+// setTokenLifetime makes the tokens the fake API mints last d, so a test can pin that the expiry written into
+// the VM follows GitHub's own expires_at as well as the local hour.
+func (f *fakeGitHub) setTokenLifetime(d time.Duration) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.lifetime = d
+}
+
+// dropConnection answers a request by closing the connection with no reply at all.
+func dropConnection(w http.ResponseWriter) {
+	hijacker, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, `{"message":"cannot drop the connection"}`, http.StatusInternalServerError)
+
+		return
+	}
+
+	conn, _, err := hijacker.Hijack()
+	if err != nil {
+		http.Error(w, `{"message":"cannot drop the connection"}`, http.StatusInternalServerError)
+
+		return
+	}
+
+	_ = conn.Close()
+}
+
+// mint answers one access_tokens request with a new token, valid for the fake API's lifetime (an hour by
+// default, as GitHub mints them).
 func (f *fakeGitHub) mint(w http.ResponseWriter) {
 	f.mu.Lock()
-	expiresAt := time.Now().Add(time.Hour).Unix()
+
+	lifetime := f.lifetime
+	if lifetime == 0 {
+		lifetime = time.Hour
+	}
+
+	expiresAt := time.Now().Add(lifetime).Unix()
 	token := fmt.Sprintf("ghs_%036x", len(f.tokens)+1)
 	f.tokens = append(f.tokens, token)
 	f.expiresAt = append(f.expiresAt, expiresAt)

@@ -1,7 +1,8 @@
 // Pins the VM's gh wrapper (PRD #161 milestone 1): dev/gh-app-token.sh hands the installation token of the
 // VM's token file to the real gh, unsets GITHUB_TOKEN where it does, falls back to GITHUB_TOKEN where the
 // file is absent, and refuses a token file that is expired, malformed or readable by another account without
-// running gh. The design is .dot-agent-deck/prd161m1-design.md.
+// running gh, telling the agent to ask the maintainer rather than to touch the file itself (review item 10).
+// The design is .dot-agent-deck/prd161m1-design.md.
 package devenv_test
 
 import (
@@ -239,6 +240,20 @@ func TestGHAppTokenRefusesABadTokenFile(t *testing.T) {
 
 			if !strings.Contains(stderr, "make agents-token-refresh") {
 				t.Errorf("the wrapper's stderr does not name make agents-token-refresh, the command that mints a new token: %s", stderr)
+			}
+
+			// Review item 10: the refusal must not teach an agent to delete the token file or to fall back to the
+			// maintainer's GITHUB_TOKEN; both are a maintainer's steps, and the rollback lives in the docs.
+			lowered := strings.ToLower(stderr)
+
+			for _, never := range []string{"delete", "github_token"} {
+				if strings.Contains(lowered, never) {
+					t.Errorf("the wrapper's stderr says %q: an agent must not delete the token file or reach for GITHUB_TOKEN, it must ask the maintainer (review item 10): %s", never, stderr)
+				}
+			}
+
+			if !strings.Contains(stderr, "maintainer") {
+				t.Errorf("the wrapper's stderr does not say who can fix it: ask the maintainer to run make agents-token-refresh on the Mac (review item 10): %s", stderr)
 			}
 
 			if tc.token == "" {

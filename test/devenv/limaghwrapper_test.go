@@ -6,6 +6,10 @@
 package devenv_test
 
 import (
+	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -156,6 +160,119 @@ func onlyLine(t *testing.T, lines []string, substr string) string {
 	}
 
 	return found[0]
+}
+
+// pinnedRealGH is the path the installed wrapper must pin the real gh to. The wrapper the VM runs reads no
+// SHIFT2EU_REAL_GH, so an agent that sets it in its own shell cannot make the agents' token go to a binary of
+// its choice (PRD #161 milestone 1 review, item 6).
+const pinnedRealGH = "/usr/local/libexec/shift2eu/gh"
+
+// ghPinTransform returns the sed script dev/lima.yaml pipes the wrapper through to pin the real gh's path.
+// The template's own transform is what the tests apply, so they pin the text the VM installs; the transform
+// must be a single sed script on the one line of the template that names ^real=, which is how this test finds
+// it (review item 6).
+func ghPinTransform(t *testing.T, template string) string {
+	t.Helper()
+
+	line := onlyLine(t, strings.Split(template, "\n"), "^real=")
+
+	for _, pattern := range []*regexp.Regexp{
+		regexp.MustCompile(`\bsed\s+(?:-e\s+)?'([^']+)'`),
+		regexp.MustCompile(`\bsed\s+(?:-e\s+)?"([^"]+)"`),
+	} {
+		if match := pattern.FindStringSubmatch(line); match != nil {
+			return match[1]
+		}
+	}
+
+	t.Fatalf("%s's wrapper install names ^real= without a sed script this test can read: %s. Pin the real gh with one sed script (or that declares the transform here), so the installed copy can be checked (review item 6)", limaTemplateRepoPath, line)
+
+	return ""
+}
+
+// applySed runs one sed script over text, the way a provision script pipes the wrapper through it.
+func applySed(t *testing.T, script, text string) string {
+	t.Helper()
+
+	cmd := exec.Command("sed", "-e", script)
+	cmd.Stdin = strings.NewReader(text)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("run sed %q: %v\nstderr: %s", script, err, stderr.String())
+	}
+
+	return stdout.String()
+}
+
+// assertPinnedRealGH fails when text does not pin the real gh's path in one assignment that reads nothing from
+// the environment.
+func assertPinnedRealGH(t *testing.T, where, text string) {
+	t.Helper()
+
+	var assignments []string
+
+	for _, line := range strings.Split(text, "\n") {
+		if trimmed := strings.TrimSpace(line); strings.HasPrefix(trimmed, "real=") {
+			assignments = append(assignments, trimmed)
+		}
+	}
+
+	if len(assignments) != 1 {
+		t.Fatalf("%s has %d lines that assign real, want exactly one: the installed wrapper pins the real gh's path (review item 6): %v", where, len(assignments), assignments)
+	}
+
+	if got := assignments[0]; strings.Contains(got, "${") || !strings.Contains(got, pinnedRealGH) {
+		t.Errorf("%s assigns %q, want real=%s: the installed wrapper must pin the path, so SHIFT2EU_REAL_GH cannot point the agents' token at another binary (review item 6)", where, got, pinnedRealGH)
+	}
+}
+
+// wrapperBlock returns the standard input of the call in a captured limactl log that carried the gh wrapper.
+func wrapperBlock(t *testing.T, capture, where string) string {
+	t.Helper()
+
+	for _, block := range strings.Split(capture, "\n--- end of call ---\n") {
+		if strings.Contains(block, "GH_TOKEN=") && strings.Contains(block, `exec "${real}"`) {
+			return block
+		}
+	}
+
+	t.Fatalf("%s handed limactl no gh wrapper on standard input, so the VM installs nothing; the capture holds:\n%s", where, capture)
+
+	return ""
+}
+
+// TestTheInstalledWrapperPinsTheRealGH pins review item 6: the copy of dev/gh-app-token.sh the VM installs no
+// longer reads SHIFT2EU_REAL_GH, so an agent cannot point the maintainer's installation token at a gh it wrote.
+func TestTheInstalledWrapperPinsTheRealGH(t *testing.T) {
+	t.Parallel()
+
+	template := readRepoFile(t, limaTemplateRepoPath)
+	installed := applySed(t, ghPinTransform(t, template), embeddedGHWrapper(t, template))
+
+	assertPinnedRealGH(t, limaTemplateRepoPath+"'s transform of the wrapper", installed)
+
+	sb := newSandbox(t)
+	marker := filepath.Join(sb.root, "tripwire-ran")
+	tripwire := filepath.Join(sb.root, "real-gh-tripwire")
+	script := filepath.Join(sb.root, "installed-gh")
+
+	writeFileMode(t, tripwire, []byte("#!/bin/sh\n: > \"${SHIFT2EU_TEST_TRIPWIRE:?}\"\nexit 97\n"), 0o700)
+	writeFileMode(t, script, []byte(installed), 0o700)
+
+	env := sb.baseEnv()
+	env["HOME"] = sb.vmHome // and no token file: the wrapper runs the real gh
+	env["SHIFT2EU_REAL_GH"] = tripwire
+	env["SHIFT2EU_TEST_TRIPWIRE"] = marker
+
+	stdout, stderr, _ := sb.run(t, script, []string{"--version"}, env, "")
+
+	if _, err := os.Stat(marker); err == nil {
+		t.Errorf("the installed wrapper ran the gh SHIFT2EU_REAL_GH names: an agent that sets it makes the agents' App token go to a binary of its choice (review item 6)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
 }
 
 func TestLimaTemplateInstallsTheGHWrapper(t *testing.T) {
