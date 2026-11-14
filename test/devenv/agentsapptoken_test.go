@@ -234,6 +234,23 @@ func TestAgentsAppTokenMintRefusesBadInput(t *testing.T) {
 			},
 			wantStderr: "SHIFT2EU_AGENTS_APP_KEY_FILE",
 		},
+		{
+			// Second review item 8: a key reached through a symlink is refused with the message for a
+			// symlink, not with the one for a file that is not readable, so a maintainer knows which of the
+			// two it is. The key behind the link is a regular 0600 file, so only the link is wrong.
+			name: "a symlinked key file",
+			mutate: func(t *testing.T, f *mintFixture) {
+				t.Helper()
+
+				link := filepath.Join(f.sb.root, "key", "agents-app-link.pem")
+				if err := os.Symlink(f.key.path, link); err != nil {
+					t.Fatalf("symlink %s: %v", link, err)
+				}
+
+				f.env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = link
+			},
+			wantStderr: "symlink",
+		},
 	}
 
 	for _, tc := range cases {
@@ -539,9 +556,10 @@ func TestAgentsAppTokenGivesCurlTheQFirst(t *testing.T) {
 	f.assertNoLeaks(t, stdout, stderr)
 }
 
-// TestAgentsAppTokenRefusesToWriteThroughASymlink pins review item 11 (N4): the VM's write script refuses a
-// symlinked ~/.config/shift2eu and a token or identity file that is a symlink or not a regular file, so nothing
-// an agent points at receives the token.
+// TestAgentsAppTokenRefusesToWriteThroughASymlink pins review item 11 (N4) and the second review's item 7: the
+// VM's write script refuses a symlinked ~/.config/shift2eu and a token or identity file that is a symlink or
+// not a regular file, and a ~/.config/shift2eu that resolves, with pwd -P, to a directory outside the VM
+// user's real home, so nothing an agent points at receives the token.
 func TestAgentsAppTokenRefusesToWriteThroughASymlink(t *testing.T) {
 	t.Parallel()
 
@@ -626,6 +644,33 @@ func TestAgentsAppTokenRefusesToWriteThroughASymlink(t *testing.T) {
 
 				if !info.IsDir() {
 					t.Errorf("the mint replaced the directory at %s, which is not a token file it may overwrite", agentsTokenFile)
+				}
+			},
+		},
+		{
+			// Second review item 7: the config directory is not itself a symlink, but it resolves, with pwd
+			// -P, to a directory outside the VM user's real home: an accidental symlink one level up must not
+			// carry the token out of the home the VM keeps it in.
+			name: "the config directory resolves outside the VM user's home",
+			prepare: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				outside := filepath.Join(sb.root, "outside-config")
+				if err := os.MkdirAll(outside, 0o700); err != nil {
+					t.Fatalf("create %s: %v", outside, err)
+				}
+
+				if err := os.Symlink(outside, sb.vmPath(".config")); err != nil {
+					t.Fatalf("symlink %s/.config: %v", sb.vmHome, err)
+				}
+			},
+			check: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				for _, name := range []string{"agents-app-token", "agents-app-identity"} {
+					if _, err := os.Stat(filepath.Join(sb.root, "outside-config", name)); err == nil {
+						t.Errorf("the mint wrote %s outside the VM user's home, through a .config that resolves elsewhere: the VM writes the token only under its own home (second review, item 7)", name)
+					}
 				}
 			},
 		},
@@ -748,4 +793,131 @@ func TestAgentsAppTokenRefreshReplacesTheTokenAndSaysHowToStartItAgain(t *testin
 	}
 
 	f.assertNoLeaks(t, stdout.String(), stopped)
+}
+
+// TestAgentsAppTokenMintLooksTheBotUserUpWithTheInstallationToken pins the second review's item 4: the bot user is
+// looked up after the token is minted, with that installation token. GitHub refuses the App's JWT on /users, and a
+// lookup without any authorization is no better.
+func TestAgentsAppTokenMintLooksTheBotUserUpWithTheInstallationToken(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	// This is the fake API GitHub gives an App: GET /users/<slug>[bot] refuses the App's JWT, so the bot user's
+	// id can only come from the installation token the mint just received (second review, item 4).
+	f.api.refuseJWTOnUsers()
+
+	stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+	if err != nil {
+		t.Fatalf("mint exited non-zero: %v\nstdout: %s\nstderr: %s\nthe fake API refused: %s",
+			err, stdout, stderr, strings.Join(f.api.recordedComplaints(), "; "))
+	}
+
+	if complaints := f.api.recordedComplaints(); len(complaints) != 0 {
+		t.Fatalf("the fake API refused a request: %s. The bot user is looked up with the installation token the mint just got, because GitHub does not accept the App's JWT on /users (second review, item 4)",
+			strings.Join(complaints, "; "))
+	}
+
+	if got := f.api.botUserLookups(); got != 1 {
+		t.Errorf("the fake API answered %d bot user lookups with the bot user, want one: the identity is read from the one lookup", got)
+	}
+
+	requests := f.api.requestOrder()
+
+	post := slices.Index(requests, "POST /app/installations/"+f.api.installationID+"/access_tokens")
+	lookup := slices.Index(requests, "GET /users/"+f.api.slug+"[bot]")
+
+	if post < 0 || lookup < 0 {
+		t.Fatalf("the fake API saw the requests %v, want a token mint and a bot user lookup", requests)
+	}
+
+	if lookup < post {
+		t.Errorf("the bot user was looked up before the token was minted (requests: %v): the lookup needs the installation token, so it comes after the mint (second review, item 4)", requests)
+	}
+
+	identity := readTwoLines(t, f.sb.vmPath(agentsIdentityFile), 0o600)
+
+	if want := f.api.slug + "[bot]"; identity[0] != want {
+		t.Errorf("%s's first line is %q, want the App's bot user.name %q", agentsIdentityFile, identity[0], want)
+	}
+
+	f.assertNoLeaks(t, stdout, stderr)
+}
+
+// TestAgentsAppTokenIgnoresAClockThatIsNotAClock pins the second review's item 6: the clock= value a VM prints is
+// accepted only as 1 to 12 digits, so a longer reading (an overflow, a nanosecond timestamp, whatever an agent
+// leaves behind) is not compared with the Mac's clock, while a 12-digit reading still is.
+func TestAgentsAppTokenIgnoresAClockThatIsNotAClock(t *testing.T) {
+	t.Parallel()
+
+	// The offset warning the script prints when it compared the VM's clock with the Mac's.
+	const offsetWarning = "off the Mac's"
+
+	cases := []struct {
+		name        string
+		clock       string
+		wantWarning bool
+	}{
+		{name: "a 14-digit reading is no clock", clock: "17000000000000000"},
+		{name: "a 13-digit reading is no clock", clock: "17000000000000"},
+		{name: "a 12-digit reading is the last one accepted", clock: "170000000000", wantWarning: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			f.sb.useFakeVMClock(t, f.env, tc.clock)
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+			if err != nil {
+				t.Fatalf("mint exited non-zero with the VM's clock reading %s: a reading the script cannot use is no reason to leave the VM without a token: %v\nstdout: %s\nstderr: %s",
+					tc.clock, err, stdout, stderr)
+			}
+
+			readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
+
+			if got := strings.Contains(stderr, offsetWarning); got != tc.wantWarning {
+				t.Errorf("the mint compares the VM's clock reading %s with the Mac's = %v, want %v: only 1 to 12 digits are a clock the script may compare (second review, item 6)\nstderr: %s",
+					tc.clock, got, tc.wantWarning, stderr)
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
+}
+
+// TestAgentsAppTokenKeepsTheAPIOffCurlsArgv pins the second review's item 10: the API URL, and with it every
+// header curl is configured with, reaches curl on its standard input and never on its command line, where every
+// agent in the VM can read a command line and the JWT it carries.
+func TestAgentsAppTokenKeepsTheAPIOffCurlsArgv(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+
+	stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+	if err != nil {
+		t.Fatalf("mint exited non-zero: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	log := f.sb.argvLogText(t)
+
+	calls := invocations(log, "curl")
+	if len(calls) == 0 {
+		t.Fatalf("mint ran no curl at all")
+	}
+
+	for i, args := range calls {
+		for _, arg := range args {
+			if strings.Contains(arg, f.api.url) {
+				t.Errorf("curl call %d carries the API URL %q on its argv (%v): the URL and its headers go to curl on standard input (second review, item 10)", i+1, f.api.url, args)
+			}
+		}
+	}
+
+	if got, want := strings.Count(log, "curl-stdin-url=yes"), len(calls); got != want {
+		t.Errorf("%d of the %d curl calls read the API URL from standard input, want every one: that is where the URL and the headers it carries belong (second review, item 10)", got, want)
+	}
+
+	f.assertNoLeaks(t, stdout, stderr)
 }

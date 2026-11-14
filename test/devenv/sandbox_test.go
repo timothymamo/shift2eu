@@ -52,6 +52,7 @@ const (
 var (
 	agentsMintScript   = filepath.Join("dev", "agents-app-token.sh")
 	ghWrapperScript    = filepath.Join("dev", "gh-app-token.sh")
+	vmGHWrapperScript  = filepath.Join("dev", "vm-gh-wrapper.sh")
 	agentsTokenFile    = filepath.Join(".config", "shift2eu", "agents-app-token")
 	agentsIdentityFile = filepath.Join(".config", "shift2eu", "agents-app-identity")
 )
@@ -183,6 +184,25 @@ func (sb *sandbox) argvLogText(t *testing.T) string {
 	}
 
 	return string(body)
+}
+
+// runStream runs `sh -s` with stream on its standard input, under env alone and from the sandbox's host home:
+// the way limactl runs the script make vm-gh-wrapper pipes into it.
+func (sb *sandbox) runStream(t *testing.T, env map[string]string, stream string) (string, string, error) {
+	t.Helper()
+
+	cmd := exec.Command("sh", "-s")
+	cmd.Env = envList(env)
+	cmd.Dir = sb.hostHome
+	cmd.Stdin = strings.NewReader(stream)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	return stdout.String(), stderr.String(), err
 }
 
 // run runs a script of dev/ through sh with args and stdin, under env alone, from the sandbox's host home
@@ -321,6 +341,125 @@ func (sb *sandbox) blockCurl(t *testing.T) {
 	}
 }
 
+// fakeSudo stands in for sudo in the devenv tests: it records its argv and then runs the command as the user
+// who runs the tests, which is all the paths the tests point the VM's script at (SHIFT2EU_VM_BIN_GH and
+// SHIFT2EU_VM_LIBEXEC_GH) need. It applies install the way root would - ownership options only root can use are
+// dropped, the rest reach a copy and a chmod - and chown is a no-op, as ownership is not what a test pins.
+const fakeSudo = `#!/bin/sh
+{
+  printf 'tool=sudo\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -n | -E | -H | -S | -k | --) shift ;;
+  -u | -g | -p | -C | -T) shift 2 ;;
+  *) break ;;
+  esac
+done
+command="${1:-}"
+[ -n "${command}" ] || {
+  echo 'fake sudo: nothing to run' >&2
+  exit 64
+}
+shift
+case "${command}" in
+chown)
+  # Only root changes ownership; a test pins the paths and the content.
+  exit 0
+  ;;
+mv | cp | rm | mkdir | ln | chmod | touch | tee)
+  exec "${command}" "$@"
+  ;;
+install) ;;
+*)
+  echo "fake sudo: the tests stand in for install, mv, cp, rm, mkdir, ln, chmod, touch, tee and chown, not ${command}" >&2
+  exit 64
+  ;;
+esac
+directories=0
+mode=0755
+one=""
+two=""
+three=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -o | -g | -u) shift 2 ;;
+  -m) mode="$2"; shift 2 ;;
+  -d) directories=1; shift ;;
+  -D | -b | -B | -p | -S | -Z | -v) shift ;;
+  --) shift ;;
+  -*) shift ;;
+  *)
+    if [ -z "${one}" ]; then one="$1"
+    elif [ -z "${two}" ]; then two="$1"
+    else three="$1"; fi
+    shift ;;
+  esac
+done
+if [ "${directories}" -eq 1 ]; then
+  for dir in "${one}" "${two}" "${three}"; do
+    [ -z "${dir}" ] || mkdir -p "${dir}" || exit 1
+  done
+  exit 0
+fi
+[ -n "${one}" ] && [ -n "${two}" ] || {
+  echo 'fake sudo: install needs a source and a destination' >&2
+  exit 64
+}
+mkdir -p "$(dirname "${two}")" || exit 1
+if [ "${one}" = /dev/stdin ]; then
+  cat >"${two}" || exit 1
+else
+  cp "${one}" "${two}" || exit 1
+fi
+chmod "${mode}" "${two}"
+`
+
+// useFakeSudo puts the fake sudo first on PATH, so a VM-side script that installs root-owned files installs
+// them in the test's temporary root instead of on the machine the tests run on.
+func (sb *sandbox) useFakeSudo(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "sudo")
+
+	//nolint:gosec // the fake sudo is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(fakeSudo), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// vmClockShim answers the fake VM's clock with SHIFT2EU_TEST_VM_CLOCK for `date +%s` and hands every other
+// call to the real date, so the host script's own clock stays the machine's (PRD #161 milestone 1 second
+// review, item 6).
+const vmClockShim = `#!/bin/sh
+{
+  printf 'tool=date\n'
+  for a in "$@"; do printf 'arg=%%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+if [ "$#" -eq 1 ] && [ "$1" = '+%%s' ] && [ "${HOME:-}" = "${SHIFT2EU_TEST_VM_HOME:-/nonexistent}" ]; then
+  printf '%%s\n' "${SHIFT2EU_TEST_VM_CLOCK:?set SHIFT2EU_TEST_VM_CLOCK}"
+  exit 0
+fi
+exec %s "$@"
+`
+
+// useFakeVMClock makes the fake VM's `date +%s` answer clock, so a test can pin what the host script does
+// with a VM clock reading it must not trust. The host script's own clock stays the machine's.
+func (sb *sandbox) useFakeVMClock(t *testing.T, env map[string]string, clock string) {
+	t.Helper()
+
+	shim := fmt.Sprintf(vmClockShim, strconv.Quote(realTool(t, "date")))
+	path := filepath.Join(sb.binDir, "date")
+
+	//nolint:gosec // the clock shim is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	env["SHIFT2EU_TEST_VM_CLOCK"] = clock
+}
+
 // failingLimactl stands in for a VM that is not running: it fails while the file SHIFT2EU_TEST_LIMA_FAIL_WHILE
 // names exists, and runs the command otherwise, so a test can let a loop hit the failure and then recover.
 const failingLimactl = `#!/bin/sh
@@ -380,13 +519,18 @@ func (sb *sandbox) writeRecordingShim(t *testing.T, name string) {
 // the fake API on this machine: no devenv test may reach the real GitHub API, not even when the script under
 // test reads an API URL hook of another name and so falls back to https://api.github.com (PRD #161 milestone
 // 1's security rules). The URL reaches curl on its standard input, so the shim reads it there and hands it on
-// from a shell variable: no copy of it, and so of the JWT it carries, is ever written to a file.
+// from a shell variable: no copy of it, and so of the JWT it carries, is ever written to a file. It logs
+// curl-stdin-url=yes when that input carried a url line, so a test can pin both halves: the URL travels on
+// standard input, and never on curl's argv (PRD #161 milestone 1 second review, item 10).
 const recordingCurlShim = `#!/bin/sh
 {
   printf 'tool=curl\n'
   for a in "$@"; do printf 'arg=%%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
 cfg="$(cat)"
+case "${cfg}" in
+*'url = '*) printf 'curl-stdin-url=yes\n' >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}" ;;
+esac
 if printf '%%s\n' "${cfg}" | grep -E '^[[:space:]]*url[[:space:]]*=' | grep -vE '^[[:space:]]*url[[:space:]]*=[[:space:]]*"https?://(127\.0\.0\.1|localhost)([:/"]|$)' >/dev/null; then
   echo 'the devenv tests refuse to reach any URL but the fake API on this machine' >&2
   exit 7
@@ -564,6 +708,9 @@ func (r *runningScript) exitCode(t *testing.T) int {
 	}
 }
 
+// pid is the process id of the script the test started.
+func (r *runningScript) pid() int { return r.cmd.Process.Pid }
+
 // kill ends the script if it is still running: the cleanup of every started script.
 func (r *runningScript) kill(t *testing.T) {
 	t.Helper()
@@ -697,9 +844,10 @@ func writeFileMode(t *testing.T, path string, content []byte, mode os.FileMode) 
 	}
 }
 
-// fakeGitHub is a stand-in for the GitHub REST API: it verifies the JWT of every request against the public
-// half of the invented key, and mints a new token per access_tokens request, so a test can tell a mint from
-// a refresh. It answers on 127.0.0.1 only and never reaches the real API.
+// fakeGitHub is a stand-in for the GitHub REST API: it verifies the JWT of an App's requests, mints a new token
+// per access_tokens request so a test can tell a mint from a refresh, and answers GET /users/<slug>[bot] for an
+// installation token it minted - or for the App's JWT, while a test leaves it lenient, which refuseJWTOnUsers
+// stops, as GitHub does. It answers on 127.0.0.1 only and never reaches the real API.
 type fakeGitHub struct {
 	url            string
 	appID          string
@@ -712,23 +860,31 @@ type fakeGitHub struct {
 	status int
 	// lifetime is how long the tokens the fake API hands out last; the zero value is GitHub's hour.
 	lifetime time.Duration
+	// jwtRefusedOnUsers makes GET /users/<slug>[bot] refuse the App's JWT, as GitHub does: the bot user is
+	// read with an installation token, and only after the mint (second review, item 4).
+	jwtRefusedOnUsers bool
 
-	mu         sync.Mutex
-	requests   []string      // "<method> <path>" of every request
-	posts      []string      // the path of every POST
-	accepts    []string      // the Accept header of every request, in request order
-	jwts       []string      // the Bearer value of every request the JWT check accepted
-	complaints []string      // what was wrong with a request, for the test to report without the secret
-	tokens     []string      // the tokens handed out, in order
-	expiresAt  []int64       // the expires_at of each token, Unix seconds
-	failures   []mintFailure // the transient failures still to answer, one per mint
+	mu             sync.Mutex
+	requests       []string         // "<method> <path>" of every request, in request order
+	posts          []string         // the path of every POST
+	accepts        []string         // the Accept header of every request, in request order
+	jwts           []string         // the Bearer value of every request the JWT check accepted
+	complaints     []string         // what was wrong with a request, for the test to report without the secret
+	tokens         []string         // the tokens handed out, in order
+	expiresAt      []int64          // the expires_at of each token, Unix seconds
+	failures       []requestFailure // the failures still to answer a mint with, one per mint
+	lookupFailures []requestFailure // the failures still to answer the bot user's lookup with
+	lookups        int              // the bot user lookups the fake API answered with the bot user
 }
 
-// mintFailure is one access_tokens request the fake API answers with a failure instead of a token: a status,
-// or a dropped connection, which curl reports as status 000.
-type mintFailure struct {
-	status int  // the status to answer with; ignored when drop is set
-	drop   bool // close the connection without a reply instead of answering
+// requestFailure is one request the fake API answers with a failure instead of its own answer: a status with
+// an optional body and headers (a rate limit's, say), or a dropped connection, which curl reports as status
+// 000.
+type requestFailure struct {
+	status  int               // the status to answer with; ignored when drop is set
+	body    string            // the answer's body; empty means the fake API's own complaint
+	headers map[string]string // headers to answer with, such as X-RateLimit-Remaining
+	drop    bool              // close the connection without a reply instead of answering
 }
 
 // newFakeGitHub starts the fake API for one test and stops it with the test.
@@ -752,31 +908,29 @@ func newFakeGitHub(t *testing.T, public *rsa.PublicKey) *fakeGitHub {
 }
 
 func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
-	bearer, err := f.checkAuthorization(r)
+	f.record(r)
 
-	f.mu.Lock()
-	refuse := f.status
-	f.requests = append(f.requests, r.Method+" "+r.URL.Path)
-	f.accepts = append(f.accepts, r.Header.Get("Accept"))
-
-	if r.Method == http.MethodPost {
-		f.posts = append(f.posts, r.URL.Path)
-	}
-
-	if err != nil {
-		f.complaints = append(f.complaints, err.Error())
-	} else {
-		f.jwts = append(f.jwts, bearer)
-	}
-	f.mu.Unlock()
-
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = w.Write([]byte(`{"message":"Bad credentials"}` + "\n"))
+	// GitHub answers GET /users/<slug>[bot] only for an installation token: an App's JWT is refused there,
+	// and a call without any authorization is refused too (PRD #161 milestone 1 second review, item 4).
+	// Every other call is the App's, with its JWT.
+	if r.Method == http.MethodGet && r.URL.Path == "/users/"+f.slug+"[bot]" {
+		f.serveBotUser(w, r)
 
 		return
 	}
+
+	jwt, err := f.checkJWT(r)
+	if err != nil {
+		f.complain(err.Error())
+		writeUnauthorized(w, "Bad credentials")
+
+		return
+	}
+
+	f.mu.Lock()
+	refuse := f.status
+	f.jwts = append(f.jwts, jwt)
+	f.mu.Unlock()
 
 	if refuse != 0 && r.Method == http.MethodPost {
 		http.Error(w, `{"message":"Bad credentials"}`, refuse)
@@ -784,14 +938,8 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if failure, failed := f.takeMintFailure(r.Method); failed {
-		if failure.drop {
-			dropConnection(w)
-
-			return
-		}
-
-		http.Error(w, `{"message":"GitHub is having trouble"}`, failure.status)
+	if failure, failed := f.takeFailure(&f.failures, r.Method == http.MethodPost); failed {
+		f.answerFailure(w, failure)
 
 		return
 	}
@@ -801,24 +949,92 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 		f.mint(w)
 	case r.Method == http.MethodGet && r.URL.Path == "/app":
 		writeJSON(w, map[string]string{"slug": f.slug, "id": f.appID})
-	case r.Method == http.MethodGet && r.URL.Path == "/users/"+f.slug+"[bot]":
-		writeJSON(w, map[string]any{"id": f.botUserID, "login": f.slug + "[bot]"})
 	default:
 		http.NotFound(w, r)
 	}
 }
 
-// checkAuthorization returns the Bearer value of r after verifying it is the App's JWT. Its errors never
-// hold the JWT.
-func (f *fakeGitHub) checkAuthorization(r *http.Request) (string, error) {
+// record notes one request: its method and path, the Accept header and, for a POST, its path in the posts.
+func (f *fakeGitHub) record(r *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.requests = append(f.requests, r.Method+" "+r.URL.Path)
+	f.accepts = append(f.accepts, r.Header.Get("Accept"))
+
+	if r.Method == http.MethodPost {
+		f.posts = append(f.posts, r.URL.Path)
+	}
+}
+
+// serveBotUser answers GET /users/<slug>[bot]: it accepts an installation token the fake API minted, and the
+// App's JWT only when a test left the fake API lenient, which GitHub does not. A request without any
+// authorization is refused either way.
+func (f *fakeGitHub) serveBotUser(w http.ResponseWriter, r *http.Request) {
+	bearer, ok := bearerOf(r)
+	if !ok {
+		f.complain("a request to /users carries no Bearer authorization: the bot user is looked up with the installation token, never without one")
+		writeUnauthorized(w, "Bad credentials")
+
+		return
+	}
+
+	f.mu.Lock()
+	minted := slices.Contains(f.tokens, bearer)
+	strict := f.jwtRefusedOnUsers
+	f.mu.Unlock()
+
+	if !minted {
+		if _, err := verifyJWT(bearer, f.public); err == nil && !strict {
+			// Lenient, for the tests whose subject is another behaviour of the mint: GitHub refuses the App's
+			// JWT here, and refuseJWTOnUsers makes the fake API do the same (second review, item 4).
+			f.mu.Lock()
+			f.jwts = append(f.jwts, bearer)
+			f.mu.Unlock()
+		} else if err == nil {
+			f.complain("a request to /users carries the App's JWT, which GitHub does not accept there: mint the installation token first, then look the bot user up with it")
+			writeUnauthorized(w, "Bad credentials")
+
+			return
+		} else {
+			f.complain("a request to /users carries neither the App's JWT nor an installation token this fake API minted")
+			writeUnauthorized(w, "Bad credentials")
+
+			return
+		}
+	}
+
+	if failure, failed := f.takeFailure(&f.lookupFailures, true); failed {
+		f.answerFailure(w, failure)
+
+		return
+	}
+
+	f.mu.Lock()
+	f.lookups++
+	f.mu.Unlock()
+
+	writeJSON(w, map[string]any{"id": f.botUserID, "login": f.slug + "[bot]"})
+}
+
+// bearerOf returns the Bearer value of a request's Authorization header.
+func bearerOf(r *http.Request) (string, bool) {
 	const prefix = "Bearer "
 
 	header := r.Header.Get("Authorization")
 	if !strings.HasPrefix(header, prefix) {
-		return "", errors.New("a request carries no Bearer authorization")
+		return "", false
 	}
 
-	raw := strings.TrimPrefix(header, prefix)
+	return strings.TrimPrefix(header, prefix), true
+}
+
+// checkJWT returns the Bearer value of r after verifying it is the App's JWT. Its errors never hold the JWT.
+func (f *fakeGitHub) checkJWT(r *http.Request) (string, error) {
+	raw, ok := bearerOf(r)
+	if !ok {
+		return "", errors.New("a request of the App carries no Bearer authorization")
+	}
 
 	claims, err := verifyJWT(raw, f.public)
 	if err != nil {
@@ -832,33 +1048,95 @@ func (f *fakeGitHub) checkAuthorization(r *http.Request) (string, error) {
 	return raw, nil
 }
 
-// takeMintFailure returns the failure the next access_tokens request must get, consuming it.
-func (f *fakeGitHub) takeMintFailure(method string) (mintFailure, bool) {
-	if method != http.MethodPost {
-		return mintFailure{}, false
+// complain notes what was wrong with a request, so a test can report it without the request's secret.
+func (f *fakeGitHub) complain(complaint string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.complaints = append(f.complaints, complaint)
+}
+
+// takeFailure returns the failure the next eligible request must get, consuming it.
+func (f *fakeGitHub) takeFailure(failures *[]requestFailure, eligible bool) (requestFailure, bool) {
+	if !eligible {
+		return requestFailure{}, false
 	}
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	if len(f.failures) == 0 {
-		return mintFailure{}, false
+	if len(*failures) == 0 {
+		return requestFailure{}, false
 	}
 
-	failure := f.failures[0]
-	f.failures = f.failures[1:]
+	failure := (*failures)[0]
+	*failures = (*failures)[1:]
 
 	return failure, true
+}
+
+// answerFailure answers one request with a failure instead of the fake API's own answer.
+func (f *fakeGitHub) answerFailure(w http.ResponseWriter, failure requestFailure) {
+	if failure.drop {
+		dropConnection(w)
+
+		return
+	}
+
+	for name, value := range failure.headers {
+		w.Header().Set(name, value)
+	}
+
+	body := failure.body
+	if body == "" {
+		body = `{"message":"GitHub is having trouble"}`
+	}
+
+	http.Error(w, body, failure.status)
+}
+
+// writeUnauthorized answers one request with a 401 and a message, the way GitHub refuses bad credentials.
+func writeUnauthorized(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+
+	_ = json.NewEncoder(w).Encode(map[string]string{"message": message})
+}
+
+// refuseJWTOnUsers makes GET /users/<slug>[bot] refuse the App's JWT, as GitHub does, so only the installation
+// token the mint just got can read the bot user (second review, item 4).
+func (f *fakeGitHub) refuseJWTOnUsers() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.jwtRefusedOnUsers = true
 }
 
 // failNextMints makes the next count access_tokens requests answer status instead of minting: the transient
 // failure a long-lived refresh must survive (PRD #161 milestone 1 review, item 1).
 func (f *fakeGitHub) failNextMints(status, count int) {
+	f.failNextMintsWith(status, "", nil, count)
+}
+
+// failNextMintsWith makes the next count access_tokens requests answer status, with body and headers, instead
+// of minting: a rate limit is a 403 whose body or headers say so (PRD #161 milestone 1 second review, item 4).
+func (f *fakeGitHub) failNextMintsWith(status int, body string, headers map[string]string, count int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	for range count {
-		f.failures = append(f.failures, mintFailure{status: status})
+		f.failures = append(f.failures, requestFailure{status: status, body: body, headers: headers})
+	}
+}
+
+// failNextUserLookupsWith makes the next count bot user lookups answer status, with body and headers, instead
+// of the bot user: a rate limit at the lookup must not stop the refresh either (item 4).
+func (f *fakeGitHub) failNextUserLookupsWith(status int, body string, headers map[string]string, count int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for range count {
+		f.lookupFailures = append(f.lookupFailures, requestFailure{status: status, body: body, headers: headers})
 	}
 }
 
@@ -869,7 +1147,7 @@ func (f *fakeGitHub) dropNextMints(count int) {
 	defer f.mu.Unlock()
 
 	for range count {
-		f.failures = append(f.failures, mintFailure{drop: true})
+		f.failures = append(f.failures, requestFailure{drop: true})
 	}
 }
 
@@ -990,6 +1268,23 @@ func (f *fakeGitHub) recordedComplaints() []string {
 	defer f.mu.Unlock()
 
 	return slices.Clone(f.complaints)
+}
+
+// botUserLookups returns how many bot user lookups the fake API answered with the bot user: the ones that
+// carried an installation token it minted (PRD #161 milestone 1 second review, item 4).
+func (f *fakeGitHub) botUserLookups() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return f.lookups
+}
+
+// requestOrder returns "<method> <path>" of every request the fake API saw, in request order.
+func (f *fakeGitHub) requestOrder() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	return slices.Clone(f.requests)
 }
 
 // jwtClaims are the claims dev/agents-app-token.sh must set (design: iat = now-60, exp = now+540, iss = the

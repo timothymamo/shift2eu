@@ -5,9 +5,11 @@
 package devenv_test
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -69,6 +71,42 @@ func TestAgentsAppTokenRefreshSurvivesTransientFailures(t *testing.T) {
 			name:     "the connection is dropped",
 			failures: 2,
 			fail:     func(api *fakeGitHub) { api.dropNextMints(2) },
+		},
+		// A rate limit is a 403 too, and GitHub says so in the body or in the headers: it is transient, not the
+		// permanent refusal of the App the 403 branch used to take it for (second review, item 4).
+		{
+			name:     "GitHub answers 403 with a rate limit message",
+			failures: 2,
+			fail: func(api *fakeGitHub) {
+				api.failNextMintsWith(http.StatusForbidden,
+					`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`,
+					nil, 2)
+			},
+		},
+		{
+			name:     "GitHub answers 403 with no rate limit left",
+			failures: 2,
+			fail: func(api *fakeGitHub) {
+				api.failNextMintsWith(http.StatusForbidden, `{"message":"Forbidden"}`,
+					map[string]string{"X-RateLimit-Remaining": "0"}, 2)
+			},
+		},
+		{
+			name:     "GitHub answers 403 with a retry-after",
+			failures: 2,
+			fail: func(api *fakeGitHub) {
+				api.failNextMintsWith(http.StatusForbidden, `{"message":"Forbidden"}`,
+					map[string]string{"Retry-After": "1"}, 2)
+			},
+		},
+		{
+			name:     "the bot user lookup is rate limited",
+			failures: 2,
+			fail: func(api *fakeGitHub) {
+				api.failNextUserLookupsWith(http.StatusForbidden,
+					`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`,
+					nil, 2)
+			},
 		},
 	}
 
@@ -335,4 +373,187 @@ func TestAgentsAppTokenRefreshTakesOverAStaleLock(t *testing.T) {
 	}
 
 	f.assertNoLeaks(t, second.out(), second.errOut())
+}
+
+// TestAgentsAppTokenRefreshCapsARetryAfter pins the last half of the second review's item 4: a 403 that carries
+// retry-after is transient, and the wait it asks for stays inside the loop's own backoff cap (five checks), so a
+// GitHub that asks for minutes does not leave the VM without a token for minutes.
+func TestAgentsAppTokenRefreshCapsARetryAfter(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEnv()
+
+	// Twenty seconds is four times the cap a loop with a one-second check may wait: one that slept the whole
+	// retry-after would write no token inside the twelve seconds this test waits.
+	f.api.failNextMintsWith(http.StatusForbidden,
+		`{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}`,
+		map[string]string{"Retry-After": "20"}, 1)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	waitFor(t, 30*time.Second, "one line on stderr for the start and for the rate limit", func() bool {
+		return nonEmptyLines(refresh.errOut()) >= 2
+	})
+
+	// A refresh that took the 403 for permanent prints its stop line and exits within a moment; give it that
+	// moment, so the failure names the stop instead of the wait for a token that never comes.
+	if refresh.waitExit(2 * time.Second) {
+		t.Fatalf("the refresh exited on a 403 that says it is a rate limit, which it must survive; stderr:\n%s", refresh.errOut())
+	}
+
+	waitFor(t, 12*time.Second, "the refresh to retry inside its backoff cap instead of sleeping the whole retry-after", func() bool {
+		line, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
+
+		return ok && line != ""
+	})
+
+	if !refresh.running() {
+		t.Fatalf("the refresh exited after it recovered from the rate limit; stderr:\n%s", refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshNeverClaimsAPastExpiryWhenItStops pins the second review's item 9: the stop line must
+// not tell a maintainer the VM's token is valid until a time that has already passed, which is what a token that
+// GitHub already expired, or a VM whose clock ran ahead, leaves behind.
+func TestAgentsAppTokenRefreshNeverClaimsAPastExpiryWhenItStops(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	// Tokens the fake API hands out have already expired: the refresh writes one, so the expiry it knows is in
+	// the past when the permanent failure stops it.
+	f.api.setTokenLifetime(-2 * time.Hour)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	waitFor(t, 30*time.Second, "the refresh to write a token whose expiry has already passed", func() bool {
+		body, err := os.ReadFile(f.sb.vmPath(agentsTokenFile))
+		if err != nil {
+			return false
+		}
+
+		lines := strings.Split(strings.TrimRight(string(body), "\n"), "\n")
+		if len(lines) != 2 {
+			return false
+		}
+
+		expiry, err := strconv.ParseInt(lines[1], 10, 64)
+
+		return err == nil && expiry < time.Now().Unix()
+	})
+
+	f.api.refuseMintsWith(http.StatusUnauthorized)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh was still running 30s after GitHub answered 401, which no retry can fix; stderr:\n%s", refresh.errOut())
+	}
+
+	var stopLine string
+
+	for _, line := range strings.Split(refresh.errOut(), "\n") {
+		if strings.Contains(line, "agents App token refresh stopped") {
+			stopLine = line
+		}
+	}
+
+	if stopLine == "" {
+		t.Fatalf("the refresh's stderr has no line saying 'agents App token refresh stopped', so a stopped refresh is invisible: %s", refresh.errOut())
+	}
+
+	if strings.Contains(stopLine, "valid until") {
+		t.Errorf("the stop line tells the maintainer the VM's token is valid until a time that has already passed (review item 9): %q", stopLine)
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshTakesOverAStaleLockOnce pins the second review's item 5: two refreshers that find the
+// same stale lock cannot both take it over. The takeover is atomic - one contender moves the stale lock aside
+// and the other cannot - so after both have settled exactly one refresher is running and the lock holds its pid.
+// The window between them is a race, so the test repeats a few rounds; what it asserts holds for every
+// interleaving, never for a lucky one.
+func TestAgentsAppTokenRefreshTakesOverAStaleLockOnce(t *testing.T) {
+	t.Parallel()
+
+	const rounds = 6
+
+	for round := range rounds {
+		t.Run(fmt.Sprintf("round %d", round+1), func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			env := f.refreshEnv()
+
+			// The lock a refresher killed without its trap leaves: the directory, with the pid of a process
+			// that is gone.
+			stale := deadPid(t)
+			lock := f.sb.refreshLockDir("shift2eu")
+
+			if err := os.MkdirAll(lock, 0o700); err != nil {
+				t.Fatalf("create the stale lock %s: %v", lock, err)
+			}
+
+			writeFileMode(t, filepath.Join(lock, "pid"), []byte(strconv.Itoa(stale)+"\n"), 0o600)
+
+			// Both contenders start before either is waited on, so both find the same stale lock.
+			first := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+			second := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+			waitFor(t, 30*time.Second, "one of the two refreshers to take the stale lock over and mint", func() bool {
+				return len(f.api.minted()) >= 1
+			})
+
+			// Let the contender that lost finish its exit before counting the survivors.
+			time.Sleep(500 * time.Millisecond)
+
+			var holder *runningScript
+
+			for _, contender := range []*runningScript{first, second} {
+				if !contender.running() {
+					continue
+				}
+
+				if holder != nil {
+					t.Fatalf("both refreshers that found the same stale lock are still running (pids %d and %d): a takeover that two contenders can win puts two loops on one token file (review item 5)\nfirst stderr:\n%s\nsecond stderr:\n%s",
+						first.pid(), second.pid(), first.errOut(), second.errOut())
+				}
+
+				holder = contender
+			}
+
+			if holder == nil {
+				t.Fatalf("neither refresher took the stale lock over; first stderr:\n%s\nsecond stderr:\n%s", first.errOut(), second.errOut())
+			}
+
+			body, err := os.ReadFile(filepath.Join(lock, "pid"))
+			if err != nil {
+				t.Fatalf("read %s: %v: the refresher that took the lock over must write its pid there", filepath.Join(lock, "pid"), err)
+			}
+
+			owner, err := strconv.Atoi(strings.TrimSpace(string(body)))
+			if err != nil {
+				t.Fatalf("%s holds %q, not a pid", filepath.Join(lock, "pid"), strings.TrimSpace(string(body)))
+			}
+
+			if owner != holder.pid() {
+				t.Errorf("the lock %s holds pid %d but the only running refresher is %d: the refresher that holds the lock must be the one running", lock, owner, holder.pid())
+			}
+
+			holder.signal(t, syscall.SIGTERM)
+
+			if !holder.waitExit(30 * time.Second) {
+				t.Fatalf("the refresher that took the lock over did not stop on SIGTERM; stderr:\n%s", holder.errOut())
+			}
+
+			if _, err := os.Stat(lock); err == nil {
+				t.Errorf("the lock %s outlived the refresher that took it over", lock)
+			}
+
+			f.assertNoLeaks(t, holder.out(), holder.errOut())
+		})
+	}
 }

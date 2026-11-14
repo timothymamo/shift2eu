@@ -1,8 +1,10 @@
 // Pins the Makefile's part in the agents App's credential (PRD #161 milestone 1): VM_ENV names no
 // SHIFT2EU_AGENTS_APP_* variable, make vm-env refuses one a maintainer adds rather than copying it into the
-// VM, make agents-token / make agents-token-refresh run the mint and the refresh, make vm-gh-wrapper installs
-// the pinned wrapper an existing VM lacks, and make deck starts one refresher per VM
-// (.dot-agent-deck/prd161m1-fixes.md items 3, 7 and 8).
+// VM, make agents-token / make agents-token-refresh run the mint and the refresh, make
+// agents-token-refresh-start starts one refresher per VM in the background from the host clone, make deck
+// warns about App variables in a workspace shell and starts nothing, and make vm-gh-wrapper installs the
+// pinned wrapper an existing VM lacks, whole or not at all
+// (.dot-agent-deck/prd161m1-fixes.md items 3, 7 and 8 and .dot-agent-deck/prd161m1-fixes2.md items 1 and 2).
 package devenv_test
 
 import (
@@ -85,6 +87,8 @@ func TestMakefileHasTheAgentsTokenTargets(t *testing.T) {
 	}{
 		{target: "agents-token", want: "agents-app-token.sh mint"},
 		{target: "agents-token-refresh", want: "agents-app-token.sh refresh"},
+		// The background start the maintainer runs from the host clone (second review, item 1).
+		{target: "agents-token-refresh-start", want: "agents-app-token.sh refresh"},
 	}
 
 	for _, tc := range cases {
@@ -250,18 +254,105 @@ func TestMakeDeckLeavesTheTokenPlumbingAloneWithoutTheAppVariables(t *testing.T)
 	}
 }
 
-// deckFixture is one environment for a run of make deck with the App's three variables set: a sandbox whose
-// limactl records what it is given and runs nothing, the fake GitHub API, and a state directory inside the
-// sandbox, so no test leaves a refresher or a state file behind.
-type deckFixture struct {
+// TestMakeDeckWarnsAboutTheAppVariablesInTheWorkspaceShell pins the other half of second review item 1: when
+// any SHIFT2EU_AGENTS_APP_* variable reaches make deck's environment, it says so, points at a direnv .envrc
+// outside the workspace, and still opens the deck: the App's variables belong in the maintainer's host clone,
+// not in a shell the agents' workspace can read.
+func TestMakeDeckWarnsAboutTheAppVariablesInTheWorkspaceShell(t *testing.T) {
+	t.Parallel()
+
+	all := []string{
+		"SHIFT2EU_AGENTS_APP_ID",
+		"SHIFT2EU_AGENTS_APP_INSTALLATION_ID",
+		"SHIFT2EU_AGENTS_APP_KEY_FILE",
+	}
+
+	cases := []struct {
+		name string
+		set  []string
+	}{
+		{name: "one App variable set", set: []string{"SHIFT2EU_AGENTS_APP_KEY_FILE"}},
+		{name: "the App ID alone", set: []string{"SHIFT2EU_AGENTS_APP_ID"}},
+		{name: "all three set", set: all},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newTokenFixture(t, "shift2eu")
+
+			values := make(map[string]string, len(all))
+
+			for _, name := range all {
+				values[name] = f.env[name]
+				delete(f.env, name)
+			}
+
+			for _, name := range tc.set {
+				f.env[name] = values[name]
+			}
+
+			stdout, stderr, err := runMake(t, []string{"deck"}, f.env)
+			if err != nil {
+				t.Fatalf("make deck with an App variable in its environment: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			}
+
+			combined := stdout + stderr
+
+			if !strings.Contains(combined, agentsAppPrefix) {
+				t.Errorf("make deck with an App variable in its environment says nothing about %s, so a maintainer never learns the App's variables are visible in the workspace shell:\n%s", agentsAppPrefix, combined)
+			}
+
+			if !strings.Contains(combined, ".envrc") {
+				t.Errorf("the warning does not name the direnv .envrc the App's variables belong in: outside the workspace, in the maintainer's host clone (second review, item 1):\n%s", combined)
+			}
+
+			// It warns and still opens the deck: a warning is no refusal.
+			var ranDeck bool
+
+			for _, args := range invocations(f.sb.argvLogText(t), "limactl") {
+				if slices.Contains(args, "dot-agent-deck") {
+					ranDeck = true
+				}
+			}
+
+			if !ranDeck {
+				t.Errorf("make deck did not open the deck when an App variable was set:\nstdout: %s\nstderr: %s", stdout, stderr)
+			}
+
+			// And it runs nothing of the token plumbing: no refresher, no state file, no mint (second review,
+			// item 1: the refresh belongs to make agents-token-refresh-start in the host clone).
+			entries, err := os.ReadDir(f.state)
+			if err != nil {
+				if !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("read %s: %v", f.state, err)
+				}
+			}
+
+			for _, entry := range entries {
+				t.Errorf("make deck with an App variable set left %s in %s: it must start no agents App token refresh", entry.Name(), f.state)
+			}
+
+			if got := len(f.api.minted()); got != 0 {
+				t.Errorf("make deck with an App variable set minted %d token(s): the refresh is not its job any more", got)
+			}
+		})
+	}
+}
+
+// tokenFixture is one environment for a run of make agents-token-refresh-start, or of make deck, with the
+// App's three variables set: a sandbox whose limactl records what it is given and runs nothing, the fake
+// GitHub API, and a state directory inside the sandbox, so no test leaves a refresher or a state file behind.
+type tokenFixture struct {
 	sb    *sandbox
 	api   *fakeGitHub
 	env   map[string]string
 	state string // ${XDG_STATE_HOME}/shift2eu
 }
 
-// newDeckFixture builds the fixture for one VM instance and stops the refresher make deck starts with the test.
-func newDeckFixture(t *testing.T, instance string) *deckFixture {
+// newTokenFixture builds the fixture for one VM instance and stops the refresher a target starts with the test.
+func newTokenFixture(t *testing.T, instance string) *tokenFixture {
 	t.Helper()
 
 	sb := newSandbox(t)
@@ -280,27 +371,27 @@ func newDeckFixture(t *testing.T, instance string) *deckFixture {
 	env["SHIFT2EU_AGENTS_TOKEN_MARGIN_SECONDS"] = "60"
 	env["LIMA_INSTANCE"] = instance
 
-	f := &deckFixture{sb: sb, api: api, env: env, state: sb.stateDir()}
+	f := &tokenFixture{sb: sb, api: api, env: env, state: sb.stateDir()}
 	t.Cleanup(func() { f.stopRefresher(t) })
 
 	return f
 }
 
-// statePath is a file in the state directory make deck keeps the refresh's pid and log in.
-func (f *deckFixture) statePath(name string) string {
+// statePath is a file in the state directory the start target keeps the refresh's pid and log in.
+func (f *tokenFixture) statePath(name string) string {
 	return filepath.Join(f.state, name)
 }
 
-// writeStateFile writes one file of the state directory, with the mode make deck gives it.
-func (f *deckFixture) writeStateFile(t *testing.T, name, content string, mode os.FileMode) {
+// writeStateFile writes one file of the state directory, with the mode the start target gives it.
+func (f *tokenFixture) writeStateFile(t *testing.T, name, content string, mode os.FileMode) {
 	t.Helper()
 
 	writeFileMode(t, f.statePath(name), []byte(content), mode)
 }
 
-// stopRefresher ends every refresher make deck started in this fixture, so no test leaves a loop minting
+// stopRefresher ends every refresher a target started in this fixture, so no test leaves a loop minting
 // against a server the test has closed.
-func (f *deckFixture) stopRefresher(t *testing.T) {
+func (f *tokenFixture) stopRefresher(t *testing.T) {
 	t.Helper()
 
 	paths, err := filepath.Glob(filepath.Join(f.state, "*.pid"))
@@ -376,24 +467,26 @@ func deadPid(t *testing.T) int {
 	return cmd.Process.Pid
 }
 
-// TestMakeDeckStartsOneRefresherPerVM pins review item 8, and with it the per-instance pid and log files of
-// item 7: make deck warns about a refresher that stopped and starts a new one, leaves a running one alone, and
-// names the files after the VM instance, so two VMs never share a pid file.
-func TestMakeDeckStartsOneRefresherPerVM(t *testing.T) {
+// TestMakeAgentsTokenRefreshStartKeepsOneRefresherPerVM pins second review item 1, and with it the
+// per-instance pid and log files of the first review's item 7 and the lock's pid (N-new-2): make
+// agents-token-refresh-start warns about a refresher that stopped and starts a new one, leaves a running one
+// alone, honours a refresher that holds the lock without a pid file, says where the log is, and names the
+// files after the VM instance, so two VMs never share a pid file.
+func TestMakeAgentsTokenRefreshStartKeepsOneRefresherPerVM(t *testing.T) {
 	t.Parallel()
 
 	t.Run("a pid file whose process is dead warns and starts a new refresher", func(t *testing.T) {
 		t.Parallel()
 
-		f := newDeckFixture(t, "shift2eu")
+		f := newTokenFixture(t, "shift2eu")
 
 		stale := deadPid(t)
 		f.writeStateFile(t, "agents-token-refresh-shift2eu.pid", strconv.Itoa(stale)+"\n", 0o600)
 		f.writeStateFile(t, "agents-token-refresh-shift2eu.log", "agents-token: wrote a token\n", 0o600)
 
-		stdout, stderr, err := runMake(t, []string{"deck"}, f.env)
+		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
 		if err != nil {
-			t.Fatalf("make deck: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			t.Fatalf("make agents-token-refresh-start: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 		}
 
 		if combined := stdout + stderr; !strings.Contains(combined, strconv.Itoa(stale)) {
@@ -420,7 +513,12 @@ func TestMakeDeckStartsOneRefresherPerVM(t *testing.T) {
 			t.Errorf("the pid file is mode %04o, want 0600: it is written under umask 077 like the log (review item 7, N7)", got)
 		}
 
-		waitFor(t, 60*time.Second, "the refresher make deck started to mint a token", func() bool {
+		// A background start is only usable if it says where the log is: the refresher writes nothing else.
+		if logPath := f.statePath("agents-token-refresh-shift2eu.log"); !strings.Contains(stdout+stderr, logPath) {
+			t.Errorf("make agents-token-refresh-start does not print the log's path %s, so a maintainer cannot read what the refresher says:\nstdout: %s\nstderr: %s", logPath, stdout, stderr)
+		}
+
+		waitFor(t, 60*time.Second, "the refresher make agents-token-refresh-start started to mint a token", func() bool {
 			return len(f.api.minted()) >= 1
 		})
 	})
@@ -428,13 +526,13 @@ func TestMakeDeckStartsOneRefresherPerVM(t *testing.T) {
 	t.Run("a refresher that is running is left alone", func(t *testing.T) {
 		t.Parallel()
 
-		f := newDeckFixture(t, "shift2eu")
+		f := newTokenFixture(t, "shift2eu")
 
-		if _, stderr, err := runMake(t, []string{"deck"}, f.env); err != nil {
-			t.Fatalf("the first make deck: %v\nstderr: %s", err, stderr)
+		if _, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env); err != nil {
+			t.Fatalf("the first make agents-token-refresh-start: %v\nstderr: %s", err, stderr)
 		}
 
-		waitFor(t, 60*time.Second, "the refresher make deck started to mint a token", func() bool {
+		waitFor(t, 60*time.Second, "the refresher make agents-token-refresh-start started to mint a token", func() bool {
 			return len(f.api.minted()) >= 1
 		})
 
@@ -442,41 +540,87 @@ func TestMakeDeckStartsOneRefresherPerVM(t *testing.T) {
 		pid := readPid(t, pidPath)
 		mints := len(f.api.minted())
 
-		stdout, stderr, err := runMake(t, []string{"deck"}, f.env)
+		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
 		if err != nil {
-			t.Fatalf("the second make deck: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			t.Fatalf("the second make agents-token-refresh-start: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 		}
 
 		if combined := stdout + stderr; !strings.Contains(combined, strconv.Itoa(pid)) {
-			t.Errorf("make deck does not say which refresher it found running (pid %d):\n%s", pid, combined)
+			t.Errorf("make agents-token-refresh-start does not say which refresher it found running (pid %d):\n%s", pid, combined)
 		}
 
 		if got := readPid(t, pidPath); got != pid {
-			t.Errorf("make deck replaced the running refresher: the pid file held %d, now %d", pid, got)
+			t.Errorf("make agents-token-refresh-start replaced the running refresher: the pid file held %d, now %d", pid, got)
 		}
 
 		if got := len(f.api.minted()); got != mints {
-			t.Errorf("make deck started a second refresher: the fake API minted %d token(s) instead of %d", got, mints)
+			t.Errorf("make agents-token-refresh-start started a second refresher: the fake API minted %d token(s) instead of %d", got, mints)
+		}
+	})
+
+	t.Run("a refresher that holds the lock is left alone even with no pid file", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTokenFixture(t, "shift2eu")
+
+		// A refresher started by hand (make agents-token-refresh) holds the instance's lock and writes no pid
+		// file, so the start target must read the lock's pid and not only its own pid file (review N-new-2).
+		held := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, f.env)
+		lock := f.sb.refreshLockDir("shift2eu")
+
+		waitFor(t, 30*time.Second, "the refresh started by hand to take the lock", func() bool {
+			_, err := os.Stat(lock)
+
+			return err == nil
+		})
+
+		mints := len(f.api.minted())
+
+		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-start while another refresher holds the lock: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		if combined := stdout + stderr; !strings.Contains(combined, strconv.Itoa(held.pid())) {
+			t.Errorf("make agents-token-refresh-start does not name the refresher that holds the lock (pid %d), so a maintainer cannot tell why nothing started:\n%s", held.pid(), combined)
+		}
+
+		if _, err := os.Stat(f.statePath("agents-token-refresh-shift2eu.pid")); err == nil {
+			t.Errorf("make agents-token-refresh-start wrote a pid file although a refresher already holds the lock: it started a second one")
+		}
+
+		if !held.running() {
+			t.Fatalf("the refresh that held the lock exited because the start target ran; stderr:\n%s", held.errOut())
+		}
+
+		if got := len(f.api.minted()); got != mints {
+			t.Errorf("make agents-token-refresh-start minted %d token(s) although a refresher already holds the lock", got-mints)
+		}
+
+		held.signal(t, syscall.SIGTERM)
+
+		if !held.waitExit(30 * time.Second) {
+			t.Fatalf("the refresh that held the lock did not stop on SIGTERM; stderr:\n%s", held.errOut())
 		}
 	})
 
 	t.Run("the pid and log files are named after the VM instance", func(t *testing.T) {
 		t.Parallel()
 
-		f := newDeckFixture(t, "shift2eu-other")
+		f := newTokenFixture(t, "shift2eu-other")
 
-		if _, stderr, err := runMake(t, []string{"deck"}, f.env); err != nil {
-			t.Fatalf("make deck: %v\nstderr: %s", err, stderr)
+		if _, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env); err != nil {
+			t.Fatalf("make agents-token-refresh-start: %v\nstderr: %s", err, stderr)
 		}
 
 		for _, name := range []string{"agents-token-refresh-shift2eu-other.pid", "agents-token-refresh-shift2eu-other.log"} {
 			if _, err := os.Stat(f.statePath(name)); err != nil {
-				t.Errorf("make deck wrote no %s: the refresh's pid and log are named after the instance, so two VMs keep two loops (review item 7)", name)
+				t.Errorf("make agents-token-refresh-start wrote no %s: the refresh's pid and log are named after the instance, so two VMs keep two loops (review item 7)", name)
 			}
 		}
 
 		if _, err := os.Stat(f.statePath("agents-token-refresh-shift2eu.pid")); err == nil {
-			t.Errorf("make deck named its pid file after another VM instance than shift2eu-other")
+			t.Errorf("make agents-token-refresh-start named its pid file after another VM instance than shift2eu-other")
 		}
 
 		waitFor(t, 60*time.Second, "the refresher of the other instance to mint a token", func() bool {
@@ -490,24 +634,33 @@ func TestMakeDeckStartsOneRefresherPerVM(t *testing.T) {
 func runMake(t *testing.T, args []string, env map[string]string) (string, string, error) {
 	t.Helper()
 
-	if _, err := exec.LookPath("make"); err != nil {
-		t.Fatalf("make is not installed: the repository's commands, and this test, need it")
-	}
-
 	root, err := filepath.Abs(moduleRoot)
 	if err != nil {
 		t.Fatalf("resolve the repository root: %v", err)
 	}
 
-	cmd := exec.Command("make", append([]string{"-C", root, "--no-print-directory"}, args...)...)
+	return runMakeIn(t, root, args, env)
+}
+
+// runMakeIn runs make in dir with args and env alone, never the test process's own environment: the
+// vm-gh-wrapper tests copy the Makefile and the script it runs into a temporary directory, so one recipe can
+// be run against a stand-in generator.
+func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (string, string, error) {
+	t.Helper()
+
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Fatalf("make is not installed: the repository's commands, and this test, need it")
+	}
+
+	cmd := exec.Command("make", append([]string{"-C", dir, "--no-print-directory"}, args...)...)
 	cmd.Env = envList(env)
-	cmd.Dir = root
+	cmd.Dir = dir
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err = cmd.Run()
+	err := cmd.Run()
 
 	return stdout.String(), stderr.String(), err
 }
