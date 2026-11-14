@@ -1,4 +1,4 @@
-// Pins that the gh wrapper the VM runs is the wrapper these tests run (PRD #161 milestone 1, ADR 0029).
+// Pins that the gh wrapper the VM runs is the wrapper these tests run (PRD #161 milestone 1, ADR 0030).
 // dev/lima.yaml embeds dev/gh-app-token.sh in its system provision script as a heredoc and installs that copy
 // root-owned, so the VM's gh never comes from the workspace mount an agent can write. The embedded text is
 // compared byte for byte with the file, so the two copies cannot drift, and the git credential helper is
@@ -92,7 +92,7 @@ func embeddedGHWrapper(t *testing.T, template string) string {
 	}
 
 	if opener < 0 {
-		t.Fatalf("%s has no <<'%s' heredoc: the VM's gh must be installed from the template, not from the workspace mount an agent can write (PRD #161 milestone 1, ADR 0029)", limaTemplateRepoPath, ghWrapperMarker)
+		t.Fatalf("%s has no <<'%s' heredoc: the VM's gh must be installed from the template, not from the workspace mount an agent can write (PRD #161 milestone 1, ADR 0030)", limaTemplateRepoPath, ghWrapperMarker)
 	}
 
 	header := -1
@@ -313,7 +313,7 @@ func TestLimaTemplateInstallsTheGHWrapper(t *testing.T) {
 
 		want := "!" + installedPath + " auth git-credential"
 		if got := quoted[0][1]; got != want {
-			t.Errorf("%s's git credential helper is %q, want %q: it must run the wrapper at the path dev/lima.yaml installs it to, not a gh found on PATH and not the real gh that `gh auth setup-git` would name (PRD #161 milestone 1, ADR 0029)", limaTemplateRepoPath, got, want)
+			t.Errorf("%s's git credential helper is %q, want %q: it must run the wrapper at the path dev/lima.yaml installs it to, not a gh found on PATH and not the real gh that `gh auth setup-git` would name (PRD #161 milestone 1, ADR 0030)", limaTemplateRepoPath, got, want)
 		}
 	})
 }
