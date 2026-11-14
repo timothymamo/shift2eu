@@ -68,7 +68,7 @@ func targets() []targetCase {
 			key:         ovhcloudKey,
 			name:        "OVHcloud",
 			sourceURL:   "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
-			retrievedOn: "2026-11-13",
+			retrievedOn: "2026-11-14",
 			golden:      "assess-ovhcloud.golden",
 		},
 		{
