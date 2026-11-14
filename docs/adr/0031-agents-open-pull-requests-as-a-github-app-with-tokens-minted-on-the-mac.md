@@ -263,10 +263,10 @@ the table with the App token, and that `bypass_actors` is absent or empty for th
   directly, not through `make` in the workspace, and run `make vm-env`, `make vm-init` and
   `make vm-gh-wrapper` only rarely, and only after reading the diff of the `Makefile` and `dev/` on
   GitHub. No git check run in the host clone is a safeguard: once the clone is tampered with, git there
-  runs the tampered hooks and config too. **Open follow-ups, not in this change:** run every host target
-  from the host clone (`make deck` needs a variable for the workspace path instead of `CURDIR`), and keep
-  the key where the maintainer's uid cannot read it silently (a Keychain item or a password-manager read
-  that prompts, or a separate macOS account running the refresher).
+  runs the tampered hooks and config too. **Open follow-ups, not in this change, tracked in #227:** run
+  every host target from the host clone (`make deck` needs a variable for the workspace path instead of
+  `CURDIR`), and keep the key where the maintainer's uid cannot read it silently (a Keychain item or a
+  password-manager read that prompts, or a separate macOS account running the refresher).
 - Every `gh` in the VM, the deck's included, goes through the wrapper. `/usr/local/bin/gh` is still the
   absolute path the release-tag skill calls; it is root-owned, as is the real gh behind it. Like
   everything else in the VM, an agent with the VM user's passwordless `sudo` could change either (ADR
