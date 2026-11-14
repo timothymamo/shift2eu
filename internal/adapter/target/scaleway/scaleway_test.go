@@ -5,6 +5,11 @@
 // EU regions, that a cancelled run reads nothing, and the verdicts PRD 14 asks of
 // the data: high availability scoped to a node or a zone, one offering per tier,
 // and a capability claimed only when the documentation meets it in full. The
+// storage an offering charges beyond what a plan includes is pinned against the
+// embedded snapshot too (issue #219): every offering in scope carries a per-GiB
+// storage price, or says in SOURCES.md why it has none, and a bare-metal server
+// sized above its plan's disks is reported with estimate.NoStoragePrice rather
+// than priced from a price Scaleway does not publish. The
 // snapshot document format itself, its strictness and its errors are pinned once,
 // in the shared reader's own tests (internal/adapter/target/snapshot). It is
 // black-box: only the package's exported API is used.
@@ -27,6 +32,7 @@ import (
 	"github.com/timothymamo/shift2eu/internal/adapter/target/targettest"
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
+	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
@@ -41,6 +47,7 @@ var _ analysis.CatalogSource = scaleway.New()
 // Both are relative to this package's directory.
 const (
 	catalogFile = "catalog.json"
+	sourcesFile = "SOURCES.md"
 	goldenFile  = "testdata/catalog.golden"
 )
 
@@ -353,6 +360,209 @@ func anyPriceAppliesIn(prices []catalog.Price, region string) bool {
 	return slices.ContainsFunc(prices, func(p catalog.Price) bool {
 		return len(p.Regions) == 0 || slices.Contains(p.Regions, region)
 	})
+}
+
+// offeringNamed returns the catalog's offering called name, and fails the test if
+// there is none.
+func offeringNamed(t *testing.T, cat catalog.Catalog, name string) catalog.Offering {
+	t.Helper()
+
+	for _, o := range cat.Offerings() {
+		if o.Name == name {
+			return o
+		}
+	}
+
+	t.Fatalf("the catalog has no offering called %s: the storage-price rule below assumes it", text.Quote(name))
+
+	return catalog.Offering{}
+}
+
+// noStoragePriceMarker is the convention an offering's section of SOURCES.md
+// follows when the snapshot deliberately records no per-GiB storage price for it:
+// a bullet whose text, once the Markdown bullet and any bold markers are removed,
+// begins with these words (today's form is "- **No storage price.** ..."). The
+// bullet states which page was read and why no price follows from it (ADR 0024),
+// so a missing price is a finding, never an omission. The OVHcloud adapter's test
+// pins the same convention; it is duplicated here so that neither target's test
+// depends on the other's package.
+const noStoragePriceMarker = "No storage price"
+
+// TestCatalogStoragePriceCoverage pins issue #219's acceptance on the embedded
+// snapshot: every offering in scope either has a per-GiB storage price applying
+// in each of its regions, so an estimate can price the storage above what a plan
+// includes (ADR 0027), or its own section of SOURCES.md says why it has none.
+// Elastic Metal sells no storage beyond the fixed local disks its plans include:
+// its FAQ says "Elastic Metal is not currently compatible with Block Storage, but
+// this functionality is planned for the future", and its price page's only
+// add-ons are network and Windows licences. So its storagePrices stays empty, and
+// the missing price has to be a documented finding rather than an omission. A
+// price the snapshot gains must still be sourced in SOURCES.md.
+func TestCatalogStoragePriceCoverage(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+	sections := sourcesSections(t)
+
+	tests := []struct {
+		offering string
+		// wantPrice is true for the offerings issue #219 requires a storage price
+		// on, which a SOURCES.md reason may not waive.
+		wantPrice bool
+	}{
+		{offering: "Elastic Metal"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.offering, func(t *testing.T) {
+			t.Parallel()
+
+			o := offeringNamed(t, cat, tc.offering)
+
+			var missing []string
+
+			for _, region := range o.Regions {
+				if _, ok := o.StoragePrice(region); !ok {
+					missing = append(missing, region)
+				}
+			}
+
+			if len(missing) == 0 {
+				return
+			}
+
+			if tc.wantPrice {
+				t.Errorf("offering %s has no per-GiB storage price in region(s) %s, want one in each of its regions %v: extra storage beyond what its plans include cannot be priced otherwise (issue #219)",
+					text.Quote(o.Name), strings.Join(missing, ", "), o.Regions)
+
+				return
+			}
+
+			body, documented := sections[tc.offering]
+			if !documented {
+				t.Errorf("offering %s has no per-GiB storage price in region(s) %s and no section %s in %s, want a section saying why it has none",
+					text.Quote(o.Name), strings.Join(missing, ", "), text.Quote("### "+o.Name), text.Quote(sourcesFile))
+
+				return
+			}
+
+			if !hasNoStoragePriceMarker(body) {
+				t.Errorf("offering %s has no per-GiB storage price in region(s) %s and its section of %s does not say why, want a bullet whose text begins %q (the reason no price is recorded, and the page it was looked for on)",
+					text.Quote(o.Name), strings.Join(missing, ", "), text.Quote(sourcesFile), noStoragePriceMarker)
+			}
+		})
+	}
+}
+
+// TestElasticMetalExtraStorageIsNotEstimated pins the estimate side of the same
+// finding: Elastic Metal publishes no price for storage beyond a plan's local
+// disks, so a bare-metal server sized above the disks of the cheapest plan that
+// covers it must be reported with estimate.NoStoragePrice, never priced from a
+// price the snapshot does not have (ADR 0024, ADR 0027). 8 vCPU and 64 GiB are
+// covered by `EM-A410X-SSD`, whose 2040 GiB of disks the resource's 2100 GiB
+// exceed by 60 GiB; the offering prices no GiB, so there is no storage part.
+func TestElasticMetalExtraStorageIsNotEstimated(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+	region := cat.Snapshot().DefaultRegion
+
+	r := inventory.Resource{
+		ID:       "res-example",
+		RawType:  "AWS::Example::BareMetal",
+		Category: taxonomy.ComputeBareMetal,
+		Region:   "eu-west-1",
+		Size: &inventory.Size{
+			VCPUs:      number(8),
+			MemoryGiB:  number(64),
+			StorageGiB: number(2100),
+		},
+	}
+
+	inv, err := inventory.New("aws", []inventory.Resource{r})
+	if err != nil {
+		t.Fatalf("inventory.New() returned unexpected error: %v", err)
+	}
+
+	got := estimate.For(mapping.Map(inv.Resources()[0], cat), region)
+
+	if got.Reason != estimate.NoStoragePrice {
+		t.Errorf("For() reason = %s, want %s: Elastic Metal publishes no per-GiB storage price, so the 60 GiB above plan %s's disks cannot be priced (issue #219)",
+			text.Quote(string(got.Reason)), text.Quote(string(estimate.NoStoragePrice)), text.Quote("EM-A410X-SSD"))
+	}
+
+	if got.Estimated {
+		t.Errorf("For() Estimated = true with monthly %v, want false: no storage price means no estimate, never one at 0 EUR",
+			got.Monthly)
+	}
+
+	if got.Offering != "Elastic Metal" {
+		t.Errorf("For() Offering = %s, want %s: a %s resource maps onto the bare-metal offering",
+			text.Quote(got.Offering), text.Quote("Elastic Metal"), text.Quote(string(taxonomy.ComputeBareMetal)))
+	}
+}
+
+// number returns v as the inventory number the size fields take: a pointer to it.
+func number(v float64) *float64 {
+	return &v
+}
+
+// sourcesSections returns the body lines of each "### <name>" section of the
+// SOURCES.md beside the snapshot, by the heading's name: the lines under it, up to
+// the next heading of the same or a higher level.
+func sourcesSections(t *testing.T) map[string][]string {
+	t.Helper()
+
+	data, err := os.ReadFile(sourcesFile)
+	if err != nil {
+		t.Fatalf("reading %s: %v", text.Quote(sourcesFile), err)
+	}
+
+	sections := make(map[string][]string)
+
+	current := ""
+
+	for _, line := range strings.Split(string(data), "\n") {
+		if name, ok := strings.CutPrefix(line, "### "); ok {
+			current = strings.TrimSpace(name)
+			sections[current] = nil
+
+			continue
+		}
+
+		if strings.HasPrefix(line, "## ") || strings.HasPrefix(line, "# ") {
+			current = ""
+
+			continue
+		}
+
+		if current != "" {
+			sections[current] = append(sections[current], line)
+		}
+	}
+
+	return sections
+}
+
+// hasNoStoragePriceMarker reports whether body, the lines of one offering's
+// section of SOURCES.md, carries the convention's bullet: a line whose text, after
+// the Markdown bullet and any leading bold markers, begins with
+// noStoragePriceMarker.
+func hasNoStoragePriceMarker(body []string) bool {
+	for _, line := range body {
+		rest := strings.TrimSpace(line)
+		rest = strings.TrimSpace(strings.TrimPrefix(rest, "-"))
+
+		for strings.HasPrefix(rest, "**") {
+			rest = strings.TrimPrefix(rest, "**")
+		}
+
+		if strings.HasPrefix(rest, noStoragePriceMarker) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // regionsListed formats the regions prices apply to, one entry per price, for an
