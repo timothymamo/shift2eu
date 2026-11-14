@@ -574,6 +574,13 @@ func TestMakeAgentsTokenRefreshStartKeepsOneRefresherPerVM(t *testing.T) {
 			return err == nil
 		})
 
+		// The refresher takes the lock before it mints (take it after and two starters could both mint),
+		// so the lock alone does not say it has a token yet: wait for the mint it makes under the lock and
+		// only then take the baseline this case counts from.
+		waitFor(t, 60*time.Second, "the refresh started by hand to mint its first token", func() bool {
+			return len(f.api.minted()) >= 1
+		})
+
 		mints := len(f.api.minted())
 
 		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)

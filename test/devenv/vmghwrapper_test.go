@@ -419,6 +419,11 @@ func TestMakeVMGHWrapperFailsWhenTheScriptDoesNotArrive(t *testing.T) {
 	cases := []struct {
 		name      string
 		generator string
+		// silent makes the fake limactl answer like a connection that dropped after the stream arrived:
+		// it takes the whole script and prints nothing, so sh -s exits 0.
+		silent bool
+		// wantLimactl is whether the recipe may reach the VM at all: only for a stream it generates whole.
+		wantLimactl bool
 	}{
 		{
 			name:      "the generator fails",
@@ -427,6 +432,15 @@ func TestMakeVMGHWrapperFailsWhenTheScriptDoesNotArrive(t *testing.T) {
 		{
 			name:      "the script ends without the done line",
 			generator: "#!/bin/sh\nprintf 'set -eu\\necho installed nothing\\n'\n",
+		},
+		{
+			// The stream is whole, so the recipe hands it over; the VM runs nothing and says nothing, as
+			// when the connection drops after the stream arrived and sh -s still exits 0. Only the done
+			// line tells make that the installation finished (second review, item 2).
+			name:        "the VM prints no done line",
+			generator:   "#!/bin/sh\nprintf 'set -eu\\nvm_gh_wrapper() {\\n  echo installed nothing\\n}\\nvm_gh_wrapper\\n'\n",
+			silent:      true,
+			wantLimactl: true,
 		},
 	}
 
@@ -440,13 +454,26 @@ func TestMakeVMGHWrapperFailsWhenTheScriptDoesNotArrive(t *testing.T) {
 			env := sb.baseEnv()
 			env["SHIFT2EU_TEST_LIMA_CAPTURE"] = filepath.Join(sb.root, "lima-stdin.log")
 
+			if tc.silent {
+				env["SHIFT2EU_TEST_LIMA_SILENT"] = "1"
+			}
+
 			stdout, stderr, err := runMakeIn(t, clone, []string{"vm-gh-wrapper"}, env)
 			if err == nil {
 				t.Fatalf("make vm-gh-wrapper exited 0 although %s\nstdout: %s\nstderr: %s", tc.name, stdout, stderr)
 			}
 
-			for _, args := range invocations(sb.argvLogText(t), "limactl") {
-				t.Errorf("make vm-gh-wrapper called limactl with %v before it had a script to hand it: the recipe must generate the script first (second review, item 2)", args)
+			called := len(invocations(sb.argvLogText(t), "limactl")) > 0
+
+			switch {
+			case !tc.wantLimactl && called:
+				for _, args := range invocations(sb.argvLogText(t), "limactl") {
+					t.Errorf("make vm-gh-wrapper called limactl with %v before it had a script to hand it: the recipe must generate the script first (second review, item 2)", args)
+				}
+			case tc.wantLimactl && !called:
+				t.Errorf("make vm-gh-wrapper never handed the whole script to limactl although its last line is the call that runs it\nstdout: %s\nstderr: %s", stdout, stderr)
+			case tc.wantLimactl && !strings.Contains(stdout+stderr, doneLine):
+				t.Errorf("make vm-gh-wrapper fails without naming %q, so a maintainer cannot tell that the VM never reported the installation done\nstdout: %s\nstderr: %s", doneLine, stdout, stderr)
 			}
 		})
 	}

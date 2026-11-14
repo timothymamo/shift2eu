@@ -253,9 +253,18 @@ const fakeLimactl = `#!/bin/sh
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
 if [ -n "${SHIFT2EU_TEST_LIMA_CAPTURE:-}" ]; then
   # Capture mode: a test that only wants what a recipe sends over standard input (make deck, make
-  # vm-gh-wrapper) records it and runs nothing on this machine.
-  cat >> "${SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
+  # vm-gh-wrapper) records it and runs nothing on this machine. What it answers is what the VM would
+  # answer: the vm-gh-wrapper stream ends with the call to the function that prints the done line, so a
+  # whole stream gets that line back. SHIFT2EU_TEST_LIMA_SILENT stands for a connection that dropped after
+  # the stream arrived: sh -s exits 0 and says nothing.
+  stdin_copy="$(mktemp "${TMPDIR:-/tmp}/lima-stdin.XXXXXX")" || exit 1
+  cat > "${stdin_copy}" || exit 1
+  cat "${stdin_copy}" >> "${SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
   printf '\n--- end of call ---\n' >> "${SHIFT2EU_TEST_LIMA_CAPTURE}"
+  if [ -z "${SHIFT2EU_TEST_LIMA_SILENT:-}" ] && [ "$(tail -n 1 "${stdin_copy}")" = vm_gh_wrapper ]; then
+    printf 'vm-gh-wrapper: done\n'
+  fi
+  rm -f "${stdin_copy}"
   exit 0
 fi
 HOME="${SHIFT2EU_TEST_VM_HOME:?set SHIFT2EU_TEST_VM_HOME}"
