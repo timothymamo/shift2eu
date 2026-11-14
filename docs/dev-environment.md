@@ -65,7 +65,14 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
    (`dev/lima.yaml`), enough for all six roles to run `make check` at once. Leave the Mac enough free
    memory to run it.
 
-5. Open the deck: `make deck`.
+5. Open the deck: type what `make deck` runs, from a directory outside the workspace, such as your home
+   (`cd ~`), not `make deck` in the workspace: a git-aware prompt in the workspace runs git there with
+   its `.git/config`, which the agents can edit (What the host clone does not do, in
+   [The agents App](#the-agents-app)).
+
+   ```bash
+   limactl shell --workdir <path of the main checkout> shift2eu dot-agent-deck   # the VM instance's name, LIMA_INSTANCE
+   ```
 
 ### What `make vm-init` does
 
@@ -126,12 +133,17 @@ It never prints a credential: the checks show only the field they test.
 ### Every day
 
 ```bash
-make vm-up && make deck    # the TUI attaches to the daemon service
+make vm-up    # from the workspace
+cd ~ && limactl shell --workdir <path of the main checkout> shift2eu dot-agent-deck   # the TUI attaches to the daemon service
 ```
 
+Type the second line from outside the workspace, not `make deck` in it: a git-aware prompt in the
+workspace runs git there with its `.git/config`, which the agents can edit (What the host clone does not
+do, in [The agents App](#the-agents-app)).
+
 - **Detach, don't stop.** Leave the TUI with `Ctrl+c` and **Detach**: the agents keep running in the
-  service, and the next `make deck` shows them again. **Stop** ends the agents and the service until the
-  VM restarts or you run `systemctl --user start dot-agent-deck.service`.
+  service, and the deck shows them again the next time you open it. **Stop** ends the agents and the
+  service until the VM restarts or you run `systemctl --user start dot-agent-deck.service`.
 - **The service starts with the VM.** Lima enables lingering for the VM user, so no login is needed.
   `make vm-stop` stops the VM and every agent in it; `make vm-delete` removes the VM and everything
   inside it.
@@ -335,7 +347,7 @@ And from the workspace, as before:
 | Command | Does |
 |---|---|
 | `make vm-gh-wrapper` | Gives a VM created before the gh wrapper the wrapper, without recreating it |
-| `make deck` | Opens the deck; it starts no refresh |
+| `make deck` | Opens the deck; it starts no refresh. Rather type `limactl shell --workdir <main checkout> shift2eu dot-agent-deck` from outside the workspace, such as your home (What the host clone does not do, below) |
 
 **What the host clone does not do.** It keeps the key's path out of the workspace's shells and keeps the
 token targets on code the agents cannot edit. It does not put the key out of reach of code run from the
@@ -353,7 +365,9 @@ credential `make vm-env` copies from the `.envrc` above the workspace:
 
 Until the follow-ups below, keep that code's chances few:
 
-- Open the deck by typing what `make deck` runs, directly, not through `make` in the workspace:
+- Open the deck by typing what `make deck` runs, directly, not through `make` in the workspace, and type
+  it from a directory outside the workspace, such as your home: a git-aware prompt in the workspace runs
+  git there with its `.git/config`, which the agents can edit:
 
   ```bash
   limactl shell --workdir <path of the main checkout> shift2eu dot-agent-deck   # the VM instance's name, LIMA_INSTANCE
