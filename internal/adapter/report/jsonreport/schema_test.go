@@ -652,46 +652,28 @@ func TestJSONSchemaValidatorRefusesUnsupportedSchema(t *testing.T) {
 // reporters through the CLI, so the schemas must accept them too.
 const e2eGoldenDir = "../../../../test/e2e/testdata"
 
+// currentSchemaVersion is the schemaVersion every document this release writes
+// declares (docs/adr/0018, PRD #190 milestone 8): a new version gets new schema
+// files beside the old ones.
+const currentSchemaVersion = 2
+
 // TestGoldenDocumentsMatchSchema validates every golden document against the
-// schema of its kind: the goldens are the specification of the format, so a
-// document the schema refuses is not the format the repository ships. The
-// binary's end-to-end goldens are validated too, through the relative path from
-// this package, so the format the CLI writes is the format the schema describes.
+// schema of its own kind and schemaVersion: the goldens are the specification of
+// the format, so a document the schema refuses is not the format the repository
+// ships. The reporter's own goldens must declare the current version; the
+// binary's end-to-end goldens are validated through the relative path from this
+// package at whatever version they declare, so the format the CLI writes is the
+// format the schema describes.
 func TestGoldenDocumentsMatchSchema(t *testing.T) {
 	t.Parallel()
 
+	// The reporter's own goldens: the documents this release writes.
 	patterns := []struct {
-		name       string
-		pattern    string
-		schemaFile string
+		name    string
+		pattern string
 	}{
-		{name: "assessment documents", pattern: "report*.golden", schemaFile: "assessment-v1.schema.json"},
-		{name: "comparison documents", pattern: "comparison*.golden", schemaFile: "comparison-v1.schema.json"},
-	}
-
-	// The end-to-end goldens, which the CLI wrote: the fixtures' documents of both
-	// kinds, and the hostile inventory's assessment, whose values the format has to
-	// write as JSON strings.
-	e2eGoldens := []struct {
-		name       string
-		golden     string
-		schemaFile string
-	}{
-		{
-			name:       "an end-to-end assessment",
-			golden:     "assess-ovhcloud-json.golden",
-			schemaFile: "assessment-v1.schema.json",
-		},
-		{
-			name:       "an end-to-end comparison",
-			golden:     "assess-all-json.golden",
-			schemaFile: "comparison-v1.schema.json",
-		},
-		{
-			name:       "an end-to-end assessment of hostile values",
-			golden:     "assess-hostile-json.golden",
-			schemaFile: "assessment-v1.schema.json",
-		},
+		{name: "assessment documents", pattern: "report*.golden"},
+		{name: "comparison documents", pattern: "comparison*.golden"},
 	}
 
 	for _, test := range patterns {
@@ -712,19 +694,80 @@ func TestGoldenDocumentsMatchSchema(t *testing.T) {
 				t.Run(filepath.Base(path), func(t *testing.T) {
 					t.Parallel()
 
-					checkGoldenAgainstSchema(t, path, test.schemaFile)
+					// A golden of the current release is written by the current
+					// reporter, so it declares the current version.
+					if version := goldenSchemaVersion(t, path); version != currentSchemaVersion {
+						t.Fatalf("%s declares schemaVersion %d, want %d: the reporter's own goldens are "+
+							"documents of the version this release writes", path, version, currentSchemaVersion)
+					}
+
+					checkGoldenAgainstItsSchema(t, path)
 				})
 			}
 		})
 	}
 
-	for _, test := range e2eGoldens {
-		t.Run(test.name, func(t *testing.T) {
+	// The end-to-end goldens, which the CLI wrote: the fixtures' documents of both
+	// kinds, and the hostile inventory's assessment, whose values the format has to
+	// write as JSON strings.
+	e2eGoldens := []string{
+		"assess-ovhcloud-json.golden",
+		"assess-all-json.golden",
+		"assess-hostile-json.golden",
+	}
+
+	for _, golden := range e2eGoldens {
+		t.Run(golden, func(t *testing.T) {
 			t.Parallel()
 
-			checkGoldenAgainstSchema(t, filepath.Join(e2eGoldenDir, test.golden), test.schemaFile)
+			checkGoldenAgainstItsSchema(t, filepath.Join(e2eGoldenDir, golden))
 		})
 	}
+}
+
+// goldenHeader is what a document says about itself before anything else.
+type goldenHeader struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	Kind          string `json:"kind"`
+}
+
+// goldenSchemaVersion returns the schemaVersion the document at path declares.
+func goldenSchemaVersion(tb testing.TB, path string) int {
+	tb.Helper()
+
+	return goldenHeaderOf(tb, path).SchemaVersion
+}
+
+// goldenHeaderOf reads the schemaVersion and kind of the document at path.
+func goldenHeaderOf(tb testing.TB, path string) goldenHeader {
+	tb.Helper()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		tb.Fatalf("read the golden file %s: %v", path, err)
+	}
+
+	var header goldenHeader
+	if err := json.Unmarshal(data, &header); err != nil {
+		tb.Fatalf("%s is not a JSON document with a schemaVersion and a kind: %v", path, err)
+	}
+
+	return header
+}
+
+// schemaFileFor returns the schema file of a document kind and schemaVersion, as
+// docs/adr/0018 names it: a new schemaVersion gets new files beside the old ones.
+func schemaFileFor(kind string, version int) string {
+	return kind + "-v" + strconv.Itoa(version) + ".schema.json"
+}
+
+// checkGoldenAgainstItsSchema fails the test when the golden document at path does
+// not match the schema file of the kind and schemaVersion it declares.
+func checkGoldenAgainstItsSchema(t *testing.T, path string) {
+	t.Helper()
+
+	header := goldenHeaderOf(t, path)
+	checkGoldenAgainstSchema(t, path, schemaFileFor(header.Kind, header.SchemaVersion))
 }
 
 // checkGoldenAgainstSchema fails the test when the golden document at path does
@@ -749,35 +792,44 @@ func checkGoldenAgainstSchema(t *testing.T, path, schemaFile string) {
 	}
 }
 
-// optionalProperties are the property names a schema may declare without
-// requiring them: the reason object's names, each written only when the reason
-// sets it.
-var optionalProperties = []string{"target", "category", "offering", "capability"}
+// optionalProperties are the property names an object schema may declare without
+// requiring them, because the document writes them only when it has something to
+// say. They are the reason object's names, each written only when the reason sets
+// it, the flags an estimate writes only when it estimated the resource
+// (countAssumed and hoursAssumed), the cap an estimate writes only when the plan's
+// offering bills a plan for at most that many hours a month (billingCapHours,
+// ADR 0029), and the schema version 2 keys of a resource that cannot be priced: a
+// resource priced by storage has no plan, an estimate that is not estimated has no
+// amount, and a plan with no price in the estimate region has no price. Any other
+// property a schema declares must be required, so a document can neither omit a
+// key the format always writes nor gain one nobody checks.
+var optionalProperties = []string{
+	"target", "category", "offering", "capability",
+	"plan", "estimate", "amount", "breakdown", "reason", "price",
+	// The two assumptions an estimate records, written only when the resource is
+	// estimated (ADR 0025), and the cap it was scaled by, written only when the
+	// plan's offering caps its hours (ADR 0029).
+	"countAssumed", "hoursAssumed", "billingCapHours",
+	// A document names the region a run chose, at the top level and per
+	// comparison target, only when --region chose one; sourceCost is written
+	// only with estimates on.
+	"region", "sourceCost",
+}
 
-// TestSchemaObjectsAreClosed pins that both schemas describe every key of every
-// object their documents hold, and no other: an object schema declares
-// additionalProperties false, describes every name it requires, and requires
-// every name it describes, so a document can neither omit a key the format always
-// writes nor add one the validator would not check. The one exception is the
-// reason object's optional names, which the explicit allow list holds.
+// TestSchemaObjectsAreClosed pins that every schema of this package describes
+// every key of every object its documents hold, and no other: an object schema
+// declares additionalProperties false, describes every name it requires, and
+// requires every name it describes apart from the few in optionalProperties. It
+// loops over every schema file, so a new schemaVersion's files are held to the
+// same rule as the ones before them.
 func TestSchemaObjectsAreClosed(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"assessment-v1.schema.json", "comparison-v1.schema.json"} {
+	for _, name := range schemaFiles(t) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			s := readSchema(t, filepath.Join("schema", name))
-
-			// The reason object is the one schema the allow list applies to, by its
-			// place in $defs: an optional name is then the reason object's own name,
-			// never another schema's.
-			reason := s.defs["reason"]
-			if reason == nil {
-				t.Fatalf("the schema holds no reason definition, so the allow list names nothing")
-			}
-
-			optional := map[*schema]bool{reason: true}
 
 			objects := 0
 
@@ -806,11 +858,7 @@ func TestSchemaObjectsAreClosed(t *testing.T) {
 				}
 
 				for _, property := range slices.Sorted(maps.Keys(sub.properties)) {
-					if required[property] {
-						continue
-					}
-
-					if optional[sub] && slices.Contains(optionalProperties, property) {
+					if required[property] || slices.Contains(optionalProperties, property) {
 						continue
 					}
 
@@ -826,12 +874,35 @@ func TestSchemaObjectsAreClosed(t *testing.T) {
 	}
 }
 
+// schemaFiles returns the base names of every schema document of this package,
+// in byte order, so a test that must hold each one to a rule loops over all of
+// them and a new schemaVersion's files are never skipped.
+func schemaFiles(tb testing.TB) []string {
+	tb.Helper()
+
+	paths, err := filepath.Glob(filepath.Join("schema", "*.schema.json"))
+	if err != nil {
+		tb.Fatalf("globbing the schema files: %v", err)
+	}
+
+	if len(paths) == 0 {
+		tb.Fatal("the package holds no schema file")
+	}
+
+	names := make([]string, 0, len(paths))
+	for _, path := range paths {
+		names = append(names, filepath.Base(path))
+	}
+
+	return names
+}
+
 // TestSchemaFilesDeclareDraft202012 pins that each schema file is a JSON document
 // declaring the dialect the validator implements.
 func TestSchemaFilesDeclareDraft202012(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"assessment-v1.schema.json", "comparison-v1.schema.json"} {
+	for _, name := range schemaFiles(t) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 

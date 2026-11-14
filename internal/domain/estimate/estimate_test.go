@@ -341,10 +341,11 @@ func TestFor(t *testing.T) {
 			offerings: []catalog.Offering{cappedComputeOffering(672)},
 			region:    testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:    testutil.PricedDefaultRegion,
-				Estimated: true,
-				Offering:  "Example Compute Plans",
-				Plan:      pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				Region:          testutil.PricedDefaultRegion,
+				Estimated:       true,
+				Offering:        "Example Compute Plans",
+				Plan:            pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				BillingCapHours: 672,
 				// 38.00 × min(336, 672) / 672 = 19.00, exactly half.
 				Monthly:      estimate.FromAmount(190000),
 				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(190000)},
@@ -360,13 +361,14 @@ func TestFor(t *testing.T) {
 			offerings: []catalog.Offering{cappedComputeOffering(672)},
 			region:    testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:       testutil.PricedDefaultRegion,
-				Estimated:    true,
-				Offering:     "Example Compute Plans",
-				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
-				Monthly:      estimate.FromAmount(380000),
-				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(380000)},
-				CountAssumed: true,
+				Region:          testutil.PricedDefaultRegion,
+				Estimated:       true,
+				Offering:        "Example Compute Plans",
+				Plan:            pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				BillingCapHours: 672,
+				Monthly:         estimate.FromAmount(380000),
+				Breakdown:       estimate.Breakdown{Plan: estimate.FromAmount(380000)},
+				CountAssumed:    true,
 			},
 			wantMonthly:   "38.00",
 			wantExact:     "38",
@@ -378,13 +380,14 @@ func TestFor(t *testing.T) {
 			offerings: []catalog.Offering{cappedComputeOffering(672)},
 			region:    testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:       testutil.PricedDefaultRegion,
-				Estimated:    true,
-				Offering:     "Example Compute Plans",
-				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
-				Monthly:      estimate.FromAmount(380000),
-				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(380000)},
-				CountAssumed: true,
+				Region:          testutil.PricedDefaultRegion,
+				Estimated:       true,
+				Offering:        "Example Compute Plans",
+				Plan:            pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				BillingCapHours: 672,
+				Monthly:         estimate.FromAmount(380000),
+				Breakdown:       estimate.Breakdown{Plan: estimate.FromAmount(380000)},
+				CountAssumed:    true,
 			},
 			wantMonthly:   "38.00",
 			wantExact:     "38",
@@ -398,13 +401,14 @@ func TestFor(t *testing.T) {
 			offerings: []catalog.Offering{cappedComputeOffering(672)},
 			region:    testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:       testutil.PricedDefaultRegion,
-				Estimated:    true,
-				Offering:     "Example Compute Plans",
-				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
-				Monthly:      estimate.FromAmount(380000),
-				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(380000)},
-				CountAssumed: true,
+				Region:          testutil.PricedDefaultRegion,
+				Estimated:       true,
+				Offering:        "Example Compute Plans",
+				Plan:            pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				BillingCapHours: 672,
+				Monthly:         estimate.FromAmount(380000),
+				Breakdown:       estimate.Breakdown{Plan: estimate.FromAmount(380000)},
+				CountAssumed:    true,
 			},
 			wantMonthly:   "38.00",
 			wantExact:     "38",
@@ -418,14 +422,15 @@ func TestFor(t *testing.T) {
 			offerings: []catalog.Offering{cappedComputeOffering(672)},
 			region:    testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:       testutil.PricedDefaultRegion,
-				Estimated:    true,
-				Offering:     "Example Compute Plans",
-				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
-				Monthly:      estimate.FromAmount(380000),
-				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(380000)},
-				CountAssumed: true,
-				HoursAssumed: true,
+				Region:          testutil.PricedDefaultRegion,
+				Estimated:       true,
+				Offering:        "Example Compute Plans",
+				Plan:            pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				BillingCapHours: 672,
+				Monthly:         estimate.FromAmount(380000),
+				Breakdown:       estimate.Breakdown{Plan: estimate.FromAmount(380000)},
+				CountAssumed:    true,
+				HoursAssumed:    true,
 			},
 			wantMonthly:   "38.00",
 			wantExact:     "38",
@@ -461,10 +466,11 @@ func TestFor(t *testing.T) {
 			offerings: []catalog.Offering{cappedComputeOffering(672)},
 			region:    testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:    testutil.PricedDefaultRegion,
-				Estimated: true,
-				Offering:  "Example Compute Plans",
-				Plan:      pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				Region:          testutil.PricedDefaultRegion,
+				Estimated:       true,
+				Offering:        "Example Compute Plans",
+				Plan:            pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				BillingCapHours: 672,
 				// 38.00 × 3 × 336 / 672 = 57.00.
 				Monthly:   estimate.FromAmount(570000),
 				Breakdown: estimate.Breakdown{Plan: estimate.FromAmount(570000)},
@@ -494,10 +500,11 @@ func TestFor(t *testing.T) {
 			offerings: []catalog.Offering{kubernetesOfferingWithCap(672)},
 			region:    testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:    testutil.PricedDefaultRegion,
-				Estimated: true,
-				Offering:  "Example Kubernetes",
-				Plan:      pricedPlan("NK-1", 4, 8000, 50, 300000),
+				Region:          testutil.PricedDefaultRegion,
+				Estimated:       true,
+				Offering:        "Example Kubernetes",
+				Plan:            pricedPlan("NK-1", 4, 8000, 50, 300000),
+				BillingCapHours: 672,
 				// 30 × 3 × 336/672 = 45; (80 − 50) × 0.03 × 3 = 2.7, unscaled;
 				// the fee 9 × 336/730 = 1512/365, not 9 × 336/672 = 4.5.
 				Monthly: estimate.Ratio(7569, 146),
@@ -521,13 +528,14 @@ func TestFor(t *testing.T) {
 			offerings: []catalog.Offering{cappedComputeOffering(672), uncappedComputeOffering()},
 			region:    testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:       testutil.PricedDefaultRegion,
-				Estimated:    true,
-				Offering:     "Example Compute Plans",
-				Plan:         pricedPlan("CAP-M", 2, 4000, 20, 380000),
-				Monthly:      estimate.FromAmount(190000),
-				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(190000)},
-				CountAssumed: true,
+				Region:          testutil.PricedDefaultRegion,
+				Estimated:       true,
+				Offering:        "Example Compute Plans",
+				Plan:            pricedPlan("CAP-M", 2, 4000, 20, 380000),
+				BillingCapHours: 672,
+				Monthly:         estimate.FromAmount(190000),
+				Breakdown:       estimate.Breakdown{Plan: estimate.FromAmount(190000)},
+				CountAssumed:    true,
 			},
 			wantMonthly:   "19.00",
 			wantExact:     "19",
@@ -1390,6 +1398,97 @@ func TestFor(t *testing.T) {
 	}
 }
 
+// TestForBillingCapHours pins the hours a month an estimate records when the
+// chosen plan's offering caps them (ADR 0029): the cap when the resource is
+// estimated by plan on a capped offering, whatever the resource's own hours,
+// and none otherwise — on an uncapped offering, for a resource priced by
+// storage, and for a resource that is not estimated at all.
+func TestForBillingCapHours(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// resource, offerings and region are the case's input, as in TestFor.
+		resource  inventory.Resource
+		offerings []catalog.Offering
+		// wantCap is the BillingCapHours the estimate must record.
+		wantCap int64
+		// wantReason is the reason of an estimate the case expects not to be
+		// estimated.
+		wantReason estimate.Reason
+		// wantMonthly is the estimate's monthly price, empty when it is not
+		// estimated.
+		wantMonthly string
+	}{
+		{
+			// 38.00 × min(730, 672) / 672 = 38.00: the plan price is the price of
+			// the capped hours, so a 730-hour month costs the whole of it.
+			name:        "730 hours on a capped offering cost the whole plan price, and the cap is recorded",
+			resource:    computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, &inventory.Usage{HoursPerMonth: f(730)}),
+			offerings:   []catalog.Offering{cappedComputeOffering(672)},
+			wantCap:     672,
+			wantMonthly: "38.00",
+		},
+		{
+			// 38.00 × min(336, 672) / 672 = 19.00: half the cap costs half the plan
+			// price, and the estimate still records the cap it was scaled by.
+			name:        "336 hours on a capped offering cost half the plan price, and the cap is recorded",
+			resource:    computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, &inventory.Usage{HoursPerMonth: f(336)}),
+			offerings:   []catalog.Offering{cappedComputeOffering(672)},
+			wantCap:     672,
+			wantMonthly: "19.00",
+		},
+		{
+			// 38.00 × 336 / 730: without a cap the plan price stands for 730 hours,
+			// and the estimate records no cap.
+			name:        "an offering without a cap records none",
+			resource:    computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, &inventory.Usage{HoursPerMonth: f(336)}),
+			offerings:   []catalog.Offering{cappedComputeOffering(0)},
+			wantMonthly: "17.49",
+		},
+		{
+			// 1000 GiB × 0.015 EUR: a cap is a property of an offering's plan prices,
+			// so a resource priced by storage is not capped and records no cap.
+			name:        "an offering's cap does not reach a resource priced by storage",
+			resource:    objectResource(&inventory.Size{StorageGiB: f(1000)}),
+			offerings:   []catalog.Offering{cappedStorageOffering(672)},
+			wantMonthly: "15.00",
+		},
+		{
+			// The chosen plan includes 20 GiB and the offering charges no per-GiB
+			// storage price, so the resource is not estimated, and records no cap.
+			name: "a resource that is not estimated records no cap",
+			resource: computeResource(
+				&inventory.Size{VCPUs: f(2), MemoryGiB: f(4), StorageGiB: f(100)}, nil),
+			offerings:  []catalog.Offering{cappedComputeOffering(672)},
+			wantReason: estimate.NoStoragePrice,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cat := newCatalog(t, tc.offerings)
+			got := estimate.For(mapping.Map(newResource(t, tc.resource), cat), testutil.PricedDefaultRegion)
+
+			if got.BillingCapHours != tc.wantCap {
+				t.Errorf("BillingCapHours = %d, want %d", got.BillingCapHours, tc.wantCap)
+			}
+
+			if got.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", got.Reason, tc.wantReason)
+			}
+
+			if tc.wantMonthly != "" {
+				if gotMonths := got.Monthly.String(); gotMonths != tc.wantMonthly {
+					t.Errorf("Monthly.String() = %q, want %q", gotMonths, tc.wantMonthly)
+				}
+			}
+		})
+	}
+}
+
 // namedComputeOffering is a compute.vm offering with that name, sold in the
 // default region, with the given plans.
 func namedComputeOffering(name string, plans ...catalog.Plan) catalog.Offering {
@@ -1408,6 +1507,19 @@ func cappedComputeOffering(capHours int64) catalog.Offering {
 	o.PlanBillingCapHours = capHours
 
 	return o
+}
+
+// cappedStorageOffering sells storage.object at 0.015 EUR a GiB and bills its
+// plans for at most capHours hours a month (ADR 0029): the cap must not reach a
+// resource priced by storage, which has no plan price to scale.
+func cappedStorageOffering(capHours int64) catalog.Offering {
+	return catalog.Offering{
+		Name:                "Example Capped Object Storage",
+		Categories:          []taxonomy.Category{taxonomy.StorageObject},
+		Regions:             []string{testutil.PricedDefaultRegion},
+		StoragePrices:       []catalog.Price{price(150)},
+		PlanBillingCapHours: capHours,
+	}
 }
 
 // uncappedComputeOffering sells one compute.vm plan at 40.00 EUR a month and

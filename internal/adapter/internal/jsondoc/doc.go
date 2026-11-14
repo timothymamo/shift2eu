@@ -22,8 +22,11 @@
 // errors are worded once for every format ("schemaVersion is missing, want the
 // integer 1"). Document.Walker reads the document token by token: Walker.Object
 // reads an object whose keys a format lists as Key values and calls back for
-// each key, and Walker.Array, Walker.String, Walker.Null, Walker.Raw and
-// Walker.Version read the values a callback finds. As it reads, the walker
+// each key, and Walker.Members, Walker.Array, Walker.String, Walker.Bool,
+// Walker.Null, Walker.Raw and Walker.Version read the values a callback finds.
+// Walker.Members reads an object whose keys are data, not names the format
+// lists (a map such as the HTTP API's regions): its errors never quote such a
+// key, and name a member's value by its index (regions[0]). As it reads, the walker
 // refuses:
 //
 //   - a key that is not character for character one of the keys the format

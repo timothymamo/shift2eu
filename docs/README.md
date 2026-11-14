@@ -70,6 +70,7 @@ supersedes it.
 - [0027. Match plans and estimate monthly prices in a domain package, with exact money](adr/0027-match-plans-and-estimate-monthly-prices-in-a-domain-package.md)
 - [0028. Group workloads, note blocked relations and sum the source's cost in the assessment](adr/0028-group-workloads-note-blocked-relations-and-sum-the-source-cost-in-the-assessment.md)
 - [0029. Cap the billed hours of an offering's plans in target snapshot format version 2](adr/0029-cap-the-billed-hours-of-an-offerings-plans-in-target-snapshot-format-v2.md)
+- [0030. Serve the version 2 report on /v1, with estimates, relations and workloads](adr/0030-serve-the-version-2-report-on-v1.md)
 
 ## Writing a page
 

@@ -5,6 +5,9 @@
 - Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-13
 - Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
 - Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
+- Region: `OVHcloud`: `GRA` (the target's default for estimates)
+- Region: `Scaleway`: `fr-par` (the target's default for estimates)
+- Region: `UpCloud`: `de-fra1` (the target's default for estimates)
 
 ## Comparison
 
@@ -16,22 +19,27 @@
 | partial | 2 | 5 | 3 |
 | none | 3 | 1 | 3 |
 | total | 11 | 11 | 11 |
+| `OVHcloud` estimate | €0.00 per month for 0 of 11 resources |  |  |
+| `Scaleway` estimate |  | €0.00 per month for 0 of 11 resources |  |
+| `UpCloud` estimate |  |  | €0.00 per month for 0 of 11 resources |
+
+Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 
 ### Resources
 
-| ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `Scaleway` fit | `Scaleway` best offering | `UpCloud` fit | `UpCloud` best offering |
-|---|---|---|---|---|---|---|---|
-| `bucket-example` | `storage.object` | direct | `Object Storage` | direct | `Object Storage` | direct | `Managed Object Storage` |
-| `cluster-example` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` | direct | `Kubernetes Kapsule Dedicated` | direct | `Managed Kubernetes Production` |
-| `db-autoscaling-example` | `database.postgresql` | partial | `Managed PostgreSQL` | partial | `Managed Database for PostgreSQL and MySQL` | partial | `Managed PostgreSQL` |
-| `db-example` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` | partial | `Managed Database for PostgreSQL and MySQL` | direct | `Managed PostgreSQL Multi-node` |
-| `db-node-example` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` | direct | `Managed Database for PostgreSQL and MySQL High Availability` | direct | `Managed PostgreSQL Multi-node` |
-| `db-zone-example` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node 3-AZ` | partial | `Managed Database for PostgreSQL and MySQL` | partial | `Managed PostgreSQL` |
-| `fn-example` | `serverless.function` | none |  | direct | `Serverless Functions` | none |  |
-| `fn-ipv6-example` | `serverless.function` | none |  | partial | `Serverless Functions` | none |  |
-| `i-0123456789abcdef0` | `compute.vm` | direct | `Instances` | direct | `Instances` | direct | `Cloud Servers` |
-| `misc-example` | `unclassified` | none |  | none |  | none |  |
-| `partial-example` | `compute.vm` | partial | `Instances` | partial | `Instances` | partial | `Cloud Servers` |
+| ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `OVHcloud` monthly estimate | `Scaleway` fit | `Scaleway` best offering | `Scaleway` monthly estimate | `UpCloud` fit | `UpCloud` best offering | `UpCloud` monthly estimate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `bucket-example` | `storage.object` | direct | `Object Storage` | not estimated: size unknown | direct | `Object Storage` | not estimated: size unknown | direct | `Managed Object Storage` | not estimated: size unknown |
+| `cluster-example` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` | not estimated: size unknown | direct | `Kubernetes Kapsule Dedicated` | not estimated: size unknown | direct | `Managed Kubernetes Production` | not estimated: size unknown |
+| `db-autoscaling-example` | `database.postgresql` | partial | `Managed PostgreSQL` | not estimated: size unknown | partial | `Managed Database for PostgreSQL and MySQL` | not estimated: size unknown | partial | `Managed PostgreSQL` | not estimated: size unknown |
+| `db-example` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` | not estimated: size unknown | partial | `Managed Database for PostgreSQL and MySQL` | not estimated: size unknown | direct | `Managed PostgreSQL Multi-node` | not estimated: size unknown |
+| `db-node-example` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` | not estimated: size unknown | direct | `Managed Database for PostgreSQL and MySQL High Availability` | not estimated: size unknown | direct | `Managed PostgreSQL Multi-node` | not estimated: size unknown |
+| `db-zone-example` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node 3-AZ` | not estimated: size unknown | partial | `Managed Database for PostgreSQL and MySQL` | not estimated: size unknown | partial | `Managed PostgreSQL` | not estimated: size unknown |
+| `fn-example` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `fn-ipv6-example` | `serverless.function` | none |  | not estimated: no fit | partial | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `i-0123456789abcdef0` | `compute.vm` | direct | `Instances` | not estimated: size unknown | direct | `Instances` | not estimated: size unknown | direct | `Cloud Servers` | not estimated: size unknown |
+| `misc-example` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `partial-example` | `compute.vm` | partial | `Instances` | not estimated: size unknown | partial | `Instances` | not estimated: size unknown | partial | `Cloud Servers` | not estimated: size unknown |
 
 ### Blockers on every target
 
@@ -53,19 +61,19 @@
 
 ### Resources
 
-| ID | Raw type | Category | Fit | Best offering | Reasons |
-|---|---|---|---|---|---|
-| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` (tie: `Object Storage 3-AZ`) | `Object Storage` offers every capability the resource uses |
-| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` | `Managed Kubernetes Service 3-AZ` offers every capability the resource uses |
-| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`, `Managed PostgreSQL Multi-node 3-AZ`, `Managed PostgreSQL Multi-node Advanced`, `Managed PostgreSQL Multi-node Advanced 3-AZ`) | `Managed PostgreSQL` does not offer `autoscaling` |
-| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` (tie: `Managed PostgreSQL Multi-node Advanced 3-AZ`) | `Managed PostgreSQL Multi-node Advanced` offers every capability the resource uses |
-| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` (tie: `Managed PostgreSQL Multi-node 3-AZ`, `Managed PostgreSQL Multi-node Advanced`, `Managed PostgreSQL Multi-node Advanced 3-AZ`) | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
-| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node 3-AZ` (tie: `Managed PostgreSQL Multi-node Advanced 3-AZ`) | `Managed PostgreSQL Multi-node 3-AZ` offers every capability the resource uses |
-| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | none |  | no offering in the `OVHcloud` catalog for `serverless.function` |
-| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | none |  | no offering in the `OVHcloud` catalog for `serverless.function` |
-| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `Instances` offers every capability the resource uses |
-| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  | not classified |
-| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Instances` | `Instances` does not offer `node-high-availability` |
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` (tie: `Object Storage 3-AZ`) |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` |  | not estimated: size unknown | `Managed Kubernetes Service 3-AZ` offers every capability the resource uses |
+| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`, `Managed PostgreSQL Multi-node 3-AZ`, `Managed PostgreSQL Multi-node Advanced`, `Managed PostgreSQL Multi-node Advanced 3-AZ`) |  | not estimated: size unknown | `Managed PostgreSQL` does not offer `autoscaling` |
+| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` (tie: `Managed PostgreSQL Multi-node Advanced 3-AZ`) |  | not estimated: size unknown | `Managed PostgreSQL Multi-node Advanced` offers every capability the resource uses |
+| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` (tie: `Managed PostgreSQL Multi-node 3-AZ`, `Managed PostgreSQL Multi-node Advanced`, `Managed PostgreSQL Multi-node Advanced 3-AZ`) |  | not estimated: size unknown | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
+| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node 3-AZ` (tie: `Managed PostgreSQL Multi-node Advanced 3-AZ`) |  | not estimated: size unknown | `Managed PostgreSQL Multi-node 3-AZ` offers every capability the resource uses |
+| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `serverless.function` |
+| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `serverless.function` |
+| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `node-high-availability` |
 
 ### Required changes
 
@@ -77,6 +85,14 @@
 - `fn-example`: no offering in the `OVHcloud` catalog for `serverless.function`
 - `fn-ipv6-example`: no offering in the `OVHcloud` catalog for `serverless.function`
 - `misc-example`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 11 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `GRA`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
 
 ## `Scaleway`
 
@@ -91,19 +107,19 @@
 
 ### Resources
 
-| ID | Raw type | Category | Fit | Best offering | Reasons |
-|---|---|---|---|---|---|
-| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` | `Object Storage` offers every capability the resource uses |
-| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule Dedicated` | `Kubernetes Kapsule Dedicated` offers every capability the resource uses |
-| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `Managed Database for PostgreSQL and MySQL` does not offer `autoscaling` |
-| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
-| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL High Availability` | `Managed Database for PostgreSQL and MySQL High Availability` offers every capability the resource uses |
-| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
-| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` | `Serverless Functions` offers every capability the resource uses |
-| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | partial | `Serverless Functions` | `Serverless Functions` does not offer `ipv6` |
-| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `Instances` offers every capability the resource uses |
-| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  | not classified |
-| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Instances` | `Instances` does not offer `node-high-availability` |
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule Dedicated` |  | not estimated: size unknown | `Kubernetes Kapsule Dedicated` offers every capability the resource uses |
+| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `autoscaling` |
+| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
+| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL High Availability` |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL High Availability` offers every capability the resource uses |
+| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` offers every capability the resource uses |
+| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | partial | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` does not offer `ipv6` |
+| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `node-high-availability` |
 
 ### Required changes
 
@@ -116,6 +132,14 @@
 ### Blockers
 
 - `misc-example`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 11 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
 
 ## `UpCloud`
 
@@ -130,19 +154,19 @@
 
 ### Resources
 
-| ID | Raw type | Category | Fit | Best offering | Reasons |
-|---|---|---|---|---|---|
-| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Managed Object Storage` | `Managed Object Storage` offers every capability the resource uses |
-| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Production` | `Managed Kubernetes Production` offers every capability the resource uses |
-| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) | `Managed PostgreSQL` does not offer `autoscaling` |
-| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
-| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
-| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) | `Managed PostgreSQL` does not offer `zone-high-availability` |
-| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | none |  | no offering in the `UpCloud` catalog for `serverless.function` |
-| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | none |  | no offering in the `UpCloud` catalog for `serverless.function` |
-| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` | `Cloud Servers` offers every capability the resource uses |
-| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  | not classified |
-| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Cloud Servers` | `Cloud Servers` does not offer `node-high-availability` |
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `bucket-example` | `AWS::S3::Bucket` | `storage.object` | direct | `Managed Object Storage` |  | not estimated: size unknown | `Managed Object Storage` offers every capability the resource uses |
+| `cluster-example` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Production` |  | not estimated: size unknown | `Managed Kubernetes Production` offers every capability the resource uses |
+| `db-autoscaling-example` | `AWS::RDS::DBCluster` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) |  | not estimated: size unknown | `Managed PostgreSQL` does not offer `autoscaling` |
+| `db-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
+| `db-node-example` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node` offers every capability the resource uses |
+| `db-zone-example` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) |  | not estimated: size unknown | `Managed PostgreSQL` does not offer `zone-high-availability` |
+| `fn-example` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `serverless.function` |
+| `fn-ipv6-example` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `serverless.function` |
+| `i-0123456789abcdef0` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` offers every capability the resource uses |
+| `misc-example` | `AWS::CloudFormation::CustomResource` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `partial-example` | `AWS::EC2::Instance` | `compute.vm` | partial | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` does not offer `node-high-availability` |
 
 ### Required changes
 
@@ -155,3 +179,11 @@
 - `fn-example`: no offering in the `UpCloud` catalog for `serverless.function`
 - `fn-ipv6-example`: no offering in the `UpCloud` catalog for `serverless.function`
 - `misc-example`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 11 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `de-fra1`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

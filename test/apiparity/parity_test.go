@@ -140,6 +140,98 @@ func TestTheAPIAndTheCLIAgreeOnTheReport(t *testing.T) {
 	}
 }
 
+// emptyRegionExit is the exit code of a command line the CLI refuses: its usage
+// errors use it, and nothing is run.
+const emptyRegionExit = 2
+
+// TestTheAPIAndTheCLIRefuseAnEmptyRegion pins that both driving adapters refuse
+// an empty region: `--region scaleway=` is a usage error before any inventory is
+// read, and `"regions": {"scaleway": ""}` is 400 invalid_request naming the
+// member by its index. Neither may read it as "no region" and assess every
+// region, which would answer a client that pinned one with something else
+// (PRD #190 milestone 8, security-audit follow-up L2).
+func TestTheAPIAndTheCLIRefuseAnEmptyRegion(t *testing.T) {
+	t.Parallel()
+
+	document := readFixture(t, inventoryFixture)
+
+	// The CLI: a usage error, so it names the region option and writes no report.
+	var stdout, stderr bytes.Buffer
+
+	args := []string{
+		"assess",
+		"--inventory", writeInventory(t, document),
+		"--target", "scaleway",
+		"--region", "scaleway=",
+	}
+
+	if code := cli.Run(t.Context(), args, &stdout, &stderr, cliDeps()); code != emptyRegionExit {
+		t.Errorf("shift2eu %s = exit %d, want %d; stderr: %q",
+			strings.Join(args, " "), code, emptyRegionExit, stderr.String())
+	}
+
+	if stdout.Len() != 0 {
+		t.Errorf("shift2eu %s wrote a report for an empty region: %q", strings.Join(args, " "), stdout.String())
+	}
+
+	if !strings.Contains(stderr.String(), "region") {
+		t.Errorf("stderr = %q, want it to name the region option", stderr.String())
+	}
+
+	// The API: 400 invalid_request, the same refusal the decoder makes.
+	rec := postAssessmentWithRegions(t, document, []string{"scaleway"}, map[string]string{"scaleway": ""})
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("POST %s = %d, want %d; body: %q",
+			assessmentsPath, rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+
+	var doc struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+
+	if err := json.Unmarshal(rec.Body.Bytes(), &doc); err != nil {
+		t.Fatalf("the error body is not the documented JSON shape: %v; body: %q", err, rec.Body.String())
+	}
+
+	if doc.Error.Code != "invalid_request" {
+		t.Errorf("error code = %q, want %q; message: %q",
+			doc.Error.Code, "invalid_request", doc.Error.Message)
+	}
+
+	if !strings.Contains(doc.Error.Message, "regions[0]") {
+		t.Errorf("the message = %q, want it to name the member regions[0]", doc.Error.Message)
+	}
+}
+
+// postAssessmentWithRegions posts document and targets with a regions object to
+// the real API handler and returns the recorded response, whatever its status.
+func postAssessmentWithRegions(t *testing.T, document []byte, targets []string,
+	regions map[string]string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+
+	body, err := json.Marshal(struct {
+		Inventory json.RawMessage   `json:"inventory"`
+		Targets   []string          `json:"targets"`
+		Regions   map[string]string `json:"regions"`
+	}{Inventory: document, Targets: targets, Regions: regions})
+	if err != nil {
+		t.Fatalf("encoding the request body: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, assessmentsPath, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	rec := httptest.NewRecorder()
+	apiHandler(t).ServeHTTP(rec, req)
+
+	return rec
+}
+
 // runAssess runs the real CLI over inventoryPath and returns its report, failing
 // the test when the run does not succeed cleanly.
 func runAssess(t *testing.T, inventoryPath string, tc parityCase) []byte {
@@ -384,6 +476,23 @@ func cliDeps() cli.Deps {
 	}
 }
 
+// decodeRequest is what the server's composition root passes as
+// httpapi.Deps.DecodeRequest: the strict request decoder, whose Request is the
+// adapter's own type, carried over to the port's.
+func decodeRequest(body []byte) (httpapi.Request, error) {
+	req, err := assessmentrequest.Decode(body)
+	if err != nil {
+		return httpapi.Request{}, err
+	}
+
+	return httpapi.Request{
+		Inventory: req.Inventory,
+		Targets:   req.Targets,
+		Regions:   req.Regions,
+		Estimate:  req.Estimate,
+	}, nil
+}
+
 // apiHandler wires the HTTP API as its composition root does: the strict request
 // decoder, the in-memory inventory source, the same targets and reporters as the
 // CLI, and the body cap assessmentrequest declares.
@@ -391,7 +500,7 @@ func apiHandler(tb testing.TB) http.Handler {
 	tb.Helper()
 
 	handler, err := httpapi.New(httpapi.Deps{
-		DecodeRequest: assessmentrequest.Decode,
+		DecodeRequest: decodeRequest,
 		NewInventorySource: func(document []byte) analysis.InventorySource {
 			return inventoryfile.FromBytes(document)
 		},

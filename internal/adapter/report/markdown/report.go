@@ -76,17 +76,32 @@ func writeHeader(b *strings.Builder, a assessment.Assessment, meta analysis.Repo
 
 	b.WriteString("- Source: " + codeSpan(a.Source, false) + "\n")
 	b.WriteString("- Catalog: " + target + " snapshot from " + codeSpan(a.Snapshot.SourceURL, false) +
-		", retrieved " + a.Snapshot.RetrievedOn.UTC().Format(dateLayout) + "\n\n")
+		", retrieved " + a.Snapshot.RetrievedOn.UTC().Format(dateLayout) + "\n")
+
+	if region := renderRegion(a); region != "" {
+		b.WriteString("- Region: " + region + "\n")
+	}
+
+	b.WriteString("\n")
 }
 
 // writeBody writes the sections of the report of a: its summary, resources,
-// required changes and blockers, each headed by the heading marker heading and
-// the section's name. It ends with a single newline.
+// required changes and blockers, then the per-workload section when
+// a.ShowWorkloads and the cost summary when a has estimates, each headed by the
+// heading marker heading and the section's name. It ends with a single newline.
 func writeBody(b *strings.Builder, a assessment.Assessment, heading string) {
 	writeSummary(b, a.Summary, heading)
-	writeResources(b, a.Verdicts, heading)
+	writeResources(b, a, heading)
 	writeRequiredChanges(b, a.Verdicts, heading)
-	writeBlockers(b, a.Blockers, heading)
+	writeBlockers(b, a.Blockers, a.Verdicts, heading)
+
+	if a.ShowWorkloads() {
+		writeWorkloads(b, a, heading)
+	}
+
+	if hasEstimates(a) {
+		writeCostEstimate(b, a, heading)
+	}
 }
 
 // writeSummary writes the number of resources per fit, and in total.
@@ -101,21 +116,48 @@ func writeSummary(b *strings.Builder, s assessment.Summary, heading string) {
 	b.WriteString("\n")
 }
 
-// writeResources writes one table row per verdict, in the order given.
-func writeResources(b *strings.Builder, verdicts []assessment.Verdict, heading string) {
-	b.WriteString(heading + " Resources\n\n")
-	writeRow(b, "ID", "Raw type", "Category", "Fit", "Best offering", "Reasons")
-	writeSeparator(b, 6)
+// writeResources writes one table row per verdict of a, in its order. The Plan
+// and Monthly estimate columns are there only when a has estimates, and the
+// Relations column only when some resource has a relation, so a report without
+// either has the same table as before they existed.
+func writeResources(b *strings.Builder, a assessment.Assessment, heading string) {
+	estimates := hasEstimates(a)
+	relations := hasRelations(a.Verdicts)
 
-	for _, v := range verdicts {
-		writeRow(b,
+	header := []string{"ID", "Raw type", "Category", "Fit", "Best offering"}
+	if estimates {
+		header = append(header, "Plan", "Monthly estimate")
+	}
+
+	if relations {
+		header = append(header, "Relations")
+	}
+
+	header = append(header, "Reasons")
+
+	b.WriteString(heading + " Resources\n\n")
+	writeRow(b, header...)
+	writeSeparator(b, len(header))
+
+	for _, v := range a.Verdicts {
+		row := []string{
 			codeSpan(v.Resource.ID, true),
 			codeSpan(v.Resource.RawType, true),
 			codeSpan(string(v.Resource.Category), true),
 			escapeText(string(v.Fit)),
 			renderBestOffering(v),
-			renderReasons(v.Reasons, true),
-		)
+		}
+
+		if estimates {
+			row = append(row, renderPlan(v.Estimate), renderEstimate(v.Estimate))
+		}
+
+		if relations {
+			row = append(row, renderRelations(v))
+		}
+
+		row = append(row, renderReasons(v.Reasons, true))
+		writeRow(b, row...)
 	}
 
 	b.WriteString("\n")
@@ -153,9 +195,11 @@ func writeRequiredChanges(b *strings.Builder, verdicts []assessment.Verdict, hea
 	b.WriteString("\n")
 }
 
-// writeBlockers writes one list item per blocker, in the order given, or "None."
-// when there is none. It ends the report, so it ends with a single newline.
-func writeBlockers(b *strings.Builder, blockers []assessment.Blocker, heading string) {
+// writeBlockers writes one list item per blocker, in the order given, then one
+// item per "affected by" note of the verdicts (assessment.Verdict.AffectedBy), in
+// verdict order, or "None." when there is no blocker. It ends with a single
+// newline.
+func writeBlockers(b *strings.Builder, blockers []assessment.Blocker, verdicts []assessment.Verdict, heading string) {
 	b.WriteString(heading + " Blockers\n\n")
 
 	if len(blockers) == 0 {
@@ -164,8 +208,22 @@ func writeBlockers(b *strings.Builder, blockers []assessment.Blocker, heading st
 		return
 	}
 
+	writeBlockerItems(b, blockers, "")
+
+	for _, v := range verdicts {
+		for _, id := range v.AffectedBy {
+			b.WriteString("- " + codeSpan(v.Resource.ID, false) + ": affected by a blocker on " +
+				codeSpan(id, false) + "\n")
+		}
+	}
+}
+
+// writeBlockerItems writes one list item per blocker, "ID: reason", each line
+// starting with indent.
+func writeBlockerItems(b *strings.Builder, blockers []assessment.Blocker, indent string) {
 	for _, blocker := range blockers {
-		b.WriteString("- " + codeSpan(blocker.ResourceID, false) + ": " + renderReason(blocker.Reason, false) + "\n")
+		b.WriteString(indent + "- " + codeSpan(blocker.ResourceID, false) + ": " +
+			renderReason(blocker.Reason, false) + "\n")
 	}
 }
 

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "assessment",
   "inventoryName": "inventory.json",
   "source": "aws",
@@ -32,7 +32,9 @@
           "offering": "Object Storage"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "db-example",
@@ -51,7 +53,9 @@
           "offering": "Managed Database for PostgreSQL"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "fn-example",
@@ -69,7 +73,9 @@
           "category": "serverless.function"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "i-0123456789abcdef0",
@@ -86,7 +92,9 @@
           "offering": "Instances"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "misc-example",
@@ -102,7 +110,9 @@
           "text": "not classified"
         }
       ],
-      "requiredChanges": []
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": []
     },
     {
       "id": "partial-example",
@@ -129,7 +139,9 @@
       "requiredChanges": [
         "node-high-availability",
         "snapshots"
-      ]
+      ],
+      "relations": [],
+      "affectedBy": []
     }
   ],
   "blockers": [
@@ -148,6 +160,37 @@
         "code": "not-classified",
         "text": "not classified"
       }
+    }
+  ],
+  "workloads": [
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 6,
+      "summary": {
+        "direct": 3,
+        "partial": 1,
+        "none": 2,
+        "total": 6
+      },
+      "blockers": [
+        {
+          "resourceId": "fn-example",
+          "reason": {
+            "code": "no-offering",
+            "text": "no offering in the Scaleway catalog for serverless.function",
+            "target": "Scaleway",
+            "category": "serverless.function"
+          }
+        },
+        {
+          "resourceId": "misc-example",
+          "reason": {
+            "code": "not-classified",
+            "text": "not classified"
+          }
+        }
+      ]
     }
   ]
 }

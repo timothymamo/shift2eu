@@ -6,6 +6,7 @@
 // # Commands
 //
 //	shift2eu assess --inventory <file> --target <targets> [--format <format>] [--output <file>]
+//	                [--region <target>=<region>,...] [--no-estimate]
 //	shift2eu version
 //	shift2eu help
 //
@@ -21,7 +22,20 @@
 // input is not supported, so a source is always a file the inventory-file
 // adapter reads once per run (ADR 0006). The report names the file by its base
 // name only (analysis.ReportMeta). Without --output the report goes to standard
-// output; with it, to the named file. Flags are parsed by the standard library
+// output; with it, to the named file.
+//
+// Estimates are on by default (PRD #190): the run matches each sized resource
+// to a plan and estimates its monthly cost (analysis.Options.Estimate,
+// analysis.ComparisonOptions.Estimate); --no-estimate turns them off, and the
+// report then holds no price at all. --region takes comma-separated
+// <target>=<region> pairs, spaces around each pair, key and region dropped,
+// each naming one selected target at most once: that
+// target is assessed and estimated in that one region (analysis.Options.Region,
+// analysis.Target.Region), every other in all its regions with estimates in its
+// default region. Whether the target lists the region is checked by the use
+// case against the loaded catalog, before the inventory is read; an
+// *analysis.RegionError is a usage error naming the region and the target's
+// regions. Flags are parsed by the standard library
 // flag package, so -flag and --flag are the same.
 //
 // # Exit codes
@@ -36,9 +50,14 @@
 //   - 2: a usage error: no command or an unknown one, a missing --inventory or
 //     --target, an unknown, repeated or empty target in the --target list, or
 //     all with another target (each error lists the supported targets), an
-//     unknown or empty --format (the error lists the supported formats), an
-//     unknown flag or an extra argument. An error line and the usage text go to
-//     standard error, nothing goes to standard output, and no adapter is built.
+//     unknown or empty --format (the error lists the supported formats), a
+//     malformed --region pair, a --region target --target does not select or
+//     one named twice, an unknown flag or an extra argument. An error line and
+//     the usage text go to standard error, nothing goes to standard output, and
+//     no adapter is built. A --region the target's catalog does not list is a
+//     usage error too: it is found once the catalogs are loaded, but before the
+//     inventory is read or the --output file is written, and it prints the same
+//     way.
 //
 // Help (help, -h, --help, or -h after assess) prints the usage text to standard
 // output and exits 0.

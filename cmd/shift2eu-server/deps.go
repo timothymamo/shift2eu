@@ -19,7 +19,7 @@ import (
 // None of them uses the network, a file or credentials.
 func deps() httpapi.Deps {
 	return httpapi.Deps{
-		DecodeRequest: assessmentrequest.Decode,
+		DecodeRequest: decodeRequest,
 		NewInventorySource: func(doc []byte) analysis.InventorySource {
 			return inventoryfile.FromBytes(doc)
 		},
@@ -37,4 +37,20 @@ func deps() httpapi.Deps {
 			NewComparisonReporter: func() analysis.ComparisonReporter { return markdown.New() },
 		},
 	}
+}
+
+// decodeRequest decodes body with assessmentrequest.Decode and converts the
+// adapter's Request into the API's: the API cannot import the adapter.
+func decodeRequest(body []byte) (httpapi.Request, error) {
+	req, err := assessmentrequest.Decode(body)
+	if err != nil {
+		return httpapi.Request{}, err
+	}
+
+	return httpapi.Request{
+		Inventory: req.Inventory,
+		Targets:   req.Targets,
+		Regions:   req.Regions,
+		Estimate:  req.Estimate,
+	}, nil
 }

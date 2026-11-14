@@ -1,0 +1,206 @@
+# Migration assessment: `OVHcloud`, `Scaleway`, `UpCloud`
+
+- Inventory file: `inventory.json`
+- Source: `aws`
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
+- Region: `OVHcloud`: `GRA` (the target's default for estimates)
+- Region: `Scaleway`: `fr-par` (the target's default for estimates)
+- Region: `UpCloud`: `de-fra1` (the target's default for estimates)
+
+## Comparison
+
+### Summary
+
+| Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
+|---|---|---|---|
+| direct | 7 | 5 | 5 |
+| partial | 1 | 6 | 3 |
+| none | 5 | 2 | 5 |
+| total | 13 | 13 | 13 |
+| `OVHcloud` estimate | €0.00 per month for 0 of 13 resources |  |  |
+| `Scaleway` estimate |  | €0.00 per month for 0 of 13 resources |  |
+| `UpCloud` estimate |  |  | €0.00 per month for 0 of 13 resources |
+
+Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
+
+### Resources
+
+| ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `OVHcloud` monthly estimate | `Scaleway` fit | `Scaleway` best offering | `Scaleway` monthly estimate | `UpCloud` fit | `UpCloud` best offering | `UpCloud` monthly estimate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `shop-assets` | `storage.object` | direct | `Object Storage` | not estimated: size unknown | direct | `Object Storage` | not estimated: size unknown | direct | `Managed Object Storage` | not estimated: size unknown |
+| `shop-cdn` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` | not estimated: size unknown | partial | `Managed Database for PostgreSQL and MySQL` | not estimated: size unknown | partial | `Managed PostgreSQL Multi-node` | not estimated: size unknown |
+| `shop-eks` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` | not estimated: size unknown | direct | `Kubernetes Kapsule Dedicated` | not estimated: size unknown | partial | `Managed Kubernetes Production` | not estimated: size unknown |
+| `shop-legacy-mysql` | `database.mysql` | direct | `Managed MySQL Multi-node` | not estimated: size unknown | partial | `Managed Database for PostgreSQL and MySQL High Availability` | not estimated: size unknown | direct | `Managed MySQL Multi-node` | not estimated: size unknown |
+| `shop-orders` | `messaging.queue` | none |  | not estimated: no fit | partial | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `shop-orders-dlq` | `messaging.queue` | none |  | not estimated: no fit | partial | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `shop-thumbnailer` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `shop-web-1` | `compute.vm` | direct | `Instances` | not estimated: size unknown | direct | `Instances` | not estimated: size unknown | direct | `Cloud Servers` | not estimated: size unknown |
+| `shop-web-1-data` | `storage.block` | direct | `Block Storage LUKS` | not estimated: size unknown | partial | `Block Storage` | not estimated: size unknown | direct | `Block Storage Encrypted` | not estimated: size unknown |
+| `shop-web-2` | `compute.vm` | direct | `Instances` | not estimated: size unknown | direct | `Instances` | not estimated: size unknown | direct | `Cloud Servers` | not estimated: size unknown |
+| `shop-web-asg` | `compute.vm` | partial | `Instances` | not estimated: size unknown | partial | `Instances` | not estimated: size unknown | partial | `Cloud Servers` | not estimated: size unknown |
+| `shop.example.com` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+
+### Blockers on every target
+
+- `shop-cdn`
+  - `OVHcloud`: not classified
+  - `Scaleway`: not classified
+  - `UpCloud`: not classified
+- `shop.example.com`
+  - `OVHcloud`: not classified
+  - `Scaleway`: not classified
+  - `UpCloud`: not classified
+
+## `OVHcloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 7 |
+| partial | 1 |
+| none | 5 |
+| total | 13 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` (tie: `Object Storage 3-AZ`) |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node Advanced 3-AZ` offers every capability the resource uses |
+| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` |  | not estimated: size unknown | `Managed Kubernetes Service 3-AZ` offers every capability the resource uses |
+| `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | direct | `Managed MySQL Multi-node` (tie: `Managed MySQL Multi-node 3-AZ`, `Managed MySQL Multi-node Advanced`, `Managed MySQL Multi-node Advanced 3-AZ`) |  | not estimated: size unknown | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `messaging.queue` |
+| `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `messaging.queue` |
+| `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `serverless.function` |
+| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage LUKS` |  | not estimated: size unknown | `Block Storage LUKS` offers every capability the resource uses |
+| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `shop-web-asg` | `AWS::AutoScaling::AutoScalingGroup` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop.example.com` | `AWS::Route53::HostedZone` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+
+### Required changes
+
+- `shop-web-asg`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
+
+### Blockers
+
+- `shop-cdn`: not classified
+- `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
+- `shop-orders-dlq`: no offering in the `OVHcloud` catalog for `messaging.queue`
+- `shop-thumbnailer`: no offering in the `OVHcloud` catalog for `serverless.function`
+- `shop.example.com`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 13 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `GRA`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
+
+## `Scaleway`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 5 |
+| partial | 6 |
+| none | 2 |
+| total | 13 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule Dedicated` |  | not estimated: size unknown | `Kubernetes Kapsule Dedicated` offers every capability the resource uses |
+| `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced | `Queues` does not offer `encryption-at-rest` |
+| `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced | `Queues` does not offer `encryption-at-rest` |
+| `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` offers every capability the resource uses |
+| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | partial | `Block Storage` |  | not estimated: size unknown | `Block Storage` does not offer `encryption-at-rest` |
+| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `shop-web-asg` | `AWS::AutoScaling::AutoScalingGroup` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop.example.com` | `AWS::Route53::HostedZone` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+
+### Required changes
+
+- `shop-db`: `point-in-time-restore`, `zone-high-availability` (not offered by `Managed Database for PostgreSQL and MySQL`)
+- `shop-legacy-mysql`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
+- `shop-orders`: `encryption-at-rest` (not offered by `Queues`)
+- `shop-orders-dlq`: `encryption-at-rest` (not offered by `Queues`)
+- `shop-web-1-data`: `encryption-at-rest` (not offered by `Block Storage`)
+- `shop-web-asg`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
+
+### Blockers
+
+- `shop-cdn`: not classified
+- `shop.example.com`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 13 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
+
+## `UpCloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 5 |
+| partial | 3 |
+| none | 5 |
+| total | 13 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Managed Object Storage` |  | not estimated: size unknown | `Managed Object Storage` offers every capability the resource uses |
+| `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed PostgreSQL Multi-node` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node` does not offer `zone-high-availability` |
+| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | partial | `Managed Kubernetes Production` |  | not estimated: size unknown | `Managed Kubernetes Production` does not offer `autoscaling` |
+| `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | direct | `Managed MySQL Multi-node` |  | not estimated: size unknown | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `messaging.queue` |
+| `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `messaging.queue` |
+| `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `serverless.function` |
+| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` offers every capability the resource uses |
+| `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage Encrypted` |  | not estimated: size unknown | `Block Storage Encrypted` offers every capability the resource uses |
+| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` offers every capability the resource uses |
+| `shop-web-asg` | `AWS::AutoScaling::AutoScalingGroup` | `compute.vm` | partial | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` does not offer `autoscaling`; `Cloud Servers` does not offer `zone-high-availability` |
+| `shop.example.com` | `AWS::Route53::HostedZone` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+
+### Required changes
+
+- `shop-db`: `zone-high-availability` (not offered by `Managed PostgreSQL Multi-node`)
+- `shop-eks`: `autoscaling` (not offered by `Managed Kubernetes Production`)
+- `shop-web-asg`: `autoscaling`, `zone-high-availability` (not offered by `Cloud Servers`)
+
+### Blockers
+
+- `shop-cdn`: not classified
+- `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
+- `shop-orders-dlq`: no offering in the `UpCloud` catalog for `messaging.queue`
+- `shop-thumbnailer`: no offering in the `UpCloud` catalog for `serverless.function`
+- `shop.example.com`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 13 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `de-fra1`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

@@ -1,0 +1,660 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/timothymamo/shift2eu/blob/main/internal/adapter/report/jsonreport/schema/comparison-v2.schema.json",
+  "title": "shift2eu comparison report, version 2",
+  "description": "The JSON report of one inventory compared across several targets.",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "description": "The format version (docs/adr/0018, docs/adr/0030).",
+      "const": 2
+    },
+    "kind": {
+      "description": "The document's kind.",
+      "const": "comparison"
+    },
+    "inventoryName": {
+      "type": "string",
+      "description": "The inventory file's base name, or empty when it did not come from a file."
+    },
+    "source": {
+      "type": "string",
+      "description": "The source the inventory was taken from."
+    },
+    "targets": {
+      "type": "array",
+      "description": "One entry per target, in target key order.",
+      "items": {
+        "$ref": "#/$defs/targetEntry"
+      }
+    },
+    "sharedBlockers": {
+      "type": "array",
+      "description": "The resources blocked on every target, in resource ID order.",
+      "items": {
+        "$ref": "#/$defs/sharedBlocker"
+      }
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "kind",
+    "inventoryName",
+    "source",
+    "targets",
+    "sharedBlockers"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "target": {
+      "type": "object",
+      "description": "The target assessed against and its catalog snapshot.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The target's display name."
+        },
+        "snapshot": {
+          "$ref": "#/$defs/snapshot"
+        }
+      },
+      "required": [
+        "name",
+        "snapshot"
+      ],
+      "additionalProperties": false
+    },
+    "snapshot": {
+      "type": "object",
+      "description": "Where the target's catalog was taken from and when.",
+      "properties": {
+        "source": {
+          "type": "string",
+          "description": "The snapshot's source URL, as stored."
+        },
+        "retrieved": {
+          "type": "string",
+          "description": "The UTC calendar date the snapshot was retrieved, YYYY-MM-DD.",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        }
+      },
+      "required": [
+        "source",
+        "retrieved"
+      ],
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "object",
+      "description": "The number of resources per fit, and in total.",
+      "properties": {
+        "direct": {
+          "type": "integer",
+          "description": "Resources with a direct fit.",
+          "minimum": 0
+        },
+        "partial": {
+          "type": "integer",
+          "description": "Resources with a partial fit.",
+          "minimum": 0
+        },
+        "none": {
+          "type": "integer",
+          "description": "Resources with no fit.",
+          "minimum": 0
+        },
+        "total": {
+          "type": "integer",
+          "description": "Resources assessed.",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "direct",
+        "partial",
+        "none",
+        "total"
+      ],
+      "additionalProperties": false
+    },
+    "resource": {
+      "type": "object",
+      "description": "The verdict on one resource.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The resource's ID."
+        },
+        "rawType": {
+          "type": "string",
+          "description": "The source's own type name, or empty."
+        },
+        "category": {
+          "type": "string",
+          "description": "The taxonomy category."
+        },
+        "region": {
+          "type": "string",
+          "description": "The source region, or empty."
+        },
+        "fit": {
+          "type": "string",
+          "description": "How well the best offering fits.",
+          "enum": [
+            "direct",
+            "partial",
+            "none"
+          ]
+        },
+        "bestOffering": {
+          "type": "string",
+          "description": "The best candidate offering's name, or empty when there is none."
+        },
+        "ties": {
+          "type": "array",
+          "description": "The other candidates with the best one's fit and as many missing capabilities, in candidate order.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reasons": {
+          "type": "array",
+          "description": "The reasons for the fit.",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        },
+        "requiredChanges": {
+          "type": "array",
+          "description": "For a partial fit, the capabilities the best offering lacks; empty otherwise.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "relations": {
+          "type": "array",
+          "description": "The resource's relations, in the inventory's order.",
+          "items": {
+            "$ref": "#/$defs/relation"
+          }
+        },
+        "affectedBy": {
+          "type": "array",
+          "description": "The IDs of the resources this one depends on or is a replica of that have no fit here, sorted; not transitive.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "plan": {
+          "$ref": "#/$defs/plan"
+        },
+        "estimate": {
+          "$ref": "#/$defs/resourceEstimate"
+        }
+      },
+      "required": [
+        "id",
+        "rawType",
+        "category",
+        "region",
+        "fit",
+        "bestOffering",
+        "ties",
+        "reasons",
+        "requiredChanges",
+        "relations",
+        "affectedBy"
+      ],
+      "additionalProperties": false
+    },
+    "reason": {
+      "type": "object",
+      "description": "One reason: a code, its plain sentence, and the names it mentions, each present only when set.",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "The reason code; a consumer must accept a code it does not know."
+        },
+        "text": {
+          "type": "string",
+          "description": "The reason as a plain sentence, not Markdown."
+        },
+        "target": {
+          "type": "string",
+          "description": "The target display name the reason mentions."
+        },
+        "category": {
+          "type": "string",
+          "description": "The taxonomy category the reason mentions."
+        },
+        "offering": {
+          "type": "string",
+          "description": "The offering name the reason mentions."
+        },
+        "capability": {
+          "type": "string",
+          "description": "The capability the reason mentions."
+        }
+      },
+      "required": [
+        "code",
+        "text"
+      ],
+      "additionalProperties": false
+    },
+    "blocker": {
+      "type": "object",
+      "description": "One reason a resource cannot move.",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "description": "The blocked resource's ID."
+        },
+        "reason": {
+          "$ref": "#/$defs/reason"
+        }
+      },
+      "required": [
+        "resourceId",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "targetEntry": {
+      "type": "object",
+      "description": "One compared target: its key and that target's own assessment.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "The target key, as --target names it."
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "region": {
+          "type": "string",
+          "description": "The region chosen for the target (--region or the API's regions), written only when one was chosen, with or without estimates. Absent when none was chosen."
+        },
+        "summary": {
+          "$ref": "#/$defs/summary"
+        },
+        "resources": {
+          "type": "array",
+          "description": "One verdict per resource, in the inventory's order.",
+          "items": {
+            "$ref": "#/$defs/resource"
+          }
+        },
+        "blockers": {
+          "type": "array",
+          "description": "One entry per reason a resource cannot move, in resource order.",
+          "items": {
+            "$ref": "#/$defs/blocker"
+          }
+        },
+        "workloads": {
+          "type": "array",
+          "description": "One group per workload, by name in byte order, then the group without a workload; empty when there is no resource.",
+          "items": {
+            "$ref": "#/$defs/workload"
+          }
+        },
+        "estimate": {
+          "$ref": "#/$defs/estimateBasis"
+        },
+        "sourceCost": {
+          "$ref": "#/$defs/sourceCost"
+        }
+      },
+      "required": [
+        "key",
+        "target",
+        "summary",
+        "resources",
+        "blockers",
+        "workloads"
+      ],
+      "additionalProperties": false
+    },
+    "sharedBlocker": {
+      "type": "object",
+      "description": "A resource blocked on every compared target.",
+      "properties": {
+        "resourceId": {
+          "type": "string",
+          "description": "The blocked resource's ID."
+        },
+        "targets": {
+          "type": "array",
+          "description": "Each target's reasons, in target order.",
+          "items": {
+            "$ref": "#/$defs/targetReasons"
+          }
+        }
+      },
+      "required": [
+        "resourceId",
+        "targets"
+      ],
+      "additionalProperties": false
+    },
+    "targetReasons": {
+      "type": "object",
+      "description": "One target's reasons for a shared blocker.",
+      "properties": {
+        "key": {
+          "type": "string",
+          "description": "The target key."
+        },
+        "reasons": {
+          "type": "array",
+          "description": "The reasons of the resource's verdict on that target.",
+          "items": {
+            "$ref": "#/$defs/reason"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "reasons"
+      ],
+      "additionalProperties": false
+    },
+    "relation": {
+      "type": "object",
+      "description": "One relation of the resource to another resource of the inventory.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "description": "The relation type, in the inventory's vocabulary (such as depends-on or replica-of); a consumer must accept a type it does not know."
+        },
+        "target": {
+          "type": "string",
+          "description": "The ID of the resource the relation points to."
+        }
+      },
+      "required": [
+        "type",
+        "target"
+      ],
+      "additionalProperties": false
+    },
+    "plan": {
+      "type": "object",
+      "description": "The plan the estimate chose or, when no plan is large enough, the largest plan of the best offerings.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The plan's name, as the catalog lists it."
+        },
+        "vcpus": {
+          "type": "integer",
+          "description": "The plan's vCPU count.",
+          "minimum": 0
+        },
+        "memoryGiB": {
+          "type": "string",
+          "description": "The plan's memory in GiB, an exact decimal with at most three fractional digits.",
+          "pattern": "^[0-9]+(\\.[0-9]{1,3})?$"
+        },
+        "includedStorageGiB": {
+          "type": "integer",
+          "description": "The storage the plan includes, in GiB.",
+          "minimum": 0
+        },
+        "price": {
+          "type": "string",
+          "description": "The plan's monthly list price in EUR in the estimate region, a decimal string rounded to the cent; absent when the plan has no price there.",
+          "pattern": "^[0-9]+\\.[0-9]{2}$"
+        }
+      },
+      "required": [
+        "name",
+        "vcpus",
+        "memoryGiB",
+        "includedStorageGiB"
+      ],
+      "additionalProperties": false
+    },
+    "resourceEstimate": {
+      "type": "object",
+      "description": "The resource's monthly estimate: the amount, its breakdown and what it assumed when it is estimated, the reason when it is not. A resource that is not estimated is never counted as 0.",
+      "properties": {
+        "estimated": {
+          "type": "boolean",
+          "description": "Whether the resource is estimated."
+        },
+        "amount": {
+          "type": "string",
+          "description": "The monthly list price in EUR, excluding VAT and discounts, a decimal string rounded to the cent (half away from zero); present only when estimated.",
+          "pattern": "^[0-9]+\\.[0-9]{2}$"
+        },
+        "countAssumed": {
+          "type": "boolean",
+          "description": "Whether the estimate assumed a count of 1 because the resource gives none; present only when estimated."
+        },
+        "hoursAssumed": {
+          "type": "boolean",
+          "description": "Whether the estimate assumed 730 hours a month because the resource gives none; present only when estimated."
+        },
+        "billingCapHours": {
+          "type": "integer",
+          "description": "The most hours a month the estimated plan is billed for: its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
+          "minimum": 1
+        },
+        "breakdown": {
+          "$ref": "#/$defs/breakdown"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why the resource is not estimated (no-fit, usage-priced, no-size, no-plan, no-plan-large-enough, no-price, no-storage-price); present only when not estimated. A consumer must accept a reason it does not know."
+        }
+      },
+      "required": [
+        "estimated"
+      ],
+      "additionalProperties": false
+    },
+    "breakdown": {
+      "type": "object",
+      "description": "What an estimate is made of, each part in EUR as a decimal string rounded to the cent; each part is rounded from its exact value, so the parts sum to the amount give or take a cent.",
+      "properties": {
+        "plan": {
+          "type": "string",
+          "description": "The plan price × count × hours a month / 730; 0.00 for a resource priced by storage.",
+          "pattern": "^[0-9]+\\.[0-9]{2}$"
+        },
+        "storage": {
+          "type": "string",
+          "description": "The storage priced per GiB, never scaled by hours.",
+          "pattern": "^[0-9]+\\.[0-9]{2}$"
+        },
+        "fixedFee": {
+          "type": "string",
+          "description": "The offering's listed fixed fee × hours a month / 730, once per resource and never × count; 0.00 when the offering charges none. A fee the catalog records as the smallest paid size of a tier (such as Scaleway Kubernetes Kapsule Dedicated, see the Scaleway catalog's SOURCES.md) is a lower bound of what the resource is charged.",
+          "pattern": "^[0-9]+\\.[0-9]{2}$"
+        }
+      },
+      "required": [
+        "plan",
+        "storage",
+        "fixedFee"
+      ],
+      "additionalProperties": false
+    },
+    "total": {
+      "type": "object",
+      "description": "A sum of estimates: the amount over the estimated resources only, how many those are, and how many resources there are.",
+      "properties": {
+        "amount": {
+          "type": "string",
+          "description": "The sum in EUR, a decimal string rounded to the cent from the exact sum of the estimates, not summed from the rounded amounts of the resources, so it can differ from that by a cent or so.",
+          "pattern": "^[0-9]+\\.[0-9]{2}$"
+        },
+        "estimated": {
+          "type": "integer",
+          "description": "How many resources were estimated.",
+          "minimum": 0
+        },
+        "resources": {
+          "type": "integer",
+          "description": "How many resources there are, estimated or not.",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "amount",
+        "estimated",
+        "resources"
+      ],
+      "additionalProperties": false
+    },
+    "estimateBasis": {
+      "type": "object",
+      "description": "What the estimates are given on, and their total. Present only when estimates are on.",
+      "properties": {
+        "region": {
+          "type": "string",
+          "description": "The target region the prices are for."
+        },
+        "regionChosen": {
+          "type": "boolean",
+          "description": "True when the region was chosen (--region or the API's regions); false when it is the target's default region for estimates."
+        },
+        "priceDate": {
+          "type": "string",
+          "description": "The UTC calendar date the catalog's prices were retrieved, YYYY-MM-DD.",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "currency": {
+          "description": "The currency of every estimate.",
+          "const": "EUR"
+        },
+        "excluded": {
+          "type": "array",
+          "description": "What the list prices leave out.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "hoursBasis": {
+          "type": "integer",
+          "description": "The hours a month a plan price is for: a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
+          "const": 730
+        },
+        "total": {
+          "$ref": "#/$defs/total"
+        }
+      },
+      "required": [
+        "region",
+        "regionChosen",
+        "priceDate",
+        "currency",
+        "excluded",
+        "hoursBasis",
+        "total"
+      ],
+      "additionalProperties": false
+    },
+    "sourceCost": {
+      "type": "object",
+      "description": "What the source charges a month, per currency, never converted. Present only when estimates are on.",
+      "properties": {
+        "covered": {
+          "type": "integer",
+          "description": "How many resources the inventory gives a cost for.",
+          "minimum": 0
+        },
+        "resources": {
+          "type": "integer",
+          "description": "How many resources there are, with a cost or not.",
+          "minimum": 0
+        },
+        "currencies": {
+          "type": "array",
+          "description": "One sum per currency, by currency code in byte order.",
+          "items": {
+            "$ref": "#/$defs/currencyCost"
+          }
+        }
+      },
+      "required": [
+        "covered",
+        "resources",
+        "currencies"
+      ],
+      "additionalProperties": false
+    },
+    "currencyCost": {
+      "type": "object",
+      "description": "The source's monthly cost in one currency.",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "description": "The ISO 4217 code, as the inventory gives it."
+        },
+        "amount": {
+          "type": "string",
+          "description": "The sum in that currency, a decimal string rounded to the cent from the exact sum of the source costs.",
+          "pattern": "^[0-9]+\\.[0-9]{2}$"
+        },
+        "resources": {
+          "type": "integer",
+          "description": "How many resources have a cost in that currency.",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "currency",
+        "amount",
+        "resources"
+      ],
+      "additionalProperties": false
+    },
+    "workload": {
+      "type": "object",
+      "description": "The assessment of one workload: the resources that name it, or, for noWorkload, those that name none.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "The workload's name, its runs of white space collapsed to one space; empty for the group without a workload."
+        },
+        "noWorkload": {
+          "type": "boolean",
+          "description": "True for the group of the resources that name no workload."
+        },
+        "resources": {
+          "type": "integer",
+          "description": "How many resources the group holds.",
+          "minimum": 0
+        },
+        "summary": {
+          "$ref": "#/$defs/summary"
+        },
+        "blockers": {
+          "type": "array",
+          "description": "The blockers of the group's resources, in resource order.",
+          "items": {
+            "$ref": "#/$defs/blocker"
+          }
+        },
+        "estimate": {
+          "$ref": "#/$defs/total"
+        },
+        "sourceCost": {
+          "$ref": "#/$defs/sourceCost"
+        }
+      },
+      "required": [
+        "name",
+        "noWorkload",
+        "resources",
+        "summary",
+        "blockers"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "comparison",
   "inventoryName": "inventory.json",
   "source": "aws",
@@ -35,7 +35,9 @@
               "offering": "Object Storage"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "db-example",
@@ -52,7 +54,9 @@
               "offering": "Managed PostgreSQL"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "fn-example",
@@ -70,7 +74,9 @@
               "category": "serverless.function"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "misc-example",
@@ -86,7 +92,9 @@
               "text": "not classified"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "partial-example",
@@ -106,7 +114,9 @@
           ],
           "requiredChanges": [
             "node-high-availability"
-          ]
+          ],
+          "relations": [],
+          "affectedBy": []
         }
       ],
       "blockers": [
@@ -125,6 +135,37 @@
             "code": "not-classified",
             "text": "not classified"
           }
+        }
+      ],
+      "workloads": [
+        {
+          "name": "",
+          "noWorkload": true,
+          "resources": 5,
+          "summary": {
+            "direct": 2,
+            "partial": 1,
+            "none": 2,
+            "total": 5
+          },
+          "blockers": [
+            {
+              "resourceId": "fn-example",
+              "reason": {
+                "code": "no-offering",
+                "text": "no offering in the OVHcloud catalog for serverless.function",
+                "target": "OVHcloud",
+                "category": "serverless.function"
+              }
+            },
+            {
+              "resourceId": "misc-example",
+              "reason": {
+                "code": "not-classified",
+                "text": "not classified"
+              }
+            }
+          ]
         }
       ]
     },
@@ -159,7 +200,9 @@
               "offering": "Object Storage"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "db-example",
@@ -178,7 +221,9 @@
               "offering": "Managed Database for PostgreSQL"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "fn-example",
@@ -196,7 +241,9 @@
               "category": "serverless.function"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "misc-example",
@@ -212,7 +259,9 @@
               "text": "not classified"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "partial-example",
@@ -239,7 +288,9 @@
           "requiredChanges": [
             "node-high-availability",
             "snapshots"
-          ]
+          ],
+          "relations": [],
+          "affectedBy": []
         }
       ],
       "blockers": [
@@ -258,6 +309,37 @@
             "code": "not-classified",
             "text": "not classified"
           }
+        }
+      ],
+      "workloads": [
+        {
+          "name": "",
+          "noWorkload": true,
+          "resources": 5,
+          "summary": {
+            "direct": 2,
+            "partial": 1,
+            "none": 2,
+            "total": 5
+          },
+          "blockers": [
+            {
+              "resourceId": "fn-example",
+              "reason": {
+                "code": "no-offering",
+                "text": "no offering in the Scaleway catalog for serverless.function",
+                "target": "Scaleway",
+                "category": "serverless.function"
+              }
+            },
+            {
+              "resourceId": "misc-example",
+              "reason": {
+                "code": "not-classified",
+                "text": "not classified"
+              }
+            }
+          ]
         }
       ]
     },
@@ -295,7 +377,9 @@
           ],
           "requiredChanges": [
             "object-versioning"
-          ]
+          ],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "db-example",
@@ -313,7 +397,9 @@
               "category": "database.postgresql"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "fn-example",
@@ -331,7 +417,9 @@
               "category": "serverless.function"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "misc-example",
@@ -347,7 +435,9 @@
               "text": "not classified"
             }
           ],
-          "requiredChanges": []
+          "requiredChanges": [],
+          "relations": [],
+          "affectedBy": []
         },
         {
           "id": "partial-example",
@@ -367,7 +457,9 @@
           ],
           "requiredChanges": [
             "node-high-availability"
-          ]
+          ],
+          "relations": [],
+          "affectedBy": []
         }
       ],
       "blockers": [
@@ -395,6 +487,46 @@
             "code": "not-classified",
             "text": "not classified"
           }
+        }
+      ],
+      "workloads": [
+        {
+          "name": "",
+          "noWorkload": true,
+          "resources": 5,
+          "summary": {
+            "direct": 0,
+            "partial": 2,
+            "none": 3,
+            "total": 5
+          },
+          "blockers": [
+            {
+              "resourceId": "db-example",
+              "reason": {
+                "code": "no-offering",
+                "text": "no offering in the UpCloud catalog for database.postgresql",
+                "target": "UpCloud",
+                "category": "database.postgresql"
+              }
+            },
+            {
+              "resourceId": "fn-example",
+              "reason": {
+                "code": "no-offering",
+                "text": "no offering in the UpCloud catalog for serverless.function",
+                "target": "UpCloud",
+                "category": "serverless.function"
+              }
+            },
+            {
+              "resourceId": "misc-example",
+              "reason": {
+                "code": "not-classified",
+                "text": "not classified"
+              }
+            }
+          ]
         }
       ]
     }

@@ -22,6 +22,7 @@ const validatorSchema = `{
   "required": ["name", "kind", "items"],
   "properties": {
     "name": {"type": "string", "pattern": "^[a-z]+$"},
+    "label": {"type": "string", "minLength": 3},
     "kind": {"enum": ["assessment", "comparison"]},
     "version": {"const": 1},
     "count": {"type": "integer", "minimum": 0},
@@ -50,7 +51,7 @@ func TestSchemaAcceptsAValidDocument(t *testing.T) {
 		t.Fatalf("ParseSchema() returned unexpected error: %v", err)
 	}
 
-	document := `{"name":"report","kind":"assessment","version":1,"count":0,"ratio":1.5,` +
+	document := `{"name":"report","label":"abc","kind":"assessment","version":1,"count":0,"ratio":1.5,` +
 		`"items":[{"id":"a"}],"nothing":null}`
 
 	mismatches, err := schema.Mismatches([]byte(document))
@@ -117,6 +118,18 @@ func TestSchemaRefusesInvalidDocuments(t *testing.T) {
 			name:     "an array with too few items",
 			document: `{"name":"report","kind":"assessment","items":[]}`,
 			want:     []string{"want at least 1 items, got 0"},
+		},
+		{
+			// minLength counts characters, not bytes: two runes of two bytes each
+			// are two characters, and still fewer than three.
+			name:     "a string shorter than the minimum length",
+			document: `{"name":"report","label":"éé","kind":"assessment","items":[{"id":"a"}]}`,
+			want:     []string{"want at least 3 characters, got 2"},
+		},
+		{
+			name:     "an empty string where a minimum length is declared",
+			document: `{"name":"report","label":"","kind":"assessment","items":[{"id":"a"}]}`,
+			want:     []string{"want at least 3 characters, got 0"},
 		},
 		{
 			name:     "a referred schema the element breaks",

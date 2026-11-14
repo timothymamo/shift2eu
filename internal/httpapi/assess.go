@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"slices"
@@ -71,25 +72,40 @@ func (a *api) assess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	doc, keys, err := a.deps.DecodeRequest(body)
+	req, err := a.deps.DecodeRequest(body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", escape(err.Error()))
 
 		return
 	}
 
-	selected, err := a.selectTargets(keys)
+	selected, err := a.selectTargets(req.Targets)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_targets", err.Error())
 
 		return
 	}
 
-	report, err := a.run(r.Context(), doc, selected, format)
+	if err := a.checkRegionTargets(req.Regions, selected); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_region", escape(err.Error()))
+
+		return
+	}
+
+	report, err := a.run(r.Context(), req, selected, format)
 	if err != nil {
 		var invalid *inventoryError
 		if errors.As(err, &invalid) && r.Context().Err() == nil {
 			writeError(w, http.StatusBadRequest, "invalid_inventory", escape(invalid.err.Error()))
+
+			return
+		}
+
+		// The use case checks a chosen region against the loaded catalog
+		// before it reads the inventory, so nothing was assessed.
+		var regionErr *analysis.RegionError
+		if errors.As(err, &regionErr) && r.Context().Err() == nil {
+			writeError(w, http.StatusBadRequest, "invalid_region", escape(regionMessage(regionErr, selected)))
 
 			return
 		}
@@ -197,11 +213,81 @@ func (a *api) selectTargets(keys []string) ([]string, error) {
 	return selected, nil
 }
 
+// checkRegionTargets refuses regions that name a target the request does not
+// select. A supported target key is named, as the API names its own keys; any
+// other key is client data, never echoed (ADR 0019).
+func (a *api) checkRegionTargets(regions map[string]string, selected []string) error {
+	selectedList := "selected targets: " + strings.Join(selected, ", ")
+
+	for _, key := range slices.Sorted(maps.Keys(regions)) {
+		if slices.Contains(selected, key) {
+			continue
+		}
+
+		if _, ok := a.deps.Targets[key]; ok {
+			return fmt.Errorf("regions names the target %q, which targets does not select; %s", key, selectedList)
+		}
+
+		return errors.New("regions names a target that is not supported; " + selectedList)
+	}
+
+	return nil
+}
+
+// maxEchoedRegion is the longest region a message names (ADR 0030).
+const maxEchoedRegion = 64
+
+// regionMessage words err, a region a target's catalog does not list, for
+// the client: the target (one of the API's own keys) and the target's regions,
+// which are the catalog's. The region the client sent is named only when it
+// is region-shaped (isRegionName), so a message holds no markup, control
+// character or long text from the request (ADR 0030 amends ADR 0019's
+// no-echo rule for this one value).
+func regionMessage(err *analysis.RegionError, selected []string) string {
+	key := err.Target
+	if key == "" && len(selected) == 1 {
+		key = selected[0]
+	}
+
+	region := "the region"
+	if isRegionName(err.Region) {
+		region = fmt.Sprintf("the region %q", err.Region)
+	}
+
+	quoted := make([]string, 0, len(err.Regions))
+	for _, r := range err.Regions {
+		quoted = append(quoted, strconv.Quote(r))
+	}
+
+	return fmt.Sprintf("%s for the target %q is not one of the target's regions: %s",
+		region, key, strings.Join(quoted, ", "))
+}
+
+// isRegionName reports whether s looks like a region name: 1 to
+// maxEchoedRegion ASCII letters, digits, hyphens, underscores and dots.
+func isRegionName(s string) bool {
+	if s == "" || len(s) > maxEchoedRegion {
+		return false
+	}
+
+	for _, c := range []byte(s) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+
+	return true
+}
+
 // run builds the use case for the selected targets, one target's analysis or
-// a comparison of several, runs it and returns the whole report. An error the
-// inventory source returns is an *inventoryError.
-func (a *api) run(ctx context.Context, doc []byte, keys []string, format Format) ([]byte, error) {
-	source := inventorySource{inner: a.deps.NewInventorySource(doc)}
+// a comparison of several, with the request's regions and estimate switch,
+// runs it and returns the whole report. An error the inventory source returns
+// is an *inventoryError; a region a target's catalog does not list is an
+// *analysis.RegionError, returned before the inventory is read.
+func (a *api) run(ctx context.Context, req Request, keys []string, format Format) ([]byte, error) {
+	source := inventorySource{inner: a.deps.NewInventorySource(req.Inventory)}
 	meta := analysis.ReportMeta{InventoryName: inventoryName}
 
 	var report bytes.Buffer
@@ -212,7 +298,8 @@ func (a *api) run(ctx context.Context, doc []byte, keys []string, format Format)
 			return nil, err
 		}
 
-		if err := single.Run(ctx, &report, meta); err != nil {
+		opts := analysis.Options{Region: req.Regions[keys[0]], Estimate: req.Estimate}
+		if err := single.RunWith(ctx, &report, meta, opts); err != nil {
 			return nil, err
 		}
 
@@ -221,7 +308,7 @@ func (a *api) run(ctx context.Context, doc []byte, keys []string, format Format)
 
 	targets := make([]analysis.Target, 0, len(keys))
 	for _, key := range keys {
-		targets = append(targets, analysis.Target{Key: key, Catalog: a.deps.Targets[key]()})
+		targets = append(targets, analysis.Target{Key: key, Catalog: a.deps.Targets[key](), Region: req.Regions[key]})
 	}
 
 	comparison, err := analysis.NewComparison(source, targets, format.NewComparisonReporter())
@@ -229,7 +316,7 @@ func (a *api) run(ctx context.Context, doc []byte, keys []string, format Format)
 		return nil, err
 	}
 
-	if err := comparison.Run(ctx, &report, meta); err != nil {
+	if err := comparison.RunWith(ctx, &report, meta, analysis.ComparisonOptions{Estimate: req.Estimate}); err != nil {
 		return nil, err
 	}
 

@@ -1,0 +1,55 @@
+# Migration assessment: `Scaleway`
+
+- Inventory file: `inventory.json`
+- Source: `gcp`
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Region: `fr-par` (the target's default for estimates)
+
+## Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 7 |
+| partial | 5 |
+| none | 2 |
+| total | 14 |
+
+## Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `shop-assets` | `storage.googleapis.com/Bucket` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
+| `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` offers every capability the resource uses |
+| `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | partial | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) |  | not estimated: size unknown | `Kubernetes Kapsule` does not offer `zone-high-availability` |
+| `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | `Queues` offers every capability the resource uses |
+| `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | `Queues` offers every capability the resource uses |
+| `shop-resize-images` | `cloudfunctions.googleapis.com/Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` offers every capability the resource uses |
+| `shop-search-bms` | `baremetalsolution.googleapis.com/Instance` | `compute.baremetal` | direct | `Elastic Metal` |  | not estimated: size unknown | `Elastic Metal` offers every capability the resource uses |
+| `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | partial | `Block Storage` |  | not estimated: size unknown | `Block Storage` does not offer `encryption-at-rest` |
+| `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+
+## Required changes
+
+- `shop-catalog-mysql`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL`)
+- `shop-db`: `point-in-time-restore`, `zone-high-availability` (not offered by `Managed Database for PostgreSQL and MySQL`)
+- `shop-gke`: `zone-high-availability` (not offered by `Kubernetes Kapsule`)
+- `shop-web-1-data`: `encryption-at-rest` (not offered by `Block Storage`)
+- `shop-web-mig`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
+
+## Blockers
+
+- `shop-cdn-backend`: not classified
+- `shop-zone`: not classified
+
+## Cost estimate
+
+- Total: €0.00 per month for 0 of 14 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

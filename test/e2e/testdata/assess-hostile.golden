@@ -3,6 +3,7 @@
 - Inventory file: `inventory-hostile.json`
 - Source: `aws`
 - Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Region: `fr-par` (the target's default for estimates)
 
 ## Summary
 
@@ -15,12 +16,12 @@
 
 ## Resources
 
-| ID | Raw type | Category | Fit | Best offering | Reasons |
-|---|---|---|---|---|---|
-| `#1` | `$\Huge X$` | `storage.object` | direct | `Object Storage` | `Object Storage` offers every capability the resource uses |
-| `[ ] x` | `@octocat` | `compute.vm` | direct | `Instances` | `Instances` offers every capability the resource uses |
-| `a\|b` | `<b>` | `compute.vm` | partial | `Instances` | `Instances` does not offer `node-high-availability` |
-| ``tick`x`` | `:x:` | `storage.object` | direct | `Object Storage` | `Object Storage` offers every capability the resource uses |
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Relations | Reasons |
+|---|---|---|---|---|---|---|---|---|
+| `#1` | `$\Huge X$` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown | depends-on `a\|b` | `Object Storage` offers every capability the resource uses |
+| `[ ] x` | `@octocat` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown |  | `Instances` offers every capability the resource uses |
+| `a\|b` | `<b>` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown |  | `Instances` does not offer `node-high-availability` |
+| ``tick`x`` | `:x:` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown |  | `Object Storage` offers every capability the resource uses |
 
 ## Required changes
 
@@ -29,3 +30,27 @@
 ## Blockers
 
 None.
+
+## Workloads
+
+### ``ws|`x`[a](b) # h``
+
+- Fit: 1 direct, 0 partial, 0 none
+- Monthly estimate: €0.00 per month for 0 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: none in the inventory
+- Blockers: none
+
+### No workload
+
+- Fit: 2 direct, 1 partial, 0 none
+- Monthly estimate: €0.00 per month for 0 of 3 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: none in the inventory
+- Blockers: none
+
+## Cost estimate
+
+- Total: €0.00 per month for 0 of 4 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

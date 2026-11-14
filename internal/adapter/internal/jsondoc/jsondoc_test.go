@@ -1028,6 +1028,9 @@ func TestValueTypes(t *testing.T) {
 		wantContains []string
 		// wantQuoted lists values the message must show through text.Quote.
 		wantQuoted []string
+		// wantAbsent lists text the message must not hold: the keys and values a
+		// document sent, which are data and are never echoed.
+		wantAbsent []string
 	}{
 		{
 			name:         "String of a number",
@@ -1079,6 +1082,44 @@ func TestValueTypes(t *testing.T) {
 			wantContains: []string{"is null, want an object"},
 		},
 		{
+			name:         "Bool of a string",
+			data:         `{"s": "true"}`,
+			read:         readBool,
+			wantContains: []string{"is a string, want a boolean"},
+			wantQuoted:   []string{"s"},
+			wantAbsent:   []string{"true"},
+		},
+		{
+			name:         "Bool of a number",
+			data:         `{"s": 1}`,
+			read:         readBool,
+			wantContains: []string{"is a number, want a boolean"},
+		},
+		{
+			name:         "Bool of null",
+			data:         `{"s": null}`,
+			read:         readBool,
+			wantContains: []string{"is null, want a boolean"},
+		},
+		{
+			name:         "Members of an array",
+			data:         `{"s": []}`,
+			read:         readMembers,
+			wantContains: []string{"is an array, want an object of strings"},
+		},
+		{
+			name:         "Members of a string",
+			data:         `{"s": "x"}`,
+			read:         readMembers,
+			wantContains: []string{"is a string, want an object of strings"},
+		},
+		{
+			name:         "Members of null",
+			data:         `{"s": null}`,
+			read:         readMembers,
+			wantContains: []string{"is null, want an object of strings"},
+		},
+		{
 			name:         "array element of the wrong type",
 			data:         `{"s": [1]}`,
 			read:         readArrayOfStrings,
@@ -1118,6 +1159,13 @@ func TestValueTypes(t *testing.T) {
 					t.Errorf("read error = %q, want it to show %s through text.Quote", msg, quoted)
 				}
 			}
+
+			for _, unwanted := range tt.wantAbsent {
+				if strings.Contains(msg, unwanted) {
+					t.Errorf("read error = %q, want it without %s, which is data, not a name", msg,
+						text.Quote(unwanted))
+				}
+			}
 		})
 	}
 }
@@ -1150,6 +1198,198 @@ func readArrayOfStrings(w *jsondoc.Walker) error {
 // readObject reads the walker's next value as an object with no listed keys.
 func readObject(w *jsondoc.Walker) error {
 	return w.Object(nil, func(string) error { return nil })
+}
+
+// readBool reads the walker's next value as a boolean.
+func readBool(w *jsondoc.Walker) error {
+	_, err := w.Bool()
+
+	return err
+}
+
+// readMembers reads the walker's next value as an object of strings.
+func readMembers(w *jsondoc.Walker) error {
+	return w.Members("an object of strings", func(int, string) error {
+		_, err := w.String()
+
+		return err
+	})
+}
+
+// TestBool pins reading a boolean: true and false are read as they are, and a
+// value of any other type, null included, is refused as a value of the wrong
+// type.
+func TestBool(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		data string
+		want bool
+	}{
+		{name: "true", data: `{"b": true}`, want: true},
+		{name: "false", data: `{"b": false}`, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			w := open(t, tt.data).Walker()
+
+			var got bool
+
+			err := w.Object([]jsondoc.Key{{Name: "b"}}, func(string) error {
+				var err error
+				got, err = w.Bool()
+
+				return err
+			})
+			if err != nil {
+				t.Fatalf("Object() returned unexpected error: %v", err)
+			}
+
+			if got != tt.want {
+				t.Errorf("Bool() = %t, want %t", got, tt.want)
+			}
+		})
+	}
+}
+
+// readMembersOfRegions drives the walk over a document whose one key, regions,
+// has a value read with Members, and returns the members read, in document
+// order, and the error the walk stopped with. The keys are data, so a failure
+// of the walk names them by index, never by the key itself.
+func readMembersOfRegions(t *testing.T, data string) (keys, values []string, err error) {
+	t.Helper()
+
+	w := open(t, data).Walker()
+
+	err = w.Object([]jsondoc.Key{{Name: "regions"}}, func(string) error {
+		return w.Members("an object of strings", func(_ int, key string) error {
+			value, err := w.String()
+			if err != nil {
+				return err
+			}
+
+			keys = append(keys, key)
+			values = append(values, value)
+
+			return nil
+		})
+	})
+
+	return keys, values, err
+}
+
+// TestMembers pins reading an object whose keys are data: Members hands the
+// format each member's index and its decoded key in document order, names a
+// member's value by its index in brackets, places a repeated key by line and
+// column only, and, because a key here is data rather than a name the format
+// lists, never echoes a key or a value in an error.
+func TestMembers(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// regions is the JSON of the document's regions member.
+		regions string
+		// wantKeys and wantValues are the members read, in document order.
+		wantKeys   []string
+		wantValues []string
+		// wantContains lists substrings an error must hold and wantQuoted ones
+		// it must show through text.Quote.
+		wantContains []string
+		wantQuoted   []string
+		// wantAbsent lists text the error must not hold: the keys and values
+		// the document sent, which are data.
+		wantAbsent []string
+	}{
+		{
+			name:       "members in document order",
+			regions:    `{"fr-par": "r1", "gra": "r2"}`,
+			wantKeys:   []string{"fr-par", "gra"},
+			wantValues: []string{"r1", "r2"},
+		},
+		{
+			name:    "an empty object",
+			regions: `{}`,
+		},
+		{
+			name:       "a key with its JSON escapes decoded",
+			regions:    `{"a\nb": "x"}`,
+			wantKeys:   []string{"a\nb"},
+			wantValues: []string{"x"},
+		},
+		{
+			name:         "a member value of the wrong type",
+			regions:      `{"api-key-1234": 1}`,
+			wantContains: []string{"is a number, want a string"},
+			wantQuoted:   []string{"regions[0]"},
+			wantAbsent:   []string{"api-key-1234"},
+		},
+		{
+			name:         "a member value of the wrong type, past a member that read",
+			regions:      `{"a": "x", "b": [1]}`,
+			wantContains: []string{"is an array, want a string"},
+			wantQuoted:   []string{"regions[1]"},
+			wantAbsent:   []string{"\"a\"", "\"b\""},
+		},
+		{
+			name:         "a repeated member key",
+			regions:      `{"leaky-key": "leaky-value", "leaky-key": "other-value"}`,
+			wantContains: []string{"repeated key", "line 1, column 42"},
+			wantQuoted:   []string{"regions"},
+			wantAbsent:   []string{"leaky-key", "leaky-value", "other-value"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			keys, values, err := readMembersOfRegions(t, `{"regions": `+tt.regions+`}`)
+
+			if len(tt.wantContains) > 0 || len(tt.wantQuoted) > 0 || len(tt.wantAbsent) > 0 {
+				checkDocumentError(t, err)
+
+				msg := err.Error()
+
+				for _, want := range tt.wantContains {
+					if !strings.Contains(msg, want) {
+						t.Errorf("read error = %q, want it to contain %s", msg, text.Quote(want))
+					}
+				}
+
+				for _, value := range tt.wantQuoted {
+					if quoted := text.Quote(value); !strings.Contains(msg, quoted) {
+						t.Errorf("read error = %q, want it to show %s through text.Quote", msg, quoted)
+					}
+				}
+
+				for _, unwanted := range tt.wantAbsent {
+					if strings.Contains(msg, unwanted) {
+						t.Errorf("read error = %q, want it without %s, which is data, not a name", msg,
+							text.Quote(unwanted))
+					}
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("the walk returned unexpected error: %v", err)
+			}
+
+			if diff := cmp.Diff(tt.wantKeys, keys); diff != "" {
+				t.Errorf("the member keys mismatch (-want +got):\n%s", diff)
+			}
+
+			if diff := cmp.Diff(tt.wantValues, values); diff != "" {
+				t.Errorf("the member values mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 // TestNull pins the null policy the walker leaves to the format: Null reports

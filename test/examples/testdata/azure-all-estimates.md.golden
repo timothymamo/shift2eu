@@ -1,0 +1,195 @@
+# Migration assessment: `OVHcloud`, `Scaleway`, `UpCloud`
+
+- Inventory file: `inventory.json`
+- Source: `azure`
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-13
+- Catalog: `Scaleway` snapshot from `https://www.scaleway.com/en/pricing/`, retrieved 2026-11-13
+- Catalog: `UpCloud` snapshot from `https://upcloud.com/pricing/`, retrieved 2026-11-13
+- Region: `OVHcloud`: `GRA` (the target's default for estimates)
+- Region: `Scaleway`: `fr-par` (the target's default for estimates)
+- Region: `UpCloud`: `de-fra1` (the target's default for estimates)
+
+## Comparison
+
+### Summary
+
+| Fit | `OVHcloud` | `Scaleway` | `UpCloud` |
+|---|---|---|---|
+| direct | 6 | 4 | 4 |
+| partial | 1 | 5 | 3 |
+| none | 4 | 2 | 4 |
+| total | 11 | 11 | 11 |
+| `OVHcloud` estimate | €0.00 per month for 0 of 11 resources |  |  |
+| `Scaleway` estimate |  | €0.00 per month for 0 of 11 resources |  |
+| `UpCloud` estimate |  |  | €0.00 per month for 0 of 11 resources |
+
+Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
+
+### Resources
+
+| ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `OVHcloud` monthly estimate | `Scaleway` fit | `Scaleway` best offering | `Scaleway` monthly estimate | `UpCloud` fit | `UpCloud` best offering | `UpCloud` monthly estimate |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `aks-shop` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` | not estimated: size unknown | partial | `Kubernetes Kapsule` | not estimated: size unknown | partial | `Managed Kubernetes` | not estimated: size unknown |
+| `cdn-shop` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `disk-shop-web-1-data` | `storage.block` | direct | `Block Storage LUKS` | not estimated: size unknown | partial | `Block Storage` | not estimated: size unknown | direct | `Block Storage Encrypted` | not estimated: size unknown |
+| `dns-shop` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
+| `func-shop-thumbnails` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `mysql-shop-catalog` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` | not estimated: size unknown | partial | `Managed Database for PostgreSQL and MySQL High Availability` | not estimated: size unknown | direct | `Managed MySQL Multi-node` | not estimated: size unknown |
+| `psql-shop` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` | not estimated: size unknown | partial | `Managed Database for PostgreSQL and MySQL` | not estimated: size unknown | partial | `Managed PostgreSQL Multi-node` | not estimated: size unknown |
+| `sb-shop-orders` | `messaging.queue` | none |  | not estimated: no fit | direct | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
+| `stshopassets` | `storage.object` | direct | `Object Storage` | not estimated: size unknown | direct | `Object Storage` | not estimated: size unknown | direct | `Managed Object Storage` | not estimated: size unknown |
+| `vm-shop-web-1` | `compute.vm` | direct | `Instances` | not estimated: size unknown | direct | `Instances` | not estimated: size unknown | direct | `Cloud Servers` | not estimated: size unknown |
+| `vmss-shop-web` | `compute.vm` | partial | `Instances` | not estimated: size unknown | partial | `Instances` | not estimated: size unknown | partial | `Cloud Servers` | not estimated: size unknown |
+
+### Blockers on every target
+
+- `cdn-shop`
+  - `OVHcloud`: not classified
+  - `Scaleway`: not classified
+  - `UpCloud`: not classified
+- `dns-shop`
+  - `OVHcloud`: not classified
+  - `Scaleway`: not classified
+  - `UpCloud`: not classified
+
+## `OVHcloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 6 |
+| partial | 1 |
+| none | 4 |
+| total | 11 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `aks-shop` | `Microsoft.ContainerService/managedClusters` | `kubernetes.managed` | direct | `Managed Kubernetes Service 3-AZ` |  | not estimated: size unknown | `Managed Kubernetes Service 3-AZ` offers every capability the resource uses |
+| `cdn-shop` | `Microsoft.Cdn/profiles` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `disk-shop-web-1-data` | `Microsoft.Compute/disks` | `storage.block` | direct | `Block Storage LUKS` |  | not estimated: size unknown | `Block Storage LUKS` offers every capability the resource uses |
+| `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `serverless.function` |
+| `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` (tie: `Managed MySQL Multi-node Advanced 3-AZ`) |  | not estimated: size unknown | `Managed MySQL Multi-node Advanced` offers every capability the resource uses |
+| `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node Advanced 3-AZ` offers every capability the resource uses |
+| `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `OVHcloud` catalog for `messaging.queue` |
+| `stshopassets` | `Microsoft.Storage/storageAccounts` | `storage.object` | direct | `Object Storage` (tie: `Object Storage 3-AZ`) |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `vm-shop-web-1` | `Microsoft.Compute/virtualMachines` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `vmss-shop-web` | `Microsoft.Compute/virtualMachineScaleSets` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+
+### Required changes
+
+- `vmss-shop-web`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
+
+### Blockers
+
+- `cdn-shop`: not classified
+- `dns-shop`: not classified
+- `func-shop-thumbnails`: no offering in the `OVHcloud` catalog for `serverless.function`
+- `sb-shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 11 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `GRA`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
+
+## `Scaleway`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 4 |
+| partial | 5 |
+| none | 2 |
+| total | 11 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `aks-shop` | `Microsoft.ContainerService/managedClusters` | `kubernetes.managed` | partial | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) |  | not estimated: size unknown | `Kubernetes Kapsule` does not offer `zone-high-availability` |
+| `cdn-shop` | `Microsoft.Cdn/profiles` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `disk-shop-web-1-data` | `Microsoft.Compute/disks` | `storage.block` | partial | `Block Storage` |  | not estimated: size unknown | `Block Storage` does not offer `encryption-at-rest` |
+| `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | `Serverless Functions` offers every capability the resource uses |
+| `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
+| `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) |  | not estimated: size unknown | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | `Queues` offers every capability the resource uses |
+| `stshopassets` | `Microsoft.Storage/storageAccounts` | `storage.object` | direct | `Object Storage` |  | not estimated: size unknown | `Object Storage` offers every capability the resource uses |
+| `vm-shop-web-1` | `Microsoft.Compute/virtualMachines` | `compute.vm` | direct | `Instances` |  | not estimated: size unknown | `Instances` offers every capability the resource uses |
+| `vmss-shop-web` | `Microsoft.Compute/virtualMachineScaleSets` | `compute.vm` | partial | `Instances` |  | not estimated: size unknown | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+
+### Required changes
+
+- `aks-shop`: `zone-high-availability` (not offered by `Kubernetes Kapsule`)
+- `disk-shop-web-1-data`: `encryption-at-rest` (not offered by `Block Storage`)
+- `mysql-shop-catalog`: `point-in-time-restore` (not offered by `Managed Database for PostgreSQL and MySQL High Availability`)
+- `psql-shop`: `point-in-time-restore`, `zone-high-availability` (not offered by `Managed Database for PostgreSQL and MySQL`)
+- `vmss-shop-web`: `autoscaling`, `zone-high-availability` (not offered by `Instances`)
+
+### Blockers
+
+- `cdn-shop`: not classified
+- `dns-shop`: not classified
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 11 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `fr-par`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory
+
+## `UpCloud`
+
+### Summary
+
+| Fit | Resources |
+|---|---|
+| direct | 4 |
+| partial | 3 |
+| none | 4 |
+| total | 11 |
+
+### Resources
+
+| ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Reasons |
+|---|---|---|---|---|---|---|---|
+| `aks-shop` | `Microsoft.ContainerService/managedClusters` | `kubernetes.managed` | partial | `Managed Kubernetes` (tie: `Managed Kubernetes Production`) |  | not estimated: size unknown | `Managed Kubernetes` does not offer `autoscaling`; `Managed Kubernetes` does not offer `zone-high-availability` |
+| `cdn-shop` | `Microsoft.Cdn/profiles` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `disk-shop-web-1-data` | `Microsoft.Compute/disks` | `storage.block` | direct | `Block Storage Encrypted` |  | not estimated: size unknown | `Block Storage Encrypted` offers every capability the resource uses |
+| `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` | none |  |  | not estimated: no fit | not classified |
+| `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `serverless.function` |
+| `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | direct | `Managed MySQL Multi-node` |  | not estimated: size unknown | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | partial | `Managed PostgreSQL Multi-node` |  | not estimated: size unknown | `Managed PostgreSQL Multi-node` does not offer `zone-high-availability` |
+| `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | none |  |  | not estimated: no fit | no offering in the `UpCloud` catalog for `messaging.queue` |
+| `stshopassets` | `Microsoft.Storage/storageAccounts` | `storage.object` | direct | `Managed Object Storage` |  | not estimated: size unknown | `Managed Object Storage` offers every capability the resource uses |
+| `vm-shop-web-1` | `Microsoft.Compute/virtualMachines` | `compute.vm` | direct | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` offers every capability the resource uses |
+| `vmss-shop-web` | `Microsoft.Compute/virtualMachineScaleSets` | `compute.vm` | partial | `Cloud Servers` |  | not estimated: size unknown | `Cloud Servers` does not offer `autoscaling`; `Cloud Servers` does not offer `zone-high-availability` |
+
+### Required changes
+
+- `aks-shop`: `autoscaling`, `zone-high-availability` (not offered by `Managed Kubernetes`)
+- `psql-shop`: `zone-high-availability` (not offered by `Managed PostgreSQL Multi-node`)
+- `vmss-shop-web`: `autoscaling`, `zone-high-availability` (not offered by `Cloud Servers`)
+
+### Blockers
+
+- `cdn-shop`: not classified
+- `dns-shop`: not classified
+- `func-shop-thumbnails`: no offering in the `UpCloud` catalog for `serverless.function`
+- `sb-shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
+
+### Cost estimate
+
+- Total: €0.00 per month for 0 of 11 resources
+- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Prices in `de-fra1`
+- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
+- Source cost: none in the inventory

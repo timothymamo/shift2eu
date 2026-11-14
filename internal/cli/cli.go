@@ -118,7 +118,8 @@ func printError(w io.Writer, err error) {
 // list of supported formats and the default format.
 const usage = `Usage:
   shift2eu assess --inventory <file> --target <targets> [--format <format>]
-               [--output <file>]
+               [--output <file>] [--region <target>=<region>,...]
+               [--no-estimate]
   shift2eu version
   shift2eu help
 
@@ -147,6 +148,15 @@ Flags of assess:
                       was. Anything else (a directory, a pipe, a device, a
                       socket, a link to one) and the inventory file itself are
                       refused.
+  --region <target>=<region>,...
+                      Assess and estimate a selected target in one of its
+                      regions, such as scaleway=nl-ams. A target without one is
+                      assessed in all its regions, with estimates in its
+                      default region. A region the target does not list is a
+                      usage error that names the target's regions.
+  --no-estimate       Leave out plans and monthly estimates: the report holds
+                      no price. Estimates are on by default: list prices on the
+                      catalog's retrieval date, excluding VAT and discounts.
 
 Exit codes:
   0  the assessment ran (blockers are a result, not a failure)

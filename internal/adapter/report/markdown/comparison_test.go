@@ -406,22 +406,55 @@ func demotedReportLines(t *testing.T, singleTargetReport string) []string {
 // TestReportComparisonHasNoRanking pins that a comparison states facts per target
 // and does not rank them or recommend one: the words a ranking would use do not
 // appear, while "best offering", a per-resource fact, stays.
+//
+// It runs with estimates off and on, because the words a ranking would use are
+// the words a priced report is most tempting to use: the estimates-on case is a
+// comparison with the fixture's prices in it, so "cheapest" and "best price" are
+// checked against a report that shows amounts.
 func TestReportComparisonHasNoRanking(t *testing.T) {
 	t.Parallel()
 
-	c := assessment.Compare(assessTargets(t, comparisonInventory(t), threeTargetKeys()))
-
-	out := renderComparison(t, c, analysis.ReportMeta{InventoryName: inventoryFileName})
-	lowered := strings.ToLower(string(out))
-
-	for _, word := range []string{"best target", "recommend", "winner"} {
-		if strings.Contains(lowered, word) {
-			t.Errorf("the comparison holds the ranking word %q:\n%s", word, out)
-		}
+	tests := []struct {
+		name string
+		// comparison is the comparison the reporter renders.
+		comparison assessment.Comparison
+		// prices is whether the report shows an amount, which the estimates-on
+		// case must: the ranking words are checked against a priced report.
+		prices bool
+	}{
+		{
+			name:       "estimates off",
+			comparison: assessment.Compare(assessTargets(t, comparisonInventory(t), threeTargetKeys())),
+		},
+		{
+			name:       "estimates on",
+			comparison: assessment.Compare(assessReportTargets(t, []string{reportKey, reportNorthKey})),
+			prices:     true,
+		},
 	}
 
-	if !strings.Contains(lowered, "best offering") {
-		t.Errorf("the comparison does not name each target's best offering:\n%s", out)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := renderComparison(t, test.comparison, analysis.ReportMeta{InventoryName: inventoryFileName})
+			lowered := strings.ToLower(string(out))
+
+			for _, word := range []string{"best target", "recommend", "winner", "cheapest", "best price"} {
+				if strings.Contains(lowered, word) {
+					t.Errorf("the comparison holds the ranking word %q:\n%s", word, out)
+				}
+			}
+
+			if !strings.Contains(lowered, "best offering") {
+				t.Errorf("the comparison does not name each target's best offering:\n%s", out)
+			}
+
+			if got := strings.Contains(lowered, "€"); got != test.prices {
+				t.Errorf("the comparison shows an amount = %t, want %t: the ranking words are checked against "+
+					"the report the case names:\n%s", got, test.prices, out)
+			}
+		})
 	}
 }
 
@@ -788,5 +821,264 @@ func hostileComparisonValues() []string {
 		string(hostileComparisonCategory()),
 		"AWS::X|<y>`\n",
 		hostileComparisonReason,
+	}
+}
+
+// The two targets the estimate comparison compares: the report fixture's
+// invented prices, with display names, snapshots and default regions that
+// differ, so the comparison has to keep two regions and two estimates apart.
+const (
+	reportTwoTarget      = "Example Cloud North"
+	reportTwoSourceURL   = "https://www.example.com/pricing/north/"
+	reportTwoRetrievedOn = "2026-11-14"
+	reportKey            = "example"
+	reportNorthKey       = "example-north"
+)
+
+// reportTwoSnapshot is the north target's snapshot: the same invented catalog
+// taken a day later, whose estimates are for the report fixture's second region,
+// where its compute plans cost a fifth more.
+func reportTwoSnapshot() catalog.Snapshot {
+	return catalog.Snapshot{
+		SourceURL:     reportTwoSourceURL,
+		RetrievedOn:   time.Date(2026, 11, 14, 0, 0, 0, 0, time.UTC),
+		DefaultRegion: testutil.ReportSecondRegion,
+	}
+}
+
+// reportComparisonCatalog returns the priced fixture catalog of one target key.
+func reportComparisonCatalog(t *testing.T, key string) catalog.Catalog {
+	t.Helper()
+
+	switch key {
+	case reportKey:
+		return testutil.ReportCatalog(t)
+	case reportNorthKey:
+		return testutil.ReportCatalogIn(t, reportTwoTarget, reportTwoSnapshot())
+	default:
+		t.Fatalf("no priced fixture catalog for target key %q", key)
+
+		return catalog.Catalog{}
+	}
+}
+
+// assessReportTargets assesses the estimate fixture with estimates on against
+// each priced fixture catalog, in the order given.
+func assessReportTargets(t *testing.T, keys []string) []assessment.TargetAssessment {
+	t.Helper()
+
+	inv := newInventory(t, sourceName, estimateResources())
+
+	targets := make([]assessment.TargetAssessment, 0, len(keys))
+	for _, key := range keys {
+		targets = append(targets, assessment.TargetAssessment{
+			Key: key,
+			Assessment: assessment.AssessWith(inv, reportComparisonCatalog(t, key),
+				assessment.Options{Estimate: true}),
+		})
+	}
+
+	return targets
+}
+
+// TestReportComparisonWithEstimates pins the comparison of two priced targets:
+// the region line per target in the header, one estimate row per target in the
+// summary, one estimate column per target in the resources table, and each
+// target's own cost summary and per-workload estimates in its section.
+func TestReportComparisonWithEstimates(t *testing.T) {
+	t.Parallel()
+
+	keys := []string{reportKey, reportNorthKey}
+
+	c := assessment.Compare(assessReportTargets(t, keys))
+	out := renderComparison(t, c, analysis.ReportMeta{InventoryName: inventoryFileName})
+
+	checkTableShape(t, out)
+
+	t.Run("header names each target's region", func(t *testing.T) {
+		t.Parallel()
+
+		want := []string{
+			"- Region: `Example Cloud`: `xx-par` (the target's default for estimates)",
+			"- Region: `Example Cloud North`: `xx-ams` (the target's default for estimates)",
+		}
+
+		if diff := cmp.Diff(want, linesWithPrefix(t, out, "- Region: ")); diff != "" {
+			t.Errorf("region lines mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("one estimate row per target in the summary", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			target string
+			cells  []string
+		}{
+			{
+				target: "`Example Cloud` estimate",
+				cells:  []string{"`Example Cloud` estimate", "€2,535.00 per month for 4 of 8 resources", ""},
+			},
+			{
+				target: "`Example Cloud North` estimate",
+				cells:  []string{"`Example Cloud North` estimate", "", "€2,539.00 per month for 4 of 8 resources"},
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.target, func(t *testing.T) {
+				t.Parallel()
+
+				if diff := cmp.Diff(test.cells, tableRow(t, out, test.target)); diff != "" {
+					t.Errorf("summary row mismatch (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
+
+	t.Run("one estimate column per target in the resources table", func(t *testing.T) {
+		t.Parallel()
+
+		got := tableRow(t, out, "ID")
+		if len(got) != 8 {
+			t.Fatalf("the resources table has %d columns, want 8: %q", len(got), got)
+		}
+
+		for _, column := range []string{"`Example Cloud` monthly estimate", "`Example Cloud North` monthly estimate"} {
+			if !slices.Contains(got, column) {
+				t.Errorf("the resources table has no %q column: %q", column, got)
+			}
+		}
+
+		// The regions differ only in their prices: the same resource costs 10.00
+		// in the default region and 12.00 in the second, and a resource with no
+		// plan large enough says so in both. The cells say what the estimate
+		// assumed of a resource that gives no count and no hours (ADR 0025).
+		tests := []struct {
+			id     string
+			first  string
+			second string
+		}{
+			{
+				id:     "worker-jobs",
+				first:  "€10.00 (count assumed 1) (730 hours assumed)",
+				second: "€12.00 (count assumed 1) (730 hours assumed)",
+			},
+			{id: "server-huge", first: "not estimated: no plan large enough", second: "not estimated: no plan large enough"},
+		}
+
+		for _, test := range tests {
+			cells := tableRow(t, out, "`"+test.id+"`")
+			if got := []string{cells[4], cells[7]}; !slices.Equal(got, []string{test.first, test.second}) {
+				t.Errorf("%q estimates = %q, want %q", test.id, got, []string{test.first, test.second})
+			}
+		}
+	})
+
+	t.Run("each target's own cost summary and workloads", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			target   string
+			total    string
+			workload string
+		}{
+			{
+				target: "Example Cloud",
+				total:  "- Total: €2,535.00 per month for 4 of 8 resources",
+				workload: "- Monthly estimate: €2,525.00 per month for 3 of 3 resources, list prices on " +
+					reportRetrievedOn + ", excluding VAT and discounts",
+			},
+			{
+				target: "Example Cloud North",
+				total:  "- Total: €2,539.00 per month for 4 of 8 resources",
+				workload: "- Monthly estimate: €2,527.00 per month for 3 of 3 resources, list prices on " +
+					reportTwoRetrievedOn + ", excluding VAT and discounts",
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.target, func(t *testing.T) {
+				t.Parallel()
+
+				section := sectionLines(t, out, targetSectionHeading(test.target))
+
+				for _, want := range []string{test.total, test.workload} {
+					if !slices.Contains(section, want) {
+						t.Errorf("the %q section does not hold %q: %q", test.target, want, section)
+					}
+				}
+			})
+		}
+	})
+
+	testutil.Golden(t, "testdata/comparison-estimates.golden", out)
+}
+
+// TestReportComparisonWithBillingCapHours pins that a billing cap belongs to a
+// target, not to a comparison (ADR 0029): each target's own section carries its
+// own hours line, with one clause per distinct cap of that target, ascending.
+func TestReportComparisonWithBillingCapHours(t *testing.T) {
+	t.Parallel()
+
+	inv := newInventory(t, sourceName, estimateResources())
+
+	capped := testutil.ReportCappedCatalogIn(t, reportTwoTarget, reportTwoSnapshot())
+	offerings := capped.Offerings()
+	// The report fixture's second offering, the Kubernetes one, bills its node
+	// plans for 336 hours a month too, so this target's line carries two caps,
+	// out of ascending order in the catalog.
+	offerings[1].PlanBillingCapHours = 336
+
+	twoCaps, err := catalog.New(capped.Target(), capped.Snapshot(), offerings)
+	if err != nil {
+		t.Fatalf("catalog.New() returned unexpected error: %v", err)
+	}
+
+	c := assessment.Compare([]assessment.TargetAssessment{
+		{
+			Key:        reportKey,
+			Assessment: assessment.AssessWith(inv, testutil.ReportCatalog(t), assessment.Options{Estimate: true}),
+		},
+		{
+			Key:        reportNorthKey,
+			Assessment: assessment.AssessWith(inv, twoCaps, assessment.Options{Estimate: true}),
+		},
+	})
+	out := renderComparison(t, c, analysis.ReportMeta{InventoryName: inventoryFileName})
+
+	plain := "- Hours: plan price × count × hours / 730, 730 hours for a resource that gives none"
+	cappedLine := plain + "; a plan billed for at most 336 hours a month costs plan price × count × " +
+		"min(hours, 336) / 336; a plan billed for at most 672 hours a month costs plan price × count × " +
+		"min(hours, 672) / 672"
+
+	tests := []struct {
+		target string
+		want   string
+	}{
+		{target: reportTarget, want: plain},
+		{target: reportTwoTarget, want: cappedLine},
+	}
+
+	for _, test := range tests {
+		t.Run(test.target, func(t *testing.T) {
+			t.Parallel()
+
+			var found []string
+
+			for _, line := range sectionLines(t, out, targetSectionHeading(test.target)) {
+				if strings.HasPrefix(line, "- Hours: ") {
+					found = append(found, line)
+				}
+			}
+
+			if len(found) != 1 {
+				t.Fatalf("the %q section has %d hours lines, want 1:\n%s", test.target, len(found), out)
+			}
+
+			if found[0] != test.want {
+				t.Errorf("hours line of %q = %q, want %q", test.target, found[0], test.want)
+			}
+		})
 	}
 }

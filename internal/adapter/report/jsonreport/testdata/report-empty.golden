@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "kind": "assessment",
   "inventoryName": "inventory.json",
   "source": "aws",
@@ -17,5 +17,6 @@
     "total": 0
   },
   "resources": [],
-  "blockers": []
+  "blockers": [],
+  "workloads": []
 }
