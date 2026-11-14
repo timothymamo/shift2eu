@@ -5,10 +5,9 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
 
 ## How it was compiled
 
-- **Retrieved on:** 2026-11-13, the date the plans and prices were read (PRD #190 milestone 3, ADR 0024).
-  The extra-storage prices were read on 2026-11-14 (issue #219, below), and the snapshot's `retrievedOn`
-  stays 2026-11-13 until the tests that pin it move with it. The snapshot's `retrievedOn` and `sourceURL`
-  name the prices, the facts most likely to change. The
+- **Retrieved on:** 2026-11-14, the date the extra-storage prices were read and every compute plan price
+  re-checked (issue #219, below); the other plans and prices were read on 2026-11-13 (PRD #190 milestone 3,
+  ADR 0024). The snapshot's `retrievedOn` and `sourceURL` name the prices, the facts most likely to change. The
   regions come from the regions page, read on 2026-11-10, and the capabilities were last re-verified on
   2026-11-11 (below). Every page cited below was fetched on one of those four dates, without credentials
   and without calling any OVHcloud API. A page fetched or saved to read the data from, such as a browser
@@ -26,7 +25,7 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
   available product.
 - **Product pages** on `www.ovhcloud.com` and **documentation** on `docs.ovhcloud.com` give the
   capabilities. They were read live on 2026-11-10 or, for the re-verification below, 2026-11-11; the
-  prices were read on 2026-11-13.
+  prices were read on 2026-11-13, and the extra-storage prices on 2026-11-14.
 - **Documentation source.** `docs.ovhcloud.com` is built from `ovh/ovhcloud-docs`. Its files were read at
   commit
   [`2df4cc152902b880880b77955ab9e52de4a2c2ff`](https://github.com/ovh/ovhcloud-docs/tree/2df4cc152902b880880b77955ab9e52de4a2c2ff)
@@ -49,19 +48,19 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
   `retrievedOn` in `catalog.json` was its date, 2026-11-11, until the prices were added. No region
   changed; the regions page was read on 2026-11-10.
 - **Prices read on 2026-11-13 for PRD #190 milestone 3.** The plans and prices, with the pages under
-  *Prices*. No offering, capability or region changed.
+  *Prices*. No offering, capability or region changed. `retrievedOn` was this date until issue #219.
 - **Extra-storage prices read on 2026-11-14 for issue #219.** The prices page was read again, with the
   product pages and documentation cited in each section, to price the storage beyond what a plan includes.
   *Instances*, *Managed Kubernetes Service* and *Managed Kubernetes Service 3-AZ* gained a storage price;
   *Metal Instances*, *Block Storage LUKS* and *Block Storage LUKS Zonal* say why they have none. The same
   read re-checked every plan price of those four compute offerings (82 prices): each still equals the
   page's Linux hourly price × 730, so no plan price or included storage changed. No offering, capability
-  or region changed.
+  or region changed. Because it priced new facts, `retrievedOn` in `catalog.json` is its date, 2026-11-14.
 
 ## Prices
 
 Every plan and storage price in `catalog.json` is a monthly list price in EUR, excluding VAT (ADR 0024),
-read on 2026-11-13. "The prices page" below is <https://www.ovhcloud.com/en-ie/public-cloud/prices/>.
+read on 2026-11-13, or on 2026-11-14 where a section says so (issue #219). "The prices page" below is <https://www.ovhcloud.com/en-ie/public-cloud/prices/>.
 
 - **Which edition.** The page exists in one edition per OVHcloud market. The `/en/` edition
   (<https://www.ovhcloud.com/en/public-cloud/prices/>) is the "World [$]" market and shows US dollars, so

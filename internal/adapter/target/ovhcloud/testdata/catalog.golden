@@ -1,6 +1,6 @@
 target: OVHcloud
 sourceURL: https://www.ovhcloud.com/en-ie/public-cloud/prices/
-retrievedOn: 2026-11-13
+retrievedOn: 2026-11-14
 defaultRegion: GRA
 Block Storage | storage.block | snapshots | GRA, LIM, RBX, SBG, WAW
   plans: -

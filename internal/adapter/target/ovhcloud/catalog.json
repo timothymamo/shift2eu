@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "target": "OVHcloud",
   "sourceURL": "https://www.ovhcloud.com/en-ie/public-cloud/prices/",
-  "retrievedOn": "2026-11-13",
+  "retrievedOn": "2026-11-14",
   "regions": ["GRA", "LIM", "MIL", "PAR", "RBX", "SBG", "WAW"],
   "defaultRegion": "GRA",
   "offerings": [
