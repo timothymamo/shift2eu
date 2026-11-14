@@ -1072,13 +1072,14 @@ func TestKubernetesTierVariantIsBestOffering(t *testing.T) {
 // the adapter embeds: a compute.vm resource with more disk than the plan it fits
 // includes is estimated with that storage priced, and not reported "not
 // estimated" with estimate.NoStoragePrice (ADR 0027). The resource is 2 vCPU and
-// 8 GiB, which the Gen 3 plan b3-8 covers at the lowest monthly price; a Gen 3
-// instance boots from a Block Storage volume, so its plan includes no storage
-// (storageGiB 0) and the resource's 100 GiB is extra storage the Instances
-// offering must price per GiB, most likely at its Block Storage volume price. The
-// euro amount is not pinned here because it is still to be verified against the
-// prices page: the test pins the structure, that the plan is priced, that the
-// storage costs more than nothing and that no reason is given for leaving it out.
+// 8 GiB, which the Gen 3 plan b3-8 covers at the lowest monthly price (b2-7 has
+// only 7 GiB); a Gen 3 instance boots from a Block Storage volume, so its plan
+// includes no storage (storageGiB 0) and the resource's 100 GiB is extra storage
+// the Instances offering prices per GiB at that volume's price. Both the plan and
+// the amount are pinned: 100 GiB x 0.0431 EUR/GiB-month = 4.31 EUR, the Classic
+// Block Storage volume price SOURCES.md sources (EUR 0.000059/GB-hour x 730), so
+// a wrong or swapped price — the 0.1064 EUR/GiB-month Local Storage volume, say —
+// fails here.
 func TestExtraStorageEstimateThroughEmbeddedCatalog(t *testing.T) {
 	t.Parallel()
 
@@ -1128,14 +1129,26 @@ func TestExtraStorageEstimateThroughEmbeddedCatalog(t *testing.T) {
 		t.Errorf("For() Plan.Priced = false for plan %s, want a priced plan", text.Quote(got.Plan.Name))
 	}
 
-	// The storage part is what the extra 100 GiB cost: zero would mean the
-	// estimate priced the plan alone and left the disk out.
-	if got.Breakdown.Storage.IsZero() {
-		t.Errorf("For() Breakdown.Storage = %s, want the 100 GiB of storage priced above zero on plan %s",
-			got.Breakdown.Storage, text.Quote(got.Plan.Name))
+	if got.Offering != "Instances" {
+		t.Errorf("For() Offering = %s, want %s: a Gen 3 instance is an Instances offering and that offering prices its extra storage",
+			text.Quote(got.Offering), text.Quote("Instances"))
 	}
 
-	wantMonthly := got.Breakdown.Plan.Add(got.Breakdown.Storage).Add(got.Breakdown.FixedFee)
+	if got.Plan.Name != "b3-8" {
+		t.Errorf("For() Plan.Name = %s, want %s: it is the cheapest plan covering 2 vCPU and 8 GiB, whose Block Storage volume the extra disk is billed at",
+			text.Quote(got.Plan.Name), text.Quote("b3-8"))
+	}
+
+	// The storage part is what the extra 100 GiB cost at the Instances offering's
+	// Block Storage volume price: 100 GiB x 0.0431 EUR/GiB-month = 4.31 EUR.
+	wantStorage := estimate.Ratio(431, 100)
+
+	if diff := cmp.Diff(wantStorage, got.Breakdown.Storage); diff != "" {
+		t.Errorf("For() Breakdown.Storage mismatch for 100 GiB on plan %s (-want +got):\n%s",
+			text.Quote(got.Plan.Name), diff)
+	}
+
+	wantMonthly := got.Breakdown.Plan.Add(wantStorage).Add(got.Breakdown.FixedFee)
 	if diff := cmp.Diff(wantMonthly, got.Monthly); diff != "" {
 		t.Errorf("For() Monthly mismatch, want the breakdown's sum (plan + storage + fixed fee) (-want +got):\n%s", diff)
 	}
@@ -1168,8 +1181,8 @@ const noStoragePriceMarker = "No storage price"
 // each of its regions, so an estimate can price the storage above what a plan
 // includes (ADR 0027), or its own section of SOURCES.md says why it has none.
 // Instances, Managed Kubernetes Service and its 3-AZ variant must have the price:
-// their Gen 3 and B3 plans include no storage and boot from a Block Storage volume,
-// whose per-GiB price OVHcloud publishes. Metal Instances and the LUKS volumes may
+// their Gen 3 (B3, C3, R3) plans include no storage and boot from a Block Storage
+// volume, whose per-GiB price OVHcloud publishes. Metal Instances and the LUKS volumes may
 // have none if SOURCES.md says why: Metal plans include their local SSD, and the
 // prices page lists no encrypted volume class. A price the snapshot gains must
 // still be sourced in SOURCES.md, which TestEveryOfferingHasASourcesSection pins.
