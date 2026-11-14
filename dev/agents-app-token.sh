@@ -1,7 +1,8 @@
 #!/bin/sh
 # Mints installation tokens of the agents App on the Mac and writes them into the Lima VM (PRD #161
 # milestone 1, docs/adr/0029-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md).
-# The App's private key never leaves the Mac: the VM only ever holds a token that expires within the hour.
+# This script never copies the App's private key into the VM: the VM only ever holds a token that expires
+# within the hour. Code run from the workspace on the Mac can still read the key (ADR 0029, Consequences).
 #
 # Usage: dev/agents-app-token.sh mint      mint one token (make agents-token)
 #        dev/agents-app-token.sh refresh   mint now, then again before each token expires, until stopped
@@ -86,6 +87,14 @@ is_number() {
   esac
 }
 
+# decimal <digits> prints the number without its leading zeros, 0 for zeros only. Every number from outside
+# the script (a header, the VM's clock, a setting) goes through it before it reaches $(( )), where a leading
+# 0 reads as octal and a digit 8 or 9 then ends the shell ("Illegal number" in dash).
+decimal() {
+  set -- "${1#"${1%%[!0]*}"}"
+  printf '%s' "${1:-0}"
+}
+
 check_inputs() {
   is_number "${SHIFT2EU_AGENTS_APP_ID:-}" ||
     die "SHIFT2EU_AGENTS_APP_ID is not set, or not a number: export the agents App's ID from the .envrc of your host clone, outside the workspace (docs/dev-environment.md, The agents App)"
@@ -112,6 +121,8 @@ check_inputs() {
   is_number "${check_seconds}" && [ "${check_seconds}" -gt 0 ] ||
     die "SHIFT2EU_AGENTS_TOKEN_CHECK_SECONDS must be a positive number of seconds"
   is_number "${margin_seconds}" || die "SHIFT2EU_AGENTS_TOKEN_MARGIN_SECONDS must be a number of seconds"
+  check_seconds="$(decimal "${check_seconds}")"
+  margin_seconds="$(decimal "${margin_seconds}")"
 }
 
 # check_api_url refuses an API URL that could send the JWT anywhere but GitHub: an @ (curl reads what comes
@@ -178,13 +189,13 @@ call() {
   status="${response##*"${nl}"}"
   response="${response%"${nl}"*}"
   header="${response##*"${nl}"}"
-  ! is_number "${header}" || retry_after="${header}"
+  ! is_number "${header}" || retry_after="$(decimal "${header}")"
   response="${response%"${nl}"*}"
   header="${response##*"${nl}"}"
-  ! is_number "${header}" || reset="${header}"
+  ! is_number "${header}" || reset="$(decimal "${header}")"
   response="${response%"${nl}"*}"
   header="${response##*"${nl}"}"
-  ! is_number "${header}" || remaining="${header}"
+  ! is_number "${header}" || remaining="$(decimal "${header}")"
   body="${response%"${nl}"*}"
 }
 
@@ -370,6 +381,7 @@ check_vm() {
   # 1 to 12 digits only: a longer reading is no clock, and could overflow the shell's arithmetic.
   vm_clock="$(printf '%s\n' "$1" | sed -n 's/^clock=\([0-9]\{1,12\}\)$/\1/p')"
   if is_number "${vm_clock}"; then
+    vm_clock="$(decimal "${vm_clock}")"
     offset="$((vm_clock - $(now)))"
     if [ "${offset}" -gt 60 ] || [ "${offset}" -lt -60 ]; then
       say "warning: the VM ${instance}'s clock is ${offset}s off the Mac's; the token's expiry is the Mac's, so the VM may refuse it early or keep it past its life. Restart the VM's time sync (or make vm-stop vm-up)"
@@ -452,7 +464,7 @@ mint_once() {
   # Five minutes early, of the Mac's hour and of GitHub's own expires_at, whichever ends first: a call
   # started just before the expiry still has a valid token, and so does a VM whose clock lags a little.
   expiry="$((started + 3600 - 300))"
-  if stated="$(parse_time "${expires_at}")" && is_number "${stated}" && [ "$((stated - 300))" -lt "${expiry}" ]; then
+  if stated="$(parse_time "${expires_at}")" && is_number "${stated}" && stated="$(decimal "${stated}")" && [ "$((stated - 300))" -lt "${expiry}" ]; then
     expiry="$((stated - 300))"
   fi
   # A token the VM did not take is dropped: the next try mints another one.
