@@ -88,7 +88,7 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 | `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`) |
 | `claude auth` | Checks that Claude Code uses the OAuth token (your subscription), not an API key |
 | `pi` | `pi auth check --provider deepseek` |
-| `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository, with the agents App's token when its file is in the VM, otherwise `GITHUB_TOKEN`. Not `gh auth status`, which an installation token may fail (ADR 0030) |
+| `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository, with the agents App's token when its file is in the VM, otherwise `GITHUB_TOKEN`. Not `gh auth status`, which an installation token may fail (ADR 0031) |
 | `deck` | `dot-agent-deck validate`: checks `.dot-agent-deck.toml` |
 | `deck command` | Sets the deck's `default_command` to `claude --model opus --permission-mode auto`, the orchestrator's command: the New Agent form pre-fills it, and a dispatcher started with a blank command, and the single units it dispatches, run it. A command already set in the VM is kept (`dot-agent-deck config set default_command ...` changes it) |
 | `daemon` | `dot-agent-deck daemon install`, unless `dot-agent-deck.service` is already installed |
@@ -281,7 +281,7 @@ that is not set is skipped. Two things read the file:
 
 PRD #161 moves the agents from your `GITHUB_TOKEN` to a GitHub App of yours, the **agents App**, so their
 pull requests are the App's and you can approve them
-([ADR 0030](adr/0030-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)). Its
+([ADR 0031](adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)). Its
 private key stays on the Mac: a job there mints installation tokens, valid for an hour, and writes only
 those into the VM. Until you switch (the runbook in PRD #161; milestone 2 puts it here), nothing changes:
 without a token file in the VM, `gh` and `git push` use `GITHUB_TOKEN` as before.
@@ -295,14 +295,14 @@ permissions:
 | Pull requests | Read and write | Open, view and merge pull requests |
 | Issues | Read and write | File and read issues |
 | Workflows | Write | Agents edit `.github/workflows/` |
-| Actions | Read | Runs and environments. Not write: a re-run (`gh run rerun`) stays yours, as write would also let an agent cancel runs, delete runs and logs, and disable or dispatch workflows (ADR 0030, d) |
+| Actions | Read | Runs and environments. Not write: a re-run (`gh run rerun`) stays yours, as write would also let an agent cancel runs, delete runs and logs, and disable or dispatch workflows (ADR 0031, d) |
 | Checks | Read | `gh pr checks`, check-run annotations |
 | Commit statuses | Read | `gh pr checks` |
 | Attestations | Read | `gh attestation verify` in the release-tag skill |
 | Metadata | Read | Required; rulesets, the repository itself |
 
 Never give it Administration: the rulesets' bypass lists need Administration write, which could change
-`Protect main`, so those checks stay yours (ADR 0030, d). Secrets and Variables are not needed either.
+`Protect main`, so those checks stay yours (ADR 0031, d). Secrets and Variables are not needed either.
 Generate a private key and keep the `.pem` **outside the workspace**, a regular file (not a symlink: the
 script refuses one), readable only by you (`chmod 600`). The App's slug is never configured: the token script reads it from the App (`GET /app`).
 
@@ -377,7 +377,7 @@ Until the follow-ups below, keep that code's chances few:
   of the `Makefile` and `dev/` on GitHub.
 
 No git check in the host clone is a safeguard: once the clone is tampered with, git there runs the
-tampered hooks and config too. The open follow-ups (ADR 0030, Consequences): run every host target from
+tampered hooks and config too. The open follow-ups (ADR 0031, Consequences): run every host target from
 the host clone (`make deck` needs a variable for the workspace path instead of `CURDIR`), and keep the key
 where your uid cannot read it silently (a Keychain item or a password-manager read that prompts, or a
 separate macOS account running the refresher).
@@ -577,7 +577,7 @@ recreate it to get, and verify, the pinned ones. After recreating, confirm them:
 
 ```bash
 /usr/local/bin/cosign version | grep GitVersion   # the cosignVersion in dev/lima.yaml
-/usr/local/libexec/shift2eu/gh --version          # the ghVersion in dev/lima.yaml (/usr/local/bin/gh is the wrapper, ADR 0030)
+/usr/local/libexec/shift2eu/gh --version          # the ghVersion in dev/lima.yaml (/usr/local/bin/gh is the wrapper, ADR 0031)
 sha256sum /usr/local/bin/cosign                   # cosignSha256<Arch> for this VM's architecture
 # The provisioning output: one of these holds it. Check which one does on your VM. Not `journalctl -b`:
 # that shows only the current boot, and the self-check runs on the boot that installs cosign.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Sets the git identity the agents commit with in the Lima VM (git config --global): step 3 of
 # dev/vm-init.sh, a script of its own so its switch-over cases are tested without a VM (PRD #161 milestone
-# 1, ADR 0030).
+# 1, ADR 0031).
 #
 # Usage: dev/vm-git-identity.sh <fallback user.name> <fallback user.email>
 #

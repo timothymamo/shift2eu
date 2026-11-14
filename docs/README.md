@@ -70,7 +70,7 @@ supersedes it.
 - [0027. Match plans and estimate monthly prices in a domain package, with exact money](adr/0027-match-plans-and-estimate-monthly-prices-in-a-domain-package.md)
 - [0028. Group workloads, note blocked relations and sum the source's cost in the assessment](adr/0028-group-workloads-note-blocked-relations-and-sum-the-source-cost-in-the-assessment.md)
 - [0029. Cap the billed hours of an offering's plans in target snapshot format version 2](adr/0029-cap-the-billed-hours-of-an-offerings-plans-in-target-snapshot-format-v2.md)
-- [0030. Agents open pull requests as a GitHub App, with one-hour tokens minted on the Mac](adr/0030-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)
+- [0031. Agents open pull requests as a GitHub App, with one-hour tokens minted on the Mac](adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)
 
 ## Writing a page
 

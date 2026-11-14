@@ -200,7 +200,7 @@ provision:
 
       # The gh every agent, the deck, the git credential helper and make vm-init run: the wrapper of
       # dev/gh-app-token.sh, which hands the real gh the agents App's token from ~/.config/shift2eu, or
-      # falls back to GITHUB_TOKEN (PRD #161, ADR 0030). Root-owned and outside the workspace mount, so an
+      # falls back to GITHUB_TOKEN (PRD #161, ADR 0031). Root-owned and outside the workspace mount, so an
       # agent's edit of the workspace copy never changes the gh in use; plumbing, not a security boundary,
       # as the VM user has sudo. Copied into the template, as a VM keeps the template it was created with.
       # Keep the text between the GHWRAPPER lines identical to dev/gh-app-token.sh, which the tests run. The
@@ -212,11 +212,11 @@ provision:
         sed 's|^real=.*|real=/usr/local/libexec/shift2eu/gh|;/^# SHIFT2EU_REAL_GH /d' >"${tmp}" <<'GHWRAPPER'
       #!/bin/sh
       # The gh of the Lima VM (PRD #161 milestone 1,
-      # docs/adr/0030-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md). dev/lima.yaml
+      # docs/adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md). dev/lima.yaml
       # installs a copy of this file, root-owned, as /usr/local/bin/gh (make vm-gh-wrapper does it for a VM created
       # before), and the real gh as /usr/local/libexec/shift2eu/gh, off the PATH: every agent, the deck, the git
       # credential helper and make vm-init run this wrapper. It is plumbing, not a security boundary: the VM user
-      # has passwordless sudo and can run the real gh, or delete the token file, at will (ADR 0030).
+      # has passwordless sudo and can run the real gh, or delete the token file, at will (ADR 0031).
       #
       # On every call it reads ~/.config/shift2eu/agents-app-token (the agents App's installation token, then
       # its expiry as Unix seconds, written by make agents-token on the Mac) and:
@@ -395,7 +395,7 @@ provision:
       go install "golang.org/x/vuln/cmd/govulncheck@${PARAM_govulncheckVersion}"
 
       # git push over HTTPS authenticates through the gh wrapper, by its absolute path: with the agents
-      # App's token from `make agents-token`, else the GITHUB_TOKEN copied in by `make vm-env` (ADR 0030).
+      # App's token from `make agents-token`, else the GITHUB_TOKEN copied in by `make vm-env` (ADR 0031).
       # Not `gh auth setup-git`, which would name the real gh and skip the wrapper.
       git config --global credential.https://github.com.helper '!/usr/local/bin/gh auth git-credential'
 

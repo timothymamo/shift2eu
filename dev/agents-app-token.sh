@@ -1,8 +1,8 @@
 #!/bin/sh
 # Mints installation tokens of the agents App on the Mac and writes them into the Lima VM (PRD #161
-# milestone 1, docs/adr/0030-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md).
+# milestone 1, docs/adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md).
 # This script never copies the App's private key into the VM: the VM only ever holds a token that expires
-# within the hour. Code run from the workspace on the Mac can still read the key (ADR 0030, Consequences).
+# within the hour. Code run from the workspace on the Mac can still read the key (ADR 0031, Consequences).
 #
 # Usage: dev/agents-app-token.sh mint      mint one token (make agents-token)
 #        dev/agents-app-token.sh refresh   mint now, then again before each token expires, until stopped
