@@ -32,7 +32,9 @@ REPO_ROOT := $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --
 WORKSPACE := $(abspath $(REPO_ROOT)/..)
 REPO_NAME := $(notdir $(REPO_ROOT))
 # Credentials vm-env copies from your shell (e.g. direnv) into the VM, by name. Never add
-# ANTHROPIC_API_KEY: Claude Code prefers it over the subscription token and bills per call.
+# ANTHROPIC_API_KEY: Claude Code prefers it over the subscription token and bills per call. Never add a
+# SHIFT2EU_AGENTS_APP_* variable either: vm-env refuses them, as the agents App's key and its path stay on
+# the Mac and only its one-hour tokens enter the VM (make agents-token, PRD #161, ADR 0029).
 VM_ENV ?= CLAUDE_CODE_OAUTH_TOKEN,DEEPSEEK_API_KEY,GITHUB_TOKEN
 # The git identity vm-init gives the VM, so the agents commit as you: the Mac's own by default.
 GIT_USER_NAME  ?= $(shell git config user.name 2>/dev/null)
@@ -200,6 +202,11 @@ vm-shell: ## Open a shell in the VM at the repository root
 
 .PHONY: vm-env
 vm-env: ## Copy the VM_ENV credentials from your shell into the VM
+	@for name in $$(echo '$(VM_ENV)' | tr ',' ' '); do \
+		case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
+			echo "vm-env: refusing $$name: the agents App's key and its path never enter the VM; make agents-token writes its tokens there" >&2; \
+			exit 1;; esac; \
+	done
 	@env_file="$$(for name in $$(echo '$(VM_ENV)' | tr ',' ' '); do \
 		value="$$(printenv "$$name")"; \
 		[ -n "$$value" ] || { echo "vm-env: $$name is not set, skipped" >&2; continue; }; \
@@ -229,8 +236,39 @@ vm-create: ## Create and set up the VM, ready for make deck: vm-up, vm-env, vm-c
 	$(MAKE) vm-claude-settings
 	$(MAKE) vm-init
 
+# Where make deck keeps the pid and the log of the agents App token refresh: on the Mac, outside the
+# workspace (ADR 0029).
+AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2eu
+
+.PHONY: agents-token
+agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM
+	@LIMA_INSTANCE="$(LIMA_INSTANCE)" sh dev/agents-app-token.sh mint
+
+.PHONY: agents-token-refresh
+agents-token-refresh: ## Mint the agents App token now and again before each one expires, in the foreground, until stopped
+	@LIMA_INSTANCE="$(LIMA_INSTANCE)" sh dev/agents-app-token.sh refresh
+
+# With the three SHIFT2EU_AGENTS_APP_* variables set, deck first starts the token refresh in the background
+# unless it already runs, and warns when the one it started earlier has stopped. Without them it opens the
+# deck as before.
 .PHONY: deck
-deck: ## Open the dot-agent-deck TUI in the VM (attaches to the daemon service)
+deck: ## Open the dot-agent-deck TUI in the VM (attaches to the daemon service); starts the agents App token refresh when its variables are set
+	@if [ -n "$${SHIFT2EU_AGENTS_APP_ID:-}" ] && [ -n "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] && [ -n "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
+		state="$(AGENTS_TOKEN_STATE)"; pid_file="$$state/agents-token-refresh.pid"; log="$$state/agents-token-refresh.log"; \
+		(umask 077 && mkdir -p "$$state" && : >>"$$log") || exit 1; \
+		pid="$$(cat "$$pid_file" 2>/dev/null || true)"; \
+		if [ -n "$$pid" ] && kill -0 "$$pid" 2>/dev/null && ps -p "$$pid" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
+			echo "deck: the agents App token refresh is running (pid $$pid); its log is $$log"; \
+		else \
+			if [ -n "$$pid" ]; then \
+				echo "deck: warning: the agents App token refresh (pid $$pid) had stopped; its log's last lines:" >&2; \
+				tail -n 3 "$$log" 2>/dev/null | sed 's/^/  /' >&2 || true; \
+			fi; \
+			LIMA_INSTANCE="$(LIMA_INSTANCE)" nohup sh dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
+			echo "$$!" >"$$pid_file"; \
+			echo "deck: started the agents App token refresh (pid $$!); its log is $$log"; \
+		fi; \
+	fi
 	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)" dot-agent-deck
 
 .PHONY: deck-restart

@@ -12,10 +12,12 @@
 #                  workspace alone does not cover sessions in the repository. The flags are Claude Code's
 #                  saved state, not documented settings, so a later version may rename them; the fallback
 #                  is a manual `claude` run in each of the two directories (docs/dev-environment.md).
-#   3. git         The git identity the agents commit with (git config --global), where the VM has none.
+#   3. git         The git identity the agents commit with (git config --global), where the VM has none:
+#                  the agents App's bot from ~/.config/shift2eu/agents-app-identity when make agents-token
+#                  wrote it (it replaces any other), otherwise the one passed in.
 #   4. claude auth Claude Code uses the subscription's OAuth token, not an API key.
 #   5. pi          pi has the DeepSeek key.
-#   6. gh          gh is logged in to github.com.
+#   6. gh          gh can read this repository, with the agents App's token or GITHUB_TOKEN.
 #   7. deck        .dot-agent-deck.toml is valid.
 #   8. deck command The deck's default_command, which new agents and dispatchers start with, where the VM
 #                  has none (issue #134).
@@ -90,15 +92,33 @@ else
   say "claude: onboarding already done and ${workspace} and ${main_checkout} already trusted"
 fi
 
-# 3. git
+# 3. git: the agents App's bot when make agents-token has written its identity into the VM (PRD #161,
+# ADR 0029), otherwise the identity passed in.
+identity_file="${HOME}/.config/shift2eu/agents-app-identity"
+bot_identity=0
+if [ -e "${identity_file}" ]; then
+  { IFS= read -r git_name && IFS= read -r git_email; } <"${identity_file}" ||
+    fail "git: ${identity_file} does not hold two lines; run make agents-token on the Mac, or delete it to commit as yourself"
+  [[ "${git_name}" =~ ^[A-Za-z0-9-]+\[bot\]$ ]] ||
+    fail "git: the first line of ${identity_file} is not an App's bot name (<slug>[bot]); run make agents-token on the Mac"
+  [[ "${git_email}" =~ ^[0-9]+\+[A-Za-z0-9-]+\[bot\]@users\.noreply\.github\.com$ ]] ||
+    fail "git: the second line of ${identity_file} is not a bot's noreply address; run make agents-token on the Mac"
+  bot_identity=1
+fi
 [ -n "${git_name}" ] || fail "git: no user.name; set it on the Mac (git config --global user.name) or pass GIT_USER_NAME=..."
 [ -n "${git_email}" ] || fail "git: no user.email; set it on the Mac (git config --global user.email) or pass GIT_USER_EMAIL=..."
-# Set only where the VM has none, so a re-run never replaces an identity chosen in the VM.
+# Set only where the VM has none, so a re-run never replaces an identity chosen in the VM. Two exceptions,
+# for the switch to the App and back: the bot's identity replaces any other, and with no identity file a
+# bot's identity left from an earlier run gives way to the one passed in.
 for pair in "user.name=${git_name}" "user.email=${git_email}"; do
   key="${pair%%=*}"
   value="${pair#*=}"
   current="$(git config --global --get "${key}" || true)"
-  if [ -z "${current}" ]; then
+  if [ -n "${current}" ] && [ "${current}" != "${value}" ] &&
+    { [ "${bot_identity}" -eq 1 ] || [[ "${current}" == *"[bot]"* ]]; }; then
+    git config --global "${key}" "${value}"
+    say "git: replaced ${key} ${current} with ${value}"
+  elif [ -z "${current}" ]; then
     git config --global "${key}" "${value}"
     say "git: set ${key} to ${value}"
   elif [ "${current}" = "${value}" ]; then
@@ -119,10 +139,22 @@ pi auth check --provider deepseek >/dev/null 2>&1 ||
   fail "pi: no DeepSeek key; set DEEPSEEK_API_KEY for make vm-env, then run make vm-env and make vm-init again"
 say "pi: DeepSeek key ready"
 
-# 6. gh: its output shows part of the token, so only the exit status is used.
-gh auth status --hostname github.com >/dev/null 2>&1 ||
-  fail "gh: not logged in to github.com; set GITHUB_TOKEN for make vm-env, then run make vm-env and make vm-init again"
-say "gh: logged in to github.com"
+# 6. gh: a read of this repository, which works with both credentials the gh wrapper hands gh (ADR 0029):
+# the agents App's installation token, which cannot call GET /user and so may fail gh auth status, and
+# GITHUB_TOKEN. Only the repository's name is printed.
+origin="$(git -C "${main_checkout}" remote get-url origin 2>/dev/null || true)"
+nwo="$(printf '%s\n' "${origin}" | sed -n -E 's#^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$#\2#p')"
+nwo="${nwo%.git}"
+[ -n "${nwo}" ] || fail "gh: ${main_checkout}'s origin is not a github.com repository"
+if [ -e "${HOME}/.config/shift2eu/agents-app-token" ]; then
+  credential="the agents App's token (make agents-token)"
+else
+  credential="GITHUB_TOKEN (make vm-env)"
+fi
+read_back="$(gh api "repos/${nwo}" --jq .full_name 2>/dev/null || true)"
+[ "${read_back,,}" = "${nwo,,}" ] ||
+  fail "gh: cannot read ${nwo} with ${credential}; with the App, run make agents-token on the Mac; without it, set GITHUB_TOKEN for make vm-env, then run make vm-env and make vm-init again"
+say "gh: reads ${nwo} with ${credential}"
 
 # 7. deck
 dot-agent-deck validate --path "${repo}" >/dev/null || fail "deck: ${repo}/.dot-agent-deck.toml is not valid; see dot-agent-deck validate"
