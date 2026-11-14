@@ -1279,6 +1279,10 @@ func TestCatalogConstants(t *testing.T) {
 	if catalog.MaxIncludedStorageGiB != 1<<30 {
 		t.Errorf("MaxIncludedStorageGiB = %d, want %d", catalog.MaxIncludedStorageGiB, 1<<30)
 	}
+
+	if catalog.MaxBillingCapHours != 744 {
+		t.Errorf("MaxBillingCapHours = %d, want 744 hours, the hours of a 31-day month", catalog.MaxBillingCapHours)
+	}
 }
 
 // Amount.String formats an exact amount as a plain decimal: at least two
@@ -1904,6 +1908,77 @@ func TestNewPlanAndPriceErrors(t *testing.T) {
 			}
 
 			for _, want := range append([]string{offeringName}, tc.wantMsg...) {
+				if !strings.Contains(msg, want) {
+					t.Errorf("New() error = %q, want it to name %s", msg, text.Quote(want))
+				}
+			}
+		})
+	}
+}
+
+// TestNewPlanBillingCapHours pins the optional monthly billing cap of an
+// offering's plans (ADR 0029): 0 is the domain's one spelling of "uncapped", a
+// cap from 1 to MaxBillingCapHours is kept as given, and a negative cap or one
+// above the maximum is refused with ErrInvalidBillingCap in one line naming the
+// offering and the field. A cap above 744 would never be reached, so it is
+// refused rather than read as uncapped.
+func TestNewPlanBillingCapHours(t *testing.T) {
+	t.Parallel()
+
+	const offeringName = "Example Compute Plans"
+
+	capped := func(hours int64) catalog.Offering {
+		return catalog.Offering{
+			Name:                offeringName,
+			Categories:          []taxonomy.Category{taxonomy.ComputeVM},
+			Regions:             []string{"fr-par"},
+			PlanBillingCapHours: hours,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		hours   int64
+		wantErr error
+	}{
+		{name: "uncapped", hours: 0},
+		{name: "one hour", hours: 1},
+		{name: "672 hours, the hours of a 28-day month", hours: 672},
+		{name: "744 hours, the largest a month has", hours: catalog.MaxBillingCapHours},
+		{name: "negative cap", hours: -1, wantErr: catalog.ErrInvalidBillingCap},
+		{name: "cap above the maximum", hours: catalog.MaxBillingCapHours + 1, wantErr: catalog.ErrInvalidBillingCap},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cat, err := catalog.New(targetName, validSnapshot(), []catalog.Offering{capped(tc.hours)})
+
+			if tc.wantErr == nil {
+				if err != nil {
+					t.Fatalf("New() with a plan billing cap of %d returned unexpected error: %v", tc.hours, err)
+				}
+
+				if got := cat.Offerings()[0].PlanBillingCapHours; got != tc.hours {
+					t.Errorf("Offerings()[0].PlanBillingCapHours = %d, want %d", got, tc.hours)
+				}
+
+				return
+			}
+
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("New() with a plan billing cap of %d returned error %v, want one wrapping %v",
+					tc.hours, err, tc.wantErr)
+			}
+
+			msg := err.Error()
+
+			if strings.ContainsAny(msg, "\r\n") {
+				t.Errorf("New() error = %q, want a single line", msg)
+			}
+
+			for _, want := range []string{offeringName, "planBillingCapHours"} {
 				if !strings.Contains(msg, want) {
 					t.Errorf("New() error = %q, want it to name %s", msg, text.Quote(want))
 				}

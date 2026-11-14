@@ -196,6 +196,15 @@ func TestCatalogPlansAndPrices(t *testing.T) {
 				text.Quote(o.Name))
 		}
 
+		// ADR 0029: a plan billing cap is UpCloud's alone. OVHcloud publishes an
+		// hourly price for every plan and calls its monthly figure that price ×
+		// 730, with no maximum, so no offering may cap the hours it bills a plan
+		// for.
+		if o.PlanBillingCapHours != 0 {
+			t.Errorf("offering %s has PlanBillingCapHours %d, want 0: OVHcloud records no monthly billing cap",
+				text.Quote(o.Name), o.PlanBillingCapHours)
+		}
+
 		for _, p := range o.Plans {
 			for i, price := range p.Prices {
 				checkPrice(t, o, fmt.Sprintf("plan %s prices[%d]", text.Quote(p.Name), i), price)

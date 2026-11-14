@@ -51,10 +51,14 @@ described above; each section names the part of the page (its tab or table) a pr
   maximum of 28 days per month", and under the Kubernetes data plane that "All node plans are billed by
   the starting hour, maximum of 28 days per month". A server running all month pays the monthly price, so
   the snapshot stores that price as shown. Converting an hourly price at 730 hours (ADR 0024) does not
-  apply: there is no hourly price, and 730 hours would exceed the cap. Because the month is capped at
-  672 hours, an estimate for a server or node running fewer than 730 hours a month (price × hours / 730)
-  is lower than UpCloud's bill (min(hours, 672) / 672 of the price): at 336 hours, 46% against 50%.
-  Milestone 6 of PRD #190 handles `hoursPerMonth`.
+  apply: there is no hourly price, and 730 hours would exceed the cap. The cap is recorded as
+  `"planBillingCapHours": 672` on the three offerings whose plans are server or node plans, *Cloud
+  Servers*, *Managed Kubernetes* and *Managed Kubernetes Production* (ADR 0029), so an estimate prices a
+  server or node running `hoursPerMonth` hours at min(hours, 672) / 672 of its monthly price, as UpCloud
+  bills it: at 336 hours, 50% of the price, and at 672 hours or more, the whole price. The cap applies to
+  plan prices only: the Production control-plane fee, the databases, Block Storage and Object Storage
+  are charged by the hour with no cap (below), carry no `planBillingCapHours`, and are scaled by
+  `hoursPerMonth` / 730 or not at all, as before.
 - **Databases, storage and Object Storage: converted to a 730-hour month.** These are billed by the hour
   with no cap, and the pricing page shows a monthly figure for a 30-day month, 720 hours: "Resources are
   charged by the hour. Monthly prices are estimates based on a 30-day month" (under each database table
@@ -273,6 +277,12 @@ Category `compute.vm`. Pages: <https://upcloud.com/docs/products/cloud-servers/a
   storage", Block Storage billing page), none for Cloud Native, whose storage is an add-on ("Cloud Native
   and GPU plans don't include storage", same page).
   `STARTER-1xCPU-1GB` is "restricted to 5 instances per account" (configurations page).
+- **Plan billing cap** `672` hours a month (ADR 0029): the configurations page
+  (<https://upcloud.com/docs/products/cloud-servers/configurations/>, read 2026-11-13) says "Cloud Servers
+  are billed hourly and capped at 672 hours (24 h x 28 days) per month", and the pricing page says under
+  the *Starter*, *Premium* and *Cloud Native* tabs that the plans "are billed by the starting hour, maximum
+  of 28 days per month" (saved copy of <https://upcloud.com/pricing/>, read 2026-11-14). It applies to every
+  plan and zone of the offering, never to its storage price.
 - **Storage price** (pricing page, *Cloud Servers*, *Additional services*, *Block Storage* table, read
   2026-11-13; <https://upcloud.com/pricing/>; Block Storage billing page,
   <https://upcloud.com/docs/products/block-storage/billing/>, read 2026-11-13): `0.2231` per GiB a
@@ -403,6 +413,12 @@ capability follows from that.
   maximum of 28 days per month". The 42 Cloud Native plans include no storage, every node needs a disk,
   and this offering has no storage price, so a Cloud Native plan would price a node without its disk; GPU
   plans are left out too (*Left out on purpose*). Included storage is as for *Cloud Servers*.
+- **Plan billing cap** `672` hours a month (ADR 0029), as for *Cloud Servers*: the pricing page says under
+  the *Data plane* table that "All node plans are billed by the starting hour, maximum of 28 days per
+  month" (saved copy of <https://upcloud.com/pricing/>, read 2026-11-14), and worker nodes are Cloud
+  Servers, "capped at 672 hours (24 h x 28 days) per month" (configurations page,
+  <https://upcloud.com/docs/products/cloud-servers/configurations/>, read 2026-11-13). It caps the node
+  plans only; the control-plane fee is not capped.
 - **No storage price.** Worker-node storage beyond a plan's included storage is not priced: no page read
   on 2026-11-13 gives a per-GiB price for it (*Left out on purpose*). A sized node needing more disk than
   its plan includes is "not estimated" (PRD #190 milestone 6).
@@ -477,7 +493,15 @@ Category `kubernetes.managed`. A variant of *Managed Kubernetes* (tier-variant r
   hour". So it is converted like every other hourly-billed UpCloud price (*Prices*): 60 × 730 / 720 =
   60.833333… → `60.8333` (half up, 4 decimal places), recorded once in every zone of the offering. A
   plan is multiplied by the node count; the fee is charged once per cluster, never per node. Milestone 6
-  of PRD #190 scales fixed fees by `hoursPerMonth` / 730 (ADR 0026).
+  of PRD #190 scales fixed fees by `hoursPerMonth` / 730 (ADR 0026); the plan billing cap below never
+  applies to it (ADR 0029).
+- **Plan billing cap** `672` hours a month on the worker node plans (ADR 0029), as for *Managed
+  Kubernetes*: "All node plans are billed by the starting hour, maximum of 28 days per month" (pricing
+  page, *Data plane*, saved copy of <https://upcloud.com/pricing/>, read 2026-11-14), and Cloud Servers are
+  "capped at 672 hours (24 h x 28 days) per month" (configurations page,
+  <https://upcloud.com/docs/products/cloud-servers/configurations/>, read 2026-11-13). The control
+  plane's footer says instead "Resources are charged by the hour. Monthly prices are estimates based on a
+  30-day month.", so the fee above stays uncapped.
 - **No storage price**, as for *Managed Kubernetes*: worker-node storage beyond a plan's included storage
   is not priced (*Left out on purpose*), and a sized node needing more disk than its plan includes is "not
   estimated" (PRD #190 milestone 6).

@@ -152,6 +152,18 @@ func fixedFeesDocument(t *testing.T) string {
       "storagePrices": [`)
 }
 
+// planBillingCapDocument returns pricedDocument with the format's second
+// optional key on its offering (ADR 0029): the offering bills one instance of
+// one of its plans for at most 672 hours a month, 24 h × 28 days, so its plan
+// prices are the price of that many hours.
+func planBillingCapDocument(t *testing.T) string {
+	t.Helper()
+
+	return offeringDoc(t, func(offering map[string]json.RawMessage) {
+		offering["planBillingCapHours"] = json.RawMessage("672")
+	})
+}
+
 // padTo returns data padded with trailing spaces to exactly n bytes. White space
 // after the catalog object is allowed, so the result is the same document.
 func padTo(t *testing.T, data string, n int) []byte {
@@ -1088,6 +1100,99 @@ func TestParseErrors(t *testing.T) {
 			wantQuoted:   []string{"nl-ams"},
 			wantContains: []string{"fixedFees"},
 		},
+		// planBillingCapHours is the format's second optional key (ADR 0029): the
+		// hours a month the offering bills one instance of one of its plans for, an
+		// integer from 1 to 744 that its plan prices are the price of. Zero is
+		// refused, as an empty fixedFees is, so "uncapped" has one spelling: leave
+		// the key out. Every value but an integer is refused with the path it sits
+		// at.
+		{
+			name:         "plan billing cap of zero",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `0`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours", "leave the key out"},
+		},
+		{
+			name:         "null plan billing cap",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `null`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			name:         "plan billing cap given as a string",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `"672"`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			name:         "plan billing cap given as a boolean",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `true`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			name:         "plan billing cap given as an object",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `{}`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			name:         "plan billing cap given as an array",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `[]`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			name:         "plan billing cap with a fraction",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `672.5`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			// 672.0 is an integer written as a decimal, which the format's
+			// integer grammar does not allow: a cap is written 672.
+			name:         "plan billing cap with a zero fraction",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `672.0`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			name:         "plan billing cap with an exponent",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `6.72e2`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			name:         "plan billing cap written as -0",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `-0`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			name:         "plan billing cap outside int64",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `9223372036854775808`),
+			wantErr:      []error{snapshot.ErrDecode},
+			wantContains: []string{"offerings[0].planBillingCapHours"},
+		},
+		{
+			// A negative cap is read: the sign is part of the grammar, and the
+			// rule that a cap is at least 1 lives once, in the domain, so Parse
+			// returns catalog.New's error as it is.
+			name:         "negative plan billing cap reaches the domain",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `-1`),
+			wantErr:      []error{catalog.ErrInvalidBillingCap},
+			wantNotErr:   []error{snapshot.ErrDecode},
+			wantQuoted:   []string{"Example Compute"},
+			wantContains: []string{"planBillingCapHours"},
+		},
+		{
+			name:         "plan billing cap above the maximum reaches the domain",
+			data:         withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", `745`),
+			wantErr:      []error{catalog.ErrInvalidBillingCap},
+			wantNotErr:   []error{snapshot.ErrDecode},
+			wantQuoted:   []string{"Example Compute"},
+			wantContains: []string{"planBillingCapHours"},
+		},
 		{
 			// A negative number is read: the sign is part of the grammar, and the
 			// rule that a size or a price is not negative lives once, in the
@@ -1689,6 +1794,64 @@ func TestParseFixedFees(t *testing.T) {
 
 // offeringPath is where pricedDocument's offering sits, as editAt takes it.
 var offeringPath = []any{"offerings", 0}
+
+// TestParsePlanBillingCapHours pins what the optional planBillingCapHours key of
+// a version 2 document becomes in the catalog (ADR 0029): the hours a month the
+// offering bills one instance of one of its plans for, whose monthly prices are
+// then the price of that many hours. A document without the key reads as it
+// always did, with no cap on any offering, which is not a cap of 0 hours.
+func TestParsePlanBillingCapHours(t *testing.T) {
+	t.Parallel()
+
+	document, err := snapshot.Parse([]byte(planBillingCapDocument(t)))
+	if err != nil {
+		t.Fatalf("Parse() of a document with a plan billing cap returned unexpected error: %v", err)
+	}
+
+	offerings := document.Catalog.Offerings()
+	if len(offerings) != 1 {
+		t.Fatalf("Parse().Catalog.Offerings() returned %d offerings, want 1", len(offerings))
+	}
+
+	if got, want := offerings[0].PlanBillingCapHours, int64(672); got != want {
+		t.Errorf("Offerings()[0].PlanBillingCapHours = %d, want %d", got, want)
+	}
+
+	t.Run("a document without the key is uncapped", func(t *testing.T) {
+		t.Parallel()
+
+		// Every snapshot written before ADR 0029 has no planBillingCapHours key,
+		// and must read as it did: no cap on any offering.
+		document, err := snapshot.Parse([]byte(pricedDocument))
+		if err != nil {
+			t.Fatalf("Parse() of a document without a plan billing cap returned unexpected error: %v", err)
+		}
+
+		for _, offering := range document.Catalog.Offerings() {
+			if got := offering.PlanBillingCapHours; got != 0 {
+				t.Errorf("offering %s has PlanBillingCapHours %d, want 0: a document without the key is uncapped",
+					text.Quote(offering.Name), got)
+			}
+		}
+	})
+
+	t.Run("the smallest and the largest cap", func(t *testing.T) {
+		t.Parallel()
+
+		for _, hours := range []string{"1", "744"} {
+			data := withNested(t, planBillingCapDocument(t), offeringPath, "planBillingCapHours", hours)
+
+			document, err := snapshot.Parse([]byte(data))
+			if err != nil {
+				t.Fatalf("Parse() of a document with a plan billing cap of %s returned unexpected error: %v", hours, err)
+			}
+
+			if got := document.Catalog.Offerings()[0].PlanBillingCapHours; strconv.FormatInt(got, 10) != hours {
+				t.Errorf("Offerings()[0].PlanBillingCapHours = %d, want %s", got, hours)
+			}
+		}
+	})
+}
 
 // TestParseRequiresEveryVersion2Key pins that every key schema version 2 adds is
 // required and spelt exactly: defaultRegion, an offering's plans and

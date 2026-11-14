@@ -6,10 +6,12 @@
 // with the best one on fit and missing capabilities): the cheapest plan in the
 // region whose vCPUs and memory are each at least the resource's, ties broken
 // by fewer vCPUs, less memory, plan name and offering name. The estimate is the
-// plan price × count × hoursPerMonth / 730, plus the storage above what the
-// plan includes × the offering's per-GiB price, plus the offering's fixed fee
-// once per resource × hoursPerMonth / 730 (ADR 0026). Storage categories have
-// no plan: their estimate is the stored GiB × the per-GiB price.
+// plan price × count × hoursPerMonth / 730 (× min(hoursPerMonth, cap) / cap
+// instead when the offering bills its plans at most cap hours a month,
+// ADR 0029), plus the storage above what the plan includes × the offering's
+// per-GiB price, plus the offering's fixed fee once per resource ×
+// hoursPerMonth / 730, never capped (ADR 0026). Storage categories have no
+// plan: their estimate is the stored GiB × the per-GiB price.
 //
 // A resource that cannot be priced is never priced at 0: its Estimate says it
 // is not estimated, and why (Reason). Sum totals only the estimated resources

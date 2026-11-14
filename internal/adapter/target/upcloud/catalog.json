@@ -104,7 +104,8 @@
         { "name": "CLOUDNATIVE-64xCPU-512GB", "vcpus": 64, "memoryGiB": 512, "storageGiB": 0, "prices": [{ "amount": 1400, "currency": "EUR", "regions": [] }] },
         { "name": "CLOUDNATIVE-80xCPU-512GB", "vcpus": 80, "memoryGiB": 512, "storageGiB": 0, "prices": [{ "amount": 1800, "currency": "EUR", "regions": [] }] }
       ],
-      "storagePrices": [{ "amount": 0.2231, "currency": "EUR", "regions": [] }]
+      "storagePrices": [{ "amount": 0.2231, "currency": "EUR", "regions": [] }],
+      "planBillingCapHours": 672
     },
     {
       "name": "Managed Kubernetes",
@@ -145,7 +146,8 @@
         { "name": "PREMIUM-80xCPU-512GB", "vcpus": 80, "memoryGiB": 512, "storageGiB": 500, "prices": [{ "amount": 2552, "currency": "EUR", "regions": [] }] }
       ],
       "storagePrices": [],
-      "fixedFees": [{ "amount": 0, "currency": "EUR", "regions": [] }]
+      "fixedFees": [{ "amount": 0, "currency": "EUR", "regions": [] }],
+      "planBillingCapHours": 672
     },
     {
       "name": "Managed Kubernetes Production",
@@ -186,7 +188,8 @@
         { "name": "PREMIUM-80xCPU-512GB", "vcpus": 80, "memoryGiB": 512, "storageGiB": 500, "prices": [{ "amount": 2552, "currency": "EUR", "regions": [] }] }
       ],
       "storagePrices": [],
-      "fixedFees": [{ "amount": 60.8333, "currency": "EUR", "regions": [] }]
+      "fixedFees": [{ "amount": 60.8333, "currency": "EUR", "regions": [] }],
+      "planBillingCapHours": 672
     },
     {
       "name": "Managed MySQL",

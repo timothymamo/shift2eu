@@ -272,7 +272,7 @@ func diff(got, want catalog.Catalog) string {
 }
 
 // equalOffering reports whether a and b are the same offering, field by field,
-// plans, prices and storage prices included.
+// plans, prices, storage prices, fixed fees and plan billing cap included.
 func equalOffering(a, b catalog.Offering) bool {
 	return a.Name == b.Name &&
 		slices.Equal(a.Categories, b.Categories) &&
@@ -280,7 +280,8 @@ func equalOffering(a, b catalog.Offering) bool {
 		slices.Equal(a.Regions, b.Regions) &&
 		slices.EqualFunc(a.Plans, b.Plans, equalPlan) &&
 		slices.EqualFunc(a.StoragePrices, b.StoragePrices, equalPrice) &&
-		slices.EqualFunc(a.FixedFees, b.FixedFees, equalPrice)
+		slices.EqualFunc(a.FixedFees, b.FixedFees, equalPrice) &&
+		a.PlanBillingCapHours == b.PlanBillingCapHours
 }
 
 // equalPlan reports whether a and b are the same plan, prices included.
@@ -299,9 +300,10 @@ func equalPrice(a, b catalog.Price) bool {
 
 // describe formats o for a violation message, quoting every value.
 func describe(o catalog.Offering) string {
-	return fmt.Sprintf("{Name: %s, Categories: %s, Capabilities: %s, Regions: %s, Plans: %s, StoragePrices: %s, FixedFees: %s}",
+	return fmt.Sprintf("{Name: %s, Categories: %s, Capabilities: %s, Regions: %s, Plans: %s, StoragePrices: %s, FixedFees: %s, "+
+		"PlanBillingCapHours: %d}",
 		text.Quote(o.Name), quoteAll(o.Categories), quoteAll(o.Capabilities), quoteAll(o.Regions),
-		describePlans(o.Plans), describePrices(o.StoragePrices), describePrices(o.FixedFees))
+		describePlans(o.Plans), describePrices(o.StoragePrices), describePrices(o.FixedFees), o.PlanBillingCapHours)
 }
 
 // describePlans formats plans for a violation message, quoting every value.
