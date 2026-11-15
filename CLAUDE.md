@@ -131,3 +131,19 @@ commands, never to one agent's built-in tools.
 Workers start with no memory of earlier tasks: everything needed is in the task text, the PRD, this file
 and the skills. The first line of every task, `Worktree: <path>`, names the worktree to work in. Workers report only to the orchestrator via `dot-agent-deck work-done`; only the
 orchestrator talks to the user. The single human gate is merging a PR.
+
+### Dispatcher
+
+Above the orchestrations sits the dispatcher: the pane that talks to the maintainer, dispatches each
+issue or PRD milestone as a unit, verifies what the units report and cleans up after a merge. Its process
+is the `dispatch` skill; its memory holds only its state (the queue, holds and decisions). The skill
+refers to these values by name:
+
+| Name | Value |
+|---|---|
+| Orchestration | `shift2eu` |
+| CLI | `~/.local/bin/dot-agent-deck` |
+| Unit limit | 3 open units (2 when the VM has 8 GiB or less) |
+| Checks on a merged scratch tree | `make check` and `make test-e2e` |
+| Maintainer notes directory | `.idea/` in the repository root (git-ignored) |
+| Release flow | The release-please PR, reviewed with the `release-tag` skill |
