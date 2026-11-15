@@ -2,7 +2,7 @@
 
 - Inventory file: `inventory.json`
 - Source: `aws`
-- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-13
+- Catalog: `OVHcloud` snapshot from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, retrieved 2026-11-14
 - Region: `GRA` (the target's default for estimates)
 
 ## Summary
@@ -44,7 +44,7 @@
 ## Cost estimate
 
 - Total: €0.00 per month for 0 of 11 resources
-- Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
+- Estimate: list prices on 2026-11-14, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
 - Source cost: none in the inventory

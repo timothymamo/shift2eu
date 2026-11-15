@@ -1,6 +1,6 @@
 target: OVHcloud
 sourceURL: https://www.ovhcloud.com/en-ie/public-cloud/prices/
-retrievedOn: 2026-11-13
+retrievedOn: 2026-11-14
 defaultRegion: GRA
 Block Storage | storage.block | snapshots | GRA, LIM, RBX, SBG, WAW
   plans: -
@@ -43,7 +43,7 @@ Instances | compute.vm | ipv6, snapshots | GRA, LIM, MIL, PAR, RBX, SBG, WAW
   plan: r3-32 | 4 vcpu | 32 GiB | 0 GiB storage | 96.652 EUR @ -
   plan: r3-512 | 64 vcpu | 512 GiB | 0 GiB storage | 1546.14 EUR @ -
   plan: r3-64 | 8 vcpu | 64 GiB | 0 GiB storage | 193.304 EUR @ -
-  storage prices: -
+  storage price: 0.0431 EUR @ -
 Managed Kubernetes Service | kubernetes.managed | autoscaling | GRA, LIM, RBX, SBG, WAW
   plan: b2-120 | 32 vcpu | 120 GiB | 400 GiB storage | 754.09 EUR @ -
   plan: b2-15 | 4 vcpu | 15 GiB | 100 GiB storage | 97.966 EUR @ -
@@ -73,7 +73,7 @@ Managed Kubernetes Service | kubernetes.managed | autoscaling | GRA, LIM, RBX, S
   plan: r3-32 | 4 vcpu | 32 GiB | 0 GiB storage | 96.652 EUR @ GRA, LIM, WAW
   plan: r3-512 | 64 vcpu | 512 GiB | 0 GiB storage | 1546.14 EUR @ GRA, LIM, WAW
   plan: r3-64 | 8 vcpu | 64 GiB | 0 GiB storage | 193.304 EUR @ GRA, LIM, WAW
-  storage prices: -
+  storage price: 0.0431 EUR @ -
 Managed Kubernetes Service 3-AZ | kubernetes.managed | autoscaling, node-high-availability, zone-high-availability | MIL, PAR
   plan: b3-128 | 32 vcpu | 128 GiB | 0 GiB storage | 597.87 EUR @ -
   plan: b3-16 | 4 vcpu | 16 GiB | 0 GiB storage | 74.679 EUR @ -
@@ -98,7 +98,7 @@ Managed Kubernetes Service 3-AZ | kubernetes.managed | autoscaling, node-high-av
   plan: r3-32 | 4 vcpu | 32 GiB | 0 GiB storage | 96.652 EUR @ -
   plan: r3-512 | 64 vcpu | 512 GiB | 0 GiB storage | 1546.14 EUR @ -
   plan: r3-64 | 8 vcpu | 64 GiB | 0 GiB storage | 193.304 EUR @ -
-  storage prices: -
+  storage price: 0.0431 EUR @ -
 Managed MySQL | database.mysql | encryption-at-rest, point-in-time-restore | GRA, LIM, RBX, SBG, WAW
   plan: Discovery B3-128 | 32 vcpu | 128 GiB | 2560 GiB storage | 2290.886 EUR @ -
   plan: Discovery B3-16 | 4 vcpu | 16 GiB | 320 GiB storage | 286.379 EUR @ -
