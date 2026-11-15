@@ -129,8 +129,8 @@ Skills live only in `.claude/skills`: Claude Code finds them there, and pi loads
 commands, never to one agent's built-in tools.
 
 Workers start with no memory of earlier tasks: everything needed is in the task text, the PRD, this file
-and the skills. The first line of every task, `Worktree: <path>`, names the worktree to work in. Workers report only to the orchestrator via `dot-agent-deck work-done`; only the
-orchestrator talks to the user. The single human gate is merging a PR.
+and the skills. The first line of every task, `Worktree: <path>`, names the worktree to work in. Workers report only to their orchestrator via `dot-agent-deck work-done`; units report
+to the dispatcher, and only the dispatcher talks to the maintainer. The single human gate is merging a PR.
 
 ### Dispatcher
 
