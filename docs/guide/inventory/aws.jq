@@ -37,9 +37,10 @@
 #
 # The size comes from the calls too: an instance's vCPU and memory from its
 # instance type (ec2 describe-instance-types), a volume's GiB (Size), a DB
-# instance's allocated storage (AllocatedStorage) and an EKS cluster's node count
-# (the desired sizes of its managed node groups). A number no call gives is left
-# out, never guessed. The workload, relations and monthlyCost fields are the
+# instance's allocated storage (AllocatedStorage; none for an Aurora instance,
+# whose storage belongs to its cluster) and an EKS cluster's node count (the
+# desired sizes of its managed node groups). A number no call gives is left out,
+# never guessed. The workload, relations and monthlyCost fields are the
 # user's to add by hand; this program never writes them.
 
 # The CloudFormation types the service calls above cover. AWS Config lists them
@@ -184,7 +185,9 @@ def inventory($source):
         }),
 
     # RDS DB instances: the engine decides the category; any other engine is
-    # unclassified. An Aurora cluster is assessed per instance.
+    # unclassified. An Aurora cluster is assessed per instance. An Aurora
+    # instance (DBClusterIdentifier set) gets no storage size: Aurora storage
+    # belongs to the cluster, and AllocatedStorage means nothing for it.
     ($docs[] | .DBInstances? // empty | .[]
       | (if .Engine == "postgres" or .Engine == "aurora-postgresql" then "database.postgresql"
          elif .Engine == "mysql" or .Engine == "aurora-mysql" then "database.mysql"
@@ -200,7 +203,8 @@ def inventory($source):
             cap("zone-high-availability"; .MultiAZ == true),
             cap("encryption-at-rest"; .StorageEncrypted == true)
           ] end),
-          size: (if $category == "unclassified" then null else size_of({storageGiB: .AllocatedStorage}) end)
+          size: (if $category == "unclassified" or .DBClusterIdentifier != null then null
+                 else size_of({storageGiB: .AllocatedStorage}) end)
         }),
 
     # EKS clusters, with their managed node groups. Cluster names are unique per

@@ -335,12 +335,14 @@ Review `inventories/aws.inventory.json`, then delete the raw output: `rm -r inve
 |---|---|---|
 | EC2 instance | `vcpus`, `memoryGiB` | its `InstanceType`, looked up in `ec2 describe-instance-types` (`VCpuInfo.DefaultVCpus`, `MemoryInfo.SizeInMiB` / 1024) |
 | EBS volume | `storageGiB` | `ec2 describe-volumes`, `Volumes[].Size` |
-| RDS DB instance | `storageGiB` | `rds describe-db-instances`, `DBInstances[].AllocatedStorage` |
+| RDS DB instance (not Aurora) | `storageGiB` | `rds describe-db-instances`, `DBInstances[].AllocatedStorage` |
 | EKS cluster | `count` | the sum of its managed node groups' `scalingConfig.desiredSize` (`eks describe-nodegroup`) |
 
 Not filled in: an RDS instance's vCPU and memory (from its `DBInstanceClass`, such as `db.m5.large`), an
-EKS cluster's per-node vCPU and memory (from its node groups' `instanceTypes`), an Auto Scaling group's
-instance size and count, and an S3 bucket's stored GiB (the `BucketSizeBytes` metric in CloudWatch).
+Aurora instance's storage (Aurora storage belongs to the cluster, so `AllocatedStorage` means nothing
+for an instance with a `DBClusterIdentifier`), an EKS cluster's per-node vCPU and memory (from its node
+groups' `instanceTypes`), an Auto Scaling group's instance size and count, and an S3 bucket's stored GiB
+(the `BucketSizeBytes` metric in CloudWatch).
 Add them by hand where you want an estimate.
 
 ### AWS classification
