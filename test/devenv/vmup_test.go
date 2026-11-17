@@ -176,6 +176,20 @@ func (f *vmUpFixture) creationWith(flags []string) []string {
 	return append(want, args[len(args)-1])
 }
 
+// sortedSettings renders the variables set in the environment as NAME=value, sorted by name, for a failure
+// message that does not depend on map order.
+func sortedSettings(env map[string]string) []string {
+	settings := make([]string, 0, len(env))
+
+	for name, value := range env {
+		settings = append(settings, name+"="+value)
+	}
+
+	slices.Sort(settings)
+
+	return settings
+}
+
 // describeCalls renders start calls for a failure message.
 func describeCalls(calls [][]string) string {
 	var b strings.Builder
@@ -195,8 +209,9 @@ func TestMakeVMUpPassesTheVMResourcesToLimactlStart(t *testing.T) {
 
 	cases := []struct {
 		name string
-		vars []string // the make arguments that set the variables
-		want []string // the flags they add, in this order
+		vars []string          // the make arguments that set the variables
+		env  map[string]string // the variables set in the environment instead of the command line
+		want []string          // the flags they add, in this order
 	}{
 		{
 			name: "none set",
@@ -243,6 +258,26 @@ func TestMakeVMUpPassesTheVMResourcesToLimactlStart(t *testing.T) {
 			vars: []string{"VM_CPUS=1", "VM_DISK=1GiB"},
 			want: []string{"--cpus=1", "--disk=1"},
 		},
+		// The variables are read from the environment too, the way a shell exports them before make runs,
+		// so a maintainer can set them in a profile or with direnv rather than on the command line.
+		{
+			name: "VM_CPUS in the environment alone",
+			env:  map[string]string{"VM_CPUS": "6"},
+			want: []string{"--cpus=6"},
+		},
+		{
+			name: "all four in the environment",
+			env: map[string]string{
+				"VM_CPUS": "6", "VM_MEMORY": "8GiB", "VM_DISK": "60GiB", "VM_SSH_PORT": "60023",
+			},
+			want: []string{"--cpus=6", "--memory=8", "--disk=60", "--ssh-port=60023"},
+		},
+		{
+			name: "the environment and the command line together",
+			vars: []string{"VM_MEMORY=10GiB"},
+			env:  map[string]string{"VM_CPUS": "6", "VM_SSH_PORT": "60023"},
+			want: []string{"--cpus=6", "--memory=10", "--ssh-port=60023"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -251,16 +286,25 @@ func TestMakeVMUpPassesTheVMResourcesToLimactlStart(t *testing.T) {
 
 			f := newVMUpFixture(t, false)
 
+			for name, value := range tc.env {
+				f.env[name] = value
+			}
+
+			setting := strings.Join(tc.vars, " ")
+			if setting == "" {
+				setting = "with " + strings.Join(sortedSettings(tc.env), ", ") + " in the environment"
+			}
+
 			stdout, stderr, err := f.run(t, append([]string{"vm-up"}, tc.vars...)...)
 			if err != nil {
-				t.Fatalf("make vm-up %s: %v\nstdout: %s\nstderr: %s", strings.Join(tc.vars, " "), err, stdout, stderr)
+				t.Fatalf("make vm-up %s: %v\nstdout: %s\nstderr: %s", setting, err, stdout, stderr)
 			}
 
 			want := f.creationWith(tc.want)
 			got := f.creating(t)
 
 			if diff := cmp.Diff(want, got); diff != "" {
-				t.Errorf("make vm-up %s creates the VM with the wrong limactl start argv (issue #228): the existing creation arguments stay as they are, the flags of the set variables follow them, and the template stays the last argument (-want +got):\n%s", strings.Join(tc.vars, " "), diff)
+				t.Errorf("make vm-up %s creates the VM with the wrong limactl start argv (issue #228): the existing creation arguments stay as they are, the flags of the set variables follow them, and the template stays the last argument (-want +got):\n%s", setting, diff)
 			}
 		})
 	}
@@ -277,6 +321,7 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 		name     string
 		variable string
 		value    string // {marker} is replaced with the fixture's marker path
+		env      bool   // the variable is set in the environment rather than on the make command line
 	}{
 		// VM_CPUS is a CPU count: a positive whole number.
 		{name: "VM_CPUS 0", variable: vmCPUsVar, value: "0"},
@@ -286,6 +331,9 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 		{name: "VM_CPUS a command after a semicolon", variable: vmCPUsVar, value: "4; touch {marker}"},
 		{name: "VM_CPUS a command substitution", variable: vmCPUsVar, value: "$(touch {marker})"},
 		{name: "VM_CPUS a backtick command", variable: vmCPUsVar, value: "`touch {marker}`"},
+		{name: "VM_CPUS a number with a single quote", variable: vmCPUsVar, value: "4'"},
+		{name: "VM_CPUS a quoted command", variable: vmCPUsVar, value: "4'; touch {marker}; echo '"},
+		{name: "VM_CPUS a quoted command in the environment", variable: vmCPUsVar, value: "4'; touch {marker}; echo '", env: true},
 		// VM_MEMORY and VM_DISK are a size in GiB: a positive whole number and the GiB suffix.
 		{name: "VM_MEMORY without its unit", variable: vmMemoryVar, value: "8"},
 		{name: "VM_MEMORY in GB", variable: vmMemoryVar, value: "8GB"},
@@ -299,12 +347,16 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 		{name: "VM_DISK 0GiB", variable: vmDiskVar, value: "0GiB"},
 		{name: "VM_DISK abcGiB", variable: vmDiskVar, value: "abcGiB"},
 		{name: "VM_DISK a command after a semicolon", variable: vmDiskVar, value: "8GiB; touch {marker}"},
+		{name: "VM_MEMORY a size with a single quote", variable: vmMemoryVar, value: "8GiB'"},
+		{name: "VM_DISK a quoted command", variable: vmDiskVar, value: "8GiB'; touch {marker}; echo '"},
 		// VM_SSH_PORT is a port Lima can forward: 1024 to 65535.
 		{name: "VM_SSH_PORT 1023", variable: vmSSHPortVar, value: "1023"},
 		{name: "VM_SSH_PORT 65536", variable: vmSSHPortVar, value: "65536"},
 		{name: "VM_SSH_PORT 0", variable: vmSSHPortVar, value: "0"},
 		{name: "VM_SSH_PORT abc", variable: vmSSHPortVar, value: "abc"},
 		{name: "VM_SSH_PORT with a space", variable: vmSSHPortVar, value: "600 22"},
+		{name: "VM_SSH_PORT a number with a single quote", variable: vmSSHPortVar, value: "60023'"},
+		{name: "VM_SSH_PORT a quoted command in the environment", variable: vmSSHPortVar, value: "60023'; touch {marker}; echo '", env: true},
 	}
 
 	for _, tc := range cases {
@@ -313,24 +365,32 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 
 			f := newVMUpFixture(t, false)
 			value := strings.ReplaceAll(tc.value, "{marker}", f.marker)
+			setting := tc.variable + "=" + strconv.Quote(value) + " on the command line"
+			args := []string{"vm-up", tc.variable + "=" + value}
 
-			stdout, stderr, err := f.run(t, "vm-up", tc.variable+"="+value)
+			if tc.env {
+				setting = tc.variable + "=" + strconv.Quote(value) + " in the environment"
+				args = []string{"vm-up"}
+				f.env[tc.variable] = value
+			}
+
+			stdout, stderr, err := f.run(t, args...)
 			if err == nil {
-				t.Fatalf("make vm-up %s=%q exited 0: vm-up must refuse a value that is not a CPU count, a whole GiB size or a port in 1024-65535, so limactl never sees it (issue #228)\nstdout: %s\nstderr: %s", tc.variable, value, stdout, stderr)
+				t.Fatalf("make vm-up %s exited 0: vm-up must refuse a value that is not a CPU count, a whole GiB size or a port in 1024-65535, so limactl never sees it (issue #228)\nstdout: %s\nstderr: %s", setting, stdout, stderr)
 			}
 
 			if calls := invocations(f.sb.argvLogText(t), "limactl"); len(calls) != 0 {
-				t.Errorf("make vm-up %s=%q called limactl before it refused the value: validation must come first, so no value can reach limactl or a shell (issue #228):%s",
-					tc.variable, value, describeCalls(calls))
+				t.Errorf("make vm-up %s called limactl before it refused the value: validation must come first, so no value can reach limactl or a shell (issue #228):%s",
+					setting, describeCalls(calls))
 			}
 
 			if _, err := os.Stat(f.marker); err == nil {
-				t.Errorf("make vm-up %s=%q created %s: a value the Makefile refuses must never be run by a shell (issue #228)", tc.variable, value, f.marker)
+				t.Errorf("make vm-up %s created %s: a value the Makefile refuses must never be run by a shell (issue #228)", setting, f.marker)
 			}
 
 			if combined := stdout + stderr; !strings.Contains(combined, tc.variable) {
-				t.Errorf("the refusal of %s=%q does not name %s, so a maintainer cannot tell which variable to fix (issue #228):\nstdout: %s\nstderr: %s",
-					tc.variable, value, tc.variable, stdout, stderr)
+				t.Errorf("the refusal of %s does not name %s, so a maintainer cannot tell which variable to fix (issue #228):\nstdout: %s\nstderr: %s",
+					setting, tc.variable, stdout, stderr)
 			}
 		})
 	}
