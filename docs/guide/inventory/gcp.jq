@@ -32,10 +32,10 @@
 # is left out with its boot disk, the group stands for it.
 #
 # The size comes from the calls too: an instance's vCPU and memory from its
-# machine type (compute machine-types list, matched by the instance's
-# machineType URL, zone included) and a disk's GiB (compute disks list, sizeGb,
-# which the Compute API writes as a string; a regional disk is matched by its
-# region). A number no call gives is left out,
+# machine type (compute machine-types list, the instance's machineType URL
+# matched to the type's selfLink, zone included) and a disk's GiB (compute
+# disks list, sizeGb, which the Compute API writes as a string; a regional disk
+# is matched by its region). A number no call gives is left out,
 # never guessed. The workload, relations and monthlyCost fields are the user's to
 # add by hand; this program never writes them.
 
@@ -98,7 +98,7 @@ def details(f; k): map(select(f)) | INDEX(k);
 | ($all | details(.kind? == "compute#instance"; .selfLink | key)) as $instances
 | ($all | details(.kind? == "compute#instanceGroupManager"; .selfLink | key)) as $groups
 | ($all | details(.kind? == "sql#instance"; .selfLink | key)) as $sql
-| ($all | details(.kind? == "compute#machineType"; .zone + "/machineTypes/" + .name | key)) as $machinetypes
+| ($all | details(.kind? == "compute#machineType"; .selfLink | key)) as $machinetypes
 | ($all | details(.kind? == "compute#disk"; (.zone // .region) + "/disks/" + .name | key)) as $disks
 | ($all | details(.kind? == "storage#bucket"; .name)) as $buckets
 | ($all | details((.selfLink? // "") | startswith("https://container.googleapis.com/"); .selfLink | key)) as $clusters

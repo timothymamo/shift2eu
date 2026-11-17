@@ -459,7 +459,7 @@ gcloud compute instances list --project="$project" \
 # The vCPU and memory of the machine types in use, and every disk's size.
 types="$(jq -r '[.[].machineType // empty | split("/") | last] | unique | join(" ")' "$out/compute-instances.json")"
 gcloud compute machine-types list --project="$project" --filter="name:($types)" \
-  --format='json(kind,name,zone,guestCpus,memoryMb)' > "$out/compute-machine-types.json"
+  --format='json(kind,selfLink,name,zone,guestCpus,memoryMb)' > "$out/compute-machine-types.json"
 gcloud compute disks list --project="$project" \
   --format='json(kind,name,zone,region,sizeGb)' > "$out/compute-disks.json"
 gcloud compute instance-groups managed list --project="$project" \
