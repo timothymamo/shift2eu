@@ -81,10 +81,11 @@ var (
 	// hostnamePattern finds every dot-separated name, the shape of a DNS name:
 	// one or more labels, each starting and ending with a letter or digit,
 	// separated by dots. The match is case-insensitive (?i) so a name written
-	// in capitals cannot slip past the allow list (SHOP.ACME.IO). Names the
-	// taxonomy declares (compute.vm, database.postgresql) are dotted too and
-	// are not data; an IPv4 address matches as well and is checked by
-	// ipv4Problems. Both are skipped in hostnameProblems.
+	// in capitals cannot slip past the allow list (SHOP.ACME.IO). Not every
+	// match is a host name: a decimal number (84.10), the taxonomy's vocabulary
+	// (compute.vm, database.postgresql), an IPv4 address (checked by
+	// ipv4Problems) and an inventory field path (size.storageGiB,
+	// usage.hoursPerMonth) match it too, and are skipped in hostnameProblems.
 	hostnamePattern = regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+\b`)
 
 	// documentationPrefixNet and documentationPrefixV6Net are the documentation
@@ -100,6 +101,21 @@ var allowedHostnames = []string{
 	"example.com",
 	".example.com",
 	".example",
+}
+
+// inventoryFieldPaths are the resource fields inventory format version 2 writes
+// with a dot (docs/adr/0025). A document and a README name them as they are
+// (size.vcpus, usage.hoursPerMonth), and hostnamePattern matches a path written
+// under resources[N] from the field name on, because the "[" before the index
+// and the "]" after it end the word. An inventory field path is not a host name.
+var inventoryFieldPaths = []string{
+	"size.vcpus",
+	"size.memoryGiB",
+	"size.storageGiB",
+	"size.count",
+	"usage.hoursPerMonth",
+	"monthlyCost.amount",
+	"monthlyCost.currency",
 }
 
 // allowedHostnamesHint is how a failure message spells the host name rule.
@@ -369,6 +385,17 @@ func hostnameProblems(text string) []problem {
 			continue
 		}
 
+		// A number with a decimal point (a monthlyCost.amount of 84.10) has the
+		// shape of a two-label name and is not data about a host.
+		if numeric(candidate) {
+			continue
+		}
+
+		// An inventory field path is the format's own vocabulary, not a value.
+		if slices.Contains(inventoryFieldPaths, candidate) {
+			continue
+		}
+
 		// The taxonomy vocabulary is dotted as well, and an inventory carries
 		// it in every resource: a value the taxonomy declares is not a domain
 		// name.
@@ -396,6 +423,23 @@ func hostnameProblems(text string) []problem {
 	}
 
 	return problems
+}
+
+// numeric reports whether candidate is a number rather than a host name: its
+// last label is all digits, as every label of a number written as a plain
+// decimal is (84.10, 1234.5). A host name's last label is a top-level domain,
+// and every real one holds a letter, so a host name is never read as a number.
+func numeric(candidate string) bool {
+	labels := strings.Split(candidate, ".")
+	last := labels[len(labels)-1]
+
+	for i := range len(last) {
+		if last[i] < '0' || last[i] > '9' {
+			return false
+		}
+	}
+
+	return true
 }
 
 // insidePath reports whether the candidate starting at start is a segment of a
@@ -597,8 +641,10 @@ func TestIPv6Problems(t *testing.T) {
 }
 
 // TestHostnameProblems pins which names the sanitisation check reports, not only
-// through allowedHostname: a name in a command path or a markdown link target is
-// a file, not a host, while a real host in prose or in a URL is reported.
+// through allowedHostname: a name in a command path, a markdown link target or
+// an inventory field path is not a host, a decimal number is not one either,
+// while a real host in prose or in a URL is reported - even next to a number or
+// a field path that is not.
 func TestHostnameProblems(t *testing.T) {
 	t.Parallel()
 

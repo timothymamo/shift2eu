@@ -48,11 +48,16 @@ const (
 	assessmentSchema = repoRoot + "/internal/adapter/report/jsonreport/schema/assessment-v2.schema.json"
 )
 
-// pricedSize says which size fields a priced category is priced by (PRD #190):
-// vcpus and memoryGiB for a category priced by plan, storageGiB for one priced
-// by stored GiB. A category that is not in pricedSizes is not priced at all:
-// messaging.queue and serverless.function are priced by usage, and unclassified
-// never is.
+// pricedSize says which size fields the estimate prices a category by (PRD
+// #190): vcpus and memoryGiB for a category priced by plan, storageGiB for one
+// priced by stored GiB. A category that is not in pricedSizes is not priced at
+// all: messaging.queue and serverless.function are priced by usage, and
+// unclassified never is.
+//
+// They are not the only fields a category may give: docs/adr/0025 lets every
+// compute, Kubernetes and database resource give every size field, so a sample
+// may carry storageGiB beside the plan's vcpus and memoryGiB. The pin requires
+// the fields below and judges no other size field (sizeGaps).
 type pricedSize struct {
 	vcpus   bool
 	memory  bool
@@ -141,13 +146,6 @@ func TestSampleSizesCoverPricedCategories(t *testing.T) {
 					priced, _ := pricedSizes[gap.Category]
 					t.Errorf("%s: resource %q (%s) has no size; a priced category is priced by %s",
 						file.name, gap.ID, gap.Category, sizeFields(priced))
-
-					continue
-				}
-
-				if gap.Unwanted {
-					t.Errorf("%s: resource %q (%s) gives %s, which makes no sense for the category",
-						file.name, gap.ID, gap.Category, gap.Field)
 
 					continue
 				}
@@ -245,21 +243,23 @@ func sizeFields(want pricedSize) string {
 }
 
 // sizeGap is one size a priced resource of a sample does not give the way the
-// estimate reads it: the resource's ID and category, the field's path as the
-// inventory file spells it (empty when the resource gives no size at all), and
-// whether the resource gives a field the estimate does not price (Unwanted)
-// rather than leaving out one it does.
+// estimate reads it: the resource's ID and category, and the field's path as the
+// inventory file spells it (empty when the resource gives no size at all).
 type sizeGap struct {
 	ID       string
 	Category taxonomy.Category
 	Field    string
-	Unwanted bool
 }
 
-// sizeGaps returns a gap for every priced resource whose size is not the one the
-// estimate reads, in the inventory's order: a field the resource leaves out that
-// its category is priced by, or a field it gives that its category is not priced
-// by.
+// sizeGaps returns a gap for every priced resource that leaves out a size field
+// its category is priced by, in the inventory's order.
+//
+// Which size fields a category takes is not decided here. docs/adr/0025 makes
+// that the domain's rule (inventory.New, inventory.ErrFieldNotForCategory), and
+// the reader a sample is decoded through enforces it, so a sample that gives a
+// field its category does not take never loads. A second table here would refuse
+// what the format allows - storageGiB on a database above all - so the pin judges
+// no field but the ones the estimate needs, which the reader cannot know.
 func sizeGaps(inv inventory.Inventory) []sizeGap {
 	var gaps []sizeGap
 
@@ -284,17 +284,11 @@ func sizeGaps(inv inventory.Inventory) []sizeGap {
 			{name: "memoryGiB", priced: priced.memory, value: resource.Size.MemoryGiB},
 			{name: "storageGiB", priced: priced.storage, value: resource.Size.StorageGiB},
 		} {
-			path := "size." + field.name
-
-			switch {
-			case field.priced && field.value == nil:
-				gaps = append(gaps, sizeGap{ID: resource.ID, Category: resource.Category, Field: path})
-			case !field.priced && field.value != nil:
+			if field.priced && field.value == nil {
 				gaps = append(gaps, sizeGap{
 					ID:       resource.ID,
 					Category: resource.Category,
-					Field:    path,
-					Unwanted: true,
+					Field:    "size." + field.name,
 				})
 			}
 		}
@@ -307,9 +301,9 @@ func sizeGaps(inv inventory.Inventory) []sizeGap {
 // docs/adr/0025 writes it: every size field the format allows a category is not
 // a gap. storageGiB on a database is a real size - the instance's disk, which the
 // estimate prices above what the plan includes (docs/adr/0027) - and so is
-// storageGiB on a compute instance or a Kubernetes node. A field a priced
-// category is priced by and the resource leaves out is a gap, so the pin still
-// catches a sample that shows no estimate.
+// storageGiB on a compute instance or a Kubernetes node (the local disk, per
+// instance or per node). A field a priced category is priced by and the resource
+// leaves out is a gap, so the pin still catches a sample that shows no estimate.
 func TestSizePinFollowsTheFormat(t *testing.T) {
 	t.Parallel()
 
