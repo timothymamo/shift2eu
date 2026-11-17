@@ -38,7 +38,7 @@ param:
   # renovate: datasource=go depName=golang.org/x/vuln
   govulncheckVersion: "v1.9.0"
   # renovate: datasource=github-releases depName=vfarcic/dot-agent-deck
-  dotAgentDeckVersion: "v0.49.8"
+  dotAgentDeckVersion: "v0.50.2"
   # renovate: datasource=node-version depName=node versioning=node
   nodeVersion: "26.13.0"
   # renovate: datasource=npm depName=@earendil-works/pi-coding-agent
