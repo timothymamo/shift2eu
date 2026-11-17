@@ -644,6 +644,48 @@ func TestIPv6Problems(t *testing.T) {
 	}
 }
 
+// TestIPv4Problems pins which addresses the sanitisation check reports, now
+// that hostnameProblems leaves every all-digit dotted name to it: the
+// documentation range 192.0.2.0/24 the samples use is allowed, and so is a
+// prefix in it, while a private, a public or a malformed address is reported.
+// The two other RFC 5737 ranges (198.51.100.0/24 and 203.0.113.0/24) are
+// reported on purpose: the samples all use one range, so a second one in a
+// sample is a value somebody copied from elsewhere.
+func TestIPv4Problems(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{name: "no address", text: "shop-web-1 in eu-central-1", want: nil},
+		{name: "documentation address", text: `"address": "192.0.2.10"`, want: nil},
+		{name: "documentation address in prose", text: "the shop answers on 192.0.2.10", want: nil},
+		{name: "documentation prefix", text: `"range": "192.0.2.0/24"`, want: nil},
+		{name: "private address", text: `"address": "10.0.0.5"`, want: []string{"10.0.0.5"}},
+		{name: "private address with a prefix length", text: `"range": "10.0.0.5/16"`, want: []string{"10.0.0.5"}},
+		{name: "other documentation address", text: `"address": "198.51.100.7"`, want: []string{"198.51.100.7"}},
+		{name: "third documentation address", text: `"address": "203.0.113.7"`, want: []string{"203.0.113.7"}},
+		{name: "dotted quad that is not an address", text: `"address": "1.2.3.400"`, want: []string{"1.2.3.400"}},
+		{
+			name: "allowed and reported address beside each other",
+			text: "192.0.2.10 forwards to 10.0.0.5",
+			want: []string{"10.0.0.5"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, values(ipv4Problems(tc.text))); diff != "" {
+				t.Errorf("ipv4Problems(%q) mismatch (-want +got):\n%s", tc.text, diff)
+			}
+		})
+	}
+}
+
 // TestHostnameProblems pins which names the sanitisation check reports, not only
 // through allowedHostname: a name in a command path, a markdown link target or
 // an inventory field path is not a host, a decimal number is not one either,
