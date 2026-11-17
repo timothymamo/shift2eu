@@ -1,6 +1,6 @@
 # aws.jq turns the output of the read-only aws CLI calls in docs/guide/inventory.md
-# into a shift2eu inventory file, schema version 1
-# (docs/adr/0006-json-inventory-file-format-v1.md). Run it with -n on every file
+# into a shift2eu inventory file, schema version 2
+# (docs/adr/0025-json-inventory-file-format-v2.md). Run it with -n on every file
 # the guide's commands wrote, from one region or several:
 #
 #   jq -n -f docs/guide/inventory/aws.jq inventories/aws/*/*.json > inventories/aws.inventory.json
@@ -10,6 +10,7 @@
 # only the fields read here; the full, unprojected output is read the same way:
 #
 #   {"Reservations": ...}          ec2 describe-instances
+#   {"InstanceTypes": ...}         ec2 describe-instance-types
 #   {"Volumes": ...}               ec2 describe-volumes
 #   {"Snapshots": ...}             ec2 describe-snapshots --owner-ids self
 #   {"AutoScalingGroups": ...}     autoscaling describe-auto-scaling-groups
@@ -33,6 +34,14 @@
 # Scaling group launched is left out too, the group stands for it. The volumes
 # deleted with an instance left out go with it (a persistent volume, which
 # outlives its instance, stays).
+#
+# The size comes from the calls too: an instance's vCPU and memory from its
+# instance type (ec2 describe-instance-types), a volume's GiB (Size), a DB
+# instance's allocated storage (AllocatedStorage; none for an instance in a DB
+# cluster, Aurora or an RDS Multi-AZ DB cluster, whose storage belongs to the
+# cluster) and an EKS cluster's node count (the desired sizes of its managed
+# node groups). A number no call gives is left out, never guessed. The workload, relations and monthlyCost fields are the
+# user's to add by hand; this program never writes them.
 
 # The CloudFormation types the service calls above cover. AWS Config lists them
 # too; those entries are dropped, so a resource is not listed twice. An Aurora
@@ -75,23 +84,31 @@ def unique_ids:
   | map(if length == 1 then . else to_entries | map(.value.id += " #" + (.key + 1 | tostring) | .value) end)
   | add // [];
 
+# A size object without the fields no call gave; null when none is left.
+def size_of(fields):
+  fields | with_entries(select(.value != null)) | if . == {} then null else . end;
+
 # Writes the inventory document: no empty region or capabilities, capabilities
 # sorted, identical resources (from two regions' global calls) listed once.
 def inventory($source):
   map(
-    {id, rawType, category, region, capabilities}
+    {id, rawType, category, region, capabilities, size}
     | if .region == null or .region == "" then del(.region) else . end
+    | if .size == null then del(.size) else . end
     | .capabilities = ((.capabilities // []) | unique)
     | if .capabilities == [] then del(.capabilities) else . end
   )
   | unique
   | unique_ids
   | sort_by(.id)
-  | {schemaVersion: 1, source: $source, resources: .};
+  | {schemaVersion: 2, source: $source, resources: .};
 
 [inputs | objects] as $docs
 | ([$docs[] | .Snapshots? // empty | .[] | .VolumeId] | unique) as $snapshotted
 | ([$docs[] | select(.Bucket? and has("Versioning")) | select(.Versioning.Status? == "Enabled") | .Bucket] | unique) as $versioned
+| ([$docs[] | .InstanceTypes? // empty | .[]
+    | {key: .InstanceType, value: {vcpus: .VCpuInfo.DefaultVCpus, memoryGiB: (.MemoryInfo.SizeInMiB / 1024)}}]
+   | from_entries) as $types
 | [$docs[] | .nodegroup? // empty] as $nodegroups
 | [$docs[] | .Reservations? // empty | .[].Instances[]?
    | select(is_node or ([.Tags[]?.Key] | index("aws:autoscaling:groupName")))
@@ -118,7 +135,8 @@ def inventory($source):
             cap("ipv6"; any(.NetworkInterfaces[]?;
               ((.Ipv6Addresses // []) | length > 0) or (.Ipv6AddressCount // 0) > 0)),
             cap("snapshots"; any(.BlockDeviceMappings[]?; .Ebs.VolumeId | IN($snapshotted[])))
-          ]
+          ],
+          size: size_of($types[.InstanceType // ""] // {})
         }),
 
     # EBS volumes. A volume deleted with an instance left out (a Kubernetes
@@ -134,7 +152,8 @@ def inventory($source):
           capabilities: [
             cap("encryption-at-rest"; .Encrypted == true),
             cap("snapshots"; .VolumeId | IN($snapshotted[]))
-          ]
+          ],
+          size: size_of({storageGiB: .Size})
         }),
 
     # Auto Scaling groups. The group of a managed node group, or one tagged as a
@@ -166,7 +185,10 @@ def inventory($source):
         }),
 
     # RDS DB instances: the engine decides the category; any other engine is
-    # unclassified. An Aurora cluster is assessed per instance.
+    # unclassified. An Aurora cluster is assessed per instance. An instance in
+    # a DB cluster (DBClusterIdentifier set: Aurora, or an RDS Multi-AZ DB
+    # cluster) gets no storage size: its storage belongs to the cluster, and
+    # AllocatedStorage does not describe it.
     ($docs[] | .DBInstances? // empty | .[]
       | (if .Engine == "postgres" or .Engine == "aurora-postgresql" then "database.postgresql"
          elif .Engine == "mysql" or .Engine == "aurora-mysql" then "database.mysql"
@@ -181,7 +203,9 @@ def inventory($source):
             cap("read-replicas"; (.ReadReplicaDBInstanceIdentifiers // []) | length > 0),
             cap("zone-high-availability"; .MultiAZ == true),
             cap("encryption-at-rest"; .StorageEncrypted == true)
-          ] end)
+          ] end),
+          size: (if $category == "unclassified" or .DBClusterIdentifier != null then null
+                 else size_of({storageGiB: .AllocatedStorage}) end)
         }),
 
     # EKS clusters, with their managed node groups. Cluster names are unique per
@@ -198,7 +222,9 @@ def inventory($source):
           capabilities: [
             cap("autoscaling"; any($groups[]; .scalingConfig.maxSize > .scalingConfig.minSize)),
             cap("node-high-availability"; ([$groups[].scalingConfig.desiredSize // 0] | add // 0) >= 2)
-          ]
+          ],
+          size: size_of({count: ([$groups[].scalingConfig.desiredSize // 0] | add // 0
+                                 | if . >= 1 then . else null end)})
         }),
 
     # Lambda functions.

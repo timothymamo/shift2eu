@@ -1,0 +1,31 @@
+{
+  "InstanceTypes": [
+    {
+      "InstanceType": "m5.large",
+      "VCpuInfo": {
+        "DefaultVCpus": 2
+      },
+      "MemoryInfo": {
+        "SizeInMiB": 8192
+      }
+    },
+    {
+      "InstanceType": "m5.metal",
+      "VCpuInfo": {
+        "DefaultVCpus": 96
+      },
+      "MemoryInfo": {
+        "SizeInMiB": 393216
+      }
+    },
+    {
+      "InstanceType": "c7i.metal-24xl",
+      "VCpuInfo": {
+        "DefaultVCpus": 96
+      },
+      "MemoryInfo": {
+        "SizeInMiB": 196608
+      }
+    }
+  ]
+}

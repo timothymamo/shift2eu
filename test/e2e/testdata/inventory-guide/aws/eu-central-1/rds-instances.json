@@ -2,6 +2,7 @@
   "DBInstances": [
     {
       "DBInstanceIdentifier": "shop-db",
+      "AllocatedStorage": 50,
       "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-db",
       "DBClusterIdentifier": null,
       "Engine": "postgres",
@@ -14,6 +15,7 @@
     },
     {
       "DBInstanceIdentifier": "shop-db-replica",
+      "AllocatedStorage": 50,
       "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-db-replica",
       "DBClusterIdentifier": null,
       "Engine": "postgres",
@@ -24,6 +26,7 @@
     },
     {
       "DBInstanceIdentifier": "shop-legacy-mysql",
+      "AllocatedStorage": 20,
       "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-legacy-mysql",
       "DBClusterIdentifier": null,
       "Engine": "mysql",
@@ -34,6 +37,7 @@
     },
     {
       "DBInstanceIdentifier": "shop-reports-mariadb",
+      "AllocatedStorage": 20,
       "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-reports-mariadb",
       "DBClusterIdentifier": null,
       "Engine": "mariadb",
@@ -44,7 +48,19 @@
     },
     {
       "DBInstanceIdentifier": "shop-aurora-1",
+      "AllocatedStorage": 100,
       "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-aurora-1",
+      "DBClusterIdentifier": "shop-aurora",
+      "Engine": "aurora-postgresql",
+      "BackupRetentionPeriod": 7,
+      "MultiAZ": false,
+      "StorageEncrypted": true,
+      "ReadReplicaDBInstanceIdentifiers": []
+    },
+    {
+      "DBInstanceIdentifier": "shop-aurora-2",
+      "AllocatedStorage": 1,
+      "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-aurora-2",
       "DBClusterIdentifier": "shop-aurora",
       "Engine": "aurora-postgresql",
       "BackupRetentionPeriod": 7,

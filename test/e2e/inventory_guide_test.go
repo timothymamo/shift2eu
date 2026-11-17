@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,9 +20,10 @@ import (
 
 // This file pins the jq programs docs/guide/inventory.md documents (issue #178):
 // each program turns the recorded output of the guide's read-only CLI calls into
-// a schema version 1 inventory the binary accepts. The programs are part of what
-// the guide promises, so they are run as the guide runs them, against the
-// recorded fixtures, not just read.
+// a schema version 2 inventory the binary accepts, with the `size` of every
+// resource a recorded call gives it (PRD #190, docs/adr/0025). The programs are
+// part of what the guide promises, so they are run as the guide runs them,
+// against the recorded fixtures, not just read.
 
 const (
 	// inventoryGuideDir holds the recorded, sanitised CLI output of the guide,
@@ -33,8 +35,9 @@ const (
 	// directory of its own because the gcp and azure programs read every
 	// <source>/*.json file: a golden beside them would be an input too.
 	inventoryGuideGoldenDir = "inventory-guide/golden"
-	// schemaVersion is the only schema version the binary reads (ADR 0006).
-	schemaVersion = 1
+	// schemaVersion is the version the programs write: version 2 adds the size
+	// (docs/adr/0025), which the guide's programs fill from the recorded calls.
+	schemaVersion = 2
 )
 
 // inventoryGuideCase is one source the guide covers: the recorded CLI output its
@@ -58,6 +61,14 @@ type inventoryGuideCase struct {
 	// present are resources the inventory has to hold, by ID, with this category
 	// and rawType.
 	present []resourceFact
+	// sized are the sizes the inventory has to give, by ID: the numbers the
+	// recorded read-only calls give to a resource, which the program fills its
+	// `size` from (PRD #190).
+	sized []sizeFact
+	// unsized are resources the inventory has to give no size at all, by ID: a
+	// recorded call gives the resource a number that is not its size, and the
+	// program has to write none rather than that number.
+	unsized []string
 	// absent are resource IDs the program has to leave out altogether: another
 	// recorded resource stands for them.
 	absent []string
@@ -85,6 +96,22 @@ type resourceFact struct {
 	category string
 }
 
+// sizeFact is the size the inventory has to give one resource, by ID. A zero
+// field is not checked, so a source pins only the numbers its recorded calls
+// give it.
+type sizeFact struct {
+	// id is the resource's ID in the inventory, short IDs only.
+	id string
+	// vcpus and memoryGiB are per instance, node or server: the numbers an
+	// instance type, a machine type or a VM size records.
+	vcpus     float64
+	memoryGiB float64
+	// storageGiB is the GiB of a volume, a disk or a database.
+	storageGiB float64
+	// count is the number of instances, nodes or volumes.
+	count int
+}
+
 // inventoryGuides returns the sources the guide covers. A source added to the
 // guide gets a row here, its fixtures and a golden file.
 func inventoryGuides() []inventoryGuideCase {
@@ -106,6 +133,23 @@ func inventoryGuides() []inventoryGuideCase {
 				// A volume that outlives its node is a persistent volume and
 				// stays: only the node's own root volume is left out.
 				{id: "vol-0123456789abcdef6", rawType: "AWS::EC2::Volume", category: "storage.block"},
+			},
+			// The storage of an Aurora instance belongs to its cluster, so
+			// rds describe-db-instances gives every Aurora instance
+			// AllocatedStorage 1 (and, in one fixture, a stale 100): neither is
+			// the instance's size.
+			unsized: []string{"shop-aurora-1", "shop-aurora-2"},
+			sized: []sizeFact{
+				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
+				{id: "i-0123456789abcdef0", vcpus: 2, memoryGiB: 8},
+				// An m5.metal is 96 vCPU and 384 GiB, from the same call.
+				{id: "i-0123456789abcdef6", vcpus: 96, memoryGiB: 384},
+				// The GiB of an EBS volume, from ec2 describe-volumes.
+				{id: "vol-0123456789abcdef6", storageGiB: 100},
+				// The AllocatedStorage of an RDS instance.
+				{id: "shop-db", storageGiB: 50},
+				// The nodes a managed node group wants, from eks describe-nodegroup.
+				{id: "shop-eks (AWS::EKS::Cluster, eu-central-1)", count: 3},
 			},
 			// The EKS nodes, the Auto Scaling groups that run them and their
 			// root volumes, and the root volume of an Auto Scaling group's
@@ -133,6 +177,13 @@ func inventoryGuides() []inventoryGuideCase {
 				// So does a disk a standalone instance keeps after it goes: only a
 				// managed instance group's members and their disks are left out.
 				{id: "shop-web-1-data", rawType: "compute.googleapis.com/Disk", category: "storage.block"},
+			},
+			sized: []sizeFact{
+				// An e2-standard-2 is 2 vCPU and 8192 MB, from compute machine-types list.
+				{id: "shop-web-1 (compute.googleapis.com/Instance, europe-west1)", vcpus: 2, memoryGiB: 8},
+				// The sizeGb of a disk, from compute disks list.
+				{id: "shop-web-1-data", storageGiB: 100},
+				{id: "pvc-00000000-0000-0000-0000-000000000001", storageGiB: 50},
 			},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
@@ -168,6 +219,13 @@ func inventoryGuides() []inventoryGuideCase {
 				// data and stays: only one its member deletes with it goes.
 				{id: "vmss-shop-web_0abc_DataDisk_1", rawType: "Microsoft.Compute/disks", category: "storage.block"},
 			},
+			sized: []sizeFact{
+				// A Standard_D2s_v3 is 2 cores and 8192 MB, from az vm list-sizes.
+				{id: "vm-shop-web-1", vcpus: 2, memoryGiB: 8},
+				// The diskSizeGB of a managed disk, from the Resource Graph query.
+				{id: "disk-shop-web-1-data", storageGiB: 64},
+				{id: "vm-shop-web-1_OsDisk_1", storageGiB: 128},
+			},
 			// The cluster's node scale set and its load balancer, the OS disk
 			// of a scale set member, and a member's data disk its member deletes
 			// with it: the member's scale set stands for all of them.
@@ -200,19 +258,37 @@ func taxonomyCategories() []string {
 	}
 }
 
-// inventoryDoc is the part of a schema version 1 inventory this file checks.
+// inventoryDoc is the part of a schema version 2 inventory this file checks.
 type inventoryDoc struct {
 	SchemaVersion int                 `json:"schemaVersion"`
 	Source        string              `json:"source"`
 	Resources     []inventoryResource `json:"resources"`
 }
 
-// inventoryResource is the part of one resource this file checks.
+// inventoryResource is the part of one resource this file checks: the fields the
+// programs write, and the version 2 fields the guide tells the user to add by
+// hand, which a program must not write.
 type inventoryResource struct {
 	ID       string `json:"id"`
 	RawType  string `json:"rawType"`
 	Category string `json:"category"`
 	Region   string `json:"region"`
+	// Size is the resource's size, filled from the recorded read-only calls.
+	Size *sizeSpec `json:"size"`
+	// Workload, Relations and MonthlyCost are added by hand: no recorded call
+	// gives them.
+	Workload    string            `json:"workload"`
+	Relations   []json.RawMessage `json:"relations"`
+	MonthlyCost *json.RawMessage  `json:"monthlyCost"`
+}
+
+// sizeSpec is a resource's `size` object as this file checks it. Every field is
+// optional and nil when the program does not write it.
+type sizeSpec struct {
+	VCPUs      *float64 `json:"vcpus"`
+	MemoryGiB  *float64 `json:"memoryGiB"`
+	StorageGiB *float64 `json:"storageGiB"`
+	Count      *int     `json:"count"`
 }
 
 // findResource returns the resource with id, and whether the inventory holds it.
@@ -290,6 +366,9 @@ func TestInventoryGuidePrograms(t *testing.T) {
 			assertCategories(t, tc.source, doc)
 			assertBareMetal(t, tc.source, doc, tc.bareMetal)
 			assertPresent(t, tc.source, doc, tc.present)
+			assertSized(t, tc.source, doc, tc.sized)
+			assertUnsized(t, tc.source, doc, tc.unsized)
+			assertNoUserFields(t, tc.source, doc)
 			assertAbsent(t, tc.source, doc, tc.absent)
 			assertNoRawTypes(t, tc.source, doc, tc.absentRawTypes)
 			assertUnclassifiedKeepsRawType(t, tc.source, doc)
@@ -424,6 +503,169 @@ func assertPresent(t *testing.T, source string, doc inventoryDoc, wants []resour
 		if resource.RawType != want.rawType {
 			t.Errorf("%s: resource %q has rawType %q, want %q",
 				source, want.id, resource.RawType, want.rawType)
+		}
+	}
+}
+
+// assertSized fails unless the inventory gives each fact's resource the size its
+// recorded calls give it: the vCPU and memory of an instance type, a machine
+// type or a VM size, the GiB of a volume, a disk or a database, and the nodes a
+// node group wants. A size the program dropped, or wrote for the wrong resource,
+// shows up here; the golden file alone cannot catch it after an -update.
+func assertSized(t *testing.T, source string, doc inventoryDoc, wants []sizeFact) {
+	t.Helper()
+
+	for _, want := range wants {
+		resource, ok := findResource(doc, want.id)
+		if !ok {
+			t.Errorf("%s: the inventory holds no resource %q, so its size cannot be checked", source, want.id)
+
+			continue
+		}
+
+		if resource.Size == nil {
+			t.Errorf("%s: resource %q has no size, want the one its recorded calls give (%s)",
+				source, want.id, want.describe())
+
+			continue
+		}
+
+		assertSizeNumber(t, source, want.id, "vcpus", want.vcpus, resource.Size.VCPUs)
+		assertSizeNumber(t, source, want.id, "memoryGiB", want.memoryGiB, resource.Size.MemoryGiB)
+		assertSizeNumber(t, source, want.id, "storageGiB", want.storageGiB, resource.Size.StorageGiB)
+
+		if want.count != 0 && (resource.Size.Count == nil || *resource.Size.Count != want.count) {
+			t.Errorf("%s: resource %q has size.count %s, want %d", source, want.id,
+				derefCount(resource.Size.Count), want.count)
+		}
+	}
+}
+
+// describe says which numbers the fact checks, for an error message.
+func (f sizeFact) describe() string {
+	var fields []string
+
+	if f.vcpus != 0 {
+		fields = append(fields, "vcpus")
+	}
+
+	if f.memoryGiB != 0 {
+		fields = append(fields, "memoryGiB")
+	}
+
+	if f.storageGiB != 0 {
+		fields = append(fields, "storageGiB")
+	}
+
+	if f.count != 0 {
+		fields = append(fields, "count")
+	}
+
+	if len(fields) == 0 {
+		return "no field"
+	}
+
+	return strings.Join(fields, ", ")
+}
+
+// assertSizeNumber fails unless got is want, which is 0 when the fact does not
+// check the field.
+func assertSizeNumber(t *testing.T, source, id, field string, want float64, got *float64) {
+	t.Helper()
+
+	if want == 0 {
+		return
+	}
+
+	if got == nil {
+		t.Errorf("%s: resource %q gives no size.%s, want %v", source, id, field, want)
+
+		return
+	}
+
+	if *got != want {
+		t.Errorf("%s: resource %q has size.%s = %v, want %v", source, id, field, *got, want)
+	}
+}
+
+// derefCount returns the count as text, and "none" when the resource gives none.
+func derefCount(count *int) string {
+	if count == nil {
+		return "none"
+	}
+
+	return fmt.Sprint(*count)
+}
+
+// assertUnsized fails when the inventory gives a resource a size. The recorded
+// call exists for the resource but the number it gives is not the resource's
+// size, so the program has to write none: a size written from it is worse than
+// no size, because the assessment prices a wrong number instead of saying the
+// size is unknown.
+func assertUnsized(t *testing.T, source string, doc inventoryDoc, ids []string) {
+	t.Helper()
+
+	for _, id := range ids {
+		resource, ok := findResource(doc, id)
+		if !ok {
+			t.Errorf("%s: the inventory holds no resource %q, so its size cannot be checked", source, id)
+
+			continue
+		}
+
+		if resource.Size != nil {
+			t.Errorf("%s: resource %q has a size (%s), want none: no recorded call gives its size",
+				source, id, resource.Size.describe())
+		}
+	}
+}
+
+// describe says which numbers a size holds, for an error message.
+func (s sizeSpec) describe() string {
+	var fields []string
+
+	if s.VCPUs != nil {
+		fields = append(fields, fmt.Sprintf("vcpus: %v", *s.VCPUs))
+	}
+
+	if s.MemoryGiB != nil {
+		fields = append(fields, fmt.Sprintf("memoryGiB: %v", *s.MemoryGiB))
+	}
+
+	if s.StorageGiB != nil {
+		fields = append(fields, fmt.Sprintf("storageGiB: %v", *s.StorageGiB))
+	}
+
+	if s.Count != nil {
+		fields = append(fields, fmt.Sprintf("count: %d", *s.Count))
+	}
+
+	if len(fields) == 0 {
+		return "no field"
+	}
+
+	return strings.Join(fields, ", ")
+}
+
+// assertNoUserFields fails when the inventory gives a resource a workload, a
+// relation or a monthly cost: the guide tells the user to add those by hand, and
+// no recorded read-only call gives them.
+func assertNoUserFields(t *testing.T, source string, doc inventoryDoc) {
+	t.Helper()
+
+	for _, resource := range doc.Resources {
+		if resource.Workload != "" {
+			t.Errorf("%s: resource %q has workload %q; the programs write no workload",
+				source, resource.ID, resource.Workload)
+		}
+
+		if len(resource.Relations) != 0 {
+			t.Errorf("%s: resource %q has %d relation(s); the programs write no relations",
+				source, resource.ID, len(resource.Relations))
+		}
+
+		if resource.MonthlyCost != nil {
+			t.Errorf("%s: resource %q has a monthlyCost; the programs write none", source, resource.ID)
 		}
 	}
 }

@@ -151,7 +151,9 @@
       "zones": [
         "1"
       ],
-      "properties": null
+      "properties": {
+        "diskSizeGB": 50
+      }
     },
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.BareMetalInfrastructure/bareMetalInstances/shop-baremetal-1",

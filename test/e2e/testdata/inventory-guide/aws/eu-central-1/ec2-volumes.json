@@ -2,6 +2,7 @@
   "Volumes": [
     {
       "VolumeId": "vol-0123456789abcdef0",
+      "Size": 100,
       "AvailabilityZone": "eu-central-1a",
       "Encrypted": true,
       "Attachments": [
@@ -13,6 +14,7 @@
     },
     {
       "VolumeId": "vol-0123456789abcdef1",
+      "Size": 100,
       "AvailabilityZone": "eu-central-1b",
       "Encrypted": false,
       "Attachments": [
@@ -24,6 +26,7 @@
     },
     {
       "VolumeId": "vol-0123456789abcdef2",
+      "Size": 8,
       "AvailabilityZone": "eu-central-1a",
       "Encrypted": true,
       "Attachments": [
@@ -35,6 +38,7 @@
     },
     {
       "VolumeId": "vol-0123456789abcdef4",
+      "Size": 20,
       "AvailabilityZone": "eu-central-1a",
       "Encrypted": true,
       "Attachments": [
@@ -46,6 +50,7 @@
     },
     {
       "VolumeId": "vol-0123456789abcdef5",
+      "Size": 20,
       "AvailabilityZone": "eu-central-1b",
       "Encrypted": true,
       "Attachments": [
@@ -57,6 +62,7 @@
     },
     {
       "VolumeId": "vol-0123456789abcdef6",
+      "Size": 100,
       "AvailabilityZone": "eu-central-1b",
       "Encrypted": true,
       "Attachments": [

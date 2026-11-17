@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": "aws",
   "resources": [
     {
@@ -7,86 +7,117 @@
       "rawType": "AWS::EC2::Instance",
       "category": "compute.vm",
       "region": "eu-central-1",
-      "capabilities": ["ipv6", "snapshots"]
+      "capabilities": ["ipv6", "snapshots"],
+      "size": { "vcpus": 2, "memoryGiB": 8 },
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "shop-orders" }],
+      "monthlyCost": { "amount": 84.10, "currency": "USD" }
     },
     {
       "id": "shop-web-2",
       "rawType": "AWS::EC2::Instance",
       "category": "compute.vm",
       "region": "eu-central-1",
-      "capabilities": ["ipv6", "snapshots"]
+      "capabilities": ["ipv6", "snapshots"],
+      "size": { "vcpus": 2, "memoryGiB": 8 },
+      "usage": { "hoursPerMonth": 360 },
+      "workload": "shop",
+      "monthlyCost": { "amount": 42.05, "currency": "USD" }
     },
     {
       "id": "shop-web-asg",
       "rawType": "AWS::AutoScaling::AutoScalingGroup",
       "category": "compute.vm",
       "region": "eu-central-1",
-      "capabilities": ["autoscaling", "zone-high-availability"]
+      "capabilities": ["autoscaling", "zone-high-availability"],
+      "size": { "vcpus": 2, "memoryGiB": 8, "count": 3 },
+      "workload": "shop"
     },
     {
       "id": "shop-web-1-data",
       "rawType": "AWS::EC2::Volume",
       "category": "storage.block",
       "region": "eu-central-1",
-      "capabilities": ["encryption-at-rest", "snapshots"]
+      "capabilities": ["snapshots"],
+      "size": { "storageGiB": 100 },
+      "workload": "shop",
+      "relations": [{ "type": "attached-to", "target": "shop-web-1" }],
+      "monthlyCost": { "amount": 9.52, "currency": "USD" }
     },
     {
       "id": "shop-assets",
       "rawType": "AWS::S3::Bucket",
       "category": "storage.object",
       "region": "eu-central-1",
-      "capabilities": ["object-versioning", "encryption-at-rest"]
+      "capabilities": ["object-versioning", "encryption-at-rest"],
+      "size": { "storageGiB": 250 },
+      "workload": "media"
     },
     {
       "id": "shop-db",
       "rawType": "AWS::RDS::DBInstance",
       "category": "database.postgresql",
       "region": "eu-central-1",
-      "capabilities": ["point-in-time-restore", "read-replicas", "zone-high-availability", "encryption-at-rest"]
+      "capabilities": ["point-in-time-restore", "read-replicas", "node-high-availability", "encryption-at-rest"],
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 200 },
+      "workload": "shop",
+      "monthlyCost": { "amount": 383.25, "currency": "USD" }
     },
     {
       "id": "shop-legacy-mysql",
       "rawType": "AWS::RDS::DBInstance",
       "category": "database.mysql",
       "region": "eu-central-1",
-      "capabilities": ["point-in-time-restore", "node-high-availability"]
+      "capabilities": ["point-in-time-restore", "node-high-availability"],
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 50 }
     },
     {
       "id": "shop-eks",
       "rawType": "AWS::EKS::Cluster",
       "category": "kubernetes.managed",
       "region": "eu-central-1",
-      "capabilities": ["node-high-availability", "autoscaling"]
+      "capabilities": ["autoscaling"],
+      "size": { "vcpus": 4, "memoryGiB": 16, "count": 3 },
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "shop-db" }]
     },
     {
       "id": "shop-thumbnailer",
       "rawType": "AWS::Lambda::Function",
       "category": "serverless.function",
-      "region": "eu-central-1"
+      "region": "eu-central-1",
+      "workload": "media",
+      "relations": [{ "type": "depends-on", "target": "shop-assets" }]
     },
     {
       "id": "shop-orders",
       "rawType": "AWS::SQS::Queue",
       "category": "messaging.queue",
       "region": "eu-central-1",
-      "capabilities": ["dead-letter-queue", "encryption-at-rest"]
+      "capabilities": ["dead-letter-queue", "encryption-at-rest"],
+      "workload": "shop"
     },
     {
       "id": "shop-orders-dlq",
       "rawType": "AWS::SQS::Queue",
       "category": "messaging.queue",
       "region": "eu-central-1",
-      "capabilities": ["encryption-at-rest"]
+      "capabilities": ["encryption-at-rest"],
+      "workload": "shop",
+      "relations": [{ "type": "dead-letter-queue-of", "target": "shop-orders" }]
     },
     {
       "id": "shop-cdn",
       "rawType": "AWS::CloudFront::Distribution",
-      "category": "unclassified"
+      "category": "unclassified",
+      "workload": "media",
+      "relations": [{ "type": "depends-on", "target": "shop-assets" }]
     },
     {
       "id": "shop.example.com",
       "rawType": "AWS::Route53::HostedZone",
-      "category": "unclassified"
+      "category": "unclassified",
+      "workload": "shop"
     }
   ]
 }

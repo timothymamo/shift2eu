@@ -2,6 +2,7 @@
   {
     "kind": "compute#instance",
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-b/instances/shop-web-1",
+    "machineType": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-b/machineTypes/e2-standard-2",
     "networkInterfaces": [
       {
         "stackType": "IPV4_IPV6",
@@ -16,6 +17,7 @@
   {
     "kind": "compute#instance",
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-c/instances/shop-web-mig-0abc",
+    "machineType": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-c/machineTypes/e2-standard-2",
     "metadata": {
       "items": [
         {
@@ -44,6 +46,7 @@
   {
     "kind": "compute#instance",
     "selfLink": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-b/instances/gke-shop-gke-default-pool-0a1b2c3d-x1y2",
+    "machineType": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-b/machineTypes/e2-standard-2",
     "metadata": {
       "items": [
         {

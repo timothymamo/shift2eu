@@ -4,7 +4,10 @@ Analyse what you run on a hyperscaler today, and find out what can move to a Eur
 
 > **Status: walking skeleton.** `shift2eu assess` assesses an inventory file against an embedded snapshot
 > of the OVHcloud, the Scaleway or the UpCloud catalog, offline, or compares several of them in one
-> report. `shift2eu-server` serves the same assessments over an HTTP API
+> report. With resource sizes in the inventory, it names the plan each resource would run on and
+> estimates its monthly list price per resource, per workload and in total (`--no-estimate` turns this
+> off), groups resources by workload, notes blockers on related resources, and can judge a target in
+> one region (`--region scaleway=nl-ams`). `shift2eu-server` serves the same assessments over an HTTP API
 > ([Run the HTTP API](docs/guide/http-api.md)). Live discovery from AWS, Azure and GCP
 > is not implemented yet.
 
@@ -12,7 +15,10 @@ Analyse what you run on a hyperscaler today, and find out what can move to a Eur
 
 `shift2eu` reads your current infrastructure **read-only** from a source hyperscaler, compares it with the
 service catalogs of EU providers, and reports per resource and per workload whether it can move as is,
-with changes, or not at all, and why.
+with changes, or not at all, and why. For each resource with a size it picks the cheapest plan
+that covers it and estimates the monthly list price on the target, next to what the source costs today
+where the inventory says so. An estimate is labelled as one: list prices on the catalog snapshot's
+date, excluding VAT and discounts, never a quote.
 
 | Source (analysed, read-only) | Target (compared) |
 |---|---|
@@ -57,6 +63,8 @@ makes one from your AWS, GCP or Azure estate with the provider's read-only CLI a
 
 ```bash
 ./bin/shift2eu assess --inventory inventory.json --target all --output comparison.md
+./bin/shift2eu assess --inventory inventory.json --target scaleway --region scaleway=nl-ams
+./bin/shift2eu assess --inventory inventory.json --target all --no-estimate
 ```
 
 Or run the image, with no network and the inventory mounted read-only
@@ -75,7 +83,7 @@ The [documentation's index](docs/README.md) lists every page. Using `shift2eu`:
 - [Install](docs/guide/install.md): the release archives, the images, and building from source.
 - [Try it](docs/guide/try-it.md): a walkthrough on a sample inventory, from install to reading the report.
 - [Build an inventory from your cloud](docs/guide/inventory.md): an inventory from AWS, GCP or Azure, with read-only CLIs and `jq`.
-- [Assess an inventory](docs/guide/assess.md): the `assess` command, its reports and its exit codes.
+- [Assess an inventory](docs/guide/assess.md): the `assess` command, its reports, regions and estimates, and its exit codes.
 - [Run with Docker](docs/guide/docker.md): the image, mounts, users, reports and credentials.
 - [Verify a release](docs/guide/verify-releases.md): signatures, provenance and SBOMs, and the
   releases before the rename.

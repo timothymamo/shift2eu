@@ -81,10 +81,11 @@ var (
 	// hostnamePattern finds every dot-separated name, the shape of a DNS name:
 	// one or more labels, each starting and ending with a letter or digit,
 	// separated by dots. The match is case-insensitive (?i) so a name written
-	// in capitals cannot slip past the allow list (SHOP.ACME.IO). Names the
-	// taxonomy declares (compute.vm, database.postgresql) are dotted too and
-	// are not data; an IPv4 address matches as well and is checked by
-	// ipv4Problems. Both are skipped in hostnameProblems.
+	// in capitals cannot slip past the allow list (SHOP.ACME.IO). Not every
+	// match is a host name: a decimal number (84.10), the taxonomy's vocabulary
+	// (compute.vm, database.postgresql), an IPv4 address (checked by
+	// ipv4Problems) and an inventory field path (size.storageGiB,
+	// usage.hoursPerMonth) match it too, and are skipped in hostnameProblems.
 	hostnamePattern = regexp.MustCompile(`(?i)\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+\b`)
 
 	// documentationPrefixNet and documentationPrefixV6Net are the documentation
@@ -100,6 +101,21 @@ var allowedHostnames = []string{
 	"example.com",
 	".example.com",
 	".example",
+}
+
+// inventoryFieldPaths are the resource fields inventory format version 2 writes
+// with a dot (docs/adr/0025). A document and a README name them as they are
+// (size.vcpus, usage.hoursPerMonth), and hostnamePattern matches a path written
+// under resources[N] from the field name on, because the "[" before the index
+// and the "]" after it end the word. An inventory field path is not a host name.
+var inventoryFieldPaths = []string{
+	"size.vcpus",
+	"size.memoryGiB",
+	"size.storageGiB",
+	"size.count",
+	"usage.hoursPerMonth",
+	"monthlyCost.amount",
+	"monthlyCost.currency",
 }
 
 // allowedHostnamesHint is how a failure message spells the host name rule.
@@ -369,6 +385,17 @@ func hostnameProblems(text string) []problem {
 			continue
 		}
 
+		// A number with a decimal point (a monthlyCost.amount of 84.10) has the
+		// shape of a two-label name and is not data about a host.
+		if numeric(candidate) {
+			continue
+		}
+
+		// An inventory field path is the format's own vocabulary, not a value.
+		if slices.Contains(inventoryFieldPaths, candidate) {
+			continue
+		}
+
 		// The taxonomy vocabulary is dotted as well, and an inventory carries
 		// it in every resource: a value the taxonomy declares is not a domain
 		// name.
@@ -396,6 +423,27 @@ func hostnameProblems(text string) []problem {
 	}
 
 	return problems
+}
+
+// numeric reports whether candidate is a number rather than a host name: every
+// label is all digits, as in a number written as a plain decimal (84.10,
+// 1234.5). A host name holds a letter in at least one label, so a host name
+// followed by a digit label (shop.acme.io.1) is still read as a host name.
+// Dotted quads are all digits as well; ipv4Problems checks those.
+func numeric(candidate string) bool {
+	for label := range strings.SplitSeq(candidate, ".") {
+		if label == "" {
+			return false
+		}
+
+		for i := range len(label) {
+			if label[i] < '0' || label[i] > '9' {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 // insidePath reports whether the candidate starting at start is a segment of a
@@ -596,9 +644,53 @@ func TestIPv6Problems(t *testing.T) {
 	}
 }
 
+// TestIPv4Problems pins which addresses the sanitisation check reports, now
+// that hostnameProblems leaves every all-digit dotted name to it: the
+// documentation range 192.0.2.0/24 the samples use is allowed, and so is a
+// prefix in it, while a private, a public or a malformed address is reported.
+// The two other RFC 5737 ranges (198.51.100.0/24 and 203.0.113.0/24) are
+// reported on purpose: the samples all use one range, so a second one in a
+// sample is a value somebody copied from elsewhere.
+func TestIPv4Problems(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{name: "no address", text: "shop-web-1 in eu-central-1", want: nil},
+		{name: "documentation address", text: `"address": "192.0.2.10"`, want: nil},
+		{name: "documentation address in prose", text: "the shop answers on 192.0.2.10", want: nil},
+		{name: "documentation prefix", text: `"range": "192.0.2.0/24"`, want: nil},
+		{name: "private address", text: `"address": "10.0.0.5"`, want: []string{"10.0.0.5"}},
+		{name: "private address with a prefix length", text: `"range": "10.0.0.5/16"`, want: []string{"10.0.0.5"}},
+		{name: "other documentation address", text: `"address": "198.51.100.7"`, want: []string{"198.51.100.7"}},
+		{name: "third documentation address", text: `"address": "203.0.113.7"`, want: []string{"203.0.113.7"}},
+		{name: "dotted quad that is not an address", text: `"address": "1.2.3.400"`, want: []string{"1.2.3.400"}},
+		{
+			name: "allowed and reported address beside each other",
+			text: "192.0.2.10 forwards to 10.0.0.5",
+			want: []string{"10.0.0.5"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, values(ipv4Problems(tc.text))); diff != "" {
+				t.Errorf("ipv4Problems(%q) mismatch (-want +got):\n%s", tc.text, diff)
+			}
+		})
+	}
+}
+
 // TestHostnameProblems pins which names the sanitisation check reports, not only
-// through allowedHostname: a name in a command path or a markdown link target is
-// a file, not a host, while a real host in prose or in a URL is reported.
+// through allowedHostname: a name in a command path, a markdown link target or
+// an inventory field path is not a host, a decimal number is not one either,
+// while a real host in prose or in a URL is reported - even next to a number or
+// a field path that is not.
 func TestHostnameProblems(t *testing.T) {
 	t.Parallel()
 
@@ -615,6 +707,26 @@ func TestHostnameProblems(t *testing.T) {
 		{name: "Azure resource type", text: "`Microsoft.Compute/virtualMachines`", want: nil},
 		{name: "file name in a command", text: "./bin/shift2eu assess --inventory examples/aws/inventory.json", want: nil},
 		{name: "markdown link target", text: "[Try it](../docs/guide/try-it.md)", want: nil},
+		{name: "decimal number", text: `"amount": 84.10,`, want: nil},
+		{name: "decimal number in prose", text: "the estimate is 1234.56 per month", want: nil},
+		{name: "inventory size field path", text: "give the volume a `size.storageGiB`", want: nil},
+		{name: "inventory usage field path", text: "a resource runs for `usage.hoursPerMonth`", want: nil},
+		{
+			name: "inventory field path under a resource index",
+			text: "`resources[1].size.storageGiB` is the volume's size",
+			want: nil,
+		},
+		{
+			name: "real customer host beside a decimal number",
+			text: `"amount": 84.10 billed by shop.acme.io`,
+			want: []string{"shop.acme.io"},
+		},
+		{
+			name: "real customer host followed by a digit label",
+			text: "billed by shop.acme.io.1",
+			want: []string{"shop.acme.io.1"},
+		},
+		{name: "real customer host ending in a digit label", text: "the shop runs on db.acme.com.2", want: []string{"db.acme.com.2"}},
 		{name: "real customer domain", text: "the shop runs on shop.acme.io", want: []string{"shop.acme.io"}},
 		{name: "real customer domain in capitals", text: "the shop runs on SHOP.ACME.IO", want: []string{"SHOP.ACME.IO"}},
 		{name: "real host in a URL", text: "see https://shop.acme.io/orders", want: []string{"shop.acme.io"}},

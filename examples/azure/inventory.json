@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": "azure",
   "resources": [
     {
@@ -7,72 +7,101 @@
       "rawType": "Microsoft.Compute/virtualMachines",
       "category": "compute.vm",
       "region": "westeurope",
-      "capabilities": ["ipv6", "snapshots"]
+      "capabilities": ["ipv6", "snapshots"],
+      "size": { "vcpus": 2, "memoryGiB": 8 },
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "sb-shop-orders" }],
+      "monthlyCost": { "amount": 80.59, "currency": "EUR" }
     },
     {
       "id": "vmss-shop-web",
       "rawType": "Microsoft.Compute/virtualMachineScaleSets",
       "category": "compute.vm",
       "region": "westeurope",
-      "capabilities": ["autoscaling", "zone-high-availability"]
+      "capabilities": ["autoscaling", "zone-high-availability"],
+      "size": { "vcpus": 2, "memoryGiB": 8, "count": 2 },
+      "workload": "shop"
     },
     {
       "id": "disk-shop-web-1-data",
       "rawType": "Microsoft.Compute/disks",
       "category": "storage.block",
       "region": "westeurope",
-      "capabilities": ["encryption-at-rest", "snapshots"]
+      "capabilities": ["snapshots"],
+      "size": { "storageGiB": 64 },
+      "workload": "shop",
+      "relations": [{ "type": "attached-to", "target": "vm-shop-web-1" }],
+      "monthlyCost": { "amount": 7.68, "currency": "EUR" }
     },
     {
       "id": "stshopassets",
       "rawType": "Microsoft.Storage/storageAccounts",
       "category": "storage.object",
       "region": "westeurope",
-      "capabilities": ["object-versioning", "encryption-at-rest"]
+      "capabilities": ["object-versioning", "encryption-at-rest"],
+      "size": { "storageGiB": 200 },
+      "workload": "shop"
     },
     {
       "id": "psql-shop",
       "rawType": "Microsoft.DBforPostgreSQL/flexibleServers",
       "category": "database.postgresql",
       "region": "westeurope",
-      "capabilities": ["point-in-time-restore", "zone-high-availability", "read-replicas"]
+      "capabilities": ["point-in-time-restore", "node-high-availability", "read-replicas"],
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 256 },
+      "workload": "shop",
+      "monthlyCost": { "amount": 291.70, "currency": "EUR" }
     },
     {
       "id": "mysql-shop-catalog",
       "rawType": "Microsoft.DBforMySQL/flexibleServers",
       "category": "database.mysql",
       "region": "westeurope",
-      "capabilities": ["point-in-time-restore", "node-high-availability", "read-replicas"]
+      "capabilities": ["point-in-time-restore", "node-high-availability", "read-replicas"],
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 64 },
+      "workload": "catalog"
     },
     {
       "id": "aks-shop",
       "rawType": "Microsoft.ContainerService/managedClusters",
       "category": "kubernetes.managed",
       "region": "westeurope",
-      "capabilities": ["zone-high-availability", "autoscaling"]
+      "capabilities": ["autoscaling"],
+      "size": { "vcpus": 4, "memoryGiB": 16, "count": 3 },
+      "workload": "shop",
+      "relations": [
+        { "type": "depends-on", "target": "mysql-shop-catalog" },
+        { "type": "depends-on", "target": "psql-shop" }
+      ]
     },
     {
       "id": "func-shop-thumbnails",
       "rawType": "Microsoft.Web/sites",
       "category": "serverless.function",
-      "region": "westeurope"
+      "region": "westeurope",
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "stshopassets" }]
     },
     {
       "id": "sb-shop-orders",
       "rawType": "Microsoft.ServiceBus/namespaces/queues",
       "category": "messaging.queue",
       "region": "westeurope",
-      "capabilities": ["dead-letter-queue"]
+      "capabilities": ["dead-letter-queue"],
+      "workload": "shop"
     },
     {
       "id": "cdn-shop",
       "rawType": "Microsoft.Cdn/profiles",
-      "category": "unclassified"
+      "category": "unclassified",
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "stshopassets" }]
     },
     {
       "id": "dns-shop",
       "rawType": "Microsoft.Network/dnsZones",
-      "category": "unclassified"
+      "category": "unclassified",
+      "workload": "shop"
     }
   ]
 }

@@ -1,0 +1,38 @@
+[
+  {
+    "kind": "compute#disk",
+    "name": "shop-web-1",
+    "zone": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-b",
+    "sizeGb": "20"
+  },
+  {
+    "kind": "compute#disk",
+    "name": "shop-web-1-data",
+    "zone": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-b",
+    "sizeGb": "100"
+  },
+  {
+    "kind": "compute#disk",
+    "name": "pvc-00000000-0000-0000-0000-000000000001",
+    "zone": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-b",
+    "sizeGb": "50"
+  },
+  {
+    "kind": "compute#disk",
+    "name": "shop-web-mig-0abc",
+    "zone": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-c",
+    "sizeGb": "20"
+  },
+  {
+    "kind": "compute#disk",
+    "name": "shop-web-mig-0abc-data",
+    "zone": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-c",
+    "sizeGb": "20"
+  },
+  {
+    "kind": "compute#disk",
+    "name": "gke-shop-gke-default-pool-0a1b2c3d-x1y2",
+    "zone": "https://www.googleapis.com/compute/v1/projects/example-project/zones/europe-west1-b",
+    "sizeGb": "100"
+  }
+]

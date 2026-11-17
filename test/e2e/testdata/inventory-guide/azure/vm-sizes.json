@@ -1,0 +1,18 @@
+[
+  {
+    "maxDataDiskCount": 4,
+    "memoryInMb": 8192,
+    "name": "Standard_D2s_v3",
+    "numberOfCores": 2,
+    "osDiskSizeInMb": 1047552,
+    "resourceDiskSizeInMb": 16384
+  },
+  {
+    "maxDataDiskCount": 8,
+    "memoryInMb": 16384,
+    "name": "Standard_D4s_v3",
+    "numberOfCores": 4,
+    "osDiskSizeInMb": 1047552,
+    "resourceDiskSizeInMb": 32768
+  }
+]

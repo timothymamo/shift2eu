@@ -1,6 +1,6 @@
 # gcp.jq turns the output of the read-only gcloud calls in docs/guide/inventory.md
-# into a shift2eu inventory file, schema version 1
-# (docs/adr/0006-json-inventory-file-format-v1.md). Run it with -n on every file
+# into a shift2eu inventory file, schema version 2
+# (docs/adr/0025-json-inventory-file-format-v2.md). Run it with -n on every file
 # the guide's commands wrote:
 #
 #   jq -n -f docs/guide/inventory/gcp.jq inventories/gcp/*.json > inventories/gcp.inventory.json
@@ -14,6 +14,8 @@
 #   {"assetType": ..., "name": "//..."}       asset search-all-resources
 #   {"kind": "compute#instance"}              compute instances list
 #   {"kind": "compute#instanceGroupManager"}  compute instance-groups managed list
+#   {"kind": "compute#machineType"}         compute machine-types list
+#   {"kind": "compute#disk"}                compute disks list
 #   {"kind": "compute#snapshot"}              compute snapshots list
 #   {"kind": "sql#instance"}                  sql instances list
 #   {"kind": "storage#bucket"}                storage buckets list --raw
@@ -28,6 +30,14 @@
 # managed instance groups its node pools name (instanceGroupUrls), and instances
 # and disks labelled goog-gke-node. An instance a managed instance group created
 # is left out with its boot disk, the group stands for it.
+#
+# The size comes from the calls too: an instance's vCPU and memory from its
+# machine type (compute machine-types list, the instance's machineType URL
+# matched to the type's selfLink, zone included) and a disk's GiB (compute
+# disks list, sizeGb, which the Compute API writes as a string; a regional disk
+# is matched by its region). A number no call gives is left out,
+# never guessed. The workload, relations and monthlyCost fields are the user's to
+# add by hand; this program never writes them.
 
 # A key that names the same resource in an asset name
 # (//compute.googleapis.com/projects/p/zones/z/instances/n), a selfLink
@@ -62,19 +72,24 @@ def unique_ids:
   | map(if length == 1 then . else to_entries | map(.value.id += " #" + (.key + 1 | tostring) | .value) end)
   | add // [];
 
+# A size object without the fields no call gave; null when none is left.
+def size_of(fields):
+  fields | with_entries(select(.value != null)) | if . == {} then null else . end;
+
 # Writes the inventory document: no empty region or capabilities, capabilities
 # sorted, identical resources listed once.
 def inventory($source):
   map(
-    {id, rawType, category, region, capabilities}
+    {id, rawType, category, region, capabilities, size}
     | if .region == null or .region == "" then del(.region) else . end
+    | if .size == null then del(.size) else . end
     | .capabilities = ((.capabilities // []) | unique)
     | if .capabilities == [] then del(.capabilities) else . end
   )
   | unique
   | unique_ids
   | sort_by(.id)
-  | {schemaVersion: 1, source: $source, resources: .};
+  | {schemaVersion: 2, source: $source, resources: .};
 
 # The details of one kind, by key.
 def details(f; k): map(select(f)) | INDEX(k);
@@ -83,6 +98,8 @@ def details(f; k): map(select(f)) | INDEX(k);
 | ($all | details(.kind? == "compute#instance"; .selfLink | key)) as $instances
 | ($all | details(.kind? == "compute#instanceGroupManager"; .selfLink | key)) as $groups
 | ($all | details(.kind? == "sql#instance"; .selfLink | key)) as $sql
+| ($all | details(.kind? == "compute#machineType"; .selfLink | key)) as $machinetypes
+| ($all | details(.kind? == "compute#disk"; (.zone // .region) + "/disks/" + .name | key)) as $disks
 | ($all | details(.kind? == "storage#bucket"; .name)) as $buckets
 | ($all | details((.selfLink? // "") | startswith("https://container.googleapis.com/"); .selfLink | key)) as $clusters
 | ($all | details((.name? // "") | test("^projects/[^/]+/subscriptions/"); .name | key)) as $subscriptions
@@ -110,7 +127,10 @@ def details(f; k): map(select(f)) | INDEX(k);
         | $base + {category: "compute.vm", capabilities: [
             cap("ipv6"; any($d.networkInterfaces[]?;
               (.ipv6AccessConfigs // []) | length > 0 or .stackType == "IPV4_IPV6"))
-          ]}
+          ],
+          size: ($machinetypes[$d.machineType | key] as $m
+            | if $m == null then null
+              else size_of({vcpus: $m.guestCpus, memoryGiB: (if $m.memoryMb == null then null else $m.memoryMb / 1024 end)}) end)}
       elif .assetType == "compute.googleapis.com/InstanceGroupManager" then
         # The group of a GKE node pool is left out: the cluster stands for it.
         select($key | IN($nodegroups[]) | not)
@@ -130,7 +150,8 @@ def details(f; k): map(select(f)) | INDEX(k);
         | $base + {category: "storage.block", capabilities: [
           "encryption-at-rest",
           cap("snapshots"; $key | IN($snapshotted[]))
-        ]}
+        ],
+        size: size_of({storageGiB: ($disks[$key].sizeGb? // null | if . == null then null else tonumber end)})}
       elif .assetType == "storage.googleapis.com/Bucket" then
         $buckets[$key] as $d
         | $base + {category: "storage.object", capabilities: [

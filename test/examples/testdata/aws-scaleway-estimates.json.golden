@@ -1,0 +1,603 @@
+{
+  "schemaVersion": 2,
+  "kind": "assessment",
+  "inventoryName": "inventory.json",
+  "source": "aws",
+  "target": {
+    "name": "Scaleway",
+    "snapshot": {
+      "source": "https://www.scaleway.com/en/pricing/",
+      "retrieved": "2026-11-13"
+    }
+  },
+  "summary": {
+    "direct": 6,
+    "partial": 5,
+    "none": 2,
+    "total": 13
+  },
+  "resources": [
+    {
+      "id": "shop-assets",
+      "rawType": "AWS::S3::Bucket",
+      "category": "storage.object",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Object Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Object Storage offers every capability the resource uses",
+          "offering": "Object Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": true,
+        "amount": "4.03",
+        "countAssumed": false,
+        "hoursAssumed": false,
+        "breakdown": {
+          "plan": "0.00",
+          "storage": "4.03",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "shop-cdn",
+      "rawType": "AWS::CloudFront::Distribution",
+      "category": "unclassified",
+      "region": "",
+      "fit": "none",
+      "bestOffering": "",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "not-classified",
+          "text": "not classified"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "shop-assets"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
+      }
+    },
+    {
+      "id": "shop-db",
+      "rawType": "AWS::RDS::DBInstance",
+      "category": "database.postgresql",
+      "region": "eu-central-1",
+      "fit": "partial",
+      "bestOffering": "Managed Database for PostgreSQL and MySQL High Availability",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "missing-capability",
+          "text": "Managed Database for PostgreSQL and MySQL High Availability does not offer point-in-time-restore",
+          "offering": "Managed Database for PostgreSQL and MySQL High Availability",
+          "capability": "point-in-time-restore"
+        }
+      ],
+      "requiredChanges": [
+        "point-in-time-restore"
+      ],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "DB-PRO2-XXS",
+        "vcpus": 2,
+        "memoryGiB": "8",
+        "includedStorageGiB": 0,
+        "price": "61.43"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "81.29",
+        "countAssumed": true,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "61.43",
+          "storage": "19.86",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "shop-eks",
+      "rawType": "AWS::EKS::Cluster",
+      "category": "kubernetes.managed",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Kubernetes Kapsule",
+      "ties": [
+        "Kubernetes Kapsule Dedicated"
+      ],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Kubernetes Kapsule offers every capability the resource uses",
+          "offering": "Kubernetes Kapsule"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "shop-db"
+        }
+      ],
+      "affectedBy": [],
+      "plan": {
+        "name": "PRO2-XS",
+        "vcpus": 4,
+        "memoryGiB": "16",
+        "includedStorageGiB": 0,
+        "price": "81.91"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "245.72",
+        "countAssumed": false,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "245.72",
+          "storage": "0.00",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "shop-legacy-mysql",
+      "rawType": "AWS::RDS::DBInstance",
+      "category": "database.mysql",
+      "region": "eu-central-1",
+      "fit": "partial",
+      "bestOffering": "Managed Database for PostgreSQL and MySQL High Availability",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "missing-capability",
+          "text": "Managed Database for PostgreSQL and MySQL High Availability does not offer point-in-time-restore",
+          "offering": "Managed Database for PostgreSQL and MySQL High Availability",
+          "capability": "point-in-time-restore"
+        }
+      ],
+      "requiredChanges": [
+        "point-in-time-restore"
+      ],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "DB-PRO2-XXS",
+        "vcpus": 2,
+        "memoryGiB": "8",
+        "includedStorageGiB": 0,
+        "price": "61.43"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "66.39",
+        "countAssumed": true,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "61.43",
+          "storage": "4.97",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "shop-orders",
+      "rawType": "AWS::SQS::Queue",
+      "category": "messaging.queue",
+      "region": "eu-central-1",
+      "fit": "partial",
+      "bestOffering": "Queues",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "missing-capability",
+          "text": "Queues does not offer encryption-at-rest",
+          "offering": "Queues",
+          "capability": "encryption-at-rest"
+        }
+      ],
+      "requiredChanges": [
+        "encryption-at-rest"
+      ],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "usage-priced"
+      }
+    },
+    {
+      "id": "shop-orders-dlq",
+      "rawType": "AWS::SQS::Queue",
+      "category": "messaging.queue",
+      "region": "eu-central-1",
+      "fit": "partial",
+      "bestOffering": "Queues",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "missing-capability",
+          "text": "Queues does not offer encryption-at-rest",
+          "offering": "Queues",
+          "capability": "encryption-at-rest"
+        }
+      ],
+      "requiredChanges": [
+        "encryption-at-rest"
+      ],
+      "relations": [
+        {
+          "type": "dead-letter-queue-of",
+          "target": "shop-orders"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "usage-priced"
+      }
+    },
+    {
+      "id": "shop-thumbnailer",
+      "rawType": "AWS::Lambda::Function",
+      "category": "serverless.function",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Serverless Functions",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Serverless Functions offers every capability the resource uses",
+          "offering": "Serverless Functions"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "shop-assets"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "usage-priced"
+      }
+    },
+    {
+      "id": "shop-web-1",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "shop-orders"
+        }
+      ],
+      "affectedBy": [],
+      "plan": {
+        "name": "PLAY2-MICRO",
+        "vcpus": 4,
+        "memoryGiB": "8",
+        "includedStorageGiB": 0,
+        "price": "40.21"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "40.21",
+        "countAssumed": true,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "40.21",
+          "storage": "0.00",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "shop-web-1-data",
+      "rawType": "AWS::EC2::Volume",
+      "category": "storage.block",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Block Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Block Storage offers every capability the resource uses",
+          "offering": "Block Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "attached-to",
+          "target": "shop-web-1"
+        }
+      ],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": true,
+        "amount": "9.49",
+        "countAssumed": true,
+        "hoursAssumed": false,
+        "breakdown": {
+          "plan": "0.00",
+          "storage": "9.49",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "shop-web-2",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "fit": "direct",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Instances offers every capability the resource uses",
+          "offering": "Instances"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "PLAY2-MICRO",
+        "vcpus": 4,
+        "memoryGiB": "8",
+        "includedStorageGiB": 0,
+        "price": "40.21"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "19.83",
+        "countAssumed": true,
+        "hoursAssumed": false,
+        "breakdown": {
+          "plan": "19.83",
+          "storage": "0.00",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "shop-web-asg",
+      "rawType": "AWS::AutoScaling::AutoScalingGroup",
+      "category": "compute.vm",
+      "region": "eu-central-1",
+      "fit": "partial",
+      "bestOffering": "Instances",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "missing-capability",
+          "text": "Instances does not offer autoscaling",
+          "offering": "Instances",
+          "capability": "autoscaling"
+        },
+        {
+          "code": "missing-capability",
+          "text": "Instances does not offer zone-high-availability",
+          "offering": "Instances",
+          "capability": "zone-high-availability"
+        }
+      ],
+      "requiredChanges": [
+        "autoscaling",
+        "zone-high-availability"
+      ],
+      "relations": [],
+      "affectedBy": [],
+      "plan": {
+        "name": "PLAY2-MICRO",
+        "vcpus": 4,
+        "memoryGiB": "8",
+        "includedStorageGiB": 0,
+        "price": "40.21"
+      },
+      "estimate": {
+        "estimated": true,
+        "amount": "120.63",
+        "countAssumed": false,
+        "hoursAssumed": true,
+        "breakdown": {
+          "plan": "120.63",
+          "storage": "0.00",
+          "fixedFee": "0.00"
+        }
+      }
+    },
+    {
+      "id": "shop.example.com",
+      "rawType": "AWS::Route53::HostedZone",
+      "category": "unclassified",
+      "region": "",
+      "fit": "none",
+      "bestOffering": "",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "not-classified",
+          "text": "not classified"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "no-fit"
+      }
+    }
+  ],
+  "blockers": [
+    {
+      "resourceId": "shop-cdn",
+      "reason": {
+        "code": "not-classified",
+        "text": "not classified"
+      }
+    },
+    {
+      "resourceId": "shop.example.com",
+      "reason": {
+        "code": "not-classified",
+        "text": "not classified"
+      }
+    }
+  ],
+  "workloads": [
+    {
+      "name": "media",
+      "noWorkload": false,
+      "resources": 3,
+      "summary": {
+        "direct": 2,
+        "partial": 0,
+        "none": 1,
+        "total": 3
+      },
+      "blockers": [
+        {
+          "resourceId": "shop-cdn",
+          "reason": {
+            "code": "not-classified",
+            "text": "not classified"
+          }
+        }
+      ],
+      "estimate": {
+        "amount": "4.03",
+        "estimated": 1,
+        "resources": 3
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 3,
+        "currencies": []
+      }
+    },
+    {
+      "name": "shop",
+      "noWorkload": false,
+      "resources": 9,
+      "summary": {
+        "direct": 4,
+        "partial": 4,
+        "none": 1,
+        "total": 9
+      },
+      "blockers": [
+        {
+          "resourceId": "shop.example.com",
+          "reason": {
+            "code": "not-classified",
+            "text": "not classified"
+          }
+        }
+      ],
+      "estimate": {
+        "amount": "517.16",
+        "estimated": 6,
+        "resources": 9
+      },
+      "sourceCost": {
+        "covered": 4,
+        "resources": 9,
+        "currencies": [
+          {
+            "currency": "USD",
+            "amount": "518.92",
+            "resources": 4
+          }
+        ]
+      }
+    },
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 1,
+      "summary": {
+        "direct": 0,
+        "partial": 1,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": [],
+      "estimate": {
+        "amount": "66.39",
+        "estimated": 1,
+        "resources": 1
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 1,
+        "currencies": []
+      }
+    }
+  ],
+  "estimate": {
+    "region": "fr-par",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "amount": "587.58",
+      "estimated": 8,
+      "resources": 13
+    }
+  },
+  "sourceCost": {
+    "covered": 4,
+    "resources": 13,
+    "currencies": [
+      {
+        "currency": "USD",
+        "amount": "518.92",
+        "resources": 4
+      }
+    ]
+  }
+}
