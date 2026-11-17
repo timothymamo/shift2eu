@@ -98,39 +98,44 @@ the new fields are optional and the report's `schemaVersion` says which version 
 Started from a clone with a token, the server listens on its default loopback
 address; the requests read the token from the same variable, which keeps it out of your shell history, and
 hand curl the header on standard input (`-H @-`), which keeps it out of the process list.
-With the repository's sanitised example inventory:
+With the repository's sanitised example inventory, and the request body in a temporary file outside the
+clone, so a request made from a real inventory cannot end up in a commit:
 
 ```bash
 export SHIFT2EU_SERVER_TOKEN="$(openssl rand -hex 32)"
 make server && ./bin/shift2eu-server &   # listening on 127.0.0.1:8080
 
-jq '{inventory: ., targets: ["scaleway"]}' test/e2e/testdata/inventory.json > request.json
+req="$(mktemp)"
+
+jq '{inventory: ., targets: ["scaleway"]}' test/e2e/testdata/inventory.json > "$req"
 
 # The JSON report.
 printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" |
   curl -sS -X POST http://127.0.0.1:8080/v1/assessments -H @- \
     -H 'Content-Type: application/json' \
-    --data-binary @request.json
+    --data-binary @"$req"
 
 # The JSON report in a chosen region, with the estimates off.
 jq '{inventory: ., targets: ["scaleway"], regions: {scaleway: "nl-ams"}, estimate: false}' \
-  test/e2e/testdata/inventory.json > request.json
+  test/e2e/testdata/inventory.json > "$req"
 printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" |
   curl -sS -X POST http://127.0.0.1:8080/v1/assessments -H @- \
     -H 'Content-Type: application/json' \
-    --data-binary @request.json
+    --data-binary @"$req"
 
 # The Markdown report, comparing every target.
-jq '{inventory: ., targets: ["all"]}' test/e2e/testdata/inventory.json > request.json
+jq '{inventory: ., targets: ["all"]}' test/e2e/testdata/inventory.json > "$req"
 printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" |
   curl -sS -X POST http://127.0.0.1:8080/v1/assessments -H @- \
     -H 'Content-Type: application/json' -H 'Accept: text/markdown' \
-    --data-binary @request.json
+    --data-binary @"$req"
 
 # The targets, and the health checks.
 printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" | curl -sS -H @- http://127.0.0.1:8080/v1/targets
 curl -sS http://127.0.0.1:8080/healthz
 curl -sS http://127.0.0.1:8080/readyz
+
+rm -f "$req"
 ```
 
 Through [the proxy](reverse-proxy.md), the same requests go to `https://api.example.com/v1/...` with the user's own
