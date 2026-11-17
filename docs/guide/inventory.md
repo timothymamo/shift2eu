@@ -26,13 +26,13 @@ updates, deletes or tags anything. Where a provider's inventory service must be 
 
 An inventory is a JSON object with a version, the source and a list of resources.
 [ADR 0006](../adr/0006-json-inventory-file-format-v1.md) records the format in full; the reader is
-strict, so a misspelt key or an unknown value is an error, never ignored. This guide builds version 1;
-schema version 2, which adds sizes, usage, workloads, relations and cost, is recorded in
-[ADR 0025](../adr/0025-json-inventory-file-format-v2.md).
+strict, so a misspelt key or an unknown value is an error, never ignored. This guide builds version 2,
+recorded in [ADR 0025](../adr/0025-json-inventory-file-format-v2.md): version 1 plus a resource's size,
+usage, workload, relations and monthly cost, all optional. `shift2eu assess` reads both versions.
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": "aws",
   "resources": [
     {
@@ -40,7 +40,19 @@ schema version 2, which adds sizes, usage, workloads, relations and cost, is rec
       "rawType": "AWS::RDS::DBInstance",
       "category": "database.postgresql",
       "region": "eu-central-1",
-      "capabilities": ["point-in-time-restore", "zone-high-availability"]
+      "capabilities": ["point-in-time-restore", "zone-high-availability"],
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 50 },
+      "workload": "shop",
+      "monthlyCost": { "amount": 383, "currency": "USD" }
+    },
+    {
+      "id": "shop-db-replica",
+      "rawType": "AWS::RDS::DBInstance",
+      "category": "database.postgresql",
+      "region": "eu-central-1",
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 50 },
+      "workload": "shop",
+      "relations": [{ "type": "replica-of", "target": "shop-db" }]
     },
     { "id": "shop-cdn", "rawType": "AWS::CloudFront::Distribution", "category": "unclassified" }
   ]
@@ -49,13 +61,18 @@ schema version 2, which adds sizes, usage, workloads, relations and cost, is rec
 
 | Field | Required | Meaning |
 |---|---|---|
-| `schemaVersion` | yes | Always `1` |
+| `schemaVersion` | yes | `2` (or `1`, without the fields below `capabilities`) |
 | `source` | yes | `aws`, `gcp` or `azure` here |
 | `resources[].id` | yes, unique | A short name for the resource |
 | `resources[].category` | yes | A taxonomy category, below |
 | `resources[].rawType` | no | The source's own type name |
 | `resources[].region` | no | The source region; absent for a global resource |
 | `resources[].capabilities` | no | Capabilities the resource depends on, below |
+| `resources[].size` | no | `vcpus`, `memoryGiB`, `storageGiB` and `count` (instances, nodes or volumes), each optional; see [Sizes](#sizes) |
+| `resources[].usage` | no | `hoursPerMonth`, the hours a month the resource runs: 730 when absent, at most 744 |
+| `resources[].workload` | no | A free-text name of the application the resource belongs to, such as `shop` |
+| `resources[].relations` | no | A list of `{"type", "target"}`: `type` is `replica-of`, `dead-letter-queue-of`, `attached-to` or `depends-on`, and `target` is another resource's `id` |
+| `resources[].monthlyCost` | no | `{"amount", "currency"}`: what the source charges for the resource a month, from your own bill; `currency` is an ISO 4217 code such as `USD` or `EUR` |
 
 The **taxonomy categories** are the only bridge between a source and a target: `compute.vm` (a
 virtual machine), `compute.baremetal` (a dedicated physical server, with no hypervisor; see
@@ -84,6 +101,54 @@ A capability changes the verdict: an offering that serves the category but lacks
 resource lists is a partial fit, not a direct one, and the report names the missing capability. A
 capability left out can therefore make a move look easier than it is, which is why the programs
 derive them from the resources' settings rather than leaving them out.
+
+### Sizes
+
+The size is what `assess` matches a target's plans against and prices: the cheapest plan whose vCPU and
+memory cover the resource's, times the `count`, plus storage per GiB
+([Assess an inventory](assess.md#read-the-estimate)). Which fields a category takes:
+
+| Category | `vcpus`, `memoryGiB` | `storageGiB` | `count` | Priced by |
+|---|---|---|---|---|
+| `compute.vm`, `compute.baremetal` | per instance or server | yes | instances | plan |
+| `kubernetes.managed` | per node | per node | nodes | plan per node, plus the control-plane fee |
+| `database.postgresql`, `database.mysql` | yes | yes | nodes | plan, plus storage above what it includes |
+| `storage.block` | no | yes | volumes | GiB |
+| `storage.object` | no | stored GiB | no | GiB |
+| `serverless.function` | `memoryGiB` only | no | no | not estimated (priced by usage) |
+| `messaging.queue`, `unclassified` | no | no | no | not estimated |
+
+A field a category does not take is an error that names it. A resource without the fields its category
+is priced by shows "not estimated: size unknown", never €0. The programs fill in the sizes the
+read-only calls give (each source's *Sizes* table below) and leave out any they do not, never guessing.
+
+### What you add by hand
+
+No read-only call says what a resource is for, so the programs never write these; add them to the
+inventory yourself, with an editor or `jq`:
+
+- **`workload`**: the application a resource belongs to. The report groups resources by it, with fits,
+  blockers and an estimate per workload; resources without one are under "No workload".
+- **`relations`**: a replica (`replica-of`), a dead-letter queue (`dead-letter-queue-of`), a volume on
+  its server (`attached-to`), or a dependency (`depends-on`). A blocker on a resource is then also
+  listed under each resource that `depends-on` it or is a `replica-of` it.
+- **`monthlyCost`**: what the resource costs on the source today, from your own bill or cost export.
+  `shift2eu` never reads billing APIs and knows no hyperscaler price; the report shows this cost next
+  to the estimate, per currency, without converting it.
+- **`usage.hoursPerMonth`**: for a resource that does not run all month, such as a server stopped at
+  night.
+- any size the calls do not give, such as an RDS or Cloud SQL instance's vCPU and memory (its
+  instance class or tier), or an Auto Scaling group's instance count.
+
+For example, with `jq`:
+
+```bash
+jq '(.resources[] | select(.id == "shop-db")) += {workload: "shop",
+      monthlyCost: {amount: 383, currency: "USD"}}' \
+  inventories/aws.inventory.json > inventories/aws.edited.inventory.json
+```
+
+The [samples](../../examples/) show every field in use.
 
 ## How the programs work
 
@@ -187,8 +252,13 @@ aws ec2 describe-instances --output json --query '{Reservations: Reservations[].
   BlockDeviceMappings: BlockDeviceMappings[].{Ebs: {VolumeId: Ebs.VolumeId}},
   NetworkInterfaces: NetworkInterfaces[].{Ipv6AddressCount: length(Ipv6Addresses || `[]`)},
   Tags: Tags[].{Key: Key}}}}' > "$out/ec2-instances.json"
+# The vCPU and memory of the instance types in use.
+jq -r '[.Reservations[].Instances[].InstanceType] | unique[]' "$out/ec2-instances.json" |
+  xargs -r aws ec2 describe-instance-types --output json --query '{InstanceTypes: InstanceTypes[].{
+    InstanceType: InstanceType, VCpuInfo: {DefaultVCpus: VCpuInfo.DefaultVCpus},
+    MemoryInfo: {SizeInMiB: MemoryInfo.SizeInMiB}}}' --instance-types > "$out/ec2-instance-types.json"
 aws ec2 describe-volumes --output json --query '{Volumes: Volumes[].{
-  VolumeId: VolumeId, AvailabilityZone: AvailabilityZone, Encrypted: Encrypted,
+  VolumeId: VolumeId, AvailabilityZone: AvailabilityZone, Encrypted: Encrypted, Size: Size,
   Attachments: Attachments[].{InstanceId: InstanceId, DeleteOnTermination: DeleteOnTermination}}}' \
   > "$out/ec2-volumes.json"
 aws ec2 describe-snapshots --owner-ids self --output json \
@@ -207,7 +277,7 @@ done > "$out/s3-versioning.json"
 
 aws rds describe-db-instances --output json --query '{DBInstances: DBInstances[].{
   DBInstanceIdentifier: DBInstanceIdentifier, DBInstanceArn: DBInstanceArn,
-  DBClusterIdentifier: DBClusterIdentifier, Engine: Engine,
+  DBClusterIdentifier: DBClusterIdentifier, Engine: Engine, AllocatedStorage: AllocatedStorage,
   BackupRetentionPeriod: BackupRetentionPeriod, MultiAZ: MultiAZ, StorageEncrypted: StorageEncrypted,
   ReadReplicaDBInstanceIdentifiers: ReadReplicaDBInstanceIdentifiers}}' > "$out/rds-instances.json"
 
@@ -242,6 +312,9 @@ Every list and describe call above, `select-resource-config` included, is pagina
 AWS CLI version 2 fetches every page and merges them before it applies `--query`, so each file holds
 the whole region. Do not pass `--no-paginate` or `--max-items`.
 
+`describe-instance-types` takes at most 100 instance types per call; `xargs` splits a longer list
+into several calls, and the program reads each.
+
 S3 is global: `list-buckets` returns every bucket from any region, and the program lists each bucket
 once. A bucket's region comes from the `BucketRegion` field, which recent versions of the AWS CLI
 version 2 print; with an older CLI, buckets have no region.
@@ -253,6 +326,20 @@ jq -n -f docs/guide/inventory/aws.jq inventories/aws/*/*.json > inventories/aws.
 ```
 
 Review `inventories/aws.inventory.json`, then delete the raw output: `rm -r inventories/aws`.
+
+### AWS sizes
+
+| Resource | Size | From |
+|---|---|---|
+| EC2 instance | `vcpus`, `memoryGiB` | its `InstanceType`, looked up in `ec2 describe-instance-types` (`VCpuInfo.DefaultVCpus`, `MemoryInfo.SizeInMiB` / 1024) |
+| EBS volume | `storageGiB` | `ec2 describe-volumes`, `Volumes[].Size` |
+| RDS DB instance | `storageGiB` | `rds describe-db-instances`, `DBInstances[].AllocatedStorage` |
+| EKS cluster | `count` | the sum of its managed node groups' `scalingConfig.desiredSize` (`eks describe-nodegroup`) |
+
+Not filled in: an RDS instance's vCPU and memory (from its `DBInstanceClass`, such as `db.m5.large`), an
+EKS cluster's per-node vCPU and memory (from its node groups' `instanceTypes`), an Auto Scaling group's
+instance size and count, and an S3 bucket's stored GiB (the `BucketSizeBytes` metric in CloudWatch).
+Add them by hand where you want an estimate.
 
 ### AWS classification
 
@@ -367,8 +454,14 @@ gcloud asset search-all-resources --scope="projects/$project" \
   jq '[.[] | if .labels then .labels |= with_entries(select(.key == "goog-gke-node" or .key == "goog-managed-by")) else . end]' \
   > "$out/assets.json"
 gcloud compute instances list --project="$project" \
-  --format='json(kind,selfLink,metadata.items[].key,disks[].source,disks[].boot,disks[].autoDelete,networkInterfaces[].stackType,networkInterfaces[].ipv6AccessConfigs[].type)' \
+  --format='json(kind,selfLink,machineType,metadata.items[].key,disks[].source,disks[].boot,disks[].autoDelete,networkInterfaces[].stackType,networkInterfaces[].ipv6AccessConfigs[].type)' \
   > "$out/compute-instances.json"
+# The vCPU and memory of the machine types in use, and every disk's size.
+types="$(jq -r '[.[].machineType // empty | split("/") | last] | unique | join(" ")' "$out/compute-instances.json")"
+gcloud compute machine-types list --project="$project" --filter="name:($types)" \
+  --format='json(kind,name,zone,guestCpus,memoryMb)' > "$out/compute-machine-types.json"
+gcloud compute disks list --project="$project" \
+  --format='json(kind,name,zone,region,sizeGb)' > "$out/compute-disks.json"
 gcloud compute instance-groups managed list --project="$project" \
   --format='json(kind,selfLink,status.autoscaler)' > "$out/compute-instance-groups.json"
 gcloud compute snapshots list --project="$project" \
@@ -402,6 +495,18 @@ jq -n -f docs/guide/inventory/gcp.jq inventories/gcp/*.json > inventories/gcp.in
 ```
 
 Review `inventories/gcp.inventory.json`, then delete the raw output: `rm -r inventories/gcp`.
+
+### GCP sizes
+
+| Resource | Size | From |
+|---|---|---|
+| Compute Engine instance | `vcpus`, `memoryGiB` | its `machineType`, looked up in `compute machine-types list` for its zone (`guestCpus`, `memoryMb` / 1024) |
+| Persistent disk | `storageGiB` | `compute disks list`, `sizeGb` (a string in the API's JSON) |
+
+Not filled in: a Cloud SQL instance's tier and storage, a GKE cluster's node count and machine type, a
+managed instance group's size and instance template, and a bucket's stored GiB. Add them by hand
+where you want an estimate. A custom machine type (`custom-4-16384`) is not in
+`machine-types list`; its vCPU and memory are in its name.
 
 ### GCP classification
 
@@ -478,7 +583,10 @@ query="Resources
       'storageProfile', bag_pack(
         'osDisk', bag_pack('managedDisk', bag_pack('id', properties.storageProfile.osDisk.managedDisk.id)),
         'dataDisks', properties.storageProfile.dataDisks),
-      'networkProfile', bag_pack('networkInterfaces', properties.networkProfile.networkInterfaces)),
+      'networkProfile', bag_pack('networkInterfaces', properties.networkProfile.networkInterfaces),
+      'hardwareProfile', bag_pack('vmSize', properties.hardwareProfile.vmSize)),
+    type =~ 'microsoft.compute/disks',
+      bag_pack('diskSizeGB', properties.diskSizeGB),
     type =~ 'microsoft.network/networkinterfaces',
       bag_pack('ipConfigurations', properties.ipConfigurations),
     type =~ 'microsoft.compute/snapshots',
@@ -488,12 +596,13 @@ query="Resources
     type in~ ('microsoft.dbforpostgresql/flexibleservers', 'microsoft.dbformysql/flexibleservers'),
       bag_pack('backup', bag_pack('backupRetentionDays', properties.backup.backupRetentionDays),
         'highAvailability', bag_pack('mode', properties.highAvailability.mode),
-        'sourceServerResourceId', properties.sourceServerResourceId),
+        'sourceServerResourceId', properties.sourceServerResourceId,
+        'storage', bag_pack('storageSizeGB', properties.storage.storageSizeGB)),
     type =~ 'microsoft.containerservice/managedclusters',
       bag_pack('nodeResourceGroup', properties.nodeResourceGroup,
         'agentPoolProfiles', properties.agentPoolProfiles),
     dynamic(null))
-| project id, name, type, kind, location, zones, properties"
+| project id, name, type, kind, location, zones, sku, properties"
 page=1
 token=""
 while :; do
@@ -530,6 +639,13 @@ az storage account list --query "[].[name, resourceGroup]" --output tsv |
       --resource-group "$group" --query "{id: id, type: type, isVersioningEnabled: isVersioningEnabled}" \
       --output json
   done > "$out/blob-services.json"
+
+# The vCPU and memory of every VM size, in each region with virtual machines or scale sets.
+jq -r '[.data[] | select(.type == "microsoft.compute/virtualmachines"
+    or .type == "microsoft.compute/virtualmachinescalesets") | .location] | unique[]' "$out"/graph-*.json |
+  while read -r location; do
+    az vm list-sizes --location "$location" --output json
+  done > "$out/vm-sizes.json"
 ```
 
 The query keeps no admin user names, SSH keys, server logins or host names. It keeps whole arrays
@@ -538,8 +654,8 @@ interfaces, a network interface's IP configurations with their private IP addres
 cluster's node pools with their labels, tags (keys and values), taints, subnet IDs and node image
 versions), as Resource Graph cannot trim inside an array.
 
-Resource Graph holds most settings; Service Bus queues and topics, storage queues and a storage
-account's blob versioning are not in it, hence the three loops. Storage queues are listed through the
+Resource Graph holds most settings; Service Bus queues and topics, storage queues, a storage
+account's blob versioning and the VM sizes are not in it, hence the four loops. Storage queues are listed through the
 Resource Manager API (`az rest --method get`, a read), not the data plane, so `Reader` is enough and
 no account key is needed. A Basic tier Service Bus namespace has no topics, and its `topic list`
 fails: that error is expected. An account with more queues than one response returns adds a
@@ -553,6 +669,20 @@ jq -n -f docs/guide/inventory/azure.jq inventories/azure/*.json > inventories/az
 ```
 
 Review `inventories/azure.inventory.json`, then delete the raw output: `rm -r inventories/azure`.
+
+### Azure sizes
+
+| Resource | Size | From |
+|---|---|---|
+| Virtual machine | `vcpus`, `memoryGiB` | `properties.hardwareProfile.vmSize`, looked up in `az vm list-sizes` (`numberOfCores`, `memoryInMb` / 1024) |
+| Scale set | `vcpus`, `memoryGiB`, `count` | its `sku.name`, looked up the same way, and `sku.capacity` |
+| Managed disk | `storageGiB` | `properties.diskSizeGB` |
+| PostgreSQL or MySQL flexible server | `storageGiB` | `properties.storage.storageSizeGB` |
+| AKS cluster | `count` | the sum of its agent pools' `count` |
+
+Not filled in: a flexible server's vCPU and memory (its `sku.name`, such as `Standard_D2ds_v4`), an AKS
+cluster's per-node vCPU and memory (its pools' `vmSize`), and a storage account's stored GiB. Add them
+by hand where you want an estimate.
 
 ### Azure classification
 
@@ -661,9 +791,11 @@ and the field by its path, for example:
 shift2eu: load inventory: inventory file "inventories/aws.inventory.json": not a valid inventory document: unknown key "regoin" at "resources[0].regoin", line 1, column 82
 shift2eu: load inventory: inventory file "inventories/aws.inventory.json": resource "i-0123456789abcdef0": unknown taxonomy category "compute.mv"
 shift2eu: load inventory: inventory file "inventories/aws.inventory.json": resources[1]: duplicate resource ID "a"
+shift2eu: load inventory: inventory file "inventories/aws.inventory.json": "resources[3].relations[0].target": relation target is no resource of the inventory: "shop-web-9"
 ```
 
 It also refuses a file over 10 MiB, more than 50,000 resources and more than 32 capabilities on one
-resource; split a larger estate into several inventories, by region or project. After a hand edit,
-check the category and capability names against the lists above. [Assess an inventory](assess.md)
+resource, and more than 32 relations on one resource; split a larger estate into several inventories,
+by region or project. After a hand edit, check the category and capability names against the lists
+above, and that every relation's `target` is the `id` of another resource in the file. [Assess an inventory](assess.md)
 describes the report and the exit codes, and [Try it](try-it.md#read-the-report) how to read it.

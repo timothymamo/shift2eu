@@ -1,12 +1,12 @@
 # azure.jq turns the output of the read-only az calls in docs/guide/inventory.md
-# into a shift2eu inventory file, schema version 1
-# (docs/adr/0006-json-inventory-file-format-v1.md). Run it with -n on every file
+# into a shift2eu inventory file, schema version 2
+# (docs/adr/0025-json-inventory-file-format-v2.md). Run it with -n on every file
 # the guide's commands wrote:
 #
 #   jq -n -f docs/guide/inventory/azure.jq inventories/azure/*.json > inventories/azure.inventory.json
 #
 # The Resource Graph listing (az graph query, one file per page) is the list of
-# resources and holds most details; four calls add what it lacks. Each element of
+# resources and holds most details; five calls add what it lacks. Each element of
 # each input is recognised by its shape, not by its file name. The guide's queries
 # keep only the fields read here; the full output is read the same way:
 #
@@ -18,6 +18,7 @@
 #   {"type": "Microsoft.Storage/storageAccounts/blobServices"}
 #                                                az storage account
 #                                                blob-service-properties show
+#   [{"name": ..., "numberOfCores": ...}]        az vm list-sizes
 #
 # Resource IDs are short (the resource's name), never the full Azure resource ID,
 # which carries the subscription. Anything it cannot classify is "unclassified"
@@ -26,6 +27,15 @@
 # Everything in an AKS cluster's node resource group (its scale sets, load
 # balancers, network interfaces) is left out, the cluster stands for it; its
 # managed disks, persistent volumes that hold data, stay.
+#
+# The size comes from the calls too: a virtual machine's or a scale set's vCPU
+# and memory from its VM size (properties.hardwareProfile.vmSize or sku.name,
+# looked up in az vm list-sizes), a scale set's instance count (sku.capacity), a
+# managed disk's GiB (properties.diskSizeGB), a flexible server's storage
+# (properties.storage.storageSizeGB) and an AKS cluster's node count (the counts
+# of its agent pools). A number no call gives is left out, never guessed. The
+# workload, relations and monthlyCost fields are the user's to add by hand; this
+# program never writes them.
 
 # The Resource Manager type of a resource ID, in the casing of the ID (Resource
 # Graph writes types in lower case):
@@ -49,19 +59,32 @@ def unique_ids:
   | map(if length == 1 then . else to_entries | map(.value.id += " #" + (.key + 1 | tostring) | .value) end)
   | add // [];
 
+# A size object without the fields no call gave; null when none is left.
+def size_of(fields):
+  fields | with_entries(select(.value != null)) | if . == {} then null else . end;
+
+# The vCPU and memory of a VM size name, from az vm list-sizes ($vmsizes), or
+# null when the call did not list it.
+def vm_size($vmsizes):
+  if . == null then null else $vmsizes[ascii_downcase] as $s
+  | if $s == null then null
+    else {vcpus: $s.numberOfCores, memoryGiB: (if $s.memoryInMb == null then null else $s.memoryInMb / 1024 end)} end
+  end;
+
 # Writes the inventory document: no empty region or capabilities, capabilities
 # sorted, identical resources listed once.
 def inventory($source):
   map(
-    {id, rawType, category, region, capabilities}
+    {id, rawType, category, region, capabilities, size}
     | if .region == null or .region == "" then del(.region) else . end
+    | if .size == null then del(.size) else . end
     | .capabilities = ((.capabilities // []) | unique)
     | if .capabilities == [] then del(.capabilities) else . end
   )
   | unique
   | unique_ids
   | sort_by(.id)
-  | {schemaVersion: 1, source: $source, resources: .};
+  | {schemaVersion: 2, source: $source, resources: .};
 
 def lower_type: (.type // "") | ascii_downcase;
 def lid: ascii_downcase;
@@ -75,7 +98,11 @@ def child_types:
   "microsoft.storage/storageaccounts/queueservices/queues",
   "microsoft.storage/storageaccounts/blobservices";
 
-[inputs | if type == "object" and (.data | type) == "array" then .data[]
+[inputs] as $inputs
+# The VM sizes az vm list-sizes lists: an array of sizes, no id or type.
+| ([$inputs[] | arrays | .[] | objects | select(has("numberOfCores") and (.name | type) == "string")]
+   | INDEX(.name | ascii_downcase)) as $vmsizes
+| [$inputs[] | if type == "object" and (.data | type) == "array" then .data[]
           elif type == "object" and (.value | type) == "array" then .value[]
           elif type == "array" then .[] else . end
         | objects | select((.id? | type) == "string" and (.type? | type) == "string")] as $all
@@ -158,12 +185,15 @@ def child_types:
               cap("ipv6"; any(.properties.networkProfile.networkInterfaces[]?.id | lid;
                 any($byid[.].properties.ipConfigurations[]?; .properties.privateIPAddressVersion == "IPv6"))),
               cap("snapshots"; any($disks[]; IN($snapshotted[])))
-            ]}
+            ],
+            size: size_of(.properties.hardwareProfile.vmSize? | vm_size($vmsizes) // {})}
         elif $t == "microsoft.compute/virtualmachinescalesets" then
           $base + {category: "compute.vm", capabilities: [
             cap("autoscaling"; $id | IN($autoscaled[])),
             cap("zone-high-availability"; (.zones // []) | length >= 2)
-          ]}
+          ],
+          size: size_of((.sku.name? | vm_size($vmsizes) // {})
+            + {count: (.sku.capacity? | if type == "number" and . >= 1 then . else null end)})}
         elif $t == "microsoft.baremetalinfrastructure/baremetalinstances"
           or $t == "microsoft.azurelargeinstance/azurelargeinstances" then
           # A BareMetal Infrastructure instance or a SAP HANA Large Instance: a
@@ -177,7 +207,8 @@ def child_types:
           | $base + {category: "storage.block", capabilities: [
             "encryption-at-rest",
             cap("snapshots"; $id | IN($snapshotted[]))
-          ]}
+          ],
+          size: size_of({storageGiB: .properties.diskSizeGB?})}
         elif $t == "microsoft.storage/storageaccounts" then
           # A FileStorage account holds file shares only. Azure encrypts every
           # storage account at rest.
@@ -195,14 +226,16 @@ def child_types:
               cap("zone-high-availability"; .properties.highAvailability.mode? == "ZoneRedundant"),
               cap("node-high-availability"; .properties.highAvailability.mode? == "SameZone"),
               cap("read-replicas"; $id | IN($replicated[]))
-            ]}
+            ],
+            size: size_of({storageGiB: .properties.storage.storageSizeGB?})}
         elif $t == "microsoft.containerservice/managedclusters" then
           [.properties.agentPoolProfiles[]?] as $pools
           | $base + {category: "kubernetes.managed", capabilities: [
               cap("autoscaling"; any($pools[]; .enableAutoScaling == true)),
               cap("zone-high-availability"; any($pools[]; (.availabilityZones // []) | length >= 2)),
               cap("node-high-availability"; ([$pools[].count // 0] | add // 0) >= 2)
-            ]}
+            ],
+            size: size_of({count: ([$pools[].count // 0] | add // 0 | if . >= 1 then . else null end)})}
         elif $t == "microsoft.web/sites" then
           # A function app; a web app or a Logic App is unclassified.
           (.kind // "" | ascii_downcase | split(",")) as $kind
