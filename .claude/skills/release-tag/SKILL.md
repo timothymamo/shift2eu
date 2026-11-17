@@ -103,17 +103,22 @@ moves or deletes a tag.
    have. Never count a missing or empty list as passing.
    Then run the `Protect main` gate check from the repository root: `make gate-check`
    (`dev/protect-main-check.sh`; PRD #161). It reads `Protect main` and `main`'s `.github/CODEOWNERS`
-   and lists each gap: fewer than 1 required approval, `require_code_owner_review`,
-   `dismiss_stale_reviews_on_push` or `require_last_push_approval` not `true`, a bypass actor, or a
-   code owner other than the maintainer. Until milestone 3 of PRD #161 turns it off, the Makefile runs
+   and prints one `ok:` or `gap:` line per check. A gap is `Protect main` not enforced or without a
+   `pull_request` rule, fewer than 1 required approval, `require_code_owner_review`,
+   `dismiss_stale_reviews_on_push` or `require_last_push_approval` not `true`, a bypass actor, a bypass
+   list it could not read, or a CODEOWNERS file without rules, without a `*` rule, with an ownerless rule
+   or with an owner other than the maintainer. Until milestone 3 of PRD #161 turns it off, the Makefile runs
    it with the transition flag (`GATE_TRANSITION=1`, `--transition`), which reports the gaps without
    failing. Act on its exit status:
    - **0**: the gate holds, or the transition flag is on: put every gap line it printed in the report and
      go on;
    - **1**: the gate has gaps and the transition is over: report the gaps and stop the release;
-   - **2**: it could not check (no access, an unexpected answer): report its output and stop.
+   - **2**: it could not check (a `gh api` read failed, not exactly one ruleset named `Protect main`, an
+     unexpected answer): report its stderr and stop.
    A gap saying the bypass list could not be read is not yours to settle: the App's token cannot read it
-   (above). Hand it to the maintainer to check with their own token, and say so in the report.
+   (above). Hand it to the maintainer to check with their own token, and say so in the report. The same
+   holds for `ok: bypass_actors is empty` on the App's token: GitHub may return the list empty to a token
+   that cannot read it, so it is no proof; ask the maintainer to confirm it too.
 3. Find the open release PR:
    `gh pr list --state open --label "autorelease: pending" --json number,title,headRefName,url`.
    There must be exactly one, from the branch `release-please--branches--main--components--shift2eu`

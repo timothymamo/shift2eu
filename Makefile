@@ -39,6 +39,10 @@ VM_ENV ?= CLAUDE_CODE_OAUTH_TOKEN,DEEPSEEK_API_KEY,GITHUB_TOKEN
 # The git identity vm-init gives the VM, so the agents commit as you: the Mac's own by default.
 GIT_USER_NAME  ?= $(shell git config user.name 2>/dev/null)
 GIT_USER_EMAIL ?= $(shell git config user.email 2>/dev/null)
+# The Protect main gate check's transition flag (PRD #161 milestone 2): 1 runs make gate-check with
+# --transition, which reports the gaps without failing a release before the switch-over; 0 fails on any gap.
+# PRD #161 milestone 3 sets it to 0 or removes it (docs/dev-environment.md, The gate check).
+GATE_TRANSITION ?= 1
 # The Claude Code theme vm-init sets in the VM (dark, light, dark-daltonized, light-daltonized, ...).
 CLAUDE_THEME ?= dark
 
@@ -171,6 +175,12 @@ vuln: ## Scan code and dependencies, and the lint tools, for known vulnerabiliti
 check: lint test vuln ## Everything CI gates on; run before every commit
 
 ##@ Workflow
+
+# Reads GitHub through gh, so run it where gh is logged in: from the host clone as the maintainer, to read the
+# rulesets' bypass list, or in the VM, where the agents App's token cannot read it.
+.PHONY: gate-check
+gate-check: ## Check that Protect main and CODEOWNERS on main require the maintainer's approval (GATE_TRANSITION=0 fails on a gap)
+	sh dev/protect-main-check.sh$(if $(filter 1,$(GATE_TRANSITION)), --transition)
 
 .PHONY: worktree
 worktree: ## Create or resume the worktree for a PR: make worktree BRANCH=feat/12-short-name

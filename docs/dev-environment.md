@@ -463,22 +463,26 @@ reviewer (milestone 4) comments and may request changes; its findings are advice
 request is yours to dismiss, and it never approves.
 
 **The gate check**, `make gate-check` (`dev/protect-main-check.sh`), reads `Protect main` and
-`.github/CODEOWNERS` on `main` and prints one line per gap: fewer than 1 required approval, one of the
-three rules above off, a bypass actor, or a code owner other than you. The `release-tag` skill runs it in
-its step 2; you can run it whenever you like. Its exit status:
+`.github/CODEOWNERS` on `main` and prints one `ok:` or `gap:` line per check. A gap is `Protect main` not
+enforced or without a pull request rule, fewer than 1 required approval, one of the three rules above off,
+a bypass actor, a bypass list it could not read, or a CODEOWNERS file on `main` without rules, without a
+`*` rule, with a rule that has no owner, or with an owner other than you. The `release-tag` skill runs it
+in its step 2; you can run it whenever you like. Its exit status:
 
 | Exit | Means |
 |---|---|
 | 0 | The gate holds, or the transition flag is on and it only reported the gaps |
 | 1 | The gate has gaps (transition flag off): the release-tag skill stops the release |
-| 2 | It could not check: no access, or an answer it did not expect |
+| 2 | It could not check, in both modes: a `gh api` read failed (no access), not exactly one ruleset is named `Protect main`, an answer it did not expect, or an unknown argument |
 
 The transition flag, `GATE_TRANSITION`, is `1` by default until milestone 3 of PRD #161 turns it off: the
 check runs with `--transition` and reports the gaps without failing, so releases go on before the switch.
 `make gate-check GATE_TRANSITION=0` checks as it will after milestone 3. GitHub returns a ruleset's
 bypass list only to a token that may change the ruleset (Administration write), which the agents App
-never gets (ADR 0031, d): run in the VM, the check says the bypass list could not be read. That part is
-yours: run the check from the host clone, logged in to `gh` as yourself, as runbook step 5 does.
+never gets (ADR 0031, d): run in the VM, GitHub leaves the list out and the check prints
+`gap: bypass_actors could not be read: ...`, or GitHub returns it empty and the check prints
+`ok: bypass_actors is empty`, which on the App's token proves nothing. That part is yours: run the check
+from the host clone, logged in to `gh` as yourself, as runbook step 5 does.
 
 ### The switch-over runbook
 
