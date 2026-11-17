@@ -338,9 +338,10 @@ func vmWriteScript(t *testing.T) string {
 	text := script.String()
 
 	// What the VM's own script must hold, so a test that reads it out of the file knows it read the whole thing: the
-	// options it sets, the trap it removes a half-written copy with (a quote, so the unquoting above worked) and the
-	// line that says it set the identity.
-	for _, want := range []string{"set -eu", `trap 'rm -f "$gitnew"' EXIT`, "git-identity=set"} {
+	// options it sets, the trap it removes a half-written copy with (a quote, so the unquoting above worked), the
+	// line that says it set the identity and the last line of the script, which sets the end of the text a quoting
+	// change would otherwise truncate without a test noticing (issue #241).
+	for _, want := range []string{"set -eu", `trap 'rm -f "$gitnew"' EXIT`, "git-identity=set", "gh-wrapper=missing"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("the text read out of %s's vm_write assignment holds no %q, so the test is not running the script the VM runs (issue #241):\n%s",
 				agentsMintScript, want, text)
@@ -422,6 +423,118 @@ func botNameRefusedNotice(name string, streams ...string) bool {
 	}
 
 	return false
+}
+
+// lockRemovalNotice returns a line of the mint's output that tells a maintainer how to clear a lock that no git
+// holds: it names ~/.gitconfig.lock and removing or deleting it, or names the case the way out is for, no git
+// running in the VM. The wording is not pinned. A line that merely holds the word lock is no evidence: a test's own
+// temporary directory carries its name, and one of these names ends in LockOn, so the way out has to be said about
+// the lock itself (issue #241).
+func lockRemovalNotice(streams ...string) (string, bool) {
+	for _, stream := range streams {
+		for _, line := range strings.Split(stream, "\n") {
+			lower := strings.ToLower(line)
+
+			namesTheFile := strings.Contains(lower, ".gitconfig")
+			removesIt := strings.Contains(lower, "remove") || strings.Contains(lower, "delete")
+
+			switch {
+			case namesTheFile && removesIt,
+				strings.Contains(lower, "no git is running"),
+				strings.Contains(lower, "no git runs"),
+				strings.Contains(lower, "no git in the vm"):
+				return line, true
+			}
+		}
+	}
+
+	return "", false
+}
+
+// staleGitLockBody is what a git config that was killed before it could remove its lock leaves in
+// ~/.gitconfig.lock: a lock file with no writer behind it (issue #241).
+const staleGitLockBody = "a git config that was killed before it removed its lock\n"
+
+// writeStaleGitLock gives the fake VM user's home a ~/.gitconfig.lock that no writer holds, and returns its path.
+func (f *mintFixture) writeStaleGitLock(t *testing.T) string {
+	t.Helper()
+
+	lock := filepath.Join(f.sb.vmHome, ".gitconfig.lock")
+	writeFileMode(t, lock, []byte(staleGitLockBody), 0o600)
+
+	return lock
+}
+
+// gitConfigBody returns a ~/.gitconfig body holding exactly one user.name and one user.email, and nothing else.
+func gitConfigBody(name, email string) []byte {
+	return []byte("[user]\n\tname = " + name + "\n\temail = " + email + "\n")
+}
+
+// mintWithin runs one mint and fails the test when it is still running after timeout: a mint that took a FIFO for
+// the lock git itself creates would wait for a writer that never comes, and a test must fail on that instead of
+// blocking the package. The whole process group goes on the timeout, because the mint's own children hold the
+// pipes the test reads (issue #241).
+func (f *mintFixture) mintWithin(t *testing.T, timeout time.Duration) (string, string, error) {
+	t.Helper()
+
+	cmd := exec.Command("sh", scriptPath(t, agentsMintScript), "mint")
+	cmd.Env = envList(f.env)
+	cmd.Dir = f.sb.hostHome
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	var stdout, stderr bytes.Buffer
+
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start the mint: %v", err)
+	}
+
+	// The status is read only after done is closed, which orders it after Wait wrote it.
+	var status error
+
+	done := make(chan struct{})
+
+	go func() {
+		status = cmd.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return stdout.String(), stderr.String(), status
+	case <-time.After(timeout):
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+
+		t.Fatalf("the mint was still running after %s with a ~/.gitconfig.lock that is not a regular file: it must refuse such a lock, never follow it or wait on it, because nothing ever writes to it (issue #241)\nstdout:\n%s\nstderr:\n%s",
+			timeout, stdout.String(), stderr.String())
+
+		return "", "", nil
+	}
+}
+
+// mintWithUmask runs one mint from a shell whose umask is umask, so the modes the VM user's tools create are the
+// ones that user's umask gives them: a VM user with 0002 leaves the group and other bits on a file unless the
+// script creates it 0600 itself (issue #241).
+func (f *mintFixture) mintWithUmask(t *testing.T, umask string) (string, string, error) {
+	t.Helper()
+
+	// exec sh "$@": a shell that sets the umask and then becomes the mint, so only this run sees it.
+	cmd := exec.Command("sh", "-c", "umask "+umask+"\nexec sh \"$@\"", "mint-under-umask",
+		scriptPath(t, agentsMintScript), "mint")
+	cmd.Env = envList(f.env)
+	cmd.Dir = f.sb.hostHome
+
+	var stdout, stderr bytes.Buffer
+
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	return stdout.String(), stderr.String(), err
 }
 
 // readTwoLines reads a file the script wrote into the VM and checks its mode: exactly two lines.
@@ -1033,12 +1146,9 @@ func TestAgentsAppTokenMintLeavesAGitConfigThatIsAlreadyTheBotsAlone(t *testing.
 	name := f.api.slug + "[bot]"
 	email := fmt.Sprintf("%d+%s[bot]@users.noreply.github.com", f.api.botUserID, f.api.slug)
 
-	// A mode the mint's own copy does not have (mktemp makes it 0600), so a rewrite that replaces the file shows up
-	// in the mode as well as in the inode.
-	const mode = 0o640
-
-	gitconfig := filepath.Join(f.sb.vmHome, ".gitconfig")
-	writeFileMode(t, gitconfig, []byte("[user]\n\tname = "+name+"\n\temail = "+email+"\n"), mode)
+	// The helper writes the file mode 0640, a mode the mint's own copy does not have (it creates the lock 0600), so
+	// a rewrite that replaces the file shows up in the mode as well as in the inode.
+	gitconfig := f.configTheBotIdentity(t, name, email)
 
 	before, err := os.Stat(gitconfig)
 	if err != nil {
@@ -1081,6 +1191,108 @@ func TestAgentsAppTokenMintLeavesAGitConfigThatIsAlreadyTheBotsAlone(t *testing.
 	f.assertNoLeaks(t, stdout, stderr)
 }
 
+// TestAgentsAppTokenMintIgnoresAStaleGitLockWhenTheIdentityIsAlreadyTheBots pins the third review's finding that
+// the mint took ~/.gitconfig.lock before it looked at ~/.gitconfig: a git that was killed leaves its lock behind,
+// and while it sits there every mint of a VM that already commits as the bot refused - although nothing needed
+// writing. The check for "already the bot's" runs read-only on ~/.gitconfig first, so the mint succeeds, writes its
+// token and its identity file, and leaves the lock alone (issue #241).
+func TestAgentsAppTokenMintIgnoresAStaleGitLockWhenTheIdentityIsAlreadyTheBots(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+
+	name := f.api.slug + "[bot]"
+	email := fmt.Sprintf("%d+%s[bot]@users.noreply.github.com", f.api.botUserID, f.api.slug)
+
+	gitconfig := f.configTheBotIdentity(t, name, email)
+
+	before, err := os.Stat(gitconfig)
+	if err != nil {
+		t.Fatalf("stat the fake VM's .gitconfig before the mint: %v", err)
+	}
+
+	lock := f.writeStaleGitLock(t)
+
+	lockBefore, err := os.Stat(lock)
+	if err != nil {
+		t.Fatalf("stat the fake VM's %s before the mint: %v", lock, err)
+	}
+
+	stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+	if err != nil {
+		t.Fatalf("mint exited non-zero although the fake VM's ~/.gitconfig already held exactly the bot's identity %s <%s>, so nothing needed writing, and the stale %s beside it belongs to no writer: %v\nstdout: %s\nstderr: %s",
+			name, email, lock, err, stdout, stderr)
+	}
+
+	// The token and the identity file are written whether ~/.gitconfig needed a write or not.
+	readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
+
+	identity := readTwoLines(t, f.sb.vmPath(agentsIdentityFile), 0o600)
+	if identity[0] != name || identity[1] != email {
+		t.Errorf("%s holds %q <%q>, want the bot %q <%q>: a mint that writes no git configuration still writes the identity file (issue #241)",
+			agentsIdentityFile, identity[0], identity[1], name, email)
+	}
+
+	after, err := os.Stat(gitconfig)
+	if err != nil {
+		t.Fatalf("stat the fake VM's .gitconfig after the mint: %v", err)
+	}
+
+	if !os.SameFile(before, after) {
+		t.Errorf("the mint replaced the fake VM's ~/.gitconfig although it already held exactly the bot's identity %s <%s>: a file whose content needs no change must not be rewritten, so it keeps its inode (issue #241)",
+			name, email)
+	}
+
+	body, err := os.ReadFile(gitconfig)
+	if err != nil {
+		t.Fatalf("read the fake VM's .gitconfig after the mint: %v", err)
+	}
+
+	if want := gitConfigBody(name, email); !bytes.Equal(body, want) {
+		t.Errorf("the fake VM's ~/.gitconfig holds\n%s\nafter the mint, want\n%s\nalthough it already held the bot's identity (issue #241)",
+			body, want)
+	}
+
+	// The lock is nobody's: the mint never took it, so it neither removes it nor waits on it.
+	lockAfter, err := os.Stat(lock)
+	if err != nil {
+		t.Errorf("the mint removed %s although the fake VM's ~/.gitconfig already held the bot's identity and the mint took no lock: a stale lock belongs to no writer, and removing one the mint did not create is not its to do (issue #241): %v",
+			lock, err)
+	} else if !os.SameFile(lockBefore, lockAfter) {
+		t.Errorf("the mint replaced the stale %s although it had no reason to touch it: the identity needed no write, so no lock is taken (issue #241)", lock)
+	}
+
+	held, err := os.ReadFile(lock)
+	if err != nil {
+		t.Fatalf("read the fake VM's %s after the mint: %v", lock, err)
+	}
+
+	if string(held) != staleGitLockBody {
+		t.Errorf("the fake VM's %s holds %q after the mint, want %q: the mint leaves a lock it never took exactly as it found it (issue #241)",
+			lock, held, staleGitLockBody)
+	}
+
+	if _, ok := identityNotice(email, stdout, stderr); !ok {
+		t.Errorf("the mint's output says nothing about setting the VM's git identity although it already was the bot's: no line holds %q together with the words git and identity (issue #241)\nstdout:\n%s\nstderr:\n%s",
+			email, stdout, stderr)
+	}
+
+	f.assertNoLeaks(t, stdout, stderr)
+}
+
+// configTheBotIdentity gives the fake VM's ~/.gitconfig exactly the bot's identity, mode 0640, and returns its path:
+// the state every mint after the first leaves a VM in, and the one a stale lock must not block. The mode is one the
+// mint's own copy does not have, so a rewrite that replaces the file shows up in the mode as well as in the inode
+// (issue #241).
+func (f *mintFixture) configTheBotIdentity(t *testing.T, name, email string) string {
+	t.Helper()
+
+	gitconfig := filepath.Join(f.sb.vmHome, ".gitconfig")
+	writeFileMode(t, gitconfig, gitConfigBody(name, email), 0o640)
+
+	return gitconfig
+}
+
 // TestAgentsAppTokenMintRefusesAGitConfigAnotherWriterHoldsALockOn pins the second review's finding that the mint
 // moves its copy over ~/.gitconfig without honouring git's own lock: a `git config` another writer runs in the VM
 // holds ~/.gitconfig.lock and renames its own copy over the file when it is done, so a mint that writes meanwhile
@@ -1116,6 +1328,13 @@ func TestAgentsAppTokenMintRefusesAGitConfigAnotherWriterHoldsALockOn(t *testing
 			lock, stdout, stderr)
 	}
 
+	// A lock no git holds is stale - a git that was killed leaves one behind - and it blocks every later mint for
+	// good unless a maintainer removes it: the refusal must name that way out (issue #241).
+	if _, ok := lockRemovalNotice(stdout, stderr); !ok {
+		t.Errorf("the mint refuses because %s is held, but no line says to remove it when no git runs in the VM: a git that was killed leaves its lock behind, and without that way out every later mint refuses for good (issue #241)\nstdout:\n%s\nstderr:\n%s",
+			lock, stdout, stderr)
+	}
+
 	after, err := os.ReadFile(gitconfig)
 	if err != nil {
 		t.Fatalf("read the fake VM's .gitconfig after the refused mint: %v", err)
@@ -1144,6 +1363,205 @@ func TestAgentsAppTokenMintRefusesAGitConfigAnotherWriterHoldsALockOn(t *testing
 	}
 
 	f.assertNoLeaks(t, stdout, stderr)
+}
+
+// TestAgentsAppTokenMintWritesAGitConfigOnlyItsOwnerCanRead pins that a ~/.gitconfig the mint rewrites ends mode
+// 0600 whatever the VM user's umask is: the copy the mint writes the identity into is the lock it created, and a
+// file created under a umask of 0002 keeps its group and other bits unless the script takes them off (issue #241).
+func TestAgentsAppTokenMintWritesAGitConfigOnlyItsOwnerCanRead(t *testing.T) {
+	t.Parallel()
+
+	const (
+		maintainerName  = "Example Maintainer"
+		maintainerEmail = "maintainer@example.com"
+	)
+
+	f := newMintFixture(t)
+
+	gitconfig := filepath.Join(f.sb.vmHome, ".gitconfig")
+	writeFileMode(t, gitconfig, gitConfigBody(maintainerName, maintainerEmail), 0o644)
+
+	stdout, stderr, err := f.mintWithUmask(t, "0002")
+	if err != nil {
+		t.Fatalf("mint exited non-zero under the fake VM user's umask 0002: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	wantName := f.api.slug + "[bot]"
+	wantEmail := fmt.Sprintf("%d+%s[bot]@users.noreply.github.com", f.api.botUserID, f.api.slug)
+
+	if got := f.vmGitValues(t, "user.name"); !slices.Equal(got, []string{wantName}) {
+		t.Errorf("the fake VM's global user.name is %v under umask 0002, want exactly [%q]: the mint rewrites the maintainer's identity (issue #241)",
+			got, wantName)
+	}
+
+	if got := f.vmGitValues(t, "user.email"); !slices.Equal(got, []string{wantEmail}) {
+		t.Errorf("the fake VM's global user.email is %v under umask 0002, want exactly [%q]: the mint rewrites the maintainer's identity (issue #241)",
+			got, wantEmail)
+	}
+
+	info, err := os.Stat(gitconfig)
+	if err != nil {
+		t.Fatalf("stat the fake VM's .gitconfig after the mint: %v", err)
+	}
+
+	// The identity is no secret, but a file the mint writes is the owner's: a umask of 0002 must not leave the
+	// group and other bits on it, because a later mint writes the same file again.
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Errorf("the fake VM's ~/.gitconfig is mode %04o after the mint, want 0600: the mint rewrites the file under whatever umask the VM user has, 0002 here, so it must set the mode itself (issue #241)",
+			got)
+	}
+
+	f.assertNoLeaks(t, stdout, stderr)
+}
+
+// TestAgentsAppTokenMintRefusesALockThatIsNotARegularFile pins that a ~/.gitconfig.lock that is not the regular file
+// git itself creates is refused, never followed, never removed and never waited on: whatever sits behind the entry
+// is a file the mint must not write the identity through, and an entry it cannot tell from another writer's lock is
+// no lock it may take over (issue #241).
+func TestAgentsAppTokenMintRefusesALockThatIsNotARegularFile(t *testing.T) {
+	t.Parallel()
+
+	const (
+		maintainerName  = "Example Maintainer"
+		maintainerEmail = "maintainer@example.com"
+
+		// The mint reads the lock's entry, and a mint that opened a FIFO for writing would wait for a writer that
+		// never comes: the timeout turns that hang into a failed test instead of a blocked package (issue #241).
+		mintTimeout = 20 * time.Second
+	)
+
+	cases := []struct {
+		name string
+		// makeLock plants the ~/.gitconfig.lock entry and returns the check that it is still exactly what it was.
+		makeLock func(t *testing.T, f *mintFixture) func(t *testing.T, f *mintFixture)
+	}{
+		{
+			name: "a symlink to a file in the VM home",
+			makeLock: func(t *testing.T, f *mintFixture) func(t *testing.T, f *mintFixture) {
+				t.Helper()
+
+				target := filepath.Join(f.sb.vmHome, "stale-lock-target")
+				writeFileMode(t, target, []byte(staleGitLockBody), 0o600)
+
+				lock := filepath.Join(f.sb.vmHome, ".gitconfig.lock")
+				if err := os.Symlink(target, lock); err != nil {
+					t.Fatalf("symlink %s to %s: %v", lock, target, err)
+				}
+
+				return func(t *testing.T, _ *mintFixture) {
+					t.Helper()
+
+					info, err := os.Lstat(lock)
+					if err != nil || info.Mode()&os.ModeSymlink == 0 {
+						t.Errorf("the refused mint removed or replaced %s, which is a symlink to a file it may neither follow nor remove; git's lock is a regular file, and an entry that is not one is no lock the mint may take over (%v)",
+							lock, err)
+					}
+
+					body, err := os.ReadFile(target)
+					if err != nil {
+						t.Fatalf("read %s: %v", target, err)
+					}
+
+					if string(body) != staleGitLockBody {
+						t.Errorf("%s holds %q after the refused mint, want %q: the mint wrote the identity through the lock's symlink, into a file that is no lock of git's (issue #241)",
+							target, body, staleGitLockBody)
+					}
+				}
+			},
+		},
+		{
+			// A symlink to /dev/null is the entry a mint could take for a lock it created and then move over
+			// ~/.gitconfig, which would turn the VM's git configuration into a link to nowhere (issue #241).
+			name: "a symlink to /dev/null",
+			makeLock: func(t *testing.T, f *mintFixture) func(t *testing.T, f *mintFixture) {
+				t.Helper()
+
+				lock := filepath.Join(f.sb.vmHome, ".gitconfig.lock")
+				if err := os.Symlink(os.DevNull, lock); err != nil {
+					t.Fatalf("symlink %s to %s: %v", lock, os.DevNull, err)
+				}
+
+				return func(t *testing.T, _ *mintFixture) {
+					t.Helper()
+
+					info, err := os.Lstat(lock)
+					if err != nil || info.Mode()&os.ModeSymlink == 0 {
+						t.Errorf("the refused mint removed or replaced %s, a symlink to %s: an entry that is no regular file is no lock git wrote, so the mint follows it nowhere and removes it never (%v)",
+							lock, os.DevNull, err)
+
+						return
+					}
+
+					if target, err := os.Readlink(lock); err != nil || target != os.DevNull {
+						t.Errorf("%s points at %q after the refused mint, want %q: the mint leaves the entry it found exactly as it found it (issue #241)",
+							lock, target, os.DevNull)
+					}
+				}
+			},
+		},
+		{
+			name: "a FIFO",
+			makeLock: func(t *testing.T, f *mintFixture) func(t *testing.T, f *mintFixture) {
+				t.Helper()
+
+				lock := filepath.Join(f.sb.vmHome, ".gitconfig.lock")
+				if err := syscall.Mkfifo(lock, 0o600); err != nil {
+					t.Fatalf("make %s a FIFO: %v", lock, err)
+				}
+
+				return func(t *testing.T, _ *mintFixture) {
+					t.Helper()
+
+					info, err := os.Lstat(lock)
+					if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+						t.Errorf("the refused mint removed or replaced %s, a FIFO nothing writes to: opening it for writing waits for a writer that never comes, so the mint must not open it at all (%v)",
+							lock, err)
+					}
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			f.setVMGitIdentity(t, maintainerName, maintainerEmail)
+
+			gitconfig := filepath.Join(f.sb.vmHome, ".gitconfig")
+			before, err := os.ReadFile(gitconfig)
+			if err != nil {
+				t.Fatalf("read the fake VM's .gitconfig before the mint: %v", err)
+			}
+
+			checkLock := tc.makeLock(t, f)
+
+			stdout, stderr, err := f.mintWithin(t, mintTimeout)
+			if err == nil {
+				t.Fatalf("mint exited 0 although the fake VM's ~/.gitconfig.lock is %s, not the regular file git itself creates: the mint took an entry it cannot tell from a lock, and its write landed in whatever is behind it (issue #241)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+
+			if text := strings.ToLower(stdout + stderr); !strings.Contains(text, "lock") {
+				t.Errorf("the mint refuses a ~/.gitconfig.lock that is %s, but no line mentions a lock, so a maintainer cannot tell what to look at (issue #241)\nstdout:\n%s\nstderr:\n%s",
+					tc.name, stdout, stderr)
+			}
+
+			after, err := os.ReadFile(gitconfig)
+			if err != nil {
+				t.Fatalf("read the fake VM's .gitconfig after the refused mint: %v", err)
+			}
+
+			if !bytes.Equal(after, before) {
+				t.Errorf("the refused mint changed the fake VM's .gitconfig although ~/.gitconfig.lock is %s:\nbefore:\n%s\nafter:\n%s",
+					tc.name, before, after)
+			}
+
+			checkLock(t, f)
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
 }
 
 // TestAgentsAppTokenMintWritesTheTokensGitHubAnswersWithUnchanged pins issue #232: GitHub's installation tokens

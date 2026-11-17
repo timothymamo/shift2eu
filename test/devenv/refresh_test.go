@@ -5,6 +5,7 @@
 package devenv_test
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"os"
@@ -271,6 +272,111 @@ func TestAgentsAppTokenRefreshSurvivesAGitConfigLockAnotherWriterHolds(t *testin
 
 	if !refresh.waitExit(30 * time.Second) {
 		t.Fatalf("the refresh did not stop on SIGTERM while another writer held the VM's %s; stderr:\n%s", lock, refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshIgnoresAStaleGitLockWhenTheIdentityIsAlreadyTheBots pins the third review's finding as
+// the refresh sees it: once the VM's ~/.gitconfig holds exactly the bot's identity, a lock a killed git left behind
+// is no obstacle to any later mint, so the loop keeps the VM's token fresh across mints with the stale lock in
+// place, and leaves both the file and the lock exactly as it found them (issue #241).
+func TestAgentsAppTokenRefreshIgnoresAStaleGitLockWhenTheIdentityIsAlreadyTheBots(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+
+	name := f.api.slug + "[bot]"
+	email := fmt.Sprintf("%d+%s[bot]@users.noreply.github.com", f.api.botUserID, f.api.slug)
+
+	gitconfig := filepath.Join(f.sb.vmHome, ".gitconfig")
+	writeFileMode(t, gitconfig, gitConfigBody(name, email), 0o600)
+
+	before, err := os.Stat(gitconfig)
+	if err != nil {
+		t.Fatalf("stat the fake VM's .gitconfig before the refresh: %v", err)
+	}
+
+	lock := f.writeStaleGitLock(t)
+	env := f.refreshEagerEnv()
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	// A second token in the file proves a mint that ran while the stale lock was there both minted and wrote: the
+	// loop mints at every check (refreshEagerEnv), so a token file that still held the first token is the refusal.
+	// The loop polls here rather than through waitFor, because the failure has to say what the VM's file still holds
+	// and why the loop refused, not only that a condition did not come true.
+	replaced := false
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && !replaced {
+		tokens := f.api.minted()
+		if len(tokens) >= 2 {
+			if line, ok := tokenLine(f.sb.vmPath(agentsTokenFile)); ok && line != tokens[0] {
+				replaced = true
+			}
+		}
+
+		if !replaced {
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+
+	if !replaced {
+		line, _ := tokenLine(f.sb.vmPath(agentsTokenFile))
+
+		t.Fatalf("the refresh minted %d tokens in 30s but the fake VM's %s still holds %q: the stale %s beside a ~/.gitconfig that already holds the bot's identity refused every write, so the VM's gh keeps a token the loop cannot replace although nothing needed writing (issue #241)\nstderr:\n%s",
+			len(f.api.minted()), agentsTokenFile, line, lock, refresh.errOut())
+	}
+
+	if !refresh.running() {
+		t.Fatalf("the refresh exited although the fake VM's ~/.gitconfig already held the bot's identity and the stale %s belongs to no writer; stderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	if strings.Contains(refresh.errOut(), "agents App token refresh stopped") {
+		t.Errorf("the refresh stopped with a stale %s beside a ~/.gitconfig that already holds the bot's identity: a lock nobody holds is no reason to stop the loop (issue #241)\nstderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh did not stop on SIGTERM; stderr:\n%s", refresh.errOut())
+	}
+
+	after, err := os.Stat(gitconfig)
+	if err != nil {
+		t.Fatalf("stat the fake VM's .gitconfig after the refresh: %v", err)
+	}
+
+	if !os.SameFile(before, after) {
+		t.Errorf("the refresh replaced the fake VM's ~/.gitconfig although it already held exactly the bot's identity %s <%s>: every mint of the loop would otherwise rewrite a file nothing changed (issue #241)",
+			name, email)
+	}
+
+	body, err := os.ReadFile(gitconfig)
+	if err != nil {
+		t.Fatalf("read the fake VM's .gitconfig after the refresh: %v", err)
+	}
+
+	if want := gitConfigBody(name, email); !bytes.Equal(body, want) {
+		t.Errorf("the fake VM's ~/.gitconfig holds\n%s\nafter the refresh, want\n%s\n(issue #241)", body, want)
+	}
+
+	held, err := os.ReadFile(lock)
+	if err != nil {
+		t.Errorf("the refresh removed %s, a lock it never took: a stale lock belongs to no writer, and the mint that took none leaves it alone (%v)",
+			lock, err)
+	} else if string(held) != staleGitLockBody {
+		t.Errorf("the fake VM's %s holds %q after the refresh, want %q: the mint that needed no write touched no lock (issue #241)",
+			lock, held, staleGitLockBody)
+	}
+
+	identity := readTwoLines(t, f.sb.vmPath(agentsIdentityFile), 0o600)
+	if identity[0] != name || identity[1] != email {
+		t.Errorf("%s holds %q <%q> after the refresh, want the bot %q <%q>: the identity file is written by every mint that knows the bot (issue #241)",
+			agentsIdentityFile, identity[0], identity[1], name, email)
 	}
 
 	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
