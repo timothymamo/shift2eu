@@ -443,11 +443,17 @@ the JWT or the key, and nothing writes them to a log or the workspace.
 or a `~/.gitconfig` that is a symlink or not a regular file (a guard against a symlink left by mistake, not
 against the VM user). Whenever it writes the identity file it also sets the VM user's git identity to it
 (`user.name` and `user.email` in `~/.gitconfig`, replacing every value there), and says so ("set the VM
-shift2eu's git identity ..."). That write is atomic: a copy of `~/.gitconfig` gets the bot's identity,
-and replaces the file only when git, following the copy's `[include]` files, reads the bot's identity back;
-otherwise `~/.gitconfig` stays as it was. It refuses a name or address that is not a bot's (a slug begins
-with a letter or digit), a VM without git, and an `[include]` that would override the bot's name or
-address. Once the bot identity is known, every mint writes it, so a running refresh applies it again at
+shift2eu's git identity ..."). That write is atomic and takes git's own lock: a copy of `~/.gitconfig` in
+`~/.gitconfig.lock` gets the bot's identity, and replaces the file only when git, following the copy's
+`[include]` files, reads the bot's identity back; otherwise `~/.gitconfig` stays as it was. A rewritten
+`~/.gitconfig` is mode 0600; one that already holds exactly the bot's identity is not rewritten at all. A
+`~/.gitconfig.lock` another git writer holds is left alone: that mint writes nothing and the next one tries
+again. It refuses a name or address that is not a bot's (a slug begins with a letter or digit), a VM
+without git, an `[include]` that would override the bot's name or address, and any `[includeIf]` (the
+check cannot evaluate a conditional include, which applies only inside the workspace's repositories). Such
+an `[include]` or any `[includeIf]` added to `~/.gitconfig` while a refresh runs makes the next mint refuse and
+the refresh stop: remove it in the VM and start the refresh again (`make agents-token-refresh-start`).
+Once the bot identity is known, every mint writes it, so a running refresh applies it again at
 each mint; only a mint before the bot user's lookup has worked writes the token alone, and that write
 never touches the git configuration.
 
