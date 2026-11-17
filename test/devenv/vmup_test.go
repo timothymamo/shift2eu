@@ -8,6 +8,7 @@ package devenv_test
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -48,13 +49,45 @@ exit 0
 // vmUpGitShim is the git make's recipes run in the vm-up tests: it answers git config core.hooksPath, the write
 // make vm-up's git-hooks prerequisite makes into the checkout's .git/config, without touching a file, and hands
 // every other call to the real git. That config is shared by every worktree, so tests that run make in parallel
-// would each wait on the other's lock, and no test writes into the repository it runs from.
+// would each wait on the other's lock, and no test writes into the repository it runs from. The real git's path
+// is shQuote's single-quoted word, never a Go-quoted string: sh expands a $(...) or a backtick in a
+// double-quoted path (issue #228 review, item D).
 const vmUpGitShim = `#!/bin/sh
 for a in "$@"; do
   if [ "$a" = core.hooksPath ]; then exit 0; fi
 done
 exec %s "$@"
 `
+
+// vmUpRealGit stands in for the real git the vm-up git shim hands its other calls to: it prints the arguments
+// it got, so a test can tell whether the shim ran it and what it passed on.
+const vmUpRealGit = `#!/bin/sh
+printf 'real-git'
+for a in "$@"; do printf ' %s' "$a"; done
+printf '\n'
+`
+
+// writeGitShim writes the git shim into dir, handing every call but git config core.hooksPath to realGit, and
+// returns the shim's path.
+func writeGitShim(t *testing.T, dir, realGit string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, "git")
+
+	//nolint:gosec // the git shim is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(vmUpGitShim, shQuote(realGit))), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	return path
+}
+
+// shQuote quotes s as one sh word: single quotes, with every ' inside s closed, backslash-escaped and reopened,
+// and the whole wrapped in them. sh expands nothing inside it, so a path that carries a $, a backtick or a
+// backslash reaches the command as it is.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
 
 // vmUpFixture is one environment for a run of make vm-up or make vm-create: a sandbox whose limactl records its
 // argv, and a workspace of the sandbox's own, which holds only the repository's name, so vm-up's check for
@@ -81,12 +114,7 @@ func newVMUpFixture(t *testing.T, instanceExists bool) *vmUpFixture {
 		t.Fatalf("write %s: %v", fake, err)
 	}
 
-	git := filepath.Join(sb.binDir, "git")
-
-	//nolint:gosec // the git shim is a script the tests run, so it must be executable
-	if err := os.WriteFile(git, []byte(fmt.Sprintf(vmUpGitShim, strconv.Quote(realTool(t, "git")))), 0o700); err != nil {
-		t.Fatalf("write %s: %v", git, err)
-	}
+	writeGitShim(t, sb.binDir, realTool(t, "git"))
 
 	workspace := filepath.Join(sb.root, "workspace")
 	repoRoot := filepath.Join(workspace, "shift2eu")
@@ -258,6 +286,13 @@ func TestMakeVMUpPassesTheVMResourcesToLimactlStart(t *testing.T) {
 			vars: []string{"VM_CPUS=1", "VM_DISK=1GiB"},
 			want: []string{"--cpus=1", "--disk=1"},
 		},
+		{
+			// The longest values vm-up accepts (issue #228 review, item B): the cap on the digits refuses
+			// anything longer, and nothing shorter.
+			name: "the longest CPU count and sizes it accepts",
+			vars: []string{"VM_CPUS=999", "VM_MEMORY=99999GiB", "VM_DISK=99999GiB"},
+			want: []string{"--cpus=999", "--memory=99999", "--disk=99999"},
+		},
 		// The variables are read from the environment too, the way a shell exports them before make runs,
 		// so a maintainer can set them in a profile or with direnv rather than on the command line.
 		{
@@ -322,6 +357,7 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 		variable string
 		value    string // {marker} is replaced with the fixture's marker path
 		env      bool   // the variable is set in the environment rather than on the make command line
+		target   string // the make target, vm-up when empty
 	}{
 		// VM_CPUS is a CPU count: a positive whole number.
 		{name: "VM_CPUS 0", variable: vmCPUsVar, value: "0"},
@@ -334,6 +370,21 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 		{name: "VM_CPUS a number with a single quote", variable: vmCPUsVar, value: "4'"},
 		{name: "VM_CPUS a quoted command", variable: vmCPUsVar, value: "4'; touch {marker}; echo '"},
 		{name: "VM_CPUS a quoted command in the environment", variable: vmCPUsVar, value: "4'; touch {marker}; echo '", env: true},
+		// make's own syntax is not shell syntax: the Makefile reads each variable raw ($(value ...)), so a
+		// $(shell ...) in a value stays text - on the command line, in the environment, and on the way
+		// through make vm-create (issue #228 review, item A).
+		{name: "VM_CPUS make's shell function on the command line", variable: vmCPUsVar, value: "$(shell touch {marker})"},
+		{name: "VM_CPUS make's shell function in the environment", variable: vmCPUsVar, value: "$(shell touch {marker})", env: true},
+		{name: "VM_CPUS make's shell function through make vm-create", variable: vmCPUsVar, value: "$(shell touch {marker})", target: "vm-create"},
+		{name: "VM_MEMORY make's shell function on the command line", variable: vmMemoryVar, value: "$(shell touch {marker})GiB"},
+		// A number longer than the flag it feeds is refused before limactl, which would otherwise reject it or
+		// wrap it: CPUs are at most three digits, a GiB size at most five (issue #228 review, item B).
+		{name: "VM_CPUS 20 digits", variable: vmCPUsVar, value: "99999999999999999999"},
+		{name: "VM_CPUS 4 digits", variable: vmCPUsVar, value: "1000"},
+		{name: "VM_MEMORY 11 digits", variable: vmMemoryVar, value: "99999999999GiB"},
+		{name: "VM_MEMORY 6 digits", variable: vmMemoryVar, value: "100000GiB"},
+		{name: "VM_DISK 11 digits", variable: vmDiskVar, value: "99999999999GiB"},
+		{name: "VM_DISK 6 digits", variable: vmDiskVar, value: "100000GiB"},
 		// VM_MEMORY and VM_DISK are a size in GiB: a positive whole number and the GiB suffix.
 		{name: "VM_MEMORY without its unit", variable: vmMemoryVar, value: "8"},
 		{name: "VM_MEMORY in GB", variable: vmMemoryVar, value: "8GB"},
@@ -364,36 +415,199 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 			t.Parallel()
 
 			f := newVMUpFixture(t, false)
+			target := tc.target
+			if target == "" {
+				target = "vm-up"
+			}
+
 			value := strings.ReplaceAll(tc.value, "{marker}", f.marker)
 			setting := tc.variable + "=" + strconv.Quote(value) + " on the command line"
-			args := []string{"vm-up", tc.variable + "=" + value}
+			args := []string{target, tc.variable + "=" + value}
 
 			if tc.env {
 				setting = tc.variable + "=" + strconv.Quote(value) + " in the environment"
-				args = []string{"vm-up"}
+				args = []string{target}
 				f.env[tc.variable] = value
 			}
 
 			stdout, stderr, err := f.run(t, args...)
 			if err == nil {
-				t.Fatalf("make vm-up %s exited 0: vm-up must refuse a value that is not a CPU count, a whole GiB size or a port in 1024-65535, so limactl never sees it (issue #228)\nstdout: %s\nstderr: %s", setting, stdout, stderr)
+				t.Fatalf("make %s %s exited 0: vm-up must refuse a value that is not a CPU count, a whole GiB size or a port in 1024-65535, so limactl never sees it (issue #228)\nstdout: %s\nstderr: %s", target, setting, stdout, stderr)
 			}
 
 			if calls := invocations(f.sb.argvLogText(t), "limactl"); len(calls) != 0 {
-				t.Errorf("make vm-up %s called limactl before it refused the value: validation must come first, so no value can reach limactl or a shell (issue #228):%s",
-					setting, describeCalls(calls))
+				t.Errorf("make %s %s called limactl before it refused the value: validation must come first, so no value can reach limactl or a shell (issue #228):%s",
+					target, setting, describeCalls(calls))
 			}
 
 			if _, err := os.Stat(f.marker); err == nil {
-				t.Errorf("make vm-up %s created %s: a value the Makefile refuses must never be run by a shell (issue #228)", setting, f.marker)
+				t.Errorf("make %s %s created %s: a value the Makefile refuses must never be run by a shell (issue #228)", target, setting, f.marker)
 			}
 
 			if combined := stdout + stderr; !strings.Contains(combined, tc.variable) {
-				t.Errorf("the refusal of %s does not name %s, so a maintainer cannot tell which variable to fix (issue #228):\nstdout: %s\nstderr: %s",
-					setting, tc.variable, stdout, stderr)
+				t.Errorf("the refusal of %s by make %s does not name %s, so a maintainer cannot tell which variable to fix (issue #228):\nstdout: %s\nstderr: %s",
+					setting, target, tc.variable, stdout, stderr)
 			}
 		})
 	}
+}
+
+// TestMakeNeverExpandsMakeSyntaxInAVMResource pins the override block at the top of the Makefile (issue #228
+// review, item A). make exports the four variables to the shell of every recipe, expanding them on the way, so
+// a $(shell ...) in one of them would run in any target when the Makefile read it late: each is read raw
+// ($(value ...)) before anything else, so no target - not even one that has nothing to do with the VM - runs
+// it.
+func TestMakeNeverExpandsMakeSyntaxInAVMResource(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		args []string // the make arguments, without the value, which the test adds
+		env  bool     // the value is set in the environment rather than on the make command line
+	}{
+		{name: "make help", args: []string{"help"}},
+		{name: "make -n build", args: []string{"-n", "build"}},
+		{name: "make help with the value in the environment", args: []string{"help"}, env: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMUpFixture(t, false)
+			value := "$(shell touch " + f.marker + ")"
+			args := slices.Clone(tc.args)
+			setting := vmCPUsVar + "=" + strconv.Quote(value) + " on the command line"
+
+			if tc.env {
+				setting = vmCPUsVar + "=" + strconv.Quote(value) + " in the environment"
+				f.env[vmCPUsVar] = value
+			} else {
+				args = append(args, vmCPUsVar+"="+value)
+			}
+
+			stdout, stderr, err := f.run(t, args...)
+			if err != nil {
+				t.Fatalf("make %s with %s: %v\nstdout: %s\nstderr: %s", strings.Join(args, " "), setting, err, stdout, stderr)
+			}
+
+			if _, err := os.Stat(f.marker); err == nil {
+				t.Errorf("make %s with %s created %s: the Makefile reads each VM variable raw, so make never expands the syntax in one, whatever the target (issue #228 review, item A)",
+					strings.Join(args, " "), setting, f.marker)
+			}
+		})
+	}
+}
+
+// TestMakeVMUpRefusesAnInvalidValueWhateverMakeIsTold pins the auditor's L1 finding (issue #228 review, item
+// C): make -i ignores a recipe line that failed and make -k carries on past it, so vm-up's validation and the
+// limactl call it guards have to share one shell. However make is told to treat an error, limactl never gets a
+// value vm-up has not validated.
+func TestMakeVMUpRefusesAnInvalidValueWhateverMakeIsTold(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		flags []string
+	}{
+		{name: "make -i", flags: []string{"-i"}},
+		{name: "make -k", flags: []string{"-k"}},
+		{name: "make -i -k", flags: []string{"-i", "-k"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMUpFixture(t, false)
+
+			stdout, stderr, _ := f.run(t, append(slices.Clone(tc.flags), "vm-up", "VM_CPUS=abc")...)
+
+			if starts := f.starts(t); len(starts) != 0 {
+				t.Errorf("%s vm-up VM_CPUS=abc called limactl start although the value is not a CPU count: make -i ignores a failed recipe line and make -k carries on past it, so validation and the start call must be one shell that stops on the first failure (issue #228 review, item C):%s\nstdout: %s\nstderr: %s",
+					strings.Join(tc.flags, " "), describeCalls(starts), stdout, stderr)
+			}
+
+			if combined := stdout + stderr; !strings.Contains(combined, vmCPUsVar) {
+				t.Errorf("%s vm-up VM_CPUS=abc says nothing about %s: the value is refused, not silently dropped (issue #228 review, item C):\nstdout: %s\nstderr: %s",
+					strings.Join(tc.flags, " "), vmCPUsVar, stdout, stderr)
+			}
+		})
+	}
+}
+
+// TestVMUpGitShimRunsTheRealGitAtAnyPath pins the shim's quoting (issue #228 review, item D): the path of the
+// real git is one single-quoted sh word, so a path that carries a $, a backtick, a space or a single quote
+// reaches sh as it is. Quoted for Go instead, sh would expand part of the path, split it, or run a command in
+// it, and every make vm-up would hand its git calls to something else than git.
+func TestVMUpGitShimRunsTheRealGitAtAnyPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		dir  string // the directory the real git sits in, under the test's temporary directory
+	}{
+		{name: "a plain path", dir: "plain"},
+		{name: "a path with a space", dir: "with space"},
+		{name: "a path with a dollar", dir: "with $HOME"},
+		{name: "a path with a command substitution", dir: "with $(id)"},
+		{name: "a path with a backtick", dir: "with `id`"},
+		{name: "a path with a single quote", dir: "with 'quotes'"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := filepath.Join(t.TempDir(), tc.dir)
+			if err := os.MkdirAll(dir, 0o750); err != nil {
+				t.Fatalf("create %s: %v", dir, err)
+			}
+
+			real := filepath.Join(dir, "git")
+
+			//nolint:gosec // the fake real git is a script the tests run, so it must be executable
+			if err := os.WriteFile(real, []byte(vmUpRealGit), 0o700); err != nil {
+				t.Fatalf("write %s: %v", real, err)
+			}
+
+			shim := writeGitShim(t, t.TempDir(), real)
+
+			out, err := exec.Command(shim, "rev-parse", "--show-toplevel").Output()
+			if err != nil {
+				t.Fatalf("the git shim of the real git at %s: %v", real, err)
+			}
+
+			want, got := "real-git rev-parse --show-toplevel\n", string(out)
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("the git shim did not run the real git at %s with the arguments it got: sh expanded or split the path, so make's git calls in the vm-up tests reach the wrong command (issue #228 review, item D) (-want +got):\n%s",
+					real, diff)
+			}
+		})
+	}
+
+	t.Run("git config core.hooksPath answers without the real git", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		real := filepath.Join(dir, "git")
+
+		//nolint:gosec // the fake real git is a script the tests run, so it must be executable
+		if err := os.WriteFile(real, []byte(vmUpRealGit), 0o700); err != nil {
+			t.Fatalf("write %s: %v", real, err)
+		}
+
+		shim := writeGitShim(t, dir, real)
+
+		out, err := exec.Command(shim, "config", "core.hooksPath").Output()
+		if err != nil {
+			t.Fatalf("the git shim with git config core.hooksPath: %v", err)
+		}
+
+		if got := string(out); got != "" {
+			t.Errorf("the git shim ran the real git for `git config core.hooksPath` and printed %q: that call reads the write make vm-up's git-hooks prerequisite makes into the checkout's .git/config, which is shared by every worktree, so the vm-up tests must answer it themselves", got)
+		}
+	})
 }
 
 // TestMakeVMCreatePassesTheVMResourcesToVMUp pins issue #228's pass-through: make vm-create hands the four
