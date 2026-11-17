@@ -1,8 +1,9 @@
 # The VM's size and SSH port, for a host that runs several VMs (issue #228, docs/dev-environment.md, Several
 # VMs on one host). Empty keeps dev/lima.yaml's value and the port Lima picks. They apply only when make vm-up
 # creates the VM: an existing VM is never resized, and vm-up warns that they were ignored. VM_CPUS is a CPU
-# count, VM_MEMORY and VM_DISK a whole size in GiB (8GiB), VM_SSH_PORT a port in 1024-65535; vm-up refuses
-# anything else before limactl runs. Each is read raw ($(value ...), so make expands nothing in it) and
+# count of at most 3 digits (5), VM_MEMORY and VM_DISK a whole size in GiB of at most 5 digits (7GiB, 58GiB),
+# VM_SSH_PORT a port in 1024-65535 (60022); vm-up refuses anything else before limactl runs. They can also come
+# from the environment. Each is read raw ($(value ...), so make expands nothing in it) and
 # exported, so the recipes read it from the environment as "$$VM_CPUS" and no shell ever parses the value.
 # Keep this block first: make hands exported variables, command-line ones included, to every $(shell ...),
 # expanding them, so a $(shell ...) evaluated before these lines would run a value's $(...) as make code.
@@ -212,26 +213,29 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 
 ##@ Isolated environment (Lima)
 
+# vm-up checks VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT in the same shell line as its limactl calls, so no
+# make flag (-i, -k) can run limactl after a check failed.
 .PHONY: vm-up
 vm-up: git-hooks ## Create or start the Lima VM with only this repository's workspace mounted (VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT on creation)
-	@whole() { case "$$1" in ([1-9]*) case "$$1" in (*[!0-9]*) return 1;; esac;; (*) return 1;; esac; }; \
-	refuse() { printf 'vm-up: %s=%s is not %s\n' "$$1" "$$2" "$$3" >&2; exit 1; }; \
-	[ -z "$$VM_CPUS" ] || whole "$$VM_CPUS" || refuse VM_CPUS "$$VM_CPUS" 'a CPU count (a whole number, 1 or more)'; \
-	[ -z "$$VM_MEMORY" ] || { case "$$VM_MEMORY" in (*GiB) whole "$${VM_MEMORY%GiB}";; (*) false;; esac; } || \
-		refuse VM_MEMORY "$$VM_MEMORY" 'a whole size in GiB, such as 8GiB'; \
-	[ -z "$$VM_DISK" ] || { case "$$VM_DISK" in (*GiB) whole "$${VM_DISK%GiB}";; (*) false;; esac; } || \
-		refuse VM_DISK "$$VM_DISK" 'a whole size in GiB, such as 60GiB'; \
-	[ -z "$$VM_SSH_PORT" ] || { whole "$$VM_SSH_PORT" && [ "$${#VM_SSH_PORT}" -le 5 ] && \
-		[ "$$VM_SSH_PORT" -ge 1024 ] && [ "$$VM_SSH_PORT" -le 65535 ]; } || \
-		refuse VM_SSH_PORT "$$VM_SSH_PORT" 'a port from 1024 to 65535'
 	@stray="$$(ls -A "$(WORKSPACE)" | grep -vx -e '$(REPO_NAME)' -e '$(REPO_NAME)-dispatch-.*' -e '\.DS_Store' || true)"; \
 	if [ -n "$$stray" ]; then \
 		echo "vm-up: the VM mounts $(WORKSPACE), which must hold only $(REPO_NAME) and its dispatch worktrees; move these out first:" >&2; \
 		echo "$$stray" | sed 's/^/  /' >&2; \
 		exit 1; \
 	fi
-	@if limactl list --quiet | grep -qx "$(LIMA_INSTANCE)"; then \
-		$(if $(VM_RESOURCES_SET),echo "vm-up: warning: $(VM_RESOURCES_SET) apply only when the VM is created; $(LIMA_INSTANCE) exists and starts as it is: an existing VM is never resized (make vm-delete vm-create rebuilds it)" >&2;) \
+	@whole() { case "$$1" in ([1-9]*) case "$$1" in (*[!0-9]*) return 1;; esac;; (*) return 1;; esac; \
+		[ "$${#1}" -le "$$2" ]; }; \
+	refuse() { printf 'vm-up: %s=%s is not %s\n' "$$1" "$$2" "$$3" >&2; exit 1; }; \
+	[ -z "$$VM_CPUS" ] || whole "$$VM_CPUS" 3 || refuse VM_CPUS "$$VM_CPUS" 'a CPU count (a whole number from 1 to 999)'; \
+	[ -z "$$VM_MEMORY" ] || { case "$$VM_MEMORY" in (*GiB) whole "$${VM_MEMORY%GiB}" 5;; (*) false;; esac; } || \
+		refuse VM_MEMORY "$$VM_MEMORY" 'a whole size in GiB from 1GiB to 99999GiB, such as 8GiB'; \
+	[ -z "$$VM_DISK" ] || { case "$$VM_DISK" in (*GiB) whole "$${VM_DISK%GiB}" 5;; (*) false;; esac; } || \
+		refuse VM_DISK "$$VM_DISK" 'a whole size in GiB from 1GiB to 99999GiB, such as 60GiB'; \
+	[ -z "$$VM_SSH_PORT" ] || { whole "$$VM_SSH_PORT" 5 && \
+		[ "$$VM_SSH_PORT" -ge 1024 ] && [ "$$VM_SSH_PORT" -le 65535 ]; } || \
+		refuse VM_SSH_PORT "$$VM_SSH_PORT" 'a port from 1024 to 65535'; \
+	if limactl list --quiet | grep -qx "$(LIMA_INSTANCE)"; then \
+		$(if $(VM_RESOURCES_SET),echo "vm-up: warning: $(VM_RESOURCES_SET) apply only when the VM is created; $(LIMA_INSTANCE) exists and starts as it is: an existing VM is never resized (stop it and resize it with limactl edit, or rebuild it with make vm-delete and make vm-create)" >&2;) \
 		limactl start "$(LIMA_INSTANCE)"; \
 	else \
 		limactl start --name="$(LIMA_INSTANCE)" --mount-only "$(WORKSPACE):w" --tty=false \
