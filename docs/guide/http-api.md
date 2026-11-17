@@ -106,6 +106,7 @@ export SHIFT2EU_SERVER_TOKEN="$(openssl rand -hex 32)"
 make server && ./bin/shift2eu-server &   # listening on 127.0.0.1:8080
 
 req="$(mktemp)"
+trap 'rm -f "$req"' EXIT   # removed when the shell exits, even if you stop part-way
 
 jq '{inventory: ., targets: ["scaleway"]}' test/e2e/testdata/inventory.json > "$req"
 
