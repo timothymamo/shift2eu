@@ -207,11 +207,11 @@ func (f *mintFixture) vmEffectiveGitValueIn(t *testing.T, dir, key string) strin
 	return strings.TrimRight(out, "\n")
 }
 
-// vmGitConfigLeftovers returns what a mint left beside the fake VM user's ~/.gitconfig: the copies of it a mint
-// made - it writes the bot identity into a `mktemp "$HOME/.gitconfig.agents-token.XXXXXX"` copy and moves that over
-// ~/.gitconfig, so a run that refused and a run that succeeded must leave none of them behind - and git's own
-// ~/.gitconfig.lock, which git creates while it writes that file and removes when it is done: a mint that leaves one
-// behind makes every later `git config` in the VM fail with "could not lock config file" (issue #241).
+// vmGitConfigLeftovers returns what a mint left beside the fake VM user's ~/.gitconfig: the copy of it the mint
+// edits - it creates `$HOME/.gitconfig.lock` exclusively, writes the bot identity into that copy and moves it over
+// ~/.gitconfig (an older version used a mktemp copy, whose name is matched too, so a test cannot miss one) - so a
+// run that refused and a run that succeeded must leave none of them behind: a mint that leaves a lock behind makes
+// every later `git config` in the VM fail with "could not lock config file" (issue #241).
 func (f *mintFixture) vmGitConfigLeftovers(t *testing.T) []string {
 	t.Helper()
 

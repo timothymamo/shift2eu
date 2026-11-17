@@ -211,6 +211,71 @@ func TestAgentsAppTokenRefreshSurvivesAVMThatIsNotRunning(t *testing.T) {
 	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
 }
 
+// TestAgentsAppTokenRefreshSurvivesAGitConfigLockAnotherWriterHolds pins the other half of the mint's refusal when
+// another writer holds the VM's ~/.gitconfig.lock: the refusal is transient, because a lock git config takes for the
+// moment of one write is gone by the next check, so the loop says it will try again instead of stopping and never
+// removes the other writer's lock (issue #241, the mint's status 4).
+func TestAgentsAppTokenRefreshSurvivesAGitConfigLockAnotherWriterHolds(t *testing.T) {
+	t.Parallel()
+
+	const lockBody = "a git config another writer runs in the VM holds this lock\n"
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	lock := filepath.Join(f.sb.vmHome, ".gitconfig.lock")
+	writeFileMode(t, lock, []byte(lockBody), 0o600)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	// Two mints: the first write was refused because the lock was held, and the loop tried again instead of
+	// stopping. mint_once mints before it writes, so a second token proves the retry.
+	waitFor(t, 30*time.Second, "the refresh to try a second mint while ~/.gitconfig.lock is held", func() bool {
+		return len(f.api.minted()) >= 2 || !refresh.running()
+	})
+
+	if !refresh.running() {
+		t.Fatalf("the refresh exited while another writer held the VM's %s, although a held lock is gone by the next check and the loop must never stop on it; stderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	if strings.Contains(refresh.errOut(), "agents App token refresh stopped") {
+		t.Errorf("the refresh said it stopped while another writer held the VM's %s: a lock held for the moment of one write is retried, never stopped on (issue #241)\nstderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	// The refusal the loop retried is the lock's, not some other failure that leaves the lock looking untouched.
+	if text := strings.ToLower(refresh.errOut()); !strings.Contains(text, "lock") {
+		t.Errorf("the refresh retried but no line mentions the lock on ~/.gitconfig, so this test cannot tell a refusal by the lock from any other transient failure (issue #241)\nstderr:\n%s",
+			refresh.errOut())
+	}
+
+	held, err := os.ReadFile(lock)
+	if err != nil {
+		t.Fatalf("the refresh removed the VM's %s, a lock it did not create: another writer's git config must survive it untouched (%v)", lock, err)
+	}
+
+	if string(held) != lockBody {
+		t.Errorf("the VM's %s holds %q after the refresh retried, want %q: the refresh leaves another writer's lock exactly as it found it (issue #241)",
+			lock, held, lockBody)
+	}
+
+	// The token is written before the bot's identity is known, so the held lock refuses the identity and not the
+	// token; the identity file must not be there, because no write of it succeeded.
+	if _, err := os.Stat(f.sb.vmPath(agentsIdentityFile)); err == nil {
+		t.Errorf("the refresh wrote %s although another writer's lock refused every write of the bot identity (issue #241)",
+			agentsIdentityFile)
+	}
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh did not stop on SIGTERM while another writer held the VM's %s; stderr:\n%s", lock, refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
 // TestAgentsAppTokenRefreshWaitsOutARateLimit pins the third review's item 2 (S1), which replaces the five-check
 // cap of the second review: a rate limit's wait is honoured up to an hour. A refresh that still capped it would
 // retry about two seconds before this test allows, because five checks of one second are five seconds.
