@@ -85,9 +85,11 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
   are listed in ADR 0031 (d) and `docs/dev-environment.md` (Attestations read added; Actions stays read, so
   `gh run rerun` and the rulesets' bypass lists stay maintainer steps); that each works is checked at
   runbook step 3.*
-- [ ] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
+- [x] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
   `true`). No ruleset requires signed commits. *Nothing in milestone 1 signs a commit (ADR 0031); the
-  repository's rulesets and `main`'s commits are checked at runbook step 3.*
+  repository's rulesets and `main`'s commits are checked at runbook step 3. Checked at runbook step 3 on
+  PR #239 (2026-11-17): its 16 branch commits are unsigned, `main`'s last five commits have `verified`
+  `true`, and none of the four rulesets has a `required_signatures` rule.*
 
 ### The gate (milestone 2)
 
