@@ -285,6 +285,12 @@ func TestMakeVMEnvRefusesMissingCredentials(t *testing.T) {
 // character a variable name may not have - is refused instead of written into daemon.env, where the line
 // would be meaningless and printenv could never have set it. Every credential is set, so the refusal is
 // about the name and not about a missing credential, and the file stays byte for byte as it was.
+//
+// What the refusal may show differs between the two checks. A value holding a character the character class
+// refuses is never echoed at all - not even the offending name - because it may be a credential a maintainer
+// pasted into VM_ENV by mistake (issue #234 audit L1). A value that got past the character class and is
+// refused per name held nothing but names, commas and spaces, so naming the offending name back reveals no
+// credential and is what the maintainer needs to see.
 func TestMakeVMEnvRefusesANameThatIsNotAVariable(t *testing.T) {
 	t.Parallel()
 
@@ -292,11 +298,15 @@ func TestMakeVMEnvRefusesANameThatIsNotAVariable(t *testing.T) {
 		name   string
 		vmEnv  string // the invented name handed to VM_ENV; no variable of the test machine is ever named so
 		reason string
+		// echoesTheName is whether the refusal may show what VM_ENV held: only the per-name check names the
+		// name it refused back, the character-class refusal shows none of its value (issue #234 audit L1).
+		echoesTheName bool
 	}{
 		{
-			name:   "the name starts with a digit",
-			vmEnv:  "1INVENTED_TOKEN",
-			reason: "a name may not start with a digit",
+			name:          "the name starts with a digit",
+			vmEnv:         "1INVENTED_TOKEN",
+			reason:        "a name may not start with a digit",
+			echoesTheName: true,
 		},
 		{
 			name:   "the name holds a dash",
@@ -326,9 +336,30 @@ func TestMakeVMEnvRefusesANameThatIsNotAVariable(t *testing.T) {
 					tc.vmEnv, tc.reason, stdout, stderr)
 			}
 
-			if !strings.Contains(stdout+stderr, tc.vmEnv) {
-				t.Errorf("the refusal does not name %s, so a maintainer cannot tell which VM_ENV name vm-env refused (%s):\nstdout: %s\nstderr: %s",
-					tc.vmEnv, tc.reason, stdout, stderr)
+			text := stdout + stderr
+
+			if tc.echoesTheName {
+				if !strings.Contains(text, tc.vmEnv) {
+					t.Errorf("the refusal does not name %s, so a maintainer cannot tell which VM_ENV name vm-env refused (%s):\nstdout: %s\nstderr: %s",
+						tc.vmEnv, tc.reason, stdout, stderr)
+				}
+			} else {
+				if !strings.Contains(text, "VM_ENV") {
+					t.Errorf("the refusal does not name VM_ENV, so a maintainer cannot tell that the VM_ENV they passed is what vm-env refused (%s):\nstdout: %s\nstderr: %s",
+						tc.reason, stdout, stderr)
+				}
+
+				if !strings.Contains(strings.ToLower(text), "not shown") {
+					t.Errorf("the refusal does not say that VM_ENV's value is not shown, so a maintainer cannot tell whether the value they handed vm-env was echoed (%s) (issue #234 audit L1):\nstdout: %s\nstderr: %s",
+						tc.reason, stdout, stderr)
+				}
+
+				// None of it: a character the character class refuses may be where a maintainer pasted a
+				// credential, so the refusal must not reproduce it (issue #234 audit L1).
+				if strings.Contains(text, tc.vmEnv) {
+					t.Errorf("the refusal echoes the value VM_ENV held: the character-class refusal must show none of it, because a maintainer may have pasted a credential there by mistake (%s) (issue #234 audit L1):\nstdout: %s\nstderr: %s",
+						tc.reason, stdout, stderr)
+				}
 			}
 
 			got, readErr := os.ReadFile(sb.daemonEnvPath())
@@ -982,9 +1013,10 @@ func TestMakeVMEnvSweepsOnlyOldLeftovers(t *testing.T) {
 }
 
 // TestMakeVMEnvRefusesAGlobAsAName pins the reviewer's finding on issue #234: `make vm-env VM_ENV=*` names no
-// variable, and make must say so with the `*` it was given. The star is not a variable name, and the shell must
-// never expand it in the working directory first: the refusal would then list the names of the files there,
-// none of which the maintainer asked for, and the refusal would no longer name what was wrong with VM_ENV.
+// variable, and make must refuse it. The star is not a variable name, and the shell must never expand it in the
+// working directory first: the refusal would then list the names of the files there, none of which the
+// maintainer asked for. The refusal itself names VM_ENV and shows none of its value, the star included: `*`
+// may stand where a credential was meant, and a value must never reach a pane (issue #234 audit L1).
 func TestMakeVMEnvRefusesAGlobAsAName(t *testing.T) {
 	t.Parallel()
 
@@ -1008,8 +1040,19 @@ func TestMakeVMEnvRefusesAGlobAsAName(t *testing.T) {
 		}
 	}
 
-	if !strings.Contains(strings.Join(said, "\n"), "*") {
-		t.Errorf("the refusal does not show the star it was given, so a maintainer cannot tell that VM_ENV's `*` is what vm-env refused (issue #234):\nstdout: %s\nstderr: %s", stdout, stderr)
+	// vm-env's own lines, without make's `***`, which is why the star is looked for here and not in all of text.
+	saidText := strings.Join(said, "\n")
+
+	if !strings.Contains(saidText, "VM_ENV") {
+		t.Errorf("the refusal does not name VM_ENV, so a maintainer cannot tell that the VM_ENV they passed is what vm-env refused (issue #234):\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	if !strings.Contains(strings.ToLower(saidText), "not shown") {
+		t.Errorf("the refusal does not say that VM_ENV's value is not shown, so a maintainer cannot tell whether the star they handed vm-env was echoed (issue #234 audit L1):\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	if strings.Contains(saidText, "*") {
+		t.Errorf("the refusal shows the star it was given: the character-class refusal must show none of VM_ENV's value, because a maintainer may have pasted a credential where the star stands (issue #234 audit L1):\nstdout: %s\nstderr: %s", stdout, stderr)
 	}
 
 	// A file of the working directory standing in for the name: the star was globbed, not refused.
@@ -1029,8 +1072,8 @@ func TestMakeVMEnvRefusesAGlobAsAName(t *testing.T) {
 			continue
 		}
 
-		if strings.Contains(strings.Join(said, "\n"), entry.Name()) {
-			t.Errorf("the refusal names %q, an entry of the working directory: VM_ENV's `*` was expanded by the shell instead of being refused as the name it is, so the refusal no longer tells a maintainer which VM_ENV vm-env refused (issue #234):\nstdout: %s\nstderr: %s",
+		if strings.Contains(saidText, entry.Name()) {
+			t.Errorf("the refusal names %q, an entry of the working directory: VM_ENV's `*` was expanded by the shell instead of being refused as the name it is (issue #234):\nstdout: %s\nstderr: %s",
 				entry.Name(), stdout, stderr)
 		}
 	}
