@@ -262,7 +262,9 @@ classify() {
   fi
 }
 
-# lookup_slug sets slug from GET /app, with the App's JWT.
+# lookup_slug sets slug from GET /app, with the App's JWT. A slug is letters, digits and -, and begins with a
+# letter or digit, as the VM's name check wants it: anything else is refused before a token is minted, so the
+# bot name <slug>[bot] never reaches git config shaped like an option (issue #241).
 lookup_slug() {
   call GET /app "${jwt}"
   [ "${status}" = 200 ] || {
@@ -272,9 +274,10 @@ lookup_slug() {
   }
   slug="$(json_string slug)"
   case "${slug}" in
-  '' | *[!A-Za-z0-9-]*)
+  '' | [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-]*)
     failure=transient
-    say "GET /app gave no usable slug"
+    slug=""
+    say "GET /app gave no usable slug: the bot name would not be an App bot name (<slug>[bot], letters, digits and -, beginning with a letter or digit)"
     return 1
     ;;
   esac
@@ -311,14 +314,21 @@ lookup_identity() {
 # user.name, the git user.email) and writes the identity file when the name is not empty and the token file
 # when the token is not empty, each atomically (a temporary file beside it, then mv), so a gh running at the
 # same time never reads half a token. With the identity it also sets the VM user's global git identity
-# (user.name and user.email in ~/.gitconfig, replacing whatever is there, one value per key), so the agents
-# commit as the bot even when vm-init ran before the first mint (issue #241); a write without an identity
-# never touches the git configuration. It
+# (user.name and user.email in ~/.gitconfig, replacing every value there, one value per key), so the agents
+# commit as the bot even when vm-init ran before the first mint (issue #241). Once the bot identity is known
+# every mint sends it, so every mint of a refresh applies it again; only a mint before the bot user's lookup
+# has worked (a process's first one, or one while the lookup keeps failing) writes the token alone, and such
+# a write never touches the git configuration. The git identity is written atomically too: a copy of ~/.gitconfig in $HOME gets the two
+# keys (--replace-all), git reads the identity back from that copy with its [include] files followed, and
+# only when that is the bot's does the copy replace ~/.gitconfig (mv); otherwise ~/.gitconfig is left as it
+# was and the copy removed. It
 # refuses, with status 3, before it writes anything: a ~/.config/shift2eu that is a symlink or that resolves
 # (pwd -P) outside the VM user's real home, a token or identity file or a ~/.gitconfig that is a symlink or
-# not a regular file, a name or email that is not a bot's (the patterns of dev/vm-git-identity.sh), and,
-# with an identity, a VM without git (its image always has git, so a missing one is a broken VM that would
-# leave the agents committing as someone else: refused loudly, not skipped). That keeps the token
+# not a regular file, a name or email that is not a bot's (the patterns of dev/vm-git-identity.sh, with a
+# slug that begins with a letter or digit), and, with an identity, a VM without git (its image always has
+# git, so a missing one is a broken VM that would leave the agents committing as someone else: refused
+# loudly, not skipped), git failing to set the keys, and an [include] in ~/.gitconfig that would override
+# the bot's name or address (the effective identity a commit would use is not the bot's). That keeps the token
 # from being written through a symlink by mistake; it is no boundary against the VM user, who can read the
 # token anyway and could swap a path between the check and the mv.
 # It then prints, never a secret, git-identity=set when it set the git identity, the VM's clock as
@@ -369,9 +379,10 @@ IFS= read -r expiry
 IFS= read -r name
 IFS= read -r email
 slug_only() {
-  [ -n "$1" ] || return 1
   case "$1" in
+  [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]*) return 1 ;;
   *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
+  "") return 1 ;;
   esac
 }
 if [ -n "$name" ]; then
@@ -397,10 +408,23 @@ if [ -n "$name" ]; then
     echo "agents-token: git is not installed in the VM, so the agents cannot commit as the bot: install it (make vm-init)" >&2
     exit 3
   fi
-  if ! git config --file "$gitconfig" user.name "$name" || ! git config --file "$gitconfig" user.email "$email"; then
-    echo "agents-token: git could not set the bot identity in $gitconfig: fix that file in the VM" >&2
+  gitnew="$(mktemp "$HOME/.gitconfig.agents-token.XXXXXX")"
+  trap '\''rm -f "$gitnew"'\'' EXIT
+  trap '\''exit 1'\'' HUP INT TERM
+  if [ -e "$gitconfig" ]; then
+    cat "$gitconfig" >"$gitnew"
+  fi
+  if ! git config --file "$gitnew" --replace-all user.name "$name" || ! git config --file "$gitnew" --replace-all user.email "$email"; then
+    echo "agents-token: git could not set the bot identity in a copy of $gitconfig, which is unchanged: fix that file in the VM" >&2
     exit 3
   fi
+  got_name="$(git config --includes --file "$gitnew" --get user.name)" || got_name=""
+  got_email="$(git config --includes --file "$gitnew" --get user.email)" || got_email=""
+  if [ "$got_name" != "$name" ] || [ "$got_email" != "$email" ]; then
+    echo "agents-token: with the bot identity set, the effective git identity in the VM would still be $got_name <$got_email>, from an [include] in $gitconfig that sets user.name or user.email after it; $gitconfig is unchanged: remove that include in the VM" >&2
+    exit 3
+  fi
+  mv -f "$gitnew" "$gitconfig"
   printf "git-identity=set\n"
   tmp="$(mktemp "$dir/.agents-app-identity.XXXXXX")"
   printf "%s\n%s\n" "$name" "$email" >"$tmp"
@@ -441,7 +465,7 @@ check_vm() {
 said_git_identity() {
   case "${written}" in
   *git-identity=set*)
-    say "set the VM ${instance}'s git identity (git config --global) to ${bot_name} <${bot_email}>"
+    say "set the VM ${instance}'s git identity (user.name and user.email in ~/.gitconfig) to ${bot_name} <${bot_email}>"
     ;;
   esac
 }

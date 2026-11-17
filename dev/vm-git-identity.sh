@@ -47,6 +47,8 @@ fi
 # Set only where the VM has none, so a re-run never replaces an identity chosen in the VM. Two exceptions,
 # for the switch to the App and back: the bot's identity replaces any other, and with no identity file a
 # bot's identity left from an earlier run gives way to the fallback.
+# Known gap: a key with several values in ~/.gitconfig makes git config <key> <value> refuse (status 5),
+# where the mint (dev/agents-app-token.sh) uses --replace-all; no test pins that case here yet (issue #241).
 for pair in "user.name=${git_name}" "user.email=${git_email}"; do
   key="${pair%%=*}"
   value="${pair#*=}"
