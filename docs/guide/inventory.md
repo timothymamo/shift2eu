@@ -69,7 +69,7 @@ usage, workload, relations and monthly cost, all optional. `shift2eu assess` rea
 | `resources[].region` | no | The source region; absent for a global resource |
 | `resources[].capabilities` | no | Capabilities the resource depends on, below |
 | `resources[].size` | no | `vcpus`, `memoryGiB`, `storageGiB` and `count` (instances, nodes or volumes), each optional; see [Sizes](#sizes) |
-| `resources[].usage` | no | `hoursPerMonth`, the hours a month the resource runs: 730 when absent, at most 744 |
+| `resources[].usage` | no | `hoursPerMonth`, the hours a month the resource runs: 730 when absent, at most 744. Only for compute, Kubernetes and database categories; on any other category it is an error |
 | `resources[].workload` | no | A free-text name of the application the resource belongs to, such as `shop` |
 | `resources[].relations` | no | A list of `{"type", "target"}`: `type` is `replica-of`, `dead-letter-queue-of`, `attached-to` or `depends-on`, and `target` is another resource's `id` |
 | `resources[].monthlyCost` | no | `{"amount", "currency"}`: what the source charges for the resource a month, from your own bill; `currency` is an ISO 4217 code such as `USD` or `EUR` |
@@ -136,7 +136,9 @@ inventory yourself, with an editor or `jq`:
   `shift2eu` never reads billing APIs and knows no hyperscaler price; the report shows this cost next
   to the estimate, per currency, without converting it.
 - **`usage.hoursPerMonth`**: for a resource that does not run all month, such as a server stopped at
-  night.
+  night. Only compute (`compute.vm`, `compute.baremetal`), Kubernetes (`kubernetes.managed`) and
+  database (`database.postgresql`, `database.mysql`) resources take it; on any other category the
+  inventory is refused.
 - any size the calls do not give, such as an RDS or Cloud SQL instance's vCPU and memory (its
   instance class or tier), or an Auto Scaling group's instance count.
 
@@ -254,7 +256,7 @@ aws ec2 describe-instances --output json --query '{Reservations: Reservations[].
   Tags: Tags[].{Key: Key}}}}' > "$out/ec2-instances.json"
 # The vCPU and memory of the instance types in use.
 jq -r '[.Reservations[].Instances[].InstanceType] | unique[]' "$out/ec2-instances.json" |
-  xargs -r aws ec2 describe-instance-types --output json --query '{InstanceTypes: InstanceTypes[].{
+  xargs -r -n 100 aws ec2 describe-instance-types --output json --query '{InstanceTypes: InstanceTypes[].{
     InstanceType: InstanceType, VCpuInfo: {DefaultVCpus: VCpuInfo.DefaultVCpus},
     MemoryInfo: {SizeInMiB: MemoryInfo.SizeInMiB}}}' --instance-types > "$out/ec2-instance-types.json"
 aws ec2 describe-volumes --output json --query '{Volumes: Volumes[].{
@@ -312,7 +314,7 @@ Every list and describe call above, `select-resource-config` included, is pagina
 AWS CLI version 2 fetches every page and merges them before it applies `--query`, so each file holds
 the whole region. Do not pass `--no-paginate` or `--max-items`.
 
-`describe-instance-types` takes at most 100 instance types per call; `xargs` splits a longer list
+`describe-instance-types` takes at most 100 instance types per call; `xargs -n 100` splits a longer list
 into several calls, and the program reads each.
 
 S3 is global: `list-buckets` returns every bucket from any region, and the program lists each bucket
@@ -458,8 +460,13 @@ gcloud compute instances list --project="$project" \
   > "$out/compute-instances.json"
 # The vCPU and memory of the machine types in use, and every disk's size.
 types="$(jq -r '[.[].machineType // empty | split("/") | last] | unique | join(" ")' "$out/compute-instances.json")"
-gcloud compute machine-types list --project="$project" --filter="name:($types)" \
-  --format='json(kind,selfLink,name,zone,guestCpus,memoryMb)' > "$out/compute-machine-types.json"
+# With no instances there are no types to ask for: write an empty list instead.
+if [ -n "$types" ]; then
+  gcloud compute machine-types list --project="$project" --filter="name:($types)" \
+    --format='json(kind,selfLink,name,zone,guestCpus,memoryMb)' > "$out/compute-machine-types.json"
+else
+  echo '[]' > "$out/compute-machine-types.json"
+fi
 gcloud compute disks list --project="$project" \
   --format='json(kind,name,zone,region,sizeGb)' > "$out/compute-disks.json"
 gcloud compute instance-groups managed list --project="$project" \

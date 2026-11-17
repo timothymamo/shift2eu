@@ -132,7 +132,8 @@ serve. The tool never picks a region for you. A target without a pair is assesse
 
 `--region` is checked before the inventory is read. A region the target does not list, a target that
 `--target` does not select, a target named twice, or a malformed element is a usage error: exit code 2,
-one line naming the bad element, and for an unknown region the target's regions:
+one line naming the bad element, and for an unknown region the target's regions, then the usage
+text:
 
 ```text
 shift2eu: --region: target "scaleway": region "xx" is not one of the target's regions: "fr-par", "it-mil", "nl-ams", "pl-waw"
