@@ -192,10 +192,12 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 
 ##@ Isolated environment (Lima)
 
-# limactl start <name> on an instance Lima cannot load (Broken: its directory has no lima.yaml) reads the name
+# limactl start <name> on an instance whose directory has no lima.yaml (Lima lists it as Broken) reads the name
 # as a template and falls back to template:default, a VM that mounts the whole home directory (#237). So a
-# listed instance is started by name only when its status is known good: an allow list, not a deny list on
-# Broken.
+# listed instance is started by name only when its status is known good (an allow list, not a deny list on
+# Broken) and its lima.yaml is still there, and a status query that fails stops vm-up. A Broken instance with
+# its lima.yaml in place is broken for another reason and may keep an intact disk: vm-up points at limactl
+# list and limactl start --debug, never at removing it by hand.
 .PHONY: vm-up
 vm-up: git-hooks ## Create or start the Lima VM with only this repository's workspace directory mounted
 	@stray="$$(ls -A "$(WORKSPACE)" | grep -vx -e '$(REPO_NAME)' -e '$(REPO_NAME)-dispatch-.*' -e '\.DS_Store' || true)"; \
@@ -205,12 +207,27 @@ vm-up: git-hooks ## Create or start the Lima VM with only this repository's work
 		exit 1; \
 	fi
 	@if limactl list --quiet | grep -qx "$(LIMA_INSTANCE)"; then \
-		status="$$(limactl list --format '{{.Status}}' "$(LIMA_INSTANCE)")"; \
+		dir="$${LIMA_HOME:-$$HOME/.lima}/$(LIMA_INSTANCE)"; \
+		status="$$(limactl list --format '{{.Status}}' "$(LIMA_INSTANCE)")" || { \
+			echo "vm-up: could not read the status of the Lima instance $(LIMA_INSTANCE)" >&2; \
+			exit 1; \
+		}; \
 		case "$$status" in \
 		(Stopped|Running) \
+			if [ ! -f "$$dir/lima.yaml" ]; then \
+				echo "vm-up: the Lima instance $(LIMA_INSTANCE) is $$status, but $$dir has no lima.yaml:" >&2; \
+				echo "  limactl start $(LIMA_INSTANCE) would read the name as a template and fall back to template:default, a VM that mounts the home directory." >&2; \
+				echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
+				exit 1; \
+			fi; \
 			limactl start "$(LIMA_INSTANCE)";; \
 		(Broken) \
-			dir="$${LIMA_HOME:-$$HOME/.lima}/$(LIMA_INSTANCE)"; \
+			if [ -f "$$dir/lima.yaml" ]; then \
+				echo "vm-up: the Lima instance $(LIMA_INSTANCE) is Broken although $$dir/lima.yaml is there: it is broken for another reason, such as a lima.yaml Lima cannot load." >&2; \
+				echo "  Its disk may be intact: see why with 'limactl list' and 'limactl start --debug $(LIMA_INSTANCE)', and fix the cause instead of deleting the instance." >&2; \
+				echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
+				exit 1; \
+			fi; \
 			echo "vm-up: the Lima instance $(LIMA_INSTANCE) is Broken: $$dir has no lima.yaml, and starting it would create a default VM that mounts the home directory" >&2; \
 			echo "  Remove $$dir by hand once no limactl job uses it; make vm-delete cannot, as limactl delete --force refuses a directory without lima.yaml." >&2; \
 			echo "  A launchd job running limactl start may recreate it through its log paths; look for one with" >&2; \
