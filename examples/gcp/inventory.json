@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": "gcp",
   "resources": [
     {
@@ -7,91 +7,128 @@
       "rawType": "compute.googleapis.com/Instance",
       "category": "compute.vm",
       "region": "europe-west1",
-      "capabilities": ["ipv6"]
+      "capabilities": ["ipv6"],
+      "size": { "vcpus": 2, "memoryGiB": 8 },
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "shop-orders" }],
+      "monthlyCost": { "amount": 53, "currency": "USD" }
     },
     {
       "id": "shop-web-mig",
       "rawType": "compute.googleapis.com/InstanceGroupManager",
       "category": "compute.vm",
       "region": "europe-west1",
-      "capabilities": ["autoscaling", "zone-high-availability"]
+      "capabilities": ["autoscaling", "zone-high-availability"],
+      "size": { "vcpus": 2, "memoryGiB": 8, "count": 2 },
+      "workload": "shop"
     },
     {
       "id": "shop-search-bms",
       "rawType": "baremetalsolution.googleapis.com/Instance",
       "category": "compute.baremetal",
-      "region": "europe-west3"
+      "region": "europe-west3",
+      "size": { "vcpus": 16, "memoryGiB": 64 },
+      "usage": { "hoursPerMonth": 500 },
+      "workload": "catalog"
     },
     {
       "id": "shop-web-1-data",
       "rawType": "compute.googleapis.com/Disk",
       "category": "storage.block",
       "region": "europe-west1",
-      "capabilities": ["snapshots", "encryption-at-rest"]
+      "capabilities": ["snapshots"],
+      "size": { "storageGiB": 100 },
+      "workload": "shop",
+      "relations": [{ "type": "attached-to", "target": "shop-web-1" }]
     },
     {
       "id": "shop-assets",
       "rawType": "storage.googleapis.com/Bucket",
       "category": "storage.object",
       "region": "europe-west1",
-      "capabilities": ["object-versioning"]
+      "capabilities": ["object-versioning"],
+      "size": { "storageGiB": 500 },
+      "workload": "shop",
+      "monthlyCost": { "amount": 10, "currency": "USD" }
     },
     {
       "id": "shop-db",
       "rawType": "sqladmin.googleapis.com/Instance",
       "category": "database.postgresql",
       "region": "europe-west1",
-      "capabilities": ["point-in-time-restore", "zone-high-availability", "read-replicas"]
+      "capabilities": ["point-in-time-restore", "zone-high-availability", "read-replicas"],
+      "size": { "vcpus": 4, "memoryGiB": 16 },
+      "workload": "shop",
+      "monthlyCost": { "amount": 412, "currency": "USD" }
     },
     {
       "id": "shop-db-replica",
       "rawType": "sqladmin.googleapis.com/Instance",
       "category": "database.postgresql",
-      "region": "europe-west4"
+      "region": "europe-west4",
+      "size": { "vcpus": 4, "memoryGiB": 16 },
+      "workload": "shop",
+      "relations": [{ "type": "replica-of", "target": "shop-db" }]
     },
     {
       "id": "shop-catalog-mysql",
       "rawType": "sqladmin.googleapis.com/Instance",
       "category": "database.mysql",
       "region": "europe-west1",
-      "capabilities": ["point-in-time-restore", "read-replicas"]
+      "capabilities": ["point-in-time-restore", "read-replicas"],
+      "size": { "vcpus": 2, "memoryGiB": 8 },
+      "workload": "catalog"
     },
     {
       "id": "shop-gke",
       "rawType": "container.googleapis.com/Cluster",
       "category": "kubernetes.managed",
       "region": "europe-west1",
-      "capabilities": ["zone-high-availability", "autoscaling"]
+      "capabilities": ["autoscaling"],
+      "size": { "vcpus": 4, "memoryGiB": 16, "count": 3 },
+      "workload": "shop",
+      "relations": [
+        { "type": "depends-on", "target": "shop-catalog-mysql" },
+        { "type": "depends-on", "target": "shop-db" }
+      ]
     },
     {
       "id": "shop-resize-images",
       "rawType": "cloudfunctions.googleapis.com/Function",
       "category": "serverless.function",
       "region": "europe-west1",
-      "capabilities": ["autoscaling"]
+      "capabilities": ["autoscaling"],
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "shop-assets" }]
     },
     {
       "id": "shop-orders",
       "rawType": "pubsub.googleapis.com/Subscription",
       "category": "messaging.queue",
       "region": "europe-west1",
-      "capabilities": ["dead-letter-queue"]
+      "capabilities": ["dead-letter-queue"],
+      "workload": "shop"
     },
     {
       "id": "shop-orders-dlq",
       "rawType": "pubsub.googleapis.com/Topic",
       "category": "messaging.queue",
-      "region": "europe-west1"
+      "region": "europe-west1",
+      "workload": "shop",
+      "relations": [{ "type": "dead-letter-queue-of", "target": "shop-orders" }]
     },
     {
       "id": "shop-cdn-backend",
       "rawType": "compute.googleapis.com/BackendBucket",
-      "category": "unclassified"
+      "category": "unclassified",
+      "workload": "shop",
+      "relations": [{ "type": "depends-on", "target": "shop-assets" }]
     },
     {
       "id": "shop-zone",
       "rawType": "dns.googleapis.com/ManagedZone",
-      "category": "unclassified"
+      "category": "unclassified",
+      "workload": "shop"
     }
   ]
 }
