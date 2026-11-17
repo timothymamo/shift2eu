@@ -425,17 +425,21 @@ func hostnameProblems(text string) []problem {
 	return problems
 }
 
-// numeric reports whether candidate is a number rather than a host name: its
-// last label is all digits, as every label of a number written as a plain
-// decimal is (84.10, 1234.5). A host name's last label is a top-level domain,
-// and every real one holds a letter, so a host name is never read as a number.
+// numeric reports whether candidate is a number rather than a host name: every
+// label is all digits, as in a number written as a plain decimal (84.10,
+// 1234.5). A host name holds a letter in at least one label, so a host name
+// followed by a digit label (shop.acme.io.1) is still read as a host name.
+// Dotted quads are all digits as well; ipv4Problems checks those.
 func numeric(candidate string) bool {
-	labels := strings.Split(candidate, ".")
-	last := labels[len(labels)-1]
-
-	for i := range len(last) {
-		if last[i] < '0' || last[i] > '9' {
+	for label := range strings.SplitSeq(candidate, ".") {
+		if label == "" {
 			return false
+		}
+
+		for i := range len(label) {
+			if label[i] < '0' || label[i] > '9' {
+				return false
+			}
 		}
 	}
 
