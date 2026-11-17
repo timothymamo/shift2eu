@@ -283,16 +283,23 @@ read the file:
   `limactl`, and leaves the VM's `daemon.env` byte for byte as it was; `make vm-create`, which runs it,
   stops there. This keeps a locked login Keychain or an unloaded `.envrc` from wiping the credentials the
   agents need ([Troubleshooting](#troubleshooting-credentials)). An empty `VM_ENV` (`make vm-env VM_ENV=`)
-  names no credential and is refused the same way; a name listed twice is written once.
+  names no credential and is refused the same way; a name listed twice is written once. A `VM_ENV`
+  holding anything but variable names, commas and spaces (a quote, a `$`, a `*`) is refused, as written,
+  before any shell reads it.
 - **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the three
-  variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY`, is removed.
-- **An explicit `VM_ENV` merges.** `make vm-env VM_ENV=...` (on the command line or in the environment)
-  replaces the lines of the names in `VM_ENV` and keeps every other line already in `daemon.env` (it
-  creates the file when there is none). So `make vm-env VM_ENV=GITHUB_TOKEN` replaces only `GITHUB_TOKEN`
-  and keeps the OAuth token and the DeepSeek key. A merge prints the names of the lines it kept, never
-  their values: `vm-env: kept (unchanged): CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY`. Either way the file
-  is written to a temporary file beside `daemon.env`, mode 0600, and moved into place, so a failure (or an
-  interrupted run) never leaves half a file or a stray copy of the credentials.
+  variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY`, is removed. Only a
+  `VM_ENV` on the make command line merges; an exported `VM_ENV` replaces like the default, so a `VM_ENV`
+  left in a `.envrc` cannot keep a stale credential.
+- **A `VM_ENV` on the command line merges.** `make vm-env VM_ENV=...` (or `make vm-create VM_ENV=...`)
+  replaces the lines of the names in `VM_ENV` and keeps the other variable lines already in `daemon.env`
+  (it creates the file when there is none). So `make vm-env VM_ENV=GITHUB_TOKEN` replaces only
+  `GITHUB_TOKEN` and keeps the OAuth token and the DeepSeek key. Only plain `NAME=value` lines are kept:
+  any other line (a command, a comment, a value the shell would expand) is dropped, with a warning that
+  says how many lines were dropped, never what they held. A merge prints the names of the variable lines
+  it kept, never their values: `vm-env: kept (unchanged): CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY`.
+  Either way the file is written to a temporary file beside `daemon.env`, mode 0600, and moved into
+  place, so a failure does not leave half a file. An interrupted run removes its temporary file, and a
+  leftover from a killed run is removed by the next `make vm-env`.
 - **Rotating a credential:** change it on the Mac, then `make vm-env deck-restart`. Restarting the service
   stops its running agents, so do it between tasks. Run `claude setup-token` again before the year is up.
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the

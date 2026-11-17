@@ -211,25 +211,40 @@ vm-shell: ## Open a shell in the VM at the repository root
 	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)"
 
 # The names in VM_ENV, one per line: commas and spaces separate them, and a name listed twice is listed once.
-vm_env_names = $$(printf '%s\n' '$(VM_ENV)' | tr ', ' '\n\n' | awk 'NF && !seen[$$0]++')
-# replace when VM_ENV is the default above, merge when it is given on the command line or in the environment.
-vm_env_mode = $(if $(filter file,$(origin VM_ENV)),replace,merge)
+# The recipe reads VM_ENV from its environment ("$$VM_ENV"), never pasted into its own text, and refuses any
+# character but those of names, commas and spaces before it splits the list (with globbing off), so no quote,
+# `$` or glob in VM_ENV ever reaches a shell as code.
+vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', ' '\n\n' | awk 'NF && !seen[$$0]++')
+# Only a VM_ENV on the make command line merges (make vm-create hands it to its sub-make the same way); the
+# default, an exported VM_ENV, make -e and override all replace, so a VM_ENV left in a .envrc cannot keep a
+# stale credential.
+vm_env_mode = $(if $(filter command line,$(origin VM_ENV)),merge,replace)
+# A daemon.env line a merge keeps: a plain NAME=value assignment, nothing the login shell would run.
+vm_env_safe_line = ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._~+/=-]*\$$
 
-# vm-env refuses an empty VM_ENV, then checks every name and writes nothing, without calling limactl at all,
-# unless each one is set and not empty: a locked macOS login Keychain in an SSH session or an unloaded direnv
-# .envrc must never wipe the credentials the VM has (issue #234). With the default VM_ENV it replaces the
-# VM's whole daemon.env with exactly those lines, so a stale line (an old ANTHROPIC_API_KEY) is removed. With
-# a VM_ENV given explicitly it merges: the lines of the names in VM_ENV are replaced and every other line is
-# kept, so `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN; a merge prints the names (never the
-# values) of the lines it kept. The values travel on standard input, never on a command line (only the mode
-# does), and the file is written to a temporary file beside daemon.env and moved into place, mode 0600, so a
-# failure never leaves half a file; a trap removes the temporary file if the VM-side shell is interrupted.
+# vm-env refuses a VM_ENV holding anything but names, commas and spaces, and an empty one, then checks every
+# name and writes nothing, without calling limactl at all, unless each one is set and not empty: a locked
+# macOS login Keychain in an SSH session or an unloaded direnv .envrc must never wipe the credentials the VM
+# has (issue #234). Only a VM_ENV on the make command line merges; an exported VM_ENV replaces like the
+# default, so a VM_ENV left in a .envrc cannot keep a stale credential. A replace writes the VM's whole
+# daemon.env with exactly those lines, so a stale line (an old ANTHROPIC_API_KEY) is removed. A merge replaces
+# the lines of the names in VM_ENV and keeps the other plain NAME=value lines, so
+# `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN; it drops every other line (a command, a
+# comment, a value the shell would expand) with a warning that says how many (never their content), and
+# prints the names (never the values) of the lines it kept. The values travel on standard input, never on a
+# command line (only the mode does), and the file is written to a temporary file beside daemon.env and moved
+# into place, mode 0600, so a failure never leaves half a file; a trap removes the temporary file if the
+# VM-side shell is interrupted, and a leftover of a killed run is removed by the next vm-env.
 .PHONY: vm-env
+vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
-	@[ -n "$(vm_env_names)" ] || { \
+	@case "$$VM_ENV" in (*[!A-Za-z0-9_,\ ]*) \
+		printf 'vm-env: refusing VM_ENV=%s: it may hold only variable names, commas and spaces. Nothing was written.\n' "$$VM_ENV" >&2; \
+		exit 1;; esac; \
+	[ -n "$(vm_env_names)" ] || { \
 		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: name at least one, e.g. make vm-env VM_ENV=GITHUB_TOKEN" >&2; \
 		exit 1; }
-	@for name in $(vm_env_names); do \
+	@set -f; for name in $(vm_env_names); do \
 		case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
 			echo "vm-env: refusing $$name: the agents App's key and its path never enter the VM; make agents-token writes its tokens there" >&2; \
 			exit 1;; esac; \
@@ -237,7 +252,7 @@ vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if o
 			echo "vm-env: refusing $$name: not a variable name" >&2; \
 			exit 1;; esac; \
 	done
-	@missing=''; \
+	@set -f; missing=''; \
 	for name in $(vm_env_names); do \
 		[ -n "$$(printenv "$$name")" ] || missing="$$missing $$name"; \
 	done; \
@@ -251,18 +266,25 @@ vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if o
 		echo "  To copy only some of them on purpose, name them in VM_ENV: make vm-env VM_ENV=GITHUB_TOKEN keeps the others." >&2; \
 		exit 1; \
 	fi
-	@env_file="$$(for name in $(vm_env_names); do \
+	@set -f; env_file="$$(for name in $(vm_env_names); do \
 		value="$$(printenv "$$name")"; \
 		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$name has unsupported characters" >&2; exit 1;; esac; \
 		printf '%s=%s\n' "$$name" "$$value"; \
 	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
-		sh -c 'umask 077 && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && mkdir -p "$$d" && new="$$(cat)" && \
+		sh -c 'umask 077 && LC_ALL=C && export LC_ALL && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && \
+		t= && trap "rm -f \"\$$t\"" EXIT && trap "exit 1" HUP INT TERM && \
+		mkdir -p "$$d" && rm -f "$$d"/.daemon.env.?????? && new="$$(cat)" && safe="$(vm_env_safe_line)" && \
 		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && t="$$(mktemp "$$d/.daemon.env.XXXXXX")" && \
-		trap "rm -f \"\$$t\"" EXIT && trap "exit 1" HUP INT TERM && \
-		{ { if [ "$$1" = merge ] && [ -f "$$f" ]; then grep -v -E "^($$names)=" "$$f"; [ "$$?" -le 1 ]; fi && printf "%s\n" "$$new"; } > "$$t" && \
-		chmod 600 "$$t" && mv "$$t" "$$f" || { rm -f "$$t"; exit 1; }; } && trap - EXIT HUP INT TERM && \
-		if [ "$$1" = merge ]; then printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi' sh $(vm_env_mode))" && \
+		dropped=0 && if [ "$$1" = merge ] && [ -f "$$f" ]; then \
+			dropped=$$(( $$(grep -a -c . "$$f" || :) - $$(grep -a -c -E "$$safe" "$$f" || :) )); fi && \
+		{ if [ "$$1" = merge ] && [ -f "$$f" ]; then { grep -a -E "$$safe" "$$f" || :; } | grep -a -v -E "^($$names)="; [ "$$?" -le 1 ]; fi && printf "%s\n" "$$new"; } > "$$t" && \
+		chmod 600 "$$t" && mv "$$t" "$$f" && t= && trap - EXIT HUP INT TERM && \
+		if [ "$$1" = merge ]; then printf "vm-env-dropped:%s\n" "$$dropped" && \
+			printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi' sh $(vm_env_mode))" && \
 	echo "vm-env: $$(echo $(vm_env_names)) written to ~/.config/dot-agent-deck/daemon.env in the VM, $(if $(filter replace,$(vm_env_mode)),replacing the whole file,its other lines kept); 'make deck-restart' applies it to a running deck" && \
+	dropped="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-dropped:\([0-9][0-9]*\)$$/\1/p')" && \
+	if [ -n "$$dropped" ] && [ "$$dropped" -gt 0 ]; then \
+		echo "vm-env: warning: dropped $$dropped line(s) of the VM's daemon.env that were not plain NAME=value assignments (their content is not shown)" >&2; fi && \
 	kept="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-kept:\([A-Za-z0-9_ ]*\)$$/\1/p')" && \
 	if [ -n "$$kept" ]; then echo "vm-env: kept (unchanged): $$kept"; fi
 
