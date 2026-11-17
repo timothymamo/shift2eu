@@ -95,6 +95,25 @@ moves or deletes a tag.
    `RELEASE_TAG_APP_CLIENT_ID`, `RELEASE_APP_ID`. The agents' token may not be allowed to list them (a
    403): then say in the report that this is a maintainer check you could not make, and go on. If one of
    them is listed, report it and stop.
+   **The rulesets' bypass lists after the switch.** The agents App's token cannot read `bypass_actors`
+   (it needs Administration write, which the App never gets: ADR 0031, d): GitHub leaves the field out,
+   or returns it empty. The checks above that hold a ruleset's `bypass_actors` are then a maintainer
+   check you could not make: report the rulesets as you read them, ask the maintainer to confirm their
+   bypass lists against this step with their own token, and do not go on to step 5's merge until they
+   have. Never count a missing or empty list as passing.
+   Then run the `Protect main` gate check from the repository root: `make gate-check`
+   (`dev/protect-main-check.sh`; PRD #161). It reads `Protect main` and `main`'s `.github/CODEOWNERS`
+   and lists each gap: fewer than 1 required approval, `require_code_owner_review`,
+   `dismiss_stale_reviews_on_push` or `require_last_push_approval` not `true`, a bypass actor, or a
+   code owner other than the maintainer. Until milestone 3 of PRD #161 turns it off, the Makefile runs
+   it with the transition flag (`GATE_TRANSITION=1`, `--transition`), which reports the gaps without
+   failing. Act on its exit status:
+   - **0**: the gate holds, or the transition flag is on: put every gap line it printed in the report and
+     go on;
+   - **1**: the gate has gaps and the transition is over: report the gaps and stop the release;
+   - **2**: it could not check (no access, an unexpected answer): report its output and stop.
+   A gap saying the bypass list could not be read is not yours to settle: the App's token cannot read it
+   (above). Hand it to the maintainer to check with their own token, and say so in the report.
 3. Find the open release PR:
    `gh pr list --state open --label "autorelease: pending" --json number,title,headRefName,url`.
    There must be exactly one, from the branch `release-please--branches--main--components--shift2eu`
@@ -130,8 +149,9 @@ moves or deletes a tag.
    `Release-As: X.Y.Z` footer, or a commit type, on `main`, which release-please picks up.
 5. State the version, the reasoning and the PR's URL in your report **and wait for explicit
    confirmation** before anything is merged: merging the release PR publishes binaries and signed
-   container images. Merge it only when explicitly told to, as the `pr-create` skill merges a PR, and
-   only the commit you reviewed:
+   container images. Merge it only when explicitly told to, as the `pr-create` skill merges a PR (once the
+   maintainer has approved that head commit; never approve it yourself), and only the commit you
+   reviewed:
    `gh pr merge <n> --squash --delete-branch --match-head-commit <head commit from step 4>` from the
    repository root, which refuses to merge if the branch moved since the review; if it refuses, review
    the PR again from step 4. Usually the maintainer merges it: tell them to confirm, before merging by
@@ -144,8 +164,11 @@ moves or deletes a tag.
    and watch it (`gh run watch <id>`). It must succeed: its `Release please`, `Tag` and `Relabel` jobs
    (the last is skipped only when nothing was tagged). If the `Tag` job's step "Wait for no release to be
    queued or in progress" failed because a release was in flight, wait for that `release.yml` run to finish, then
-   `gh run rerun <id>`, once. If only the `Relabel` job failed after the tag was created, a re-run finds
-   the tag on the merge commit, hands it on and finishes the relabelling: `gh run rerun <id>`, once. On any
+   ask the maintainer to re-run it, once, with the exact command `gh run rerun <id>`. If only the
+   `Relabel` job failed after the tag was created, a re-run finds the tag on the merge commit, hands it on
+   and finishes the relabelling: ask the maintainer for `gh run rerun <id>`, once. Never re-run a run
+   yourself: the agents App has Actions read only (ADR 0031, d), and re-runs are the maintainer's. Report,
+   stop, and pick this step up again once the maintainer says the re-run finished. On any
    other failure, report the failed step's log
    (`gh run view <id> --log-failed`) and stop. Then `git -C <repository root> fetch --tags` and check
    that `vX.Y.Z` exists, is the version reviewed in step 4, and points at the merge commit
@@ -155,7 +178,8 @@ moves or deletes a tag.
 7. Watch the release run the tag started
    (`gh run list --workflow release.yml --branch vX.Y.Z --json databaseId,status,conclusion`,
    then `gh run watch <id>`), then report the release URL (`gh release view vX.Y.Z --json url`).
-   If a pending run was cancelled, re-run it with `gh run rerun <id>`. On failure, report the failed
+   If a pending run was cancelled, ask the maintainer to re-run it with the exact command
+   `gh run rerun <id>` (never run it yourself), and watch it once they have. On failure, report the failed
    step's log and stop; never delete or move a pushed tag.
    GoReleaser uploads to a draft and the run's `publish` job publishes it last, after the archives are
    attested (issues #156 and #163, ADR 0015). Check that it did:

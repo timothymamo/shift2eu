@@ -33,9 +33,10 @@ These names come from the work itself:
 
 ## Rules
 
-- Merging is the maintainer's gate only. Never merge a PR, never force-push, never rebase. A unit brings
-  its branch up to date by merging `origin/main` with a merge commit. Merging into the scratch tree to run
-  `<checks>` (Verify, step 6) is allowed: that tree is never pushed from.
+- Approving and merging are the maintainer's gate only. Never approve or merge a PR, never force-push,
+  never rebase. A unit brings its branch up to date by merging `origin/main` with a merge commit.
+  Merging into the scratch tree to run `<checks>` (Verify, step 6) is allowed: that tree is never pushed
+  from.
 - The repository root stays on the default branch. The dispatcher never edits or commits there; it only
   pulls.
 - Dispatch only what the maintainer approved, never more than `<unit limit>` units at once, and never a
