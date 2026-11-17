@@ -154,9 +154,9 @@ moves or deletes a tag.
    `Release-As: X.Y.Z` footer, or a commit type, on `main`, which release-please picks up.
 5. State the version, the reasoning and the PR's URL in your report **and wait for explicit
    confirmation** before anything is merged: merging the release PR publishes binaries and signed
-   container images. Merge it only when explicitly told to, as the `pr-create` skill merges a PR (once the
-   maintainer has approved that head commit; never approve it yourself), and only the commit you
-   reviewed:
+   container images. Merge it only when explicitly told to, and only after the approval check of the
+   `pr-create` skill's merge step 9 passes for this PR, exactly as written there (never approve it
+   yourself), and only the commit you reviewed:
    `gh pr merge <n> --squash --delete-branch --match-head-commit <head commit from step 4>` from the
    repository root, which refuses to merge if the branch moved since the review; if it refuses, review
    the PR again from step 4. Usually the maintainer merges it: tell them to confirm, before merging by

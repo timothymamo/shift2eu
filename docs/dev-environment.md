@@ -528,7 +528,11 @@ before it still hold. Rolling back is under each step.
    yourself, `make gate-check GATE_TRANSITION=0` exits 0 and prints no gap. An open agent pull request
    shows "Review required" (`gh pr view <n> --json reviewDecision` gives `REVIEW_REQUIRED`) until you
    approve it.
-   *Roll back:* set the required approvals in `Protect main` back to 0.
+   *Roll back:* put the `pull_request` rule of `Protect main` back as it was before this step, turning
+   off all four settings: required approvals 0, no review from Code Owners, no dismissal of stale
+   approvals, no approval of the most recent reviewable push. *Check:* `make gate-check
+   GATE_TRANSITION=0` reports those review gaps again, and an open agent pull request's
+   `reviewDecision` (`gh pr view <n> --json reviewDecision`) is no longer `REVIEW_REQUIRED`.
 6. **Remove your token from the VM** (milestone 3, approved and merged by you: the first change through
    the gate): drop `GITHUB_TOKEN` from `VM_ENV` and the `.envrc` above the workspace, recreate the VM's
    environment, then revoke that personal token on GitHub.

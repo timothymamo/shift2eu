@@ -163,7 +163,8 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
    read, so `release-tag` hands a re-run of a failed run (`gh run rerun <id>`) to the maintainer instead
    of running it.*
 3. [ ] **Remove the maintainer's token.** After the maintainer's runbook step 6: drop `GITHUB_TOKEN` from
-   `VM_ENV` and the fallback, turn the check's transition flag off, update the docs. Opened by the App and
+   `VM_ENV` and the fallback, remove the check's transition flag entirely (`GATE_TRANSITION` and the
+   script's `--transition` flag, not only defaulting it to 0), update the docs. Opened by the App and
    approved by the maintainer: the first change through the new gate. Depends on 2 and the runbook.
 4. [ ] **AI reviewer.** The review workflow, its prompt, the code that posts the review (comment or request
    changes only), its tests, an ADR (trigger, secrets, prompt injection, cost), `docs/dev-environment.md`

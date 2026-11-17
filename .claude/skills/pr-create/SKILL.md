@@ -41,12 +41,20 @@ maintainer has not approved: the maintainer's approval and merge are the single 
 ## Merge (only when explicitly instructed)
 
 9. Check the maintainer's approval first, from the repository root:
-   `gh pr view <n> --json headRefOid,reviewDecision,reviews`. Merge only if `reviewDecision` is
-   `APPROVED` **and** `reviews` holds a review with `state` `APPROVED` by the maintainer (`author.login`
-   exactly `timothymamo`) whose `commit.oid` is the current `headRefOid`. Otherwise report "waiting for
-   the maintainer's approval" with the head commit and stop. An approval by anyone else, an App or a bot
-   included, does not count. Never try `--admin`, `--auto` or any other way past a missing approval, and
-   never approve the pull request yourself.
+   `gh pr view <n> --json author,headRefOid,reviewDecision,reviews`.
+   - If the pull request's `author.login` is the maintainer, `timothymamo` (opened under the maintainer's
+     own token before the switch to the agents App), its author cannot approve it: report that the
+     maintainer merges it themselves, and stop.
+   - Otherwise merge only if **both** hold:
+     - `reviews` holds a review with `state` `APPROVED` by the maintainer (`author.login` exactly
+       `timothymamo`) whose `commit.oid` is the current `headRefOid`; and
+     - `reviewDecision` is `APPROVED` or empty. It can be empty even after an approval while
+       `Protect main` does not yet require reviews. Never merge when it is `CHANGES_REQUESTED` or
+       `REVIEW_REQUIRED`.
+
+   Otherwise report "waiting for the maintainer's approval" with the head commit and stop. An approval
+   by anyone else, an App or a bot included, does not count. Never try `--admin`, `--auto` or any other
+   way past a missing approval, and never approve the pull request yourself.
 10. From the repository root, remove the worktree: `git -C <repository root> worktree remove <path>`.
     It refuses when the worktree has uncommitted changes; then report and stop, and never force it.
 11. Still from the root:
