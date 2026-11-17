@@ -8,6 +8,12 @@ package e2e_test
 // inventory format version 2 with sizes, workloads, relations and a monthly
 // cost, so a report of a sample must carry the Workloads section and a non-zero
 // estimate total, which a version 1 sample cannot produce.
+//
+// The goldens examples-aws-scaleway*.golden duplicate
+// test/examples/testdata/aws-scaleway-*.golden on purpose (the plain report
+// and its JSON match the -estimates ones there): these pin the built binary's
+// output, those the same report produced in-process, so a difference between
+// the two paths shows as one of them failing.
 
 import (
 	"encoding/json"
@@ -36,7 +42,9 @@ const (
 	// comparison's summary: "EUR 1,234.56 per month for 9 of 13 resources".
 	estimateTotalPrefix = " per month for "
 	// noEstimateTotal is the count of a total that estimates no resource, which
-	// a version 1 sample, whose resources are not sized, produces.
+	// a version 1 sample, whose resources are not sized, produces. It also
+	// matches a workload's subtotal, so a future sample workload made only of
+	// usage-priced (unsized) resources would trip the refusal below.
 	noEstimateTotal = " per month for 0 of "
 )
 
@@ -97,7 +105,9 @@ func TestExamplesAssess(t *testing.T) {
 
 				// The report with estimates on sums the sized resources: without
 				// a total it estimated nothing, and a total that estimates no
-				// resource means the sample is not sized.
+				// resource means the sample is not sized. The refusal matches a
+				// workload subtotal too, not only the report's total: a sample
+				// workload made only of usage-priced resources would trip it.
 				if !strings.Contains(got.stdout, estimateTotalPrefix) {
 					t.Errorf("the report holds no estimate total (\"... per month for N of M resources\"): "+
 						"estimates are on by default, and the sample is sized:\n%s", got.stdout)
