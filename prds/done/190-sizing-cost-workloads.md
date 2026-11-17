@@ -1,6 +1,7 @@
 # PRD #190: Sizing, cost estimates and workloads
 
-**Status:** Draft
+**Status:** Complete (milestones 1 to 9 done). Two acceptance criteria stay open, each with its reason
+below and a follow-up issue proposed.
 **Issue:** #190 (takes in #186)
 
 ## Problem
@@ -80,7 +81,7 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   category (for example `vcpus` on `storage.object`), the run exits 1 with one error line that names
   the resource and the field by path (`resources[3].relations[0].target`). Nothing is written.
 - [x] *Review:* an ADR records format version 2 and how it relates to ADR 0006 (supersedes or amends):
-  [ADR 0025](../docs/adr/0025-json-inventory-file-format-v2.md) amends it.
+  [ADR 0025](../../docs/adr/0025-json-inventory-file-format-v2.md) amends it.
 
 **Catalog plans and prices**
 
@@ -91,9 +92,16 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 
   Each snapshot also carries the date the prices were retrieved, their source URL and the target's
   default region for estimates, which must be one of its regions. Its `SOURCES.md` cites every price.
-- [ ] *Review:* an ADR records the snapshot format version that adds plans and prices (amends ADR 0007),
+
+  *Open:* plans, prices, dates, source URLs, default regions and citations are in place and pinned
+  (`TestCatalogPlansAndPrices`, `TestPriceCitations`), but OVHcloud's *Block Storage LUKS* and *Block
+  Storage LUKS Zonal* have no per-GiB price (their `SOURCES.md` says why), so encrypted block storage is
+  never estimated on OVHcloud.
+- [x] *Review:* an ADR records the snapshot format version that adds plans and prices (amends ADR 0007),
   including the rounding. Prices are stated as monthly prices only; a target that publishes hourly
-  prices has them converted at 730 hours, and `SOURCES.md` says so.
+  prices has them converted at 730 hours, and `SOURCES.md` says so:
+  [ADR 0024](../../docs/adr/0024-add-plans-prices-and-a-default-region-in-target-snapshot-format-v2.md),
+  *Monthly prices and rounding*.
 - [x] The snapshot reader refuses, with the existing strict errors, a plan without a price, a negative
   price, a currency other than EUR, or two plans of one offering with the same name.
 
@@ -107,6 +115,10 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 - [ ] The monthly estimate of a resource is plan price × `count` × `hoursPerMonth` / 730, plus storage
   above what the plan includes × the per-GiB price. It's rounded to the cent only for display. A test
   table pins one example per priced category on each target.
+
+  *Open:* `TestFor` (`internal/domain/estimate`) pins the formula with one example per priced category
+  on an invented catalog, and the sample goldens pin real estimates on every target, but no test table
+  pins one worked example per priced category on each real target's snapshot.
 - [x] A resource with no size, no fit, a usage-priced category or no price for its region shows "not
   estimated" with that reason. Totals sum only the estimated resources and say how many weren't
   estimated ("€1,234.56 per month for 9 of 13 resources").
@@ -149,13 +161,13 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 
 **Reports, comparison and API**
 
-- [ ] The Markdown report adds a plan and an estimate column to the resources table, a "Workloads"
+- [x] The Markdown report adds a plan and an estimate column to the resources table, a "Workloads"
   section, and a cost summary. Golden files pin a single-target and a comparison report for each sample
   inventory under `examples/` (updated to version 2 with sizes, workloads and relations).
 - [x] The comparison report adds one estimate column per target in its summary and resources tables,
   and the per-workload estimates per target. It contains no ranking, "cheapest" or recommendation: the
   "no ranking" test from PRD #89 gains "cheapest" and "best price".
-- [ ] The JSON report moves to schema version 2 (ADR 0018) with the plan, the estimate, its basis
+- [x] The JSON report moves to schema version 2 (ADR 0018) with the plan, the estimate, its basis
   (price date, currency, excluded items), the workloads and the relations. Its JSON Schemas are updated
   and the examples validate against them.
 - [x] `POST /v1/assessments` accepts version 1 and version 2 inventories and returns the version 2
@@ -169,10 +181,10 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
 
 **Architecture**
 
-- [ ] `make check` passes, including depguard and `test/architecture`. Plan matching and estimating are
+- [x] `make check` passes, including depguard and `test/architecture`. Plan matching and estimating are
   domain logic (`internal/domain`). Prices enter only through the catalog port. No source-service to
   target-service price table exists anywhere.
-- [ ] Default tests use invented plans and prices (`internal/testutil`). Real prices appear only in the
+- [x] Default tests use invented plans and prices (`internal/testutil`). Real prices appear only in the
   embedded snapshots and the goldens built from them.
 
 ## Milestones
@@ -186,13 +198,13 @@ Each milestone ships as one PR, in dependency order. Milestones 3, 4 and 5 can r
 2. [x] **Catalog plans and prices.** Domain: plans and prices on `catalog.Offering`, validated by
    `catalog.New`, and the target's default region for estimates. The snapshot format version that adds
    them, with the shared reader, the targettest contract suite and an ADR
-   ([0024](../docs/adr/0024-add-plans-prices-and-a-default-region-in-target-snapshot-format-v2.md)). The existing snapshots move
+   ([0024](../../docs/adr/0024-add-plans-prices-and-a-default-region-in-target-snapshot-format-v2.md)). The existing snapshots move
    to the new version with no plans yet.
 3. [x] **OVHcloud plans and prices** (monthly) and its default region, in its snapshot and
    `SOURCES.md`. Depends on 2.
 4. [x] **Scaleway plans and prices** (monthly) and its default region, in its snapshot and
    `SOURCES.md`. Paid Kubernetes control-plane fees are recorded as the offering's `fixedFees`
-   (ADR [0026](../docs/adr/0026-add-an-optional-fixed-monthly-fee-per-offering-to-snapshot-format-v2.md)), not left out. Depends on 2.
+   (ADR [0026](../../docs/adr/0026-add-an-optional-fixed-monthly-fee-per-offering-to-snapshot-format-v2.md)), not left out. Depends on 2.
 5. [x] **UpCloud plans and prices** (monthly) and its default region, in its snapshot and `SOURCES.md`.
    Paid Kubernetes control-plane fees are recorded as the offering's `fixedFees` (ADR 0026), not left
    out. Depends on 2.
@@ -205,7 +217,7 @@ Each milestone ships as one PR, in dependency order. Milestones 3, 4 and 5 can r
    by its `count` (its nodes), and scaled by hours / 730 as plan prices are; a fee alone never makes an
    estimate: a resource with no plan price for the region stays "not estimated" (ADR 0026,
    *Estimates*). Design and API: ADR
-   [0027](../docs/adr/0027-match-plans-and-estimate-monthly-prices-in-a-domain-package.md). Depends on 1
+   [0027](../../docs/adr/0027-match-plans-and-estimate-monthly-prices-in-a-domain-package.md). Depends on 1
    and 2.
 7. [x] **Workloads and relations in the assessment.** Domain: per-workload summaries and estimates, and
    the "affected by a blocker" notes. `Assessment.Workloads` groups resources by workload, and
@@ -213,13 +225,13 @@ Each milestone ships as one PR, in dependency order. Milestones 3, 4 and 5 can r
    `depends-on` or `replica-of` relation to the blocked one, never transitively; and
    `estimate.SumSourceCost` sums the source's `monthlyCost` per currency, which milestone 8 shows only
    when estimates are on. Design and API: ADR
-   [0028](../docs/adr/0028-group-workloads-note-blocked-relations-and-sum-the-source-cost-in-the-assessment.md).
+   [0028](../../docs/adr/0028-group-workloads-note-blocked-relations-and-sum-the-source-cost-in-the-assessment.md).
    Depends on 6.
 8. [x] **Markdown and JSON reports, CLI and API options.** Both renderers, the comparison, JSON report
    schema version 2 and its Schemas. The CLI's `--region` and `--no-estimate`, and the HTTP API's
    `regions` and `estimate` request fields, on `/v1`. Depends on 7 and on 3, 4 and 5 for the real-price
    goldens.
-9. [ ] **Examples, docs and e2e.** `examples/` move to version 2 with sizes, workloads, relations and
+9. [x] **Examples, docs and e2e.** `examples/` move to version 2 with sizes, workloads, relations and
    some `monthlyCost`, and `docs/guide/try-it.md`, `assess.md`, `http-api.md` and the inventory guide
    (#178) cover the new fields and how to read sizes from each source's CLI. E2e goldens. README and
    `CLAUDE.md` status. Moves this PRD to `prds/done/`, closes #190 and #186. Depends on 8.
