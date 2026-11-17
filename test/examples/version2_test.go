@@ -586,8 +586,11 @@ func TestSampleReportVariants(t *testing.T) {
 				return runSingleWith(t, inventoryPath, scaleway.New(), markdown.New(),
 					analysis.Options{Estimate: false}, meta)
 			},
-			want:     []string{"## Resources", "## Workloads"},
-			unwanted: []string{"€", "| Plan |", "| Monthly estimate |", "## Cost estimate"},
+			want: []string{"## Resources", "## Workloads"},
+			// The sample carries the source's own monthly cost in USD, which the
+			// report shows beside the estimates only: with them off, neither
+			// the label nor the currency may appear.
+			unwanted: []string{"€", "$", "Source cost", "| Plan |", "| Monthly estimate |", "## Cost estimate"},
 		},
 		{
 			name:   "markdown report against scaleway in a chosen region",

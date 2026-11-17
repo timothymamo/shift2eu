@@ -140,7 +140,10 @@ func TestExamplesReportVariants(t *testing.T) {
 				"workloads:\n%s", workloadsHeading, got.stdout)
 		}
 
-		for _, unwanted := range []string{"€", "| Plan |", "| Monthly estimate |", costHeading} {
+		// The sample carries the source's own monthly cost in USD, which the run
+		// shows beside the estimates only: with them off, neither the label nor
+		// the currency may appear.
+		for _, unwanted := range []string{"€", "$", "Source cost", "| Plan |", "| Monthly estimate |", costHeading} {
 			if strings.Contains(got.stdout, unwanted) {
 				t.Errorf("the report of a run with --no-estimate holds %q:\n%s", unwanted, got.stdout)
 			}
