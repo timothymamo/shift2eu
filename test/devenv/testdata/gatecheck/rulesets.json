@@ -1,0 +1,29 @@
+[
+  {
+    "id": 200001,
+    "name": "Release tags",
+    "target": "tag",
+    "source_type": "Repository",
+    "source": "timothymamo/shift2eu",
+    "enforcement": "active",
+    "node_id": "RRS_lACqUmVwb3NpdG9yec4AqQAB"
+  },
+  {
+    "id": 123456,
+    "name": "Protect main",
+    "target": "branch",
+    "source_type": "Repository",
+    "source": "timothymamo/shift2eu",
+    "enforcement": "active",
+    "node_id": "RRS_lACqUmVwb3NpdG9yec4AqQAC"
+  },
+  {
+    "id": 200002,
+    "name": "Protect main (old)",
+    "target": "branch",
+    "source_type": "Repository",
+    "source": "timothymamo/shift2eu",
+    "enforcement": "evaluate",
+    "node_id": "RRS_lACqUmVwb3NpdG9yec4AqQAD"
+  }
+]

@@ -70,8 +70,8 @@ func readRepoFile(t *testing.T, rel string) string {
 }
 
 // scriptPath returns the absolute path of a script of dev/, failing the test when the script does not exist
-// yet: PRD #161 milestone 1 adds dev/agents-app-token.sh and dev/gh-app-token.sh, and a missing one is the
-// RED this test exists for, never a reason to skip.
+// yet: the PRD milestone that adds it is the one whose tests fail here, and a missing script is the RED such a
+// test exists for, never a reason to skip.
 func scriptPath(t *testing.T, rel string) string {
 	t.Helper()
 
@@ -82,7 +82,7 @@ func scriptPath(t *testing.T, rel string) string {
 
 	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("%s does not exist: PRD #161 milestone 1 adds it (design: .dot-agent-deck/prd161m1-design.md): %v", rel, err)
+		t.Fatalf("%s does not exist yet: the PRD milestone that adds it has not landed: %v", rel, err)
 	}
 
 	if !info.Mode().IsRegular() {

@@ -1,0 +1,18 @@
+{
+  "name": "CODEOWNERS",
+  "path": ".github/CODEOWNERS",
+  "sha": "1c0de0e1c0de0e1c0de0e1c0de0e1c0de0e1c0de",
+  "size": 174,
+  "url": "https://api.github.com/repos/timothymamo/shift2eu/contents/.github/CODEOWNERS?ref=main",
+  "html_url": "https://github.com/timothymamo/shift2eu/blob/main/.github/CODEOWNERS",
+  "git_url": "https://api.github.com/repos/timothymamo/shift2eu/git/blobs/1c0de0e1c0de0e1c0de0e1c0de0e1c0de0e1c0de",
+  "download_url": "https://raw.githubusercontent.com/timothymamo/shift2eu/main/.github/CODEOWNERS",
+  "type": "file",
+  "content": "IyBFdmVyeSBwYXRoIGJlbG9uZ3MgdG8gdGhlIG1haW50YWluZXIgKFBSRCAj\nMTYxIG1pbGVzdG9uZSAyKS4KIyBUaGUgQUkgcmV2aWV3ZXIncyBjaGFuZ2Ug\ncmVxdWVzdHMgYXJlIGFkdmljZTsgb25seSB0aGUgbWFpbnRhaW5lcidzIGFw\ncHJvdmFsIGxhbmRzIGEgY2hhbmdlLgoKKiBAdGltb3RoeW1hbW8K\n",
+  "encoding": "base64",
+  "_links": {
+    "self": "https://api.github.com/repos/timothymamo/shift2eu/contents/.github/CODEOWNERS?ref=main",
+    "git": "https://api.github.com/repos/timothymamo/shift2eu/git/blobs/1c0de0e1c0de0e1c0de0e1c0de0e1c0de0e1c0de",
+    "html": "https://github.com/timothymamo/shift2eu/blob/main/.github/CODEOWNERS"
+  }
+}
