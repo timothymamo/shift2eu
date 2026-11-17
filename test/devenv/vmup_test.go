@@ -192,6 +192,14 @@ func newVMUpFixture(t *testing.T, instance, status string) *vmUpFixture {
 	env["SHIFT2EU_TEST_LIMA_INSTANCE"] = instance
 	env["SHIFT2EU_TEST_LIMA_STATUS"] = status
 
+	// make vm-create runs make vm-env after its vm-up, and vm-env refuses a VM_ENV name that is unset or empty
+	// (issue #234). The fixture's environment holds none of the test machine's own (CLAUDE.md rule 3), so the
+	// VM_ENV names get invented values here, with the same helper the issue #234 tests use: obviously fake
+	// ones, never a credential of this machine.
+	for _, name := range vmEnvCredentials {
+		env[name] = fakeEnvValue(name)
+	}
+
 	return &vmUpFixture{
 		sb:           sb,
 		env:          env,
