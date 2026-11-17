@@ -210,21 +210,46 @@ vm-up: git-hooks ## Create or start the Lima VM with only this repository's work
 vm-shell: ## Open a shell in the VM at the repository root
 	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)"
 
+# vm-env checks every name first and writes nothing, without calling limactl at all, unless each one is set
+# and not empty: a locked macOS login Keychain in an SSH session or an unloaded direnv .envrc must never wipe
+# the credentials the VM has (issue #234). It then merges into the VM's daemon.env: the lines of the names in
+# VM_ENV are replaced and every other line is kept, so `make vm-env VM_ENV=GITHUB_TOKEN` replaces only
+# GITHUB_TOKEN. The values travel on standard input, never on a command line, and the merge is written to a
+# temporary file beside daemon.env and moved into place, mode 0600, so a failure never leaves half a file.
 .PHONY: vm-env
-vm-env: ## Copy the VM_ENV credentials from your shell into the VM
+vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
 	@for name in $$(echo '$(VM_ENV)' | tr ',' ' '); do \
 		case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
 			echo "vm-env: refusing $$name: the agents App's key and its path never enter the VM; make agents-token writes its tokens there" >&2; \
 			exit 1;; esac; \
+		case "$$name" in ([!A-Za-z_]* | *[!A-Za-z0-9_]*) \
+			echo "vm-env: refusing $$name: not a variable name" >&2; \
+			exit 1;; esac; \
 	done
+	@missing=''; \
+	for name in $$(echo '$(VM_ENV)' | tr ',' ' '); do \
+		[ -n "$$(printenv "$$name")" ] || missing="$$missing $$name"; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "vm-env: not set or empty:$$missing. Nothing was written: the VM's daemon.env is unchanged." >&2; \
+		echo "  1. If your credentials come from the macOS login Keychain, an SSH session has it locked: run" >&2; \
+		echo "     security unlock-keychain ~/Library/Keychains/login.keychain-db (it asks for the account password)." >&2; \
+		echo "  2. Run cd ~ && cd $(REPO_ROOT) so direnv reads the .envrc again. On any host, check that the" >&2; \
+		echo "     .envrc exists, sets them and is allowed (direnv allow), or export the variables yourself." >&2; \
+		echo "  3. Re-run make vm-env (or the target that ran it, e.g. make vm-create)." >&2; \
+		echo "  To copy only some of them on purpose, narrow VM_ENV: make vm-env VM_ENV=GITHUB_TOKEN keeps the others." >&2; \
+		exit 1; \
+	fi
 	@env_file="$$(for name in $$(echo '$(VM_ENV)' | tr ',' ' '); do \
 		value="$$(printenv "$$name")"; \
-		[ -n "$$value" ] || { echo "vm-env: $$name is not set, skipped" >&2; continue; }; \
 		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$name has unsupported characters" >&2; exit 1;; esac; \
 		printf '%s=%s\n' "$$name" "$$value"; \
 	done)" && printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
-		sh -c 'umask 077 && mkdir -p ~/.config/dot-agent-deck && cat > ~/.config/dot-agent-deck/daemon.env && chmod 600 ~/.config/dot-agent-deck/daemon.env' >/dev/null
-	@echo "vm-env: written to ~/.config/dot-agent-deck/daemon.env in the VM; 'make deck-restart' applies it to a running deck"
+		sh -c 'umask 077 && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && mkdir -p "$$d" && new="$$(cat)" && \
+		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && t="$$(mktemp "$$d/.daemon.env.XXXXXX")" && \
+		{ { if [ -f "$$f" ]; then grep -v -E "^($$names)=" "$$f"; [ "$$?" -le 1 ]; fi && printf "%s\n" "$$new"; } > "$$t" && \
+		chmod 600 "$$t" && mv "$$t" "$$f" || { rm -f "$$t"; exit 1; }; }' >/dev/null
+	@echo "vm-env: $(VM_ENV) written to ~/.config/dot-agent-deck/daemon.env in the VM, its other lines kept; 'make deck-restart' applies it to a running deck"
 
 .PHONY: vm-claude-settings
 vm-claude-settings: ## Merge dev/claude-user-settings.json into Claude Code's user settings in the VM
@@ -328,7 +353,8 @@ deck: ## Open the dot-agent-deck TUI in the VM (attaches to the daemon service)
 	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)" dot-agent-deck
 
 .PHONY: deck-restart
-deck-restart: ## Restart the deck's daemon service in the VM, e.g. after vm-env (stops running agents)
+deck-restart: ## Reload the units and restart the deck's daemon service in the VM, e.g. after vm-env (stops running agents)
+	limactl shell --workdir / "$(LIMA_INSTANCE)" systemctl --user daemon-reload
 	limactl shell --workdir / "$(LIMA_INSTANCE)" systemctl --user restart dot-agent-deck.service
 
 .PHONY: vm-stop

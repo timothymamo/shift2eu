@@ -21,11 +21,13 @@
 #   7. deck        .dot-agent-deck.toml is valid.
 #   8. deck command The deck's default_command, which new agents and dispatchers start with, where the VM
 #                  has none (issue #134).
-#   9. daemon      The deck's daemon is installed as a systemd user service, if it is not yet.
+#   9. deck dir    The deck's default_dir, where new agents start browsing: the main checkout (issue #234).
+#  10. daemon      The deck's daemon is installed as a systemd user service, if it is not yet, and
+#                  restarted if it runs and step 9 changed the deck's configuration.
 #
 # Running it again changes nothing: a file is written only when a flag in it is not set yet, the theme only
-# when it differs from the one asked for, and the git identity and the deck's default command only where
-# the VM has none. Run it while no Claude Code session runs in the VM (before `make deck`): a running
+# when it differs from the one asked for, the git identity and the deck's default command only where the VM
+# has none, and default_dir is set to the same main checkout every time. Run it while no Claude Code session runs in the VM (before `make deck`): a running
 # session can write its own copy of ~/.claude.json back over the trust flags. It never prints a credential: the tools whose output can
 # include one are run quietly or filtered to the field checked.
 set -euo pipefail
@@ -143,9 +145,27 @@ else
   say "deck command: kept default_command ${current}, not ${deck_command}; change it with dot-agent-deck config set default_command in the VM"
 fi
 
-# 9. daemon: last, as installing it starts it, and only when it is not installed yet.
+# 9. deck dir: where Ctrl+N, the Schedules manager's Add and the desktop app's New agent start browsing. The
+# main checkout, so an agent opens where CLAUDE.md, the roles in .dot-agent-deck.toml and the dispatcher's
+# memory (keyed by the checkout's path) are, not in the VM user's home (issue #234). Set on every run, with the
+# same argument, so a re-run keeps it. The daemon reads it when it starts: when the set changes the deck's
+# config.toml and the daemon already runs, step 10 restarts it.
+[ -d "${main_checkout}" ] || fail "deck dir: ${main_checkout} is not a directory in the VM"
+deck_config="${XDG_CONFIG_HOME:-${HOME}/.config}/dot-agent-deck/config.toml"
+config_before="$(cksum <"${deck_config}" 2>/dev/null || true)"
+dot-agent-deck config set default_dir "${main_checkout}" >/dev/null || fail "deck dir: dot-agent-deck config set default_dir failed"
+config_after="$(cksum <"${deck_config}" 2>/dev/null || true)"
+say "deck dir: default_dir is ${main_checkout}"
+
+# 10. daemon: last, as installing it starts it, and only when it is not installed yet. An installed one that
+# runs is restarted only when step 9 changed the deck's configuration, so it reads the new default_dir.
 if [ "$(systemctl --user is-enabled dot-agent-deck.service 2>/dev/null || true)" = "enabled" ]; then
-  say "daemon: dot-agent-deck.service already installed"
+  if [ "${config_before}" != "${config_after}" ] && systemctl --user is-active --quiet dot-agent-deck.service; then
+    systemctl --user restart dot-agent-deck.service || fail "daemon: systemctl --user restart dot-agent-deck.service failed"
+    say "daemon: restarted dot-agent-deck.service to read the new default_dir"
+  else
+    say "daemon: dot-agent-deck.service already installed"
+  fi
 else
   dot-agent-deck daemon install || fail "daemon: dot-agent-deck daemon install failed"
   say "daemon: installed dot-agent-deck.service"
