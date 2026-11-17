@@ -403,20 +403,44 @@ provision:
       # Not `gh auth setup-git`, which would name the real gh and skip the wrapper.
       git config --global credential.https://github.com.helper '!/usr/local/bin/gh auth git-credential'
 
-      # The deck's daemon runs as a systemd user service (`dot-agent-deck daemon install`, once). This
-      # drop-in gives it the credentials from `make vm-env`. Lima enables lingering, so it starts at boot.
-      mkdir -p "$HOME/.config/systemd/user/dot-agent-deck.service.d"
-      cat > "$HOME/.config/systemd/user/dot-agent-deck.service.d/credentials.conf" <<'UNIT'
+      # The deck's daemon runs as a systemd user service (`dot-agent-deck daemon install`, once), with two
+      # drop-ins. Each is written only when its content differs, so an unchanged one keeps its mtime and
+      # systemd never warns that the unit changed on disk; a changed one is reloaded below (issue #234).
+      dropins="$HOME/.config/systemd/user/dot-agent-deck.service.d"
+      mkdir -p "$dropins"
+      dropin_changed=0
+      # write_dropin <name> writes its standard input to the drop-in <name> when that differs from the file there.
+      write_dropin() {
+        local tmp
+        tmp="$(mktemp "$dropins/.$1.XXXXXX")"
+        cat > "$tmp"
+        if cmp -s "$tmp" "$dropins/$1"; then
+          rm -f "$tmp"
+        else
+          chmod 644 "$tmp"
+          mv "$tmp" "$dropins/$1"
+          dropin_changed=1
+        fi
+      }
+
+      # The credentials from `make vm-env`. Lima enables lingering, so the service starts at boot.
+      write_dropin credentials.conf <<'UNIT'
       [Service]
       EnvironmentFile=-%h/.config/dot-agent-deck/daemon.env
       UNIT
 
       # The daemon starts every agent pane with its own environment, which systemd leaves without a
       # TERM, so Claude Code and pi would print no colour. The deck's terminal emulator handles 24-bit colour.
-      cat > "$HOME/.config/systemd/user/dot-agent-deck.service.d/terminal.conf" <<'UNIT'
+      write_dropin terminal.conf <<'UNIT'
       [Service]
       Environment=TERM=xterm-256color COLORTERM=truecolor
       UNIT
+
+      # A changed drop-in takes effect at the service's next start once the user manager has reloaded. When the
+      # manager is not reachable yet, it reads the drop-ins when it starts, and make deck-restart reloads too.
+      if [ "${dropin_changed}" -eq 1 ] && systemctl --user show-environment >/dev/null 2>&1; then
+        systemctl --user daemon-reload || true
+      fi
 
       # Claude Code (native installer, no Node.js needed): every role except the tester.
       command -v claude >/dev/null 2>&1 || curl -fsSL https://claude.ai/install.sh | bash
