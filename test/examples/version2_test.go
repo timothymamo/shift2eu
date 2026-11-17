@@ -21,6 +21,7 @@ import (
 
 	"github.com/timothymamo/shift2eu/internal/adapter/report/jsonreport"
 	"github.com/timothymamo/shift2eu/internal/adapter/report/markdown"
+	"github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile"
 	"github.com/timothymamo/shift2eu/internal/adapter/target/scaleway"
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
@@ -135,22 +136,24 @@ func TestSampleSizesCoverPricedCategories(t *testing.T) {
 		t.Run(file.name+"/sizes", func(t *testing.T) {
 			t.Parallel()
 
-			for _, resource := range inv.Resources() {
-				want, priced := pricedSizes[resource.Category]
-				if !priced {
-					continue
-				}
-
-				if resource.Size == nil {
+			for _, gap := range sizeGaps(inv) {
+				if gap.Field == "" {
+					priced, _ := pricedSizes[gap.Category]
 					t.Errorf("%s: resource %q (%s) has no size; a priced category is priced by %s",
-						file.name, resource.ID, resource.Category, sizeFields(want))
+						file.name, gap.ID, gap.Category, sizeFields(priced))
 
 					continue
 				}
 
-				assertSizeField(t, file.name, resource, "vcpus", want.vcpus, resource.Size.VCPUs)
-				assertSizeField(t, file.name, resource, "memoryGiB", want.memory, resource.Size.MemoryGiB)
-				assertSizeField(t, file.name, resource, "storageGiB", want.storage, resource.Size.StorageGiB)
+				if gap.Unwanted {
+					t.Errorf("%s: resource %q (%s) gives %s, which makes no sense for the category",
+						file.name, gap.ID, gap.Category, gap.Field)
+
+					continue
+				}
+
+				t.Errorf("%s: resource %q (%s) gives no %s; its category is priced by that field",
+					file.name, gap.ID, gap.Category, gap.Field)
 			}
 		})
 
@@ -241,23 +244,165 @@ func sizeFields(want pricedSize) string {
 	return strings.Join(fields[:len(fields)-1], ", ") + " and " + fields[len(fields)-1]
 }
 
-// assertSizeField fails the test when the category wants the field (want) and
-// the resource leaves it out, or when the category does not want it and the
-// resource gives it anyway: either way the size would not be the one the
-// estimate reads.
-func assertSizeField(t *testing.T, name string, resource inventory.Resource, field string, want bool,
-	value *float64,
-) {
+// sizeGap is one size a priced resource of a sample does not give the way the
+// estimate reads it: the resource's ID and category, the field's path as the
+// inventory file spells it (empty when the resource gives no size at all), and
+// whether the resource gives a field the estimate does not price (Unwanted)
+// rather than leaving out one it does.
+type sizeGap struct {
+	ID       string
+	Category taxonomy.Category
+	Field    string
+	Unwanted bool
+}
+
+// sizeGaps returns a gap for every priced resource whose size is not the one the
+// estimate reads, in the inventory's order: a field the resource leaves out that
+// its category is priced by, or a field it gives that its category is not priced
+// by.
+func sizeGaps(inv inventory.Inventory) []sizeGap {
+	var gaps []sizeGap
+
+	for _, resource := range inv.Resources() {
+		priced, ok := pricedSizes[resource.Category]
+		if !ok {
+			continue
+		}
+
+		if resource.Size == nil {
+			gaps = append(gaps, sizeGap{ID: resource.ID, Category: resource.Category})
+
+			continue
+		}
+
+		for _, field := range []struct {
+			name   string
+			priced bool
+			value  *float64
+		}{
+			{name: "vcpus", priced: priced.vcpus, value: resource.Size.VCPUs},
+			{name: "memoryGiB", priced: priced.memory, value: resource.Size.MemoryGiB},
+			{name: "storageGiB", priced: priced.storage, value: resource.Size.StorageGiB},
+		} {
+			path := "size." + field.name
+
+			switch {
+			case field.priced && field.value == nil:
+				gaps = append(gaps, sizeGap{ID: resource.ID, Category: resource.Category, Field: path})
+			case !field.priced && field.value != nil:
+				gaps = append(gaps, sizeGap{
+					ID:       resource.ID,
+					Category: resource.Category,
+					Field:    path,
+					Unwanted: true,
+				})
+			}
+		}
+	}
+
+	return gaps
+}
+
+// TestSizePinFollowsTheFormat pins that the sizing pin reads a document the way
+// docs/adr/0025 writes it: every size field the format allows a category is not
+// a gap. storageGiB on a database is a real size - the instance's disk, which the
+// estimate prices above what the plan includes (docs/adr/0027) - and so is
+// storageGiB on a compute instance or a Kubernetes node. A field a priced
+// category is priced by and the resource leaves out is a gap, so the pin still
+// catches a sample that shows no estimate.
+func TestSizePinFollowsTheFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		// name is the subtest's name.
+		name string
+		// id is the resource's ID, as the document writes it.
+		id string
+		// category is the resource's category, as the document writes it.
+		category taxonomy.Category
+		// size is the document's size object without the braces, or "" for a
+		// resource that gives none.
+		size string
+		// want lists the gaps the pin must report.
+		want []sizeGap
+	}{
+		{
+			name:     "database sized by plan and disk",
+			id:       "shop-db",
+			category: taxonomy.DatabasePostgreSQL,
+			size:     `"vcpus": 2, "memoryGiB": 8, "storageGiB": 50`,
+		},
+		{
+			name:     "mysql database sized by plan and disk",
+			id:       "shop-legacy-mysql",
+			category: taxonomy.DatabaseMySQL,
+			size:     `"vcpus": 2, "memoryGiB": 8, "storageGiB": 100`,
+		},
+		{
+			name:     "compute instance sized by plan and local disk",
+			id:       "shop-web-1",
+			category: taxonomy.ComputeVM,
+			size:     `"vcpus": 2, "memoryGiB": 8, "storageGiB": 100`,
+		},
+		{
+			name:     "kubernetes node sized by plan and local disk",
+			id:       "shop-eks",
+			category: taxonomy.KubernetesManaged,
+			size:     `"vcpus": 4, "memoryGiB": 16, "storageGiB": 50, "count": 3`,
+		},
+		{
+			name:     "compute instance with no vcpus",
+			id:       "shop-web-1",
+			category: taxonomy.ComputeVM,
+			size:     `"memoryGiB": 8`,
+			want: []sizeGap{
+				{ID: "shop-web-1", Category: taxonomy.ComputeVM, Field: "size.vcpus"},
+			},
+		},
+		{
+			name:     "database with no size",
+			id:       "shop-db",
+			category: taxonomy.DatabaseMySQL,
+			want: []sizeGap{
+				{ID: "shop-db", Category: taxonomy.DatabaseMySQL},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := sizeGaps(sizedSample(t, tc.id, tc.category, tc.size))
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("sizeGaps(%s) mismatch (-want +got):\n%s", tc.name, diff)
+			}
+		})
+	}
+}
+
+// sizedSample decodes a one-resource version 2 document whose resource has the
+// size object written as size, through the real inventory-file adapter, the one
+// cmd/shift2eu wires.
+func sizedSample(t *testing.T, id string, category taxonomy.Category, size string) inventory.Inventory {
 	t.Helper()
 
-	switch {
-	case want && value == nil:
-		t.Errorf("%s: resource %q (%s) gives no size.%s; its category is priced by that field",
-			name, resource.ID, resource.Category, field)
-	case !want && value != nil:
-		t.Errorf("%s: resource %q (%s) gives size.%s = %v, which makes no sense for the category",
-			name, resource.ID, resource.Category, field, *value)
+	doc := `{"schemaVersion": 2, "source": "aws", "resources": [{"id": "` + id + `", "category": "` +
+		string(category) + `"`
+
+	if size != "" {
+		doc += `, "size": { ` + size + ` }`
 	}
+
+	doc += `}]}`
+
+	inv, err := inventoryfile.FromBytes([]byte(doc)).Inventory(t.Context())
+	if err != nil {
+		t.Fatalf("decode the sample document %s: %v", doc, err)
+	}
+
+	return inv
 }
 
 // TestSampleWorkloadsAndRelations pins that every sample names at least two
