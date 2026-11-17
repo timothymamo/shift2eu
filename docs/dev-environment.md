@@ -284,8 +284,9 @@ read the file:
   stops there. This keeps a locked login Keychain or an unloaded `.envrc` from wiping the credentials the
   agents need ([Troubleshooting](#troubleshooting-credentials)). An empty `VM_ENV` (`make vm-env VM_ENV=`)
   names no credential and is refused the same way; a name listed twice is written once. A `VM_ENV`
-  holding anything but variable names, commas and spaces (a quote, a `$`, a `*`) is refused, as written,
-  before any shell reads it.
+  holding anything but variable names, commas and spaces (a quote, a `$`, a `*`) is refused before any
+  shell reads it; the refusal names `VM_ENV` but never shows its value, which may be a credential typed
+  by mistake.
 - **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the three
   variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY`, is removed. Only a
   `VM_ENV` on the make command line merges; an exported `VM_ENV` replaces like the default, so a `VM_ENV`
@@ -299,7 +300,10 @@ read the file:
   it kept, never their values: `vm-env: kept (unchanged): CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY`.
   Either way the file is written to a temporary file beside `daemon.env`, mode 0600, and moved into
   place, so a failure does not leave half a file. An interrupted run removes its temporary file, and a
-  leftover from a killed run is removed by the next `make vm-env`.
+  leftover from a killed run is removed by the next `make vm-env` once it is older than a minute, so a
+  concurrent run's fresh temporary file is left alone (running `make vm-env` twice at once is not
+  otherwise supported). A merge whose `daemon.env` exists but cannot be read is refused with a `vm-env:`
+  message naming `daemon.env`, and nothing is written: make the file readable and run it again.
 - **Rotating a credential:** change it on the Mac, then `make vm-env deck-restart`. Restarting the service
   stops its running agents, so do it between tasks. Run `claude setup-token` again before the year is up.
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the

@@ -234,12 +234,16 @@ vm_env_safe_line = ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._~+/=-]*\$$
 # prints the names (never the values) of the lines it kept. The values travel on standard input, never on a
 # command line (only the mode does), and the file is written to a temporary file beside daemon.env and moved
 # into place, mode 0600, so a failure never leaves half a file; a trap removes the temporary file if the
-# VM-side shell is interrupted, and a leftover of a killed run is removed by the next vm-env.
+# VM-side shell is interrupted, and a leftover of a killed run older than a minute is removed by the next
+# vm-env: a fresh one may be a concurrent run's (concurrent vm-env runs are not supported beyond that). A
+# merge refuses a daemon.env that exists but cannot be read before it writes anything; its greps accept only
+# status 1 (no match), so a read error (status 2) is never taken for an empty file. The refusal of a bad
+# VM_ENV never shows its value, which may be a credential typed by mistake.
 .PHONY: vm-env
 vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
 	@case "$$VM_ENV" in (*[!A-Za-z0-9_,\ ]*) \
-		printf 'vm-env: refusing VM_ENV=%s: it may hold only variable names, commas and spaces. Nothing was written.\n' "$$VM_ENV" >&2; \
+		echo "vm-env: refusing VM_ENV: it may hold only variable names, commas and spaces. Its value is not shown, as it may hold a credential typed by mistake. Nothing was written." >&2; \
 		exit 1;; esac; \
 	[ -n "$(vm_env_names)" ] || { \
 		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: name at least one, e.g. make vm-env VM_ENV=GITHUB_TOKEN" >&2; \
@@ -273,11 +277,19 @@ vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if o
 	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
 		sh -c 'umask 077 && LC_ALL=C && export LC_ALL && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && \
 		t= && trap "rm -f \"\$$t\"" EXIT && trap "exit 1" HUP INT TERM && \
-		mkdir -p "$$d" && rm -f "$$d"/.daemon.env.?????? && new="$$(cat)" && safe="$(vm_env_safe_line)" && \
-		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && t="$$(mktemp "$$d/.daemon.env.XXXXXX")" && \
-		dropped=0 && if [ "$$1" = merge ] && [ -f "$$f" ]; then \
-			dropped=$$(( $$(grep -a -c . "$$f" || :) - $$(grep -a -c -E "$$safe" "$$f" || :) )); fi && \
-		{ if [ "$$1" = merge ] && [ -f "$$f" ]; then { grep -a -E "$$safe" "$$f" || :; } | grep -a -v -E "^($$names)="; [ "$$?" -le 1 ]; fi && printf "%s\n" "$$new"; } > "$$t" && \
+		unreadable() { echo "vm-env: cannot read ~/.config/dot-agent-deck/daemon.env in the VM, so a merge cannot keep its lines. Nothing was written: make it readable by the VM user (chmod 600) and run make vm-env again." >&2; exit 1; } && \
+		mkdir -p "$$d" && if [ "$$1" = merge ] && [ -f "$$f" ] && ! [ -r "$$f" ]; then unreadable; fi && \
+		find "$$d" -maxdepth 1 -name ".daemon.env.??????" -mmin +1 -exec rm -f {} + && \
+		new="$$(cat)" && safe="$(vm_env_safe_line)" && \
+		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && \
+		dropped=0 && kept= && if [ "$$1" = merge ] && [ -f "$$f" ]; then \
+			total=$$(grep -a -c . "$$f") || [ "$$?" -eq 1 ] || unreadable; \
+			plain=$$(grep -a -E "$$safe" "$$f") || [ "$$?" -eq 1 ] || unreadable; \
+			nplain=$$(printf "%s" "$$plain" | grep -a -c .) || [ "$$?" -eq 1 ] || exit 1; \
+			dropped=$$(( total - nplain )); \
+			kept=$$(printf "%s\n" "$$plain" | grep -a -v -E "^($$names)=") || [ "$$?" -eq 1 ] || exit 1; fi && \
+		t="$$(mktemp "$$d/.daemon.env.XXXXXX")" && \
+		{ if [ -n "$$kept" ]; then printf "%s\n" "$$kept"; fi && printf "%s\n" "$$new"; } > "$$t" && \
 		chmod 600 "$$t" && mv "$$t" "$$f" && t= && trap - EXIT HUP INT TERM && \
 		if [ "$$1" = merge ]; then printf "vm-env-dropped:%s\n" "$$dropped" && \
 			printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi' sh $(vm_env_mode))" && \
