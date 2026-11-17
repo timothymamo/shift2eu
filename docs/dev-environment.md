@@ -501,27 +501,28 @@ starts nothing. A lock left by a killed refresh is taken over, by one refresh on
 `kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,
 the JWT or the key, and nothing writes them to a log or the workspace.
 
-**In the VM**, both files are readable only by the VM user and replaced atomically; the write refuses a
-`~/.config/shift2eu` that is a symlink or resolves outside the VM user's home, or a token or identity file
-or a `~/.gitconfig` that is a symlink or not a regular file (a guard against a symlink left by mistake, not
-against the VM user). Whenever it writes the identity file it also sets the VM user's git identity to it
-(`user.name` and `user.email` in `~/.gitconfig`, replacing every value there), and says so ("set the VM
-shift2eu's git identity ..."). That write is atomic and takes git's own lock: a copy of `~/.gitconfig` in
-`~/.gitconfig.lock` gets the bot's identity, and replaces the file only when git, following the copy's
-`[include]` files, reads the bot's identity back; otherwise `~/.gitconfig` stays as it was. A rewritten
-`~/.gitconfig` is mode 0600; one that already holds exactly the bot's identity is not rewritten at all, and
-then no lock is looked at, so a stale `~/.gitconfig.lock` blocks only a mint that must still write the
-identity. A `~/.gitconfig.lock` another git writer holds is left alone: that mint writes nothing and the next
-one tries again. If no git is running in the VM, the lock is a crashed git's: remove `~/.gitconfig.lock` in
-the VM. A `~/.gitconfig.lock` that is a symlink or not a regular file is no lock git wrote: the mint refuses
-it and leaves it alone, and the refresh stops; remove it in the VM. It refuses a name or address that is not a bot's (a slug begins with a letter or digit), a VM
-without git, an `[include]` that would override the bot's name or address, and any `[includeIf]` (the
-check cannot evaluate a conditional include, which applies only inside the workspace's repositories). Such
-an `[include]` or any `[includeIf]` added to `~/.gitconfig` while a refresh runs makes the next mint refuse and
-the refresh stop: remove it in the VM and start the refresh again (`make agents-token-refresh-start`).
-Once the bot identity is known, every mint writes it, so a running refresh applies it again at
-each mint; only a mint before the bot user's lookup has worked writes the token alone, and that write
-never touches the git configuration.
+**In the VM**, both files are readable only by the VM user and replaced atomically; the write refuses
+a `~/.config/shift2eu` that is a symlink or resolves outside the VM user's home, or a token or identity
+file or a `~/.gitconfig` that is a symlink or not a regular file (a guard against a symlink left by
+mistake, not against the VM user). Whenever it writes the identity file it also sets the VM user's git
+identity to it (`user.name` and `user.email` in `~/.gitconfig`, replacing every value there), and says
+so ("set the VM shift2eu's git identity ..."). That write is atomic and takes git's own lock: a copy
+of `~/.gitconfig` in `~/.gitconfig.lock` gets the bot's identity, and replaces the file only when git,
+following the copy's `[include]` files, reads the bot's identity back; otherwise `~/.gitconfig` stays as
+it was. A rewritten `~/.gitconfig` is mode 0600; one that already holds exactly the bot's identity is not
+rewritten at all, and then no lock is looked at, so a stale `~/.gitconfig.lock` blocks only a mint that
+must still write the identity. A `~/.gitconfig.lock` another git writer holds is left alone: that mint
+writes nothing and the next one tries again. If no git is running in the VM, the lock is a crashed git's:
+remove `~/.gitconfig.lock` in the VM. A `~/.gitconfig.lock` that is a symlink or not a regular file is
+no lock git wrote: the mint refuses it and leaves it alone, and the refresh stops; remove it in the VM.
+It refuses a name or address that is not a bot's (a slug begins with a letter or digit), a VM without
+git, an `[include]` that would override the bot's name or address, and any `[includeIf]` (the check
+cannot evaluate a conditional include, which applies only inside the workspace's repositories). Such an
+`[include]` or any `[includeIf]` added to `~/.gitconfig` while a refresh runs makes the next mint refuse
+and the refresh stop: remove it in the VM and start the refresh again (`make agents-token-refresh-start`).
+Once the bot identity is known, every mint writes it, so a running refresh applies it again at each mint;
+only a mint before the bot user's lookup has worked writes the token alone, and that write never touches
+the git configuration.
 
 | File | Holds | Read by |
 |---|---|---|

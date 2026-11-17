@@ -333,13 +333,17 @@ lookup_identity() {
 # git wrote and is refused with status 3 (never opened, followed or removed); a regular one belongs to another
 # git writer, which the script leaves alone, exiting with status 4 before it writes anything, which the host
 # reads as transient (such a lock is held for a moment; the next mint tries again, and when no git runs in the
-# VM it is a crashed git's, for the maintainer to remove). Otherwise the script creates the lock exclusively (as
-# git config does), mode 0600, and copies ~/.gitconfig into it; the copy is checked again (the file may have
-# changed in between): an [includeIf] is refused, a copy already holding the bot's identity is dropped, and
+# VM it is a crashed git's, for the maintainer to remove). Otherwise the script takes the lock with a primitive
+# that never opens or follows what is there: it creates its own file (mktemp, mode 0600) beside ~/.gitconfig
+# and hard-links it to ~/.gitconfig.lock (ln -T: link(2) fails on any existing entry, a symlink, FIFO or
+# directory planted after the check included, which is then classified as above), then drops the temporary
+# name. It copies ~/.gitconfig into that lock; the copy is checked again (the file may have changed in
+# between): an [includeIf] is refused, a copy already holding the bot's identity is dropped, and
 # else the copy gets the two keys (--replace-all), git reads the identity back from it, and only when that is
 # the bot's does the copy replace ~/.gitconfig (mv); otherwise ~/.gitconfig is left as it was. The lock is
 # removed on every way out but the mv, and only ever the one this script created: the traps are set before the
-# lock is taken, and the path they remove is set only while the script holds the lock. A git that cannot read
+# lock is taken, and the path they remove is set only while the script holds the lock (or, before the link,
+# its own temporary file, which is removed on every way out too). A git that cannot read
 # ~/.gitconfig's includes (any status but 1, no match) is refused with status 3, never taken for none. It
 # refuses, with status 3, before it writes anything: a ~/.config/shift2eu that is a symlink or that resolves
 # (pwd -P) outside the VM user's real home, a token or identity file or a ~/.gitconfig that is a symlink or
@@ -469,8 +473,20 @@ if [ -n "$name" ]; then
       echo "agents-token: $lock exists: another git writer holds the lock on $gitconfig, so the VM writes no token and no git identity now; the next mint tries again. If no git is running in the VM, remove $lock there (a crashed git leaves it behind)" >&2
       exit 4
     fi
-    if ! (set -C && : >"$lock") 2>/dev/null; then
-      if [ -e "$lock" ] || [ -L "$lock" ]; then
+    if ! locktmp="$(mktemp "$HOME/.gitconfig.agents-token.XXXXXX")"; then
+      echo "agents-token: cannot create the lock $lock, so the VM writes no git identity: fix the VM user home" >&2
+      exit 3
+    fi
+    gitnew="$locktmp"
+    chmod 600 "$locktmp"
+    if ! ln -T "$locktmp" "$lock" 2>/dev/null; then
+      rm -f "$locktmp"
+      gitnew=""
+      if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
+        echo "agents-token: $lock is a symlink or not a regular file, so no lock git wrote: the VM writes no token and no git identity, and leaves it alone: remove $lock in the VM" >&2
+        exit 3
+      fi
+      if [ -e "$lock" ]; then
         echo "agents-token: $lock exists: another git writer holds the lock on $gitconfig, so the VM writes no token and no git identity now; the next mint tries again. If no git is running in the VM, remove $lock there (a crashed git leaves it behind)" >&2
         exit 4
       fi
@@ -478,7 +494,7 @@ if [ -n "$name" ]; then
       exit 3
     fi
     gitnew="$lock"
-    chmod 600 "$gitnew"
+    rm -f "$locktmp"
     if [ -e "$gitconfig" ] && ! cat "$gitconfig" >"$gitnew"; then
       echo "agents-token: cannot read $gitconfig, so the VM writes no git identity: make it readable by the VM user" >&2
       exit 3
