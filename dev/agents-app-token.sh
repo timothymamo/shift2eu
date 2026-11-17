@@ -325,15 +325,22 @@ lookup_identity() {
 # commit as the bot even when vm-init ran before the first mint (issue #241). Once the bot identity is known
 # every mint sends it, so every mint of a refresh applies it again; only a mint before the bot user's lookup
 # has worked (a process's first one, or one while the lookup keeps failing) writes the token alone, and such
-# a write never touches the git configuration. The git identity is written atomically too, under git's own
-# lock: the script creates ~/.gitconfig.lock exclusively (as git config does) and copies ~/.gitconfig into it.
-# A lock that exists already belongs to another git writer: the script leaves it alone and exits with status
-# 4 before it writes anything, which the host reads as transient (such a lock is held for a moment; the next
-# mint tries again). A copy that, read with its [include] files followed, already holds exactly one user.name
-# and one user.email, the bot's, is dropped and ~/.gitconfig left untouched (same inode, same mode). Otherwise
-# the copy gets the two keys (--replace-all), git reads the identity back from it, and only when that is the
-# bot's does the copy replace ~/.gitconfig (mv, which leaves it mode 0600); otherwise ~/.gitconfig is left as
-# it was. The lock is removed on every way out but the mv, and only ever the one this script created. It
+# a write never touches the git configuration. First, without any lock, it reads ~/.gitconfig itself (with
+# its [include] files followed): an [includeIf] is refused, and a file that already holds exactly one
+# user.name and one user.email, the bot's, is left untouched (same inode, same mode) and no lock is looked at,
+# so a stale ~/.gitconfig.lock never blocks the mints after the first. Only when the identity needs writing
+# does it take git's own lock: an existing ~/.gitconfig.lock that is a symlink or not a regular file is no lock
+# git wrote and is refused with status 3 (never opened, followed or removed); a regular one belongs to another
+# git writer, which the script leaves alone, exiting with status 4 before it writes anything, which the host
+# reads as transient (such a lock is held for a moment; the next mint tries again, and when no git runs in the
+# VM it is a crashed git's, for the maintainer to remove). Otherwise the script creates the lock exclusively (as
+# git config does), mode 0600, and copies ~/.gitconfig into it; the copy is checked again (the file may have
+# changed in between): an [includeIf] is refused, a copy already holding the bot's identity is dropped, and
+# else the copy gets the two keys (--replace-all), git reads the identity back from it, and only when that is
+# the bot's does the copy replace ~/.gitconfig (mv); otherwise ~/.gitconfig is left as it was. The lock is
+# removed on every way out but the mv, and only ever the one this script created: the traps are set before the
+# lock is taken, and the path they remove is set only while the script holds the lock. A git that cannot read
+# ~/.gitconfig's includes (any status but 1, no match) is refused with status 3, never taken for none. It
 # refuses, with status 3, before it writes anything: a ~/.config/shift2eu that is a symlink or that resolves
 # (pwd -P) outside the VM user's real home, a token or identity file or a ~/.gitconfig that is a symlink or
 # not a regular file, a name or email that is not a bot's (the patterns of dev/vm-git-identity.sh, with a
@@ -426,44 +433,74 @@ if [ -n "$name" ]; then
   printable() {
     printf "%s" "$1" | tr -cd "[:print:]"
   }
-  lock="$gitconfig.lock"
-  if ! (set -C && : >"$lock") 2>/dev/null; then
-    if [ -e "$lock" ] || [ -L "$lock" ]; then
-      echo "agents-token: $lock exists: another git writer holds the lock on $gitconfig, so the VM writes no token and no git identity now; the next mint tries again" >&2
-      exit 4
+  no_conditional() {
+    found=0
+    conditional="$(git config --includes --file "$1" --name-only --get-regexp "^includeif\..*\.path$")" || found=$?
+    if [ "$found" -ne 0 ] && [ "$found" -ne 1 ]; then
+      echo "agents-token: cannot read the includes of $gitconfig (git config exited $found), so the VM writes no token and no git identity: fix $gitconfig in the VM" >&2
+      exit 3
     fi
-    echo "agents-token: cannot create the lock $lock, so the VM writes no git identity: fix the VM user home" >&2
-    exit 3
-  fi
-  gitnew="$lock"
+    if [ -n "$conditional" ]; then
+      conditional="$(printf "%s\n" "$conditional" | tr -cd "[:print:]\n" | tr "\n" " ")"
+      echo "agents-token: $gitconfig has a conditional include ($conditional); git applies an includeIf only inside the repositories it matches, so the identity a commit in the workspace would use cannot be checked, and $gitconfig is unchanged: remove the includeIf in the VM" >&2
+      exit 3
+    fi
+  }
+  is_bots() {
+    got_name="$(git config --includes --file "$1" --get-all user.name)" || got_name=""
+    got_email="$(git config --includes --file "$1" --get-all user.email)" || got_email=""
+    [ "$got_name" = "$name" ] && [ "$got_email" = "$email" ]
+  }
+  lock="$gitconfig.lock"
+  gitnew=""
   trap '\''rm -f "$gitnew"'\'' EXIT
   trap '\''exit 1'\'' HUP INT TERM
-  if [ -e "$gitconfig" ] && ! cat "$gitconfig" >"$gitnew"; then
-    echo "agents-token: cannot read $gitconfig, so the VM writes no git identity: make it readable by the VM user" >&2
-    exit 3
+  if [ -e "$gitconfig" ]; then
+    no_conditional "$gitconfig"
   fi
-  conditional="$(git config --includes --file "$gitnew" --name-only --get-regexp "^includeif\..*\.path$")" || conditional=""
-  if [ -n "$conditional" ]; then
-    conditional="$(printf "%s\n" "$conditional" | tr -cd "[:print:]\n" | tr "\n" " ")"
-    echo "agents-token: $gitconfig has a conditional include ($conditional); git applies an includeIf only inside the repositories it matches, so the identity a commit in the workspace would use cannot be checked, and $gitconfig is unchanged: remove the includeIf in the VM" >&2
-    exit 3
-  fi
-  got_name="$(git config --includes --file "$gitnew" --get-all user.name)" || got_name=""
-  got_email="$(git config --includes --file "$gitnew" --get-all user.email)" || got_email=""
-  if [ "$got_name" != "$name" ] || [ "$got_email" != "$email" ]; then
-    if ! git config --file "$gitnew" --replace-all user.name "$name" || ! git config --file "$gitnew" --replace-all user.email "$email"; then
-      echo "agents-token: git could not set the bot identity in a copy of $gitconfig, which is unchanged: fix that file in the VM" >&2
-      exit 3
-    fi
-    got_name="$(git config --includes --file "$gitnew" --get user.name)" || got_name=""
-    got_email="$(git config --includes --file "$gitnew" --get user.email)" || got_email=""
-    if [ "$got_name" != "$name" ] || [ "$got_email" != "$email" ]; then
-      echo "agents-token: with the bot identity set, the effective git identity in the VM would still be $(printable "$got_name") <$(printable "$got_email")>, from an [include] in $gitconfig that sets user.name or user.email after it; $gitconfig is unchanged: remove that include in the VM" >&2
-      exit 3
-    fi
-    mv -f "$gitnew" "$gitconfig"
+  if [ -e "$gitconfig" ] && is_bots "$gitconfig"; then
+    :
   else
-    rm -f "$gitnew"
+    if [ -e "$lock" ] || [ -L "$lock" ]; then
+      if [ -L "$lock" ] || [ ! -f "$lock" ]; then
+        echo "agents-token: $lock is a symlink or not a regular file, so no lock git wrote: the VM writes no token and no git identity, and leaves it alone: remove $lock in the VM" >&2
+        exit 3
+      fi
+      echo "agents-token: $lock exists: another git writer holds the lock on $gitconfig, so the VM writes no token and no git identity now; the next mint tries again. If no git is running in the VM, remove $lock there (a crashed git leaves it behind)" >&2
+      exit 4
+    fi
+    if ! (set -C && : >"$lock") 2>/dev/null; then
+      if [ -e "$lock" ] || [ -L "$lock" ]; then
+        echo "agents-token: $lock exists: another git writer holds the lock on $gitconfig, so the VM writes no token and no git identity now; the next mint tries again. If no git is running in the VM, remove $lock there (a crashed git leaves it behind)" >&2
+        exit 4
+      fi
+      echo "agents-token: cannot create the lock $lock, so the VM writes no git identity: fix the VM user home" >&2
+      exit 3
+    fi
+    gitnew="$lock"
+    chmod 600 "$gitnew"
+    if [ -e "$gitconfig" ] && ! cat "$gitconfig" >"$gitnew"; then
+      echo "agents-token: cannot read $gitconfig, so the VM writes no git identity: make it readable by the VM user" >&2
+      exit 3
+    fi
+    no_conditional "$gitnew"
+    if is_bots "$gitnew"; then
+      rm -f "$gitnew"
+      gitnew=""
+    else
+      if ! git config --file "$gitnew" --replace-all user.name "$name" || ! git config --file "$gitnew" --replace-all user.email "$email"; then
+        echo "agents-token: git could not set the bot identity in a copy of $gitconfig, which is unchanged: fix that file in the VM" >&2
+        exit 3
+      fi
+      got_name="$(git config --includes --file "$gitnew" --get user.name)" || got_name=""
+      got_email="$(git config --includes --file "$gitnew" --get user.email)" || got_email=""
+      if [ "$got_name" != "$name" ] || [ "$got_email" != "$email" ]; then
+        echo "agents-token: with the bot identity set, the effective git identity in the VM would still be $(printable "$got_name") <$(printable "$got_email")>, from an [include] in $gitconfig that sets user.name or user.email after it; $gitconfig is unchanged: remove that include in the VM" >&2
+        exit 3
+      fi
+      mv -f "$gitnew" "$gitconfig"
+      gitnew=""
+    fi
   fi
   trap - EXIT
   printf "git-identity=set\n"
@@ -524,7 +561,7 @@ vm_send() {
       say "the VM ${instance} refused to write the ${5} (see above)"
     elif [ "${written}" -eq 4 ]; then
       failure=transient
-      say "the VM ${instance} did not write the ${5} now: another git writer holds the lock on ~/.gitconfig (see above)"
+      say "the VM ${instance} did not write the ${5} now: another git writer holds the lock on ~/.gitconfig (see above); if no git is running in the VM, remove ~/.gitconfig.lock there (a crashed git leaves it behind)"
     else
       failure=transient
       say "could not write the ${5} into the VM ${instance}: is it running (make vm-up)?"

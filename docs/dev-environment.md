@@ -509,9 +509,12 @@ against the VM user). Whenever it writes the identity file it also sets the VM u
 shift2eu's git identity ..."). That write is atomic and takes git's own lock: a copy of `~/.gitconfig` in
 `~/.gitconfig.lock` gets the bot's identity, and replaces the file only when git, following the copy's
 `[include]` files, reads the bot's identity back; otherwise `~/.gitconfig` stays as it was. A rewritten
-`~/.gitconfig` is mode 0600; one that already holds exactly the bot's identity is not rewritten at all. A
-`~/.gitconfig.lock` another git writer holds is left alone: that mint writes nothing and the next one tries
-again. It refuses a name or address that is not a bot's (a slug begins with a letter or digit), a VM
+`~/.gitconfig` is mode 0600; one that already holds exactly the bot's identity is not rewritten at all, and
+then no lock is looked at, so a stale `~/.gitconfig.lock` blocks only a mint that must still write the
+identity. A `~/.gitconfig.lock` another git writer holds is left alone: that mint writes nothing and the next
+one tries again. If no git is running in the VM, the lock is a crashed git's: remove `~/.gitconfig.lock` in
+the VM. A `~/.gitconfig.lock` that is a symlink or not a regular file is no lock git wrote: the mint refuses
+it and leaves it alone, and the refresh stops; remove it in the VM. It refuses a name or address that is not a bot's (a slug begins with a letter or digit), a VM
 without git, an `[include]` that would override the bot's name or address, and any `[includeIf]` (the
 check cannot evaluate a conditional include, which applies only inside the workspace's repositories). Such
 an `[include]` or any `[includeIf]` added to `~/.gitconfig` while a refresh runs makes the next mint refuse and
