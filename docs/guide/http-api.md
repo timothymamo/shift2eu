@@ -9,7 +9,7 @@ for the same inventory and targets.
 
 | Route | Answer |
 |---|---|
-| `POST /v1/assessments` | The assessment of one target, or the comparison of several (`["all"]` for every target), as the JSON report ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md)) or, with `Accept: text/markdown`, the Markdown report |
+| `POST /v1/assessments` | The assessment of one target, or the comparison of several (`["all"]` for every target), as the JSON report, schema version 2 ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md), [ADR 0030](../adr/0030-serve-the-version-2-report-on-v1.md)) or, with `Accept: text/markdown`, the Markdown report, with plans and monthly estimates unless the request turns them off |
 | `GET /v1/targets` | Every target's key, name, snapshot source and retrieval date |
 | `GET /healthz` | `200 {"status":"ok"}` while the process runs |
 | `GET /readyz` | `200 {"status":"ready"}` once every catalog has loaded, `503` until then |
@@ -22,8 +22,8 @@ the request.
 
 Outside the repository those relative paths do not resolve, so each release, from the first after
 `v0.3.0`, also publishes the self-contained document as the asset `shift2eu-server_openapi.json`: the
-same document with the report schemas bundled under `components.schemas` (`AssessmentReportV1`,
-`ComparisonReportV1`). The latest release's, that of the highest version released, as for the
+same document with the report schemas bundled under `components.schemas` (`AssessmentReportV2`,
+`ComparisonReportV2`). The latest release's, that of the highest version released, as for the
 images' `latest` tag, is always at
 <https://github.com/timothymamo/shift2eu/releases/latest/download/shift2eu-server_openapi.json>, and a
 given release's at `https://github.com/timothymamo/shift2eu/releases/download/vX.Y.Z/shift2eu-server_openapi.json`.
@@ -78,7 +78,24 @@ the version stamp). Deploy it as [Behind a reverse proxy](reverse-proxy.md) desc
 
 An assessment request is a JSON object with the inventory document, version 1 or 2
 ([ADR 0006](../adr/0006-json-inventory-file-format-v1.md), [ADR 0025](../adr/0025-json-inventory-file-format-v2.md)),
-and the target keys. Started from a clone with a token, the server listens on its default loopback
+and the target keys. It may also carry the same choices as the CLI's flags:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `inventory` | object | The inventory document, version 1 or 2. Required. |
+| `targets` | array of strings | Target keys, or `["all"]`. Required. |
+| `regions` | object | Optional. One region per selected target, `{"scaleway": "nl-ams"}`, as `--region scaleway=nl-ams`: only the offerings in that region count, a resource offered only elsewhere gets fit `none` ("not offered in `<region>`"), and the estimates use that region's prices. A target without one is assessed in all its regions, with estimates in its default region. |
+| `estimate` | boolean | Optional, `true` when absent. `false` is `--no-estimate`: no plans, no estimates, no cost summary and no source cost in the report. |
+
+They are validated as the CLI validates its flags, before the inventory is assessed: a region the target
+does not list, or a key the request does not select, is `400` with the code `invalid_region` and a
+message naming the target and its regions; an empty region is `400 invalid_request`. Nothing is
+assessed. Either inventory version gets the version 2 report; a version 1 inventory's resources have
+no size, so they show "not estimated: size unknown"
+([Assess an inventory](assess.md#regions-and-estimates) explains the estimate). The path stays `/v1`:
+the new fields are optional and the report's `schemaVersion` says which version a response is.
+
+Started from a clone with a token, the server listens on its default loopback
 address; the requests read the token from the same variable, which keeps it out of your shell history, and
 hand curl the header on standard input (`-H @-`), which keeps it out of the process list.
 With the repository's sanitised example inventory:
@@ -90,6 +107,14 @@ make server && ./bin/shift2eu-server &   # listening on 127.0.0.1:8080
 jq '{inventory: ., targets: ["scaleway"]}' test/e2e/testdata/inventory.json > request.json
 
 # The JSON report.
+printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" |
+  curl -sS -X POST http://127.0.0.1:8080/v1/assessments -H @- \
+    -H 'Content-Type: application/json' \
+    --data-binary @request.json
+
+# The JSON report in a chosen region, with the estimates off.
+jq '{inventory: ., targets: ["scaleway"], regions: {scaleway: "nl-ams"}, estimate: false}' \
+  test/e2e/testdata/inventory.json > request.json
 printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" |
   curl -sS -X POST http://127.0.0.1:8080/v1/assessments -H @- \
     -H 'Content-Type: application/json' \

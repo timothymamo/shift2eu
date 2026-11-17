@@ -13,7 +13,11 @@ against an embedded OVHcloud, Scaleway or UpCloud catalog snapshot, through ever
 several targets in one report (`--target all` or a list), as Markdown or as versioned JSON
 (`--format json`, ADR 0018) (PRD #2, OVHcloud from PRD #11, UpCloud from PRD #77 and the comparison
 from PRD #89, the JSON report and the HTTP API from PRD #103, all in `prds/done/`). It reads inventory
-schema versions 1 and 2 (ADR 0006, ADR 0025; version 2 from PRD #190). A second binary,
+schema versions 1 and 2 (ADR 0006, ADR 0025). From a sized inventory it names a plan and estimates a
+monthly list price per resource, per workload and in total from the snapshots' dated prices (on by
+default, `--no-estimate` turns it off), groups resources by workload, notes blockers on related
+resources, and scopes a target to one region with `--region` (PRD #190, ADRs 0024 and 0026-0030, in
+`prds/done/`). A second binary,
 `shift2eu-server`, serves the same assessments over a versioned HTTP API (PRD #103, ADR 0019), released
 as a binary and as the image `ghcr.io/timothymamo/shift2eu-server` beside the CLI's. Live source adapters
 do not exist yet. Work is planned as PRDs in `prds/`.
