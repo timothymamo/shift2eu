@@ -289,8 +289,10 @@ read the file:
 - **An explicit `VM_ENV` merges.** `make vm-env VM_ENV=...` (on the command line or in the environment)
   replaces the lines of the names in `VM_ENV` and keeps every other line already in `daemon.env` (it
   creates the file when there is none). So `make vm-env VM_ENV=GITHUB_TOKEN` replaces only `GITHUB_TOKEN`
-  and keeps the OAuth token and the DeepSeek key. Either way the file is written to a temporary file
-  beside `daemon.env`, mode 0600, and moved into place, so a failure never leaves half a file.
+  and keeps the OAuth token and the DeepSeek key. A merge prints the names of the lines it kept, never
+  their values: `vm-env: kept (unchanged): CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY`. Either way the file
+  is written to a temporary file beside `daemon.env`, mode 0600, and moved into place, so a failure (or an
+  interrupted run) never leaves half a file or a stray copy of the credentials.
 - **Rotating a credential:** change it on the Mac, then `make vm-env deck-restart`. Restarting the service
   stops its running agents, so do it between tasks. Run `claude setup-token` again before the year is up.
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the

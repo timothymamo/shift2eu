@@ -220,9 +220,10 @@ vm_env_mode = $(if $(filter file,$(origin VM_ENV)),replace,merge)
 # .envrc must never wipe the credentials the VM has (issue #234). With the default VM_ENV it replaces the
 # VM's whole daemon.env with exactly those lines, so a stale line (an old ANTHROPIC_API_KEY) is removed. With
 # a VM_ENV given explicitly it merges: the lines of the names in VM_ENV are replaced and every other line is
-# kept, so `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN. The values travel on standard input,
-# never on a command line (only the mode does), and the file is written to a temporary file beside
-# daemon.env and moved into place, mode 0600, so a failure never leaves half a file.
+# kept, so `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN; a merge prints the names (never the
+# values) of the lines it kept. The values travel on standard input, never on a command line (only the mode
+# does), and the file is written to a temporary file beside daemon.env and moved into place, mode 0600, so a
+# failure never leaves half a file; a trap removes the temporary file if the VM-side shell is interrupted.
 .PHONY: vm-env
 vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
 	@[ -n "$(vm_env_names)" ] || { \
@@ -254,12 +255,16 @@ vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if o
 		value="$$(printenv "$$name")"; \
 		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$name has unsupported characters" >&2; exit 1;; esac; \
 		printf '%s=%s\n' "$$name" "$$value"; \
-	done)" && printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
+	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
 		sh -c 'umask 077 && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && mkdir -p "$$d" && new="$$(cat)" && \
 		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && t="$$(mktemp "$$d/.daemon.env.XXXXXX")" && \
+		trap "rm -f \"\$$t\"" EXIT && trap "exit 1" HUP INT TERM && \
 		{ { if [ "$$1" = merge ] && [ -f "$$f" ]; then grep -v -E "^($$names)=" "$$f"; [ "$$?" -le 1 ]; fi && printf "%s\n" "$$new"; } > "$$t" && \
-		chmod 600 "$$t" && mv "$$t" "$$f" || { rm -f "$$t"; exit 1; }; }' sh $(vm_env_mode) >/dev/null
-	@echo "vm-env: $$(echo $(vm_env_names)) written to ~/.config/dot-agent-deck/daemon.env in the VM, $(if $(filter replace,$(vm_env_mode)),replacing the whole file,its other lines kept); 'make deck-restart' applies it to a running deck"
+		chmod 600 "$$t" && mv "$$t" "$$f" || { rm -f "$$t"; exit 1; }; } && trap - EXIT HUP INT TERM && \
+		if [ "$$1" = merge ]; then printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi' sh $(vm_env_mode))" && \
+	echo "vm-env: $$(echo $(vm_env_names)) written to ~/.config/dot-agent-deck/daemon.env in the VM, $(if $(filter replace,$(vm_env_mode)),replacing the whole file,its other lines kept); 'make deck-restart' applies it to a running deck" && \
+	kept="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-kept:\([A-Za-z0-9_ ]*\)$$/\1/p')" && \
+	if [ -n "$$kept" ]; then echo "vm-env: kept (unchanged): $$kept"; fi
 
 .PHONY: vm-claude-settings
 vm-claude-settings: ## Merge dev/claude-user-settings.json into Claude Code's user settings in the VM
