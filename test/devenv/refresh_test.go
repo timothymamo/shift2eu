@@ -635,6 +635,85 @@ func TestAgentsAppTokenRefreshStopsOnAPermanentFailure(t *testing.T) {
 	}
 }
 
+// TestAgentsAppTokenRefreshStopsOnAMalformedSlug pins the second review's finding that a slug no App has stops the
+// loop instead of being retried forever: a slug comes from GitHub and never fixes itself, and a `-example-agents` would
+// reach the VM's name check and be refused at every check, so a refresh that took that for a transient failure would
+// retry it for as long as it runs, with no token ever reaching the VM (issue #241).
+func TestAgentsAppTokenRefreshStopsOnAMalformedSlug(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	f.api.setSlug("-example-agents")
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh was still running 30s after GET /app answered the slug -example-agents, which no retry can fix: the loop must stop as it does on any other permanent failure (issue #241)\nstderr:\n%s",
+			refresh.errOut())
+	}
+
+	if code := refresh.exitCode(t); code != 1 {
+		t.Errorf("the refresh exited with %d after GET /app answered the slug -example-agents, want 1: make deck, and the maintainer reading its log, relies on a stopped refresh being a failure (issue #241)", code)
+	}
+
+	assertStopLineNamesWhereToRestart(t, refresh.errOut())
+
+	if posted := f.api.posted(); len(posted) != 0 {
+		t.Errorf("the refresh posted to %v although the App's slug begins with -: the slug is refused before a token is minted, at every check as at the first (issue #241)",
+			posted)
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshSurvivesAnEmptySlug pins the other side of TestAgentsAppTokenRefreshStopsOnAMalformedSlug:
+// an empty slug is no malformed one. A 200 whose answer holds no slug reads as GitHub having said nothing yet, so the
+// loop keeps trying, and a refresh that took every unusable slug for a permanent failure would stop on it and leave the
+// VM without a token until a maintainer restarted it (issue #241).
+func TestAgentsAppTokenRefreshSurvivesAnEmptySlug(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	f.api.setSlug("")
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	// Two requests for the App's slug: the loop went back to GitHub instead of stopping after the first.
+	waitFor(t, 30*time.Second, "the refresh to ask GET /app again after an empty slug", func() bool {
+		asked := 0
+
+		for _, request := range f.api.requestOrder() {
+			if request == "GET /app" {
+				asked++
+			}
+		}
+
+		return asked >= 2 || !refresh.running()
+	})
+
+	if !refresh.running() {
+		t.Fatalf("the refresh exited after GET /app answered an empty slug, which is transient and must never stop it; stderr:\n%s",
+			refresh.errOut())
+	}
+
+	if strings.Contains(refresh.errOut(), "agents App token refresh stopped") {
+		t.Errorf("the refresh said it stopped after GET /app answered an empty slug: an answer with no slug is retried, not stopped on (issue #241)\nstderr:\n%s",
+			refresh.errOut())
+	}
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh did not stop on SIGTERM after an empty slug; stderr:\n%s", refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
 // TestAgentsAppTokenRefreshHoldsOneLockPerVM pins the first half of review item 7: the refresh takes a lock
 // named after the VM instance, a second refresher of the same VM exits at once without minting anything, and
 // the lock goes when the first one does, so make deck cannot stack two loops on one token file.
