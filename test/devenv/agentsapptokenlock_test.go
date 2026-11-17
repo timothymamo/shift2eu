@@ -148,6 +148,47 @@ func TestAgentsAppTokenMintRefusesALockThatIsNotARegularFile(t *testing.T) {
 			},
 		},
 		{
+			// A directory is the entry a mint that created its lock *inside* the lock path, or that opened the path
+			// for writing, would write the identity through; link(2) refuses any existing entry, a directory included
+			// (issue #241).
+			name: "a directory",
+			makeLock: func(t *testing.T, f *mintFixture) func(t *testing.T, f *mintFixture) {
+				t.Helper()
+
+				lock := filepath.Join(f.sb.vmHome, ".gitconfig.lock")
+				if err := os.Mkdir(lock, 0o700); err != nil {
+					t.Fatalf("make %s a directory: %v", lock, err)
+				}
+
+				return func(t *testing.T, _ *mintFixture) {
+					t.Helper()
+
+					info, err := os.Lstat(lock)
+					if err != nil || !info.IsDir() {
+						t.Errorf("the refused mint removed or replaced %s, a directory: an entry that is no regular file is no lock git wrote, so the mint neither follows nor removes it (%v)",
+							lock, err)
+
+						return
+					}
+
+					inside, err := os.ReadDir(lock)
+					if err != nil {
+						t.Fatalf("read %s after the refused mint: %v", lock, err)
+					}
+
+					if len(inside) != 0 {
+						names := make([]string, 0, len(inside))
+						for _, entry := range inside {
+							names = append(names, entry.Name())
+						}
+
+						t.Errorf("%s holds %v after the refused mint, want nothing: the mint takes its own lock beside ~/.gitconfig and writes nothing inside an entry it found at the lock's path (issue #241)",
+							lock, names)
+					}
+				}
+			},
+		},
+		{
 			name: "a FIFO",
 			makeLock: func(t *testing.T, f *mintFixture) func(t *testing.T, f *mintFixture) {
 				t.Helper()
