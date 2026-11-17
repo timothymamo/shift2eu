@@ -38,6 +38,63 @@ func TestVMInitRunsTheGitIdentityScript(t *testing.T) {
 	}
 }
 
+// TestVMInitNeverRestartsTheDaemon pins what vm-init does instead (issue #234 review). Restarting the deck's
+// service from vm-init would kill every agent running in the VM at that moment - on a re-run over SSH, possibly
+// the agent running vm-init itself - so vm-init leaves the restart to `make deck-restart`, which a maintainer
+// runs at a moment they choose. When step 9 changed the deck's configuration, the running daemon still holds
+// the old default_dir, so the script says so and names the command to run.
+//
+// vm-init cannot be run in make test (see the package comment above), so this is pinned in the script's own
+// text, the way TestVMInitSetsTheDeckDefaultDir pins the default_dir step.
+func TestVMInitNeverRestartsTheDaemon(t *testing.T) {
+	t.Parallel()
+
+	body := readRepoFile(t, vmInitScript)
+	lines := strings.Split(body, "\n")
+
+	// commandLineWith returns the number of the first line that runs or says something holding substr, and -1
+	// when there is none. A comment line is skipped: it explains, it does not run anything.
+	commandLineWith := func(substr string) int {
+		t.Helper()
+
+		return slices.IndexFunc(lines, func(line string) bool {
+			return !strings.HasPrefix(strings.TrimSpace(line), "#") && strings.Contains(line, substr)
+		})
+	}
+
+	// The absence of the restart itself: no form of it may come back, whether the unit is named or the user
+	// manager is asked without one.
+	for _, forbidden := range []string{"systemctl --user restart", "restart dot-agent-deck"} {
+		if at := commandLineWith(forbidden); at >= 0 {
+			t.Errorf("%s runs %q at line %d: vm-init must never restart dot-agent-deck.service, because the restart kills every agent running in the VM - on a re-run over SSH, possibly the agent running vm-init. It must leave the restart to `make deck-restart`, which the maintainer runs when no agent is running (issue #234 review): %q",
+				vmInitScript, forbidden, at+1, strings.TrimSpace(lines[at]))
+		}
+	}
+
+	// The default_dir step, which is what a running daemon would have to be restarted for.
+	set := commandLineWith("config set default_dir")
+	if set < 0 {
+		t.Fatalf("%s no longer runs `dot-agent-deck config set default_dir`, so this test cannot pin what it tells the maintainer when that changes the deck's configuration (issue #234)", vmInitScript)
+	}
+
+	// The message that replaces the restart.
+	hint := commandLineWith("make deck-restart")
+	if hint < 0 {
+		t.Fatalf("%s never tells the maintainer to run `make deck-restart`: when step 9 changed the deck's configuration, the daemon that already runs keeps the old default_dir, so the script must name the command that reloads it, now that it does not restart the service itself (issue #234 review)", vmInitScript)
+	}
+
+	if hint < set {
+		t.Errorf("%s names `make deck-restart` at line %d, before it sets default_dir at line %d: the command belongs to the case where setting it changed the deck's configuration, so a maintainer reads it as the next step after the change (issue #234 review)",
+			vmInitScript, hint+1, set+1)
+	}
+
+	// Near the default_dir step, not somewhere else in the run.
+	if hint-set > 20 {
+		t.Errorf("%s names `make deck-restart` at line %d, %d lines after it sets default_dir at line %d: the message belongs to the default_dir step and the daemon step that follows it, so a maintainer reads it where the setting changed (issue #234 review)",
+			vmInitScript, hint+1, hint-set, set+1)
+	}
+}
+
 // TestVMInitSetsTheDeckDefaultDir pins issue #234's first half: vm-init sets the deck's default_dir to the main
 // checkout it is given as its second argument, with `dot-agent-deck config set default_dir`, after the deck
 // itself answers and before the daemon service is installed or started. Without it, Ctrl+N in a new VM opens

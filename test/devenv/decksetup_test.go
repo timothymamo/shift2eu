@@ -1,8 +1,11 @@
 // Pins the deck's setup on a new VM (issue #234): make deck-restart reloads the service's drop-ins before it
 // restarts the daemon, so a changed drop-in takes effect, and make vm-env refuses to rebuild the VM's
 // daemon.env unless every credential its VM_ENV names is in the environment, so a locked login Keychain or an
-// unloaded direnv .envrc never wipes the credentials the agents need. A narrowed VM_ENV merges: it replaces
-// only the names it lists and keeps every other line already in the file (decision recorded on issue #234).
+// unloaded direnv .envrc never wipes the credentials the agents need. VM_ENV itself decides what happens to the
+// file (decision recorded on issue #234): the default VM_ENV replaces the whole file, so no stale line - an old
+// ANTHROPIC_API_KEY, say, which silently switches Claude Code to pay-as-you-go billing - survives a run, and an
+// explicit VM_ENV, on the command line or in the environment, merges: it replaces only the names it lists and
+// keeps every other line already in the file.
 //
 // No test reaches the machine it runs on: the sandbox's fake limactl runs the VM side of every target on this
 // machine with the fake VM user's HOME, and systemctl is a recording fake. No value in this file is a real
@@ -72,6 +75,19 @@ func (sb *sandbox) vmEnvEnv() map[string]string {
 	}
 
 	return env
+}
+
+// assertNoLimaCalls fails when make handed limactl anything at all. Every refusal make vm-env makes is made
+// before the VM is touched, so a refused run costs no connection to the VM and writes nothing in it (issue #234).
+func (sb *sandbox) assertNoLimaCalls(t *testing.T, why string) {
+	t.Helper()
+
+	log := sb.argvLogText(t)
+
+	if calls := invocations(log, "limactl"); len(calls) > 0 {
+		t.Errorf("make vm-env called limactl %d time(s) although %s: a refused run must not reach the VM at all, so nothing there can be written (issue #234):\n%s",
+			len(calls), why, log)
+	}
 }
 
 // assertNoCredentialValues fails when text holds the value of any credential the tests invented. The failure
@@ -207,10 +223,9 @@ func TestMakeVMEnvRefusesMissingCredentials(t *testing.T) {
 				t.Errorf("make vm-env rewrote the VM's daemon.env although it refused: the file must be byte for byte what it was (issue #234) (-want +got):\n%s", diff)
 			}
 
-			// A refusal before the VM is touched at all: nothing handed limactl writes daemon.env.
-			if log := sb.argvLogText(t); strings.Contains(log, "daemon.env") {
-				t.Errorf("make vm-env handed limactl a command that writes ~/.config/dot-agent-deck/daemon.env although it refused, so the file may be wiped after all:\n%s", log)
-			}
+			// A refusal before the VM is touched at all: nothing handed limactl writes daemon.env, because
+			// nothing is handed limactl.
+			sb.assertNoLimaCalls(t, "a missing credential is refused")
 
 			assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
 		})
@@ -278,11 +293,9 @@ func TestMakeVMEnvRefusesANameThatIsNotAVariable(t *testing.T) {
 					tc.vmEnv, diff)
 			}
 
-			// A refusal before the VM is touched at all: nothing handed limactl writes daemon.env.
-			if log := sb.argvLogText(t); strings.Contains(log, "daemon.env") {
-				t.Errorf("make vm-env handed limactl a command that writes ~/.config/dot-agent-deck/daemon.env although it refused %s:\n%s",
-					tc.vmEnv, log)
-			}
+			// A refusal before the VM is touched at all: nothing handed limactl writes daemon.env, because
+			// nothing is handed limactl.
+			sb.assertNoLimaCalls(t, "a name that is not a variable is refused")
 
 			assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
 		})
@@ -340,27 +353,88 @@ func TestMakeVMEnvRefusalSaysHowToFixIt(t *testing.T) {
 		t.Errorf("the refusal does not name the direnv .envrc, the source of the credentials on a host without the login Keychain (issue #234):\nstdout: %s\nstderr: %s", stdout, stderr)
 	}
 
+	// The refusal is made before the VM is touched: no connection, nothing written there.
+	sb.assertNoLimaCalls(t, "a missing credential is refused")
+
 	assertNoCredentialValues(t, "make vm-env's refusal", text)
 }
 
-// TestMakeVMEnvWritesTheCredentialsItNames pins the case that behaves as before (issue #234): with all three
-// credentials set, make vm-env writes them to the VM's daemon.env, mode 0600, whether the VM has the file yet or
-// not.
+// TestMakeVMEnvRefusesAnEmptyVMEnv pins where the narrowed merge stops (issue #234 review): `make vm-env
+// VM_ENV=` names nothing at all, and vm-env must refuse it. A merge with nothing named replaces nothing and
+// would leave the file as it was - or, as it did, append a blank line - while a replacement would empty it: both
+// are a daemon.env the agents cannot start with. Every credential is set, so the refusal can only be about the
+// empty VM_ENV, and the file stays byte for byte as it was.
+func TestMakeVMEnvRefusesAnEmptyVMEnv(t *testing.T) {
+	t.Parallel()
+
+	sb := newSandbox(t)
+	env := sb.vmEnvEnv()
+	seeded := sb.seedDaemonEnv(t)
+
+	stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV="}, env)
+	text := stdout + stderr
+
+	if err == nil {
+		t.Fatalf("make vm-env VM_ENV= exited 0: an empty VM_ENV names no credential, so it must be refused instead of leaving a daemon.env without the credentials the agents need (issue #234)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	if !strings.Contains(text, "VM_ENV") {
+		t.Errorf("the refusal does not name VM_ENV, so a maintainer cannot tell that the empty VM_ENV is what vm-env refused (issue #234):\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	lower := strings.ToLower(text)
+	if !strings.Contains(lower, "empty") && !strings.Contains(lower, "names nothing") {
+		t.Errorf("the refusal does not say that the VM_ENV it was given is empty and names nothing: a silent non-zero exit reads like a broken target, not like a typo in VM_ENV (issue #234):\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	sb.assertNoLimaCalls(t, "an empty VM_ENV is refused")
+
+	got, readErr := os.ReadFile(sb.daemonEnvPath())
+	if readErr != nil {
+		t.Fatalf("read the VM's daemon.env after a refused make vm-env: %v", readErr)
+	}
+
+	if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+		t.Errorf("make vm-env rewrote the VM's daemon.env although VM_ENV named nothing: the file must be byte for byte what it was, so no blank line is appended either (issue #234) (-want +got):\n%s", diff)
+	}
+
+	assertNoCredentialValues(t, "make vm-env's output", text)
+}
+
+// TestMakeVMEnvWritesTheCredentialsItNames pins what a run with every credential set writes to the VM's
+// daemon.env, mode 0600, whether the VM has the file yet or not (issue #234). VM_ENV decides the rest: the
+// default VM_ENV replaces the whole file, so a line it does not name - a stale ANTHROPIC_API_KEY left by an
+// earlier setup, which silently switches Claude Code to pay-as-you-go billing - never survives a full run;
+// an explicit VM_ENV merges and keeps every line it does not name, so `make vm-env VM_ENV=GITHUB_TOKEN`
+// drops nothing (the decision recorded on issue #234).
 func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name string
 		seed bool // the VM already has a daemon.env, as after an earlier make vm-env
-		// extra are the lines of an earlier daemon.env that VM_ENV does not name: the merge keeps them.
+		// extra are the lines of an earlier daemon.env that VM_ENV does not name.
 		extra []string
+		// args are further arguments on the make command line - an explicit VM_ENV, which is what decides
+		// whether the file is replaced or merged.
+		args []string
+		// kept are the lines of the earlier daemon.env that survive the run: an explicit VM_ENV replaces only
+		// the names it lists and keeps every other line.
+		kept []string
 	}{
 		{name: "the VM has no daemon.env yet, the first run"},
 		{name: "the VM has a daemon.env already", seed: true},
 		{
-			name:  "a line VM_ENV does not name survives the merge",
+			name:  "the default VM_ENV replaces a line it does not name",
+			seed:  true,
+			extra: []string{"UNRELATED_SETTING=not-kept-by-the-default"},
+		},
+		{
+			name:  "an explicit VM_ENV merges and keeps a line it does not name",
 			seed:  true,
 			extra: []string{"UNRELATED_SETTING=kept-by-the-merge"},
+			args:  []string{"VM_ENV=" + strings.Join(vmEnvCredentials, ",")},
+			kept:  []string{"UNRELATED_SETTING=kept-by-the-merge"},
 		},
 	}
 
@@ -375,9 +449,10 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 				sb.seedDaemonEnvWith(t, tc.extra...)
 			}
 
-			stdout, stderr, err := runMake(t, []string{"vm-env"}, env)
+			stdout, stderr, err := runMake(t, append([]string{"vm-env"}, tc.args...), env)
 			if err != nil {
-				t.Fatalf("make vm-env with every credential set: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+				t.Fatalf("make vm-env %s with every credential set: %v\nstdout: %s\nstderr: %s",
+					strings.Join(tc.args, " "), err, stdout, stderr)
 			}
 
 			info, statErr := os.Stat(sb.daemonEnvPath())
@@ -399,9 +474,9 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 				"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
 				"GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN"),
 			}
-			// A full VM_ENV replaces the names it lists and keeps every other line, so a setting vm-env does
-			// not know about is never lost (the merge decision on issue #234).
-			want = append(want, tc.extra...)
+			// A full VM_ENV replaces the names it lists; an explicit one keeps every other line, so a setting
+			// vm-env does not know about is never lost (the merge decision on issue #234).
+			want = append(want, tc.kept...)
 
 			if diff := cmp.Diff(sortedEnvLines(strings.Join(want, "\n")), sortedEnvLines(string(body))); diff != "" {
 				t.Errorf("make vm-env wrote the wrong lines to the VM's daemon.env (-want +got):\n%s", diff)
@@ -452,6 +527,49 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 		assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
 	})
 
+	t.Run("a name listed twice is written once", func(t *testing.T) {
+		t.Parallel()
+
+		sb := newSandbox(t)
+		env := sb.vmEnvEnv()
+		delete(env, "CLAUDE_CODE_OAUTH_TOKEN")
+		delete(env, "DEEPSEEK_API_KEY")
+
+		sb.seedDaemonEnv(t)
+
+		stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=GITHUB_TOKEN,GITHUB_TOKEN"}, env)
+		if err != nil {
+			t.Fatalf("make vm-env VM_ENV=GITHUB_TOKEN,GITHUB_TOKEN with GITHUB_TOKEN set: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		body, readErr := os.ReadFile(sb.daemonEnvPath())
+		if readErr != nil {
+			t.Fatalf("read the VM's daemon.env: %v", readErr)
+		}
+
+		want := "GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN")
+
+		written := 0
+
+		for _, line := range sortedEnvLines(string(body)) {
+			if strings.HasPrefix(line, "GITHUB_TOKEN=") {
+				written++
+			}
+		}
+
+		if written != 1 {
+			t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN,GITHUB_TOKEN wrote %d GITHUB_TOKEN lines, want exactly 1: a name listed twice reaches daemon.env once, so the file stays one line per credential (issue #234). The lines it wrote: %v",
+				written, sortedEnvLines(string(body)))
+		}
+
+		if !slices.Contains(sortedEnvLines(string(body)), want) {
+			t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN,GITHUB_TOKEN did not write the value it was given to daemon.env: the lines it wrote are %v, want one of them the GITHUB_TOKEN line with the value the shell held (issue #234)",
+				sortedEnvLines(string(body)))
+		}
+
+		assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
+	})
+
 	t.Run("the name it lists is missing, so it is refused and the file is kept", func(t *testing.T) {
 		t.Parallel()
 
@@ -480,5 +598,9 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 		if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
 			t.Errorf("make vm-env rewrote the VM's daemon.env although it refused: the file must be byte for byte what it was (issue #234) (-want +got):\n%s", diff)
 		}
+
+		// A refusal before the VM is touched at all: nothing handed limactl writes daemon.env, because
+		// nothing is handed limactl.
+		sb.assertNoLimaCalls(t, "a missing narrowed name is refused")
 	})
 }
