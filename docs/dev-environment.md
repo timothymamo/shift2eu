@@ -188,6 +188,26 @@ limactl edit --tty=false --memory=16 shift2eu   # memory in GiB; --cpus and --di
 make vm-up
 ```
 
+### Troubleshooting: a Broken instance
+
+`limactl list` shows an instance as `Broken` when its directory (for example
+`/Users/example/.lima/shift2eu`, or `$LIMA_HOME/shift2eu` when `LIMA_HOME` is set) has no `lima.yaml`.
+`limactl start shift2eu` cannot load such an instance, reads the name as a template and falls back to
+Lima's `template:default`, a VM that mounts the whole home directory instead of only the workspace;
+without a terminal it does so without asking. So `make vm-up` starts an existing instance only when it is
+`Stopped` or `Running`: for `Broken` it stops before any `limactl start` and names the directory, and for
+any other status it stops and names the status.
+
+`make vm-delete` cannot clean it up: `limactl delete --force` refuses a directory without `lima.yaml`.
+Remove the directory by hand, once no `limactl` job uses it.
+
+If the directory comes back after `rm -rf`, even across a reboot, a launchd job (a LaunchDaemon or
+LaunchAgent running `limactl start shift2eu`, for example one that starts the VM at boot) is recreating
+it: launchd creates the job's `StandardOutPath` and `StandardErrorPath` log files, which sit in the
+instance directory, every time it runs the job. Find it with `launchctl print system | grep -i lima` and
+in `~/Library/LaunchAgents` and `/Library/LaunchDaemons`, unload it (`launchctl bootout`), then remove the
+directory and run `make vm-up` to create the VM from `dev/lima.yaml`.
+
 ## Dispatcher mode
 
 A [dispatcher pane](https://agent-deck.devopstoolkit.ai/docs/dispatcher-mode.md) starts orchestrations
