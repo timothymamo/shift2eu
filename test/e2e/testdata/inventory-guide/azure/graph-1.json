@@ -31,6 +31,9 @@
               "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Network/networkInterfaces/nic-shop-web-1"
             }
           ]
+        },
+        "hardwareProfile": {
+          "vmSize": "Standard_D2s_v3"
         }
       }
     },
@@ -135,7 +138,9 @@
       "zones": [
         "1"
       ],
-      "properties": null
+      "properties": {
+        "diskSizeGB": 128
+      }
     },
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Compute/disks/disk-shop-web-1-data",
@@ -146,7 +151,9 @@
       "zones": [
         "1"
       ],
-      "properties": null
+      "properties": {
+        "diskSizeGB": 64
+      }
     },
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Compute/disks/vmss-shop-web_0abc_OsDisk_1",
@@ -157,7 +164,9 @@
       "zones": [
         "1"
       ],
-      "properties": null
+      "properties": {
+        "diskSizeGB": 128
+      }
     },
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Compute/disks/vmss-shop-web_0abc_DataDisk_0",
@@ -168,7 +177,9 @@
       "zones": [
         "1"
       ],
-      "properties": null
+      "properties": {
+        "diskSizeGB": 32
+      }
     },
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Compute/disks/vmss-shop-web_0abc_DataDisk_1",
@@ -179,7 +190,9 @@
       "zones": [
         "1"
       ],
-      "properties": null
+      "properties": {
+        "diskSizeGB": 64
+      }
     },
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.Compute/snapshots/snap-shop-web-1-data",
