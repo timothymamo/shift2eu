@@ -4,13 +4,13 @@ A made-up web shop on AWS in `eu-central-1`, as an inventory: dummy data only, f
 
 | ID | Raw type | Category | Capabilities | Size | Workload | Relations | Monthly cost |
 |---|---|---|---|---|---|---|---|
-| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | `ipv6`, `snapshots` | 2 vCPU, 8 GiB | `shop` | depends-on `shop-orders` | 84 USD |
-| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | `ipv6`, `snapshots` | 2 vCPU, 8 GiB, 360 h a month | `shop` |  | 41 USD |
+| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | `ipv6`, `snapshots` | 2 vCPU, 8 GiB | `shop` | depends-on `shop-orders` | 84.10 USD |
+| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | `ipv6`, `snapshots` | 2 vCPU, 8 GiB, 360 h a month | `shop` |  | 42.05 USD |
 | `shop-web-asg` | `AWS::AutoScaling::AutoScalingGroup` | `compute.vm` | `autoscaling`, `zone-high-availability` | 2 vCPU, 8 GiB × 3 | `shop` |  |  |
-| `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | `snapshots` | 100 GiB | `shop` | attached-to `shop-web-1` | 9 USD |
+| `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | `snapshots` | 100 GiB | `shop` | attached-to `shop-web-1` | 9.52 USD |
 | `shop-assets` | `AWS::S3::Bucket` | `storage.object` | `object-versioning`, `encryption-at-rest` | 250 GiB stored | `media` |  |  |
-| `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | `point-in-time-restore`, `read-replicas`, `node-high-availability`, `encryption-at-rest` | 2 vCPU, 8 GiB | `shop` |  | 383 USD |
-| `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | `point-in-time-restore`, `node-high-availability` | 2 vCPU, 8 GiB |  |  |  |
+| `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | `point-in-time-restore`, `read-replicas`, `node-high-availability`, `encryption-at-rest` | 2 vCPU, 8 GiB, 200 GiB stored | `shop` |  | 383.25 USD |
+| `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | `point-in-time-restore`, `node-high-availability` | 2 vCPU, 8 GiB, 50 GiB stored |  |  |  |
 | `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | `autoscaling` | 4 vCPU, 16 GiB × 3 | `shop` | depends-on `shop-db` |  |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` |  |  | `media` | depends-on `shop-assets` |  |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | `dead-letter-queue`, `encryption-at-rest` |  | `shop` |  |  |

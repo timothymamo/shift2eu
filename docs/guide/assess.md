@@ -172,7 +172,7 @@ priced.
   `usage-priced` (`serverless.function`, `messaging.queue`), `size unknown`, `no plan` (the offering
   lists none), `no plan large enough`, or `no price in <region>` / `no storage price in <region>` (the
   offering has no price there, for example because it is not offered in that region). It is never priced at €0: totals add only the estimated resources and say how
-  many they cover, "€562.75 per month for 8 of 13 resources".
+  many they cover, "€587.58 per month for 8 of 13 resources".
 
 The rules are in [ADR 0027](../adr/0027-match-plans-and-estimate-monthly-prices-in-a-domain-package.md).
 

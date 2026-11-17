@@ -5,12 +5,12 @@ subscription. The raw types are Azure Resource Manager resource types.
 
 | ID | Raw type | Category | Capabilities | Size | Workload | Relations | Monthly cost |
 |---|---|---|---|---|---|---|---|
-| `vm-shop-web-1` | `Microsoft.Compute/virtualMachines` | `compute.vm` | `ipv6`, `snapshots` | 2 vCPU, 8 GiB | `shop` | depends-on `sb-shop-orders` | 81 EUR |
+| `vm-shop-web-1` | `Microsoft.Compute/virtualMachines` | `compute.vm` | `ipv6`, `snapshots` | 2 vCPU, 8 GiB | `shop` | depends-on `sb-shop-orders` | 80.59 EUR |
 | `vmss-shop-web` | `Microsoft.Compute/virtualMachineScaleSets` | `compute.vm` | `autoscaling`, `zone-high-availability` | 2 vCPU, 8 GiB × 2 | `shop` |  |  |
-| `disk-shop-web-1-data` | `Microsoft.Compute/disks` | `storage.block` | `snapshots` | 64 GiB | `shop` | attached-to `vm-shop-web-1` | 8 EUR |
+| `disk-shop-web-1-data` | `Microsoft.Compute/disks` | `storage.block` | `snapshots` | 64 GiB | `shop` | attached-to `vm-shop-web-1` | 7.68 EUR |
 | `stshopassets` | `Microsoft.Storage/storageAccounts` | `storage.object` | `object-versioning`, `encryption-at-rest` | 200 GiB stored | `shop` |  |  |
-| `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | `point-in-time-restore`, `node-high-availability`, `read-replicas` | 2 vCPU, 8 GiB | `shop` |  | 292 EUR |
-| `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | `point-in-time-restore`, `node-high-availability`, `read-replicas` | 2 vCPU, 8 GiB | `catalog` |  |  |
+| `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | `point-in-time-restore`, `node-high-availability`, `read-replicas` | 2 vCPU, 8 GiB, 256 GiB stored | `shop` |  | 291.70 EUR |
+| `mysql-shop-catalog` | `Microsoft.DBforMySQL/flexibleServers` | `database.mysql` | `point-in-time-restore`, `node-high-availability`, `read-replicas` | 2 vCPU, 8 GiB, 64 GiB stored | `catalog` |  |  |
 | `aks-shop` | `Microsoft.ContainerService/managedClusters` | `kubernetes.managed` | `autoscaling` | 4 vCPU, 16 GiB × 3 | `shop` | depends-on `mysql-shop-catalog`, depends-on `psql-shop` |  |
 | `func-shop-thumbnails` | `Microsoft.Web/sites` | `serverless.function` |  |  | `shop` | depends-on `stshopassets` |  |
 | `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | `dead-letter-queue` |  | `shop` |  |  |

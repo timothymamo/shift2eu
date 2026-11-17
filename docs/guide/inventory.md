@@ -43,7 +43,7 @@ usage, workload, relations and monthly cost, all optional. `shift2eu assess` rea
       "capabilities": ["point-in-time-restore", "zone-high-availability"],
       "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 50 },
       "workload": "shop",
-      "monthlyCost": { "amount": 383, "currency": "USD" }
+      "monthlyCost": { "amount": 383.25, "currency": "USD" }
     },
     {
       "id": "shop-db-replica",
@@ -144,7 +144,7 @@ For example, with `jq`:
 
 ```bash
 jq '(.resources[] | select(.id == "shop-db")) += {workload: "shop",
-      monthlyCost: {amount: 383, currency: "USD"}}' \
+      monthlyCost: {amount: 383.25, currency: "USD"}}' \
   inventories/aws.inventory.json > inventories/aws.edited.inventory.json
 ```
 

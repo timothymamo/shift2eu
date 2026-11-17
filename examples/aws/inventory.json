@@ -11,7 +11,7 @@
       "size": { "vcpus": 2, "memoryGiB": 8 },
       "workload": "shop",
       "relations": [{ "type": "depends-on", "target": "shop-orders" }],
-      "monthlyCost": { "amount": 84, "currency": "USD" }
+      "monthlyCost": { "amount": 84.10, "currency": "USD" }
     },
     {
       "id": "shop-web-2",
@@ -22,7 +22,7 @@
       "size": { "vcpus": 2, "memoryGiB": 8 },
       "usage": { "hoursPerMonth": 360 },
       "workload": "shop",
-      "monthlyCost": { "amount": 41, "currency": "USD" }
+      "monthlyCost": { "amount": 42.05, "currency": "USD" }
     },
     {
       "id": "shop-web-asg",
@@ -42,7 +42,7 @@
       "size": { "storageGiB": 100 },
       "workload": "shop",
       "relations": [{ "type": "attached-to", "target": "shop-web-1" }],
-      "monthlyCost": { "amount": 9, "currency": "USD" }
+      "monthlyCost": { "amount": 9.52, "currency": "USD" }
     },
     {
       "id": "shop-assets",
@@ -59,9 +59,9 @@
       "category": "database.postgresql",
       "region": "eu-central-1",
       "capabilities": ["point-in-time-restore", "read-replicas", "node-high-availability", "encryption-at-rest"],
-      "size": { "vcpus": 2, "memoryGiB": 8 },
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 200 },
       "workload": "shop",
-      "monthlyCost": { "amount": 383, "currency": "USD" }
+      "monthlyCost": { "amount": 383.25, "currency": "USD" }
     },
     {
       "id": "shop-legacy-mysql",
@@ -69,7 +69,7 @@
       "category": "database.mysql",
       "region": "eu-central-1",
       "capabilities": ["point-in-time-restore", "node-high-availability"],
-      "size": { "vcpus": 2, "memoryGiB": 8 }
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 50 }
     },
     {
       "id": "shop-eks",

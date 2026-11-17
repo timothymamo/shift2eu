@@ -19,6 +19,8 @@ so a report shows all its sections.
 
 Each resource that a target prices has a size (vCPU and memory, or stored GiB, and a count of
 instances or nodes), so the reports show a plan and a monthly estimate per resource and a cost summary.
+Every database gives its stored GiB too; where that is more than its plan includes, the estimate adds
+the target's price for the extra storage (OVHcloud's plans include some, Scaleway's and UpCloud's none).
 Resources belong to named workloads (`shop`, and `media` or `catalog`), so the reports group them; the
 AWS sample leaves its legacy MySQL database in no workload. Relations of all four types link them: a
 volume `attached-to` its server, a dead-letter queue `dead-letter-queue-of` its queue, a read replica

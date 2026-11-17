@@ -93,9 +93,9 @@ summary counts the fits and gives each target's estimated total:
 | partial | 1 | 5 | 2 |
 | none | 5 | 2 | 5 |
 | total | 13 | 13 | 13 |
-| `OVHcloud` estimate | €736.34 per month for 8 of 13 resources |  |  |
-| `Scaleway` estimate |  | €562.75 per month for 8 of 13 resources |  |
-| `UpCloud` estimate |  |  | €308.61 per month for 8 of 13 resources |
+| `OVHcloud` estimate | €797.66 per month for 8 of 13 resources |  |  |
+| `Scaleway` estimate |  | €587.58 per month for 8 of 13 resources |  |
+| `UpCloud` estimate |  |  | €359.31 per month for 8 of 13 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 ```
@@ -145,7 +145,7 @@ source's cost ([`aws-scaleway-estimates.json.golden`](../../test/examples/testda
     ],
     "hoursBasis": 730,
     "total": {
-      "amount": "562.75",
+      "amount": "587.58",
       "estimated": 8,
       "resources": 13
     }
@@ -358,15 +358,15 @@ database belongs to no workload:
 ### `shop`
 
 - Fit: 4 direct, 4 partial, 1 none
-- Monthly estimate: €497.30 per month for 6 of 9 resources, list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $517.00 for 4 of 9 resources
+- Monthly estimate: €517.16 per month for 6 of 9 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $518.92 for 4 of 9 resources
 - Blockers:
   - `shop.example.com`: not classified
 
 ### No workload
 
 - Fit: 0 direct, 1 partial, 0 none
-- Monthly estimate: €61.43 per month for 1 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €66.39 per month for 1 of 1 resource, list prices on 2026-11-13, excluding VAT and discounts
 ```
 
 The **cost estimate** ends the report: the total of the estimated resources, how many of them there
@@ -376,11 +376,11 @@ the source's cost is shown beside it per currency, never converted, with how man
 ```markdown
 ## Cost estimate
 
-- Total: €562.75 per month for 8 of 13 resources
+- Total: €587.58 per month for 8 of 13 resources
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $517.00 for 4 of 13 resources
+- Source cost: `USD` $518.92 for 4 of 13 resources
 ```
 
 An estimate is not a quote: it uses list prices on the snapshot's date, without VAT, discounts,
@@ -395,7 +395,7 @@ rank the targets or recommend one.
 ```markdown
 | ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `OVHcloud` monthly estimate | `Scaleway` fit | `Scaleway` best offering | `Scaleway` monthly estimate | `UpCloud` fit | `UpCloud` best offering | `UpCloud` monthly estimate |
 |---|---|---|---|---|---|---|---|---|---|---|
-| `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` | €175.49 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL High Availability` | €61.43 (count assumed 1) (730 hours assumed) | direct | `Managed PostgreSQL Multi-node` | €57.79 (count assumed 1) (730 hours assumed) |
+| `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` | €236.81 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL High Availability` | €81.29 (count assumed 1) (730 hours assumed) | direct | `Managed PostgreSQL Multi-node` | €98.35 (count assumed 1) (730 hours assumed) |
 | `shop-thumbnailer` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
 ```
 

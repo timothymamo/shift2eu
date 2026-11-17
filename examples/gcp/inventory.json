@@ -11,7 +11,7 @@
       "size": { "vcpus": 2, "memoryGiB": 8 },
       "workload": "shop",
       "relations": [{ "type": "depends-on", "target": "shop-orders" }],
-      "monthlyCost": { "amount": 53, "currency": "USD" }
+      "monthlyCost": { "amount": 53.45, "currency": "USD" }
     },
     {
       "id": "shop-web-mig",
@@ -49,7 +49,7 @@
       "capabilities": ["object-versioning"],
       "size": { "storageGiB": 500 },
       "workload": "shop",
-      "monthlyCost": { "amount": 10, "currency": "USD" }
+      "monthlyCost": { "amount": 11.50, "currency": "USD" }
     },
     {
       "id": "shop-db",
@@ -57,16 +57,16 @@
       "category": "database.postgresql",
       "region": "europe-west1",
       "capabilities": ["point-in-time-restore", "zone-high-availability", "read-replicas"],
-      "size": { "vcpus": 4, "memoryGiB": 16 },
+      "size": { "vcpus": 4, "memoryGiB": 16, "storageGiB": 500 },
       "workload": "shop",
-      "monthlyCost": { "amount": 412, "currency": "USD" }
+      "monthlyCost": { "amount": 412.36, "currency": "USD" }
     },
     {
       "id": "shop-db-replica",
       "rawType": "sqladmin.googleapis.com/Instance",
       "category": "database.postgresql",
       "region": "europe-west4",
-      "size": { "vcpus": 4, "memoryGiB": 16 },
+      "size": { "vcpus": 4, "memoryGiB": 16, "storageGiB": 500 },
       "workload": "shop",
       "relations": [{ "type": "replica-of", "target": "shop-db" }]
     },
@@ -76,7 +76,7 @@
       "category": "database.mysql",
       "region": "europe-west1",
       "capabilities": ["point-in-time-restore", "read-replicas"],
-      "size": { "vcpus": 2, "memoryGiB": 8 },
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 100 },
       "workload": "catalog"
     },
     {
