@@ -192,16 +192,74 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 
 ##@ Isolated environment (Lima)
 
+# limactl start <name> on an instance whose directory has no lima.yaml (Lima lists it as Broken) reads the name
+# as a template and falls back to template:default, a VM that mounts the whole home directory (#237). So a
+# listed instance is started by name only when its status is known good (an allow list, not a deny list on
+# Broken) and its lima.yaml is still there, and a listing or status query that fails stops vm-up (a failed
+# listing would otherwise reach the create line). The listing is matched literally (grep -xF), so a name
+# with a dot never matches a look-alike. A Broken instance with any entry named lima.yaml in place, even a
+# dangling symlink, is broken for another reason and may keep an intact disk: vm-up points at limactl list
+# and limactl start --debug, never at removing it by hand. A Stopped or Running instance whose lima.yaml is a
+# dangling symlink is not started either, and gets the same pointer. Before any limactl call, vm-up refuses a
+# LIMA_INSTANCE that is not letters, digits, '.', '_' and '-' starting with a letter or digit: an empty name
+# matches the empty line an empty listing prints and would point at all of ~/.lima, a leading dash reads as an
+# option and a slash as a path. The name is single-quoted for the shell, so a space or quote cannot break out.
 .PHONY: vm-up
 vm-up: git-hooks ## Create or start the Lima VM with only this repository's workspace directory mounted
+	@LC_ALL=C; export LC_ALL; \
+	name='$(subst ','\'',$(LIMA_INSTANCE))'; \
+	case "$$name" in \
+	("" | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*) \
+		printf "vm-up: invalid LIMA_INSTANCE '%s': a Lima instance name is letters, digits, '.', '_' and '-', starting with a letter or digit\n" "$$name" >&2; \
+		exit 1;; \
+	esac
 	@stray="$$(ls -A "$(WORKSPACE)" | grep -vx -e '$(REPO_NAME)' -e '$(REPO_NAME)-dispatch-.*' -e '\.DS_Store' || true)"; \
 	if [ -n "$$stray" ]; then \
 		echo "vm-up: the VM mounts $(WORKSPACE), which must hold only $(REPO_NAME) and its dispatch worktrees; move these out first:" >&2; \
 		echo "$$stray" | sed 's/^/  /' >&2; \
 		exit 1; \
 	fi
-	@if limactl list --quiet | grep -qx "$(LIMA_INSTANCE)"; then \
-		limactl start "$(LIMA_INSTANCE)"; \
+	@list="$$(limactl list --quiet)" || { \
+		echo "vm-up: could not list the Lima instances, so it cannot tell whether $(LIMA_INSTANCE) exists" >&2; \
+		exit 1; \
+	}; \
+	if printf '%s\n' "$$list" | grep -qxF -- "$(LIMA_INSTANCE)"; then \
+		dir="$${LIMA_HOME:-$$HOME/.lima}/$(LIMA_INSTANCE)"; \
+		status="$$(limactl list --format '{{.Status}}' "$(LIMA_INSTANCE)")" || { \
+			echo "vm-up: could not read the status of the Lima instance $(LIMA_INSTANCE)" >&2; \
+			exit 1; \
+		}; \
+		case "$$status" in \
+		(Stopped|Running) \
+			if [ -L "$$dir/lima.yaml" ] && [ ! -e "$$dir/lima.yaml" ]; then \
+				echo "vm-up: the Lima instance $(LIMA_INSTANCE) is $$status, but $$dir/lima.yaml is a dangling symlink: it is there, but Lima cannot use it." >&2; \
+				echo "  Its disk may be intact: see why with 'limactl list' and 'limactl start --debug $(LIMA_INSTANCE)', and fix the link instead of deleting the instance." >&2; \
+				echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
+				exit 1; \
+			elif [ ! -f "$$dir/lima.yaml" ]; then \
+				echo "vm-up: the Lima instance $(LIMA_INSTANCE) is $$status, but $$dir has no lima.yaml:" >&2; \
+				echo "  limactl start $(LIMA_INSTANCE) would read the name as a template and fall back to template:default, a VM that mounts the home directory." >&2; \
+				echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
+				exit 1; \
+			fi; \
+			limactl start "$(LIMA_INSTANCE)";; \
+		(Broken) \
+			if [ -e "$$dir/lima.yaml" ] || [ -L "$$dir/lima.yaml" ]; then \
+				echo "vm-up: the Lima instance $(LIMA_INSTANCE) is Broken although $$dir/lima.yaml is there: it is broken for another reason, such as a lima.yaml Lima cannot load." >&2; \
+				echo "  Its disk may be intact: see why with 'limactl list' and 'limactl start --debug $(LIMA_INSTANCE)', and fix the cause instead of deleting the instance." >&2; \
+				echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
+				exit 1; \
+			fi; \
+			echo "vm-up: the Lima instance $(LIMA_INSTANCE) is Broken: $$dir has no lima.yaml, and starting it would create a default VM that mounts the home directory" >&2; \
+			echo "  Remove $$dir by hand once no limactl job uses it; make vm-delete cannot, as limactl delete --force refuses a directory without lima.yaml." >&2; \
+			echo "  A launchd job running limactl start may recreate it through its log paths; look for one with" >&2; \
+			echo "  'launchctl print system | grep -i lima' and in ~/Library/LaunchAgents and /Library/LaunchDaemons, and unload it first." >&2; \
+			echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
+			exit 1;; \
+		(*) \
+			echo "vm-up: the Lima instance $(LIMA_INSTANCE) has the status '$$status'; vm-up starts only a Stopped or Running instance" >&2; \
+			exit 1;; \
+		esac; \
 	else \
 		limactl start --name="$(LIMA_INSTANCE)" --mount-only "$(WORKSPACE):w" --tty=false dev/lima.yaml; \
 	fi

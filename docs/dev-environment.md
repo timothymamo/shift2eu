@@ -204,6 +204,37 @@ limactl edit --tty=false --memory=16 shift2eu   # memory in GiB; --cpus and --di
 make vm-up
 ```
 
+### Troubleshooting: a Broken instance
+
+`limactl list` shows an instance as `Broken` when Lima cannot load it, for example when its directory (such
+as `/Users/example/.lima/shift2eu`, or `$LIMA_HOME/shift2eu` when `LIMA_HOME` is set) has no `lima.yaml`.
+`limactl start shift2eu` on an instance without a `lima.yaml` reads the name as a template and falls back
+to Lima's `template:default`, a VM that mounts the whole home directory instead of only the workspace;
+without a terminal it does so without asking. So `make vm-up` starts an existing instance only when it is
+`Stopped` or `Running` and its `lima.yaml` is there: for `Broken` it stops before any `limactl start` and
+names the directory, for a `Stopped` or `Running` instance whose `lima.yaml` is gone or a dangling symlink
+it stops too, for any other status it stops and names the status, and when it cannot list the instances or
+read the status at all it stops and says so. Before any of that it refuses a `LIMA_INSTANCE` that is not
+letters, digits, `.`, `_` and `-`, starting with a letter or digit.
+
+Which fix applies depends on whether the directory still holds a `lima.yaml`:
+
+- **`lima.yaml` is missing.** `make vm-delete` cannot clean it up: `limactl delete --force` refuses a
+  directory without `lima.yaml`. Remove the directory by hand, once no `limactl` job uses it.
+- **`lima.yaml` is there**, even as a dangling symlink. The instance is broken for another reason, such as
+  a `lima.yaml` Lima cannot load, and its disk may well be intact. Do not delete it: see why with
+  `limactl list` and `limactl start --debug shift2eu`, fix the `lima.yaml` (or whatever the debug output
+  names), then run `make vm-up` again.
+
+The rest of this section is about the first case.
+
+If the directory comes back after `rm -rf`, even across a reboot, a launchd job (a LaunchDaemon or
+LaunchAgent running `limactl start shift2eu`, for example one that starts the VM at boot) is recreating
+it: launchd creates the job's `StandardOutPath` and `StandardErrorPath` log files, which sit in the
+instance directory, every time it runs the job. Find it with `launchctl print system | grep -i lima` and
+in `~/Library/LaunchAgents` and `/Library/LaunchDaemons`, unload it (`launchctl bootout`), then remove the
+directory and run `make vm-up` to create the VM from `dev/lima.yaml`.
+
 ## Dispatcher mode
 
 A [dispatcher pane](https://agent-deck.devopstoolkit.ai/docs/dispatcher-mode.md) starts orchestrations
