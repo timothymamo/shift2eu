@@ -490,8 +490,9 @@ run make gate-check as the maintainer` instead of a verdict. That part is yours:
 the host clone, logged in to `gh` as yourself with an admin token (`gh auth login` on the Mac), as runbook
 step 5 does. A fine-grained personal token reports your role on the repository in `permissions.admin`, not
 what the token itself may do: without Administration on the token, GitHub leaves the bypass list out and
-the check reports `gap: bypass_actors is missing although this token is a repository admin`. Use
-`gh auth login`'s token, or give the fine-grained token Administration read.
+the check reports `gap: bypass_actors is missing although this token is a repository admin`. A token that
+returned `[]` without being able to see the bypass actors would make the check pass falsely, so run the
+gate check only with `gh auth login`'s token, whose answer runbook step 5 checks once by hand.
 
 The transition flag, `GATE_TRANSITION`, is `1` by default until milestone 3 of PRD #161 removes it: the
 check runs with `--transition`, and while the gate is off (no pull request rule, or one that requires
@@ -544,7 +545,11 @@ before it still hold. Rolling back is under each step.
    *Check:* from the host clone (`git -C ~/src/shift2eu-host pull --ff-only`), logged in to `gh` as
    yourself with an admin token, `make gate-check GATE_TRANSITION=0` exits 0 and prints no `gap:` and no
    `unverified:` line (an exit of 3 means the token is not a repository admin: `gh auth login` and run it
-   again). An open agent pull request shows "Review required" (`gh pr view <n> --json reviewDecision`
+   again). Once, by hand, with that same `gh auth login` token: the ruleset id from
+   `gh api repos/timothymamo/shift2eu/rulesets --jq '.[] | select(.name == "Protect main") | .id'`, then
+   `gh api repos/timothymamo/shift2eu/rulesets/<id> --jq 'has("bypass_actors"), .bypass_actors'` prints
+   `true` and `[]`: the field is there and empty, so this token sees the bypass actors. Run the gate check
+   only with this token. An open agent pull request shows "Review required" (`gh pr view <n> --json reviewDecision`
    gives `REVIEW_REQUIRED`) until you approve it.
    *Roll back:* put the `pull_request` rule of `Protect main` back as it was before this step, turning
    off all four settings: required approvals 0, no review from Code Owners, no dismissal of stale
