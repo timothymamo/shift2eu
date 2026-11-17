@@ -63,7 +63,8 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
 
    Each can also be run on its own. The VM has 4 CPUs, 16 GiB of memory and a 40 GiB disk
    (`dev/lima.yaml`), enough for all six roles to run `make check` at once. Leave the Mac enough free
-   memory to run it.
+   memory to run it. `VM_CPUS`, `VM_MEMORY`, `VM_DISK` and `VM_SSH_PORT` set another size and a fixed SSH
+   port when the VM is created ([Several VMs on one host](#several-vms-on-one-host)).
 
 5. Open the deck: type what `make deck` runs, from a directory outside the workspace, such as your home
    (`cd ~`), not `make deck` in the workspace: a git-aware prompt in the workspace runs git there with
@@ -179,13 +180,37 @@ it replaces and `refusal`, a substring of the message `limactl validate` prints 
 `go test ./test/devenv -update` to write its template and `.expect`, and check with `limactl validate`
 that Lima refuses the new template with that text.
 
-The same goes for the VM's size: `make vm-up` starts an existing VM with the CPUs, memory and disk it
-was created with. To resize it without recreating it, keeping its tools, login and configuration:
+### Several VMs on one host
+
+A host that runs one Lima VM per repository gives each VM a size and an SSH port of its own. `make vm-up`
+and `make vm-create` (which hands them on to `make vm-up`) take four optional variables:
+
+| Variable | Value | Passed to `limactl start` as |
+|---|---|---|
+| `VM_CPUS` | A whole number, 1 or more | `--cpus=N` |
+| `VM_MEMORY` | A whole size in GiB, such as `7GiB` | `--memory=N` (GiB) |
+| `VM_DISK` | A whole size in GiB, such as `58GiB` | `--disk=N` (GiB) |
+| `VM_SSH_PORT` | A port from 1024 to 65535 | `--ssh-port=N` |
+
+Unset, `dev/lima.yaml`'s 4 CPUs, 16 GiB and 40 GiB stand and Lima picks the SSH port, as before. Any other
+value fails before `limactl` runs, naming the variable. They apply only when the VM is created: an
+existing VM is never resized, and `make vm-up` warns that the variables it was given were ignored. To give
+an existing VM a new size or port, rebuild it in one command (it loses what is inside it, so run
+`make vm-create`'s setup again, which this does):
 
 ```bash
-make vm-stop
-limactl edit --tty=false --memory=16 shift2eu   # memory in GiB; --cpus and --disk work the same way
-make vm-up
+make vm-delete vm-create VM_CPUS=5 VM_MEMORY=7GiB VM_DISK=58GiB VM_SSH_PORT=60022
+```
+
+A client that reaches the VM through the host, with `ProxyJump` to `127.0.0.1:<port>` in its
+`~/.ssh/config`, must use the same port as `VM_SSH_PORT`, so pick one per VM and keep it:
+
+```text
+Host shift2eu-vm
+  HostName 127.0.0.1
+  Port 60022
+  ProxyJump mac-mini.example.com
+  IdentityFile /Users/example/.lima/_config/user
 ```
 
 ## Dispatcher mode

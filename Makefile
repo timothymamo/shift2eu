@@ -1,3 +1,23 @@
+# The VM's size and SSH port, for a host that runs several VMs (issue #228, docs/dev-environment.md, Several
+# VMs on one host). Empty keeps dev/lima.yaml's value and the port Lima picks. They apply only when make vm-up
+# creates the VM: an existing VM is never resized, and vm-up warns that they were ignored. VM_CPUS is a CPU
+# count, VM_MEMORY and VM_DISK a whole size in GiB (8GiB), VM_SSH_PORT a port in 1024-65535; vm-up refuses
+# anything else before limactl runs. Each is read raw ($(value ...), so make expands nothing in it) and
+# exported, so the recipes read it from the environment as "$$VM_CPUS" and no shell ever parses the value.
+# Keep this block first: make hands exported variables, command-line ones included, to every $(shell ...),
+# expanding them, so a $(shell ...) evaluated before these lines would run a value's $(...) as make code.
+VM_CPUS     ?=
+VM_MEMORY   ?=
+VM_DISK     ?=
+VM_SSH_PORT ?=
+override VM_CPUS     := $(value VM_CPUS)
+override VM_MEMORY   := $(value VM_MEMORY)
+override VM_DISK     := $(value VM_DISK)
+override VM_SSH_PORT := $(value VM_SSH_PORT)
+export VM_CPUS VM_MEMORY VM_DISK VM_SSH_PORT
+# The ones that are set, for vm-up's warning when the VM exists already.
+VM_RESOURCES_SET = $(strip $(if $(VM_CPUS),VM_CPUS) $(if $(VM_MEMORY),VM_MEMORY) $(if $(VM_DISK),VM_DISK) $(if $(VM_SSH_PORT),VM_SSH_PORT))
+
 BINARY  := shift2eu
 # The HTTP API's binary (PRD #103, docs/adr/0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md).
 SERVER  := shift2eu-server
@@ -193,7 +213,17 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 ##@ Isolated environment (Lima)
 
 .PHONY: vm-up
-vm-up: git-hooks ## Create or start the Lima VM with only this repository's workspace directory mounted
+vm-up: git-hooks ## Create or start the Lima VM with only this repository's workspace mounted (VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT on creation)
+	@whole() { case "$$1" in ([1-9]*) case "$$1" in (*[!0-9]*) return 1;; esac;; (*) return 1;; esac; }; \
+	refuse() { printf 'vm-up: %s=%s is not %s\n' "$$1" "$$2" "$$3" >&2; exit 1; }; \
+	[ -z "$$VM_CPUS" ] || whole "$$VM_CPUS" || refuse VM_CPUS "$$VM_CPUS" 'a CPU count (a whole number, 1 or more)'; \
+	[ -z "$$VM_MEMORY" ] || { case "$$VM_MEMORY" in (*GiB) whole "$${VM_MEMORY%GiB}";; (*) false;; esac; } || \
+		refuse VM_MEMORY "$$VM_MEMORY" 'a whole size in GiB, such as 8GiB'; \
+	[ -z "$$VM_DISK" ] || { case "$$VM_DISK" in (*GiB) whole "$${VM_DISK%GiB}";; (*) false;; esac; } || \
+		refuse VM_DISK "$$VM_DISK" 'a whole size in GiB, such as 60GiB'; \
+	[ -z "$$VM_SSH_PORT" ] || { whole "$$VM_SSH_PORT" && [ "$${#VM_SSH_PORT}" -le 5 ] && \
+		[ "$$VM_SSH_PORT" -ge 1024 ] && [ "$$VM_SSH_PORT" -le 65535 ]; } || \
+		refuse VM_SSH_PORT "$$VM_SSH_PORT" 'a port from 1024 to 65535'
 	@stray="$$(ls -A "$(WORKSPACE)" | grep -vx -e '$(REPO_NAME)' -e '$(REPO_NAME)-dispatch-.*' -e '\.DS_Store' || true)"; \
 	if [ -n "$$stray" ]; then \
 		echo "vm-up: the VM mounts $(WORKSPACE), which must hold only $(REPO_NAME) and its dispatch worktrees; move these out first:" >&2; \
@@ -201,9 +231,12 @@ vm-up: git-hooks ## Create or start the Lima VM with only this repository's work
 		exit 1; \
 	fi
 	@if limactl list --quiet | grep -qx "$(LIMA_INSTANCE)"; then \
+		$(if $(VM_RESOURCES_SET),echo "vm-up: warning: $(VM_RESOURCES_SET) apply only when the VM is created; $(LIMA_INSTANCE) exists and starts as it is: an existing VM is never resized (make vm-delete vm-create rebuilds it)" >&2;) \
 		limactl start "$(LIMA_INSTANCE)"; \
 	else \
-		limactl start --name="$(LIMA_INSTANCE)" --mount-only "$(WORKSPACE):w" --tty=false dev/lima.yaml; \
+		limactl start --name="$(LIMA_INSTANCE)" --mount-only "$(WORKSPACE):w" --tty=false \
+			$${VM_CPUS:+--cpus="$$VM_CPUS"} $${VM_MEMORY:+--memory="$${VM_MEMORY%GiB}"} \
+			$${VM_DISK:+--disk="$${VM_DISK%GiB}"} $${VM_SSH_PORT:+--ssh-port="$$VM_SSH_PORT"} dev/lima.yaml; \
 	fi
 
 .PHONY: vm-shell
@@ -240,7 +273,7 @@ vm-init: ## Once-only VM setup after vm-env and vm-claude-settings: Claude Code 
 
 # One target at a time, in order, even under make -j.
 .PHONY: vm-create
-vm-create: ## Create and set up the VM, ready for make deck: vm-up, vm-env, vm-claude-settings, vm-init
+vm-create: ## Create and set up the VM, ready for make deck: vm-up (VM_CPUS, ... pass through), vm-env, vm-claude-settings, vm-init
 	$(MAKE) vm-up
 	$(MAKE) vm-env
 	$(MAKE) vm-claude-settings
