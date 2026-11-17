@@ -7,7 +7,9 @@
 #
 #   - $HOME/.config/shift2eu/agents-app-identity present (make agents-token wrote it): its two lines, the
 #     agents App's bot name and noreply address, replace any identity the VM has. A file that is not exactly
-#     that is refused, and nothing changes.
+#     that is refused, and nothing changes. The mint that writes the file (dev/agents-app-token.sh) sets the
+#     same identity at once, since on a new VM this step runs before the first mint (issue #241); here it
+#     is applied again, which changes nothing when the mint already did.
 #   - absent: the fallback (the identity make vm-init was given, the Mac's own by default) is set where the
 #     VM has none, and replaces a bot's identity left from an earlier run (the rollback). Any other identity
 #     the VM has is kept.

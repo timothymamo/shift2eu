@@ -37,6 +37,8 @@
 #   ~/.config/shift2eu/agents-app-token     the token, then its expiry as Unix seconds
 #   ~/.config/shift2eu/agents-app-identity  the git user.name <slug>[bot], then the git user.email
 #                                           <bot user id>+<slug>[bot]@users.noreply.github.com
+#   ~/.gitconfig                            user.name and user.email set to that identity, whenever the
+#                                           identity is written (git config; issue #241)
 #
 # The token is written into the VM as soon as it is minted. The bot user is looked up after that, with the
 # installation token, never with the JWT or without one, and its identity file is written once the lookup
@@ -308,13 +310,20 @@ lookup_identity() {
 # The script the VM runs: it reads four lines from its standard input (the token, its expiry, the git
 # user.name, the git user.email) and writes the identity file when the name is not empty and the token file
 # when the token is not empty, each atomically (a temporary file beside it, then mv), so a gh running at the
-# same time never reads half a token. It
-# refuses, with status 3, a ~/.config/shift2eu that is a symlink or that resolves (pwd -P) outside the VM
-# user's real home, and a token or identity file that is a symlink or not a regular file. That keeps the token
+# same time never reads half a token. With the identity it also sets the VM user's global git identity
+# (user.name and user.email in ~/.gitconfig, replacing whatever is there, one value per key), so the agents
+# commit as the bot even when vm-init ran before the first mint (issue #241); a write without an identity
+# never touches the git configuration. It
+# refuses, with status 3, before it writes anything: a ~/.config/shift2eu that is a symlink or that resolves
+# (pwd -P) outside the VM user's real home, a token or identity file or a ~/.gitconfig that is a symlink or
+# not a regular file, a name or email that is not a bot's (the patterns of dev/vm-git-identity.sh), and,
+# with an identity, a VM without git (its image always has git, so a missing one is a broken VM that would
+# leave the agents committing as someone else: refused loudly, not skipped). That keeps the token
 # from being written through a symlink by mistake; it is no boundary against the VM user, who can read the
 # token anyway and could swap a path between the check and the mv.
-# It then prints, never a secret, the VM's clock as clock=<Unix seconds> and, when the real gh is not where
-# the gh wrapper keeps it ($1), gh-wrapper=missing: a VM created before the wrapper.
+# It then prints, never a secret, git-identity=set when it set the git identity, the VM's clock as
+# clock=<Unix seconds> and, when the real gh is not where the gh wrapper keeps it ($1), gh-wrapper=missing:
+# a VM created before the wrapper.
 # shellcheck disable=SC2016 # expanded by the VM's sh, not here
 vm_write='set -eu
 umask 077
@@ -338,6 +347,11 @@ for d in "$HOME/.config" "$dir"; do
     exit 3
   fi
 done
+gitconfig="$HOME/.gitconfig"
+if [ -L "$gitconfig" ] || { [ -e "$gitconfig" ] && [ ! -f "$gitconfig" ]; }; then
+  echo "agents-token: $gitconfig is a symlink or not a regular file; the VM writes no token and no git identity: make it a regular file (or remove it) in the VM" >&2
+  exit 3
+fi
 mkdir -p "$dir"
 if ! inside "$dir"; then
   echo "agents-token: $dir resolves outside $HOME; the VM writes no token there: make it a directory in the VM user home" >&2
@@ -354,7 +368,40 @@ IFS= read -r token
 IFS= read -r expiry
 IFS= read -r name
 IFS= read -r email
+slug_only() {
+  [ -n "$1" ] || return 1
+  case "$1" in
+  *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
+  esac
+}
 if [ -n "$name" ]; then
+  name_slug="${name%"[bot]"}"
+  if [ "$name_slug" = "$name" ] || ! slug_only "$name_slug"; then
+    echo "agents-token: the bot name is not an App bot name (<slug>[bot]); the VM writes no git identity" >&2
+    exit 3
+  fi
+  email_rest="${email%"[bot]@users.noreply.github.com"}"
+  email_id="${email_rest%%+*}"
+  email_slug="${email_rest#*+}"
+  if [ "$email_rest" = "$email" ] || [ "$email_id" = "$email_rest" ] || ! slug_only "$email_slug"; then
+    echo "agents-token: the bot email is not a bot noreply address; the VM writes no git identity" >&2
+    exit 3
+  fi
+  case "$email_id" in
+  "" | *[!0123456789]*)
+    echo "agents-token: the bot email is not a bot noreply address; the VM writes no git identity" >&2
+    exit 3
+    ;;
+  esac
+  if ! command -v git >/dev/null 2>&1; then
+    echo "agents-token: git is not installed in the VM, so the agents cannot commit as the bot: install it (make vm-init)" >&2
+    exit 3
+  fi
+  if ! git config --file "$gitconfig" user.name "$name" || ! git config --file "$gitconfig" user.email "$email"; then
+    echo "agents-token: git could not set the bot identity in $gitconfig: fix that file in the VM" >&2
+    exit 3
+  fi
+  printf "git-identity=set\n"
   tmp="$(mktemp "$dir/.agents-app-identity.XXXXXX")"
   printf "%s\n%s\n" "$name" "$email" >"$tmp"
   chmod 600 "$tmp"
@@ -387,6 +434,16 @@ check_vm() {
       say "warning: the VM ${instance}'s clock is ${offset}s off the Mac's; the token's expiry is the Mac's, so the VM may refuse it early or keep it past its life. Restart the VM's time sync (or make vm-stop vm-up)"
     fi
   fi
+}
+
+# said_git_identity says the VM user's global git identity is now the bot's, when vm_write printed that it
+# set it (git-identity=set): the agents commit as the bot from here on (issue #241).
+said_git_identity() {
+  case "${written}" in
+  *git-identity=set*)
+    say "set the VM ${instance}'s git identity (git config --global) to ${bot_name} <${bot_email}>"
+    ;;
+  esac
 }
 
 # vm_send <token> <expiry> <name> <email> runs vm_write in the VM, which writes each file whose first field is
@@ -483,6 +540,7 @@ mint_once() {
     identity_written=1
     held=""
     say "wrote a token for ${bot_name} into the VM ${instance}, valid until $(show_time "${expiry}")"
+    said_git_identity
   else
     held="${token}"
     say "wrote a token into the VM ${instance}, valid until $(show_time "${expiry}"); looking up the bot user next"
@@ -503,6 +561,7 @@ identify() {
   vm_send "" "" "${bot_name}" "${bot_email}" "bot identity" || return 1
   identity_written=1
   say "wrote the bot identity ${bot_name} into the VM ${instance}"
+  said_git_identity
 }
 
 # stopped <why> says the refresh stopped, when, until when the VM's token is valid, and how to start it
@@ -607,7 +666,7 @@ refresh() {
     if [ "${ok}" -eq 1 ] && [ -n "${expiry}" ] && [ "${identity_written}" -eq 0 ]; then
       if ! identify; then
         ok=0
-        why="the bot user's identity cannot be read, and trying again cannot fix it"
+        why="the bot user's identity cannot be read or written into the VM, and trying again cannot fix it"
       fi
     fi
     if [ "${ok}" -eq 1 ]; then
