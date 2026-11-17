@@ -9,9 +9,9 @@ Providers meet only through the **taxonomy** (`internal/domain/taxonomy`). A sou
 what it discovers into taxonomy categories; a target adapter declares which categories its offerings
 serve. Never write a direct "AWS service X maps to OVH service Y" table.
 
-Change files (code, data files, `.golangci.yml`, scratch files) with your file-editing tool, never with a
-shell command or script that rewrites them, and never `rm` a path held in a variable or built at run
-time (CLAUDE.md, rule 9).
+Change files with your file-editing tool, never with a shell command or script that rewrites them.
+Never `rm` a path held in a variable or built at run time; leave scratch directories for the system to
+clean (CLAUDE.md, rule 9).
 
 ## Source provider (hyperscaler, read-only discovery)
 

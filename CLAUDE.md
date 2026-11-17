@@ -114,10 +114,10 @@ make server            # ./bin/shift2eu-server only
 9. **Change files with your file-editing tool, never through the shell.** No heredoc, `cat >`, `tee`,
    `sed -i` or scripted rewrite (`python3 - <<'EOF'`) of a file; the formatters and generators `make`
    and the tests run (`make fmt`, `-update`) are fine. Write scratch files with that tool too, in your
-   scratchpad or temporary directory, and so a commit message or PR body longer than one line
-   (`git commit -F <file>`, `gh pr create --body-file <file>`). Never `rm` a path held in a variable or built at run time
-   (`rm -rf "$dir"`); leave scratch directories for the system to clean. Why: unattended panes run in
-   auto mode, whose safety check holds such commands at a permission prompt nobody answers (issue #251).
+   scratchpad or temporary directory. Write commit messages and PR bodies longer than one line the same
+   way (`git commit -F <file>`, `gh pr create --body-file <file>`). Never `rm` a path held in a variable
+   or built at run time (`rm -rf "$dir"`); leave scratch directories for the system to clean. Why: such
+   commands stop an unattended pane at a permission prompt nobody answers (issue #251).
 
 ## Multi-agent workflow
 

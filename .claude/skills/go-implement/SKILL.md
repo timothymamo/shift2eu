@@ -13,10 +13,9 @@ description: Implementation conventions for shift2eu Go code - layering, errors,
 2. Read the task's PRD or issue and the failing test you were given.
 3. Locate the layer (CLAUDE.md, "Architecture") and read the package's `doc.go`.
 4. Make the smallest change that makes the test pass, then refactor with the tests green.
-5. Change every file, the `Makefile` and scratch files included, with your file-editing tool, never
-   with a shell command or script that rewrites it (heredoc, `cat >`, `sed -i`, `python3 -`). Never
-   `rm` a path held in a variable or built at run time; leave scratch directories for the system to
-   clean (CLAUDE.md, rule 9).
+5. Change files with your file-editing tool, never with a shell command or script that rewrites them.
+   Never `rm` a path held in a variable or built at run time; leave scratch directories for the system
+   to clean (CLAUDE.md, rule 9).
 
 ## Layering (enforced by `make lint` via depguard)
 
