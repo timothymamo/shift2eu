@@ -180,7 +180,7 @@ check: lint test vuln ## Everything CI gates on; run before every commit
 # rulesets' bypass list, or in the VM, where the agents App's token cannot read it.
 .PHONY: gate-check
 gate-check: ## Check that Protect main and CODEOWNERS on main require the maintainer's approval (GATE_TRANSITION=0 fails on a gap)
-	sh dev/protect-main-check.sh$(if $(filter 1,$(GATE_TRANSITION)), --transition)
+	dev/protect-main-check.sh$(if $(filter 1,$(GATE_TRANSITION)), --transition)
 
 .PHONY: worktree
 worktree: ## Create or resume the worktree for a PR: make worktree BRANCH=feat/12-short-name
