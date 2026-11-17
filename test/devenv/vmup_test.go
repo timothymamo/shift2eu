@@ -1,10 +1,30 @@
-// Pins make vm-up's optional VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT (issue #228): on creation they reach
-// limactl start in Lima's own flag form, unset the creation command line is byte for byte what it was, an
-// invalid value fails before limactl runs, make vm-create hands the four on to make vm-up, and an existing VM -
-// Stopped or Running - is started by its name without any of them, with a warning that they apply only when
-// the VM is created. vm-up also refuses a workspace that holds anything but the repository and its dispatch
-// worktrees, and neither check may be bypassed by make -i or make -k. Every run uses a fake limactl on PATH:
-// no test starts a real VM.
+// Pins make vm-up's decision about a Lima instance that is already listed (issue #237): an instance whose
+// directory holds no lima.yaml is still listed, with the status Broken, and limactl start <name> then reads
+// the name as a template and falls back to template:default - a VM that mounts the whole home directory
+// instead of only the workspace. So an instance that is listed but neither Stopped nor Running stops vm-up
+// before any limactl start, with a message naming the instance directory, its removal by hand and the launchd
+// jobs that may recreate it; Stopped and Running still get limactl start <name>, and an instance that is not
+// listed still gets the dev/lima.yaml command line, unchanged.
+//
+// Removing anything by hand is advice only for a Broken instance whose directory really holds no lima.yaml: a
+// lima.yaml Lima cannot load keeps the VM, so that message must point at limactl list instead. Nor may a
+// Stopped or Running instance without a lima.yaml be started - limactl start <name> falls back to
+// template:default in that window too - and a status query that fails stops vm-up instead of being read as an
+// unknown status.
+//
+// Three further details of the same decision are pinned here (issue #237): a lima.yaml that is a dangling
+// symlink counts as present, because the directory may still hold the VM disk; a limactl list --quiet that
+// fails stops vm-up before it creates anything, instead of being read as an instance that is not listed; and the
+// instance name is matched literally, not as a grep pattern, so a name with a dot matches only itself.
+//
+// Two last details of the same decision (issue #237): a lima.yaml that is a dangling symlink is present for a
+// Stopped or Running instance too, so vm-up neither starts it nor advises removing the directory; and an
+// instance name that is not letters, digits, '.', '_' and '-', starting with a letter or digit, is refused
+// before any limactl call at all - an empty name matches the empty line an empty listing prints, so it would
+// take the branch of a listed instance and could send a maintainer off to remove all of ~/.lima by hand.
+//
+// The fixture below is shared with vmup_resources_test.go, which pins make vm-up's VM_CPUS, VM_MEMORY, VM_DISK
+// and VM_SSH_PORT (issue #228) against the same fake limactl and the same throwaway clone.
 package devenv_test
 
 import (
@@ -13,60 +33,90 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
 
-// The four variables make vm-up takes (issue #228).
 const (
-	vmCPUsVar    = "VM_CPUS"
-	vmMemoryVar  = "VM_MEMORY"
-	vmDiskVar    = "VM_DISK"
-	vmSSHPortVar = "VM_SSH_PORT"
+	// vmUpInstance is the instance every case runs against: the Makefile's default LIMA_INSTANCE.
+	vmUpInstance = "shift2eu"
+	// vmUpWorkspaceMarker stands in for the directory the VM mounts in a case's expected argv; the fixture
+	// only knows it once it has built the clone make runs in.
+	vmUpWorkspaceMarker = "<workspace>"
+	// vmUpInstanceDirMarker stands in for the directory Lima keeps the instance in, a case's expected stderr;
+	// the fixture only knows it once the case has chosen LIMA_HOME.
+	vmUpInstanceDirMarker = "<instance-dir>"
+	// vmUpDottedInstance is an instance name whose dot grep reads as any character, and vmUpLookalikeInstance
+	// is the name that pattern also matches: what limactl list --quiet answers for another instance, which
+	// must not pass for vmUpDottedInstance (issue #237).
+	vmUpDottedInstance    = "shift2eu.x"
+	vmUpLookalikeInstance = "shift2euXx"
 )
 
-// vmUpLimactl stands in for limactl in the vm-up tests: it records its argv in the sandbox's log, answers
-// limactl list with the instances SHIFT2EU_TEST_VM_INSTANCES names, and answers limactl start with success. It
-// creates and starts nothing. The shared fake in sandbox_test.go runs a command inside a VM, which vm-up never
-// asks for, so these tests write their own.
-const vmUpLimactl = `#!/bin/sh
+// statusLimactl stands in for limactl in the vm-up tests: it records its argv in the sandbox's log (a
+// tool=limactl line and one arg= line per argument), answers the listing that decides whether the instance
+// exists at all with the name SHIFT2EU_TEST_LIMA_INSTANCE (nothing for an instance that is not listed),
+// answers any other listing - the status query - with SHIFT2EU_TEST_LIMA_STATUS (nothing for an empty
+// status), and lets a start through without running anything: what these tests pin is which command lines
+// vm-up runs, never what a VM on this machine would do. A status query answers only when it asks for this
+// instance by name, as limactl does: a query about anything else gets nothing. SHIFT2EU_TEST_LIMA_STATUS_FAIL
+// stands for a limactl that cannot read the status at all: it says so on stderr and exits non-zero.
+// SHIFT2EU_TEST_LIMA_LIST_FAIL stands for a limactl whose existence listing fails: it says so on stderr and
+// exits non-zero. A limactl shell answers without running anything either, draining what the recipe pipes into
+// it, because make vm-create runs vm-env, vm-claude-settings and vm-init after its vm-up (issue #228).
+const statusLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
-# make vm-env, make vm-claude-settings and make vm-init pipe their work into limactl shell: drain it, so the
-# writer never meets a closed pipe.
-if [ ! -t 0 ]; then cat >/dev/null 2>&1 || true; fi
-if [ "$1" = list ]; then
-  # An instance that exists, whatever its status: vm-up only asks for the names.
-  if [ -n "${SHIFT2EU_TEST_VM_INSTANCES:-}" ]; then printf '%s\n' "${SHIFT2EU_TEST_VM_INSTANCES}"; fi
+if [ "${1:-}" = list ]; then
+  # Any listing without --quiet is the status query, whatever spelling of --format it uses.
+  for a in "$@"; do
+    if [ "${a}" = --quiet ]; then
+      if [ -n "${SHIFT2EU_TEST_LIMA_LIST_FAIL:-}" ]; then
+        echo 'level=fatal msg="unable to list the instances"' >&2
+        exit 1
+      fi
+      if [ -n "${SHIFT2EU_TEST_LIMA_INSTANCE:-}" ]; then printf '%s\n' "${SHIFT2EU_TEST_LIMA_INSTANCE}"; fi
+      exit 0
+    fi
+  done
+  last=''
+  for a in "$@"; do last="${a}"; done
+  if [ "${last}" != "${SHIFT2EU_TEST_LIMA_INSTANCE:-}" ]; then exit 0; fi
+  if [ -n "${SHIFT2EU_TEST_LIMA_STATUS_FAIL:-}" ]; then
+    echo 'level=fatal msg="unable to read the instance status"' >&2
+    exit 1
+  fi
+  if [ -n "${SHIFT2EU_TEST_LIMA_STATUS:-}" ]; then printf '%s\n' "${SHIFT2EU_TEST_LIMA_STATUS}"; fi
   exit 0
 fi
-exit 0
+if [ "${1:-}" = shell ]; then
+  # make vm-env, make vm-claude-settings and make vm-init pipe their work into limactl shell: drain it, so the
+  # writer never meets a closed pipe.
+  cat >/dev/null 2>&1 || true
+  exit 0
+fi
+if [ "${1:-}" = start ]; then
+  exit 0
+fi
+echo "fake limactl: unexpected call: $*" >&2
+exit 64
 `
 
 // vmUpGitShim is the git make's recipes run in the vm-up tests: it answers git config core.hooksPath, the write
 // make vm-up's git-hooks prerequisite makes into the checkout's .git/config, without touching a file, and hands
-// every other call to the real git. That config is shared by every worktree, so tests that run make in parallel
-// would each wait on the other's lock, and no test writes into the repository it runs from. The real git's path
-// is shQuote's single-quoted word, never a Go-quoted string: sh expands a $(...) or a backtick in a
+// every other call to the real git. That config is shared by every worktree, so a test that ran make in the
+// repository itself would write into it; the shim keeps every git call of a run inside the fixture. The real
+// git's path is shQuote's single-quoted word, never a Go-quoted string: sh expands a $(...) or a backtick in a
 // double-quoted path (issue #228 review, item D).
 const vmUpGitShim = `#!/bin/sh
 for a in "$@"; do
   if [ "$a" = core.hooksPath ]; then exit 0; fi
 done
 exec %s "$@"
-`
-
-// vmUpRealGit stands in for the real git the vm-up git shim hands its other calls to: it prints the arguments
-// it got, so a test can tell whether the shim ran it and what it passed on.
-const vmUpRealGit = `#!/bin/sh
-printf 'real-git'
-for a in "$@"; do printf ' %s' "$a"; done
-printf '\n'
 `
 
 // writeGitShim writes the git shim into dir, handing every call but git config core.hooksPath to realGit, and
@@ -91,65 +141,135 @@ func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// vmUpFixture is one environment for a run of make vm-up or make vm-create: a sandbox whose limactl records its
-// argv, and a workspace of the sandbox's own, which holds only the repository's name, so vm-up's check for
-// stray files passes whatever the machine the tests run on holds and the VM would mount a path inside the
-// sandbox.
+// vmUpFixture is one throwaway environment for a run of make vm-up or make vm-create: a sandbox whose limactl
+// answers the listing and the status its case names, and a clone of the Makefile in a workspace that holds
+// nothing but the clone, so vm-up's workspace check and its git-hooks prerequisite pass without touching the
+// repository the tests run from. The clone is a git repository of its own, so the Makefile resolves REPO_ROOT
+// and WORKSPACE from it and the VM would mount a path inside the sandbox.
 type vmUpFixture struct {
-	sb        *sandbox
-	env       map[string]string
-	repoRoot  string // the stand-in REPO_ROOT, <workspace>/shift2eu
-	workspace string // the stand-in WORKSPACE the VM mounts
-	marker    string // a file no run may create: what a value the Makefile got wrong would run
+	sb   *sandbox
+	env  map[string]string
+	root string // the clone make runs in
+	// limaInstance is the LIMA_INSTANCE make runs with: vmUpInstance unless a case picks another name.
+	limaInstance string
+	// marker is a file no run may create: what a value the Makefile got wrong would run (issue #228).
+	marker string
 }
 
-// newVMUpFixture builds the fixture for one instance, which exists when instanceExists is set. The instance is
-// the sandbox's LIMA_INSTANCE.
-func newVMUpFixture(t *testing.T, instanceExists bool) *vmUpFixture {
+// newVMUpFixture builds the fixture for one case: instance is what limactl list --quiet answers (empty for
+// an instance that is not listed) and status what the status query answers.
+func newVMUpFixture(t *testing.T, instance, status string) *vmUpFixture {
 	t.Helper()
 
 	sb := newSandbox(t)
-	fake := filepath.Join(sb.binDir, "limactl")
+
+	limactl := filepath.Join(sb.binDir, "limactl")
 
 	//nolint:gosec // the fake limactl is a script the tests run, so it must be executable
-	if err := os.WriteFile(fake, []byte(vmUpLimactl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", fake, err)
+	if err := os.WriteFile(limactl, []byte(statusLimactl), 0o700); err != nil {
+		t.Fatalf("write %s: %v", limactl, err)
 	}
 
 	writeGitShim(t, sb.binDir, realTool(t, "git"))
 
-	workspace := filepath.Join(sb.root, "workspace")
-	repoRoot := filepath.Join(workspace, "shift2eu")
+	// vm-up depends on git-hooks, so make must run in a git repository, and its workspace may hold only
+	// the repository itself: the clone sits alone in a directory of its own inside the sandbox.
+	root := filepath.Join(sb.root, "ws", "shift2eu")
+	writeFileMode(t, filepath.Join(root, makefilePath), []byte(readRepoFile(t, makefilePath)), 0o600)
+	writeFileMode(t, filepath.Join(root, "dev", "lima.yaml"), []byte(readRepoFile(t, "dev/lima.yaml")), 0o600)
 
-	if err := os.MkdirAll(repoRoot, 0o750); err != nil {
-		t.Fatalf("create %s: %v", repoRoot, err)
+	init := exec.Command("git", "init", "--quiet", root)
+	init.Env = envList(map[string]string{
+		"PATH": "/usr/local/bin:/usr/bin:/bin",
+		"HOME": sb.hostHome,
+	})
+
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", root, err, out)
 	}
 
 	env := sb.baseEnv()
-	env["SHIFT2EU_TEST_VM_INSTANCES"] = ""
-
-	if instanceExists {
-		env["SHIFT2EU_TEST_VM_INSTANCES"] = env["LIMA_INSTANCE"]
-	}
+	env["SHIFT2EU_TEST_LIMA_INSTANCE"] = instance
+	env["SHIFT2EU_TEST_LIMA_STATUS"] = status
 
 	return &vmUpFixture{
-		sb:        sb,
-		env:       env,
-		repoRoot:  repoRoot,
-		workspace: workspace,
-		marker:    filepath.Join(sb.root, "marker-a-value-ran"),
+		sb:           sb,
+		env:          env,
+		root:         root,
+		limaInstance: vmUpInstance,
+		marker:       filepath.Join(sb.root, "marker-a-value-ran"),
 	}
 }
 
-// run runs make with args in the repository's root, with the fixture's stand-in workspace as the one the VM
-// would mount.
+// workspace is the directory the run mounts: the clone's parent, which holds only the clone.
+func (f *vmUpFixture) workspace() string {
+	return filepath.Dir(f.root)
+}
+
+// instanceDir is the directory Lima keeps the instance in, as a maintainer has to find it to remove it:
+// $LIMA_HOME/<name> when LIMA_HOME is set, else $HOME/.lima/<name>.
+func (f *vmUpFixture) instanceDir() string {
+	if home := f.env["LIMA_HOME"]; home != "" {
+		return filepath.Join(home, f.limaInstance)
+	}
+
+	return filepath.Join(f.env["HOME"], ".lima", f.limaInstance)
+}
+
+// writeInstanceLimaYaml gives the instance a lima.yaml, as an instance that was started once has one: it is
+// what limactl start <name> loads, and without it the name is read as a template and falls back to
+// template:default. Call it after the case has chosen LIMA_HOME.
+func (f *vmUpFixture) writeInstanceLimaYaml(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(f.instanceDir(), "lima.yaml"), []byte("name: "+f.limaInstance+"\n"), 0o600)
+}
+
+// symlinkInstanceLimaYaml gives the instance directory a lima.yaml that is a dangling symlink: the entry Lima
+// looks for is there, but nothing is behind it, as after a restore or a moved file. Call it after the case has
+// chosen LIMA_HOME.
+func (f *vmUpFixture) symlinkInstanceLimaYaml(t *testing.T) {
+	t.Helper()
+
+	dir := f.instanceDir()
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+
+	link, target := filepath.Join(dir, "lima.yaml"), filepath.Join(f.sb.root, "no-such-lima", "lima.yaml")
+
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink %s to %s: %v", link, target, err)
+	}
+}
+
+// run runs make with args in the clone, with the fixture's environment alone.
 func (f *vmUpFixture) run(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 
-	return runMake(t, append(args, "REPO_ROOT="+f.repoRoot), f.env)
+	return runMakeIn(t, f.root, args, f.env)
 }
 
-// starts is the argv of every limactl start a run made.
+// statusQueries returns the argv of every limactl list that is not the existence check (--quiet), in call
+// order: the status query vm-up makes about a listed instance.
+func (f *vmUpFixture) statusQueries(t *testing.T) [][]string {
+	t.Helper()
+
+	var queries [][]string
+
+	for _, args := range invocations(f.sb.argvLogText(t), "limactl") {
+		if len(args) == 0 || args[0] != "list" || slices.Contains(args, "--quiet") {
+			continue
+		}
+
+		queries = append(queries, args)
+	}
+
+	return queries
+}
+
+// starts returns the argv of every limactl start the run made, in call order.
 func (f *vmUpFixture) starts(t *testing.T) [][]string {
 	t.Helper()
 
@@ -164,7 +284,7 @@ func (f *vmUpFixture) starts(t *testing.T) [][]string {
 	return starts
 }
 
-// creating is the argv of the one limactl start that creates the VM from dev/lima.yaml.
+// creating is the argv of the one limactl start that creates the VM from dev/lima.yaml (issue #228).
 func (f *vmUpFixture) creating(t *testing.T) []string {
 	t.Helper()
 
@@ -190,7 +310,7 @@ func (f *vmUpFixture) creationArgs() []string {
 	return []string{
 		"start",
 		"--name=" + f.env["LIMA_INSTANCE"],
-		"--mount-only", f.workspace + ":w",
+		"--mount-only", f.workspace() + ":w",
 		"--tty=false",
 		"dev/lima.yaml",
 	}
@@ -206,114 +326,82 @@ func (f *vmUpFixture) creationWith(flags []string) []string {
 	return append(want, args[len(args)-1])
 }
 
-// sortedSettings renders the variables set in the environment as NAME=value, sorted by name, for a failure
-// message that does not depend on map order.
-func sortedSettings(env map[string]string) []string {
-	settings := make([]string, 0, len(env))
-
-	for name, value := range env {
-		settings = append(settings, name+"="+value)
-	}
-
-	slices.Sort(settings)
-
-	return settings
-}
-
-// describeCalls renders start calls for a failure message.
-func describeCalls(calls [][]string) string {
-	var b strings.Builder
-
-	for _, args := range calls {
-		b.WriteString("\n  limactl " + strings.Join(args, " "))
-	}
-
-	return b.String()
-}
-
-// TestMakeVMUpPassesTheVMResourcesToLimactlStart pins issue #228's first two acceptances: a VM that does not
-// exist yet is created with exactly the four flags the set variables name, and with no variable set the
-// creation command line is the one the Makefile ran before the variables existed.
-func TestMakeVMUpPassesTheVMResourcesToLimactlStart(t *testing.T) {
+// TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning pins the refusal: with a listed instance whose status
+// is Broken, Uninitialized, Installing, empty or one vm-up does not know, make vm-up exits non-zero and runs
+// no limactl start at all, and a Broken instance's message says which directory to remove by hand and which
+// launchd jobs may be recreating it (issue #237). A Broken instance whose directory does hold a lima.yaml
+// keeps its VM: that message must not send a maintainer off to remove it by hand, and points at limactl list
+// instead - and a lima.yaml that is a dangling symlink still counts as there, since the directory may hold an
+// intact disk behind it. When the status query itself fails, vm-up stops rather than reading the empty answer
+// as an unknown status.
+func TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		vars []string          // the make arguments that set the variables
-		env  map[string]string // the variables set in the environment instead of the command line
-		want []string          // the flags they add, in this order
+		name         string
+		status       string
+		limaHome     bool     // LIMA_HOME names the directory Lima keeps its instances in
+		limaYaml     bool     // the instance directory holds a lima.yaml
+		limaYamlLink bool     // the instance directory holds a lima.yaml that is a dangling symlink instead
+		statusFail   bool     // the status query itself fails, whatever status the instance has
+		broken       bool     // the message must name the directory, the removal by hand and the launchd jobs
+		wantStatus   string   // the status the message must name; empty means nothing to look for
+		want         []string // further substrings stderr must hold
+		forbid       []string // substrings stderr must not hold
 	}{
 		{
-			name: "none set",
-			vars: nil,
-			want: nil,
+			name:     "a broken instance whose directory holds no lima.yaml, with LIMA_HOME set",
+			status:   "Broken",
+			limaHome: true,
+			broken:   true,
 		},
 		{
-			name: "VM_CPUS alone",
-			vars: []string{"VM_CPUS=6"},
-			want: []string{"--cpus=6"},
+			name:   "a broken instance whose directory holds no lima.yaml, with LIMA_HOME unset",
+			status: "Broken",
+			broken: true,
 		},
 		{
-			name: "VM_MEMORY alone",
-			vars: []string{"VM_MEMORY=8GiB"},
-			want: []string{"--memory=8"},
+			name:     "a broken instance whose lima.yaml is there",
+			status:   "Broken",
+			limaYaml: true,
+			want:     []string{vmUpInstance, "Broken", "limactl list"},
+			forbid:   []string{"by hand"},
 		},
 		{
-			name: "VM_DISK alone",
-			vars: []string{"VM_DISK=60GiB"},
-			want: []string{"--disk=60"},
+			name:         "a broken instance whose lima.yaml is a dangling symlink, with LIMA_HOME set",
+			status:       "Broken",
+			limaHome:     true,
+			limaYamlLink: true,
+			want:         []string{vmUpInstance, "Broken", "limactl list"},
+			forbid:       []string{"by hand"},
 		},
 		{
-			name: "VM_SSH_PORT alone",
-			vars: []string{"VM_SSH_PORT=60023"},
-			want: []string{"--ssh-port=60023"},
+			name:       "an instance that is uninitialized",
+			status:     "Uninitialized",
+			wantStatus: "Uninitialized",
 		},
 		{
-			name: "all four",
-			vars: []string{"VM_CPUS=6", "VM_MEMORY=8GiB", "VM_DISK=60GiB", "VM_SSH_PORT=60023"},
-			want: []string{"--cpus=6", "--memory=8", "--disk=60", "--ssh-port=60023"},
+			name:       "an instance that is installing",
+			status:     "Installing",
+			wantStatus: "Installing",
 		},
 		{
-			name: "the SSH port at its lowest",
-			vars: []string{"VM_SSH_PORT=1024"},
-			want: []string{"--ssh-port=1024"},
+			name:   "an instance whose status is empty",
+			status: "",
 		},
 		{
-			name: "the SSH port at its highest",
-			vars: []string{"VM_SSH_PORT=65535"},
-			want: []string{"--ssh-port=65535"},
+			name:       "an instance whose status vm-up does not know",
+			status:     "Weird",
+			wantStatus: "Weird",
 		},
 		{
-			name: "the smallest CPU count and disk",
-			vars: []string{"VM_CPUS=1", "VM_DISK=1GiB"},
-			want: []string{"--cpus=1", "--disk=1"},
-		},
-		{
-			// The longest values vm-up accepts (issue #228 review, item B): the cap on the digits refuses
-			// anything longer, and nothing shorter.
-			name: "the longest CPU count and sizes it accepts",
-			vars: []string{"VM_CPUS=999", "VM_MEMORY=99999GiB", "VM_DISK=99999GiB"},
-			want: []string{"--cpus=999", "--memory=99999", "--disk=99999"},
-		},
-		// The variables are read from the environment too, the way a shell exports them before make runs,
-		// so a maintainer can set them in a profile or with direnv rather than on the command line.
-		{
-			name: "VM_CPUS in the environment alone",
-			env:  map[string]string{"VM_CPUS": "6"},
-			want: []string{"--cpus=6"},
-		},
-		{
-			name: "all four in the environment",
-			env: map[string]string{
-				"VM_CPUS": "6", "VM_MEMORY": "8GiB", "VM_DISK": "60GiB", "VM_SSH_PORT": "60023",
-			},
-			want: []string{"--cpus=6", "--memory=8", "--disk=60", "--ssh-port=60023"},
-		},
-		{
-			name: "the environment and the command line together",
-			vars: []string{"VM_MEMORY=10GiB"},
-			env:  map[string]string{"VM_CPUS": "6", "VM_SSH_PORT": "60023"},
-			want: []string{"--cpus=6", "--memory=10", "--ssh-port=60023"},
+			name:       "an instance whose status query fails",
+			status:     "Stopped",
+			statusFail: true,
+			want:       []string{"could not read the status"},
+			// A failed query is not an unknown status: the empty answer must never reach the case that
+			// names a status vm-up does not know.
+			forbid: []string{"has the status"},
 		},
 	}
 
@@ -321,420 +409,364 @@ func TestMakeVMUpPassesTheVMResourcesToLimactlStart(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newVMUpFixture(t, false)
+			f := newVMUpFixture(t, vmUpInstance, tc.status)
 
-			for name, value := range tc.env {
-				f.env[name] = value
+			if tc.limaHome {
+				f.env["LIMA_HOME"] = filepath.Join(f.sb.root, "lima-home")
 			}
 
-			setting := strings.Join(tc.vars, " ")
-			if setting == "" {
-				setting = "with " + strings.Join(sortedSettings(tc.env), ", ") + " in the environment"
+			if tc.limaYaml {
+				f.writeInstanceLimaYaml(t)
 			}
 
-			stdout, stderr, err := f.run(t, append([]string{"vm-up"}, tc.vars...)...)
-			if err != nil {
-				t.Fatalf("make vm-up %s: %v\nstdout: %s\nstderr: %s", setting, err, stdout, stderr)
+			if tc.limaYamlLink {
+				f.symlinkInstanceLimaYaml(t)
 			}
 
-			want := f.creationWith(tc.want)
-			got := f.creating(t)
-
-			if diff := cmp.Diff(want, got); diff != "" {
-				t.Errorf("make vm-up %s creates the VM with the wrong limactl start argv (issue #228): the existing creation arguments stay as they are, the flags of the set variables follow them, and the template stays the last argument (-want +got):\n%s", setting, diff)
-			}
-		})
-	}
-}
-
-// TestMakeVMUpRefusesAnInvalidVMResource pins issue #228's validation: a value that is not a positive whole
-// number, not a whole GiB size or not a port Lima can forward ends make vm-up with an error that names the
-// variable, before limactl runs at all - and so before anything a value might carry could run as a shell
-// command.
-func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name     string
-		variable string
-		value    string // {marker} is replaced with the fixture's marker path
-		env      bool   // the variable is set in the environment rather than on the make command line
-		target   string // the make target, vm-up when empty
-	}{
-		// VM_CPUS is a CPU count: a positive whole number.
-		{name: "VM_CPUS 0", variable: vmCPUsVar, value: "0"},
-		{name: "VM_CPUS -1", variable: vmCPUsVar, value: "-1"},
-		{name: "VM_CPUS abc", variable: vmCPUsVar, value: "abc"},
-		{name: "VM_CPUS 4.5", variable: vmCPUsVar, value: "4.5"},
-		{name: "VM_CPUS a command after a semicolon", variable: vmCPUsVar, value: "4; touch {marker}"},
-		{name: "VM_CPUS a command substitution", variable: vmCPUsVar, value: "$(touch {marker})"},
-		{name: "VM_CPUS a backtick command", variable: vmCPUsVar, value: "`touch {marker}`"},
-		{name: "VM_CPUS a number with a single quote", variable: vmCPUsVar, value: "4'"},
-		{name: "VM_CPUS a quoted command", variable: vmCPUsVar, value: "4'; touch {marker}; echo '"},
-		{name: "VM_CPUS a quoted command in the environment", variable: vmCPUsVar, value: "4'; touch {marker}; echo '", env: true},
-		// make's own syntax is not shell syntax: the Makefile reads each variable raw ($(value ...)), so a
-		// $(shell ...) in a value stays text - on the command line, in the environment, and on the way
-		// through make vm-create (issue #228 review, item A).
-		{name: "VM_CPUS make's shell function on the command line", variable: vmCPUsVar, value: "$(shell touch {marker})"},
-		{name: "VM_CPUS make's shell function in the environment", variable: vmCPUsVar, value: "$(shell touch {marker})", env: true},
-		{name: "VM_CPUS make's shell function through make vm-create", variable: vmCPUsVar, value: "$(shell touch {marker})", target: "vm-create"},
-		{name: "VM_MEMORY make's shell function on the command line", variable: vmMemoryVar, value: "$(shell touch {marker})GiB"},
-		// A number longer than the flag it feeds is refused before limactl, which would otherwise reject it or
-		// wrap it: CPUs are at most three digits, a GiB size at most five (issue #228 review, item B).
-		{name: "VM_CPUS 20 digits", variable: vmCPUsVar, value: "99999999999999999999"},
-		{name: "VM_CPUS 4 digits", variable: vmCPUsVar, value: "1000"},
-		{name: "VM_MEMORY 11 digits", variable: vmMemoryVar, value: "99999999999GiB"},
-		{name: "VM_MEMORY 6 digits", variable: vmMemoryVar, value: "100000GiB"},
-		{name: "VM_DISK 11 digits", variable: vmDiskVar, value: "99999999999GiB"},
-		{name: "VM_DISK 6 digits", variable: vmDiskVar, value: "100000GiB"},
-		// VM_MEMORY and VM_DISK are a size in GiB: a positive whole number and the GiB suffix.
-		{name: "VM_MEMORY without its unit", variable: vmMemoryVar, value: "8"},
-		{name: "VM_MEMORY in GB", variable: vmMemoryVar, value: "8GB"},
-		{name: "VM_MEMORY in G", variable: vmMemoryVar, value: "8G"},
-		{name: "VM_MEMORY 0GiB", variable: vmMemoryVar, value: "0GiB"},
-		{name: "VM_MEMORY abcGiB", variable: vmMemoryVar, value: "abcGiB"},
-		{name: "VM_MEMORY a command after a semicolon", variable: vmMemoryVar, value: "8GiB; touch {marker}"},
-		{name: "VM_DISK without its unit", variable: vmDiskVar, value: "8"},
-		{name: "VM_DISK in GB", variable: vmDiskVar, value: "8GB"},
-		{name: "VM_DISK in G", variable: vmDiskVar, value: "8G"},
-		{name: "VM_DISK 0GiB", variable: vmDiskVar, value: "0GiB"},
-		{name: "VM_DISK abcGiB", variable: vmDiskVar, value: "abcGiB"},
-		{name: "VM_DISK a command after a semicolon", variable: vmDiskVar, value: "8GiB; touch {marker}"},
-		{name: "VM_MEMORY a size with a single quote", variable: vmMemoryVar, value: "8GiB'"},
-		{name: "VM_DISK a quoted command", variable: vmDiskVar, value: "8GiB'; touch {marker}; echo '"},
-		// VM_SSH_PORT is a port Lima can forward: 1024 to 65535.
-		{name: "VM_SSH_PORT 1023", variable: vmSSHPortVar, value: "1023"},
-		{name: "VM_SSH_PORT 65536", variable: vmSSHPortVar, value: "65536"},
-		{name: "VM_SSH_PORT 0", variable: vmSSHPortVar, value: "0"},
-		{name: "VM_SSH_PORT abc", variable: vmSSHPortVar, value: "abc"},
-		{name: "VM_SSH_PORT with a space", variable: vmSSHPortVar, value: "600 22"},
-		{name: "VM_SSH_PORT a number with a single quote", variable: vmSSHPortVar, value: "60023'"},
-		{name: "VM_SSH_PORT a quoted command in the environment", variable: vmSSHPortVar, value: "60023'; touch {marker}; echo '", env: true},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			f := newVMUpFixture(t, false)
-			target := tc.target
-			if target == "" {
-				target = "vm-up"
+			if tc.statusFail {
+				f.env["SHIFT2EU_TEST_LIMA_STATUS_FAIL"] = "1"
 			}
 
-			value := strings.ReplaceAll(tc.value, "{marker}", f.marker)
-			setting := tc.variable + "=" + strconv.Quote(value) + " on the command line"
-			args := []string{target, tc.variable + "=" + value}
-
-			if tc.env {
-				setting = tc.variable + "=" + strconv.Quote(value) + " in the environment"
-				args = []string{target}
-				f.env[tc.variable] = value
-			}
-
-			stdout, stderr, err := f.run(t, args...)
+			stdout, stderr, err := f.run(t, "vm-up")
 			if err == nil {
-				t.Fatalf("make %s %s exited 0: vm-up must refuse a value that is not a CPU count, a whole GiB size or a port in 1024-65535, so limactl never sees it (issue #228)\nstdout: %s\nstderr: %s", target, setting, stdout, stderr)
+				t.Fatalf("make vm-up exited 0 with the instance listed as %q: it must stop before limactl start, which turns a name it cannot load into template:default, a VM that mounts the whole home directory (issue #237)\nstdout: %s\nstderr: %s",
+					tc.status, stdout, stderr)
 			}
 
-			if calls := invocations(f.sb.argvLogText(t), "limactl"); len(calls) != 0 {
-				t.Errorf("make %s %s called limactl before it refused the value: validation must come first, so no value can reach limactl or a shell (issue #228):%s",
-					target, setting, describeCalls(calls))
+			if starts := f.starts(t); len(starts) != 0 {
+				t.Errorf("make vm-up ran limactl start %v with the instance listed as %q: no start may run before the refusal, or Lima falls back to template:default (issue #237)",
+					starts[0], tc.status)
 			}
 
-			if _, err := os.Stat(f.marker); err == nil {
-				t.Errorf("make %s %s created %s: a value the Makefile refuses must never be run by a shell (issue #228)", target, setting, f.marker)
+			want := make([]string, 0, 9)
+			if tc.broken {
+				want = append(want,
+					f.instanceDir(),
+					"by hand",
+					"launchctl print system | grep -i lima",
+					"~/Library/LaunchAgents",
+					"/Library/LaunchDaemons",
+				)
 			}
 
-			if combined := stdout + stderr; !strings.Contains(combined, tc.variable) {
-				t.Errorf("the refusal of %s by make %s does not name %s, so a maintainer cannot tell which variable to fix (issue #228):\nstdout: %s\nstderr: %s",
-					setting, target, tc.variable, stdout, stderr)
+			if tc.wantStatus != "" {
+				want = append(want, tc.wantStatus)
+			}
+
+			want = append(want, tc.want...)
+
+			for _, w := range want {
+				if !strings.Contains(stderr, w) {
+					t.Errorf("make vm-up's stderr does not say %q with the instance listed as %q, so a maintainer cannot see why vm-up stopped or what to do about it (issue #237)\nstderr: %s",
+						w, tc.status, stderr)
+				}
+			}
+
+			for _, w := range tc.forbid {
+				if strings.Contains(stderr, w) {
+					t.Errorf("make vm-up's stderr says %q with the instance listed as %q, which this case forbids: a lima.yaml Lima cannot load is not a reason to send a maintainer off to remove the VM by hand, and a status query that fails is not an unknown status (issue #237)\nstderr: %s",
+						w, tc.status, stderr)
+				}
 			}
 		})
 	}
 }
 
-// TestMakeNeverExpandsMakeSyntaxInAVMResource pins the override block at the top of the Makefile (issue #228
-// review, item A). make exports the four variables to the shell of every recipe, expanding them on the way, so
-// a $(shell ...) in one of them would run in any target when the Makefile read it late: each is read raw
-// ($(value ...)) before anything else, so no target - not even one that has nothing to do with the VM - runs
-// it.
-func TestMakeNeverExpandsMakeSyntaxInAVMResource(t *testing.T) {
+// TestVMUpStopsWhenItCannotListInstances pins what the existence check does with a limactl list --quiet that
+// fails (issue #237): the empty answer is not an instance that is not listed, so vm-up stops before it creates
+// anything and says it could not list the instances - the dev/lima.yaml create line would otherwise build a VM
+// on a name that may already exist, with a VM disk of its own.
+func TestVMUpStopsWhenItCannotListInstances(t *testing.T) {
 	t.Parallel()
 
+	f := newVMUpFixture(t, vmUpInstance, "Stopped")
+	f.env["SHIFT2EU_TEST_LIMA_LIST_FAIL"] = "1"
+
+	stdout, stderr, err := f.run(t, "vm-up")
+	if err == nil {
+		t.Fatalf("make vm-up exited 0 although limactl list --quiet failed: a listing vm-up cannot read is not an instance that is not listed, and creating one on the strength of it may collide with the VM that is there (issue #237)\nstdout: %s\nstderr: %s",
+			stdout, stderr)
+	}
+
+	if starts := f.starts(t); len(starts) != 0 {
+		t.Errorf("make vm-up ran limactl start %v although limactl list --quiet failed: it must stop before creating or starting anything it cannot see (issue #237)",
+			starts[0])
+	}
+
+	if !strings.Contains(stderr, "could not list") {
+		t.Errorf("make vm-up's stderr does not say %q although limactl list --quiet failed, so a maintainer cannot see that the instance could not be looked up at all (issue #237)\nstderr: %s",
+			"could not list", stderr)
+	}
+}
+
+// TestVMUpStartsOrCreatesTheInstance pins the other half of issue #237: an instance that is Stopped or
+// Running and whose directory holds a lima.yaml still gets exactly one limactl start <name>, an instance that
+// is not listed gets exactly the dev/lima.yaml command line with this repository's workspace mounted,
+// unchanged, and a listed instance whose directory holds no lima.yaml is started by neither branch: limactl
+// start <name> would read the name as a template and fall back to template:default (issue #237). A lima.yaml
+// that is a dangling symlink is there for a Stopped or Running instance as well: the directory may still hold
+// an intact disk, so that case stops too, pointing at limactl list instead of a removal by hand. The status
+// of a listed instance is read by asking limactl for that instance by name, never by any other query, and an
+// instance that is not listed gets no status query at all: there is no status to read.
+func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
+	t.Parallel()
+
+	// statusQuery is the one status query vm-up makes about a listed instance: limactl asked for this instance
+	// by name, so a query about any other name reads nothing.
+	statusQuery := []string{"list", "--format", "{{.Status}}", vmUpInstance}
+
 	cases := []struct {
-		name string
-		args []string // the make arguments, without the value, which the test adds
-		env  bool     // the value is set in the environment rather than on the make command line
+		name         string
+		instance     string   // what limactl list --quiet answers; empty means the instance is not listed
+		status       string   // what the status query answers, unread when the instance is not listed
+		limaHome     bool     // LIMA_HOME names the directory Lima keeps its instances in
+		limaYaml     bool     // the instance directory holds a lima.yaml
+		limaYamlLink bool     // the instance directory holds a lima.yaml that is a dangling symlink instead
+		limaInstance string   // the LIMA_INSTANCE make runs with; empty means vmUpInstance
+		want         []string // the one limactl start vm-up must run; nil means vm-up must refuse to start
+		wantStderr   []string // substrings stderr must hold when vm-up refuses; <instance-dir> stands for the directory
+		forbidStderr []string // substrings stderr must not hold when vm-up refuses
+		// wantQueries is the status query vm-up must make, in call order: nil, the zero value, means it
+		// must make none at all, as for an instance that is not listed and has no status to read.
+		wantQueries [][]string
 	}{
-		{name: "make help", args: []string{"help"}},
-		{name: "make -n build", args: []string{"-n", "build"}},
-		{name: "make help with the value in the environment", args: []string{"help"}, env: true},
+		{
+			name:        "an instance that is stopped",
+			instance:    vmUpInstance,
+			status:      "Stopped",
+			limaHome:    true,
+			limaYaml:    true,
+			want:        []string{"start", vmUpInstance},
+			wantQueries: [][]string{statusQuery},
+		},
+		{
+			name:        "an instance that is running",
+			instance:    vmUpInstance,
+			status:      "Running",
+			limaYaml:    true,
+			want:        []string{"start", vmUpInstance},
+			wantQueries: [][]string{statusQuery},
+		},
+		{
+			name:       "a stopped instance whose directory holds no lima.yaml",
+			instance:   vmUpInstance,
+			status:     "Stopped",
+			wantStderr: []string{vmUpInstanceDirMarker, "lima.yaml"},
+		},
+		{
+			name:       "a running instance whose directory holds no lima.yaml, with LIMA_HOME set",
+			instance:   vmUpInstance,
+			status:     "Running",
+			limaHome:   true,
+			wantStderr: []string{vmUpInstanceDirMarker, "lima.yaml"},
+		},
+		{
+			// A dangling lima.yaml is an entry Lima looks for: the instance may hold an intact disk behind it,
+			// so this case must not start it and must not advise a removal by hand either.
+			name:         "a stopped instance whose lima.yaml is a dangling symlink",
+			instance:     vmUpInstance,
+			status:       "Stopped",
+			limaYamlLink: true,
+			wantStderr:   []string{"limactl list"},
+			forbidStderr: []string{"by hand"},
+		},
+		{
+			name:         "a running instance whose lima.yaml is a dangling symlink, with LIMA_HOME set",
+			instance:     vmUpInstance,
+			status:       "Running",
+			limaHome:     true,
+			limaYamlLink: true,
+			wantStderr:   []string{"limactl list"},
+			forbidStderr: []string{"by hand"},
+		},
+		{
+			name:     "an instance that is not listed",
+			instance: "",
+			want: []string{
+				"start",
+				"--name=" + vmUpInstance,
+				"--mount-only",
+				vmUpWorkspaceMarker + ":w",
+				"--tty=false",
+				"dev/lima.yaml",
+			},
+		},
+		{
+			// A dotted name is a grep pattern that also matches a name with any character where the dot
+			// is, so a listed look-alike must not pass for this instance: an instance that is not listed
+			// gets the create line, and no status query reads the look-alike's status.
+			name:         "an instance whose name holds a dot, when limactl lists a look-alike",
+			instance:     vmUpLookalikeInstance,
+			limaInstance: vmUpDottedInstance,
+			want: []string{
+				"start",
+				"--name=" + vmUpDottedInstance,
+				"--mount-only",
+				vmUpWorkspaceMarker + ":w",
+				"--tty=false",
+				"dev/lima.yaml",
+			},
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newVMUpFixture(t, false)
-			value := "$(shell touch " + f.marker + ")"
-			args := slices.Clone(tc.args)
-			setting := vmCPUsVar + "=" + strconv.Quote(value) + " on the command line"
+			f := newVMUpFixture(t, tc.instance, tc.status)
 
-			if tc.env {
-				setting = vmCPUsVar + "=" + strconv.Quote(value) + " in the environment"
-				f.env[vmCPUsVar] = value
-			} else {
-				args = append(args, vmCPUsVar+"="+value)
+			if tc.limaInstance != "" {
+				f.limaInstance = tc.limaInstance
+				f.env["LIMA_INSTANCE"] = tc.limaInstance
 			}
 
-			stdout, stderr, err := f.run(t, args...)
-			if err != nil {
-				t.Fatalf("make %s with %s: %v\nstdout: %s\nstderr: %s", strings.Join(args, " "), setting, err, stdout, stderr)
+			if tc.limaHome {
+				f.env["LIMA_HOME"] = filepath.Join(f.sb.root, "lima-home")
 			}
 
-			if _, err := os.Stat(f.marker); err == nil {
-				t.Errorf("make %s with %s created %s: the Makefile reads each VM variable raw, so make never expands the syntax in one, whatever the target (issue #228 review, item A)",
-					strings.Join(args, " "), setting, f.marker)
-			}
-		})
-	}
-}
-
-// TestMakeVMUpRefusesAnInvalidValueWhateverMakeIsTold pins the auditor's L1 finding (issue #228 review, item
-// C): make -i ignores a recipe line that failed and make -k carries on past it, so vm-up's validation and the
-// limactl call it guards have to share one shell. However make is told to treat an error, limactl never gets a
-// value vm-up has not validated. The same holds for vm-up's stray-workspace check (Makefile:220-225), which
-// must run in that one shell too: started with any of these flags, it must neither mount nor start anything.
-func TestMakeVMUpRefusesAnInvalidValueWhateverMakeIsTold(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name       string
-		flags      []string
-		cpus       string // VM_CPUS on the make command line, empty when it is unset
-		stray      string // an entry beside the repository in the workspace, empty when it holds only the repository
-		strayIsDir bool   // the stray entry is a directory rather than a file
-		want       string // what the refusal must name, so a maintainer knows what to fix
-	}{
-		{name: "make -i", flags: []string{"-i"}, cpus: "abc", want: vmCPUsVar},
-		{name: "make -k", flags: []string{"-k"}, cpus: "abc", want: vmCPUsVar},
-		{name: "make -i -k", flags: []string{"-i", "-k"}, cpus: "abc", want: vmCPUsVar},
-		// The workspace the VM mounts writable must hold only the repository and its dispatch worktrees. A
-		// stray entry is refused before anything is mounted or started, whatever make is told about errors.
-		{name: "make -i with a stray file in the workspace", flags: []string{"-i"}, stray: "stray-file", want: "stray-file"},
-		{name: "make -k with a stray file in the workspace", flags: []string{"-k"}, stray: "stray-file", want: "stray-file"},
-		{name: "make -i -k with a stray file in the workspace", flags: []string{"-i", "-k"}, stray: "stray-file", want: "stray-file"},
-		{name: "make -i with a stray directory in the workspace", flags: []string{"-i"}, stray: "stray-dir", strayIsDir: true, want: "stray-dir"},
-		{name: "make -k with a stray directory in the workspace", flags: []string{"-k"}, stray: "stray-dir", strayIsDir: true, want: "stray-dir"},
-		// The order: a value that is not a CPU count is refused before the workspace is looked at, so the
-		// maintainer fixes the value first. Either way limactl never runs.
-		{name: "make -i with a stray file and VM_CPUS=abc", flags: []string{"-i"}, stray: "stray-file", cpus: "abc", want: vmCPUsVar},
-		{name: "make -k with a stray file and VM_CPUS=abc", flags: []string{"-k"}, stray: "stray-file", cpus: "abc", want: vmCPUsVar},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			f := newVMUpFixture(t, false)
-			run := "make " + strings.Join(append(slices.Clone(tc.flags), "vm-up"), " ")
-			args := append(slices.Clone(tc.flags), "vm-up")
-
-			if tc.cpus != "" {
-				args = append(args, vmCPUsVar+"="+tc.cpus)
-				run += " " + vmCPUsVar + "=" + tc.cpus
+			if tc.limaYaml {
+				f.writeInstanceLimaYaml(t)
 			}
 
-			if tc.stray != "" {
-				path := filepath.Join(f.workspace, tc.stray)
+			if tc.limaYamlLink {
+				f.symlinkInstanceLimaYaml(t)
+			}
 
-				if tc.strayIsDir {
-					if err := os.MkdirAll(filepath.Join(path, "nested"), 0o750); err != nil {
-						t.Fatalf("create the stray directory %s: %v", path, err)
-					}
-				} else if err := os.WriteFile(path, []byte("not the repository\n"), 0o600); err != nil {
-					t.Fatalf("write the stray file %s: %v", path, err)
+			stdout, stderr, err := f.run(t, "vm-up")
+
+			if tc.want == nil {
+				if err == nil {
+					t.Fatalf("make vm-up %s exited 0, but this case must stop vm-up before any limactl start (issue #237): an instance whose lima.yaml is missing or cannot be loaded must not be started, or limactl start <name> reads the name as a template and falls back to template:default, a VM that mounts the whole home directory\nstdout: %s\nstderr: %s",
+						tc.name, stdout, stderr)
 				}
 
-				run += " with " + tc.stray + " in the workspace"
+				if starts := f.starts(t); len(starts) != 0 {
+					t.Errorf("make vm-up %s ran limactl start %v: a listed instance without a lima.yaml must never be started, or Lima falls back to template:default (issue #237)",
+						tc.name, starts[0])
+				}
+
+				for _, w := range tc.wantStderr {
+					w = strings.ReplaceAll(w, vmUpInstanceDirMarker, f.instanceDir())
+					if !strings.Contains(stderr, w) {
+						t.Errorf("make vm-up's stderr does not say %q for %s, so a maintainer cannot see which instance directory is at fault, what is missing from it, or where to look next (issue #237)\nstderr: %s",
+							w, tc.name, stderr)
+					}
+				}
+
+				for _, w := range tc.forbidStderr {
+					if strings.Contains(stderr, w) {
+						t.Errorf("make vm-up's stderr says %q for %s, which this case forbids: a lima.yaml that is there, even as a dangling symlink, is not a reason to send a maintainer off to remove the instance by hand, or to look for the reason somewhere else than limactl list (issue #237)\nstderr: %s",
+							w, tc.name, stderr)
+					}
+				}
+
+				return
 			}
 
-			stdout, stderr, _ := f.run(t, args...)
-
-			if calls := invocations(f.sb.argvLogText(t), "limactl"); len(calls) != 0 {
-				t.Errorf("%s called limactl although vm-up refuses before it starts or mounts anything: make -i ignores a failed recipe line and make -k carries on past it, so the stray-workspace check, the validation and the limactl calls they guard must be one shell that stops on the first failure (issue #228, Makefile:220-225):%s\nstdout: %s\nstderr: %s",
-					run, describeCalls(calls), stdout, stderr)
+			if err != nil {
+				t.Fatalf("make vm-up %s: %v\nstdout: %s\nstderr: %s", tc.name, err, stdout, stderr)
 			}
 
-			if combined := stdout + stderr; !strings.Contains(combined, tc.want) {
-				t.Errorf("%s says nothing about %s: the refusal names the entry or the value a maintainer has to fix, rather than dropping it silently (issue #228):\nstdout: %s\nstderr: %s",
-					run, tc.want, stdout, stderr)
+			want := slices.Clone(tc.want)
+			for i, arg := range want {
+				want[i] = strings.ReplaceAll(arg, vmUpWorkspaceMarker, f.workspace())
+			}
+
+			starts := f.starts(t)
+			if len(starts) != 1 {
+				t.Fatalf("make vm-up %s ran %d limactl starts, want exactly one (%v)\nstdout: %s\nstderr: %s",
+					tc.name, len(starts), tc.want, stdout, stderr)
+			}
+
+			if diff := cmp.Diff(want, starts[0]); diff != "" {
+				t.Errorf("make vm-up %s ran the wrong limactl start (-want +got):\n%s", tc.name, diff)
+			}
+
+			if diff := cmp.Diff(tc.wantQueries, f.statusQueries(t)); diff != "" {
+				t.Errorf("make vm-up %s read the status of the instance with the wrong limactl calls (-want +got), or read a status an instance that is not listed does not have:\n%s", tc.name, diff)
 			}
 		})
 	}
 }
 
-// TestVMUpGitShimRunsTheRealGitAtAnyPath pins the shim's quoting (issue #228 review, item D): the path of the
-// real git is one single-quoted sh word, so a path that carries a $, a backtick, a space or a single quote
-// reaches sh as it is. Quoted for Go instead, sh would expand part of the path, split it, or run a command in
-// it, and every make vm-up would hand its git calls to something else than git.
-func TestVMUpGitShimRunsTheRealGitAtAnyPath(t *testing.T) {
+// vmUpProbeMakefile answers the LIMA_INSTANCE make reads, with the same ?= the repository's Makefile uses, so a
+// case can prove its empty name reached make as an empty value and not as the recipe's default.
+const vmUpProbeMakefile = `LIMA_INSTANCE ?= shift2eu
+probe:
+	@printf 'LIMA_INSTANCE=[%s]\n' "$(LIMA_INSTANCE)"
+`
+
+// assertMakeSeesEmptyInstance fails unless make, run with the fixture's environment, reads LIMA_INSTANCE as
+// defined and empty: an environment variable set to an empty value is defined for ?=, so the empty name is
+// what the recipe sees. Without it the empty-name case would silently run as the default instance and pin
+// nothing.
+func assertMakeSeesEmptyInstance(t *testing.T, f *vmUpFixture) {
+	t.Helper()
+
+	probe := filepath.Join(f.sb.root, "probe.mk")
+	writeFileMode(t, probe, []byte(vmUpProbeMakefile), 0o600)
+
+	stdout, stderr, err := runMakeIn(t, f.root, []string{"-f", probe, "probe"}, f.env)
+	if err != nil {
+		t.Fatalf("make -f %s probe: %v\nstdout: %s\nstderr: %s", probe, err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "LIMA_INSTANCE=[]") {
+		t.Fatalf("make reads LIMA_INSTANCE as %q although the test sets it to an empty value: a variable make does not see as defined stays the recipe's default, so the empty-name case would pin nothing (issue #237)\nstdout: %s",
+			strings.TrimSpace(stdout), stdout)
+	}
+}
+
+// TestVMUpRefusesAnInvalidInstanceName pins that vm-up checks the instance name before it calls limactl at all
+// (issue #237): only letters, digits, '.', '_' and '-', starting with a letter or digit, name an instance.
+// Anything else - an empty name, a leading dash limactl would read as an option, a slash that turns the
+// instance directory into a path below ~/.lima, a space - stops vm-up with a message naming LIMA_INSTANCE, and
+// no limactl call runs. An empty name in particular matches the single empty line an empty listing prints, so
+// vm-up would take the branch of a listed instance, look in $HOME/.lima itself and could send a maintainer off
+// to remove all of it by hand.
+func TestVMUpRefusesAnInvalidInstanceName(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		dir  string // the directory the real git sits in, under the test's temporary directory
+		name         string
+		limaInstance string // the LIMA_INSTANCE make runs with, as an environment variable
+		status       string // what the status query would answer, should vm-up make one
 	}{
-		{name: "a plain path", dir: "plain"},
-		{name: "a path with a space", dir: "with space"},
-		{name: "a path with a dollar", dir: "with $HOME"},
-		{name: "a path with a command substitution", dir: "with $(id)"},
-		{name: "a path with a backtick", dir: "with `id`"},
-		{name: "a path with a single quote", dir: "with 'quotes'"},
+		{limaInstance: "", status: "Broken", name: "an empty name"},
+		{limaInstance: "-x", status: "Stopped", name: "a name with a leading dash"},
+		{limaInstance: "a/b", status: "Stopped", name: "a name with a slash"},
+		{limaInstance: "a b", status: "Stopped", name: "a name with a space"},
+		{limaInstance: "_x", status: "Stopped", name: "a name with a leading underscore"},
+		{limaInstance: ".hidden", status: "Stopped", name: "a name with a leading dot"},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			dir := filepath.Join(t.TempDir(), tc.dir)
-			if err := os.MkdirAll(dir, 0o750); err != nil {
-				t.Fatalf("create %s: %v", dir, err)
+			// Nothing is listed, as an empty listing answers: the empty name is the one that matches it.
+			f := newVMUpFixture(t, "", tc.status)
+			f.env["LIMA_INSTANCE"] = tc.limaInstance
+
+			if tc.limaInstance == "" {
+				assertMakeSeesEmptyInstance(t, f)
 			}
 
-			real := filepath.Join(dir, "git")
-
-			//nolint:gosec // the fake real git is a script the tests run, so it must be executable
-			if err := os.WriteFile(real, []byte(vmUpRealGit), 0o700); err != nil {
-				t.Fatalf("write %s: %v", real, err)
+			stdout, stderr, err := f.run(t, "vm-up")
+			if err == nil {
+				t.Fatalf("make vm-up exited 0 with LIMA_INSTANCE=%q: an invalid instance name must stop vm-up, or limactl reads it as an option, a path or nothing at all and the name that is started is not the one LIMA_INSTANCE asks for (issue #237)\nstdout: %s\nstderr: %s",
+					tc.limaInstance, stdout, stderr)
 			}
 
-			shim := writeGitShim(t, t.TempDir(), real)
-
-			out, err := exec.Command(shim, "rev-parse", "--show-toplevel").Output()
-			if err != nil {
-				t.Fatalf("the git shim of the real git at %s: %v", real, err)
+			if calls := invocations(f.sb.argvLogText(t), "limactl"); len(calls) != 0 {
+				t.Errorf("make vm-up ran limactl %v with LIMA_INSTANCE=%q: the name must be checked before any limactl call, or vm-up takes a name it cannot use for an instance that is listed and looks in a directory that is not one instance's (issue #237)",
+					calls[0], tc.limaInstance)
 			}
 
-			want, got := "real-git rev-parse --show-toplevel\n", string(out)
-			if diff := cmp.Diff(want, got); diff != "" {
-				t.Errorf("the git shim did not run the real git at %s with the arguments it got: sh expanded or split the path, so make's git calls in the vm-up tests reach the wrong command (issue #228 review, item D) (-want +got):\n%s",
-					real, diff)
+			if !strings.Contains(stderr, "LIMA_INSTANCE") {
+				t.Errorf("make vm-up's stderr does not say %q with LIMA_INSTANCE=%q, so a maintainer cannot see which variable to fix (issue #237)\nstderr: %s",
+					"LIMA_INSTANCE", tc.limaInstance, stderr)
 			}
 		})
 	}
-
-	t.Run("git config core.hooksPath answers without the real git", func(t *testing.T) {
-		t.Parallel()
-
-		dir := t.TempDir()
-		real := filepath.Join(dir, "git")
-
-		//nolint:gosec // the fake real git is a script the tests run, so it must be executable
-		if err := os.WriteFile(real, []byte(vmUpRealGit), 0o700); err != nil {
-			t.Fatalf("write %s: %v", real, err)
-		}
-
-		shim := writeGitShim(t, dir, real)
-
-		out, err := exec.Command(shim, "config", "core.hooksPath").Output()
-		if err != nil {
-			t.Fatalf("the git shim with git config core.hooksPath: %v", err)
-		}
-
-		if got := string(out); got != "" {
-			t.Errorf("the git shim ran the real git for `git config core.hooksPath` and printed %q: that call reads the write make vm-up's git-hooks prerequisite makes into the checkout's .git/config, which is shared by every worktree, so the vm-up tests must answer it themselves", got)
-		}
-	})
-}
-
-// TestMakeVMCreatePassesTheVMResourcesToVMUp pins issue #228's pass-through: make vm-create hands the four
-// variables to the make vm-up it runs, so one command still creates the VM at the size the host needs.
-func TestMakeVMCreatePassesTheVMResourcesToVMUp(t *testing.T) {
-	t.Parallel()
-
-	f := newVMUpFixture(t, false)
-
-	vars := []string{"VM_CPUS=5", "VM_MEMORY=7GiB", "VM_DISK=58GiB", "VM_SSH_PORT=60022"}
-	stdout, stderr, err := f.run(t, append([]string{"vm-create"}, vars...)...)
-	if err != nil {
-		t.Fatalf("make vm-create %s: %v\nstdout: %s\nstderr: %s", strings.Join(vars, " "), err, stdout, stderr)
-	}
-
-	want := f.creationWith([]string{"--cpus=5", "--memory=7", "--disk=58", "--ssh-port=60022"})
-	got := f.creating(t)
-
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("make vm-create %s does not hand the four variables to its make vm-up, so the VM is created at the template's size instead (issue #228) (-want +got):\n%s",
-			strings.Join(vars, " "), diff)
-	}
-}
-
-// TestMakeVMUpNeverResizesAnExistingVM pins issue #228's third acceptance: with the four variables set, an
-// instance that already exists is started by its name alone - never resized - and vm-up says that they apply
-// only when the VM is created. A value that is invalid still fails first, so the variables are checked before
-// vm-up looks at the instance at all.
-func TestMakeVMUpNeverResizesAnExistingVM(t *testing.T) {
-	t.Parallel()
-
-	vars := []string{"VM_CPUS=6", "VM_MEMORY=8GiB", "VM_DISK=60GiB", "VM_SSH_PORT=60023"}
-
-	t.Run("the instance is started by name without the four flags", func(t *testing.T) {
-		t.Parallel()
-
-		f := newVMUpFixture(t, true)
-
-		stdout, stderr, err := f.run(t, append([]string{"vm-up"}, vars...)...)
-		if err != nil {
-			t.Fatalf("make vm-up %s on an instance that exists: %v\nstdout: %s\nstderr: %s", strings.Join(vars, " "), err, stdout, stderr)
-		}
-
-		want := []string{"start", f.env["LIMA_INSTANCE"]}
-		starts := f.starts(t)
-
-		if len(starts) == 0 {
-			t.Fatalf("make vm-up did not start the instance that exists, so the VM stays down; stdout: %s\nstderr: %s", stdout, stderr)
-		}
-
-		for _, got := range starts {
-			if diff := cmp.Diff(want, got); diff != "" {
-				t.Errorf("make vm-up %s resized or reconfigured an existing VM: an instance that exists is started by its name alone, never with the flags that only apply at creation (issue #228) (-want +got):\n%s",
-					strings.Join(vars, " "), diff)
-			}
-		}
-
-		combined := stdout + stderr
-
-		for _, name := range []string{vmCPUsVar, vmMemoryVar, vmDiskVar, vmSSHPortVar} {
-			if !strings.Contains(combined, name) {
-				t.Errorf("make vm-up with %s set and an instance that exists says nothing about %s, so a maintainer expects a VM created at that size and gets the old one (issue #228):\n%s",
-					strings.Join(vars, " "), name, combined)
-			}
-		}
-
-		if lowered := strings.ToLower(combined); !strings.Contains(lowered, "creat") {
-			t.Errorf("the warning says nothing about creation, so it does not tell a maintainer that %s apply only when the VM is created and an existing VM is never resized (issue #228):\n%s",
-				strings.Join(vars, " "), combined)
-		}
-	})
-
-	t.Run("an invalid value fails before the instance is looked at", func(t *testing.T) {
-		t.Parallel()
-
-		f := newVMUpFixture(t, true)
-
-		stdout, stderr, err := f.run(t, "vm-up", "VM_SSH_PORT=70000")
-		if err == nil {
-			t.Fatalf("make vm-up VM_SSH_PORT=70000 on an instance that exists exited 0: the value is refused whatever the instance is (issue #228)\nstdout: %s\nstderr: %s", stdout, stderr)
-		}
-
-		if starts := f.starts(t); len(starts) != 0 {
-			t.Errorf("make vm-up VM_SSH_PORT=70000 started the existing instance although the value is invalid: validation must come first (issue #228):%s", describeCalls(starts))
-		}
-
-		if combined := stdout + stderr; !strings.Contains(combined, vmSSHPortVar) {
-			t.Errorf("the refusal of VM_SSH_PORT=70000 does not name VM_SSH_PORT (issue #228):\nstdout: %s\nstderr: %s", stdout, stderr)
-		}
-	})
 }
