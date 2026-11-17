@@ -75,10 +75,17 @@
       "capabilities": [
         "encryption-at-rest",
         "point-in-time-restore"
-      ],
-      "size": {
-        "storageGiB": 100
-      }
+      ]
+    },
+    {
+      "id": "shop-aurora-2",
+      "rawType": "AWS::RDS::DBInstance",
+      "category": "database.postgresql",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest",
+        "point-in-time-restore"
+      ]
     },
     {
       "id": "shop-db",

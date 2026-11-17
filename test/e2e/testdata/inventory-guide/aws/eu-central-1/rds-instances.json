@@ -56,6 +56,17 @@
       "MultiAZ": false,
       "StorageEncrypted": true,
       "ReadReplicaDBInstanceIdentifiers": []
+    },
+    {
+      "DBInstanceIdentifier": "shop-aurora-2",
+      "AllocatedStorage": 1,
+      "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-aurora-2",
+      "DBClusterIdentifier": "shop-aurora",
+      "Engine": "aurora-postgresql",
+      "BackupRetentionPeriod": 7,
+      "MultiAZ": false,
+      "StorageEncrypted": true,
+      "ReadReplicaDBInstanceIdentifiers": []
     }
   ]
 }

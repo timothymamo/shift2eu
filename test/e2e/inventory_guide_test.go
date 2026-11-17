@@ -65,6 +65,10 @@ type inventoryGuideCase struct {
 	// recorded read-only calls give to a resource, which the program fills its
 	// `size` from (PRD #190).
 	sized []sizeFact
+	// unsized are resources the inventory has to give no size at all, by ID: a
+	// recorded call gives the resource a number that is not its size, and the
+	// program has to write none rather than that number.
+	unsized []string
 	// absent are resource IDs the program has to leave out altogether: another
 	// recorded resource stands for them.
 	absent []string
@@ -130,6 +134,11 @@ func inventoryGuides() []inventoryGuideCase {
 				// stays: only the node's own root volume is left out.
 				{id: "vol-0123456789abcdef6", rawType: "AWS::EC2::Volume", category: "storage.block"},
 			},
+			// The storage of an Aurora instance belongs to its cluster, so
+			// rds describe-db-instances gives every Aurora instance
+			// AllocatedStorage 1 (and, in one fixture, a stale 100): neither is
+			// the instance's size.
+			unsized: []string{"shop-aurora-1", "shop-aurora-2"},
 			sized: []sizeFact{
 				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
 				{id: "i-0123456789abcdef0", vcpus: 2, memoryGiB: 8},
@@ -358,6 +367,7 @@ func TestInventoryGuidePrograms(t *testing.T) {
 			assertBareMetal(t, tc.source, doc, tc.bareMetal)
 			assertPresent(t, tc.source, doc, tc.present)
 			assertSized(t, tc.source, doc, tc.sized)
+			assertUnsized(t, tc.source, doc, tc.unsized)
 			assertNoUserFields(t, tc.source, doc)
 			assertAbsent(t, tc.source, doc, tc.absent)
 			assertNoRawTypes(t, tc.source, doc, tc.absentRawTypes)
@@ -585,6 +595,56 @@ func derefCount(count *int) string {
 	}
 
 	return fmt.Sprint(*count)
+}
+
+// assertUnsized fails when the inventory gives a resource a size. The recorded
+// call exists for the resource but the number it gives is not the resource's
+// size, so the program has to write none: a size written from it is worse than
+// no size, because the assessment prices a wrong number instead of saying the
+// size is unknown.
+func assertUnsized(t *testing.T, source string, doc inventoryDoc, ids []string) {
+	t.Helper()
+
+	for _, id := range ids {
+		resource, ok := findResource(doc, id)
+		if !ok {
+			t.Errorf("%s: the inventory holds no resource %q, so its size cannot be checked", source, id)
+
+			continue
+		}
+
+		if resource.Size != nil {
+			t.Errorf("%s: resource %q has a size (%s), want none: no recorded call gives its size",
+				source, id, resource.Size.describe())
+		}
+	}
+}
+
+// describe says which numbers a size holds, for an error message.
+func (s sizeSpec) describe() string {
+	var fields []string
+
+	if s.VCPUs != nil {
+		fields = append(fields, fmt.Sprintf("vcpus: %v", *s.VCPUs))
+	}
+
+	if s.MemoryGiB != nil {
+		fields = append(fields, fmt.Sprintf("memoryGiB: %v", *s.MemoryGiB))
+	}
+
+	if s.StorageGiB != nil {
+		fields = append(fields, fmt.Sprintf("storageGiB: %v", *s.StorageGiB))
+	}
+
+	if s.Count != nil {
+		fields = append(fields, fmt.Sprintf("count: %d", *s.Count))
+	}
+
+	if len(fields) == 0 {
+		return "no field"
+	}
+
+	return strings.Join(fields, ", ")
 }
 
 // assertNoUserFields fails when the inventory gives a resource a workload, a
