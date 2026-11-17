@@ -104,12 +104,12 @@
       },
       "estimate": {
         "estimated": true,
-        "amount": "61.43",
+        "amount": "81.29",
         "countAssumed": true,
         "hoursAssumed": true,
         "breakdown": {
           "plan": "61.43",
-          "storage": "0.00",
+          "storage": "19.86",
           "fixedFee": "0.00"
         }
       }
@@ -188,12 +188,12 @@
       },
       "estimate": {
         "estimated": true,
-        "amount": "61.43",
+        "amount": "66.39",
         "countAssumed": true,
         "hoursAssumed": true,
         "breakdown": {
           "plan": "61.43",
-          "storage": "0.00",
+          "storage": "4.97",
           "fixedFee": "0.00"
         }
       }
@@ -534,7 +534,7 @@
         }
       ],
       "estimate": {
-        "amount": "497.30",
+        "amount": "517.16",
         "estimated": 6,
         "resources": 9
       },
@@ -544,7 +544,7 @@
         "currencies": [
           {
             "currency": "USD",
-            "amount": "517.00",
+            "amount": "518.92",
             "resources": 4
           }
         ]
@@ -562,7 +562,7 @@
       },
       "blockers": [],
       "estimate": {
-        "amount": "61.43",
+        "amount": "66.39",
         "estimated": 1,
         "resources": 1
       },
@@ -584,7 +584,7 @@
     ],
     "hoursBasis": 730,
     "total": {
-      "amount": "562.75",
+      "amount": "587.58",
       "estimated": 8,
       "resources": 13
     }
@@ -595,7 +595,7 @@
     "currencies": [
       {
         "currency": "USD",
-        "amount": "517.00",
+        "amount": "518.92",
         "resources": 4
       }
     ]

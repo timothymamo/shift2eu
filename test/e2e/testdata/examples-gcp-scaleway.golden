@@ -19,10 +19,10 @@
 | ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Relations | Reasons |
 |---|---|---|---|---|---|---|---|---|
 | `shop-assets` | `storage.googleapis.com/Bucket` | `storage.object` | direct | `Object Storage` |  | €8.05 |  | `Object Storage` offers every capability the resource uses |
-| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €61.43 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
+| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €71.36 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
-| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €122.86 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
-| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €122.86 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed Database for PostgreSQL and MySQL` offers every capability the resource uses |
+| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed Database for PostgreSQL and MySQL` offers every capability the resource uses |
 | `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced |  | `Queues` offers every capability the resource uses |
 | `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | dead-letter-queue-of `shop-orders` | `Queues` offers every capability the resource uses |
@@ -49,23 +49,23 @@
 ### `catalog`
 
 - Fit: 1 direct, 1 partial, 0 none
-- Monthly estimate: €227.93 per month for 2 of 2 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €237.86 per month for 2 of 2 resources, list prices on 2026-11-13, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 ### `shop`
 
 - Fit: 8 direct, 2 partial, 2 none
-- Monthly estimate: €629.60 per month for 7 of 12 resources, list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $475.00 for 3 of 12 resources
+- Monthly estimate: €728.90 per month for 7 of 12 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $477.31 for 3 of 12 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
   - `shop-zone`: not classified
 
 ## Cost estimate
 
-- Total: €857.53 per month for 9 of 14 resources
+- Total: €966.76 per month for 9 of 14 resources
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $475.00 for 3 of 14 resources
+- Source cost: `USD` $477.31 for 3 of 14 resources

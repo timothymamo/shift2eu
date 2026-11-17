@@ -19,9 +19,9 @@
 | partial | 1 | 3 | 3 |
 | none | 5 | 2 | 6 |
 | total | 14 | 14 | 14 |
-| `OVHcloud` estimate | €1,530.90 per month for 8 of 14 resources |  |  |
-| `Scaleway` estimate |  | €857.53 per month for 9 of 14 resources |  |
-| `UpCloud` estimate |  |  | €497.95 per month for 8 of 14 resources |
+| `OVHcloud` estimate | €1,583.46 per month for 8 of 14 resources |  |  |
+| `Scaleway` estimate |  | €966.76 per month for 9 of 14 resources |  |
+| `UpCloud` estimate |  |  | €721.03 per month for 8 of 14 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 
@@ -30,10 +30,10 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | ID | Category | `OVHcloud` fit | `OVHcloud` best offering | `OVHcloud` monthly estimate | `Scaleway` fit | `Scaleway` best offering | `Scaleway` monthly estimate | `UpCloud` fit | `UpCloud` best offering | `UpCloud` monthly estimate |
 |---|---|---|---|---|---|---|---|---|---|---|
 | `shop-assets` | `storage.object` | direct | `Object Storage` | €3.55 | direct | `Object Storage` | €8.05 | direct | `Managed Object Storage` | €10.15 |
-| `shop-catalog-mysql` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` | €175.49 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL` | €61.43 (count assumed 1) (730 hours assumed) | direct | `Managed MySQL Multi-node` | €57.79 (count assumed 1) (730 hours assumed) |
+| `shop-catalog-mysql` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` | €175.49 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL` | €71.36 (count assumed 1) (730 hours assumed) | direct | `Managed MySQL Multi-node` | €78.07 (count assumed 1) (730 hours assumed) |
 | `shop-cdn-backend` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
-| `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` | not estimated: no price in `GRA` | partial | `Managed Database for PostgreSQL and MySQL` | €122.86 (count assumed 1) (730 hours assumed) | partial | `Managed PostgreSQL Multi-node` | €134.85 (count assumed 1) (730 hours assumed) |
-| `shop-db-replica` | `database.postgresql` | direct | `Managed PostgreSQL` | €286.38 (count assumed 1) (730 hours assumed) | direct | `Managed Database for PostgreSQL and MySQL` | €122.86 (count assumed 1) (730 hours assumed) | direct | `Managed PostgreSQL` | €134.85 (count assumed 1) (730 hours assumed) |
+| `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` | not estimated: no price in `GRA` | partial | `Managed Database for PostgreSQL and MySQL` | €172.51 (count assumed 1) (730 hours assumed) | partial | `Managed PostgreSQL Multi-node` | €236.25 (count assumed 1) (730 hours assumed) |
+| `shop-db-replica` | `database.postgresql` | direct | `Managed PostgreSQL` | €338.94 (count assumed 1) (730 hours assumed) | direct | `Managed Database for PostgreSQL and MySQL` | €172.51 (count assumed 1) (730 hours assumed) | direct | `Managed PostgreSQL` | €236.25 (count assumed 1) (730 hours assumed) |
 | `shop-gke` | `kubernetes.managed` | direct | `Managed Kubernetes Service` | €224.04 (730 hours assumed) | direct | `Kubernetes Kapsule` | €245.72 (730 hours assumed) | partial | `Managed Kubernetes` | €84.00 (730 hours assumed) |
 | `shop-orders` | `messaging.queue` | none |  | not estimated: no fit | direct | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-orders-dlq` | `messaging.queue` | none |  | not estimated: no fit | direct | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
@@ -74,7 +74,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | direct | `Managed MySQL Multi-node Advanced` (tie: `Managed MySQL Multi-node Advanced 3-AZ`) | `Advanced B3-8` (2 vCPU, 8 GiB) | €175.49 (count assumed 1) (730 hours assumed) |  | `Managed MySQL Multi-node Advanced` offers every capability the resource uses |
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
 | `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` | `Advanced B3-16` (4 vCPU, 16 GiB) | not estimated: no price in `GRA` |  | `Managed PostgreSQL Multi-node Advanced 3-AZ` offers every capability the resource uses |
-| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`, `Managed PostgreSQL Multi-node 3-AZ`, `Managed PostgreSQL Multi-node Advanced`, `Managed PostgreSQL Multi-node Advanced 3-AZ`) | `Discovery B3-16` (4 vCPU, 16 GiB) | €286.38 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed PostgreSQL` offers every capability the resource uses |
+| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`, `Managed PostgreSQL Multi-node 3-AZ`, `Managed PostgreSQL Multi-node Advanced`, `Managed PostgreSQL Multi-node Advanced 3-AZ`) | `Discovery B3-16` (4 vCPU, 16 GiB) | €338.94 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed PostgreSQL` offers every capability the resource uses |
 | `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service` (tie: `Managed Kubernetes Service 3-AZ`) | `b3-16` (4 vCPU, 16 GiB) | €224.04 (730 hours assumed) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Managed Kubernetes Service` offers every capability the resource uses |
 | `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | none |  |  | not estimated: no fit |  | no offering in the `OVHcloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | none |  |  | not estimated: no fit | dead-letter-queue-of `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.queue` |
@@ -110,8 +110,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `shop`
 
 - Fit: 6 direct, 1 partial, 5 none
-- Monthly estimate: €630.40 per month for 6 of 12 resources, list prices on 2026-11-14, excluding VAT and discounts
-- Source cost: `USD` $475.00 for 3 of 12 resources
+- Monthly estimate: €682.96 per month for 6 of 12 resources, list prices on 2026-11-14, excluding VAT and discounts
+- Source cost: `USD` $477.31 for 3 of 12 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
   - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
@@ -121,11 +121,11 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €1,530.90 per month for 8 of 14 resources
+- Total: €1,583.46 per month for 8 of 14 resources
 - Estimate: list prices on 2026-11-14, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $475.00 for 3 of 14 resources
+- Source cost: `USD` $477.31 for 3 of 14 resources
 
 ## `Scaleway`
 
@@ -143,10 +143,10 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Relations | Reasons |
 |---|---|---|---|---|---|---|---|---|
 | `shop-assets` | `storage.googleapis.com/Bucket` | `storage.object` | direct | `Object Storage` |  | €8.05 |  | `Object Storage` offers every capability the resource uses |
-| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €61.43 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
+| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €71.36 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore` |
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
-| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €122.86 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
-| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €122.86 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed Database for PostgreSQL and MySQL` offers every capability the resource uses |
+| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
+| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed Database for PostgreSQL and MySQL` offers every capability the resource uses |
 | `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced |  | `Queues` offers every capability the resource uses |
 | `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | dead-letter-queue-of `shop-orders` | `Queues` offers every capability the resource uses |
@@ -173,26 +173,26 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `catalog`
 
 - Fit: 1 direct, 1 partial, 0 none
-- Monthly estimate: €227.93 per month for 2 of 2 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €237.86 per month for 2 of 2 resources, list prices on 2026-11-13, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers: none
 
 #### `shop`
 
 - Fit: 8 direct, 2 partial, 2 none
-- Monthly estimate: €629.60 per month for 7 of 12 resources, list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $475.00 for 3 of 12 resources
+- Monthly estimate: €728.90 per month for 7 of 12 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $477.31 for 3 of 12 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
   - `shop-zone`: not classified
 
 ### Cost estimate
 
-- Total: €857.53 per month for 9 of 14 resources
+- Total: €966.76 per month for 9 of 14 resources
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
-- Source cost: `USD` $475.00 for 3 of 14 resources
+- Source cost: `USD` $477.31 for 3 of 14 resources
 
 ## `UpCloud`
 
@@ -210,10 +210,10 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Relations | Reasons |
 |---|---|---|---|---|---|---|---|---|
 | `shop-assets` | `storage.googleapis.com/Bucket` | `storage.object` | direct | `Managed Object Storage` |  | €10.15 |  | `Managed Object Storage` offers every capability the resource uses |
-| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | direct | `Managed MySQL Multi-node` | `rdb.standard.2CPU-8GB` (2 vCPU, 8 GiB) | €57.79 (count assumed 1) (730 hours assumed) |  | `Managed MySQL Multi-node` offers every capability the resource uses |
+| `shop-catalog-mysql` | `sqladmin.googleapis.com/Instance` | `database.mysql` | direct | `Managed MySQL Multi-node` | `rdb.standard.2CPU-8GB` (2 vCPU, 8 GiB) | €78.07 (count assumed 1) (730 hours assumed) |  | `Managed MySQL Multi-node` offers every capability the resource uses |
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
-| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed PostgreSQL Multi-node` | `rdb.standard.4CPU-16GB` (4 vCPU, 16 GiB) | €134.85 (count assumed 1) (730 hours assumed) |  | `Managed PostgreSQL Multi-node` does not offer `zone-high-availability` |
-| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) | `rdb.standard.4CPU-16GB` (4 vCPU, 16 GiB) | €134.85 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed PostgreSQL` offers every capability the resource uses |
+| `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed PostgreSQL Multi-node` | `rdb.standard.4CPU-16GB` (4 vCPU, 16 GiB) | €236.25 (count assumed 1) (730 hours assumed) |  | `Managed PostgreSQL Multi-node` does not offer `zone-high-availability` |
+| `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`) | `rdb.standard.4CPU-16GB` (4 vCPU, 16 GiB) | €236.25 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed PostgreSQL` offers every capability the resource uses |
 | `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | partial | `Managed Kubernetes` (tie: `Managed Kubernetes Production`) | `STARTER-4xCPU-16GB` (4 vCPU, 16 GiB) | €84.00 (730 hours assumed) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Managed Kubernetes` does not offer `autoscaling` |
 | `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | none |  |  | not estimated: no fit |  | no offering in the `UpCloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | none |  |  | not estimated: no fit | dead-letter-queue-of `shop-orders` | no offering in the `UpCloud` catalog for `messaging.queue` |
@@ -245,7 +245,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `catalog`
 
 - Fit: 1 direct, 0 partial, 1 none
-- Monthly estimate: €57.79 per month for 1 of 2 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €78.07 per month for 1 of 2 resources, list prices on 2026-11-13, excluding VAT and discounts
 - Source cost: none in the inventory
 - Blockers:
   - `shop-search-bms`: no offering in the `UpCloud` catalog for `compute.baremetal`
@@ -253,8 +253,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `shop`
 
 - Fit: 4 direct, 3 partial, 5 none
-- Monthly estimate: €440.15 per month for 7 of 12 resources, list prices on 2026-11-13, excluding VAT and discounts
-- Source cost: `USD` $475.00 for 3 of 12 resources
+- Monthly estimate: €642.95 per month for 7 of 12 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Source cost: `USD` $477.31 for 3 of 12 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
   - `shop-orders`: no offering in the `UpCloud` catalog for `messaging.queue`
@@ -264,8 +264,8 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €497.95 per month for 8 of 14 resources
+- Total: €721.03 per month for 8 of 14 resources
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `de-fra1`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none; a plan billed for at most 672 hours a month costs plan price × count × min(hours, 672) / 672
-- Source cost: `USD` $475.00 for 3 of 14 resources
+- Source cost: `USD` $477.31 for 3 of 14 resources
