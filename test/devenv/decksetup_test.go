@@ -524,6 +524,27 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 			t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN wrote the wrong lines to the VM's daemon.env: it must replace GITHUB_TOKEN and keep every other line already in the file (issue #234) (-want +got):\n%s", diff)
 		}
 
+		// A merge says, by name, which lines it left in place (the auditor's finding on issue #234): the
+		// maintainer who narrows VM_ENV to one credential must see from the run itself what stays in
+		// daemon.env, without opening the file and without any value being printed.
+		keptNames := slices.DeleteFunc(slices.Clone(vmEnvCredentials), func(name string) bool {
+			return name == "GITHUB_TOKEN"
+		})
+
+		for _, name := range keptNames {
+			if !strings.Contains(stdout+stderr, name) {
+				t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN kept the line daemon.env already held for %s but never names it: a merge must print the names - only the names - of the lines it kept, so a maintainer sees what stays in the file (issue #234)\nstdout: %s\nstderr: %s",
+					name, stdout, stderr)
+			}
+		}
+
+		// Names only, never values: neither the ones the file held before the run nor the ones it copied in.
+		assertNoSecrets(t, "make vm-env VM_ENV=GITHUB_TOKEN's output", stdout+stderr, []secret{
+			{kind: "earlier value of CLAUDE_CODE_OAUTH_TOKEN", value: "old-oauth"},
+			{kind: "earlier value of DEEPSEEK_API_KEY", value: "old-deepseek"},
+			{kind: "earlier value of GITHUB_TOKEN", value: "old-github"},
+		})
+
 		assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
 	})
 
