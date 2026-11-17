@@ -46,8 +46,21 @@ maintainer has not approved: the maintainer's approval and merge are the single 
      own token before the switch to the agents App), its author cannot approve it: report that the
      maintainer merges it themselves, and stop.
    - Otherwise merge only if **both** hold:
-     - `reviews` holds a review with `state` `APPROVED` by the maintainer (`author.login` exactly
-       `timothymamo`) whose `commit.oid` is the current `headRefOid`; and
+     - the maintainer's (`author.login` exactly `timothymamo`) **latest** review that is not a comment,
+       that is the last by `submittedAt` with `state` `APPROVED`, `CHANGES_REQUESTED` or `DISMISSED`,
+       has `state` `APPROVED` and its `commit.oid` is the current `headRefOid`. An earlier approval
+       followed by a change request, or one since dismissed, does not count. This prints `approved`
+       only then:
+
+       ```bash
+       gh pr view <n> --json headRefOid,reviews --jq '.headRefOid as $head
+         | [.reviews[] | select(.author.login == "timothymamo"
+             and (.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))]
+         | sort_by(.submittedAt) | last
+         | if . != null and .state == "APPROVED" and .commit.oid == $head then "approved" else "not approved" end'
+       ```
+
+       and
      - `reviewDecision` is `APPROVED` or empty. It can be empty even after an approval while
        `Protect main` does not yet require reviews. Never merge when it is `CHANGES_REQUESTED` or
        `REVIEW_REQUIRED`.
