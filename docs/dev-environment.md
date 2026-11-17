@@ -91,7 +91,8 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 | `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository, with the agents App's token when its file is in the VM, otherwise `GITHUB_TOKEN`. Not `gh auth status`, which an installation token may fail (ADR 0031) |
 | `deck` | `dot-agent-deck validate`: checks `.dot-agent-deck.toml` |
 | `deck command` | Sets the deck's `default_command` to `claude --model opus --permission-mode auto`, the orchestrator's command: the New Agent form pre-fills it, and a dispatcher started with a blank command, and the single units it dispatches, run it. A command already set in the VM is kept (`dot-agent-deck config set default_command ...` changes it) |
-| `daemon` | `dot-agent-deck daemon install`, unless `dot-agent-deck.service` is already installed |
+| `deck dir` | Sets the deck's `default_dir` to the main checkout, on every run (see below) |
+| `daemon` | `dot-agent-deck daemon install`, unless `dot-agent-deck.service` is already installed. It never restarts an installed service (that would stop every running agent): when `deck dir` changed the deck's configuration and the service runs, it says to run `make deck-restart` between tasks so the daemon reads the new `default_dir` |
 
 It never prints a credential: the checks show only the field they test.
 
@@ -115,6 +116,16 @@ It never prints a credential: the checks show only the field they test.
   exit
   ```
 
+- **Agents start browsing in the main checkout.** `default_dir`, in the VM's
+  `~/.config/dot-agent-deck/config.toml`, is where `Ctrl+N`, the Schedules manager's Add and the desktop
+  app's New agent open the directory picker. `make vm-init` sets it to the main checkout it is given
+  (for example `/Users/example/agents/shift2eu-ws/shift2eu`, mounted at the same path in the VM) with
+  `dot-agent-deck config set default_dir`, before the daemon service starts. Without it the picker opens
+  in the VM user's home, which holds only `go/`, and an agent opened there gets no `CLAUDE.md`, no roles
+  from `.dot-agent-deck.toml` and no dispatcher memory, which is keyed by the checkout's path. It is a
+  starting point, not a limit. A rebuilt VM gets it again from `make vm-create`, and a re-run of
+  `make vm-init` sets the same value. `make vm-init` never restarts a running daemon: when it changed
+  `default_dir`, run `make deck-restart` between tasks so the daemon reads it.
 - **`dot-agent-deck daemon install`** sets the deck's daemon up as a systemd user service and starts it,
   which is why `make vm-init` comes before the first `make deck`. If the TUI has already started a daemon
   of its own, the service is installed but not started: run `dot-agent-deck daemon stop` and
@@ -126,9 +137,14 @@ It never prints a credential: the checks show only the field they test.
   restart the service (this stops the running agents):
 
   ```bash
-  limactl shell --workdir / shift2eu sh -c 'printf "[Service]\nEnvironment=TERM=xterm-256color COLORTERM=truecolor\n" > ~/.config/systemd/user/dot-agent-deck.service.d/terminal.conf && systemctl --user daemon-reload'
+  limactl shell --workdir / shift2eu sh -c 'printf "[Service]\nEnvironment=TERM=xterm-256color COLORTERM=truecolor\n" > ~/.config/systemd/user/dot-agent-deck.service.d/terminal.conf'
   make deck-restart
   ```
+
+- **`make deck-restart` reloads the drop-ins.** It runs `systemctl --user daemon-reload` before
+  `systemctl --user restart dot-agent-deck.service`, so a changed drop-in takes effect at that restart
+  and systemd never warns that the unit changed on disk. `dev/lima.yaml`'s provisioning rewrites a
+  drop-in only when its content differs, and then reloads the user manager when it is reachable.
 
 ### Every day
 
@@ -277,8 +293,8 @@ trust given to the old paths does not carry over.
 
 Nothing from the Mac's home directory is visible in the VM. `make vm-env` copies the variables named in
 `VM_ENV` (Makefile) from the shell you run it in to `~/.config/dot-agent-deck/daemon.env` in the VM,
-readable only by the VM user. The values travel over standard input, never on a command line; a variable
-that is not set is skipped. Two things read the file:
+readable only by the VM user. The values travel over standard input, never on a command line. Two things
+read the file:
 
 - the deck's daemon service, through a systemd drop-in installed by `dev/lima.yaml`, so every agent it
   starts has the variables;
@@ -293,6 +309,32 @@ that is not set is skipped. Two things read the file:
 - **Subscription, not pay-as-you-go.** Whenever `ANTHROPIC_API_KEY` is set, Claude Code uses it instead
   of the token and bills each call. `VM_ENV` leaves it out on purpose; do not add it. The five Claude
   Code roles share your subscription's usage limits.
+- **Every variable must be set, or nothing is written.** `make vm-env` first checks every name in
+  `VM_ENV`. If one is unset or empty, it names it (never a value), exits non-zero without calling
+  `limactl`, and leaves the VM's `daemon.env` byte for byte as it was; `make vm-create`, which runs it,
+  stops there. This keeps a locked login Keychain or an unloaded `.envrc` from wiping the credentials the
+  agents need ([Troubleshooting](#troubleshooting-credentials)). An empty `VM_ENV` (`make vm-env VM_ENV=`)
+  names no credential and is refused the same way; a name listed twice is written once. A `VM_ENV`
+  holding anything but variable names, commas and spaces (a quote, a `$`, a `*`) is refused before any
+  shell reads it; the refusal names `VM_ENV` but never shows its value, which may be a credential typed
+  by mistake.
+- **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the three
+  variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY`, is removed. Only a
+  `VM_ENV` on the make command line merges; an exported `VM_ENV` replaces like the default, so a `VM_ENV`
+  left in a `.envrc` cannot keep a stale credential.
+- **A `VM_ENV` on the command line merges.** `make vm-env VM_ENV=...` (or `make vm-create VM_ENV=...`)
+  replaces the lines of the names in `VM_ENV` and keeps the other variable lines already in `daemon.env`
+  (it creates the file when there is none). So `make vm-env VM_ENV=GITHUB_TOKEN` replaces only
+  `GITHUB_TOKEN` and keeps the OAuth token and the DeepSeek key. Only plain `NAME=value` lines are kept:
+  any other line (a command, a comment, a value the shell would expand) is dropped, with a warning that
+  says how many lines were dropped, never what they held. A merge prints the names of the variable lines
+  it kept, never their values: `vm-env: kept (unchanged): CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY`.
+  Either way the file is written to a temporary file beside `daemon.env`, mode 0600, and moved into
+  place, so a failure does not leave half a file. An interrupted run removes its temporary file, and a
+  leftover from a killed run is removed by the next `make vm-env` once it is older than a minute, so a
+  concurrent run's fresh temporary file is left alone (running `make vm-env` twice at once is not
+  otherwise supported). A merge whose `daemon.env` exists but cannot be read is refused with a `vm-env:`
+  message naming `daemon.env`, and nothing is written: make the file readable and run it again.
 - **Rotating a credential:** change it on the Mac, then `make vm-env deck-restart`. Restarting the service
   stops its running agents, so do it between tasks. Run `claude setup-token` again before the year is up.
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the
@@ -307,6 +349,27 @@ that is not set is skipped. Two things read the file:
 - **Cloud accounts (for integration tests and real analyses, later):** read-only identities only
   (`ReadOnlyAccess` or narrower on AWS, `Reader` on Azure, `roles/viewer` or narrower on GCP). Do not
   copy your personal admin credentials in.
+
+### Troubleshooting credentials
+
+**`make vm-env` refuses: `vm-env: not set or empty: CLAUDE_CODE_OAUTH_TOKEN ...`.** The shell you ran it
+in does not have the variables. Fix it in this order:
+
+1. If your credentials come from the macOS login Keychain (a `.envrc` that reads them with `security`),
+   an SSH session has the Keychain locked, so every lookup comes back empty. Unlock it; it asks for the
+   account password:
+
+   ```bash
+   security unlock-keychain ~/Library/Keychains/login.keychain-db
+   ```
+
+2. Leave and re-enter the checkout, so direnv reads the `.envrc` again:
+   `cd ~ && cd /Users/example/agents/shift2eu-ws/shift2eu`. On a host without the Keychain, check that the
+   `.envrc` above the workspace exists, sets the variables and is allowed (`direnv allow`), or export
+   them in the shell yourself.
+3. Re-run `make vm-env`, or the target that ran it (`make vm-create`).
+
+The VM's `daemon.env` is untouched by the refused run, so the running agents keep their credentials.
 
 ### The agents App
 
