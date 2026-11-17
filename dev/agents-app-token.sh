@@ -458,10 +458,13 @@ mint_once() {
   # formats, ghs_ and 36 alphanumerics, and ghs_<App ID>_<JWT> (about 520 characters, variable length,
   # whose base64url JWT adds - and the . between its parts), and still refuses anything that could break
   # the two-line token file or the shell: whitespace, quotes, \, $, ; and control characters.
+  # The set is spelled out, not written as ranges like A-Z: some shells, bash 3.2 among them as the
+  # Mac's /bin/sh, match a range by the locale's collation, where a UTF-8 locale can let a non-ASCII
+  # letter through. LC_ALL=C instead would also change the locale of every command this script runs.
   case "${token}" in
-  '' | *[!A-Za-z0-9_.-]*)
+  '' | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-]*)
     failure=transient
-    say "no installation token minted: GitHub's answer holds no token"
+    say "no installation token minted: GitHub's answer holds no usable token"
     return 1
     ;;
   esac

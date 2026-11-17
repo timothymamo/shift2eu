@@ -45,8 +45,10 @@ extra=""
 
 # The token is opaque: an allow list, not a format parser. It takes both of GitHub's installation token
 # formats, ghs_ and 36 alphanumerics, and ghs_<App ID>_<JWT>, whose base64url JWT adds - and . (#232).
+# The set is spelled out, not written as ranges like A-Z: some shells match a range by the locale's
+# collation, where it can take a non-ASCII letter, and LC_ALL=C here would change the locale gh runs in.
 case "${token}" in
-'' | *[!A-Za-z0-9_.-]*) refuse "malformed (want two lines: the token, then its expiry as Unix seconds)" ;;
+'' | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-]*) refuse "malformed (want two lines: the token, then its expiry as Unix seconds)" ;;
 esac
 case "${expiry}" in
 '' | *[!0-9]*) refuse "malformed (want two lines: the token, then its expiry as Unix seconds)" ;;
