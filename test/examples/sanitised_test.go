@@ -675,6 +675,12 @@ func TestHostnameProblems(t *testing.T) {
 			text: `"amount": 84.10 billed by shop.acme.io`,
 			want: []string{"shop.acme.io"},
 		},
+		{
+			name: "real customer host followed by a digit label",
+			text: "billed by shop.acme.io.1",
+			want: []string{"shop.acme.io.1"},
+		},
+		{name: "real customer host ending in a digit label", text: "the shop runs on db.acme.com.2", want: []string{"db.acme.com.2"}},
 		{name: "real customer domain", text: "the shop runs on shop.acme.io", want: []string{"shop.acme.io"}},
 		{name: "real customer domain in capitals", text: "the shop runs on SHOP.ACME.IO", want: []string{"SHOP.ACME.IO"}},
 		{name: "real host in a URL", text: "see https://shop.acme.io/orders", want: []string{"shop.acme.io"}},
