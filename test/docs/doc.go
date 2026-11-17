@@ -10,9 +10,14 @@
 //   - docs/README.md, the index, links to every page under docs/;
 //   - README.md links only to files the release archives in .goreleaser.yaml
 //     ship, so its links work in an unpacked archive;
-//   - no command block in a skill writes a file through the shell (heredoc,
-//     redirection, tee, sed -i) or removes a path held in a variable
-//     (CLAUDE.md, rule 9; issue #251).
+//   - no shell command block (tagged bash, sh, shell, console, or untagged) in
+//     CLAUDE.md or in a skill writes or removes a file through the shell
+//     (heredoc, redirection, tee, sed -i, perl -i) or removes a path held in a
+//     variable (CLAUDE.md, rule 9; issue #251). The list covers the forms seen
+//     in #251 and is not complete: `python3 -c`, `dd`, `cp`/`mv` and
+//     `find -delete` write or remove a file and are not caught. The prompts
+//     in .dot-agent-deck.toml are not scanned: they quote the forbidden forms
+//     as examples in prose.
 //
 // make test, and so make check, run it. The link checker is
 // test/internal/mdlink.
