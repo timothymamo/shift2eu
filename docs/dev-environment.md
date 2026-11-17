@@ -283,8 +283,8 @@ PRD #161 moves the agents from your `GITHUB_TOKEN` to a GitHub App of yours, the
 pull requests are the App's and you can approve them
 ([ADR 0031](adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)). Its
 private key stays on the Mac: a job there mints installation tokens, valid for an hour, and writes only
-those into the VM. Until you switch (the runbook in PRD #161; milestone 2 puts it here), nothing changes:
-without a token file in the VM, `gh` and `git push` use `GITHUB_TOKEN` as before.
+those into the VM. Until you switch ([The switch-over runbook](#the-switch-over-runbook)), nothing
+changes: without a token file in the VM, `gh` and `git push` use `GITHUB_TOKEN` as before.
 
 **Creating the App** (runbook step 1): install it on this repository only, with these repository
 permissions:
@@ -442,6 +442,107 @@ kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"
 limactl shell --workdir / shift2eu sh -c 'rm -f "$HOME/.config/shift2eu/agents-app-token" "$HOME/.config/shift2eu/agents-app-identity"'
 make vm-init
 ```
+
+### The gate
+
+After the switch, `Protect main` lets a change reach `main` only with **your approval and your merge**,
+the single human gate (PRD #161). `.github/CODEOWNERS` names you as the owner of every path (`*`), itself
+and `.github/` included, and `Protect main` requires:
+
+| Rule | Setting |
+|---|---|
+| Required approvals | at least 1 |
+| Require review from Code Owners (`require_code_owner_review`) | on: only your approval counts; one from the agents App, the AI reviewer or any other account does not |
+| Dismiss stale approvals on push (`dismiss_stale_reviews_on_push`) | on: a push after your approval needs a new one |
+| Require approval of the most recent push (`require_last_push_approval`) | on: whoever pushed last cannot approve it |
+| Bypass list | empty: no App, bot, role or token gets past the rules, Renovate's and release-please's pull requests included |
+
+Because of the last push rule, **nobody pushes to an agent's branch by hand after the switch**: a push of
+yours would need another approver, and there is none. Ask the agents for the change instead. The AI
+reviewer (milestone 4) comments and may request changes; its findings are advice you weigh, its change
+request is yours to dismiss, and it never approves.
+
+**The gate check**, `make gate-check` (`dev/protect-main-check.sh`), reads `Protect main` and
+`.github/CODEOWNERS` on `main` and prints one line per gap: fewer than 1 required approval, one of the
+three rules above off, a bypass actor, or a code owner other than you. The `release-tag` skill runs it in
+its step 2; you can run it whenever you like. Its exit status:
+
+| Exit | Means |
+|---|---|
+| 0 | The gate holds, or the transition flag is on and it only reported the gaps |
+| 1 | The gate has gaps (transition flag off): the release-tag skill stops the release |
+| 2 | It could not check: no access, or an answer it did not expect |
+
+The transition flag, `GATE_TRANSITION`, is `1` by default until milestone 3 of PRD #161 turns it off: the
+check runs with `--transition` and reports the gaps without failing, so releases go on before the switch.
+`make gate-check GATE_TRANSITION=0` checks as it will after milestone 3. GitHub returns a ruleset's
+bypass list only to a token that may change the ruleset (Administration write), which the agents App
+never gets (ADR 0031, d): run in the VM, the check says the bypass list could not be read. That part is
+yours: run the check from the host clone, logged in to `gh` as yourself, as runbook step 5 does.
+
+### The switch-over runbook
+
+Agreed with the maintainer in PRD #161. Each step ends with a check; stop at any step and the ones
+before it still hold. Rolling back is under each step.
+
+1. **Create the agents App** as [The agents App](#the-agents-app) says (Creating the App), with its key
+   and IDs in the host clone's `.envrc`. Nothing changes yet.
+   *Check:* the installation's settings page says "Only select repositories" with only this one, and its
+   permissions are exactly the table's (no Administration, Actions read).
+   *Roll back:* delete the App.
+2. **Merge milestone 1**, still opened under your `GITHUB_TOKEN`.
+   *Check:* after `git -C ~/src/shift2eu-host pull --ff-only`, `make -n agents-token` in the host clone
+   prints its commands instead of "No rule to make target".
+   *Roll back:* nothing is enforced; without a token file the VM goes on with `GITHUB_TOKEN`.
+3. **Switch the agents to the App.** Give a VM created before milestone 1 the gh wrapper
+   (`make vm-gh-wrapper`, or `make vm-delete vm-create`). From the host clone, run `make agents-token`,
+   then `make agents-token-refresh-start`; then `make vm-init` from the workspace, so the agents commit as
+   the bot, and restart the deck **between tasks**. Have an agent open a test pull request, then open
+   milestone 2's, the first the App opens, and approve and merge it.
+   *Check* on the test pull request `<n>`:
+   - `gh pr view <n> --json author --jq '.author.is_bot, .author.login'` prints `true` and
+     `app/shift2eu-agents`;
+   - `gh pr view <n> --json commits --jq '.commits[].authors[].email'` prints only
+     `<bot user id>+shift2eu-agents[bot]@users.noreply.github.com`, with the id of the bot user
+     (`gh api users/shift2eu-agents%5Bbot%5D --jq .id`), not the App ID;
+   - in the VM, each call of ADR 0031 (d)'s table works with the App token, and
+     `gh api repos/timothymamo/shift2eu/rulesets/<id> --jq '.bypass_actors'` gives `null` or `[]`: the
+     App cannot read the bypass lists;
+   - `gh api repos/timothymamo/shift2eu/commits/main --jq .commit.verification.verified` prints `true`,
+     and no ruleset holds a `required_signatures` rule.
+   *Roll back:* as [The agents App](#the-agents-app) says (Rolling back): stop the refresh, delete the
+   token and identity files in the VM, `make vm-init`.
+4. **Close out your own pull requests.** Merge or close every open pull request authored by you: once
+   step 5 is in place, with no bypass, nobody can approve one. Release-please's and Renovate's are not
+   affected.
+   *Check:* `gh pr list --state open --author timothymamo` prints nothing.
+   *Roll back:* nothing to undo.
+5. **Turn on the gate.** In the repository's settings, edit `Protect main`: 1 required approval, require
+   review from Code Owners, dismiss stale pull request approvals when new commits are pushed, require
+   approval of the most recent reviewable push. Leave the bypass list empty.
+   *Check:* from the host clone (`git -C ~/src/shift2eu-host pull --ff-only`), logged in to `gh` as
+   yourself, `make gate-check GATE_TRANSITION=0` exits 0 and prints no gap. An open agent pull request
+   shows "Review required" (`gh pr view <n> --json reviewDecision` gives `REVIEW_REQUIRED`) until you
+   approve it.
+   *Roll back:* set the required approvals in `Protect main` back to 0.
+6. **Remove your token from the VM** (milestone 3, approved and merged by you: the first change through
+   the gate): drop `GITHUB_TOKEN` from `VM_ENV` and the `.envrc` above the workspace, recreate the VM's
+   environment, then revoke that personal token on GitHub.
+   *Check:* the token no longer appears under your
+   [fine-grained tokens](https://github.com/settings/personal-access-tokens); `make vm-init`'s `gh` step
+   still passes, on the App token; and from the host clone, `make gate-check` (its transition flag now
+   off by default) exits 0.
+   *Roll back:* create a new fine-grained token and put it back in `VM_ENV` (milestone 3's revert brings
+   the fallback back).
+7. **Add the AI reviewer** (milestone 4): create the reviewer App (Pull requests write, Contents read,
+   this repository only), the `ai-review` environment (deployment branches: `main` only) and its secrets,
+   then approve and merge milestone 4.
+   *Check:* `gh api repos/timothymamo/shift2eu/environments/ai-review/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'`
+   prints only `branch main`; on the next pull request,
+   `gh api repos/timothymamo/shift2eu/pulls/<n>/reviews --jq '.[] | .user.login + " " + .state'` shows
+   the reviewer's review as `COMMENTED` or `CHANGES_REQUESTED`, never `APPROVED`, and an approval by
+   anyone but you leaves `reviewDecision` short of `APPROVED`.
+   *Roll back:* disable the review workflow; it is never a required check.
 
 ## Agent permissions
 

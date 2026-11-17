@@ -130,7 +130,11 @@ commands, never to one agent's built-in tools.
 
 Workers start with no memory of earlier tasks: everything needed is in the task text, the PRD, this file
 and the skills. The first line of every task, `Worktree: <path>`, names the worktree to work in. Workers report only to their orchestrator via `dot-agent-deck work-done`; units report
-to the dispatcher, and only the dispatcher talks to the maintainer. The single human gate is merging a PR.
+to the dispatcher, and only the dispatcher talks to the maintainer. The single human gate is the
+maintainer's approval and merge of a PR (PRD #161): no agent approves, merges an unapproved PR or enables
+auto-merge. The AI reviewer's comments and change requests are advice the maintainer weighs. After the
+switch to the agents App, nobody pushes to an agent's branch by hand: a push by the maintainer could not
+be approved (`require_last_push_approval`).
 
 ### Dispatcher
 

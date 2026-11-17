@@ -6,7 +6,13 @@ This page says who does what and how to set up the VM and open the deck.
 The project is built by a team of AI agents orchestrated with
 [dot-agent-deck](https://github.com/vfarcic/dot-agent-deck): an **orchestrator** that plans from PRDs
 and delegates to a **tester** (writes failing tests first), a **coder**, a **reviewer**, a security
-**auditor** and a **releaser** that opens and verifies pull requests. The only human gate is the merge.
+**auditor** and a **releaser** that opens and verifies pull requests. The only human gate is the
+maintainer's approval and merge: `Protect main` requires a code owner's approval, and
+`.github/CODEOWNERS` names only the maintainer, so no agent, App or bot can land a change alone (PRD #161).
+The AI reviewer's comments and change requests are advice the maintainer weighs, never a substitute for
+their review. After the switch to the agents App, nobody pushes to an agent's branch by hand: a push by
+the maintainer could not be approved (the last push needs someone else's approval). Ask the agents for
+the change instead ([docs/dev-environment.md](../dev-environment.md#the-gate)).
 
 The tester runs [pi](https://pi.dev) on DeepSeek V4.1 Flash; every other role runs Claude Code. Tests and
 the code they check come from different model families, so one model's blind spots are less likely to

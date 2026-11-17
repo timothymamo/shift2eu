@@ -11,6 +11,9 @@
   timezone: 'Europe/Amsterdam',
   schedule: ['* 0 * * *'],
   labels: ['dependencies'],
+  // Never automerge: Renovate's pull requests need the maintainer's approval like any other, and get no
+  // bypass of Protect main (PRD #161).
+  automerge: false,
   // The gomod manager finds go.mod and tools/go.mod, actionlint's module of its own (ADR 0022), by its
   // default file pattern; gomodTidy tidies each in its own directory.
   postUpdateOptions: ['gomodTidy'],
