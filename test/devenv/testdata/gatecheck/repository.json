@@ -1,0 +1,32 @@
+{
+  "id": 700000001,
+  "node_id": "R_kgDOKeEp0Y",
+  "name": "shift2eu",
+  "full_name": "timothymamo/shift2eu",
+  "private": false,
+  "owner": {
+    "login": "timothymamo",
+    "id": 30000001,
+    "type": "User",
+    "site_admin": false
+  },
+  "html_url": "https://github.com/timothymamo/shift2eu",
+  "description": "Reports what can move from a hyperscaler to an EU cloud provider.",
+  "fork": false,
+  "url": "https://api.github.com/repos/timothymamo/shift2eu",
+  "default_branch": "main",
+  "visibility": "public",
+  "archived": false,
+  "disabled": false,
+  "permissions": {
+    "admin": true,
+    "maintain": true,
+    "push": true,
+    "triage": true,
+    "pull": true
+  },
+  "allow_squash_merge": true,
+  "allow_merge_commit": false,
+  "allow_rebase_merge": false,
+  "delete_branch_on_merge": true
+}

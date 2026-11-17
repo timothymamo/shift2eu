@@ -1,10 +1,16 @@
-// Pins the Protect main gate check (PRD #161 milestone 2). dev/protect-main-check.sh reads the `Protect main`
-// ruleset and .github/CODEOWNERS on main through gh's read-only API, prints one `ok:` or `gap:` line per
-// check, fails closed (exit 1) once the switch-over is done and reports without failing (exit 0, a line about
-// the transition holding the number of gaps) before it, and exits 2 whenever it cannot make the checks at
-// all. The recorded answers are GitHub's documented REST shapes with invented identifiers, in
-// testdata/gatecheck/; a fake gh on PATH serves them and records its argv, so no test reaches the network or
-// an account and every call the script makes is pinned.
+// Pins the Protect main gate check (PRD #161 milestone 2). dev/protect-main-check.sh reads the repository,
+// the `Protect main` ruleset and .github/CODEOWNERS on main (with GitHub's CODEOWNERS errors for it) through
+// gh's read-only API, prints one line per check of three kinds - `ok: ...`, `gap: ...` and `unverified: ...` -
+// and fails closed once the switch-over is done. The `unverified:` kind is for what only the maintainer's own
+// token may read: an installation token cannot see the ruleset's bypass list, so an empty one proves nothing.
+// Before the switch-over --transition reports the gaps and the unverified lines without failing the release,
+// and it is honoured only while the gate was never turned on. It exits 2 whenever it cannot make the checks at
+// all.
+//
+// The recorded answers are GitHub's documented REST shapes with invented identifiers, in
+// testdata/gatecheck/; a fake gh on PATH serves them, refuses any endpoint that is not the pinned repository
+// and records its argv, so no test reaches the network or an account and every call the script makes is
+// pinned.
 package devenv_test
 
 import (
@@ -37,18 +43,101 @@ const (
 	gateMaintainer = "@timothymamo"
 )
 
-// gateEndpoints are the three reads the gate check makes, in the order its contract lists them. gh fills the
-// placeholders, so the fake gh sees them as they are.
+// gateEndpoints are the five reads the gate check makes, in the order its contract lists them: the rulesets
+// list (paginated), the Protect main ruleset, the repository - whose .permissions.admin says whether this
+// token may read the ruleset's bypass list at all - the CODEOWNERS file on main, and GitHub's CODEOWNERS
+// errors for that file.
 var gateEndpoints = []string{
-	"repos/{owner}/{repo}/rulesets",
-	"repos/{owner}/{repo}/rulesets/" + gateRulesetID,
-	"repos/{owner}/{repo}/contents/.github/CODEOWNERS?ref=main",
+	gateListEndpoint,
+	gateRulesetEndpoint,
+	gateRepositoryEndpoint,
+	gateCodeownersEndpoint,
+	gateErrorsEndpoint,
+}
+
+const (
+	// gateRepositoryEndpoint is the repository the check must mean, spelled out: gh fills {owner} and {repo}
+	// from the checkout's remote, so a placeholder would let a fork's remote, another remote or GH_REPO decide
+	// what is checked.
+	gateRepositoryEndpoint = "repos/timothymamo/shift2eu"
+
+	gateListEndpoint       = gateRepositoryEndpoint + "/rulesets"
+	gateRulesetEndpoint    = gateListEndpoint + "/" + gateRulesetID
+	gateCodeownersEndpoint = gateRepositoryEndpoint + "/contents/.github/CODEOWNERS?ref=main"
+	gateErrorsEndpoint     = gateRepositoryEndpoint + "/codeowners/errors?ref=main"
+)
+
+// The lines the gate check prints on a repository whose gate is complete, read with the maintainer's own
+// token, in the order its contract prints them. The transition lines come last, and only when they apply.
+const (
+	okEnforced             = "ok: Protect main is enforced"
+	okTargetsBranches      = "ok: Protect main targets branches"
+	okIncludesMain         = "ok: Protect main includes main"
+	okDoesNotExcludeMain   = "ok: Protect main does not exclude main"
+	okRequiresPullRequest  = "ok: Protect main requires a pull request"
+	okApprovals            = "ok: required_approving_review_count is at least 1"
+	okCodeOwnerReview      = "ok: require_code_owner_review is true"
+	okDismissStale         = "ok: dismiss_stale_reviews_on_push is true"
+	okLastPushApproval     = "ok: require_last_push_approval is true"
+	okBypassEmpty          = "ok: bypass_actors is empty"
+	okCannotOverride       = "ok: this token cannot bypass Protect main"
+	okCodeownersRules      = "ok: CODEOWNERS on main has at least one rule"
+	okCodeownersStar       = "ok: CODEOWNERS on main has a * rule"
+	okCodeownersOwners     = "ok: every CODEOWNERS rule has an owner"
+	okCodeownersMaintainer = "ok: every CODEOWNERS owner is @timothymamo"
+	okCodeownersNoErrors   = "ok: GitHub reports no CODEOWNERS errors on main"
+)
+
+// The lines today's ruleset changes, one gap each.
+const (
+	gapApprovals       = "gap: required_approving_review_count is 0, want at least 1"
+	gapCodeOwnerReview = "gap: require_code_owner_review is false"
+	gapDismissStale    = "gap: dismiss_stale_reviews_on_push is false"
+	gapLastPush        = "gap: require_last_push_approval is false"
+)
+
+// unverifiedActors is the one line a token that is not a repository admin gets in place of the bypass check:
+// an empty bypass list proves nothing when the token could not have read a non-empty one.
+const unverifiedActors = "unverified: bypass_actors cannot be verified with this token (not a repository admin): run make gate-check as the maintainer"
+
+// transitionIgnored is the line --transition adds once the gate is on, where it changes nothing.
+const transitionIgnored = "transition: ignored, the gate is on"
+
+// reportPrefixes are the only prefixes a line of the report may start with.
+var reportPrefixes = []string{"ok: ", "gap: ", "unverified: ", "transition: "}
+
+// gateOkLines is the report of a gate that is complete in every respect but nothing else, in contract order.
+func gateOkLines() []string {
+	return []string{
+		okEnforced,
+		okTargetsBranches,
+		okIncludesMain,
+		okDoesNotExcludeMain,
+		okRequiresPullRequest,
+		okApprovals,
+		okCodeOwnerReview,
+		okDismissStale,
+		okLastPushApproval,
+		okBypassEmpty,
+		okCannotOverride,
+		okCodeownersRules,
+		okCodeownersStar,
+		okCodeownersOwners,
+		okCodeownersMaintainer,
+		okCodeownersNoErrors,
+	}
+}
+
+// transitionNotFailing is the line --transition adds before the switch-over, naming both counts it reports
+// without failing the release.
+func transitionNotFailing(gaps, unverified int) string {
+	return fmt.Sprintf("transition: gaps=%d, unverified=%d, not failing the release", gaps, unverified)
 }
 
 // gateFakeGH stands in for gh in the gate check's tests: it records its argv the way the sandbox's other
-// shims do, finds the endpoint among its arguments (gh api allows flags on either side of it) and answers with
-// the recorded file the endpoint names. A file the test did not write is the API's failure, which gh reports
-// as a non-zero exit.
+// shims do, finds the endpoint among its arguments (gh api allows flags on either side of it), refuses one
+// that is not the pinned repository and answers with the recorded file the endpoint names. A file the test
+// did not write is the API's failure, which gh reports as a non-zero exit.
 const gateFakeGH = `#!/bin/sh
 # Serves the recorded answers of testdata/gatecheck/ to the gate check.
 {
@@ -56,6 +145,7 @@ const gateFakeGH = `#!/bin/sh
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
 serve="${SHIFT2EU_TEST_GH_SERVE:?set SHIFT2EU_TEST_GH_SERVE}"
+pinned='repos/timothymamo/shift2eu'
 endpoint=""
 for a in "$@"; do
   case "$a" in
@@ -70,9 +160,33 @@ if [ -z "${endpoint}" ]; then
   exit 64
 fi
 case "${endpoint}" in
-*"/contents/.github/CODEOWNERS?ref=main") file="${serve}/codeowners.json" ;;
-*"/rulesets/"*) file="${serve}/ruleset-${endpoint##*/}.json" ;;
-*"/rulesets") file="${serve}/rulesets.json" ;;
+"${pinned}")
+  rest=""
+  ;;
+"${pinned}"/*)
+  rest="${endpoint#"${pinned}"}"
+  ;;
+*)
+  echo "fake gh: the gate check reads ${endpoint}, which is not the pinned repository ${pinned}: a placeholder endpoint lets a fork or GH_REPO decide what is checked" >&2
+  exit 64
+  ;;
+esac
+case "${rest}" in
+'')
+  file="${serve}/repository.json"
+  ;;
+/rulesets)
+  file="${serve}/rulesets.json"
+  ;;
+/rulesets/*)
+  file="${serve}/ruleset-${rest##*/}.json"
+  ;;
+'/contents/.github/CODEOWNERS?ref=main')
+  file="${serve}/codeowners.json"
+  ;;
+'/codeowners/errors?ref=main')
+  file="${serve}/codeowners-errors.json"
+  ;;
 *)
   echo "fake gh: the gate check reads the unexpected endpoint ${endpoint}" >&2
   exit 64
@@ -153,17 +267,35 @@ func outputLines(stdout string) []string {
 	return strings.Split(trimmed, "\n")
 }
 
-// gapLines returns the gap: lines of a run's stdout, in the order it printed them.
-func gapLines(stdout string) []string {
-	var gaps []string
+// linesWithPrefix returns the lines of a run's stdout that start with prefix, in the order it printed them.
+func linesWithPrefix(stdout, prefix string) []string {
+	var lines []string
 
 	for _, line := range outputLines(stdout) {
-		if strings.HasPrefix(line, "gap: ") {
-			gaps = append(gaps, line)
+		if strings.HasPrefix(line, prefix) {
+			lines = append(lines, line)
 		}
 	}
 
-	return gaps
+	return lines
+}
+
+// gapLines returns the gap: lines of a run's stdout, in the order it printed them.
+func gapLines(stdout string) []string {
+	return linesWithPrefix(stdout, "gap: ")
+}
+
+// assertReport fails unless run printed exactly want on stdout and nothing on stderr.
+func assertReport(t *testing.T, want []string, stdout, stderr string) {
+	t.Helper()
+
+	if diff := cmp.Diff(want, outputLines(stdout)); diff != "" {
+		t.Errorf("the gate check printed unexpected lines (-want +got):\n%s", diff)
+	}
+
+	if stderr != "" {
+		t.Errorf("the gate check writes to stderr when it can make every check; its report is stdout: %s", stderr)
+	}
 }
 
 // serveJSON writes one answer of the fake API, under the file name the fake gh serves for its endpoint.
@@ -183,6 +315,16 @@ func (f *gateFixture) serveRaw(t *testing.T, name, body string) {
 	t.Helper()
 
 	writeFileMode(t, filepath.Join(f.serve, name), []byte(body), 0o600)
+}
+
+// unserve removes one recorded answer, which is the API failing that one read: the fake gh reports it the way
+// gh reports a 404.
+func (f *gateFixture) unserve(t *testing.T, name string) {
+	t.Helper()
+
+	if err := os.Remove(filepath.Join(f.serve, name)); err != nil {
+		t.Fatalf("remove the fake API's %s answer: %v", name, err)
+	}
 }
 
 // readGateFixture decodes a recorded answer of testdata/gatecheck.
@@ -240,6 +382,60 @@ func (f *gateFixture) serveRuleset(t *testing.T, ruleset map[string]any) {
 	f.serveJSON(t, "ruleset-"+gateRulesetID+".json", ruleset)
 }
 
+// serveRulesetWith writes the switched-over ruleset as the answer of the ruleset endpoint, with change applied
+// to it: one case changes the one field it pins.
+func (f *gateFixture) serveRulesetWith(t *testing.T, change func(t *testing.T, ruleset map[string]any)) {
+	t.Helper()
+
+	ruleset := readGateRuleset(t, "ruleset-switched-over.json")
+	change(t, ruleset)
+	f.serveRuleset(t, ruleset)
+}
+
+// recordedRepository returns the recorded answer of the repository endpoint.
+func recordedRepository(t *testing.T) map[string]any {
+	t.Helper()
+
+	repository, ok := readGateFixture(t, "repository.json").(map[string]any)
+	if !ok {
+		t.Fatalf("%s/repository.json is not an object: gh api answers the repository with one", gateFixtureDir)
+	}
+
+	return repository
+}
+
+// serveRepository writes the answer of the repository endpoint: the recorded one, which is the maintainer's
+// own token with repository administration (admin), or the same answer without its permissions object, which
+// is one of the two shapes an App installation token's answer takes.
+func (f *gateFixture) serveRepository(t *testing.T, admin bool) {
+	t.Helper()
+
+	repository := recordedRepository(t)
+	if !admin {
+		delete(repository, "permissions")
+	}
+
+	f.serveJSON(t, "repository.json", repository)
+}
+
+// serveRepositoryWithoutAdmin writes the repository endpoint's answer for an installation token whose
+// permissions object is there but says admin false, which is the other shape its answer takes. Both leave the
+// ruleset's bypass list unreadable.
+func (f *gateFixture) serveRepositoryWithoutAdmin(t *testing.T) {
+	t.Helper()
+
+	repository := recordedRepository(t)
+	repository["permissions"] = map[string]any{
+		"admin":    false,
+		"maintain": false,
+		"push":     true,
+		"triage":   true,
+		"pull":     true,
+	}
+
+	f.serveJSON(t, "repository.json", repository)
+}
+
 // serveCodeowners writes the answer of the contents endpoint for a CODEOWNERS file holding content: base64
 // encoded and wrapped over several lines, as GitHub answers it.
 func (f *gateFixture) serveCodeowners(t *testing.T, content string) {
@@ -274,14 +470,53 @@ func (f *gateFixture) serveRecordedCodeowners(t *testing.T) {
 	f.serveJSON(t, "codeowners.json", readGateFixture(t, "codeowners.json"))
 }
 
-// serveSwitchedOver makes the fake API answer as a repository whose gate is complete: the recorded rulesets
-// list, the recorded switched-over ruleset and the recorded CODEOWNERS file.
+// serveCodeownersErrors writes the answer of the codeowners/errors endpoint: GitHub's report on the CODEOWNERS
+// file on main, empty when the file is valid.
+func (f *gateFixture) serveCodeownersErrors(t *testing.T, errs []any) {
+	t.Helper()
+
+	f.serveJSON(t, "codeowners-errors.json", map[string]any{"errors": errs})
+}
+
+// serveNoCodeownersErrors writes the recorded answer of the codeowners/errors endpoint, which holds no errors.
+func (f *gateFixture) serveNoCodeownersErrors(t *testing.T) {
+	t.Helper()
+
+	f.serveJSON(t, "codeowners-errors.json", readGateFixture(t, "codeowners-errors.json"))
+}
+
+// serveSwitchedOver produces the answers of a repository whose gate is complete: the recorded rulesets list,
+// the recorded switched-over ruleset and the recorded CODEOWNERS file. The token's answers are not part of it:
+// serveSwitchedOverAs adds them.
 func (f *gateFixture) serveSwitchedOver(t *testing.T) {
 	t.Helper()
 
 	f.serveRulesetList(t, readGateRulesetList(t))
 	f.serveRuleset(t, readGateRuleset(t, "ruleset-switched-over.json"))
 	f.serveRecordedCodeowners(t)
+}
+
+// serveSwitchedOverAs writes every answer of a repository whose gate is complete, read by the maintainer's own
+// token (admin) or by an App installation token (not admin).
+func (f *gateFixture) serveSwitchedOverAs(t *testing.T, admin bool) {
+	t.Helper()
+
+	f.serveSwitchedOver(t)
+	f.serveRepository(t, admin)
+	f.serveNoCodeownersErrors(t)
+}
+
+// serveTodayAs writes every answer of today's repository: the recorded rulesets list, the recorded today
+// ruleset and the recorded CODEOWNERS file, read by the maintainer's own token (admin) or by an App
+// installation token (not admin).
+func (f *gateFixture) serveTodayAs(t *testing.T, admin bool) {
+	t.Helper()
+
+	f.serveRulesetList(t, readGateRulesetList(t))
+	f.serveRuleset(t, readGateRuleset(t, "ruleset-today.json"))
+	f.serveRecordedCodeowners(t)
+	f.serveRepository(t, admin)
+	f.serveNoCodeownersErrors(t)
 }
 
 // pullRequestParameters returns the parameters of a ruleset's pull_request rule, for a case that changes one
@@ -303,6 +538,23 @@ func pullRequestParameters(t *testing.T, ruleset map[string]any) map[string]any 
 	t.Fatalf("the fixture ruleset holds no pull_request rule")
 
 	return nil
+}
+
+// refNameConditions returns a ruleset's conditions.ref_name object, which says which refs it targets.
+func refNameConditions(t *testing.T, ruleset map[string]any) map[string]any {
+	t.Helper()
+
+	conditions, ok := ruleset["conditions"].(map[string]any)
+	if !ok {
+		t.Fatalf("the fixture ruleset holds no conditions object: %v", ruleset["conditions"])
+	}
+
+	refName, ok := conditions["ref_name"].(map[string]any)
+	if !ok {
+		t.Fatalf("the fixture ruleset's conditions hold no ref_name object: %v", conditions["ref_name"])
+	}
+
+	return refName
 }
 
 // rulesOf returns a ruleset's rules.
@@ -345,33 +597,25 @@ func withoutRule(t *testing.T, ruleset map[string]any, ruleType string) map[stri
 	return ruleset
 }
 
-// gateSwitchedOverStdout is what the gate check prints on a repository whose gate is complete: every check
-// holds, one ok: line each.
-func gateSwitchedOverStdout() []string {
-	return []string{
-		"ok: Protect main is enforced",
-		"ok: Protect main requires a pull request",
-		"ok: required_approving_review_count is at least 1",
-		"ok: require_code_owner_review is true",
-		"ok: dismiss_stale_reviews_on_push is true",
-		"ok: require_last_push_approval is true",
-		"ok: bypass_actors is empty",
-		"ok: CODEOWNERS on main has at least one rule",
-		"ok: CODEOWNERS on main has a * rule",
-		"ok: every CODEOWNERS rule has an owner",
-		"ok: every CODEOWNERS owner is @timothymamo",
-	}
-}
-
 func TestProtectMainCheckPassesOnASwitchedOverRepository(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name string
 		args []string
+		want []string
 	}{
-		{name: "fails closed and passes when nothing is a gap"},
-		{name: "with --transition, which changes nothing when nothing is a gap", args: []string{"--transition"}},
+		{
+			name: "fails closed and passes when nothing is a gap",
+			want: gateOkLines(),
+		},
+		{
+			// The gate is on, so --transition can no longer hold anything back: the check says so and passes,
+			// because there is nothing to hold back either.
+			name: "with --transition, which the gate's own state has already switched off",
+			args: []string{"--transition"},
+			want: slices.Concat(gateOkLines(), []string{transitionIgnored}),
+		},
 	}
 
 	for _, tc := range cases {
@@ -379,21 +623,91 @@ func TestProtectMainCheckPassesOnASwitchedOverRepository(t *testing.T) {
 			t.Parallel()
 
 			f := newGateFixture(t)
-			f.serveSwitchedOver(t)
+			f.serveSwitchedOverAs(t, true)
 
 			stdout, stderr, status := f.run(t, tc.args...)
 
 			if status != 0 {
-				t.Fatalf("the gate check exited %d on a switched-over repository, want 0: no check is a gap\nstdout: %s\nstderr: %s", status, stdout, stderr)
+				t.Fatalf("the gate check exited %d on a switched-over repository, want 0: no check is a gap and none is unverified\nstdout: %s\nstderr: %s", status, stdout, stderr)
 			}
 
-			if diff := cmp.Diff(gateSwitchedOverStdout(), outputLines(stdout)); diff != "" {
-				t.Errorf("the gate check printed unexpected lines (-want +got):\n%s", diff)
+			assertReport(t, tc.want, stdout, stderr)
+		})
+	}
+}
+
+// TestProtectMainCheckCannotVerifyTheBypassListWithoutAnAdminToken pins the third kind of line: an installation
+// token's repository answer holds no permissions object, so the token may not read the ruleset's bypass list,
+// and an empty list proves nothing. It is not a gap - the token says nothing about the repository - but it is
+// no passing check either, so the check exits 3 without --transition and still 3 once the gate is on.
+func TestProtectMainCheckCannotVerifyTheBypassListWithoutAnAdminToken(t *testing.T) {
+	t.Parallel()
+
+	// Every other check holds; only the bypass list cannot be verified with this token.
+	want := slices.Concat(gateOkLines()[:9], []string{unverifiedActors}, gateOkLines()[10:])
+
+	// An installation token's answer takes one of two shapes, and neither proves the token may administer the
+	// repository: one with no permissions object at all, one whose admin is false.
+	noPermissions := func(t *testing.T, f *gateFixture) {
+		t.Helper()
+
+		f.serveSwitchedOver(t)
+		f.serveRepository(t, false)
+		f.serveNoCodeownersErrors(t)
+	}
+
+	notAdmin := func(t *testing.T, f *gateFixture) {
+		t.Helper()
+
+		f.serveSwitchedOver(t)
+		f.serveRepositoryWithoutAdmin(t)
+		f.serveNoCodeownersErrors(t)
+	}
+
+	cases := []struct {
+		name       string
+		prepare    func(t *testing.T, f *gateFixture)
+		args       []string
+		wantStatus int
+		want       []string
+	}{
+		{
+			name:       "the answer holds no permissions object",
+			prepare:    noPermissions,
+			wantStatus: 3,
+			want:       want,
+		},
+		{
+			name:       "the answer's permissions say admin false",
+			prepare:    notAdmin,
+			wantStatus: 3,
+			want:       want,
+		},
+		{
+			// The gate is on, so --transition is ignored: an unverified check is still no passing check.
+			name:       "with --transition once the gate is on",
+			prepare:    noPermissions,
+			args:       []string{"--transition"},
+			wantStatus: 3,
+			want:       slices.Concat(want, []string{transitionIgnored}),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newGateFixture(t)
+			tc.prepare(t, f)
+
+			stdout, stderr, status := f.run(t, tc.args...)
+
+			if status != tc.wantStatus {
+				t.Fatalf("the gate check exited %d on a switched-over repository it cannot fully verify, want %d\nstdout: %s\nstderr: %s",
+					status, tc.wantStatus, stdout, stderr)
 			}
 
-			if stderr != "" {
-				t.Errorf("the gate check writes to stderr although every check holds; its report is stdout: %s", stderr)
-			}
+			assertReport(t, tc.want, stdout, stderr)
 		})
 	}
 }
@@ -402,31 +716,61 @@ func TestProtectMainCheckReportsTodaysGaps(t *testing.T) {
 	t.Parallel()
 
 	// Today's ruleset: no required approval, none of the three review rules, no bypass actor, and a CODEOWNERS
-	// file that is already complete. Four gaps.
-	wantStdout := []string{
-		"ok: Protect main is enforced",
-		"ok: Protect main requires a pull request",
-		"gap: required_approving_review_count is 0, want at least 1",
-		"gap: require_code_owner_review is false",
-		"gap: dismiss_stale_reviews_on_push is false",
-		"gap: require_last_push_approval is false",
-		"ok: bypass_actors is empty",
-		"ok: CODEOWNERS on main has at least one rule",
-		"ok: CODEOWNERS on main has a * rule",
-		"ok: every CODEOWNERS rule has an owner",
-		"ok: every CODEOWNERS owner is @timothymamo",
+	// file that is already complete. Four gaps, and - read with the maintainer's own token - no unverified line.
+	wantAdmin := []string{
+		okEnforced,
+		okTargetsBranches,
+		okIncludesMain,
+		okDoesNotExcludeMain,
+		okRequiresPullRequest,
+		gapApprovals,
+		gapCodeOwnerReview,
+		gapDismissStale,
+		gapLastPush,
+		okBypassEmpty,
+		okCannotOverride,
+		okCodeownersRules,
+		okCodeownersStar,
+		okCodeownersOwners,
+		okCodeownersMaintainer,
+		okCodeownersNoErrors,
 	}
 
-	// The line the transition flag adds, holding the number of gaps it reports without failing.
-	transition := "transition: gaps=4, not failing the release"
+	// An installation token gets the unverified line in place of the bypass check: one more thing it cannot
+	// establish, and no gap either way.
+	wantApp := slices.Concat(wantAdmin[:9], []string{unverifiedActors}, wantAdmin[10:])
 
 	cases := []struct {
 		name       string
+		admin      bool
 		args       []string
 		wantStatus int
+		want       []string
 	}{
-		{name: "before the switch-over a gap fails the check", wantStatus: 1},
-		{name: "with --transition it reports the gaps and passes", args: []string{"--transition"}, wantStatus: 0},
+		{
+			name:       "before the switch-over a gap fails the check",
+			admin:      true,
+			wantStatus: 1,
+			want:       wantAdmin,
+		},
+		{
+			name:       "with --transition it reports the gaps and passes",
+			admin:      true,
+			args:       []string{"--transition"},
+			wantStatus: 0,
+			want:       slices.Concat(wantAdmin, []string{transitionNotFailing(4, 0)}),
+		},
+		{
+			name:       "an App installation token's gaps fail it too",
+			wantStatus: 1,
+			want:       wantApp,
+		},
+		{
+			name:       "with --transition it reports the gaps and the unverified line, and passes",
+			args:       []string{"--transition"},
+			wantStatus: 0,
+			want:       slices.Concat(wantApp, []string{transitionNotFailing(4, 1)}),
+		},
 	}
 
 	for _, tc := range cases {
@@ -434,9 +778,7 @@ func TestProtectMainCheckReportsTodaysGaps(t *testing.T) {
 			t.Parallel()
 
 			f := newGateFixture(t)
-			f.serveRulesetList(t, readGateRulesetList(t))
-			f.serveRuleset(t, readGateRuleset(t, "ruleset-today.json"))
-			f.serveRecordedCodeowners(t)
+			f.serveTodayAs(t, tc.admin)
 
 			stdout, stderr, status := f.run(t, tc.args...)
 
@@ -444,26 +786,125 @@ func TestProtectMainCheckReportsTodaysGaps(t *testing.T) {
 				t.Fatalf("the gate check exited %d on today's ruleset, want %d\nstdout: %s\nstderr: %s", status, tc.wantStatus, stdout, stderr)
 			}
 
-			want := wantStdout
-			if tc.wantStatus == 0 {
-				want = slices.Concat(wantStdout, []string{transition})
-			}
+			assertReport(t, tc.want, stdout, stderr)
 
-			if diff := cmp.Diff(want, outputLines(stdout)); diff != "" {
-				t.Errorf("the gate check printed unexpected lines (-want +got):\n%s", diff)
-			}
-
-			if diff := cmp.Diff(wantStdout[2:6], gapLines(stdout)); diff != "" {
+			if diff := cmp.Diff([]string{gapApprovals, gapCodeOwnerReview, gapDismissStale, gapLastPush}, gapLines(stdout)); diff != "" {
 				t.Errorf("the four gaps of today's ruleset, and no other, are what a maintainer must close (-want +got):\n%s", diff)
 			}
 		})
 	}
 }
 
+// TestProtectMainCheckIgnoresTheTransitionOnceTheGateIsOn pins the self-closing transition flag: once one
+// approval is required or code owner review is on, the switch-over has happened and the gaps fail the check
+// whatever the Makefile passes.
+func TestProtectMainCheckIgnoresTheTransitionOnceTheGateIsOn(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		change func(t *testing.T, ruleset map[string]any)
+	}{
+		{
+			name: "one approval required",
+			change: func(t *testing.T, ruleset map[string]any) {
+				t.Helper()
+
+				pullRequestParameters(t, ruleset)["require_last_push_approval"] = false
+			},
+		},
+		{
+			name: "code owner review on",
+			change: func(t *testing.T, ruleset map[string]any) {
+				t.Helper()
+
+				pullRequestParameters(t, ruleset)["required_approving_review_count"] = float64(0)
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newGateFixture(t)
+			f.serveSwitchedOverAs(t, true)
+			f.serveRulesetWith(t, tc.change)
+
+			stdout, stderr, status := f.run(t, "--transition")
+
+			if status != 1 {
+				t.Fatalf("the gate check exited %d with --transition and the gate already on (%s), want 1: the flag changes nothing there\nstdout: %s\nstderr: %s",
+					status, tc.name, stdout, stderr)
+			}
+
+			if last := outputLines(stdout); len(last) == 0 || last[len(last)-1] != transitionIgnored {
+				t.Errorf("the last line of the report is not %q, so the maintainer cannot tell that --transition was ignored:\n%s", transitionIgnored, stdout)
+			}
+
+			if gaps := gapLines(stdout); len(gaps) != 1 {
+				t.Errorf("the gate check reported %d gaps, want 1 (%s):\n%s", len(gaps), tc.name, strings.Join(gaps, "\n"))
+			}
+		})
+	}
+}
+
+// TestProtectMainCheckReportsAVisibleBypassActorWhateverTheToken pins that a bypass actor that can be read is a
+// gap even for a token that may not read the list: a visible bypass actor skips every rule of the ruleset.
+func TestProtectMainCheckReportsAVisibleBypassActorWhateverTheToken(t *testing.T) {
+	t.Parallel()
+
+	bypass := func(t *testing.T, ruleset map[string]any) {
+		t.Helper()
+
+		ruleset["bypass_actors"] = []any{map[string]any{
+			"actor_id":    float64(67890),
+			"actor_type":  "Team",
+			"bypass_mode": "always",
+		}}
+	}
+
+	cases := []struct {
+		name  string
+		admin bool
+	}{
+		{name: "with the maintainer's own token", admin: true},
+		{name: "with an App installation token"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newGateFixture(t)
+			f.serveSwitchedOverAs(t, tc.admin)
+			f.serveRulesetWith(t, bypass)
+
+			stdout, stderr, status := f.run(t)
+
+			if status != 1 {
+				t.Fatalf("the gate check exited %d with a bypass actor, want 1: a visible bypass actor is a gap\nstdout: %s\nstderr: %s", status, stdout, stderr)
+			}
+
+			want := []string{"gap: bypass_actors is not empty: Team 67890 (always)"}
+			if diff := cmp.Diff(want, gapLines(stdout)); diff != "" {
+				t.Errorf("the gate check reported other gaps than the bypass actor (-want +got):\n%s", diff)
+			}
+
+			if unverified := linesWithPrefix(stdout, "unverified: "); len(unverified) != 0 {
+				t.Errorf("the gate check reported %s as unverified although it read it:\n%s", strings.Join(unverified, ", "), stdout)
+			}
+		})
+	}
+}
+
 // TestProtectMainCheckReportsEachGapOnItsOwn pins one gap at a time, so a check that silently passes a gap, or
-// reports it as another, fails on its own case.
+// reports it as another, fails on its own case. Every case runs with the maintainer's own token, so no case is
+// unverified instead.
 func TestProtectMainCheckReportsEachGapOnItsOwn(t *testing.T) {
 	t.Parallel()
+
+	gapActor := "gap: bypass_actors is not empty: Team 67890 (always)"
 
 	cases := []struct {
 		name    string
@@ -475,81 +916,189 @@ func TestProtectMainCheckReportsEachGapOnItsOwn(t *testing.T) {
 			prepare: func(t *testing.T, f *gateFixture) {
 				t.Helper()
 
-				ruleset := readGateRuleset(t, "ruleset-switched-over.json")
-				pullRequestParameters(t, ruleset)["required_approving_review_count"] = float64(0)
-				f.serveRuleset(t, ruleset)
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					pullRequestParameters(t, ruleset)["required_approving_review_count"] = float64(0)
+				})
 			},
-			wantGap: []string{"gap: required_approving_review_count is 0, want at least 1"},
+			wantGap: []string{gapApprovals},
 		},
 		{
 			name: "require_code_owner_review false",
 			prepare: func(t *testing.T, f *gateFixture) {
 				t.Helper()
 
-				ruleset := readGateRuleset(t, "ruleset-switched-over.json")
-				pullRequestParameters(t, ruleset)["require_code_owner_review"] = false
-				f.serveRuleset(t, ruleset)
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					pullRequestParameters(t, ruleset)["require_code_owner_review"] = false
+				})
 			},
-			wantGap: []string{"gap: require_code_owner_review is false"},
+			wantGap: []string{gapCodeOwnerReview},
 		},
 		{
 			name: "dismiss_stale_reviews_on_push false",
 			prepare: func(t *testing.T, f *gateFixture) {
 				t.Helper()
 
-				ruleset := readGateRuleset(t, "ruleset-switched-over.json")
-				pullRequestParameters(t, ruleset)["dismiss_stale_reviews_on_push"] = false
-				f.serveRuleset(t, ruleset)
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					pullRequestParameters(t, ruleset)["dismiss_stale_reviews_on_push"] = false
+				})
 			},
-			wantGap: []string{"gap: dismiss_stale_reviews_on_push is false"},
+			wantGap: []string{gapDismissStale},
 		},
 		{
 			name: "require_last_push_approval false",
 			prepare: func(t *testing.T, f *gateFixture) {
 				t.Helper()
 
-				ruleset := readGateRuleset(t, "ruleset-switched-over.json")
-				pullRequestParameters(t, ruleset)["require_last_push_approval"] = false
-				f.serveRuleset(t, ruleset)
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					pullRequestParameters(t, ruleset)["require_last_push_approval"] = false
+				})
 			},
-			wantGap: []string{"gap: require_last_push_approval is false"},
+			wantGap: []string{gapLastPush},
 		},
 		{
 			name: "a bypass actor",
 			prepare: func(t *testing.T, f *gateFixture) {
 				t.Helper()
 
-				ruleset := readGateRuleset(t, "ruleset-switched-over.json")
-				ruleset["bypass_actors"] = []any{map[string]any{
-					"actor_id":    float64(67890),
-					"actor_type":  "Team",
-					"bypass_mode": "always",
-				}}
-				f.serveRuleset(t, ruleset)
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					ruleset["bypass_actors"] = []any{map[string]any{
+						"actor_id":    float64(67890),
+						"actor_type":  "Team",
+						"bypass_mode": "always",
+					}}
+				})
 			},
-			wantGap: []string{"gap: bypass_actors is not empty: Team 67890 (always)"},
+			wantGap: []string{gapActor},
 		},
 		{
-			// A token without Administration read gets the ruleset without its bypass list, so a missing list
-			// is not a complete one: the maintainer must make this check.
-			name: "no bypass_actors field",
+			// The maintainer's own token reads the list, so a missing one is not a token limitation: it is a
+			// ruleset without the field, which a maintainer must not leave unchecked.
+			name: "no bypass_actors field with the maintainer's own token",
 			prepare: func(t *testing.T, f *gateFixture) {
 				t.Helper()
 
-				ruleset := readGateRuleset(t, "ruleset-switched-over.json")
-				delete(ruleset, "bypass_actors")
-				f.serveRuleset(t, ruleset)
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					delete(ruleset, "bypass_actors")
+				})
 			},
-			wantGap: []string{"gap: bypass_actors could not be read: the token cannot read the ruleset's bypass list, so run make gate-check as the maintainer"},
+			wantGap: []string{"gap: bypass_actors is missing although this token is a repository admin"},
+		},
+		{
+			// Any token reads current_user_can_bypass: if this one may bypass the ruleset, every other rule of
+			// it is worth nothing.
+			name: "this token can bypass Protect main",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					ruleset["current_user_can_bypass"] = "always"
+				})
+			},
+			wantGap: []string{"gap: this token can bypass Protect main: current_user_can_bypass is always"},
+		},
+		{
+			name: "no current_user_can_bypass field",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					delete(ruleset, "current_user_can_bypass")
+				})
+			},
+			wantGap: []string{"gap: this token can bypass Protect main: current_user_can_bypass is missing"},
+		},
+		{
+			// A ruleset that targets tags protects no branch at all.
+			name: "a ruleset that targets tags",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					ruleset["target"] = "tag"
+				})
+			},
+			wantGap: []string{"gap: Protect main targets tag, not branches"},
+		},
+		{
+			name: "no target field",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					delete(ruleset, "target")
+				})
+			},
+			wantGap: []string{"gap: Protect main targets missing, not branches"},
+		},
+		{
+			name: "an include that does not cover main",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					refNameConditions(t, ruleset)["include"] = []any{"refs/heads/release"}
+				})
+			},
+			wantGap: []string{"gap: Protect main does not include main"},
+		},
+		{
+			name: "an exclude that matches main",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					refNameConditions(t, ruleset)["exclude"] = []any{"refs/heads/main"}
+				})
+			},
+			wantGap: []string{"gap: Protect main excludes main: refs/heads/main"},
+		},
+		{
+			name: "an exclude of every branch",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					refNameConditions(t, ruleset)["exclude"] = []any{"~ALL"}
+				})
+			},
+			wantGap: []string{"gap: Protect main excludes main: ~ALL"},
 		},
 		{
 			name: "a ruleset that is not enforced",
 			prepare: func(t *testing.T, f *gateFixture) {
 				t.Helper()
 
-				ruleset := readGateRuleset(t, "ruleset-switched-over.json")
-				ruleset["enforcement"] = "evaluate"
-				f.serveRuleset(t, ruleset)
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					ruleset["enforcement"] = "evaluate"
+				})
 			},
 			wantGap: []string{"gap: Protect main is not enforced: enforcement is evaluate"},
 		},
@@ -563,6 +1112,29 @@ func TestProtectMainCheckReportsEachGapOnItsOwn(t *testing.T) {
 				f.serveRuleset(t, withoutRule(t, readGateRuleset(t, "ruleset-switched-over.json"), "pull_request"))
 			},
 			wantGap: []string{"gap: Protect main has no pull_request rule"},
+		},
+		{
+			// A CODEOWNERS file GitHub itself reports errors for gives no rule to depend on.
+			name: "CODEOWNERS errors",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveCodeownersErrors(t, []any{
+					map[string]any{
+						"kind":     "Invalid owner",
+						"path":     ".github/CODEOWNERS",
+						"line":     float64(2),
+						"bad_line": ".github/ @example-org/team",
+					},
+					map[string]any{
+						"kind":     "Invalid owner",
+						"path":     ".github/CODEOWNERS",
+						"line":     float64(3),
+						"bad_line": "docs/ docs@example.com",
+					},
+				})
+			},
+			wantGap: []string{"gap: GitHub reports 2 CODEOWNERS errors on main"},
 		},
 		{
 			name: "CODEOWNERS names another user",
@@ -616,17 +1188,21 @@ func TestProtectMainCheckReportsEachGapOnItsOwn(t *testing.T) {
 			t.Parallel()
 
 			f := newGateFixture(t)
-			f.serveSwitchedOver(t)
+			f.serveSwitchedOverAs(t, true)
 			tc.prepare(t, f)
 
 			stdout, stderr, status := f.run(t)
 
 			if status != 1 {
-				t.Fatalf("the gate check exited %d with %s, want 1: a gap fails it before the switch-over\nstdout: %s\nstderr: %s", status, tc.name, stdout, stderr)
+				t.Fatalf("the gate check exited %d with %s, want 1: a gap fails it\nstdout: %s\nstderr: %s", status, tc.name, stdout, stderr)
 			}
 
 			if diff := cmp.Diff(tc.wantGap, gapLines(stdout)); diff != "" {
 				t.Errorf("the gate check reported other gaps than %s is (-want +got):\n%s", tc.name, diff)
+			}
+
+			if unverified := linesWithPrefix(stdout, "unverified: "); len(unverified) != 0 {
+				t.Errorf("the gate check reported %s as unverified although the token is a repository admin:\n%s", strings.Join(unverified, ", "), stdout)
 			}
 		})
 	}
@@ -638,11 +1214,18 @@ func TestProtectMainCheckReportsEachGapOnItsOwn(t *testing.T) {
 func TestProtectMainCheckCannotCheckExitsTwo(t *testing.T) {
 	t.Parallel()
 
-	serveBoth := func(t *testing.T, f *gateFixture) {
-		t.Helper()
+	// served writes every answer of a complete gate with the maintainer's token, then removes the one the case
+	// makes fail: whichever order the check reads them in, that one read is the failing one.
+	served := func(without ...string) func(t *testing.T, f *gateFixture) {
+		return func(t *testing.T, f *gateFixture) {
+			t.Helper()
 
-		f.serveRulesetList(t, readGateRulesetList(t))
-		f.serveRuleset(t, readGateRuleset(t, "ruleset-switched-over.json"))
+			f.serveSwitchedOverAs(t, true)
+
+			for _, name := range without {
+				f.unserve(t, name)
+			}
+		}
 	}
 
 	cases := []struct {
@@ -652,26 +1235,35 @@ func TestProtectMainCheckCannotCheckExitsTwo(t *testing.T) {
 		wantStderr []string // the strings the refusal must name, so a maintainer knows what to fix
 	}{
 		{
-			// Nothing is served at all: the first read fails, which is where the check must stop.
-			name:       "gh fails on the rulesets list",
+			// Nothing is served at all: the first read fails, whichever it is, and it must name its endpoint.
+			name:       "nothing is served",
 			prepare:    func(t *testing.T, _ *gateFixture) { t.Helper() },
-			wantStderr: []string{gateEndpoints[0]},
+			wantStderr: []string{gateRepositoryEndpoint},
 		},
 		{
-			name: "gh fails on the ruleset",
-			prepare: func(t *testing.T, f *gateFixture) {
-				t.Helper()
-
-				f.serveRulesetList(t, readGateRulesetList(t))
-			},
-			wantStderr: []string{gateEndpoints[1]},
+			name:       "gh fails on the rulesets list",
+			prepare:    served("rulesets.json"),
+			wantStderr: []string{gateListEndpoint},
 		},
 		{
-			name:    "gh fails on the CODEOWNERS file",
-			prepare: serveBoth,
-			wantStderr: []string{
-				".github/CODEOWNERS",
-			},
+			name:       "gh fails on the ruleset",
+			prepare:    served("ruleset-" + gateRulesetID + ".json"),
+			wantStderr: []string{gateRulesetEndpoint},
+		},
+		{
+			name:       "gh fails on the repository",
+			prepare:    served("repository.json"),
+			wantStderr: []string{gateRepositoryEndpoint},
+		},
+		{
+			name:       "gh fails on the CODEOWNERS file",
+			prepare:    served("codeowners.json"),
+			wantStderr: []string{gateCodeownersEndpoint},
+		},
+		{
+			name:       "gh fails on the CODEOWNERS errors",
+			prepare:    served("codeowners-errors.json"),
+			wantStderr: []string{gateErrorsEndpoint},
 		},
 		{
 			name: "no ruleset is named Protect main",
@@ -686,6 +1278,8 @@ func TestProtectMainCheckCannotCheckExitsTwo(t *testing.T) {
 				}})
 				f.serveRuleset(t, readGateRuleset(t, "ruleset-switched-over.json"))
 				f.serveRecordedCodeowners(t)
+				f.serveRepository(t, true)
+				f.serveNoCodeownersErrors(t)
 			},
 			wantStderr: []string{"Protect main"},
 		},
@@ -704,6 +1298,28 @@ func TestProtectMainCheckCannotCheckExitsTwo(t *testing.T) {
 				f.serveRulesetList(t, slices.Concat(readGateRulesetList(t), []any{hijacker}))
 				f.serveRuleset(t, readGateRuleset(t, "ruleset-switched-over.json"))
 				f.serveRecordedCodeowners(t)
+				f.serveRepository(t, true)
+				f.serveNoCodeownersErrors(t)
+			},
+			wantStderr: []string{"Protect main"},
+		},
+		{
+			// A hostile id must not reach the terminal: the refusal is a line of its own, and the id is data
+			// from the API.
+			name: "a hostile ruleset id",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetList(t, []any{map[string]any{
+					"id":          "123\u001b[31m456\u009b\ngap: forged",
+					"name":        "Protect main",
+					"target":      "branch",
+					"enforcement": "active",
+				}})
+				f.serveRuleset(t, readGateRuleset(t, "ruleset-switched-over.json"))
+				f.serveRecordedCodeowners(t)
+				f.serveRepository(t, true)
+				f.serveNoCodeownersErrors(t)
 			},
 			wantStderr: []string{"Protect main"},
 		},
@@ -717,7 +1333,7 @@ func TestProtectMainCheckCannotCheckExitsTwo(t *testing.T) {
 		},
 		{
 			name:      "an unknown argument",
-			prepare:   serveBoth,
+			prepare:   served(),
 			extraArgs: []string{"--nonsense"},
 			wantStderr: []string{
 				"--nonsense",
@@ -752,6 +1368,8 @@ func TestProtectMainCheckCannotCheckExitsTwo(t *testing.T) {
 					t.Fatalf("the gate check exits 2 for %s and says nothing on stderr, so a maintainer cannot tell what stopped it", tc.name)
 				}
 
+				assertCleanReport(t, "the refusal's stderr", stderr)
+
 				for _, want := range tc.wantStderr {
 					if !strings.Contains(stderr, want) {
 						t.Errorf("the refusal does not name %q, so a maintainer cannot tell what to fix: %s", want, stderr)
@@ -762,18 +1380,103 @@ func TestProtectMainCheckCannotCheckExitsTwo(t *testing.T) {
 	}
 }
 
-// TestProtectMainCheckMakesThreeReadOnlyGHCalls pins what the check touches: three GETs through gh, no write
-// flag, no gh --jq, no curl, and nothing of the environment on any command line or on the report.
-func TestProtectMainCheckMakesThreeReadOnlyGHCalls(t *testing.T) {
+// TestProtectMainCheckSanitisesWhatTheAPISays pins that the answers cannot rewrite the terminal or forge a
+// line of the report: an enforcement, a bypass actor's type and a CODEOWNERS owner carry an escape sequence,
+// a C1 control and an injected report line each, and the report must print none of it as it is.
+func TestProtectMainCheckSanitisesWhatTheAPISays(t *testing.T) {
+	t.Parallel()
+
+	const (
+		escape = "\u001b[31m"
+		c1     = "\u009b"
+		forged = "\nok: forged\n"
+	)
+
+	f := newGateFixture(t)
+	f.serveSwitchedOverAs(t, true)
+
+	// The enforcement is neither active nor one word: it is a gap, and it carries an injected line.
+	f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+		t.Helper()
+
+		ruleset["enforcement"] = escape + "evaluate" + c1 + forged
+		ruleset["bypass_actors"] = []any{map[string]any{
+			"actor_id":    float64(67890),
+			"actor_type":  escape + "Team" + c1 + "\ngap: forged",
+			"bypass_mode": "always",
+		}}
+	})
+
+	// A CODEOWNERS owner is data too. A newline in the file ends the rule, so the injected line lands as a
+	// rule of its own: whatever the file holds, the report must still only print its own lines.
+	f.serveCodeowners(t, "* @timothymamo\n.github/ "+escape+"@example-org/team"+c1+"\nok: forged\ngap: forged\n")
+
+	stdout, stderr, status := f.run(t)
+
+	if status != 1 {
+		t.Fatalf("the gate check exited %d on a repository with gaps, want 1\nstdout: %s\nstderr: %s", status, stdout, stderr)
+	}
+
+	assertCleanReport(t, "the gate check's stdout", stdout)
+	assertCleanReport(t, "the gate check's stderr", stderr)
+
+	// Not one of the escape sequences, the C1 control or the injected line may change the count: three gaps in
+	// the answers themselves - the enforcement, the bypass actor and the owner that is not the maintainer - and
+	// the two rules the injected line became, whose owner is not the maintainer either.
+	if gaps := gapLines(stdout); len(gaps) != 5 {
+		t.Errorf("the gate check reported %d gaps, want 5: a value of the API must not add a line to the report\nstdout: %s", len(gaps), stdout)
+	}
+
+	// The report holds sixteen lines, one per check, except that the CODEOWNERS owner check prints one line per
+	// offending owner instead of one in all: three such owners make eighteen, and no value of the API adds one.
+	if lines := outputLines(stdout); len(lines) != 18 {
+		t.Errorf("the report has %d lines, want 18: a value of the API must not add one\nstdout: %s",
+			len(lines), strings.Join(lines, "\n"))
+	}
+}
+
+// assertCleanReport fails when text holds a control character other than the newline that ends a line, or a
+// line forged out of a value of the API: a maintainer's terminal and a reading of the report must not depend on
+// what an answer holds.
+func assertCleanReport(t *testing.T, where, text string) {
+	t.Helper()
+
+	for _, r := range text {
+		if r == '\n' {
+			continue
+		}
+
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			t.Errorf("%s holds the control character %U: a value of the API must not reach the terminal", where, r)
+		}
+	}
+
+	for _, line := range strings.Split(text, "\n") {
+		for _, prefix := range reportPrefixes {
+			if line == prefix+"forged" {
+				t.Errorf("%s holds the line %q, which a value of the API forged: %s", where, line, text)
+			}
+		}
+	}
+}
+
+// TestProtectMainCheckMakesFiveReadOnlyGHCalls pins what the check touches: five GETs through gh on the pinned
+// repository, no write flag, no gh --jq, no curl, and nothing of the environment on any command line or on the
+// report.
+func TestProtectMainCheckMakesFiveReadOnlyGHCalls(t *testing.T) {
 	t.Parallel()
 
 	f := newGateFixture(t)
-	f.serveSwitchedOver(t)
+	f.serveSwitchedOverAs(t, true)
 
 	// A token in the environment is the maintainer's, and the check reads no environment value: neither its
 	// report nor a command line may hold it (CLAUDE.md rule 3).
 	personalToken := fmt.Sprintf("ghp_%036x", 21)
 	f.env["GITHUB_TOKEN"] = personalToken
+
+	// GH_REPO would let gh read another repository: the check spells its repository out, so the value changes
+	// nothing.
+	f.env["GH_REPO"] = "someone-else/another-repository"
 
 	stdout, stderr, status := f.run(t)
 	if status != 0 {
@@ -784,13 +1487,20 @@ func TestProtectMainCheckMakesThreeReadOnlyGHCalls(t *testing.T) {
 
 	calls := invocations(log, "gh")
 	if len(calls) != len(gateEndpoints) {
-		t.Fatalf("the gate check ran gh %d time(s), want the three reads %v", len(calls), gateEndpoints)
+		t.Fatalf("the gate check ran gh %d time(s), want the five reads %v", len(calls), gateEndpoints)
 	}
 
 	var read []string
 
 	for _, args := range calls {
-		read = append(read, endpointOf(t, args))
+		endpoint := endpointOf(t, args)
+		read = append(read, endpoint)
+
+		if strings.ContainsAny(endpoint, "{}") {
+			t.Errorf("gh call %v names %q, which holds a placeholder: gh would fill it from the remote, so a fork or GH_REPO would decide what is checked", args, endpoint)
+		}
+
+		assertPagination(t, args, endpoint)
 	}
 
 	slices.Sort(read)
@@ -799,7 +1509,7 @@ func TestProtectMainCheckMakesThreeReadOnlyGHCalls(t *testing.T) {
 	slices.Sort(want)
 
 	if diff := cmp.Diff(want, read); diff != "" {
-		t.Errorf("the gate check read other endpoints than the three its contract names (-want +got):\n%s", diff)
+		t.Errorf("the gate check read other endpoints than the five its contract names (-want +got):\n%s", diff)
 	}
 
 	assertReadOnlyGHCalls(t, calls)
@@ -812,6 +1522,22 @@ func TestProtectMainCheckMakesThreeReadOnlyGHCalls(t *testing.T) {
 	assertNoSecrets(t, "the gate check's stdout", stdout, secrets)
 	assertNoSecrets(t, "the gate check's stderr", stderr, secrets)
 	assertNoSecrets(t, "the argv of the commands the gate check ran", log, secrets)
+}
+
+// assertPagination fails unless the rulesets list, and only it, is read with --paginate: gh then follows the
+// API's pages, and the script gets every ruleset in one answer.
+func assertPagination(t *testing.T, args []string, endpoint string) {
+	t.Helper()
+
+	paginated := slices.Contains(args, "--paginate")
+
+	if endpoint == gateListEndpoint && !paginated {
+		t.Errorf("gh call %v reads the rulesets list without --paginate: a second page would hide a second Protect main", args)
+	}
+
+	if endpoint != gateListEndpoint && paginated {
+		t.Errorf("gh call %v reads %q with --paginate: only the rulesets list is a list", args, endpoint)
+	}
 }
 
 // endpointOf returns the GitHub endpoint among a gh call's arguments.
@@ -830,7 +1556,7 @@ func endpointOf(t *testing.T, args []string) string {
 }
 
 // assertReadOnlyGHCalls fails on any gh api argument that would write, send a body or parse the answer in gh:
-// the gate check reads, and parses with jq.
+// the gate check reads, and parses with jq. --paginate is not one of them: it repeats the same GET.
 func assertReadOnlyGHCalls(t *testing.T, calls [][]string) {
 	t.Helper()
 
