@@ -277,6 +277,68 @@ func TestAgentsAppTokenRefreshSurvivesAGitConfigLockAnotherWriterHolds(t *testin
 	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
 }
 
+// TestAgentsAppTokenRefreshStopsOnALockThatIsNotARegularFile is the other half of the pair the test above pins: a
+// ~/.gitconfig.lock that is a symlink is no lock git wrote, so refusing it is permanent (status 3) and the loop
+// stops with the stop line and status 1, where another writer's regular lock is transient and only retried. A
+// refresh that retried this one would mint a token at every check for as long as it runs, and none would ever
+// reach the VM's git configuration (issue #241).
+func TestAgentsAppTokenRefreshStopsOnALockThatIsNotARegularFile(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	target := filepath.Join(f.sb.vmHome, "stale-lock-target")
+	writeFileMode(t, target, []byte(staleGitLockBody), 0o600)
+
+	lock := filepath.Join(f.sb.vmHome, ".gitconfig.lock")
+	if err := os.Symlink(target, lock); err != nil {
+		t.Fatalf("symlink %s to %s: %v", lock, target, err)
+	}
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh was still running 30s after the fake VM's %s was a symlink, an entry no git wrote and no retry can turn into a lock; stderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	if code := refresh.exitCode(t); code != 1 {
+		t.Errorf("the refresh exited with %d although the fake VM's %s is a symlink, not the regular file git itself creates, want 1: that refusal is permanent, so the loop stops like every failure a maintainer has to fix (issue #241)\nstderr:\n%s",
+			code, lock, refresh.errOut())
+	}
+
+	assertStopLineNamesWhereToRestart(t, refresh.errOut())
+
+	// The refusal the stop line follows is the lock's, not some other permanent failure.
+	if text := strings.ToLower(refresh.errOut()); !strings.Contains(text, "lock") {
+		t.Errorf("the refresh stopped but no line mentions the lock on ~/.gitconfig, so a maintainer cannot tell what to remove (issue #241)\nstderr:\n%s",
+			refresh.errOut())
+	}
+
+	// An entry the mint may not take for a lock is left exactly as it was found: never followed, never removed.
+	info, err := os.Lstat(lock)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the refresh removed or replaced %s, a symlink to a file it may neither follow nor remove (%v)", lock, err)
+	}
+
+	body, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read %s: %v", target, err)
+	}
+
+	if string(body) != staleGitLockBody {
+		t.Errorf("%s holds %q after the refresh stopped, want %q: no write of the bot identity went through the lock's symlink (issue #241)",
+			target, body, staleGitLockBody)
+	}
+
+	if _, err := os.Stat(filepath.Join(f.sb.vmHome, ".gitconfig")); err == nil {
+		t.Errorf("the refresh created the fake VM's ~/.gitconfig although it refused to write the bot identity: a refused write leaves no half-written file behind (issue #241)")
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
 // TestAgentsAppTokenRefreshIgnoresAStaleGitLockWhenTheIdentityIsAlreadyTheBots pins the third review's finding as
 // the refresh sees it: once the VM's ~/.gitconfig holds exactly the bot's identity, a lock a killed git left behind
 // is no obstacle to any later mint, so the loop keeps the VM's token fresh across mints with the stale lock in
