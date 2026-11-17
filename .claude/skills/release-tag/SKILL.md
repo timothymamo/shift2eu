@@ -316,8 +316,7 @@ moves or deletes a tag.
    ```bash
    ARCHIVE="shift2eu_${TAG#v}_linux_amd64.tar.gz"
    /usr/local/bin/gh release download "$TAG" --repo timothymamo/shift2eu --pattern "$ARCHIVE" --pattern checksums.txt
-   awk -v a="$ARCHIVE" '$2 == a' checksums.txt > "$ARCHIVE.sha256"
-   sha256sum --check "$ARCHIVE.sha256"
+   awk -v a="$ARCHIVE" '$2 == a' checksums.txt | sha256sum --check -   # no line for the archive fails too
    /usr/local/bin/gh attestation verify "$ARCHIVE" --repo timothymamo/shift2eu \
      --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
      --source-ref "refs/tags/$TAG" --deny-self-hosted-runners

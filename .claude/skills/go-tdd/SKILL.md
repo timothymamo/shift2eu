@@ -8,6 +8,9 @@ description: Test-first workflow and Go testing conventions for shift2eu. Use wh
 Work in the worktree named in your task (`cd <path> && ...` for every non-git command), never in the
 repository root and never on `main`. Run git as `git -C <path> ...`, never `cd <path> && git ...`.
 Write the worktree path out in full; do not store it in a shell variable.
+Change every file, test, fixture and scratch file alike, with your file-editing tool, never with a shell
+command or script that rewrites it (heredoc, `cat >`, `sed -i`, `python3 -`). Never `rm` a path held in
+a variable or built at run time; leave scratch directories for the system to clean (CLAUDE.md, rule 9).
 
 ## RED: pin the behaviour
 

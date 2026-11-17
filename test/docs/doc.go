@@ -9,7 +9,10 @@
 //     that is its title;
 //   - docs/README.md, the index, links to every page under docs/;
 //   - README.md links only to files the release archives in .goreleaser.yaml
-//     ship, so its links work in an unpacked archive.
+//     ship, so its links work in an unpacked archive;
+//   - no command block in a skill writes a file through the shell (heredoc,
+//     redirection, tee, sed -i) or removes a path held in a variable
+//     (CLAUDE.md, rule 9; issue #251).
 //
 // make test, and so make check, run it. The link checker is
 // test/internal/mdlink.
