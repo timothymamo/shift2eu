@@ -512,47 +512,52 @@ func TestMakeVMUpNeverResizesAnExistingVM(t *testing.T) {
 
 	vars := []string{"VM_CPUS=6", "VM_MEMORY=8GiB", "VM_DISK=60GiB", "VM_SSH_PORT=60023"}
 
-	t.Run("the instance is started by name without the four flags", func(t *testing.T) {
-		t.Parallel()
+	// Both statuses vm-up starts an existing instance in, because the warning and the start by name alone are
+	// the same on either: a Running instance is not resized twice because it happens to be up already.
+	for _, status := range []string{"Stopped", "Running"} {
+		t.Run("the instance is started by name without the four flags: "+status, func(t *testing.T) {
+			t.Parallel()
 
-		// An instance vm-up may start: listed as Stopped, with the lima.yaml an instance that was started
-		// once has (issue #237). Without it vm-up refuses the start, so only the resize stays unpinned.
-		f := newVMUpFixture(t, vmUpInstance, "Stopped")
-		f.writeInstanceLimaYaml(t)
+			// An instance vm-up may start: listed as Stopped or Running, with the lima.yaml an instance that
+			// was started once has (issue #237). Without it vm-up refuses the start, so only the resize stays
+			// unpinned.
+			f := newVMUpFixture(t, vmUpInstance, status)
+			f.writeInstanceLimaYaml(t)
 
-		stdout, stderr, err := f.run(t, append([]string{"vm-up"}, vars...)...)
-		if err != nil {
-			t.Fatalf("make vm-up %s on an instance that exists: %v\nstdout: %s\nstderr: %s", strings.Join(vars, " "), err, stdout, stderr)
-		}
-
-		want := []string{"start", f.env["LIMA_INSTANCE"]}
-		starts := f.starts(t)
-
-		if len(starts) == 0 {
-			t.Fatalf("make vm-up did not start the instance that exists, so the VM stays down; stdout: %s\nstderr: %s", stdout, stderr)
-		}
-
-		for _, got := range starts {
-			if diff := cmp.Diff(want, got); diff != "" {
-				t.Errorf("make vm-up %s resized or reconfigured an existing VM: an instance that exists is started by its name alone, never with the flags that only apply at creation (issue #228) (-want +got):\n%s",
-					strings.Join(vars, " "), diff)
+			stdout, stderr, err := f.run(t, append([]string{"vm-up"}, vars...)...)
+			if err != nil {
+				t.Fatalf("make vm-up %s on a %s instance that exists: %v\nstdout: %s\nstderr: %s", strings.Join(vars, " "), status, err, stdout, stderr)
 			}
-		}
 
-		combined := stdout + stderr
+			want := []string{"start", f.env["LIMA_INSTANCE"]}
+			starts := f.starts(t)
 
-		for _, name := range []string{vmCPUsVar, vmMemoryVar, vmDiskVar, vmSSHPortVar} {
-			if !strings.Contains(combined, name) {
-				t.Errorf("make vm-up with %s set and an instance that exists says nothing about %s, so a maintainer expects a VM created at that size and gets the old one (issue #228):\n%s",
-					strings.Join(vars, " "), name, combined)
+			if len(starts) == 0 {
+				t.Fatalf("make vm-up did not start the %s instance that exists, so the VM stays down; stdout: %s\nstderr: %s", status, stdout, stderr)
 			}
-		}
 
-		if lowered := strings.ToLower(combined); !strings.Contains(lowered, "creat") {
-			t.Errorf("the warning says nothing about creation, so it does not tell a maintainer that %s apply only when the VM is created and an existing VM is never resized (issue #228):\n%s",
-				strings.Join(vars, " "), combined)
-		}
-	})
+			for _, got := range starts {
+				if diff := cmp.Diff(want, got); diff != "" {
+					t.Errorf("make vm-up %s resized or reconfigured an existing %s VM: an instance that exists is started by its name alone, never with the flags that only apply at creation (issue #228) (-want +got):\n%s",
+						strings.Join(vars, " "), status, diff)
+				}
+			}
+
+			combined := stdout + stderr
+
+			for _, name := range []string{vmCPUsVar, vmMemoryVar, vmDiskVar, vmSSHPortVar} {
+				if !strings.Contains(combined, name) {
+					t.Errorf("make vm-up with %s set and a %s instance that exists says nothing about %s, so a maintainer expects a VM created at that size and gets the old one (issue #228):\n%s",
+						strings.Join(vars, " "), status, name, combined)
+				}
+			}
+
+			if lowered := strings.ToLower(combined); !strings.Contains(lowered, "creat") {
+				t.Errorf("the warning says nothing about creation, so it does not tell a maintainer that %s apply only when the VM is created and an existing %s VM is never resized (issue #228):\n%s",
+					strings.Join(vars, " "), status, combined)
+			}
+		})
+	}
 
 	t.Run("an invalid value fails before the instance is looked at", func(t *testing.T) {
 		t.Parallel()

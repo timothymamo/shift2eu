@@ -108,10 +108,10 @@ exit 64
 
 // vmUpGitShim is the git make's recipes run in the vm-up tests: it answers git config core.hooksPath, the write
 // make vm-up's git-hooks prerequisite makes into the checkout's .git/config, without touching a file, and hands
-// every other call to the real git. That config is shared by every worktree, so a test that ran make in the
-// repository itself would write into it; the shim keeps every git call of a run inside the fixture. The real
-// git's path is shQuote's single-quoted word, never a Go-quoted string: sh expands a $(...) or a backtick in a
-// double-quoted path (issue #228 review, item D).
+// every other call to the real git. That is defence in depth: no run writes into any .git/config, even if a test
+// ever ran make in a real checkout, whose config every worktree shares. The real git's path is shQuote's
+// single-quoted word, never a Go-quoted string: sh expands a $(...) or a backtick in a double-quoted path
+// (issue #228 review, item D).
 const vmUpGitShim = `#!/bin/sh
 for a in "$@"; do
   if [ "$a" = core.hooksPath ]; then exit 0; fi
