@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": "aws",
   "resources": [
     {
@@ -15,25 +15,41 @@
       "capabilities": [
         "ipv6",
         "snapshots"
-      ]
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 8
+      }
     },
     {
       "id": "i-0123456789abcdef1",
       "rawType": "AWS::EC2::Instance",
       "category": "compute.vm",
-      "region": "eu-central-1"
+      "region": "eu-central-1",
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 8
+      }
     },
     {
       "id": "i-0123456789abcdef6",
       "rawType": "AWS::EC2::Instance",
       "category": "compute.baremetal",
-      "region": "eu-central-1"
+      "region": "eu-central-1",
+      "size": {
+        "vcpus": 96,
+        "memoryGiB": 384
+      }
     },
     {
       "id": "i-0123456789abcdef7",
       "rawType": "AWS::EC2::Instance",
       "category": "compute.baremetal",
-      "region": "eu-central-1"
+      "region": "eu-central-1",
+      "size": {
+        "vcpus": 96,
+        "memoryGiB": 192
+      }
     },
     {
       "id": "shop-alb",
@@ -59,7 +75,10 @@
       "capabilities": [
         "encryption-at-rest",
         "point-in-time-restore"
-      ]
+      ],
+      "size": {
+        "storageGiB": 100
+      }
     },
     {
       "id": "shop-db",
@@ -71,7 +90,10 @@
         "point-in-time-restore",
         "read-replicas",
         "zone-high-availability"
-      ]
+      ],
+      "size": {
+        "storageGiB": 50
+      }
     },
     {
       "id": "shop-db-replica",
@@ -80,7 +102,10 @@
       "region": "eu-central-1",
       "capabilities": [
         "encryption-at-rest"
-      ]
+      ],
+      "size": {
+        "storageGiB": 50
+      }
     },
     {
       "id": "shop-eks (AWS::EKS::Cluster, eu-central-1)",
@@ -90,13 +115,19 @@
       "capabilities": [
         "autoscaling",
         "node-high-availability"
-      ]
+      ],
+      "size": {
+        "count": 3
+      }
     },
     {
       "id": "shop-eks (AWS::EKS::Cluster, eu-west-1)",
       "rawType": "AWS::EKS::Cluster",
       "category": "kubernetes.managed",
-      "region": "eu-west-1"
+      "region": "eu-west-1",
+      "size": {
+        "count": 1
+      }
     },
     {
       "id": "shop-legacy-mysql",
@@ -105,7 +136,10 @@
       "region": "eu-central-1",
       "capabilities": [
         "point-in-time-restore"
-      ]
+      ],
+      "size": {
+        "storageGiB": 20
+      }
     },
     {
       "id": "shop-logs-example",
@@ -179,13 +213,19 @@
       "capabilities": [
         "encryption-at-rest",
         "snapshots"
-      ]
+      ],
+      "size": {
+        "storageGiB": 100
+      }
     },
     {
       "id": "vol-0123456789abcdef1",
       "rawType": "AWS::EC2::Volume",
       "category": "storage.block",
-      "region": "eu-central-1"
+      "region": "eu-central-1",
+      "size": {
+        "storageGiB": 100
+      }
     },
     {
       "id": "vol-0123456789abcdef6",
@@ -194,7 +234,10 @@
       "region": "eu-central-1",
       "capabilities": [
         "encryption-at-rest"
-      ]
+      ],
+      "size": {
+        "storageGiB": 100
+      }
     }
   ]
 }

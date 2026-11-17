@@ -11,8 +11,8 @@
     }
   },
   "summary": {
-    "direct": 5,
-    "partial": 6,
+    "direct": 6,
+    "partial": 5,
     "none": 2,
     "total": 13
   },
@@ -51,7 +51,12 @@
         }
       ],
       "requiredChanges": [],
-      "relations": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "shop-assets"
+        }
+      ],
       "affectedBy": []
     },
     {
@@ -60,27 +65,18 @@
       "category": "database.postgresql",
       "region": "eu-central-1",
       "fit": "partial",
-      "bestOffering": "Managed Database for PostgreSQL and MySQL",
-      "ties": [
-        "Managed Database for PostgreSQL and MySQL High Availability"
-      ],
+      "bestOffering": "Managed Database for PostgreSQL and MySQL High Availability",
+      "ties": [],
       "reasons": [
         {
           "code": "missing-capability",
-          "text": "Managed Database for PostgreSQL and MySQL does not offer point-in-time-restore",
-          "offering": "Managed Database for PostgreSQL and MySQL",
+          "text": "Managed Database for PostgreSQL and MySQL High Availability does not offer point-in-time-restore",
+          "offering": "Managed Database for PostgreSQL and MySQL High Availability",
           "capability": "point-in-time-restore"
-        },
-        {
-          "code": "missing-capability",
-          "text": "Managed Database for PostgreSQL and MySQL does not offer zone-high-availability",
-          "offering": "Managed Database for PostgreSQL and MySQL",
-          "capability": "zone-high-availability"
         }
       ],
       "requiredChanges": [
-        "point-in-time-restore",
-        "zone-high-availability"
+        "point-in-time-restore"
       ],
       "relations": [],
       "affectedBy": []
@@ -91,17 +87,24 @@
       "category": "kubernetes.managed",
       "region": "eu-central-1",
       "fit": "direct",
-      "bestOffering": "Kubernetes Kapsule Dedicated",
-      "ties": [],
+      "bestOffering": "Kubernetes Kapsule",
+      "ties": [
+        "Kubernetes Kapsule Dedicated"
+      ],
       "reasons": [
         {
           "code": "all-capabilities",
-          "text": "Kubernetes Kapsule Dedicated offers every capability the resource uses",
-          "offering": "Kubernetes Kapsule Dedicated"
+          "text": "Kubernetes Kapsule offers every capability the resource uses",
+          "offering": "Kubernetes Kapsule"
         }
       ],
       "requiredChanges": [],
-      "relations": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "shop-db"
+        }
+      ],
       "affectedBy": []
     },
     {
@@ -167,7 +170,12 @@
       "requiredChanges": [
         "encryption-at-rest"
       ],
-      "relations": [],
+      "relations": [
+        {
+          "type": "dead-letter-queue-of",
+          "target": "shop-orders"
+        }
+      ],
       "affectedBy": []
     },
     {
@@ -186,7 +194,12 @@
         }
       ],
       "requiredChanges": [],
-      "relations": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "shop-assets"
+        }
+      ],
       "affectedBy": []
     },
     {
@@ -205,7 +218,12 @@
         }
       ],
       "requiredChanges": [],
-      "relations": [],
+      "relations": [
+        {
+          "type": "depends-on",
+          "target": "shop-orders"
+        }
+      ],
       "affectedBy": []
     },
     {
@@ -213,21 +231,23 @@
       "rawType": "AWS::EC2::Volume",
       "category": "storage.block",
       "region": "eu-central-1",
-      "fit": "partial",
+      "fit": "direct",
       "bestOffering": "Block Storage",
       "ties": [],
       "reasons": [
         {
-          "code": "missing-capability",
-          "text": "Block Storage does not offer encryption-at-rest",
-          "offering": "Block Storage",
-          "capability": "encryption-at-rest"
+          "code": "all-capabilities",
+          "text": "Block Storage offers every capability the resource uses",
+          "offering": "Block Storage"
         }
       ],
-      "requiredChanges": [
-        "encryption-at-rest"
+      "requiredChanges": [],
+      "relations": [
+        {
+          "type": "attached-to",
+          "target": "shop-web-1"
+        }
       ],
-      "relations": [],
       "affectedBy": []
     },
     {
@@ -315,14 +335,14 @@
   ],
   "workloads": [
     {
-      "name": "",
-      "noWorkload": true,
-      "resources": 13,
+      "name": "media",
+      "noWorkload": false,
+      "resources": 3,
       "summary": {
-        "direct": 5,
-        "partial": 6,
-        "none": 2,
-        "total": 13
+        "direct": 2,
+        "partial": 0,
+        "none": 1,
+        "total": 3
       },
       "blockers": [
         {
@@ -331,7 +351,20 @@
             "code": "not-classified",
             "text": "not classified"
           }
-        },
+        }
+      ]
+    },
+    {
+      "name": "shop",
+      "noWorkload": false,
+      "resources": 9,
+      "summary": {
+        "direct": 4,
+        "partial": 4,
+        "none": 1,
+        "total": 9
+      },
+      "blockers": [
         {
           "resourceId": "shop.example.com",
           "reason": {
@@ -340,6 +373,18 @@
           }
         }
       ]
+    },
+    {
+      "name": "",
+      "noWorkload": true,
+      "resources": 1,
+      "summary": {
+        "direct": 0,
+        "partial": 1,
+        "none": 0,
+        "total": 1
+      },
+      "blockers": []
     }
   ]
 }

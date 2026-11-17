@@ -1,5 +1,5 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "source": "azure",
   "resources": [
     {
@@ -11,7 +11,10 @@
         "autoscaling",
         "node-high-availability",
         "zone-high-availability"
-      ]
+      ],
+      "size": {
+        "count": 3
+      }
     },
     {
       "id": "app-shop-storefront",
@@ -32,7 +35,10 @@
       "capabilities": [
         "encryption-at-rest",
         "snapshots"
-      ]
+      ],
+      "size": {
+        "storageGiB": 64
+      }
     },
     {
       "id": "func-shop-thumbnails",
@@ -86,7 +92,10 @@
       "region": "westeurope",
       "capabilities": [
         "encryption-at-rest"
-      ]
+      ],
+      "size": {
+        "storageGiB": 50
+      }
     },
     {
       "id": "sb-shop-invoices",
@@ -162,7 +171,11 @@
       "capabilities": [
         "ipv6",
         "snapshots"
-      ]
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 8
+      }
     },
     {
       "id": "vm-shop-web-1_OsDisk_1",
@@ -171,7 +184,10 @@
       "region": "westeurope",
       "capabilities": [
         "encryption-at-rest"
-      ]
+      ],
+      "size": {
+        "storageGiB": 128
+      }
     },
     {
       "id": "vmss-shop-web",
@@ -190,7 +206,10 @@
       "region": "westeurope",
       "capabilities": [
         "encryption-at-rest"
-      ]
+      ],
+      "size": {
+        "storageGiB": 64
+      }
     }
   ]
 }
