@@ -189,6 +189,20 @@ func (f *mintFixture) vmEffectiveGitValue(t *testing.T, key string) string {
 	return strings.TrimRight(out, "\n")
 }
 
+// vmGitConfigLeftovers returns the copies of the fake VM user's ~/.gitconfig a mint made and did not remove: the
+// mint writes the bot identity into a `mktemp "$HOME/.gitconfig.agents-token.XXXXXX"` copy and moves that over
+// ~/.gitconfig, so a run that refused and a run that succeeded must leave none of them behind (issue #241).
+func (f *mintFixture) vmGitConfigLeftovers(t *testing.T) []string {
+	t.Helper()
+
+	leftovers, err := filepath.Glob(filepath.Join(f.sb.vmHome, ".gitconfig.agents-token.*"))
+	if err != nil {
+		t.Fatalf("look for a left-over copy of the fake VM's .gitconfig: %v", err)
+	}
+
+	return leftovers
+}
+
 // vmPathWithoutGit writes a PATH directory holding every tool of this machine's /usr/bin and /bin except git, and
 // returns it. The fake limactl runs the VM's sh -c on this machine and inherits the mint's PATH, so a mint run with
 // this directory on its PATH stands in front of a VM that has no git (issue #241).
@@ -568,6 +582,14 @@ func TestAgentsAppTokenMintAppliesTheBotIdentityToTheVMGit(t *testing.T) {
 			if tc.check != nil {
 				tc.check(t, f, wantName, wantEmail)
 			}
+
+			// The mint writes the identity into a copy of ~/.gitconfig and moves that copy over the original, so the
+			// write is atomic: a copy left in the VM user's home is one the maintainer's home did not get, and a home that
+			// mints twice a day fills with them (issue #241).
+			if leftovers := f.vmGitConfigLeftovers(t); len(leftovers) != 0 {
+				t.Errorf("the mint left %v in the fake VM's home: the copy of ~/.gitconfig it writes the identity into must not outlive the mint that wrote it (issue #241)",
+					leftovers)
+			}
 		})
 	}
 }
@@ -631,6 +653,11 @@ func TestAgentsAppTokenMintRefusesAGitIncludeThatOverridesTheBotIdentity(t *test
 			got, otherEmail)
 	}
 
+	before, err := os.ReadFile(filepath.Join(f.sb.vmHome, ".gitconfig"))
+	if err != nil {
+		t.Fatalf("read the fake VM's .gitconfig before the mint: %v", err)
+	}
+
 	stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
 	if err == nil {
 		t.Fatalf("mint exited 0 although a commit in the VM still reads %q for user.email, from an included file: the agents would commit as someone else while the mint reports the bot's identity (issue #241)\nstdout: %s\nstderr: %s",
@@ -640,6 +667,24 @@ func TestAgentsAppTokenMintRefusesAGitIncludeThatOverridesTheBotIdentity(t *test
 	if !identityRefusedNotice(otherEmail, stdout, stderr) {
 		t.Errorf("the mint refuses but says nothing about the git identity a commit in the VM would use: no line names the effective identity, the include that overrides it, or %q (issue #241)\nstdout:\n%s\nstderr:\n%s",
 			otherEmail, stdout, stderr)
+	}
+
+	// A refusal is no half-success: the mint writes the identity into a copy of ~/.gitconfig and only moves it over
+	// the original once it read the bot's identity back, so the refused run must leave the VM's own git
+	// configuration exactly as it found it, byte for byte (issue #241).
+	after, err := os.ReadFile(filepath.Join(f.sb.vmHome, ".gitconfig"))
+	if err != nil {
+		t.Fatalf("read the fake VM's .gitconfig after the refused mint: %v", err)
+	}
+
+	if !bytes.Equal(after, before) {
+		t.Errorf("the refused mint changed the fake VM's .gitconfig, although nothing set the bot identity:\nbefore:\n%s\nafter:\n%s",
+			before, after)
+	}
+
+	if leftovers := f.vmGitConfigLeftovers(t); len(leftovers) != 0 {
+		t.Errorf("the refused mint left %v in the fake VM's home: the copy of ~/.gitconfig it writes the identity into must be removed when it refuses, or the VM user's home keeps a file nothing reads (issue #241)",
+			leftovers)
 	}
 
 	// Whether a run refused this way still keeps the token is the design's call, so the token is not pinned here.
