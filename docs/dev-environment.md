@@ -85,7 +85,7 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 |---|---|
 | `theme` | Sets `theme` in Claude Code's `~/.claude/settings.json` to `CLAUDE_THEME` (default `dark`; `make vm-init CLAUDE_THEME=light`) |
 | `claude` | Marks Claude Code's onboarding done and trusts the workspace and the repository, in `~/.claude.json`, so the Claude Code roles start without first-run screens (see below) |
-| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`) |
+| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run |
 | `claude auth` | Checks that Claude Code uses the OAuth token (your subscription), not an API key |
 | `pi` | `pi auth check --provider deepseek` |
 | `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository, with the agents App's token when its file is in the VM, otherwise `GITHUB_TOKEN`. Not `gh auth status`, which an installation token may fail (ADR 0031) |
@@ -150,7 +150,10 @@ do, in [The agents App](#the-agents-app)).
 
 Tool versions are pinned in `dev/lima.yaml` under `param:`, and Renovate opens a PR when a new version
 is released. A VM keeps the template it was created with, so after merging a version bump recreate it
-with `make vm-delete vm-create`, then `make deck`: nothing has to be typed in the VM.
+with `make vm-delete vm-create`, then, once the agents use the App ([The agents App](#the-agents-app)),
+`make agents-token-refresh-start` from the host clone, then `make deck`: nothing has to be typed in the VM.
+The refresh's first mint writes the bot identity and sets it as the VM's git identity, so the agents
+commit as the bot without another step.
 
 Lima itself runs on the Mac, so it is not pinned in the template: `dev/lima.yaml` accepts Lima 2.0 or
 newer (`minimumLimaVersion`). CI runs `limactl validate dev/lima.yaml` with the Lima pinned as
@@ -369,7 +372,7 @@ nothing of the workspace:
 
 | Command | Does |
 |---|---|
-| `make agents-token` | Mints one token and writes it, and the bot's identity, into the VM |
+| `make agents-token` | Mints one token and writes it, and the bot's identity, into the VM, and sets that identity as the VM user's git identity (`git config --global user.name` and `user.email`) |
 | `make agents-token-refresh` | Mints now and again before each token expires, in the foreground, until stopped |
 | `make agents-token-refresh-start` | Starts that refresh in the background, unless one already runs for the VM, and prints where its log is |
 
@@ -437,13 +440,16 @@ the JWT or the key, and nothing writes them to a log or the workspace.
 
 **In the VM**, both files are readable only by the VM user and replaced atomically; the write refuses a
 `~/.config/shift2eu` that is a symlink or resolves outside the VM user's home, or a token or identity file
-that is a symlink or not a regular file (a guard against a symlink left by mistake, not against the VM
-user):
+or a `~/.gitconfig` that is a symlink or not a regular file (a guard against a symlink left by mistake, not
+against the VM user). Whenever it writes the identity file it also sets the VM user's git identity to it
+(`user.name` and `user.email` in `~/.gitconfig`, replacing any other), and says so ("set the VM shift2eu's
+git identity ..."); it refuses a name or address that is not a bot's, and a VM without git. A write without
+the identity never touches the git configuration.
 
 | File | Holds | Read by |
 |---|---|---|
 | `~/.config/shift2eu/agents-app-token` | The token, then its expiry in Unix seconds, five minutes before GitHub's | `gh`, on every call |
-| `~/.config/shift2eu/agents-app-identity` | `<slug>[bot]`, then `<bot user id>+<slug>[bot]@users.noreply.github.com` | `make vm-init` (the `git` step, `dev/vm-git-identity.sh`) |
+| `~/.config/shift2eu/agents-app-identity` | `<slug>[bot]`, then `<bot user id>+<slug>[bot]@users.noreply.github.com` | Written by the mint, which applies it to the VM's git at once; `make vm-init` applies it again (the `git` step, `dev/vm-git-identity.sh`) |
 
 `/usr/local/bin/gh` is a root-owned wrapper (`dev/gh-app-token.sh`, with the real gh's path pinned); the
 real gh is `/usr/local/libexec/shift2eu/gh`. With the token file it runs gh with that token and without
@@ -459,8 +465,10 @@ that it "predates the gh wrapper". Run `make vm-gh-wrapper` (it moves the real g
 and points the git credential helper at it, whole or not at all, and ends with `vm-gh-wrapper: done`, without which `make` fails; safe
 to run again), or recreate the VM with
 `make vm-delete vm-create`, **before runbook step 3**. `make agents-token` also warns when the VM's clock
-is more than a minute off the Mac's. After the first `make agents-token` (from the host clone), run
-`make vm-init` so the agents commit as the App's bot.
+is more than a minute off the Mac's. The first `make agents-token` (from the host clone) after
+`make vm-delete vm-create` writes the identity file and applies it to the VM's git, so the agents commit
+as the App's bot with no further step. To check, in the VM: `git config --global user.email` prints the
+bot's noreply address, `<bot user id>+shift2eu-agents[bot]@users.noreply.github.com`.
 
 **Rolling back**: stop the refresh first, and do not start it again from the host clone: it mints again
 whenever the token in the VM is within 20 minutes
@@ -549,8 +557,9 @@ before it still hold. Rolling back is under each step.
    *Roll back:* nothing is enforced; without a token file the VM goes on with `GITHUB_TOKEN`.
 3. **Switch the agents to the App.** Give a VM created before milestone 1 the gh wrapper
    (`make vm-gh-wrapper`, or `make vm-delete vm-create`). From the host clone, run `make agents-token`,
-   then `make agents-token-refresh-start`; then `make vm-init` from the workspace, so the agents commit as
-   the bot, and restart the deck **between tasks**. Have an agent open a test pull request, then open
+   then `make agents-token-refresh-start`; the mint sets the bot as the VM's git identity, so the agents
+   commit as the bot (in the VM, `git config --global user.email` prints its noreply address), and restart
+   the deck **between tasks**. Have an agent open a test pull request, then open
    milestone 2's, the first the App opens, and approve and merge it.
    *Check* on the test pull request `<n>`:
    - `gh pr view <n> --json author --jq '.author.is_bot, .author.login'` prints `true` and
