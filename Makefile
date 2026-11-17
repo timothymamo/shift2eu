@@ -210,15 +210,25 @@ vm-up: git-hooks ## Create or start the Lima VM with only this repository's work
 vm-shell: ## Open a shell in the VM at the repository root
 	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)"
 
-# vm-env checks every name first and writes nothing, without calling limactl at all, unless each one is set
-# and not empty: a locked macOS login Keychain in an SSH session or an unloaded direnv .envrc must never wipe
-# the credentials the VM has (issue #234). It then merges into the VM's daemon.env: the lines of the names in
-# VM_ENV are replaced and every other line is kept, so `make vm-env VM_ENV=GITHUB_TOKEN` replaces only
-# GITHUB_TOKEN. The values travel on standard input, never on a command line, and the merge is written to a
-# temporary file beside daemon.env and moved into place, mode 0600, so a failure never leaves half a file.
+# The names in VM_ENV, one per line: commas and spaces separate them, and a name listed twice is listed once.
+vm_env_names = $$(printf '%s\n' '$(VM_ENV)' | tr ', ' '\n\n' | awk 'NF && !seen[$$0]++')
+# replace when VM_ENV is the default above, merge when it is given on the command line or in the environment.
+vm_env_mode = $(if $(filter file,$(origin VM_ENV)),replace,merge)
+
+# vm-env refuses an empty VM_ENV, then checks every name and writes nothing, without calling limactl at all,
+# unless each one is set and not empty: a locked macOS login Keychain in an SSH session or an unloaded direnv
+# .envrc must never wipe the credentials the VM has (issue #234). With the default VM_ENV it replaces the
+# VM's whole daemon.env with exactly those lines, so a stale line (an old ANTHROPIC_API_KEY) is removed. With
+# a VM_ENV given explicitly it merges: the lines of the names in VM_ENV are replaced and every other line is
+# kept, so `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN. The values travel on standard input,
+# never on a command line (only the mode does), and the file is written to a temporary file beside
+# daemon.env and moved into place, mode 0600, so a failure never leaves half a file.
 .PHONY: vm-env
 vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
-	@for name in $$(echo '$(VM_ENV)' | tr ',' ' '); do \
+	@[ -n "$(vm_env_names)" ] || { \
+		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: name at least one, e.g. make vm-env VM_ENV=GITHUB_TOKEN" >&2; \
+		exit 1; }
+	@for name in $(vm_env_names); do \
 		case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
 			echo "vm-env: refusing $$name: the agents App's key and its path never enter the VM; make agents-token writes its tokens there" >&2; \
 			exit 1;; esac; \
@@ -227,7 +237,7 @@ vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if o
 			exit 1;; esac; \
 	done
 	@missing=''; \
-	for name in $$(echo '$(VM_ENV)' | tr ',' ' '); do \
+	for name in $(vm_env_names); do \
 		[ -n "$$(printenv "$$name")" ] || missing="$$missing $$name"; \
 	done; \
 	if [ -n "$$missing" ]; then \
@@ -237,19 +247,19 @@ vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if o
 		echo "  2. Run cd ~ && cd $(REPO_ROOT) so direnv reads the .envrc again. On any host, check that the" >&2; \
 		echo "     .envrc exists, sets them and is allowed (direnv allow), or export the variables yourself." >&2; \
 		echo "  3. Re-run make vm-env (or the target that ran it, e.g. make vm-create)." >&2; \
-		echo "  To copy only some of them on purpose, narrow VM_ENV: make vm-env VM_ENV=GITHUB_TOKEN keeps the others." >&2; \
+		echo "  To copy only some of them on purpose, name them in VM_ENV: make vm-env VM_ENV=GITHUB_TOKEN keeps the others." >&2; \
 		exit 1; \
 	fi
-	@env_file="$$(for name in $$(echo '$(VM_ENV)' | tr ',' ' '); do \
+	@env_file="$$(for name in $(vm_env_names); do \
 		value="$$(printenv "$$name")"; \
 		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$name has unsupported characters" >&2; exit 1;; esac; \
 		printf '%s=%s\n' "$$name" "$$value"; \
 	done)" && printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
 		sh -c 'umask 077 && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && mkdir -p "$$d" && new="$$(cat)" && \
 		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && t="$$(mktemp "$$d/.daemon.env.XXXXXX")" && \
-		{ { if [ -f "$$f" ]; then grep -v -E "^($$names)=" "$$f"; [ "$$?" -le 1 ]; fi && printf "%s\n" "$$new"; } > "$$t" && \
-		chmod 600 "$$t" && mv "$$t" "$$f" || { rm -f "$$t"; exit 1; }; }' >/dev/null
-	@echo "vm-env: $(VM_ENV) written to ~/.config/dot-agent-deck/daemon.env in the VM, its other lines kept; 'make deck-restart' applies it to a running deck"
+		{ { if [ "$$1" = merge ] && [ -f "$$f" ]; then grep -v -E "^($$names)=" "$$f"; [ "$$?" -le 1 ]; fi && printf "%s\n" "$$new"; } > "$$t" && \
+		chmod 600 "$$t" && mv "$$t" "$$f" || { rm -f "$$t"; exit 1; }; }' sh $(vm_env_mode) >/dev/null
+	@echo "vm-env: $$(echo $(vm_env_names)) written to ~/.config/dot-agent-deck/daemon.env in the VM, $(if $(filter replace,$(vm_env_mode)),replacing the whole file,its other lines kept); 'make deck-restart' applies it to a running deck"
 
 .PHONY: vm-claude-settings
 vm-claude-settings: ## Merge dev/claude-user-settings.json into Claude Code's user settings in the VM

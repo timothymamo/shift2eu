@@ -92,7 +92,7 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 | `deck` | `dot-agent-deck validate`: checks `.dot-agent-deck.toml` |
 | `deck command` | Sets the deck's `default_command` to `claude --model opus --permission-mode auto`, the orchestrator's command: the New Agent form pre-fills it, and a dispatcher started with a blank command, and the single units it dispatches, run it. A command already set in the VM is kept (`dot-agent-deck config set default_command ...` changes it) |
 | `deck dir` | Sets the deck's `default_dir` to the main checkout, on every run (see below) |
-| `daemon` | `dot-agent-deck daemon install`, unless `dot-agent-deck.service` is already installed; an installed service that runs is restarted when `deck dir` changed the deck's configuration, so it reads the new `default_dir` |
+| `daemon` | `dot-agent-deck daemon install`, unless `dot-agent-deck.service` is already installed. It never restarts an installed service (that would stop every running agent): when `deck dir` changed the deck's configuration and the service runs, it says to run `make deck-restart` between tasks so the daemon reads the new `default_dir` |
 
 It never prints a credential: the checks show only the field they test.
 
@@ -124,7 +124,8 @@ It never prints a credential: the checks show only the field they test.
   in the VM user's home, which holds only `go/`, and an agent opened there gets no `CLAUDE.md`, no roles
   from `.dot-agent-deck.toml` and no dispatcher memory, which is keyed by the checkout's path. It is a
   starting point, not a limit. A rebuilt VM gets it again from `make vm-create`, and a re-run of
-  `make vm-init` sets the same value.
+  `make vm-init` sets the same value. `make vm-init` never restarts a running daemon: when it changed
+  `default_dir`, run `make deck-restart` between tasks so the daemon reads it.
 - **`dot-agent-deck daemon install`** sets the deck's daemon up as a systemd user service and starts it,
   which is why `make vm-init` comes before the first `make deck`. If the TUI has already started a daemon
   of its own, the service is installed but not started: run `dot-agent-deck daemon stop` and
@@ -281,12 +282,15 @@ read the file:
   `VM_ENV`. If one is unset or empty, it names it (never a value), exits non-zero without calling
   `limactl`, and leaves the VM's `daemon.env` byte for byte as it was; `make vm-create`, which runs it,
   stops there. This keeps a locked login Keychain or an unloaded `.envrc` from wiping the credentials the
-  agents need ([Troubleshooting](#troubleshooting-credentials)).
-- **A narrowed `VM_ENV` merges.** `make vm-env` replaces the lines of the names in `VM_ENV` and keeps
-  every other line already in `daemon.env` (it creates the file when there is none). So
-  `make vm-env VM_ENV=GITHUB_TOKEN` replaces only `GITHUB_TOKEN` and keeps the OAuth token and the
-  DeepSeek key. The merge is written to a temporary file beside `daemon.env`, mode 0600, and moved into
-  place, so a failure never leaves half a file. To drop a variable from the file, delete its line in the VM.
+  agents need ([Troubleshooting](#troubleshooting-credentials)). An empty `VM_ENV` (`make vm-env VM_ENV=`)
+  names no credential and is refused the same way; a name listed twice is written once.
+- **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the three
+  variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY`, is removed.
+- **An explicit `VM_ENV` merges.** `make vm-env VM_ENV=...` (on the command line or in the environment)
+  replaces the lines of the names in `VM_ENV` and keeps every other line already in `daemon.env` (it
+  creates the file when there is none). So `make vm-env VM_ENV=GITHUB_TOKEN` replaces only `GITHUB_TOKEN`
+  and keeps the OAuth token and the DeepSeek key. Either way the file is written to a temporary file
+  beside `daemon.env`, mode 0600, and moved into place, so a failure never leaves half a file.
 - **Rotating a credential:** change it on the Mac, then `make vm-env deck-restart`. Restarting the service
   stops its running agents, so do it between tasks. Run `claude setup-token` again before the year is up.
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the
