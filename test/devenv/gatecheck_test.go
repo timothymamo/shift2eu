@@ -910,6 +910,9 @@ func TestProtectMainCheckReportsEachGapOnItsOwn(t *testing.T) {
 		name    string
 		prepare func(t *testing.T, f *gateFixture)
 		wantGap []string
+		// wantNotPrinted names lines the run must not print, for a case whose gap would otherwise let a
+		// contradicting ok: line stand beside it.
+		wantNotPrinted []string
 	}{
 		{
 			name: "0 required approvals",
@@ -1089,6 +1092,58 @@ func TestProtectMainCheckReportsEachGapOnItsOwn(t *testing.T) {
 			},
 			wantGap: []string{"gap: Protect main excludes main: ~ALL"},
 		},
+		// GitHub matches a ruleset's ref_name patterns as shell globs, so a character class, a brace
+		// expansion or an escape can select main. The check reads the pattern with its own glob matcher and
+		// prints only the pattern back, so it cannot tell whether such a pattern excludes main: it must say
+		// it may, so that a pattern it cannot read never reads as a gate that holds.
+		{
+			name: "an exclude with a character class",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					refNameConditions(t, ruleset)["exclude"] = []any{"refs/heads/[m]ain"}
+				})
+			},
+			wantGap: []string{
+				"gap: Protect main cannot read exclude pattern refs/heads/[m]ain, so it may exclude main",
+			},
+			wantNotPrinted: []string{okDoesNotExcludeMain},
+		},
+		{
+			name: "an exclude with a brace expansion",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					refNameConditions(t, ruleset)["exclude"] = []any{"refs/heads/{main,dev}"}
+				})
+			},
+			wantGap: []string{
+				"gap: Protect main cannot read exclude pattern refs/heads/{main,dev}, so it may exclude main",
+			},
+			wantNotPrinted: []string{okDoesNotExcludeMain},
+		},
+		{
+			name: "an exclude with an escape",
+			prepare: func(t *testing.T, f *gateFixture) {
+				t.Helper()
+
+				f.serveRulesetWith(t, func(t *testing.T, ruleset map[string]any) {
+					t.Helper()
+
+					refNameConditions(t, ruleset)["exclude"] = []any{`refs/heads/ma\in`}
+				})
+			},
+			wantGap: []string{
+				`gap: Protect main cannot read exclude pattern refs/heads/ma\in, so it may exclude main`,
+			},
+			wantNotPrinted: []string{okDoesNotExcludeMain},
+		},
 		{
 			name: "a ruleset that is not enforced",
 			prepare: func(t *testing.T, f *gateFixture) {
@@ -1199,6 +1254,13 @@ func TestProtectMainCheckReportsEachGapOnItsOwn(t *testing.T) {
 
 			if diff := cmp.Diff(tc.wantGap, gapLines(stdout)); diff != "" {
 				t.Errorf("the gate check reported other gaps than %s is (-want +got):\n%s", tc.name, diff)
+			}
+
+			printed := outputLines(stdout)
+			for _, line := range tc.wantNotPrinted {
+				if slices.Contains(printed, line) {
+					t.Errorf("the gate check printed %q with %s: it contradicts the gap it reported\nstdout: %s", line, tc.name, stdout)
+				}
 			}
 
 			if unverified := linesWithPrefix(stdout, "unverified: "); len(unverified) != 0 {
