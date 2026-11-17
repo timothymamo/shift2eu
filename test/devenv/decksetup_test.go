@@ -42,9 +42,22 @@ func (sb *sandbox) daemonEnvPath() string {
 func (sb *sandbox) seedDaemonEnv(t *testing.T) []byte {
 	t.Helper()
 
-	writeFileMode(t, sb.daemonEnvPath(), []byte(seededDaemonEnv), 0o600)
+	return sb.seedDaemonEnvWith(t)
+}
 
-	return []byte(seededDaemonEnv)
+// seedDaemonEnvWith writes the VM's daemon.env as a previous make vm-env left it plus extra lines, the way a
+// maintainer or an earlier target left a setting vm-env does not know about, and returns its bytes.
+func (sb *sandbox) seedDaemonEnvWith(t *testing.T, extra ...string) []byte {
+	t.Helper()
+
+	body := seededDaemonEnv
+	for _, line := range extra {
+		body += line + "\n"
+	}
+
+	writeFileMode(t, sb.daemonEnvPath(), []byte(body), 0o600)
+
+	return []byte(body)
 }
 
 // vmEnvEnv is the environment one run of make vm-env gets: the sandbox's PATH with the fake limactl first, a
@@ -204,6 +217,78 @@ func TestMakeVMEnvRefusesMissingCredentials(t *testing.T) {
 	}
 }
 
+// TestMakeVMEnvRefusesANameThatIsNotAVariable pins the other refusal make vm-env makes before it writes
+// anything (issue #234): a VM_ENV name that is not a shell identifier - it starts with a digit, or holds a
+// character a variable name may not have - is refused instead of written into daemon.env, where the line
+// would be meaningless and printenv could never have set it. Every credential is set, so the refusal is
+// about the name and not about a missing credential, and the file stays byte for byte as it was.
+func TestMakeVMEnvRefusesANameThatIsNotAVariable(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		vmEnv  string // the invented name handed to VM_ENV; no variable of the test machine is ever named so
+		reason string
+	}{
+		{
+			name:   "the name starts with a digit",
+			vmEnv:  "1INVENTED_TOKEN",
+			reason: "a name may not start with a digit",
+		},
+		{
+			name:   "the name holds a dash",
+			vmEnv:  "INVENTED-TOKEN",
+			reason: "a variable name never holds a dash",
+		},
+		{
+			name:   "the name holds a dot",
+			vmEnv:  "INVENTED.TOKEN",
+			reason: "a variable name never holds a dot",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+
+			// The credentials VM_ENV lists are all set, so a refusal can only be about tc.vmEnv.
+			seeded := sb.seedDaemonEnv(t)
+
+			stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=" + tc.vmEnv}, env)
+			if err == nil {
+				t.Fatalf("make vm-env VM_ENV=%s exited 0: it must refuse a name that is not a variable (%s), so no line printenv could never set reaches daemon.env (issue #234)\nstdout: %s\nstderr: %s",
+					tc.vmEnv, tc.reason, stdout, stderr)
+			}
+
+			if !strings.Contains(stdout+stderr, tc.vmEnv) {
+				t.Errorf("the refusal does not name %s, so a maintainer cannot tell which VM_ENV name vm-env refused (%s):\nstdout: %s\nstderr: %s",
+					tc.vmEnv, tc.reason, stdout, stderr)
+			}
+
+			got, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after a refused make vm-env: %v", readErr)
+			}
+
+			if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+				t.Errorf("make vm-env rewrote the VM's daemon.env although it refused %s: the file must be byte for byte what it was (issue #234) (-want +got):\n%s",
+					tc.vmEnv, diff)
+			}
+
+			// A refusal before the VM is touched at all: nothing handed limactl writes daemon.env.
+			if log := sb.argvLogText(t); strings.Contains(log, "daemon.env") {
+				t.Errorf("make vm-env handed limactl a command that writes ~/.config/dot-agent-deck/daemon.env although it refused %s:\n%s",
+					tc.vmEnv, log)
+			}
+
+			assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
+		})
+	}
+}
+
 // TestMakeVMEnvRefusalSaysHowToFixIt pins that the refusal is actionable, in the order a maintainer needs it:
 // unlock the login Keychain (a macOS SSH session, where the credentials come from the Keychain), re-enter the
 // checkout so direnv reloads the .envrc (other hosts, where they come from direnv), then run make vm-env again.
@@ -267,9 +352,16 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 	cases := []struct {
 		name string
 		seed bool // the VM already has a daemon.env, as after an earlier make vm-env
+		// extra are the lines of an earlier daemon.env that VM_ENV does not name: the merge keeps them.
+		extra []string
 	}{
 		{name: "the VM has no daemon.env yet, the first run"},
 		{name: "the VM has a daemon.env already", seed: true},
+		{
+			name:  "a line VM_ENV does not name survives the merge",
+			seed:  true,
+			extra: []string{"UNRELATED_SETTING=kept-by-the-merge"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -280,7 +372,7 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 			env := sb.vmEnvEnv()
 
 			if tc.seed {
-				sb.seedDaemonEnv(t)
+				sb.seedDaemonEnvWith(t, tc.extra...)
 			}
 
 			stdout, stderr, err := runMake(t, []string{"vm-env"}, env)
@@ -307,6 +399,9 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 				"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
 				"GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN"),
 			}
+			// A full VM_ENV replaces the names it lists and keeps every other line, so a setting vm-env does
+			// not know about is never lost (the merge decision on issue #234).
+			want = append(want, tc.extra...)
 
 			if diff := cmp.Diff(sortedEnvLines(strings.Join(want, "\n")), sortedEnvLines(string(body))); diff != "" {
 				t.Errorf("make vm-env wrote the wrong lines to the VM's daemon.env (-want +got):\n%s", diff)
