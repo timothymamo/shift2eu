@@ -16,6 +16,12 @@
 // symlink counts as present, because the directory may still hold the VM disk; a limactl list --quiet that
 // fails stops vm-up before it creates anything, instead of being read as an instance that is not listed; and the
 // instance name is matched literally, not as a grep pattern, so a name with a dot matches only itself.
+//
+// Two last details of the same decision (issue #237): a lima.yaml that is a dangling symlink is present for a
+// Stopped or Running instance too, so vm-up neither starts it nor advises removing the directory; and an
+// instance name that is not letters, digits, '.', '_' and '-', starting with a letter or digit, is refused
+// before any limactl call at all - an empty name matches the empty line an empty listing prints, so it would
+// take the branch of a listed instance and could send a maintainer off to remove all of ~/.lima by hand.
 
 package devenv_test
 
@@ -391,7 +397,9 @@ func TestVMUpStopsWhenItCannotListInstances(t *testing.T) {
 // Running and whose directory holds a lima.yaml still gets exactly one limactl start <name>, an instance that
 // is not listed gets exactly the dev/lima.yaml command line with this repository's workspace mounted,
 // unchanged, and a listed instance whose directory holds no lima.yaml is started by neither branch: limactl
-// start <name> would read the name as a template and fall back to template:default (issue #237). The status
+// start <name> would read the name as a template and fall back to template:default (issue #237). A lima.yaml
+// that is a dangling symlink is there for a Stopped or Running instance as well: the directory may still hold
+// an intact disk, so that case stops too, pointing at limactl list instead of a removal by hand. The status
 // of a listed instance is read by asking limactl for that instance by name, never by any other query, and an
 // instance that is not listed gets no status query at all: there is no status to read.
 func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
@@ -407,9 +415,11 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 		status       string   // what the status query answers, unread when the instance is not listed
 		limaHome     bool     // LIMA_HOME names the directory Lima keeps its instances in
 		limaYaml     bool     // the instance directory holds a lima.yaml
+		limaYamlLink bool     // the instance directory holds a lima.yaml that is a dangling symlink instead
 		limaInstance string   // the LIMA_INSTANCE make runs with; empty means vmUpInstance
 		want         []string // the one limactl start vm-up must run; nil means vm-up must refuse to start
 		wantStderr   []string // substrings stderr must hold when vm-up refuses; <instance-dir> stands for the directory
+		forbidStderr []string // substrings stderr must not hold when vm-up refuses
 		// wantQueries is the status query vm-up must make, in call order: nil, the zero value, means it
 		// must make none at all, as for an instance that is not listed and has no status to read.
 		wantQueries [][]string
@@ -443,6 +453,25 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 			status:     "Running",
 			limaHome:   true,
 			wantStderr: []string{vmUpInstanceDirMarker, "lima.yaml"},
+		},
+		{
+			// A dangling lima.yaml is an entry Lima looks for: the instance may hold an intact disk behind it,
+			// so this case must not start it and must not advise a removal by hand either.
+			name:         "a stopped instance whose lima.yaml is a dangling symlink",
+			instance:     vmUpInstance,
+			status:       "Stopped",
+			limaYamlLink: true,
+			wantStderr:   []string{"limactl list"},
+			forbidStderr: []string{"by hand"},
+		},
+		{
+			name:         "a running instance whose lima.yaml is a dangling symlink, with LIMA_HOME set",
+			instance:     vmUpInstance,
+			status:       "Running",
+			limaHome:     true,
+			limaYamlLink: true,
+			wantStderr:   []string{"limactl list"},
+			forbidStderr: []string{"by hand"},
 		},
 		{
 			name:     "an instance that is not listed",
@@ -493,11 +522,15 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 				f.writeInstanceLimaYaml(t)
 			}
 
+			if tc.limaYamlLink {
+				f.symlinkInstanceLimaYaml(t)
+			}
+
 			stdout, stderr, err := runMakeIn(t, f.root, []string{"vm-up"}, f.env)
 
 			if tc.want == nil {
 				if err == nil {
-					t.Fatalf("make vm-up %s exited 0: limactl start <name> on an instance whose directory holds no lima.yaml reads the name as a template and falls back to template:default, a VM that mounts the whole home directory (issue #237)\nstdout: %s\nstderr: %s",
+					t.Fatalf("make vm-up %s exited 0, but this case must stop vm-up before any limactl start (issue #237): an instance whose lima.yaml is missing or cannot be loaded must not be started, or limactl start <name> reads the name as a template and falls back to template:default, a VM that mounts the whole home directory\nstdout: %s\nstderr: %s",
 						tc.name, stdout, stderr)
 				}
 
@@ -509,7 +542,14 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 				for _, w := range tc.wantStderr {
 					w = strings.ReplaceAll(w, vmUpInstanceDirMarker, f.instanceDir())
 					if !strings.Contains(stderr, w) {
-						t.Errorf("make vm-up's stderr does not say %q for %s, so a maintainer cannot see which instance directory is at fault or what is missing from it (issue #237)\nstderr: %s",
+						t.Errorf("make vm-up's stderr does not say %q for %s, so a maintainer cannot see which instance directory is at fault, what is missing from it, or where to look next (issue #237)\nstderr: %s",
+							w, tc.name, stderr)
+					}
+				}
+
+				for _, w := range tc.forbidStderr {
+					if strings.Contains(stderr, w) {
+						t.Errorf("make vm-up's stderr says %q for %s, which this case forbids: a lima.yaml that is there, even as a dangling symlink, is not a reason to send a maintainer off to remove the instance by hand, or to look for the reason somewhere else than limactl list (issue #237)\nstderr: %s",
 							w, tc.name, stderr)
 					}
 				}
@@ -538,6 +578,88 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 
 			if diff := cmp.Diff(tc.wantQueries, f.statusQueries(t)); diff != "" {
 				t.Errorf("make vm-up %s read the status of the instance with the wrong limactl calls (-want +got), or read a status an instance that is not listed does not have:\n%s", tc.name, diff)
+			}
+		})
+	}
+}
+
+// vmUpProbeMakefile answers the LIMA_INSTANCE make reads, with the same ?= the repository's Makefile uses, so a
+// case can prove its empty name reached make as an empty value and not as the recipe's default.
+const vmUpProbeMakefile = `LIMA_INSTANCE ?= shift2eu
+probe:
+	@printf 'LIMA_INSTANCE=[%s]\n' "$(LIMA_INSTANCE)"
+`
+
+// assertMakeSeesEmptyInstance fails unless make, run with the fixture's environment, reads LIMA_INSTANCE as
+// defined and empty: an environment variable set to an empty value is defined for ?=, so the empty name is
+// what the recipe sees. Without it the empty-name case would silently run as the default instance and pin
+// nothing.
+func assertMakeSeesEmptyInstance(t *testing.T, f *vmUpFixture) {
+	t.Helper()
+
+	probe := filepath.Join(f.sb.root, "probe.mk")
+	writeFileMode(t, probe, []byte(vmUpProbeMakefile), 0o600)
+
+	stdout, stderr, err := runMakeIn(t, f.root, []string{"-f", probe, "probe"}, f.env)
+	if err != nil {
+		t.Fatalf("make -f %s probe: %v\nstdout: %s\nstderr: %s", probe, err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "LIMA_INSTANCE=[]") {
+		t.Fatalf("make reads LIMA_INSTANCE as %q although the test sets it to an empty value: a variable make does not see as defined stays the recipe's default, so the empty-name case would pin nothing (issue #237)\nstdout: %s",
+			strings.TrimSpace(stdout), stdout)
+	}
+}
+
+// TestVMUpRefusesAnInvalidInstanceName pins that vm-up checks the instance name before it calls limactl at all
+// (issue #237): only letters, digits, '.', '_' and '-', starting with a letter or digit, name an instance.
+// Anything else - an empty name, a leading dash limactl would read as an option, a slash that turns the
+// instance directory into a path below ~/.lima, a space - stops vm-up with a message naming LIMA_INSTANCE, and
+// no limactl call runs. An empty name in particular matches the single empty line an empty listing prints, so
+// vm-up would take the branch of a listed instance, look in $HOME/.lima itself and could send a maintainer off
+// to remove all of it by hand.
+func TestVMUpRefusesAnInvalidInstanceName(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		limaInstance string // the LIMA_INSTANCE make runs with, as an environment variable
+		status       string // what the status query would answer, should vm-up make one
+	}{
+		{limaInstance: "", status: "Broken", name: "an empty name"},
+		{limaInstance: "-x", status: "Stopped", name: "a name with a leading dash"},
+		{limaInstance: "a/b", status: "Stopped", name: "a name with a slash"},
+		{limaInstance: "a b", status: "Stopped", name: "a name with a space"},
+		{limaInstance: "_x", status: "Stopped", name: "a name with a leading underscore"},
+		{limaInstance: ".hidden", status: "Stopped", name: "a name with a leading dot"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Nothing is listed, as an empty listing answers: the empty name is the one that matches it.
+			f := newVMUpFixture(t, "", tc.status)
+			f.env["LIMA_INSTANCE"] = tc.limaInstance
+
+			if tc.limaInstance == "" {
+				assertMakeSeesEmptyInstance(t, f)
+			}
+
+			stdout, stderr, err := runMakeIn(t, f.root, []string{"vm-up"}, f.env)
+			if err == nil {
+				t.Fatalf("make vm-up exited 0 with LIMA_INSTANCE=%q: an invalid instance name must stop vm-up, or limactl reads it as an option, a path or nothing at all and the name that is started is not the one LIMA_INSTANCE asks for (issue #237)\nstdout: %s\nstderr: %s",
+					tc.limaInstance, stdout, stderr)
+			}
+
+			if calls := invocations(f.sb.argvLogText(t), "limactl"); len(calls) != 0 {
+				t.Errorf("make vm-up ran limactl %v with LIMA_INSTANCE=%q: the name must be checked before any limactl call, or vm-up takes a name it cannot use for an instance that is listed and looks in a directory that is not one instance's (issue #237)",
+					calls[0], tc.limaInstance)
+			}
+
+			if !strings.Contains(stderr, "LIMA_INSTANCE") {
+				t.Errorf("make vm-up's stderr does not say %q with LIMA_INSTANCE=%q, so a maintainer cannot see which variable to fix (issue #237)\nstderr: %s",
+					"LIMA_INSTANCE", tc.limaInstance, stderr)
 			}
 		})
 	}
