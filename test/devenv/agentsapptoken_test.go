@@ -46,6 +46,11 @@ func newMintFixture(t *testing.T) *mintFixture {
 	// not there unless a test creates it keeps the warning independent of what this machine has installed
 	// (PRD #161 milestone 1 review, item 3).
 	env["SHIFT2EU_VM_REAL_GH_PATH"] = filepath.Join(sb.root, "vm-real-gh")
+	// The mint sets the fake VM user's global git identity (issue #241), and the git it runs for that reads the
+	// machine's system configuration unless it is off: the fake VM home is the only git configuration a test
+	// reads, and the machine's own never reaches the script.
+	env["GIT_CONFIG_NOSYSTEM"] = "1"
+	env["GIT_CONFIG_SYSTEM"] = os.DevNull
 
 	return &mintFixture{sb: sb, api: api, key: key, env: env}
 }
@@ -81,6 +86,90 @@ func (f *mintFixture) assertNoLeaks(t *testing.T, stdout, stderr string) {
 		f.sb.binDir,
 		f.sb.argvLog,
 	}, secrets)
+}
+
+// vmGit runs git in the fake VM user's home, the way the VM's own git sees it: HOME is that home, so the global
+// configuration is the one the mint writes there, and the machine's system configuration is off, so a test never
+// reads or writes the maintainer's git identity (issue #241).
+func (f *mintFixture) vmGit(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("git is not installed: the test needs it")
+	}
+
+	cmd := exec.Command(git, args...)
+	cmd.Env = []string{
+		"HOME=" + f.sb.vmHome,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_SYSTEM=" + os.DevNull,
+		"PATH=" + toolDir(t, "git") + ":/usr/bin:/bin",
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%w\nstderr: %s", err, stderr.String())
+	}
+
+	return stdout.String(), nil
+}
+
+// vmGitValues returns every value of one global key in the fake VM user's home: --get-all, so a key the mint
+// wrote twice shows both values, and a key it never wrote shows none.
+func (f *mintFixture) vmGitValues(t *testing.T, key string) []string {
+	t.Helper()
+
+	out, err := f.vmGit(t, "config", "--global", "--get-all", key)
+
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 1 {
+		return nil // git's status for a key the global configuration does not hold
+	}
+
+	if err != nil {
+		t.Fatalf("read the fake VM's global %s: %v", key, err)
+	}
+
+	out = strings.TrimRight(out, "\n")
+	if out == "" {
+		return nil
+	}
+
+	return strings.Split(out, "\n")
+}
+
+// setVMGitIdentity gives the fake VM user's home a global identity, the way an earlier vm-init or the maintainer
+// leaves one there (issue #241).
+func (f *mintFixture) setVMGitIdentity(t *testing.T, name, email string) {
+	t.Helper()
+
+	if _, err := f.vmGit(t, "config", "--global", "user.name", name); err != nil {
+		t.Fatalf("set the fake VM's global user.name: %v", err)
+	}
+
+	if _, err := f.vmGit(t, "config", "--global", "user.email", email); err != nil {
+		t.Fatalf("set the fake VM's global user.email: %v", err)
+	}
+}
+
+// identityNotice returns a line of the mint's output that says it set the VM's git identity: the bot's address
+// and the words git and identity. The wording is not pinned, only that a maintainer reading the run sees the
+// identity went in (issue #241).
+func identityNotice(email string, streams ...string) (string, bool) {
+	for _, stream := range streams {
+		for _, line := range strings.Split(stream, "\n") {
+			lower := strings.ToLower(line)
+			if strings.Contains(line, email) && strings.Contains(lower, "git") && strings.Contains(lower, "identity") {
+				return line, true
+			}
+		}
+	}
+
+	return "", false
 }
 
 // readTwoLines reads a file the script wrote into the VM and checks its mode: exactly two lines.
@@ -196,8 +285,91 @@ func TestAgentsAppTokenMintWritesTheTokenAndTheBotIdentity(t *testing.T) {
 			agentsIdentityFile, identity[1], wantEmail, f.api.botUserID, f.api.appID)
 	}
 
+	// Issue #241: the identity file alone left the VM committing as the maintainer, because vm-init ran before the
+	// first mint. The mint applies the identity to the VM's global git configuration, and says so.
+	if _, ok := identityNotice(wantEmail, stdout, stderr); !ok {
+		t.Errorf("the mint's output says nothing about setting the VM's git identity: no line holds the bot's address %q together with the words git and identity, so a maintainer cannot tell from the run whether the agents commit as the bot (issue #241)\nstdout:\n%s\nstderr:\n%s",
+			wantEmail, stdout, stderr)
+	}
+
 	if _, err := os.Stat(filepath.Join(f.sb.hostHome, filepath.FromSlash(agentsTokenFile))); err == nil {
 		t.Errorf("the mint wrote %s into the host's home; the token belongs in the VM and nowhere else", agentsTokenFile)
+	}
+}
+
+// TestAgentsAppTokenMintAppliesTheBotIdentityToTheVMGit pins issue #241: writing the identity file is not enough,
+// because vm-init runs before the first mint and finds no file, so nothing applies the bot identity then and every
+// agent commit carries the maintainer's. The mint that writes the bot identity also sets the VM user's global git
+// identity, replacing whatever was there, and a later mint leaves exactly one value per key.
+func TestAgentsAppTokenMintAppliesTheBotIdentityToTheVMGit(t *testing.T) {
+	t.Parallel()
+
+	const (
+		maintainerName  = "Example Maintainer"
+		maintainerEmail = "maintainer@example.com"
+	)
+
+	maintainer := func(t *testing.T, f *mintFixture) {
+		t.Helper()
+
+		f.setVMGitIdentity(t, maintainerName, maintainerEmail)
+	}
+
+	cases := []struct {
+		name   string
+		before func(t *testing.T, f *mintFixture)
+		mints  int
+	}{
+		{
+			name:  "the VM home holds no git identity yet",
+			mints: 1,
+		},
+		{
+			name:   "the VM home holds the maintainer's identity",
+			before: maintainer,
+			mints:  1,
+		},
+		{
+			// The bot replaces any other identity, as dev/vm-git-identity.sh does with the identity file present, so a
+			// second mint replaces its own: no key is written twice.
+			name:   "two mints in a row",
+			before: maintainer,
+			mints:  2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			if tc.before != nil {
+				tc.before(t, f)
+			}
+
+			for i := 1; i <= tc.mints; i++ {
+				stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+				if err != nil {
+					t.Fatalf("mint %d exited non-zero: %v\nstdout: %s\nstderr: %s\nthe fake API refused: %s",
+						i, err, stdout, stderr, strings.Join(f.api.recordedComplaints(), "; "))
+				}
+
+				f.assertNoLeaks(t, stdout, stderr)
+			}
+
+			wantName := f.api.slug + "[bot]"
+			wantEmail := fmt.Sprintf("%d+%s[bot]@users.noreply.github.com", f.api.botUserID, f.api.slug)
+
+			if got := f.vmGitValues(t, "user.name"); !slices.Equal(got, []string{wantName}) {
+				t.Errorf("the fake VM's global user.name is %v, want exactly [%q]: the mint that writes the bot identity sets the VM user's git identity too, and a later mint replaces it rather than writing the key twice (issue #241)",
+					got, wantName)
+			}
+
+			if got := f.vmGitValues(t, "user.email"); !slices.Equal(got, []string{wantEmail}) {
+				t.Errorf("the fake VM's global user.email is %v, want exactly [%q]: the mint that writes the bot identity sets the VM user's git identity too, and a later mint replaces it rather than writing the key twice (issue #241)",
+					got, wantEmail)
+			}
+		})
 	}
 }
 
@@ -784,6 +956,65 @@ func TestAgentsAppTokenRefusesToWriteThroughASymlink(t *testing.T) {
 			},
 		},
 		{
+			// Issue #241: the mint that writes the bot identity also sets the VM user's global git identity, in
+			// ~/.gitconfig, so a ~/.gitconfig that is a symlink is refused the way a symlinked token file is: the
+			// bot's identity must not be written wherever an agent points the link, and no token goes with it.
+			name: "the global git config is a symlink",
+			prepare: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				target := filepath.Join(sb.root, "outside-gitconfig")
+				writeFileMode(t, target, []byte("unchanged\n"), 0o600)
+
+				if err := os.Symlink(target, filepath.Join(sb.vmHome, ".gitconfig")); err != nil {
+					t.Fatalf("symlink the fake VM's .gitconfig: %v", err)
+				}
+			},
+			check: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				body, err := os.ReadFile(filepath.Join(sb.root, "outside-gitconfig"))
+				if err != nil {
+					t.Fatalf("read the symlink's target: %v", err)
+				}
+
+				if string(body) != "unchanged\n" {
+					t.Errorf("the mint wrote the bot's git identity through the symlinked .gitconfig, so it landed wherever an agent pointed the link (issue #241)")
+				}
+
+				if _, err := os.Stat(sb.vmPath(agentsTokenFile)); err == nil {
+					t.Errorf("the mint wrote %s although the fake VM's .gitconfig is a symlink: it must refuse before it writes the token (issue #241)", agentsTokenFile)
+				}
+			},
+		},
+		{
+			// Issue #241: a ~/.gitconfig that is a directory is not a git configuration the mint may write into.
+			name: "the global git config is not a regular file",
+			prepare: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				if err := os.MkdirAll(filepath.Join(sb.vmHome, ".gitconfig"), 0o700); err != nil {
+					t.Fatalf("create the fake VM's .gitconfig as a directory: %v", err)
+				}
+			},
+			check: func(t *testing.T, sb *sandbox) {
+				t.Helper()
+
+				info, err := os.Lstat(filepath.Join(sb.vmHome, ".gitconfig"))
+				if err != nil {
+					t.Fatalf("stat the fake VM's .gitconfig: %v", err)
+				}
+
+				if !info.IsDir() {
+					t.Errorf("the mint replaced the directory at the fake VM's .gitconfig, which is not a git configuration it may write (issue #241)")
+				}
+
+				if _, err := os.Stat(sb.vmPath(agentsTokenFile)); err == nil {
+					t.Errorf("the mint wrote %s although the fake VM's .gitconfig is a directory: it must refuse before it writes the token (issue #241)", agentsTokenFile)
+				}
+			},
+		},
+		{
 			// Second review item 7: the config directory is not itself a symlink, but it resolves, with pwd
 			// -P, to a directory outside the VM user's real home: an accidental symlink one level up must not
 			// carry the token out of the home the VM keeps it in.
@@ -856,6 +1087,9 @@ func TestAgentsAppTokenMintExitsOneWhenTheBotUserLookupFails(t *testing.T) {
 			f := newMintFixture(t)
 			f.api.failNextUserLookups(tc.status, 1)
 
+			// The VM holds an identity from before this mint, as a VM an earlier vm-init set up does (issue #241).
+			f.setVMGitIdentity(t, "Example Maintainer", "maintainer@example.com")
+
 			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
 
 			if err == nil {
@@ -881,6 +1115,16 @@ func TestAgentsAppTokenMintExitsOneWhenTheBotUserLookupFails(t *testing.T) {
 
 			if _, err := os.Stat(f.sb.vmPath(agentsIdentityFile)); err == nil {
 				t.Errorf("%s is there although no bot user lookup succeeded", agentsIdentityFile)
+			}
+
+			// Issue #241: this mint sends no identity (the token is written before the bot user is known), so it sets
+			// no git identity: what the VM had stays as it is.
+			if got := f.vmGitValues(t, "user.name"); !slices.Equal(got, []string{"Example Maintainer"}) {
+				t.Errorf("the fake VM's global user.name is %v, want [\"Example Maintainer\"]: this mint wrote a token and no identity, so it must leave the VM's git identity alone (issue #241)", got)
+			}
+
+			if got := f.vmGitValues(t, "user.email"); !slices.Equal(got, []string{"maintainer@example.com"}) {
+				t.Errorf("the fake VM's global user.email is %v, want [\"maintainer@example.com\"]: this mint wrote a token and no identity, so it must leave the VM's git identity alone (issue #241)", got)
 			}
 
 			f.assertNoLeaks(t, stdout, stderr)
