@@ -11,6 +11,11 @@
 // Stopped or Running instance without a lima.yaml be started - limactl start <name> falls back to
 // template:default in that window too - and a status query that fails stops vm-up instead of being read as an
 // unknown status.
+//
+// Three further details of the same decision are pinned here (issue #237): a lima.yaml that is a dangling
+// symlink counts as present, because the directory may still hold the VM disk; a limactl list --quiet that
+// fails stops vm-up before it creates anything, instead of being read as an instance that is not listed; and the
+// instance name is matched literally, not as a grep pattern, so a name with a dot matches only itself.
 
 package devenv_test
 
@@ -34,6 +39,11 @@ const (
 	// vmUpInstanceDirMarker stands in for the directory Lima keeps the instance in, a case's expected stderr;
 	// the fixture only knows it once the case has chosen LIMA_HOME.
 	vmUpInstanceDirMarker = "<instance-dir>"
+	// vmUpDottedInstance is an instance name whose dot grep reads as any character, and vmUpLookalikeInstance
+	// is the name that pattern also matches: what limactl list --quiet answers for another instance, which
+	// must not pass for vmUpDottedInstance (issue #237).
+	vmUpDottedInstance    = "shift2eu.x"
+	vmUpLookalikeInstance = "shift2euXx"
 )
 
 // statusLimactl stands in for limactl in the vm-up tests: it records its argv in the sandbox's log (a
@@ -44,6 +54,8 @@ const (
 // vm-up runs, never what a VM on this machine would do. A status query answers only when it asks for this
 // instance by name, as limactl does: a query about anything else gets nothing. SHIFT2EU_TEST_LIMA_STATUS_FAIL
 // stands for a limactl that cannot read the status at all: it says so on stderr and exits non-zero.
+// SHIFT2EU_TEST_LIMA_LIST_FAIL stands for a limactl whose existence listing fails: it says so on stderr and
+// exits non-zero.
 const statusLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
@@ -53,6 +65,10 @@ if [ "${1:-}" = list ]; then
   # Any listing without --quiet is the status query, whatever spelling of --format it uses.
   for a in "$@"; do
     if [ "${a}" = --quiet ]; then
+      if [ -n "${SHIFT2EU_TEST_LIMA_LIST_FAIL:-}" ]; then
+        echo 'level=fatal msg="unable to list the instances"' >&2
+        exit 1
+      fi
       if [ -n "${SHIFT2EU_TEST_LIMA_INSTANCE:-}" ]; then printf '%s\n' "${SHIFT2EU_TEST_LIMA_INSTANCE}"; fi
       exit 0
     fi
@@ -81,6 +97,8 @@ type vmUpFixture struct {
 	sb   *sandbox
 	env  map[string]string
 	root string // the clone make runs in
+	// limaInstance is the LIMA_INSTANCE make runs with: vmUpInstance unless a case picks another name.
+	limaInstance string
 }
 
 // newVMUpFixture builds the fixture for one case: instance is what limactl list --quiet answers (empty for
@@ -117,7 +135,7 @@ func newVMUpFixture(t *testing.T, instance, status string) *vmUpFixture {
 	env["SHIFT2EU_TEST_LIMA_INSTANCE"] = instance
 	env["SHIFT2EU_TEST_LIMA_STATUS"] = status
 
-	return &vmUpFixture{sb: sb, env: env, root: root}
+	return &vmUpFixture{sb: sb, env: env, root: root, limaInstance: vmUpInstance}
 }
 
 // workspace is the directory the run mounts: the clone's parent, which holds only the clone.
@@ -129,10 +147,10 @@ func (f *vmUpFixture) workspace() string {
 // $LIMA_HOME/<name> when LIMA_HOME is set, else $HOME/.lima/<name>.
 func (f *vmUpFixture) instanceDir() string {
 	if home := f.env["LIMA_HOME"]; home != "" {
-		return filepath.Join(home, vmUpInstance)
+		return filepath.Join(home, f.limaInstance)
 	}
 
-	return filepath.Join(f.env["HOME"], ".lima", vmUpInstance)
+	return filepath.Join(f.env["HOME"], ".lima", f.limaInstance)
 }
 
 // writeInstanceLimaYaml gives the instance a lima.yaml, as an instance that was started once has one: it is
@@ -141,7 +159,26 @@ func (f *vmUpFixture) instanceDir() string {
 func (f *vmUpFixture) writeInstanceLimaYaml(t *testing.T) {
 	t.Helper()
 
-	writeFileMode(t, filepath.Join(f.instanceDir(), "lima.yaml"), []byte("name: "+vmUpInstance+"\n"), 0o600)
+	writeFileMode(t, filepath.Join(f.instanceDir(), "lima.yaml"), []byte("name: "+f.limaInstance+"\n"), 0o600)
+}
+
+// symlinkInstanceLimaYaml gives the instance directory a lima.yaml that is a dangling symlink: the entry Lima
+// looks for is there, but nothing is behind it, as after a restore or a moved file. Call it after the case has
+// chosen LIMA_HOME.
+func (f *vmUpFixture) symlinkInstanceLimaYaml(t *testing.T) {
+	t.Helper()
+
+	dir := f.instanceDir()
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+
+	link, target := filepath.Join(dir, "lima.yaml"), filepath.Join(f.sb.root, "no-such-lima", "lima.yaml")
+
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink %s to %s: %v", link, target, err)
+	}
 }
 
 // statusQueries returns the argv of every limactl list that is not the existence check (--quiet), in call
@@ -182,21 +219,23 @@ func (f *vmUpFixture) starts(t *testing.T) [][]string {
 // no limactl start at all, and a Broken instance's message says which directory to remove by hand and which
 // launchd jobs may be recreating it (issue #237). A Broken instance whose directory does hold a lima.yaml
 // keeps its VM: that message must not send a maintainer off to remove it by hand, and points at limactl list
-// instead. When the status query itself fails, vm-up stops rather than reading the empty answer as an
-// unknown status.
+// instead - and a lima.yaml that is a dangling symlink still counts as there, since the directory may hold an
+// intact disk behind it. When the status query itself fails, vm-up stops rather than reading the empty answer
+// as an unknown status.
 func TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name       string
-		status     string
-		limaHome   bool     // LIMA_HOME names the directory Lima keeps its instances in
-		limaYaml   bool     // the instance directory holds a lima.yaml
-		statusFail bool     // the status query itself fails, whatever status the instance has
-		broken     bool     // the message must name the directory, the removal by hand and the launchd jobs
-		wantStatus string   // the status the message must name; empty means nothing to look for
-		want       []string // further substrings stderr must hold
-		forbid     []string // substrings stderr must not hold
+		name         string
+		status       string
+		limaHome     bool     // LIMA_HOME names the directory Lima keeps its instances in
+		limaYaml     bool     // the instance directory holds a lima.yaml
+		limaYamlLink bool     // the instance directory holds a lima.yaml that is a dangling symlink instead
+		statusFail   bool     // the status query itself fails, whatever status the instance has
+		broken       bool     // the message must name the directory, the removal by hand and the launchd jobs
+		wantStatus   string   // the status the message must name; empty means nothing to look for
+		want         []string // further substrings stderr must hold
+		forbid       []string // substrings stderr must not hold
 	}{
 		{
 			name:     "a broken instance whose directory holds no lima.yaml, with LIMA_HOME set",
@@ -215,6 +254,14 @@ func TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning(t *testing.T) {
 			limaYaml: true,
 			want:     []string{vmUpInstance, "Broken", "limactl list"},
 			forbid:   []string{"by hand"},
+		},
+		{
+			name:         "a broken instance whose lima.yaml is a dangling symlink, with LIMA_HOME set",
+			status:       "Broken",
+			limaHome:     true,
+			limaYamlLink: true,
+			want:         []string{vmUpInstance, "Broken", "limactl list"},
+			forbid:       []string{"by hand"},
 		},
 		{
 			name:       "an instance that is uninitialized",
@@ -258,6 +305,10 @@ func TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning(t *testing.T) {
 
 			if tc.limaYaml {
 				f.writeInstanceLimaYaml(t)
+			}
+
+			if tc.limaYamlLink {
+				f.symlinkInstanceLimaYaml(t)
 			}
 
 			if tc.statusFail {
@@ -309,6 +360,33 @@ func TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning(t *testing.T) {
 	}
 }
 
+// TestVMUpStopsWhenItCannotListInstances pins what the existence check does with a limactl list --quiet that
+// fails (issue #237): the empty answer is not an instance that is not listed, so vm-up stops before it creates
+// anything and says it could not list the instances - the dev/lima.yaml create line would otherwise build a VM
+// on a name that may already exist, with a VM disk of its own.
+func TestVMUpStopsWhenItCannotListInstances(t *testing.T) {
+	t.Parallel()
+
+	f := newVMUpFixture(t, vmUpInstance, "Stopped")
+	f.env["SHIFT2EU_TEST_LIMA_LIST_FAIL"] = "1"
+
+	stdout, stderr, err := runMakeIn(t, f.root, []string{"vm-up"}, f.env)
+	if err == nil {
+		t.Fatalf("make vm-up exited 0 although limactl list --quiet failed: a listing vm-up cannot read is not an instance that is not listed, and creating one on the strength of it may collide with the VM that is there (issue #237)\nstdout: %s\nstderr: %s",
+			stdout, stderr)
+	}
+
+	if starts := f.starts(t); len(starts) != 0 {
+		t.Errorf("make vm-up ran limactl start %v although limactl list --quiet failed: it must stop before creating or starting anything it cannot see (issue #237)",
+			starts[0])
+	}
+
+	if !strings.Contains(stderr, "could not list") {
+		t.Errorf("make vm-up's stderr does not say %q although limactl list --quiet failed, so a maintainer cannot see that the instance could not be looked up at all (issue #237)\nstderr: %s",
+			"could not list", stderr)
+	}
+}
+
 // TestVMUpStartsOrCreatesTheInstance pins the other half of issue #237: an instance that is Stopped or
 // Running and whose directory holds a lima.yaml still gets exactly one limactl start <name>, an instance that
 // is not listed gets exactly the dev/lima.yaml command line with this repository's workspace mounted,
@@ -324,13 +402,14 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 	statusQuery := []string{"list", "--format", "{{.Status}}", vmUpInstance}
 
 	cases := []struct {
-		name       string
-		instance   string   // what limactl list --quiet answers; empty means the instance is not listed
-		status     string   // what the status query answers, unread when the instance is not listed
-		limaHome   bool     // LIMA_HOME names the directory Lima keeps its instances in
-		limaYaml   bool     // the instance directory holds a lima.yaml
-		want       []string // the one limactl start vm-up must run; nil means vm-up must refuse to start
-		wantStderr []string // substrings stderr must hold when vm-up refuses; <instance-dir> stands for the directory
+		name         string
+		instance     string   // what limactl list --quiet answers; empty means the instance is not listed
+		status       string   // what the status query answers, unread when the instance is not listed
+		limaHome     bool     // LIMA_HOME names the directory Lima keeps its instances in
+		limaYaml     bool     // the instance directory holds a lima.yaml
+		limaInstance string   // the LIMA_INSTANCE make runs with; empty means vmUpInstance
+		want         []string // the one limactl start vm-up must run; nil means vm-up must refuse to start
+		wantStderr   []string // substrings stderr must hold when vm-up refuses; <instance-dir> stands for the directory
 		// wantQueries is the status query vm-up must make, in call order: nil, the zero value, means it
 		// must make none at all, as for an instance that is not listed and has no status to read.
 		wantQueries [][]string
@@ -377,6 +456,22 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 				"dev/lima.yaml",
 			},
 		},
+		{
+			// A dotted name is a grep pattern that also matches a name with any character where the dot
+			// is, so a listed look-alike must not pass for this instance: an instance that is not listed
+			// gets the create line, and no status query reads the look-alike's status.
+			name:         "an instance whose name holds a dot, when limactl lists a look-alike",
+			instance:     vmUpLookalikeInstance,
+			limaInstance: vmUpDottedInstance,
+			want: []string{
+				"start",
+				"--name=" + vmUpDottedInstance,
+				"--mount-only",
+				vmUpWorkspaceMarker + ":w",
+				"--tty=false",
+				"dev/lima.yaml",
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -384,6 +479,11 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 			t.Parallel()
 
 			f := newVMUpFixture(t, tc.instance, tc.status)
+
+			if tc.limaInstance != "" {
+				f.limaInstance = tc.limaInstance
+				f.env["LIMA_INSTANCE"] = tc.limaInstance
+			}
 
 			if tc.limaHome {
 				f.env["LIMA_HOME"] = filepath.Join(f.sb.root, "lima-home")
