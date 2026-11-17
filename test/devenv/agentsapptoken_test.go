@@ -291,6 +291,9 @@ func TestAgentsAppTokenMintWritesTheTokensGitHubAnswersWithUnchanged(t *testing.
 func TestAgentsAppTokenMintRefusesATokenGitHubMustNeverHandOut(t *testing.T) {
 	t.Parallel()
 
+	// The fake API answers in JSON, so only an empty token, a space, a single quote, $ and ; reach the script
+	// as themselves and exercise the allow list directly: a tab, a double quote, a backslash, a control
+	// character and a newline arrive as JSON escapes and are refused for the backslash that spells them.
 	cases := []struct {
 		name  string
 		token string

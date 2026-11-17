@@ -298,8 +298,10 @@ func TestGHAppTokenRefusesABadTokenFile(t *testing.T) {
 
 // TestGHAppTokenRefusesADangerousToken pins the other half of the new token format (issue #232): accepting
 // GitHub's longer, punctuated tokens must not weaken the check that keeps a value from breaking the two-line
-// token file, a header or the shell. An empty token, whitespace, a quote, a backslash, $, ;, a control
-// character and a newline are still refused without running gh, and the token is never printed.
+// token file, a header or the shell. An empty token, whitespace, a quote, a backslash, $, ; and a control
+// character are still refused without running gh, and the token is never printed. A newline cannot sit in a
+// token of this file at all: it reaches the file as a line of its own, so the last case pins that a file with
+// a line between the token and its expiry is refused too.
 func TestGHAppTokenRefusesADangerousToken(t *testing.T) {
 	t.Parallel()
 
@@ -316,7 +318,7 @@ func TestGHAppTokenRefusesADangerousToken(t *testing.T) {
 		{name: "a dollar sign", token: newFormatAppToken(3) + "$x"},
 		{name: "a semicolon", token: newFormatAppToken(3) + ";x"},
 		{name: "a control character", token: newFormatAppToken(3) + "\x01"},
-		{name: "a newline", token: newFormatAppToken(3) + "\nx"},
+		{name: "a line between the token and its expiry", token: newFormatAppToken(3) + "\nx"},
 	}
 
 	for _, tc := range cases {
