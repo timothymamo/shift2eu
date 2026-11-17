@@ -102,23 +102,26 @@ moves or deletes a tag.
    bypass lists against this step with their own token, and do not go on to step 5's merge until they
    have. Never count a missing or empty list as passing.
    Then run the `Protect main` gate check from the repository root: `make gate-check`
-   (`dev/protect-main-check.sh`; PRD #161). It reads `Protect main` and `main`'s `.github/CODEOWNERS`
-   and prints one `ok:` or `gap:` line per check. A gap is `Protect main` not enforced or without a
-   `pull_request` rule, fewer than 1 required approval, `require_code_owner_review`,
-   `dismiss_stale_reviews_on_push` or `require_last_push_approval` not `true`, a bypass actor, a bypass
-   list it could not read, or a CODEOWNERS file without rules, without a `*` rule, with an ownerless rule
-   or with an owner other than the maintainer. Until milestone 3 of PRD #161 turns it off, the Makefile runs
-   it with the transition flag (`GATE_TRANSITION=1`, `--transition`), which reports the gaps without
-   failing. Act on its exit status:
-   - **0**: the gate holds, or the transition flag is on: put every gap line it printed in the report and
-     go on;
-   - **1**: the gate has gaps and the transition is over: report the gaps and stop the release;
+   (`dev/protect-main-check.sh`; PRD #161). It reads the repository, `Protect main`, `main`'s
+   `.github/CODEOWNERS` and GitHub's CODEOWNERS errors, and prints one line per check: `ok:`, `gap:`, or
+   `unverified:` for what this token may not read (on the App's token, `Protect main`'s bypass list). A
+   gap is `Protect main` not enforced, not targeting branches, not including `main` or excluding it,
+   without a `pull_request` rule, fewer than 1 required approval, `require_code_owner_review`,
+   `dismiss_stale_reviews_on_push` or `require_last_push_approval` not `true`, a bypass actor, a token
+   that may bypass `Protect main`, or a CODEOWNERS file without rules, without a `*` rule, with an
+   ownerless rule, with an owner other than the maintainer or with errors GitHub reports. Until milestone 3
+   of PRD #161 removes it, the Makefile runs it with the transition flag (`GATE_TRANSITION=1`,
+   `--transition`): while the gate is off it reports without failing and prints a
+   `transition: gaps=<n>, unverified=<m>, not failing the release` line; once the gate is on it prints
+   `transition: ignored, the gate is on` and exits as without the flag. Quote any `transition:` line first
+   in the report, then act on its exit status:
+   - **0**: put every `gap:` and `unverified:` line it printed in the report and go on;
+   - **1**: stop the release and report the `gap:` lines;
    - **2**: it could not check (a `gh api` read failed, not exactly one ruleset named `Protect main`, an
-     unexpected answer): report its stderr and stop.
-   A gap saying the bypass list could not be read is not yours to settle: the App's token cannot read it
-   (above). Hand it to the maintainer to check with their own token, and say so in the report. The same
-   holds for `ok: bypass_actors is empty` on the App's token: GitHub may return the list empty to a token
-   that cannot read it, so it is no proof; ask the maintainer to confirm it too.
+     unexpected answer): report its stderr and stop;
+   - **3**: no gap, but a check is unverified with this token: stop, and ask the maintainer to run
+     `make gate-check` with their own admin token (`gh auth login` on the Mac) and confirm it exits 0.
+     Do not go on to step 5's merge until they have.
 3. Find the open release PR:
    `gh pr list --state open --label "autorelease: pending" --json number,title,headRefName,url`.
    There must be exactly one, from the branch `release-please--branches--main--components--shift2eu`

@@ -462,27 +462,42 @@ yours would need another approver, and there is none. Ask the agents for the cha
 reviewer (milestone 4) comments and may request changes; its findings are advice you weigh, its change
 request is yours to dismiss, and it never approves.
 
-**The gate check**, `make gate-check` (`dev/protect-main-check.sh`), reads `Protect main` and
-`.github/CODEOWNERS` on `main` and prints one `ok:` or `gap:` line per check. A gap is `Protect main` not
-enforced or without a pull request rule, fewer than 1 required approval, one of the three rules above off,
-a bypass actor, a bypass list it could not read, or a CODEOWNERS file on `main` without rules, without a
-`*` rule, with a rule that has no owner, or with an owner other than you. The `release-tag` skill runs it
-in its step 2; you can run it whenever you like. Its exit status:
+**The gate check**, `make gate-check` (`dev/protect-main-check.sh`), reads the repository
+`timothymamo/shift2eu` (spelled out, so a fork's remote or `GH_REPO` cannot change what it checks), its
+`Protect main` ruleset, `.github/CODEOWNERS` on `main` and GitHub's CODEOWNERS errors for that file, and
+prints one line per check: `ok:`, `gap:`, or `unverified:` for what this token may not read. A gap is
+`Protect main` not enforced, not targeting branches, not including `main` or excluding it, without a pull
+request rule, with fewer than 1 required approval or one of the three rules above off, a bypass actor, a
+bypass list missing on a repository admin's token, a token that may bypass `Protect main`
+(`current_user_can_bypass` other than `never`), or a CODEOWNERS file on `main` without rules, without a
+`*` rule, with a rule that has no owner, with an owner other than you, or with errors GitHub reports. The
+`release-tag` skill runs it in its step 2; you can run it whenever you like. Its exit status:
 
 | Exit | Means |
 |---|---|
-| 0 | The gate holds, or the transition flag is on and it only reported the gaps |
-| 1 | The gate has gaps (transition flag off): the release-tag skill stops the release |
+| 0 | The gate holds, or the transition flag applies (see below) and it only reported the gaps |
+| 1 | The gate has gaps: the release-tag skill stops the release |
 | 2 | It could not check, in both modes: a `gh api` read failed (no access), not exactly one ruleset is named `Protect main`, an answer it did not expect, or an unknown argument |
+| 3 | No gap, but a check is `unverified:`: run `make gate-check` yourself, with your own admin token |
 
-The transition flag, `GATE_TRANSITION`, is `1` by default until milestone 3 of PRD #161 turns it off: the
-check runs with `--transition` and reports the gaps without failing, so releases go on before the switch.
-`make gate-check GATE_TRANSITION=0` checks as it will after milestone 3. GitHub returns a ruleset's
-bypass list only to a token that may change the ruleset (Administration write), which the agents App
-never gets (ADR 0031, d): run in the VM, GitHub leaves the list out and the check prints
-`gap: bypass_actors could not be read: ...`, or GitHub returns it empty and the check prints
-`ok: bypass_actors is empty`, which on the App's token proves nothing. That part is yours: run the check
-from the host clone, logged in to `gh` as yourself, as runbook step 5 does.
+GitHub returns a ruleset's bypass list only to a token that may change the ruleset, which the agents App
+never gets (ADR 0031, d): GitHub leaves the list out or returns it empty, and either proves nothing. The
+check therefore reads the repository's `permissions.admin` first, and on a token that is not a repository
+admin it prints `unverified: bypass_actors cannot be verified with this token (not a repository admin):
+run make gate-check as the maintainer` instead of a verdict. That part is yours: run `make gate-check` from
+the host clone, logged in to `gh` as yourself with an admin token (`gh auth login` on the Mac), as runbook
+step 5 does. A fine-grained personal token reports your role on the repository in `permissions.admin`, not
+what the token itself may do: without Administration on the token, GitHub leaves the bypass list out and
+the check reports `gap: bypass_actors is missing although this token is a repository admin`. Use
+`gh auth login`'s token, or give the fine-grained token Administration read.
+
+The transition flag, `GATE_TRANSITION`, is `1` by default until milestone 3 of PRD #161 removes it: the
+check runs with `--transition`, and while the gate is off (no pull request rule, or one that requires
+neither an approval nor code owner review) it reports the gaps and unverified checks, adds
+`transition: gaps=<n>, unverified=<m>, not failing the release` and exits 0, so releases go on before the
+switch. The flag closes itself: once `Protect main` requires an approval or code owner review, the check
+prints `transition: ignored, the gate is on` and exits as without the flag. `make gate-check
+GATE_TRANSITION=0` checks as it will after milestone 3.
 
 ### The switch-over runbook
 
@@ -525,9 +540,10 @@ before it still hold. Rolling back is under each step.
    review from Code Owners, dismiss stale pull request approvals when new commits are pushed, require
    approval of the most recent reviewable push. Leave the bypass list empty.
    *Check:* from the host clone (`git -C ~/src/shift2eu-host pull --ff-only`), logged in to `gh` as
-   yourself, `make gate-check GATE_TRANSITION=0` exits 0 and prints no gap. An open agent pull request
-   shows "Review required" (`gh pr view <n> --json reviewDecision` gives `REVIEW_REQUIRED`) until you
-   approve it.
+   yourself with an admin token, `make gate-check GATE_TRANSITION=0` exits 0 and prints no `gap:` and no
+   `unverified:` line (an exit of 3 means the token is not a repository admin: `gh auth login` and run it
+   again). An open agent pull request shows "Review required" (`gh pr view <n> --json reviewDecision`
+   gives `REVIEW_REQUIRED`) until you approve it.
    *Roll back:* put the `pull_request` rule of `Protect main` back as it was before this step, turning
    off all four settings: required approvals 0, no review from Code Owners, no dismissal of stale
    approvals, no approval of the most recent reviewable push. *Check:* `make gate-check
@@ -538,8 +554,8 @@ before it still hold. Rolling back is under each step.
    environment, then revoke that personal token on GitHub.
    *Check:* the token no longer appears under your
    [fine-grained tokens](https://github.com/settings/personal-access-tokens); `make vm-init`'s `gh` step
-   still passes, on the App token; and from the host clone, `make gate-check` (its transition flag now
-   off by default) exits 0.
+   still passes, on the App token; and from the host clone, as yourself with an admin token,
+   `make gate-check` (its transition flag now gone) exits 0.
    *Roll back:* create a new fine-grained token and put it back in `VM_ENV` (milestone 3's revert brings
    the fallback back).
 7. **Add the AI reviewer** (milestone 4): create the reviewer App (Pull requests write, Contents read,
