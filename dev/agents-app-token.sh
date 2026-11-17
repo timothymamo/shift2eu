@@ -454,8 +454,12 @@ mint_once() {
   esac
   token="$(json_string token)"
   expires_at="$(json_string expires_at)"
+  # The token is opaque, as GitHub asks: an allow list, not a format parser. It takes both of GitHub's
+  # formats, ghs_ and 36 alphanumerics, and ghs_<App ID>_<JWT> (about 520 characters, variable length,
+  # whose base64url JWT adds - and the . between its parts), and still refuses anything that could break
+  # the two-line token file or the shell: whitespace, quotes, \, $, ; and control characters.
   case "${token}" in
-  '' | *[!A-Za-z0-9_]*)
+  '' | *[!A-Za-z0-9_.-]*)
     failure=transient
     say "no installation token minted: GitHub's answer holds no token"
     return 1

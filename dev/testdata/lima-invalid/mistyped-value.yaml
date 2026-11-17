@@ -255,8 +255,10 @@ provision:
         IFS= read -r extra || :
       } <"${file}"
 
+      # The token is opaque: an allow list, not a format parser. It takes both of GitHub's installation token
+      # formats, ghs_ and 36 alphanumerics, and ghs_<App ID>_<JWT>, whose base64url JWT adds - and . (#232).
       case "${token}" in
-      '' | *[!A-Za-z0-9_]*) refuse "malformed (want two lines: the token, then its expiry as Unix seconds)" ;;
+      '' | *[!A-Za-z0-9_.-]*) refuse "malformed (want two lines: the token, then its expiry as Unix seconds)" ;;
       esac
       case "${expiry}" in
       '' | *[!0-9]*) refuse "malformed (want two lines: the token, then its expiry as Unix seconds)" ;;
