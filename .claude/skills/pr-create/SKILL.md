@@ -5,7 +5,9 @@ description: Take committed work on a branch to a verified GitHub pull request -
 
 # Create and verify a pull request
 
-You never modify source code in this flow.
+You never modify source code in this flow. You never approve a pull request (`gh pr review --approve`,
+never), never enable auto-merge (`gh pr merge --auto`, never), and never merge a pull request the
+maintainer has not approved: the maintainer's approval and merge are the single human gate (PRD #161).
 
 ## Open
 
@@ -31,14 +33,46 @@ You never modify source code in this flow.
 
 ## Report and stop
 
-8. Report through `dot-agent-deck work-done`: the PR URL, each check and its result, and anything notable.
-   **Do not merge and do not enable auto-merge.**
+8. Report through `dot-agent-deck work-done`: the PR URL, each check and its result, the head commit, and
+   anything notable, such as the AI reviewer's findings once it runs (milestone 4 of PRD #161: advice for
+   the maintainer, never a reason to merge or not). **Do not merge, do not approve and do not enable
+   auto-merge.** The pull request now waits for the maintainer's approval.
 
 ## Merge (only when explicitly instructed)
 
-9. From the repository root, remove the worktree: `git -C <repository root> worktree remove <path>`.
-   It refuses when the worktree has uncommitted changes; then report and stop, and never force it.
-10. Still from the root: `gh pr merge <n> --squash --delete-branch`, then confirm the linked issue's state
+9. Check the maintainer's approval first, from the repository root:
+   `gh pr view <n> --json author,headRefOid,reviewDecision,reviews`.
+   - If the pull request's `author.login` is the maintainer, `timothymamo` (opened under the maintainer's
+     own token before the switch to the agents App), its author cannot approve it: report that the
+     maintainer merges it themselves, and stop.
+   - Otherwise merge only if **both** hold:
+     - the maintainer's (`author.login` exactly `timothymamo`) **latest** review that is not a comment,
+       that is the last by `submittedAt` with `state` `APPROVED`, `CHANGES_REQUESTED` or `DISMISSED`,
+       has `state` `APPROVED` and its `commit.oid` is the current `headRefOid`. An earlier approval
+       followed by a change request, or one since dismissed, does not count. This prints `approved`
+       only then:
+
+       ```bash
+       gh pr view <n> --json headRefOid,reviews --jq '.headRefOid as $head
+         | [.reviews[] | select(.author.login == "timothymamo"
+             and (.state == "APPROVED" or .state == "CHANGES_REQUESTED" or .state == "DISMISSED"))]
+         | sort_by(.submittedAt) | last
+         | if . != null and .state == "APPROVED" and .commit.oid == $head then "approved" else "not approved" end'
+       ```
+
+       and
+     - `reviewDecision` is `APPROVED` or empty. It can be empty even after an approval while
+       `Protect main` does not yet require reviews. Never merge when it is `CHANGES_REQUESTED` or
+       `REVIEW_REQUIRED`.
+
+   Otherwise report "waiting for the maintainer's approval" with the head commit and stop. An approval
+   by anyone else, an App or a bot included, does not count. Never try `--admin`, `--auto` or any other
+   way past a missing approval, and never approve the pull request yourself.
+10. From the repository root, remove the worktree: `git -C <repository root> worktree remove <path>`.
+    It refuses when the worktree has uncommitted changes; then report and stop, and never force it.
+11. Still from the root:
+    `gh pr merge <n> --squash --delete-branch --match-head-commit <headRefOid from step 9>`, which
+    refuses if the branch moved after the approval you checked; then confirm the linked issue's state
     matches the PR body (`gh issue view <n> --json state`) and report. If the merge fails, report the
     error. To bring the worktree back for a fix, run `make worktree BRANCH=<branch>` from the checkout
     the unit started in, as in step 2 of the `start-work` skill: the repository root, or the dispatch

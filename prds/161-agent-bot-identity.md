@@ -85,25 +85,27 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
   are listed in ADR 0031 (d) and `docs/dev-environment.md` (Attestations read added; Actions stays read, so
   `gh run rerun` and the rulesets' bypass lists stay maintainer steps); that each works is checked at
   runbook step 3.*
-- [ ] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
+- [x] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
   `true`). No ruleset requires signed commits. *Nothing in milestone 1 signs a commit (ADR 0031); the
-  repository's rulesets and `main`'s commits are checked at runbook step 3.*
+  repository's rulesets and `main`'s commits are checked at runbook step 3. Checked at runbook step 3 on
+  PR #239 (2026-11-17): its 16 branch commits are unsigned, `main`'s last five commits have `verified`
+  `true`, and none of the four rulesets has a `required_signatures` rule.*
 
 ### The gate (milestone 2)
 
-- [ ] `.github/CODEOWNERS` names the maintainer as the owner of every path (`*`), including itself and
+- [x] `.github/CODEOWNERS` names the maintainer as the owner of every path (`*`), including itself and
   `.github/`.
-- [ ] A check (in the `release-tag` skill's step 2 and as a make target the maintainer can run) reads
+- [x] A check (in the `release-tag` skill's step 2 and as a make target the maintainer can run) reads
   `Protect main` and fails unless: `required_approving_review_count` is at least 1,
   `require_code_owner_review`, `dismiss_stale_reviews_on_push` and `require_last_push_approval` are
   `true`, and `bypass_actors` is empty; and `.github/CODEOWNERS` on `main` names only the maintainer.
   Before the switch it reports the gaps without failing a release (a documented transition flag), after
   it, it fails closed.
-- [ ] `pr-create` never approves a pull request and never merges one the maintainer has not approved;
+- [x] `pr-create` never approves a pull request and never merges one the maintainer has not approved;
   after the switch it reports "waiting for the maintainer's approval" instead of trying to merge.
-- [ ] A Renovate pull request needs the maintainer's approval like any other; `.github/renovate.json5`
+- [x] A Renovate pull request needs the maintainer's approval like any other; `.github/renovate.json5`
   keeps `automerge: false`.
-- [ ] `docs/dev-environment.md` gives the maintainer's switch-over runbook (below) step by step, with a
+- [x] `docs/dev-environment.md` gives the maintainer's switch-over runbook (below) step by step, with a
   check after each step and how to roll back; CLAUDE.md and `docs/contributing/agents.md` say that the
   single human gate is the maintainer's approval and merge, that the AI reviewer's comments and change
   requests are advice the maintainer weighs, and that nobody pushes to an agent's branch by hand after the
@@ -157,13 +159,14 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
    `make vm-env`/`vm-init` changes, tests, an ADR (identity, token model, why not a machine user, why the
    reviewer never approves), and `docs/dev-environment.md`. Merged under the old token; nothing is
    enforced yet. *Code merged; criteria marked "runbook step 3" are checked there.*
-2. [ ] **Gate checks, CODEOWNERS, skills and docs.** `.github/CODEOWNERS`, the `Protect main` check with
+2. [x] **Gate checks, CODEOWNERS, skills and docs.** `.github/CODEOWNERS`, the `Protect main` check with
    its transition flag, `pr-create` and `release-tag` changes, CLAUDE.md, `docs/contributing/agents.md`,
    the switch-over runbook. Depends on 1. *Note from milestone 1 (ADR 0031, d): the App keeps Actions
    read, so `release-tag` hands a re-run of a failed run (`gh run rerun <id>`) to the maintainer instead
-   of running it.*
+   of running it.* *Code merged; the switch-over at runbook step 5 is the maintainer's.*
 3. [ ] **Remove the maintainer's token.** After the maintainer's runbook step 6: drop `GITHUB_TOKEN` from
-   `VM_ENV` and the fallback, turn the check's transition flag off, update the docs. Opened by the App and
+   `VM_ENV` and the fallback, remove the check's transition flag entirely (`GATE_TRANSITION` and the
+   script's `--transition` flag, not only defaulting it to 0), update the docs. Opened by the App and
    approved by the maintainer: the first change through the new gate. Depends on 2 and the runbook.
 4. [ ] **AI reviewer.** The review workflow, its prompt, the code that posts the review (comment or request
    changes only), its tests, an ADR (trigger, secrets, prompt injection, cost), `docs/dev-environment.md`

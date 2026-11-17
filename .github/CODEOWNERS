@@ -1,0 +1,4 @@
+# The maintainer owns every path, this file and .github/ included (PRD #161). With `Protect main`
+# requiring a code owner's review, only the maintainer's approval lets a change reach main: an approval
+# from the agents App, the AI reviewer or anyone else does not count. Add no other rules or owners.
+* @timothymamo

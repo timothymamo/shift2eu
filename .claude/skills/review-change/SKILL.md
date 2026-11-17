@@ -36,4 +36,5 @@ in a shell variable.
 
 For each finding: **severity** (blocker / suggestion / nit), `path/file.go:line`, what is wrong, and a
 concrete fix. Say explicitly when you found nothing in a category. End with a verdict:
-*approve*, *approve with suggestions*, or *changes required*.
+*approve*, *approve with suggestions*, or *changes required*. The verdict is never a GitHub approval
+(`gh pr review --approve`, never): approving a pull request is the maintainer's alone.
