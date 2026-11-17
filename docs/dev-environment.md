@@ -205,9 +205,9 @@ Which fix applies depends on whether the directory still holds a `lima.yaml`:
 - **`lima.yaml` is missing.** `make vm-delete` cannot clean it up: `limactl delete --force` refuses a
   directory without `lima.yaml`. Remove the directory by hand, once no `limactl` job uses it.
 - **`lima.yaml` is there**, even as a dangling symlink. The instance is broken for another reason, such as
-  a `lima.yaml` Lima cannot load, and its disk may well be intact. Do not delete it: see why with `limactl list` and
-  `limactl start --debug shift2eu`, fix the `lima.yaml` (or whatever the debug output names), then run
-  `make vm-up` again.
+  a `lima.yaml` Lima cannot load, and its disk may well be intact. Do not delete it: see why with
+  `limactl list` and `limactl start --debug shift2eu`, fix the `lima.yaml` (or whatever the debug output
+  names), then run `make vm-up` again.
 
 The rest of this section is about the first case.
 
