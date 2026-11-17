@@ -197,14 +197,15 @@ to Lima's `template:default`, a VM that mounts the whole home directory instead 
 without a terminal it does so without asking. So `make vm-up` starts an existing instance only when it is
 `Stopped` or `Running` and its `lima.yaml` is there: for `Broken` it stops before any `limactl start` and
 names the directory, for a `Stopped` or `Running` instance whose `lima.yaml` is gone it stops too, for any
-other status it stops and names the status, and when it cannot read the status at all it stops and says so.
+other status it stops and names the status, and when it cannot list the instances or read the status at
+all it stops and says so.
 
 Which fix applies depends on whether the directory still holds a `lima.yaml`:
 
 - **`lima.yaml` is missing.** `make vm-delete` cannot clean it up: `limactl delete --force` refuses a
   directory without `lima.yaml`. Remove the directory by hand, once no `limactl` job uses it.
-- **`lima.yaml` is there.** The instance is broken for another reason, such as a `lima.yaml` Lima cannot
-  load, and its disk may well be intact. Do not delete it: see why with `limactl list` and
+- **`lima.yaml` is there**, even as a dangling symlink. The instance is broken for another reason, such as
+  a `lima.yaml` Lima cannot load, and its disk may well be intact. Do not delete it: see why with `limactl list` and
   `limactl start --debug shift2eu`, fix the `lima.yaml` (or whatever the debug output names), then run
   `make vm-up` again.
 
