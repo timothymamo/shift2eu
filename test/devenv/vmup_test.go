@@ -240,6 +240,9 @@ func TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning(t *testing.T) {
 			status:     "Stopped",
 			statusFail: true,
 			want:       []string{"could not read the status"},
+			// A failed query is not an unknown status: the empty answer must never reach the case that
+			// names a status vm-up does not know.
+			forbid: []string{"has the status"},
 		},
 	}
 
@@ -298,7 +301,7 @@ func TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning(t *testing.T) {
 
 			for _, w := range tc.forbid {
 				if strings.Contains(stderr, w) {
-					t.Errorf("make vm-up's stderr says %q with the instance listed as %q and its lima.yaml in place: a lima.yaml Lima cannot load is not a reason to send a maintainer off to remove the VM by hand, so the message must point at limactl list instead (issue #237)\nstderr: %s",
+					t.Errorf("make vm-up's stderr says %q with the instance listed as %q, which this case forbids: a lima.yaml Lima cannot load is not a reason to send a maintainer off to remove the VM by hand, and a status query that fails is not an unknown status (issue #237)\nstderr: %s",
 						w, tc.status, stderr)
 				}
 			}
@@ -311,9 +314,14 @@ func TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning(t *testing.T) {
 // is not listed gets exactly the dev/lima.yaml command line with this repository's workspace mounted,
 // unchanged, and a listed instance whose directory holds no lima.yaml is started by neither branch: limactl
 // start <name> would read the name as a template and fall back to template:default (issue #237). The status
-// of a listed instance is read by asking limactl for that instance by name, never by any other query.
+// of a listed instance is read by asking limactl for that instance by name, never by any other query, and an
+// instance that is not listed gets no status query at all: there is no status to read.
 func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 	t.Parallel()
+
+	// statusQuery is the one status query vm-up makes about a listed instance: limactl asked for this instance
+	// by name, so a query about any other name reads nothing.
+	statusQuery := []string{"list", "--format", "{{.Status}}", vmUpInstance}
 
 	cases := []struct {
 		name       string
@@ -323,21 +331,26 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 		limaYaml   bool     // the instance directory holds a lima.yaml
 		want       []string // the one limactl start vm-up must run; nil means vm-up must refuse to start
 		wantStderr []string // substrings stderr must hold when vm-up refuses; <instance-dir> stands for the directory
+		// wantQueries is the status query vm-up must make, in call order: nil, the zero value, means it
+		// must make none at all, as for an instance that is not listed and has no status to read.
+		wantQueries [][]string
 	}{
 		{
-			name:     "an instance that is stopped",
-			instance: vmUpInstance,
-			status:   "Stopped",
-			limaHome: true,
-			limaYaml: true,
-			want:     []string{"start", vmUpInstance},
+			name:        "an instance that is stopped",
+			instance:    vmUpInstance,
+			status:      "Stopped",
+			limaHome:    true,
+			limaYaml:    true,
+			want:        []string{"start", vmUpInstance},
+			wantQueries: [][]string{statusQuery},
 		},
 		{
-			name:     "an instance that is running",
-			instance: vmUpInstance,
-			status:   "Running",
-			limaYaml: true,
-			want:     []string{"start", vmUpInstance},
+			name:        "an instance that is running",
+			instance:    vmUpInstance,
+			status:      "Running",
+			limaYaml:    true,
+			want:        []string{"start", vmUpInstance},
+			wantQueries: [][]string{statusQuery},
 		},
 		{
 			name:       "a stopped instance whose directory holds no lima.yaml",
@@ -423,13 +436,8 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 				t.Errorf("make vm-up %s ran the wrong limactl start (-want +got):\n%s", tc.name, diff)
 			}
 
-			if tc.status == "" {
-				return
-			}
-
-			wantQueries := [][]string{{"list", "--format", "{{.Status}}", vmUpInstance}}
-			if diff := cmp.Diff(wantQueries, f.statusQueries(t)); diff != "" {
-				t.Errorf("make vm-up %s read the status of the instance with the wrong limactl call (-want +got):\n%s", tc.name, diff)
+			if diff := cmp.Diff(tc.wantQueries, f.statusQueries(t)); diff != "" {
+				t.Errorf("make vm-up %s read the status of the instance with the wrong limactl calls (-want +got), or read a status an instance that is not listed does not have:\n%s", tc.name, diff)
 			}
 		})
 	}
