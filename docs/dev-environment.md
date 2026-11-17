@@ -466,7 +466,9 @@ request is yours to dismiss, and it never approves.
 `timothymamo/shift2eu` (spelled out, so a fork's remote or `GH_REPO` cannot change what it checks), its
 `Protect main` ruleset, `.github/CODEOWNERS` on `main` and GitHub's CODEOWNERS errors for that file, and
 prints one line per check: `ok:`, `gap:`, or `unverified:` for what this token may not read. A gap is
-`Protect main` not enforced, not targeting branches, not including `main` or excluding it, without a pull
+`Protect main` not enforced, not targeting branches, not including `main` or excluding it, an exclude
+pattern it cannot read (one with `[`, `]`, `{`, `}` or `\`, which GitHub may match against `main`:
+`gap: Protect main cannot read exclude pattern <pattern>, so it may exclude main`), without a pull
 request rule, with fewer than 1 required approval or one of the three rules above off, a bypass actor, a
 bypass list missing on a repository admin's token, a token that may bypass `Protect main`
 (`current_user_can_bypass` other than `never`), or a CODEOWNERS file on `main` without rules, without a

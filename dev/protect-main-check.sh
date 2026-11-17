@@ -122,9 +122,16 @@ ruleset_report="$(printf '%s\n' "${ruleset}" | jq 2>/dev/null -r --argjson repo 
      else "gap: Protect main targets \(.target // "missing" | clean), not branches" end),
     (if any(($ref.include // [])[]?; covers(.)) then "ok: Protect main includes main"
      else "gap: Protect main does not include main" end),
-    ([($ref.exclude // [])[]? | select(covers(.))] | .[0]) as $excluded
-    | (if $excluded == null then "ok: Protect main does not exclude main"
-       else "gap: Protect main excludes main: \($excluded | clean)" end),
+    # covers reads [, ], {, } and \ as literal characters, but GitHub reads a character class, a brace
+    # expansion or an escape there, any of which can select main: an exclude pattern holding one is not
+    # matched but reported as a gap, so that a pattern the check cannot read never passes as one that holds.
+    ([($ref.exclude // [])[]?] | map(select(type == "string" and test("[\\[\\]{}\\\\]")))) as $unreadable
+    | ([($ref.exclude // [])[]? | select(covers(.))] | .[0]) as $excluded
+    | (if $excluded == null and ($unreadable | length) == 0 then "ok: Protect main does not exclude main"
+       else
+         ($unreadable[] | "gap: Protect main cannot read exclude pattern \(clean), so it may exclude main"),
+         (if $excluded == null then empty else "gap: Protect main excludes main: \($excluded | clean)" end)
+       end),
     (([.rules[] | select(type == "object" and .type == "pull_request")] | .[0]) as $rule
     | if $rule == null then "gap: Protect main has no pull_request rule"
       else
