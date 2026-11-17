@@ -2,7 +2,9 @@
 // limactl start in Lima's own flag form, unset the creation command line is byte for byte what it was, an
 // invalid value fails before limactl runs, make vm-create hands the four on to make vm-up, and an existing VM -
 // Stopped or Running - is started by its name without any of them, with a warning that they apply only when
-// the VM is created. Every run uses a fake limactl on PATH: no test starts a real VM.
+// the VM is created. vm-up also refuses a workspace that holds anything but the repository and its dispatch
+// worktrees, and neither check may be bypassed by make -i or make -k. Every run uses a fake limactl on PATH:
+// no test starts a real VM.
 package devenv_test
 
 import (
@@ -502,17 +504,33 @@ func TestMakeNeverExpandsMakeSyntaxInAVMResource(t *testing.T) {
 // TestMakeVMUpRefusesAnInvalidValueWhateverMakeIsTold pins the auditor's L1 finding (issue #228 review, item
 // C): make -i ignores a recipe line that failed and make -k carries on past it, so vm-up's validation and the
 // limactl call it guards have to share one shell. However make is told to treat an error, limactl never gets a
-// value vm-up has not validated.
+// value vm-up has not validated. The same holds for vm-up's stray-workspace check (Makefile:220-225), which
+// must run in that one shell too: started with any of these flags, it must neither mount nor start anything.
 func TestMakeVMUpRefusesAnInvalidValueWhateverMakeIsTold(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name  string
-		flags []string
+		name       string
+		flags      []string
+		cpus       string // VM_CPUS on the make command line, empty when it is unset
+		stray      string // an entry beside the repository in the workspace, empty when it holds only the repository
+		strayIsDir bool   // the stray entry is a directory rather than a file
+		want       string // what the refusal must name, so a maintainer knows what to fix
 	}{
-		{name: "make -i", flags: []string{"-i"}},
-		{name: "make -k", flags: []string{"-k"}},
-		{name: "make -i -k", flags: []string{"-i", "-k"}},
+		{name: "make -i", flags: []string{"-i"}, cpus: "abc", want: vmCPUsVar},
+		{name: "make -k", flags: []string{"-k"}, cpus: "abc", want: vmCPUsVar},
+		{name: "make -i -k", flags: []string{"-i", "-k"}, cpus: "abc", want: vmCPUsVar},
+		// The workspace the VM mounts writable must hold only the repository and its dispatch worktrees. A
+		// stray entry is refused before anything is mounted or started, whatever make is told about errors.
+		{name: "make -i with a stray file in the workspace", flags: []string{"-i"}, stray: "stray-file", want: "stray-file"},
+		{name: "make -k with a stray file in the workspace", flags: []string{"-k"}, stray: "stray-file", want: "stray-file"},
+		{name: "make -i -k with a stray file in the workspace", flags: []string{"-i", "-k"}, stray: "stray-file", want: "stray-file"},
+		{name: "make -i with a stray directory in the workspace", flags: []string{"-i"}, stray: "stray-dir", strayIsDir: true, want: "stray-dir"},
+		{name: "make -k with a stray directory in the workspace", flags: []string{"-k"}, stray: "stray-dir", strayIsDir: true, want: "stray-dir"},
+		// The order: a value that is not a CPU count is refused before the workspace is looked at, so the
+		// maintainer fixes the value first. Either way limactl never runs.
+		{name: "make -i with a stray file and VM_CPUS=abc", flags: []string{"-i"}, stray: "stray-file", cpus: "abc", want: vmCPUsVar},
+		{name: "make -k with a stray file and VM_CPUS=abc", flags: []string{"-k"}, stray: "stray-file", cpus: "abc", want: vmCPUsVar},
 	}
 
 	for _, tc := range cases {
@@ -520,17 +538,38 @@ func TestMakeVMUpRefusesAnInvalidValueWhateverMakeIsTold(t *testing.T) {
 			t.Parallel()
 
 			f := newVMUpFixture(t, false)
+			run := "make " + strings.Join(append(slices.Clone(tc.flags), "vm-up"), " ")
+			args := append(slices.Clone(tc.flags), "vm-up")
 
-			stdout, stderr, _ := f.run(t, append(slices.Clone(tc.flags), "vm-up", "VM_CPUS=abc")...)
-
-			if starts := f.starts(t); len(starts) != 0 {
-				t.Errorf("%s vm-up VM_CPUS=abc called limactl start although the value is not a CPU count: make -i ignores a failed recipe line and make -k carries on past it, so validation and the start call must be one shell that stops on the first failure (issue #228 review, item C):%s\nstdout: %s\nstderr: %s",
-					strings.Join(tc.flags, " "), describeCalls(starts), stdout, stderr)
+			if tc.cpus != "" {
+				args = append(args, vmCPUsVar+"="+tc.cpus)
+				run += " " + vmCPUsVar + "=" + tc.cpus
 			}
 
-			if combined := stdout + stderr; !strings.Contains(combined, vmCPUsVar) {
-				t.Errorf("%s vm-up VM_CPUS=abc says nothing about %s: the value is refused, not silently dropped (issue #228 review, item C):\nstdout: %s\nstderr: %s",
-					strings.Join(tc.flags, " "), vmCPUsVar, stdout, stderr)
+			if tc.stray != "" {
+				path := filepath.Join(f.workspace, tc.stray)
+
+				if tc.strayIsDir {
+					if err := os.MkdirAll(filepath.Join(path, "nested"), 0o750); err != nil {
+						t.Fatalf("create the stray directory %s: %v", path, err)
+					}
+				} else if err := os.WriteFile(path, []byte("not the repository\n"), 0o600); err != nil {
+					t.Fatalf("write the stray file %s: %v", path, err)
+				}
+
+				run += " with " + tc.stray + " in the workspace"
+			}
+
+			stdout, stderr, _ := f.run(t, args...)
+
+			if calls := invocations(f.sb.argvLogText(t), "limactl"); len(calls) != 0 {
+				t.Errorf("%s called limactl although vm-up refuses before it starts or mounts anything: make -i ignores a failed recipe line and make -k carries on past it, so the stray-workspace check, the validation and the limactl calls they guard must be one shell that stops on the first failure (issue #228, Makefile:220-225):%s\nstdout: %s\nstderr: %s",
+					run, describeCalls(calls), stdout, stderr)
+			}
+
+			if combined := stdout + stderr; !strings.Contains(combined, tc.want) {
+				t.Errorf("%s says nothing about %s: the refusal names the entry or the value a maintainer has to fix, rather than dropping it silently (issue #228):\nstdout: %s\nstderr: %s",
+					run, tc.want, stdout, stderr)
 			}
 		})
 	}
