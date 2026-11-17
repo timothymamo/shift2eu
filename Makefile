@@ -206,10 +206,11 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # option and a slash as a path. The name is single-quoted for the shell, so a space or quote cannot break out.
 .PHONY: vm-up
 vm-up: git-hooks ## Create or start the Lima VM with only this repository's workspace directory mounted
-	@name='$(subst ','\'',$(LIMA_INSTANCE))'; \
+	@LC_ALL=C; export LC_ALL; \
+	name='$(subst ','\'',$(LIMA_INSTANCE))'; \
 	case "$$name" in \
 	("" | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*) \
-		echo "vm-up: invalid LIMA_INSTANCE '$$name': a Lima instance name is letters, digits, '.', '_' and '-', starting with a letter or digit" >&2; \
+		printf "vm-up: invalid LIMA_INSTANCE '%s': a Lima instance name is letters, digits, '.', '_' and '-', starting with a letter or digit\n" "$$name" >&2; \
 		exit 1;; \
 	esac
 	@stray="$$(ls -A "$(WORKSPACE)" | grep -vx -e '$(REPO_NAME)' -e '$(REPO_NAME)-dispatch-.*' -e '\.DS_Store' || true)"; \
