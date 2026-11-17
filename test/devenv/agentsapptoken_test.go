@@ -201,6 +201,138 @@ func TestAgentsAppTokenMintWritesTheTokenAndTheBotIdentity(t *testing.T) {
 	}
 }
 
+// TestAgentsAppTokenMintWritesTheTokensGitHubAnswersWithUnchanged pins issue #232: GitHub's installation tokens
+// changed from ghs_ plus 36 alphanumerics to ghs_<App ID>_<JWT>, about 520 characters with . and - in them, and
+// the mint must write whatever token it was handed into the VM unchanged - the new format, the old one a VM may
+// still hold, and a token longer than today's, which no length cap may refuse.
+func TestAgentsAppTokenMintWritesTheTokensGitHubAnswersWithUnchanged(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		prepare func(api *fakeGitHub)
+		check   func(t *testing.T, token string)
+	}{
+		{
+			name:    "the new format GitHub mints now",
+			prepare: func(api *fakeGitHub) { api.mintNewFormatTokens() },
+			check: func(t *testing.T, token string) {
+				t.Helper()
+
+				assertNewFormatAppToken(t, "the token the mint wrote", token)
+			},
+		},
+		{
+			name:    "the old format GitHub minted before",
+			prepare: func(api *fakeGitHub) { api.mintOldFormatTokens() },
+			check: func(t *testing.T, token string) {
+				t.Helper()
+
+				assertOldFormatAppToken(t, "the token the mint wrote", token)
+			},
+		},
+		{
+			// A token longer than the one GitHub sends today: no length cap may refuse it, because the format's
+			// length is GitHub's to choose (issue #232).
+			name:    "a token longer than the new format's 520 characters",
+			prepare: func(api *fakeGitHub) { api.answerMintsWith(newFormatAppTokenWithClaims(5, 1050)) },
+			check: func(t *testing.T, token string) {
+				t.Helper()
+
+				assertNewFormatAppToken(t, "the token the mint wrote", token)
+
+				if len(token) < 1400 {
+					t.Fatalf("the token the mint wrote is %d characters long, want about 1500: this case pins that a length cap does not refuse a longer token (issue #232)", len(token))
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			tc.prepare(f.api)
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+			if err != nil {
+				t.Fatalf("mint exited non-zero with %s, a token GitHub answers with: %v\nstdout: %s\nstderr: %s\nthe fake API refused: %s",
+					tc.name, err, stdout, stderr, strings.Join(f.api.recordedComplaints(), "; "))
+			}
+
+			tokens := f.api.minted()
+			if len(tokens) != 1 {
+				t.Fatalf("the fake API minted %d tokens, want one: mint writes one installation token", len(tokens))
+			}
+
+			tc.check(t, tokens[0])
+
+			written := readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
+			if written[0] != tokens[0] {
+				t.Fatalf("%s holds a %d-character first line, want the %d characters the fake API handed out: the mint writes the token into the VM unchanged (issue #232)",
+					agentsTokenFile, len(written[0]), len(tokens[0]))
+			}
+
+			if _, err := strconv.ParseInt(written[1], 10, 64); err != nil {
+				t.Errorf("%s's second line is not the expiry as Unix seconds: %v", agentsTokenFile, err)
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
+}
+
+// TestAgentsAppTokenMintRefusesATokenGitHubMustNeverHandOut pins the other half of the new token format (issue
+// #232): a check that accepts the longer, punctuated tokens must still refuse a value that could break the
+// two-line token file, a header or the shell - an empty token, whitespace, a quote, a backslash, $, ;, a control
+// character or a newline - and never write it or print it. GitHub escapes some of these in its JSON answer, so
+// the script sees the escape; either way it must refuse.
+func TestAgentsAppTokenMintRefusesATokenGitHubMustNeverHandOut(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		token string
+	}{
+		{name: "an empty token", token: ""},
+		{name: "a space", token: newFormatAppToken(3) + " x"},
+		{name: "a tab", token: newFormatAppToken(3) + "\tx"},
+		{name: "a single quote", token: newFormatAppToken(3) + "'x"},
+		{name: "a double quote", token: newFormatAppToken(3) + `"x`},
+		{name: "a backslash", token: newFormatAppToken(3) + `\x`},
+		{name: "a dollar sign", token: newFormatAppToken(3) + "$x"},
+		{name: "a semicolon", token: newFormatAppToken(3) + ";x"},
+		{name: "a control character", token: newFormatAppToken(3) + "\x01"},
+		{name: "a newline", token: newFormatAppToken(3) + "\nx"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			f.api.answerMintsWith(tc.token)
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+			if err == nil {
+				t.Fatalf("mint exited 0 with a token that holds %s: it cannot be written into the two-line token file the wrapper reads back, so the mint must refuse it (issue #232)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+
+			if _, err := os.Stat(f.sb.vmPath(agentsTokenFile)); err == nil {
+				t.Errorf("mint wrote %s although GitHub's answer held a token that holds %s: no such token may reach the VM (issue #232)", agentsTokenFile, tc.name)
+			}
+
+			if !strings.Contains(strings.ToLower(stderr), "token") {
+				t.Errorf("the refusal does not say that no token was minted, so a maintainer cannot tell what failed: %s", stderr)
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
+}
+
 // TestAgentsAppTokenMintRefusesBadInput pins that a mint without its inputs, and with a key any other account
 // can read, stops before it talks to GitHub and names the input it refused.
 func TestAgentsAppTokenMintRefusesBadInput(t *testing.T) {
@@ -755,97 +887,123 @@ func TestAgentsAppTokenMintExitsOneWhenTheBotUserLookupFails(t *testing.T) {
 
 // TestAgentsAppTokenRefreshReplacesTheTokenAndSaysHowToStartItAgain pins the loop make deck starts: it mints
 // again before the token expires, replaces the VM's copy, and on SIGTERM says it stopped and names the
-// command that starts it again.
+// command that starts it again. It does so for whichever format GitHub answers with, the new one it mints since
+// 2026 and the old one a VM may still hold (issue #232).
 func TestAgentsAppTokenRefreshReplacesTheTokenAndSaysHowToStartItAgain(t *testing.T) {
 	t.Parallel()
 
-	f := newMintFixture(t)
-	f.env["SHIFT2EU_AGENTS_TOKEN_CHECK_SECONDS"] = "1"
-	// A margin larger than any token's lifetime keeps the loop minting at every check, so the test sees a
-	// refresh within a few seconds and needs no long sleep.
-	f.env["SHIFT2EU_AGENTS_TOKEN_MARGIN_SECONDS"] = strconv.Itoa(24 * 60 * 60)
-
-	startedAt := time.Now().Unix()
-
-	cmd := exec.Command("sh", scriptPath(t, agentsMintScript), "refresh")
-	cmd.Env = envList(f.env)
-	cmd.Dir = f.sb.hostHome
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Start(); err != nil {
-		t.Fatalf("start refresh: %v", err)
+	cases := []struct {
+		name   string
+		format appTokenFormat
+	}{
+		{name: "the new format GitHub mints now", format: newFormatTokens},
+		{name: "the old format GitHub minted before", format: oldFormatTokens},
 	}
 
-	t.Cleanup(func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	t.Cleanup(func() {
-		if complaints := f.api.recordedComplaints(); len(complaints) != 0 {
-			t.Logf("the fake API refused a request: %s", strings.Join(complaints, "; "))
-		}
-	})
+			f := newMintFixture(t)
+			switch tc.format {
+			case oldFormatTokens:
+				f.api.mintOldFormatTokens()
+			default:
+				f.api.mintNewFormatTokens()
+			}
 
-	waitFor(t, 30*time.Second, "the refresh to replace the VM's first token", func() bool {
-		tokens := f.api.minted()
-		if len(tokens) < 2 {
-			return false
-		}
+			f.env["SHIFT2EU_AGENTS_TOKEN_CHECK_SECONDS"] = "1"
+			// A margin larger than any token's lifetime keeps the loop minting at every check, so the test sees a
+			// refresh within a few seconds and needs no long sleep.
+			f.env["SHIFT2EU_AGENTS_TOKEN_MARGIN_SECONDS"] = strconv.Itoa(24 * 60 * 60)
 
-		line, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
+			startedAt := time.Now().Unix()
 
-		return ok && line != tokens[0]
-	})
+			cmd := exec.Command("sh", scriptPath(t, agentsMintScript), "refresh")
+			cmd.Env = envList(f.env)
+			cmd.Dir = f.sb.hostHome
 
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
-		t.Fatalf("send SIGTERM to the refresh: %v", err)
+			var stdout, stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+
+			if err := cmd.Start(); err != nil {
+				t.Fatalf("start refresh: %v", err)
+			}
+
+			t.Cleanup(func() {
+				_ = cmd.Process.Kill()
+				_ = cmd.Wait()
+			})
+
+			t.Cleanup(func() {
+				if complaints := f.api.recordedComplaints(); len(complaints) != 0 {
+					t.Logf("the fake API refused a request: %s", strings.Join(complaints, "; "))
+				}
+			})
+
+			waitFor(t, 30*time.Second, "the refresh to replace the VM's first token", func() bool {
+				tokens := f.api.minted()
+				if len(tokens) < 2 {
+					return false
+				}
+
+				line, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
+
+				return ok && line != tokens[0]
+			})
+
+			if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+				t.Fatalf("send SIGTERM to the refresh: %v", err)
+			}
+
+			// A signal may end the loop with 0 or with a signal's status; only a failed mint is specified non-zero,
+			// so the exit status is not pinned here. What it says before it exits is.
+			_ = cmd.Wait()
+
+			stopped := stderr.String()
+			if !strings.Contains(stopped, "agents App token refresh stopped") {
+				t.Errorf("the refresh's stderr does not say 'agents App token refresh stopped', so a stopped refresh is invisible: %s", stopped)
+			}
+
+			assertStopLineNamesWhereToRestart(t, stopped)
+
+			tokens := f.api.minted()
+			if len(tokens) < 2 {
+				t.Fatalf("the fake API minted %d tokens, want at least two: the refresh replaces the token before it expires", len(tokens))
+			}
+
+			for i, minted := range tokens {
+				assertAppTokenFormat(t, fmt.Sprintf("the token the fake API minted %d", i+1), minted, tc.format)
+			}
+
+			token := readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
+
+			refreshed := slices.Index(tokens, token[0])
+			if refreshed < 0 {
+				t.Fatalf("%s does not hold a token the fake API handed out", agentsTokenFile)
+			}
+
+			if refreshed == 0 {
+				t.Errorf("%s still holds the first token: each newer token must replace the file, so a running agent's next gh uses it", agentsTokenFile)
+			}
+
+			expiry, err := strconv.ParseInt(token[1], 10, 64)
+			if err != nil {
+				t.Fatalf("%s's second line is not the expiry as Unix seconds: %v", agentsTokenFile, err)
+			}
+
+			if expiry <= startedAt {
+				t.Errorf("%s's expiry %d is not after the refresh started (%d)", agentsTokenFile, expiry, startedAt)
+			}
+
+			if apiExpiry := f.api.expiryOf(refreshed); expiry > apiExpiry {
+				t.Errorf("%s's expiry %d is later than the expires_at of the token it holds (%d)", agentsTokenFile, expiry, apiExpiry)
+			}
+
+			f.assertNoLeaks(t, stdout.String(), stopped)
+		})
 	}
-
-	// A signal may end the loop with 0 or with a signal's status; only a failed mint is specified non-zero,
-	// so the exit status is not pinned here. What it says before it exits is.
-	_ = cmd.Wait()
-
-	stopped := stderr.String()
-	if !strings.Contains(stopped, "agents App token refresh stopped") {
-		t.Errorf("the refresh's stderr does not say 'agents App token refresh stopped', so a stopped refresh is invisible: %s", stopped)
-	}
-
-	assertStopLineNamesWhereToRestart(t, stopped)
-
-	tokens := f.api.minted()
-	if len(tokens) < 2 {
-		t.Fatalf("the fake API minted %d tokens, want at least two: the refresh replaces the token before it expires", len(tokens))
-	}
-
-	token := readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
-
-	refreshed := slices.Index(tokens, token[0])
-	if refreshed < 0 {
-		t.Fatalf("%s does not hold a token the fake API handed out", agentsTokenFile)
-	}
-
-	if refreshed == 0 {
-		t.Errorf("%s still holds the first token: each newer token must replace the file, so a running agent's next gh uses it", agentsTokenFile)
-	}
-
-	expiry, err := strconv.ParseInt(token[1], 10, 64)
-	if err != nil {
-		t.Fatalf("%s's second line is not the expiry as Unix seconds: %v", agentsTokenFile, err)
-	}
-
-	if expiry <= startedAt {
-		t.Errorf("%s's expiry %d is not after the refresh started (%d)", agentsTokenFile, expiry, startedAt)
-	}
-
-	if apiExpiry := f.api.expiryOf(refreshed); expiry > apiExpiry {
-		t.Errorf("%s's expiry %d is later than the expires_at of the token it holds (%d)", agentsTokenFile, expiry, apiExpiry)
-	}
-
-	f.assertNoLeaks(t, stdout.String(), stopped)
 }
 
 // TestAgentsAppTokenMintLooksTheBotUserUpWithTheInstallationToken pins the second review's item 4: the bot user is

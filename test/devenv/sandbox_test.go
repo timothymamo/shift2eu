@@ -888,6 +888,9 @@ type fakeGitHub struct {
 	// jwtRefusedOnUsers makes GET /users/<slug>[bot] refuse the App's JWT, as GitHub does: the bot user is
 	// read with an installation token, and only after the mint (second review, item 4).
 	jwtRefusedOnUsers bool
+	// format is the shape of the tokens the fake API mints: the new one GitHub answers with today by default,
+	// and the old one where a test pins that it still works (issue #232).
+	format appTokenFormat
 
 	mu             sync.Mutex
 	requests       []string         // "<method> <path>" of every request, in request order
@@ -904,6 +907,9 @@ type fakeGitHub struct {
 	// test can pin a refusal no retry fixes (third review, item 3).
 	lookupStatus int
 	lookups      int // the bot user lookups the fake API answered with the bot user
+	// answerTokens are the tokens the next mints answer with, in order, instead of one of the fake API's own
+	// shapes: a value GitHub must never hand out, which the scripts still refuse (issue #232).
+	answerTokens []string
 }
 
 // requestFailure is one request the fake API answers with a failure instead of its own answer: a status with
@@ -916,12 +922,141 @@ type requestFailure struct {
 	drop    bool              // close the connection without a reply instead of answering
 }
 
+// fakeAppID is the App ID the fake API answers for, and the one the installation tokens it mints carry.
+const fakeAppID = "424242"
+
+// appTokenFormat is the shape of a GitHub App installation token. GitHub minted ghs_ plus 36 alphanumerics, 40
+// characters, until 2026, and mints ghs_<App ID>_<base64url JWT> since: about 520 characters, variable length,
+// with . and - in it (issue #232). Both shapes stay pinned here: the old one because a VM may still hold one,
+// and the new one because it is what the API answers now, which is the zero value.
+type appTokenFormat int
+
+const (
+	newFormatTokens appTokenFormat = iota
+	oldFormatTokens
+)
+
+// oldFormatAppToken returns a made-up installation token in the format GitHub minted before 2026: ghs_ and 36
+// hexadecimal digits, 40 characters, the shape the scripts accepted until GitHub changed it (issue #232). It is
+// invented, never a real credential, and n tells one token from another.
+func oldFormatAppToken(n int) string {
+	return fmt.Sprintf("ghs_%036x", n)
+}
+
+// newFormatAppToken returns a made-up installation token in the format GitHub mints since 2026:
+// ghs_<App ID>_<base64url header>.<base64url claims>.<base64url signature>, about 520 characters whose
+// characters are A-Za-z0-9_- and the two dots. It is invented and deterministic, never a real credential, and n
+// tells one token from another (issue #232).
+func newFormatAppToken(n int) string {
+	return newFormatAppTokenWithClaims(n, 0)
+}
+
+// newFormatAppTokenWithClaims is newFormatAppToken whose claims part is extra base64url characters longer, so a
+// test can pin that a token longer than the 520 characters GitHub sends today is not refused by a length cap
+// either (issue #232). For extra 0 the token is 521 characters long, as the ones GitHub answers with are about
+// 520.
+func newFormatAppTokenWithClaims(n, extra int) string {
+	digits := strconv.Itoa(n)
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+	// A jti of 38 characters makes the token about 520 characters long; extra lengthens the claims further.
+	jti := digits + strings.Repeat("a", 38-len(digits)+extra*3/4)
+	claims := base64.RawURLEncoding.EncodeToString([]byte(
+		`{"iat":1700000000,"exp":1700000600,"iss":"` + fakeAppID + `","jti":"` + jti + `"}`))
+
+	return "ghs_" + fakeAppID + "_" + header + "." + claims + "." + appTokenSignature(n)
+}
+
+// appTokenSignature returns the tail of every made-up new-format token: as many base64url characters as the
+// 256-byte RSA signature a real token's JWT ends with, spread over the whole base64url alphabet, so the token
+// carries the - and the _ a check that only knows alphanumerics refuses (issue #232). The characters are
+// invented, not a signature of anything.
+func appTokenSignature(n int) string {
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+	var signature strings.Builder
+	signature.Grow(342)
+
+	// 7 is coprime with 64, so the whole alphabet, - and _ included, appears in the 342 characters.
+	for i := range 342 {
+		signature.WriteByte(alphabet[(i*7+n*13)%len(alphabet)])
+	}
+
+	return signature.String()
+}
+
+// assertNewFormatAppToken fails unless token has the shape of the installation tokens GitHub mints since 2026:
+// ghs_<App ID>_ then three dot-separated, non-empty base64url parts, with the - and _ the format brings, and
+// about 520 characters long (issue #232).
+func assertNewFormatAppToken(t *testing.T, where, token string) {
+	t.Helper()
+
+	if len(token) < 500 || len(token) > 1700 {
+		t.Fatalf("%s is %d characters long, want 500 to 1700: GitHub's installation tokens are about 520 characters since 2026 (issue #232)", where, len(token))
+	}
+
+	body, ok := strings.CutPrefix(token, "ghs_"+fakeAppID+"_")
+	if !ok {
+		t.Fatalf("%s does not start with ghs_%s_: the new format names the App ID between the prefix and the JWT (issue #232)", where, fakeAppID)
+	}
+
+	parts := strings.Split(body, ".")
+	if len(parts) != 3 {
+		t.Fatalf("%s does not hold a header, claims and signature separated by two dots (issue #232)", where)
+	}
+
+	for _, part := range parts {
+		if part == "" {
+			t.Fatalf("%s holds an empty JWT part (issue #232)", where)
+		}
+
+		for _, r := range part {
+			if !strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_", r) {
+				t.Fatalf("%s holds %q, which base64url does not (issue #232)", where, r)
+			}
+		}
+	}
+
+	if !strings.Contains(body, "-") || !strings.Contains(body, "_") {
+		t.Fatalf("%s holds neither a - nor a _ in its JWT: this must be a token a check that only knows alphanumerics refuses (issue #232)", where)
+	}
+}
+
+// assertOldFormatAppToken fails unless token has the shape GitHub minted before 2026: ghs_ and 36 hexadecimal
+// digits, 40 characters (issue #232).
+func assertOldFormatAppToken(t *testing.T, where, token string) {
+	t.Helper()
+
+	hex, ok := strings.CutPrefix(token, "ghs_")
+	if !ok || len(token) != 40 {
+		t.Fatalf("%s is %q, want ghs_ and 36 hexadecimal digits, 40 characters: the old format a VM may still hold (issue #232)", where, token)
+	}
+
+	for _, r := range hex {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			t.Fatalf("%s holds %q, which is not the hexadecimal digit the old format had (issue #232)", where, r)
+		}
+	}
+}
+
+// assertAppTokenFormat fails unless token has the shape of the format the test says it is pinning.
+func assertAppTokenFormat(t *testing.T, where, token string, format appTokenFormat) {
+	t.Helper()
+
+	if format == oldFormatTokens {
+		assertOldFormatAppToken(t, where, token)
+
+		return
+	}
+
+	assertNewFormatAppToken(t, where, token)
+}
+
 // newFakeGitHub starts the fake API for one test and stops it with the test.
 func newFakeGitHub(t *testing.T, public *rsa.PublicKey) *fakeGitHub {
 	t.Helper()
 
 	f := &fakeGitHub{
-		appID:          "424242",
+		appID:          fakeAppID,
 		installationID: "77889900",
 		slug:           "shift2eu-agents",
 		botUserID:      987654321,
@@ -1255,7 +1390,8 @@ func dropConnection(w http.ResponseWriter) {
 }
 
 // mint answers one access_tokens request with a new token, valid for the fake API's lifetime (an hour by
-// default, as GitHub mints them).
+// default, as GitHub mints them), in the format GitHub answers with now unless a test pins the old one (issue
+// #232).
 func (f *fakeGitHub) mint(w http.ResponseWriter) {
 	f.mu.Lock()
 
@@ -1265,7 +1401,7 @@ func (f *fakeGitHub) mint(w http.ResponseWriter) {
 	}
 
 	expiresAt := time.Now().Add(lifetime).Unix()
-	token := fmt.Sprintf("ghs_%036x", len(f.tokens)+1)
+	token := f.nextTokenLocked()
 	f.tokens = append(f.tokens, token)
 	f.expiresAt = append(f.expiresAt, expiresAt)
 	f.mu.Unlock()
@@ -1277,6 +1413,50 @@ func (f *fakeGitHub) mint(w http.ResponseWriter) {
 		"token":      token,
 		"expires_at": time.Unix(expiresAt, 0).UTC().Format(time.RFC3339),
 	})
+}
+
+// nextTokenLocked is the token the next access_tokens answer carries: the one a test forced, or one of the
+// fake API's own shapes in f.format. It is called with the fake API's mutex held.
+func (f *fakeGitHub) nextTokenLocked() string {
+	if len(f.answerTokens) > 0 {
+		token := f.answerTokens[0]
+		f.answerTokens = f.answerTokens[1:]
+
+		return token
+	}
+
+	if f.format == oldFormatTokens {
+		return oldFormatAppToken(len(f.tokens) + 1)
+	}
+
+	return newFormatAppToken(len(f.tokens) + 1)
+}
+
+// mintNewFormatTokens makes the fake API mint tokens in the format GitHub answers with now: ghs_<App ID>_<JWT>,
+// about 520 characters. It is the default, and a test that pins the format says so (issue #232).
+func (f *fakeGitHub) mintNewFormatTokens() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.format = newFormatTokens
+}
+
+// mintOldFormatTokens makes the fake API mint tokens in the format GitHub used before 2026: ghs_ plus 36
+// hexadecimal digits, 40 characters, which the scripts must keep accepting in a VM that holds one (issue #232).
+func (f *fakeGitHub) mintOldFormatTokens() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.format = oldFormatTokens
+}
+
+// answerMintsWith makes the next mints answer with tokens, in order, instead of one of the fake API's own
+// shapes: a value GitHub must never hand out, which the scripts refuse (issue #232).
+func (f *fakeGitHub) answerMintsWith(tokens ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.answerTokens = append(f.answerTokens, tokens...)
 }
 
 // writeJSON answers one request with body. The fake API's own answers are small and fixed, so a write
