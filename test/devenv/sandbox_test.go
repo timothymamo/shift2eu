@@ -274,11 +274,12 @@ found=0
 for a in "$@"; do
   at=$((at + 1))
   case "$a" in
-  sh | bash | dash) found=1; break ;;
+  # systemctl, because make deck-restart hands the VM the command itself, not a sh -c around it.
+  sh | bash | dash | systemctl) found=1; break ;;
   esac
 done
 if [ "${found}" -ne 1 ]; then
-  echo 'fake limactl: the argv holds no sh, bash or dash to run' >&2
+  echo 'fake limactl: the argv holds no sh, bash, dash or systemctl to run' >&2
   exit 64
 fi
 shift $((at - 1))
@@ -434,6 +435,30 @@ func (sb *sandbox) useFakeSudo(t *testing.T) {
 
 	//nolint:gosec // the fake sudo is a script the tests run, so it must be executable
 	if err := os.WriteFile(path, []byte(fakeSudo), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// fakeSystemctl stands in for systemctl in the devenv tests: it records its argv and exits 0. A test that pins
+// what make deck-restart asks the VM's user manager for must never reach the machine the tests run on, where
+// `systemctl --user restart dot-agent-deck.service` would really restart something.
+const fakeSystemctl = `#!/bin/sh
+{
+  printf 'tool=systemctl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+exit 0
+`
+
+// useFakeSystemctl puts the recording systemctl first on PATH, so the calls the VM side of make deck-restart
+// makes are pinned by their argv and their order in the argv log instead of reaching this machine.
+func (sb *sandbox) useFakeSystemctl(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "systemctl")
+
+	//nolint:gosec // the fake systemctl is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(fakeSystemctl), 0o700); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
