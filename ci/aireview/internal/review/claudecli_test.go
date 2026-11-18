@@ -225,6 +225,18 @@ func TestClaudeCLIAskPresentsThePromptAsTheCLIReadsIt(t *testing.T) {
 		}
 	})
 
+	t.Run("the CLI runs in safe mode, which leaves CLAUDE.md, skills, plugins, hooks, MCP servers and custom agents off", func(t *testing.T) {
+		t.Parallel()
+
+		// --safe-mode (Claude Code 2.1.327) turns off CLAUDE.md, skills,
+		// plugins, hooks, MCP servers and custom agents for the run, and keeps
+		// the subscription's authentication. The empty working directory and
+		// HOME the test above pins are not enough on their own.
+		if !slices.Contains(args, "--safe-mode") {
+			t.Errorf("the CLI's arguments %q hold no --safe-mode; the reviewer runs the CLI with CLAUDE.md, skills, plugins, hooks, MCP servers and custom agents off, so nothing of the checkout or the runner's home reaches the model (ADR 0033)", args)
+		}
+	})
+
 	t.Run("the system prompt arrives in the file the flag names", func(t *testing.T) {
 		t.Parallel()
 

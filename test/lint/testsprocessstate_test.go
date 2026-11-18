@@ -18,14 +18,15 @@ import (
 // and the CLI and the HTTP API take their inputs from flags and the request.
 //
 // The group holds for every test of the module and for every other file a test
-// could hand the change to, and is dropped in two places only, each with its own
+// could hand the change to, and is dropped in three places only, each with its own
 // linters.exclusions.rules entry: test/lint and test/architecture set the go
 // command's own variables (GOCACHE, GOFLAGS, HOME) on purpose, in a test binary of
 // their own, to run the go command in a known environment, and the AI reviewer's
-// CLI asker tests (PRD #161 milestone 4, ADR 0033) set ANTHROPIC_API_KEY and a
-// variable of their own in the process's environment in the one test that proves
-// the Claude Code CLI inherits none of it, with no parallel test beside it. Before
-// the audit's
+// claudecli_test.go (PRD #161 milestone 4, ADR 0033) sets ANTHROPIC_API_KEY and a
+// variable of its own in the process's environment in the one test that proves
+// the Claude Code CLI inherits none of it, with no parallel test beside it. That
+// exception is that one file: every other file of the library, its tests
+// included, is held to the group. Before the audit's
 // finding S1 the group was scoped to five areas, so an adapter's or the domain's
 // test, and every e2e test, could set a variable with lint green: the likely case
 // is a source adapter's test that sets AWS_PROFILE.
@@ -260,16 +261,24 @@ func processStateSelectorFindings(t *testing.T, files []goFile) []finding {
 	return found
 }
 
+// aiReviewerEnvTestFile is the one file of the AI reviewer's library the group
+// tests-no-process-state is dropped in (PRD #161 milestone 4, ADR 0033):
+// claudecli_test.go's env test sets ANTHROPIC_API_KEY and a variable of its own
+// in the process's environment, to prove that the Claude Code CLI inherits
+// neither, and runs no parallel test beside it. The library's other files change
+// no process state, so they are held to the group.
+const aiReviewerEnvTestFile = "ci/aireview/internal/review/claudecli_test.go"
+
 // processStateScope reports whether the group tests-no-process-state holds for the
 // file at rel, a slash-separated path from the module root: it holds everywhere
 // but in the two harnesses under test/, which set the go command's own variables
-// on purpose, and in the AI reviewer's CLI asker tests, whose one test sets an
+// on purpose, and in the AI reviewer's claudecli_test.go, whose env test sets an
 // ANTHROPIC_API_KEY in the process's environment to prove that the Claude Code CLI
 // inherits none of it, as the group's linters.exclusions.rules entries say.
 func processStateScope(rel string) bool {
 	return !strings.HasPrefix(rel, "test/lint/") &&
 		!strings.HasPrefix(rel, "test/architecture/") &&
-		!strings.HasPrefix(rel, "ci/aireview/internal/review/")
+		rel != aiReviewerEnvTestFile
 }
 
 // TestTestsChangeNoProcessStateByNoSelector fails on every selector that

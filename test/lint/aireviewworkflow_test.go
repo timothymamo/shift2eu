@@ -24,14 +24,14 @@ const aiReviewWorkflowPath = ".github/workflows/ai-review.yml"
 // expression.
 var aiReviewPinnedAction = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}$`)
 
-// aiReviewClaudeVersion matches the install of the Claude Code CLI at an exact
-// version: the npm package, its optional platform suffix and @X.Y.Z (CLAUDE.md
-// rule 7).
-var aiReviewClaudeVersion = regexp.MustCompile(`@anthropic-ai/claude-code(?:-[a-z0-9-]+)?@(\d+\.\d+\.\d+)`)
+// aiReviewIntegrity matches the npm integrity the install step checks the
+// download against: sha512-<base64>, the dist.integrity npm publishes for a
+// tarball (ADR 0033).
+var aiReviewIntegrity = regexp.MustCompile(`^sha512-[A-Za-z0-9+/]{20,}={0,2}$`)
 
-// aiReviewChecksum matches a pinned digest the install step checks the download
-// against: a SHA-256 in hex, or npm's sha512-<base64> integrity form.
-var aiReviewChecksum = regexp.MustCompile(`[0-9a-f]{64}|sha512-[A-Za-z0-9+/=]{20,}`)
+// aiReviewExactVersion matches a version pin that names one release: X.Y.Z, with
+// no range and no latest (CLAUDE.md rule 7).
+var aiReviewExactVersion = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
 
 // aiReviewInstallScript is the script the install step calls with the directory
 // the Claude Code CLI is extracted into, its platform package and its integrity
@@ -417,63 +417,82 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 			t.Fatalf("%s: no step installs the Claude Code CLI; the reviewer asks its model through `claude -p` (ADR 0033)", aiReviewWorkflowPath)
 		}
 
-		script := aiReviewText(run)
-		lines := aiReviewRunLines(run)
+		// The version and the integrity are the install step's env:, not its
+		// script: the repository's generic Renovate regex manager reads a
+		// `# renovate:` comment and the `KEY: value` line below it, which the
+		// old one-line `@package@X.Y.Z` form also matched, with the script's
+		// path as the version (CLAUDE.md rule 7).
+		env, ok := aiReviewFind(aiReviewStepFields(t, workflow.steps[index]), "env")
+		if !ok {
+			t.Fatalf("%s: line %d: the step that installs the CLI sets no env:, so the CLI's version and integrity are pinned nowhere Renovate reads them (CLAUDE.md rule 7)", aiReviewWorkflowPath, workflow.steps[index].Num)
+		}
 
-		install := -1
-		version := ""
+		version, versionLine := "", 0
+		integrity := ""
 
-		for i, line := range lines {
-			match := aiReviewClaudeVersion.FindStringSubmatch(line.text)
-			if match == nil {
+		for _, line := range env.Block {
+			key, value, ok := strings.Cut(line.Text, ":")
+			if !ok {
 				continue
 			}
 
-			install, version = i, match[1]
-
-			break
-		}
-
-		if install < 0 {
-			t.Fatalf("%s: line %d: the install step names no exact version of the CLI, want @anthropic-ai/claude-code@X.Y.Z: a range or latest would change the program the reviewer runs without a commit (CLAUDE.md rule 7)", aiReviewWorkflowPath, run.Num)
-		}
-
-		for _, loose := range []string{"latest", "^", "~", "*"} {
-			if strings.Contains(lines[install].text, loose) {
-				t.Errorf("%s: line %d: the CLI's install line %q holds %q; it names the exact version %s and no range (CLAUDE.md rule 7)", aiReviewWorkflowPath, lines[install].num, lines[install].text, loose, version)
+			switch key {
+			case "CLAUDE_CODE_VERSION":
+				version, versionLine = strings.TrimSpace(value), line.Num
+			case "CLAUDE_CODE_INTEGRITY":
+				integrity = strings.TrimSpace(value)
 			}
 		}
 
-		above := aiReviewSourceLine(t, workflow, lines[install].num-1)
+		if versionLine == 0 {
+			t.Fatalf("%s: line %d: the install step's env: sets no CLAUDE_CODE_VERSION, want the CLI's exact version X.Y.Z: a range or latest would change the program the reviewer runs without a commit (CLAUDE.md rule 7)", aiReviewWorkflowPath, env.Num)
+		}
+
+		if !aiReviewExactVersion.MatchString(version) {
+			t.Errorf("%s: line %d: CLAUDE_CODE_VERSION is %q, want an exact X.Y.Z version: a range or latest would change the program the reviewer runs without a commit (CLAUDE.md rule 7)", aiReviewWorkflowPath, versionLine, version)
+		}
+
+		above := aiReviewSourceLine(t, workflow, versionLine-1)
 		if !strings.HasPrefix(strings.TrimSpace(above), "# renovate:") ||
 			!strings.Contains(above, "datasource=npm") ||
 			!strings.Contains(above, "depName=@anthropic-ai/claude-code") {
-			t.Errorf("%s: line %d: the line above the CLI's version pin is %q, want a # renovate: datasource=npm depName=@anthropic-ai/claude-code comment, so Renovate finds the pin and no one bumps it by hand (CLAUDE.md rule 7)", aiReviewWorkflowPath, lines[install].num-1, above)
+			t.Errorf("%s: line %d: the line above the CLI's version pin is %q, want a # renovate: datasource=npm depName=@anthropic-ai/claude-code comment, so Renovate finds the pin and no one bumps it by hand (CLAUDE.md rule 7)", aiReviewWorkflowPath, versionLine-1, above)
 		}
 
 		// The reviewer runs a downloaded program that holds a subscription
-		// token: the step compares the download against a digest pinned here,
-		// so a changed tarball is refused rather than run (ADR 0033).
-		if !strings.Contains(script, "sha512") && !strings.Contains(script, "sha256sum") {
-			t.Errorf("%s: line %d: the install step verifies no checksum; it compares the download against a pinned digest (ADR 0033)", aiReviewWorkflowPath, run.Num)
+		// token: the step compares the download against an integrity pinned
+		// here, so a changed tarball is refused rather than run (ADR 0033).
+		if integrity == "" {
+			t.Errorf("%s: the install step's env: sets no CLAUDE_CODE_INTEGRITY, so nothing compares the download against a pinned digest (ADR 0033)", aiReviewWorkflowPath)
+		} else if !aiReviewIntegrity.MatchString(integrity) {
+			t.Errorf("%s: CLAUDE_CODE_INTEGRITY is %q, want npm's sha512-<base64> integrity for the pinned version, so the download is verified before it runs (ADR 0033)", aiReviewWorkflowPath, integrity)
 		}
 
-		if !aiReviewChecksum.MatchString(script) {
-			t.Errorf("%s: line %d: the install step holds no pinned digest, want a SHA-256 in hex or npm's sha512-<base64> integrity to verify the download against", aiReviewWorkflowPath, run.Num)
+		// The script itself names no version and no digest: both reach it
+		// through the env:, where Renovate updates them.
+		script := aiReviewText(run)
+
+		for _, want := range []string{"@${CLAUDE_CODE_VERSION}", "${CLAUDE_CODE_INTEGRITY}"} {
+			if !strings.Contains(script, want) {
+				t.Errorf("%s: line %d: the install step's run: script holds no %s, so it passes neither the version nor the integrity the step's env: pins to the install script (ADR 0033)", aiReviewWorkflowPath, run.Num, want)
+			}
+		}
+
+		if strings.Contains(script, version) {
+			t.Errorf("%s: line %d: the install step's run: script names the version %s itself; the version is CLAUDE_CODE_VERSION, which Renovate updates with the integrity in one place (CLAUDE.md rule 7)", aiReviewWorkflowPath, run.Num, version)
 		}
 
 		// The CLI is installed before any secret is in a step's environment, so
 		// nothing it writes while installing can read one.
 		for i := 0; i <= index; i++ {
-			fields := aiReviewStepFields(t, workflow.steps[i])
+			step := workflow.steps[i]
 
-			for _, key := range []string{"env", "run"} {
-				entry, ok := aiReviewFind(fields, key)
-				if !ok || !strings.Contains(aiReviewText(entry), "secrets.") {
+			for _, field := range aiReviewStepFields(t, step) {
+				if !strings.Contains(aiReviewText(field), "secrets.") {
 					continue
 				}
 
-				t.Errorf("%s: line %d: the step that installs the CLI, or one before it, reads a secret in its %s:; the CLI is installed before any secret is in a step's environment (ADR 0033)", aiReviewWorkflowPath, entry.Num, key)
+				t.Errorf("%s: line %d: the step that installs the CLI, or one before it, reads a secret in its %s:; the CLI is installed before any secret is in a step's environment (ADR 0033)", aiReviewWorkflowPath, field.Num, field.Key)
 			}
 		}
 	})
