@@ -304,8 +304,10 @@ func TestMakeVMCreateRefusesAGitHubToken(t *testing.T) {
 // The drop is not silent (PRD #161 milestone 3, reviewer and auditor): the line sat in the VM's daemon.env,
 // which the login shell sources, so every agent the VM started could read the maintainer's personal token.
 // make must therefore name the variable it dropped and say that the token is to be revoked - and it must do so
-// without ever printing the value, which is the credential itself. A daemon.env that holds no such line gets no
-// such note.
+// without ever printing the value, which is the credential itself. So must a line in one of the other shapes a
+// login shell reads a variable in (nonCanonicalTokenLines): the auditor found that the VM-side name read missed
+// them, so the token left the file with no word. A daemon.env that holds no such line gets no such note, and a
+// name that only holds a token's spelling (MY_GITHUB_TOKEN) is no token line at all.
 func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 	t.Parallel()
 
@@ -318,14 +320,36 @@ func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 	type mergeCase struct {
 		name  string
 		token string
+		// line is the shape the stale token line has, with tokenLineValue where its value goes: the plain
+		// NAME=value assignment when empty.
+		line string
+		// kept are further lines of the earlier daemon.env that the merge must keep as they were.
+		kept []string
 	}
 
-	cases := make([]mergeCase, 0, len(gitHubTokens)+1)
+	cases := make([]mergeCase, 0, len(gitHubTokens)+len(nonCanonicalTokenLines)+2)
 	for _, token := range gitHubTokens {
 		cases = append(cases, mergeCase{name: "a merge drops a stale " + token, token: token})
 	}
 
+	// The other shapes a token line takes, which a hand edit or another tool writes and the VM-side name read
+	// missed: a merge removes each of them and names its variable all the same (PRD #161 milestone 3).
+	for _, form := range nonCanonicalTokenLines {
+		cases = append(cases, mergeCase{
+			name:  "a merge drops a " + form.variable + " line " + form.name,
+			token: form.variable,
+			line:  form.line,
+		})
+	}
+
 	cases = append(cases, mergeCase{name: "a merge of a daemon.env with no GitHub token says nothing about one"})
+
+	// A name that holds a token's spelling without being one: it is a plain line, so the merge keeps it and
+	// reports no GitHub token - and a maintainer is sent to revoke nothing (PRD #161 milestone 3).
+	cases = append(cases, mergeCase{
+		name: "a merge keeps a MY_GITHUB_TOKEN line and reports no GitHub token",
+		kept: []string{"MY_GITHUB_TOKEN=" + fakeEnvValue("MY_GITHUB_TOKEN")},
+	})
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -336,11 +360,17 @@ func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 			delete(env, "CLAUDE_CODE_OAUTH_TOKEN")
 
 			stale := ""
-			seeded := []string{}
+			seeded := slices.Clone(tc.kept)
 
 			if tc.token != "" {
 				stale = fakeEnvValue(tc.token)
-				seeded = append(seeded, tc.token+"="+stale)
+
+				line := tc.line
+				if line == "" {
+					line = tc.token + "=" + tokenLineValue
+				}
+
+				seeded = append(seeded, strings.ReplaceAll(line, tokenLineValue, stale))
 			}
 
 			sb.seedDaemonEnvWith(t, seeded...)
@@ -369,6 +399,7 @@ func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 				"CLAUDE_CODE_OAUTH_TOKEN=old-oauth",
 				narrowed + "=" + fakeEnvValue(narrowed),
 			}
+			want = append(want, tc.kept...)
 
 			if diff := cmp.Diff(sortedEnvLines(strings.Join(want, "\n")), lines); diff != "" {
 				t.Errorf("make vm-env VM_ENV=%s wrote the wrong lines to the VM's daemon.env: it must drop a GitHub token line and keep every other plain line the file held (PRD #161 milestone 3) (-want +got):\n%s",
@@ -378,15 +409,20 @@ func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 			text := stdout + stderr
 
 			if tc.token == "" {
+				// The warnings only: the merge's "kept (unchanged)" line names the variables it kept, and a
+				// name such as MY_GITHUB_TOKEN holds a token's spelling without being a token, so the run may
+				// print it - what may not appear is a warning about one (PRD #161 milestone 3).
+				warnings := strings.Join(vmEnvWarnings(text), "\n")
+
 				for _, token := range gitHubTokens {
-					if strings.Contains(text, token) {
-						t.Errorf("make vm-env VM_ENV=%s dropped no GitHub token line - the VM's daemon.env held none - yet it names %s: a note about a token that was not there sends a maintainer to revoke a credential the VM never had (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+					if strings.Contains(warnings, token) {
+						t.Errorf("make vm-env VM_ENV=%s dropped no GitHub token line - the VM's daemon.env held none - yet it warns about %s: a note about a token that was not there sends a maintainer to revoke a credential the VM never had (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
 							narrowed, token, stdout, stderr)
 					}
 				}
 
-				if strings.Contains(strings.ToLower(text), "revoke") {
-					t.Errorf("make vm-env VM_ENV=%s dropped no GitHub token line - the VM's daemon.env held none - yet its output talks about revoking a token: the note must appear only when a line was really dropped, or a maintainer learns to ignore it (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+				if strings.Contains(strings.ToLower(warnings), "revoke") {
+					t.Errorf("make vm-env VM_ENV=%s dropped no GitHub token line - the VM's daemon.env held none - yet it warns about revoking a token: the note must appear only when a line was really dropped, or a maintainer learns to ignore it (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
 						narrowed, stdout, stderr)
 				}
 
@@ -408,6 +444,21 @@ func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 			})
 		})
 	}
+}
+
+// vmEnvWarnings returns the lines a make vm-env run wrote as a warning of its own, so a check about what a
+// warning says never trips on another line of the output: the merge's "kept (unchanged)" line names every
+// variable it kept, and a name such as MY_GITHUB_TOKEN holds a token's spelling without being one.
+func vmEnvWarnings(text string) []string {
+	var warnings []string
+
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "vm-env: warning:") {
+			warnings = append(warnings, line)
+		}
+	}
+
+	return warnings
 }
 
 // assertPointsAtTheAppToken fails when a refusal of one of the GitHub token names does not point a maintainer at
