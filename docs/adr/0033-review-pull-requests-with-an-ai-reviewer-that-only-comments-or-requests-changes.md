@@ -247,8 +247,10 @@ up an unbounded bill.
   `prompt-injection` finding always blocks.
 - **The model has no tools**, so a tricked model can do nothing but write text. Its answer is one JSON
   object, parsed strictly: unknown fields, a missing summary or title, a severity or category outside the
-  lists, a negative line, a line without a path, an absolute path or one with `..`, or anything around
-  the object fails the run, and nothing is posted. The model never names the event: the program decides
+  lists, a negative line, a line without a path, an absolute path or one with `..`, a backslash or a
+  control character (below 0x20, or DEL: git quotes such a path in a diff, so no real one holds it, and a
+  line break would put the rest of the path on a line of its own), or anything around the object fails
+  the run, and nothing is posted. The model never names the event: the program decides
   it from the findings, so no answer can make it approve, and the poster refuses anything but `COMMENT`
   and `REQUEST_CHANGES` even if the program asked.
 - An inline comment goes only on a line the diff shows on its new side; a finding on any other line, or
@@ -260,13 +262,20 @@ up an unbounded bill.
   then the summary, the event's reason (and, with the switch off, that blocking findings would have
   requested changes), and each finding with its severity and category, blocking ones marked so. It says
   that it is advice and never an approval.
-- **GitHub's length limit.** GitHub refuses a review body or an inline comment body over 65,000
-  characters. The renderer cuts the body and each inline comment to that many characters (runes) and says
-  it truncated them; the body always keeps its first line, which names the head commit, and its closing
-  statement that the review is advice and never an approval. A normal answer is posted whole.
+- **GitHub's length limit.** GitHub refuses a review body or an inline comment body over 65,536
+  characters, counted in UTF-16 code units (a character outside the BMP, such as an emoji, counts 2). The
+  renderer cuts the body and each inline comment to 65,000 UTF-16 code units, a margin under that limit,
+  on a character boundary, and says it truncated them; a code fence the cut leaves open is closed before
+  that note, so the note and the closing statement do not render as code. The body always keeps its
+  first line, which names the head commit, and its closing statement that the review is advice and never
+  an approval. A normal answer is posted whole.
 - **Mentions are defused.** Every `@` followed by a letter or a digit in the text the model wrote (the
-  summary, the findings' titles and bodies, the inline comments) gets a zero-width space after it, so a
-  review notifies no user or team while the handle stays readable. The program's own text is unchanged.
+  summary, the findings' titles and bodies, the inline comments, the paths listed in the body) gets a
+  zero-width space after it, and the `&` of an HTML character reference to an `@` (`&#64;`, `&#x40;`,
+  `&commat;` and their variants, which GitHub renders as a live `@`) is escaped as `&amp;`, so a review
+  notifies no user or team while the handle stays readable. A path listed in the body also has its
+  control characters made spaces, so it stays on its line even if one reaches the renderer. The
+  program's own text is unchanged.
 - **Dismissal.** After posting, when no blocking finding remains, it dismisses each of its own earlier
   reviews in state `CHANGES_REQUESTED` (`user.login` the reviewer's `<slug>[bot]`), and nothing else:
   never anyone else's review, never one in any other state. With a blocking finding left it dismisses
