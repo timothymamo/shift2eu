@@ -1022,6 +1022,55 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Allow: []string{},
 		Deny:  []string{"os"},
 	},
+	{
+		// The AI reviewer's entry point (PRD #161 milestone 4, ADR 0033): a main
+		// package no root can import, held to the standard packages it imports and
+		// its own library, each exact. os is for main's instruction files, os.Exit
+		// and the one os.LookupEnv the forbidigo group ai-reviewer-env allows.
+		Name:     "ai-reviewer-main",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/aireview/**",
+			"!**/ci/aireview/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"context$",
+			"fmt$",
+			"net/http$",
+			"os$",
+			"os/signal$",
+			"strings$",
+			"time$",
+			"github.com/timothymamo/shift2eu/ci/aireview/internal/review$",
+		},
+		Deny: []string{"os/exec"},
+	},
+	{
+		// The AI reviewer's library (ADR 0033): named standard packages only, no
+		// os, os/exec, syscall or unsafe and no package of the product. Go's
+		// internal rule keeps it out of reach of cmd/ and internal/.
+		Name:     "ai-reviewer-is-standard-library",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/aireview/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bytes$",
+			"context$",
+			"encoding/json$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"net/http$",
+			"net/url$",
+			"slices$",
+			"strconv$",
+			"strings$",
+		},
+		Deny: []string{"os"},
+	},
 }
 
 // TestDepguardRulesArePinned pins every depguard rule of .golangci.yml against

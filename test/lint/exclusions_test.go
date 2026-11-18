@@ -20,7 +20,15 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, httpapiTestsNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, httpapiTestsNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag}
+
+// aiReviewerEnvTag is the tag of the AI reviewer's environment group (ADR 0033),
+// and aiReviewerLookupEnvMsg the msg of its one entry with an exception: the
+// os.LookupEnv that ci/aireview/main.go passes to review.SettingsFromEnv.
+const (
+	aiReviewerEnvTag       = "ai-reviewer-env"
+	aiReviewerLookupEnvMsg = "ai-reviewer-env: os.LookupEnv is used in ci/aireview/main.go only, passed to review.SettingsFromEnv (ADR 0033); a test passes a lookup function of its own"
+)
 
 // exclusionRule is one rule of linters.exclusions.rules in .golangci.yml.
 type exclusionRule struct {
@@ -125,6 +133,14 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		// sets AWS_PROFILE is refused rather than left to review.
 		testsNoProcessStateTag: {
 			{"path": `^test/(?:lint|architecture)/`, "text": groupText(testsNoProcessStateTag)},
+		},
+		// The AI reviewer (ADR 0033): one rule for every path outside
+		// ci/aireview/, so the group holds there and nowhere else, _test.go
+		// files included, and the one exception, the os.LookupEnv entry's msg
+		// alone, in ci/aireview/main.go alone.
+		aiReviewerEnvTag: {
+			{"path-except": `^ci/aireview/`, "text": groupText(aiReviewerEnvTag)},
+			{"path": `^ci/aireview/main\.go$`, "text": narrowedTextOf(aiReviewerLookupEnvMsg)},
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
