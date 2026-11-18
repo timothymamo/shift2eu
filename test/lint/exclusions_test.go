@@ -20,7 +20,15 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, httpapiTestsNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, httpapiTestsNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag}
+
+// aiReviewerEnvTag is the tag of the AI reviewer's environment group (ADR 0033),
+// and aiReviewerLookupEnvMsg the msg of its one entry with an exception: the
+// os.LookupEnv that ci/aireview/main.go passes to review.SettingsFromEnv.
+const (
+	aiReviewerEnvTag       = "ai-reviewer-env"
+	aiReviewerLookupEnvMsg = "ai-reviewer-env: os.LookupEnv is used in ci/aireview/main.go only, passed to review.SettingsFromEnv (ADR 0033); a test passes a lookup function of its own"
+)
 
 // exclusionRule is one rule of linters.exclusions.rules in .golangci.yml.
 type exclusionRule struct {
@@ -123,8 +131,34 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		// The group holds for every other path, the adapters' and the domain's
 		// tests and the e2e ones included, so a future source adapter test that
 		// sets AWS_PROFILE is refused rather than left to review.
+		//
+		// The AI reviewer's CLI asker (PRD #161 milestone 4, ADR 0033) states one
+		// exception: the one test file that fills the process's environment with
+		// an ANTHROPIC_API_KEY and a variable of its own, to prove that the
+		// Claude Code CLI inherits neither. That test runs no parallel test
+		// beside it, and the exception is that file alone: every other file of
+		// the library, its own tests included, changes no process state.
 		testsNoProcessStateTag: {
 			{"path": `^test/(?:lint|architecture)/`, "text": groupText(testsNoProcessStateTag)},
+			{"path": `^ci/aireview/internal/review/claudecli_test\.go$`, "text": groupText(testsNoProcessStateTag)},
+		},
+		// The AI reviewer (ADR 0033): one rule for every path outside
+		// ci/aireview/, so the group holds there and nowhere else, _test.go
+		// files included, and the one exception, the os.LookupEnv entry's msg
+		// alone, in ci/aireview/main.go alone.
+		aiReviewerEnvTag: {
+			{"path-except": `^ci/aireview/`, "text": groupText(aiReviewerEnvTag)},
+			{"path": `^ci/aireview/main\.go$`, "text": narrowedTextOf(aiReviewerLookupEnvMsg)},
+		},
+		// The AI reviewer's library (PRD #161 milestone 4, ADR 0033): it runs
+		// the one Claude Code CLI call with exec.CommandContext, writes the
+		// system prompt to a temporary file and removes the directories it made,
+		// and reads no file. Two rules scope the group to the library's
+		// non-test files: one drops it in their _test.go files, which read and
+		// run what they test the way a test does, and one outside the library.
+		aiReviewerOneProcessTag: {
+			{"path": `^ci/aireview/internal/review/.*_test\.go$`, "text": groupText(aiReviewerOneProcessTag)},
+			{"path-except": `^ci/aireview/internal/review/`, "text": groupText(aiReviewerOneProcessTag)},
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {

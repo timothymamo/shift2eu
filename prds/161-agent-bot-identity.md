@@ -127,37 +127,40 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 
 ### The AI reviewer (milestone 4)
 
-- [ ] A workflow reviews every pull request against `main` when it is opened, reopened, marked ready or
+- [x] A workflow reviews every pull request against `main` when it is opened, reopened, marked ready or
   pushed to (drafts are skipped; a new push cancels the review in progress). It runs in the `ai-review`
   environment, whose deployment branch policy is `main` only, so only `main`'s copy of the workflow ever
   holds the reviewer App's key and the model provider's key. It is triggered with `pull_request_target`
   and **never checks out or runs the pull request's code**: it reads the diff and changed files through
   the API as data. A pull request that edits the workflow, its prompt or the skills is reviewed by
-  `main`'s versions of them.
-- [ ] The workflow's job token has `contents: read` and `pull-requests: read` only; the review is posted
+  `main`'s versions of them. *The workflow (`.github/workflows/ai-review.yml`) and `ci/aireview`, ADR
+  0033; the environment's `main`-only policy is checked at runbook step 7.*
+- [x] The workflow's job token has `contents: read` and `pull-requests: read` only; the review is posted
   with a token minted for the reviewer App (Pull requests write, Contents read, nothing else), whose ID and
   key are secrets of the `ai-review` environment only. The model provider's key is a secret of that
   environment only. No repository-level secret or variable holds either; the `release-tag` check lists
-  them as it lists the release Apps' keys.
-- [ ] The review uses `main`'s `review-change` and `security-audit` skills and CLAUDE.md. It posts one
+  them as it lists the release Apps' keys. *That the secrets are the environment's only is checked at
+  runbook step 7.*
+- [x] The review uses `main`'s `review-change` and `security-audit` skills and CLAUDE.md. It posts one
   review: a summary, and inline comments on the lines it flags, each finding with a severity. A blocking
   finding (correctness, a broken architecture rule, a security issue) makes the review **request
   changes**; otherwise it is a **comment**. The workflow submits only the events `COMMENT` and
   `REQUEST_CHANGES`: the code that posts the review refuses any other event, and a test pins that.
-- [ ] On a new push, the reviewer reviews the new head and dismisses its own earlier change request when it
+- [x] On a new push, the reviewer reviews the new head and dismisses its own earlier change request when it
   no longer stands; it never dismisses anyone else's review. The maintainer can always dismiss its change
   request.
 - [ ] An approval from the reviewer App, the agents App or any account other than the maintainer does not
-  satisfy `Protect main` (code-owner review), shown in the switch-over runbook's check.
-- [ ] The reviewer treats the pull request's title, body, diff and comments as untrusted data, never as
+  satisfy `Protect main` (code-owner review), shown in the switch-over runbook's check. *Checked at
+  runbook step 7.*
+- [x] The reviewer treats the pull request's title, body, diff and comments as untrusted data, never as
   instructions; the prompt says so. Given a pull request whose diff contains instructions to the reviewer,
   it still reviews it and reports the attempt as a finding. Its tools are read-only (no shell, no network
   beyond the GitHub and model APIs, no write to the repository other than the review).
-- [ ] The review states the head commit it reviewed. A failed or skipped review (the provider down, the diff
+- [x] The review states the head commit it reviewed. A failed or skipped review (the provider down, the diff
   over a documented size limit) is a visible check, not a silent pass, and never blocks the merge on its own:
-  it is not a required check.
-- [ ] Release-please's and Renovate's pull requests are reviewed like any other.
-- [ ] `docs/dev-environment.md` gives the maintainer the steps to create the reviewer App, the
+  it is not a required check. *That it is not a required check is checked at runbook step 7.*
+- [x] Release-please's and Renovate's pull requests are reviewed like any other.
+- [x] `docs/dev-environment.md` gives the maintainer the steps to create the reviewer App, the
   `ai-review` environment and its secrets, and the cost and model used.
 
 ## Milestones
@@ -179,7 +182,7 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 4. [ ] **AI reviewer.** The review workflow, its prompt, the code that posts the review (comment or request
    changes only), its tests, an ADR (trigger, secrets, prompt injection, cost), `docs/dev-environment.md`
    and the release-tag check of its secrets. Depends on 2 (the code-owner gate, so no approval of the
-   reviewer's could count); can run in parallel with 3.
+   reviewer's could count); can run in parallel with 3. *Code in PR; enforced at runbook step 7.*
 
 ## Switch-over runbook (maintainer)
 
@@ -240,6 +243,28 @@ never a required check.
   count, even if it were tricked into giving one.
 - **The switch-over order** is the runbook above.
 
+**Decided (milestone 4, maintainer and ADR 0033, 2026-11-18;
+[ADR 0033](../docs/adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md)):**
+
+- (4) **Model and runner:** Claude Opus 5.5 on the maintainer's Claude subscription, asked through one
+  run of the Claude Code CLI (`claude -p`) with every tool off, `CLAUDE.md`, skills, plugins, hooks and
+  MCP servers off through `--safe-mode` and the empty working directory and `HOME`, the user, project and
+  local settings files skipped by `--setting-sources ""` (an admin-managed policy under
+  `/etc/claude-code` would still apply under every flag; the runner image ships none and the install
+  fails if one appears), with an explicit environment, by a small standard-library Go
+  program in this module (`ci/aireview`); the CLI is installed at a pinned version and checked against a
+  pinned checksum before any secret, and no third-party action is used beyond the pinned App-token
+  action. The subscription token, `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, is a secret of the
+  `ai-review` environment; no `ANTHROPIC_API_KEY` is set anywhere, as Claude Code would bill the API
+  instead. **Diff limit:** 300,000 bytes of unified diff; over it the check fails with the size and the
+  limit, and nothing is posted. **Cost:** no per-token bill; reviews draw on the subscription's usage
+  limits, shared with the agents and the monthly security audit (PRD #175), and a review that hits a
+  limit fails its check (about 1,260 reviews a month, about $230 at the API's Opus 5.5 prices, for
+  comparison only).
+- (4) **Comments first, behind a switch:** the reviewer posts comments only until the maintainer sets the
+  `ai-review` environment's variable `AI_REVIEW_REQUEST_CHANGES` to `true`; a blocking finding is still
+  marked blocking, and the review says it would have requested changes.
+
 **Open (to settle in the milestone named, recorded in its ADR):**
 
 - (1) How the refresh runs on the Mac: a launchd agent, or a loop the `deck` target starts. It must
@@ -250,10 +275,5 @@ never a required check.
 - (1) Which reads in the `release-tag` skill need permissions beyond those listed (rulesets with bypass
   actors, environments, deployment branch policies): if the App cannot be given them read-only, those
   checks stay maintainer checks and the skill says so, as it already does for the Actions secrets list.
-- (4) Which model and runner the reviewer uses (a pinned action or a small script calling the provider's
-  API), the diff size limit, and the expected monthly cost. A new third-party action needs a reason and a
-  pinned SHA, like every other action.
-- (4) Whether the reviewer's blocking threshold should start lower (comments only, no change requests) for
-  the first weeks, so its false positives can be judged before it blocks anything.
 
 Security-sensitive throughout: every milestone runs the `security-audit` skill. Refs #142, #157.

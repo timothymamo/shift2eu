@@ -1022,6 +1022,64 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Allow: []string{},
 		Deny:  []string{"os"},
 	},
+	{
+		// The AI reviewer's entry point (PRD #161 milestone 4, ADR 0033): a main
+		// package no root can import, held to the standard packages it imports and
+		// its own library, each exact. os is for main's instruction files, os.Exit
+		// and the one os.LookupEnv the forbidigo group ai-reviewer-env allows.
+		Name:     "ai-reviewer-main",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/aireview/**",
+			"!**/ci/aireview/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"context$",
+			"fmt$",
+			"os$",
+			"os/signal$",
+			"time$",
+			"github.com/timothymamo/shift2eu/ci/aireview/internal/review$",
+		},
+		Deny: []string{"os/exec"},
+	},
+	{
+		// The AI reviewer's library (ADR 0033): named standard packages only, no
+		// syscall or unsafe and no package of the product. os and os/exec are the
+		// Claude Code CLI the reviewer asks: it writes the trusted instructions
+		// to a file of a temporary directory and starts `claude -p` in another,
+		// with an environment of its own. The forbidigo group ai-reviewer-env
+		// still refuses every read of the environment and every lookup of a
+		// home, config, cache or temp directory, and ai-reviewer-one-process
+		// refuses exec.Command and every os call that opens or reads a file in
+		// the library's non-test files, so os is here for the prompt file and
+		// the run's temporary directories alone. net/http reads and posts
+		// through GitHub. Go's
+		// internal rule keeps it out of reach of cmd/ and internal/.
+		Name:     "ai-reviewer-is-standard-library",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/aireview/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bytes$",
+			"context$",
+			"encoding/json$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"net/http$",
+			"net/url$",
+			"os$",
+			"os/exec$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"time$",
+		},
+	},
 }
 
 // TestDepguardRulesArePinned pins every depguard rule of .golangci.yml against
