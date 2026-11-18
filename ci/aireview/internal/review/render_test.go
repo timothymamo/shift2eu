@@ -354,13 +354,19 @@ func TestRenderKeepsTheReviewUnderGitHubsLimits(t *testing.T) {
 // cut inside the fence, and so is an inline comment whose finding does: left
 // open, the fence would render the note that the text was truncated, and the
 // body's closing statement that the review is advice and never an approval, as
-// code, so Render closes the fence before them.
+// code, so Render closes the fence before them. A ~~~ fence opens a code block
+// just the same, and a fence the text closed before the cut is closed already:
+// Render adds no line to it.
 func TestRenderClosesACodeFenceItCuts(t *testing.T) {
 	t.Parallel()
 
 	// fenceAndPatch opens a diff fence and fills the text past GitHub's limit, so
 	// the cut lands inside the fence.
 	fenceAndPatch := "```diff\n" + strings.Repeat("- removed a line\n+ added a line\n", 4_000)
+
+	// prose fills the text past GitHub's limit with no fence in it, so the cut
+	// lands well after anything a case puts before it.
+	prose := strings.Repeat("A paragraph of ordinary prose.\n", 3_000)
 
 	fencedFinding := review.Finding{
 		Severity: review.SeveritySuggestion,
@@ -387,6 +393,14 @@ func TestRenderClosesACodeFenceItCuts(t *testing.T) {
 			diff:         renderDiff,
 			wantComments: 1,
 		},
+		{
+			name:   "a body the cut left inside the summary's ~~~ fence closes it",
+			answer: review.Answer{Summary: "~~~\n" + prose},
+		},
+		{
+			name:   "a fence the summary closed before the cut gains no closer",
+			answer: review.Answer{Summary: "```go\npackage x\n```\n" + prose},
+		},
 	}
 
 	for _, tc := range cases {
@@ -411,8 +425,9 @@ func TestRenderClosesACodeFenceItCuts(t *testing.T) {
 }
 
 // assertFenceClosedAfterCut pins what a text Render cut must leave: a note that
-// it was truncated, an even number of lines that start a code fence, and that
-// note and the body's closing statement after the last of those lines.
+// it was truncated, an even number of lines that start a code fence (``` or
+// ~~~), and that note and the body's closing statement after the last of those
+// lines.
 func assertFenceClosedAfterCut(t *testing.T, where, text string) {
 	t.Helper()
 
@@ -428,7 +443,7 @@ func assertFenceClosedAfterCut(t *testing.T, where, text string) {
 	)
 
 	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(line, "```") {
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
 			fences++
 			lastAt = at
 		}
@@ -546,6 +561,21 @@ func TestRenderDefusesMentionsInTheModelsText(t *testing.T) {
 		if !strings.Contains(got.Body, "x.go") {
 			t.Errorf("the review's body drops the path of the finding %q, which is on no line the diff shows, so the body lists it; body:\n%s", finding.Title, got.Body)
 		}
+
+		// The path stays on its one line: the line break the model wrote in it
+		// would otherwise put the rest of the path on a line of its own, and the
+		// finding's own text would read as if it were part of the path.
+		var listed []string
+
+		for _, line := range strings.Split(got.Body, "\n") {
+			if strings.Contains(line, "x.go") {
+				listed = append(listed, line)
+			}
+		}
+
+		if len(listed) != 1 || !strings.Contains(listed[0], "please look") {
+			t.Errorf("the review's body lists the path %q on %d lines (%q), want its whole text on one line: a listed path stays on its one line, with the control characters in it turned to spaces", finding.Path, len(listed), listed)
+		}
 	})
 
 	// GitHub renders an HTML character reference in a body as the character it
@@ -586,6 +616,23 @@ func TestRenderDefusesMentionsInTheModelsText(t *testing.T) {
 
 			if !strings.Contains(rendered.text, "octocat") {
 				t.Errorf("%s drops the handle text %q of the mention: the finding stays readable, only the @ goes; text:\n%s", rendered.where, "octocat", rendered.text)
+			}
+		}
+	})
+
+	// Only a character reference to an @ is a mention. Every other reference
+	// names a character that notifies nobody, and escaping it would show the
+	// reference as written where the model meant the character it names.
+	t.Run("a character reference to anything but an @ is left as written", func(t *testing.T) {
+		t.Parallel()
+
+		written := []string{"&#65;", "&#x2603;", "&#38;", "&amp;", "&#0640;"}
+
+		got := review.Render(headSHA, review.Answer{Summary: "The build prints " + strings.Join(written, ", ") + "."}, review.EventComment, "")
+
+		for _, text := range written {
+			if !strings.Contains(got.Body, text) {
+				t.Errorf("the review's body does not hold %q as the model wrote it: only a reference to an @ is a mention, the others name a character that notifies nobody; body:\n%s", text, got.Body)
 			}
 		}
 	})
