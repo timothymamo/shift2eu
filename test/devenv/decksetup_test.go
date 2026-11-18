@@ -495,6 +495,11 @@ func TestMakeVMEnvRefusesAnEmptyVMEnv(t *testing.T) {
 // So does a VM_ENV exported in make's environment: only one given on the make command line merges, and a
 // command-line VM_ENV keeps every plain line it does not name, so `make vm-env VM_ENV=DEEPSEEK_API_KEY`
 // drops nothing (the decision and its second-round correction on issue #234).
+//
+// A replace that drops a maintainer's GitHub token line (PRD #161 milestone 3) is pinned here as well: that
+// line sat in a file the login shell of every agent the VM starts sources, so the drop must not be silent.
+// make names the variable it removed and says to revoke that token at GitHub, and it never prints the value,
+// which is the credential itself - while a file that held no such line gets no such note.
 func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 	t.Parallel()
 
@@ -512,6 +517,12 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 		// kept are the lines of the earlier daemon.env that survive the run: an explicit VM_ENV replaces only
 		// the names it lists and keeps every other line.
 		kept []string
+		// removedName is the variable an earlier daemon.env's stale line holds (one of gitHubTokens), as a
+		// plain assignment or behind an `export`: a replace removes it and must report having done so. Empty
+		// when the earlier file held no GitHub token line, so the run must say nothing about one.
+		removedName string
+		// removedValue is the invented value that line holds, which no output may print.
+		removedValue string
 	}{
 		{name: "the VM has no daemon.env yet, the first run"},
 		{name: "the VM has a daemon.env already", seed: true},
@@ -523,10 +534,22 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 		{
 			// A VM set up before PRD #161 milestone 3 still holds the maintainer's personal token in its
 			// daemon.env. The default VM_ENV no longer names it, so a plain run replaces the whole file and the
-			// token leaves the VM: nothing reads it any more (dev/gh-app-token.sh has no fallback).
-			name:  "a GITHUB_TOKEN line an earlier VM was set up with is dropped",
-			seed:  true,
-			extra: []string{"GITHUB_TOKEN=old-github"},
+			// token leaves the VM: nothing reads it any more (dev/gh-app-token.sh has no fallback). The drop is
+			// not silent either - the line sat where every agent of the VM could read it.
+			name:         "a GITHUB_TOKEN line an earlier VM was set up with is dropped",
+			seed:         true,
+			extra:        []string{"GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN")},
+			removedName:  "GITHUB_TOKEN",
+			removedValue: fakeEnvValue("GITHUB_TOKEN"),
+		},
+		{
+			// The same kind of line behind an `export` a hand edit added: the leading `export` hides neither the
+			// line from the removal nor its variable from the note.
+			name:         "an exported GH_TOKEN line a hand edit added is dropped",
+			seed:         true,
+			extra:        []string{"export GH_TOKEN=" + fakeEnvValue("GH_TOKEN")},
+			removedName:  "GH_TOKEN",
+			removedValue: fakeEnvValue("GH_TOKEN"),
 		},
 		{
 			name:  "a VM_ENV exported in the environment replaces a line it does not name",
@@ -593,7 +616,40 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 				t.Errorf("make vm-env wrote the wrong lines to the VM's daemon.env (-want +got):\n%s", diff)
 			}
 
-			assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
+			text := stdout + stderr
+
+			// A note about a token must be about the one line that was really there (PRD #161 milestone 3):
+			// naming another variable would send a maintainer to revoke a credential the VM never held.
+			for _, name := range gitHubTokens {
+				if name != tc.removedName && strings.Contains(text, name) {
+					t.Errorf("make vm-env's output names %s although the VM's daemon.env held no %s line: a note must name only the variable it really removed, and the other names are the spellings it must look for (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+						name, name, stdout, stderr)
+				}
+			}
+
+			if tc.removedName == "" {
+				// A file with no such line: the drop was nothing, so a warning would teach a maintainer to ignore it.
+				if strings.Contains(strings.ToLower(text), "revoke") {
+					t.Errorf("make vm-env's output talks about revoking a token although the VM's daemon.env held no GitHub token line: the note must appear only when a line was really removed, or a maintainer learns to ignore it (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+						stdout, stderr)
+				}
+			} else {
+				if !strings.Contains(text, tc.removedName) {
+					t.Errorf("make vm-env removed the stale %s line from the VM's daemon.env without telling the maintainer: that line sat where the login shell of every agent the VM starts read it, so the drop must name the variable (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+						tc.removedName, stdout, stderr)
+				}
+
+				if !strings.Contains(strings.ToLower(text), "revoke") {
+					t.Errorf("make vm-env removed the stale %s line from the VM's daemon.env without saying to revoke that token: every agent in the VM could read it, so removing the line is not enough - the maintainer must revoke it at GitHub (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+						tc.removedName, stdout, stderr)
+				}
+
+				assertNoSecrets(t, "make vm-env's output", text, []secret{
+					{kind: "the stale " + tc.removedName + " line's value", value: tc.removedValue},
+				})
+			}
+
+			assertNoCredentialValues(t, "make vm-env's output", text)
 		})
 	}
 }
