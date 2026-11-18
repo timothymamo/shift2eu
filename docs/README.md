@@ -73,6 +73,7 @@ supersedes it.
 - [0030. Serve the version 2 report on /v1, with estimates, relations and workloads](adr/0030-serve-the-version-2-report-on-v1.md)
 - [0031. Agents open pull requests as a GitHub App, with one-hour tokens minted on the Mac](adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)
 - [0032. Say when an estimate leaves out storage its plan does not include](adr/0032-say-when-an-estimate-leaves-out-storage-its-plan-does-not-include.md)
+- [0033. Run the agents App token refresh as a LaunchDaemon, so it survives a reboot](adr/0033-run-the-agents-app-token-refresh-as-a-launchdaemon.md)
 
 ## Writing a page
 
