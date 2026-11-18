@@ -10,12 +10,9 @@ import (
 	"github.com/timothymamo/shift2eu/ci/aireview/internal/review"
 )
 
-// The production APIs. Constants on purpose: no environment variable can send a
-// token or key to another host (ADR 0033).
-const (
-	gitHubAPI    = "https://api.github.com"
-	anthropicAPI = "https://api.anthropic.com"
-)
+// gitHubAPI is the production GitHub API. A constant on purpose: no environment
+// variable can send the App's token to another host (ADR 0033).
+const gitHubAPI = "https://api.github.com"
 
 // main's instructions, read from the working directory, main's checkout.
 const (
@@ -24,11 +21,15 @@ const (
 	securityAuditPath = ".claude/skills/security-audit/SKILL.md"
 )
 
-// The clients' timeouts: a model answer of MaxOutputTokens can take minutes.
+// The timeouts: GitHub's calls are quick, the model's answer can take minutes.
 const (
 	gitHubTimeout = 30 * time.Second
 	modelTimeout  = 10 * time.Minute
 )
+
+// usage is the program's one command line: the absolute path of the Claude
+// Code CLI the workflow installed and verified (ADR 0033).
+const usage = "usage: aireview <absolute path of the claude CLI>"
 
 func main() {
 	os.Exit(run())
@@ -37,6 +38,12 @@ func main() {
 func run() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	if len(os.Args) != 2 || os.Args[1] == "" || os.Args[1][0] != '/' {
+		return fail(fmt.Errorf("%s", usage))
+	}
+
+	claudePath := os.Args[1]
 
 	settings, err := review.SettingsFromEnv(os.LookupEnv)
 	if err != nil {
@@ -49,7 +56,7 @@ func run() int {
 	}
 
 	gh := review.NewGitHub(gitHubAPI, settings.Repository, settings.GitHubToken, review.NewHTTPClient(gitHubTimeout))
-	model := review.NewAnthropic(anthropicAPI, settings.ModelKey, review.NewHTTPClient(modelTimeout))
+	model := review.NewClaudeCLI(claudePath, settings.ModelToken, modelTimeout)
 
 	result, err := review.Run(ctx, gh, model, review.Config{
 		Number:         settings.Number,

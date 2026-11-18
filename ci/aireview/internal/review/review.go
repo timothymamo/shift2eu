@@ -2,19 +2,14 @@ package review
 
 import "errors"
 
-// Model is the Anthropic model every review asks (ADR 0033).
+// Model is the Anthropic model every review asks, named to the Claude Code CLI
+// with --model (ADR 0033).
 const Model = "claude-opus-5-5"
-
-// AnthropicVersion is the anthropic-version header every model request sends.
-const AnthropicVersion = "2023-06-01"
 
 // MaxDiffBytes is the largest unified diff, in bytes, the reviewer sends to the
 // model (ADR 0033). A larger diff fails the run with ErrDiffTooLarge and posts
 // no review.
 const MaxDiffBytes = 300_000
-
-// MaxOutputTokens is the max_tokens of every model request.
-const MaxOutputTokens = 16_000
 
 // The errors a run fails with. Each one means nothing was posted, except a
 // failed dismissal, which comes after the review.
@@ -30,9 +25,10 @@ var (
 	// ErrGitHub is returned for a GitHub API call that failed or answered
 	// something the reviewer cannot read.
 	ErrGitHub = errors.New("GitHub API error")
-	// ErrModel is returned for a model API call that failed or did not end
-	// its turn (an error status, a refusal, a cut-off answer).
-	ErrModel = errors.New("model API error")
+	// ErrModel is returned for a model call that failed or did not end its
+	// turn (a Claude Code CLI that could not start, timed out, reported an
+	// error such as a usage limit, or printed no result).
+	ErrModel = errors.New("model error")
 	// ErrMalformedAnswer is returned for a model answer ParseAnswer refuses.
 	ErrMalformedAnswer = errors.New("malformed model answer")
 	// ErrSettings is returned by SettingsFromEnv for a missing or invalid

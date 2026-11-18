@@ -626,9 +626,12 @@ forbidigo renders nothing for a call through an interface literal
 
 The group owns the writes: `testutil-no-env` and `cli-no-env-or-process` leave `os.Setenv`,
 `os.Unsetenv`, `os.Clearenv` and the `syscall` writes out, so no line is reported by two groups.
-Its one exclusion rule, `path: ^test/(?:lint|architecture)/`, drops it in those two harnesses only, which call `t.Setenv` on
+Its first exclusion rule, `path: ^test/(?:lint|architecture)/`, drops it in those two harnesses, which call `t.Setenv` on
 purpose, in test binaries of their own, to run the go command in a known environment (`GOCACHE`,
-`GOFLAGS`, `HOME`). Everywhere else it holds: the application layer, the test helpers, the driving
+`GOFLAGS`, `HOME`). Its second, `path: ^ci/aireview/internal/review/.*_test\.go$`, drops it in the AI
+reviewer's library tests (PRD #161 milestone 4, ADR 0033): one test there sets `ANTHROPIC_API_KEY` and
+a variable of its own, with no parallel test beside it, to prove that the Claude Code CLI the reviewer
+runs inherits nothing of the process's environment. Everywhere else it holds: the application layer, the test helpers, the driving
 adapters, the composition roots, and since the review of #153 the adapters', the domain's and the e2e
 tests too, so a future source adapter's test cannot set `AWS_PROFILE`. `TestTestsNoProcessStateProbe`
 runs the group on a probe module (`test/lint/testdata/testsprocessstate`) with a line on each

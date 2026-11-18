@@ -14,31 +14,38 @@ const (
 	EnvPullRequest    = "AI_REVIEW_PR_NUMBER"
 	EnvAppSlug        = "AI_REVIEWER_APP_SLUG"
 	EnvGitHubToken    = "AI_REVIEWER_TOKEN"
-	EnvModelKey       = "ANTHROPIC_API_KEY"
+	EnvModelToken     = "CLAUDE_CODE_OAUTH_TOKEN" //nolint:gosec // the variable's name, not a credential
 	EnvRequestChanges = "AI_REVIEW_REQUEST_CHANGES"
 )
 
-// Settings is a run's settings from the environment. GitHubToken and ModelKey
-// are credentials: String leaves them out, and nothing prints them.
+// envAnthropicAPIKey is the variable SettingsFromEnv refuses when it is set:
+// Claude Code prefers an API key over the subscription's token whenever it
+// sees one, which would bill the API instead of the maintainer's subscription
+// (ADR 0033). It is only checked, never kept.
+const envAnthropicAPIKey = "ANTHROPIC_API_KEY" //nolint:gosec // the variable's name, not a credential
+
+// Settings is a run's settings from the environment. GitHubToken and
+// ModelToken are credentials: String leaves them out, and nothing prints them.
 type Settings struct {
 	Repository     string
 	Number         int
 	BotLogin       string
 	GitHubToken    string
-	ModelKey       string
+	ModelToken     string
 	RequestChanges bool
 }
 
 // SettingsFromEnv reads the settings through lookup (os.LookupEnv in
-// ci/aireview, a map in tests), reading the Env* variables and no other. It
-// returns an error wrapping ErrSettings, naming the variable but never its
-// value, when: EnvRepository is not owner/name (each part non-empty, of
-// letters, digits, '-', '_' and '.', and neither "." nor ".."); EnvPullRequest
-// is not a decimal integer above 0; EnvAppSlug is not a GitHub App slug
-// (lower-case letters, digits and '-', starting with a letter or digit);
-// EnvGitHubToken or EnvModelKey is unset or empty; or EnvRequestChanges is
-// set to anything but "", "false" or "true". BotLogin is the slug followed by
-// "[bot]"; RequestChanges is true for "true" alone.
+// ci/aireview, a map in tests), reading the Env* variables and
+// ANTHROPIC_API_KEY, and no other. It returns an error wrapping ErrSettings,
+// naming the variable but never its value, when: EnvRepository is not
+// owner/name (each part non-empty, of letters, digits, '-', '_' and '.', and
+// neither "." nor ".."); EnvPullRequest is not a decimal integer above 0;
+// EnvAppSlug is not a GitHub App slug (lower-case letters, digits and '-',
+// starting with a letter or digit); EnvGitHubToken or EnvModelToken is unset
+// or empty; ANTHROPIC_API_KEY is set to anything but ""; or EnvRequestChanges
+// is set to anything but "", "false" or "true". BotLogin is the slug followed
+// by "[bot]"; RequestChanges is true for "true" alone.
 func SettingsFromEnv(lookup func(string) (string, bool)) (Settings, error) {
 	var s Settings
 
@@ -67,8 +74,13 @@ func SettingsFromEnv(lookup func(string) (string, bool)) (Settings, error) {
 		return Settings{}, fmt.Errorf("%w: %s is unset or empty", ErrSettings, EnvGitHubToken)
 	}
 
-	if s.ModelKey = lookupValue(lookup, EnvModelKey); s.ModelKey == "" {
-		return Settings{}, fmt.Errorf("%w: %s is unset or empty", ErrSettings, EnvModelKey)
+	if s.ModelToken = lookupValue(lookup, EnvModelToken); s.ModelToken == "" {
+		return Settings{}, fmt.Errorf("%w: %s is unset or empty", ErrSettings, EnvModelToken)
+	}
+
+	if lookupValue(lookup, envAnthropicAPIKey) != "" {
+		return Settings{}, fmt.Errorf("%w: %s is set; the reviewer runs on the Claude subscription's %s alone, and Claude Code would bill the API instead",
+			ErrSettings, envAnthropicAPIKey, EnvModelToken)
 	}
 
 	switch lookupValue(lookup, EnvRequestChanges) {
@@ -153,6 +165,6 @@ func isASCIILetterOrDigit(r rune) bool {
 // String describes s without its credentials: the repository, number, login
 // and switch, and whether each credential is set, never its value.
 func (s Settings) String() string {
-	return fmt.Sprintf("repository=%s pull_request=%d login=%s request_changes=%t github_token_set=%t model_key_set=%t",
-		s.Repository, s.Number, s.BotLogin, s.RequestChanges, s.GitHubToken != "", s.ModelKey != "")
+	return fmt.Sprintf("repository=%s pull_request=%d login=%s request_changes=%t github_token_set=%t model_token_set=%t",
+		s.Repository, s.Number, s.BotLogin, s.RequestChanges, s.GitHubToken != "", s.ModelToken != "")
 }

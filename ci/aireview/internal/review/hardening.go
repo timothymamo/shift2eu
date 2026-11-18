@@ -6,10 +6,11 @@ import (
 	"time"
 )
 
-// NewHTTPClient returns the client both APIs are built with: it has timeout
-// and follows no redirect. A 3xx answer is returned as it is, a status other
-// than 200, so the call fails with ErrModel or ErrGitHub and the host the
-// answer names never sees the x-api-key, the token or the diff (ADR 0033).
+// NewHTTPClient returns the client the GitHub API is read and posted through:
+// it has timeout and follows no redirect. A 3xx answer is returned as it is, a
+// status other than 200, so the call fails with ErrGitHub and the host the
+// answer names never sees the App's token or the diff (ADR 0033). The model is
+// asked through the Claude Code CLI, which this client never carries.
 func NewHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,

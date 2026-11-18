@@ -15,7 +15,7 @@ type PullRequests interface {
 	DismissReview(ctx context.Context, number int, id int64, message string) error
 }
 
-// Asker is what Run needs of the model; *Anthropic implements it. (Not
+// Asker is what Run needs of the model; *ClaudeCLI implements it. (Not
 // Complete: test/lint refuses an interface method named for a write verb.)
 type Asker interface {
 	Ask(ctx context.Context, p Prompt) (string, error)
@@ -24,7 +24,7 @@ type Asker interface {
 // The production clients implement Run's interfaces.
 var (
 	_ PullRequests = (*GitHub)(nil)
-	_ Asker        = (*Anthropic)(nil)
+	_ Asker        = (*ClaudeCLI)(nil)
 )
 
 // Config is one run's input: the pull request, the reviewer's own login
