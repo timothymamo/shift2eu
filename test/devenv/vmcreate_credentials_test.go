@@ -11,9 +11,16 @@
 // relying on the host's (CLAUDE.md rules 3 and 4). A run with every credential set is already pinned by
 // TestMakeVMCreatePassesTheVMResourcesToVMUp (issue #228), which sets all three through the same fixture: it
 // shows that vm-create still reaches limactl, so issue #258 does not need a second test for that.
+//
+// Two further properties are pinned here. vm-env-check run on its own is a host-side check and nothing more: with
+// every credential set it exits 0, calls no limactl, leaves the VM's daemon.env byte for byte as it was and
+// prints no value, so a maintainer may run it as a dry run before a rebuild. And a refusal vm-create makes
+// itself adds its own line, "vm-create: nothing was created", so a maintainer who ran vm-create reads that the
+// VM is untouched; vm-env's refusals keep their wording and never carry that line.
 package devenv_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -72,6 +79,35 @@ func assertNoLimactlCalls(t *testing.T, f *vmUpFixture, why string) {
 	}
 }
 
+// vmCreateNothingCreated is the line make vm-create adds to a refusal it makes itself, on top of vm-env's own
+// message: whoever ran vm-create, not vm-env, must read that the VM was never created (issue #258). Only this
+// fragment is pinned; the wording after it is not.
+const vmCreateNothingCreated = "vm-create: nothing was created"
+
+// assertVMCreateSaysNothingWasCreated fails when a refusal make vm-create makes itself does not say that it
+// created nothing: the check runs before vm-up, so no VM exists, and a maintainer must not go looking for one
+// (issue #258).
+func assertVMCreateSaysNothingWasCreated(t *testing.T, stdout, stderr string) {
+	t.Helper()
+
+	if !strings.Contains(stderr, vmCreateNothingCreated) {
+		t.Errorf("make vm-create's refusal does not say %q, so a maintainer who ran vm-create does not read that the credential check ran before any VM was created (issue #258)\nstdout: %s\nstderr: %s",
+			vmCreateNothingCreated, stdout, stderr)
+	}
+}
+
+// assertVMCreateDidNotSayNothingWasCreated fails when text carries vm-create's "nothing was created" line where
+// no VM was left uncreated: a run that passed the check and reached limactl created the VM, and vm-env's own
+// refusals never claim to speak for vm-create (issue #258).
+func assertVMCreateDidNotSayNothingWasCreated(t *testing.T, where, text, why string) {
+	t.Helper()
+
+	if strings.Contains(text, vmCreateNothingCreated) {
+		t.Errorf("%s carries %q although %s: the line belongs to a refusal make vm-create makes before vm-up, and to nothing else (issue #258)",
+			where, vmCreateNothingCreated, why)
+	}
+}
+
 // assertNoCredentialValuesOf fails when text holds the value of one of the VM_ENV credentials in env. The
 // failure names the variable, never its value (CLAUDE.md rule 3).
 func assertNoCredentialValuesOf(t *testing.T, where, text string, env map[string]string) {
@@ -83,6 +119,38 @@ func assertNoCredentialValuesOf(t *testing.T, where, text string, env map[string
 	}
 
 	assertNoSecrets(t, where, text, secrets)
+}
+
+// TestMakeVMEnvCheckAloneLeavesTheVMAlone pins that vm-env-check on its own is the host-side check and nothing
+// more (issue #258): with every VM_ENV credential set it exits 0, calls no limactl at all, so the VM and its
+// daemon.env are untouched byte for byte, and prints no value. A maintainer whose login Keychain is locked, or
+// whose direnv .envrc is not loaded, can run it before a rebuild to learn whether the rebuild can finish.
+func TestMakeVMEnvCheckAloneLeavesTheVMAlone(t *testing.T) {
+	t.Parallel()
+
+	f := newVMUpFixture(t, "", "")
+
+	// A daemon.env a previous make vm-env left in the VM: the check must neither reach nor rewrite it.
+	seeded := f.sb.seedDaemonEnv(t)
+
+	stdout, stderr, err := f.run(t, "vm-env-check")
+	if err != nil {
+		t.Fatalf("make vm-env-check exited non-zero with every VM_ENV credential set: it must pass, so a dry run before a rebuild never refuses a rebuild whose credentials are there (issue #258)\nstdout: %s\nstderr: %s",
+			stdout, stderr)
+	}
+
+	assertNoLimactlCalls(t, f, "every VM_ENV credential vm-env-check names is set: the check is host-side only")
+
+	got, readErr := os.ReadFile(f.sb.daemonEnvPath())
+	if readErr != nil {
+		t.Fatalf("read the VM's daemon.env after make vm-env-check: %v", readErr)
+	}
+
+	if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+		t.Errorf("make vm-env-check rewrote the VM's daemon.env although it only checks the host's environment: the file must be byte for byte what it was (issue #258) (-want +got):\n%s", diff)
+	}
+
+	assertNoCredentialValuesOf(t, "make vm-env-check's output", stdout+stderr, f.env)
 }
 
 // TestMakeVMCreateRefusesMissingCredentialsBeforeLimactl pins issue #258's first acceptance: make vm-create with
@@ -162,6 +230,7 @@ func TestMakeVMCreateRefusesMissingCredentialsBeforeLimactl(t *testing.T) {
 			}
 
 			assertVMCreateRefusalSaysHowToFixIt(t, stdout, stderr)
+			assertVMCreateSaysNothingWasCreated(t, stdout, stderr)
 			assertNoLimactlCalls(t, f, "a credential is unset or empty")
 			assertNoCredentialValuesOf(t, "make vm-create's output", stdout+stderr, f.env)
 		})
@@ -195,6 +264,7 @@ func TestMakeVMCreateChecksANarrowedVMEnv(t *testing.T) {
 		}
 
 		assertVMCreateRefusalSaysHowToFixIt(t, stdout, stderr)
+		assertVMCreateSaysNothingWasCreated(t, stdout, stderr)
 		assertNoLimactlCalls(t, f, "GITHUB_TOKEN is unset")
 		assertNoCredentialValuesOf(t, "make vm-create's output", stdout+stderr, f.env)
 	})
@@ -216,6 +286,9 @@ func TestMakeVMCreateChecksANarrowedVMEnv(t *testing.T) {
 			t.Errorf("make vm-create %s did not reach limactl at all, so a narrowed VM_ENV with its credential set no longer creates the VM (issue #258):\nstdout: %s\nstderr: %s",
 				narrowed, stdout, stderr)
 		}
+
+		assertVMCreateDidNotSayNothingWasCreated(t, "make vm-create's output", stdout+stderr,
+			"it passed the credential check and reached limactl, so the VM was created")
 	})
 }
 
@@ -293,6 +366,7 @@ func TestMakeVMCreateRefusesAVMEnvTheHostCheckRefuses(t *testing.T) {
 				}
 			}
 
+			assertVMCreateSaysNothingWasCreated(t, stdout, stderr)
 			assertNoLimactlCalls(t, f, "VM_ENV itself is refused")
 			assertNoCredentialValuesOf(t, "make vm-create's output", text, f.env)
 		})

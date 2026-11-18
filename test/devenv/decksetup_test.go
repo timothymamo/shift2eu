@@ -275,6 +275,11 @@ func TestMakeVMEnvRefusesMissingCredentials(t *testing.T) {
 			// nothing is handed limactl.
 			sb.assertNoLimaCalls(t, "a missing credential is refused")
 
+			// vm-env speaks for itself only: whether a VM exists is make vm-create's to report, so its line
+			// must not appear here (issue #258).
+			assertVMCreateDidNotSayNothingWasCreated(t, "make vm-env's refusal", stdout+stderr,
+				"vm-env creates no VM either way, and the line is vm-create's own")
+
 			assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
 		})
 	}
