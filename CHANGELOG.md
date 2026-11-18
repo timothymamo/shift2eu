@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.7.0](https://github.com/timothymamo/shift2eu/compare/v0.6.0...v0.7.0) (2026-11-18)
+
+
+### Features
+
+* **devenv:** set the VM's CPUs, memory, disk and SSH port from make vm-up ([#228](https://github.com/timothymamo/shift2eu/issues/228)) ([#257](https://github.com/timothymamo/shift2eu/issues/257)) ([32c6760](https://github.com/timothymamo/shift2eu/commit/32c6760b9b82ad18597a0d37f7298d83b22eb026))
+* **devenv:** vm-init sets default_dir, deck-restart reloads drop-ins, vm-env refuses missing credentials ([#234](https://github.com/timothymamo/shift2eu/issues/234)) ([#256](https://github.com/timothymamo/shift2eu/issues/256)) ([7095f01](https://github.com/timothymamo/shift2eu/commit/7095f01e4913f8fddcb400ad0ff135b43de54b3d))
+* **estimate:** say when a plan's storage is not included ([#226](https://github.com/timothymamo/shift2eu/issues/226)) ([#266](https://github.com/timothymamo/shift2eu/issues/266)) ([8693f83](https://github.com/timothymamo/shift2eu/commit/8693f83c504c8d7bf8bad97c33b58486718ad781))
+
+
+### Bug Fixes
+
+* **devenv:** apply the agents App's bot identity to the VM's git when the token mint writes it ([#261](https://github.com/timothymamo/shift2eu/issues/261)) ([9d3700f](https://github.com/timothymamo/shift2eu/commit/9d3700f333dbae01ec5768602b6eeeba2a1765b5))
+* **devenv:** make vm-create check the credentials before it creates the VM ([#258](https://github.com/timothymamo/shift2eu/issues/258)) ([#265](https://github.com/timothymamo/shift2eu/issues/265)) ([7eee61b](https://github.com/timothymamo/shift2eu/commit/7eee61b1d5a5dbfb36842365e528ad388d1b9276))
+* **devenv:** make vm-up refuse a Broken or unknown Lima instance ([#237](https://github.com/timothymamo/shift2eu/issues/237)) ([#250](https://github.com/timothymamo/shift2eu/issues/250)) ([d0ecc21](https://github.com/timothymamo/shift2eu/commit/d0ecc213a3362276f76b9bea45e124637427e7d8))
+
 ## [0.6.0](https://github.com/timothymamo/shift2eu/compare/v0.5.0...v0.6.0) (2026-11-17)
 
 
