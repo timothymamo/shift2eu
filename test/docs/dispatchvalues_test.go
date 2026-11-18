@@ -298,6 +298,11 @@ type codeSpan struct {
 // on one line and opens on another is read as one span and not as prose. An
 // open span is dropped at a blank line, at a table row and at a fence: those
 // end the paragraph, and a backtick left open there is not code.
+//
+// Every line a span touches contributes its own part, an empty one included: a
+// span that opens on the last character of a line has nothing before the
+// backtick, and the newline still belongs to the span, so a placeholder on the
+// next line is reported there and not on the line the backtick opened.
 func inlineCodeSpans(data string, drop map[int]bool) []codeSpan {
 	var (
 		spans   []codeSpan
@@ -346,7 +351,7 @@ func inlineCodeSpans(data string, drop map[int]bool) []codeSpan {
 			if !open {
 				continue
 			}
-			if text.Len() > 0 && last != n {
+			if last != 0 && last != n {
 				text.WriteByte('\n')
 			}
 			text.WriteString(part)
@@ -371,7 +376,9 @@ type placeholderUse struct {
 // is an argument a command documents for itself, not a value the skill takes
 // from CLAUDE.md or from the work, so neither table can have a row for it. Keep
 // the list minimal: add an entry only with the command in the skill that needs
-// it, and remove it once nothing uses it.
+// it, and remove it once nothing uses it. TestDispatchSkillNamesTheCLAUDEValues
+// holds the list to that rule and fails on an entry no command of the skill
+// takes.
 var allowedMetavars = map[string]bool{
 	"<file>":          true, // <cli> dispatch <name> --task-file <file>, <cli> inbox send --file <file>
 	"<path>":          true, // git worktree remove <path>, git worktree unlock <path>
@@ -446,6 +453,111 @@ func listedNames(tables []valueTable) map[string]bool {
 	return listed
 }
 
+// accepts reports whether the placeholder check accepts use: a name one of the
+// skill's name tables lists, or a command metavariable in allowedMetavars that
+// the skill uses inside a command. A span that is nothing but a placeholder
+// names a value, so the allow list excuses a token only as part of a command:
+// a lone `<file>` names nothing the skill lists and is reported.
+func accepts(use placeholderUse, listed map[string]bool) bool {
+	if listed[use.name] {
+		return true
+	}
+	return use.inCommand && allowedMetavars[use.name]
+}
+
+// staleMetavars returns, in name order, the entries of allowed that no use in
+// uses takes as a command argument: a metavariable the skill no longer uses,
+// which the allow list must not keep, since a stale entry would excuse a
+// placeholder no command takes.
+func staleMetavars(uses []placeholderUse, allowed map[string]bool) []string {
+	used := make(map[string]bool)
+	for _, use := range uses {
+		if use.inCommand {
+			used[use.name] = true
+		}
+	}
+	stale := make([]string, 0, len(allowed))
+	for name := range allowed {
+		if !used[name] {
+			stale = append(stale, name)
+		}
+	}
+	slices.Sort(stale)
+	return stale
+}
+
+// TestPlaceholderDecision pins the accept/reject decision the skill-placeholder
+// check makes for one placeholder use (issue #269): a name one of the skill's
+// tables lists is accepted wherever it appears, and a command metavariable only
+// inside a command, so a misspelling of a command's argument and a lone `<file>`
+// are both rejected.
+func TestPlaceholderDecision(t *testing.T) {
+	t.Parallel()
+
+	listed := map[string]bool{"<unit limit>": true, "<orchestration>": true}
+	for _, tc := range []struct {
+		name string
+		use  placeholderUse
+		want bool
+	}{
+		{name: "a listed name on its own", use: placeholderUse{name: "<unit limit>"}, want: true},
+		{name: "a listed name in a command", use: placeholderUse{name: "<unit limit>", inCommand: true}, want: true},
+		{name: "a metavariable in a command", use: placeholderUse{name: "<file>", inCommand: true}, want: true},
+		{name: "a lone metavariable", use: placeholderUse{name: "<file>"}, want: false},
+		{name: "a misspelling in a command", use: placeholderUse{name: "<orchestraton>", inCommand: true}, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := accepts(tc.use, listed); got != tc.want {
+				t.Errorf("accepts(%+v) = %t, want %t", tc.use, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestStaleMetavars pins what keeps allowedMetavars minimal (issue #269): an
+// entry no command of the skill takes is reported, including one the skill uses
+// only outside a command, where the allow list does not excuse it.
+func TestStaleMetavars(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name    string
+		uses    []placeholderUse
+		allowed map[string]bool
+		want    []string
+	}{
+		{name: "no entries", want: []string{}},
+		{
+			name:    "an entry the skill takes in a command",
+			uses:    []placeholderUse{{name: "<file>", inCommand: true}},
+			allowed: map[string]bool{"<file>": true},
+			want:    []string{},
+		},
+		{
+			name:    "an entry nothing takes",
+			uses:    []placeholderUse{{name: "<file>", inCommand: true}},
+			allowed: map[string]bool{"<file>": true, "<path>": true, "<branch>": true},
+			want:    []string{"<branch>", "<path>"},
+		},
+		{
+			name:    "an entry the skill uses only outside a command",
+			uses:    []placeholderUse{{name: "<file>"}},
+			allowed: map[string]bool{"<file>": true},
+			want:    []string{"<file>"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, staleMetavars(tc.uses, tc.allowed)); diff != "" {
+				t.Errorf("staleMetavars() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestPlaceholderRule pins what placeholderSpan reads as a lone placeholder in
 // the dispatch skill (issue #269): a name the skill defines, and not a command,
 // a command's argument, or a single-letter metavariable. A command's arguments
@@ -508,6 +620,9 @@ func TestSkillPlaceholders(t *testing.T) {
 		"```",                                    // 15
 		"",                                       // 16
 		"A lone span names a value: `<checks>`.", // 17
+		"",                                       // 18
+		"A wrapped span opens at the end of a line: `", // 19
+		"and closes on the next with <checks>` here.",  // 20
 	}, "\n")
 
 	tables := valueTables(doc)
@@ -534,6 +649,7 @@ func TestSkillPlaceholders(t *testing.T) {
 		{Line: 14, Name: "<repository root>", InCommand: true},
 		{Line: 14, Name: "<absolute path>", InCommand: true},
 		{Line: 17, Name: "<checks>"},
+		{Line: 20, Name: "<checks>", InCommand: true},
 	}
 	var got []use
 	for _, u := range skillPlaceholders(doc, tables) {
@@ -628,12 +744,23 @@ func TestDispatchSkillNamesTheCLAUDEValues(t *testing.T) {
 			t.Fatalf("%s: %d name tables, want the values table and the table of names from the work (issue #269)", dispatchSkill, len(skillTables))
 		}
 		listed := listedNames(skillTables)
-		for _, use := range skillPlaceholders(skillDoc, skillTables) {
-			if listed[use.name] || (use.inCommand && allowedMetavars[use.name]) {
+		uses := skillPlaceholders(skillDoc, skillTables)
+		for _, use := range uses {
+			if accepts(use, listed) {
 				continue
 			}
 			t.Errorf("%s:%d uses %s, which neither name table lists and which is no command metavariable: a placeholder is a value of the first table, a name from the work in the second, or an entry of allowedMetavars, so using a new one needs its row (issue #269)",
 				dispatchSkill, use.line, use.name)
+		}
+	})
+
+	t.Run("the metavariable allow list has no entry the skill stopped using", func(t *testing.T) {
+		t.Parallel()
+
+		uses := skillPlaceholders(skillDoc, skillTables)
+		for _, name := range staleMetavars(uses, allowedMetavars) {
+			t.Errorf("%s: allowedMetavars holds %s, which no command of the skill takes: a metavariable stays only with the command that needs it, so remove the entry (issue #269)",
+				dispatchSkill, name)
 		}
 	})
 }
