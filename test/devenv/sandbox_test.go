@@ -590,13 +590,9 @@ func (sb *sandbox) useFakeLaunchctlJobPrintingPid(t *testing.T, env map[string]s
 	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS"] = "1"
 
 	path := filepath.Join(sb.root, "launchctl-print.txt")
-	printed := "system/" + label + " = {\n" +
-		"\tactive count = 1\n" +
-		"\tpath = /Library/LaunchDaemons/" + label + ".plist\n" +
-		"\ttype = LaunchDaemon\n" +
-		"\tstate = running\n" +
-		"\tpid = " + strconv.Itoa(pid) + "\n" +
-		"}\n"
+	// The print output of a job launchd is running: the header every pinned block starts with, naming the
+	// job's own process.
+	printed := launchctlPrintHeader(label, pid) + "}\n"
 
 	writeFileMode(t, path, []byte(printed), 0o600)
 

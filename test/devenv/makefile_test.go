@@ -914,6 +914,15 @@ func TestMakeAgentsTokenRefreshInstallRefusesToRunAsRoot(t *testing.T) {
 		t.Fatalf("make agents-token-refresh-install exited 0 with id -u answering 0: the plist it renders would name root as the job's UserName, and the job would run the host clone's script - which the maintainer can still edit - as root, at every boot\nstdout: %s\nstderr: %s", stdout, stderr)
 	}
 
+	// The refusal must be the install recipe's own, before it runs anything: dev/agents-token-launchd.sh refuses
+	// a root run as well (agents-token-launchd: refused: ...), so a recipe whose own check is gone still exits
+	// non-zero, and a test that only looks for a refusal passes on the generator's, after the recipe read the
+	// VM's mounts as root (issue #229, seventh review).
+	firstLine, _, _ := strings.Cut(stderr, "\n")
+	if !strings.HasPrefix(firstLine, "agents-token-refresh-install: refused") {
+		t.Errorf("the first line of stderr is not the install recipe's own refusal, which starts with %q: the generator dev/agents-token-launchd.sh refuses a root run too, so the refusal may come from it alone, after the recipe's own check - and the work before it - ran as root (issue #229, seventh review)\nfirst line: %q\nstdout: %s\nstderr: %s", "agents-token-refresh-install: refused", firstLine, stdout, stderr)
+	}
+
 	refusal := strings.ToLower(stderr)
 
 	for _, want := range []string{"maintainer", "sudo"} {
@@ -922,9 +931,10 @@ func TestMakeAgentsTokenRefreshInstallRefusesToRunAsRoot(t *testing.T) {
 		}
 	}
 
-	// Refusing means doing nothing: no plist is rendered or linted, no file is installed and no job is loaded,
-	// so a refused run leaves the machine exactly as it was (issue #229, sixth review).
-	for _, tool := range []string{"sudo", "launchctl", "plutil"} {
+	// Refusing means doing nothing: no VM is asked about its mounts, no plist is rendered or linted, no file is
+	// installed and no job is loaded, so a refused run leaves the machine exactly as it was (issue #229, sixth
+	// and seventh reviews).
+	for _, tool := range []string{"sudo", "limactl", "launchctl", "plutil"} {
 		if calls := invocations(f.sb.argvLogText(t), tool); len(calls) != 0 {
 			t.Errorf("the install ran %s although it refuses to run as root, so the refusal comes after work that root should never have been asked for: %v\nstdout: %s\nstderr: %s", tool, calls, stdout, stderr)
 		}
@@ -2036,15 +2046,30 @@ func TestMakeAgentsTokenRefreshUninstall(t *testing.T) {
 	})
 }
 
-// launchctlPrintBlock renders what `launchctl print system/<label>` prints for a loaded job: a `program` line
-// and an `arguments` block that holds one argument per line, tab-indented, the way the real command prints a
-// job's arguments. The start target reads the script the job runs from that block.
-func launchctlPrintBlock(label, script, log string) string {
-	return "system/" + label + " = {\n" +
+// launchctlPrintHeader renders the lines `launchctl print system/<label>` prints for any loaded LaunchDaemon,
+// with the `pid = N` line it adds for a job whose process is running: pid 0 prints no line, as launchctl prints
+// none for a loaded job whose process is not running. Every test builds its print output from this header, so the
+// block's shape lives here.
+func launchctlPrintHeader(label string, pid int) string {
+	header := "system/" + label + " = {\n" +
 		"\tactive count = 1\n" +
 		"\tpath = /Library/LaunchDaemons/" + label + ".plist\n" +
 		"\ttype = LaunchDaemon\n" +
-		"\tstate = running\n" +
+		"\tstate = running\n"
+
+	if pid != 0 {
+		header += "\tpid = " + strconv.Itoa(pid) + "\n"
+	}
+
+	return header
+}
+
+// launchctlPrintBlock renders what `launchctl print system/<label>` prints for a loaded job: the header
+// launchctlPrintHeader renders and, below it, a `program` line and an `arguments` block that holds one argument
+// per line, tab-indented, the way the real command prints a job's arguments. The start target reads the script
+// the job runs from that block.
+func launchctlPrintBlock(label, script, log string) string {
+	return launchctlPrintHeader(label, 0) +
 		"\n" +
 		"\tprogram = /bin/sh\n" +
 		"\targuments = {\n" +
