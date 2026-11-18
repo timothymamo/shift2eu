@@ -59,7 +59,8 @@ Workflow for a PRD or issue:
 Context handoff (critical): every worker cold-starts with no memory and no access to other workers' output.
 The --task text is the worker's entire context, so always include: the `Worktree:` line first, the PRD path
 or issue number, the files and packages involved, the previous worker's findings or changed files, and the
-exact error text when retrying. For long context write .dot-agent-deck/<task-slug>.md and pass that path.
+exact error text when retrying. For long context write .dot-agent-deck/<task-slug>.md with your
+file-editing tool (never a heredoc or shell redirection) and pass that path.
 
 Workers run different models: the tester is DeepSeek (through pi), the others are Claude. They share only
 CLAUDE.md, .claude/skills and the repository, so in every tester task spell out the package path, the
@@ -78,6 +79,9 @@ commit on main. If the task names no worktree, report that through `dot-agent-de
 Implement the requested change following CLAUDE.md and the go-implement skill. If the task references a PRD
 or issue, read it first. In a TDD chain, change PRODUCTION code only; never edit the tester's tests to make
 them pass. If you think a test is wrong, say so in work-done instead.
+Change files with your file-editing tool, never with a shell command or script that rewrites them.
+Never `rm` a path held in a variable or built at run time; leave scratch directories for the system to
+clean (CLAUDE.md, rule 9).
 Before reporting: run `make check` (lint incl. architecture rules, tests, govulncheck) and fix everything it
 reports, then commit with a Conventional Commit message and confirm `git status` is clean.
 If you are blocked or missing context, report it through `dot-agent-deck work-done` and stop. Never wait on
@@ -98,6 +102,9 @@ You write tests, never production code. Before you start, read .claude/skills/go
 available as /skill:go-tdd) and the testing section of CLAUDE.md, and follow them.
 Nothing asks you for permission, so stay inside your remit: change only *_test.go files, testdata/
 directories and internal/testutil.
+Change files with your file-editing tool, never with a shell command or script that rewrites them.
+Never `rm` a path held in a variable or built at run time; leave scratch directories for the system to
+clean (CLAUDE.md, rule 9).
 When asked for RED: write or extend the test that pins the requested behaviour, run it, confirm it fails for
 the right reason, commit the failing test on its own, and report the exact failure output.
 When asked for GREEN: re-run that test and the package's tests, and report the result with test names.

@@ -111,6 +111,13 @@ make server            # ./bin/shift2eu-server only
    `xargs git branch -D < <file>` (`! xargs git branch -D < <file>` in Claude Code). Remove worktrees
    (`git worktree remove`) and delete remote branches (`git push origin --delete <branch>`) yourself. A
    worker hands the list to the orchestrator, which passes it on.
+9. **Change files with your file-editing tool, never through the shell.** No heredoc, `cat >`, `tee`,
+   `sed -i` or scripted rewrite (`python3 - <<'EOF'`) of a file; the formatters and generators `make`
+   and the tests run (`make fmt`, `-update`) are fine. Write scratch files with that tool too, in your
+   scratchpad or temporary directory. Write commit messages and PR bodies longer than one line the same
+   way (`git commit -F <file>`, `gh pr create --body-file <file>`). Never `rm` a path held in a variable
+   or built at run time (`rm -rf "$dir"`); leave scratch directories for the system to clean. Why: such
+   commands stop an unattended pane at a permission prompt nobody answers (issue #251).
 
 ## Multi-agent workflow
 
