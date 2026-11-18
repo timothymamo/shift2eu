@@ -8,19 +8,16 @@
 #
 # On every call it reads ~/.config/shift2eu/agents-app-token (the agents App's installation token, then
 # its expiry as Unix seconds, written by make agents-token on the Mac) and:
-#   - file absent: runs the real gh unchanged, so it falls back to GITHUB_TOKEN (milestone 3 removes this);
 #   - file present, well formed, mode 0600, the VM user's own and not expired: runs the real gh with the
-#     token as GH_TOKEN and GITHUB_TOKEN unset, every argument and standard input passed through;
-#   - anything else: fails without running gh, asking the maintainer to run
-#     make agents-token-refresh-start in the host clone on the Mac, never printing the file's content.
+#     token as GH_TOKEN and no other GitHub token in its environment, every argument and standard input
+#     passed through;
+#   - anything else, a missing file included: fails without running gh, asking the maintainer to run
+#     make agents-token-refresh-start in the host clone on the Mac, never printing the file's content. There
+#     is no fallback: the App's token is the agents' only GitHub credential (PRD #161 milestone 3).
 # SHIFT2EU_REAL_GH names another real gh, for the tests: the installed copies pin real= and drop this line.
 
 real="${SHIFT2EU_REAL_GH:-/usr/local/libexec/shift2eu/gh}"
 file="${HOME:?HOME is not set}/.config/shift2eu/agents-app-token"
-
-if [ ! -e "${file}" ] && [ ! -L "${file}" ]; then
-  exec "${real}" "$@"
-fi
 
 refuse() {
   printf 'gh: %s is %s, so gh cannot use the agents App token; ask the maintainer to run make agents-token-refresh-start in the host clone on the Mac\n' \
@@ -28,6 +25,7 @@ refuse() {
   exit 1
 }
 
+[ -e "${file}" ] || [ -L "${file}" ] || refuse "missing"
 [ -f "${file}" ] && [ ! -L "${file}" ] || refuse "not a regular file"
 [ -z "$(find "${file}" -prune \( -perm -0040 -o -perm -0020 -o -perm -0010 -o -perm -0004 -o -perm -0002 -o -perm -0001 \) -print)" ] ||
   refuse "readable or writable by other accounts (want mode 0600)"

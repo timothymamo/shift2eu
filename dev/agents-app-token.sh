@@ -540,7 +540,7 @@ printf "clock=%s\n" "$(date +%s)"
 check_vm() {
   case "$1" in
   *gh-wrapper=missing*)
-    say "warning: the VM ${instance} has no ${vm_real_gh}: this VM predates the gh wrapper, so its gh and git push ignore the token and keep using GITHUB_TOKEN. Upgrade it with make vm-gh-wrapper (or make vm-delete vm-create)"
+    say "warning: the VM ${instance} has no ${vm_real_gh}: this VM predates the gh wrapper, so its gh and git push ignore the token and have no GitHub credential of the agents. Upgrade it with make vm-gh-wrapper (or make vm-delete vm-create)"
     ;;
   esac
   # 1 to 12 digits only: a longer reading is no clock, and could overflow the shell's arithmetic.

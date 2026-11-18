@@ -18,21 +18,17 @@
 #   - CODEOWNERS on main has rules, a * rule, an owner for every rule, and no owner but the maintainer, and
 #     GitHub reports no errors for it.
 #
-# Usage: dev/protect-main-check.sh [--transition]   (make gate-check, from the repository root)
+# Usage: dev/protect-main-check.sh   (make gate-check, from the repository root; it takes no arguments)
 #
 # Exit status:
-#   0  every check holds, or --transition is given before the switch-over (see below)
+#   0  every check holds
 #   1  at least one gap
 #   2  it could not check: gh failed on a read, there is not exactly one ruleset named Protect main with a
-#      numeric id, an answer is not what GitHub documents, or an unknown argument (in both modes)
+#      numeric id, an answer is not what GitHub documents, or an argument was given (it takes none)
 #   3  no gap, but at least one check is unverified: run make gate-check as the maintainer, with their token
 #
-# The transition flag, --transition, is for the time before the switch-over, and it closes itself: while the
-# gate is off (no pull_request rule, or one that requires neither an approval nor code owner review) it
-# reports the gaps and the unverified checks, adds the line
-# "transition: gaps=<n>, unverified=<m>, not failing the release" when there are any, and exits 0, so a
-# release goes on. Once the gate is on it adds "transition: ignored, the gate is on" and exits as without the
-# flag. The Makefile passes it while GATE_TRANSITION is 1, its default until PRD #161 milestone 3 removes it.
+# A gap always fails: the transition mode of the time before the switch-over is gone (PRD #161 milestone 3),
+# so its old flag is refused like any other argument.
 #
 # It reads GitHub through gh only, with five GETs on the repository spelled out (never gh's {owner}/{repo}
 # placeholders, which a fork's remote or GH_REPO would fill), the rulesets list with --paginate. It parses the
@@ -44,17 +40,11 @@ set -eu
 maintainer='@timothymamo'
 repository='repos/timothymamo/shift2eu'
 
-transition=0
-for arg in "$@"; do
-  case "${arg}" in
-  --transition) transition=1 ;;
-  *)
-    printf 'protect-main-check: unknown argument %s; usage: dev/protect-main-check.sh [--transition]\n' \
-      "$(printf '%s' "${arg}" | tr -d '\000-\037\177')" >&2
-    exit 2
-    ;;
-  esac
-done
+if [ "$#" -gt 0 ]; then
+  printf 'protect-main-check: unknown argument %s; usage: dev/protect-main-check.sh (it takes no arguments)\n' \
+    "$(printf '%s' "$1" | tr -d '\000-\037\177')" >&2
+  exit 2
+fi
 
 cannot() {
   printf 'protect-main-check: cannot check: %s\n' "$*" >&2
@@ -156,16 +146,6 @@ ruleset_report="$(printf '%s\n' "${ruleset}" | jq 2>/dev/null -r --argjson repo 
      else "gap: this token can bypass Protect main: current_user_can_bypass is \(.current_user_can_bypass // "missing" | clean)" end)
 ')" || cannot "the answer of ${ruleset_endpoint} is not a ruleset"
 
-# The gate is on once Protect main requires an approval or code owner review: from then on --transition is
-# ignored, so a Makefile that still passes it cannot hold a gap back.
-gate_on="$(printf '%s\n' "${ruleset}" | jq 2>/dev/null -r '
-  [.rules[] | select(type == "object" and .type == "pull_request")] | .[0] | (.parameters? // {}) as $p
-  | if . != null and ((($p.required_approving_review_count | type) == "number"
-                       and $p.required_approving_review_count >= 1)
-                      or $p.require_code_owner_review == true)
-    then "on" else "off" end
-')" || cannot "the answer of ${ruleset_endpoint} is not a ruleset"
-
 codeowners_report="$(printf '%s\n' "${codeowners}" | jq 2>/dev/null -r --arg maintainer "${maintainer}" "${jq_lib}"'
   if type != "object" or .encoding != "base64" or (.content | type) != "string" then error("not a file") else . end
   | [.content | gsub("\\s"; "") | @base64d | split("\n")[]
@@ -193,17 +173,6 @@ printf '%s\n' "${report}"
 
 gaps="$(printf '%s\n' "${report}" | grep -c '^gap: ' || true)"
 unverified="$(printf '%s\n' "${report}" | grep -c '^unverified: ' || true)"
-
-if [ "${transition}" -eq 1 ]; then
-  if [ "${gate_on}" = 'on' ]; then
-    printf 'transition: ignored, the gate is on\n'
-  else
-    if [ "$((gaps + unverified))" -gt 0 ]; then
-      printf 'transition: gaps=%s, unverified=%s, not failing the release\n' "${gaps}" "${unverified}"
-    fi
-    exit 0
-  fi
-fi
 
 if [ "${gaps}" -gt 0 ]; then
   exit 1
