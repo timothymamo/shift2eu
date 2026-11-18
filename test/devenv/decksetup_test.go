@@ -30,8 +30,11 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// vmEnvCredentials are the names make vm-env copies into the VM by default, in VM_ENV's order (Makefile).
-var vmEnvCredentials = []string{"CLAUDE_CODE_OAUTH_TOKEN", "DEEPSEEK_API_KEY", "GITHUB_TOKEN"}
+// vmEnvCredentials are the names make vm-env copies into the VM by default, in VM_ENV's order (Makefile),
+// after PRD #161 milestone 3: the maintainer's personal GITHUB_TOKEN left the VM, and the agents push with the
+// agents App's token, which the gh wrapper hands the real gh (dev/gh-app-token.sh). No case in this file treats
+// GITHUB_TOKEN as a credential of the agents any more.
+var vmEnvCredentials = []string{"CLAUDE_CODE_OAUTH_TOKEN", "DEEPSEEK_API_KEY"}
 
 // fakeEnvValue is the invented value the tests give one credential: its name with a fake- prefix, so no
 // literal in this file pairs a credential's name with a value (gosec G101) and none is a real credential
@@ -67,7 +70,7 @@ func vmEnvInvalidTail(vmEnv string) string {
 
 // seededDaemonEnv is what the VM's daemon.env holds before a case: the credentials a previous make vm-env
 // wrote. A refused run leaves exactly these bytes behind.
-const seededDaemonEnv = "CLAUDE_CODE_OAUTH_TOKEN=old-oauth\nDEEPSEEK_API_KEY=old-deepseek\nGITHUB_TOKEN=old-github\n"
+const seededDaemonEnv = "CLAUDE_CODE_OAUTH_TOKEN=old-oauth\nDEEPSEEK_API_KEY=old-deepseek\n"
 
 // daemonEnvPath is the VM's ~/.config/dot-agent-deck/daemon.env, the file make vm-env writes and the
 // credentials.conf drop-in reads at every start.
@@ -218,8 +221,8 @@ func TestMakeVMEnvRefusesMissingCredentials(t *testing.T) {
 	}{
 		{
 			name:  "one credential unset",
-			unset: []string{"GITHUB_TOKEN"},
-			named: []string{"GITHUB_TOKEN"},
+			unset: []string{"CLAUDE_CODE_OAUTH_TOKEN"},
+			named: []string{"CLAUDE_CODE_OAUTH_TOKEN"},
 		},
 		{
 			name:  "one credential set to an empty string",
@@ -490,8 +493,8 @@ func TestMakeVMEnvRefusesAnEmptyVMEnv(t *testing.T) {
 // default VM_ENV replaces the whole file, so a line it does not name - a stale ANTHROPIC_API_KEY left by an
 // earlier setup, which silently switches Claude Code to pay-as-you-go billing - never survives a full run.
 // So does a VM_ENV exported in make's environment: only one given on the make command line merges, and a
-// command-line VM_ENV keeps every plain line it does not name, so `make vm-env VM_ENV=GITHUB_TOKEN` drops
-// nothing (the decision and its second-round correction on issue #234).
+// command-line VM_ENV keeps every plain line it does not name, so `make vm-env VM_ENV=DEEPSEEK_API_KEY`
+// drops nothing (the decision and its second-round correction on issue #234).
 func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 	t.Parallel()
 
@@ -516,6 +519,14 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 			name:  "the default VM_ENV replaces a line it does not name",
 			seed:  true,
 			extra: []string{"UNRELATED_SETTING=not-kept-by-the-default"},
+		},
+		{
+			// A VM set up before PRD #161 milestone 3 still holds the maintainer's personal token in its
+			// daemon.env. The default VM_ENV no longer names it, so a plain run replaces the whole file and the
+			// token leaves the VM: nothing reads it any more (dev/gh-app-token.sh has no fallback).
+			name:  "a GITHUB_TOKEN line an earlier VM was set up with is dropped",
+			seed:  true,
+			extra: []string{"GITHUB_TOKEN=old-github"},
 		},
 		{
 			name:  "a VM_ENV exported in the environment replaces a line it does not name",
@@ -572,7 +583,6 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 			want := []string{
 				"CLAUDE_CODE_OAUTH_TOKEN=" + fakeEnvValue("CLAUDE_CODE_OAUTH_TOKEN"),
 				"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
-				"GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN"),
 			}
 			// The default VM_ENV and one exported in the environment write the whole file; only a
 			// command-line VM_ENV keeps every other plain line, so a setting vm-env does not know about is
@@ -590,10 +600,14 @@ func TestMakeVMEnvWritesTheCredentialsItNames(t *testing.T) {
 
 // TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials pins the decision recorded on issue #234: making vm-env
 // write only a few names by narrowing VM_ENV merges - it replaces the names it lists and keeps every other line
-// already in the file - so `make vm-env VM_ENV=GITHUB_TOKEN` never drops the OAuth token and the DeepSeek key.
-// A narrowed name that is missing is refused like any other, and the file stays as it was.
+// already in the file - so `make vm-env VM_ENV=DEEPSEEK_API_KEY` never drops the OAuth token. A narrowed name
+// that is missing is refused like any other, and the file stays as it was.
 func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 	t.Parallel()
+
+	// One of the two names VM_ENV still lists (PRD #161 milestone 3): GITHUB_TOKEN is no credential of the VM
+	// any more, so narrowing to it would pin a name the switch-over removed.
+	const narrowed = "DEEPSEEK_API_KEY"
 
 	t.Run("the name it lists is replaced and the others are kept", func(t *testing.T) {
 		t.Parallel()
@@ -601,13 +615,12 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 		sb := newSandbox(t)
 		env := sb.vmEnvEnv()
 		delete(env, "CLAUDE_CODE_OAUTH_TOKEN")
-		delete(env, "DEEPSEEK_API_KEY")
 
 		sb.seedDaemonEnv(t)
 
-		stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=GITHUB_TOKEN"}, env)
+		stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=" + narrowed}, env)
 		if err != nil {
-			t.Fatalf("make vm-env VM_ENV=GITHUB_TOKEN with GITHUB_TOKEN set: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			t.Fatalf("make vm-env VM_ENV=%s with %s set: %v\nstdout: %s\nstderr: %s", narrowed, narrowed, err, stdout, stderr)
 		}
 
 		body, readErr := os.ReadFile(sb.daemonEnvPath())
@@ -617,33 +630,31 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 
 		want := []string{
 			"CLAUDE_CODE_OAUTH_TOKEN=old-oauth",
-			"DEEPSEEK_API_KEY=old-deepseek",
-			"GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN"),
+			"DEEPSEEK_API_KEY=" + fakeEnvValue(narrowed),
 		}
 
 		if diff := cmp.Diff(sortedEnvLines(strings.Join(want, "\n")), sortedEnvLines(string(body))); diff != "" {
-			t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN wrote the wrong lines to the VM's daemon.env: it must replace GITHUB_TOKEN and keep every other line already in the file (issue #234) (-want +got):\n%s", diff)
+			t.Errorf("make vm-env VM_ENV=%s wrote the wrong lines to the VM's daemon.env: it must replace %s and keep every other line already in the file (issue #234) (-want +got):\n%s", narrowed, narrowed, diff)
 		}
 
 		// A merge says, by name, which lines it left in place (the auditor's finding on issue #234): the
 		// maintainer who narrows VM_ENV to one credential must see from the run itself what stays in
 		// daemon.env, without opening the file and without any value being printed.
 		keptNames := slices.DeleteFunc(slices.Clone(vmEnvCredentials), func(name string) bool {
-			return name == "GITHUB_TOKEN"
+			return name == narrowed
 		})
 
 		for _, name := range keptNames {
 			if !strings.Contains(stdout+stderr, name) {
-				t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN kept the line daemon.env already held for %s but never names it: a merge must print the names - only the names - of the lines it kept, so a maintainer sees what stays in the file (issue #234)\nstdout: %s\nstderr: %s",
-					name, stdout, stderr)
+				t.Errorf("make vm-env VM_ENV=%s kept the line daemon.env already held for %s but never names it: a merge must print the names - only the names - of the lines it kept, so a maintainer sees what stays in the file (issue #234)\nstdout: %s\nstderr: %s",
+					narrowed, name, stdout, stderr)
 			}
 		}
 
 		// Names only, never values: neither the ones the file held before the run nor the ones it copied in.
-		assertNoSecrets(t, "make vm-env VM_ENV=GITHUB_TOKEN's output", stdout+stderr, []secret{
+		assertNoSecrets(t, "make vm-env VM_ENV="+narrowed+"'s output", stdout+stderr, []secret{
 			{kind: "earlier value of CLAUDE_CODE_OAUTH_TOKEN", value: "old-oauth"},
 			{kind: "earlier value of DEEPSEEK_API_KEY", value: "old-deepseek"},
-			{kind: "earlier value of GITHUB_TOKEN", value: "old-github"},
 		})
 
 		assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
@@ -655,13 +666,12 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 		sb := newSandbox(t)
 		env := sb.vmEnvEnv()
 		delete(env, "CLAUDE_CODE_OAUTH_TOKEN")
-		delete(env, "DEEPSEEK_API_KEY")
 
 		sb.seedDaemonEnv(t)
 
-		stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=GITHUB_TOKEN,GITHUB_TOKEN"}, env)
+		stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=" + narrowed + "," + narrowed}, env)
 		if err != nil {
-			t.Fatalf("make vm-env VM_ENV=GITHUB_TOKEN,GITHUB_TOKEN with GITHUB_TOKEN set: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			t.Fatalf("make vm-env VM_ENV=%s,%s with %s set: %v\nstdout: %s\nstderr: %s", narrowed, narrowed, narrowed, err, stdout, stderr)
 		}
 
 		body, readErr := os.ReadFile(sb.daemonEnvPath())
@@ -669,24 +679,24 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 			t.Fatalf("read the VM's daemon.env: %v", readErr)
 		}
 
-		want := "GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN")
+		want := narrowed + "=" + fakeEnvValue(narrowed)
 
 		written := 0
 
 		for _, line := range sortedEnvLines(string(body)) {
-			if strings.HasPrefix(line, "GITHUB_TOKEN=") {
+			if strings.HasPrefix(line, narrowed+"=") {
 				written++
 			}
 		}
 
 		if written != 1 {
-			t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN,GITHUB_TOKEN wrote %d GITHUB_TOKEN lines, want exactly 1: a name listed twice reaches daemon.env once, so the file stays one line per credential (issue #234). The lines it wrote: %v",
-				written, sortedEnvLines(string(body)))
+			t.Errorf("make vm-env VM_ENV=%s,%s wrote %d %s lines, want exactly 1: a name listed twice reaches daemon.env once, so the file stays one line per credential (issue #234). The lines it wrote: %v",
+				narrowed, narrowed, written, narrowed, sortedEnvLines(string(body)))
 		}
 
 		if !slices.Contains(sortedEnvLines(string(body)), want) {
-			t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN,GITHUB_TOKEN did not write the value it was given to daemon.env: the lines it wrote are %v, want one of them the GITHUB_TOKEN line with the value the shell held (issue #234)",
-				sortedEnvLines(string(body)))
+			t.Errorf("make vm-env VM_ENV=%s,%s did not write the value it was given to daemon.env: the lines it wrote are %v, want one of them the %s line with the value the shell held (issue #234)",
+				narrowed, narrowed, sortedEnvLines(string(body)), narrowed)
 		}
 
 		assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
@@ -703,13 +713,13 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 
 		seeded := sb.seedDaemonEnv(t)
 
-		stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=GITHUB_TOKEN"}, env)
+		stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=" + narrowed}, env)
 		if err == nil {
-			t.Fatalf("make vm-env VM_ENV=GITHUB_TOKEN exited 0 with GITHUB_TOKEN missing: a narrowed VM_ENV must be refused like any other, so the VM keeps the credentials it has (issue #234)\nstdout: %s\nstderr: %s", stdout, stderr)
+			t.Fatalf("make vm-env VM_ENV=%s exited 0 with %s missing: a narrowed VM_ENV must be refused like any other, so the VM keeps the credentials it has (issue #234)\nstdout: %s\nstderr: %s", narrowed, narrowed, stdout, stderr)
 		}
 
-		if !strings.Contains(stdout+stderr, "GITHUB_TOKEN") {
-			t.Errorf("the refusal does not name GITHUB_TOKEN, the one name VM_ENV lists:\nstdout: %s\nstderr: %s", stdout, stderr)
+		if !strings.Contains(stdout+stderr, narrowed) {
+			t.Errorf("the refusal does not name %s, the one name VM_ENV lists:\nstdout: %s\nstderr: %s", narrowed, stdout, stderr)
 		}
 
 		got, readErr := os.ReadFile(sb.daemonEnvPath())
@@ -755,7 +765,7 @@ func TestMakeVMEnvRefusesAQuoteBeforeTheShellSeesIt(t *testing.T) {
 			// The value a maintainer's .envrc or a mistyped command line could hold: a valid name, a quote
 			// that ends the quoted word, and a command that runs if the quote is not refused.
 			pwned := filepath.Join(t.TempDir(), "pwned")
-			vmEnv := "GITHUB_TOKEN';touch " + pwned + ";'"
+			vmEnv := "INVENTED_TOKEN';touch " + pwned + ";'"
 
 			args := []string{"vm-env"}
 
@@ -819,9 +829,9 @@ func TestMakeVMEnvRefusalNeverEchoesTheVMEnv(t *testing.T) {
 			value: inventedVMEnvValue("oauth-value-with-dash"),
 		},
 		{
-			// The shape an exported assignment has: GITHUB_TOKEN=<the value>.
+			// The shape an exported assignment has: NAME=<the value>.
 			name:  "an exported assignment in the environment",
-			value: "GITHUB_TOKEN=" + inventedVMEnvValue("ghp-value"),
+			value: "INVENTED_TOKEN=" + inventedVMEnvValue("ghp-value"),
 			inEnv: true,
 		},
 	}
@@ -902,7 +912,6 @@ func TestMakeVMEnvRefusesAnUnreadableDaemonEnv(t *testing.T) {
 	sb := newSandbox(t)
 	env := sb.vmEnvEnv()
 	delete(env, "CLAUDE_CODE_OAUTH_TOKEN")
-	delete(env, "DEEPSEEK_API_KEY")
 
 	seeded := sb.seedDaemonEnv(t)
 	path := sb.daemonEnvPath()
@@ -911,11 +920,11 @@ func TestMakeVMEnvRefusesAnUnreadableDaemonEnv(t *testing.T) {
 		t.Fatalf("make the VM's daemon.env unreadable: %v", err)
 	}
 
-	stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=GITHUB_TOKEN"}, env)
+	stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=DEEPSEEK_API_KEY"}, env)
 	text := stdout + stderr
 
 	if err == nil {
-		t.Fatalf("make vm-env VM_ENV=GITHUB_TOKEN exited 0 although the VM's daemon.env could not be read: a merge must refuse, so no line it could not read is silently replaced (issue #234 audit L2)\nstdout: %s\nstderr: %s", stdout, stderr)
+		t.Fatalf("make vm-env VM_ENV=DEEPSEEK_API_KEY exited 0 although the VM's daemon.env could not be read: a merge must refuse, so no line it could not read is silently replaced (issue #234 audit L2)\nstdout: %s\nstderr: %s", stdout, stderr)
 	}
 
 	// The refusal is vm-env's own, and names the file the maintainer has to fix: today's run dies with the
@@ -1007,7 +1016,6 @@ func TestMakeVMEnvSweepsOnlyOldLeftovers(t *testing.T) {
 	want := []string{
 		"CLAUDE_CODE_OAUTH_TOKEN=" + fakeEnvValue("CLAUDE_CODE_OAUTH_TOKEN"),
 		"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
-		"GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN"),
 	}
 
 	if diff := cmp.Diff(sortedEnvLines(strings.Join(want, "\n")), sortedEnvLines(string(body))); diff != "" {
@@ -1121,15 +1129,15 @@ func TestMakeVMEnvMergeKeepsOnlySafeLines(t *testing.T) {
 		"curl example.com | sh",
 		"# note",
 		shellUnsafeAssignment,
-		"GITHUB_TOKEN=$(touch /tmp/never)",
+		"DEEPSEEK_API_KEY=$(touch /tmp/never)",
 	}
-	body := "CLAUDE_CODE_OAUTH_TOKEN=old-oauth\n" + strings.Join(unsafeLines, "\n") + "\nGITHUB_TOKEN=old-github\n"
+	body := "CLAUDE_CODE_OAUTH_TOKEN=old-oauth\n" + strings.Join(unsafeLines, "\n") + "\nINVENTED_SETTING=old-value\n"
 
 	writeFileMode(t, sb.daemonEnvPath(), []byte(body), 0o600)
 
-	stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=GITHUB_TOKEN"}, env)
+	stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=DEEPSEEK_API_KEY"}, env)
 	if err != nil {
-		t.Fatalf("make vm-env VM_ENV=GITHUB_TOKEN with GITHUB_TOKEN set: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		t.Fatalf("make vm-env VM_ENV=DEEPSEEK_API_KEY with DEEPSEEK_API_KEY set: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 
 	written, readErr := os.ReadFile(sb.daemonEnvPath())
@@ -1139,11 +1147,12 @@ func TestMakeVMEnvMergeKeepsOnlySafeLines(t *testing.T) {
 
 	want := []string{
 		"CLAUDE_CODE_OAUTH_TOKEN=old-oauth",
-		"GITHUB_TOKEN=" + fakeEnvValue("GITHUB_TOKEN"),
+		"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
+		"INVENTED_SETTING=old-value",
 	}
 
 	if diff := cmp.Diff(want, sortedEnvLines(string(written))); diff != "" {
-		t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN wrote the wrong lines to the VM's daemon.env: a merge keeps only the plain NAME=value lines it does not name and drops every other line, so no shell code of an earlier daemon.env reaches the file the login shell sources (issue #234) (-want +got):\n%s", diff)
+		t.Errorf("make vm-env VM_ENV=DEEPSEEK_API_KEY wrote the wrong lines to the VM's daemon.env: a merge keeps only the plain NAME=value lines it does not name and drops every other line, so no shell code of an earlier daemon.env reaches the file the login shell sources (issue #234) (-want +got):\n%s", diff)
 	}
 
 	// The rule the kept lines follow, stated as the merge must apply it: a plain name, an `=`, and a value of
@@ -1162,7 +1171,7 @@ func TestMakeVMEnvMergeKeepsOnlySafeLines(t *testing.T) {
 
 	dropped := []string{"drop", "skip", "ignor"}
 	if !slices.ContainsFunc(dropped, func(word string) bool { return strings.Contains(lower, word) }) {
-		t.Errorf("make vm-env VM_ENV=GITHUB_TOKEN dropped %d line(s) of the earlier daemon.env without saying so: a merge that silently discards a setting leaves the maintainer with no way to learn that daemon.env lost it, and no clue which (issue #234)\nstdout: %s\nstderr: %s",
+		t.Errorf("make vm-env VM_ENV=DEEPSEEK_API_KEY dropped %d line(s) of the earlier daemon.env without saying so: a merge that silently discards a setting leaves the maintainer with no way to learn that daemon.env lost it, and no clue which (issue #234)\nstdout: %s\nstderr: %s",
 			len(unsafeLines), stdout, stderr)
 	}
 
@@ -1185,9 +1194,9 @@ func TestMakeVMEnvMergeKeepsOnlySafeLines(t *testing.T) {
 		}
 	}
 
-	assertNoSecrets(t, "make vm-env VM_ENV=GITHUB_TOKEN's output", stdout+stderr, []secret{
+	assertNoSecrets(t, "make vm-env VM_ENV=DEEPSEEK_API_KEY's output", stdout+stderr, []secret{
 		{kind: "earlier value of CLAUDE_CODE_OAUTH_TOKEN", value: "old-oauth"},
-		{kind: "earlier value of GITHUB_TOKEN", value: "old-github"},
+		{kind: "earlier value of INVENTED_SETTING", value: "old-value"},
 	})
 
 	assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)

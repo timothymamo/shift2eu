@@ -1,13 +1,16 @@
-// Pins the VM's gh wrapper (PRD #161 milestone 1): dev/gh-app-token.sh hands the installation token of the
-// VM's token file to the real gh, unsets GITHUB_TOKEN where it does, falls back to GITHUB_TOKEN where the
-// file is absent, and refuses a token file that is expired, malformed or readable by another account without
-// running gh, telling the agent to ask the maintainer rather than to touch the file itself (review item 10).
+// Pins the VM's gh wrapper (PRD #161 milestone 1, and milestone 3 for the fallback's removal): dev/gh-app-token.sh
+// hands the installation token of the VM's token file to the real gh, unsets GITHUB_TOKEN where it does, refuses
+// when the token file is absent - GITHUB_TOKEN in the environment is no fallback of the agents' any more - and
+// refuses a token file that is expired, malformed or readable by another account without running gh, telling the
+// agent to ask the maintainer to refresh the token rather than to touch the file itself (review item 10).
 // The design is .dot-agent-deck/prd161m1-design.md.
 package devenv_test
 
 import (
+	"bytes"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -178,7 +181,32 @@ func TestGHAppTokenHandsTheAppTokenToTheRealGH(t *testing.T) {
 	}
 }
 
-func TestGHAppTokenFallsBackToGITHUBToken(t *testing.T) {
+// refreshTarget is the target the maintainer runs in the host clone on the Mac to refresh the agents App's
+// token, and the two words that place it: every refusal of the wrapper names them, so an agent whose gh stops
+// working reads what to ask for instead of a bare 401 (PRD #161 milestone 1, and milestone 3, which removed the
+// GITHUB_TOKEN fallback this message replaces).
+const (
+	refreshTarget      = "make agents-token-refresh-start"
+	refreshTargetPlace = "host clone on the Mac"
+)
+
+// refusedForMissingTokenFile is the message a wrapper without a token file must print: the refresh target, where
+// to run it, and the file it could not read. The wording around these fragments is not pinned, they are.
+func assertRefusalNamesTheRefreshTarget(t *testing.T, stderr string) {
+	t.Helper()
+
+	for _, want := range []string{refreshTarget, refreshTargetPlace} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("the wrapper's stderr does not hold %q, so the next agent whose gh stops working cannot tell what to ask the maintainer for: %s", want, stderr)
+		}
+	}
+}
+
+// TestGHAppTokenRefusesWithoutATokenFile pins PRD #161 milestone 3's first acceptance criterion: without the
+// App's token file, gh fails - even with GITHUB_TOKEN in its environment - and the error names the refresh
+// target. Milestone 1 fell back to GITHUB_TOKEN here; with the maintainer's token out of the VM there is
+// nothing left to fall back to, so a silent fallback would be a gh that quietly acts as nobody.
+func TestGHAppTokenRefusesWithoutATokenFile(t *testing.T) {
 	t.Parallel()
 
 	sb := newSandbox(t)
@@ -190,30 +218,77 @@ func TestGHAppTokenFallsBackToGITHUBToken(t *testing.T) {
 	env["GITHUB_TOKEN"] = personal
 
 	stdout, stderr, err := sb.run(t, scriptPath(t, ghWrapperScript), []string{"auth", "git-credential", "get"}, env, helperStdin)
-	if err != nil {
-		t.Fatalf("the wrapper exited non-zero with no token file, which milestone 1 must still allow: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	if err == nil {
+		t.Fatalf("the wrapper exited 0 with no token file: without the agents App's token gh must fail and name the refresh target, even when GITHUB_TOKEN is in the environment (PRD #161 milestone 3)\nstdout: %s\nstderr: %s", stdout, stderr)
 	}
 
-	got := readGHRecord(t, record)
-
-	if got.ghToken != unsetMarker {
-		t.Errorf("the wrapper set GH_TOKEN with no token file: without one it runs the real gh unchanged")
+	if _, statErr := os.Stat(record); statErr == nil {
+		t.Fatalf("the wrapper ran the real gh with no token file: with the maintainer's token out of the VM there is no fallback, so gh must not run at all (PRD #161 milestone 3)\nstdout: %s\nstderr: %s", stdout, stderr)
 	}
 
-	if got.githubToken != personal {
-		t.Errorf("the real gh did not see GITHUB_TOKEN as the wrapper got it: with no token file the wrapper falls back to it (milestone 3 removes the fallback)")
+	assertRefusalNamesTheRefreshTarget(t, stderr)
+
+	if !strings.Contains(stderr, agentsTokenFile) {
+		t.Errorf("the wrapper's stderr does not name %s, the file it could not read, so a maintainer cannot tell which file the refresh has to write: %s", agentsTokenFile, stderr)
 	}
 
-	wantArgs := []string{"auth", "git-credential", "get"}
-	if diff := cmp.Diff(wantArgs, got.argv); diff != "" {
-		t.Errorf("the wrapper did not pass its arguments through unchanged (-want +got):\n%s", diff)
+	if strings.Contains(stderr, personal) || strings.Contains(stdout, personal) {
+		t.Errorf("the wrapper printed the GITHUB_TOKEN it was given: a value must never reach a pane or a log (CLAUDE.md rule 3)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+}
+
+// TestGitCredentialHelperRefusesWithoutATokenFile pins the other half of the same criterion: git push goes
+// through the credential helper the VM configures, which runs the wrapper (`!<gh> auth git-credential`), so
+// with no token file `git credential fill` fails too and carries the wrapper's message - never a credential
+// made from GITHUB_TOKEN.
+func TestGitCredentialHelperRefusesWithoutATokenFile(t *testing.T) {
+	t.Parallel()
+
+	sb := newSandbox(t)
+	record := filepath.Join(sb.root, "gh-record")
+	wrapper := scriptPath(t, ghWrapperScript)
+
+	personal := fmt.Sprintf("ghp_%036x", 9)
+
+	// The helper line dev/lima.yaml and make vm-gh-wrapper write into the VM user's global git config.
+	helper := "!" + wrapper + " auth git-credential"
+	writeFileMode(t, filepath.Join(sb.vmHome, ".gitconfig"),
+		[]byte("[credential \"https://github.com\"]\n\thelper = \""+helper+"\"\n"), 0o600)
+
+	env := sb.ghEnv(writeFakeRealGh(t, sb), record)
+	env["GITHUB_TOKEN"] = personal
+	env["GIT_CONFIG_NOSYSTEM"] = "1"
+	env["GIT_TERMINAL_PROMPT"] = "0"
+
+	stdout, stderr, err := runGitCredentialFill(t, sb, env)
+	if err == nil {
+		t.Fatalf("git credential fill succeeded with no token file: the helper runs the wrapper, so a git push must fail and name the refresh target, even when GITHUB_TOKEN is in the environment (PRD #161 milestone 3)\nstdout: %s\nstderr: %s", stdout, stderr)
 	}
 
-	if diff := cmp.Diff(helperStdin, got.stdin); diff != "" {
-		t.Errorf("the wrapper did not pass stdin through unchanged (-want +got):\n%s", diff)
+	if _, statErr := os.Stat(record); statErr == nil {
+		t.Fatalf("the credential helper ran the real gh with no token file: with the maintainer's token out of the VM there is no fallback, so gh must not run at all (PRD #161 milestone 3)\nstdout: %s\nstderr: %s", stdout, stderr)
 	}
 
-	assertNoSecrets(t, "the wrapper's stderr", stderr, []secret{{kind: "maintainer token", value: personal}})
+	assertRefusalNamesTheRefreshTarget(t, stdout+stderr)
+}
+
+// runGitCredentialFill runs `git credential fill` with the VM user's home, so git reads the helper this test
+// wrote, and with the helper's standard input.
+func runGitCredentialFill(t *testing.T, sb *sandbox, env map[string]string) (string, string, error) {
+	t.Helper()
+
+	cmd := exec.Command("git", "credential", "fill")
+	cmd.Env = envList(env)
+	cmd.Dir = sb.hostHome
+	cmd.Stdin = strings.NewReader(helperStdin)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	return stdout.String(), stderr.String(), err
 }
 
 // TestGHAppTokenRefusesABadTokenFile pins that an expired, malformed or group-readable token file makes the
@@ -265,7 +340,7 @@ func TestGHAppTokenRefusesABadTokenFile(t *testing.T) {
 
 			// Third review, item 4: the refusal names the command AND where to run it - the host clone on the
 			// Mac, the only place the App's key and its path live.
-			for _, want := range []string{"make agents-token-refresh-start", "host clone on the Mac"} {
+			for _, want := range []string{refreshTarget, refreshTargetPlace} {
 				if !strings.Contains(stderr, want) {
 					t.Errorf("the wrapper's stderr does not hold %q, so a maintainer cannot tell where to start the refresh again (third review, item 4): %s", want, stderr)
 				}
