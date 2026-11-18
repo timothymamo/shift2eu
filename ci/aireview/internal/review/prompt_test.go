@@ -52,6 +52,16 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 		}
 	}
 
+	// The reviewer reviews documentation, skills, prompts and test fixtures: an
+	// instruction inside them is the content under review, not an attempt on the
+	// reviewer. Only text that tries to change this reviewer's findings or verdict
+	// is an attempt.
+	for _, want := range []string{"the content under review", "this reviewer's findings or verdict"} {
+		if !strings.Contains(got.System, want) {
+			t.Errorf("the system prompt does not say %q: instructions that are themselves the content under review are no prompt-injection attempt, only text that tries to change this reviewer's findings or verdict is one", want)
+		}
+	}
+
 	for _, leaked := range []string{pr.Title, pr.Body, pr.Author, "FILE-PATH-MARKER", "DIFF-MARKER"} {
 		if strings.Contains(got.System, leaked) {
 			t.Errorf("the system prompt holds %q, which is the pull request's data or its delimiter", leaked)

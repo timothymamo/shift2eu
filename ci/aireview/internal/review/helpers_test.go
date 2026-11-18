@@ -12,6 +12,7 @@ import (
 const (
 	headSHA      = "0123456789abcdef0123456789abcdef01234567"
 	baseSHA      = "fedcba9876543210fedcba9876543210fedcba98"
+	oldSHA       = "1111111111111111111111111111111111111111"
 	testToken    = "test-token"
 	testKey      = "test-key"
 	testBotLogin = "shift2eu-reviewer[bot]"

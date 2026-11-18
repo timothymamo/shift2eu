@@ -1,11 +1,15 @@
 package review_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -193,36 +197,184 @@ func TestPostReviewPostsOneReviewOnTheHeadCommit(t *testing.T) {
 }
 
 // TestDiffRefusesABodyOverTheLimit pins the size limit of ADR 0033: a diff of
-// MaxDiffBytes+1 bytes fails the run with ErrDiffTooLarge, so an oversized pull
-// request costs no model call and posts no review. The client reads the diff of
-// the compare of the pull request's two SHAs, so the review is of the head it
-// read.
+// exactly MaxDiffBytes is reviewed, and one byte over fails the run with
+// ErrDiffTooLarge, so an oversized pull request costs no model call and posts no
+// review. The client reads the diff of the compare of the pull request's two
+// SHAs, so the review is of the head it read.
 func TestDiffRefusesABodyOverTheLimit(t *testing.T) {
 	t.Parallel()
 
-	seen := make(chan string, 1)
-
-	srv := server(t, func(w http.ResponseWriter, r *http.Request) {
-		seen <- r.URL.Path
-
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(strings.Repeat("x", review.MaxDiffBytes+1)))
-	})
-
-	gh := review.NewGitHub(srv.URL, "owner/name", testToken, srv.Client())
-
-	pr := review.PullRequest{Number: 7, BaseSHA: baseSHA, HeadSHA: headSHA}
-
-	if _, err := gh.Diff(t.Context(), pr); !errors.Is(err, review.ErrDiffTooLarge) {
-		t.Fatalf("Diff of %d bytes = %v, want an error wrapping ErrDiffTooLarge", review.MaxDiffBytes+1, err)
+	cases := []struct {
+		name    string
+		size    int
+		wantErr error
+	}{
+		{name: "a diff exactly at the limit is reviewed", size: review.MaxDiffBytes},
+		{name: "a diff one byte over the limit fails the run", size: review.MaxDiffBytes + 1, wantErr: review.ErrDiffTooLarge},
 	}
 
-	select {
-	case path := <-seen:
-		if want := "/repos/owner/name/compare/" + baseSHA + "..." + headSHA; path != want {
-			t.Errorf("Diff read %s, want %s: the diff is pinned to the head it reviews", path, want)
-		}
-	default:
-		t.Fatal("Diff made no HTTP request")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			seen := make(chan string, 1)
+			body := strings.Repeat("x", tc.size)
+
+			srv := server(t, func(w http.ResponseWriter, r *http.Request) {
+				seen <- r.URL.Path
+
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(body))
+			})
+
+			gh := review.NewGitHub(srv.URL, "owner/name", testToken, srv.Client())
+
+			pr := review.PullRequest{Number: 7, BaseSHA: baseSHA, HeadSHA: headSHA}
+
+			diff, err := gh.Diff(t.Context(), pr)
+
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Diff of %d bytes = %v, want an error wrapping %v", tc.size, err, tc.wantErr)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Diff of %d bytes, all of MaxDiffBytes: %v, want it read: the limit refuses a longer diff only", tc.size, err)
+				}
+
+				if len(diff) != tc.size {
+					t.Errorf("Diff returned %d bytes, want %d", len(diff), tc.size)
+				}
+			}
+
+			select {
+			case path := <-seen:
+				if want := "/repos/owner/name/compare/" + baseSHA + "..." + headSHA; path != want {
+					t.Errorf("Diff read %s, want %s: the diff is pinned to the head it reviews", path, want)
+				}
+			default:
+				t.Fatal("Diff made no HTTP request")
+			}
+		})
+	}
+}
+
+// listingPage returns one page of a listing of 201 items: full pages of 100
+// while fewer than 201 items are handed out, then the one item that ends the
+// listing, as GitHub answers a listing's last page.
+func listingPage(page int, item func(i int) string) []string {
+	if page > 2 {
+		return []string{item(200)}
+	}
+
+	items := make([]string, 0, 100)
+	for i := range 100 {
+		items = append(items, item((page-1)*100+i))
+	}
+
+	return items
+}
+
+// TestGitHubReadsEveryPageOfAListing pins the pagination of the file and review
+// listings: per_page=100 and page 1, 2, 3 upwards, stopping on the first page
+// that holds fewer than 100 items, so a pull request with more than one page of
+// files or reviews is read whole and no run keeps paging a server that always
+// answers a full page.
+func TestGitHubReadsEveryPageOfAListing(t *testing.T) {
+	t.Parallel()
+
+	const (
+		filesPath   = "/repos/owner/name/pulls/7/files"
+		reviewsPath = "/repos/owner/name/pulls/7/reviews"
+	)
+
+	cases := []struct {
+		name string
+		path string
+		page func(page int) []string
+		read func(ctx context.Context, gh *review.GitHub) (int, error)
+		want int
+	}{
+		{
+			name: "the file list",
+			path: filesPath,
+			page: func(page int) []string {
+				return listingPage(page, func(i int) string {
+					return fmt.Sprintf(`{"filename":"internal/x/file-%03d.go","status":"modified","additions":1,"deletions":0}`, i)
+				})
+			},
+			read: func(ctx context.Context, gh *review.GitHub) (int, error) {
+				files, err := gh.ChangedFiles(ctx, 7)
+
+				return len(files), err
+			},
+			want: 201,
+		},
+		{
+			name: "the review list",
+			path: reviewsPath,
+			page: func(page int) []string {
+				return listingPage(page, func(i int) string {
+					return fmt.Sprintf(`{"id":%d,"user":{"login":"reviewer-%03d"},"state":"COMMENTED","commit_id":"%s"}`, i+1, i, headSHA)
+				})
+			},
+			read: func(ctx context.Context, gh *review.GitHub) (int, error) {
+				reviews, err := gh.Reviews(ctx, 7)
+
+				return len(reviews), err
+			},
+			want: 201,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var (
+				mu      sync.Mutex
+				queries []string
+			)
+
+			srv := server(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != tc.path {
+					t.Errorf("the listing read %s, want %s", r.URL.Path, tc.path)
+				}
+
+				query := r.URL.Query()
+
+				mu.Lock()
+				queries = append(queries, query.Get("per_page")+" "+query.Get("page"))
+				mu.Unlock()
+
+				page, err := strconv.Atoi(query.Get("page"))
+				if err != nil {
+					page = 0
+				}
+
+				w.WriteHeader(http.StatusOK)
+				_, _ = io.WriteString(w, "["+strings.Join(tc.page(page), ",")+"]")
+			})
+
+			gh := review.NewGitHub(srv.URL, "owner/name", testToken, srv.Client())
+
+			got, err := tc.read(t.Context(), gh)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.path, err)
+			}
+
+			if got != tc.want {
+				t.Errorf("the listing gave %d items, want %d: every page of it is read", got, tc.want)
+			}
+
+			wantQueries := []string{"100 1", "100 2", "100 3"}
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if diff := cmp.Diff(wantQueries, queries); diff != "" {
+				t.Errorf("the listing's page requests, as per_page and page (-want +got):\n%s", diff)
+			}
+		})
 	}
 }

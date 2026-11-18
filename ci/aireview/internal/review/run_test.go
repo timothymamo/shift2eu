@@ -163,6 +163,9 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 		wantBlocking   int
 		wantDismissed  []int64
 		wantText       []string
+		// wantDismissalText are the texts every dismissal message holds, when
+		// the run dismisses a review.
+		wantDismissalText []string
 	}{
 		{
 			name:      "a draft is not reviewed",
@@ -227,11 +230,27 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 				{ID: 21, Login: testBotLogin, State: "CHANGES_REQUESTED", CommitID: baseSHA},
 				{ID: 22, Login: "maintainer", State: "CHANGES_REQUESTED", CommitID: baseSHA},
 			},
-			wantAsked:     1,
-			wantEvent:     review.EventComment,
-			wantFindings:  1,
-			wantDismissed: []int64{21},
-			wantText:      []string{"Name it"},
+			wantAsked:         1,
+			wantEvent:         review.EventComment,
+			wantFindings:      1,
+			wantDismissed:     []int64{21},
+			wantText:          []string{"Name it"},
+			wantDismissalText: []string{baseSHA, headSHA},
+		},
+		{
+			name:   "the dismissal names the commit that requested changes and the head reviewed",
+			pr:     pr,
+			diff:   cleanDiff,
+			answer: cleanAnswer,
+			reviews: []review.PostedReview{
+				{ID: 23, Login: testBotLogin, State: "CHANGES_REQUESTED", CommitID: oldSHA},
+			},
+			wantAsked:         1,
+			wantEvent:         review.EventComment,
+			wantFindings:      1,
+			wantDismissed:     []int64{23},
+			wantText:          []string{"Name it"},
+			wantDismissalText: []string{oldSHA, headSHA},
 		},
 		{
 			name:         "an instruction in the diff is a finding, never an approval",
@@ -302,6 +321,14 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 
 			if !slices.Equal(tc.wantDismissed, dismissedIDs) {
 				t.Errorf("Run dismissed %v, want %v", dismissedIDs, tc.wantDismissed)
+			}
+
+			for _, dismissed := range gh.dismissals {
+				for _, want := range tc.wantDismissalText {
+					if !strings.Contains(dismissed.message, want) {
+						t.Errorf("the dismissal of review %d says %q, which does not hold %q: the message names the commit that requested changes and the head this review read", dismissed.id, dismissed.message, want)
+					}
+				}
 			}
 
 			if tc.wantErr != nil {

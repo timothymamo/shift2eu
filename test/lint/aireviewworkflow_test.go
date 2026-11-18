@@ -1,6 +1,7 @@
 package lint_test
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -174,6 +175,14 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 	t.Run("GITHUB_TOKEN only reads", func(t *testing.T) {
 		t.Parallel()
 
+		// The workflow grants nothing at all: the job's own permissions: are the
+		// only ones any step has.
+		if entry, ok := aiReviewEntry(t, workflow.lines, "permissions"); !ok {
+			t.Errorf("%s: the workflow declares no permissions:, so it takes the repository's default token permissions; it grants nothing (ADR 0033)", aiReviewWorkflowPath)
+		} else if entry.Value != "{}" {
+			t.Errorf("%s: line %d: the workflow's permissions: is %q, want exactly {}: GITHUB_TOKEN's scopes are the job's alone (ADR 0033)", aiReviewWorkflowPath, entry.Num, entry.Value)
+		}
+
 		// Both calls fail on a scope but contents and pull-requests and on a
 		// value but read; the job alone needs both, the workflow level may
 		// grant nothing.
@@ -211,7 +220,7 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		}
 	})
 
-	t.Run("a draft pull request starts no review", func(t *testing.T) {
+	t.Run("a draft pull request or one from a fork starts no review", func(t *testing.T) {
 		t.Parallel()
 
 		guard, ok := aiReviewEntry(t, workflow.job.Block, "if")
@@ -223,6 +232,14 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 
 		if !strings.Contains(condition, "draft") {
 			t.Errorf("%s: job %s: if: %q does not skip drafts, so a draft pull request starts a review; marking it ready starts one (ADR 0033)", aiReviewWorkflowPath, workflow.job.Key, condition)
+		}
+
+		// A fork must not spend the model budget, and its pull request's code is
+		// never what this job checks out: the head repository is this one.
+		for _, want := range []string{"head.repo.full_name", "github.repository"} {
+			if !strings.Contains(condition, want) {
+				t.Errorf("%s: job %s: if: %q does not compare %s with the repository, so a pull request from a fork starts a review and spends the model budget (ADR 0033)", aiReviewWorkflowPath, workflow.job.Key, condition, want)
+			}
 		}
 	})
 
@@ -302,6 +319,157 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		}
 	})
 
+	t.Run("the checkout leaves no credential in the git config", func(t *testing.T) {
+		t.Parallel()
+
+		checkouts := 0
+
+		for _, step := range workflow.steps {
+			fields := aiReviewStepFields(t, step)
+
+			uses, ok := aiReviewUses(t, fields)
+			if !ok || !strings.HasPrefix(uses, "actions/checkout@") {
+				continue
+			}
+
+			checkouts++
+
+			persist, ok := aiReviewWithScalar(t, fields, "persist-credentials")
+			if !ok {
+				t.Errorf("%s: line %d: the checkout sets no persist-credentials:, so the job token stays in .git/config and every later step can read it (ADR 0033)", aiReviewWorkflowPath, step.Num)
+
+				continue
+			}
+
+			if persist != "false" {
+				t.Errorf("%s: line %d: the checkout sets persist-credentials: %s, want false: the job token stays out of .git/config (ADR 0033)", aiReviewWorkflowPath, step.Num, persist)
+			}
+		}
+
+		if checkouts == 0 {
+			t.Errorf("%s: no step checks out main with actions/checkout, so the reviewer's program and its instructions are not there", aiReviewWorkflowPath)
+		}
+	})
+
+	t.Run("the go build cache is off", func(t *testing.T) {
+		t.Parallel()
+
+		setupSteps := 0
+
+		for _, step := range workflow.steps {
+			fields := aiReviewStepFields(t, step)
+
+			uses, ok := aiReviewUses(t, fields)
+			if !ok || !strings.HasPrefix(uses, "actions/setup-go@") {
+				continue
+			}
+
+			setupSteps++
+
+			cache, ok := aiReviewWithScalar(t, fields, "cache")
+			if !ok {
+				t.Errorf("%s: line %d: setup-go sets no cache:, so it caches something by default; a job that holds two secrets restores nothing another run saved (ADR 0033)", aiReviewWorkflowPath, step.Num)
+
+				continue
+			}
+
+			if cache != "false" {
+				t.Errorf("%s: line %d: setup-go sets cache: %s, want false: a job that holds two secrets restores nothing another run saved (ADR 0033)", aiReviewWorkflowPath, step.Num, cache)
+			}
+		}
+
+		if setupSteps == 0 {
+			t.Errorf("%s: no step sets up Go with actions/setup-go, so the reviewer cannot be built", aiReviewWorkflowPath)
+		}
+	})
+
+	t.Run("the App token gets exactly read contents and write pull requests", func(t *testing.T) {
+		t.Parallel()
+
+		tokenSteps := 0
+
+		want := map[string]string{
+			"permission-contents":      "read",
+			"permission-pull-requests": "write",
+		}
+
+		for _, step := range workflow.steps {
+			fields := aiReviewStepFields(t, step)
+
+			uses, ok := aiReviewUses(t, fields)
+			if !ok || !strings.HasPrefix(uses, "actions/create-github-app-token@") {
+				continue
+			}
+
+			tokenSteps++
+
+			withFields, ok := aiReviewWithFields(t, fields)
+			if !ok {
+				t.Fatalf("%s: line %d: the App token step has no with:, so it mints no token", aiReviewWorkflowPath, step.Num)
+			}
+
+			got := map[string]string{}
+
+			for _, field := range withFields {
+				if strings.HasPrefix(field.Key, "permission-") {
+					got[field.Key] = aiReviewScalar(t, field)
+				}
+			}
+
+			if !maps.Equal(want, got) {
+				t.Errorf("%s: line %d: the App token asks for %v, want exactly %v: Pull requests write posts and dismisses its reviews, Contents read reads the pull request, and no other permission widens the token (ADR 0033)", aiReviewWorkflowPath, step.Num, got, want)
+			}
+		}
+
+		if tokenSteps == 0 {
+			t.Errorf("%s: no step mints the reviewer App's token with actions/create-github-app-token, so nothing can post the review", aiReviewWorkflowPath)
+		}
+	})
+
+	t.Run("the program is built before a step holds a secret", func(t *testing.T) {
+		t.Parallel()
+
+		buildAt := -1
+		secretSteps := 0
+
+		for i, step := range workflow.steps {
+			fields := aiReviewStepFields(t, step)
+
+			if run, ok := aiReviewFind(fields, "run"); ok && buildAt < 0 {
+				script := aiReviewText(run)
+				if strings.Contains(script, "go build") && strings.Contains(script, "ci/aireview") {
+					buildAt = i
+				}
+			}
+
+			readsSecret := false
+
+			for _, key := range []string{"env", "with"} {
+				if entry, ok := aiReviewFind(fields, key); ok && strings.Contains(aiReviewText(entry), "secrets.") {
+					readsSecret = true
+				}
+			}
+
+			if !readsSecret {
+				continue
+			}
+
+			secretSteps++
+
+			if buildAt < 0 || i == buildAt {
+				t.Errorf("%s: line %d: a step reads a secret at or before the step that builds the reviewer; main's program is built first, so no secret is in a step's environment while it runs (ADR 0033)", aiReviewWorkflowPath, step.Num)
+			}
+		}
+
+		if buildAt < 0 {
+			t.Fatalf("%s: no step runs \"go build\" of ./ci/aireview, so the workflow never builds the reviewer from main", aiReviewWorkflowPath)
+		}
+
+		if secretSteps == 0 {
+			t.Errorf("%s: no step reads a secret, so nothing mints the reviewer App's token or holds the model key", aiReviewWorkflowPath)
+		}
+	})
+
 	t.Run("every action is pinned to a commit", func(t *testing.T) {
 		t.Parallel()
 
@@ -357,11 +525,14 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 			for _, refused := range []string{
 				"github.event.pull_request.title",
 				"github.event.pull_request.body",
-				"${{ secrets.",
 			} {
 				if strings.Contains(script, refused) {
-					t.Errorf("%s: line %d: the run: script holds %s; pull request data and secrets reach a script through env: only, never through an expression (ADR 0033)", aiReviewWorkflowPath, run.Num, refused)
+					t.Errorf("%s: line %d: the run: script holds %s; pull request data reaches a script through env: only, never through an expression (ADR 0033)", aiReviewWorkflowPath, run.Num, refused)
 				}
+			}
+
+			if strings.Contains(script, "${{") {
+				t.Errorf("%s: line %d: the run: script holds a ${{ }} expression; every value reaches a script through env: only, never through an expression (ADR 0033)", aiReviewWorkflowPath, run.Num)
 			}
 		}
 	})
@@ -431,6 +602,49 @@ func aiReviewScalar(t *testing.T, e yamlread.Entry) string {
 	}
 
 	return value
+}
+
+// aiReviewText returns every text of e: its value and the lines of its block,
+// joined by newlines.
+func aiReviewText(e yamlread.Entry) string {
+	texts := []string{e.Value}
+	for _, line := range e.Block {
+		texts = append(texts, line.Text)
+	}
+
+	return strings.Join(texts, "\n")
+}
+
+// aiReviewWithFields returns the entries of one step's with: block, and false
+// when the step has none.
+func aiReviewWithFields(t *testing.T, fields []yamlread.Entry) ([]yamlread.Entry, bool) {
+	t.Helper()
+
+	with, ok := aiReviewFind(fields, "with")
+	if !ok {
+		return nil, false
+	}
+
+	return aiReviewFields(t, with.Block, "a step's with:"), true
+}
+
+// aiReviewWithScalar returns the value of key in one step's with: block, and
+// false when the step has no with: block or it does not set key.
+func aiReviewWithScalar(t *testing.T, fields []yamlread.Entry, key string) (string, bool) {
+	t.Helper()
+
+	withFields, ok := aiReviewWithFields(t, fields)
+	if !ok {
+		return "", false
+	}
+
+	for _, field := range withFields {
+		if field.Key == key {
+			return aiReviewScalar(t, field), true
+		}
+	}
+
+	return "", false
 }
 
 // aiReviewPermissions returns the permissions the mapping lines declare at
