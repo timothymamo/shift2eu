@@ -246,11 +246,18 @@ never a required check.
 **Decided (milestone 4, maintainer and ADR 0033, 2026-11-18;
 [ADR 0033](../docs/adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md)):**
 
-- (4) **Model and runner:** Claude Opus 5.5 through the Anthropic Messages API, with no tools, called by
-  a small standard-library Go program in this module (`ci/aireview`), no third-party action beyond the
-  pinned App-token action. **Diff limit:** 300,000 bytes of unified diff; over it the check fails with
-  the size and the limit, and nothing is posted. **Cost:** about $0.23 a typical review and about $290 a
-  month at the ADR's assumed prices, with a monthly spend limit on the key's Anthropic workspace.
+- (4) **Model and runner:** Claude Opus 5.5 on the maintainer's Claude subscription, asked through one
+  run of the Claude Code CLI (`claude -p`) with every tool off, no settings, hooks, MCP servers or
+  `CLAUDE.md` loaded, in empty directories with an explicit environment, by a small standard-library Go
+  program in this module (`ci/aireview`); the CLI is installed at a pinned version and checked against a
+  pinned checksum before any secret, and no third-party action is used beyond the pinned App-token
+  action. The subscription token, `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, is a secret of the
+  `ai-review` environment; no `ANTHROPIC_API_KEY` is set anywhere, as Claude Code would bill the API
+  instead. **Diff limit:** 300,000 bytes of unified diff; over it the check fails with the size and the
+  limit, and nothing is posted. **Cost:** no per-token bill; reviews draw on the subscription's usage
+  limits, shared with the agents and the monthly security audit (PRD #175), and a review that hits a
+  limit fails its check (about 1,260 reviews a month, about $230 at the API's Opus 5.5 prices, for
+  comparison only).
 - (4) **Comments first, behind a switch:** the reviewer posts comments only until the maintainer sets the
   `ai-review` environment's variable `AI_REVIEW_REQUEST_CHANGES` to `true`; a blocking finding is still
   marked blocking, and the review says it would have requested changes.

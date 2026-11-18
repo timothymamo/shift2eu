@@ -102,11 +102,14 @@ moves or deletes a tag.
    `gh api repos/{owner}/{repo}/environments/ai-review/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'`
    must list exactly one policy, `branch main`; anything else lets a workflow on another branch read
    those keys: report it and stop. `gh api repos/{owner}/{repo}/environments/ai-review/secrets --jq '.secrets[].name'`
-   should list `AI_REVIEWER_APP_CLIENT_ID`, `AI_REVIEWER_APP_PRIVATE_KEY` and `ANTHROPIC_API_KEY`; a
+   should list `AI_REVIEWER_APP_CLIENT_ID`, `AI_REVIEWER_APP_PRIVATE_KEY` and `CLAUDE_CODE_OAUTH_TOKEN`; a
    missing one only means the reviewer is not set up yet (runbook step 7, `docs/dev-environment.md`):
-   say so in the report and go on. The repository-level listings above (`actions/secrets` and
-   `actions/variables`) must list none of `AI_REVIEWER_APP_CLIENT_ID`, `AI_REVIEWER_APP_PRIVATE_KEY`,
-   `ANTHROPIC_API_KEY` or `AI_REVIEW_REQUEST_CHANGES`: if one is listed, report it and stop. A 403 on any
+   say so in the report and go on. It must not list `ANTHROPIC_API_KEY`: Claude Code would bill the API
+   instead of the maintainer's subscription, and the reviewer refuses to run beside one (ADR 0033), so
+   report it and stop. The repository-level listings above (`actions/secrets` and `actions/variables`)
+   must list none of `AI_REVIEWER_APP_CLIENT_ID`, `AI_REVIEWER_APP_PRIVATE_KEY`,
+   `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `AI_REVIEW_REQUEST_CHANGES`: if one is listed, report
+   it and stop. A 403 on any
    of these reads is a maintainer check you could not make: say so in the report and go on. The
    `ai-review` environment not existing at all (404) means the reviewer is not set up yet: say so and go
    on; it gates no release.

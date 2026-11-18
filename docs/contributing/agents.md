@@ -12,7 +12,8 @@ maintainer's approval and merge: `Protect main` requires a code owner's approval
 The AI reviewer's comments and change requests are advice the maintainer weighs, never a substitute for
 their review: a GitHub Actions workflow outside the VM, `.github/workflows/ai-review.yml`, reviews every
 pull request into `main` with `main`'s `review-change` and `security-audit` skills as a reviewer App that
-comments or requests changes and never approves
+comments or requests changes and never approves, asking Claude through the Claude Code CLI on the
+maintainer's subscription with every tool off
 ([ADR 0033](../adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md),
 [set-up](../dev-environment.md#the-ai-reviewer)). After the switch to the agents App, nobody pushes to an agent's branch by hand: a push by
 the maintainer could not be approved (the last push needs someone else's approval). Ask the agents for
