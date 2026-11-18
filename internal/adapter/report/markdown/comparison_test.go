@@ -15,6 +15,7 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
+	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
@@ -1013,6 +1014,129 @@ func TestReportComparisonWithEstimates(t *testing.T) {
 	})
 
 	testutil.Golden(t, "testdata/comparison-estimates.golden", out)
+}
+
+// TestReportComparisonStorageNotIncluded pins where a comparison shows the note
+// that an estimate leaves out storage its plan does not include (ADR 0032): in
+// each target's Monthly estimate cells of the resources table, and in its own
+// estimate row of the summary, whose count comes from that target's total. A
+// target whose estimates carry no note says nothing about storage.
+func TestReportComparisonStorageNotIncluded(t *testing.T) {
+	t.Parallel()
+
+	c := assessment.Compare([]assessment.TargetAssessment{
+		{
+			Key: reportKey,
+			Assessment: storageNoteTargetAssessment(reportTarget, estimate.FromAmount(120000),
+				estimate.BootVolume),
+		},
+		{
+			Key: reportNorthKey,
+			Assessment: storageNoteTargetAssessment(reportTwoTarget, estimate.FromAmount(100000),
+				""),
+		},
+	})
+
+	out := renderComparison(t, c, analysis.ReportMeta{InventoryName: inventoryFileName})
+	checkTableShape(t, out)
+
+	t.Run("a target's estimate row counts the estimates that leave storage out", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			row   string
+			cells []string
+		}{
+			{
+				row: "`Example Cloud` estimate",
+				cells: []string{
+					"`Example Cloud` estimate",
+					"€24.00 per month for 2 of 2 resources (storage not included in 2 estimates)",
+					"",
+				},
+			},
+			{
+				row: "`Example Cloud North` estimate",
+				cells: []string{
+					"`Example Cloud North` estimate",
+					"",
+					"€20.00 per month for 2 of 2 resources",
+				},
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.row, func(t *testing.T) {
+				t.Parallel()
+
+				if diff := cmp.Diff(test.cells, tableRow(t, out, test.row)); diff != "" {
+					t.Errorf("summary row mismatch (-want +got):\n%s", diff)
+				}
+			})
+		}
+	})
+
+	t.Run("each target's estimate cell names what is left out", func(t *testing.T) {
+		t.Parallel()
+
+		cells := tableRow(t, out, "`server-a`")
+		if len(cells) != 8 {
+			t.Fatalf("the resources table row has %d cells, want 8: %q", len(cells), cells)
+		}
+
+		want := []string{
+			"€12.00 (count assumed 1) (730 hours assumed) (boot volume not included)",
+			"€10.00 (count assumed 1) (730 hours assumed)",
+		}
+
+		if got := []string{cells[4], cells[7]}; !slices.Equal(got, want) {
+			t.Errorf("`server-a` estimates = %q, want %q", got, want)
+		}
+	})
+}
+
+// storageNoteTargetAssessment is a comparison fixture: two compute.vm resources
+// in the workload "shop", both estimated at monthly on an invented plan of no
+// included storage, both carrying note (ADR 0032). Its totals count the estimates
+// that carry the note, as estimate.Sum does, so a test states each row exactly.
+func storageNoteTargetAssessment(target string, monthly estimate.Money, note estimate.StorageNotIncluded) assessment.Assessment {
+	notes := 0
+	if note != "" {
+		notes = 2
+	}
+
+	total := monthly.Add(monthly)
+
+	return assessment.Assessment{
+		Target:         target,
+		Snapshot:       testutil.PricedSnapshot(),
+		Source:         sourceName,
+		EstimateRegion: testutil.PricedDefaultRegion,
+		Summary:        assessment.Summary{Direct: 2, Total: 2},
+		Verdicts: []assessment.Verdict{
+			{
+				Resource:     estimateResource("server-a", "shop"),
+				Fit:          mapping.Direct,
+				BestOffering: "Example Virtual Machines",
+				Estimate:     planEstimate(monthly, note),
+			},
+			{
+				Resource:     estimateResource("server-b", "shop"),
+				Fit:          mapping.Direct,
+				BestOffering: "Example Virtual Machines",
+				Estimate:     planEstimate(monthly, note),
+			},
+		},
+		Workloads: []assessment.WorkloadSummary{{
+			Name:        "shop",
+			ResourceIDs: []string{"server-a", "server-b"},
+			Summary:     assessment.Summary{Direct: 2, Total: 2},
+			Total: &estimate.Total{
+				Monthly: total, Estimated: 2, Resources: 2, StorageNotIncluded: notes,
+			},
+		}},
+		Total: &estimate.Total{Monthly: total, Estimated: 2, Resources: 2, StorageNotIncluded: notes},
+	}
 }
 
 // TestReportComparisonWithBillingCapHours pins that a billing cap belongs to a

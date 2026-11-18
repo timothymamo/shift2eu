@@ -21,6 +21,7 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
+	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
@@ -1773,6 +1774,332 @@ func TestReportBillingCapHours(t *testing.T) {
 		if slices.Contains(keys, "billingCapHours") {
 			t.Errorf("%q estimate keys = %q, want none of them billingCapHours", id, keys)
 		}
+	}
+}
+
+// TestReportStorageNotIncluded pins the two optional keys that say an estimate
+// leaves out storage its plan does not include (ADR 0032): storageNotIncluded on
+// a resource's estimate, after billingCapHours and before breakdown, and on a
+// total, after resources. Neither key is written when there is nothing to say,
+// and adding them keeps schemaVersion 2, because a reader that ignores a key it
+// does not know reads the document as before (ADR 0018).
+//
+// The assessment is hand-built: the document pins where the format writes the
+// keys, and when the domain's rule fires is pinned in internal/domain/estimate.
+func TestReportStorageNotIncluded(t *testing.T) {
+	t.Parallel()
+
+	got := render(t, storageNoteAssessment(), analysis.ReportMeta{InventoryName: inventoryFileName})
+	checkDocument(t, got)
+
+	document := decodeJSON(t, got)
+
+	if diff := cmp.Diff(float64(2), valueAt(t, document, "schemaVersion")); diff != "" {
+		t.Errorf("schemaVersion mismatch (-want +got), the added keys are optional:\n%s", diff)
+	}
+
+	t.Run("the total counts the estimates that leave storage out", func(t *testing.T) {
+		t.Parallel()
+
+		want := []string{"amount", "estimated", "resources", "storageNotIncluded"}
+		if diff := cmp.Diff(want, objectKeysAt(t, document, "estimate", "total")); diff != "" {
+			t.Errorf("estimate.total keys mismatch (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff(float64(2), valueAt(t, document, "estimate", "total", "storageNotIncluded")); diff != "" {
+			t.Errorf("estimate.total.storageNotIncluded mismatch (-want +got):\n%s", diff)
+		}
+
+		estimateObject := objectIn(t, string(got), 0, 1, "estimate")
+		total := objectIn(t, estimateObject, 0, 2, "total")
+
+		assertKeyOrder(t, total, "amount", "estimated", "resources", "storageNotIncluded")
+	})
+
+	t.Run("each estimate names the storage it leaves out", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			id   string
+			want string
+		}{
+			{id: "server-small", want: "boot-volume"},
+			{id: "db-small", want: "data-storage"},
+		}
+
+		for _, test := range tests {
+			t.Run(test.id, func(t *testing.T) {
+				t.Parallel()
+
+				at := extend(resourceIndex(t, document, test.id), "estimate")
+
+				if diff := cmp.Diff(test.want, valueAt(t, document, extend(at, "storageNotIncluded")...)); diff != "" {
+					t.Errorf("%q storageNotIncluded mismatch (-want +got):\n%s", test.id, diff)
+				}
+			})
+		}
+
+		// The key sits where the format puts it: after the cap an estimate may
+		// write and before the breakdown. The assessment's first resource is the
+		// one that carries both.
+		from := strings.Index(string(got), `"id": "server-small"`)
+		if from < 0 {
+			t.Fatalf("the document holds no server-small resource:\n%s", got)
+		}
+
+		assertKeyOrder(t, objectIn(t, string(got), from, 3, "estimate"),
+			"billingCapHours", "storageNotIncluded", "breakdown")
+	})
+
+	t.Run("an estimate and a total with nothing to say write no key", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name string
+			path []any
+			want []string
+		}{
+			{
+				name: "a resource priced by storage",
+				path: extend(resourceIndex(t, document, "bucket-storage"), "estimate"),
+				want: []string{"amount", "breakdown", "countAssumed", "estimated", "hoursAssumed"},
+			},
+			{
+				name: "a resource that is not estimated",
+				path: extend(resourceIndex(t, document, "server-nosize"), "estimate"),
+				want: []string{"estimated", "reason"},
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+
+				if diff := cmp.Diff(test.want, objectKeysAt(t, document, test.path...)); diff != "" {
+					t.Errorf("%s keys mismatch (-want +got):\n%s", test.name, diff)
+				}
+			})
+		}
+	})
+
+	t.Run("a workload's total counts its own estimates", func(t *testing.T) {
+		t.Parallel()
+
+		// A workload's estimate is its total itself, so the key sits after
+		// resources there too.
+		want := []string{"amount", "estimated", "resources", "storageNotIncluded"}
+		if diff := cmp.Diff(want, objectKeysAt(t, document, "workloads", 0, "estimate")); diff != "" {
+			t.Errorf("the shop workload's estimate keys mismatch (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff(float64(2),
+			valueAt(t, document, "workloads", 0, "estimate", "storageNotIncluded")); diff != "" {
+			t.Errorf("the shop workload's storageNotIncluded mismatch (-want +got):\n%s", diff)
+		}
+
+		// The "No workload" group's estimates carry no note, so its total writes
+		// no key at all.
+		withoutNote := []string{"amount", "estimated", "resources"}
+		if diff := cmp.Diff(withoutNote,
+			objectKeysAt(t, document, "workloads", 1, "estimate")); diff != "" {
+			t.Errorf("the No workload group's estimate keys mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("the document matches schema version 2", func(t *testing.T) {
+		t.Parallel()
+
+		s := readSchema(t, filepath.Join("schema", "assessment-v2.schema.json"))
+
+		for _, problem := range s.validate(document, "$") {
+			t.Errorf("the document does not match schema/assessment-v2.schema.json: %s", problem)
+		}
+	})
+}
+
+// objectIn returns the text of the JSON object named key at nesting level depth
+// in a document this package wrote, from its opening brace to its matching one,
+// searching at or after from. The document is pretty-printed with two spaces per
+// level, so the depth tells the object apart from one deeper in the document that
+// has the same key.
+func objectIn(tb testing.TB, text string, from, depth int, key string) string {
+	tb.Helper()
+
+	marker := "\n" + strings.Repeat("  ", depth) + `"` + key + `": {`
+
+	start := strings.Index(text[from:], marker)
+	if start < 0 {
+		tb.Fatalf("the document holds no %q object at depth %d", key, depth)
+	}
+
+	return objectFrom(tb, text, from+start+len(marker)-1)
+}
+
+// objectFrom returns the object that begins at the brace at from in text. The
+// fixtures' string values hold no brace, so counting braces finds its end.
+func objectFrom(tb testing.TB, text string, from int) string {
+	tb.Helper()
+
+	depth := 0
+
+	for i := from; i < len(text); i++ {
+		switch text[i] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+
+			if depth == 0 {
+				return text[from : i+1]
+			}
+		}
+	}
+
+	tb.Fatalf("the object at byte %d is not closed", from)
+
+	return ""
+}
+
+// assertKeyOrder fails unless object writes keys in the given order, each one
+// after the one before it, so a test pins where the format puts a key beside its
+// neighbours.
+func assertKeyOrder(tb testing.TB, object string, keys ...string) {
+	tb.Helper()
+
+	previous := -1
+
+	for _, key := range keys {
+		at := strings.Index(object, `"`+key+`":`)
+		if at < 0 {
+			tb.Fatalf("the object holds no %q key:\n%s", key, object)
+		}
+
+		if at <= previous {
+			tb.Errorf("the object writes %q out of order, want %q in this order:\n%s", key, keys, object)
+		}
+
+		previous = at
+	}
+}
+
+// storageNoteAssessment is a hand-built assessment with estimates for the
+// storage-note document: a server whose estimate leaves out its boot volume, a
+// database whose estimate leaves out its data storage, a bucket priced by
+// storage with no note, and a server with no size that is not estimated. The two
+// sized resources name the workload "shop", whose total counts its own notes,
+// and the bucket is in the "No workload" group. Every amount is invented.
+func storageNoteAssessment() assessment.Assessment {
+	const (
+		serverAmount   = 100000
+		databaseAmount = 200000
+		bucketAmount   = 50000
+		totalAmount    = 350000
+		shopAmount     = 300000
+	)
+
+	server := &estimate.Estimate{
+		Region:    testutil.PricedDefaultRegion,
+		Estimated: true,
+		Offering:  "Example Virtual Machines",
+		Plan: &estimate.Plan{
+			Name: "EX-S", VCPUs: 1, MemoryMilliGiB: 2000, IncludedStorageGiB: 0,
+			Priced: true, Price: estimate.FromAmount(serverAmount),
+		},
+		Monthly:            estimate.FromAmount(serverAmount),
+		Breakdown:          estimate.Breakdown{Plan: estimate.FromAmount(serverAmount)},
+		CountAssumed:       true,
+		HoursAssumed:       true,
+		BillingCapHours:    testutil.ReportCapHours,
+		StorageNotIncluded: estimate.BootVolume,
+	}
+
+	database := &estimate.Estimate{
+		Region:    testutil.PricedDefaultRegion,
+		Estimated: true,
+		Offering:  "Example PostgreSQL",
+		Plan: &estimate.Plan{
+			Name: "PG-S", VCPUs: 1, MemoryMilliGiB: 2000, IncludedStorageGiB: 0,
+			Priced: true, Price: estimate.FromAmount(databaseAmount),
+		},
+		Monthly:            estimate.FromAmount(databaseAmount),
+		Breakdown:          estimate.Breakdown{Plan: estimate.FromAmount(databaseAmount)},
+		CountAssumed:       true,
+		HoursAssumed:       true,
+		StorageNotIncluded: estimate.DataStorage,
+	}
+
+	bucket := &estimate.Estimate{
+		Region:       testutil.PricedDefaultRegion,
+		Estimated:    true,
+		Offering:     "Example Object Storage",
+		Monthly:      estimate.FromAmount(bucketAmount),
+		Breakdown:    estimate.Breakdown{Storage: estimate.FromAmount(bucketAmount)},
+		CountAssumed: true,
+	}
+
+	return assessment.Assessment{
+		Target:         reportTarget,
+		Snapshot:       testutil.PricedSnapshot(),
+		Source:         sourceName,
+		EstimateRegion: testutil.PricedDefaultRegion,
+		Summary:        assessment.Summary{Direct: 4, Total: 4},
+		Verdicts: []assessment.Verdict{
+			{
+				Resource: inventory.Resource{
+					ID: "server-small", RawType: "AWS::EC2::Instance", Category: taxonomy.ComputeVM,
+					Region: "eu-west-1", Workload: "shop",
+				},
+				Fit:          mapping.Direct,
+				BestOffering: "Example Virtual Machines",
+				Estimate:     server,
+			},
+			{
+				Resource: inventory.Resource{
+					ID: "db-small", RawType: "AWS::RDS::DBInstance", Category: taxonomy.DatabasePostgreSQL,
+					Region: "eu-west-1", Workload: "shop",
+				},
+				Fit:          mapping.Direct,
+				BestOffering: "Example PostgreSQL",
+				Estimate:     database,
+			},
+			{
+				Resource: inventory.Resource{
+					ID: "bucket-storage", RawType: "AWS::S3::Bucket", Category: taxonomy.StorageObject,
+					Region: "eu-west-1",
+				},
+				Fit:          mapping.Direct,
+				BestOffering: "Example Object Storage",
+				Estimate:     bucket,
+			},
+			{
+				Resource: inventory.Resource{
+					ID: "server-nosize", RawType: "AWS::EC2::Instance", Category: taxonomy.ComputeVM,
+					Region: "eu-west-1",
+				},
+				Fit:      mapping.Direct,
+				Estimate: &estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NoSize},
+			},
+		},
+		Workloads: []assessment.WorkloadSummary{
+			{
+				Name:        "shop",
+				ResourceIDs: []string{"server-small", "db-small"},
+				Summary:     assessment.Summary{Direct: 2, Total: 2},
+				Total: &estimate.Total{
+					Monthly: estimate.FromAmount(shopAmount), Estimated: 2, Resources: 2, StorageNotIncluded: 2,
+				},
+			},
+			{
+				Name:        "",
+				NoWorkload:  true,
+				ResourceIDs: []string{"bucket-storage", "server-nosize"},
+				Summary:     assessment.Summary{Direct: 2, Total: 2},
+				Total:       &estimate.Total{Monthly: estimate.FromAmount(bucketAmount), Estimated: 1, Resources: 2},
+			},
+		},
+		Total: &estimate.Total{
+			Monthly: estimate.FromAmount(totalAmount), Estimated: 3, Resources: 4, StorageNotIncluded: 2,
+		},
 	}
 }
 

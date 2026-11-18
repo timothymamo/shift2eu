@@ -358,9 +358,11 @@ func TestWorkloadGroupTotal(t *testing.T) {
 			groups: 3,
 			// The blocked database is counted in Resources, its source cost is
 			// not added to the estimate, and the free-estimated resource is
-			// still an estimate.
+			// still an estimate. cache-blog is priced on a plan that includes no
+			// storage, on an offering that prices storage, and gives no storage
+			// size, so its estimate leaves out a boot volume (ADR 0032).
 			want: map[string]*estimate.Total{
-				"blog": {Monthly: estimate.FromAmount(120000), Estimated: 1, Resources: 1},
+				"blog": {Monthly: estimate.FromAmount(120000), Estimated: 1, Resources: 1, StorageNotIncluded: 1},
 				"shop": {Monthly: estimate.FromAmount(500000), Estimated: 2, Resources: 3},
 				"":     {Monthly: estimate.FromAmount(150000), Estimated: 1, Resources: 1},
 			},

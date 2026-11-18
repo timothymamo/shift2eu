@@ -15,6 +15,7 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
+	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
@@ -1677,6 +1678,226 @@ func TestReportEstimateNotes(t *testing.T) {
 				t.Errorf("the total = %q, want %q:\n%s", got, test.total, out)
 			}
 		})
+	}
+}
+
+// TestReportEstimateStorageNotIncluded pins the words a Monthly estimate cell
+// adds when the estimate leaves out storage its plan does not include
+// (ADR 0032): the note names what is left out, after the count and hours notes,
+// and a value the renderer does not know is written as the plain "storage not
+// included".
+//
+// The estimate is hand-built: the renderer's only job is to map the domain's
+// value to these words, and when the rule fires is pinned in
+// internal/domain/estimate. The amount is 40.88 EUR, an invented plan price.
+func TestReportEstimateStorageNotIncluded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		note estimate.StorageNotIncluded
+		want string
+	}{
+		{
+			name: "no note leaves the cell as it was",
+			want: "€40.88 (count assumed 1) (730 hours assumed)",
+		},
+		{
+			name: "a boot volume is named",
+			note: estimate.BootVolume,
+			want: "€40.88 (count assumed 1) (730 hours assumed) (boot volume not included)",
+		},
+		{
+			name: "data storage is named",
+			note: estimate.DataStorage,
+			want: "€40.88 (count assumed 1) (730 hours assumed) (data storage not included)",
+		},
+		{
+			// An open set: a target may leave out a kind of storage the renderer
+			// has no words for yet, and the cell still says that something is
+			// missing.
+			name: "a value the report does not know",
+			note: "archive-storage",
+			want: "€40.88 (count assumed 1) (730 hours assumed) (storage not included)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := render(t, storageNoteAssessment(test.note), analysis.ReportMeta{InventoryName: inventoryFileName})
+
+			cells := tableRow(t, out, "`server-small`")
+			if len(cells) != 8 {
+				t.Fatalf("the resource row has %d cells, want 8: %q", len(cells), cells)
+			}
+
+			if got := cells[6]; got != test.want {
+				t.Errorf("Monthly estimate cell = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+// TestReportTotalStorageNotIncluded pins the words a total adds when some of its
+// estimates leave out storage their plan does not include (ADR 0032): "in 1
+// estimate" and "in N estimates", on the cost summary's Total line and on each
+// workload's Monthly estimate line, and nothing at all when no estimate carries
+// the note.
+func TestReportTotalStorageNotIncluded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// notes is how many of the assessment's estimated resources leave
+		// storage out, which its totals count.
+		notes        int
+		wantTotal    string
+		wantWorkload string
+	}{
+		{
+			name:      "no estimate leaves out storage",
+			wantTotal: "- Total: €60.00 per month for 2 of 3 resources",
+			wantWorkload: "- Monthly estimate: €60.00 per month for 2 of 2 resources, list prices on " +
+				reportRetrievedOn + ", excluding VAT and discounts",
+		},
+		{
+			name:      "one estimate leaves out storage",
+			notes:     1,
+			wantTotal: "- Total: €60.00 per month for 2 of 3 resources (storage not included in 1 estimate)",
+			wantWorkload: "- Monthly estimate: €60.00 per month for 2 of 2 resources (storage not included in 1 estimate), list prices on " +
+				reportRetrievedOn + ", excluding VAT and discounts",
+		},
+		{
+			name:      "two estimates leave out storage",
+			notes:     2,
+			wantTotal: "- Total: €60.00 per month for 2 of 3 resources (storage not included in 2 estimates)",
+			wantWorkload: "- Monthly estimate: €60.00 per month for 2 of 2 resources (storage not included in 2 estimates), list prices on " +
+				reportRetrievedOn + ", excluding VAT and discounts",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			out := render(t, storageNoteTotalAssessment(test.notes), analysis.ReportMeta{InventoryName: inventoryFileName})
+
+			if got := lineWithPrefix(t, out, "- Total: "); got != test.wantTotal {
+				t.Errorf("the cost summary's total = %q, want %q", got, test.wantTotal)
+			}
+
+			if got := lineWithPrefix(t, out, "- Monthly estimate: "); got != test.wantWorkload {
+				t.Errorf("the workload's monthly estimate = %q, want %q", got, test.wantWorkload)
+			}
+		})
+	}
+}
+
+// estimateResource is a compute.vm resource of the storage-note fixtures, which
+// hand-build their assessments.
+func estimateResource(id, workload string) inventory.Resource {
+	return inventory.Resource{
+		ID:       id,
+		RawType:  "AWS::EC2::Instance",
+		Category: taxonomy.ComputeVM,
+		Region:   "eu-west-1",
+		Workload: workload,
+	}
+}
+
+// planEstimate is an estimate of a compute.vm resource on an invented plan of no
+// included storage, priced at monthly, with the count and hours a resource that
+// gives neither is priced by (ADR 0025), and the storage note the test gives it
+// (ADR 0032).
+func planEstimate(monthly estimate.Money, note estimate.StorageNotIncluded) *estimate.Estimate {
+	return &estimate.Estimate{
+		Region:    testutil.PricedDefaultRegion,
+		Estimated: true,
+		Offering:  "Example Virtual Machines",
+		Plan: &estimate.Plan{
+			Name:               "EX-BV",
+			VCPUs:              1,
+			MemoryMilliGiB:     2000,
+			IncludedStorageGiB: 0,
+			Priced:             true,
+			Price:              monthly,
+		},
+		Monthly:            monthly,
+		Breakdown:          estimate.Breakdown{Plan: monthly},
+		CountAssumed:       true,
+		HoursAssumed:       true,
+		StorageNotIncluded: note,
+	}
+}
+
+// storageNoteAssessment is an assessment with estimates for one compute.vm
+// resource whose estimate carries note (ADR 0032). Its total carries no note, so
+// a test that pins the estimate cell is not confounded by the total's words.
+func storageNoteAssessment(note estimate.StorageNotIncluded) assessment.Assessment {
+	monthly := estimate.FromAmount(408800)
+
+	return assessment.Assessment{
+		Target:         reportTarget,
+		Snapshot:       testutil.PricedSnapshot(),
+		Source:         sourceName,
+		EstimateRegion: testutil.PricedDefaultRegion,
+		Summary:        assessment.Summary{Direct: 1, Total: 1},
+		Verdicts: []assessment.Verdict{{
+			Resource:     estimateResource("server-small", ""),
+			Fit:          mapping.Direct,
+			BestOffering: "Example Virtual Machines",
+			Estimate:     planEstimate(monthly, note),
+		}},
+		Total: &estimate.Total{Monthly: monthly, Estimated: 1, Resources: 1},
+	}
+}
+
+// storageNoteTotalAssessment is an assessment with estimates for three resources:
+// two of them estimated and in the workload "shop", and one that is not
+// estimated. Its total and the workload's count notes of the estimates that
+// leave storage out (ADR 0032), which the test gives it.
+func storageNoteTotalAssessment(notes int) assessment.Assessment {
+	monthly := estimate.FromAmount(300000)
+	unestimated := &estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NoSize}
+
+	return assessment.Assessment{
+		Target:         reportTarget,
+		Snapshot:       testutil.PricedSnapshot(),
+		Source:         sourceName,
+		EstimateRegion: testutil.PricedDefaultRegion,
+		Summary:        assessment.Summary{Direct: 2, Total: 3},
+		Verdicts: []assessment.Verdict{
+			{
+				Resource:     estimateResource("server-a", "shop"),
+				Fit:          mapping.Direct,
+				BestOffering: "Example Virtual Machines",
+				Estimate:     planEstimate(monthly, ""),
+			},
+			{
+				Resource:     estimateResource("server-b", "shop"),
+				Fit:          mapping.Direct,
+				BestOffering: "Example Virtual Machines",
+				Estimate:     planEstimate(monthly, ""),
+			},
+			{
+				Resource: estimateResource("server-nosize", ""),
+				Fit:      mapping.Direct,
+				Estimate: unestimated,
+			},
+		},
+		Workloads: []assessment.WorkloadSummary{{
+			Name:        "shop",
+			ResourceIDs: []string{"server-a", "server-b"},
+			Summary:     assessment.Summary{Direct: 2, Total: 2},
+			Total: &estimate.Total{
+				Monthly: estimate.FromAmount(600000), Estimated: 2, Resources: 2, StorageNotIncluded: notes,
+			},
+		}},
+		Total: &estimate.Total{
+			Monthly: estimate.FromAmount(600000), Estimated: 2, Resources: 3, StorageNotIncluded: notes,
+		},
 	}
 }
 
