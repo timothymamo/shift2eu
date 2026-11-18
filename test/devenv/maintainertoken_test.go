@@ -298,8 +298,14 @@ func TestMakeVMCreateRefusesAGitHubToken(t *testing.T) {
 // TestMakeVMEnvMergeDropsAGitHubToken pins the other way a token can reach the VM: a daemon.env a previous
 // maintainer (or an older Makefile) filled with GITHUB_TOKEN=... and its spellings. A narrowed `make vm-env
 // VM_ENV=DEEPSEEK_API_KEY` merges - it keeps the plain NAME=value lines it does not list - so it must drop these
-// four rather than keep them, silently: the rewritten daemon.env no longer holds them, the value is never
-// printed, and the other lines it keeps stay as they were (PRD #161 milestone 3).
+// four: the rewritten daemon.env no longer holds them, the other lines it keeps stay as they were, and the run
+// still exits 0 (PRD #161 milestone 3).
+//
+// The drop is not silent (PRD #161 milestone 3, reviewer and auditor): the line sat in the VM's daemon.env,
+// which the login shell sources, so every agent the VM started could read the maintainer's personal token.
+// make must therefore name the variable it dropped and say that the token is to be revoked - and it must do so
+// without ever printing the value, which is the credential itself. A daemon.env that holds no such line gets no
+// such note.
 func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 	t.Parallel()
 
@@ -307,21 +313,42 @@ func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 	// line it keeps is pinned next to the ones it drops.
 	const narrowed = "DEEPSEEK_API_KEY"
 
+	// mergeCase is one daemon.env a narrowed vm-env meets: one holding a stale line of token, or - with token
+	// empty - the two credentials of a VM that never held a GitHub token at all.
+	type mergeCase struct {
+		name  string
+		token string
+	}
+
+	cases := make([]mergeCase, 0, len(gitHubTokens)+1)
 	for _, token := range gitHubTokens {
-		t.Run("a merge drops a stale "+token, func(t *testing.T) {
+		cases = append(cases, mergeCase{name: "a merge drops a stale " + token, token: token})
+	}
+
+	cases = append(cases, mergeCase{name: "a merge of a daemon.env with no GitHub token says nothing about one"})
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
 			sb := newSandbox(t)
 			env := sb.vmEnvEnv()
 			delete(env, "CLAUDE_CODE_OAUTH_TOKEN")
 
-			stale := fakeEnvValue(token)
-			sb.seedDaemonEnvWith(t, token+"="+stale)
+			stale := ""
+			seeded := []string{}
+
+			if tc.token != "" {
+				stale = fakeEnvValue(tc.token)
+				seeded = append(seeded, tc.token+"="+stale)
+			}
+
+			sb.seedDaemonEnvWith(t, seeded...)
 
 			stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=" + narrowed}, env)
 			if err != nil {
-				t.Fatalf("make vm-env VM_ENV=%s with a daemon.env that holds %s: %v\nstdout: %s\nstderr: %s",
-					narrowed, token, err, stdout, stderr)
+				t.Fatalf("make vm-env VM_ENV=%s with a daemon.env that holds %q: %v\nstdout: %s\nstderr: %s",
+					narrowed, tc.token, err, stdout, stderr)
 			}
 
 			body, readErr := os.ReadFile(sb.daemonEnvPath())
@@ -331,9 +358,11 @@ func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 
 			lines := sortedEnvLines(string(body))
 
-			if containsPrefixed(lines, token+"=") {
-				t.Errorf("make vm-env VM_ENV=%s kept the %s line it found in the VM's daemon.env: a merge must drop a GitHub token, so the login shell that sources the file never hands one to an agent (PRD #161 milestone 3). The lines it wrote: %v",
-					narrowed, token, lines)
+			for _, token := range gitHubTokens {
+				if containsPrefixed(lines, token+"=") {
+					t.Errorf("make vm-env VM_ENV=%s kept the %s line it found in the VM's daemon.env: a merge must drop a GitHub token, so the login shell that sources the file never hands one to an agent (PRD #161 milestone 3). The lines it wrote: %v",
+						narrowed, token, lines)
+				}
 			}
 
 			want := []string{
@@ -342,12 +371,40 @@ func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
 			}
 
 			if diff := cmp.Diff(sortedEnvLines(strings.Join(want, "\n")), lines); diff != "" {
-				t.Errorf("make vm-env VM_ENV=%s wrote the wrong lines to the VM's daemon.env: it must drop the %s line and keep every other plain line the file held (PRD #161 milestone 3) (-want +got):\n%s",
-					narrowed, token, diff)
+				t.Errorf("make vm-env VM_ENV=%s wrote the wrong lines to the VM's daemon.env: it must drop a GitHub token line and keep every other plain line the file held (PRD #161 milestone 3) (-want +got):\n%s",
+					narrowed, diff)
 			}
 
-			assertNoSecrets(t, "make vm-env VM_ENV="+narrowed+"'s output", stdout+stderr, []secret{
-				{kind: "the stale " + token + " line's value", value: stale},
+			text := stdout + stderr
+
+			if tc.token == "" {
+				for _, token := range gitHubTokens {
+					if strings.Contains(text, token) {
+						t.Errorf("make vm-env VM_ENV=%s dropped no GitHub token line - the VM's daemon.env held none - yet it names %s: a note about a token that was not there sends a maintainer to revoke a credential the VM never had (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+							narrowed, token, stdout, stderr)
+					}
+				}
+
+				if strings.Contains(strings.ToLower(text), "revoke") {
+					t.Errorf("make vm-env VM_ENV=%s dropped no GitHub token line - the VM's daemon.env held none - yet its output talks about revoking a token: the note must appear only when a line was really dropped, or a maintainer learns to ignore it (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+						narrowed, stdout, stderr)
+				}
+
+				return
+			}
+
+			if !strings.Contains(text, tc.token) {
+				t.Errorf("make vm-env VM_ENV=%s dropped the stale %s line from the VM's daemon.env without telling the maintainer: that line sat where the login shell of every agent the VM starts read it, so make must name the variable it dropped (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+					narrowed, tc.token, stdout, stderr)
+			}
+
+			if !strings.Contains(strings.ToLower(text), "revoke") {
+				t.Errorf("make vm-env VM_ENV=%s dropped the stale %s line from the VM's daemon.env without saying to revoke that token: every agent in the VM could read it, so removing the line is not enough - the maintainer must revoke it at GitHub (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+					narrowed, tc.token, stdout, stderr)
+			}
+
+			assertNoSecrets(t, "make vm-env VM_ENV="+narrowed+"'s output", text, []secret{
+				{kind: "the stale " + tc.token + " line's value", value: stale},
 			})
 		})
 	}
