@@ -463,6 +463,36 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 	}
 }
 
+// fakeLaunchctl stands in for launchctl in the devenv tests: it records its argv, answers `print` with
+// SHIFT2EU_TEST_LAUNCHCTL_STATUS (0 stands for a loaded job) and every other verb with status 113, which is
+// what launchctl returns for a job it does not know, so no test needs a launchd of the machine (issue #229).
+const fakeLaunchctl = `#!/bin/sh
+{
+  printf 'tool=launchctl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+status=113
+if [ "$#" -ge 2 ] && [ "$1" = print ]; then
+  status="${SHIFT2EU_TEST_LAUNCHCTL_STATUS:-0}"
+fi
+exit "${status}"
+`
+
+// useFakeLaunchctl puts the recording launchctl first on PATH and makes `launchctl print` answer status, so a
+// test can pretend the instance's LaunchDaemon is loaded without a real launchd and on any machine.
+func (sb *sandbox) useFakeLaunchctl(t *testing.T, env map[string]string, status string) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "launchctl")
+
+	//nolint:gosec // the fake launchctl is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(fakeLaunchctl), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_STATUS"] = status
+}
+
 // vmClockShim answers the fake VM's clock with SHIFT2EU_TEST_VM_CLOCK for `date +%s` and hands every other
 // call to the real date, so the host script's own clock stays the machine's (PRD #161 milestone 1 second
 // review, item 6).

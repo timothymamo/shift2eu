@@ -634,6 +634,100 @@ func TestMakeAgentsTokenRefreshStartKeepsOneRefresherPerVM(t *testing.T) {
 			return len(f.api.minted()) >= 1
 		})
 	})
+
+	// Issue #229: the LaunchDaemon runs one refresh per instance, so a second one started by hand beside it is a
+	// second loop minting for the same VM. Once `launchctl print` answers for the instance's label, the target
+	// warns and starts nothing. The fake launchctl answers that print, so these two cases pin both halves on a
+	// machine without launchd, which is what Linux CI has.
+	t.Run("a loaded LaunchDaemon is warned about and no refresher starts", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTokenFixture(t, "shift2eu")
+		f.sb.useFakeLaunchctl(t, f.env, "0")
+
+		label := launchdLabelPrefix + "shift2eu"
+
+		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-start with the LaunchDaemon %s loaded: %v\nstdout: %s\nstderr: %s", label, err, stdout, stderr)
+		}
+
+		for _, want := range []string{"LaunchDaemon", label} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("make agents-token-refresh-start does not name %q on stderr although launchd runs the refresh as %s: a maintainer would start a second loop and never learn why not to (issue #229)\nstdout: %s\nstderr: %s", want, label, stdout, stderr)
+			}
+		}
+
+		// It asked launchd about this instance's job, so the warning is about the job that runs this VM's
+		// refresh and not about another instance's.
+		var askedLabel bool
+
+		for _, args := range invocations(f.sb.argvLogText(t), "launchctl") {
+			if slices.Contains(args, "print") && slices.Contains(args, label) {
+				askedLabel = true
+			}
+		}
+
+		if !askedLabel {
+			t.Errorf("make agents-token-refresh-start never asked launchctl for the job %s, so it cannot know the LaunchDaemon runs the refresh:\n%s", label, f.sb.argvLogText(t))
+		}
+
+		// The warning is a refusal to start a second loop: no pid file, no log, and no mint.
+		entries, err := os.ReadDir(f.state)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read %s: %v", f.state, err)
+		}
+
+		for _, entry := range entries {
+			t.Errorf("make agents-token-refresh-start left %s in %s although the LaunchDaemon runs the refresh: it must start nothing beside the job (issue #229)", entry.Name(), f.state)
+		}
+
+		if got := len(f.api.minted()); got != 0 {
+			t.Errorf("make agents-token-refresh-start started a refresher beside the LaunchDaemon: the fake API minted %d token(s) (issue #229)", got)
+		}
+	})
+
+	t.Run("no loaded LaunchDaemon leaves the start target as it was", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTokenFixture(t, "shift2eu")
+		// 113 is what launchctl returns for a job it does not know: the instance's LaunchDaemon is not
+		// loaded, so the refresh is still the maintainer's to start by hand.
+		f.sb.useFakeLaunchctl(t, f.env, "113")
+
+		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-start with no LaunchDaemon loaded: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		if combined := stdout + stderr; strings.Contains(combined, "LaunchDaemon") {
+			t.Errorf("make agents-token-refresh-start warns about a LaunchDaemon although launchctl knows no job for this instance (issue #229):\n%s", combined)
+		}
+
+		pid := readPid(t, f.statePath("agents-token-refresh-shift2eu.pid"))
+
+		if !pidAlive(pid) {
+			t.Errorf("the pid file holds %d, which is not running: with no LaunchDaemon loaded the target still starts the refresher it always started (issue #229)", pid)
+		}
+	})
+}
+
+// TestMakefileHasTheAgentsTokenLaunchDaemonTargets pins the install target's shape only: it renders the
+// instance's plist through dev/agents-token-launchd.sh, which launchdplist_test.go pins in full. Installing
+// and uninstalling need sudo and a real launchctl, so neither runs here.
+func TestMakefileHasTheAgentsTokenLaunchDaemonTargets(t *testing.T) {
+	t.Parallel()
+
+	stdout, stderr, err := runMake(t, []string{"-n", "agents-token-refresh-install"}, makeEnv(t, nil))
+	if err != nil {
+		t.Fatalf("make -n agents-token-refresh-install: %v\nstderr: %s", err, stderr)
+	}
+
+	for _, want := range []string{"agents-token-launchd.sh", "plist"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("make -n agents-token-refresh-install does not mention %q: the target installs the plist dev/agents-token-launchd.sh renders for this VM instance, so one generator and one test cover every target that writes one (issue #229)\n%s", want, stdout)
+		}
+	}
 }
 
 // runMake runs make in the repository root with args and env alone, never the test process's own
