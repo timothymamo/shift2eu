@@ -752,15 +752,16 @@ const launchdMountsFormat = `{{.Name}}{{"\n"}}{{range .Config.Mounts}}{{.Locatio
 // launchdInstallFixture is one environment for a run of make agents-token-refresh-install or
 // agents-token-refresh-uninstall: a sandbox with a temporary HOME, a state directory inside it, the log-only
 // fake sudo and the fake launchctl, plutil and limactl first on PATH, an invented key, the three App variables
-// and a LaunchDaemons directory inside the sandbox. No test reaches the machine's sudo, launchctl or plutil, and
-// nothing writes into /Library.
+// and a LaunchDaemons directory inside the sandbox, handed to make on its command line. No test reaches the
+// machine's sudo, launchctl or plutil, and nothing writes into /Library.
 type launchdInstallFixture struct {
-	sb       *sandbox
-	key      inventedKey
-	env      map[string]string
-	instance string
-	repo     string // the clone make runs in, symlinks resolved: what the plist names and the mount check reads
-	dir      string // where make runs: the repository, or a clone a test grew inside its sandbox
+	sb         *sandbox
+	key        inventedKey
+	env        map[string]string
+	instance   string
+	repo       string // the clone make runs in, symlinks resolved: what the plist names and the mount check reads
+	dir        string // where make runs: the repository, or a clone a test grew inside its sandbox
+	launchdDir string // where launchd reads LaunchDaemons from: the make command line's AGENTS_TOKEN_LAUNCHD_DIR
 }
 
 // launchdInstallOption changes the environment an install fixture runs make with, before the test uses it.
@@ -842,13 +843,13 @@ func newLaunchdInstallFixture(t *testing.T, instance string, opts ...launchdInst
 	env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = key.path
 
 	// Where launchd reads LaunchDaemons from, pointed at the sandbox: the recipe writes the plist under this
-	// directory and no test may reach the real /Library (issue #229).
+	// directory and no test may reach the real /Library (issue #229). It travels on make's command line, never
+	// in the environment, since a stale export would install where launchd never looks at boot (issue #229,
+	// fourth review).
 	launchdDir := filepath.Join(sb.root, "LaunchDaemons")
 	if err := os.MkdirAll(launchdDir, 0o700); err != nil {
 		t.Fatalf("create %s: %v", launchdDir, err)
 	}
-
-	env["AGENTS_TOKEN_LAUNCHD_DIR"] = launchdDir
 
 	sb.useLogOnlySudo(t)
 	// 113 is what launchctl returns for a job it does not know: no job of this instance is loaded yet.
@@ -861,7 +862,7 @@ func newLaunchdInstallFixture(t *testing.T, instance string, opts ...launchdInst
 		t.Fatalf("resolve the repository root: %v", err)
 	}
 
-	f := &launchdInstallFixture{sb: sb, key: key, env: env, instance: instance, repo: launchdRepoRoot(t), dir: dir}
+	f := &launchdInstallFixture{sb: sb, key: key, env: env, instance: instance, repo: launchdRepoRoot(t), dir: dir, launchdDir: launchdDir}
 
 	for _, opt := range opts {
 		opt(t, f)
@@ -876,14 +877,32 @@ func (f *launchdInstallFixture) label() string { return launchdLabelPrefix + f.i
 // dest is the file launchd reads the job from: inside the sandbox, since the recipe writes it under
 // AGENTS_TOKEN_LAUNCHD_DIR and nothing here may reach /Library (issue #229).
 func (f *launchdInstallFixture) dest() string {
-	return filepath.Join(f.env["AGENTS_TOKEN_LAUNCHD_DIR"], f.label()+".plist")
+	return filepath.Join(f.launchdDir, f.label()+".plist")
 }
 
-// run runs one target in the fixture's clone with the fixture's environment, never the test process's own.
+// run runs one target in the fixture's clone with the fixture's environment, never the test process's own, and
+// with AGENTS_TOKEN_LAUNCHD_DIR on make's command line, which is one of the only two places the recipe reads it
+// from (issue #229, fourth review).
 func (f *launchdInstallFixture) run(t *testing.T, target string) (string, string, error) {
 	t.Helper()
 
-	return runMakeIn(t, f.dir, []string{target}, f.env)
+	return runMakeIn(t, f.dir, []string{"AGENTS_TOKEN_LAUNCHD_DIR=" + f.launchdDir, target}, f.env)
+}
+
+// runWithTheDirectoryInTheEnvironment runs one target with AGENTS_TOKEN_LAUNCHD_DIR exported in the environment
+// and not on make's command line, the way a stale export in a maintainer's shell would reach it (issue #229,
+// fourth review).
+func (f *launchdInstallFixture) runWithTheDirectoryInTheEnvironment(t *testing.T, target string) (string, string, error) {
+	t.Helper()
+
+	env := make(map[string]string, len(f.env)+1)
+	for name, value := range f.env {
+		env[name] = value
+	}
+
+	env["AGENTS_TOKEN_LAUNCHD_DIR"] = f.launchdDir
+
+	return runMakeIn(t, f.dir, []string{target}, env)
 }
 
 // sudoCommands returns the argv of every command the recipe ran through sudo, in call order.
@@ -1451,9 +1470,45 @@ func TestMakeAgentsTokenRefreshInstallStopsWhenTheOldJobStaysLoaded(t *testing.T
 	}
 }
 
+// TestMakeAgentsTokenRefreshLaunchdDirComesOnlyFromTheCommandLine pins the fourth review's finding:
+// AGENTS_TOKEN_LAUNCHD_DIR may come from make's command line or from the Makefile, never from the environment. A
+// stale export in a maintainer's shell (a test's, an earlier session's) would otherwise make root write the plist
+// into a directory launchd never reads at boot, and the job would silently not exist after the next reboot. Both
+// targets refuse such a run before any sudo, and the refusal names the variable and the environment it came from.
+func TestMakeAgentsTokenRefreshLaunchdDirComesOnlyFromTheCommandLine(t *testing.T) {
+	t.Parallel()
+
+	for _, target := range []string{"agents-token-refresh-install", "agents-token-refresh-uninstall"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, "shift2eu")
+
+			stdout, stderr, err := f.runWithTheDirectoryInTheEnvironment(t, target)
+			if err == nil {
+				t.Fatalf("make %s exited 0 although AGENTS_TOKEN_LAUNCHD_DIR came from the environment (%s): a stale export would install the job where launchd never looks at boot, and the refresh would not come back after a reboot (issue #229, fourth review)\nstdout: %s\nstderr: %s", target, f.launchdDir, stdout, stderr)
+			}
+
+			if calls := f.sudoCommands(t); len(calls) != 0 {
+				t.Errorf("make %s ran sudo although AGENTS_TOKEN_LAUNCHD_DIR came from the environment, and the check of where root writes must come first: %v\nstdout: %s\nstderr: %s", target, calls, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "AGENTS_TOKEN_LAUNCHD_DIR") {
+				t.Errorf("the refusal does not name AGENTS_TOKEN_LAUNCHD_DIR, so a maintainer cannot tell which value to fix:\nstderr: %s", stderr)
+			}
+
+			if !strings.Contains(strings.ToLower(stderr), "environment") {
+				t.Errorf("the refusal does not say that the value came from the environment, so a maintainer would keep looking for it in the Makefile or on the command line:\nstderr: %s", stderr)
+			}
+		})
+	}
+}
+
 // TestMakeAgentsTokenRefreshInstallRetriesTheBootstrapOnce pins the second review's finding: a bootstrap that
 // fails is retried once, never more, and a failure both times says that no job is loaded now and names both
 // ways to restore one. The VM's token lives an hour, so a silent failure costs the agents their credentials.
+// The plist root installed stays where launchd reads it, and the failure says that too: the maintainer has to
+// know that the next boot loads the job they were told was not loaded (fourth review).
 func TestMakeAgentsTokenRefreshInstallRetriesTheBootstrapOnce(t *testing.T) {
 	t.Parallel()
 
@@ -1476,6 +1531,95 @@ func TestMakeAgentsTokenRefreshInstallRetriesTheBootstrapOnce(t *testing.T) {
 	for _, want := range []string{"no token refresh job", "agents-token-refresh-install", "agents-token-refresh-start"} {
 		if !strings.Contains(lower, want) {
 			t.Errorf("the failure does not name %q: a maintainer has to learn that no token refresh job is loaded now, and both ways to restore one - run the install again, or start a refresh by hand (issue #229)\nstderr: %s", want, stderr)
+		}
+	}
+
+	// The plist root installed stays in the directory launchd reads: it was checked and it is there, so the
+	// next boot loads it even though the install could not load it now. A maintainer who is not told would
+	// think the job is gone for good.
+	for _, want := range []string{"next boot", f.dest()} {
+		if !strings.Contains(lower, strings.ToLower(want)) {
+			t.Errorf("the failure does not say %q: the plist stays in the directory launchd reads, so it loads at the next boot although no job is loaded now, and a maintainer who is not told believes the refresh is gone until they install it again (issue #229, fourth review)\nstderr: %s", want, stderr)
+		}
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallSaysTheJobIsLoadedWhenTheBootstrapLoadedIt pins the fourth review's finding:
+// launchctl bootstrap can load the job and still exit non-zero (it loaded the job and then could not answer with
+// success). The retry finds the label loaded and fails as well. Saying "no token refresh job is loaded now" would
+// then be a lie, and a maintainer would either reinstall over a job that runs or start a second refresh by hand
+// beside it. The install says that the job is loaded, names the label and the commands that show it, and exits 0.
+func TestMakeAgentsTokenRefreshInstallSaysTheJobIsLoadedWhenTheBootstrapLoadedIt(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	// The first bootstrap loads the job and still exits non-zero; the retry finds it loaded and exits non-zero
+	// too, so both attempts fail although the job is loaded afterwards.
+	f.sb.useFakeLaunchctlBootstrapThatLoadsAndFails(t, f.env)
+	f.sb.useFakeSleep(t)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install exited %v although the job is loaded afterwards, which is what the install is for: a run that loaded the job must not fail and send the maintainer to install it again (issue #229, fourth review)\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if calls := f.bootstrapCalls(t); len(calls) != 2 {
+		t.Errorf("the install ran launchctl bootstrap %d time(s) with a bootstrap that fails, want exactly two, one retry: %v\nstdout: %s\nstderr: %s", len(calls), calls, stdout, stderr)
+	}
+
+	lower := strings.ToLower(stderr)
+
+	if strings.Contains(lower, "no token refresh job") {
+		t.Errorf("the install says no token refresh job is loaded although its own bootstrap loaded one: the maintainer would install it again over the job that runs, or start a second refresh beside it (issue #229, fourth review)\nstderr: %s", stderr)
+	}
+
+	for _, want := range []string{"loaded", f.label()} {
+		if !strings.Contains(lower, strings.ToLower(want)) {
+			t.Errorf("the install does not say %q on stderr, although the job is loaded: a maintainer has to learn that the Token refresh job runs now, and which label to look at with launchctl print (issue #229, fourth review)\nstderr: %s", want, stderr)
+		}
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesAPlistItCannotRead pins the other half of the read-back the second
+// review added: a file root installed that is there but cannot be read is as unloaded as no file at all, and the
+// install must fail closed for it too. It removes the plist again (a plist it cannot check must not stay behind
+// for the next boot), loads nothing, and says both. The unreadable file is the one branch `nothing` only reached
+// by absence, which is a different failure: a file that is there and unreadable is one root installed and nobody
+// checked.
+func TestMakeAgentsTokenRefreshInstallRefusesAPlistItCannotRead(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file with no permissions, so this test cannot make the installed plist unreadable")
+	}
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	// The fake root install copies the plist and takes every permission away: the file is there, and the
+	// install's read-back, run as the maintainer, cannot open it.
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL"] = "unreadable"
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err == nil {
+		t.Fatalf("make agents-token-refresh-install exited 0 although the plist root installed cannot be read: launchd would load a job the maintainer never saw as the printed plist, and the next boot would run it (issue #229)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	if line := "+ sudo rm -f " + f.dest(); !strings.Contains(stdout, line) {
+		t.Errorf("the install does not print %q before it runs it, so a maintainer never sees that the plist it could not read was removed again (issue #229, second review)\nstdout: %s\nstderr: %s", line, stdout, stderr)
+	}
+
+	if _, statErr := os.Stat(f.dest()); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("the plist %s is still there after the install refused it (stat: %v): the file launchd reads must not stay behind, or the next boot runs a job nobody checked (issue #229, second review)", f.dest(), statErr)
+	}
+
+	if calls := f.bootstrapCalls(t); len(calls) != 0 {
+		t.Errorf("the install loaded the job anyway (%v): a plist it could not read must never become a loaded job (issue #229, second review)", calls)
+	}
+
+	lower := strings.ToLower(stderr)
+
+	for _, want := range []string{"could not be read", "no token refresh job"} {
+		if !strings.Contains(lower, strings.ToLower(want)) {
+			t.Errorf("the failure does not say %q: a maintainer has to learn that the plist could not be read back, and that no job of the instance is loaded now (issue #229, second review)\nstderr: %s", want, stderr)
 		}
 	}
 }
@@ -1602,6 +1746,47 @@ func TestMakeAgentsTokenRefreshUninstall(t *testing.T) {
 		for _, args := range want {
 			if line := "+ sudo " + strings.Join(args, " "); !strings.Contains(stdout, line) {
 				t.Errorf("the uninstall does not print %q before it runs it:\nstdout: %s\nstderr: %s", line, stdout, stderr)
+			}
+		}
+	})
+
+	t.Run("a stuck bootout: the job is still loaded, and the plist goes anyway", func(t *testing.T) {
+		t.Parallel()
+
+		f := newLaunchdInstallFixture(t, "shift2eu")
+		// The job is loaded and a bootout leaves it loaded: launchctl print keeps succeeding after the bootout,
+		// as it does for a job launchd never unloaded (issue #229, fourth review).
+		f.sb.useFakeLaunchctlLoaded(t, f.env, true)
+
+		// A plist is there to remove, so "the plist goes anyway" is a removal and not a file that never existed.
+		writeFileMode(t, f.dest(), []byte("<plist/>"), 0o644)
+
+		stdout, stderr, err := f.run(t, "agents-token-refresh-uninstall")
+		// Exit 0: the uninstall's purpose is to leave no plist behind for the next boot, and it did. The job that
+		// is still loaded is the one thing the maintainer has to finish by hand, and re-running the target would
+		// change nothing: a failure would send them looking for a retry that cannot work. The message names the
+		// command that does (issue #229, fourth review).
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-uninstall exited %v although it removed the plist and only a bootout the maintainer runs by hand is left\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		if line := "+ sudo rm -f " + f.dest(); !strings.Contains(stdout, line) {
+			t.Errorf("the uninstall does not print %q before it runs it, so a maintainer never sees that the plist was removed although the job stays loaded (issue #229, fourth review)\nstdout: %s\nstderr: %s", line, stdout, stderr)
+		}
+
+		if _, statErr := os.Stat(f.dest()); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Errorf("the plist %s is still there although the uninstall ran (stat: %v): a job that cannot be unloaded must not leave its plist for the next boot to load again (issue #229, fourth review)", f.dest(), statErr)
+		}
+
+		lower := strings.ToLower(stderr)
+
+		if strings.Contains(lower, "was not loaded") {
+			t.Errorf("the uninstall says the job was not loaded although launchctl still reports it loaded: the maintainer would believe the refresh is stopped while it keeps running with the App's key in reach (issue #229, fourth review)\nstderr: %s", stderr)
+		}
+
+		for _, want := range []string{"still loaded", "sudo launchctl bootout", f.label()} {
+			if !strings.Contains(lower, strings.ToLower(want)) {
+				t.Errorf("the uninstall does not say %q: the job is still loaded, and the command that unloads it is the one thing the maintainer has left to run (issue #229, fourth review)\nstderr: %s", want, stderr)
 			}
 		}
 	})

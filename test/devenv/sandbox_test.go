@@ -477,7 +477,9 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 // it by removing the file, so a `print` after a `bootout` fails, as it does for a job that was just unloaded.
 // SHIFT2EU_TEST_LAUNCHCTL_STUCK=1 makes that `bootout` leave the file: the job never unloads.
 // `bootstrap` answers SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS (0 when unset), so a test can make loading the
-// new plist fail, and `bootout` answers SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS.
+// new plist fail, and `bootout` answers SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS. SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS=1
+// makes `bootstrap` create the loaded state file before it answers, so a bootstrap can load the job and still exit
+// non-zero, as launchd does when it loads a job it then cannot confirm (issue #229, fourth review).
 const fakeLaunchctl = `#!/bin/sh
 {
   printf 'tool=launchctl\n'
@@ -502,6 +504,9 @@ bootout)
   status="${SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS:-0}"
   ;;
 bootstrap)
+  if [ "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS:-0}" = 1 ] && [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ]; then
+    : > "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}"
+  fi
   status="${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS:-0}"
   ;;
 esac
@@ -551,6 +556,22 @@ func (sb *sandbox) useFakeLaunchctlLoaded(t *testing.T, env map[string]string, s
 	}
 }
 
+// useFakeLaunchctlBootstrapThatLoadsAndFails makes the job not loaded now and `launchctl bootstrap` load it -
+// it creates the loaded state file, so a `launchctl print` afterwards succeeds - while bootstrap still exits
+// non-zero, as launchd does when it loaded a job and could not answer with success. A test can then pin what the
+// install says when the load it was told failed did happen (issue #229, fourth review).
+func (sb *sandbox) useFakeLaunchctlBootstrapThatLoadsAndFails(t *testing.T, env map[string]string) {
+	t.Helper()
+
+	sb.writeFakeLaunchctl(t)
+
+	// The file is not created here: the job is not loaded until bootstrap runs, and every `print` before it
+	// must fail as launchd's does for a label it does not know.
+	env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"] = filepath.Join(sb.root, "launchctl-loaded")
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS"] = "1"
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS"] = "1"
+}
+
 func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 	t.Helper()
 
@@ -568,8 +589,9 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 //
 //   - `install ... <src> <dest>` copies src to dest, so the recipe reads back the file it installed, and
 //     SHIFT2EU_TEST_SUDO_INSTALL changes what lands there: `different` writes other bytes (a file that changed
-//     between the hash check and the install), `nothing` writes no file at all. A destination outside
-//     SHIFT2EU_TEST_SUDO_ROOT is refused.
+//     between the hash check and the install), `nothing` writes no file at all, `unreadable` copies the plist and
+//     then takes every permission away, so the file is there and the maintainer's own read-back cannot open it.
+//     A destination outside SHIFT2EU_TEST_SUDO_ROOT is refused.
 //   - `rm -f <path>` really removes a sandbox path, and refuses any path outside it.
 //   - `launchctl` runs the fake launchctl first on PATH, so a test can pin the load and unload commands and
 //     see launchd's state change between them.
@@ -613,6 +635,7 @@ install)
   }
   case "${SHIFT2EU_TEST_SUDO_INSTALL:-copy}" in
   copy) cp "${src}" "${dest}" || exit 1 ;;
+  unreadable) cp "${src}" "${dest}" || exit 1; chmod 000 "${dest}" || exit 1 ;;
   different) printf 'fake sudo: other bytes than the plist it was handed\n' >"${dest}" || exit 1 ;;
   nothing) ;;
   *)
