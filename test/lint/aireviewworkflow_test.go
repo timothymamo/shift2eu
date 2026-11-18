@@ -33,6 +33,23 @@ var aiReviewClaudeVersion = regexp.MustCompile(`@anthropic-ai/claude-code(?:-[a-
 // against: a SHA-256 in hex, or npm's sha512-<base64> integrity form.
 var aiReviewChecksum = regexp.MustCompile(`[0-9a-f]{64}|sha512-[A-Za-z0-9+/=]{20,}`)
 
+// aiReviewInstallScript is the script the install step calls with the directory
+// the Claude Code CLI is extracted into, its platform package and its integrity
+// (ADR 0033).
+const aiReviewInstallScript = ".github/scripts/install-claude-code.sh"
+
+// aiReviewShellWord matches one shell word of a run: script's line: a
+// double-quoted string, which the workflow runs every path in so a path never
+// ends at a space, or an unquoted run of characters that are neither a space nor
+// a quote.
+var aiReviewShellWord = regexp.MustCompile(`"[^"]*"|[^" ]+`)
+
+// aiReviewBlockHeader matches a run: whose script is a block: a block scalar's
+// header, | or >, with an optional chomping indicator (+ or -) and an optional
+// explicit indentation digit, in either order (YAML 1.2, block scalar header).
+// Such a value has the script in the block's lines, not on the key's line.
+var aiReviewBlockHeader = regexp.MustCompile(`^[|>](?:[+-][1-9]?|[1-9][+-]?)?$`)
+
 // aiReviewWorkflow is the parsed workflow the subtests of
 // TestAIReviewWorkflowHoldsTheReviewersSecurityProperties read: its source, its
 // content lines, its one job and that job's steps.
@@ -225,7 +242,7 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		}
 
 		if name != "ai-review" {
-			t.Errorf("%s: job %s runs in the environment %q, want ai-review: that environment is limited to main and holds the reviewer App's client ID and key, the model key and the switch (ADR 0033)", aiReviewWorkflowPath, workflow.job.Key, name)
+			t.Errorf("%s: job %s runs in the environment %q, want ai-review: that environment is limited to main and holds the reviewer App's client ID and key, the maintainer's Claude subscription token and the switch (ADR 0033)", aiReviewWorkflowPath, workflow.job.Key, name)
 		}
 	})
 
@@ -243,11 +260,11 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 			t.Errorf("%s: job %s: if: %q does not skip drafts, so a draft pull request starts a review; marking it ready starts one (ADR 0033)", aiReviewWorkflowPath, workflow.job.Key, condition)
 		}
 
-		// A fork must not spend the model budget, and its pull request's code is
-		// never what this job checks out: the head repository is this one.
+		// A fork must not spend the subscription's usage, and its pull request's
+		// code is never what this job checks out: the head repository is this one.
 		for _, want := range []string{"head.repo.full_name", "github.repository"} {
 			if !strings.Contains(condition, want) {
-				t.Errorf("%s: job %s: if: %q does not compare %s with the repository, so a pull request from a fork starts a review and spends the model budget (ADR 0033)", aiReviewWorkflowPath, workflow.job.Key, condition, want)
+				t.Errorf("%s: job %s: if: %q does not compare %s with the repository, so a pull request from a fork starts a review and spends the maintainer's Claude subscription usage (ADR 0033)", aiReviewWorkflowPath, workflow.job.Key, condition, want)
 			}
 		}
 	})
@@ -257,7 +274,7 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 
 		concurrency, ok := aiReviewEntry(t, workflow.lines, "concurrency")
 		if !ok {
-			t.Fatalf("%s: the workflow has no concurrency:, so a new push reviews beside the run in progress and both spend the model budget (ADR 0033)", aiReviewWorkflowPath)
+			t.Fatalf("%s: the workflow has no concurrency:, so a new push reviews beside the run in progress and both spend the maintainer's Claude subscription usage (ADR 0033)", aiReviewWorkflowPath)
 		}
 
 		if concurrency.Value != "" {
@@ -461,6 +478,53 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		}
 	})
 
+	t.Run("the review step runs the CLI the install step extracted", func(t *testing.T) {
+		t.Parallel()
+
+		_, install, ok := aiReviewClaudeInstall(t, workflow)
+		if !ok {
+			t.Fatalf("%s: no step installs the Claude Code CLI; the reviewer asks its model through `claude -p` (ADR 0033)", aiReviewWorkflowPath)
+		}
+
+		dir := aiReviewInstallDir(t, install)
+		if dir == "" {
+			t.Fatalf("%s: line %d: the install step calls no %s with a directory; the CLI is extracted into the directory it names and the reviewer is handed that directory's package/claude (ADR 0033)", aiReviewWorkflowPath, install.Num, aiReviewInstallScript)
+		}
+
+		// The reviewer runs the CLI by an absolute path, out of the directory
+		// the install step extracted it into: the script unpacks the platform
+		// package there, whose one binary is package/claude.
+		if !strings.HasPrefix(dir, "${RUNNER_TEMP}/") {
+			t.Errorf("%s: line %d: the install step extracts the CLI into %q, want an absolute path under ${RUNNER_TEMP}: the reviewer finds no claude on the PATH and is handed this path as its one argument (ADR 0033)", aiReviewWorkflowPath, install.Num, dir)
+		}
+
+		want := dir + "/package/claude"
+
+		step, ok := aiReviewRunStep(t, workflow)
+		if !ok {
+			t.Fatalf("%s: no step sets AI_REVIEW_PR_NUMBER, so no step runs the reviewer", aiReviewWorkflowPath)
+		}
+
+		run, ok := aiReviewFind(aiReviewStepFields(t, step), "run")
+		if !ok {
+			t.Fatalf("%s: line %d: the step that runs the reviewer has no run:, so it never runs it", aiReviewWorkflowPath, step.Num)
+		}
+
+		lines := aiReviewRunLines(run)
+		if len(lines) != 1 {
+			t.Fatalf("%s: line %d: the step that runs the reviewer runs %d lines, want the one that starts the program with the CLI's absolute path", aiReviewWorkflowPath, run.Num, len(lines))
+		}
+
+		words := aiReviewShellWords(lines[0].text)
+		if len(words) == 0 {
+			t.Fatalf("%s: line %d: the step that runs the reviewer has an empty script line", aiReviewWorkflowPath, lines[0].num)
+		}
+
+		if got := words[len(words)-1]; got != want {
+			t.Errorf("%s: line %d: the reviewer is started with the CLI at %q, want %q, the path the install step extracted it to: the program runs that file by its absolute path and nothing else (ADR 0033)", aiReviewWorkflowPath, lines[0].num, got, want)
+		}
+	})
+
 	t.Run("the review step holds the subscription token and no API key", func(t *testing.T) {
 		t.Parallel()
 
@@ -607,7 +671,7 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		}
 
 		if secretSteps == 0 {
-			t.Errorf("%s: no step reads a secret, so nothing mints the reviewer App's token or holds the model key", aiReviewWorkflowPath)
+			t.Errorf("%s: no step reads a secret, so nothing mints the reviewer App's token or holds the CLI's subscription token", aiReviewWorkflowPath)
 		}
 	})
 
@@ -697,7 +761,7 @@ type numberedLine struct {
 // aiReviewRunLines returns the lines of a step's run: script with their source
 // line numbers: the inline value alone, or the block's lines.
 func aiReviewRunLines(run yamlread.Entry) []numberedLine {
-	if run.Value != "" {
+	if run.Value != "" && !aiReviewBlockIndicator(run.Value) {
 		return []numberedLine{{num: run.Num, text: run.Value}}
 	}
 
@@ -707,6 +771,65 @@ func aiReviewRunLines(run yamlread.Entry) []numberedLine {
 	}
 
 	return lines
+}
+
+// aiReviewBlockIndicator reports whether value is a block scalar's header, which
+// a run: that holds a block script has on its own line: the script is in the
+// block's lines, and the header is no line of it.
+func aiReviewBlockIndicator(value string) bool {
+	return aiReviewBlockHeader.MatchString(value)
+}
+
+// aiReviewShellWords returns the shell words of one line of a run: script, the
+// quotes of a quoted word removed: no word of the scripts this test reads holds
+// a space, so splitting on spaces keeps every path whole, and a path is quoted.
+func aiReviewShellWords(line string) []string {
+	words := aiReviewShellWord.FindAllString(line, -1)
+
+	for i, word := range words {
+		words[i] = strings.Trim(word, `"`)
+	}
+
+	return words
+}
+
+// aiReviewInstallDir returns the directory the install step extracts the Claude
+// Code CLI into: the argument after .github/scripts/install-claude-code.sh on
+// the script line that calls it, and "" when no line calls it. The script
+// unpacks the platform package there, whose one binary is package/claude.
+func aiReviewInstallDir(t *testing.T, run yamlread.Entry) string {
+	t.Helper()
+
+	for _, line := range aiReviewRunLines(run) {
+		words := aiReviewShellWords(line.text)
+
+		for i, word := range words {
+			if word == aiReviewInstallScript && i+1 < len(words) {
+				return words[i+1]
+			}
+		}
+	}
+
+	return ""
+}
+
+// aiReviewRunStep returns the step that runs the reviewer, the one whose env:
+// names the pull request number, and false when no step does.
+func aiReviewRunStep(t *testing.T, workflow aiReviewWorkflow) (yamlread.Item, bool) {
+	t.Helper()
+
+	for _, step := range workflow.steps {
+		env, ok := aiReviewFind(aiReviewStepFields(t, step), "env")
+		if !ok {
+			continue
+		}
+
+		if _, ok := aiReviewEnvValue(env, "AI_REVIEW_PR_NUMBER"); ok {
+			return step, true
+		}
+	}
+
+	return yamlread.Item{}, false
 }
 
 // aiReviewSourceLine returns the workflow's source line num, counted from 1.
