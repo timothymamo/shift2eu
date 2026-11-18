@@ -313,6 +313,11 @@ vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', ' '\n\n' | awk 'NF && !seen[$
 # default, an exported VM_ENV, make -e and override all replace, so a VM_ENV left in a .envrc cannot keep a
 # stale credential.
 vm_env_mode = $(if $(filter command line,$(origin VM_ENV)),merge,replace)
+# The variables a GitHub token can arrive in (the two gh reads and their GitHub Enterprise spellings), as one
+# alternation that serves both as a shell case pattern and as an extended regular expression. None is a
+# credential of the agents (PRD #161 milestone 3): vm-env-check refuses them in VM_ENV, and a merge drops a
+# stale line of theirs from the VM's daemon.env instead of keeping it.
+github_token_names = GITHUB_TOKEN|GH_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN
 # A daemon.env line a merge keeps: a plain NAME=value assignment, nothing the login shell would run.
 vm_env_safe_line = ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._~+/=-]*\$$
 
@@ -335,6 +340,9 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 	@set -f; for name in $(vm_env_names); do \
 		case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
 			echo "vm-env: refusing $$name: the agents App's key and its path never enter the VM; make agents-token writes its tokens there" >&2; \
+			exit 1;; esac; \
+		case "$$name" in ($(github_token_names)) \
+			echo "vm-env: refusing $$name: a GitHub token never enters the VM; the agents' only GitHub credential is the agents App's token, which make agents-token writes there (its value is not shown)" >&2; \
 			exit 1;; esac; \
 		case "$$name" in ([!A-Za-z_]* | *[!A-Za-z0-9_]*) \
 			echo "vm-env: refusing $$name: not a variable name" >&2; \
@@ -388,7 +396,7 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 			plain=$$(grep -a -E "$$safe" "$$f") || [ "$$?" -eq 1 ] || unreadable; \
 			nplain=$$(printf "%s" "$$plain" | grep -a -c .) || [ "$$?" -eq 1 ] || exit 1; \
 			dropped=$$(( total - nplain )); \
-			kept=$$(printf "%s\n" "$$plain" | grep -a -v -E "^($$names)=") || [ "$$?" -eq 1 ] || exit 1; fi && \
+			kept=$$(printf "%s\n" "$$plain" | grep -a -v -E "^($$names|$(github_token_names))=") || [ "$$?" -eq 1 ] || exit 1; fi && \
 		t="$$(mktemp "$$d/.daemon.env.XXXXXX")" && \
 		{ if [ -n "$$kept" ]; then printf "%s\n" "$$kept"; fi && printf "%s\n" "$$new"; } > "$$t" && \
 		chmod 600 "$$t" && mv "$$t" "$$f" && t= && trap - EXIT HUP INT TERM && \

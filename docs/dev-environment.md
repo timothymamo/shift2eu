@@ -399,7 +399,11 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   repository, and the VM cannot see it.
 - **No GitHub token in `VM_ENV`.** Never put a personal access token, or any token with
   `write:packages`, into `VM_ENV`: the agents' only GitHub credential is the agents App's token, whose
-  permissions (no Packages) are what stop agents pushing to GHCR.
+  permissions (no Packages) are what stop agents pushing to GHCR. `make vm-env-check`, and so `make vm-env`
+  and `make vm-create`, refuses a `VM_ENV` that names a GitHub token variable gh reads (the personal one,
+  `GH_TOKEN`, `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`) before any `limactl` call: it names the
+  variable, never its value, points at `make agents-token`, and writes nothing. A merge drops a stale line
+  of any of them from the VM's `daemon.env` instead of keeping it.
 - **Every agent gets every variable.** The tester holds the Claude token and the App's token, the Claude
   roles the DeepSeek key. Scope each one narrowly so it is cheap to revoke. The file stays on the VM's disk
   (under `~/.lima` on the Mac) until `make vm-delete`.
@@ -585,8 +589,9 @@ the git configuration.
 | `~/.config/shift2eu/agents-app-identity` | `<slug>[bot]`, then `<bot user id>+<slug>[bot]@users.noreply.github.com` | Written by the mint, which applies it to the VM's git at once; `make vm-init` applies it again (the `git` step, `dev/vm-git-identity.sh`) |
 
 `/usr/local/bin/gh` is a root-owned wrapper (`dev/gh-app-token.sh`, with the real gh's path pinned); the
-real gh is `/usr/local/libexec/shift2eu/gh`. With the token file it runs gh with that token and no other
-GitHub token in its environment; without the file, or with one that is expired, malformed or not mode
+real gh is `/usr/local/libexec/shift2eu/gh`. With the token file it runs gh with that token as `GH_TOKEN`
+and unsets the other GitHub token variables gh reads (the personal one, `GH_ENTERPRISE_TOKEN` and
+`GITHUB_ENTERPRISE_TOKEN`) first; without the file, or with one that is expired, malformed or not mode
 0600, it fails without running gh, names the file, and asks for you to run
 `make agents-token-refresh-start` in the host clone on the Mac. There is no fallback (PRD #161 milestone 3).
 The git credential helper calls the wrapper, so `git push` follows the same rule, and a running agent's
