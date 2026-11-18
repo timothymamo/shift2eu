@@ -11,11 +11,19 @@ package devenv_test
 
 import (
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 )
+
+// gitHubTokens are the variables a maintainer's personal GitHub token can arrive in: the two the gh CLI reads
+// (GITHUB_TOKEN and GH_TOKEN) and their GitHub Enterprise Cloud spellings. None is a credential of the agents
+// any more (PRD #161 milestone 3): the VM's gh wrapper hands the real gh the agents App's token and unsets these
+// before it runs it (dev/gh-app-token.sh), so nothing here may copy one into the VM or keep a stale one there.
+var gitHubTokens = []string{"GITHUB_TOKEN", "GH_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GH_ENTERPRISE_TOKEN"}
 
 // TestMakeVMEnvNamesNoMaintainerToken pins the one place the default is decided: the Makefile's VM_ENV lists
 // exactly the credentials make vm-env copies into the VM, and the maintainer's personal token is not one of
@@ -131,14 +139,15 @@ func TestMakeVMEnvNeedsNoMaintainerToken(t *testing.T) {
 func TestMakeVMCreateNeedsNoMaintainerToken(t *testing.T) {
 	t.Parallel()
 
-	// The subtest names carry no GITHUB_TOKEN: they end up in the t.TempDir() paths the fixture echoes, and
-	// the "names it nowhere" check below would then trip on its own temporary directory.
+	// The subtest names say GITHUB_TOKEN although the fixture echoes the t.TempDir() paths it puts them in: the
+	// check below strips those paths first, so it reads what the run says about the token, never its own test's
+	// temporary directory.
 	cases := []struct {
 		name   string
 		github *string // nil leaves GITHUB_TOKEN out of make's environment
 	}{
-		{name: "maintainer token unset"},
-		{name: "maintainer token set to an empty string", github: ptrTo("")},
+		{name: "GITHUB_TOKEN unset"},
+		{name: "GITHUB_TOKEN set to an empty string", github: ptrTo("")},
 	}
 
 	for _, tc := range cases {
@@ -159,7 +168,7 @@ func TestMakeVMCreateNeedsNoMaintainerToken(t *testing.T) {
 					tc.name, stdout, stderr)
 			}
 
-			if strings.Contains(stdout+stderr, "GITHUB_TOKEN") {
+			if strings.Contains(withoutTempPaths(stdout+stderr, f.sb.root), "GITHUB_TOKEN") {
 				t.Errorf("make vm-create names GITHUB_TOKEN although it is no credential of the agents any more: the rebuild must neither require it nor ask a maintainer for it (PRD #161 milestone 3)\nstdout: %s\nstderr: %s", stdout, stderr)
 			}
 
@@ -168,6 +177,215 @@ func TestMakeVMCreateNeedsNoMaintainerToken(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestMakeVMEnvRefusesAGitHubToken pins that no target that copies credentials into the VM accepts one of the
+// GitHub token names in VM_ENV (PRD #161 milestone 3): an `make vm-env VM_ENV=CLAUDE_CODE_OAUTH_TOKEN,
+// DEEPSEEK_API_KEY,GITHUB_TOKEN` on the command line is refused before the VM is touched - non-zero, a message
+// that names the variable and points at the agents App's token, never the variable's value, no limactl call and
+// the VM's daemon.env byte for byte as it was.
+func TestMakeVMEnvRefusesAGitHubToken(t *testing.T) {
+	t.Parallel()
+
+	targets := []struct {
+		name string
+		args []string
+	}{
+		{name: "vm-env-check", args: []string{"vm-env-check"}},
+		{name: "vm-env", args: []string{"vm-env"}},
+	}
+
+	for _, target := range targets {
+		for _, token := range gitHubTokens {
+			t.Run(target.name+" refuses a VM_ENV that names "+token, func(t *testing.T) {
+				t.Parallel()
+
+				sb := newSandbox(t)
+				env := sb.vmEnvEnv()
+
+				// The value is invented and set, so the refusal cannot be the one a missing credential gets: make
+				// must refuse the name itself, and it must never print what the shell held.
+				value := fakeEnvValue(token)
+				env[token] = value
+
+				seeded := sb.seedDaemonEnv(t)
+
+				vmEnv := strings.Join(vmEnvCredentials, ",") + "," + token
+
+				stdout, stderr, err := runMake(t, append(slices.Clone(target.args), "VM_ENV="+vmEnv), env)
+				if err == nil {
+					t.Fatalf("make %s exited 0 with VM_ENV=%s: naming %s must be refused, so the maintainer's personal token cannot be copied into the VM (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+						target.name, vmEnv, token, stdout, stderr)
+				}
+
+				// The refusal happens on the host, before anything reaches the VM: no limactl call, so nothing is
+				// created and no line is written (the daemon.env below is unchanged).
+				sb.assertNoLimaCalls(t, "VM_ENV names "+token)
+
+				text := stdout + stderr
+
+				if !strings.Contains(text, token) {
+					t.Errorf("make %s's refusal does not name %s, so a maintainer cannot tell which credential it refused (PRD #161 milestone 3):\nstdout: %s\nstderr: %s",
+						target.name, token, stdout, stderr)
+				}
+
+				assertPointsAtTheAppToken(t, "make "+target.name+"'s refusal of "+token, text)
+
+				assertNoSecrets(t, "make "+target.name+"'s refusal", text, []secret{{kind: "the value of " + token + " it was given", value: value}})
+
+				got, readErr := os.ReadFile(sb.daemonEnvPath())
+				if readErr != nil {
+					t.Fatalf("read the VM's daemon.env after a refused make %s: %v", target.name, readErr)
+				}
+
+				if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+					t.Errorf("make %s rewrote the VM's daemon.env although it refused %s: the file must be byte for byte what it was (PRD #161 milestone 3) (-want +got):\n%s",
+						target.name, token, diff)
+				}
+			})
+		}
+	}
+}
+
+// TestMakeVMCreateRefusesAGitHubToken pins the same refusal on the target that builds a VM from scratch: make
+// vm-create runs vm-env-check before any limactl call, so a VM_ENV that names a GitHub token creates nothing at
+// all rather than a VM that holds the maintainer's personal token (PRD #161 milestone 3).
+func TestMakeVMCreateRefusesAGitHubToken(t *testing.T) {
+	t.Parallel()
+
+	for _, token := range gitHubTokens {
+		t.Run("vm-create refuses a VM_ENV that names "+token, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMUpFixture(t, "", "")
+
+			value := fakeEnvValue(token)
+			f.env[token] = value
+
+			vmEnv := strings.Join(vmEnvCredentials, ",") + "," + token
+
+			stdout, stderr, err := f.run(t, "vm-create", "VM_ENV="+vmEnv)
+			if err == nil {
+				t.Fatalf("make vm-create exited 0 with VM_ENV=%s: naming %s must be refused before the VM is created (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+					vmEnv, token, stdout, stderr)
+			}
+
+			if starts := f.starts(t); len(starts) != 0 {
+				t.Errorf("make vm-create reached limactl start with VM_ENV=%s: the check must run first, so a rebuild that would copy %s into the VM creates none (PRD #161 milestone 3)\nstdout: %s\nstderr: %s",
+					vmEnv, token, stdout, stderr)
+			}
+
+			text := stdout + stderr
+
+			if !strings.Contains(text, token) {
+				t.Errorf("make vm-create's refusal does not name %s, so a maintainer cannot tell which credential it refused (PRD #161 milestone 3):\nstdout: %s\nstderr: %s",
+					token, stdout, stderr)
+			}
+
+			assertPointsAtTheAppToken(t, "make vm-create's refusal of "+token, text)
+
+			assertNoSecrets(t, "make vm-create's refusal", text, []secret{{kind: "the value of " + token + " it was given", value: value}})
+
+			// Nothing was created, so nothing was written either: a daemon.env holds no line for the refused token.
+			if body, readErr := os.ReadFile(f.sb.daemonEnvPath()); readErr == nil && containsPrefixed(sortedEnvLines(string(body)), token+"=") {
+				t.Errorf("make vm-create wrote a %s line into the VM although it refused it: the check runs before vm-env, so a refused run writes no credential (PRD #161 milestone 3). The lines it wrote: %v",
+					token, sortedEnvLines(string(body)))
+			}
+		})
+	}
+}
+
+// TestMakeVMEnvMergeDropsAGitHubToken pins the other way a token can reach the VM: a daemon.env a previous
+// maintainer (or an older Makefile) filled with GITHUB_TOKEN=... and its spellings. A narrowed `make vm-env
+// VM_ENV=DEEPSEEK_API_KEY` merges - it keeps the plain NAME=value lines it does not list - so it must drop these
+// four rather than keep them, silently: the rewritten daemon.env no longer holds them, the value is never
+// printed, and the other lines it keeps stay as they were (PRD #161 milestone 3).
+func TestMakeVMEnvMergeDropsAGitHubToken(t *testing.T) {
+	t.Parallel()
+
+	// One of the names VM_ENV still lists (PRD #161 milestone 3), so the merge has something to replace and the
+	// line it keeps is pinned next to the ones it drops.
+	const narrowed = "DEEPSEEK_API_KEY"
+
+	for _, token := range gitHubTokens {
+		t.Run("a merge drops a stale "+token, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+			delete(env, "CLAUDE_CODE_OAUTH_TOKEN")
+
+			stale := fakeEnvValue(token)
+			sb.seedDaemonEnvWith(t, token+"="+stale)
+
+			stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=" + narrowed}, env)
+			if err != nil {
+				t.Fatalf("make vm-env VM_ENV=%s with a daemon.env that holds %s: %v\nstdout: %s\nstderr: %s",
+					narrowed, token, err, stdout, stderr)
+			}
+
+			body, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make vm-env VM_ENV=%s: %v", narrowed, readErr)
+			}
+
+			lines := sortedEnvLines(string(body))
+
+			if containsPrefixed(lines, token+"=") {
+				t.Errorf("make vm-env VM_ENV=%s kept the %s line it found in the VM's daemon.env: a merge must drop a GitHub token, so the login shell that sources the file never hands one to an agent (PRD #161 milestone 3). The lines it wrote: %v",
+					narrowed, token, lines)
+			}
+
+			want := []string{
+				"CLAUDE_CODE_OAUTH_TOKEN=old-oauth",
+				narrowed + "=" + fakeEnvValue(narrowed),
+			}
+
+			if diff := cmp.Diff(sortedEnvLines(strings.Join(want, "\n")), lines); diff != "" {
+				t.Errorf("make vm-env VM_ENV=%s wrote the wrong lines to the VM's daemon.env: it must drop the %s line and keep every other plain line the file held (PRD #161 milestone 3) (-want +got):\n%s",
+					narrowed, token, diff)
+			}
+
+			assertNoSecrets(t, "make vm-env VM_ENV="+narrowed+"'s output", stdout+stderr, []secret{
+				{kind: "the stale " + token + " line's value", value: stale},
+			})
+		})
+	}
+}
+
+// assertPointsAtTheAppToken fails when a refusal of one of the GitHub token names does not point a maintainer at
+// the credential the agents do use: the agents App's token, which make agents-token writes into the VM. The
+// wording around these words is not pinned, that a refusal sends a maintainer there is.
+func assertPointsAtTheAppToken(t *testing.T, where, text string) {
+	t.Helper()
+
+	if !strings.Contains(text, "App") {
+		t.Errorf("%s does not point at the agents App's token, so a maintainer whose gh needs a credential is sent to a token the agents no longer use: %s", where, text)
+	}
+
+	if !strings.Contains(text, "agents-token") && !strings.Contains(text, "agents-app-token") {
+		t.Errorf("%s does not name make agents-token or the App's token file, the one the agents' gh reads, so a maintainer cannot tell which credential replaces the one it refused: %s", where, text)
+	}
+}
+
+// withoutTempPaths removes the temporary directories a run echoes from text. t.TempDir() puts the subtest's name
+// in them, so a check that a run never names a variable (GITHUB_TOKEN, say) would otherwise trip on its own
+// test's paths: what the run says is the subject, where the sandbox happens to live is not. The resolved path is
+// removed too, because git reports a symlinked temporary directory by its real path.
+func withoutTempPaths(text string, roots ...string) string {
+	for _, root := range roots {
+		if root == "" {
+			continue
+		}
+
+		text = strings.ReplaceAll(text, root, "<temp>")
+
+		if real, err := filepath.EvalSymlinks(root); err == nil && real != root {
+			text = strings.ReplaceAll(text, real, "<temp>")
+		}
+	}
+
+	return text
 }
 
 // TestTheVMFilesNameNoMaintainerToken pins the two files the VM is built from, whose text a maintainer reads

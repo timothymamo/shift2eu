@@ -23,13 +23,17 @@ import (
 // unsetMarker is what the fake real gh records for a variable it was not handed.
 const unsetMarker = "__unset__"
 
-// fakeRealGh stands in for the real gh: it records the tokens it was handed, its argv and its stdin, so a
-// test can see what the wrapper did without gh, the network or an account.
+// fakeRealGh stands in for the real gh: it records the tokens and the GitHub token variables it was handed, its
+// argv and its stdin, so a test can see what the wrapper did without gh, the network or an account. Every
+// variable the gh CLI reads a token from is recorded, GitHub Enterprise Cloud's spellings included: a stale one
+// inherited from the VM's environment would let gh act as its holder (PRD #161 milestone 3).
 const fakeRealGh = `#!/bin/sh
 # Stands in for the real gh in the devenv tests.
 {
   printf 'GH_TOKEN=%s\n' "${GH_TOKEN-__unset__}"
   printf 'GITHUB_TOKEN=%s\n' "${GITHUB_TOKEN-__unset__}"
+  printf 'GH_ENTERPRISE_TOKEN=%s\n' "${GH_ENTERPRISE_TOKEN-__unset__}"
+  printf 'GITHUB_ENTERPRISE_TOKEN=%s\n' "${GITHUB_ENTERPRISE_TOKEN-__unset__}"
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
   printf 'stdin:\n'
   cat
@@ -38,10 +42,12 @@ const fakeRealGh = `#!/bin/sh
 
 // ghRecord is what the fake real gh saw.
 type ghRecord struct {
-	ghToken     string
-	githubToken string
-	argv        []string
-	stdin       string
+	ghToken               string
+	githubToken           string
+	ghEnterpriseToken     string
+	githubEnterpriseToken string
+	argv                  []string
+	stdin                 string
 }
 
 // readGHRecord parses what the fake real gh wrote. It reconstructs stdin from the recorded lines, so the
@@ -71,6 +77,10 @@ func readGHRecord(t *testing.T, path string) ghRecord {
 			record.ghToken = strings.TrimPrefix(line, "GH_TOKEN=")
 		case strings.HasPrefix(line, "GITHUB_TOKEN="):
 			record.githubToken = strings.TrimPrefix(line, "GITHUB_TOKEN=")
+		case strings.HasPrefix(line, "GH_ENTERPRISE_TOKEN="):
+			record.ghEnterpriseToken = strings.TrimPrefix(line, "GH_ENTERPRISE_TOKEN=")
+		case strings.HasPrefix(line, "GITHUB_ENTERPRISE_TOKEN="):
+			record.githubEnterpriseToken = strings.TrimPrefix(line, "GITHUB_ENTERPRISE_TOKEN=")
 		case strings.HasPrefix(line, "arg="):
 			record.argv = append(record.argv, strings.TrimPrefix(line, "arg="))
 		}
@@ -143,12 +153,17 @@ func TestGHAppTokenHandsTheAppTokenToTheRealGH(t *testing.T) {
 			record := filepath.Join(sb.root, "gh-record")
 
 			personal := fmt.Sprintf("ghp_%036x", 9)
+			enterprise := fakeEnvValue("GH_ENTERPRISE_TOKEN")
+			githubEnterprise := fakeEnvValue("GITHUB_ENTERPRISE_TOKEN")
+
 			expiry := time.Now().Add(45 * time.Minute).Unix()
 
 			writeVMTokenFile(t, sb, tc.token+"\n"+strconv.FormatInt(expiry, 10)+"\n", 0o600)
 
 			env := sb.ghEnv(writeFakeRealGh(t, sb), record)
 			env["GITHUB_TOKEN"] = personal
+			env["GH_ENTERPRISE_TOKEN"] = enterprise
+			env["GITHUB_ENTERPRISE_TOKEN"] = githubEnterprise
 
 			stdout, stderr, err := sb.run(t, scriptPath(t, ghWrapperScript), []string{"auth", "git-credential", "get"}, env, helperStdin)
 			if err != nil {
@@ -165,6 +180,21 @@ func TestGHAppTokenHandsTheAppTokenToTheRealGH(t *testing.T) {
 				t.Errorf("the real gh still had GITHUB_TOKEN: with a token file present the wrapper hands only GH_TOKEN, so gh cannot fall back to the maintainer's token")
 			}
 
+			// The gh CLI reads an enterprise token from these two as well: a stale one inherited from the VM's
+			// environment would let gh act as its holder, although the agents have only the App's token (PRD #161
+			// milestone 3).
+			for _, inherited := range []struct {
+				name string
+				got  string
+			}{
+				{name: "GH_ENTERPRISE_TOKEN", got: got.ghEnterpriseToken},
+				{name: "GITHUB_ENTERPRISE_TOKEN", got: got.githubEnterpriseToken},
+			} {
+				if inherited.got != unsetMarker {
+					t.Errorf("the real gh still had %s: the wrapper must unset every GitHub token variable it does not hand gh itself, so a stale enterprise token cannot stand in for the agents App's token (PRD #161 milestone 3)", inherited.name)
+				}
+			}
+
 			wantArgs := []string{"auth", "git-credential", "get"}
 			if diff := cmp.Diff(wantArgs, got.argv); diff != "" {
 				t.Errorf("the wrapper did not pass its arguments through unchanged (-want +got):\n%s", diff)
@@ -174,7 +204,7 @@ func TestGHAppTokenHandsTheAppTokenToTheRealGH(t *testing.T) {
 				t.Errorf("the wrapper did not pass stdin through unchanged, and gh auth git-credential reads it (-want +got):\n%s", diff)
 			}
 
-			secrets := []secret{{kind: "App installation token", value: tc.token}, {kind: "maintainer token", value: personal}}
+			secrets := []secret{{kind: "App installation token", value: tc.token}, {kind: "maintainer token", value: personal}, {kind: "enterprise token", value: enterprise}, {kind: "GitHub enterprise token", value: githubEnterprise}}
 			assertNoSecrets(t, "the wrapper's stdout", stdout, secrets)
 			assertNoSecrets(t, "the wrapper's stderr", stderr, secrets)
 		})
