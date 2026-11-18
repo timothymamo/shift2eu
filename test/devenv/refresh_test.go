@@ -1147,12 +1147,22 @@ func TestAgentsAppTokenRefreshTakesOverAStaleLockOnce(t *testing.T) {
 			first := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
 			second := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
 
-			waitFor(t, 30*time.Second, "one of the two refreshers to take the stale lock over and mint", func() bool {
-				return len(f.api.minted()) >= 1
-			})
+			// What tells a loaded runner from a takeover neither contender won (issue #240): both scripts'
+			// output, whether each still runs, and what the lock directory holds.
+			contest := func() string {
+				return fmt.Sprintf("first (pid %d, running %t) stderr:\n%s\nsecond (pid %d, running %t) stderr:\n%s\nstate directory:\n%s",
+					first.pid(), first.running(), first.errOut(), second.pid(), second.running(), second.errOut(), describeTree(f.sb.stateDir()))
+			}
 
-			// Let the contender that lost finish its exit before counting the survivors.
-			time.Sleep(500 * time.Millisecond)
+			if !poll(30*time.Second, func() bool { return len(f.api.minted()) >= 1 }) {
+				t.Fatalf("timed out after 30s waiting for one of the two refreshers to take the stale lock over and mint\n%s", contest())
+			}
+
+			// The contender that lost says so and exits 0; the one that won keeps running. Wait for the exit
+			// itself rather than a while: when both win, neither exits and the check below names both.
+			if !poll(30*time.Second, func() bool { return !first.running() || !second.running() }) {
+				t.Fatalf("both refreshers that found the same stale lock are still running 30s after the first mint: a takeover that two contenders can win puts two loops on one token file (review item 5)\n%s", contest())
+			}
 
 			var holder *runningScript
 
@@ -1170,7 +1180,7 @@ func TestAgentsAppTokenRefreshTakesOverAStaleLockOnce(t *testing.T) {
 			}
 
 			if holder == nil {
-				t.Fatalf("neither refresher took the stale lock over; first stderr:\n%s\nsecond stderr:\n%s", first.errOut(), second.errOut())
+				t.Fatalf("neither refresher took the stale lock over\n%s", contest())
 			}
 
 			body, err := os.ReadFile(filepath.Join(lock, "pid"))

@@ -305,10 +305,7 @@ func (sb *sandbox) writeFakeLimactl(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "limactl")
 
-	//nolint:gosec // the fake limactl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeLimactl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakeLimactl), 0o700)
 }
 
 // ghTrapScript is what the gh on PATH is in a sandbox: a wrapper that runs gh from PATH instead of the
@@ -323,10 +320,7 @@ func (sb *sandbox) writeTripwireGH(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "gh")
 
-	//nolint:gosec // the trap is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(ghTrapScript), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(ghTrapScript), 0o700)
 }
 
 // blockedCurlShim logs its argv and then fails the way curl reports a connection it never made, so a test
@@ -348,10 +342,7 @@ func (sb *sandbox) blockCurl(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "curl")
 
-	//nolint:gosec // the blocked curl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(blockedCurlShim), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(blockedCurlShim), 0o700)
 }
 
 // fakeSudo stands in for sudo in the devenv tests: it records its argv and then runs the command as the user
@@ -436,10 +427,7 @@ func (sb *sandbox) useFakeSudo(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "sudo")
 
-	//nolint:gosec // the fake sudo is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeSudo), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakeSudo), 0o700)
 }
 
 // fakeSystemctl stands in for systemctl in the devenv tests: it records its argv and exits 0. A test that pins
@@ -460,10 +448,7 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "systemctl")
 
-	//nolint:gosec // the fake systemctl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeSystemctl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakeSystemctl), 0o700)
 }
 
 // fakeLaunchctl stands in for launchctl in the devenv tests: it records its argv, answers `print` with
@@ -620,10 +605,7 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "launchctl")
 
-	//nolint:gosec // the fake launchctl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeLaunchctl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakeLaunchctl), 0o700)
 }
 
 // logOnlySudo stands in for sudo when a host-side recipe that needs root is under test: it records its argv
@@ -712,10 +694,7 @@ func (sb *sandbox) useLogOnlySudo(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "sudo")
 
-	//nolint:gosec // the log-only sudo is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(logOnlySudo), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(logOnlySudo), 0o700)
 }
 
 // fakeSleep stands in for sleep in a test that reaches a wait loop or a retry: it records its argv and returns
@@ -736,10 +715,7 @@ func (sb *sandbox) useFakeSleep(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "sleep")
 
-	//nolint:gosec // the fake sleep is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeSleep), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakeSleep), 0o700)
 }
 
 // fakeID stands in for id in a test that pins what a recipe does when it runs as root: it records its argv and
@@ -766,10 +742,7 @@ func (sb *sandbox) useFakeIDAsRoot(t *testing.T) {
 	shim := fmt.Sprintf(fakeID, strconv.Quote(realTool(t, "id")))
 	path := filepath.Join(sb.binDir, "id")
 
-	//nolint:gosec // the fake id is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(shim), 0o700)
 }
 
 // fakePlutil stands in for plutil: it records its argv and answers SHIFT2EU_TEST_PLUTIL_STATUS, so a test can
@@ -793,10 +766,7 @@ func (sb *sandbox) useFakePlutil(t *testing.T, env map[string]string, status str
 
 	path := filepath.Join(sb.binDir, "plutil")
 
-	//nolint:gosec // the fake plutil is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakePlutil), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakePlutil), 0o700)
 
 	env["SHIFT2EU_TEST_PLUTIL_STATUS"] = status
 }
@@ -842,10 +812,7 @@ func (sb *sandbox) useFakeLimactlMounts(t *testing.T, env map[string]string, mou
 
 	path := filepath.Join(sb.binDir, "limactl")
 
-	//nolint:gosec // the fake limactl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeMountLimactl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakeMountLimactl), 0o700)
 
 	list := filepath.Join(sb.root, "lima-mounts.txt")
 
@@ -901,10 +868,7 @@ func (sb *sandbox) useFakeVMClock(t *testing.T, env map[string]string, clock str
 	shim := fmt.Sprintf(vmClockShim, strconv.Quote(realTool(t, "date")))
 	path := filepath.Join(sb.binDir, "date")
 
-	//nolint:gosec // the clock shim is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(shim), 0o700)
 
 	env["SHIFT2EU_TEST_VM_CLOCK"] = clock
 }
@@ -930,17 +894,11 @@ func (sb *sandbox) useFailingLimactl(t *testing.T, marker string) {
 
 	real := filepath.Join(sb.binDir, "limactl-real")
 
-	//nolint:gosec // the fake limactl is a script the tests run, so it must be executable
-	if err := os.WriteFile(real, []byte(fakeLimactl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", real, err)
-	}
+	writeFileMode(t, real, []byte(fakeLimactl), 0o700)
 
 	path := filepath.Join(sb.binDir, "limactl")
 
-	//nolint:gosec // the failing limactl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(failingLimactl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(failingLimactl), 0o700)
 
 	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatalf("create %s: %v", marker, err)
@@ -958,10 +916,7 @@ func (sb *sandbox) writeRecordingShim(t *testing.T, name string) {
 		shim = fmt.Sprintf(recordingCurlShim, strconv.Quote(real))
 	}
 
-	//nolint:gosec // the recording shim is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(shim), 0o700)
 }
 
 // recordingCurlShim is the recording stand-in for curl. It logs its argv, and it refuses any URL that is not
@@ -1089,52 +1044,51 @@ func toolDir(t *testing.T, name string) string {
 	return filepath.Dir(path)
 }
 
-// safeBuffer is a buffer two goroutines share: one copies a running script's output into it, the test reads
-// it while the script runs.
-type safeBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *safeBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.Write(p)
-}
-
-func (b *safeBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.String()
-}
-
 // runningScript is a script a test started and keeps watching: a refresh loop is meant to keep running, so a
 // test reads its output while it runs and can see it survive a failure instead of returning.
+//
+// Its stdout and stderr are files, not pipes (issue #267). With a pipe, Wait returns only once every process
+// holding the pipe's write end has closed it, so a child the script leaves behind - a `sleep 3600 &` that a
+// SIGTERM caught before the script stored its pid - keeps Wait, and so waitExit, blocked for as long as that
+// child runs, although the script itself stopped at once. With a file Wait returns when the script exits, and
+// running and waitExit tell what the test asks: whether the script runs. The script runs in a process group of
+// its own, which the cleanup kills, so no child it leaves behind outlives the test.
 type runningScript struct {
 	cmd    *exec.Cmd
-	stdout safeBuffer
-	stderr safeBuffer
+	stdout string        // the file the script's stdout goes to
+	stderr string        // the file the script's stderr goes to
 	exited chan struct{} // closed once Wait has returned
 	status error         // what Wait returned; read it only after exited is closed
 }
 
 // start runs a script of dev/ in the background, under env alone, from the sandbox's host home, and removes
-// it with the test.
+// it, and every process it started, with the test.
 func (sb *sandbox) start(t *testing.T, script string, args []string, env map[string]string) *runningScript {
 	t.Helper()
 
+	output := t.TempDir()
 	r := &runningScript{
 		cmd:    exec.Command("sh", append([]string{script}, args...)...),
+		stdout: filepath.Join(output, "stdout"),
+		stderr: filepath.Join(output, "stderr"),
 		exited: make(chan struct{}),
 	}
 	r.cmd.Env = envList(env)
 	r.cmd.Dir = sb.hostHome
-	r.cmd.Stdout = &r.stdout
-	r.cmd.Stderr = &r.stderr
+	inOwnGroup(r.cmd)
+	stdout, stderr := createOutput(t, r.stdout), createOutput(t, r.stderr)
+	r.cmd.Stdout, r.cmd.Stderr = stdout, stderr
 
-	if err := r.cmd.Start(); err != nil {
+	err := r.cmd.Start()
+
+	// The script holds its own descriptors now; the test reads the files by name.
+	for _, file := range []*os.File{stdout, stderr} {
+		if closeErr := file.Close(); closeErr != nil {
+			t.Errorf("close %s: %v", file.Name(), closeErr)
+		}
+	}
+
+	if err != nil {
 		t.Fatalf("start %s %s: %v", script, strings.Join(args, " "), err)
 	}
 
@@ -1148,9 +1102,32 @@ func (sb *sandbox) start(t *testing.T, script string, args []string, env map[str
 	return r
 }
 
+// createOutput creates the file a running script's stdout or stderr goes to.
+func createOutput(t *testing.T, path string) *os.File {
+	t.Helper()
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+
+	return file
+}
+
 // out and errOut are the script's stdout and stderr so far.
-func (r *runningScript) out() string    { return r.stdout.String() }
-func (r *runningScript) errOut() string { return r.stderr.String() }
+func (r *runningScript) out() string    { return readOutput(r.stdout) }
+func (r *runningScript) errOut() string { return readOutput(r.stderr) }
+
+// readOutput is what a running script has written to path so far. It never fails a test: the output is read
+// for a failure message too, which a read error must not replace.
+func readOutput(path string) string {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("<cannot read %s: %v>", path, err)
+	}
+
+	return string(body)
+}
 
 // running reports whether the script is still running.
 func (r *runningScript) running() bool {
@@ -1209,9 +1186,12 @@ func (r *runningScript) exitCode(t *testing.T) int {
 // pid is the process id of the script the test started.
 func (r *runningScript) pid() int { return r.cmd.Process.Pid }
 
-// kill ends the script if it is still running: the cleanup of every started script.
+// kill ends the script if it is still running, and every process left in its group: the cleanup of every
+// started script.
 func (r *runningScript) kill(t *testing.T) {
 	t.Helper()
+
+	killGroup(r.cmd.Process.Pid)
 
 	if !r.running() {
 		return
@@ -1326,6 +1306,14 @@ func writeInventedKey(t *testing.T, path string, mode os.FileMode) inventedKey {
 
 // writeFileMode writes content to path with mode, creating the directory above it. The file is created
 // 0600 and then chmodded, because a plain write loses the group and world bits to the umask.
+//
+// Every executable a test runs is written here (issue #267), holding syscall.ForkLock for reading while the
+// file is open for writing. Go opens the file O_CLOEXEC, but a parallel test that forks in that window
+// gives its child a copy of the write descriptor, which the child holds until its own exec. Linux refuses
+// to exec a file any process holds open for writing, so this test's exec of path then fails with
+// ETXTBSY ("text file busy"), or sh reports it and exits 126. Every fork in the process takes ForkLock for
+// writing, so no fork happens while the descriptor is open. Writing to a temporary name and renaming it
+// into place would not help: the child's descriptor is on the same inode.
 func writeFileMode(t *testing.T, path string, content []byte, mode os.FileMode) {
 	t.Helper()
 
@@ -1333,7 +1321,11 @@ func writeFileMode(t *testing.T, path string, content []byte, mode os.FileMode) 
 		t.Fatalf("create %s: %v", filepath.Dir(path), err)
 	}
 
-	if err := os.WriteFile(path, content, 0o600); err != nil {
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(path, content, 0o600)
+	syscall.ForkLock.RUnlock()
+
+	if err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 
@@ -2117,14 +2109,58 @@ func jwtPart(raw string) ([]byte, error) {
 func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
 
+	if !poll(timeout, cond) {
+		t.Fatalf("timed out after %s waiting for %s", timeout, what)
+	}
+}
+
+// poll polls cond until it holds or timeout passes, and reports whether it held: waitFor for a test that
+// says more than waitFor's message when it times out.
+func poll(timeout time.Duration, cond func() bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if cond() {
-			return
+			return true
 		}
 
 		time.Sleep(25 * time.Millisecond)
 	}
 
-	t.Fatalf("timed out after %s waiting for %s", timeout, what)
+	return false
+}
+
+// describeTree lists every entry under root, one per line with its type, and the content of each regular
+// file up to a line: a failure message's view of a small directory such as the refresh's lock.
+func describeTree(root string) string {
+	var lines []string
+
+	tree := os.DirFS(root)
+
+	err := fs.WalkDir(tree, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("%s: %v", path, err))
+
+			return nil
+		}
+
+		line := fmt.Sprintf("%s %s", entry.Type(), path)
+
+		if entry.Type().IsRegular() {
+			body, readErr := fs.ReadFile(tree, path)
+			if readErr != nil {
+				line += fmt.Sprintf(" (cannot read: %v)", readErr)
+			} else {
+				line += fmt.Sprintf(" = %q", strings.SplitN(string(body), "\n", 2)[0])
+			}
+		}
+
+		lines = append(lines, line)
+
+		return nil
+	})
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("walk %s: %v", root, err))
+	}
+
+	return strings.Join(lines, "\n")
 }
