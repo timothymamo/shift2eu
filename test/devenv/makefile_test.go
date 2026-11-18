@@ -753,8 +753,28 @@ type launchdInstallFixture struct {
 	repo     string // the clone make runs in, symlinks resolved: what the plist names and the mount check reads
 }
 
+// launchdInstallOption changes the environment an install fixture runs make with, before the test uses it.
+type launchdInstallOption func(t *testing.T, f *launchdInstallFixture)
+
+// withoutOnPath leaves tool off the fixture's PATH, for a subtest that pins what a recipe does on a host that
+// has no such tool, such as Linux CI, which has no launchctl (issue #229). The fake tool the fixture installed
+// in binDir is removed, so it cannot be found there either, and every other fake tool stays reachable: the
+// log-only sudo included, so a refusal that runs it would still be caught.
+func withoutOnPath(tool string) launchdInstallOption {
+	return func(t *testing.T, f *launchdInstallFixture) {
+		t.Helper()
+
+		path := filepath.Join(f.sb.binDir, tool)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("remove the fake %s from %s: %v", tool, f.sb.binDir, err)
+		}
+
+		f.env["PATH"] = f.sb.binDir + ":" + pathWithout(t, tool)
+	}
+}
+
 // newLaunchdInstallFixture builds the fixture for one VM instance, with a VM that mounts nothing near the clone.
-func newLaunchdInstallFixture(t *testing.T, instance string) *launchdInstallFixture {
+func newLaunchdInstallFixture(t *testing.T, instance string, opts ...launchdInstallOption) *launchdInstallFixture {
 	t.Helper()
 
 	sb := newSandbox(t)
@@ -772,7 +792,13 @@ func newLaunchdInstallFixture(t *testing.T, instance string) *launchdInstallFixt
 	sb.useFakePlutil(t, env, "0")
 	sb.useFakeLimactlMounts(t, env, nil)
 
-	return &launchdInstallFixture{sb: sb, key: key, env: env, instance: instance, repo: launchdRepoRoot(t)}
+	f := &launchdInstallFixture{sb: sb, key: key, env: env, instance: instance, repo: launchdRepoRoot(t)}
+
+	for _, opt := range opts {
+		opt(t, f)
+	}
+
+	return f
 }
 
 // label is the LaunchDaemon's label of the fixture's instance.
@@ -1060,8 +1086,9 @@ func TestMakeAgentsTokenRefreshUninstall(t *testing.T) {
 	t.Run("no launchctl: a refusal, before any sudo", func(t *testing.T) {
 		t.Parallel()
 
-		f := newLaunchdInstallFixture(t, "shift2eu")
-		f.env["PATH"] = f.sb.binDir + ":" + pathWithout(t, "launchctl")
+		// The fake launchctl is not on this fixture's PATH, so make agents-token-refresh-uninstall runs on a
+		// host that has none, as Linux CI does; the log-only sudo stays reachable.
+		f := newLaunchdInstallFixture(t, "shift2eu", withoutOnPath("launchctl"))
 
 		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-uninstall"}, f.env)
 		if err == nil {
