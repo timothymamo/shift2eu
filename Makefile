@@ -359,10 +359,9 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 
 # vm-env runs vm-env-check first and writes nothing unless it passes. Only a VM_ENV on the make command line
 # merges; an exported VM_ENV replaces like the default, so a VM_ENV left in a .envrc cannot keep a stale
-# credential. A replace writes the VM's whole
-# daemon.env with exactly those lines, so a stale line (an old ANTHROPIC_API_KEY) is removed. A merge replaces
-# the lines of the names in VM_ENV and keeps the other plain NAME=value lines, so
-# `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN; it drops every other line (a command, a
+# credential. A replace writes the VM's whole daemon.env with exactly those lines, so a stale line (an old
+# ANTHROPIC_API_KEY) is removed. A merge replaces the lines of the names in VM_ENV and keeps the other plain
+# NAME=value lines, so `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN; it drops every other line (a command, a
 # comment, a value the shell would expand) with a warning that says how many (never their content), and
 # prints the names (never the values) of the lines it kept. The values travel on standard input, never on a
 # command line (only the mode does), and the file is written to a temporary file beside daemon.env and moved
@@ -419,9 +418,10 @@ vm-init: ## Once-only VM setup after vm-env and vm-claude-settings: Claude Code 
 # One target at a time, in order, even under make -j. vm-env-check runs first, before vm-up and any limactl
 # call, so a missing credential or a VM_ENV vm-env would refuse creates nothing (issue #258). Each sub-make
 # gets a command-line VM_ENV the same way (through MAKEFLAGS), so it is checked as vm-env then reads it.
+# When the check refuses, vm-create says on stderr that it created nothing, after vm-env's own messages.
 .PHONY: vm-create
 vm-create: ## Create and set up the VM, ready for make deck: vm-env-check, vm-up (VM_CPUS, ... pass through), vm-env, vm-claude-settings, vm-init
-	$(MAKE) vm-env-check
+	@$(MAKE) vm-env-check || { echo "vm-create: nothing was created: the credential check runs before the VM is created" >&2; exit 1; }
 	$(MAKE) vm-up
 	$(MAKE) vm-env
 	$(MAKE) vm-claude-settings

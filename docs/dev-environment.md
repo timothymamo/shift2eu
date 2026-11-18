@@ -399,7 +399,9 @@ read the file:
 ### Troubleshooting credentials
 
 **`make vm-env` or `make vm-create` refuses: `vm-env: not set or empty: CLAUDE_CODE_OAUTH_TOKEN ...`.**
-The shell you ran it in does not have the variables (a refused `make vm-create` has created nothing yet). Fix it in this order:
+The shell you ran it in does not have the variables. A refused `make vm-create` has created nothing yet,
+and says so: `vm-create: nothing was created: the credential check runs before the VM is created`. Fix it
+in this order:
 
 1. If your credentials come from the macOS login Keychain (a `.envrc` that reads them with `security`),
    an SSH session has the Keychain locked, so every lookup comes back empty. Unlock it; it asks for the
