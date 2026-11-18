@@ -38,10 +38,15 @@ absolute or holds anything but letters, digits, `/`, `.`, `_` and `-`, or a `..`
 come only from the `make` command line or from the Makefile: both targets refuse, before any `sudo`, one
 whose `$(origin)` is `environment` (or `environment override`), since a stale export, from a test or an
 earlier session, would have root install the plist where launchd never looks at boot, and the job would
-quietly be gone after the next reboot. Both the install and the plist generator refuse, before anything
-else, to run as root (`sudo make ...`, `sudo -E make ...`): the job's `UserName` is the account that renders
-the plist, and a root job would run the host clone's script, which the maintainer can edit, as root at every
-boot; the install is run as the maintainer and runs `sudo` itself.
+quietly be gone after the next reboot. Both the install and the plist generator refuse to run as root
+(`sudo make ...`, `sudo -E make ...`): the install recipe's first statement refuses uid 0, before it checks
+or runs anything else, and the generator refuses it with its first input check, before it renders anything.
+The job's `UserName` is the account that renders the plist, and a root job would run the host clone's
+script, which the maintainer can edit, as root at every boot; the install is run as the maintainer and runs
+`sudo` itself. Under `sudo make`, make's parse-time `$(shell git ...)` reads of the Makefile (`git describe`,
+`git rev-parse`, `git config`) still run as root against the clone before the recipe does; that is
+acceptable, since they are read-only git plumbing that runs no hooks, and the runbook says never to run the
+install under `sudo`.
 
 **The install fails closed.** Over a loaded job it runs `launchctl bootout` and waits, at most 10 seconds,
 while `launchctl print` still finds the job; a job still loaded then stops the install before it installs
