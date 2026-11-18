@@ -1517,7 +1517,10 @@ func TestForStorageNotIncluded(t *testing.T) {
 	tests := []struct {
 		name string
 		// resource, offerings and region are the case's input, as in TestFor.
-		resource  inventory.Resource
+		resource inventory.Resource
+		// handBuilt builds the resource without inventory.New, as only a caller
+		// that skips the validation can: the validation refuses a count below 1.
+		handBuilt bool
 		offerings []catalog.Offering
 		region    string
 		// want is the note the estimate must carry, "" for none.
@@ -1554,6 +1557,19 @@ func TestForStorageNotIncluded(t *testing.T) {
 			region:        testutil.PricedDefaultRegion,
 			wantEstimated: true,
 			wantMonthly:   "20.00",
+		},
+		{
+			// A resource with count 0 leaves nothing out, because it is nothing
+			// to estimate: its estimate is 0.00, so no storage is left out of it.
+			name: "compute.vm: a count of 0 gets no note",
+			resource: computeResource(&inventory.Size{
+				VCPUs: f(2), MemoryGiB: f(4), Count: n(0),
+			}, nil),
+			handBuilt:     true,
+			offerings:     []catalog.Offering{bootVolumeComputeOffering()},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "0.00",
 		},
 		{
 			// A storage size the resource gives is priced above what the plan
@@ -1703,8 +1719,13 @@ func TestForStorageNotIncluded(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			resource := tc.resource
+			if !tc.handBuilt {
+				resource = newResource(t, tc.resource)
+			}
+
 			cat := newCatalog(t, tc.offerings)
-			got := estimate.For(mapping.Map(newResource(t, tc.resource), cat), tc.region)
+			got := estimate.For(mapping.Map(resource, cat), tc.region)
 
 			if got.Estimated != tc.wantEstimated {
 				t.Errorf("Estimated = %t, want %t (reason %q)", got.Estimated, tc.wantEstimated, got.Reason)
