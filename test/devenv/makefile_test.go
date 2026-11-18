@@ -659,17 +659,18 @@ func TestMakeAgentsTokenRefreshStartKeepsOneRefresherPerVM(t *testing.T) {
 		}
 
 		// It asked launchd about this instance's job, so the warning is about the job that runs this VM's
-		// refresh and not about another instance's.
+		// refresh and not about another instance's. launchctl takes the service target as one argument,
+		// `launchctl print system/<label>`, so the same invocation must carry `print` and that target.
 		var askedLabel bool
 
 		for _, args := range invocations(f.sb.argvLogText(t), "launchctl") {
-			if slices.Contains(args, "print") && slices.Contains(args, label) {
+			if slices.Contains(args, "print") && slices.Contains(args, "system/"+label) {
 				askedLabel = true
 			}
 		}
 
 		if !askedLabel {
-			t.Errorf("make agents-token-refresh-start never asked launchctl for the job %s, so it cannot know the LaunchDaemon runs the refresh:\n%s", label, f.sb.argvLogText(t))
+			t.Errorf("make agents-token-refresh-start never ran launchctl print system/%s, so it cannot know the LaunchDaemon runs the refresh:\n%s", label, f.sb.argvLogText(t))
 		}
 
 		// The warning is a refusal to start a second loop: no pid file, no log, and no mint.
