@@ -33,6 +33,12 @@ type InlineComment struct {
 // outside the diff) is listed in the body with its path and line, if any.
 // Inline comments keep the findings' order. CommitID is headSHA and Event is
 // event, unchanged: Render refuses nothing, the poster does.
+//
+// Every mention in the text the model wrote (summary, titles, bodies) is
+// defused, so the review notifies nobody. The body and each inline comment's
+// body are cut to MaxTextRunes with a note that says so; the body keeps its
+// first line, which names headSHA, and its closing statement that the review
+// is advice and never an approval (ADR 0033).
 func Render(headSHA string, answer Answer, event Event, diff string) Review {
 	shown := newSideLines(diff)
 
@@ -43,7 +49,11 @@ func Render(headSHA string, answer Answer, event Event, diff string) Review {
 
 	for _, f := range answer.Findings {
 		if f.Path != "" && f.Line > 0 && shown[diffLine{path: f.Path, line: f.Line}] {
-			comments = append(comments, InlineComment{Path: f.Path, Line: f.Line, Body: findingText(f)})
+			comments = append(comments, InlineComment{
+				Path: f.Path,
+				Line: f.Line,
+				Body: truncateRunes(findingText(f), MaxTextRunes, truncatedComment),
+			})
 
 			continue
 		}
@@ -51,10 +61,82 @@ func Render(headSHA string, answer Answer, event Event, diff string) Review {
 		inBody = append(inBody, f)
 	}
 
+	head := fmt.Sprintf("**AI review** of %s\n\n", headSHA)
+	middle := renderMiddle(answer, event, comments, inBody)
+
+	room := MaxTextRunes - runeCount(head) - runeCount(adviceFooter)
+
+	return Review{
+		CommitID: headSHA,
+		Event:    event,
+		Body:     head + truncateRunes(middle, room, truncatedBody) + adviceFooter,
+		Comments: comments,
+	}
+}
+
+// MaxTextRunes is GitHub's limit on a review's body and on each inline
+// comment's body, in characters: a longer text is refused with a 422.
+const MaxTextRunes = 65_000
+
+// adviceFooter closes every review's body, whatever Render cuts.
+const adviceFooter = "\n---\n\n_This review is advice for the maintainer from the AI reviewer (ADR 0033). " +
+	"It never approves: only the maintainer's approval counts._\n"
+
+// The notes that end a text Render cut to GitHub's limit.
+const (
+	truncatedBody    = "\n\n_The review was truncated here: it is longer than GitHub accepts._\n"
+	truncatedComment = "\n\n_This comment was truncated here: it is longer than GitHub accepts._\n"
+)
+
+// truncateRunes returns s when it has at most limit runes, and otherwise its
+// first runes followed by note, limit runes in all.
+func truncateRunes(s string, limit int, note string) string {
+	if runeCount(s) <= limit {
+		return s
+	}
+
+	keep := max(limit-runeCount(note), 0)
+
+	return string([]rune(s)[:keep]) + note
+}
+
+// runeCount is the number of characters of s, as GitHub counts them.
+func runeCount(s string) int {
+	return len([]rune(s))
+}
+
+// defuseMentions makes every @ followed by an ASCII letter or digit in s
+// notify nobody: it puts a zero-width space after the @, so the handle stays
+// readable but is no mention. It is applied to text the model wrote only.
+func defuseMentions(s string) string {
+	var b strings.Builder
+
+	b.Grow(len(s))
+
+	for i := 0; i < len(s); i++ {
+		b.WriteByte(s[i])
+
+		if s[i] == '@' && i+1 < len(s) && isASCIIAlnum(s[i+1]) {
+			b.WriteRune(zeroWidthSpace)
+		}
+	}
+
+	return b.String()
+}
+
+// zeroWidthSpace (U+200B) is what defuseMentions puts after an @.
+const zeroWidthSpace rune = 0x200B
+
+func isASCIIAlnum(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9'
+}
+
+// renderMiddle renders the body between its first line and adviceFooter: the
+// summary, why the review has its event, and the findings not posted inline.
+func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody []Finding) string {
 	var body strings.Builder
 
-	fmt.Fprintf(&body, "**AI review** of %s\n\n", headSHA)
-	body.WriteString(strings.TrimSpace(answer.Summary))
+	body.WriteString(defuseMentions(strings.TrimSpace(answer.Summary)))
 	body.WriteString("\n\n")
 	body.WriteString(eventReason(answer.Findings, event))
 	body.WriteString("\n")
@@ -85,10 +167,7 @@ func Render(headSHA string, answer Answer, event Event, diff string) Review {
 		fmt.Fprintf(&body, "\n%d findings are inline comments on the diff.\n", len(comments))
 	}
 
-	body.WriteString("\n---\n\n_This review is advice for the maintainer from the AI reviewer (ADR 0033). " +
-		"It never approves: only the maintainer's approval counts._\n")
-
-	return Review{CommitID: headSHA, Event: event, Body: body.String(), Comments: comments}
+	return body.String()
 }
 
 // eventReason says why the review has its event.
@@ -114,7 +193,8 @@ func findingText(f Finding) string {
 		head += ", **blocking**"
 	}
 
-	return fmt.Sprintf("%s: **%s**\n\n%s", head, strings.TrimSpace(f.Title), strings.TrimSpace(f.Body))
+	return fmt.Sprintf("%s: **%s**\n\n%s", head,
+		defuseMentions(strings.TrimSpace(f.Title)), defuseMentions(strings.TrimSpace(f.Body)))
 }
 
 // diffLine is one line of a file on the new side of a diff.
@@ -178,7 +258,9 @@ func newSideLines(diff string) map[diffLine]bool {
 }
 
 // newSidePath returns the path a "+++ " line names: "b/<path>" without its
-// prefix, and "" for /dev/null (a deleted file).
+// prefix, and "" for /dev/null (a deleted file). A path git quotes
+// (+++ "b/a b.go", for a space or a non-ASCII byte) is not unquoted: it gives
+// "", so a finding on such a file falls back to the body, which is safe.
 func newSidePath(name string) string {
 	name, _, _ = strings.Cut(name, "\t")
 

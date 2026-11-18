@@ -106,9 +106,12 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 		return result, fmt.Errorf("posted the review, then: %w", err)
 	}
 
-	message := fmt.Sprintf("The AI reviewer's review of %s found nothing blocking; it withdraws its earlier change request.", pr.HeadSHA)
-
 	for _, earlier := range DismissalsFor(reviews, cfg.BotLogin, answer.Findings) {
+		// The message names both commits, so the maintainer sees which change
+		// request a review of which head withdrew (ADR 0033).
+		message := fmt.Sprintf("The AI reviewer's review of %s found nothing blocking; "+
+			"it withdraws its change request on %s.", pr.HeadSHA, earlier.CommitID)
+
 		if err := gh.DismissReview(ctx, cfg.Number, earlier.ID, message); err != nil {
 			return result, fmt.Errorf("posted the review, then: %w", err)
 		}

@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"time"
 
 	"github.com/timothymamo/shift2eu/ci/aireview/internal/review"
@@ -50,8 +48,8 @@ func run() int {
 		return fail(err)
 	}
 
-	gh := review.NewGitHub(gitHubAPI, settings.Repository, settings.GitHubToken, &http.Client{Timeout: gitHubTimeout})
-	model := review.NewAnthropic(anthropicAPI, settings.ModelKey, &http.Client{Timeout: modelTimeout})
+	gh := review.NewGitHub(gitHubAPI, settings.Repository, settings.GitHubToken, review.NewHTTPClient(gitHubTimeout))
+	model := review.NewAnthropic(anthropicAPI, settings.ModelKey, review.NewHTTPClient(modelTimeout))
 
 	result, err := review.Run(ctx, gh, model, review.Config{
 		Number:         settings.Number,
@@ -96,13 +94,7 @@ func readInstructions() (review.Instructions, error) {
 
 // fail prints err as one workflow error annotation and returns the exit code 1.
 func fail(err error) int {
-	fmt.Fprintf(os.Stderr, "::error title=AI review failed::%s\n", escapeCommandData(err.Error()))
+	fmt.Fprintf(os.Stderr, "::error title=AI review failed::%s\n", review.AnnotationData(err.Error()))
 
 	return 1
-}
-
-// escapeCommandData escapes a workflow command's data as the runner reads it,
-// so the text stays on one line and cannot start another command.
-func escapeCommandData(s string) string {
-	return strings.NewReplacer("%", "%25", "\r", "%0D", "\n", "%0A").Replace(s)
 }

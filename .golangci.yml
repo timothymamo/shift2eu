@@ -1478,10 +1478,8 @@ linters:
           allow:
             - context$
             - fmt$
-            - net/http$
             - os$
             - os/signal$
-            - strings$
             - time$
             - github.com/timothymamo/shift2eu/ci/aireview/internal/review$
           deny:
@@ -1509,6 +1507,7 @@ linters:
             - slices$
             - strconv$
             - strings$
+            - time$
           deny:
             - pkg: os
               desc: the AI reviewer's library reads no file and no environment; ci/aireview passes what it needs (ADR 0033)

@@ -1037,10 +1037,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Allow: []string{
 			"context$",
 			"fmt$",
-			"net/http$",
 			"os$",
 			"os/signal$",
-			"strings$",
 			"time$",
 			"github.com/timothymamo/shift2eu/ci/aireview/internal/review$",
 		},
@@ -1068,6 +1066,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"slices$",
 			"strconv$",
 			"strings$",
+			"time$",
 		},
 		Deny: []string{"os"},
 	},
