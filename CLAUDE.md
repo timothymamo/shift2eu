@@ -158,8 +158,8 @@ holds and decisions). The skill refers to these values by name:
 |---|---|
 | Orchestration | `shift2eu` |
 | CLI | `~/.local/bin/dot-agent-deck` |
-| Unit limit | 3 open units (2 when the VM has 8 GiB or less), counting running units only: a unit is closed once its PR is verified and reported ready |
-| Review limit | 5 PRs waiting for the maintainer's review or merge, not counting the release PR (label `autorelease: pending`) or Renovate's dependency PRs (author `app/renovate`, label `dependencies`) |
+| Unit limit | 3 running units (2 when the VM has 8 GiB or less): a unit is closed once its PR is verified and reported ready |
+| Review limit | 5 PRs waiting for the maintainer's review or merge, not counting Renovate's PRs (author `app/renovate`; their label `dependencies` alone excludes nothing) or release-please's release PR (head branch `release-please--branches--*` and label `autorelease: pending`, never the label alone) |
 | Checks on a merged scratch tree | `make check` and `make test-e2e` |
 | Maintainer notes directory | `.idea/` in the repository root (git-ignored) |
 | Release flow | The release-please PR, reviewed with the `release-tag` skill |
