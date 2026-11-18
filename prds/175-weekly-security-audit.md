@@ -104,8 +104,13 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
   triage), the App's permissions and their side effects (open question 1), and why the Lima-VM plan of
   the issue was dropped. Milestone 2 amends the same ADR with how Claude Code runs in Actions (open
   question 3), its sandbox, settings, permission mode and audit directory, how the runner's
-  user-namespace restriction is handled, the encoded-token residual risk, the encryption and artifact
-  handling, the container flags (`--tmpfs` included), and the time budget; it is not written twice.
+  user-namespace restriction is handled, the sandbox preflight's six probes and the model-free step that
+  stops Docker and removes the runner user's sudo rule, the encoded-run thresholds (the minimum length L
+  and the entropy N in bits per character, The publish script below) and the encoded-token residual risk,
+  the encryption and artifact handling, the Actions-cache residual risk, the container flags (`--tmpfs`
+  included), and the time budget; it is not written twice. It also states that the Claude subscription is
+  not a Team or Enterprise plan, so no server-managed settings reach the model step, or, if it is one, how
+  the launcher checks those settings.
 
 ### The workflow and its enforcement (milestone 2)
 
@@ -119,15 +124,17 @@ Triggers, jobs and permissions:
   started on), never a pull request's code or another ref, with `persist-credentials: false`.
 - [ ] It has three jobs, each on its own fresh runner:
   - the **checks job** runs every networked or untrusted-code check (What a run does) and references no
-    secret;
+    secret other than `GITHUB_TOKEN` (as `github.token`), and that only in step-level `env:`;
   - the **model job** has `needs: checks`, runs no check, no release code, no container and nothing it
     downloads but its checksum-pinned tools, and runs the model;
   - the **publish job** has `needs: model`, runs only its committed script, and runs no model, no audit
     check and nothing from the release; its only scanner is gitleaks over the text it is about to publish.
-- [ ] `GITHUB_TOKEN` holds `permissions: {}` at the top level. The checks job has exactly
-  `contents: read` and `attestations: read`; the model and publish jobs exactly `contents: read` (plus
-  `actions: read` where the ADR shows the artifact listing below needs it). No job ever holds a write
-  scope. The release's images are public, so they are pulled anonymously and no job holds
+- [ ] `GITHUB_TOKEN` holds `permissions: {}` at the top level. The checks job has exactly the read
+  scopes the ADR lists after the first run: at least `contents: read` and `attestations: read`, and
+  `actions: read` and `issues: read` if scorecard or the supply-chain reads (row 15) need them, never a
+  write scope. A read the token is refused is reported "not run", as scorecard's admin checks are. The
+  model and publish jobs have exactly `contents: read` (plus `actions: read` where the ADR shows the
+  artifact listing below needs it). No job ever holds a write scope. The release's images are public, so they are pulled anonymously and no job holds
   `packages: read`.
 - [ ] The audit App's token is minted with `actions/create-github-app-token` (pinned by SHA) **only in the
   publish job**, narrowed with exactly the `permission-*` inputs the ADR lists. The App's client ID is a
@@ -140,7 +147,9 @@ What crosses between the jobs:
 - [ ] Two key pairs of the encryption tool (`age`, or an equivalent the ADR names, pinned like the other
   tools): the **model key** and the **publish key**. Each public half is a variable, each private half a
   secret, of the `security-audit` environment. The model key's private half is referenced only in the
-  model job's decrypt step, the publish key's only in the publish job's decrypt step.
+  model job's decrypt step, the publish key's only in the publish job's decrypt step. Each decrypt step
+  passes the private half to the tool on stdin, or writes it to a file only under that job's
+  `$RUNNER_TEMP` (read-denied to the model) and deletes the file in the same step.
 - [ ] The checks job writes its raw results under its own `$RUNNER_TEMP`, and a last step encrypts them to
   the model key's public half and uploads **only that ciphertext**, as the artifact `checks-result`. The
   model job writes one structured result (a JSON file with a schema the publish script owns), and a
@@ -182,7 +191,7 @@ The model job and where the subscription token is:
 
 - [ ] The model job checks out `github.sha`, downloads and checksum-verifies its pinned tools, downloads
   `checks-result`, and decrypts it into the **audit directory**: a fresh directory the ADR names, outside
-  `/home`, `$HOME` and the runner's own directories (on hosted runners `$RUNNER_TEMP` lies under
+  `/home`, the runner's `$HOME` (`/home/runner`) and the runner's own directories (on hosted runners `$RUNNER_TEMP` lies under
   `/home/runner`, so it cannot be there without weakening the read deny list below). A model-free step
   copies the checkout into the audit directory, read-only.
 - [ ] The model step authenticates with the Claude Code OAuth token from the `security-audit`
@@ -194,8 +203,9 @@ The model job and where the subscription token is:
   verified against its pinned checksum in the same step, through `env -i` with an explicit allow list: a
   fresh `HOME` inside the audit directory's own state area, a fixed `PATH`, the token,
   `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and only what the ADR shows the
-  sandbox needs. The launcher fails if a Claude Code managed-settings file (the paths the ADR names)
-  exists. A test runs the launcher with a fake Claude Code binary and shows that a variable set through
+  sandbox needs, and a dummy canary variable for the preflight's probe 5. The launcher fails if a Claude
+  Code managed-settings file (the paths the ADR names) exists; server-managed settings are covered by the
+  ADR's statement on the subscription plan. A test runs the launcher with a fake Claude Code binary and shows that a variable set through
   `$GITHUB_ENV` in an earlier step (`ANTHROPIC_BASE_URL`, `HTTPS_PROXY`, `NODE_OPTIONS`, `LD_PRELOAD`) is
   not seen, and that a managed-settings file stops it.
 
@@ -211,29 +221,44 @@ How the model is contained:
 - [ ] It runs inside **Claude Code's sandbox** with `sandbox.enabled: true`,
   `autoAllowBashIfSandboxed: false`, `allowUnsandboxedCommands: false`, no `excludedCommands`, and an
   **empty** network allow list: Bash has no network at all. Bash writes only under the audit directory's
-  work area. The Claude Code process itself reaches only the model API, by its settings (the two
-  variables above, no `WebFetch` or `WebSearch`).
+  work area. The Claude Code process itself makes no connection but to the model API **by its
+  configuration** (the two variables above, no `WebFetch` or `WebSearch`). That is not enforced: the
+  sandbox wraps Bash only, and the unsandboxed CLI process could open any connection. It is a residual
+  risk (open question 6), and no test claims otherwise.
 - [ ] Its permissions are an **allow list in a non-interactive mode that refuses every tool not on it**
-  (the ADR names the mode): `Read`, `Grep` and `Glob` only under the audit directory (the checkout copy and
-  the checks' results), `Write` and `Edit` only under its work area, and, if the skill needs a command at
-  all, `Bash` only through the scrubbed-environment wrapper below. It never runs with `bypassPermissions`
-  or `--dangerously-skip-permissions`. A deny list covers `Read`, `Grep` and `Glob` of `/proc`, `/sys`,
-  `/etc`, `/home`, `$HOME` and the runner's directories, and keeps the Bash patterns (`git
-  push|commit|tag|remote`, `gh`, `curl`, `wget`, `nc`, `ssh`, `docker`, `sudo`, `env`, `printenv`, `set`,
-  `/proc/*/environ`) as defence in depth.
+  (the ADR names the mode): `Read`, `Grep` and `Glob` only of the audit directory's checkout copy, the
+  checks' results and the work area, `Write` and `Edit` only under the work area, and, if the skill needs
+  a command at all, `Bash` only through the scrubbed-environment wrapper below. It never runs with
+  `bypassPermissions` or `--dangerously-skip-permissions`. The deny list names **literal paths**, not
+  `~` or `$HOME` (in Claude Code's rules `~` is the launcher's fresh `HOME`, inside the audit directory):
+  `Read`, `Grep` and `Glob` of `/proc`, `/sys`, `/etc`, `/home` and `/home/runner` (which holds
+  `$RUNNER_TEMP`, the workspace and the runner's own directories), and `Read`, `Edit`, `Write`, `Grep` and
+  `Glob` of the audit directory's state area (the fresh `HOME`, with Claude Code's own configuration and
+  transcripts). It keeps the Bash patterns (`git push|commit|tag|remote`, `gh`, `curl`, `wget`, `nc`,
+  `ssh`, `docker`, `sudo`, `env`, `printenv`, `set`, `/proc/*/environ`) as defence in depth.
 - [ ] Any command the model runs goes through a committed wrapper that names the commands it may `exec`
   (the ADR lists them), refuses every other, and `exec`s with a scrubbed environment (`env -i` plus an
   allow list of harmless variables).
 - [ ] A test pins the settings file: the setting sources, the sandbox keys above, the empty network
-  allow list, the allow list with its path scopes, the deny list, the mode, the absence of `WebFetch`,
-  `WebSearch` and both bypass forms. Dropping or widening any of them fails `make test`.
-- [ ] Before the model starts, a **sandbox preflight** runs a probe through the same settings: a write
-  outside the work area and a TCP connect must both fail. If either succeeds, or bubblewrap cannot start
-  (Ubuntu's AppArmor restriction of unprivileged user namespaces), the step fails and its summary names
-  the runbook step. Whatever the model-free step changes to let bubblewrap start, the ADR records.
-- [ ] A test, or failing that the first run's check (runbook step 8), shows that **no tool call** in the
-  model step (`Read`, `Grep`, `Glob` or `Bash`) can read the OAuth token, neither from its own environment
-  nor from `/proc/*/environ` of the Claude Code process or its ancestors.
+  allow list, the allow list with its literal path scopes (only the checkout copy, the checks' results and
+  the work area), the deny list with its literal paths (`/proc`, `/sys`, `/etc`, `/home`, `/home/runner`
+  and the audit directory's state area), the mode, the absence of `WebFetch`, `WebSearch` and both bypass
+  forms. Dropping or widening any of them fails `make test`.
+- [ ] Before the model step, a **model-free hardening step** stops the Docker service and removes the
+  runner user's sudo rule (the model job runs no container). The `test/architecture` check pins that step
+  and its place before the preflight.
+- [ ] On **every run**, before the model starts, a **sandbox preflight** runs six probes through the same
+  launcher, settings and wrapper the model uses, and fails the step unless **all six fail**: (1) a write
+  outside the work area, (2) a TCP connect, (3) a connect to `/var/run/docker.sock`, (4) `sudo -n true`,
+  (5) a read of a canary variable from `/proc/<launcher pid>/environ`, where the launcher sets a dummy
+  canary for this purpose (never the token), and (6) a write to the `$GITHUB_ENV` file's path. Probes 5
+  and 6 also run as `Read`, `Grep` and `Glob` tool calls where the tool applies. If a probe succeeds, or
+  bubblewrap cannot start (Ubuntu's AppArmor restriction of unprivileged user namespaces), the step fails
+  and its summary names the runbook step. Whatever the model-free step changes to let bubblewrap start,
+  the ADR records. This makes the check that **no tool call** in the model step (`Read`, `Grep`, `Glob` or
+  `Bash`) can read the launcher's environment, and so the OAuth token, part of every run, so a Claude Code
+  version that Renovate bumps is checked on its first run. A test runs the preflight's logic against a
+  fake that lets each probe in turn succeed and shows the step fails.
 
 Pins, checks and logs:
 
@@ -245,14 +270,23 @@ Pins, checks and logs:
   `@latest` or a `curl | sh`.
 - [ ] A check in `test/architecture` (like `check.ReleasePleaseWorkflow`) pins the workflow: its
   triggers, the `main`-only condition, the three jobs' permissions and environment, `needs: checks` and
-  `needs: model`, no secret referenced in the checks job, each secret in exactly one job and step (the
-  OAuth token in the model step's step-level `env:`, the model key's private half in the model job's
-  decrypt step, the publish key's private half and the App key in the publish job), the App token with
-  exactly its `permission-*` inputs, the two artifacts by name and their retention, no job outputs, no
-  `actions/cache` of tool output, no `set -x`, no check or container step in the model job,
-  `GOFLAGS=-mod=readonly GOPROXY=off`, the container flags, the commit-pinned actions, the time-outs, and
-  Claude Code's launch (the launcher, its settings file, setting sources, strict MCP configuration, the
-  system-prompt or prompt file, no bypass). Changing any of them fails `make check`.
+  `needs: model`, no secret in the checks job other than `github.token` in step-level `env:`, each secret
+  in exactly one job and step (the OAuth token in the model step's step-level `env:`, the model key's
+  private half in the model job's decrypt step, the publish key's private half, the App key and the
+  fingerprint key in the publish job), **no `secrets[`, `toJSON(secrets)` or `secrets: inherit`** anywhere
+  in the workflow (each would send every environment secret to that runner), the App token with exactly
+  its `permission-*` inputs, the two artifacts by name and their retention, no job outputs, no
+  `actions/cache` of tool output, no `set -x`, no check or container step in the model job, the
+  hardening step before the sandbox preflight, `GOFLAGS=-mod=readonly GOPROXY=off`, the container flags,
+  the commit-pinned actions, the time-outs, and Claude Code's launch (the launcher, its settings file,
+  setting sources, strict MCP configuration, the system-prompt or prompt file, no bypass). Changing any of
+  them fails `make check`.
+- [ ] **The Actions cache.** Anything in the checks job runs as the runner user and could read the
+  Actions runtime token and save cache entries scoped to `main`, which other workflows on `main` restore.
+  The ADR records this residual risk and the rule that no release-relevant workflow restores an Actions
+  cache. The same `test/architecture` check pins `cache: false` (or `skip-cache: true`) on every
+  `actions/setup-go` step in `release.yml` (both set `cache: false` today) and on any golangci-lint step
+  added there, so a change that turns a cache on there fails `make check`.
 - [ ] Nothing private reaches a log or a readable artifact. Raw tool output, crash inputs, PoCs, Claude
   Code's transcript and its final output stay under the job's temporary or audit directory, never
   printed, never uploaded but encrypted. Claude Code's output is redirected to a file, not streamed to the
@@ -273,36 +307,65 @@ The publish script:
   private, never less. A test covers each row of the table.
 - [ ] Before publishing, it scans every text it is about to send (the report, any issue title and body,
   every advisory's text) with gitleaks plus patterns for Claude OAuth tokens and GitHub App private keys,
-  and refuses, in public text, any base64 or hex run or high-entropy string over the length the ADR sets
-  (longer than a fingerprint). On a hit it publishes nothing, and the summary says only "publish refused:
-  see runbook". A test covers a raw token, an encoded token, and a hit in advisory text.
+  and it **decodes every base64 or hex run and matches the decoded bytes against the same patterns**
+  (the encoded-token check). One rule, stated the same way in open question 2:
+  - **Public text** (the report and issues) also gets the **encoded-run refusal**: a run is a token with
+    no `/`, `.` or other path separator, at least L characters long, with an entropy of at least N bits
+    per character; the ADR sets L (longer than a fingerprint) and N. The refusal applies only to
+    **model-written fields, after Markdown escaping**. Values the script inserts itself are exempt: the
+    `main` SHA, the release tag, the run URL, the dates, the fingerprints, and the digests and SHAs it
+    read itself from GitHub or the release.
+  - **Advisory text** gets the token and key patterns and the encoded-token check, but **not** the
+    encoded-run refusal: an advisory legitimately holds PoCs and crash inputs, which are often base64.
+
+  On a hit it publishes nothing, and the summary says only "publish refused: see runbook". Tests cover a
+  raw token, an encoded token in public text (refused), a token encoded in advisory text (refused), a
+  base64 crash input in advisory text (published), and a public finding with a long repository path
+  (`internal/adapter/source/inventoryfile/decode.go:42`) in a report that holds the `main` SHA and an
+  image digest (published).
 - [ ] The PR's title and body, its branch `security-audit/YYYY-MM-DD` and its commit message are fixed
   templates filled only with the date, the `main` SHA, the release tag, the counts and the run's URL,
   built by the script from `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY` and `GITHUB_RUN_ID`, never with model
-  text.
+  text. The branch holds **one commit** with both files, made through the Git data endpoints (blob, tree,
+  commit, ref).
 - [ ] It opens the report PR only after checking that the branch's diff is exactly
   `docs/security/audits/YYYY-MM-DD.md` and its index line in `docs/security/README.md`, refusing
-  anything else or an existing branch. A report it renders from a fixture result passes `test/docs`' title
-  and link checks.
-- [ ] Each finding carries a **fingerprint** the script computes (rule, file, sink), written as
-  `fp-` and 12 lowercase hex characters in the report's findings table and in each issue and advisory it
-  files, so later runs can read it back.
-- [ ] It tracks private findings by fingerprint: it lists the repository's advisories, updates a draft
-  whose fingerprint recurs, creates a draft for a new one, and marks a draft whose finding this run did
-  not reproduce; a recurrence of a finding whose advisory the maintainer closed is filed as a new draft
-  marked "regressed". The report shows only counts for private findings (new, still open, not
-  reproduced).
-- [ ] It calls **only a fixed set of endpoints**: the GitHub reads it needs, creating the
-  `security-audit/*` ref and its two files, creating the PR, searching and creating issues, listing,
-  creating and updating (`PATCH`) repository security advisories. Every advisory `state` it sends is
-  hard-coded `draft`, and it never calls the endpoints that publish an advisory, request a CVE, approve or
-  merge a PR, or touch a tag, release or other branch. The fake `gh` fails the test on any other endpoint
-  or state.
+  anything else or an existing branch (runbook step 11 recovers from a stale one). A report it renders
+  from a fixture result passes `test/docs`' title and link checks.
+- [ ] Each finding carries a **fingerprint** the script computes from rule, file and sink, written as
+  `fp-` and 12 lowercase hex characters in each issue and advisory it files, and in the report's findings
+  table for public findings, so later runs can read it back. A **public** fingerprint is a plain hash: the
+  finding is published anyway. A **private** fingerprint is a keyed hash (HMAC) with the
+  `AUDIT_FINGERPRINT_KEY` secret of the `security-audit` environment, referenced only in the publish job,
+  so nobody can predict it from the committed script.
+- [ ] **Only what the App wrote is matched.** It matches, and updates with `PATCH`, only advisories the
+  audit App authored, in `draft` or `closed` state, with no credited reporter or collaborator the App did
+  not add; it never touches an advisory in `triage` state (a private vulnerability report) or any other.
+  It matches issues only if `shift2eu-audit[bot]` authored them. An outsider therefore cannot steer a
+  private finding into an advisory they can read, nor stop a public finding's issue with a planted
+  fingerprint. The fake-`gh` test covers a `triage`-state advisory and an advisory with a foreign
+  collaborator, each holding a matching fingerprint (neither is touched; a new draft is created), and an
+  outsider's issue holding a public finding's fingerprint (ignored; the bot's issue is opened).
+- [ ] It tracks private findings by fingerprint: it lists the App's advisories, updates a draft whose
+  fingerprint recurs, creates a draft for a new one, and marks a draft whose finding this run did not
+  reproduce "not reproduced". A recurrence of a finding whose advisory the maintainer closed is
+  **"regressed"**, filed as a new draft, only if an earlier run marked that advisory "not reproduced"
+  before it was closed (fixed, then back). Otherwise the closed advisory counts as dismissed (a false
+  positive or an accepted risk): no new draft, and the report counts it as "known, dismissed". A test
+  covers each case. The report shows only counts for private findings (new, still open, not reproduced,
+  regressed, known dismissed).
+- [ ] It calls **only a fixed set of endpoints**: the GitHub reads it needs; the Git data endpoints that
+  create one blob per file, one tree, one commit and the `security-audit/*` ref; creating the PR;
+  searching and creating issues; listing, creating and updating (`PATCH`) repository security
+  advisories. Every advisory `state` it sends is hard-coded `draft`, and it never calls the endpoints that
+  publish an advisory, request a CVE, approve or merge a PR, or touch a tag, release or other branch. The
+  fake `gh` fails the test on any other endpoint or state.
 - [ ] It opens a `security` issue only for a public finding of a report **already merged on `main`**,
-  never for the report it is opening (open question 7), and only when no issue, **open or closed**, carries
-  that finding's fingerprint. A merged report counts as processed once every public finding in it has
-  such an issue, so the work is idempotent and a finding whose issue the maintainer closed is not filed
-  again. A test covers an open, a closed, and an unmatched fingerprint, and the report being opened.
+  never for the report it is opening (open question 7), and only when no issue authored by
+  `shift2eu-audit[bot]`, **open or closed**, carries that finding's fingerprint. A merged report counts as
+  processed once every public finding in it has such an issue, so the work is idempotent and a finding
+  whose issue the maintainer closed is not filed again. A test covers an open, a closed, and an unmatched
+  fingerprint, and the report being opened.
 - [ ] If GitHub refuses advisory creation to the App, the run fails closed: it publishes only the counts
   and the coverage, and the summary says "N private findings, not filed: see runbook" (open question 2).
 - [ ] Values from the run reach the shell only through `env:` and files, never through a `${{ }}`
@@ -324,7 +387,8 @@ Time and failures:
   subscription's usage limit, a tool download whose checksum differs, a failed sandbox preflight, a
   managed-settings file, an unexpected artifact, a refused publish) fails the workflow, which GitHub
   notifies the maintainer of. Its step summary names the cause's kind and the runbook step that fixes it,
-  without a secret or finding detail.
+  without a secret or finding detail. Recovery is always a **new `workflow_dispatch` run**, never "re-run
+  failed jobs", so the artifact check never sees an earlier attempt's artifact.
 - [ ] The maintainer's runbook (below) is in `docs/dev-environment.md`, with a check after each step.
 
 ### The first run and the schedule (milestone 3)
@@ -372,8 +436,8 @@ tag (`gh release view --json tagName`) are recorded first, and every later step 
 | 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (none yet: open question 5) | checks, container, `--network none`, `GOPROXY=off` | no |
 | 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments read the way the `release-tag` skill's step 2 reads them, Renovate's state, dependencies changed since the last report | checks, workflow step | yes: GitHub reads |
 | 16 | Encrypt the raw results to the model key, upload `checks-result` | checks, workflow step | yes: artifact upload |
-| 17 | Check the run's artifacts, download `checks-result`, decrypt into the audit directory, copy the checkout, sandbox preflight | model, workflow steps | yes: tools, artifact download |
-| 18 | The `security-audit` checklist across the whole tree, a review of what the agents may run (`.claude/`, `.pi/`, `.dot-agent-deck.toml`, `dev/`), triage of 3 to 15 with a PoC or precise trace for each finding, the status of the last report's public findings, the structured result | model, **Claude Code**, sandboxed | Bash: none; Claude Code: model API only |
+| 17 | Check the run's artifacts, download `checks-result`, decrypt into the audit directory, copy the checkout; stop Docker and remove the runner user's sudo rule; the sandbox preflight's six probes | model, workflow steps | yes: tools, artifact download |
+| 18 | The `security-audit` checklist across the whole tree, a review of what the agents may run (`.claude/`, `.pi/`, `.dot-agent-deck.toml`, `dev/`), triage of 3 to 15 with a PoC or precise trace for each finding, the status of the last report's public findings, the structured result | model, **Claude Code**, sandboxed | Bash: none (enforced); Claude Code: model API only by configuration, not enforced (open question 6) |
 | 19 | Encrypt the result to the publish key, upload `model-result` | model, workflow step | yes: artifact upload |
 | 20 | Check the run's artifacts, download and decrypt `model-result`, validate, classify, scan, publish | publish, its script | yes: GitHub writes through the App |
 
@@ -399,8 +463,8 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
   | Unconfirmed, suspected medium or above | A draft advisory, marked unconfirmed. |
   | Category injection, authentication bypass, credential exposure or remote code execution, **whatever the severity** | A draft advisory. |
   | Missing or unknown severity or category | A draft advisory. |
-  | A secret found in the git history (gitleaks) | Always private: a draft advisory naming the commit and the rule only, never the value, and stating that triage confirmed it a real secret, not a fixture; it is **never tried against the service**. The action is rotation by the maintainer. |
-  | Confirmed low, hardening or informational | The report; after the report is merged, one `security` issue each unless an issue, open or closed, carries its fingerprint (open question 7). |
+  | A secret found in the git history (gitleaks) | Always private: a draft advisory naming the commit and the rule only, never the value, marked **"unconfirmed: maintainer to check"** (the model job has no full-history checkout and gitleaks redacts the value, so the run cannot tell a real secret from a fixture); it is **never tried against the service**. The action is a check, and if real, rotation by the maintainer. |
+  | Confirmed low or informational (hardening included) | The report; after the report is merged, one `security` issue each unless an issue, open or closed, carries its fingerprint (open question 7). |
   | Unconfirmed, suspected low or informational | The report's "needs investigation" list, no issue. |
 
   The model may mark any finding private; it cannot make a finding public that the table makes private.
@@ -420,7 +484,7 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
   model step's step-level `env:` references it. No API key is used.
 - A run counts against the **maintainer's subscription limits**, shared with the agents in the VM. The
   scheduled time is chosen for when the agents are usually idle. A run stopped by the limit fails visibly
-  and can be re-run with `workflow_dispatch`.
+  and is recovered by a new `workflow_dispatch` run, never by "re-run failed jobs".
 - **Expiry and rotation.** The token is long-lived but expires (`claude setup-token` shows the term). The
   runbook records the date it was created and its expiry. An expired or revoked token makes the model
   step fail with an authentication error and the run fail, with the step summary pointing at the runbook.
@@ -436,9 +500,11 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
    sub-index, with its test. No workflow yet. Depends on nothing; can merge before PRD #161 milestone 4.
 2. [ ] **The workflow, its three jobs, the pinned tools and their checks.** `security-audit.yml` with
    `workflow_dispatch` only (no `schedule` yet), the committed attack harness, the Claude Code launcher,
-   settings, sandbox preflight and wrapper and their tests, the two encrypted hand-offs, the publish
-   script and its fake-`gh` tests, the required path check, the `test/architecture` check of the
-   workflow, the `release-tag` secrets check, the ADR's amendment, the runbook. **Depends on 1, on PRD
+   settings, hardening step, sandbox preflight (all six probes, on every run) and wrapper and their tests,
+   the two encrypted hand-offs, the publish script and its fake-`gh` tests (keyed private fingerprints,
+   App-authored matching only), the required path check, the `test/architecture` check of the workflow
+   and of `cache: false` on `release.yml`'s setup-go steps, the `release-tag` secrets check, the ADR's
+   amendment, the runbook. **Depends on 1, on PRD
    #161 milestone 4 having merged** (`feat/161-m4-ai-reviewer`; milestone 3 is
    `chore/161-m3-remove-maintainer-token`), **and on runbook step 3 confirming that the App can create and
    update a draft advisory.** From milestone 4 it reuses the `main`-only environment pattern and
@@ -462,11 +528,14 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    installation lists this repository alone and exactly those permissions.
 2. **Create the `security-audit` environment**: deployment branches `main` only, no required reviewers
    (a scheduled run cannot wait for one). Make **two key pairs** with the encryption tool on the
-   maintainer's machine, the model key and the publish key. Add the variables (the App's client ID, both
-   public halves) and the secrets (the App's private key, both private halves, and the Claude Code OAuth
-   token from `claude setup-token`). Record the token's creation date and expiry. Delete the two private
-   key files from the machine once stored. Check: `gh api repos/<owner>/<repo>/environments/security-audit`
-   shows the branch policy, and the repository-level secrets and variables list none of them.
+   maintainer's machine, the model key and the publish key, and a random **fingerprint key** of at least
+   32 bytes (for example `openssl rand -hex 32`). Add the variables (the App's client ID, both public
+   halves) and the secrets (the App's private key, both private halves, `AUDIT_FINGERPRINT_KEY`, and the
+   Claude Code OAuth token from `claude setup-token`). Record the token's creation date and expiry. Delete
+   the two private key files from the machine once stored, and keep no copy of the fingerprint key
+   (replacing it only makes the next run file existing private findings as new drafts). Check:
+   `gh api repos/<owner>/<repo>/environments/security-audit/deployment-branch-policies` lists exactly
+   `main`, and the repository-level secrets and variables list none of them.
 3. **Create the `security` label** (it does not exist yet), and **confirm advisory creation** with an
    installation token minted by hand. Recommended: the documented local command in the runbook, which
    signs a short-lived JWT with the App's private key file (`openssl`) and exchanges it with
@@ -489,16 +558,23 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
 7. **Merge milestone 2.**
 8. **Start the first run** (`workflow_dispatch` on `main`). Read its report PR and advisories. Check that
    the logs and step summaries show only totals in the publish job and "finished" in the others, that the
-   run's two artifacts are ciphertext, and, if no test proved it, that no tool call in the model step
-   could read the OAuth token. Then merge the report, then milestone 3's schedule.
+   run's two artifacts are ciphertext, and that the sandbox preflight's step reports all six probes
+   refused (it runs on every run; this step only reads its result). Then merge the report, then
+   milestone 3's schedule.
 9. **Keep the schedule alive.** If the staleness check fails, look at the workflow's runs; if GitHub
    disabled the schedule after 60 days without repository activity, re-enable it
    (`gh workflow enable security-audit.yml`) and start one `workflow_dispatch` run. Check: the next
    scheduled run appears within a week.
 10. **Renew the Claude token** before it expires (The subscription token, above), **rotate the App's key,
     the model key or the publish key** if any may have leaked, and **rotate any secret** a private
-    finding says is in the git history. If the sandbox preflight fails, read the ADR's note on the
-    runner's user-namespace restriction before changing anything.
+    finding says is in the git history, once you have checked that it is real. If the sandbox
+    preflight fails, read the ADR's note on the runner's user-namespace restriction before changing
+    anything.
+11. **Recover a failed run.** Always start a **new `workflow_dispatch` run** on `main`, never "re-run
+    failed jobs", so the artifact check never sees an earlier attempt's artifact. If the publish job
+    created `security-audit/<date>` but failed before opening the PR, the next run that day refuses the
+    existing branch: first delete the stale branch (`git push origin --delete security-audit/<date>`, as
+    an admin under the branch ruleset), then start the new run. Check: the new run opens the report PR.
 
 ## Decisions and open questions
 
@@ -554,8 +630,13 @@ step of the workflow.)
        non-`v*` tags to every other token (runbook step 5 if adopted).
    - **Never in a bypass list** of `Protect main`, the audit-paths ruleset or the tag rulesets. Its only
      bypass entry is the `security-audit/**` branch ruleset (runbook steps 4 to 6).
+   - **Advisories and issues it did not write are never touched.** The publish script matches and
+     updates only advisories the App authored, in `draft` or `closed` state, never a `triage` one (a
+     private vulnerability report) or one with a collaborator the App did not add, and matches only
+     issues `shift2eu-audit[bot]` authored (milestone 2).
    - **Drop Actions read and Attestations read from the App.** The audit's reads use the jobs' read-only
-     `GITHUB_TOKEN`, so the App holds write scopes only, and only in the publish job. Give it no Workflows
+     `GITHUB_TOKEN`, with exactly the read scopes the ADR lists, a refused read reported "not run", so
+     the App holds write scopes only, and only in the publish job. Give it no Workflows
      permission, so it can never change `.github/workflows/`.
    - **No `Administration: read`.** Scorecard's admin-only checks are reported "not run (needs admin
      read)" and the rulesets are read the `release-tag` way instead. Giving them the App's token would put
@@ -569,12 +650,19 @@ step of the workflow.)
      publish script decides what is private (Report and triage) and creates one draft advisory per private
      finding from that result: `state: draft`, no CVE request, no publishing. Only the counts reach the
      report and the publish job's summary.
-   - Each advisory carries the finding's fingerprint. The publish script, not the model, tracks private
-     findings across runs: it lists the advisories, updates a recurring one with `PATCH` (state stays
-     `draft`), and marks one not reproduced. The model never sees an earlier private finding.
+   - Each advisory carries the finding's fingerprint, a keyed hash (HMAC with `AUDIT_FINGERPRINT_KEY`,
+     held only in the publish job) that nobody can predict from the committed script. The publish
+     script, not the model, tracks private findings across runs: it lists the advisories **the App
+     authored**, in `draft` or `closed` state, never a `triage` one or one with a collaborator or credit
+     the App did not add, updates a recurring one with `PATCH` (state stays `draft`), marks one not
+     reproduced, and files a recurrence of a closed one as "regressed" only if it was marked not
+     reproduced before it was closed (otherwise "known, dismissed"). The model never sees an earlier
+     private finding, and an outsider's private report can never receive one.
    - When the run cannot classify a finding, it is private.
-   - Advisory text is scanned for secrets and encoded runs like public text, because a draft advisory is
-     one click from publication.
+   - Advisory text gets the token and key patterns and the encoded-token check (base64 and hex runs
+     decoded and matched against those patterns), because a draft advisory is one click from
+     publication; it does not get public text's encoded-run refusal, because PoCs and crash inputs are
+     often base64 (The publish script).
    - **Fallback:** if GitHub refuses advisory creation to the App's installation token, the run fails
      closed: it publishes only the counts and the coverage, and the summary says "N private findings, not
      filed: see runbook". Milestone 2 is blocked until runbook step 3 confirms creation and update work,
@@ -621,19 +709,25 @@ step of the workflow.)
    - The model runs in its own job, on a fresh runner that runs no untrusted code: every networked or
      untrusted-code check runs in the checks job, which holds no token, and reaches the model job only as
      ciphertext.
-   - **Bash: no network; the Claude Code process: the model API only, by its settings.** The sandbox has
-     an empty network allow list, cannot be bypassed per command, and does not auto-allow; a preflight
-     proves it holds before the model starts.
+   - **Bash: no network, enforced; the Claude Code process: the model API only, by its configuration,
+     not enforced.** The sandbox has an empty network allow list, cannot be bypassed per command, and
+     does not auto-allow. On every run a model-free step stops Docker and removes the runner user's sudo
+     rule, and the preflight proves before the model starts that a write outside the work area, a TCP
+     connect, a Docker socket connect, `sudo -n true`, a read of the launcher's canary through `/proc`
+     and a write to `$GITHUB_ENV` all fail.
    - Claude Code is started through `env -i` with a fresh `HOME`, so nothing an earlier step wrote to
-     `$GITHUB_ENV` or a settings file reaches it, and its read tools see only the audit directory.
+     `$GITHUB_ENV` or a settings file reaches it, and its read tools see only the checkout copy, the
+     checks' results and the work area.
    - Any command it runs goes through the wrapper, which names what it may `exec` and scrubs the
-     environment; a test or the first run's check shows no tool call can read the token.
+     environment; the preflight's canary probe shows on every run that no tool call can read the
+     launcher's environment.
    - The token is only in the model step's step-level `env:`, pinned by the `test/architecture` check.
    - Deny rules stay as defence in depth only: Bash patterns are easy to step around.
-   - Record in the ADR the residual risks: a sandbox escape or a flaw in the CLI could still leak the
-     subscription token; and a token the model encodes in a way the publish scan does not recognise (split
-     across fields, re-encoded beyond base64 and hex) could reach the public report. Runbook step 10
-     rotates it.
+   - Record in the ADR the residual risks: the CLI process's own network is limited by configuration
+     only, so a flaw in the CLI, or a sandbox escape, could still send the subscription token elsewhere;
+     and a token the model encodes in a way the publish scan does not recognise (split across fields,
+     re-encoded beyond base64 and hex, or below the encoded-run thresholds) could reach the public report.
+     Runbook step 10 rotates it.
 
 7. **When public `security` issues are opened.** The issue's plan opens one `security` issue per public
    finding in the run. But the classification is automated and the issues are public at once, while the
@@ -641,8 +735,8 @@ step of the workflow.)
    run's publish job opens them from reports the maintainer has merged; the maintainer opens them by hand.
 
    *Recommendation:* **the next run's publish job opens them from merged reports**, model-free, matched
-   by the fingerprint in the report's findings table against every issue, open or closed, so none is
-   opened twice and one the maintainer closed is not reopened. Nothing becomes an issue that the
-   maintainer has not seen in a merged report, no new trigger or workflow is needed, and the delay of up
-   to a week only applies to public findings, which are now confirmed low, hardening or informational
-   ones. The maintainer can open one sooner by hand.
+   by the fingerprint in the report's findings table against every issue `shift2eu-audit[bot]` authored,
+   open or closed, so none is opened twice, one the maintainer closed is not reopened, and an outsider's
+   issue cannot suppress one. Nothing becomes an issue that the maintainer has not seen in a merged
+   report, no new trigger or workflow is needed, and the delay of up to a week only applies to public
+   findings, which are now confirmed low or informational ones (hardening included). The maintainer can open one sooner by hand.
