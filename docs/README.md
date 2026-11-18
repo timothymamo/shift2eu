@@ -74,6 +74,7 @@ supersedes it.
 - [0031. Agents open pull requests as a GitHub App, with one-hour tokens minted on the Mac](adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)
 - [0032. Say when an estimate leaves out storage its plan does not include](adr/0032-say-when-an-estimate-leaves-out-storage-its-plan-does-not-include.md)
 - [0033. Review pull requests with an AI reviewer that only comments or requests changes](adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md)
+- [0034. Run the agents App token refresh as a LaunchDaemon, so it survives a reboot](adr/0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md)
 
 ## Writing a page
 
