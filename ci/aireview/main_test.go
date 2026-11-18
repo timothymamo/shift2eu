@@ -87,6 +87,13 @@ func runWithCommandLine(t *testing.T, args []string) (code int, stdout, stderr s
 		os.Args, os.Stdout, os.Stderr = savedArgs, savedStdout, savedStderr
 	})
 
+	// Each pipe is drained from the moment it exists, before run writes to it:
+	// a read that started only after run returned would block forever, and
+	// fail the test with a timeout instead of its assertion, as soon as run
+	// wrote more than the pipe's buffer (64 KiB on Linux).
+	drainedStdout := drainPipe(t, stdoutRead, "stdout")
+	drainedStderr := drainPipe(t, stderrRead, "stderr")
+
 	os.Args = args
 	os.Stdout = stdoutWrite
 	os.Stderr = stderrWrite
@@ -98,23 +105,31 @@ func runWithCommandLine(t *testing.T, args []string) (code int, stdout, stderr s
 	stdoutWrite.Close()
 	stderrWrite.Close()
 
-	// The two reads come after the writes are closed, so a pipe whose buffer
-	// filled has drained: the entry point writes one short annotation at most.
-	return code, readPipe(t, stdoutRead, "stdout"), readPipe(t, stderrRead, "stderr")
+	// Closing the write ends is what ends the two reads: each delivers what it
+	// read once the writer is closed.
+	return code, <-drainedStdout, <-drainedStderr
 }
 
-// readPipe reads everything r holds and closes it.
-func readPipe(t *testing.T, r *os.File, what string) string {
+// drainPipe reads everything r holds in a goroutine started at once, and returns
+// the channel that carries what it read once the write end is closed. Reading
+// alongside the writer rather than after it is what keeps a large output from
+// filling the pipe's buffer and deadlocking the test (N2, PR #272).
+func drainPipe(t *testing.T, r *os.File, what string) <-chan string {
 	t.Helper()
 
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read run's %s: %v", what, err)
-	}
+	drained := make(chan string, 1)
 
-	if err := r.Close(); err != nil {
-		t.Fatalf("close run's %s pipe: %v", what, err)
-	}
+	go func() {
+		defer r.Close()
 
-	return string(data)
+		data, err := io.ReadAll(r)
+		if err != nil {
+			// t.Errorf, not t.Fatalf: only the test's own goroutine may fail now.
+			t.Errorf("read run's %s: %v", what, err)
+		}
+
+		drained <- string(data)
+	}()
+
+	return drained
 }
