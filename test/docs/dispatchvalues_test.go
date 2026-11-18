@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // The two files whose tables must name the same dispatcher values (issue #269).
@@ -243,19 +245,22 @@ var placeholderToken = regexp.MustCompile(`<[a-z]{2,}(?: [a-z]{2,})*>`)
 //
 //   - a command's own metavariable, a single letter such as `<n>` or `<a>`,
 //     which no word of a name matches;
-//   - a command written as an inline code span, such as `git -C <repository
-//     root> pull`: the span is not a placeholder, and neither are its
-//     arguments (`--task-file <file>`, `--text "<message>"`); only a span that
-//     is nothing but a placeholder counts, which is how the skill names a value
-//     in prose;
+//   - a whole command written as an inline code span, such as `<cli> close
+//     <unit>` or `git -C <repository root> pull`: the span is not a
+//     placeholder, but the arguments it takes are, so `<file>` in `--task-file
+//     <file>` and `<message>` in `--text "<message>"` are checked like any
+//     other token; the allow list of command metavariables, allowedMetavars,
+//     excuses them;
 //   - anything whose brackets hold more than lowercase words, such as a URL,
 //     a path, or a shell redirection.
 //
 // A lone HTML tag such as `<br>` reads as a placeholder, but the skills write
 // no HTML and a code span that is one is indistinguishable from a name, so the
 // rule does not special-case it. A bare `<file>` written in a code span of its
-// own does count: the skill names its values that way, and a placeholder that
-// names nothing is what this check exists to report.
+// own counts too, and the allow list does not excuse it: a span that is nothing
+// but a placeholder names a value, so it must be a name the skill's tables
+// list, and a placeholder that names nothing is what this check exists to
+// report.
 //
 // placeholderSpan returns the placeholder that span, the content of an inline
 // code span, is, and false when span is more than that or not one.
@@ -269,35 +274,120 @@ func placeholderSpan(span string) (string, bool) {
 }
 
 // placeholderTokens returns the placeholders in text, in the order they
-// appear: the tokens of a name table's cell, or of a command in a shell block.
+// appear: the tokens of a name table's cell, of an inline code span, or of a
+// command in a shell block.
 func placeholderTokens(text string) []string {
 	return placeholderToken.FindAllString(text, -1)
 }
 
-// inlineCodeSpans returns the contents of the `inline code` spans of line. An
-// inline code span never runs past the end of its line and the skills wrap
-// their lines, so an odd backtick is left open and its text is not code.
-func inlineCodeSpans(line string) []string {
-	parts := strings.Split(line, "`")
-	spans := make([]string, 0, len(parts)/2)
-	for i := 1; i+1 < len(parts); i += 2 {
-		spans = append(spans, parts[i])
+// codeSpan is one `inline code` span and the 1-based line it starts on.
+type codeSpan struct {
+	line int
+	text string
+}
+
+// inlineCodeSpans returns the inline code spans of the Markdown in data, in
+// document order. drop holds the lines of the document's tables, which are
+// never prose.
+//
+// A span can run past the end of its line: in CommonMark a code span crosses a
+// line break inside a paragraph, and the skill wraps its lines, so one span
+// there opens near the end of a line and closes on the next (After "PR #N
+// merged", step 5). An unclosed backtick therefore carries over to the next
+// line of the same paragraph, and text keeps the newline, so a span that closes
+// on one line and opens on another is read as one span and not as prose. An
+// open span is dropped at a blank line, at a table row and at a fence: those
+// end the paragraph, and a backtick left open there is not code.
+func inlineCodeSpans(data string, drop map[int]bool) []codeSpan {
+	var (
+		spans   []codeSpan
+		open    bool
+		start   int
+		text    strings.Builder
+		last    int
+		inFence bool
+		marker  byte
+		width   int
+	)
+	closeOpen := func() {
+		open, last = false, 0
+		text.Reset()
+	}
+	for i, line := range strings.Split(data, "\n") {
+		n := i + 1
+		if inFence {
+			if closesFence(line, marker, width) {
+				inFence = false
+			}
+			closeOpen()
+			continue
+		}
+		if m, w, _, ok := openingFence(line); ok {
+			inFence, marker, width = true, m, w
+			closeOpen()
+			continue
+		}
+		if drop[n] || strings.TrimSpace(line) == "" {
+			closeOpen()
+			continue
+		}
+		parts := strings.Split(line, "`")
+		for j, part := range parts {
+			if j > 0 { // a backtick: closes the open span, or opens one
+				if open {
+					spans = append(spans, codeSpan{line: start, text: text.String()})
+					closeOpen()
+				} else {
+					open, start = true, n
+					text.Reset()
+					last = 0
+				}
+			}
+			if !open {
+				continue
+			}
+			if text.Len() > 0 && last != n {
+				text.WriteByte('\n')
+			}
+			text.WriteString(part)
+			last = n
+		}
 	}
 	return spans
 }
 
-// placeholderUse is one placeholder of the skill, and the line it sits on.
+// placeholderUse is one placeholder of the skill, the line it sits on, and
+// whether it is part of a command rather than a code span that names a value on
+// its own: the arguments of a command span and the commands of a shell block
+// are inCommand, and the allow list excuses only those.
 type placeholderUse struct {
-	line int
-	name string
+	line      int
+	name      string
+	inCommand bool
+}
+
+// allowedMetavars are the command metavariables the skill really uses, and the
+// only placeholders outside its name tables that the check below accepts. Each
+// is an argument a command documents for itself, not a value the skill takes
+// from CLAUDE.md or from the work, so neither table can have a row for it. Keep
+// the list minimal: add an entry only with the command in the skill that needs
+// it, and remove it once nothing uses it.
+var allowedMetavars = map[string]bool{
+	"<file>":          true, // <cli> dispatch <name> --task-file <file>, <cli> inbox send --file <file>
+	"<path>":          true, // git worktree remove <path>, git worktree unlock <path>
+	"<message>":       true, // --text "<message>"
+	"<branch>":        true, // git push origin --delete <branch>
+	"<issue>":         true, // Closes #<issue>
+	"<absolute path>": true, // xargs git -C <repository root> branch -D < <absolute path>
 }
 
 // skillPlaceholders returns every placeholder the skill uses outside its name
-// tables, in document order: the inline code spans of its prose that are
-// nothing but a placeholder, and every placeholder of a command inside a
-// fenced shell block.
+// tables, in document order: the placeholder tokens of every inline code span,
+// commands and the arguments they take included, and every placeholder of a
+// command inside a fenced shell block. A span that is nothing but a placeholder
+// is a name of the skill's; one that holds more is a command, and its tokens are
+// inCommand.
 func skillPlaceholders(data string, tables []valueTable) []placeholderUse {
-	drop := tableLineNumbers(tables)
 	var (
 		uses    []placeholderUse
 		inFence bool
@@ -314,24 +404,27 @@ func skillPlaceholders(data string, tables []valueTable) []placeholderUse {
 			}
 			if shell {
 				for _, name := range placeholderTokens(line) {
-					uses = append(uses, placeholderUse{line: n, name: name})
+					uses = append(uses, placeholderUse{line: n, name: name, inCommand: true})
 				}
 			}
 			continue
 		}
 		if m, w, info, ok := openingFence(line); ok {
 			inFence, marker, width, shell = true, m, w, shellFence(info)
+		}
+	}
+	for _, span := range inlineCodeSpans(data, tableLineNumbers(tables)) {
+		if name, ok := placeholderSpan(span.text); ok {
+			uses = append(uses, placeholderUse{line: span.line, name: name})
 			continue
 		}
-		if drop[n] {
-			continue
-		}
-		for _, span := range inlineCodeSpans(line) {
-			if name, ok := placeholderSpan(span); ok {
-				uses = append(uses, placeholderUse{line: n, name: name})
+		for j, part := range strings.Split(span.text, "\n") {
+			for _, name := range placeholderTokens(part) {
+				uses = append(uses, placeholderUse{line: span.line + j, name: name, inCommand: true})
 			}
 		}
 	}
+	slices.SortStableFunc(uses, func(a, b placeholderUse) int { return a.line - b.line })
 	return uses
 }
 
@@ -353,9 +446,12 @@ func listedNames(tables []valueTable) map[string]bool {
 	return listed
 }
 
-// TestPlaceholderRule pins what counts as a placeholder in the dispatch skill
-// (issue #269): a name the skill defines, and not a command, its arguments, or
-// a single-letter metavariable.
+// TestPlaceholderRule pins what placeholderSpan reads as a lone placeholder in
+// the dispatch skill (issue #269): a name the skill defines, and not a command,
+// a command's argument, or a single-letter metavariable. A command's arguments
+// are placeholders too, which is why skillPlaceholders checks them against
+// allowedMetavars; here only a code span that is nothing but the placeholder
+// counts.
 func TestPlaceholderRule(t *testing.T) {
 	t.Parallel()
 
@@ -368,7 +464,7 @@ func TestPlaceholderRule(t *testing.T) {
 		{name: "a two-word name", text: "<unit limit>", want: "<unit limit>"},
 		{name: "a three-word name", text: "<absolute path>", want: "<absolute path>"},
 		{name: "a name with padding", text: "  <unit dir> ", want: "<unit dir>"},
-		{name: "a command", text: "`<cli> close <unit>`"},
+		{name: "a command", text: "<cli> close <unit>"},
 		{name: "a command argument", text: "--task-file <file>"},
 		{name: "a name with a path", text: "<unit dir>/.worktrees/"},
 		{name: "a single-letter metavariable", text: "<n>"},
@@ -383,6 +479,69 @@ func TestPlaceholderRule(t *testing.T) {
 				t.Errorf("placeholderSpan(%q) = %q, want %q", tc.text, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestSkillPlaceholders pins what the skill-placeholder check sees (issue
+// #269): the placeholder token of every inline code span, a span that runs past
+// the end of its line and the arguments of a command included, and every
+// placeholder of a command in a fenced shell block, but nothing of a table row,
+// which is where the skill defines its names.
+func TestSkillPlaceholders(t *testing.T) {
+	t.Parallel()
+
+	doc := strings.Join([]string{
+		"# A synthetic skill", // 1
+		"",                    // 2
+		"Dispatch with `<cli> dispatch <name> --task-file <file>`.", // 3
+		"",                      // 4
+		"| Name | Meaning |",    // 5
+		"|---|---|",             // 6
+		"| `<unit>` | A unit |", // 7
+		"",                      // 8
+		"A span runs past its line: `git -C <repository root> worktree", // 9
+		"remove <path>` (after `git worktree unlock <path>`).",          // 10
+		"",        // 11
+		"```bash", // 12
+		"git -C <repository root> pull --ff-only",                    // 13
+		"xargs git -C <repository root> branch -D < <absolute path>", // 14
+		"```",                                    // 15
+		"",                                       // 16
+		"A lone span names a value: `<checks>`.", // 17
+	}, "\n")
+
+	tables := valueTables(doc)
+	if len(tables) != 1 {
+		t.Fatalf("valueTables() found %d tables in the fixture, want 1: the fixture's table", len(tables))
+	}
+
+	// use is a placeholderUse the test can compare: placeholderUse's fields are
+	// unexported, so cmp cannot reach them from this package, and its own are
+	// exported for cmp.
+	type use struct {
+		Line      int
+		Name      string
+		InCommand bool
+	}
+	want := []use{
+		{Line: 3, Name: "<cli>", InCommand: true},
+		{Line: 3, Name: "<name>", InCommand: true},
+		{Line: 3, Name: "<file>", InCommand: true},
+		{Line: 9, Name: "<repository root>", InCommand: true},
+		{Line: 10, Name: "<path>", InCommand: true},
+		{Line: 10, Name: "<path>", InCommand: true},
+		{Line: 13, Name: "<repository root>", InCommand: true},
+		{Line: 14, Name: "<repository root>", InCommand: true},
+		{Line: 14, Name: "<absolute path>", InCommand: true},
+		{Line: 17, Name: "<checks>"},
+	}
+	var got []use
+	for _, u := range skillPlaceholders(doc, tables) {
+		got = append(got, use{Line: u.line, Name: u.name, InCommand: u.inCommand})
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("skillPlaceholders() mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -470,10 +629,11 @@ func TestDispatchSkillNamesTheCLAUDEValues(t *testing.T) {
 		}
 		listed := listedNames(skillTables)
 		for _, use := range skillPlaceholders(skillDoc, skillTables) {
-			if !listed[use.name] {
-				t.Errorf("%s:%d uses %s, which neither name table lists: a placeholder is a value of the first table or a name from the work in the second, so using a new one needs its row (issue #269)",
-					dispatchSkill, use.line, use.name)
+			if listed[use.name] || (use.inCommand && allowedMetavars[use.name]) {
+				continue
 			}
+			t.Errorf("%s:%d uses %s, which neither name table lists and which is no command metavariable: a placeholder is a value of the first table, a name from the work in the second, or an entry of allowedMetavars, so using a new one needs its row (issue #269)",
+				dispatchSkill, use.line, use.name)
 		}
 	})
 }
