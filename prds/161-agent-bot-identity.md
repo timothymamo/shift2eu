@@ -73,18 +73,22 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 
 - [x] In the VM, `gh` and the git credential helper (`gh auth git-credential`) use the App token when its
   file is present and fall back to `GITHUB_TOKEN` otherwise, so milestone 1 can merge and be switched on
-  without a gap. `make vm-init`'s credential check passes with either.
-- [ ] A pull request opened by an agent after the switch shows the App as its author
+  without a gap. `make vm-init`'s credential check passes with either. *Milestone 3 removed the fallback:
+  without the App token file, `gh` and `git push` now fail.*
+- [x] A pull request opened by an agent after the switch shows the App as its author
   (`gh pr view --json author` gives `is_bot` `true` and the App's login), and its commits' author is the
   App's bot identity (`<bot user id>+<slug>[bot]@users.noreply.github.com`, the id of the bot user
-  `<slug>[bot]`, not the App ID: ADR 0031), set by `make vm-init`. *Checked at runbook step 3.*
-- [ ] Every `gh` call the skills make works with the App token: push, `pr create`, `pr view`, `pr checks`,
+  `<slug>[bot]`, not the App ID: ADR 0031), set by `make vm-init`. *Checked at runbook step 3.
+  Confirmed by the maintainer at runbook step 3: PRs #239, #250 and #261 were opened by
+  `app/shift2eu-agents`, with only bot-authored commits.*
+- [x] Every `gh` call the skills make works with the App token: push, `pr create`, `pr view`, `pr checks`,
   `run list/view/watch`, `issue create/view`, and the `release-tag` skill's reads of rulesets, environments
   and releases. Any call that needs a permission the App lacks is listed with the permission, and the
   maintainer's App permissions in `docs/dev-environment.md` cover them. *The calls and their permissions
   are listed in ADR 0031 (d) and `docs/dev-environment.md` (Attestations read added; Actions stays read, so
   `gh run rerun` and the rulesets' bypass lists stay maintainer steps); that each works is checked at
-  runbook step 3.*
+  runbook step 3. Confirmed by the maintainer at runbook step 3; PRs #239, #250 and #261 were opened by
+  `app/shift2eu-agents` with only bot-authored commits.*
 - [x] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
   `true`). No ruleset requires signed commits. *Nothing in milestone 1 signs a commit (ADR 0031); the
   repository's rulesets and `main`'s commits are checked at runbook step 3. Checked at runbook step 3 on
@@ -113,9 +117,12 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 
 ### After the switch (milestone 3)
 
-- [ ] `GITHUB_TOKEN` is no longer in `VM_ENV`, and the fallback to it is removed: without the App token
-  file, `gh` and `git push` in the VM fail with an error naming the refresh target.
-- [ ] The docs no longer tell the maintainer to create a fine-grained personal token for the agents.
+- [x] `GITHUB_TOKEN` is no longer in `VM_ENV`, and the fallback to it is removed: without the App token
+  file, `gh` and `git push` in the VM fail with an error naming the refresh target. *`make vm-env`,
+  `vm-env-check` and `vm-create` neither need nor copy it, `dev/gh-app-token.sh` refuses without the
+  token file (`test/devenv`).*
+- [x] The docs no longer tell the maintainer to create a fine-grained personal token for the agents.
+  *Pinned by `test/docs`; the runbook's step 6 says what the maintainer does once milestone 3 merges.*
 
 ### The AI reviewer (milestone 4)
 
@@ -164,7 +171,7 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
    the switch-over runbook. Depends on 1. *Note from milestone 1 (ADR 0031, d): the App keeps Actions
    read, so `release-tag` hands a re-run of a failed run (`gh run rerun <id>`) to the maintainer instead
    of running it.* *Code merged; the switch-over at runbook step 5 is the maintainer's.*
-3. [ ] **Remove the maintainer's token.** After the maintainer's runbook step 6: drop `GITHUB_TOKEN` from
+3. [x] **Remove the maintainer's token.** After the maintainer's runbook step 6: drop `GITHUB_TOKEN` from
    `VM_ENV` and the fallback, remove the check's transition flag entirely (`GATE_TRANSITION` and the
    script's `--transition` flag, not only defaulting it to 0), update the docs. Opened by the App and
    approved by the maintainer: the first change through the new gate. Depends on 2 and the runbook.
