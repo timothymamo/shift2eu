@@ -1,4 +1,4 @@
-# PRD #175: A weekly read-only security audit of the repository and the latest release
+# PRD #175: A scheduled read-only security audit of the repository and the latest release
 
 **Status:** Draft
 **Issue:** #175
@@ -24,7 +24,8 @@ scheduled GitHub Actions workflow on GitHub-hosted runners, a GitHub App for the
 
 ## Outcome
 
-Once a week, and on demand, a GitHub Actions workflow on `main` audits the repository and its **latest
+Once a month on a schedule, and whenever the maintainer starts it by hand (`workflow_dispatch`), a GitHub
+Actions workflow on `main` audits the repository and its **latest
 published release** with **Claude Fable 5.2** (`claude-fable-5-2`, effort high). It runs on fresh
 GitHub-hosted runners and authenticates with the maintainer's Claude subscription token.
 
@@ -38,9 +39,9 @@ Its results go three ways:
 - a dated, public report in a **docs-only pull request** under `docs/security/`, opened by the audit App
   and merged only with the maintainer's code-owner approval;
 - a `security` issue per public finding, opened only **after** the maintainer has merged the report that
-  holds it (open question 7);
+  holds it (Decision 7);
 - a **draft repository security advisory** per private finding, the report saying only "N findings
-  handled privately" (open question 2).
+  handled privately" (Decision 2).
 
 Read-only, and the disclosure split, are enforced by the workflow and a model-free script, not by the
 prompt. The run has three jobs, each on its own fresh runner:
@@ -66,17 +67,19 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
 | Target providers | none | Live access to OVHcloud, Scaleway or UpCloud, their catalog sources |
 | Taxonomy categories | none | |
 | Audit subject | The repository on `main` (tree and full history), the latest published release (archives, `checksums.txt`, both images, their attestations and SBOMs, the OpenAPI document), `.github/`, `.claude/`, `.pi/`, `.dot-agent-deck.toml` and `dev/` as attack surface | Other repositories, dependencies' own code beyond advisories, GitHub's or GHCR's services |
-| Execution | A scheduled and `workflow_dispatch` workflow on `main`, GitHub-hosted runners, local containers on the runner | A second Lima VM, a launcher script, `dot-agent-deck schedule`, self-hosted runners (Decision 1) |
+| Execution | A scheduled and `workflow_dispatch` workflow on `main`, GitHub-hosted runners, local containers on the runner | A second Lima VM, a launcher script, `dot-agent-deck schedule`, self-hosted runners (Decisions, Where) |
 | Writes | The report PR (`docs/security/` only) and draft security advisories (created and updated, never published), each through the audit App's token in the publish job; `security` issues for public findings of merged reports | Fixing findings in the audit run, editing code or `testdata/`, commenting on or closing other issues and PRs, releases, tags, packages, publishing an advisory or requesting a CVE |
-| Repository settings | The `security-audit` environment, the audit App, the `security-audit/**` branch ruleset, a new ruleset on `main` that requires the audit-report-paths check, the `**` tag ruleset if open question 1 adopts it, the `security` label, documented as maintainer steps and read by checks | Changing `Protect main`, the `v*` tag rulesets, the release Apps or their environments (ADR 0021, PRD #161) |
-| Skills, tests and docs | A `security-weekly-audit` skill reusing `security-audit`'s checklist, an ADR, `SECURITY.md`, `docs/security/README.md`, the report template, `test/docs`' index check accepting a sub-index, `docs/dev-environment.md` (the runbook), a staleness check of the schedule | Rewriting `security-audit` |
+| Repository settings | The `security-audit` environment, the audit App, the `security-audit/**` branch ruleset, a new ruleset on `main` that requires the audit-report-paths check, the `**` tag ruleset if the maintainer adopts it (Decision 1 leaves it optional), the `security` label, documented as maintainer steps and read by checks | Changing `Protect main`, the `v*` tag rulesets, the release Apps or their environments (ADR 0021, PRD #161) |
+| Skills, tests and docs | A `security-audit-run` skill that reuses `security-audit`'s checklist and is distinct from it, an ADR, `SECURITY.md`, `docs/security/README.md`, the report template, `test/docs`' index check accepting a sub-index, `docs/dev-environment.md` (the runbook), a staleness check of the schedule | Rewriting `security-audit` |
 
 ## Acceptance criteria
 
 ### The skill, the ADR and the disclosure documents (milestone 1)
 
-- [ ] `.claude/skills/security-weekly-audit/SKILL.md` exists, agent-neutral like the other skills, and
-  **links to `security-audit`'s checklist instead of copying it**. It adds the whole-tree and release
+- [ ] `.claude/skills/security-audit-run/SKILL.md` exists, agent-neutral like the other skills, and
+  **links to `security-audit`'s checklist instead of copying it**. It is a separate skill from
+  `security-audit` (which audits a diff, branch or PR and stays unchanged), and its description says so,
+  so an agent asked for a change's audit does not pick it. Its name carries no cadence. It adds the whole-tree and release
   triage (What a run does, below), the rules of engagement and the triage rules. `make check` passes,
   `test/docs`' link and skill-shell checks included.
 - [ ] The skill frames every task as an authorized test of this project's own artifacts, run locally. It
@@ -90,9 +93,9 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
 - [ ] `TestIndexListsEveryPage` (`test/docs/archive_test.go`) accepts a page under `docs/` that is linked
   either from `docs/README.md` or from a **sub-index**: a `README.md` in a subdirectory of `docs/` that
   `docs/README.md` itself links (one level, no chains). A page linked only from a sub-index that
-  `docs/README.md` does not link still fails. A test pins both cases. This lets each weekly report be
+  `docs/README.md` does not link still fails. A test pins both cases. This lets each dated report be
   indexed by `docs/security/README.md` alone.
-- [ ] `docs/security/README.md` explains the weekly audit, the disclosure split and how to verify a
+- [ ] `docs/security/README.md` explains the scheduled audit and its current cadence, the disclosure split and how to verify a
   release, and indexes the reports in `docs/security/audits/`. `docs/README.md` links it.
   `docs/security/audits/TEMPLATE.md` holds the report's sections (Report and triage, below), has exactly
   one title, and is linked from `docs/security/README.md`. `TestIndexListsEveryPage` and
@@ -101,9 +104,9 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
   scope, the model and its authentication, the three-job split and the two keys, which checks run in the
   checks job and what the model does (the table in What a run does), the disclosure rules the publish
   script enforces with their **residual risk** (the model fills severity and category; Report and
-  triage), the App's permissions and their side effects (open question 1), and why the Lima-VM plan of
-  the issue was dropped. Milestone 2 amends the same ADR with how Claude Code runs in Actions (open
-  question 3), its sandbox, settings, permission mode and audit directory, how the runner's
+  triage), the App's permissions and their side effects (Decision 1), and why the Lima-VM plan of
+  the issue was dropped. Milestone 2 amends the same ADR with how Claude Code runs in Actions
+  (Decision 3), its sandbox, settings, permission mode and audit directory, how the runner's
   user-namespace restriction is handled, the sandbox preflight's six probes and the model-free step that
   stops Docker and removes the runner user's sudo rule, the encoded-run thresholds (the minimum length L
   and the entropy N in bits per character, The publish script below) and the encoded-token residual risk,
@@ -116,7 +119,7 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
 
 Triggers, jobs and permissions:
 
-- [ ] `.github/workflows/security-audit.yml` triggers on `schedule` and `workflow_dispatch` **only**. It
+- [ ] `.github/workflows/scheduled-security-audit.yml` triggers on `schedule` and `workflow_dispatch` **only**. It
   has no `pull_request`, `pull_request_target`, `push`, `workflow_run` or `issue_comment` trigger, and
   every job runs only when `github.ref` is `refs/heads/main`. All three jobs run in the `security-audit`
   environment, whose deployment branch policy is `main` only, so a `workflow_dispatch` on another ref
@@ -224,7 +227,7 @@ How the model is contained:
   work area. The Claude Code process itself makes no connection but to the model API **by its
   configuration** (the two variables above, no `WebFetch` or `WebSearch`). That is not enforced: the
   sandbox wraps Bash only, and the unsandboxed CLI process could open any connection. It is a residual
-  risk (open question 6), and no test claims otherwise.
+  risk (Decision 6), and no test claims otherwise.
 - [ ] Its permissions are an **allow list in a non-interactive mode that refuses every tool not on it**
   (the ADR names the mode): `Read`, `Grep` and `Glob` only of the audit directory's checkout copy, the
   checks' results and the work area, `Write` and `Edit` only under the work area, and, if the skill needs
@@ -308,7 +311,7 @@ The publish script:
 - [ ] Before publishing, it scans every text it is about to send (the report, any issue title and body,
   every advisory's text) with gitleaks plus patterns for Claude OAuth tokens and GitHub App private keys,
   and it **decodes every base64 or hex run and matches the decoded bytes against the same patterns**
-  (the encoded-token check). One rule, stated the same way in open question 2:
+  (the encoded-token check). One rule, stated the same way in Decision 2:
   - **Public text** (the report and issues) also gets the **encoded-run refusal**: a run is a token with
     no `/`, `.` or other path separator, at least L characters long, with an entropy of at least N bits
     per character; the ADR sets L (longer than a fingerprint) and N. The refusal applies only to
@@ -361,13 +364,13 @@ The publish script:
   publish an advisory, request a CVE, approve or merge a PR, or touch a tag, release or other branch. The
   fake `gh` fails the test on any other endpoint or state.
 - [ ] It opens a `security` issue only for a public finding of a report **already merged on `main`**,
-  never for the report it is opening (open question 7), and only when no issue authored by
+  never for the report it is opening (Decision 7), and only when no issue authored by
   `shift2eu-audit[bot]`, **open or closed**, carries that finding's fingerprint. A merged report counts as
   processed once every public finding in it has such an issue, so the work is idempotent and a finding
   whose issue the maintainer closed is not filed again. A test covers an open, a closed, and an unmatched
   fingerprint, and the report being opened.
 - [ ] If GitHub refuses advisory creation to the App, the run fails closed: it publishes only the counts
-  and the coverage, and the summary says "N private findings, not filed: see runbook" (open question 2).
+  and the coverage, and the summary says "N private findings, not filed: see runbook" (Decision 2).
 - [ ] Values from the run reach the shell only through `env:` and files, never through a `${{ }}`
   expression.
 
@@ -402,15 +405,20 @@ Time and failures:
   (no earlier report is merged yet). The PR body records the run's URL.
 - [ ] The report states the `main` SHA, the release tag, the tool versions and the model. It lists every
   check with "clean", "findings" or "not run (why)".
-- [ ] After the maintainer has reviewed and merged that report, the `schedule` trigger is enabled (weekly,
-  at a time the ADR records). The second scheduled run's report marks each earlier public finding as
+- [ ] After the maintainer has reviewed and merged that report, the `schedule` trigger is enabled: monthly,
+  with the cron `17 4 3 * *` (04:17 UTC on the 3rd of each month; GitHub evaluates cron in UTC), which
+  the ADR records. The cron is the only place the cadence is a value: no file, job, step, skill, secret,
+  label or branch name carries it, so a later cadence change edits the cron, the ADR, the staleness
+  threshold below and the cadence text, and renames nothing. The second scheduled run's report marks each earlier public finding as
   fixed, still open or regressed, gives the private counts, and its publish job opens the `security`
   issues for the first report's public findings.
 - [ ] GitHub silently disables a public repository's scheduled workflows after 60 days without repository
   activity, and a skipped schedule fails nothing. So a **staleness check**, in the `release-tag` skill's
-  checks and the dispatch flow, fails when the last scheduled `security-audit.yml` run is more than 8 days
-  old, and names runbook step 9. Each report flags a gap when the previous report is more than 8 days
-  older, computed by the publish script from `docs/security/audits/`.
+  checks and the dispatch flow, fails when the last scheduled `scheduled-security-audit.yml` run is more
+  than **38 days** old (the longest month, 31 days, plus 7 days of slack for a late or failed run), and
+  names runbook step 9. Each report flags a gap when the previous report is more than 38 days older,
+  computed by the publish script from `docs/security/audits/`. A `workflow_dispatch` run between two
+  scheduled ones does not reset the staleness check, which looks at scheduled runs only.
 
 ## What a run does
 
@@ -433,11 +441,11 @@ tag (`gh release view --json tagName`) are recorded first, and every later step 
 | 11 | The images run as non-root, with a read-only root filesystem and no shell where none is expected | checks, containers | no |
 | 12 | The server attacked by the committed harness: malformed, oversized and deeply nested bodies; slow clients; path traversal; header injection; content-type confusion; every endpoint of the published OpenAPI document | checks, server and harness containers on an `--internal` network | no |
 | 13 | The CLI on hostile inventory files | checks, container, `--network none` | no |
-| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (none yet: open question 5) | checks, container, `--network none`, `GOPROXY=off` | no |
+| 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (none yet: Decision 5) | checks, container, `--network none`, `GOPROXY=off` | no |
 | 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments read the way the `release-tag` skill's step 2 reads them, Renovate's state, dependencies changed since the last report | checks, workflow step | yes: GitHub reads |
 | 16 | Encrypt the raw results to the model key, upload `checks-result` | checks, workflow step | yes: artifact upload |
 | 17 | Check the run's artifacts, download `checks-result`, decrypt into the audit directory, copy the checkout; stop Docker and remove the runner user's sudo rule; the sandbox preflight's six probes | model, workflow steps | yes: tools, artifact download |
-| 18 | The `security-audit` checklist across the whole tree, a review of what the agents may run (`.claude/`, `.pi/`, `.dot-agent-deck.toml`, `dev/`), triage of 3 to 15 with a PoC or precise trace for each finding, the status of the last report's public findings, the structured result | model, **Claude Code**, sandboxed | Bash: none (enforced); Claude Code: model API only by configuration, not enforced (open question 6) |
+| 18 | The `security-audit` checklist across the whole tree, a review of what the agents may run (`.claude/`, `.pi/`, `.dot-agent-deck.toml`, `dev/`), triage of 3 to 15 with a PoC or precise trace for each finding, the status of the last report's public findings, the structured result | model, **Claude Code**, sandboxed | Bash: none (enforced); Claude Code: model API only by configuration, not enforced (Decision 6) |
 | 19 | Encrypt the result to the publish key, upload `model-result` | model, workflow step | yes: artifact upload |
 | 20 | Check the run's artifacts, download and decrypt `model-result`, validate, classify, scan, publish | publish, its script | yes: GitHub writes through the App |
 
@@ -459,12 +467,12 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
 
   | Finding | Where it goes |
   |---|---|
-  | Critical, high or medium | A draft security advisory (open question 2). The report says only "N findings handled privately". |
+  | Critical, high or medium | A draft security advisory (Decision 2). The report says only "N findings handled privately". |
   | Unconfirmed, suspected medium or above | A draft advisory, marked unconfirmed. |
   | Category injection, authentication bypass, credential exposure or remote code execution, **whatever the severity** | A draft advisory. |
   | Missing or unknown severity or category | A draft advisory. |
   | A secret found in the git history (gitleaks) | Always private: a draft advisory naming the commit and the rule only, never the value, marked **"unconfirmed: maintainer to check"** (the model job has no full-history checkout and gitleaks redacts the value, so the run cannot tell a real secret from a fixture); it is **never tried against the service**. The action is a check, and if real, rotation by the maintainer. |
-  | Confirmed low or informational (hardening included) | The report; after the report is merged, one `security` issue each unless an issue, open or closed, carries its fingerprint (open question 7). |
+  | Confirmed low or informational (hardening included) | The report; after the report is merged, one `security` issue each unless an issue, open or closed, carries its fingerprint (Decision 7). |
   | Unconfirmed, suspected low or informational | The report's "needs investigation" list, no issue. |
 
   The model may mark any finding private; it cannot make a finding public that the table makes private.
@@ -482,8 +490,11 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
   `claude setup-token` on their own machine, under the subscription the agents already use. It is stored
   as the secret `CLAUDE_CODE_OAUTH_TOKEN` of the `security-audit` environment **only**, and only the
   model step's step-level `env:` references it. No API key is used.
-- A run counts against the **maintainer's subscription limits**, shared with the agents in the VM. The
-  scheduled time is chosen for when the agents are usually idle. A run stopped by the limit fails visibly
+- A run counts against the **maintainer's subscription usage limits**, which are shared with the agents
+  in the VM and with the AI reviewer of PRD #161 milestone 4 (which runs Claude Code with the same kind of
+  subscription token). An audit run can therefore slow the agents or the reviewer, and they can exhaust
+  the limit an audit run needs. The scheduled time (early on a UTC morning, early in the month) is chosen
+  for when the agents are usually idle; the maintainer picks a quiet time for a run started by hand. A run stopped by the limit fails visibly
   and is recovered by a new `workflow_dispatch` run, never by "re-run failed jobs".
 - **Expiry and rotation.** The token is long-lived but expires (`claude setup-token` shows the term). The
   runbook records the date it was created and its expiry. An expired or revoked token makes the model
@@ -494,11 +505,11 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
 
 ## Milestones
 
-1. [ ] **Skill, ADR, disclosure documents and the docs index.** The `security-weekly-audit` skill, the
+1. [ ] **Skill, ADR, disclosure documents and the docs index.** The `security-audit-run` skill, the
    ADR (what is known before PRD #161 milestone 4), `SECURITY.md`, `docs/security/README.md`,
    `docs/security/audits/TEMPLATE.md`, the docs index, and `TestIndexListsEveryPage` accepting a
    sub-index, with its test. No workflow yet. Depends on nothing; can merge before PRD #161 milestone 4.
-2. [ ] **The workflow, its three jobs, the pinned tools and their checks.** `security-audit.yml` with
+2. [ ] **The workflow, its three jobs, the pinned tools and their checks.** `scheduled-security-audit.yml` with
    `workflow_dispatch` only (no `schedule` yet), the committed attack harness, the Claude Code launcher,
    settings, hardening step, sandbox preflight (all six probes, on every run) and wrapper and their tests,
    the two encrypted hand-offs, the publish script and its fake-`gh` tests (keyed private fingerprints,
@@ -508,8 +519,8 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
    #161 milestone 4 having merged** (`feat/161-m4-ai-reviewer`; milestone 3 is
    `chore/161-m3-remove-maintainer-token`), **and on runbook step 3 confirming that the App can create and
    update a draft advisory.** From milestone 4 it reuses the `main`-only environment pattern and
-   in-workflow App-token minting; its way of running Claude Code only if milestone 4 runs Claude Code at
-   all and that way meets this PRD's requirements (open question 3). Runbook steps 1 to 6 come before its
+   in-workflow App-token minting, and its way of running the Claude Code CLI with the subscription token
+   where that way meets this PRD's requirements (Decision 3). Runbook steps 1 to 6 come before its
    merge, step 7 is the merge, step 8 comes after.
 3. [ ] **First run, then the schedule.** One manual run against the latest release, its report PR merged
    by the maintainer, then a PR that adds the `schedule` trigger and the staleness check (and moves this
@@ -524,7 +535,7 @@ any other change.
 An agent cannot do these steps. Each one is safe to stop at; the workflow is rolled back by disabling it.
 
 1. **Create the audit App** `shift2eu-audit`. Install it on this repository only, with the permissions
-   settled by open question 1, no webhook, and no other repository. Generate its private key. Check: the
+   settled by Decision 1, no webhook, and no other repository. Generate its private key. Check: the
    installation lists this repository alone and exactly those permissions.
 2. **Create the `security-audit` environment**: deployment branches `main` only, no required reviewers
    (a scheduled run cannot wait for one). Make **two key pairs** with the encryption tool on the
@@ -544,12 +555,12 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    creates a draft advisory, a `PATCH` with `state: draft` updates it, then close it. Then delete the App's
    private key file from the machine (it lives only in the environment secret); the installation token
    expires within an hour. Check: the advisory existed as a draft, was updated, and is closed; the key
-   file is gone. Milestone 2 is blocked until this check passes (open question 2).
+   file is gone. Milestone 2 is blocked until this check passes (Decision 2).
 4. **Create the `security-audit/**` branch ruleset**: only the audit App, as its one bypass actor, and
    admins may create or update those branches. Check: `gh api repos/<owner>/<repo>/rulesets` lists it
    with the App as its only bypass actor.
 5. **Create the audit-paths ruleset on `main`**: it requires the CI check that fails an audit PR touching
-   anything outside `docs/security/`, with no bypass actor. If open question 1's tag ruleset is adopted,
+   anything outside `docs/security/`, with no bypass actor. If the maintainer adopts Decision 1's optional tag ruleset,
    create the `**` tag ruleset too, with only the release App as bypass actor. Check: the same `gh api`
    read lists them, and `Protect main` is unchanged.
 6. **Check the other rulesets**: the App is in no bypass list of `Protect main`, the audit-paths ruleset
@@ -563,8 +574,12 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    milestone 3's schedule.
 9. **Keep the schedule alive.** If the staleness check fails, look at the workflow's runs; if GitHub
    disabled the schedule after 60 days without repository activity, re-enable it
-   (`gh workflow enable security-audit.yml`) and start one `workflow_dispatch` run. Check: the next
-   scheduled run appears within a week.
+   (`gh workflow enable scheduled-security-audit.yml`) and start one `workflow_dispatch` run. Check: the
+   next scheduled run appears at the next date the cron names (the ADR records it).
+   To **run an audit outside the schedule**, start a `workflow_dispatch` run on `main` at any time
+   (`gh workflow run scheduled-security-audit.yml --ref main`). Check: its report PR opens like a
+   scheduled run's. Two runs on the same UTC day share the branch name `security-audit/<date>`, so the
+   second refuses it (step 11) until the first's report PR is merged or closed and its branch deleted.
 10. **Renew the Claude token** before it expires (The subscription token, above), **rotate the App's key,
     the model key or the publish key** if any may have leaked, and **rotate any secret** a private
     finding says is in the git history, once you have checked that it is real. If the sandbox
@@ -576,7 +591,9 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
     existing branch: first delete the stale branch (`git push origin --delete security-audit/<date>`, as
     an admin under the branch ruleset), then start the new run. Check: the new run opens the report PR.
 
-## Decisions and open questions
+## Decisions
+
+No question is open.
 
 **Decided (maintainer, 2026-11-18, in issue #175), replacing the parts of the issue they contradict:**
 
@@ -599,7 +616,17 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
 ("No launcher script" refers to the issue's VM launcher; the model job's committed launcher above is a
 step of the workflow.)
 
-**Open (for the maintainer, each with a recommendation):**
+**Decided (maintainer, 2026-11-18, on PR #273):**
+
+- **Cadence:** the audit runs **monthly** on a schedule (cron `17 4 3 * *`, UTC), and the maintainer
+  can start it by hand at any time (`workflow_dispatch`). The skill (`security-audit-run`), the workflow
+  (`scheduled-security-audit.yml`) and every other name are cadence-neutral, so a later cadence change
+  edits only the cron, the ADR, the staleness threshold and the cadence text. *Reason:* a monthly report
+  is enough to keep a dated record of the posture and costs a quarter of the reviews and subscription
+  usage; a run by hand covers a release or an advisory between two scheduled runs.
+
+The PRD's recommendation on each question below, open until then, is **accepted**. Each keeps the
+options that were weighed and the reason given, so the decision can be revisited with its context.
 
 1. **The audit App `shift2eu-audit` and its exact permissions.** Proposed: Contents write and Pull
    requests write (the report PR), Issues write, Repository security advisories write, Actions read and
@@ -612,7 +639,7 @@ step of the workflow.)
    - **Pull requests write** also submits reviews, `APPROVE` included.
    - **Repository security advisories write** also publishes an advisory and requests a CVE: disclosure.
 
-   *Recommendation:*
+   *Decision (maintainer, 2026-11-18), with its reasons:*
    - **Keep Contents write**: GitHub App permissions cannot be narrowed to a path or a branch.
    - **Narrow its use.**
      - The token exists only in the publish job, which has no model and no release code, runs only `main`'s
@@ -626,8 +653,8 @@ step of the workflow.)
        nothing elsewhere.
      - `Protect main` requires the code owner's approval, so an `APPROVE` by the App never counts (as PRD
        #161 milestone 4 checks for its Apps).
-     - Consider a tag ruleset on `**` that lets only the release App create tags, which also closes
-       non-`v*` tags to every other token (runbook step 5 if adopted).
+     - Optional, the maintainer's choice at runbook step 5: a tag ruleset on `**` that lets only the
+       release App create tags, which also closes non-`v*` tags to every other token.
    - **Never in a bypass list** of `Protect main`, the audit-paths ruleset or the tag rulesets. Its only
      bypass entry is the `security-audit/**` branch ruleset (runbook steps 4 to 6).
    - **Advisories and issues it did not write are never touched.** The publish script matches and
@@ -645,7 +672,9 @@ step of the workflow.)
 2. **Private findings as draft advisories.** Private findings filed as draft repository security
    advisories created by the App, the public report saying only "N findings handled privately".
 
-   *Recommendation:* **Yes, with five conditions.**
+   *Decision (maintainer, 2026-11-18):* **yes, with five conditions**, because a public report is public
+   the moment its PR opens and a draft advisory is the one place GitHub keeps a finding private to the
+   maintainer.
    - The model writes private findings only to the encrypted structured result, never to the report. The
      publish script decides what is private (Report and triage) and creates one draft advisory per private
      finding from that result: `state: draft`, no CVE request, no publishing. Only the counts reach the
@@ -672,23 +701,25 @@ step of the workflow.)
    Claude Code CLI installed at a pinned version and checksum and run headless (`claude -p`) through the
    committed launcher.
 
-   *Recommendation:* PRD #161 milestone 4 has not decided that its reviewer runs Claude Code at all (its
-   own open question: a pinned action or a small script calling the provider's API). **If milestone 4
-   runs Claude Code, reuse its way**, so the repository has one pinned way and one Renovate rule,
-   **provided it meets this PRD's requirements**: started through the launcher's `env -i` allow list with
+   *Decision (maintainer, 2026-11-18):* the model runs through the **Claude Code CLI** with the
+   maintainer's Claude subscription token (a Claude Code OAuth token, no API key), **the same way as the
+   AI reviewer of PRD #161 milestone 4** (PR #272), so the repository has one pinned way and one Renovate
+   rule, **provided that way meets this PRD's requirements**: started through the launcher's `env -i` allow list with
    a fresh `HOME`, no managed-settings file, only the audit's settings file (no user, project or local
    setting sources), the skill passed explicitly, strict empty MCP configuration, no hooks, the sandbox
    keys and empty Bash network, path-scoped read tools, an allow list in a mode that refuses the rest,
    never a bypass mode, the binary run by absolute path, its output kept out of the log, all pinned by the
-   `test/architecture` check. **Otherwise, or if that way cannot meet them, use the pinned CLI**, and the
-   ADR says why. A GitHub Action that hides the launch behind its own inputs is unlikely to meet the
-   `env -i` requirement, which favours the CLI.
+   `test/architecture` check. **Where the reviewer's way cannot meet them, the audit runs the same pinned
+   CLI through its own launcher**, and the ADR says why. *Reason:* a GitHub Action that hides the launch
+   behind its own inputs is unlikely to meet the `env -i` requirement, which favours the CLI, and one
+   pinned CLI for both workflows keeps one Renovate rule.
 
-4. **A public report PR every week, even with nothing new?**
+4. **A public report PR on every run, even with nothing new?**
 
-   *Recommendation:* **yes.** A dated report with no findings is the evidence the audit ran and what it
-   covered, and it is one docs-only PR a week to approve. Revisit after the first two months if the
-   reviews cost more than they show.
+   *Decision (maintainer, 2026-11-18):* **yes: a report PR every month, and for every run started by
+   hand, even when nothing is new.** *Reason:* a dated report with no findings is the evidence the audit
+   ran and what it covered, and it is one docs-only PR a month to approve. Revisit after a few months if
+   the reviews cost more than they show.
 
 5. **Fuzz targets.** The tree has no `Fuzz*` test today, and the audit must not change code. Fuzzing runs
    in a container in the checks job, which has no model, so the model cannot write throwaway harnesses
@@ -696,16 +727,17 @@ step of the workflow.)
    fuzz targets (the inventory decoder, the HTTP request decoder, the report renderers) that CI and the
    audit both run.
 
-   *Recommendation:* **a separate issue for committed fuzz targets**, built test-first like any other
-   change. Until it merges, the report lists fuzzing as "not run (no `Fuzz*` targets)" in its limits.
+   *Decision (maintainer, 2026-11-18):* **a separate issue for committed fuzz targets**, built test-first
+   like any other change. *Reason:* targets CI runs too catch a regression on every PR, not once a run,
+   and harnesses only the audit ran would be code nobody else tests. Until it merges, the report lists fuzzing as "not run (no `Fuzz*` targets)" in its limits.
 
 6. **Outbound network from the runner.** GitHub-hosted runners allow any outbound traffic, so a model led
    astray by hostile input (a dependency's advisory text, a scanner's output, a crafted release file)
    could try to send the subscription token or a private finding elsewhere. Options: rely on deny rules
    and containers, add a third-party egress-filtering action, or contain the model step itself.
 
-   *Recommendation:* **contain the model step; no third-party egress action**, which would be a
-   privileged action in the job that holds the token.
+   *Decision (maintainer, 2026-11-18):* **contain the model step; no third-party egress action**, which
+   would be a privileged action in the job that holds the token.
    - The model runs in its own job, on a fresh runner that runs no untrusted code: every networked or
      untrusted-code check runs in the checks job, which holds no token, and reaches the model job only as
      ciphertext.
@@ -734,9 +766,10 @@ step of the workflow.)
    report PR waits for the maintainer's review. Options: the run opens the issues with the PR; the next
    run's publish job opens them from reports the maintainer has merged; the maintainer opens them by hand.
 
-   *Recommendation:* **the next run's publish job opens them from merged reports**, model-free, matched
+   *Decision (maintainer, 2026-11-18):* **the next run's publish job opens them from merged reports**, model-free, matched
    by the fingerprint in the report's findings table against every issue `shift2eu-audit[bot]` authored,
    open or closed, so none is opened twice, one the maintainer closed is not reopened, and an outsider's
    issue cannot suppress one. Nothing becomes an issue that the maintainer has not seen in a merged
-   report, no new trigger or workflow is needed, and the delay of up to a week only applies to public
+   report, no new trigger or workflow is needed, and the delay until the next run (up to a month, less when the maintainer starts one by hand) only
+   applies to public
    findings, which are now confirmed low or informational ones (hardening included). The maintainer can open one sooner by hand.
