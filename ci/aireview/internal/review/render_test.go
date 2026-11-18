@@ -222,7 +222,9 @@ const gitHubTextLimit = 65_000
 // is over 65,000 characters, so Render caps both and says in the body that it
 // truncated it, while the review still names the head it reviewed and still says
 // it is advice and never an approval (ADR 0033). A normal-sized answer is
-// rendered whole, with no word of truncation.
+// rendered whole, with no word of truncation, and so is one whose body is
+// exactly 65,000 characters: the cap refuses a longer review only, as the diff
+// limit refuses a longer diff.
 func TestRenderKeepsTheReviewUnderGitHubsLimits(t *testing.T) {
 	t.Parallel()
 
@@ -247,11 +249,21 @@ func TestRenderKeepsTheReviewUnderGitHubsLimits(t *testing.T) {
 		Body:     strings.Repeat("c", 70_000),
 	}
 
+	// atTheLimit is an answer whose rendered body is exactly gitHubTextLimit
+	// characters: the text Render puts around a summary has a fixed size, so a
+	// one-character summary measures it.
+	atTheLimit := func() review.Answer {
+		probe := review.Render(headSHA, review.Answer{Summary: "s"}, review.EventComment, "")
+
+		return review.Answer{Summary: strings.Repeat("s", gitHubTextLimit-(utf8.RuneCountInString(probe.Body)-1))}
+	}()
+
 	cases := []struct {
 		name          string
 		answer        review.Answer
 		diff          string
 		wantTruncated bool
+		wantAtLimit   bool
 	}{
 		{
 			name:          "a huge summary and twenty huge findings leave the body under the limit",
@@ -268,6 +280,11 @@ func TestRenderKeepsTheReviewUnderGitHubsLimits(t *testing.T) {
 			name:   "a normal answer is rendered whole",
 			answer: review.Answer{Summary: renderSummary, Findings: []review.Finding{renderAddedLine, renderOutsideDiff, renderNoPosition}},
 			diff:   renderDiff,
+		},
+		{
+			name:        "a body exactly at the limit is rendered whole",
+			answer:      atTheLimit,
+			wantAtLimit: true,
 		},
 	}
 
@@ -294,6 +311,12 @@ func TestRenderKeepsTheReviewUnderGitHubsLimits(t *testing.T) {
 			truncated := strings.Contains(strings.ToLower(got.Body), "truncated")
 			if truncated != tc.wantTruncated {
 				t.Errorf("the review's body says truncation %t, want %t: a body cut at the limit says so, and a body under it says nothing of truncation", truncated, tc.wantTruncated)
+			}
+
+			if tc.wantAtLimit {
+				if n := utf8.RuneCountInString(got.Body); n != gitHubTextLimit {
+					t.Errorf("the review's body is %d characters, want exactly %d: an answer that fits GitHub's limit is rendered whole, not cut short of it", n, gitHubTextLimit)
+				}
 			}
 
 			if tc.diff != "" && len(got.Comments) == 0 {
