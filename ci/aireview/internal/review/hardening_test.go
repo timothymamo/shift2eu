@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,10 +35,13 @@ func TestNewHTTPClientRefusesRedirects(t *testing.T) {
 		t.Run("the model API answers "+redirect.name, func(t *testing.T) {
 			t.Parallel()
 
-			var reached int
+			// reached counts the requests the other host got, written by the
+			// server's goroutines and read by this one: an atomic, so the race
+			// detector has nothing to report and a 0 means 0.
+			var reached atomic.Int32
 
 			elsewhere := server(t, func(w http.ResponseWriter, _ *http.Request) {
-				reached++
+				reached.Add(1)
 
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn"}`))
@@ -54,18 +58,18 @@ func TestNewHTTPClientRefusesRedirects(t *testing.T) {
 				t.Fatalf("Ask of a %d answer = %v, want an error wrapping ErrModel: the client refuses the redirect", redirect.code, err)
 			}
 
-			if reached != 0 {
-				t.Errorf("the server the %d answer pointed at got %d requests, want 0: a followed redirect sends the x-api-key and the diff to another host", redirect.code, reached)
+			if got := reached.Load(); got != 0 {
+				t.Errorf("the server the %d answer pointed at got %d requests, want 0: a followed redirect sends the x-api-key and the diff to another host", redirect.code, got)
 			}
 		})
 
 		t.Run("GitHub answers "+redirect.name, func(t *testing.T) {
 			t.Parallel()
 
-			var reached int
+			var reached atomic.Int32
 
 			elsewhere := server(t, func(w http.ResponseWriter, _ *http.Request) {
-				reached++
+				reached.Add(1)
 
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"number":7,"title":"Add x","head":{"sha":"` + headSHA + `"},"base":{"sha":"` + baseSHA + `"}}`))
@@ -81,8 +85,8 @@ func TestNewHTTPClientRefusesRedirects(t *testing.T) {
 				t.Fatalf("PullRequest of a %d answer = %v, want an error wrapping ErrGitHub: the client refuses the redirect", redirect.code, err)
 			}
 
-			if reached != 0 {
-				t.Errorf("the server the %d answer pointed at got %d requests, want 0: a followed redirect sends the token to another host", redirect.code, reached)
+			if got := reached.Load(); got != 0 {
+				t.Errorf("the server the %d answer pointed at got %d requests, want 0: a followed redirect sends the token to another host", redirect.code, got)
 			}
 		})
 	}

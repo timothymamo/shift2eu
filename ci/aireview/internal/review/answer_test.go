@@ -103,7 +103,10 @@ func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 // with ErrMalformedAnswer: anything around the object, a second value, an
 // unknown field at any level, a missing or empty required text, a severity or
 // category outside the constants (compared exactly), and a line or path a pull
-// request could not hold. A refused answer fails the run and posts nothing.
+// request could not hold, a path holding a control character included: a line
+// break in a path would put the rest of it on a line of its own, where an @ it
+// holds notifies, and the GitHub API could not name that file anyway. A refused
+// answer fails the run and posts nothing.
 func TestParseAnswerRefusesWhatItCannotTrust(t *testing.T) {
 	t.Parallel()
 
@@ -113,6 +116,9 @@ func TestParseAnswerRefusesWhatItCannotTrust(t *testing.T) {
 		finding = `{"severity":"nit","category":"readability","title":"Name it","body":"A clearer name."}`
 	)
 
+	// The control characters in a path are spelt as the JSON escapes the model
+	// writes, since a Go escape such as \x01 is no JSON and the parser would then
+	// refuse the answer for its JSON, not for its path.
 	cases := []struct {
 		name string
 		text string
@@ -140,6 +146,12 @@ func TestParseAnswerRefusesWhatItCannotTrust(t *testing.T) {
 		{name: "an absolute path", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"/etc/passwd","line":1,"title":"t","body":"b"}]}`},
 		{name: "a path with a .. element", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal/../x.go","line":1,"title":"t","body":"b"}]}`},
 		{name: "a path with a backslash", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal\\x\\y.go","line":1,"title":"t","body":"b"}]}`},
+		{name: "a path with a line feed", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal/x/y.go\n","line":1,"title":"t","body":"b"}]}`},
+		{name: "a path with a line feed and a mention", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"x.go\n\n@someone please look","line":1,"title":"t","body":"b"}]}`},
+		{name: "a path with a carriage return", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal/x/y.go\r","line":1,"title":"t","body":"b"}]}`},
+		{name: "a path with a tab", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal/x/y.go\t","line":1,"title":"t","body":"b"}]}`},
+		{name: "a path with a control character below 0x20", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal/x/y.go\u0001","line":1,"title":"t","body":"b"}]}`},
+		{name: "a path with DEL", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal/x/y.go\u007f","line":1,"title":"t","body":"b"}]}`},
 		{name: "a finding that is not an object", text: `{"summary":"s","findings":["a finding"]}`},
 		{name: "a valid finding next to a broken one", text: `{"summary":"s","findings":[` + finding + `,{"severity":"nit","category":"style","title":"t","body":"b"}]}`},
 	}

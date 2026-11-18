@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf16"
 	"unicode/utf8"
 
 	"github.com/google/go-cmp/cmp"
@@ -219,7 +220,8 @@ const gitHubTextLimit = 65_000
 
 // TestRenderKeepsTheReviewUnderGitHubsLimits pins what a huge model answer costs
 // the reviewer: GitHub refuses a review whose body or whose inline comment body
-// is over 65,000 characters, so Render caps both and says in the body that it
+// is over 65,000 characters, counted in UTF-16 code units, so a character
+// outside the BMP counts twice; Render caps both and says in the body that it
 // truncated it, while the review still names the head it reviewed and still says
 // it is advice and never an approval (ADR 0033). A normal-sized answer is
 // rendered whole, with no word of truncation, and so is one whose body is
@@ -277,6 +279,11 @@ func TestRenderKeepsTheReviewUnderGitHubsLimits(t *testing.T) {
 			wantTruncated: true,
 		},
 		{
+			name:          "a summary of characters outside the BMP is cut to GitHub's count",
+			answer:        review.Answer{Summary: strings.Repeat("\U0001F600", 40_000)},
+			wantTruncated: true,
+		},
+		{
 			name:   "a normal answer is rendered whole",
 			answer: review.Answer{Summary: renderSummary, Findings: []review.Finding{renderAddedLine, renderOutsideDiff, renderNoPosition}},
 			diff:   renderDiff,
@@ -296,6 +303,12 @@ func TestRenderKeepsTheReviewUnderGitHubsLimits(t *testing.T) {
 
 			if n := utf8.RuneCountInString(got.Body); n > gitHubTextLimit {
 				t.Errorf("the review's body is %d characters, want at most %d: GitHub refuses a longer review, and the model call that wrote it is spent", n, gitHubTextLimit)
+			}
+
+			// GitHub counts a body in UTF-16 code units, so a character outside
+			// the BMP counts twice: a body of 40,000 emoji is 80,000 there.
+			if n := len(utf16.Encode([]rune(got.Body))); n > gitHubTextLimit {
+				t.Errorf("the review's body is %d UTF-16 code units, want at most %d: GitHub counts a character outside the BMP as two, and refuses a longer review", n, gitHubTextLimit)
 			}
 
 			if !strings.Contains(got.Body, headSHA) {
@@ -327,16 +340,127 @@ func TestRenderKeepsTheReviewUnderGitHubsLimits(t *testing.T) {
 				if n := utf8.RuneCountInString(comment.Body); n > gitHubTextLimit {
 					t.Errorf("the inline comment on %s:%d is %d characters, want at most %d: GitHub refuses a longer comment, and the model call that wrote it is spent", comment.Path, comment.Line, n, gitHubTextLimit)
 				}
+
+				if n := len(utf16.Encode([]rune(comment.Body))); n > gitHubTextLimit {
+					t.Errorf("the inline comment on %s:%d is %d UTF-16 code units, want at most %d: GitHub counts a character outside the BMP as two, and refuses a longer comment", comment.Path, comment.Line, n, gitHubTextLimit)
+				}
 			}
 		})
 	}
 }
 
+// TestRenderClosesACodeFenceItCuts pins what a cut leaves a code block looking
+// like. A summary that opens a ``` fence and is longer than GitHub accepts is
+// cut inside the fence, and so is an inline comment whose finding does: left
+// open, the fence would render the note that the text was truncated, and the
+// body's closing statement that the review is advice and never an approval, as
+// code, so Render closes the fence before them.
+func TestRenderClosesACodeFenceItCuts(t *testing.T) {
+	t.Parallel()
+
+	// fenceAndPatch opens a diff fence and fills the text past GitHub's limit, so
+	// the cut lands inside the fence.
+	fenceAndPatch := "```diff\n" + strings.Repeat("- removed a line\n+ added a line\n", 4_000)
+
+	fencedFinding := review.Finding{
+		Severity: review.SeveritySuggestion,
+		Category: review.CategoryReadability,
+		Path:     "internal/x/y.go",
+		Line:     2,
+		Title:    "The patch, at length",
+		Body:     fenceAndPatch,
+	}
+
+	cases := []struct {
+		name         string
+		answer       review.Answer
+		diff         string
+		wantComments int
+	}{
+		{
+			name:   "a body the cut left inside the summary's fence closes it",
+			answer: review.Answer{Summary: fenceAndPatch},
+		},
+		{
+			name:         "an inline comment the cut left inside its finding's fence closes it",
+			answer:       review.Answer{Summary: renderSummary, Findings: []review.Finding{fencedFinding}},
+			diff:         renderDiff,
+			wantComments: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := review.Render(headSHA, tc.answer, review.EventComment, tc.diff)
+
+			if len(got.Comments) != tc.wantComments {
+				t.Fatalf("the review holds %d inline comments, want %d: the finding is on a line the diff shows only when a comment is wanted", len(got.Comments), tc.wantComments)
+			}
+
+			if tc.wantComments == 0 {
+				assertFenceClosedAfterCut(t, "the review's body", got.Body)
+
+				return
+			}
+
+			assertFenceClosedAfterCut(t, fmt.Sprintf("the inline comment on %s:%d", got.Comments[0].Path, got.Comments[0].Line), got.Comments[0].Body)
+		})
+	}
+}
+
+// assertFenceClosedAfterCut pins what a text Render cut must leave: a note that
+// it was truncated, an even number of lines that start a code fence, and that
+// note and the body's closing statement after the last of those lines.
+func assertFenceClosedAfterCut(t *testing.T, where, text string) {
+	t.Helper()
+
+	truncated := regexp.MustCompile(`(?i)truncated`)
+	if !truncated.MatchString(text) {
+		t.Fatalf("%s holds no note that it was truncated, so nothing was cut and no fence was left open; text:\n%s", where, text)
+	}
+
+	var (
+		fences int
+		lastAt int
+		at     int
+	)
+
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, "```") {
+			fences++
+			lastAt = at
+		}
+
+		at += len(line) + 1
+	}
+
+	if fences%2 != 0 {
+		t.Errorf("%s holds %d lines that start a code fence, want an even number: a fence the cut left open renders the rest of it as code; text:\n%s", where, fences, text)
+	}
+
+	if fences == 0 {
+		return
+	}
+
+	if loc := truncated.FindStringIndex(text); loc != nil && loc[0] < lastAt {
+		t.Errorf("%s puts the note that it was truncated before the last line of the code fence, so the fence renders the note as code; text:\n%s", where, text)
+	}
+
+	if idx := strings.Index(text, "This review is advice for the maintainer"); idx != -1 && idx < lastAt {
+		t.Errorf("%s puts the review's closing statement before the last line of the code fence, so the fence renders it as code; text:\n%s", where, text)
+	}
+}
+
 // TestRenderDefusesMentionsInTheModelsText pins what a mention in the model's
-// text is allowed to do: notify nobody. The summary and the findings are text
-// the model wrote, and a review that carries @someone would ping a user or a
-// team of the repository, so Render defuses every mention (an @ followed by a
-// letter or a digit) while the handle text itself stays readable (ADR 0033).
+// text is allowed to do: notify nobody. The summary, the findings and a
+// finding's path are text the model wrote, and a review that carries @someone
+// would ping a user or a team of the repository, so Render defuses every
+// mention (an @ followed by a letter or a digit) while the handle text itself
+// stays readable (ADR 0033). A mention written as an HTML character reference
+// is the same mention to GitHub, which renders the reference as the @ it names,
+// so Render defuses those too.
 func TestRenderDefusesMentionsInTheModelsText(t *testing.T) {
 	t.Parallel()
 
@@ -397,6 +521,74 @@ func TestRenderDefusesMentionsInTheModelsText(t *testing.T) {
 	if !strings.Contains(got.Comments[0].Body, "octocat") {
 		t.Errorf("the inline comment drops the handle text of its mention; body:\n%s", got.Comments[0].Body)
 	}
+
+	// Render refuses nothing, so a finding can reach it from somewhere other than
+	// ParseAnswer: the path is text the model wrote too, and a line break in it
+	// gives the rest of the path a line of its own, where an @ notifies.
+	t.Run("a mention in a finding's path is defused too", func(t *testing.T) {
+		t.Parallel()
+
+		finding := review.Finding{
+			Severity: review.SeverityNit,
+			Category: review.CategoryReadability,
+			Path:     "x.go\n\n@someone please look",
+			Line:     99,
+			Title:    "Unreachable branch",
+			Body:     "Nothing reaches line 99.",
+		}
+
+		got := review.Render(headSHA, review.Answer{Summary: renderSummary, Findings: []review.Finding{finding}}, review.EventComment, renderDiff)
+
+		if found := mention.FindString(got.Body); found != "" {
+			t.Errorf("the review's body holds the mention %q, which the finding's path carries: Render defuses the path too; body:\n%s", found, got.Body)
+		}
+
+		if !strings.Contains(got.Body, "x.go") {
+			t.Errorf("the review's body drops the path of the finding %q, which is on no line the diff shows, so the body lists it; body:\n%s", finding.Title, got.Body)
+		}
+	})
+
+	// GitHub renders an HTML character reference in a body as the character it
+	// names, so &#64;octocat, &#x40;octocat, &#X40;octocat, &#064;octocat and
+	// &commat;octocat are all a live @octocat, and defusing the literal @ alone
+	// notifies nobody only by luck.
+	t.Run("a mention written as an HTML character reference is defused too", func(t *testing.T) {
+		t.Parallel()
+
+		reference := regexp.MustCompile(`(?i)&(#0*64|#x0*40|commat);[a-z0-9]`)
+		references := []string{"&#64;octocat", "&#x40;octocat", "&#X40;octocat", "&#064;octocat", "&commat;octocat"}
+
+		answer := review.Answer{
+			Summary: "Thanks to " + strings.Join(references, ", ") + " for the report.",
+			Findings: []review.Finding{{
+				Severity: review.SeveritySuggestion,
+				Category: review.CategoryReadability,
+				Path:     "internal/x/y.go",
+				Line:     2,
+				Title:    "Credit &#64;octocat",
+				Body:     "&#x40;octocat disagrees, and so does &commat;octocat.",
+			}},
+		}
+
+		got := review.Render(headSHA, answer, review.EventComment, renderDiff)
+
+		if len(got.Comments) != 1 {
+			t.Fatalf("the review holds %d inline comments, want 1: the finding is on a line the diff shows", len(got.Comments))
+		}
+
+		for _, rendered := range []struct{ where, text string }{
+			{where: "the review's body", text: got.Body},
+			{where: "the inline comment on internal/x/y.go:2", text: got.Comments[0].Body},
+		} {
+			if found := reference.FindString(rendered.text); found != "" {
+				t.Errorf("%s holds the character reference %q, which GitHub renders as a live @: text the model wrote cannot notify anybody; text:\n%s", rendered.where, found, rendered.text)
+			}
+
+			if !strings.Contains(rendered.text, "octocat") {
+				t.Errorf("%s drops the handle text %q of the mention: the finding stays readable, only the @ goes; text:\n%s", rendered.where, "octocat", rendered.text)
+			}
+		}
+	})
 }
 
 // TestRenderCommentsOnlyOnLinesTheDiffsNewSideShows pins the new-side detection
