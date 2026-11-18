@@ -46,8 +46,8 @@ type schema struct {
 	additional *bool
 	// items is the schema of an array's elements.
 	items *schema
-	// description is the schema's own prose, which states the quantity rule of
-	// every field that holds an amount of money or a quantity.
+	// description is the schema's own prose; for a field the quantity rule
+	// covers it states the rule.
 	description string
 	// enum and const restrict the value itself.
 	enum       []any
