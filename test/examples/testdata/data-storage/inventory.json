@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "db-0123456789abcdef0",
+      "rawType": "AWS::RDS::DBInstance",
+      "category": "database.postgresql",
+      "region": "eu-west-1",
+      "size": { "vcpus": 2, "memoryGiB": 8 }
+    },
+    {
+      "id": "db-0123456789abcdef1",
+      "rawType": "AWS::RDS::DBInstance",
+      "category": "database.postgresql",
+      "region": "eu-west-1",
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 100 }
+    }
+  ]
+}
