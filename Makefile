@@ -369,7 +369,9 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 # ANTHROPIC_API_KEY) is removed. A merge replaces the lines of the names in VM_ENV and keeps the other plain
 # NAME=value lines, so `make vm-env VM_ENV=DEEPSEEK_API_KEY` replaces only DEEPSEEK_API_KEY; it drops every other line (a command, a
 # comment, a value the shell would expand) with a warning that says how many (never their content), and
-# prints the names (never the values) of the lines it kept. The values travel on standard input, never on a
+# prints the names (never the values) of the lines it kept. Either mode removes a GitHub token line
+# (one of github_token_names above) and names the variable on stderr, never its value, saying to revoke that token:
+# every agent in the VM could read it. The values travel on standard input, never on a
 # command line (only the mode does), and the file is written to a temporary file beside daemon.env and moved
 # into place, mode 0600, so a failure never leaves half a file; a trap removes the temporary file if the
 # VM-side shell is interrupted, and a leftover of a killed run older than a minute is removed by the next
@@ -391,6 +393,8 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 		find "$$d" -maxdepth 1 -name ".daemon.env.??????" -mmin +1 -exec rm -f {} + && \
 		new="$$(cat)" && safe="$(vm_env_safe_line)" && \
 		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && \
+		removed= && if [ -f "$$f" ] && [ -r "$$f" ]; then \
+			removed=$$(sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?($(github_token_names))=.*/\2/p" "$$f" | sort -u | paste -sd " " -) || exit 1; fi && \
 		dropped=0 && kept= && if [ "$$1" = merge ] && [ -f "$$f" ]; then \
 			total=$$(grep -a -c . "$$f") || [ "$$?" -eq 1 ] || unreadable; \
 			plain=$$(grep -a -E "$$safe" "$$f") || [ "$$?" -eq 1 ] || unreadable; \
@@ -401,13 +405,17 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 		{ if [ -n "$$kept" ]; then printf "%s\n" "$$kept"; fi && printf "%s\n" "$$new"; } > "$$t" && \
 		chmod 600 "$$t" && mv "$$t" "$$f" && t= && trap - EXIT HUP INT TERM && \
 		if [ "$$1" = merge ]; then printf "vm-env-dropped:%s\n" "$$dropped" && \
-			printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi' sh $(vm_env_mode))" && \
+			printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi && \
+		if [ -n "$$removed" ]; then printf "vm-env-removed:%s\n" "$$removed"; fi' sh $(vm_env_mode))" && \
 	echo "vm-env: $$(echo $(vm_env_names)) written to ~/.config/dot-agent-deck/daemon.env in the VM, $(if $(filter replace,$(vm_env_mode)),replacing the whole file,its other lines kept); 'make deck-restart' applies it to a running deck" && \
 	dropped="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-dropped:\([0-9][0-9]*\)$$/\1/p')" && \
 	if [ -n "$$dropped" ] && [ "$$dropped" -gt 0 ]; then \
 		echo "vm-env: warning: dropped $$dropped line(s) of the VM's daemon.env that were not plain NAME=value assignments (their content is not shown)" >&2; fi && \
 	kept="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-kept:\([A-Za-z0-9_ ]*\)$$/\1/p')" && \
-	if [ -n "$$kept" ]; then echo "vm-env: kept (unchanged): $$kept"; fi
+	if [ -n "$$kept" ]; then echo "vm-env: kept (unchanged): $$kept"; fi && \
+	removed="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-removed:\([A-Z_ ]*\)$$/\1/p')" && \
+	if [ -n "$$removed" ]; then \
+		echo "vm-env: warning: removed $$removed from the VM's daemon.env: every agent in the VM could read it, so revoke that token at GitHub (its value is not shown)" >&2; fi
 
 .PHONY: vm-claude-settings
 vm-claude-settings: ## Merge dev/claude-user-settings.json into Claude Code's user settings in the VM

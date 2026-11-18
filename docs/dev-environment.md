@@ -403,7 +403,9 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   and `make vm-create`, refuses a `VM_ENV` that names a GitHub token variable gh reads (the personal one,
   `GH_TOKEN`, `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`) before any `limactl` call: it names the
   variable, never its value, points at `make agents-token`, and writes nothing. A merge drops a stale line
-  of any of them from the VM's `daemon.env` instead of keeping it.
+  of any of them from the VM's `daemon.env` instead of keeping it (a replace rewrites the whole file), and
+  either one then warns on stderr: it names the variable it removed, never its value, and says to revoke
+  that token at GitHub, as every agent in the VM could read it.
 - **Every agent gets every variable.** The tester holds the Claude token and the App's token, the Claude
   roles the DeepSeek key. Scope each one narrowly so it is cheap to revoke. The file stays on the VM's disk
   (under `~/.lima` on the Mac) until `make vm-delete`.
@@ -744,7 +746,8 @@ before it still hold. Rolling back is under each step.
      and `GITHUB_TOKEN` from any `VM_ENV` override you keep (a `VM_ENV` exported in a `.envrc`, or a
      habit of `make vm-env VM_ENV=...`);
    - run `make vm-env` with the default `VM_ENV`: it replaces the VM's whole `daemon.env`, so the old
-     `GITHUB_TOKEN` line is gone; then `make deck-restart` between tasks;
+     `GITHUB_TOKEN` line is gone (it says so: `vm-env: warning: removed GITHUB_TOKEN ...`); then
+     `make deck-restart` between tasks;
    - revoke the personal token that `GITHUB_TOKEN` held on GitHub
      ([personal access tokens](https://github.com/settings/personal-access-tokens)).
 
