@@ -165,7 +165,27 @@ type Estimate struct {
 	// hours of its plans (ADR 0029), so a report can state the cap. It is 0 for
 	// an uncapped offering, for ByStorage and for a resource not estimated.
 	BillingCapHours int64
+	// StorageNotIncluded names the storage the estimate leaves out (ADR 0032):
+	// BootVolume or DataStorage for a resource estimated ByPlan whose chosen
+	// plan includes no storage, whose offering prices storage per GiB in the
+	// estimate region, and which gives no storage size; "" otherwise. It is set
+	// only when Estimated.
+	StorageNotIncluded StorageNotIncluded
 }
+
+// StorageNotIncluded names the storage an estimate by plan leaves out: the
+// chosen plan includes none, its offering prices storage per GiB in the
+// estimate region, and the resource gives no storage size (ADR 0032).
+type StorageNotIncluded string
+
+const (
+	// BootVolume is left out of an estimate for compute.vm, compute.baremetal
+	// and kubernetes.managed: each instance's or node's boot volume.
+	BootVolume StorageNotIncluded = "boot-volume"
+	// DataStorage is left out of an estimate for database.postgresql and
+	// database.mysql: the service's data storage.
+	DataStorage StorageNotIncluded = "data-storage"
+)
 
 // For estimates the resource of result, a mapping onto a target's catalog, in
 // region, the estimate region (the region the user chose, or the snapshot's
@@ -334,8 +354,29 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 	e.CountAssumed = countAssumed
 	e.HoursAssumed = hoursAssumed
 	e.BillingCapHours = chosen.offering.PlanBillingCapHours
+	e.StorageNotIncluded = storageNotIncluded(r.Category, stored, chosen, region)
 
 	return e
+}
+
+// storageNotIncluded returns the storage an estimate by plan leaves out
+// (ADR 0032): none unless the resource gives no storage size, the chosen plan
+// includes no storage and its offering prices storage in region; then the
+// data storage for a category stored once, the boot volume otherwise.
+func storageNotIncluded(c taxonomy.Category, stored *big.Rat, chosen offeredPlan, region string) StorageNotIncluded {
+	if stored != nil || chosen.plan.IncludedStorageGiB != 0 {
+		return ""
+	}
+
+	if _, ok := chosen.offering.StoragePrice(region); !ok {
+		return ""
+	}
+
+	if storedOnce(c) {
+		return DataStorage
+	}
+
+	return BootVolume
 }
 
 // byStorage estimates a resource priced by stored GiB, on the best candidate
@@ -602,10 +643,13 @@ type Total struct {
 	// Resources is how many resources there are, estimated or not: a report
 	// shows "Monthly for Estimated of Resources resources".
 	Resources int
+	// StorageNotIncluded is how many of the estimated resources carry a
+	// non-empty Estimate.StorageNotIncluded (ADR 0032).
+	StorageNotIncluded int
 }
 
 // Sum totals estimates: Monthly over those with Estimated true, how many those
-// are, and len(estimates).
+// are, how many of those leave out storage, and len(estimates).
 func Sum(estimates []Estimate) Total {
 	t := Total{Resources: len(estimates)}
 
@@ -613,6 +657,10 @@ func Sum(estimates []Estimate) Total {
 		if e.Estimated {
 			t.Monthly = t.Monthly.Add(e.Monthly)
 			t.Estimated++
+
+			if e.StorageNotIncluded != "" {
+				t.StorageNotIncluded++
+			}
 		}
 	}
 
