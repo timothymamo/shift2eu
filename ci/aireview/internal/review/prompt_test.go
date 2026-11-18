@@ -66,7 +66,11 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 		t.Errorf("the user message holds %q %d times, want exactly once: no text of the pull request may close the tag", review.UntrustedCloseTag, count)
 	}
 
-	for _, want := range []string{"PR-TITLE-MARKER", pr.Author, headSHA, "FILE-PATH-MARKER", "DIFF-MARKER"} {
+	// The body is in this list on purpose: it is the text of the pull request that
+	// holds the closing tag above. A prompt that dropped it, or that wrote it
+	// unescaped, would leave the tag count at one and pass every check before
+	// this one.
+	for _, want := range []string{"PR-TITLE-MARKER", "PR-BODY-MARKER", pr.Author, headSHA, "FILE-PATH-MARKER", "DIFF-MARKER"} {
 		if !strings.Contains(got.User, want) {
 			t.Errorf("the user message does not carry %q to the model", want)
 		}
