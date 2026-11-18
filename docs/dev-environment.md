@@ -56,6 +56,7 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
 
    | Target | Does |
    |---|---|
+   | `make vm-env-check` | Checks on the Mac that every `VM_ENV` variable is set, before anything is created ([Credentials](#credentials)) |
    | `make vm-up` | Creates and provisions the VM, or starts it |
    | `make vm-env` | Copies the three variables into the VM ([Credentials](#credentials)) |
    | `make vm-claude-settings` | Claude Code user settings for the agents ([Agent permissions](#agent-permissions)) |
@@ -353,8 +354,11 @@ read the file:
   Code roles share your subscription's usage limits.
 - **Every variable must be set, or nothing is written.** `make vm-env` first checks every name in
   `VM_ENV`. If one is unset or empty, it names it (never a value), exits non-zero without calling
-  `limactl`, and leaves the VM's `daemon.env` byte for byte as it was; `make vm-create`, which runs it,
-  stops there. This keeps a locked login Keychain or an unloaded `.envrc` from wiping the credentials the
+  `limactl`, and leaves the VM's `daemon.env` byte for byte as it was. `make vm-create` runs the same
+  check (`make vm-env-check`, which `make vm-env` runs first too) before `make vm-up`, so a missing
+  credential, or any `VM_ENV` `make vm-env` would refuse, stops it before any `limactl` call: it creates
+  and provisions nothing, instead of leaving a half-set-up VM. A `VM_ENV` on its command line is checked
+  the same way. This keeps a locked login Keychain or an unloaded `.envrc` from wiping the credentials the
   agents need ([Troubleshooting](#troubleshooting-credentials)). An empty `VM_ENV` (`make vm-env VM_ENV=`)
   names no credential and is refused the same way; a name listed twice is written once. A `VM_ENV`
   holding anything but variable names, commas and spaces (a quote, a `$`, a `*`) is refused before any
@@ -394,8 +398,10 @@ read the file:
 
 ### Troubleshooting credentials
 
-**`make vm-env` refuses: `vm-env: not set or empty: CLAUDE_CODE_OAUTH_TOKEN ...`.** The shell you ran it
-in does not have the variables. Fix it in this order:
+**`make vm-env` or `make vm-create` refuses: `vm-env: not set or empty: CLAUDE_CODE_OAUTH_TOKEN ...`.**
+The shell you ran it in does not have the variables. A refused `make vm-create` has created nothing yet,
+and says so: `vm-create: nothing was created: the credential check runs before the VM is created`. Fix it
+in this order:
 
 1. If your credentials come from the macOS login Keychain (a `.envrc` that reads them with `security`),
    an SSH session has the Keychain locked, so every lookup comes back empty. Unlock it; it asks for the
