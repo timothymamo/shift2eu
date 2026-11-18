@@ -1,6 +1,7 @@
 # PRD #161: Agents open pull requests as a GitHub App, an AI reviewer comments, and main requires the maintainer's approval
 
-**Status:** Draft
+**Status:** Complete (milestones 1 to 4 done: #224, #239, #271, #272). The maintainer has carried out the
+switch-over runbook through step 7.
 **Issue:** #161
 
 ## Problem
@@ -149,9 +150,16 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
 - [x] On a new push, the reviewer reviews the new head and dismisses its own earlier change request when it
   no longer stands; it never dismisses anyone else's review. The maintainer can always dismiss its change
   request.
-- [ ] An approval from the reviewer App, the agents App or any account other than the maintainer does not
+- [x] An approval from the reviewer App, the agents App or any account other than the maintainer does not
   satisfy `Protect main` (code-owner review), shown in the switch-over runbook's check. *Checked at
-  runbook step 7.*
+  runbook step 7. Confirmed by the maintainer on 2026-11-18: after #272 merged, the gate check
+  (`dev/protect-main-check.sh`), run from their admin machine on `main`, exited 0 with every line ok,
+  including `bypass_actors is empty`, `require_code_owner_review is true`,
+  `require_last_push_approval is true`, `this token cannot bypass Protect main`,
+  `every CODEOWNERS owner is @timothymamo` and `GitHub reports no CODEOWNERS errors on main`. In the
+  prompt-injection test of runbook step 7, PR #279 (closed unmerged), the `AI review` check passed and
+  `shift2eu-reviewer[bot]` posted a `COMMENTED` review, never `APPROVED`, that reported the injected line
+  as a blocking `prompt-injection` finding.*
 - [x] The reviewer treats the pull request's title, body, diff and comments as untrusted data, never as
   instructions; the prompt says so. Given a pull request whose diff contains instructions to the reviewer,
   it still reviews it and reports the attempt as a finding. Its tools are read-only (no shell, no network
@@ -169,20 +177,22 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
    the `gh` and git credential path with the `GITHUB_TOKEN` fallback, the bot git author,
    `make vm-env`/`vm-init` changes, tests, an ADR (identity, token model, why not a machine user, why the
    reviewer never approves), and `docs/dev-environment.md`. Merged under the old token; nothing is
-   enforced yet. *Code merged; criteria marked "runbook step 3" are checked there.*
+   enforced yet. *Merged in #224; the criteria marked "runbook step 3" were confirmed there.*
 2. [x] **Gate checks, CODEOWNERS, skills and docs.** `.github/CODEOWNERS`, the `Protect main` check with
    its transition flag, `pr-create` and `release-tag` changes, CLAUDE.md, `docs/contributing/agents.md`,
    the switch-over runbook. Depends on 1. *Note from milestone 1 (ADR 0031, d): the App keeps Actions
    read, so `release-tag` hands a re-run of a failed run (`gh run rerun <id>`) to the maintainer instead
-   of running it.* *Code merged; the switch-over at runbook step 5 is the maintainer's.*
+   of running it.* *Merged in #239; the maintainer switched `Protect main` over at runbook step 5.*
 3. [x] **Remove the maintainer's token.** After the maintainer's runbook step 6: drop `GITHUB_TOKEN` from
    `VM_ENV` and the fallback, remove the check's transition flag entirely (`GATE_TRANSITION` and the
    script's `--transition` flag, not only defaulting it to 0), update the docs. Opened by the App and
    approved by the maintainer: the first change through the new gate. Depends on 2 and the runbook.
-4. [ ] **AI reviewer.** The review workflow, its prompt, the code that posts the review (comment or request
+   *Merged in #271.*
+4. [x] **AI reviewer.** The review workflow, its prompt, the code that posts the review (comment or request
    changes only), its tests, an ADR (trigger, secrets, prompt injection, cost), `docs/dev-environment.md`
    and the release-tag check of its secrets. Depends on 2 (the code-owner gate, so no approval of the
-   reviewer's could count); can run in parallel with 3. *Code in PR; enforced at runbook step 7.*
+   reviewer's could count); can run in parallel with 3. *Merged in #272; checked at runbook step 7 with
+   the prompt-injection test PR #279 (closed unmerged).*
 
 ## Switch-over runbook (maintainer)
 
@@ -244,7 +254,7 @@ never a required check.
 - **The switch-over order** is the runbook above.
 
 **Decided (milestone 4, maintainer and ADR 0033, 2026-11-18;
-[ADR 0033](../docs/adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md)):**
+[ADR 0033](../../docs/adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md)):**
 
 - (4) **Model and runner:** Claude Opus 5.5 on the maintainer's Claude subscription, asked through one
   run of the Claude Code CLI (`claude -p`) with every tool off, `CLAUDE.md`, skills, plugins, hooks and
@@ -265,7 +275,9 @@ never a required check.
   `ai-review` environment's variable `AI_REVIEW_REQUEST_CHANGES` to `true`; a blocking finding is still
   marked blocking, and the review says it would have requested changes.
 
-**Open (to settle in the milestone named, recorded in its ADR):**
+**Open (to settle in the milestone named, recorded in its ADR):** *All four were settled in milestone 1,
+in [ADR 0031](../../docs/adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)
+("The open questions (1) of PRD #161", a to d).*
 
 - (1) How the refresh runs on the Mac: a launchd agent, or a loop the `deck` target starts. It must
   survive the Mac sleeping and say clearly when it stopped.
