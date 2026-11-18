@@ -38,7 +38,10 @@ absolute or holds anything but letters, digits, `/`, `.`, `_` and `-`, or a `..`
 come only from the `make` command line or from the Makefile: both targets refuse, before any `sudo`, one
 whose `$(origin)` is `environment` (or `environment override`), since a stale export, from a test or an
 earlier session, would have root install the plist where launchd never looks at boot, and the job would
-quietly be gone after the next reboot.
+quietly be gone after the next reboot. Both the install and the plist generator refuse, before anything
+else, to run as root (`sudo make ...`, `sudo -E make ...`): the job's `UserName` is the account that renders
+the plist, and a root job would run the host clone's script, which the maintainer can edit, as root at every
+boot; the install is run as the maintainer and runs `sudo` itself.
 
 **The install fails closed.** Over a loaded job it runs `launchctl bootout` and waits, at most 10 seconds,
 while `launchctl print` still finds the job; a job still loaded then stops the install before it installs

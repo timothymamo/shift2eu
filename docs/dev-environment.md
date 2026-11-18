@@ -607,7 +607,8 @@ Over SSH on the Mac Mini, each step with its check (the instance `shift2eu`; for
    direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, even where no direnv hook runs
    ```
 
-   It refuses before any `sudo` when a mount of the VM reaches the clone (above it, at it or inside it),
+   Run it as yourself, never under `sudo`: it refuses to run as root, since the job runs as the account
+   that installs it, and runs `sudo` itself where it needs it. It refuses before any `sudo` when a mount of the VM reaches the clone (above it, at it or inside it),
    when `limactl list` does not answer about this VM, or when the clone's `dev/` or its script is a symlink.
    It lints the plist with `plutil -lint`, prints it with its SHA-256 and the line naming the script the job
    runs (`<host clone>/dev/agents-app-token.sh`: check it is this clone, outside the workspace), prints

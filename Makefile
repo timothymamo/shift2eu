@@ -525,6 +525,9 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # it before any use, so make never splices an unchecked value into the shell text that runs sudo.
 #
 # install refuses, before any sudo:
+#   - a run as root (sudo make, sudo -E make), before anything else: the job runs as the account that installs
+#     it, and as root it would run the host clone's script, which you can edit, at every boot. Run it as you;
+#     it runs sudo itself;
 #   - a clone whose dev/ or dev/agents-app-token.sh is a symlink: the job would run a file the install never
 #     looked at;
 #   - a clone that is one of the VM's mounts, lies under one, or holds one: the agents can edit a mounted
@@ -543,9 +546,9 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # success (bootstrap can load the job and still exit non-zero), otherwise the install fails and says that the
 # checked plist stays where launchd loads it at the next boot.
 #
-# uninstall boots the job out, waits (at most 10 seconds, as install does) until launchctl print stops finding it and removes the
-# plist either way. A job that stays loaded is reported with the command that unloads it, and the uninstall
-# still exits 0: the plist is gone, and running it again would change nothing.
+# uninstall boots the job out, waits (at most 10 seconds, as install does) until launchctl print stops finding
+# it and removes the plist either way. A job that stays loaded is reported with the command that unloads it,
+# and the uninstall still exits 0: the plist is gone, and running it again would change nothing.
 #
 # AGENTS_TOKEN_LAUNCHD_DIR is where launchd reads LaunchDaemons from. It is a hook for the tests, which point
 # it into their sandbox; never change it on a real Mac. Root writes there, so install and uninstall refuse a
@@ -557,7 +560,6 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN := $(origin AGENTS_TOKEN_LAUNCHD_DIR)
 AGENTS_TOKEN_LAUNCHD_DIR ?= /Library/LaunchDaemons
 AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX = io.github.timothymamo.shift2eu.agents-token-refresh.
-AGENTS_TOKEN_LAUNCHD_LABEL = $(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$(LIMA_INSTANCE)
 # The script a loaded job runs, read from `launchctl print system/<label>`: the first line of its arguments
 # block that ends in /dev/agents-app-token.sh, with the indentation removed (empty when there is none).
 AGENTS_TOKEN_LAUNCHD_SCRIPT_OF = awk '/^[[:space:]]*arguments = \{/ { a = 1; next } a && /^[[:space:]]*\}/ { exit } a { sub(/^[[:space:]]+/, ""); if ($$0 ~ /\/dev\/agents-app-token\.sh$$/) { print; exit } }'
@@ -586,7 +588,11 @@ agents-token-refresh-install agents-token-refresh-uninstall: export AGENTS_TOKEN
 
 .PHONY: agents-token-refresh-install
 agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs the agents App token refresh at boot, one per VM instance; needs sudo (host clone, macOS)
-	@if [ -z "$${SHIFT2EU_AGENTS_APP_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
+	@if [ "$$(id -u)" = 0 ]; then \
+		echo "agents-token-refresh-install: refused: run it as the maintainer, not as root (no sudo make); it runs sudo itself. The job runs as the account that installs it, and as root it would run the host clone's script, which the maintainer can edit, at every boot" >&2; \
+		exit 1; \
+	fi; \
+	if [ -z "$${SHIFT2EU_AGENTS_APP_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
 		echo "agents-token-refresh-install: set SHIFT2EU_AGENTS_APP_ID, SHIFT2EU_AGENTS_APP_INSTALLATION_ID and SHIFT2EU_AGENTS_APP_KEY_FILE in the host clone's .envrc (docs/dev-environment.md, The host clone)" >&2; \
 		exit 1; \
 	fi; \

@@ -32,6 +32,8 @@
 #     StandardErrorPath are /dev/null: launchd may open them as root, before UserName applies, and the log's
 #     directory is the maintainer's to write, so a symlink planted there would make root append anywhere.
 #
+# It refuses to run as root (uid 0, as under sudo make) before it prints anything: the job would run as root.
+#
 # Inputs, from the host clone's .envrc (docs/dev-environment.md, The host clone): LIMA_INSTANCE (letters,
 # digits, ., _ and -, beginning with a letter or digit), SHIFT2EU_AGENTS_APP_ID and
 # SHIFT2EU_AGENTS_APP_INSTALLATION_ID (digits), SHIFT2EU_AGENTS_APP_KEY_FILE (an absolute path naming a
@@ -85,6 +87,11 @@ digits() {
 }
 
 check_inputs() {
+  # The job runs as the account that renders the plist (UserName, from id -un): rendered under sudo, it would
+  # run the host clone's script, which the maintainer can edit, as root at every boot.
+  uid="$(id -u)" || die "cannot tell which account runs this (id -u failed)"
+  [ "${uid}" != 0 ] ||
+    die "refused: run it as the maintainer, not as root (no sudo make): the job runs as the account that renders the plist, and make agents-token-refresh-install runs sudo itself"
   instance="${LIMA_INSTANCE:-}"
   # Spelled out, not A-Z: some shells match a range by the locale's collation (dev/agents-app-token.sh).
   case "${instance}" in
