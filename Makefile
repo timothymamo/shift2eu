@@ -55,15 +55,13 @@ REPO_NAME := $(notdir $(REPO_ROOT))
 # Credentials vm-env copies from your shell (e.g. direnv) into the VM, by name. Never add
 # ANTHROPIC_API_KEY: Claude Code prefers it over the subscription token and bills per call. Never add a
 # SHIFT2EU_AGENTS_APP_* variable either: vm-env refuses them, as the agents App's key and its path stay on
-# the Mac and only its one-hour tokens enter the VM (make agents-token, PRD #161, ADR 0031).
-VM_ENV ?= CLAUDE_CODE_OAUTH_TOKEN,DEEPSEEK_API_KEY,GITHUB_TOKEN
+# the Mac and only its one-hour tokens enter the VM (make agents-token, PRD #161, ADR 0031). No personal
+# GitHub token of the maintainer's either: the agents' only GitHub credential is the App's token (PRD #161
+# milestone 3).
+VM_ENV ?= CLAUDE_CODE_OAUTH_TOKEN,DEEPSEEK_API_KEY
 # The git identity vm-init gives the VM, so the agents commit as you: the Mac's own by default.
 GIT_USER_NAME  ?= $(shell git config user.name 2>/dev/null)
 GIT_USER_EMAIL ?= $(shell git config user.email 2>/dev/null)
-# The Protect main gate check's transition flag (PRD #161 milestone 2): 1 runs make gate-check with
-# --transition, which reports the gaps without failing a release before the switch-over; 0 fails on any gap.
-# PRD #161 milestone 3 sets it to 0 or removes it (docs/dev-environment.md, The gate check).
-GATE_TRANSITION ?= 1
 # The Claude Code theme vm-init sets in the VM (dark, light, dark-daltonized, light-daltonized, ...).
 CLAUDE_THEME ?= dark
 
@@ -200,8 +198,8 @@ check: lint test vuln ## Everything CI gates on; run before every commit
 # Reads GitHub through gh, so run it where gh is logged in: from the host clone as the maintainer, to read the
 # rulesets' bypass list, or in the VM, where the agents App's token cannot read it.
 .PHONY: gate-check
-gate-check: ## Check that Protect main and CODEOWNERS on main require the maintainer's approval (GATE_TRANSITION=0 fails on a gap)
-	dev/protect-main-check.sh$(if $(filter 1,$(GATE_TRANSITION)), --transition)
+gate-check: ## Check that Protect main and CODEOWNERS on main require the maintainer's approval (fails on any gap)
+	dev/protect-main-check.sh
 
 .PHONY: worktree
 worktree: ## Create or resume the worktree for a PR: make worktree BRANCH=feat/12-short-name
@@ -315,6 +313,11 @@ vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', ' '\n\n' | awk 'NF && !seen[$
 # default, an exported VM_ENV, make -e and override all replace, so a VM_ENV left in a .envrc cannot keep a
 # stale credential.
 vm_env_mode = $(if $(filter command line,$(origin VM_ENV)),merge,replace)
+# The variables a GitHub token can arrive in (the two gh reads and their GitHub Enterprise spellings), as one
+# alternation that serves both as a shell case pattern and as an extended regular expression. None is a
+# credential of the agents (PRD #161 milestone 3): vm-env-check refuses them in VM_ENV, and a merge drops a
+# stale line of theirs from the VM's daemon.env instead of keeping it.
+github_token_names = GITHUB_TOKEN|GH_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN
 # A daemon.env line a merge keeps: a plain NAME=value assignment, nothing the login shell would run.
 vm_env_safe_line = ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._~+/=-]*\$$
 
@@ -332,11 +335,14 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 		echo "vm-env: refusing VM_ENV: it may hold only variable names, commas and spaces. Its value is not shown, as it may hold a credential typed by mistake. Nothing was written." >&2; \
 		exit 1;; esac; \
 	[ -n "$(vm_env_names)" ] || { \
-		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: name at least one, e.g. make vm-env VM_ENV=GITHUB_TOKEN" >&2; \
+		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: name at least one, e.g. make vm-env VM_ENV=DEEPSEEK_API_KEY" >&2; \
 		exit 1; }
 	@set -f; for name in $(vm_env_names); do \
 		case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
 			echo "vm-env: refusing $$name: the agents App's key and its path never enter the VM; make agents-token writes its tokens there" >&2; \
+			exit 1;; esac; \
+		case "$$name" in ($(github_token_names)) \
+			echo "vm-env: refusing $$name: a GitHub token never enters the VM; the agents' only GitHub credential is the agents App's token, which make agents-token writes there (its value is not shown)" >&2; \
 			exit 1;; esac; \
 		case "$$name" in ([!A-Za-z_]* | *[!A-Za-z0-9_]*) \
 			echo "vm-env: refusing $$name: not a variable name" >&2; \
@@ -353,7 +359,7 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 		echo "  2. Run cd ~ && cd $(REPO_ROOT) so direnv reads the .envrc again. On any host, check that the" >&2; \
 		echo "     .envrc exists, sets them and is allowed (direnv allow), or export the variables yourself." >&2; \
 		echo "  3. Re-run make vm-env (or the target that ran it, e.g. make vm-create)." >&2; \
-		echo "  To copy only some of them on purpose, name them in VM_ENV: make vm-env VM_ENV=GITHUB_TOKEN keeps the others." >&2; \
+		echo "  To copy only some of them on purpose, name them in VM_ENV: make vm-env VM_ENV=DEEPSEEK_API_KEY keeps the others." >&2; \
 		exit 1; \
 	fi
 
@@ -361,15 +367,20 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 # merges; an exported VM_ENV replaces like the default, so a VM_ENV left in a .envrc cannot keep a stale
 # credential. A replace writes the VM's whole daemon.env with exactly those lines, so a stale line (an old
 # ANTHROPIC_API_KEY) is removed. A merge replaces the lines of the names in VM_ENV and keeps the other plain
-# NAME=value lines, so `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN; it drops every other line (a command, a
+# NAME=value lines, so `make vm-env VM_ENV=DEEPSEEK_API_KEY` replaces only DEEPSEEK_API_KEY; it drops every other line (a command, a
 # comment, a value the shell would expand) with a warning that says how many (never their content), and
-# prints the names (never the values) of the lines it kept. The values travel on standard input, never on a
+# prints the names (never the values) of the lines it kept. Either mode removes a GitHub token line
+# (one of github_token_names above) and names the variable on stderr, never its value, saying to revoke that token:
+# every agent in the VM could read it. The name read errs towards warning: it takes any line that assigns one of
+# those names after a non-name character (`GITHUB_TOKEN = x`, `declare -x GH_TOKEN=x`, a leading tab), but not
+# MY_GITHUB_TOKEN, and prints only the literal name. The values travel on standard input, never on a
 # command line (only the mode does), and the file is written to a temporary file beside daemon.env and moved
 # into place, mode 0600, so a failure never leaves half a file; a trap removes the temporary file if the
 # VM-side shell is interrupted, and a leftover of a killed run older than a minute is removed by the next
-# vm-env: a fresh one may be a concurrent run's (concurrent vm-env runs are not supported beyond that). A
-# merge refuses a daemon.env that exists but cannot be read before it writes anything; its greps accept only
-# status 1 (no match), so a read error (status 2) is never taken for an empty file.
+# vm-env: a fresh one may be a concurrent run's (concurrent vm-env runs are not supported beyond that). Either
+# mode refuses a daemon.env that exists but cannot be read before it writes anything, as it could not check it
+# for a GitHub token; the token read fails on sed's own status (not a pipeline's), and a merge's greps accept
+# only status 1 (no match), so a read error is never taken for an empty file.
 .PHONY: vm-env
 vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
@@ -380,28 +391,35 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
 		sh -c 'umask 077 && LC_ALL=C && export LC_ALL && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && \
 		t= && trap "rm -f \"\$$t\"" EXIT && trap "exit 1" HUP INT TERM && \
-		unreadable() { echo "vm-env: cannot read ~/.config/dot-agent-deck/daemon.env in the VM, so a merge cannot keep its lines. Nothing was written: make it readable by the VM user (chmod 600) and run make vm-env again." >&2; exit 1; } && \
-		mkdir -p "$$d" && if [ "$$1" = merge ] && [ -f "$$f" ] && ! [ -r "$$f" ]; then unreadable; fi && \
+		unreadable() { echo "vm-env: cannot read ~/.config/dot-agent-deck/daemon.env in the VM, so it cannot check the file for a GitHub token to warn about (nor a merge keep its lines). Nothing was written: make it readable by the VM user (chmod 600) and run make vm-env again." >&2; exit 1; } && \
+		mkdir -p "$$d" && if [ -e "$$f" ] && ! [ -r "$$f" ]; then unreadable; fi && \
 		find "$$d" -maxdepth 1 -name ".daemon.env.??????" -mmin +1 -exec rm -f {} + && \
 		new="$$(cat)" && safe="$(vm_env_safe_line)" && \
 		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && \
+		removed= && if [ -f "$$f" ]; then \
+			found=$$(sed -n -E "s/^(.*[^A-Za-z0-9_])?($(github_token_names))[[:space:]]*=.*/\2/p" "$$f") || unreadable; \
+			removed=$$(printf "%s\n" "$$found" | sort -u | paste -sd " " -) || exit 1; fi && \
 		dropped=0 && kept= && if [ "$$1" = merge ] && [ -f "$$f" ]; then \
 			total=$$(grep -a -c . "$$f") || [ "$$?" -eq 1 ] || unreadable; \
 			plain=$$(grep -a -E "$$safe" "$$f") || [ "$$?" -eq 1 ] || unreadable; \
 			nplain=$$(printf "%s" "$$plain" | grep -a -c .) || [ "$$?" -eq 1 ] || exit 1; \
 			dropped=$$(( total - nplain )); \
-			kept=$$(printf "%s\n" "$$plain" | grep -a -v -E "^($$names)=") || [ "$$?" -eq 1 ] || exit 1; fi && \
+			kept=$$(printf "%s\n" "$$plain" | grep -a -v -E "^($$names|$(github_token_names))=") || [ "$$?" -eq 1 ] || exit 1; fi && \
 		t="$$(mktemp "$$d/.daemon.env.XXXXXX")" && \
 		{ if [ -n "$$kept" ]; then printf "%s\n" "$$kept"; fi && printf "%s\n" "$$new"; } > "$$t" && \
 		chmod 600 "$$t" && mv "$$t" "$$f" && t= && trap - EXIT HUP INT TERM && \
 		if [ "$$1" = merge ]; then printf "vm-env-dropped:%s\n" "$$dropped" && \
-			printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi' sh $(vm_env_mode))" && \
+			printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi && \
+		if [ -n "$$removed" ]; then printf "vm-env-removed:%s\n" "$$removed"; fi' sh $(vm_env_mode))" && \
 	echo "vm-env: $$(echo $(vm_env_names)) written to ~/.config/dot-agent-deck/daemon.env in the VM, $(if $(filter replace,$(vm_env_mode)),replacing the whole file,its other lines kept); 'make deck-restart' applies it to a running deck" && \
 	dropped="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-dropped:\([0-9][0-9]*\)$$/\1/p')" && \
 	if [ -n "$$dropped" ] && [ "$$dropped" -gt 0 ]; then \
 		echo "vm-env: warning: dropped $$dropped line(s) of the VM's daemon.env that were not plain NAME=value assignments (their content is not shown)" >&2; fi && \
 	kept="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-kept:\([A-Za-z0-9_ ]*\)$$/\1/p')" && \
-	if [ -n "$$kept" ]; then echo "vm-env: kept (unchanged): $$kept"; fi
+	if [ -n "$$kept" ]; then echo "vm-env: kept (unchanged): $$kept"; fi && \
+	removed="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-removed:\([A-Z_ ]*\)$$/\1/p')" && \
+	if [ -n "$$removed" ]; then \
+		echo "vm-env: warning: removed $$removed from the VM's daemon.env: every agent in the VM could read it, so revoke that token at GitHub (its value is not shown)" >&2; fi
 
 .PHONY: vm-claude-settings
 vm-claude-settings: ## Merge dev/claude-user-settings.json into Claude Code's user settings in the VM

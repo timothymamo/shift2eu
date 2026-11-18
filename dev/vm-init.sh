@@ -17,7 +17,7 @@
 #                  wrote it (it replaces any other), otherwise the one passed in (step 3 below runs it).
 #   4. claude auth Claude Code uses the subscription's OAuth token, not an API key.
 #   5. pi          pi has the DeepSeek key.
-#   6. gh          gh can read this repository, with the agents App's token or GITHUB_TOKEN.
+#   6. gh          gh can read this repository, with the agents App's token.
 #   7. deck        .dot-agent-deck.toml is valid.
 #   8. deck command The deck's default_command, which new agents and dispatchers start with, where the VM
 #                  has none (issue #134).
@@ -110,22 +110,17 @@ pi auth check --provider deepseek >/dev/null 2>&1 ||
   fail "pi: no DeepSeek key; set DEEPSEEK_API_KEY for make vm-env, then run make vm-env and make vm-init again"
 say "pi: DeepSeek key ready"
 
-# 6. gh: a read of this repository, which works with both credentials the gh wrapper hands gh (ADR 0031):
-# the agents App's installation token, which cannot call GET /user and so may fail gh auth status, and
-# GITHUB_TOKEN. Only the repository's name is printed.
+# 6. gh: a read of this repository with the one credential the gh wrapper hands gh, the agents App's
+# installation token (ADR 0031), which cannot call GET /user and so may fail gh auth status. Without the
+# token file the wrapper refuses to run gh at all (PRD #161 milestone 3). Only the repository's name is printed.
 origin="$(git -C "${main_checkout}" remote get-url origin 2>/dev/null || true)"
 nwo="$(printf '%s\n' "${origin}" | sed -n -E 's#^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$#\2#p')"
 nwo="${nwo%.git}"
 [ -n "${nwo}" ] || fail "gh: ${main_checkout}'s origin is not a github.com repository"
-if [ -e "${HOME}/.config/shift2eu/agents-app-token" ]; then
-  credential="the agents App's token (make agents-token)"
-else
-  credential="GITHUB_TOKEN (make vm-env)"
-fi
 read_back="$(gh api "repos/${nwo}" --jq .full_name 2>/dev/null || true)"
 [ "${read_back,,}" = "${nwo,,}" ] ||
-  fail "gh: cannot read ${nwo} with ${credential}; with the App, run make agents-token on the Mac; without it, set GITHUB_TOKEN for make vm-env, then run make vm-env and make vm-init again"
-say "gh: reads ${nwo} with ${credential}"
+  fail "gh: cannot read ${nwo} with the agents App's token; run make agents-token-refresh-start in the host clone on the Mac (or make agents-token once), then make vm-init again"
+say "gh: reads ${nwo} with the agents App's token"
 
 # 7. deck
 dot-agent-deck validate --path "${repo}" >/dev/null || fail "deck: ${repo}/.dot-agent-deck.toml is not valid; see dot-agent-deck validate"
