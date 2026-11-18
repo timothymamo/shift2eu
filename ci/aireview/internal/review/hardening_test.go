@@ -13,12 +13,13 @@ import (
 	"github.com/timothymamo/shift2eu/ci/aireview/internal/review"
 )
 
-// TestNewHTTPClientRefusesRedirects pins the client both APIs are built with: it
+// TestNewHTTPClientRefusesRedirects pins the client GitHub is built with: it
 // follows no redirect at all, so a 3xx answer that points elsewhere fails the
 // call with the API's own error and the other host never sees the request, nor
-// the x-api-key header and the pull request's text it carries (ADR 0033). A
-// followed redirect would hand the model key and the diff to whatever host a
-// response names.
+// the token and the pull request's text it carries (ADR 0033). A followed
+// redirect would hand the App's token and the diff to whatever host a response
+// names. The reviewer asks its model through the Claude Code CLI, which makes no
+// HTTP request of its own, so GitHub is the client the rule still guards.
 func TestNewHTTPClientRefusesRedirects(t *testing.T) {
 	t.Parallel()
 
@@ -32,37 +33,6 @@ func TestNewHTTPClientRefusesRedirects(t *testing.T) {
 	}
 
 	for _, redirect := range redirects {
-		t.Run("the model API answers "+redirect.name, func(t *testing.T) {
-			t.Parallel()
-
-			// reached counts the requests the other host got, written by the
-			// server's goroutines and read by this one: an atomic, so the race
-			// detector has nothing to report and a 0 means 0.
-			var reached atomic.Int32
-
-			elsewhere := server(t, func(w http.ResponseWriter, _ *http.Request) {
-				reached.Add(1)
-
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"answer"}],"stop_reason":"end_turn"}`))
-			})
-
-			srv := server(t, func(w http.ResponseWriter, r *http.Request) {
-				http.Redirect(w, r, elsewhere.URL, redirect.code)
-			})
-
-			model := review.NewAnthropic(srv.URL, testKey, review.NewHTTPClient(10*time.Second))
-
-			_, err := model.Ask(t.Context(), review.Prompt{System: "the instructions", User: "the pull request"})
-			if !errors.Is(err, review.ErrModel) {
-				t.Fatalf("Ask of a %d answer = %v, want an error wrapping ErrModel: the client refuses the redirect", redirect.code, err)
-			}
-
-			if got := reached.Load(); got != 0 {
-				t.Errorf("the server the %d answer pointed at got %d requests, want 0: a followed redirect sends the x-api-key and the diff to another host", redirect.code, got)
-			}
-		})
-
 		t.Run("GitHub answers "+redirect.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -95,7 +65,7 @@ func TestNewHTTPClientRefusesRedirects(t *testing.T) {
 		t.Parallel()
 
 		if got := review.NewHTTPClient(30 * time.Second).Timeout; got != 30*time.Second {
-			t.Errorf("NewHTTPClient(30s).Timeout = %v, want 30s: the client carries the timeout both APIs are given", got)
+			t.Errorf("NewHTTPClient(30s).Timeout = %v, want 30s: the client carries the timeout GitHub's client is given", got)
 		}
 	})
 }

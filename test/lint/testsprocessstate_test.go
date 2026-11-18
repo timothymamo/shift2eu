@@ -18,10 +18,14 @@ import (
 // and the CLI and the HTTP API take their inputs from flags and the request.
 //
 // The group holds for every test of the module and for every other file a test
-// could hand the change to, and is dropped in two places only, with one
+// could hand the change to, and is dropped in two places only, each with its own
 // linters.exclusions.rules entry: test/lint and test/architecture set the go
 // command's own variables (GOCACHE, GOFLAGS, HOME) on purpose, in a test binary of
-// their own, to run the go command in a known environment. Before the audit's
+// their own, to run the go command in a known environment, and the AI reviewer's
+// CLI asker tests (PRD #161 milestone 4, ADR 0033) set ANTHROPIC_API_KEY and a
+// variable of their own in the process's environment in the one test that proves
+// the Claude Code CLI inherits none of it, with no parallel test beside it. Before
+// the audit's
 // finding S1 the group was scoped to five areas, so an adapter's or the domain's
 // test, and every e2e test, could set a variable with lint green: the likely case
 // is a source adapter's test that sets AWS_PROFILE.
@@ -259,9 +263,13 @@ func processStateSelectorFindings(t *testing.T, files []goFile) []finding {
 // processStateScope reports whether the group tests-no-process-state holds for the
 // file at rel, a slash-separated path from the module root: it holds everywhere
 // but in the two harnesses under test/, which set the go command's own variables
-// on purpose, as the group's one linters.exclusions.rules entry says.
+// on purpose, and in the AI reviewer's CLI asker tests, whose one test sets an
+// ANTHROPIC_API_KEY in the process's environment to prove that the Claude Code CLI
+// inherits none of it, as the group's linters.exclusions.rules entries say.
 func processStateScope(rel string) bool {
-	return !strings.HasPrefix(rel, "test/lint/") && !strings.HasPrefix(rel, "test/architecture/")
+	return !strings.HasPrefix(rel, "test/lint/") &&
+		!strings.HasPrefix(rel, "test/architecture/") &&
+		!strings.HasPrefix(rel, "ci/aireview/internal/review/")
 }
 
 // TestTestsChangeNoProcessStateByNoSelector fails on every selector that

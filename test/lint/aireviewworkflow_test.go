@@ -24,6 +24,15 @@ const aiReviewWorkflowPath = ".github/workflows/ai-review.yml"
 // expression.
 var aiReviewPinnedAction = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}$`)
 
+// aiReviewClaudeVersion matches the install of the Claude Code CLI at an exact
+// version: the npm package, its optional platform suffix and @X.Y.Z (CLAUDE.md
+// rule 7).
+var aiReviewClaudeVersion = regexp.MustCompile(`@anthropic-ai/claude-code(?:-[a-z0-9-]+)?@(\d+\.\d+\.\d+)`)
+
+// aiReviewChecksum matches a pinned digest the install step checks the download
+// against: a SHA-256 in hex, or npm's sha512-<base64> integrity form.
+var aiReviewChecksum = regexp.MustCompile(`[0-9a-f]{64}|sha512-[A-Za-z0-9+/=]{20,}`)
+
 // aiReviewWorkflow is the parsed workflow the subtests of
 // TestAIReviewWorkflowHoldsTheReviewersSecurityProperties read: its source, its
 // content lines, its one job and that job's steps.
@@ -383,6 +392,138 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		}
 	})
 
+	t.Run("the Claude Code CLI is installed at a pinned version and verified", func(t *testing.T) {
+		t.Parallel()
+
+		index, run, ok := aiReviewClaudeInstall(t, workflow)
+		if !ok {
+			t.Fatalf("%s: no step installs the Claude Code CLI; the reviewer asks its model through `claude -p` (ADR 0033)", aiReviewWorkflowPath)
+		}
+
+		script := aiReviewText(run)
+		lines := aiReviewRunLines(run)
+
+		install := -1
+		version := ""
+
+		for i, line := range lines {
+			match := aiReviewClaudeVersion.FindStringSubmatch(line.text)
+			if match == nil {
+				continue
+			}
+
+			install, version = i, match[1]
+
+			break
+		}
+
+		if install < 0 {
+			t.Fatalf("%s: line %d: the install step names no exact version of the CLI, want @anthropic-ai/claude-code@X.Y.Z: a range or latest would change the program the reviewer runs without a commit (CLAUDE.md rule 7)", aiReviewWorkflowPath, run.Num)
+		}
+
+		for _, loose := range []string{"latest", "^", "~", "*"} {
+			if strings.Contains(lines[install].text, loose) {
+				t.Errorf("%s: line %d: the CLI's install line %q holds %q; it names the exact version %s and no range (CLAUDE.md rule 7)", aiReviewWorkflowPath, lines[install].num, lines[install].text, loose, version)
+			}
+		}
+
+		above := aiReviewSourceLine(t, workflow, lines[install].num-1)
+		if !strings.HasPrefix(strings.TrimSpace(above), "# renovate:") ||
+			!strings.Contains(above, "datasource=npm") ||
+			!strings.Contains(above, "depName=@anthropic-ai/claude-code") {
+			t.Errorf("%s: line %d: the line above the CLI's version pin is %q, want a # renovate: datasource=npm depName=@anthropic-ai/claude-code comment, so Renovate finds the pin and no one bumps it by hand (CLAUDE.md rule 7)", aiReviewWorkflowPath, lines[install].num-1, above)
+		}
+
+		// The reviewer runs a downloaded program that holds a subscription
+		// token: the step compares the download against a digest pinned here,
+		// so a changed tarball is refused rather than run (ADR 0033).
+		if !strings.Contains(script, "sha512") && !strings.Contains(script, "sha256sum") {
+			t.Errorf("%s: line %d: the install step verifies no checksum; it compares the download against a pinned digest (ADR 0033)", aiReviewWorkflowPath, run.Num)
+		}
+
+		if !aiReviewChecksum.MatchString(script) {
+			t.Errorf("%s: line %d: the install step holds no pinned digest, want a SHA-256 in hex or npm's sha512-<base64> integrity to verify the download against", aiReviewWorkflowPath, run.Num)
+		}
+
+		// The CLI is installed before any secret is in a step's environment, so
+		// nothing it writes while installing can read one.
+		for i := 0; i <= index; i++ {
+			fields := aiReviewStepFields(t, workflow.steps[i])
+
+			for _, key := range []string{"env", "run"} {
+				entry, ok := aiReviewFind(fields, key)
+				if !ok || !strings.Contains(aiReviewText(entry), "secrets.") {
+					continue
+				}
+
+				t.Errorf("%s: line %d: the step that installs the CLI, or one before it, reads a secret in its %s:; the CLI is installed before any secret is in a step's environment (ADR 0033)", aiReviewWorkflowPath, entry.Num, key)
+			}
+		}
+	})
+
+	t.Run("the review step holds the subscription token and no API key", func(t *testing.T) {
+		t.Parallel()
+
+		steps := 0
+
+		for _, step := range workflow.steps {
+			fields := aiReviewStepFields(t, step)
+
+			env, ok := aiReviewFind(fields, "env")
+			if !ok {
+				continue
+			}
+
+			if _, ok := aiReviewEnvValue(env, "AI_REVIEW_PR_NUMBER"); !ok {
+				continue
+			}
+
+			steps++
+
+			token, ok := aiReviewEnvValue(env, "CLAUDE_CODE_OAUTH_TOKEN")
+			if !ok {
+				t.Errorf("%s: line %d: the step that runs the reviewer sets no CLAUDE_CODE_OAUTH_TOKEN; `claude` authenticates with the maintainer's subscription through it (ADR 0033)", aiReviewWorkflowPath, env.Num)
+			} else if want := "${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}"; token != want {
+				t.Errorf("%s: line %d: CLAUDE_CODE_OAUTH_TOKEN is %q, want %q: the token of the ai-review environment's secret, and no other value (ADR 0033)", aiReviewWorkflowPath, env.Num, token, want)
+			}
+
+			if _, ok := aiReviewEnvValue(env, "ANTHROPIC_API_KEY"); ok {
+				t.Errorf("%s: line %d: the step that runs the reviewer sets ANTHROPIC_API_KEY; Claude Code bills the API instead of the maintainer's subscription whenever one is set (ADR 0033)", aiReviewWorkflowPath, env.Num)
+			}
+
+			run, ok := aiReviewFind(fields, "run")
+			if !ok {
+				continue
+			}
+
+			if strings.Contains(aiReviewText(run), "${{ secrets.") {
+				t.Errorf("%s: line %d: the reviewer's run: script interpolates a secret; the token reaches the program through env: only (ADR 0033)", aiReviewWorkflowPath, run.Num)
+			}
+		}
+
+		if steps != 1 {
+			t.Errorf("%s: %d steps set AI_REVIEW_PR_NUMBER, want the one that runs the reviewer", aiReviewWorkflowPath, steps)
+		}
+	})
+
+	t.Run("no step sets an Anthropic API key", func(t *testing.T) {
+		t.Parallel()
+
+		for i, line := range strings.Split(string(workflow.src), "\n") {
+			if !strings.Contains(line, "ANTHROPIC_API_KEY") {
+				continue
+			}
+
+			// A comment that says why it must not be set is what the workflow
+			// should hold; an env key or a secret expression is not.
+			if strings.HasPrefix(strings.TrimSpace(line), "#") {
+				continue
+			}
+
+			t.Errorf("%s: line %d: %q names ANTHROPIC_API_KEY; Claude Code bills the API instead of the maintainer's subscription whenever one is set, so no step sets or reads one (ADR 0033)", aiReviewWorkflowPath, i+1, strings.TrimSpace(line))
+		}
+	})
+
 	t.Run("the App token gets exactly read contents and write pull requests", func(t *testing.T) {
 		t.Parallel()
 
@@ -501,11 +642,11 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		for _, want := range []string{
 			"secrets.AI_REVIEWER_APP_CLIENT_ID",
 			"secrets.AI_REVIEWER_APP_PRIVATE_KEY",
-			"secrets.ANTHROPIC_API_KEY",
+			"secrets.CLAUDE_CODE_OAUTH_TOKEN",
 			"vars.AI_REVIEW_REQUEST_CHANGES",
 		} {
 			if !strings.Contains(doc, want) {
-				t.Errorf("%s: nothing reads %s; the ai-review environment holds the reviewer App's client ID and key, the model key and the switch, and no repository-level secret holds them (ADR 0033)", aiReviewWorkflowPath, want)
+				t.Errorf("%s: nothing reads %s; the ai-review environment holds the reviewer App's client ID and key, the maintainer's Claude subscription token and the switch, and no repository-level secret holds them (ADR 0033)", aiReviewWorkflowPath, want)
 			}
 		}
 
@@ -544,6 +685,58 @@ func aiReviewEntry(t *testing.T, lines []yamlread.Line, key string) (yamlread.En
 	t.Helper()
 
 	return aiReviewFind(aiReviewFields(t, lines, key), key)
+}
+
+// numberedLine is one line of a step's run: script beside the number of the
+// workflow's source line it is.
+type numberedLine struct {
+	num  int
+	text string
+}
+
+// aiReviewRunLines returns the lines of a step's run: script with their source
+// line numbers: the inline value alone, or the block's lines.
+func aiReviewRunLines(run yamlread.Entry) []numberedLine {
+	if run.Value != "" {
+		return []numberedLine{{num: run.Num, text: run.Value}}
+	}
+
+	lines := make([]numberedLine, 0, len(run.Block))
+	for _, line := range run.Block {
+		lines = append(lines, numberedLine{num: line.Num, text: line.Text})
+	}
+
+	return lines
+}
+
+// aiReviewSourceLine returns the workflow's source line num, counted from 1.
+func aiReviewSourceLine(t *testing.T, workflow aiReviewWorkflow, num int) string {
+	t.Helper()
+
+	lines := strings.Split(string(workflow.src), "\n")
+	if num < 1 || num > len(lines) {
+		t.Fatalf("%s: the workflow has no line %d", aiReviewWorkflowPath, num)
+	}
+
+	return lines[num-1]
+}
+
+// aiReviewClaudeInstall returns the index of the step that installs the Claude
+// Code CLI, its run: entry, and false when no step installs it. The step is the
+// one whose script names the CLI's npm package.
+func aiReviewClaudeInstall(t *testing.T, workflow aiReviewWorkflow) (int, yamlread.Entry, bool) {
+	t.Helper()
+
+	for i, step := range workflow.steps {
+		run, ok := aiReviewFind(aiReviewStepFields(t, step), "run")
+		if !ok || !strings.Contains(aiReviewText(run), "@anthropic-ai/claude-code") {
+			continue
+		}
+
+		return i, run, true
+	}
+
+	return -1, yamlread.Entry{}, false
 }
 
 // aiReviewFields returns the entries of the block mapping lines.
@@ -642,6 +835,28 @@ func aiReviewWithScalar(t *testing.T, fields []yamlread.Entry, key string) (stri
 		if field.Key == key {
 			return aiReviewScalar(t, field), true
 		}
+	}
+
+	return "", false
+}
+
+// aiReviewEnvValue returns the value the env: entry sets for name, as written on
+// its line and without a trailing comment, and false when it sets none. A step's
+// env: names its variables in upper case, which yamlread.Mapping refuses as keys,
+// so this reads the block's lines as written.
+func aiReviewEnvValue(env yamlread.Entry, name string) (string, bool) {
+	for _, line := range env.Block {
+		key, value, ok := strings.Cut(line.Text, ":")
+		if !ok || key != name {
+			continue
+		}
+
+		value = strings.TrimSpace(value)
+		if i := strings.Index(value, " #"); i >= 0 {
+			value = strings.TrimSpace(value[:i])
+		}
+
+		return value, true
 	}
 
 	return "", false

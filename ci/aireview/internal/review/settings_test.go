@@ -10,6 +10,11 @@ import (
 	"github.com/timothymamo/shift2eu/ci/aireview/internal/review"
 )
 
+// anthropicAPIKeyVar is the variable the reviewer refuses: a set
+// ANTHROPIC_API_KEY switches Claude Code from the maintainer's subscription to
+// pay-as-you-go billing, so the program will not run beside one (ADR 0033).
+const anthropicAPIKeyVar = "ANTHROPIC_API_KEY"
+
 // settingsLookup returns the lookup function the tests pass to
 // SettingsFromEnv: a map in place of os.LookupEnv, which the library never calls
 // itself.
@@ -21,21 +26,25 @@ func settingsLookup(env map[string]string) func(string) (string, bool) {
 	}
 }
 
-// validEnv is a complete environment of the reviewer's settings.
+// validEnv is a complete environment of the reviewer's settings: the
+// subscription token, and an ANTHROPIC_API_KEY that is set but empty, which is
+// no key at all.
 func validEnv() map[string]string {
 	return map[string]string{
 		review.EnvRepository:     "owner/name",
 		review.EnvPullRequest:    "42",
 		review.EnvAppSlug:        "shift2eu-reviewer",
 		review.EnvGitHubToken:    testToken,
-		review.EnvModelKey:       testKey,
+		review.EnvModelToken:     testModelToken,
 		review.EnvRequestChanges: "true",
+		anthropicAPIKeyVar:       "",
 	}
 }
 
 // TestSettingsFromEnvReadsTheReviewersSettings pins the environment of ADR
 // 0033: the repository, the pull request's number, the reviewer's login
-// (<slug>[bot]), the two credentials and the AI_REVIEW_REQUEST_CHANGES switch.
+// (<slug>[bot]), the two credentials, the Claude subscription's OAuth token and
+// the AI_REVIEW_REQUEST_CHANGES switch.
 func TestSettingsFromEnvReadsTheReviewersSettings(t *testing.T) {
 	t.Parallel()
 
@@ -49,7 +58,7 @@ func TestSettingsFromEnvReadsTheReviewersSettings(t *testing.T) {
 		Number:         42,
 		BotLogin:       "shift2eu-reviewer[bot]",
 		GitHubToken:    testToken,
-		ModelKey:       testKey,
+		ModelToken:     testModelToken,
 		RequestChanges: true,
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
@@ -98,6 +107,40 @@ func TestSettingsFromEnvReadsTheSwitch(t *testing.T) {
 	}
 }
 
+// TestSettingsFromEnvAcceptsNoAnthropicAPIKey pins that only a set
+// ANTHROPIC_API_KEY fails the run (ADR 0033): Claude Code prefers one over the
+// subscription whenever it is set, so an unset or empty one is the state the
+// reviewer runs in.
+func TestSettingsFromEnvAcceptsNoAnthropicAPIKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		mutate func(map[string]string)
+	}{
+		{name: "unset", mutate: func(env map[string]string) { delete(env, anthropicAPIKeyVar) }},
+		{name: "set but empty", mutate: func(env map[string]string) { env[anthropicAPIKeyVar] = "" }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := validEnv()
+			tc.mutate(env)
+
+			settings, err := review.SettingsFromEnv(settingsLookup(env))
+			if err != nil {
+				t.Fatalf("SettingsFromEnv with ANTHROPIC_API_KEY %s: %v; want the settings", tc.name, err)
+			}
+
+			if settings.ModelToken != testModelToken {
+				t.Errorf("ModelToken = %q, want %q", settings.ModelToken, testModelToken)
+			}
+		})
+	}
+}
+
 // TestSettingsFromEnvRefusesBadSettings pins what fails a run before anything is
 // read or posted, and that the failure names the variable without printing a
 // credential: a repository that is not owner/name, a pull request number that is
@@ -137,8 +180,9 @@ func TestSettingsFromEnvRefusesBadSettings(t *testing.T) {
 		{name: "no slug", mutate: unset(review.EnvAppSlug), wantVar: review.EnvAppSlug},
 		{name: "no token", mutate: unset(review.EnvGitHubToken), wantVar: review.EnvGitHubToken},
 		{name: "an empty token", mutate: set(review.EnvGitHubToken, ""), wantVar: review.EnvGitHubToken},
-		{name: "no model key", mutate: unset(review.EnvModelKey), wantVar: review.EnvModelKey},
-		{name: "an empty model key", mutate: set(review.EnvModelKey, ""), wantVar: review.EnvModelKey},
+		{name: "no model token", mutate: unset(review.EnvModelToken), wantVar: review.EnvModelToken},
+		{name: "an empty model token", mutate: set(review.EnvModelToken, ""), wantVar: review.EnvModelToken},
+		{name: "an Anthropic API key is set", mutate: set(anthropicAPIKeyVar, testAPIKey), wantVar: anthropicAPIKeyVar},
 		{name: "a switch value of yes", mutate: set(review.EnvRequestChanges, "yes"), wantVar: review.EnvRequestChanges},
 		{name: "a switch value of TRUE", mutate: set(review.EnvRequestChanges, "TRUE"), wantVar: review.EnvRequestChanges},
 	}
@@ -159,7 +203,7 @@ func TestSettingsFromEnvRefusesBadSettings(t *testing.T) {
 				t.Errorf("the error %q does not name the variable %s", err, tc.wantVar)
 			}
 
-			for _, credential := range []string{testToken, testKey} {
+			for _, credential := range []string{testToken, testModelToken, testAPIKey} {
 				if strings.Contains(err.Error(), credential) {
 					t.Errorf("the error %q prints the credential %q", err, credential)
 				}
@@ -169,7 +213,8 @@ func TestSettingsFromEnvRefusesBadSettings(t *testing.T) {
 }
 
 // TestSettingsStringPrintsNoCredential pins that the settings can be logged: the
-// description names the repository and never the token or the model key.
+// description names the repository and never the token, the subscription's OAuth
+// token or an API key.
 func TestSettingsStringPrintsNoCredential(t *testing.T) {
 	t.Parallel()
 
@@ -178,13 +223,13 @@ func TestSettingsStringPrintsNoCredential(t *testing.T) {
 		Number:         42,
 		BotLogin:       testBotLogin,
 		GitHubToken:    testToken,
-		ModelKey:       testKey,
+		ModelToken:     testModelToken,
 		RequestChanges: true,
 	}
 
 	got := settings.String()
 
-	for _, credential := range []string{testToken, testKey} {
+	for _, credential := range []string{testToken, testModelToken} {
 		if strings.Contains(got, credential) {
 			t.Errorf("Settings.String() = %q, which prints the credential %q", got, credential)
 		}

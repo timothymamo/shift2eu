@@ -1046,7 +1046,13 @@ var pinnedDepguardRules = []check.DepguardRule{
 	},
 	{
 		// The AI reviewer's library (ADR 0033): named standard packages only, no
-		// os, os/exec, syscall or unsafe and no package of the product. Go's
+		// syscall or unsafe and no package of the product. os and os/exec are the
+		// Claude Code CLI the reviewer asks: it writes the trusted instructions
+		// to a file of a temporary directory and starts `claude -p` in another,
+		// with an environment of its own. The forbidigo group ai-reviewer-env
+		// still refuses every read of the environment and every lookup of a
+		// home, config, cache or temp directory, so os is here for files and
+		// directories alone. net/http reads and posts through GitHub. Go's
 		// internal rule keeps it out of reach of cmd/ and internal/.
 		Name:     "ai-reviewer-is-standard-library",
 		ListMode: "strict",
@@ -1063,12 +1069,13 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"io$",
 			"net/http$",
 			"net/url$",
+			"os$",
+			"os/exec$",
 			"slices$",
 			"strconv$",
 			"strings$",
 			"time$",
 		},
-		Deny: []string{"os"},
 	},
 }
 

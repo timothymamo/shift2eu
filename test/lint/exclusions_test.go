@@ -131,8 +131,14 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		// The group holds for every other path, the adapters' and the domain's
 		// tests and the e2e ones included, so a future source adapter test that
 		// sets AWS_PROFILE is refused rather than left to review.
+		//
+		// The AI reviewer's CLI asker (PRD #161 milestone 4, ADR 0033) states one
+		// exception: the one test that fills the process's environment with an
+		// ANTHROPIC_API_KEY and a variable of its own, to prove that the Claude
+		// Code CLI inherits neither. That test runs no parallel test beside it.
 		testsNoProcessStateTag: {
 			{"path": `^test/(?:lint|architecture)/`, "text": groupText(testsNoProcessStateTag)},
+			{"path": `^ci/aireview/internal/review/.*_test\.go$`, "text": groupText(testsNoProcessStateTag)},
 		},
 		// The AI reviewer (ADR 0033): one rule for every path outside
 		// ci/aireview/, so the group holds there and nowhere else, _test.go
