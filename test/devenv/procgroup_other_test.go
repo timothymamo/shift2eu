@@ -2,11 +2,18 @@
 
 package devenv_test
 
-import "os/exec"
+import (
+	"os/exec"
+	"testing"
+)
 
-// inOwnGroup does nothing where there are no process groups: the scripts under test run under sh on the Mac
+// processGroup does nothing where there are no process groups: the scripts under test run under sh on the Mac
 // and in the Linux VM only, and the package is merely compiled for the other release targets by make lint.
-func inOwnGroup(*exec.Cmd) {}
+type processGroup struct{}
 
-// killGroup does nothing where there are no process groups; see inOwnGroup.
-func killGroup(int) {}
+// newProcessGroup, join and end do nothing where there are no process groups; see processGroup.
+func newProcessGroup(*testing.T) *processGroup { return &processGroup{} }
+
+func (*processGroup) join(*exec.Cmd) {}
+
+func (*processGroup) end() {}

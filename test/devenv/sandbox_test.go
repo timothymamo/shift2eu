@@ -1114,9 +1114,11 @@ func toolDir(t *testing.T, name string) string {
 // SIGTERM caught before the script stored its pid - keeps Wait, and so waitExit, blocked for as long as that
 // child runs, although the script itself stopped at once. With a file Wait returns when the script exits, and
 // running and waitExit tell what the test asks: whether the script runs. The script runs in a process group of
-// its own, which the cleanup kills, so no child it leaves behind outlives the test.
+// its own, led by a holder the test reaps only after the cleanup has killed the group, so no child the script
+// leaves behind outlives the test and the kill reaches no process outside the group (processGroup).
 type runningScript struct {
 	cmd    *exec.Cmd
+	group  *processGroup // the process group the script runs in
 	stdout string        // the file the script's stdout goes to
 	stderr string        // the file the script's stderr goes to
 	exited chan struct{} // closed once Wait has returned
@@ -1137,7 +1139,9 @@ func (sb *sandbox) start(t *testing.T, script string, args []string, env map[str
 	}
 	r.cmd.Env = envList(env)
 	r.cmd.Dir = sb.hostHome
-	inOwnGroup(r.cmd)
+	r.group = newProcessGroup(t)
+	t.Cleanup(func() { r.kill(t) })
+	r.group.join(r.cmd)
 	stdout, stderr := createOutput(t, r.stdout), createOutput(t, r.stderr)
 	r.cmd.Stdout, r.cmd.Stderr = stdout, stderr
 
@@ -1158,8 +1162,6 @@ func (sb *sandbox) start(t *testing.T, script string, args []string, env map[str
 		r.status = r.cmd.Wait()
 		close(r.exited)
 	}()
-
-	t.Cleanup(func() { r.kill(t) })
 
 	return r
 }
@@ -1248,17 +1250,18 @@ func (r *runningScript) exitCode(t *testing.T) int {
 // pid is the process id of the script the test started.
 func (r *runningScript) pid() int { return r.cmd.Process.Pid }
 
-// kill ends the script if it is still running, and every process left in its group: the cleanup of every
-// started script.
+// kill ends every process left in the script's group, the script included if it is still running: the cleanup
+// of every started script. It also runs when the script never started, and then ends the group alone.
 func (r *runningScript) kill(t *testing.T) {
 	t.Helper()
 
-	killGroup(r.cmd.Process.Pid)
+	r.group.end()
 
-	if !r.running() {
+	if r.cmd.Process == nil || !r.running() {
 		return
 	}
 
+	// Where there are no process groups, the group's end killed nothing.
 	_ = r.cmd.Process.Kill()
 
 	if !r.waitExit(30 * time.Second) {

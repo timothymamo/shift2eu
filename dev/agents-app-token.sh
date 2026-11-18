@@ -826,6 +826,8 @@ refresh() {
       fi
       say "will try again in ${wait_seconds}s (failure ${failures} in a row); ${left}"
     fi
+    # A TERM landing between the next two lines leaves the sleep running until it ends by itself: harmless
+    # under launchd, which kills the job's process group, and the tests kill the group themselves (issue #267).
     sleep "${wait_seconds}" &
     sleeper=$!
     wait "${sleeper}" || true
