@@ -87,7 +87,8 @@ state the rule in the description of every amount of money and every measured qu
 "exact decimal"); a count of resources (the `summary` counts, a `total`'s `estimated`, `resources`
 and `storageNotIncluded`, a `sourceCost`'s `covered`, every other `resources`) is whole by nature and
 says only what it counts. `TestSchemaQuantitiesStateTheQuantityRule` and
-`TestSchemaQuantitiesAreNeverNumbers` pin it. Version 1 has only counts, no money and no fractional
+`TestSchemaQuantitiesAreNeverNumbers` pin it; `TestSchemaQuantitiesClassifyEveryField` makes every new
+field be classified as a quantity or a count. Version 1 has only counts, no money and no fractional
 quantity, so the rule holds for it as written; its schema files keep the prose they shipped with
 ([ADR 0030](0030-serve-the-version-2-report-on-v1.md) keeps them unchanged). A new money or fractional
 field follows the rule; turning a string into a number or the reverse is a retyping, so a new
