@@ -12,10 +12,10 @@
 > or `GITHUB_TOKEN` in `VM_ENV` as current, this update supersedes it.
 
 > **Update (issue #229), 2026-11-18.** Open question (1) a) is superseded in part by
-> [ADR 0033](0033-run-the-agents-app-token-refresh-as-a-launchdaemon.md): a LaunchDaemon per VM instance
+> [ADR 0034](0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md): a LaunchDaemon per VM instance
 > (`make agents-token-refresh-install`) now runs the refresh at boot, with nobody logged in, and
 > `make agents-token-refresh-start` warns and starts nothing while it is loaded. Where a) says launchd lost,
-> ADR 0033 decides otherwise; the hand-started loop stays as the fallback.
+> ADR 0034 decides otherwise; the hand-started loop stays as the fallback.
 
 ## Context
 

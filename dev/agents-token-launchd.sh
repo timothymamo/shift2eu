@@ -1,6 +1,6 @@
 #!/bin/sh
 # Prints the LaunchDaemon property list that runs the agents App token refresh at boot, with nobody logged
-# in, as the maintainer (issue #229, docs/adr/0033-run-the-agents-app-token-refresh-as-a-launchdaemon.md).
+# in, as the maintainer (issue #229, docs/adr/0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md).
 # make agents-token-refresh-install renders it with this script and installs it in /Library/LaunchDaemons;
 # this script itself installs nothing and needs no sudo.
 #

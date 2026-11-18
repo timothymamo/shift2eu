@@ -1,4 +1,4 @@
-# 0033. Run the agents App token refresh as a LaunchDaemon, so it survives a reboot
+# 0034. Run the agents App token refresh as a LaunchDaemon, so it survives a reboot
 
 - Status: Accepted
 - Date: 2026-11-18

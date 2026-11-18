@@ -500,7 +500,7 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 	(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
 	echo "agents-token-refresh-start: started the agents App token refresh of $(LIMA_INSTANCE) (pid $$pid); its log is $$log"
 
-# The LaunchDaemon that runs the refresh at boot, with nobody logged in, as you (issue #229, ADR 0033): one job
+# The LaunchDaemon that runs the refresh at boot, with nobody logged in, as you (issue #229, ADR 0034): one job
 # per VM instance, whose plist dev/agents-token-launchd.sh renders from the host clone's .envrc (the plist, not
 # direnv, holds the variables, copied at install time: install again after changing them). The job runs
 # /bin/sh dev/agents-app-token.sh refresh from the host clone, never make or git, and logs where
