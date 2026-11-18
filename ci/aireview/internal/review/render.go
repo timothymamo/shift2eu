@@ -34,11 +34,14 @@ type InlineComment struct {
 // Inline comments keep the findings' order. CommitID is headSHA and Event is
 // event, unchanged: Render refuses nothing, the poster does.
 //
-// Every mention in the text the model wrote (summary, titles, bodies) is
-// defused, so the review notifies nobody. The body and each inline comment's
-// body are cut to MaxTextRunes with a note that says so; the body keeps its
-// first line, which names headSHA, and its closing statement that the review
-// is advice and never an approval (ADR 0033).
+// Every mention in the text the model wrote (summary, titles, bodies, the
+// paths listed in the body), an HTML character reference to an @ included, is
+// defused, so the review notifies nobody; a path listed in the body is kept on
+// its one line. The body and each inline comment's body are cut to
+// MaxTextUnits with a note that says so, a code fence the cut leaves open
+// closed before it; the body keeps its first line, which names headSHA, and
+// its closing statement that the review is advice and never an approval
+// (ADR 0033).
 func Render(headSHA string, answer Answer, event Event, diff string) Review {
 	shown := newSideLines(diff)
 
@@ -52,7 +55,7 @@ func Render(headSHA string, answer Answer, event Event, diff string) Review {
 			comments = append(comments, InlineComment{
 				Path: f.Path,
 				Line: f.Line,
-				Body: truncateRunes(findingText(f), MaxTextRunes, truncatedComment),
+				Body: truncate(findingText(f), MaxTextUnits, truncatedComment),
 			})
 
 			continue
@@ -64,19 +67,21 @@ func Render(headSHA string, answer Answer, event Event, diff string) Review {
 	head := fmt.Sprintf("**AI review** of %s\n\n", headSHA)
 	middle := renderMiddle(answer, event, comments, inBody)
 
-	room := MaxTextRunes - runeCount(head) - runeCount(adviceFooter)
+	room := MaxTextUnits - utf16Len(head) - utf16Len(adviceFooter)
 
 	return Review{
 		CommitID: headSHA,
 		Event:    event,
-		Body:     head + truncateRunes(middle, room, truncatedBody) + adviceFooter,
+		Body:     head + truncate(middle, room, truncatedBody) + adviceFooter,
 		Comments: comments,
 	}
 }
 
-// MaxTextRunes is GitHub's limit on a review's body and on each inline
-// comment's body, in characters: a longer text is refused with a 422.
-const MaxTextRunes = 65_000
+// MaxTextUnits caps a review's body and each inline comment's body, in UTF-16
+// code units, which is how GitHub counts: a character outside the BMP (an
+// emoji) counts 2. The cap is 65,000, kept under GitHub's limit of 65,536
+// characters with a margin; GitHub refuses a longer text with a 422.
+const MaxTextUnits = 65_000
 
 // adviceFooter closes every review's body, whatever Render cuts.
 const adviceFooter = "\n---\n\n_This review is advice for the maintainer from the AI reviewer (ADR 0033). " +
@@ -88,32 +93,142 @@ const (
 	truncatedComment = "\n\n_This comment was truncated here: it is longer than GitHub accepts._\n"
 )
 
-// truncateRunes returns s when it has at most limit runes, and otherwise its
-// first runes followed by note, limit runes in all.
-func truncateRunes(s string, limit int, note string) string {
-	if runeCount(s) <= limit {
+// truncate returns s when it is at most limit UTF-16 code units, and otherwise
+// its first characters followed by note, at most limit units in all. It cuts on
+// a character boundary, and when the cut lands inside a code fence it closes
+// the fence before note, so note and what follows the text render outside it.
+func truncate(s string, limit int, note string) string {
+	if utf16Len(s) <= limit {
 		return s
 	}
 
-	keep := max(limit-runeCount(note), 0)
+	room := max(limit-utf16Len(note), 0)
+	budget := room
 
-	return string([]rune(s)[:keep]) + note
+	for {
+		kept := prefixUnits(s, budget)
+		closer := fenceCloser(kept)
+
+		if utf16Len(kept)+utf16Len(closer) <= room || budget == 0 {
+			return kept + closer + note
+		}
+
+		budget = max(budget-utf16Len(closer), 0)
+	}
 }
 
-// runeCount is the number of characters of s, as GitHub counts them.
-func runeCount(s string) int {
-	return len([]rune(s))
+// prefixUnits returns the longest prefix of s, cut on a character boundary,
+// that is at most limit UTF-16 code units.
+func prefixUnits(s string, limit int) string {
+	units := 0
+
+	for i, r := range s {
+		units += runeUnits(r)
+		if units > limit {
+			return s[:i]
+		}
+	}
+
+	return s
 }
 
-// defuseMentions makes every @ followed by an ASCII letter or digit in s
-// notify nobody: it puts a zero-width space after the @, so the handle stays
-// readable but is no mention. It is applied to text the model wrote only.
+// utf16Len is the length of s in UTF-16 code units, as GitHub counts it: a
+// character outside the BMP counts 2, every other character (a byte that is no
+// valid UTF-8 included, which is sent as U+FFFD) counts 1.
+func utf16Len(s string) int {
+	units := 0
+
+	for _, r := range s {
+		units += runeUnits(r)
+	}
+
+	return units
+}
+
+// runeUnits is the number of UTF-16 code units r takes.
+func runeUnits(r rune) int {
+	if r > 0xFFFF {
+		return 2
+	}
+
+	return 1
+}
+
+// fenceCloser returns the line that closes the code fence s leaves open, with
+// the line break before it, and "" when s leaves no fence open. A fence opens
+// on a line of at most three spaces' indent and then three or more backticks
+// or tildes, and closes on such a line of the same character, at least as long,
+// with nothing after it but spaces (CommonMark).
+func fenceCloser(s string) string {
+	var (
+		fenceChar byte
+		fenceLen  int
+	)
+
+	for line := range strings.SplitSeq(s, "\n") {
+		c, n, rest := fenceMarker(line)
+		if n == 0 {
+			continue
+		}
+
+		switch {
+		case fenceLen == 0:
+			if c == '`' && strings.ContainsRune(rest, '`') {
+				continue // a backtick fence's info string holds no backtick
+			}
+
+			fenceChar, fenceLen = c, n
+		case c == fenceChar && n >= fenceLen && strings.TrimSpace(rest) == "":
+			fenceLen = 0
+		}
+	}
+
+	if fenceLen == 0 {
+		return ""
+	}
+
+	return "\n" + strings.Repeat(string(fenceChar), fenceLen)
+}
+
+// fenceMarker reads a code fence marker at the start of line: its character,
+// its length and the text after it. A line that holds no marker gives length 0.
+func fenceMarker(line string) (c byte, n int, rest string) {
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 || trimmed == "" || (trimmed[0] != '`' && trimmed[0] != '~') {
+		return 0, 0, ""
+	}
+
+	c = trimmed[0]
+	for n < len(trimmed) && trimmed[n] == c {
+		n++
+	}
+
+	if n < 3 {
+		return 0, 0, ""
+	}
+
+	return c, n, trimmed[n:]
+}
+
+// defuseMentions makes every mention in s notify nobody. It puts a zero-width
+// space after every @ followed by an ASCII letter or digit, so the handle stays
+// readable but is no mention, and it escapes the & of every HTML character
+// reference to an @ (&#64;, &#x40;, &commat; and their variants) as &amp;,
+// since GitHub renders such a reference as the @ it names: the reference then
+// shows as written and notifies nobody. It is applied to text the model wrote
+// only.
 func defuseMentions(s string) string {
 	var b strings.Builder
 
 	b.Grow(len(s))
 
 	for i := 0; i < len(s); i++ {
+		if s[i] == '&' && isAtReference(s[i+1:]) {
+			b.WriteString("&amp;")
+
+			continue
+		}
+
 		b.WriteByte(s[i])
 
 		if s[i] == '@' && i+1 < len(s) && isASCIIAlnum(s[i+1]) {
@@ -122,6 +237,66 @@ func defuseMentions(s string) string {
 	}
 
 	return b.String()
+}
+
+// isAtReference reports whether s, the text after an &, starts an HTML
+// character reference to an @: a decimal (#64) or a hexadecimal (#x40, #X40)
+// one with any leading zeros, with or without its semicolon, or the named one
+// (commat;), in any case. A numeric reference followed by more digits names
+// another character and is left alone.
+func isAtReference(s string) bool {
+	if len(s) >= len("commat;") && strings.EqualFold(s[:len("commat;")], "commat;") {
+		return true
+	}
+
+	rest, ok := strings.CutPrefix(s, "#")
+	if !ok {
+		return false
+	}
+
+	digit, base, want := isDecimalDigit, 10, int64(64)
+
+	if len(rest) > 0 && (rest[0] == 'x' || rest[0] == 'X') {
+		rest, digit, base, want = rest[1:], isHexDigit, 16, 0x40
+	}
+
+	end := 0
+	for end < len(rest) && digit(rest[end]) {
+		end++
+	}
+
+	if end == 0 {
+		return false
+	}
+
+	digits := strings.TrimLeft(rest[:end], "0")
+	if digits == "" || len(digits) > 4 {
+		return false
+	}
+
+	value, err := strconv.ParseInt(digits, base, 32)
+
+	return err == nil && value == want
+}
+
+func isDecimalDigit(c byte) bool {
+	return '0' <= c && c <= '9'
+}
+
+func isHexDigit(c byte) bool {
+	return isDecimalDigit(c) || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
+// oneLine returns s with every control character (below 0x20, and DEL) as a
+// space, so text the model wrote that Render puts on one line stays there.
+func oneLine(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F {
+			return ' '
+		}
+
+		return r
+	}, s)
 }
 
 // zeroWidthSpace (U+200B) is what defuseMentions puts after an @.
@@ -157,7 +332,10 @@ func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody [
 					where += ":" + strconv.Itoa(f.Line)
 				}
 
-				fmt.Fprintf(&body, "`%s`\n\n", strings.ReplaceAll(where, "`", "'"))
+				// ParseAnswer refuses a path with a control character, but
+				// Render refuses nothing: the path stays on its line and
+				// notifies nobody whatever reaches it.
+				fmt.Fprintf(&body, "`%s`\n\n", defuseMentions(oneLine(strings.ReplaceAll(where, "`", "'"))))
 			}
 
 			body.WriteString(findingText(f))

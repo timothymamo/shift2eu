@@ -130,16 +130,20 @@ func (rf rawFinding) finding() (Finding, error) {
 	}
 
 	if f.Path != "" && !validPath(f.Path) {
-		return Finding{}, errors.New("a path that is absolute, holds a .. element or a backslash")
+		return Finding{}, errors.New("a path that is absolute, holds a .. element, a backslash or a control character")
 	}
 
 	return f, nil
 }
 
 // validPath reports whether p is a slash-separated path relative to the
-// repository root with no ".." element and no backslash.
+// repository root with no ".." element, no backslash and no control character
+// (below 0x20, or DEL): git quotes a path holding one in a diff, so a path of
+// the diff never holds one, and a line break would give the rest of the path a
+// line of its own in the review.
 func validPath(p string) bool {
-	if strings.HasPrefix(p, "/") || strings.Contains(p, `\`) {
+	if strings.HasPrefix(p, "/") || strings.Contains(p, `\`) ||
+		strings.ContainsFunc(p, func(r rune) bool { return r < 0x20 || r == 0x7F }) {
 		return false
 	}
 
