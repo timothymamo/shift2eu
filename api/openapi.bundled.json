@@ -375,7 +375,7 @@
               },
               "hoursBasis": {
                 "const": 730,
-                "description": "The hours a month a plan price is for, a whole number (a JSON integer):a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
+                "description": "The hours a month a plan price is for, a whole number (a JSON integer): a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
                 "type": "integer"
               },
               "priceDate": {
@@ -597,7 +597,7 @@
                 "type": "string"
               },
               "billingCapHours": {
-                "description": "The most hours a month the estimated plan is billed for, a whole number (a JSON integer):its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
+                "description": "The most hours a month the estimated plan is billed for, a whole number (a JSON integer): its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
                 "minimum": 1,
                 "type": "integer"
               },
@@ -1018,7 +1018,7 @@
               },
               "hoursBasis": {
                 "const": 730,
-                "description": "The hours a month a plan price is for, a whole number (a JSON integer):a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
+                "description": "The hours a month a plan price is for, a whole number (a JSON integer): a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
                 "type": "integer"
               },
               "priceDate": {
@@ -1240,7 +1240,7 @@
                 "type": "string"
               },
               "billingCapHours": {
-                "description": "The most hours a month the estimated plan is billed for, a whole number (a JSON integer):its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
+                "description": "The most hours a month the estimated plan is billed for, a whole number (a JSON integer): its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
                 "minimum": 1,
                 "type": "integer"
               },

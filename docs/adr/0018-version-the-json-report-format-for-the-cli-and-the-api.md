@@ -82,7 +82,10 @@ string, typed `string` with a `pattern`: every amount of money (a plan's `price`
 to the cent, `"587.58"`) and every quantity that can be fractional (a plan's `memoryGiB`, `"0.5"`,
 `"1.875"`). No field is a fractional JSON number (`number`), so a consumer never reads a float that
 `encoding/json` or its own parser has rounded; it parses the strings as decimals. The current schemas
-state the rule in each such field's description ("whole number" or "exact decimal"), and
+state the rule in the description of every amount of money and every measured quantity, a plan's
+`vcpus`, `memoryGiB` and `includedStorageGiB`, `billingCapHours` and `hoursBasis` ("whole number" or
+"exact decimal"); a count of resources (the `summary` counts, a `total`'s `estimated`, `resources`
+and `storageNotIncluded`, a `sourceCost`'s `covered`, every other `resources`) is whole by nature and says only what it counts.
 `TestSchemaQuantitiesStateTheQuantityRule` and `TestSchemaQuantitiesAreNeverNumbers` pin it. Version 1
 has only counts, no money and no fractional quantity, so the rule holds for it as written; its schema
 files keep the prose they shipped with ([ADR 0030](0030-serve-the-version-2-report-on-v1.md) keeps
