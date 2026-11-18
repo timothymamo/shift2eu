@@ -688,7 +688,7 @@ before it still hold. Rolling back is under each step.
    *Check:* after `git -C ~/src/shift2eu-host pull --ff-only`, `make -n agents-token` in the host clone
    prints its commands instead of "No rule to make target".
    *Roll back:* nothing is enforced; until milestone 3, without a token file the VM went on with your
-   personal token.
+   personal token, `GITHUB_TOKEN`.
 3. **Switch the agents to the App.** Give a VM created before milestone 1 the gh wrapper
    (`make vm-gh-wrapper`, or `make vm-delete vm-create`). From the host clone, run `make agents-token`,
    then `make agents-token-refresh-start`; the mint sets the bot as the VM's git identity, so the agents
@@ -733,14 +733,14 @@ before it still hold. Rolling back is under each step.
    reports those review gaps again and exits 1, and an open agent pull request's
    `reviewDecision` (`gh pr view <n> --json reviewDecision`) is no longer `REVIEW_REQUIRED`.
 6. **Remove your token from the VM** (milestone 3, approved and merged by you: the first change through
-   the gate). Once it is merged, the default `VM_ENV` no longer names your personal GitHub token and the
-   gh wrapper has no fallback to it. Then, on the Mac:
-   - delete your personal token's variable from the `.envrc` above the workspace (`direnv allow` there
-     again), and from any `VM_ENV` override you keep (a `VM_ENV` exported in a `.envrc`, or a habit of
-     `make vm-env VM_ENV=...`);
+   the gate). Once it is merged, the default `VM_ENV` no longer names `GITHUB_TOKEN`, your personal
+   GitHub token, and the gh wrapper has no fallback to it. Then, on the Mac:
+   - delete the `GITHUB_TOKEN` line from the `.envrc` above the workspace (`direnv allow` there again),
+     and `GITHUB_TOKEN` from any `VM_ENV` override you keep (a `VM_ENV` exported in a `.envrc`, or a
+     habit of `make vm-env VM_ENV=...`);
    - run `make vm-env` with the default `VM_ENV`: it replaces the VM's whole `daemon.env`, so the old
-     token's line is gone; then `make deck-restart` between tasks;
-   - revoke that personal token on GitHub
+     `GITHUB_TOKEN` line is gone; then `make deck-restart` between tasks;
+   - revoke the personal token that `GITHUB_TOKEN` held on GitHub
      ([personal access tokens](https://github.com/settings/personal-access-tokens)).
 
    *Check:* the token no longer appears on GitHub's list of your personal access tokens; `make vm-init`'s
