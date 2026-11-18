@@ -1,0 +1,112 @@
+name: AI review
+
+# Reviews every pull request into main with the AI reviewer (PRD #161 milestone 4, ADR 0033): ci/aireview
+# reads the pull request through the GitHub API as data, asks Claude for findings with main's CLAUDE.md
+# and its review-change and security-audit skills, through one run of the Claude Code CLI on the
+# maintainer's Claude subscription, and posts one review as the reviewer App, COMMENT or REQUEST_CHANGES,
+# never an approval. The review is advice: this is never a required check, and a failed run (the diff
+# over the size limit, GitHub or the model failing, the subscription's usage limit reached, an expired
+# token, a malformed answer) is a failing check, not a silent pass. test/lint/aireviewworkflow_test.go pins this file's shape.
+#
+# pull_request_target runs main's copy of this workflow, in the base repository's context, whatever the
+# pull request changes, and only it can read the ai-review environment's secrets for a pull request. It
+# also means nothing here may ever check out, build or run the pull request's code: the job checks out
+# main, builds the reviewer from main and gives the pull request to the model as text only. A pull request
+# that edits this file, ci/aireview, CLAUDE.md or the skills is reviewed by main's versions of them.
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+    branches: [main]
+
+# Nothing through GITHUB_TOKEN writes: the reviewer App's short-lived token posts the review.
+permissions: {}
+
+# One review per pull request at a time: a new push cancels the review in progress and reviews the new
+# head, so two runs never spend the subscription's usage on the same pull request.
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: AI review
+    # Drafts are skipped (marking one ready starts a review), and so are pull requests from forks: the
+    # agents, Renovate and release-please push branches to this repository, and a fork must not be able to
+    # spend the maintainer's subscription usage. Either shows as a skipped check.
+    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: ubuntu-latest
+    # The model's answer can take minutes (the program gives it ten); nothing else here is slow.
+    timeout-minutes: 20
+    # Holds the reviewer App's client ID and key, the maintainer's Claude subscription token
+    # (CLAUDE_CODE_OAUTH_TOKEN) and the AI_REVIEW_REQUEST_CHANGES switch, and is limited to main, so only
+    # main's copy of this workflow ever reads them.
+    environment: ai-review
+    # GITHUB_TOKEN reads only, for the checkout; the program never uses it.
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      # No ref: and no repository: on purpose. Under pull_request_target the checkout is the base branch,
+      # main, never the pull request's head or merge commit: the reviewer's program and the instructions
+      # it reads (CLAUDE.md and the two skills) are main's. No credential is left in .git/config.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No cache: a job that holds two secrets restores nothing another run saved (ADR 0033), and the
+      # reviewer is a standard-library program that builds in seconds.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # Built before any secret is in a step's environment.
+      - name: Build the reviewer from main
+        run: |
+          go build -trimpath -o "${RUNNER_TEMP}/aireview" ./ci/aireview
+      # The reviewer asks the model through the Claude Code CLI on the maintainer's subscription (ADR
+      # 0033). Installed before any secret is in a step's environment, at an exact version, from the
+      # linux-x64 platform package (ubuntu-latest is x64). .github/scripts/install-claude-code.sh, main's
+      # copy, downloads it with npm pack, which runs no install script, compares the tarball with the npm
+      # integrity pinned here and only then extracts its one binary, package/claude. It fails when the
+      # runner image ships /etc/claude-code, whose managed policy the CLI would apply under every flag.
+      # The meta package @anthropic-ai/claude-code only picks this package in a postinstall script, so
+      # it is skipped. The version and the integrity are this step's env:, where Renovate's generic
+      # manager reads the version under its # renovate: comment. A Renovate bump of the version must
+      # also replace CLAUDE_CODE_INTEGRITY (npm view @anthropic-ai/claude-code-linux-x64@<version>
+      # dist.integrity): until it does, this step fails and nothing unverified runs, which is the safe
+      # way round. A Renovate PR's own AI review runs main's copy of this file, so a missed integrity
+      # shows only once the bump is merged.
+      - name: Install the Claude Code CLI
+        env:
+          # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64
+          CLAUDE_CODE_VERSION: 2.1.327
+          CLAUDE_CODE_INTEGRITY: sha512-uJ24I+t47cpQjeo31ZrHepsFQ8QUsLjCxmDxLshMjYHEtoxhQdgKc4iuViQDaKpFqn3puR85gwHlLj4e7s+1iQ==
+        run: .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}" "${CLAUDE_CODE_INTEGRITY}"
+      # A token of the reviewer App, revoked when the job ends, with exactly Pull requests write (to post
+      # and dismiss its reviews) and Contents read. client-id, never the deprecated app-id (ADR 0021).
+      - name: Mint the reviewer App's token
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ secrets.AI_REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AI_REVIEWER_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: write
+      # Every value reaches the program through env: only, never through an expression in the script. The
+      # program prints no credential and escapes every line it prints, so no text of the pull request or
+      # the model can become a workflow command. CLAUDE_CODE_OAUTH_TOKEN is the maintainer's Claude
+      # subscription token (claude setup-token); the program hands it to the CLI in an environment of its
+      # own, which inherits nothing else of this step's.
+      # No ANTHROPIC_API_KEY, here or anywhere: Claude Code prefers an API key over the subscription
+      # whenever one is set and bills the API instead, so the program refuses to run beside one.
+      # TMPDIR is the job's own temporary directory, so the CLI's empty working directory, its HOME and
+      # the system prompt file are made under a directory only this job writes to (os.MkdirTemp reads it).
+      - name: Review the pull request
+        env:
+          TMPDIR: ${{ runner.temp }}
+          AI_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
+          AI_REVIEWER_APP_SLUG: ${{ steps.app.outputs.app-slug }}
+          AI_REVIEWER_TOKEN: ${{ steps.app.outputs.token }}
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          AI_REVIEW_REQUEST_CHANGES: ${{ vars.AI_REVIEW_REQUEST_CHANGES }}
+        run: |
+          "${RUNNER_TEMP}/aireview" "${RUNNER_TEMP}/claude-code/package/claude"

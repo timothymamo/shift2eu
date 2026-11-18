@@ -96,6 +96,19 @@
       ],
     },
     {
+      // The AI reviewer's Claude Code CLI (ADR 0033) is pinned by version (CLAUDE_CODE_VERSION in the
+      // install step's env:, which the "Versions annotated with" manager reads) and by the npm integrity
+      // of its tarball (CLAUDE_CODE_INTEGRITY beside it), which Renovate cannot update: a bump must replace
+      // CLAUDE_CODE_INTEGRITY in the same PR. The AI review check of Renovate's PR runs main's copy of the
+      // workflow (pull_request_target), so a missed integrity shows only after the merge, as every AI
+      // review failing at the install: replace it in the same PR.
+      description: 'Claude Code CLI: ai-review.yml version, with the integrity updated by hand in the same PR',
+      matchDepNames: ['@anthropic-ai/claude-code-linux-x64'],
+      prBodyNotes: [
+        '**Before merging:** replace `CLAUDE_CODE_INTEGRITY` in `.github/workflows/ai-review.yml` with the output of `npm view @anthropic-ai/claude-code-linux-x64@<new version> dist.integrity`, and check that the CLI still accepts every flag `ci/aireview/internal/review/claudecli.go` passes (`claude --help`). The AI review check of this PR runs main\'s pin, not this one.',
+      ],
+    },
+    {
       // A digest update keeps the tag: the release asset behind an existing gh or cosign tag was replaced.
       // That is how a compromised release looks, so it gets a PR of its own that is never automerged.
       // Defence in depth only: the github-release-attachments datasource (Renovate 44) keeps the pinned

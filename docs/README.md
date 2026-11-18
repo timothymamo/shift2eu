@@ -73,6 +73,7 @@ supersedes it.
 - [0030. Serve the version 2 report on /v1, with estimates, relations and workloads](adr/0030-serve-the-version-2-report-on-v1.md)
 - [0031. Agents open pull requests as a GitHub App, with one-hour tokens minted on the Mac](adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)
 - [0032. Say when an estimate leaves out storage its plan does not include](adr/0032-say-when-an-estimate-leaves-out-storage-its-plan-does-not-include.md)
+- [0033. Review pull requests with an AI reviewer that only comments or requests changes](adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md)
 
 ## Writing a page
 
