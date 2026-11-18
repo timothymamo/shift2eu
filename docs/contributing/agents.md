@@ -10,7 +10,11 @@ and delegates to a **tester** (writes failing tests first), a **coder**, a **rev
 maintainer's approval and merge: `Protect main` requires a code owner's approval, and
 `.github/CODEOWNERS` names only the maintainer, so no agent, App or bot can land a change alone (PRD #161).
 The AI reviewer's comments and change requests are advice the maintainer weighs, never a substitute for
-their review. After the switch to the agents App, nobody pushes to an agent's branch by hand: a push by
+their review: a GitHub Actions workflow outside the VM, `.github/workflows/ai-review.yml`, reviews every
+pull request into `main` with `main`'s `review-change` and `security-audit` skills as a reviewer App that
+comments or requests changes and never approves
+([ADR 0033](../adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md),
+[set-up](../dev-environment.md#the-ai-reviewer)). After the switch to the agents App, nobody pushes to an agent's branch by hand: a push by
 the maintainer could not be approved (the last push needs someone else's approval). Ask the agents for
 the change instead ([docs/dev-environment.md](../dev-environment.md#the-gate)).
 

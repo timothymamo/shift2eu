@@ -163,19 +163,27 @@ up an unbounded bill.
   read the environment's secrets for a pull request. The workflow checks out `main` with
   `persist-credentials: false` and never the pull request's head, ref or merge commit.
 - **Drafts are skipped** (`if: ${{ !github.event.pull_request.draft }}`, a job shown as skipped); marking
-  one ready starts a review. **Pull requests from forks are skipped** the same way (the head repository
-  must be this one): the agents, Renovate and release-please all push branches to this repository, and
+  one ready starts a review. **Pull requests from forks are skipped** the same way (the job's `if:`
+  also requires `github.event.pull_request.head.repo.full_name == github.repository`): the agents, Renovate and release-please all push branches to this repository, and
   a fork's pull request should not be able to spend the model budget; the maintainer reads those alone.
 - **Concurrency per pull request**, `ai-review-<number>`, with `cancel-in-progress: true`: a new push
   cancels the review in progress and reviews the new head.
 - The job runs in the **`ai-review` environment**, whose deployment branch policy is `main` only, on
   `ubuntu-latest`, with `timeout-minutes` set. `GITHUB_TOKEN` has `permissions: {}` at the top level and
   `contents: read`, `pull-requests: read` in the job, and the program does not use it.
-- The program is built (`go build`) before any secret is in a step's environment. Then
-  `actions/create-github-app-token`, pinned by SHA as in `release-please.yml`, mints a token for the
-  reviewer App with `permission-pull-requests: write` and `permission-contents: read` exactly. The
-  reviewer App's installation has those two permissions and nothing else (Metadata read is implied),
-  on this repository only, webhook off. The token reaches the program's step alone.
+- The program is built (`go build -trimpath` into `$RUNNER_TEMP`) before any secret is in a step's
+  environment. Then `actions/create-github-app-token`, pinned by SHA as in `release-please.yml`, mints a
+  token for the reviewer App with `permission-pull-requests: write` and `permission-contents: read`
+  exactly. The reviewer App's installation has those two permissions and Metadata read, which GitHub
+  makes mandatory, and nothing else, on this repository only, webhook off. The token reaches the
+  program's step alone.
+- **No build cache.** `actions/setup-go` runs with `cache: false`. Under `pull_request_target` the job
+  runs in `main`'s cache scope, so a cache it restored would be one a run on `main` saved, not one a pull
+  request's branch saved; but a job that holds two secrets should depend on as little earlier state as it
+  can, and the program is standard library only and builds in seconds, so nothing is worth caching. The
+  job restores and saves no cache of any kind.
+- Milestone 4's own pull request is not reviewed: until it is merged `main` has no review workflow, and
+  `pull_request_target` runs `main`'s.
 - **Names**, used everywhere after this ADR (workflow, docs, the `release-tag` check):
 
   | Name | Kind | Where | Holds |

@@ -95,6 +95,21 @@ moves or deletes a tag.
    `RELEASE_TAG_APP_CLIENT_ID`, `RELEASE_APP_ID`. The agents' token may not be allowed to list them (a
    403): then say in the report that this is a maintainer check you could not make, and go on. If one of
    them is listed, report it and stop.
+   **The AI reviewer's secrets** (PRD #161 milestone 4, ADR 0033) are checked the same way. The
+   `ai-review` environment holds the reviewer App's client ID and key and the model provider's key:
+   `gh api repos/{owner}/{repo}/environments/ai-review` must show
+   `deployment_branch_policy.custom_branch_policies` `true` (and `protected_branches` `false`), and
+   `gh api repos/{owner}/{repo}/environments/ai-review/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'`
+   must list exactly one policy, `branch main`; anything else lets a workflow on another branch read
+   those keys: report it and stop. `gh api repos/{owner}/{repo}/environments/ai-review/secrets --jq '.secrets[].name'`
+   should list `AI_REVIEWER_APP_CLIENT_ID`, `AI_REVIEWER_APP_PRIVATE_KEY` and `ANTHROPIC_API_KEY`; a
+   missing one only means the reviewer is not set up yet (runbook step 7, `docs/dev-environment.md`):
+   say so in the report and go on. The repository-level listings above (`actions/secrets` and
+   `actions/variables`) must list none of `AI_REVIEWER_APP_CLIENT_ID`, `AI_REVIEWER_APP_PRIVATE_KEY`,
+   `ANTHROPIC_API_KEY` or `AI_REVIEW_REQUEST_CHANGES`: if one is listed, report it and stop. A 403 on any
+   of these reads is a maintainer check you could not make: say so in the report and go on. The
+   `ai-review` environment not existing at all (404) means the reviewer is not set up yet: say so and go
+   on; it gates no release.
    **The rulesets' bypass lists after the switch.** The agents App's token cannot read `bypass_actors`
    (it needs Administration write, which the App never gets: ADR 0031, d): GitHub leaves the field out,
    or returns it empty. The checks above that hold a ruleset's `bypass_actors` are then a maintainer

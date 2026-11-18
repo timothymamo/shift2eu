@@ -733,15 +733,134 @@ before it still hold. Rolling back is under each step.
    `make gate-check` (its transition flag now gone) exits 0.
    *Roll back:* create a new fine-grained token and put it back in `VM_ENV` (milestone 3's revert brings
    the fallback back).
-7. **Add the AI reviewer** (milestone 4): create the reviewer App (Pull requests write, Contents read,
-   this repository only), the `ai-review` environment (deployment branches: `main` only) and its secrets,
-   then approve and merge milestone 4.
-   *Check:* `gh api repos/timothymamo/shift2eu/environments/ai-review/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'`
-   prints only `branch main`; on the next pull request,
+7. **Add the AI reviewer** (milestone 4): create the reviewer App, the `ai-review` environment, its three
+   secrets and its variable as [The AI reviewer](#the-ai-reviewer) says, with the check after each of
+   its steps, then approve and merge milestone 4. Milestone 4's own pull request gets no AI review: until
+   it is merged, `main` has no review workflow for `pull_request_target` to run.
+   *Check:* on the next pull request `<n>`, the `AI review` check runs and
    `gh api repos/timothymamo/shift2eu/pulls/<n>/reviews --jq '.[] | .user.login + " " + .state'` shows
-   the reviewer's review as `COMMENTED` or `CHANGES_REQUESTED`, never `APPROVED`, and an approval by
-   anyone but you leaves `reviewDecision` short of `APPROVED`.
+   the reviewer's review as `COMMENTED` (or `CHANGES_REQUESTED` once you turn change requests on), never
+   `APPROVED`; and from the host clone, as yourself with an admin token, `make gate-check` still exits 0,
+   so an approval from the reviewer App, the agents App or anyone but you cannot satisfy `Protect main`.
    *Roll back:* disable the review workflow; it is never a required check.
+
+### The AI reviewer
+
+PRD #161 milestone 4, [ADR 0033](adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md).
+`.github/workflows/ai-review.yml` reviews every pull request into `main` from this repository when it is
+opened, reopened, marked ready or pushed to (drafts and pull requests from forks are skipped; a new push
+cancels the review in progress). It runs `main`'s `ci/aireview`, which reads the pull request through the
+GitHub API as data (never checking out or running its code), asks the model for findings with `main`'s
+`CLAUDE.md` and the `review-change` and `security-audit` skills, and posts one review as the reviewer
+App: a summary naming the head commit, and inline comments on the lines it flags. It posts `COMMENT` or
+`REQUEST_CHANGES`, never an approval, and stays at `COMMENT` until you turn change requests on. A failed
+run (the diff over 300,000 bytes, an API down or refusing, a malformed answer) is a failing check, never
+a required one: your approval stays the only gate.
+
+**1. Create the reviewer App.** On GitHub, Settings → Developer settings → GitHub Apps → New GitHub App:
+
+- Name: anything, for example `shift2eu-reviewer`; its slug makes the reviewer's login
+  `<slug>[bot]`. Homepage URL: the repository's URL.
+- Webhook: untick **Active**. The App receives no events; the workflow calls it.
+- Repository permissions, exactly these, everything else **No access**:
+
+  | Permission | Access | Why |
+  |---|---|---|
+  | Pull requests | Read and write | post its review, dismiss its own earlier change request |
+  | Contents | Read-only | read the diff of the pull request's commits |
+  | Metadata | Read-only | mandatory for every App |
+
+  No organization or account permission, no event subscription.
+- Where can this GitHub App be installed: **Only on this account**.
+
+Create it, then on its page **Generate a private key** (a `.pem` file downloads) and note its **Client
+ID** (General, About). Install it (Install App) on **Only select repositories**: `shift2eu` alone.
+*Check:* the installation's settings page says "Only select repositories" with only this one, and lists
+exactly the three permissions above.
+*Roll back:* uninstall and delete the App.
+
+**2. Create the `ai-review` environment.** Settings → Environments → New environment, `ai-review`:
+
+- Deployment branches and tags: **Selected branches and tags**, one rule, branch `main`. This is what
+  keeps the keys from any workflow but `main`'s.
+- Required reviewers: **none**. A required reviewer would make every review wait for your click before
+  it runs, which is the work the reviewer is there to save; the protection is the `main`-only policy and
+  `pull_request_target`, which only ever runs `main`'s copy of the workflow. The trade-off: anyone who can
+  merge a workflow into `main` can read these keys, which is already true of the release Apps' keys and
+  is gated by your approval.
+- Or with `gh`, as yourself with an admin token:
+
+  ```bash
+  gh api --method PUT repos/timothymamo/shift2eu/environments/ai-review \
+    -F 'deployment_branch_policy[protected_branches]=false' \
+    -F 'deployment_branch_policy[custom_branch_policies]=true'
+  gh api --method POST repos/timothymamo/shift2eu/environments/ai-review/deployment-branch-policies \
+    -f name=main -f type=branch
+  ```
+
+*Check:* `gh api repos/timothymamo/shift2eu/environments/ai-review/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'`
+prints only `branch main`.
+*Roll back:* delete the environment.
+
+**3. Store its secrets and its variable**, in the environment only, never at repository level:
+
+| Name | Kind | Value |
+|---|---|---|
+| `AI_REVIEWER_APP_CLIENT_ID` | environment secret | the reviewer App's Client ID |
+| `AI_REVIEWER_APP_PRIVATE_KEY` | environment secret | the whole `.pem` file |
+| `ANTHROPIC_API_KEY` | environment secret | an Anthropic API key, ideally of a workspace of its own (below) |
+| `AI_REVIEW_REQUEST_CHANGES` | environment variable | `false` (or leave it unset): comments only |
+
+```bash
+gh secret set AI_REVIEWER_APP_CLIENT_ID --env ai-review --repo timothymamo/shift2eu
+gh secret set AI_REVIEWER_APP_PRIVATE_KEY --env ai-review --repo timothymamo/shift2eu < <downloaded>.pem
+gh secret set ANTHROPIC_API_KEY --env ai-review --repo timothymamo/shift2eu
+gh variable set AI_REVIEW_REQUEST_CHANGES --env ai-review --repo timothymamo/shift2eu --body false
+```
+
+`gh secret set` without `--body` prompts for the value, so it stays out of your shell history. Then
+delete the downloaded `.pem`, or move it to your password manager: GitHub holds the only copy the
+workflow needs, and a new key can always be generated.
+*Check:* `gh api repos/timothymamo/shift2eu/environments/ai-review/secrets --jq '.secrets[].name'` lists
+the three secrets, and `gh api repos/timothymamo/shift2eu/actions/secrets --jq '.secrets[].name'` and
+`gh api repos/timothymamo/shift2eu/actions/variables --jq '.variables[].name'` list none of the four
+names (the `release-tag` skill checks the same before every release).
+*Roll back:* delete the secrets and the variable.
+
+**4. Merge milestone 4 and watch the first review**, as runbook step 7 says. On the next pull request the
+`AI review` check runs; its review starts with the commit it read and ends saying it is advice and never
+an approval. A skipped check means a draft or a fork; a failed one prints its reason as an error
+annotation (`AI review failed`).
+
+**Turning change requests on.** After reading its first weeks of comments, set the variable to `true`:
+`gh variable set AI_REVIEW_REQUEST_CHANGES --env ai-review --repo timothymamo/shift2eu --body true`.
+From the next run, a blocking finding (severity `blocker`, or any `prompt-injection` finding) makes the
+review `REQUEST_CHANGES`; a later push whose review finds nothing blocking dismisses the reviewer's own
+earlier change request, never anyone else's. You can always dismiss its change request yourself. Set the
+variable back to `false` to go back to comments. Any value but `true`, `false` or empty fails the run, so a
+typo shows instead of silently picking one.
+
+**Rolling back.** Disable the workflow (Actions → AI review → Disable workflow, or
+`gh workflow disable ai-review.yml --repo timothymamo/shift2eu`). It is never a required check, so
+nothing waits for it. To remove it for good, delete the environment and uninstall the App too.
+
+**Model and cost.** Claude Opus 5.5 (`claude-opus-5-5`), one request per review, no tools, at most 16,000
+tokens of answer. The estimate, from ADR 0033, whose assumptions you should check against Anthropic's
+price list and the first month's bill:
+
+| Assumption | Value |
+|---|---|
+| Price | $5 per million input tokens, $25 per million output tokens |
+| Pull requests | 14 a day (143 merges from 2026-11-09 to 2026-11-18) |
+| Reviews per pull request | 3 (opened, then two pushes) |
+| Typical review | 75 KB of diff, about 33,000 input and 2,500 output tokens |
+
+That is about **$0.23 a typical review**, **$0.94 a review at the diff limit**, and **about $290 a
+month** (1,260 reviews); at three times those prices (an earlier Opus's), about $860 a month, and a burst
+day costs about three times an average one. **Set a spend limit**: create the key in an Anthropic
+workspace of its own and give that workspace a monthly limit of about **$400** (the estimate with room
+for bursts), with an alert at about $250, so a flood of pull requests or pushes cannot run up an unbounded
+bill. A review that hits the limit fails its check; nothing else is affected.
 
 ## Agent permissions
 
