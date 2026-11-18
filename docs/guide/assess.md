@@ -48,7 +48,10 @@ then the workloads, the estimate's basis (region, price date, currency, what it 
 and the source's cost. Its format, its JSON Schemas
 (`internal/adapter/report/jsonreport/schema/`) and its versioning rules are in
 [ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md); version 2 is
-[ADR 0030](../adr/0030-serve-the-version-2-report-on-v1.md).
+[ADR 0030](../adr/0030-serve-the-version-2-report-on-v1.md). A whole-number quantity, such as a plan's
+`vcpus` or `includedStorageGiB`, is a JSON number; an amount of money, such as `"587.58"`, and a
+quantity that can be fractional, such as a plan's `memoryGiB` (`"0.5"`, `"1.875"`), are exact decimal
+strings, so a script never reads a rounded float. Parse them as decimals, not as floating point.
 
 With two or more targets, `assess` reads the inventory once and writes one comparison report. The
 targets are compared in sorted key order, whatever order they are given in. The report starts with a

@@ -1,6 +1,7 @@
 # 0018. Version the JSON report format, shared by the CLI and the HTTP API
 
-- Status: Accepted
+- Status: Accepted; amended 2026-11-18 by [issue #247](https://github.com/timothymamo/shift2eu/issues/247):
+  the quantity rule (Encoding) records how the report already writes numbers, changing no document
 - Date: 2026-11-11
 
 ## Context
@@ -71,6 +72,27 @@ so every document is valid JSON and valid UTF-8. Keys are camelCase. Required ke
 an empty string is `""` and an empty array is `[]`, never `null`. Order is the domain's (resources
 and blockers in the assessment's order, targets by key, shared blockers by resource ID), never map
 order. `retrieved` is the snapshot's UTC calendar date, `YYYY-MM-DD`, as the Markdown report prints it.
+
+*Amended (2026-11-18, [issue #247](https://github.com/timothymamo/shift2eu/issues/247)):* the
+**quantity rule**, which records the shape `schemaVersion` 2 already has and changes no field's type,
+name or value. A whole-number quantity is a JSON number, typed `integer` in the schema: counts, a plan's
+`vcpus` and `includedStorageGiB`, `billingCapHours` and `hoursBasis`. An exact decimal value is a JSON
+string, typed `string` with a `pattern`: every amount of money (a plan's `price`, an estimate's
+`amount`, the `breakdown` parts, a `total`'s `amount`, a source `currencyCost`'s `amount`, each rounded
+to the cent, `"587.58"`) and every quantity that can be fractional (a plan's `memoryGiB`, `"0.5"`,
+`"1.875"`). No field is a fractional JSON number (`number`), so a consumer never reads a float that
+`encoding/json` or its own parser has rounded; it parses the strings as decimals. The current schemas
+state the rule in the description of every amount of money and every measured quantity, a plan's
+`vcpus`, `memoryGiB` and `includedStorageGiB`, `billingCapHours` and `hoursBasis` ("whole number" or
+"exact decimal"); a count of resources (the `summary` counts, a `total`'s `estimated`, `resources`
+and `storageNotIncluded`, a `sourceCost`'s `covered`, every other `resources`) is whole by nature and
+says only what it counts. `TestSchemaQuantitiesStateTheQuantityRule` and
+`TestSchemaQuantitiesAreNeverNumbers` pin it; `TestSchemaQuantitiesClassifyEveryField` makes every new
+field be classified as a quantity or a count. Version 1 has only counts, no money and no fractional
+quantity, so the rule holds for it as written; its schema files keep the prose they shipped with
+([ADR 0030](0030-serve-the-version-2-report-on-v1.md) keeps them unchanged). A new money or fractional
+field follows the rule; turning a string into a number or the reverse is a retyping, so a new
+`schemaVersion`.
 
 **Versioning.**
 
