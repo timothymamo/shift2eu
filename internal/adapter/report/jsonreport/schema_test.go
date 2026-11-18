@@ -908,19 +908,16 @@ const (
 // with, so the rule is pinned on the version this release writes.
 var quantityRuleSchemas = []string{"assessment-v2.schema.json", "comparison-v2.schema.json"}
 
-// TestSchemaQuantitiesStateTheQuantityRule pins the rule in the descriptions of
-// the current schemas (docs/adr/0018, issue #247): the fields that hold an amount
-// of money or a quantity that can be fractional are strings described as an exact
-// decimal, and the fields that hold a whole-number quantity are integers
-// described as a whole number.
-func TestSchemaQuantitiesStateTheQuantityRule(t *testing.T) {
-	t.Parallel()
-
-	// The fields the rule covers, named one by one rather than guessed from their
-	// names, some money and some not. Every schema of quantityRuleSchemas declares
-	// them, and the walk fails when one of them is gone, so a field cannot leave
-	// the rule by being renamed or dropped.
-	decimalFields := []string{
+// The fields the rule covers, named one by one rather than guessed from their
+// names, some money and some not. Every schema of quantityRuleSchemas declares
+// them, and the walk fails when one of them is gone, so a field cannot leave the
+// rule by being renamed or dropped. TestSchemaQuantitiesClassifyEveryField holds a
+// new field of a current schema to the same lists.
+var (
+	// decimalFields hold an exact decimal value: an amount of money, or a
+	// quantity that can be fractional. They are strings and their description
+	// states the rule.
+	decimalFields = []string{
 		"/$defs/plan/properties/memoryGiB",          // GiB, fractional: "0.5", "1.875"
 		"/$defs/plan/properties/price",              // EUR, a plan's monthly list price
 		"/$defs/resourceEstimate/properties/amount", // EUR, a resource's monthly estimate
@@ -931,12 +928,43 @@ func TestSchemaQuantitiesStateTheQuantityRule(t *testing.T) {
 		"/$defs/currencyCost/properties/amount",     // the source's currency, a sum
 	}
 
-	wholeFields := []string{
+	// wholeFields hold a whole-number quantity: a JSON integer whose description
+	// states that it is a whole number.
+	wholeFields = []string{
 		"/$defs/plan/properties/vcpus",
 		"/$defs/plan/properties/includedStorageGiB",
 		"/$defs/resourceEstimate/properties/billingCapHours",
 		"/$defs/estimateBasis/properties/hoursBasis",
 	}
+
+	// countFields hold a count, not a quantity: an integer whose description says
+	// what it counts and promises no representation, so the rule does not cover
+	// it. They are listed so every integer field of a current schema is
+	// classified, and a new measured integer quantity cannot slip in without a
+	// statement of the rule.
+	countFields = []string{
+		"/properties/schemaVersion",                  // the format version
+		"/$defs/summary/properties/direct",           // resources per fit
+		"/$defs/summary/properties/partial",          //
+		"/$defs/summary/properties/none",             //
+		"/$defs/summary/properties/total",            //
+		"/$defs/total/properties/estimated",          // resources a sum covers
+		"/$defs/total/properties/resources",          //
+		"/$defs/total/properties/storageNotIncluded", // estimates that leave storage out
+		"/$defs/sourceCost/properties/covered",       // resources the source gives a cost for
+		"/$defs/sourceCost/properties/resources",     //
+		"/$defs/currencyCost/properties/resources",   // resources costing in one currency
+		"/$defs/workload/properties/resources",       // resources of a workload group
+	}
+)
+
+// TestSchemaQuantitiesStateTheQuantityRule pins the rule in the descriptions of
+// the current schemas (docs/adr/0018, issue #247): the fields that hold an amount
+// of money or a quantity that can be fractional are strings described as an exact
+// decimal, and the fields that hold a whole-number quantity are integers
+// described as a whole number.
+func TestSchemaQuantitiesStateTheQuantityRule(t *testing.T) {
+	t.Parallel()
 
 	// quantityField is one field the rule covers, in one schema document.
 	type quantityField struct {
@@ -1029,10 +1057,95 @@ func TestSchemaQuantitiesAreNeverNumbers(t *testing.T) {
 	}
 }
 
-// fieldName names a field the quantity rule covers, for a subtest name: the
-// pointer below "$defs" with its keywords dropped, as "plan.memoryGiB".
+// TestSchemaQuantitiesClassifyEveryField holds the whole of every current schema
+// to the quantity rule (docs/adr/0018, issue #247), so a field the lists above do
+// not name is caught: every integer property is a whole-number quantity or a
+// count, and every string property whose pattern admits a decimal number is an
+// exact decimal. Without it a new money field, or a new measured quantity such as
+// a disk size in GiB, could join the format with no statement of which
+// representation it uses.
+func TestSchemaQuantitiesClassifyEveryField(t *testing.T) {
+	t.Parallel()
+
+	for _, schemaFile := range quantityRuleSchemas {
+		t.Run(schemaFile, func(t *testing.T) {
+			t.Parallel()
+
+			s := readSchema(t, filepath.Join("schema", schemaFile))
+
+			integers, decimals := 0, 0
+
+			eachSchema(s, "", func(pointer string, object *schema) {
+				for _, name := range slices.Sorted(maps.Keys(object.properties)) {
+					property := object.properties[name]
+					where := pointer + "/properties/" + name
+
+					switch {
+					case slices.Contains(property.types, "integer"):
+						integers++
+
+						if slices.Contains(wholeFields, where) || slices.Contains(countFields, where) {
+							continue
+						}
+
+						t.Errorf("%s is typed integer but the quantity rule does not classify it: "+
+							"add it to wholeFields and state that it is a whole number if it measures a "+
+							"quantity, or to countFields if it counts something "+
+							"(docs/adr/0018, issue #247)", fieldName(where))
+					case slices.Contains(property.types, "string") && property.pattern != nil &&
+						isDecimalNumberPattern(property.pattern):
+						decimals++
+
+						if !slices.Contains(decimalFields, where) {
+							t.Errorf("%s is a string whose pattern admits a decimal number but the quantity "+
+								"rule does not classify it: add it to decimalFields and state that it is an "+
+								"exact decimal (docs/adr/0018, issue #247)", fieldName(where))
+						}
+					}
+				}
+			})
+
+			if integers == 0 || decimals == 0 {
+				t.Fatalf("the walk found %d integer and %d decimal fields, want some of each: "+
+					"the classification was not checked", integers, decimals)
+			}
+		})
+	}
+}
+
+// decimalSamples hold a decimal number, each written the way an exact decimal
+// field of the report writes one: digits with a decimal point.
+var decimalSamples = []string{"0.5", "1.00", "12.345", "1234567.89"}
+
+// nonDecimalSamples hold a value that is not a decimal number: the empty string, a
+// word, a date as the snapshots' retrieved and the prices' priceDate write one, a
+// currency code, and a number with a decimal comma.
+var nonDecimalSamples = []string{"", "abc", "2024-01-02", "EUR", "1,5"}
+
+// isDecimalNumberPattern reports whether pattern is a pattern a field holding an
+// exact decimal value uses: it admits a decimal number and refuses every value
+// that is not one. That tells such a field from a date pattern and from free text
+// (such as the storage an estimate leaves out, whose pattern admits everything),
+// without listing the patterns a new decimal field may bring of its own.
+func isDecimalNumberPattern(pattern *regexp.Regexp) bool {
+	return slices.ContainsFunc(decimalSamples, pattern.MatchString) &&
+		!slices.ContainsFunc(nonDecimalSamples, pattern.MatchString)
+}
+
+// fieldName names a field as a subtest name and a failure message name it: the
+// pointer below the definition and property keywords, as "plan.memoryGiB".
 func fieldName(pointer string) string {
-	return strings.ReplaceAll(strings.TrimPrefix(pointer, "/$defs/"), "/properties/", ".")
+	var parts []string
+
+	for _, part := range strings.Split(pointer, "/") {
+		if part == "" || part == "$defs" || part == "properties" {
+			continue
+		}
+
+		parts = append(parts, part)
+	}
+
+	return strings.Join(parts, ".")
 }
 
 // eachSchema calls visit for every schema object below s, s included, with the
