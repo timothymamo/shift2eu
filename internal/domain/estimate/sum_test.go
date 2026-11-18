@@ -10,8 +10,9 @@ import (
 )
 
 // TestSum pins the totals: only the estimated resources are summed, every
-// resource is counted, and a resource that is not estimated is never added as
-// 0 EUR.
+// resource is counted, a resource that is not estimated is never added as
+// 0 EUR, and the estimates that leave out storage their plan does not include
+// are counted (ADR 0032).
 func TestSum(t *testing.T) {
 	t.Parallel()
 
@@ -74,6 +75,50 @@ func TestSum(t *testing.T) {
 				{Region: "xx-par", Estimated: true, Monthly: estimate.Ratio(2, 3)},
 			},
 			want: estimate.Total{Monthly: estimate.Ratio(1, 1), Estimated: 2, Resources: 2},
+		},
+		{
+			name: "no estimate leaves out storage the plan does not include",
+			estimates: []estimate.Estimate{
+				{Region: "xx-par", Estimated: true, Monthly: estimate.FromAmount(10000)},
+				{Region: "xx-par", Reason: estimate.NoSize},
+			},
+			want: estimate.Total{Monthly: estimate.FromAmount(10000), Estimated: 1, Resources: 2},
+		},
+		{
+			// The note is a fact about an estimate, so the total counts the
+			// estimates that carry one (ADR 0032).
+			name: "the estimates that leave out storage are counted",
+			estimates: []estimate.Estimate{
+				{
+					Region: "xx-par", Estimated: true, Monthly: estimate.FromAmount(20000),
+					StorageNotIncluded: estimate.BootVolume,
+				},
+				{Region: "xx-par", Estimated: true, Monthly: estimate.FromAmount(10000)},
+				{
+					Region: "xx-par", Estimated: true, Monthly: estimate.FromAmount(30000),
+					StorageNotIncluded: estimate.DataStorage,
+				},
+				{Region: "xx-par", Reason: estimate.NoPrice},
+			},
+			want: estimate.Total{
+				Monthly: estimate.FromAmount(60000), Estimated: 3, Resources: 4, StorageNotIncluded: 2,
+			},
+		},
+		{
+			// A resource that is not estimated is never priced and so never
+			// leaves storage out: only an estimated resource counts.
+			name: "a note on a resource that is not estimated is not counted",
+			estimates: []estimate.Estimate{
+				{
+					Region: "xx-par", Reason: estimate.NoStoragePrice,
+					StorageNotIncluded: estimate.BootVolume,
+				},
+				{
+					Region: "xx-par", Estimated: true, Monthly: estimate.FromAmount(10000),
+					StorageNotIncluded: estimate.DataStorage,
+				},
+			},
+			want: estimate.Total{Monthly: estimate.FromAmount(10000), Estimated: 1, Resources: 2, StorageNotIncluded: 1},
 		},
 	}
 

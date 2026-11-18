@@ -18,7 +18,7 @@
 
 | ID | Raw type | Category | Fit | Best offering | Plan | Monthly estimate | Relations | Reasons |
 |---|---|---|---|---|---|---|---|---|
-| `aks-shop` | `Microsoft.ContainerService/managedClusters` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) | depends-on `mysql-shop-catalog`, depends-on `psql-shop` | `Kubernetes Kapsule` offers every capability the resource uses |
+| `aks-shop` | `Microsoft.ContainerService/managedClusters` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) (boot volume not included) | depends-on `mysql-shop-catalog`, depends-on `psql-shop` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `cdn-shop` | `Microsoft.Cdn/profiles` | `unclassified` | none |  |  | not estimated: no fit | depends-on `stshopassets` | not classified |
 | `disk-shop-web-1-data` | `Microsoft.Compute/disks` | `storage.block` | direct | `Block Storage` |  | €6.07 (count assumed 1) | attached-to `vm-shop-web-1` | `Block Storage` offers every capability the resource uses |
 | `dns-shop` | `Microsoft.Network/dnsZones` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
@@ -27,8 +27,8 @@
 | `psql-shop` | `Microsoft.DBforPostgreSQL/flexibleServers` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €86.85 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
 | `sb-shop-orders` | `Microsoft.ServiceBus/namespaces/queues` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced |  | `Queues` offers every capability the resource uses |
 | `stshopassets` | `Microsoft.Storage/storageAccounts` | `storage.object` | direct | `Object Storage` |  | €3.22 |  | `Object Storage` offers every capability the resource uses |
-| `vm-shop-web-1` | `Microsoft.Compute/virtualMachines` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) | depends-on `sb-shop-orders` | `Instances` offers every capability the resource uses |
-| `vmss-shop-web` | `Microsoft.Compute/virtualMachineScaleSets` | `compute.vm` | partial | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €80.42 (730 hours assumed) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `vm-shop-web-1` | `Microsoft.Compute/virtualMachines` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `sb-shop-orders` | `Instances` offers every capability the resource uses |
+| `vmss-shop-web` | `Microsoft.Compute/virtualMachineScaleSets` | `compute.vm` | partial | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €80.42 (730 hours assumed) (boot volume not included) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
 
 ## Required changes
 
@@ -53,7 +53,7 @@
 ### `shop`
 
 - Fit: 6 direct, 2 partial, 2 none
-- Monthly estimate: €462.49 per month for 6 of 10 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €462.49 per month for 6 of 10 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
 - Source cost: `EUR` €379.97 for 3 of 10 resources
 - Blockers:
   - `cdn-shop`: not classified
@@ -61,7 +61,7 @@
 
 ## Cost estimate
 
-- Total: €530.27 per month for 7 of 11 resources
+- Total: €530.27 per month for 7 of 11 resources (storage not included in 3 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none

@@ -216,19 +216,23 @@ func TestFor(t *testing.T) {
 			wantExact:   "447/10",
 		},
 		{
+			// The smallest plan includes no storage, and the offering prices it, so
+			// a resource that gives no storage size leaves its boot volume out
+			// (ADR 0032).
 			name:      "compute.vm: a small resource takes the smallest covering plan",
 			resource:  computeResource(&inventory.Size{VCPUs: f(1), MemoryGiB: f(1)}, nil),
 			offerings: testutil.PricedOfferings(),
 			region:    testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:       testutil.PricedDefaultRegion,
-				Estimated:    true,
-				Offering:     "Example Virtual Machines",
-				Plan:         pricedPlan("EX-S", 1, 2000, 0, 120000),
-				Monthly:      estimate.FromAmount(120000),
-				Breakdown:    estimate.Breakdown{Plan: estimate.FromAmount(120000)},
-				CountAssumed: true,
-				HoursAssumed: true,
+				Region:             testutil.PricedDefaultRegion,
+				Estimated:          true,
+				Offering:           "Example Virtual Machines",
+				Plan:               pricedPlan("EX-S", 1, 2000, 0, 120000),
+				Monthly:            estimate.FromAmount(120000),
+				Breakdown:          estimate.Breakdown{Plan: estimate.FromAmount(120000)},
+				CountAssumed:       true,
+				HoursAssumed:       true,
+				StorageNotIncluded: estimate.BootVolume,
 			},
 			wantMonthly: "12.00",
 		},
@@ -1500,6 +1504,250 @@ func namedComputeOffering(name string, plans ...catalog.Plan) catalog.Offering {
 	}
 }
 
+// TestForStorageNotIncluded pins the note an estimate by plan carries when it
+// leaves out storage its plan does not include (ADR 0032): the chosen plan
+// includes no storage, the offering prices storage per GiB in the estimate
+// region and the resource gives no storage size. The note names what is left out
+// by category - a boot volume for compute.vm, compute.baremetal and
+// kubernetes.managed, the data storage for database.postgresql and
+// database.mysql - and the amount, the breakdown and the totals do not change.
+func TestForStorageNotIncluded(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// resource, offerings and region are the case's input, as in TestFor.
+		resource inventory.Resource
+		// handBuilt builds the resource without inventory.New, as only a caller
+		// that skips the validation can: the validation refuses a count below 1.
+		handBuilt bool
+		offerings []catalog.Offering
+		region    string
+		// want is the note the estimate must carry, "" for none.
+		want estimate.StorageNotIncluded
+		// wantEstimated is whether the case expects an estimate at all.
+		wantEstimated bool
+		// wantReason is the reason of a resource the case expects not to be
+		// estimated.
+		wantReason estimate.Reason
+		// wantMonthly is the estimated amount, which the note never changes:
+		// empty when the case expects no estimate.
+		wantMonthly string
+	}{
+		{
+			// A Gen 3 instance boots from a Block Storage volume its plan does not
+			// include, so an estimate for a VM that gives no storage size is the
+			// plan price alone and says which storage it leaves out.
+			name:          "compute.vm: a plan with no included storage and a resource with no size",
+			resource:      computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, nil),
+			offerings:     []catalog.Offering{bootVolumeComputeOffering()},
+			region:        testutil.PricedDefaultRegion,
+			want:          estimate.BootVolume,
+			wantEstimated: true,
+			wantMonthly:   "20.00",
+		},
+		{
+			// A resource that gives storageGiB 0 said it needs none beyond the
+			// plan, so its estimate leaves nothing out.
+			name: "compute.vm: an explicit storage size of 0 gets no note",
+			resource: computeResource(&inventory.Size{
+				VCPUs: f(2), MemoryGiB: f(4), StorageGiB: f(0),
+			}, nil),
+			offerings:     []catalog.Offering{bootVolumeComputeOffering()},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "20.00",
+		},
+		{
+			// A resource with count 0 leaves nothing out, because it is nothing
+			// to estimate: its estimate is 0.00, so no storage is left out of it.
+			name: "compute.vm: a count of 0 gets no note",
+			resource: computeResource(&inventory.Size{
+				VCPUs: f(2), MemoryGiB: f(4), Count: n(0),
+			}, nil),
+			handBuilt:     true,
+			offerings:     []catalog.Offering{bootVolumeComputeOffering()},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "0.00",
+		},
+		{
+			// A storage size the resource gives is priced above what the plan
+			// includes, so nothing is left out: 20.00 + 100 GiB × 0.10.
+			name: "compute.vm: a storage size the resource gives gets no note",
+			resource: computeResource(&inventory.Size{
+				VCPUs: f(2), MemoryGiB: f(4), StorageGiB: f(100),
+			}, nil),
+			offerings:     []catalog.Offering{bootVolumeComputeOffering()},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "30.00",
+		},
+		{
+			// A plan that includes storage needs no volume to boot: a resource
+			// that gives no size needs no storage above what the plan includes.
+			name:          "compute.vm: a plan that includes storage gets no note without a size",
+			resource:      computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, nil),
+			offerings:     []catalog.Offering{includedStorageComputeOffering()},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "20.00",
+		},
+		{
+			// The size above what a plan includes is priced as before, and the
+			// plan includes a disk, so the estimate leaves nothing out: 20.00 +
+			// (100 − 20) GiB × 0.10.
+			name: "compute.vm: a plan that includes storage gets no note with a size",
+			resource: computeResource(&inventory.Size{
+				VCPUs: f(2), MemoryGiB: f(4), StorageGiB: f(100),
+			}, nil),
+			offerings:     []catalog.Offering{includedStorageComputeOffering()},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "28.00",
+		},
+		{
+			// Nothing the estimate could charge a boot volume at: the offering
+			// prices no storage, so the note would name a part the estimate has
+			// no price for.
+			name:          "compute.vm: an offering with no storage price at all gets no note",
+			resource:      computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, nil),
+			offerings:     []catalog.Offering{zeroStorageUnpricedComputeOffering()},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "20.00",
+		},
+		{
+			// The offering prices storage, in another region: the estimate region
+			// has no price to charge a boot volume at, so there is no note.
+			name:          "compute.vm: an offering with no storage price in the region gets no note",
+			resource:      computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, nil),
+			offerings:     []catalog.Offering{zeroStorageElsewhereComputeOffering()},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "20.00",
+		},
+		{
+			name: "compute.baremetal: a plan with no included storage leaves out the boot volume",
+			resource: inventory.Resource{
+				ID:       "i-0123456789abcdef0",
+				RawType:  "AWS::EC2::Instance",
+				Category: taxonomy.ComputeBareMetal,
+				Region:   "eu-west-1",
+				Size:     &inventory.Size{VCPUs: f(8), MemoryGiB: f(16)},
+			},
+			offerings:     []catalog.Offering{bootVolumeBareMetalOffering()},
+			region:        testutil.PricedDefaultRegion,
+			want:          estimate.BootVolume,
+			wantEstimated: true,
+			wantMonthly:   "48.00",
+		},
+		{
+			name: "kubernetes.managed: a node plan with no included storage leaves out the boot volume",
+			resource: inventory.Resource{
+				ID:       "cluster-example",
+				RawType:  "AWS::EKS::Cluster",
+				Category: taxonomy.KubernetesManaged,
+				Region:   "eu-west-1",
+				Size:     &inventory.Size{VCPUs: f(2), MemoryGiB: f(4)},
+			},
+			offerings:     []catalog.Offering{bootVolumeKubernetesOffering()},
+			region:        testutil.PricedDefaultRegion,
+			want:          estimate.BootVolume,
+			wantEstimated: true,
+			wantMonthly:   "30.00",
+		},
+		{
+			name: "database.postgresql: a plan with no included storage leaves out the data storage",
+			resource: inventory.Resource{
+				ID:       "db-example",
+				RawType:  "AWS::RDS::DBInstance",
+				Category: taxonomy.DatabasePostgreSQL,
+				Region:   "eu-west-1",
+				Size:     &inventory.Size{VCPUs: f(2), MemoryGiB: f(4)},
+			},
+			offerings:     []catalog.Offering{dataStoragePostgresOffering()},
+			region:        testutil.PricedDefaultRegion,
+			want:          estimate.DataStorage,
+			wantEstimated: true,
+			wantMonthly:   "20.00",
+		},
+		{
+			name: "database.mysql: a plan with no included storage leaves out the data storage",
+			resource: inventory.Resource{
+				ID:       "db-mysql-example",
+				RawType:  "AWS::RDS::DBInstance",
+				Category: taxonomy.DatabaseMySQL,
+				Region:   "eu-west-1",
+				Size:     &inventory.Size{VCPUs: f(2), MemoryGiB: f(4)},
+			},
+			offerings:     []catalog.Offering{dataStorageMySQLOffering()},
+			region:        testutil.PricedDefaultRegion,
+			want:          estimate.DataStorage,
+			wantEstimated: true,
+			wantMonthly:   "18.00",
+		},
+		{
+			// A resource priced by storage has no plan whose included storage
+			// could be short: it is the stored GiB itself, so it carries no note.
+			name:          "storage.block: a resource priced by storage gets no note",
+			resource:      blockResource(&inventory.Size{StorageGiB: f(500)}),
+			offerings:     []catalog.Offering{blockOffering(1000)},
+			region:        testutil.PricedDefaultRegion,
+			wantEstimated: true,
+			wantMonthly:   "50.00",
+		},
+		{
+			// The note is set only on an estimate: a resource that gives no size
+			// is not estimated, so it has nothing to say about storage either.
+			name:       "a resource that is not estimated, for want of a size, gets no note",
+			resource:   computeResource(&inventory.Size{VCPUs: f(2)}, nil),
+			offerings:  []catalog.Offering{bootVolumeComputeOffering()},
+			region:     testutil.PricedDefaultRegion,
+			wantReason: estimate.NoSize,
+		},
+		{
+			name:       "a resource that is not estimated, for want of a fit, gets no note",
+			resource:   queueResource(),
+			offerings:  testutil.PricedOfferings(),
+			region:     testutil.PricedDefaultRegion,
+			wantReason: estimate.NoFit,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			resource := tc.resource
+			if !tc.handBuilt {
+				resource = newResource(t, tc.resource)
+			}
+
+			cat := newCatalog(t, tc.offerings)
+			got := estimate.For(mapping.Map(resource, cat), tc.region)
+
+			if got.Estimated != tc.wantEstimated {
+				t.Errorf("Estimated = %t, want %t (reason %q)", got.Estimated, tc.wantEstimated, got.Reason)
+			}
+
+			if got.Reason != tc.wantReason {
+				t.Errorf("Reason = %q, want %q", got.Reason, tc.wantReason)
+			}
+
+			if got.StorageNotIncluded != tc.want {
+				t.Errorf("StorageNotIncluded = %q, want %q", got.StorageNotIncluded, tc.want)
+			}
+
+			if tc.wantMonthly != "" {
+				if gotMonthly := got.Monthly.String(); gotMonthly != tc.wantMonthly {
+					t.Errorf("Monthly.String() = %q, want %q", gotMonthly, tc.wantMonthly)
+				}
+			}
+		})
+	}
+}
+
 // cappedComputeOffering sells one compute.vm plan at 38.00 EUR a month and bills
 // its plans for at most capHours hours a month (ADR 0029); 0 means uncapped.
 func cappedComputeOffering(capHours int64) catalog.Offering {
@@ -1670,5 +1918,111 @@ func queueResource() inventory.Resource {
 		RawType:  "AWS::SQS::Queue",
 		Category: taxonomy.MessagingQueue,
 		Region:   "eu-west-1",
+	}
+}
+
+// The offerings below pin the note an estimate by plan carries when it leaves
+// out storage its plan does not include (ADR 0032). Every plan, price and region
+// is invented, so a case can state each amount exactly.
+
+// bootVolumeComputeOffering sells one compute.vm plan that includes no storage,
+// and prices storage at 0.10 EUR a GiB: a VM that gives no storage size leaves a
+// boot volume out of its estimate.
+func bootVolumeComputeOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:          "Example Compute Without Included Storage",
+		Categories:    []taxonomy.Category{taxonomy.ComputeVM},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		Plans:         []catalog.Plan{plan("BV-M", 2, 4000, 0, 200000)},
+		StoragePrices: []catalog.Price{price(1000)},
+	}
+}
+
+// includedStorageComputeOffering sells one compute.vm plan that includes 20 GiB,
+// and prices storage at 0.10 EUR a GiB: a resource that gives no storage size
+// needs none above what the plan includes, so its estimate carries no note.
+func includedStorageComputeOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:          "Example Compute With Included Storage",
+		Categories:    []taxonomy.Category{taxonomy.ComputeVM},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		Plans:         []catalog.Plan{plan("INC-M", 2, 4000, 20, 200000)},
+		StoragePrices: []catalog.Price{price(1000)},
+	}
+}
+
+// zeroStorageUnpricedComputeOffering sells one compute.vm plan that includes no
+// storage, and prices no storage at all: the estimate has no price at which a
+// boot volume would have been charged, so it carries no note.
+func zeroStorageUnpricedComputeOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:       "Example Compute Without a Storage Price",
+		Categories: []taxonomy.Category{taxonomy.ComputeVM},
+		Regions:    []string{testutil.PricedDefaultRegion},
+		Plans:      []catalog.Plan{plan("NOP-M", 2, 4000, 0, 200000)},
+	}
+}
+
+// zeroStorageElsewhereComputeOffering sells one compute.vm plan that includes no
+// storage, and prices storage only in the fixture's second region: the estimate
+// region has no price to charge a boot volume at, so the estimate carries no
+// note there.
+func zeroStorageElsewhereComputeOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:       "Example Compute Priced Elsewhere",
+		Categories: []taxonomy.Category{taxonomy.ComputeVM},
+		Regions:    []string{testutil.PricedDefaultRegion, testutil.ReportSecondRegion},
+		Plans:      []catalog.Plan{plan("ELSE-M", 2, 4000, 0, 200000)},
+		StoragePrices: []catalog.Price{
+			price(1000, testutil.ReportSecondRegion),
+		},
+	}
+}
+
+// bootVolumeBareMetalOffering sells one bare-metal plan that includes no storage,
+// and prices storage at 0.05 EUR a GiB.
+func bootVolumeBareMetalOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:          "Example Bare Metal Without Included Storage",
+		Categories:    []taxonomy.Category{taxonomy.ComputeBareMetal},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		Plans:         []catalog.Plan{plan("BM-BV", 8, 16000, 0, 480000)},
+		StoragePrices: []catalog.Price{price(500)},
+	}
+}
+
+// bootVolumeKubernetesOffering sells one kubernetes.managed node plan that
+// includes no storage, and prices storage at 0.10 EUR a GiB.
+func bootVolumeKubernetesOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:          "Example Kubernetes Without Included Storage",
+		Categories:    []taxonomy.Category{taxonomy.KubernetesManaged},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		Plans:         []catalog.Plan{plan("KN-BV", 2, 4000, 0, 300000)},
+		StoragePrices: []catalog.Price{price(1000)},
+	}
+}
+
+// dataStoragePostgresOffering sells one database.postgresql plan that includes
+// no storage, and prices the service's data at 0.10 EUR a GiB.
+func dataStoragePostgresOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:          "Example PostgreSQL Without Included Storage",
+		Categories:    []taxonomy.Category{taxonomy.DatabasePostgreSQL},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		Plans:         []catalog.Plan{plan("PG-DS", 2, 4000, 0, 200000)},
+		StoragePrices: []catalog.Price{price(1000)},
+	}
+}
+
+// dataStorageMySQLOffering sells one database.mysql plan that includes no
+// storage, and prices the service's data at 0.08 EUR a GiB.
+func dataStorageMySQLOffering() catalog.Offering {
+	return catalog.Offering{
+		Name:          "Example MySQL Without Included Storage",
+		Categories:    []taxonomy.Category{taxonomy.DatabaseMySQL},
+		Regions:       []string{testutil.PricedDefaultRegion},
+		Plans:         []catalog.Plan{plan("MY-DS", 2, 4000, 0, 180000)},
+		StoragePrices: []catalog.Price{price(800)},
 	}
 }

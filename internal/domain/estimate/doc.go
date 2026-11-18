@@ -15,6 +15,14 @@
 // capped offering records the cap (Estimate.BillingCapHours), so a report can
 // state it.
 //
+// An estimate by plan says which storage it leaves out
+// (Estimate.StorageNotIncluded, ADR 0032) when the chosen plan includes no
+// storage, its offering prices storage per GiB in the estimate region, and the
+// resource gives no storage size: the boot volume for compute.vm,
+// compute.baremetal and kubernetes.managed, the data storage for
+// database.postgresql and database.mysql. The note adds a statement, not a
+// price: the amount is unchanged, and Sum counts the estimates that carry it.
+//
 // A resource that cannot be priced is never priced at 0: its Estimate says it
 // is not estimated, and why (Reason). Sum totals only the estimated resources
 // and counts how many there were.

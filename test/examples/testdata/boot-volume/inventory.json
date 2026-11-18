@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "source": "aws",
+  "resources": [
+    {
+      "id": "i-0123456789abcdef0",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-west-1",
+      "size": { "vcpus": 2, "memoryGiB": 8 }
+    },
+    {
+      "id": "i-0123456789abcdef1",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-west-1",
+      "size": { "vcpus": 2, "memoryGiB": 8, "storageGiB": 100 }
+    }
+  ]
+}

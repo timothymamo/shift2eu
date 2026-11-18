@@ -15,6 +15,7 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
+	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
@@ -1143,6 +1144,161 @@ func TestReportComparisonBillingCapHours(t *testing.T) {
 
 // resourceIndexAt returns the path of the resource with ID id inside the target
 // at path, failing the test when that target holds no such resource.
+// TestReportComparisonStorageNotIncluded pins that each target of a comparison
+// carries the storage note in its own documents (ADR 0032): in its estimate
+// total after resources, in its workloads' totals and in its resources'
+// estimates. A target whose estimates leave nothing out writes no key, and the
+// document matches the comparison schema, which declares both keys.
+func TestReportComparisonStorageNotIncluded(t *testing.T) {
+	t.Parallel()
+
+	c := assessment.Compare([]assessment.TargetAssessment{
+		{Key: reportKey, Assessment: storageNoteComparisonAssessment(reportTarget, estimate.BootVolume)},
+		{Key: reportNorthKey, Assessment: storageNoteComparisonAssessment(reportTwoTarget, "")},
+	})
+
+	got := renderComparison(t, c, analysis.ReportMeta{InventoryName: inventoryFileName})
+	checkDocument(t, got)
+
+	document := decodeJSON(t, got)
+
+	// Compare sorts the targets by key, so example comes before example-north.
+	t.Run("each target's estimate total counts its own notes", func(t *testing.T) {
+		t.Parallel()
+
+		withNote := []string{"amount", "estimated", "resources", "storageNotIncluded"}
+		if diff := cmp.Diff(withNote, objectKeysAt(t, document, "targets", 0, "estimate", "total")); diff != "" {
+			t.Errorf("%q estimate.total keys mismatch (-want +got):\n%s", reportTarget, diff)
+		}
+
+		if diff := cmp.Diff(float64(2),
+			valueAt(t, document, "targets", 0, "estimate", "total", "storageNotIncluded")); diff != "" {
+			t.Errorf("%q estimate.total.storageNotIncluded mismatch (-want +got):\n%s", reportTarget, diff)
+		}
+
+		withoutNote := []string{"amount", "estimated", "resources"}
+		if diff := cmp.Diff(withoutNote, objectKeysAt(t, document, "targets", 1, "estimate", "total")); diff != "" {
+			t.Errorf("%q estimate.total keys mismatch (-want +got), the target leaves nothing out:\n%s",
+				reportTwoTarget, diff)
+		}
+
+		// The key sits after resources, in a comparison's total as in the
+		// single-target document's.
+		targetEstimate := objectIn(t, string(got), 0, 3, "estimate")
+		assertKeyOrder(t, objectIn(t, targetEstimate, 0, 4, "total"),
+			"amount", "estimated", "resources", "storageNotIncluded")
+	})
+
+	t.Run("each target's estimates and workloads say what they leave out", func(t *testing.T) {
+		t.Parallel()
+
+		at := resourceIndexAt(t, document, []any{"targets", 0}, "server-small")
+
+		if diff := cmp.Diff("boot-volume",
+			valueAt(t, document, extend(at, "estimate", "storageNotIncluded")...)); diff != "" {
+			t.Errorf("%q server-small storageNotIncluded mismatch (-want +got):\n%s", reportTarget, diff)
+		}
+
+		if diff := cmp.Diff(float64(2),
+			valueAt(t, document, "targets", 0, "workloads", 0, "estimate", "storageNotIncluded")); diff != "" {
+			t.Errorf("%q workload storageNotIncluded mismatch (-want +got):\n%s", reportTarget, diff)
+		}
+
+		// The other target's estimates leave nothing out, so they carry no key.
+		without := resourceIndexAt(t, document, []any{"targets", 1}, "server-small")
+		keys := objectKeysAt(t, document, extend(without, "estimate")...)
+		if slices.Contains(keys, "storageNotIncluded") {
+			t.Errorf("%q estimate keys = %q, want none of them storageNotIncluded", reportTwoTarget, keys)
+		}
+	})
+
+	t.Run("the document matches schema version 2", func(t *testing.T) {
+		t.Parallel()
+
+		s := readSchema(t, filepath.Join("schema", "comparison-v2.schema.json"))
+
+		for _, problem := range s.validate(document, "$") {
+			t.Errorf("the document does not match schema/comparison-v2.schema.json: %s", problem)
+		}
+	})
+}
+
+// storageNoteComparisonAssessment is a comparison fixture: a compute.vm resource
+// and a database in the workload "shop", both estimated at invented monthly
+// plan prices, both carrying note (ADR 0032). Its totals count the estimates that
+// carry the note, as estimate.Sum does.
+func storageNoteComparisonAssessment(target string, note estimate.StorageNotIncluded) assessment.Assessment {
+	notes := 0
+	if note != "" {
+		notes = 2
+	}
+
+	server := &estimate.Estimate{
+		Region:    testutil.PricedDefaultRegion,
+		Estimated: true,
+		Offering:  "Example Virtual Machines",
+		Plan: &estimate.Plan{
+			Name: "EX-S", VCPUs: 1, MemoryMilliGiB: 2000, IncludedStorageGiB: 0,
+			Priced: true, Price: estimate.FromAmount(100000),
+		},
+		Monthly:            estimate.FromAmount(100000),
+		Breakdown:          estimate.Breakdown{Plan: estimate.FromAmount(100000)},
+		CountAssumed:       true,
+		HoursAssumed:       true,
+		StorageNotIncluded: note,
+	}
+
+	database := &estimate.Estimate{
+		Region:             testutil.PricedDefaultRegion,
+		Estimated:          true,
+		Offering:           "Example PostgreSQL",
+		Monthly:            estimate.FromAmount(200000),
+		Breakdown:          estimate.Breakdown{Plan: estimate.FromAmount(200000)},
+		CountAssumed:       true,
+		HoursAssumed:       true,
+		StorageNotIncluded: note,
+	}
+
+	return assessment.Assessment{
+		Target:         target,
+		Snapshot:       testutil.PricedSnapshot(),
+		Source:         sourceName,
+		EstimateRegion: testutil.PricedDefaultRegion,
+		Summary:        assessment.Summary{Direct: 2, Total: 2},
+		Verdicts: []assessment.Verdict{
+			{
+				Resource: inventory.Resource{
+					ID: "server-small", RawType: "AWS::EC2::Instance", Category: taxonomy.ComputeVM,
+					Region: "eu-west-1", Workload: "shop",
+				},
+				Fit:          mapping.Direct,
+				BestOffering: "Example Virtual Machines",
+				Estimate:     server,
+			},
+			{
+				Resource: inventory.Resource{
+					ID: "db-small", RawType: "AWS::RDS::DBInstance", Category: taxonomy.DatabasePostgreSQL,
+					Region: "eu-west-1", Workload: "shop",
+				},
+				Fit:          mapping.Direct,
+				BestOffering: "Example PostgreSQL",
+				Estimate:     database,
+			},
+		},
+		Workloads: []assessment.WorkloadSummary{{
+			Name:        "shop",
+			ResourceIDs: []string{"server-small", "db-small"},
+			Summary:     assessment.Summary{Direct: 2, Total: 2},
+			Total: &estimate.Total{
+				Monthly: estimate.FromAmount(300000), Estimated: 2, Resources: 2, StorageNotIncluded: notes,
+			},
+		}},
+		Total: &estimate.Total{
+			Monthly: estimate.FromAmount(300000), Estimated: 2, Resources: 2, StorageNotIncluded: notes,
+		},
+	}
+}
+
 func resourceIndexAt(tb testing.TB, document any, path []any, id string) []any {
 	tb.Helper()
 

@@ -93,7 +93,11 @@ message naming the target and its regions; an empty region is `400 invalid_reque
 assessed. Either inventory version gets the version 2 report; a version 1 inventory's resources have
 no size, so they show "not estimated: size unknown"
 ([Assess an inventory](assess.md#regions-and-estimates) explains the estimate). The path stays `/v1`:
-the new fields are optional and the report's `schemaVersion` says which version a response is.
+the new fields are optional and the report's `schemaVersion` says which version a response is. A
+report of the same version can gain optional keys: an estimate that leaves out storage its plan does
+not include carries `storageNotIncluded` (`"boot-volume"`, `"data-storage"`, or a value a newer release
+adds), and a total the count of such estimates under the same key, both absent when there is nothing to
+say ([ADR 0032](../adr/0032-say-when-an-estimate-leaves-out-storage-its-plan-does-not-include.md)).
 
 Started from a clone with a token, the server listens on its default loopback
 address; the requests read the token from the same variable, which keeps it out of your shell history, and

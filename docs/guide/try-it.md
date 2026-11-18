@@ -93,8 +93,8 @@ summary counts the fits and gives each target's estimated total:
 | partial | 1 | 5 | 2 |
 | none | 5 | 2 | 5 |
 | total | 13 | 13 | 13 |
-| `OVHcloud` estimate | €797.66 per month for 8 of 13 resources |  |  |
-| `Scaleway` estimate |  | €587.58 per month for 8 of 13 resources |  |
+| `OVHcloud` estimate | €797.66 per month for 8 of 13 resources (storage not included in 4 estimates) |  |  |
+| `Scaleway` estimate |  | €587.58 per month for 8 of 13 resources (storage not included in 4 estimates) |  |
 | `UpCloud` estimate |  |  | €359.31 per month for 8 of 13 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
@@ -147,7 +147,8 @@ source's cost ([`aws-scaleway-estimates.json.golden`](../../test/examples/testda
     "total": {
       "amount": "587.58",
       "estimated": 8,
-      "resources": 13
+      "resources": 13,
+      "storageNotIncluded": 4
     }
   },
 ```
@@ -287,14 +288,16 @@ A direct row, a direct row with a plan, and an unclassified row, from the Scalew
 |---|---|---|---|---|---|---|---|---|
 | `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` |  | €4.03 |  | `Object Storage` offers every capability the resource uses |
 | `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
-| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €19.83 (count assumed 1) |  | `Instances` offers every capability the resource uses |
+| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €19.83 (count assumed 1) (boot volume not included) |  | `Instances` offers every capability the resource uses |
 ```
 
 The **plan** is the cheapest plan of the best offering whose vCPU and memory each cover the
 resource's size: `shop-web-2` asks for 2 vCPU and 8 GiB, and the cheapest plan that covers both has 4
 vCPU. The **monthly estimate** is the plan's monthly list price × count × hours / 730, plus storage
 priced per GiB. `shop-web-2` runs 360 hours a month, so it costs about half its plan's €40.21; its
-count is not given and is taken as 1, which the cell says. A resource that cannot be priced says
+count is not given and is taken as 1, which the cell says. A Scaleway Instance's plan includes no
+disk: its boot volume is Block Storage, priced per GiB, and `shop-web-2` gives no disk size, so the
+cell says "(boot volume not included)" and the estimate is the plan alone. A resource that cannot be priced says
 "not estimated" and why: no fit, a usage-priced category (functions and queues), size unknown, no
 plan large enough, or no price in the region. It is counted, never priced at €0.
 [Assess an inventory](assess.md#read-the-estimate) explains every rule.
@@ -302,7 +305,7 @@ plan large enough, or no price in the region. It is counted, never priced at €
 Where several offerings fit equally well, the others are named as a tie:
 
 ```markdown
-| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
+| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) (boot volume not included) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 ```
 
 Offerings tie when they have the same fit and lack as many of the resource's capabilities; among
@@ -358,7 +361,7 @@ database belongs to no workload:
 ### `shop`
 
 - Fit: 4 direct, 4 partial, 1 none
-- Monthly estimate: €517.16 per month for 6 of 9 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €517.16 per month for 6 of 9 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
 - Source cost: `USD` $518.92 for 4 of 9 resources
 - Blockers:
   - `shop.example.com`: not classified
@@ -376,7 +379,7 @@ the source's cost is shown beside it per currency, never converted, with how man
 ```markdown
 ## Cost estimate
 
-- Total: €587.58 per month for 8 of 13 resources
+- Total: €587.58 per month for 8 of 13 resources (storage not included in 4 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none

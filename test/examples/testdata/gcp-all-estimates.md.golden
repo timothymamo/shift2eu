@@ -19,8 +19,8 @@
 | partial | 1 | 3 | 3 |
 | none | 5 | 2 | 6 |
 | total | 14 | 14 | 14 |
-| `OVHcloud` estimate | €1,583.46 per month for 8 of 14 resources |  |  |
-| `Scaleway` estimate |  | €966.76 per month for 9 of 14 resources |  |
+| `OVHcloud` estimate | €1,583.46 per month for 8 of 14 resources (storage not included in 3 estimates) |  |  |
+| `Scaleway` estimate |  | €966.76 per month for 9 of 14 resources (storage not included in 3 estimates) |  |
 | `UpCloud` estimate |  |  | €721.03 per month for 8 of 14 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
@@ -34,14 +34,14 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-cdn-backend` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
 | `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` | not estimated: no price in `GRA` | partial | `Managed Database for PostgreSQL and MySQL` | €172.51 (count assumed 1) (730 hours assumed) | partial | `Managed PostgreSQL Multi-node` | €236.25 (count assumed 1) (730 hours assumed) |
 | `shop-db-replica` | `database.postgresql` | direct | `Managed PostgreSQL` | €338.94 (count assumed 1) (730 hours assumed) | direct | `Managed Database for PostgreSQL and MySQL` | €172.51 (count assumed 1) (730 hours assumed) | direct | `Managed PostgreSQL` | €236.25 (count assumed 1) (730 hours assumed) |
-| `shop-gke` | `kubernetes.managed` | direct | `Managed Kubernetes Service` | €224.04 (730 hours assumed) | direct | `Kubernetes Kapsule` | €245.72 (730 hours assumed) | partial | `Managed Kubernetes` | €84.00 (730 hours assumed) |
+| `shop-gke` | `kubernetes.managed` | direct | `Managed Kubernetes Service` | €224.04 (730 hours assumed) (boot volume not included) | direct | `Kubernetes Kapsule` | €245.72 (730 hours assumed) (boot volume not included) | partial | `Managed Kubernetes` | €84.00 (730 hours assumed) |
 | `shop-orders` | `messaging.queue` | none |  | not estimated: no fit | direct | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-orders-dlq` | `messaging.queue` | none |  | not estimated: no fit | direct | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-resize-images` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-search-bms` | `compute.baremetal` | direct | `Metal Instances` | €725.00 (count assumed 1) | direct | `Elastic Metal` | €166.50 (count assumed 1) | none |  | not estimated: no fit |
-| `shop-web-1` | `compute.vm` | direct | `Instances` | €37.38 (count assumed 1) (730 hours assumed) | direct | `Instances` | €40.21 (count assumed 1) (730 hours assumed) | direct | `Cloud Servers` | €18.00 (count assumed 1) (730 hours assumed) |
+| `shop-web-1` | `compute.vm` | direct | `Instances` | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Instances` | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Cloud Servers` | €18.00 (count assumed 1) (730 hours assumed) |
 | `shop-web-1-data` | `storage.block` | direct | `Block Storage` | €4.31 (count assumed 1) | direct | `Block Storage` | €9.49 (count assumed 1) | direct | `Block Storage` | €22.31 (count assumed 1) |
-| `shop-web-mig` | `compute.vm` | partial | `Instances` | €74.75 (730 hours assumed) | partial | `Instances` | €80.42 (730 hours assumed) | partial | `Cloud Servers` | €36.00 (730 hours assumed) |
+| `shop-web-mig` | `compute.vm` | partial | `Instances` | €74.75 (730 hours assumed) (boot volume not included) | partial | `Instances` | €80.42 (730 hours assumed) (boot volume not included) | partial | `Cloud Servers` | €36.00 (730 hours assumed) |
 | `shop-zone` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
 
 ### Blockers on every target
@@ -75,14 +75,14 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
 | `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced 3-AZ` | `Advanced B3-16` (4 vCPU, 16 GiB) | not estimated: no price in `GRA` |  | `Managed PostgreSQL Multi-node Advanced 3-AZ` offers every capability the resource uses |
 | `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed PostgreSQL` (tie: `Managed PostgreSQL Multi-node`, `Managed PostgreSQL Multi-node 3-AZ`, `Managed PostgreSQL Multi-node Advanced`, `Managed PostgreSQL Multi-node Advanced 3-AZ`) | `Discovery B3-16` (4 vCPU, 16 GiB) | €338.94 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed PostgreSQL` offers every capability the resource uses |
-| `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service` (tie: `Managed Kubernetes Service 3-AZ`) | `b3-16` (4 vCPU, 16 GiB) | €224.04 (730 hours assumed) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Managed Kubernetes Service` offers every capability the resource uses |
+| `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service` (tie: `Managed Kubernetes Service 3-AZ`) | `b3-16` (4 vCPU, 16 GiB) | €224.04 (730 hours assumed) (boot volume not included) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Managed Kubernetes Service` offers every capability the resource uses |
 | `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | none |  |  | not estimated: no fit |  | no offering in the `OVHcloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | none |  |  | not estimated: no fit | dead-letter-queue-of `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.queue` |
 | `shop-resize-images` | `cloudfunctions.googleapis.com/Function` | `serverless.function` | none |  |  | not estimated: no fit | depends-on `shop-assets` | no offering in the `OVHcloud` catalog for `serverless.function` |
 | `shop-search-bms` | `baremetalsolution.googleapis.com/Instance` | `compute.baremetal` | direct | `Metal Instances` | `bm-l1` (16 vCPU, 128 GiB) | €725.00 (count assumed 1) |  | `Metal Instances` offers every capability the resource uses |
-| `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €37.38 (count assumed 1) (730 hours assumed) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
+| `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | direct | `Block Storage` (tie: `Block Storage LUKS`) |  | €4.31 (count assumed 1) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
-| `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €74.75 (730 hours assumed) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €74.75 (730 hours assumed) (boot volume not included) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
 | `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
 
 ### Required changes
@@ -110,7 +110,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `shop`
 
 - Fit: 6 direct, 1 partial, 5 none
-- Monthly estimate: €682.96 per month for 6 of 12 resources, list prices on 2026-11-14, excluding VAT and discounts
+- Monthly estimate: €682.96 per month for 6 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-14, excluding VAT and discounts
 - Source cost: `USD` $477.31 for 3 of 12 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
@@ -121,7 +121,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €1,583.46 per month for 8 of 14 resources
+- Total: €1,583.46 per month for 8 of 14 resources (storage not included in 3 estimates)
 - Estimate: list prices on 2026-11-14, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
@@ -147,14 +147,14 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-cdn-backend` | `compute.googleapis.com/BackendBucket` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
 | `shop-db` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL` does not offer `point-in-time-restore`; `Managed Database for PostgreSQL and MySQL` does not offer `zone-high-availability` |
 | `shop-db-replica` | `sqladmin.googleapis.com/Instance` | `database.postgresql` | direct | `Managed Database for PostgreSQL and MySQL` (tie: `Managed Database for PostgreSQL and MySQL High Availability`) | `DB-PRO2-XS` (4 vCPU, 16 GiB) | €172.51 (count assumed 1) (730 hours assumed) | replica-of `shop-db` | `Managed Database for PostgreSQL and MySQL` offers every capability the resource uses |
-| `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
+| `shop-gke` | `container.googleapis.com/Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) (boot volume not included) | depends-on `shop-catalog-mysql`, depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `shop-orders` | `pubsub.googleapis.com/Subscription` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced |  | `Queues` offers every capability the resource uses |
 | `shop-orders-dlq` | `pubsub.googleapis.com/Topic` | `messaging.queue` | direct | `Queues` |  | not estimated: usage-priced | dead-letter-queue-of `shop-orders` | `Queues` offers every capability the resource uses |
 | `shop-resize-images` | `cloudfunctions.googleapis.com/Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | depends-on `shop-assets` | `Serverless Functions` offers every capability the resource uses |
 | `shop-search-bms` | `baremetalsolution.googleapis.com/Instance` | `compute.baremetal` | direct | `Elastic Metal` | `EM-B220E-NVMe` (16 vCPU, 64 GiB) | €166.50 (count assumed 1) |  | `Elastic Metal` offers every capability the resource uses |
-| `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
+| `shop-web-1` | `compute.googleapis.com/Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `compute.googleapis.com/Disk` | `storage.block` | direct | `Block Storage` |  | €9.49 (count assumed 1) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
-| `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €80.42 (730 hours assumed) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop-web-mig` | `compute.googleapis.com/InstanceGroupManager` | `compute.vm` | partial | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €80.42 (730 hours assumed) (boot volume not included) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
 | `shop-zone` | `dns.googleapis.com/ManagedZone` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
 
 ### Required changes
@@ -180,7 +180,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `shop`
 
 - Fit: 8 direct, 2 partial, 2 none
-- Monthly estimate: €728.90 per month for 7 of 12 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €728.90 per month for 7 of 12 resources (storage not included in 3 estimates), list prices on 2026-11-13, excluding VAT and discounts
 - Source cost: `USD` $477.31 for 3 of 12 resources
 - Blockers:
   - `shop-cdn-backend`: not classified
@@ -188,7 +188,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €966.76 per month for 9 of 14 resources
+- Total: €966.76 per month for 9 of 14 resources (storage not included in 3 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
