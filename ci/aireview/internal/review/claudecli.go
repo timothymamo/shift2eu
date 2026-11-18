@@ -70,14 +70,15 @@ type cliResult struct {
 // flag names; p.User, the untrusted pull request, reaches the CLI on stdin
 // alone. --safe-mode turns CLAUDE.md, skills, plugins, hooks, MCP servers and
 // custom agents off, and --setting-sources "" skips the user, project and
-// local settings files. The CLI runs in an empty temporary directory, with an empty temporary
-// HOME and an environment of exactly the token, HOME, a fixed PATH and the
-// switches that turn its updater, telemetry and error reports off: nothing of
-// the runner's environment, an ANTHROPIC_API_KEY included, is inherited. It
-// returns an error wrapping ErrModel when the CLI cannot start, runs past the
-// timeout, is cancelled, prints no JSON result, reports an error, ends its turn
-// other than with success, or prints an empty result; the error quotes at most
-// maxCLIExcerpt bytes of the CLI's text, with the token redacted.
+// local settings files. The CLI runs in an empty temporary directory, with an
+// empty temporary HOME and an environment of exactly the token, HOME, a fixed
+// PATH and the switches that turn its updater, telemetry and error reports off:
+// nothing of the runner's environment, an ANTHROPIC_API_KEY included, is
+// inherited. It returns an error wrapping ErrModel when the CLI cannot start,
+// runs past the timeout, is cancelled, prints no JSON result, reports an error,
+// ends its turn other than with success, or prints an empty result; the error
+// quotes at most maxCLIExcerpt bytes of the CLI's text, with the token
+// redacted.
 func (c *ClaudeCLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	if !strings.HasPrefix(c.path, "/") {
 		return "", fmt.Errorf("%w: the Claude Code CLI's path %q is not absolute", ErrModel, c.path)
