@@ -718,6 +718,159 @@ func TestMakeAgentsTokenRefreshStartKeepsOneRefresherPerVM(t *testing.T) {
 	})
 }
 
+// TestMakeAgentsTokenRefreshStartRefusesAnInvalidInstance pins the fifth review's finding: the start target uses
+// LIMA_INSTANCE in the paths of its pid, log and lock files and in the label it asks launchd about, and make splices
+// the value into the shell text it runs. An instance name with a space, a slash or a quote is no name this
+// Makefile supports (the install and the uninstall already refuse one), so the start target refuses it before it
+// asks launchctl anything and before it starts a refresher, and the refusal names the variable.
+func TestMakeAgentsTokenRefreshStartRefusesAnInvalidInstance(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		instance string
+	}{
+		{name: "a name with a space", instance: "a b"},
+		{name: "a name with a slash", instance: "a/b"},
+		{name: "a name with a quote", instance: `x"y`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newTokenFixture(t, "shift2eu")
+
+			stdout, stderr, err := runMake(t, []string{"LIMA_INSTANCE=" + tc.instance, "agents-token-refresh-start"}, f.env)
+			if err == nil {
+				t.Fatalf("make agents-token-refresh-start with LIMA_INSTANCE=%q exited 0: the value becomes part of the pid, log and lock file names and of the label launchd is asked about, and make splices it into the shell text it runs, so a name this Makefile does not support must be refused (issue #229, fifth review)\nstdout: %s\nstderr: %s", tc.instance, stdout, stderr)
+			}
+
+			if calls := invocations(f.sb.argvLogText(t), "launchctl"); len(calls) != 0 {
+				t.Errorf("make agents-token-refresh-start asked launchctl about LIMA_INSTANCE=%q before it refused it, and the check of the name must come before any use: %v\nstdout: %s\nstderr: %s", tc.instance, calls, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "LIMA_INSTANCE") {
+				t.Errorf("the refusal does not name LIMA_INSTANCE, so a maintainer cannot tell which value to fix:\nstderr: %s", stderr)
+			}
+
+			pids, globErr := filepath.Glob(f.statePath("*.pid"))
+			if globErr != nil {
+				t.Fatalf("look for pid files in %s: %v", f.state, globErr)
+			}
+
+			if len(pids) != 0 {
+				t.Errorf("make agents-token-refresh-start started a refresher for LIMA_INSTANCE=%q and left %v: a name it refuses must start nothing (issue #229, fifth review)", tc.instance, pids)
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh pins the fifth review's finding: after
+// `launchctl bootstrap` the job starts and the refresh it runs takes the instance's lock at once, so the lock's
+// pid file names that refresh by the time the install reads it. Telling the maintainer that "a refresh you
+// started by hand (pid N) holds the lock" and to kill N would then point at the job's own loop - the one process
+// the job exists to keep running, and one launchd starts again five minutes later. A refresh that held the lock
+// before the install is still the one to warn about, with its pid.
+func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name           string
+		lockHeldBefore bool // a refresh started by hand holds the lock before make runs
+		wantWarned     bool
+	}{
+		{
+			name: "the job's own refresh takes the lock as it loads",
+		},
+		{
+			name:           "a refresh started by hand held the lock before the install",
+			lockHeldBefore: true,
+			wantWarned:     true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, "shift2eu")
+
+			// A running refresh of the instance, as the lock names one: it is the pid the lock holds when the
+			// install reads the file, and it belongs to the job when the lock appears with the bootstrap.
+			refresh := standInForARefresh(t, f.sb)
+			pid := strconv.Itoa(refresh.pid())
+			lockPid := filepath.Join(f.sb.refreshLockDir(f.instance), "pid")
+
+			if tc.lockHeldBefore {
+				writeFileMode(t, lockPid, []byte(pid+"\n"), 0o600)
+			} else {
+				f.sb.useFakeLaunchctlTakingTheLockAtLoad(t, f.env, lockPid, refresh.pid())
+			}
+
+			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+			if err != nil {
+				t.Fatalf("make agents-token-refresh-install with the lock of %s held by pid %s: %v\nstdout: %s\nstderr: %s", f.instance, pid, err, stdout, stderr)
+			}
+
+			if calls := f.bootstrapCalls(t); len(calls) != 1 {
+				t.Fatalf("the install ran launchctl bootstrap %d time(s), want one: %v", len(calls), calls)
+			}
+
+			combined := stdout + stderr
+
+			if tc.wantWarned {
+				var named bool
+
+				for _, line := range strings.Split(combined, "\n") {
+					if strings.Contains(line, "started by hand") && strings.Contains(line, pid) {
+						named = true
+					}
+				}
+
+				if !named {
+					t.Errorf("the install does not warn that a refresh started by hand (pid %s) holds the lock of %s, so a maintainer never learns that the job waits for it, trying again every 5 minutes (issue #229, fifth review)\nstdout: %s\nstderr: %s", pid, f.instance, stdout, stderr)
+				}
+
+				return
+			}
+
+			// The lock belongs to the job's own refresh: the install must not warn about it, and must not send the
+			// maintainer to kill the loop it just loaded.
+			if strings.Contains(combined, "started by hand") {
+				t.Errorf("the install warns about a refresh started by hand although the lock of %s holds pid %s, the refresh its own bootstrap loaded: the maintainer would kill the job's loop, and launchd would start it again 5 minutes later (issue #229, fifth review)\nstdout: %s\nstderr: %s", f.instance, pid, stdout, stderr)
+			}
+
+			for _, line := range strings.Split(combined, "\n") {
+				if strings.Contains(line, "kill") && strings.Contains(line, pid) {
+					t.Errorf("the install tells the maintainer to kill pid %s, the refresh the job it just loaded runs: that is the process the job exists to keep running (issue #229, fifth review)\nline: %s", pid, line)
+				}
+			}
+		})
+	}
+}
+
+// standInForARefresh starts a harmless process whose command line ends in agents-app-token.sh refresh, the
+// shape the install and the start target look for in the lock's pid: they compare the command line of the pid the
+// lock names, so a test needs a process that looks like a refresh and never mints. It is a stand-in copied into
+// the sandbox, not the repository's script, and it only sleeps until the test ends - which kills it.
+func standInForARefresh(t *testing.T, sb *sandbox) *runningScript {
+	t.Helper()
+
+	path := filepath.Join(sb.root, "a-copy", "dev", "agents-app-token.sh")
+	writeFileMode(t, path, []byte("#!/bin/sh\n# A stand-in for the refresh the job runs: it runs, and does nothing else.\ntrap 'exit 0' TERM\nwhile :; do sleep 1; done\n"), 0o755)
+
+	r := sb.start(t, path, []string{"refresh"}, sb.baseEnv())
+
+	// The lock is only about a running refresh: a stand-in that died would make the install skip the lock, and
+	// the test would pass for the wrong reason.
+	if !r.running() {
+		t.Fatalf("the stand-in refresh %s exited at once; stderr:\n%s", path, r.errOut())
+	}
+
+	return r
+}
+
 // TestMakefileHasTheAgentsTokenLaunchDaemonTargets pins the install target's shape only: it renders the
 // instance's plist through dev/agents-token-launchd.sh, which launchdplist_test.go pins in full. Installing
 // and uninstalling need sudo and a real launchctl, so neither runs here.
@@ -1757,6 +1910,7 @@ func TestMakeAgentsTokenRefreshUninstall(t *testing.T) {
 		// The job is loaded and a bootout leaves it loaded: launchctl print keeps succeeding after the bootout,
 		// as it does for a job launchd never unloaded (issue #229, fourth review).
 		f.sb.useFakeLaunchctlLoaded(t, f.env, true)
+		f.sb.useFakeSleep(t)
 
 		// A plist is there to remove, so "the plist goes anyway" is a removal and not a file that never existed.
 		writeFileMode(t, f.dest(), []byte("<plist/>"), 0o644)
@@ -1782,6 +1936,11 @@ func TestMakeAgentsTokenRefreshUninstall(t *testing.T) {
 
 		if strings.Contains(lower, "was not loaded") {
 			t.Errorf("the uninstall says the job was not loaded although launchctl still reports it loaded: the maintainer would believe the refresh is stopped while it keeps running with the App's key in reach (issue #229, fourth review)\nstderr: %s", stderr)
+		}
+
+		// The wait is bounded: a bootout that never unloads must not hang the uninstall, and it must happen at all.
+		if waits := len(invocations(f.sb.argvLogText(t), "sleep")); waits == 0 || waits > 10 {
+			t.Errorf("the uninstall waited %d time(s) for the job to unload, want between 1 and 10: the wait must be bounded, and it must happen at all (issue #229, fourth review)", waits)
 		}
 
 		for _, want := range []string{"still loaded", "sudo launchctl bootout", f.label()} {

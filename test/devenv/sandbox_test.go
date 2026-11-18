@@ -480,6 +480,9 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 // new plist fail, and `bootout` answers SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS. SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS=1
 // makes `bootstrap` create the loaded state file before it answers, so a bootstrap can load the job and still exit
 // non-zero, as launchd does when it loads a job it then cannot confirm (issue #229, fourth review).
+// SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE, with the pid in SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID, makes
+// `bootstrap` write that file with that pid: a job whose refresh takes the instance's lock as launchd starts it,
+// which is what the install finds in the lock right after the bootstrap (issue #229, fifth review).
 const fakeLaunchctl = `#!/bin/sh
 {
   printf 'tool=launchctl\n'
@@ -506,6 +509,10 @@ bootout)
 bootstrap)
   if [ "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS:-0}" = 1 ] && [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ]; then
     : > "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}"
+  fi
+  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE:-}" ]; then
+    mkdir -p "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE%/*}" || exit 1
+    printf '%s\n' "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID:?set SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID}" > "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE}" || exit 1
   fi
   status="${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS:-0}"
   ;;
@@ -554,6 +561,18 @@ func (sb *sandbox) useFakeLaunchctlLoaded(t *testing.T, env map[string]string, s
 	if stuck {
 		env["SHIFT2EU_TEST_LAUNCHCTL_STUCK"] = "1"
 	}
+}
+
+// useFakeLaunchctlTakingTheLockAtLoad makes `launchctl bootstrap` write lockPidFile with pid, as a job does that
+// takes the instance's lock as launchd starts its refresh: the install reads that lock after the bootstrap, so a
+// test can pin what it says about a lock the job's own refresh holds (issue #229, fifth review).
+func (sb *sandbox) useFakeLaunchctlTakingTheLockAtLoad(t *testing.T, env map[string]string, lockPidFile string, pid int) {
+	t.Helper()
+
+	sb.writeFakeLaunchctl(t)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE"] = lockPidFile
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID"] = strconv.Itoa(pid)
 }
 
 // useFakeLaunchctlBootstrapThatLoadsAndFails makes the job not loaded now and `launchctl bootstrap` load it -
