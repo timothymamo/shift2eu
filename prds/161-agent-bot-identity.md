@@ -247,8 +247,11 @@ never a required check.
 [ADR 0033](../docs/adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md)):**
 
 - (4) **Model and runner:** Claude Opus 5.5 on the maintainer's Claude subscription, asked through one
-  run of the Claude Code CLI (`claude -p`) with every tool off, no settings, hooks, MCP servers or
-  `CLAUDE.md` loaded, in empty directories with an explicit environment, by a small standard-library Go
+  run of the Claude Code CLI (`claude -p`) with every tool off, `CLAUDE.md`, skills, plugins, hooks and
+  MCP servers off through `--safe-mode` and the empty working directory and `HOME`, the user, project and
+  local settings files skipped by `--setting-sources ""` (an admin-managed policy under
+  `/etc/claude-code` would still apply under every flag; the runner image ships none and the install
+  fails if one appears), with an explicit environment, by a small standard-library Go
   program in this module (`ci/aireview`); the CLI is installed at a pinned version and checked against a
   pinned checksum before any secret, and no third-party action is used beyond the pinned App-token
   action. The subscription token, `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, is a secret of the

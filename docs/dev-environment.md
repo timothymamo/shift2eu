@@ -763,8 +763,9 @@ before it still hold. Rolling back is under each step.
 7. **Add the AI reviewer** (milestone 4): create the reviewer App, the `ai-review` environment, its three
    secrets (the App's client ID and key, and your Claude subscription token from `claude setup-token`,
    made on your own machine, never in the VM) and its variable as [The AI reviewer](#the-ai-reviewer)
-   says, with the check after each of its steps, then approve and merge milestone 4. Milestone 4's own pull request gets no AI review: until
-   it is merged, `main` has no review workflow for `pull_request_target` to run.
+   says, with the check after each of its steps, then approve and merge milestone 4. Milestone 4's own
+   pull request gets no AI review: until it is merged, `main` has no review workflow for
+   `pull_request_target` to run.
    *Check:* on the next pull request `<n>`, the `AI review` check runs and
    `gh api repos/timothymamo/shift2eu/pulls/<n>/reviews --jq '.[] | .user.login + " " + .state'` shows
    the reviewer's review as `COMMENTED` (or `CHANGES_REQUESTED` once you turn change requests on), never
@@ -792,9 +793,14 @@ only gate.
 
 It asks the model through the **Claude Code CLI on your Claude subscription**, not with an API key: the
 workflow installs the CLI at a pinned version and checks the download against a pinned checksum before
-any secret is in a step, and the program runs `claude -p` with every tool off, no settings, hooks, MCP
-servers or `CLAUDE.md` loaded, in an empty directory with an empty `HOME`, the pull request on stdin and
-an environment of its own (ADR 0033). **Never set `ANTHROPIC_API_KEY`** for it, as a secret, a variable
+any secret is in a step (both are the install step's `CLAUDE_CODE_VERSION` and `CLAUDE_CODE_INTEGRITY`;
+a Renovate bump of the version must replace the integrity in the same pull request), and the program
+runs `claude -p` with every tool off, in an empty directory with an empty `HOME`, the pull request on
+stdin and an environment of its own (ADR 0033). `--safe-mode`, with the empty directory and `HOME`, keeps
+`CLAUDE.md`, skills, plugins, hooks and MCP servers off; `--setting-sources ""` skips the user, project
+and local settings files. An admin-managed policy (`/etc/claude-code/managed-settings.json`, managed
+plugins' hooks) would still apply under every flag: the GitHub-hosted runner image ships none, and the
+install step fails if `/etc/claude-code` exists. **Never set `ANTHROPIC_API_KEY`** for it, as a secret, a variable
 or anywhere else: Claude Code prefers an API key over the subscription and bills the API instead, so the
 program refuses to run when one is set.
 

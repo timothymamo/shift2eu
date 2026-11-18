@@ -73,19 +73,28 @@ the poster and the dismissal) is unchanged.
 one model turn, and turns the rest off:
 
 ```text
-claude -p --model claude-opus-5-5 --output-format json --tools "" --setting-sources ""
-  --strict-mcp-config --disable-slash-commands --no-session-persistence
+claude -p --model claude-opus-5-5 --output-format json --safe-mode --tools ""
+  --setting-sources "" --strict-mcp-config --disable-slash-commands --no-session-persistence
   --system-prompt-file <file>
 ```
 
 - **Every tool off** (`--tools ""`): the model cannot run a command, read or write a file or fetch a URL,
   as with the API it had no tools. No MCP server (`--strict-mcp-config` with no `--mcp-config`), no slash
   command or skill, no stored session.
-- **Nothing of the runner's configuration is loaded.** `--setting-sources ""` loads no user, project or
-  local settings, so no hook, permission or `CLAUDE.md` of a directory reaches it; it runs in a fresh,
-  empty working directory, with a fresh, empty `HOME`, so there is no `CLAUDE.md`, `.claude/` or
-  credentials file for it to find either. `--bare` would skip the same things but also ignores the OAuth
-  token, so it is not used.
+- **Nothing of the runner's configuration is loaded.** `--safe-mode` turns `CLAUDE.md`, skills,
+  plugins, hooks, MCP servers and custom agents off for the run and keeps the subscription's
+  authentication; it runs in a fresh, empty working directory, with a fresh, empty `HOME`, so there is
+  no `CLAUDE.md`, `.claude/` or credentials file for it to find either. `--setting-sources ""` skips the
+  user, project and local settings files, so no permission or setting of theirs applies. `--bare` would
+  skip the same things but also ignores the OAuth token, so it is not used.
+- **What no flag turns off: an admin-managed policy.** Claude Code applies managed policy settings
+  (`/etc/claude-code/managed-settings.json`, the hooks of managed plugins) under every flag, `--safe-mode`
+  and `--setting-sources ""` included. That is a residual trust in the GitHub-hosted runner image, which
+  ships none; `.github/scripts/install-claude-code.sh` fails the run with an error annotation when
+  `/etc/claude-code` exists, so an image that starts shipping one is noticed rather than applied.
+- **Its temporary directories are the job's.** The review step sets `TMPDIR` to `${{ runner.temp }}`,
+  which `os.MkdirTemp("", ...)` reads, so the working directory, `HOME` and the system prompt's directory
+  are made under a directory only the job writes to.
 - **The prompt keeps its two halves apart.** The trusted system prompt (`CLAUDE.md`, the skills, the
   task) is written to a file in a third temporary directory, neither the working directory nor `HOME`,
   and named by `--system-prompt-file`, which replaces Claude Code's own system prompt. The untrusted
@@ -105,10 +114,12 @@ claude -p --model claude-opus-5-5 --output-format json --tools "" --setting-sour
   own, and the job's `timeout-minutes` ends anything left.)
 - The output cap is the CLI's own: the program no longer sets `max_tokens`.
 - **The install is pinned and verified before any secret.** The workflow installs the CLI at an exact
-  version (2.1.327, with a `# renovate:` comment) from the npm platform package
-  `@anthropic-ai/claude-code-linux-x64` (the runner is x64): `.github/scripts/install-claude-code.sh`
-  downloads it with `npm pack --ignore-scripts`, which runs no install script, compares the tarball with
-  the npm `sha512` integrity pinned in the workflow and only then extracts its one binary. The meta
+  version (2.1.327) from the npm platform package `@anthropic-ai/claude-code-linux-x64` (the runner is
+  x64). The install step's `env:` pins it: `CLAUDE_CODE_VERSION`, under a `# renovate:` comment that the
+  repository's generic Renovate manager reads, and `CLAUDE_CODE_INTEGRITY` beside it.
+  `.github/scripts/install-claude-code.sh` downloads it with `npm pack --ignore-scripts`, which runs no
+  install script, compares the tarball with the pinned npm `sha512` integrity and only then extracts its
+  one binary. The meta
   package `@anthropic-ai/claude-code` only picks a platform package in a postinstall script, so it is
   never installed. Renovate bumps the version but cannot bump the integrity: the bump's pull request says
   to replace it, and until it is replaced the install fails, so an unverified binary never runs.
@@ -153,9 +164,12 @@ claude -p --model claude-opus-5-5 --output-format json --tools "" --setting-sour
   `syscall`, no `unsafe`, no package of the product. It allows `os` and `os/exec` for the one CLI run
   alone: the temporary directories, the system prompt file and the process. The `ai-reviewer-env` group
   still refuses it every read of the environment and every lookup of a home, config, cache or temp
-  directory. It reads no file of the repository and no variable; `main` hands it everything. The entry
-  point's own rule keeps denying `os/exec`, so the library's run is the only process the reviewer
-  starts. The product's rules do not change: no root's allow list, no layer and no
+  directory. It reads no file and no variable; `main` hands it everything. A second forbidigo group,
+  **`ai-reviewer-one-process`**, holds that in the library's non-test files: it refuses `exec.Command`
+  (the one process is started with `exec.CommandContext`, so a timeout or a cancellation reaches it) and
+  `os.ReadFile`, `os.Open`, `os.OpenFile` and `os.ReadDir`, and keeps `os.WriteFile`, `os.MkdirTemp` and
+  `os.RemoveAll`. The entry point's own rule keeps denying `os/exec`, so the library's run is the only
+  process the reviewer starts. The product's rules do not change: no root's allow list, no layer and no
   lax rule moves.
 - The go.mod is the module's own: the reviewer adds no requirement.
 
@@ -184,7 +198,8 @@ the limit, and posts no review.
 - At about three bytes per token (the diffs of this repository are Go, Markdown and YAML), 300,000 bytes
   are about 100,000 tokens. With the fixed instructions (`CLAUDE.md` and the two skills are 18,444 bytes
   on 2026-11-18, with the prompt's own text and the pull request's title, body and file list about
-  24,000 bytes, about 8,000 tokens) and an answer of about 16,000 tokens at most, a review at the limit needs about
+  24,000 bytes, about 8,000 tokens) and an assumed long answer of about 16,000 tokens (an assumption,
+  not a cap: the program sets no output limit), a review at the limit needs about
   124,000 tokens, inside a context window this ADR assumes to be 200,000 tokens, with room for the
   instructions to grow.
 - It covers most pull requests. Of the last 40 squash merges on `main` (2026-11-09 to 2026-11-18), the
@@ -219,7 +234,7 @@ Assumptions (the prices are for comparison only, what the same usage would cost 
 | | Input tokens | Output tokens | API price, for comparison |
 |---|---|---|---|
 | One typical review | 33,000 | 2,500 | $0.13 + $0.05 = **about $0.18** |
-| One review at the diff limit | 108,000 | 16,000 | $0.43 + $0.32 = **about $0.75** |
+| One review at the diff limit (16,000 output tokens is an assumed long answer, not a cap) | 108,000 | 16,000 | $0.43 + $0.32 = **about $0.75** |
 | A month (14 × 3 × 30 = 1,260 reviews, typical) | 41.6 M | 3.2 M | $166 + $63 = **about $230** |
 
 A burst day like 2026-11-11 (47 merges) uses about three times an average day, and is the day a usage
@@ -417,8 +432,10 @@ the trigger option below are the levers.
   the `ai-review` secrets as it lists the release Apps' keys.
 - **Residual risk: the reviewer runs a downloaded program that holds the subscription token.** The
   version and the tarball's integrity are pinned and checked before the token is in any step, every tool
-  of the CLI is off and it runs in empty directories with an explicit environment; a compromised release
-  of the pinned version would still see the token and the diff, as the API's endpoint saw the key.
+  of the CLI is off and it runs in safe mode in empty directories with an explicit environment; a
+  compromised release of the pinned version would still see the token and the diff, as the API's
+  endpoint saw the key. An admin-managed policy under `/etc/claude-code` would apply under every flag;
+  the runner image ships none, and the install fails if one appears.
 - **Residual risk: the reviewer App's token can write to every pull request.** With Pull requests write
   it can comment, review, request changes on and edit any pull request of the repository, and close one;
   with Contents read only it cannot push or merge. Its key is only in the `ai-review` environment, limited
@@ -436,7 +453,7 @@ the trigger option below are the levers.
 - **Residual risk: the model provider sees every diff**, the pull request's title and body, and `main`'s
   instructions. Nothing in them may be secret (CLAUDE.md, rule 2); a diff that adds a secret by mistake
   reaches the provider as it reaches GitHub.
-- New code to keep: `ci/aireview` and its tests, its two depguard rules and forbidigo group (pinned in
+- New code to keep: `ci/aireview` and its tests, its two depguard rules and two forbidigo groups (pinned in
   `test/architecture` and `test/lint` like the others), and the workflow (its pins checked by the same
   tests as the other workflows), the CLI's install script and pinned integrity. A Claude Code release
   that renames or drops a flag the program passes, or a retired model ID, needs a reviewed change; the
