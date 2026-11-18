@@ -905,6 +905,68 @@ func (sb *sandbox) useFailingLimactl(t *testing.T, marker string) {
 	}
 }
 
+// takeoverMVShim stands in for mv in the test that forces the interleaving of issue #240, the way the second
+// contender of the race acts on the lock: once, when the refresh renames the temporary directory holding its own
+// pid into a lock that is not there (the move that wins a takeover), the shim does first what that contender does
+// to the winner - it moves the lock the refresh has just won aside - and returns success, so the refresh's own
+// read of the lock's pid finds no lock. Every other call is the machine's own mv.
+const takeoverMVShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+lock="${SHIFT2EU_TEST_LOCK:?set SHIFT2EU_TEST_LOCK}"
+if [ "${SHIFT2EU_TEST_LOCK_TAKEOVER:-0}" = 1 ] && [ "$#" -eq 2 ] && [ "$2" = "${lock}" ] &&
+  [ -d "$1" ] && [ ! -e "${lock}" ] && [ ! -e "${race}/parked" ]; then
+  %s "$@" || exit $?
+  %s "${lock}" "${race}/aside" || exit $?
+  echo moved-aside >> "${race}/log"
+  : > "${race}/parked"
+  exit 0
+fi
+exec %s "$@"
+`
+
+// takeoverRMShim is the other half of the same interleaving: the contender, finding a pid in the lock it moved
+// aside that is not the owner it read while the lock was missing, puts that lock back. The first rm after the lock
+// was moved aside is the refresh's own cleanup of the takeover it has just lost, and this shim restores the lock
+// before it hands on to the machine's own rm, so the refresh reads its own pid back from the lock (issue #240).
+const takeoverRMShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+if [ "${SHIFT2EU_TEST_LOCK_TAKEOVER:-0}" = 1 ] && [ -e "${race}/parked" ]; then
+  %s "${race}/aside" "${SHIFT2EU_TEST_LOCK:?set SHIFT2EU_TEST_LOCK}" || exit $?
+  echo put-back >> "${race}/log"
+  %s -f "${race}/parked"
+fi
+exec %s "$@"
+`
+
+// useLockRacedByAContender puts the mv and rm shims of issue #240 first on PATH, armed for the lock at lock, and
+// returns the directory they record the interleaving in: its log holds moved-aside once the lock the refresh had
+// won was moved aside and put-back once it was restored, so a test can prove it forced the race rather than a
+// plain takeover. Neither shim waits on anything, so the order inside the refresh's own take_lock is the whole
+// interleaving and the test needs no sleep and no second process.
+func (sb *sandbox) useLockRacedByAContender(t *testing.T, env map[string]string, lock string) string {
+	t.Helper()
+
+	mvTool, rmTool := realTool(t, "mv"), realTool(t, "rm")
+
+	trace := filepath.Join(sb.root, "lock-race")
+
+	if err := os.MkdirAll(filepath.Join(trace, "bin"), 0o700); err != nil {
+		t.Fatalf("create %s: %v", filepath.Join(trace, "bin"), err)
+	}
+
+	writeFileMode(t, filepath.Join(trace, "bin", "mv"),
+		[]byte(fmt.Sprintf(takeoverMVShim, strconv.Quote(mvTool), strconv.Quote(mvTool), strconv.Quote(mvTool))), 0o700)
+	writeFileMode(t, filepath.Join(trace, "bin", "rm"),
+		[]byte(fmt.Sprintf(takeoverRMShim, strconv.Quote(mvTool), strconv.Quote(rmTool), strconv.Quote(rmTool))), 0o700)
+
+	env["PATH"] = filepath.Join(trace, "bin") + ":" + env["PATH"]
+	env["SHIFT2EU_TEST_LOCK_TAKEOVER"] = "1"
+	env["SHIFT2EU_TEST_LOCK"] = lock
+	env["SHIFT2EU_TEST_LOCK_RACE"] = trace
+
+	return trace
+}
+
 func (sb *sandbox) writeRecordingShim(t *testing.T, name string) {
 	t.Helper()
 
