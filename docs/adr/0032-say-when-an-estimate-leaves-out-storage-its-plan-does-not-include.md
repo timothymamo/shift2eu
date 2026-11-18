@@ -67,6 +67,9 @@ The note says what is left out, by category:
 - `database.postgresql`, `database.mysql` (the categories whose storage is stored once, `storedOnce`):
   the **data storage**.
 
+The list is explicit: any other category, including one later routed to an estimate by plan, gets no
+note until it is added here and to the switch in `storageNotIncluded`.
+
 Resources priced by storage or by usage, and resources not estimated, never carry it. The amount, the
 breakdown and the totals do not change: this ADR adds a statement, not a price.
 

@@ -362,8 +362,10 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 // storageNotIncluded returns the storage an estimate by plan leaves out
 // (ADR 0032): none unless the resource gives no storage size, the chosen plan
 // includes no storage and its offering prices storage in region; then the
-// data storage for a category stored once, the boot volume otherwise.
-// A count of 0 is estimated at 0 and leaves nothing out, so it gets none.
+// boot volume for compute.vm, compute.baremetal and kubernetes.managed, the
+// data storage for database.postgresql and database.mysql, and none for any
+// other category. A count of 0 is estimated at 0 and leaves nothing out, so
+// it gets none.
 func storageNotIncluded(c taxonomy.Category, count, stored *big.Rat, chosen offeredPlan, region string) StorageNotIncluded {
 	if count.Sign() == 0 || stored != nil || chosen.plan.IncludedStorageGiB != 0 {
 		return ""
@@ -373,11 +375,14 @@ func storageNotIncluded(c taxonomy.Category, count, stored *big.Rat, chosen offe
 		return ""
 	}
 
-	if storedOnce(c) {
+	switch c {
+	case taxonomy.ComputeVM, taxonomy.ComputeBareMetal, taxonomy.KubernetesManaged:
+		return BootVolume
+	case taxonomy.DatabasePostgreSQL, taxonomy.DatabaseMySQL:
 		return DataStorage
+	default:
+		return ""
 	}
-
-	return BootVolume
 }
 
 // byStorage estimates a resource priced by stored GiB, on the best candidate
