@@ -80,15 +80,16 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
   App's bot identity (`<bot user id>+<slug>[bot]@users.noreply.github.com`, the id of the bot user
   `<slug>[bot]`, not the App ID: ADR 0031), set by `make vm-init`. *Checked at runbook step 3.
   Confirmed by the maintainer at runbook step 3: PRs #239, #250 and #261 were opened by
-  `app/shift2eu-agents`, with only bot-authored commits.*
+  `app/shift2eu-agents` (`is_bot` `true`). #250 and #261 carry only bot-authored commits; #239 still
+  carries 8 commits the maintainer authored before the switch.*
 - [x] Every `gh` call the skills make works with the App token: push, `pr create`, `pr view`, `pr checks`,
   `run list/view/watch`, `issue create/view`, and the `release-tag` skill's reads of rulesets, environments
   and releases. Any call that needs a permission the App lacks is listed with the permission, and the
   maintainer's App permissions in `docs/dev-environment.md` cover them. *The calls and their permissions
   are listed in ADR 0031 (d) and `docs/dev-environment.md` (Attestations read added; Actions stays read, so
   `gh run rerun` and the rulesets' bypass lists stay maintainer steps); that each works is checked at
-  runbook step 3. Confirmed by the maintainer at runbook step 3; PRs #239, #250 and #261 were opened by
-  `app/shift2eu-agents` with only bot-authored commits.*
+  runbook step 3. Confirmed by the maintainer at runbook step 3, through the same PRs as the criterion
+  above.*
 - [x] Branch commits are not signed; `main`'s commits stay GitHub-signed squash merges (`verified`
   `true`). No ruleset requires signed commits. *Nothing in milestone 1 signs a commit (ADR 0031); the
   repository's rulesets and `main`'s commits are checked at runbook step 3. Checked at runbook step 3 on

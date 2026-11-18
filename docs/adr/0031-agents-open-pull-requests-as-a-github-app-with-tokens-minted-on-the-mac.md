@@ -3,6 +3,14 @@
 - Status: Accepted
 - Date: 2026-11-14
 
+> **Update (milestone 3), 2026-11-18.** PRD #161 milestone 3 removed `GITHUB_TOKEN` from `VM_ENV` and
+> removed the wrapper's fallback to it: without a valid App token file, `gh` and `git push` in the VM fail.
+> `make vm-env-check` (thus `make vm-env` and `make vm-create`) now refuses a `VM_ENV` that names a GitHub
+> token variable (`GITHUB_TOKEN`, `GH_TOKEN`, `GH_ENTERPRISE_TOKEN`, `GITHUB_ENTERPRISE_TOKEN`), a merge
+> drops a stale line of theirs from the VM's `daemon.env`, and the wrapper unsets all but `GH_TOKEN` before
+> it runs the real gh. The decision text below is kept as it was decided; where it describes the fallback
+> or `GITHUB_TOKEN` in `VM_ENV` as current, this update supersedes it.
+
 ## Context
 
 The agents in the Lima VM push branches, open pull requests and file issues with the maintainer's own
