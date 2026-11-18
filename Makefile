@@ -371,13 +371,16 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 # comment, a value the shell would expand) with a warning that says how many (never their content), and
 # prints the names (never the values) of the lines it kept. Either mode removes a GitHub token line
 # (one of github_token_names above) and names the variable on stderr, never its value, saying to revoke that token:
-# every agent in the VM could read it. The values travel on standard input, never on a
+# every agent in the VM could read it. The name read errs towards warning: it takes any line that assigns one of
+# those names after a non-name character (`GITHUB_TOKEN = x`, `declare -x GH_TOKEN=x`, a leading tab), but not
+# MY_GITHUB_TOKEN, and prints only the literal name. The values travel on standard input, never on a
 # command line (only the mode does), and the file is written to a temporary file beside daemon.env and moved
 # into place, mode 0600, so a failure never leaves half a file; a trap removes the temporary file if the
 # VM-side shell is interrupted, and a leftover of a killed run older than a minute is removed by the next
-# vm-env: a fresh one may be a concurrent run's (concurrent vm-env runs are not supported beyond that). A
-# merge refuses a daemon.env that exists but cannot be read before it writes anything; its greps accept only
-# status 1 (no match), so a read error (status 2) is never taken for an empty file.
+# vm-env: a fresh one may be a concurrent run's (concurrent vm-env runs are not supported beyond that). Either
+# mode refuses a daemon.env that exists but cannot be read before it writes anything, as it could not check it
+# for a GitHub token; the token read fails on sed's own status (not a pipeline's), and a merge's greps accept
+# only status 1 (no match), so a read error is never taken for an empty file.
 .PHONY: vm-env
 vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
@@ -388,13 +391,14 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
 		sh -c 'umask 077 && LC_ALL=C && export LC_ALL && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && \
 		t= && trap "rm -f \"\$$t\"" EXIT && trap "exit 1" HUP INT TERM && \
-		unreadable() { echo "vm-env: cannot read ~/.config/dot-agent-deck/daemon.env in the VM, so a merge cannot keep its lines. Nothing was written: make it readable by the VM user (chmod 600) and run make vm-env again." >&2; exit 1; } && \
-		mkdir -p "$$d" && if [ "$$1" = merge ] && [ -f "$$f" ] && ! [ -r "$$f" ]; then unreadable; fi && \
+		unreadable() { echo "vm-env: cannot read ~/.config/dot-agent-deck/daemon.env in the VM, so it cannot check the file for a GitHub token to warn about (nor a merge keep its lines). Nothing was written: make it readable by the VM user (chmod 600) and run make vm-env again." >&2; exit 1; } && \
+		mkdir -p "$$d" && if [ -e "$$f" ] && ! [ -r "$$f" ]; then unreadable; fi && \
 		find "$$d" -maxdepth 1 -name ".daemon.env.??????" -mmin +1 -exec rm -f {} + && \
 		new="$$(cat)" && safe="$(vm_env_safe_line)" && \
 		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && \
-		removed= && if [ -f "$$f" ] && [ -r "$$f" ]; then \
-			removed=$$(sed -n -E "s/^[[:space:]]*(export[[:space:]]+)?($(github_token_names))=.*/\2/p" "$$f" | sort -u | paste -sd " " -) || exit 1; fi && \
+		removed= && if [ -f "$$f" ]; then \
+			found=$$(sed -n -E "s/^(.*[^A-Za-z0-9_])?($(github_token_names))[[:space:]]*=.*/\2/p" "$$f") || unreadable; \
+			removed=$$(printf "%s\n" "$$found" | sort -u | paste -sd " " -) || exit 1; fi && \
 		dropped=0 && kept= && if [ "$$1" = merge ] && [ -f "$$f" ]; then \
 			total=$$(grep -a -c . "$$f") || [ "$$?" -eq 1 ] || unreadable; \
 			plain=$$(grep -a -E "$$safe" "$$f") || [ "$$?" -eq 1 ] || unreadable; \

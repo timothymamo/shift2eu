@@ -389,8 +389,9 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   place, so a failure does not leave half a file. An interrupted run removes its temporary file, and a
   leftover from a killed run is removed by the next `make vm-env` once it is older than a minute, so a
   concurrent run's fresh temporary file is left alone (running `make vm-env` twice at once is not
-  otherwise supported). A merge whose `daemon.env` exists but cannot be read is refused with a `vm-env:`
-  message naming `daemon.env`, and nothing is written: make the file readable and run it again.
+  otherwise supported). A run whose `daemon.env` exists but cannot be read, merge or replace, is refused
+  with a `vm-env:` message naming `daemon.env` (it cannot check the file for a GitHub token), and nothing is
+  written: make the file readable and run it again.
 - **Rotating a credential:** change it on the Mac, then `make vm-env deck-restart`. Restarting the service
   stops its running agents, so do it between tasks. Run `claude setup-token` again before the year is up.
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the
@@ -405,7 +406,9 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   variable, never its value, points at `make agents-token`, and writes nothing. A merge drops a stale line
   of any of them from the VM's `daemon.env` instead of keeping it (a replace rewrites the whole file), and
   either one then warns on stderr: it names the variable it removed, never its value, and says to revoke
-  that token at GitHub, as every agent in the VM could read it.
+  that token at GitHub, as every agent in the VM could read it. The warning covers any line that assigns
+  one of those names (spaces around the `=`, behind `export` or `declare -x`), not a longer name that
+  only ends in one (a `MY_` prefix).
 - **Every agent gets every variable.** The tester holds the Claude token and the App's token, the Claude
   roles the DeepSeek key. Scope each one narrowly so it is cheap to revoke. The file stays on the VM's disk
   (under `~/.lima` on the Mac) until `make vm-delete`.
