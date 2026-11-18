@@ -46,6 +46,9 @@ type schema struct {
 	additional *bool
 	// items is the schema of an array's elements.
 	items *schema
+	// description is the schema's own prose, which states the quantity rule of
+	// every field that holds an amount of money or a quantity.
+	description string
 	// enum and const restrict the value itself.
 	enum       []any
 	hasEnum    bool
@@ -117,10 +120,16 @@ func (s *schema) parseKeywords(raw map[string]json.RawMessage) error {
 // parseKeyword parses one keyword of a schema object.
 func (s *schema) parseKeyword(keyword string, value json.RawMessage) error {
 	switch keyword {
-	case "$schema", "$id", "title", "description":
+	case "$schema", "$id", "title":
 		var text string
 		if err := json.Unmarshal(value, &text); err != nil {
 			return fmt.Errorf("%s must be a string: %w", keyword, err)
+		}
+
+		return nil
+	case "description":
+		if err := json.Unmarshal(value, &s.description); err != nil {
+			return fmt.Errorf("description must be a string: %w", err)
 		}
 
 		return nil
@@ -879,6 +888,202 @@ func TestSchemaObjectsAreClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The JSON report writes a whole-number quantity as a JSON number and an exact
+// decimal value as a JSON string (docs/adr/0018, issue #247). The description of
+// every affected field states which one it is, so a producer or a consumer that
+// reads only the schema learns the representation. These are the phrases such a
+// description must hold, in any case.
+const (
+	// exactDecimalPhrase marks a value written as a JSON string: an amount of
+	// money, or a quantity that can be fractional.
+	exactDecimalPhrase = "exact decimal"
+	// wholeNumberPhrase marks a value written as a JSON number with no fraction.
+	wholeNumberPhrase = "whole number"
+)
+
+// quantityRuleSchemas are the schema documents the quantity rule covers: the
+// current version's files. Version 1 is frozen and keeps the prose it shipped
+// with, so the rule is pinned on the version this release writes.
+var quantityRuleSchemas = []string{"assessment-v2.schema.json", "comparison-v2.schema.json"}
+
+// TestSchemaQuantitiesStateTheQuantityRule pins the rule in the descriptions of
+// the current schemas (docs/adr/0018, issue #247): the fields that hold an amount
+// of money or a quantity that can be fractional are strings described as an exact
+// decimal, and the fields that hold a whole-number quantity are integers
+// described as a whole number.
+func TestSchemaQuantitiesStateTheQuantityRule(t *testing.T) {
+	t.Parallel()
+
+	// The fields the rule covers, named one by one rather than guessed from their
+	// names, some money and some not. Every schema of quantityRuleSchemas declares
+	// them, and the walk fails when one of them is gone, so a field cannot leave
+	// the rule by being renamed or dropped.
+	decimalFields := []string{
+		"/$defs/plan/properties/memoryGiB",          // GiB, fractional: "0.5", "1.875"
+		"/$defs/plan/properties/price",              // EUR, a plan's monthly list price
+		"/$defs/resourceEstimate/properties/amount", // EUR, a resource's monthly estimate
+		"/$defs/breakdown/properties/plan",          // EUR
+		"/$defs/breakdown/properties/storage",       // EUR
+		"/$defs/breakdown/properties/fixedFee",      // EUR
+		"/$defs/total/properties/amount",            // EUR, a sum of estimates
+		"/$defs/currencyCost/properties/amount",     // the source's currency, a sum
+	}
+
+	wholeFields := []string{
+		"/$defs/plan/properties/vcpus",
+		"/$defs/plan/properties/includedStorageGiB",
+		"/$defs/resourceEstimate/properties/billingCapHours",
+		"/$defs/estimateBasis/properties/hoursBasis",
+	}
+
+	// quantityField is one field the rule covers, in one schema document.
+	type quantityField struct {
+		name       string
+		schemaFile string
+		pointer    string
+		wantType   string
+		wantPhrase string
+	}
+
+	tests := make([]quantityField, 0, len(quantityRuleSchemas)*(len(decimalFields)+len(wholeFields)))
+
+	for _, schemaFile := range quantityRuleSchemas {
+		label := strings.TrimSuffix(schemaFile, ".schema.json")
+
+		for _, pointer := range decimalFields {
+			tests = append(tests, quantityField{
+				name:       label + " " + fieldName(pointer),
+				schemaFile: schemaFile,
+				pointer:    pointer,
+				wantType:   "string",
+				wantPhrase: exactDecimalPhrase,
+			})
+		}
+
+		for _, pointer := range wholeFields {
+			tests = append(tests, quantityField{
+				name:       label + " " + fieldName(pointer),
+				schemaFile: schemaFile,
+				pointer:    pointer,
+				wantType:   "integer",
+				wantPhrase: wholeNumberPhrase,
+			})
+		}
+	}
+
+	schemas := make(map[string]*schema, len(quantityRuleSchemas))
+
+	for _, schemaFile := range quantityRuleSchemas {
+		schemas[schemaFile] = readSchema(t, filepath.Join("schema", schemaFile))
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			field := schemaAt(t, schemas[test.schemaFile], test.pointer)
+
+			if !slices.Equal(field.types, []string{test.wantType}) {
+				t.Errorf("%s is typed %v, want exactly [%s] (docs/adr/0018, issue #247)",
+					test.pointer, field.types, test.wantType)
+			}
+
+			if !strings.Contains(strings.ToLower(field.description), test.wantPhrase) {
+				t.Errorf("the description of %s in %s is %q, want it to hold %q (docs/adr/0018, issue #247)",
+					test.pointer, test.schemaFile, field.description, test.wantPhrase)
+			}
+		})
+	}
+}
+
+// TestSchemaQuantitiesAreNeverNumbers pins the other half of the rule: a quantity
+// in a current document is either a whole JSON number, typed "integer", or an
+// exact decimal string, never a fractional JSON number, typed "number", so a
+// consumer never has to round a float it read.
+func TestSchemaQuantitiesAreNeverNumbers(t *testing.T) {
+	t.Parallel()
+
+	for _, schemaFile := range quantityRuleSchemas {
+		t.Run(schemaFile, func(t *testing.T) {
+			t.Parallel()
+
+			s := readSchema(t, filepath.Join("schema", schemaFile))
+
+			walked := 0
+
+			eachSchema(s, "", func(pointer string, sub *schema) {
+				walked++
+
+				if slices.Contains(sub.types, "number") {
+					t.Errorf("%s is typed number, want %q for a whole quantity or %q for an exact decimal (docs/adr/0018, issue #247)",
+						pointerName(pointer), "integer", "string")
+				}
+			})
+
+			if walked == 0 {
+				t.Fatal("the schema declares no schema object, so nothing was checked")
+			}
+		})
+	}
+}
+
+// fieldName names a field the quantity rule covers, for a subtest name: the
+// pointer below "$defs" with its keywords dropped, as "plan.memoryGiB".
+func fieldName(pointer string) string {
+	return strings.ReplaceAll(strings.TrimPrefix(pointer, "/$defs/"), "/properties/", ".")
+}
+
+// eachSchema calls visit for every schema object below s, s included, with the
+// JSON pointer that names it, in a fixed order: properties by name, then items,
+// then "$defs" entries by name. The pointer uses a property's or a definition's
+// name as written, which is how a schemaAt pointer names it too.
+func eachSchema(s *schema, pointer string, visit func(pointer string, sub *schema)) {
+	visit(pointer, s)
+
+	for _, name := range slices.Sorted(maps.Keys(s.properties)) {
+		eachSchema(s.properties[name], pointer+"/properties/"+name, visit)
+	}
+
+	if s.items != nil {
+		eachSchema(s.items, pointer+"/items", visit)
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(s.defs)) {
+		eachSchema(s.defs[name], pointer+"/$defs/"+name, visit)
+	}
+}
+
+// schemaAt returns the schema object the JSON pointer names below s, failing the
+// test when the document declares none: a field the rule covers must be in the
+// schema, not only in this test.
+func schemaAt(tb testing.TB, s *schema, pointer string) *schema {
+	tb.Helper()
+
+	var found *schema
+
+	eachSchema(s, "", func(at string, sub *schema) {
+		if at == pointer {
+			found = sub
+		}
+	})
+
+	if found == nil {
+		tb.Fatalf("the schema declares no %s", pointer)
+	}
+
+	return found
+}
+
+// pointerName returns the pointer as a failure message names it, "$" for the
+// document root.
+func pointerName(pointer string) string {
+	if pointer == "" {
+		return "$"
+	}
+
+	return pointer
 }
 
 // schemaFiles returns the base names of every schema document of this package,
