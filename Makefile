@@ -469,43 +469,47 @@ agents-token-refresh: ## Mint the agents App token now and again before each one
 # instance's lock holds (a refresh started by hand with make agents-token-refresh holds it too), or the one
 # this target started earlier. It warns when that one has stopped, and prints where the log is. When launchd
 # has the instance's LaunchDaemon loaded (agents-token-refresh-install), it warns and starts nothing, writing
-# no file: the job is the instance's refresher. Without launchctl (Linux) that check is skipped.
+# no file: the job is the instance's refresher. Without launchctl (Linux) that check is skipped. Like install
+# and uninstall below, it reads LIMA_INSTANCE from its environment ($$LIMA_INSTANCE, exported with theirs) and
+# refuses an unsupported name before any use: the name becomes part of its file names and of the job's label.
 .PHONY: agents-token-refresh-start
 agents-token-refresh-start: ## Start the agents App token refresh in the background, one per VM instance, and print where its log is (host clone)
 	@if [ -z "$${SHIFT2EU_AGENTS_APP_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
 		echo "agents-token-refresh-start: set SHIFT2EU_AGENTS_APP_ID, SHIFT2EU_AGENTS_APP_INSTALLATION_ID and SHIFT2EU_AGENTS_APP_KEY_FILE in the host clone's .envrc (docs/dev-environment.md, The host clone)" >&2; \
 		exit 1; \
 	fi; \
-	state="$(AGENTS_TOKEN_STATE)"; pid_file="$$state/agents-token-refresh-$(LIMA_INSTANCE).pid"; log="$$state/agents-token-refresh-$(LIMA_INSTANCE).log"; \
-	if command -v launchctl >/dev/null 2>&1 && printed="$$(launchctl print "system/$(AGENTS_TOKEN_LAUNCHD_LABEL)" 2>/dev/null)"; then \
-		echo "agents-token-refresh-start: warning: the LaunchDaemon $(AGENTS_TOKEN_LAUNCHD_LABEL) runs the agents App token refresh of $(LIMA_INSTANCE), so none is started beside it; check it with sudo launchctl print system/$(AGENTS_TOKEN_LAUNCHD_LABEL), its log is $$log, and make agents-token-refresh-uninstall removes it" >&2; \
+	$(AGENTS_TOKEN_INSTANCE_CHECK); \
+	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; \
+	state="$(AGENTS_TOKEN_STATE)"; pid_file="$$state/agents-token-refresh-$$LIMA_INSTANCE.pid"; log="$$state/agents-token-refresh-$$LIMA_INSTANCE.log"; \
+	if command -v launchctl >/dev/null 2>&1 && printed="$$(launchctl print "system/$$label" 2>/dev/null)"; then \
+		echo "agents-token-refresh-start: warning: the LaunchDaemon $$label runs the agents App token refresh of $$LIMA_INSTANCE, so none is started beside it; check it with sudo launchctl print system/$$label, its log is $$log, and make agents-token-refresh-uninstall removes it" >&2; \
 		job_script="$$(printf '%s\n' "$$printed" | $(AGENTS_TOKEN_LAUNCHD_SCRIPT_OF))"; \
 		own_script="$$(pwd -P)/dev/agents-app-token.sh"; \
 		if [ -z "$$job_script" ]; then \
-			echo "agents-token-refresh-start: warning: launchctl print names no dev/agents-app-token.sh in the job's arguments, so it may run another clone's script: check its arguments with sudo launchctl print system/$(AGENTS_TOKEN_LAUNCHD_LABEL), and install it from the host clone (make agents-token-refresh-install)" >&2; \
+			echo "agents-token-refresh-start: warning: launchctl print names no dev/agents-app-token.sh in the job's arguments, so it may run another clone's script: check its arguments with sudo launchctl print system/$$label, and install it from the host clone (make agents-token-refresh-install)" >&2; \
 		elif [ "$$job_script" != "$$own_script" ]; then \
 			echo "agents-token-refresh-start: warning: the LaunchDaemon runs $$job_script, another clone's script, not this clone's $$own_script: edits and pulls here do not reach the job; install it from the host clone (make agents-token-refresh-install there)" >&2; \
 		fi; \
 		exit 0; \
 	fi; \
-	lock_pid="$$state/agents-token-refresh-$(LIMA_INSTANCE).lock/pid"; \
+	lock_pid="$$state/agents-token-refresh-$$LIMA_INSTANCE.lock/pid"; \
 	(umask 077 && mkdir -p "$$state" && : >>"$$log") || exit 1; \
 	started="$$(cat "$$pid_file" 2>/dev/null || true)"; \
 	for pid in "$$(cat "$$lock_pid" 2>/dev/null || true)" "$$started"; do \
 		case "$$pid" in ''|*[!0-9]*) continue ;; esac; \
 		if kill -0 "$$pid" 2>/dev/null && ps -p "$$pid" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
-			echo "agents-token-refresh-start: the agents App token refresh of $(LIMA_INSTANCE) is already running (pid $$pid); its log is $$log"; \
+			echo "agents-token-refresh-start: the agents App token refresh of $$LIMA_INSTANCE is already running (pid $$pid); its log is $$log"; \
 			exit 0; \
 		fi; \
 	done; \
 	if [ -n "$$started" ]; then \
-		echo "agents-token-refresh-start: warning: the agents App token refresh of $(LIMA_INSTANCE) (pid $$started) had stopped; its log's last lines:" >&2; \
+		echo "agents-token-refresh-start: warning: the agents App token refresh of $$LIMA_INSTANCE (pid $$started) had stopped; its log's last lines:" >&2; \
 		tail -n 3 "$$log" 2>/dev/null | sed 's/^/  /' >&2 || true; \
 	fi; \
-	LIMA_INSTANCE="$(LIMA_INSTANCE)" nohup sh dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
+	nohup sh dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
 	pid="$$!"; \
 	(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
-	echo "agents-token-refresh-start: started the agents App token refresh of $(LIMA_INSTANCE) (pid $$pid); its log is $$log"
+	echo "agents-token-refresh-start: started the agents App token refresh of $$LIMA_INSTANCE (pid $$pid); its log is $$log"
 
 # The LaunchDaemon that runs the refresh at boot, with nobody logged in, as you (issue #229, ADR 0034): one job
 # per VM instance, whose plist dev/agents-token-launchd.sh renders from the host clone's .envrc (the plist, not
@@ -513,7 +517,9 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # /bin/sh dev/agents-app-token.sh refresh from the host clone, never make or git, and logs where
 # agents-token-refresh-start does. Installing needs sudo; both targets print every sudo command before they
 # run it. A refresh started by hand keeps the instance's lock while it runs: the job then exits 0 at once and
-# launchd tries again every ThrottleInterval (5 minutes), so install says so and names the pid to stop.
+# launchd tries again every ThrottleInterval (5 minutes), so install says so and names the pid to stop. It reads
+# the lock before the bootstrap, since the job's own refresh takes the lock as soon as it loads, and warns only
+# about a refresh that held it then, still holds it, and is not the pid launchctl print reports for the job.
 #
 # install and uninstall read LIMA_INSTANCE from their environment ($$LIMA_INSTANCE, exported below) and check
 # it before any use, so make never splices an unchecked value into the shell text that runs sudo.
@@ -537,7 +543,7 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # success (bootstrap can load the job and still exit non-zero), otherwise the install fails and says that the
 # checked plist stays where launchd loads it at the next boot.
 #
-# uninstall boots the job out, waits (at most 5 seconds) until launchctl print stops finding it and removes the
+# uninstall boots the job out, waits (at most 10 seconds, as install does) until launchctl print stops finding it and removes the
 # plist either way. A job that stays loaded is reported with the command that unloads it, and the uninstall
 # still exits 0: the plist is gone, and running it again would change nothing.
 #
@@ -575,7 +581,7 @@ AGENTS_TOKEN_LAUNCHD_DIR_CHECK = case "$(AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN)" in \
 		echo "$@: AGENTS_TOKEN_LAUNCHD_DIR may hold only letters, digits, /, ., _ and -, and no .. component, since root writes there (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
 	esac
 
-agents-token-refresh-install agents-token-refresh-uninstall: export LIMA_INSTANCE := $(LIMA_INSTANCE)
+agents-token-refresh-start agents-token-refresh-install agents-token-refresh-uninstall: export LIMA_INSTANCE := $(LIMA_INSTANCE)
 agents-token-refresh-install agents-token-refresh-uninstall: export AGENTS_TOKEN_LAUNCHD_DIR := $(AGENTS_TOKEN_LAUNCHD_DIR)
 
 .PHONY: agents-token-refresh-install
@@ -641,6 +647,10 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 			exit 1; \
 		fi; \
 	fi; \
+	held="$$(cat "$$lock_pid" 2>/dev/null || true)"; \
+	case "$$held" in ''|*[!0-9]*) held='' ;; *) \
+		kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh' || held='' ;; \
+	esac; \
 	echo "+ sudo install -m 0644 -o root -g wheel $$tmp $$dest"; \
 	sudo install -m 0644 -o root -g wheel "$$tmp" "$$dest" || exit 1; \
 	installed="$$( { shasum -a 256 | cut -d ' ' -f 1; } 2>/dev/null <"$$dest")" || installed=''; \
@@ -673,12 +683,12 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 		fi; \
 	fi; \
 	echo "agents-token-refresh-install: loaded $$label: it runs now, at every boot, and again whenever it exits"; \
-	pid="$$(cat "$$lock_pid" 2>/dev/null || true)"; \
-	case "$$pid" in ''|*[!0-9]*) ;; *) \
-		if kill -0 "$$pid" 2>/dev/null && ps -p "$$pid" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
-			echo "agents-token-refresh-install: warning: a refresh you started by hand (pid $$pid) holds the lock of $$LIMA_INSTANCE, so the job waits, trying again every 5 minutes; stop it (kill $$pid) and the job takes over" >&2; \
-		fi ;; \
-	esac; \
+	if [ -n "$$held" ] && [ "$$(cat "$$lock_pid" 2>/dev/null || true)" = "$$held" ] && kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
+		job_pid="$$(launchctl print "system/$$label" 2>/dev/null | awk '/^[[:space:]]*pid = [0-9]+[[:space:]]*$$/ { print $$3; exit }')"; \
+		if [ "$$held" != "$$job_pid" ]; then \
+			echo "agents-token-refresh-install: warning: a refresh you started by hand (pid $$held) holds the lock of $$LIMA_INSTANCE, so the job waits, trying again every 5 minutes; stop it (kill $$held) and the job takes over" >&2; \
+		fi; \
+	fi; \
 	echo "agents-token-refresh-install: check it with: sudo launchctl print system/$$label (state = running, and $$script in its arguments), and its log: tail $$log"
 
 .PHONY: agents-token-refresh-uninstall
@@ -690,7 +700,7 @@ agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh'
 	echo "+ sudo launchctl bootout system/$$label"; \
 	if sudo launchctl bootout "system/$$label"; then booted=1; else booted=0; fi; \
 	tries=0; \
-	while [ "$$tries" -lt 5 ] && launchctl print "system/$$label" >/dev/null 2>&1; do sleep 1; tries=$$((tries + 1)); done; \
+	while [ "$$tries" -lt 10 ] && launchctl print "system/$$label" >/dev/null 2>&1; do sleep 1; tries=$$((tries + 1)); done; \
 	if launchctl print "system/$$label" >/dev/null 2>&1; then \
 		stuck=1; \
 		echo "agents-token-refresh-uninstall: warning: $$label is still loaded $$tries second(s) after launchctl bootout: it keeps running until the next reboot or until you run sudo launchctl bootout system/$$label; removing its plist anyway, so the next boot does not load it" >&2; \

@@ -51,7 +51,7 @@ be loaded at the next boot without anyone having checked it, so a warning is not
 since bootstrap can load the job and still exit non-zero: a loaded job is a success and the install says
 it is loaded; otherwise the install fails, says the checked plist stays in place and loads at the next
 boot, and names the two ways to restore a job now: the install again, or
-`make agents-token-refresh-start`. The uninstall boots the job out, waits at most 5 seconds while
+`make agents-token-refresh-start`. The uninstall boots the job out, waits at most 10 seconds, as the install does, while
 `launchctl print` still finds it, and removes the plist either way; a job still loaded is reported with
 `sudo launchctl bootout system/<label>`, which the maintainer runs by hand (it otherwise runs until the
 next reboot), and the uninstall exits 0, since the plist is gone and running it again would change
@@ -136,7 +136,21 @@ failure (a revoked key, a removed installation) likewise costs one refused mint 
 logged with `agents App token refresh stopped`. Five minutes is well inside the 20 minutes before expiry
 at which the refresh mints, so a refresh killed for any reason is back before the VM's token runs out.
 The install does not stop a refresh started by hand: it says one holds the lock and names its pid to stop,
-and the job takes over once it is gone.
+and the job takes over once it is gone. It reads the lock before `launchctl bootstrap`, after the old job
+is booted out, since the job's own refresh takes the lock as soon as it loads: after the bootstrap it warns
+only about the refresh that held the lock then, if it still holds it and is not the pid `launchctl print`
+reports for the job, and never sends the maintainer to kill the job's own loop.
+
+**Unprivileged `launchctl print`.** Every decision the targets make about whether the job is loaded (the
+start target's warning, the install's bootout and its wait, the check after a failing bootstrap, the
+uninstall's wait and its warning) rests on `launchctl print system/<label>` run without `sudo`, while the
+runbook checks with `sudo launchctl print`. The assumption is that macOS lets an unprivileged user print a
+job in the system domain; it cannot be checked on the Linux VM the tests run in, so the runbook's check
+after install asks the maintainer to confirm it on the Mac. Were it wrong, the targets would see no job
+where one is loaded (start would start a second refresher beside it, which waits on the lock; install
+would skip the bootout, and its bootstrap would fail over the loaded job): the runbook then says to report
+it and rely on the `sudo` commands. The targets add no `sudo` of their own for it: every `sudo` they run is
+printed and pinned by the tests.
 
 ## Alternatives considered
 

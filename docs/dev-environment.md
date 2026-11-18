@@ -619,8 +619,9 @@ Over SSH on the Mac Mini, each step with its check (the instance `shift2eu`; for
    not, or cannot be read, it removes it again (`sudo rm -f`, so the next boot cannot load it), loads
    nothing and fails, saying no token refresh job is loaded. A failing `launchctl bootstrap` is tried once
    more; if it fails again no job is loaded: run the install again, or `make agents-token-refresh-start`. A refresh
-   you started by hand keeps the VM's lock: install says so and names its pid; the job then waits, trying
-   every 5 minutes, until you stop that one (`kill <pid>`).
+   you started by hand before the install keeps the VM's lock: install says so and names its pid; the job
+   then waits, trying every 5 minutes, until you stop that one (`kill <pid>`). It never names the job's own
+   refresh, which takes the lock as the job loads.
 
 2. **Check that it is loaded and minting**:
 
@@ -633,8 +634,22 @@ Over SSH on the Mac Mini, each step with its check (the instance `shift2eu`; for
    (`~/agents/shift2eu/host/shift2eu/dev/agents-app-token.sh`, never one in the workspace), and the log's
    last lines say `wrote a token ... into the VM shift2eu`. If
    `make agents-token-refresh-start` ever warns that the job runs another clone's script, uninstall it and
-   install again from the host clone. A
-   log line every 5 minutes saying `another agents App token refresh ... is running` means a refresh you
+   install again from the host clone.
+
+   Then check that `launchctl print` finds the job **without** `sudo` too:
+
+   ```bash
+   launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu >/dev/null && echo found
+   ```
+
+   The targets decide whether the job is loaded from exactly this unprivileged command (ADR 0034,
+   Unprivileged `launchctl print`), which the Linux tests cannot check. If it prints no `found` while the
+   `sudo` one shows the job, report it (an issue naming the macOS version), and until it is fixed rely on
+   the `sudo` commands: check the job with `sudo launchctl print`, never start a refresh by hand beside it
+   (`make agents-token-refresh-start` would not see the job), and before installing again over a loaded job
+   unload it first with `sudo launchctl bootout system/<label>`.
+
+   A log line every 5 minutes saying `another agents App token refresh ... is running` means a refresh you
    started by hand still holds the lock: stop it as step 1 says. `make agents-token-refresh-start` now
    warns about the LaunchDaemon and starts nothing.
 
