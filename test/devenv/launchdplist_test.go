@@ -286,8 +286,12 @@ func TestAgentsTokenLaunchdPlistDescribesTheJob(t *testing.T) {
 				t.Errorf("the plist's ThrottleInterval is %q, which is no number of seconds: launchd wants an integer (issue #229)", plistText(t, dict, "ThrottleInterval"))
 			}
 
-			if throttle < 60 {
-				t.Errorf("the plist's ThrottleInterval is %d, want at least 60: a job launchd restarts faster than once a minute mints a token per restart against a GitHub that may be the reason it failed (issue #229)", throttle)
+			// ADR 0034, the runbook and the install's warning ("trying again every 5 minutes") all promise five
+			// minutes, so the plist pins exactly that: a shorter interval mints a token per restart against a GitHub
+			// that may be the reason the refresh failed, and a longer one keeps a stopped job down longer than the
+			// maintainer was told.
+			if throttle != 300 {
+				t.Errorf("the plist's ThrottleInterval is %d, want 300: launchd restarts a failing job at most once every five minutes, the interval ADR 0034, the runbook and the install's warning promise (issue #229)", throttle)
 			}
 
 			// launchd opens these as root, before the job's UserName applies, so nothing of the maintainer's
@@ -569,6 +573,37 @@ func TestAgentsTokenLaunchdPlistRefusesBadInput(t *testing.T) {
 			f.assertNoLeaks(t, stdout, stderr)
 		})
 	}
+}
+
+// TestAgentsTokenLaunchdPlistRefusesToRunAsRoot pins the sixth review's finding: the plist's UserName is the
+// account that renders it, so a plist rendered under `sudo -E make agents-token-refresh-install` would name root
+// as the job's account, and the job would then run a script root can be told to run while the maintainer can
+// still edit it. The generator therefore refuses before it prints anything, and says to run it as the maintainer
+// and not under sudo (issue #229, sixth review).
+func TestAgentsTokenLaunchdPlistRefusesToRunAsRoot(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdFixture(t, "shift2eu", xdgStateHomeSet)
+	f.sb.useFakeIDAsRoot(t)
+
+	stdout, stderr, err := f.plist(t)
+	if err == nil {
+		t.Fatalf("sh %s plist exited 0 with id -u answering 0: the job's UserName comes from id -un, so a plist rendered as root would run the refresh as root, on a script the maintainer can still edit\nstdout: %s\nstderr: %s", launchdScript, stdout, stderr)
+	}
+
+	if stdout != "" {
+		t.Errorf("the plist generator printed a plist although it refused to run as root, so make could install a job that runs as root:\n%s", stdout)
+	}
+
+	refusal := strings.ToLower(stderr)
+
+	for _, want := range []string{"maintainer", "sudo"} {
+		if !strings.Contains(refusal, want) {
+			t.Errorf("the refusal does not mention %q, so a maintainer who ran sudo -E make agents-token-refresh-install cannot tell how to run it instead:\nstderr: %s", want, stderr)
+		}
+	}
+
+	f.assertNoLeaks(t, stdout, stderr)
 }
 
 // plistValue is one value of a parsed property list: the kinds these tests read, and no more.

@@ -575,6 +575,34 @@ func (sb *sandbox) useFakeLaunchctlTakingTheLockAtLoad(t *testing.T, env map[str
 	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID"] = strconv.Itoa(pid)
 }
 
+// useFakeLaunchctlJobPrintingPid makes the job not loaded until `launchctl bootstrap` loads it, and makes
+// `launchctl print` afterwards report pid as the job's own: the job launchd started is running that process, as
+// it is when the refresh it runs took the instance's lock. A test can then pin what the install says about a
+// lock that holds the very pid launchctl names for the job (issue #229, sixth review).
+func (sb *sandbox) useFakeLaunchctlJobPrintingPid(t *testing.T, env map[string]string, label string, pid int) {
+	t.Helper()
+
+	sb.writeFakeLaunchctl(t)
+
+	// Nothing is loaded until the bootstrap runs, so the install's first `launchctl print` fails as it does for
+	// a label launchd does not know, and the bootstrap loads the job it then reads the pid of.
+	env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"] = filepath.Join(sb.root, "launchctl-loaded")
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS"] = "1"
+
+	path := filepath.Join(sb.root, "launchctl-print.txt")
+	printed := "system/" + label + " = {\n" +
+		"\tactive count = 1\n" +
+		"\tpath = /Library/LaunchDaemons/" + label + ".plist\n" +
+		"\ttype = LaunchDaemon\n" +
+		"\tstate = running\n" +
+		"\tpid = " + strconv.Itoa(pid) + "\n" +
+		"}\n"
+
+	writeFileMode(t, path, []byte(printed), 0o600)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE"] = path
+}
+
 // useFakeLaunchctlBootstrapThatLoadsAndFails makes the job not loaded now and `launchctl bootstrap` load it -
 // it creates the loaded state file, so a `launchctl print` afterwards succeeds - while bootstrap still exits
 // non-zero, as launchd does when it loaded a job and could not answer with success. A test can then pin what the
@@ -714,6 +742,36 @@ func (sb *sandbox) useFakeSleep(t *testing.T) {
 
 	//nolint:gosec // the fake sleep is a script the tests run, so it must be executable
 	if err := os.WriteFile(path, []byte(fakeSleep), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// fakeID stands in for id in a test that pins what a recipe does when it runs as root: it records its argv and
+// answers uid 0 and the account name root for the options the Makefile and the plist generator read (`id -u`,
+// `id -un`, and the short forms `id -ur` and `id -nur`), and hands every other call to the real id, so a test
+// fails on the refusal it pins and not on an id its stand-in could not answer (issue #229, sixth review).
+const fakeID = `#!/bin/sh
+{
+  printf 'tool=id\n'
+  for a in "$@"; do printf 'arg=%%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+case "$*" in
+'-u' | '-ur') printf '0\n'; exit 0 ;;
+'-un' | '-nu' | '-urn' | '-nur') printf 'root\n'; exit 0 ;;
+esac
+exec %s "$@"
+`
+
+// useFakeIDAsRoot puts an id first on PATH that answers uid 0 and the account name root, as id does in a shell
+// that runs under sudo, and hands every other call to the machine's own id.
+func (sb *sandbox) useFakeIDAsRoot(t *testing.T) {
+	t.Helper()
+
+	shim := fmt.Sprintf(fakeID, strconv.Quote(realTool(t, "id")))
+	path := filepath.Join(sb.binDir, "id")
+
+	//nolint:gosec // the fake id is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }

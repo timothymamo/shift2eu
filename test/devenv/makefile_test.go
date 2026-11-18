@@ -716,6 +716,38 @@ func TestMakeAgentsTokenRefreshStartKeepsOneRefresherPerVM(t *testing.T) {
 			t.Errorf("the pid file holds %d, which is not running: with no LaunchDaemon loaded the target still starts the refresher it always started (issue #229)", pid)
 		}
 	})
+
+	// A shell that never exported LIMA_INSTANCE still gets the default instance's refresher: the recipe exports
+	// LIMA_INSTANCE := $(LIMA_INSTANCE), and the Makefile defaults it to shift2eu, so the pid and log files are
+	// named after that VM and not after an empty name (issue #229, sixth review).
+	t.Run("no LIMA_INSTANCE in the environment starts the default instance's refresher", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTokenFixture(t, "shift2eu")
+		delete(f.env, "LIMA_INSTANCE")
+
+		f.sb.useFakeLaunchctl(t, f.env, "113")
+
+		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-start with no LIMA_INSTANCE in its environment: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		pidPath := f.statePath("agents-token-refresh-shift2eu.pid")
+		pid := readPid(t, pidPath)
+
+		if !pidAlive(pid) {
+			t.Errorf("the pid file %s holds %d, which is not running: a start with no LIMA_INSTANCE in the environment starts the default instance's refresher", pidPath, pid)
+		}
+
+		if _, err := os.Stat(f.statePath("agents-token-refresh-.pid")); err == nil {
+			t.Errorf("make agents-token-refresh-start named the pid file after an empty instance: with no LIMA_INSTANCE in the environment it must use the Makefile's default, shift2eu")
+		}
+
+		waitFor(t, 60*time.Second, "the default instance's refresher to mint a token", func() bool {
+			return len(f.api.minted()) >= 1
+		})
+	})
 }
 
 // TestMakeAgentsTokenRefreshStartRefusesAnInvalidInstance pins the fifth review's finding: the start target uses
@@ -778,6 +810,7 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 	cases := []struct {
 		name           string
 		lockHeldBefore bool // a refresh started by hand holds the lock before make runs
+		jobRunsLock    bool // launchctl print reports the lock's pid as the job's own after the bootstrap
 		wantWarned     bool
 	}{
 		{
@@ -787,6 +820,15 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 			name:           "a refresh started by hand held the lock before the install",
 			lockHeldBefore: true,
 			wantWarned:     true,
+		},
+		{
+			// The install reads the lock's pid before the bootstrap and warns only about a refresh that still
+			// holds that pid and is not the pid `launchctl print` reports for the job: the lock can belong to the
+			// job's own refresh even when the maintainer started that refresh by hand, and the last condition is
+			// what the pid comparison is for (issue #229, sixth review).
+			name:           "the job runs the very pid the lock holds",
+			lockHeldBefore: true,
+			jobRunsLock:    true,
 		},
 	}
 
@@ -806,6 +848,12 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 				writeFileMode(t, lockPid, []byte(pid+"\n"), 0o600)
 			} else {
 				f.sb.useFakeLaunchctlTakingTheLockAtLoad(t, f.env, lockPid, refresh.pid())
+			}
+
+			if tc.jobRunsLock {
+				// The job is not loaded yet (the install's first `launchctl print` fails), the bootstrap loads it,
+				// and from then on launchctl names the refresh's own pid as the job's.
+				f.sb.useFakeLaunchctlJobPrintingPid(t, f.env, f.label(), refresh.pid())
 			}
 
 			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
@@ -847,6 +895,43 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 				}
 			}
 		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesToRunAsRoot pins the sixth review's finding: the plist names the
+// account that rendered it (id -un) as the job's UserName, so an install run under sudo -E would install a job
+// that runs the host clone's script as root - a script the maintainer can still edit, and everything it reaches.
+// The install must refuse such a run before it runs anything as root, prints no plist and installs nothing, and
+// must say to run it as the maintainer and not under sudo.
+func TestMakeAgentsTokenRefreshInstallRefusesToRunAsRoot(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	f.sb.useFakeIDAsRoot(t)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err == nil {
+		t.Fatalf("make agents-token-refresh-install exited 0 with id -u answering 0: the plist it renders would name root as the job's UserName, and the job would run the host clone's script - which the maintainer can still edit - as root, at every boot\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	refusal := strings.ToLower(stderr)
+
+	for _, want := range []string{"maintainer", "sudo"} {
+		if !strings.Contains(refusal, want) {
+			t.Errorf("the refusal does not mention %q, so a maintainer who ran sudo -E make agents-token-refresh-install cannot tell how to run it instead:\nstdout: %s\nstderr: %s", want, stdout, stderr)
+		}
+	}
+
+	// Refusing means doing nothing: no plist is rendered or linted, no file is installed and no job is loaded,
+	// so a refused run leaves the machine exactly as it was (issue #229, sixth review).
+	for _, tool := range []string{"sudo", "launchctl", "plutil"} {
+		if calls := invocations(f.sb.argvLogText(t), tool); len(calls) != 0 {
+			t.Errorf("the install ran %s although it refuses to run as root, so the refusal comes after work that root should never have been asked for: %v\nstdout: %s\nstderr: %s", tool, calls, stdout, stderr)
+		}
+	}
+
+	if _, err := os.Stat(f.dest()); err == nil {
+		t.Errorf("the install wrote the plist %s although it refuses to run as root: then a refused run still leaves a job behind for root to load at the next boot", f.dest())
 	}
 }
 
