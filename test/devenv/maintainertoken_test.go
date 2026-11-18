@@ -131,12 +131,14 @@ func TestMakeVMEnvNeedsNoMaintainerToken(t *testing.T) {
 func TestMakeVMCreateNeedsNoMaintainerToken(t *testing.T) {
 	t.Parallel()
 
+	// The subtest names carry no GITHUB_TOKEN: they end up in the t.TempDir() paths the fixture echoes, and
+	// the "names it nowhere" check below would then trip on its own temporary directory.
 	cases := []struct {
 		name   string
 		github *string // nil leaves GITHUB_TOKEN out of make's environment
 	}{
-		{name: "GITHUB_TOKEN unset"},
-		{name: "GITHUB_TOKEN set to an empty string", github: ptrTo("")},
+		{name: "maintainer token unset"},
+		{name: "maintainer token set to an empty string", github: ptrTo("")},
 	}
 
 	for _, tc := range cases {
@@ -180,12 +182,59 @@ func TestTheVMFilesNameNoMaintainerToken(t *testing.T) {
 		body := readRepoFile(t, file)
 
 		for i, line := range strings.Split(body, "\n") {
-			if strings.Contains(line, "GITHUB_TOKEN") {
-				t.Errorf("%s:%d names GITHUB_TOKEN: the maintainer's personal token leaves the VM - the gh wrapper has no fallback to it and make vm-env no longer copies it in - so nothing here may pass it on or ask a maintainer to set it (PRD #161 milestone 3): %s",
-					file, i+1, strings.TrimSpace(line))
+			if !strings.Contains(line, "GITHUB_TOKEN") || onlyUnsetsTheToken(line) {
+				continue
 			}
+
+			t.Errorf("%s:%d names GITHUB_TOKEN: the maintainer's personal token leaves the VM - the gh wrapper has no fallback to it and make vm-env no longer copies it in - so nothing here may pass it on or ask a maintainer to set it (PRD #161 milestone 3): %s",
+				file, i+1, strings.TrimSpace(line))
 		}
 	}
+}
+
+// onlyUnsetsTheToken reports whether line is a shell `unset` statement whose only effect on the maintainer's
+// token is to drop it from the environment. dev/gh-app-token.sh unsets GITHUB_TOKEN (and its own token) before
+// running the real gh, so a stale variable inherited from the caller never reaches it - defence in depth, pinned
+// by TestGHAppTokenHandsTheAppTokenToTheRealGH - and dev/lima.yaml embeds that wrapper byte for byte, so the
+// same line appears there. Any other use - exporting, reading, checking, listing it as a credential, falling
+// back to it - is still a mention these files may not make.
+func onlyUnsetsTheToken(line string) bool {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || fields[0] != "unset" {
+		return false
+	}
+
+	unsetsToken := false
+
+	for _, name := range fields[1:] {
+		if !isShellName(name) {
+			return false
+		}
+
+		if name == "GITHUB_TOKEN" {
+			unsetsToken = true
+		}
+	}
+
+	return unsetsToken
+}
+
+// isShellName reports whether s is a plain shell variable name, which is all an `unset` may list.
+func isShellName(s string) bool {
+	if s == "" {
+		return false
+	}
+
+	for i, r := range s {
+		switch {
+		case r == '_', r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 // ptrTo returns a pointer to s, for a case that hands make's environment a value it must read as set.
