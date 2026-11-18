@@ -27,11 +27,13 @@ its lock.
 **A LaunchDaemon per VM instance runs `dev/agents-app-token.sh refresh` in the foreground, as the
 maintainer, at boot.** `make agents-token-refresh-install`, run from the host clone, renders its plist
 with `dev/agents-token-launchd.sh plist` (a pure function of its inputs, pinned by
-`test/devenv/launchdplist_test.go` on Linux, and by `plutil -lint` where it exists), prints it and every
-`sudo` command, installs it as `/Library/LaunchDaemons/<label>.plist` (root, mode 0644) and bootstraps it
-into the `system` domain; `make agents-token-refresh-uninstall` boots it out and removes that one file.
-`make agents-token-refresh-start` stays as it was, but warns and starts nothing while the instance's
-LaunchDaemon is loaded (`launchctl print system/<label>` succeeds), and needs no launchctl on Linux.
+`test/devenv/launchdplist_test.go` on Linux), refuses a clone inside any of the VM's mounts, lints the
+plist with `plutil -lint`, prints it with its SHA-256, the script the job runs and every `sudo` command,
+installs it as `/Library/LaunchDaemons/<label>.plist` (root, mode 0644), checks the installed file's
+SHA-256 and bootstraps it into the `system` domain; `make agents-token-refresh-uninstall` boots it out and
+removes that one file. `make agents-token-refresh-start` stays as it was, but warns and starts nothing
+while the instance's LaunchDaemon is loaded (`launchctl print system/<label>` succeeds), says so when the
+loaded job runs another clone's script, and needs no launchctl on Linux.
 
 The job:
 
@@ -39,12 +41,21 @@ The job:
 |---|---|
 | `Label` | `io.github.timothymamo.shift2eu.agents-token-refresh.<LIMA_INSTANCE>`: one job per VM instance |
 | `UserName` | the account that installed it (`id -un`): the job runs as the maintainer, not as root |
-| `ProgramArguments` | `/bin/sh <host clone>/dev/agents-app-token.sh refresh` |
+| `ProgramArguments` | `/bin/sh -c 'exec /bin/sh "$0" refresh >>"$1" 2>&1' <host clone>/dev/agents-app-token.sh <log>`: the script and the log are arguments of their own, never spliced into the shell text |
 | `WorkingDirectory` | the host clone |
-| `EnvironmentVariables` | exactly `LIMA_INSTANCE`, the three `SHIFT2EU_AGENTS_APP_*` (the key's **path**), `HOME`, and a `PATH` with `/opt/homebrew/bin` (Homebrew's `limactl`) |
+| `EnvironmentVariables` | exactly `LIMA_INSTANCE`, the three `SHIFT2EU_AGENTS_APP_*` (the key's **path**), `HOME`, `XDG_STATE_HOME` when it is set and not empty, and a `PATH` with `/opt/homebrew/bin` (Homebrew's `limactl`) |
 | `RunAtLoad`, `KeepAlive` | true: it starts at boot and comes back whenever it exits |
 | `ThrottleInterval` | 300 seconds |
-| `StandardOutPath`, `StandardErrorPath` | `${XDG_STATE_HOME:-~/.local/state}/shift2eu/agents-token-refresh-<instance>.log`, the log `make agents-token-refresh-start` writes |
+| `StandardOutPath`, `StandardErrorPath` | `/dev/null`: the job opens its log, `${XDG_STATE_HOME:-~/.local/state}/shift2eu/agents-token-refresh-<instance>.log`, itself |
+
+**The job opens its own log.** launchd may open `StandardOutPath` and `StandardErrorPath` as root, before
+`UserName` applies, and the log lives in the maintainer's state directory: a symlink planted there would
+make root append to any file. So both are `/dev/null`, and the shell line opens the log as the maintainer,
+with the maintainer's permissions, the log `make agents-token-refresh-start` and a hand-started refresh
+write. `XDG_STATE_HOME` goes into the plist when the host clone sets it, so the job's log and lock are the
+same files the Makefile's targets and a refresh started by hand use; an empty one counts as unset, as
+`${XDG_STATE_HOME:-...}` reads it. Losing launchd's own messages about the job is the price; `launchctl
+print` still shows its state and last exit.
 
 The open points of issue #229:
 
@@ -53,8 +64,8 @@ The open points of issue #229:
   clone's `.envrc`, through the maintainer's shell, and the plist holds a copy of their values from that
   moment: after changing `.envrc` (a new key file, another installation), install again. The plist is
   world-readable, so it holds the App ID, the installation ID and the key's path, which are not secret,
-  and never the key or a token; the script refuses any value with XML markup or a line break, so the job
-  never sees a value the maintainer did not write.
+  and never the key or a token; the script refuses any value with XML markup or a control character
+  (0x01-0x1F, 0x7F), naming the variable, so the job never sees a value the maintainer did not write.
 - **b) No make under launchd.** The job runs `/bin/sh dev/agents-app-token.sh refresh` directly, so GNU
   make against `/usr/bin/make`, and a Makefile's behaviour at boot, never come up. make runs only at
   install, in the maintainer's shell, as every other host-clone target does.
@@ -68,7 +79,17 @@ The open points of issue #229:
   as the maintainer. Whoever can change the host clone controls what runs with the key, at every boot now
   instead of at the next `make agents-token-refresh-start`: the host clone's integrity is still the
   boundary (ADR 0031, Consequences), and the job never pulls (`git pull --ff-only` stays a step the
-  maintainer runs, followed by an install or a `launchctl kickstart -k` to run the new code).
+  maintainer runs, followed by an install or a `launchctl kickstart -k` to run the new code). The job runs
+  the script as it is on disk when the job starts, not as it was at install time.
+  An install from the wrong clone, the workspace the VM mounts, would widen the exposure from a one-off run
+  of code the agents can edit to a persistent job that runs it unattended at every boot, as the
+  maintainer, with the key in reach. Four guards stand against that: the install asks `limactl list` for
+  the instance's mounts and refuses, before any `sudo`, a clone that is a mount or lies under one (compared
+  by path components, `~` expanded and symlinks resolved), and refuses too when limactl cannot answer,
+  since the check cannot be done then (create the VM first); it prints, before any `sudo`, the script the
+  job will run and that it must be the host clone's; `make agents-token-refresh-start` warns when the
+  loaded job runs another clone's script; and the runbook's check after install looks for the host
+  clone's script in `sudo launchctl print system/<label>`.
 - **e) The note from #237.** The job never starts the VM: it only writes into a VM that runs, and treats
   one that does not as a transient failure, so it can never start a Broken instance and create a default
   VM. Its logs are in the state directory, never under `~/.lima/<instance>/`, which a log launchd creates
@@ -109,5 +130,6 @@ and the job takes over once it is gone.
   on, as the hand-started one did while it ran (ADR 0031, Consequences: the key stays readable by the
   maintainer's uid until #227).
 - `docs/dev-environment.md` carries the install, check, reboot test, uninstall and rollback runbook.
-- The Linux tests pin the plist and the start target's warning; installing and booting it are checked by
-  hand on the Mac, as the runbook says.
+- The Linux tests pin the plist, the start target's warnings, and the install's and uninstall's checks and
+  `sudo` commands against fake `sudo`, `launchctl`, `plutil` and `limactl`; the real install and a boot are
+  checked by hand on the Mac, as the runbook says.

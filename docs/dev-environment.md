@@ -574,12 +574,19 @@ the hour the agents' `gh` and `git push` fail. On an unattended Mac, such as the
 it instead ([ADR 0034](adr/0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md)): a LaunchDaemon
 per VM instance, `io.github.timothymamo.shift2eu.agents-token-refresh.<instance>`, runs
 `/bin/sh <host clone>/dev/agents-app-token.sh refresh` as you, at boot with nobody logged in, and again
-whenever it exits (at most every 5 minutes). It writes to the same log as
-`make agents-token-refresh-start`, never under `~/.lima`, and never starts the VM: it waits for it, like
-any refresh. Its plist (`/Library/LaunchDaemons/<label>.plist`, root-owned) holds the App ID, the
-installation ID and the key's path, copied from the host clone's `.envrc` when you install it, never the
-key or a token: **install again after changing `.envrc`**, and after a `git pull --ff-only` of the host
-clone run `sudo launchctl kickstart -k system/<label>` so the job runs the pulled code. One LaunchDaemon
+whenever it exits (at most every 5 minutes). It opens its log itself, as you, and appends to the same log
+as `make agents-token-refresh-start`, `${XDG_STATE_HOME:-~/.local/state}/shift2eu/agents-token-refresh-<instance>.log`,
+owned by you and never under `~/.lima`; launchd's own output goes to `/dev/null`, because launchd would open
+a log path as root in a directory you can write. It never starts the VM: it waits for it, like any
+refresh. Its plist (`/Library/LaunchDaemons/<label>.plist`, root-owned) holds the App ID, the
+installation ID, the key's path and your `XDG_STATE_HOME` when it is set, copied from the host clone's
+`.envrc` when you install it, never the key or a token: **install again after changing `.envrc`**. The job
+runs the host clone's `dev/agents-app-token.sh` as it is when the job starts, so after a
+`git pull --ff-only` of the host clone run `sudo launchctl kickstart -k system/<label>` to run the pulled
+code now. Installing it from the wrong clone, such as the workspace the VM mounts, would turn a one-off
+run of the agents' code into a job that runs it at every boot: install refuses a clone inside any of the
+VM's mounts, and when `limactl list` cannot tell it the VM's mounts (no such VM yet) it refuses too, so
+create the VM first. One LaunchDaemon
 per `LIMA_INSTANCE`: for a second VM, install again with that instance's name. A `kill` of the job's
 refresh only restarts it (within 5 minutes): stop it with `make agents-token-refresh-uninstall`.
 
@@ -594,18 +601,26 @@ Over SSH on the Mac Mini, each step with its check (the instance `shift2eu`; for
    direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, even where no direnv hook runs
    ```
 
-   It prints the plist and every `sudo` command before running it, and asks for your password. A refresh
+   It refuses before any `sudo` when the clone lies inside one of the VM's mounts. It lints the plist with
+   `plutil -lint`, prints it with its SHA-256 and the line naming the script the job runs
+   (`<host clone>/dev/agents-app-token.sh`: check it is this clone, outside the workspace), prints every
+   `sudo` command before running it, and asks for your password. After installing it checks that the
+   installed plist has the SHA-256 it printed, and stops before loading it when it does not. A refresh
    you started by hand keeps the VM's lock: install says so and names its pid; the job then waits, trying
    every 5 minutes, until you stop that one (`kill <pid>`).
 
 2. **Check that it is loaded and minting**:
 
    ```bash
-   sudo launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu | grep -E 'state|pid|last exit'
+   sudo launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu | grep -E 'state|pid|last exit|agents-app-token.sh'
    tail ~/.local/state/shift2eu/agents-token-refresh-shift2eu.log
    ```
 
-   `state = running` and a pid, and the log's last lines say `wrote a token ... into the VM shift2eu`. A
+   `state = running` and a pid, the job's arguments name the host clone's script
+   (`~/agents/shift2eu/host/shift2eu/dev/agents-app-token.sh`, never one in the workspace), and the log's
+   last lines say `wrote a token ... into the VM shift2eu`. If
+   `make agents-token-refresh-start` ever warns that the job runs another clone's script, uninstall it and
+   install again from the host clone. A
    log line every 5 minutes saying `another agents App token refresh ... is running` means a refresh you
    started by hand still holds the lock: stop it as step 1 says. `make agents-token-refresh-start` now
    warns about the LaunchDaemon and starts nothing.
