@@ -22,10 +22,13 @@
 // instance name that is not letters, digits, '.', '_' and '-', starting with a letter or digit, is refused
 // before any limactl call at all - an empty name matches the empty line an empty listing prints, so it would
 // take the branch of a listed instance and could send a maintainer off to remove all of ~/.lima by hand.
-
+//
+// The fixture below is shared with vmup_resources_test.go, which pins make vm-up's VM_CPUS, VM_MEMORY, VM_DISK
+// and VM_SSH_PORT (issue #228) against the same fake limactl and the same throwaway clone.
 package devenv_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -61,7 +64,8 @@ const (
 // instance by name, as limactl does: a query about anything else gets nothing. SHIFT2EU_TEST_LIMA_STATUS_FAIL
 // stands for a limactl that cannot read the status at all: it says so on stderr and exits non-zero.
 // SHIFT2EU_TEST_LIMA_LIST_FAIL stands for a limactl whose existence listing fails: it says so on stderr and
-// exits non-zero.
+// exits non-zero. A limactl shell answers without running anything either, draining what the recipe pipes into
+// it, because make vm-create runs vm-env, vm-claude-settings and vm-init after its vm-up (issue #228).
 const statusLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
@@ -89,6 +93,12 @@ if [ "${1:-}" = list ]; then
   if [ -n "${SHIFT2EU_TEST_LIMA_STATUS:-}" ]; then printf '%s\n' "${SHIFT2EU_TEST_LIMA_STATUS}"; fi
   exit 0
 fi
+if [ "${1:-}" = shell ]; then
+  # make vm-env, make vm-claude-settings and make vm-init pipe their work into limactl shell: drain it, so the
+  # writer never meets a closed pipe.
+  cat >/dev/null 2>&1 || true
+  exit 0
+fi
 if [ "${1:-}" = start ]; then
   exit 0
 fi
@@ -96,15 +106,54 @@ echo "fake limactl: unexpected call: $*" >&2
 exit 64
 `
 
-// vmUpFixture is one throwaway environment for a run of make vm-up: a sandbox whose limactl answers the
-// listing and the status its case names, and a clone of the Makefile in a workspace that holds nothing but
-// the clone, so vm-up's workspace check and its git-hooks prerequisite pass without touching the worktree.
+// vmUpGitShim is the git make's recipes run in the vm-up tests: it answers git config core.hooksPath, the write
+// make vm-up's git-hooks prerequisite makes into the checkout's .git/config, without touching a file, and hands
+// every other call to the real git. That is defence in depth: no run writes into any .git/config, even if a test
+// ever ran make in a real checkout, whose config every worktree shares. The real git's path is shQuote's
+// single-quoted word, never a Go-quoted string: sh expands a $(...) or a backtick in a double-quoted path
+// (issue #228 review, item D).
+const vmUpGitShim = `#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = core.hooksPath ]; then exit 0; fi
+done
+exec %s "$@"
+`
+
+// writeGitShim writes the git shim into dir, handing every call but git config core.hooksPath to realGit, and
+// returns the shim's path.
+func writeGitShim(t *testing.T, dir, realGit string) string {
+	t.Helper()
+
+	path := filepath.Join(dir, "git")
+
+	//nolint:gosec // the git shim is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(fmt.Sprintf(vmUpGitShim, shQuote(realGit))), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	return path
+}
+
+// shQuote quotes s as one sh word: single quotes, with every ' inside s closed, backslash-escaped and reopened,
+// and the whole wrapped in them. sh expands nothing inside it, so a path that carries a $, a backtick or a
+// backslash reaches the command as it is.
+func shQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// vmUpFixture is one throwaway environment for a run of make vm-up or make vm-create: a sandbox whose limactl
+// answers the listing and the status its case names, and a clone of the Makefile in a workspace that holds
+// nothing but the clone, so vm-up's workspace check and its git-hooks prerequisite pass without touching the
+// repository the tests run from. The clone is a git repository of its own, so the Makefile resolves REPO_ROOT
+// and WORKSPACE from it and the VM would mount a path inside the sandbox.
 type vmUpFixture struct {
 	sb   *sandbox
 	env  map[string]string
 	root string // the clone make runs in
 	// limaInstance is the LIMA_INSTANCE make runs with: vmUpInstance unless a case picks another name.
 	limaInstance string
+	// marker is a file no run may create: what a value the Makefile got wrong would run (issue #228).
+	marker string
 }
 
 // newVMUpFixture builds the fixture for one case: instance is what limactl list --quiet answers (empty for
@@ -120,6 +169,8 @@ func newVMUpFixture(t *testing.T, instance, status string) *vmUpFixture {
 	if err := os.WriteFile(limactl, []byte(statusLimactl), 0o700); err != nil {
 		t.Fatalf("write %s: %v", limactl, err)
 	}
+
+	writeGitShim(t, sb.binDir, realTool(t, "git"))
 
 	// vm-up depends on git-hooks, so make must run in a git repository, and its workspace may hold only
 	// the repository itself: the clone sits alone in a directory of its own inside the sandbox.
@@ -141,7 +192,21 @@ func newVMUpFixture(t *testing.T, instance, status string) *vmUpFixture {
 	env["SHIFT2EU_TEST_LIMA_INSTANCE"] = instance
 	env["SHIFT2EU_TEST_LIMA_STATUS"] = status
 
-	return &vmUpFixture{sb: sb, env: env, root: root, limaInstance: vmUpInstance}
+	// make vm-create runs make vm-env after its vm-up, and vm-env refuses a VM_ENV name that is unset or empty
+	// (issue #234). The fixture's environment holds none of the test machine's own (CLAUDE.md rule 3), so the
+	// VM_ENV names get invented values here, with the same helper the issue #234 tests use: obviously fake
+	// ones, never a credential of this machine.
+	for _, name := range vmEnvCredentials {
+		env[name] = fakeEnvValue(name)
+	}
+
+	return &vmUpFixture{
+		sb:           sb,
+		env:          env,
+		root:         root,
+		limaInstance: vmUpInstance,
+		marker:       filepath.Join(sb.root, "marker-a-value-ran"),
+	}
 }
 
 // workspace is the directory the run mounts: the clone's parent, which holds only the clone.
@@ -187,6 +252,13 @@ func (f *vmUpFixture) symlinkInstanceLimaYaml(t *testing.T) {
 	}
 }
 
+// run runs make with args in the clone, with the fixture's environment alone.
+func (f *vmUpFixture) run(t *testing.T, args ...string) (string, string, error) {
+	t.Helper()
+
+	return runMakeIn(t, f.root, args, f.env)
+}
+
 // statusQueries returns the argv of every limactl list that is not the existence check (--quiet), in call
 // order: the status query vm-up makes about a listed instance.
 func (f *vmUpFixture) statusQueries(t *testing.T) [][]string {
@@ -218,6 +290,48 @@ func (f *vmUpFixture) starts(t *testing.T) [][]string {
 	}
 
 	return starts
+}
+
+// creating is the argv of the one limactl start that creates the VM from dev/lima.yaml (issue #228).
+func (f *vmUpFixture) creating(t *testing.T) []string {
+	t.Helper()
+
+	var creating [][]string
+
+	for _, args := range f.starts(t) {
+		if slices.Contains(args, "dev/lima.yaml") {
+			creating = append(creating, args)
+		}
+	}
+
+	if len(creating) != 1 {
+		t.Fatalf("make ran %d limactl start call(s) creating the VM from dev/lima.yaml, want exactly one; the start calls were:%s",
+			len(creating), describeCalls(f.starts(t)))
+	}
+
+	return creating[0]
+}
+
+// creationArgs is the argv limactl start creates the VM with, without issue #228's four flags: today's command
+// line, byte for byte.
+func (f *vmUpFixture) creationArgs() []string {
+	return []string{
+		"start",
+		"--name=" + f.env["LIMA_INSTANCE"],
+		"--mount-only", f.workspace() + ":w",
+		"--tty=false",
+		"dev/lima.yaml",
+	}
+}
+
+// creationWith is creationArgs with flags added after the existing creation arguments, the template staying the
+// last argument, the way limactl documents its start flags.
+func (f *vmUpFixture) creationWith(flags []string) []string {
+	args := f.creationArgs()
+	want := slices.Clone(args[:len(args)-1])
+	want = append(want, flags...)
+
+	return append(want, args[len(args)-1])
 }
 
 // TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning pins the refusal: with a listed instance whose status
@@ -321,7 +435,7 @@ func TestVMUpRefusesAnInstanceThatIsNotStoppedOrRunning(t *testing.T) {
 				f.env["SHIFT2EU_TEST_LIMA_STATUS_FAIL"] = "1"
 			}
 
-			stdout, stderr, err := runMakeIn(t, f.root, []string{"vm-up"}, f.env)
+			stdout, stderr, err := f.run(t, "vm-up")
 			if err == nil {
 				t.Fatalf("make vm-up exited 0 with the instance listed as %q: it must stop before limactl start, which turns a name it cannot load into template:default, a VM that mounts the whole home directory (issue #237)\nstdout: %s\nstderr: %s",
 					tc.status, stdout, stderr)
@@ -376,7 +490,7 @@ func TestVMUpStopsWhenItCannotListInstances(t *testing.T) {
 	f := newVMUpFixture(t, vmUpInstance, "Stopped")
 	f.env["SHIFT2EU_TEST_LIMA_LIST_FAIL"] = "1"
 
-	stdout, stderr, err := runMakeIn(t, f.root, []string{"vm-up"}, f.env)
+	stdout, stderr, err := f.run(t, "vm-up")
 	if err == nil {
 		t.Fatalf("make vm-up exited 0 although limactl list --quiet failed: a listing vm-up cannot read is not an instance that is not listed, and creating one on the strength of it may collide with the VM that is there (issue #237)\nstdout: %s\nstderr: %s",
 			stdout, stderr)
@@ -526,7 +640,7 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 				f.symlinkInstanceLimaYaml(t)
 			}
 
-			stdout, stderr, err := runMakeIn(t, f.root, []string{"vm-up"}, f.env)
+			stdout, stderr, err := f.run(t, "vm-up")
 
 			if tc.want == nil {
 				if err == nil {
@@ -646,7 +760,7 @@ func TestVMUpRefusesAnInvalidInstanceName(t *testing.T) {
 				assertMakeSeesEmptyInstance(t, f)
 			}
 
-			stdout, stderr, err := runMakeIn(t, f.root, []string{"vm-up"}, f.env)
+			stdout, stderr, err := f.run(t, "vm-up")
 			if err == nil {
 				t.Fatalf("make vm-up exited 0 with LIMA_INSTANCE=%q: an invalid instance name must stop vm-up, or limactl reads it as an option, a path or nothing at all and the name that is started is not the one LIMA_INSTANCE asks for (issue #237)\nstdout: %s\nstderr: %s",
 					tc.limaInstance, stdout, stderr)
