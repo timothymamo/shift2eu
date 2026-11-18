@@ -58,8 +58,9 @@ func (g *processGroup) join(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: g.holder.Process.Pid}
 }
 
-// end kills every process in the group, the holder included, and then reaps the holder. It ignores ESRCH,
-// which cannot happen while the holder is unreaped, and the holder's exit status: SIGKILL ended it.
+// end kills every process in the group, the holder included, and then reaps the holder. It ignores the
+// kill error, as ESRCH means only zombies are left in the group, and the holder's exit status: SIGKILL
+// or whatever else ended it.
 func (g *processGroup) end() {
 	_ = syscall.Kill(-g.holder.Process.Pid, syscall.SIGKILL)
 	_ = g.holder.Wait()
