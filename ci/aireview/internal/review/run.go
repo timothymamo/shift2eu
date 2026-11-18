@@ -1,6 +1,9 @@
 package review
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // PullRequests is what Run needs of GitHub; *GitHub implements it.
 type PullRequests interface {
@@ -52,9 +55,68 @@ type Result struct {
 // dismisses the reviews DismissalsFor picks. Any error before the post returns
 // with nothing posted and nothing dismissed.
 func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result, error) {
-	_, _, _, _ = ctx, gh, model, cfg // the skeleton's stub (step 1)
+	pr, err := gh.PullRequest(ctx, cfg.Number)
+	if err != nil {
+		return Result{}, err
+	}
 
-	return Result{}, errNotImplemented
+	if pr.Draft {
+		return Result{}, fmt.Errorf("pull request %d: %w", cfg.Number, ErrDraft)
+	}
+
+	diff, err := gh.Diff(ctx, pr)
+	if err != nil {
+		return Result{}, err
+	}
+
+	files, err := gh.ChangedFiles(ctx, cfg.Number)
+	if err != nil {
+		return Result{}, err
+	}
+
+	text, err := model.Ask(ctx, BuildPrompt(cfg.Instructions, pr, files, diff))
+	if err != nil {
+		return Result{}, fmt.Errorf("ask the model to review pull request %d: %w", cfg.Number, err)
+	}
+
+	answer, err := ParseAnswer(text)
+	if err != nil {
+		return Result{}, fmt.Errorf("read the model's review of pull request %d: %w", cfg.Number, err)
+	}
+
+	event := Decide(answer.Findings, cfg.RequestChanges)
+
+	if err := gh.PostReview(ctx, cfg.Number, Render(pr.HeadSHA, answer, event, diff)); err != nil {
+		return Result{}, err
+	}
+
+	result := Result{
+		HeadSHA:  pr.HeadSHA,
+		Event:    event,
+		Findings: len(answer.Findings),
+		Blocking: countBlocking(answer.Findings),
+	}
+
+	if result.Blocking > 0 {
+		return result, nil
+	}
+
+	reviews, err := gh.Reviews(ctx, cfg.Number)
+	if err != nil {
+		return result, fmt.Errorf("posted the review, then: %w", err)
+	}
+
+	message := fmt.Sprintf("The AI reviewer's review of %s found nothing blocking; it withdraws its earlier change request.", pr.HeadSHA)
+
+	for _, earlier := range DismissalsFor(reviews, cfg.BotLogin, answer.Findings) {
+		if err := gh.DismissReview(ctx, cfg.Number, earlier.ID, message); err != nil {
+			return result, fmt.Errorf("posted the review, then: %w", err)
+		}
+
+		result.Dismissed = append(result.Dismissed, earlier.ID)
+	}
+
+	return result, nil
 }
 
 // DismissalsFor returns the reviews to dismiss after a review with findings:
@@ -63,7 +125,17 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 // the order given. Another login's review, or one of the reviewer's in another
 // state, is never returned; an empty botLogin returns none.
 func DismissalsFor(reviews []PostedReview, botLogin string, findings []Finding) []PostedReview {
-	_, _, _ = reviews, botLogin, findings // the skeleton's stub (step 1)
+	if botLogin == "" || countBlocking(findings) > 0 {
+		return nil
+	}
 
-	return nil
+	var dismiss []PostedReview
+
+	for _, r := range reviews {
+		if r.Login == botLogin && r.State == "CHANGES_REQUESTED" {
+			dismiss = append(dismiss, r)
+		}
+	}
+
+	return dismiss
 }

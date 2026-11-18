@@ -40,10 +40,6 @@ var (
 	ErrSettings = errors.New("invalid AI review settings")
 )
 
-// errNotImplemented is returned by the skeleton's stubs (PRD #161 milestone 4,
-// step 1); step 3 replaces every use of it.
-var errNotImplemented = errors.New("not implemented")
-
 // Event is a review event as the GitHub API names it.
 type Event string
 
@@ -94,7 +90,20 @@ type Finding struct {
 // Blocking reports whether the finding blocks: severity blocker, or category
 // prompt-injection whatever its severity.
 func (f Finding) Blocking() bool {
-	return false
+	return f.Severity == SeverityBlocker || f.Category == CategoryPromptInjection
+}
+
+// countBlocking returns how many of findings are blocking.
+func countBlocking(findings []Finding) int {
+	n := 0
+
+	for _, f := range findings {
+		if f.Blocking() {
+			n++
+		}
+	}
+
+	return n
 }
 
 // Answer is the model's parsed answer: a summary and the findings, possibly
@@ -108,7 +117,9 @@ type Answer struct {
 // when a finding is blocking and requestChanges (the AI_REVIEW_REQUEST_CHANGES
 // switch) is on, EventComment otherwise. The model never names the event.
 func Decide(findings []Finding, requestChanges bool) Event {
-	_, _ = findings, requestChanges // the skeleton's stub (step 1)
+	if requestChanges && countBlocking(findings) > 0 {
+		return EventRequestChanges
+	}
 
-	return ""
+	return EventComment
 }
