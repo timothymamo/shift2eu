@@ -66,15 +66,21 @@ jobs:
       # 0033). Installed before any secret is in a step's environment, at an exact version, from the
       # linux-x64 platform package (ubuntu-latest is x64). .github/scripts/install-claude-code.sh, main's
       # copy, downloads it with npm pack, which runs no install script, compares the tarball with the npm
-      # integrity pinned here and only then extracts its one binary, package/claude. The meta package
-      # @anthropic-ai/claude-code only picks this package in a postinstall script, so it is skipped. A
-      # Renovate bump of the version must also replace the integrity (npm view
-      # @anthropic-ai/claude-code-linux-x64@<version> dist.integrity): until it does, this step fails and
-      # nothing unverified runs, which is the safe way round. A Renovate PR's own AI review runs main's
-      # copy of this file, so a missed integrity shows only once the bump is merged.
+      # integrity pinned here and only then extracts its one binary, package/claude. It fails when the
+      # runner image ships /etc/claude-code, whose managed policy the CLI would apply under every flag.
+      # The meta package @anthropic-ai/claude-code only picks this package in a postinstall script, so
+      # it is skipped. The version and the integrity are this step's env:, where Renovate's generic
+      # manager reads the version under its # renovate: comment. A Renovate bump of the version must
+      # also replace CLAUDE_CODE_INTEGRITY (npm view @anthropic-ai/claude-code-linux-x64@<version>
+      # dist.integrity): until it does, this step fails and nothing unverified runs, which is the safe
+      # way round. A Renovate PR's own AI review runs main's copy of this file, so a missed integrity
+      # shows only once the bump is merged.
       - name: Install the Claude Code CLI
-        # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64
-        run: .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" @anthropic-ai/claude-code-linux-x64@2.1.327 sha512-uJ24I+t47cpQjeo31ZrHepsFQ8QUsLjCxmDxLshMjYHEtoxhQdgKc4iuViQDaKpFqn3puR85gwHlLj4e7s+1iQ==
+        env:
+          # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64
+          CLAUDE_CODE_VERSION: 2.1.327
+          CLAUDE_CODE_INTEGRITY: sha512-uJ24I+t47cpQjeo31ZrHepsFQ8QUsLjCxmDxLshMjYHEtoxhQdgKc4iuViQDaKpFqn3puR85gwHlLj4e7s+1iQ==
+        run: .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}" "${CLAUDE_CODE_INTEGRITY}"
       # A token of the reviewer App, revoked when the job ends, with exactly Pull requests write (to post
       # and dismiss its reviews) and Contents read. client-id, never the deprecated app-id (ADR 0021).
       - name: Mint the reviewer App's token
@@ -92,8 +98,11 @@ jobs:
       # own, which inherits nothing else of this step's.
       # No ANTHROPIC_API_KEY, here or anywhere: Claude Code prefers an API key over the subscription
       # whenever one is set and bills the API instead, so the program refuses to run beside one.
+      # TMPDIR is the job's own temporary directory, so the CLI's empty working directory, its HOME and
+      # the system prompt file are made under a directory only this job writes to (os.MkdirTemp reads it).
       - name: Review the pull request
         env:
+          TMPDIR: ${{ runner.temp }}
           AI_REVIEW_PR_NUMBER: ${{ github.event.pull_request.number }}
           AI_REVIEWER_APP_SLUG: ${{ steps.app.outputs.app-slug }}
           AI_REVIEWER_TOKEN: ${{ steps.app.outputs.token }}

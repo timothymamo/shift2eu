@@ -62,13 +62,15 @@ type cliResult struct {
 
 // Ask runs the CLI once and returns its result text:
 //
-//	claude -p --model Model --output-format json --tools "" --setting-sources ""
-//	  --strict-mcp-config --disable-slash-commands --no-session-persistence
-//	  --system-prompt-file <file>
+//	claude -p --model Model --output-format json --safe-mode --tools ""
+//	  --setting-sources "" --strict-mcp-config --disable-slash-commands
+//	  --no-session-persistence --system-prompt-file <file>
 //
 // p.System is written to a file of a temporary directory of its own, which the
 // flag names; p.User, the untrusted pull request, reaches the CLI on stdin
-// alone. The CLI runs in an empty temporary directory, with an empty temporary
+// alone. --safe-mode turns CLAUDE.md, skills, plugins, hooks, MCP servers and
+// custom agents off, and --setting-sources "" skips the user, project and
+// local settings files. The CLI runs in an empty temporary directory, with an empty temporary
 // HOME and an environment of exactly the token, HOME, a fixed PATH and the
 // switches that turn its updater, telemetry and error reports off: nothing of
 // the runner's environment, an ANTHROPIC_API_KEY included, is inherited. It
@@ -115,15 +117,24 @@ func (c *ClaudeCLI) Ask(ctx context.Context, p Prompt) (string, error) {
 
 	runErr := cmd.Run()
 
-	if err := ctx.Err(); err != nil {
-		return "", fmt.Errorf("%w: the Claude Code CLI was cancelled: %w", ErrModel, err)
+	// The run's own outcome comes first: a CLI that exited 0 with a successful
+	// result just as the deadline passed has answered, and is not a timeout.
+	// Every other outcome of a run whose context is done is reported as the
+	// cancellation or the timeout it most likely is.
+	text, err := c.answer(runErr, stdout, stderr)
+	if err == nil {
+		return text, nil
+	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return "", fmt.Errorf("%w: the Claude Code CLI was cancelled: %w", ErrModel, ctxErr)
 	}
 
 	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		return "", fmt.Errorf("%w: the Claude Code CLI timed out after %s", ErrModel, c.timeout)
 	}
 
-	return c.answer(runErr, stdout, stderr)
+	return "", err
 }
 
 // cliArgs returns the CLI's arguments with the system prompt in systemFile.
@@ -132,6 +143,7 @@ func cliArgs(systemFile string) []string {
 		"-p",
 		"--model", Model,
 		"--output-format", "json",
+		"--safe-mode",
 		"--tools", "",
 		"--setting-sources", "",
 		"--strict-mcp-config",

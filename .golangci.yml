@@ -1485,16 +1485,18 @@ linters:
           deny:
             - pkg: os/exec
               desc: the AI reviewer's entry point runs no program; its library runs the one Claude Code CLI call (ADR 0033)
-        # The reviewer's library reads no environment variable and no file of
-        # the repository: ci/aireview hands it the settings, main's
-        # instructions, the HTTP client and the Claude Code CLI's path, so it
-        # is held to named standard packages, without syscall or unsafe, and to
-        # no package of the product (ADR 0033). os and os/exec are the one CLI
-        # run it asks the model through: it writes the system prompt to a file
-        # of a temporary directory and starts `claude -p` in another, with an
-        # environment of its own. The forbidigo group ai-reviewer-env still
-        # refuses every read of the environment and every lookup of a home,
-        # config, cache or temp directory.
+        # The reviewer's library reads no environment variable and no file:
+        # ci/aireview hands it the settings, main's instructions, the HTTP
+        # client and the Claude Code CLI's path, so it is held to named
+        # standard packages, without syscall or unsafe, and to no package of
+        # the product (ADR 0033). os and os/exec are the one CLI run it asks
+        # the model through: it writes the system prompt to a file of a
+        # temporary directory and starts `claude -p` in another, with an
+        # environment of its own. An import rule cannot narrow os, so forbidigo
+        # does: ai-reviewer-env refuses every read of the environment and every
+        # lookup of a home, config, cache or temp directory, and
+        # ai-reviewer-one-process refuses exec.Command and the os calls that
+        # open or read a file in the library's non-test files.
         ai-reviewer-is-standard-library:
           list-mode: strict
           files:
@@ -2072,6 +2074,24 @@ linters:
         - pattern: '^os\.LookupEnv$'
           pkg: '^os$'
           msg: 'ai-reviewer-env: os.LookupEnv is used in ci/aireview/main.go only, passed to review.SettingsFromEnv (ADR 0033); a test passes a lookup function of its own'
+        # Group ai-reviewer-one-process (PRD #161 milestone 4, ADR 0033): the
+        # library imports os and os/exec for its one Claude Code CLI run. It
+        # starts that process with exec.CommandContext, so a timeout or a
+        # cancellation reaches it, and refuses exec.Command, which takes no
+        # context. It writes the system prompt to a file of a temporary
+        # directory it makes and removes (os.WriteFile, os.MkdirTemp,
+        # os.RemoveAll), and opens no file for reading: the pull request and
+        # main's instructions reach it as strings, so nothing of the checkout
+        # or the runner's home is a file it reads. Scope: the library's
+        # non-test files; its exclusion rules drop it in the library's
+        # _test.go files, which read fixtures and run the go command as a
+        # test does, and everywhere outside the library.
+        - pattern: '^exec\.Command$'
+          pkg: '^os/exec$'
+          msg: 'ai-reviewer-one-process: the library of the AI reviewer starts its one process, the Claude Code CLI, with exec.CommandContext, so a timeout or a cancellation reaches it (ADR 0033)'
+        - pattern: '^os\.(?:ReadFile|Open|OpenFile|ReadDir)$'
+          pkg: '^os$'
+          msg: 'ai-reviewer-one-process: the library of the AI reviewer reads no file; ci/aireview hands it the pull request and the instructions as strings (ADR 0033)'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -2190,10 +2210,11 @@ linters:
         linters:
           - forbidigo
         text: 'because "tests-no-process-state: [^"]*"$'
-      # And for the AI reviewer's library tests (ADR 0033): the one test that
-      # sets ANTHROPIC_API_KEY and a variable of its own with t.Setenv, with no
+      # And for claudecli_test.go alone (ADR 0033): its one test that sets
+      # ANTHROPIC_API_KEY and a variable of its own with t.Setenv, with no
       # parallel test beside it, to prove the Claude Code CLI inherits neither.
-      - path: ^ci/aireview/internal/review/.*_test\.go$
+      # Every other file of the AI reviewer's library is held to the group.
+      - path: ^ci/aireview/internal/review/claudecli_test\.go$
         linters:
           - forbidigo
         text: 'because "tests-no-process-state: [^"]*"$'
@@ -2232,6 +2253,16 @@ linters:
         linters:
           - forbidigo
         text: 'because "ai-reviewer-env: os\.LookupEnv is used in ci/aireview/main\.go only, passed to review\.SettingsFromEnv \(ADR 0033\); a test passes a lookup function of its own"$'
+      # ai-reviewer-one-process: the group holds for the non-test files of
+      # ci/aireview/internal/review/ and nowhere else.
+      - path: ^ci/aireview/internal/review/.*_test\.go$
+        linters:
+          - forbidigo
+        text: 'because "ai-reviewer-one-process: [^"]*"$'
+      - path-except: ^ci/aireview/internal/review/
+        linters:
+          - forbidigo
+        text: 'because "ai-reviewer-one-process: [^"]*"$'
 
 formatters:
   enable:

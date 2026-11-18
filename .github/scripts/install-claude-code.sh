@@ -9,9 +9,19 @@
 # <directory>, where the reviewer runs it as <directory>/package/claude. A tarball that does not match
 # fails the run and nothing of it is extracted. The meta package @anthropic-ai/claude-code only picks a
 # platform package in a postinstall script, so it is never installed. The workflow pins the version
-# (with a # renovate: comment) and the integrity on the one line that calls this script: a Renovate
-# bump of the version must replace the integrity too (npm view <package>@<version> dist.integrity).
+# (CLAUDE_CODE_VERSION, under a # renovate: comment) and the integrity (CLAUDE_CODE_INTEGRITY) in the
+# install step's env: and passes both here: a Renovate bump of the version must replace the integrity
+# too (npm view <package>@<version> dist.integrity).
+#
+# It fails when /etc/claude-code exists: the CLI applies an admin-managed policy from there
+# (managed-settings.json, managed plugins' hooks) under every flag, --safe-mode and --setting-sources ""
+# included. The GitHub-hosted runner image ships none; one that does is noticed rather than applied.
 set -euo pipefail
+
+if [ -e /etc/claude-code ]; then
+	echo "::error title=Claude Code CLI::/etc/claude-code exists on this runner; its managed policy would apply to the reviewer's CLI under every flag (ADR 0033)"
+	exit 1
+fi
 
 if [ "$#" -ne 3 ]; then
 	echo "usage: $0 <directory> <platform package>@<X.Y.Z> <sha512 integrity>" >&2

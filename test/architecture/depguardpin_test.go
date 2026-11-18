@@ -1051,8 +1051,11 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// to a file of a temporary directory and starts `claude -p` in another,
 		// with an environment of its own. The forbidigo group ai-reviewer-env
 		// still refuses every read of the environment and every lookup of a
-		// home, config, cache or temp directory, so os is here for files and
-		// directories alone. net/http reads and posts through GitHub. Go's
+		// home, config, cache or temp directory, and ai-reviewer-one-process
+		// refuses exec.Command and every os call that opens or reads a file in
+		// the library's non-test files, so os is here for the prompt file and
+		// the run's temporary directories alone. net/http reads and posts
+		// through GitHub. Go's
 		// internal rule keeps it out of reach of cmd/ and internal/.
 		Name:     "ai-reviewer-is-standard-library",
 		ListMode: "strict",
