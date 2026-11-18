@@ -8,7 +8,7 @@ description: Use in the dispatcher pane - dispatching units, verifying their rep
 The dispatcher is the pane that talks to the maintainer. It dispatches units, each an orchestration of its
 own in a dispatch worktree, verifies what they report, and tells the maintainer what is ready to merge.
 Units report only to the dispatcher. This skill is the dispatcher's process; its memory holds only its
-state (the queue, holds and decisions).
+state (the queue, holds, decisions and the unit branches of waiting PRs).
 
 The repository's values are in its `CLAUDE.md`, subsection `### Dispatcher`, and this skill uses them by
 name:
@@ -114,9 +114,10 @@ For every PR a unit reports:
    in your environment: when the PR changed build or test scaffolding, tell the maintainer it did before
    the checks ran on it.
 
-When `main` has moved since a waiting PR was verified, check it again before the maintainer merges it.
-If its `headRefOid` differs from the head you verified, run all of the steps above again (3 and 4
-included) and report the new head SHA; otherwise repeat steps 1, 2, 5 and 6.
+Before the maintainer merges a waiting PR, check its `headRefOid` again: its branch can move after the
+unit closed. If it differs from the head you verified, run all of the steps above again (3 and 4
+included) and report the new head SHA. If only `main` moved, repeat steps 1, 2, 5 and 6. The maintainer
+can merge with `gh pr merge --match-head-commit` and the verified SHA.
 
 ## Close a ready unit
 
@@ -169,7 +170,8 @@ In order (for a unit already closed when its PR was ready, skip steps 3 to 5):
 ## Queue and holds
 
 Keep the queue the maintainer approved in memory, as state: the order, the dependencies, parked items and
-holds (such as an unmerged release PR). Update it at every change. When a held release PR's hold ends,
+holds (such as an unmerged release PR), and the unit branches recorded for each waiting PR (Close a ready
+unit). Update it at every change. When a held release PR's hold ends,
 review it again from scratch with `<release flow>`, because the release tooling keeps changing it.
 
 ## Files for the maintainer
@@ -181,7 +183,8 @@ Everything the maintainer needs to read (runbooks, reviews, branch lists, issue 
 
 - After a session restart, rebuild the picture from `gh pr list`, `git worktree list`, `<cli> roles` and
   the PRDs' milestone checkboxes, then from memory. The picture includes the PRs waiting for the
-  maintainer (`gh pr list`): they hold no unit, but count against `<review limit>`.
+  maintainer (`gh pr list`): they hold no unit, but count against `<review limit>`. Their recorded unit
+  branches come only from memory: their worktrees are gone.
 - Before the machine the deck runs on is rebuilt or resized, confirm no unit is mid-task, check that the
   memory directory holds no credential or customer data, then back it up to `<notes dir>`. Memory is lost
   with the machine and is keyed by the checkout's path.
