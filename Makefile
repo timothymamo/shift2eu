@@ -318,26 +318,16 @@ vm_env_mode = $(if $(filter command line,$(origin VM_ENV)),merge,replace)
 # A daemon.env line a merge keeps: a plain NAME=value assignment, nothing the login shell would run.
 vm_env_safe_line = ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._~+/=-]*\$$
 
-# vm-env refuses a VM_ENV holding anything but names, commas and spaces, and an empty one, then checks every
-# name and writes nothing, without calling limactl at all, unless each one is set and not empty: a locked
-# macOS login Keychain in an SSH session or an unloaded direnv .envrc must never wipe the credentials the VM
-# has (issue #234). Only a VM_ENV on the make command line merges; an exported VM_ENV replaces like the
-# default, so a VM_ENV left in a .envrc cannot keep a stale credential. A replace writes the VM's whole
-# daemon.env with exactly those lines, so a stale line (an old ANTHROPIC_API_KEY) is removed. A merge replaces
-# the lines of the names in VM_ENV and keeps the other plain NAME=value lines, so
-# `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN; it drops every other line (a command, a
-# comment, a value the shell would expand) with a warning that says how many (never their content), and
-# prints the names (never the values) of the lines it kept. The values travel on standard input, never on a
-# command line (only the mode does), and the file is written to a temporary file beside daemon.env and moved
-# into place, mode 0600, so a failure never leaves half a file; a trap removes the temporary file if the
-# VM-side shell is interrupted, and a leftover of a killed run older than a minute is removed by the next
-# vm-env: a fresh one may be a concurrent run's (concurrent vm-env runs are not supported beyond that). A
-# merge refuses a daemon.env that exists but cannot be read before it writes anything; its greps accept only
-# status 1 (no match), so a read error (status 2) is never taken for an empty file. The refusal of a bad
+# vm-env-check is vm-env's host-side check, shared by vm-env (its prerequisite) and vm-create (its first step):
+# it refuses a VM_ENV holding anything but names, commas and spaces, and an empty one, then checks every name
+# and refuses, without calling limactl at all, unless each one is set and not empty: a locked macOS login
+# Keychain in an SSH session or an unloaded direnv .envrc must never wipe the credentials the VM has (issue
+# #234), nor leave a VM that make vm-create created and provisioned only to stop at vm-env (issue #258). It
+# checks VM_ENV the way vm-env reads it: from its environment, never expanded by make, so the refusal of a bad
 # VM_ENV never shows its value, which may be a credential typed by mistake.
-.PHONY: vm-env
-vm-env: export VM_ENV := $(value VM_ENV)
-vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
+.PHONY: vm-env-check
+vm-env-check: export VM_ENV := $(value VM_ENV)
+vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-create do first (calls no limactl)
 	@case "$$VM_ENV" in (*[!A-Za-z0-9_,\ ]*) \
 		echo "vm-env: refusing VM_ENV: it may hold only variable names, commas and spaces. Its value is not shown, as it may hold a credential typed by mistake. Nothing was written." >&2; \
 		exit 1;; esac; \
@@ -366,6 +356,24 @@ vm-env: ## Copy the VM_ENV credentials from your shell into the VM (refuses if o
 		echo "  To copy only some of them on purpose, name them in VM_ENV: make vm-env VM_ENV=GITHUB_TOKEN keeps the others." >&2; \
 		exit 1; \
 	fi
+
+# vm-env runs vm-env-check first and writes nothing unless it passes. Only a VM_ENV on the make command line
+# merges; an exported VM_ENV replaces like the default, so a VM_ENV left in a .envrc cannot keep a stale
+# credential. A replace writes the VM's whole
+# daemon.env with exactly those lines, so a stale line (an old ANTHROPIC_API_KEY) is removed. A merge replaces
+# the lines of the names in VM_ENV and keeps the other plain NAME=value lines, so
+# `make vm-env VM_ENV=GITHUB_TOKEN` replaces only GITHUB_TOKEN; it drops every other line (a command, a
+# comment, a value the shell would expand) with a warning that says how many (never their content), and
+# prints the names (never the values) of the lines it kept. The values travel on standard input, never on a
+# command line (only the mode does), and the file is written to a temporary file beside daemon.env and moved
+# into place, mode 0600, so a failure never leaves half a file; a trap removes the temporary file if the
+# VM-side shell is interrupted, and a leftover of a killed run older than a minute is removed by the next
+# vm-env: a fresh one may be a concurrent run's (concurrent vm-env runs are not supported beyond that). A
+# merge refuses a daemon.env that exists but cannot be read before it writes anything; its greps accept only
+# status 1 (no match), so a read error (status 2) is never taken for an empty file.
+.PHONY: vm-env
+vm-env: export VM_ENV := $(value VM_ENV)
+vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
 	@set -f; env_file="$$(for name in $(vm_env_names); do \
 		value="$$(printenv "$$name")"; \
 		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$name has unsupported characters" >&2; exit 1;; esac; \
@@ -408,9 +416,12 @@ vm-init: ## Once-only VM setup after vm-env and vm-claude-settings: Claude Code 
 	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)" bash -l dev/vm-init.sh \
 		"$(WORKSPACE)" "$(REPO_ROOT)" "$(GIT_USER_NAME)" "$(GIT_USER_EMAIL)" "$(CLAUDE_THEME)"
 
-# One target at a time, in order, even under make -j.
+# One target at a time, in order, even under make -j. vm-env-check runs first, before vm-up and any limactl
+# call, so a missing credential or a VM_ENV vm-env would refuse creates nothing (issue #258). Each sub-make
+# gets a command-line VM_ENV the same way (through MAKEFLAGS), so it is checked as vm-env then reads it.
 .PHONY: vm-create
-vm-create: ## Create and set up the VM, ready for make deck: vm-up (VM_CPUS, ... pass through), vm-env, vm-claude-settings, vm-init
+vm-create: ## Create and set up the VM, ready for make deck: vm-env-check, vm-up (VM_CPUS, ... pass through), vm-env, vm-claude-settings, vm-init
+	$(MAKE) vm-env-check
 	$(MAKE) vm-up
 	$(MAKE) vm-env
 	$(MAKE) vm-claude-settings
