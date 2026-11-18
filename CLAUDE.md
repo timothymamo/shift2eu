@@ -150,15 +150,16 @@ be approved (`require_last_push_approval`).
 ### Dispatcher
 
 Above the orchestrations sits the dispatcher: the pane that talks to the maintainer, dispatches each
-issue or PRD milestone as a unit, verifies what the units report and cleans up after a merge. Its process
-is the `dispatch` skill; its memory holds only its state (the queue, holds and decisions). The skill
-refers to these values by name:
+issue or PRD milestone as a unit, verifies what the units report, closes a unit once its PR is ready and
+cleans up after a merge. Its process is the `dispatch` skill; its memory holds only its state (the queue,
+holds, decisions and the unit branches of waiting PRs). The skill refers to these values by name:
 
 | Name | Value |
 |---|---|
 | Orchestration | `shift2eu` |
 | CLI | `~/.local/bin/dot-agent-deck` |
-| Unit limit | 3 open units (2 when the VM has 8 GiB or less) |
+| Unit limit | 3 running units (2 when the VM has 8 GiB or less): a unit is closed once its PR is verified and reported ready |
+| Review limit | 5 PRs waiting for the maintainer's review or merge, not counting Renovate's PRs (author `app/renovate`; their label `dependencies` alone excludes nothing) or release-please's release PR (author `app/shift2eu-release`, head branch `release-please--branches--*` and label `autorelease: pending`, never the label alone) |
 | Checks on a merged scratch tree | `make check` and `make test-e2e` |
 | Maintainer notes directory | `.idea/` in the repository root (git-ignored) |
 | Release flow | The release-please PR, reviewed with the `release-tag` skill |
