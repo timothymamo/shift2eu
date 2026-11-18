@@ -197,8 +197,10 @@ func TestAgentsTokenLaunchdPlistDescribesTheJob(t *testing.T) {
 			// The job opens its own log: launchd opens StandardOutPath as root, and the log lives in a
 			// directory the maintainer writes, so a symlink planted there would make root write anywhere. The
 			// shell line therefore opens the log as the maintainer, and the script and the log travel as two
-			// arguments of their own, spliced into no shell text (issue #229, auditor's finding).
-			const openLog = `exec /bin/sh "$0" refresh >>"$1" 2>&1`
+			// arguments of their own, spliced into no shell text (issue #229, auditor's finding). It creates the
+			// log's directory under umask 077, so a log the job recreates is the maintainer's alone, and the
+			// exec still runs even when the directory was missing (second review).
+			const openLog = `umask 077 && mkdir -p "${1%/*}" && exec /bin/sh "$0" refresh >>"$1" 2>&1`
 
 			wantArgs := []string{"/bin/sh", "-c", openLog, filepath.Join(repo, "dev", "agents-app-token.sh"), wantLog}
 			if diff := cmp.Diff(wantArgs, plistStrings(t, plistList(t, dict, "ProgramArguments"))); diff != "" {

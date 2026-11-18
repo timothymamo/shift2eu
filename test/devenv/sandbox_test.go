@@ -152,6 +152,9 @@ func (sb *sandbox) baseEnv() map[string]string {
 		"TMPDIR":                 filepath.Join(sb.root, "tmp"),
 		"SHIFT2EU_TEST_ARGV_LOG": sb.argvLog,
 		"SHIFT2EU_TEST_VM_HOME":  sb.vmHome,
+		// The only tree a host-side install or uninstall recipe's root commands may touch: the log-only sudo
+		// copies, removes and loads files inside it and refuses every path outside it (issue #229).
+		"SHIFT2EU_TEST_SUDO_ROOT": sb.root,
 		// The state dir of the refresh's pid, log and lock files, outside the workspace and never the
 		// test machine's own (PRD #161 milestone 1 review, item 7).
 		"XDG_STATE_HOME": filepath.Join(sb.root, "state"),
@@ -468,18 +471,40 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 // what launchctl returns for a job it does not know, so no test needs a launchd of the machine (issue #229).
 // A test that pins what the start target reads of a loaded job's arguments makes `print` also print the block
 // in SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE, the way the real launchctl prints a job.
+//
+// A test that needs launchd's state to change between two calls names a state file in
+// SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE instead: the job is loaded while that file exists, and `bootout` unloads
+// it by removing the file, so a `print` after a `bootout` fails, as it does for a job that was just unloaded.
+// SHIFT2EU_TEST_LAUNCHCTL_STUCK=1 makes that `bootout` leave the file: the job never unloads.
+// `bootstrap` answers SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS (0 when unset), so a test can make loading the
+// new plist fail, and `bootout` answers SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS.
 const fakeLaunchctl = `#!/bin/sh
 {
   printf 'tool=launchctl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
 status=113
-if [ "$#" -ge 2 ] && [ "$1" = print ]; then
+verb="${1:-}"
+case "${verb}" in
+print)
   status="${SHIFT2EU_TEST_LAUNCHCTL_STATUS:-0}"
-  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE:-}" ]; then
+  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ]; then
+    if [ -e "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}" ]; then status=0; else status=113; fi
+  fi
+  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE:-}" ] && [ "${status}" -eq 0 ]; then
     cat "${SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE}"
   fi
-fi
+  ;;
+bootout)
+  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ] && [ "${SHIFT2EU_TEST_LAUNCHCTL_STUCK:-0}" != 1 ]; then
+    rm -f "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}"
+  fi
+  status="${SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS:-0}"
+  ;;
+bootstrap)
+  status="${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS:-0}"
+  ;;
+esac
 exit "${status}"
 `
 
@@ -507,6 +532,25 @@ func (sb *sandbox) useFakeLaunchctlPrint(t *testing.T, env map[string]string, st
 	env["SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE"] = path
 }
 
+// useFakeLaunchctlLoaded makes launchd's state a file instead of a fixed status, so a test can pin what the
+// install does when the old job is loaded now and unloads (or never unloads) during the install: `launchctl
+// print` answers 0 while the file exists, and `launchctl bootout` removes it through sudo, as the real one
+// unloads the job. stuck asks for a bootout that leaves the job loaded (issue #229).
+func (sb *sandbox) useFakeLaunchctlLoaded(t *testing.T, env map[string]string, stuck bool) {
+	t.Helper()
+
+	sb.writeFakeLaunchctl(t)
+
+	state := filepath.Join(sb.root, "launchctl-loaded")
+	writeFileMode(t, state, nil, 0o600)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"] = state
+
+	if stuck {
+		env["SHIFT2EU_TEST_LAUNCHCTL_STUCK"] = "1"
+	}
+}
+
 func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 	t.Helper()
 
@@ -519,8 +563,17 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 }
 
 // logOnlySudo stands in for sudo when a host-side recipe that needs root is under test: it records its argv
-// and never runs install, rm or launchctl, so no test reaches /Library or the machine's launchd; every other
-// command runs with the fake tools first on PATH, as it would under the real sudo.
+// and runs nothing of the machine's own, so no test reaches /Library, the machine's launchd or its plist. What
+// it does run stays inside the sandbox:
+//
+//   - `install ... <src> <dest>` copies src to dest, so the recipe reads back the file it installed, and
+//     SHIFT2EU_TEST_SUDO_INSTALL changes what lands there: `different` writes other bytes (a file that changed
+//     between the hash check and the install), `nothing` writes no file at all. A destination outside
+//     SHIFT2EU_TEST_SUDO_ROOT is refused.
+//   - `rm -f <path>` really removes a sandbox path, and refuses any path outside it.
+//   - `launchctl` runs the fake launchctl first on PATH, so a test can pin the load and unload commands and
+//     see launchd's state change between them.
+//   - every other command runs with the fake tools first on PATH, as it would under the real sudo.
 const logOnlySudo = `#!/bin/sh
 {
   printf 'tool=sudo\n'
@@ -539,9 +592,45 @@ command="${1:-}"
   exit 64
 }
 shift
+root="${SHIFT2EU_TEST_SUDO_ROOT:-}"
+inside() {
+  [ -n "${root}" ] || return 1
+  case "$1" in "${root}"/*) return 0 ;; esac
+  return 1
+}
 case "${command}" in
-install | rm | launchctl)
-  # Root's own tools: a test pins the argv, and nothing may reach the real /Library or launchd.
+install)
+  # The last two arguments are the file to copy and where it goes; root writes only inside the sandbox.
+  src=''
+  dest=''
+  for a in "$@"; do
+    src="${dest}"
+    dest="$a"
+  done
+  inside "${dest}" || {
+    echo "fake sudo: refusing to install outside the sandbox: ${dest}" >&2
+    exit 1
+  }
+  case "${SHIFT2EU_TEST_SUDO_INSTALL:-copy}" in
+  copy) cp "${src}" "${dest}" || exit 1 ;;
+  different) printf 'fake sudo: other bytes than the plist it was handed\n' >"${dest}" || exit 1 ;;
+  nothing) ;;
+  *)
+    echo "fake sudo: unknown SHIFT2EU_TEST_SUDO_INSTALL: ${SHIFT2EU_TEST_SUDO_INSTALL}" >&2
+    exit 64
+    ;;
+  esac
+  exit 0
+  ;;
+rm)
+  for a in "$@"; do
+    case "$a" in -*) continue ;; esac
+    inside "$a" || {
+      echo "fake sudo: refusing to remove a path outside the sandbox: ${a}" >&2
+      exit 1
+    }
+    rm -f "$a" || exit 1
+  done
   exit 0
   ;;
 *)
@@ -559,6 +648,30 @@ func (sb *sandbox) useLogOnlySudo(t *testing.T) {
 
 	//nolint:gosec // the log-only sudo is a script the tests run, so it must be executable
 	if err := os.WriteFile(path, []byte(logOnlySudo), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// fakeSleep stands in for sleep in a test that reaches a wait loop or a retry: it records its argv and returns
+// at once, so a bounded wait adds no seconds to the suite and the test can still count how often it waited
+// (issue #229).
+const fakeSleep = `#!/bin/sh
+{
+  printf 'tool=sleep\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+exit 0
+`
+
+// useFakeSleep puts the recording sleep first on PATH, so a test that reaches the install's wait loop or its
+// bootstrap retry runs no real sleep and can count the waits from the argv log.
+func (sb *sandbox) useFakeSleep(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "sleep")
+
+	//nolint:gosec // the fake sleep is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(fakeSleep), 0o700); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 }
@@ -592,24 +705,42 @@ func (sb *sandbox) useFakePlutil(t *testing.T, env map[string]string, status str
 	env["SHIFT2EU_TEST_PLUTIL_STATUS"] = status
 }
 
-// fakeMountLimactl stands in for limactl when a test pins the mount locations of the VM: it records its argv,
-// answers `list` with the locations SHIFT2EU_TEST_LIMA_MOUNTS holds one per line, and refuses anything else,
-// so a test can prove which limactl call the install makes and nothing else.
+// fakeMountLimactl stands in for limactl when a test pins the instance's name and mount locations: it records
+// its argv and answers `list` the way `limactl list --format '{{.Name}}{{"\n"}}{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}' <instance>`
+// does, with the instance's name on the first line and one mount location per line after it (issue #229).
+//
+// SHIFT2EU_TEST_LIMA_LIST_NAME names the instance the list is about (default: the instance the recipe asked
+// about, the last argument), SHIFT2EU_TEST_LIMA_LIST_EMPTY=1 answers nothing at all (an instance limactl does
+// not know: exit 0, no output) and SHIFT2EU_TEST_LIMA_LIST_STATUS exits with that status instead (an instance
+// that is not running, or a limactl that cannot read it).
 const fakeMountLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
 if [ "${1:-}" = list ]; then
-  cat "${SHIFT2EU_TEST_LIMA_MOUNTS:?set SHIFT2EU_TEST_LIMA_MOUNTS}"
+  if [ "${SHIFT2EU_TEST_LIMA_LIST_STATUS:-0}" -ne 0 ]; then
+    echo "fake limactl: the instance ${SHIFT2EU_TEST_LIMA_LIST_NAME:-} is not readable" >&2
+    exit "${SHIFT2EU_TEST_LIMA_LIST_STATUS}"
+  fi
+  if [ "${SHIFT2EU_TEST_LIMA_LIST_EMPTY:-0}" != 1 ]; then
+    name="${SHIFT2EU_TEST_LIMA_LIST_NAME:-}"
+    if [ -z "${name}" ]; then
+      for a in "$@"; do name="$a"; done
+    fi
+    printf '%s\n' "${name}"
+    cat "${SHIFT2EU_TEST_LIMA_MOUNTS:?set SHIFT2EU_TEST_LIMA_MOUNTS}"
+  fi
   exit 0
 fi
 echo "fake limactl: the tests answer limactl list only, not $*" >&2
 exit 64
 `
 
-// useFakeLimactlMounts makes the sandbox's limactl answer `list` with mounts, one location per line, the way
-// `limactl list --format '{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}'` does (issue #229).
+// useFakeLimactlMounts makes the sandbox's limactl answer `list` with the instance's name and then mounts, one
+// location per line, the way
+// `limactl list --format '{{.Name}}{{"\n"}}{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}'` does
+// (issue #229).
 func (sb *sandbox) useFakeLimactlMounts(t *testing.T, env map[string]string, mounts []string) {
 	t.Helper()
 
@@ -631,6 +762,24 @@ func (sb *sandbox) useFakeLimactlMounts(t *testing.T, env map[string]string, mou
 	writeFileMode(t, list, []byte(body), 0o600)
 
 	env["SHIFT2EU_TEST_LIMA_MOUNTS"] = list
+}
+
+// useFakeLimactlListNamed names the instance the fake limactl's list is about, so a test can pin what the
+// install does with a list that names another instance than the one it asked about (issue #229).
+func (sb *sandbox) useFakeLimactlListNamed(env map[string]string, name string) {
+	env["SHIFT2EU_TEST_LIMA_LIST_NAME"] = name
+}
+
+// useFakeLimactlListEmpty makes the fake limactl's list answer nothing at all, as it does for an instance it
+// does not know: exit 0 and no output, not even a name line (issue #229).
+func (sb *sandbox) useFakeLimactlListEmpty(env map[string]string) {
+	env["SHIFT2EU_TEST_LIMA_LIST_EMPTY"] = "1"
+}
+
+// useFakeLimactlListFailing makes the fake limactl's list exit 1, as it does when the instance is not running
+// or its configuration cannot be read (issue #229).
+func (sb *sandbox) useFakeLimactlListFailing(env map[string]string) {
+	env["SHIFT2EU_TEST_LIMA_LIST_STATUS"] = "1"
 }
 
 // vmClockShim answers the fake VM's clock with SHIFT2EU_TEST_VM_CLOCK for `date +%s` and hands every other
