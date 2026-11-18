@@ -177,7 +177,7 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
    the `gh` and git credential path with the `GITHUB_TOKEN` fallback, the bot git author,
    `make vm-env`/`vm-init` changes, tests, an ADR (identity, token model, why not a machine user, why the
    reviewer never approves), and `docs/dev-environment.md`. Merged under the old token; nothing is
-   enforced yet. *Merged in #224; the criteria marked "runbook step 3" were confirmed there.*
+   enforced yet. *Merged in #224; the criteria marked "runbook step 3" were confirmed at runbook step 3.*
 2. [x] **Gate checks, CODEOWNERS, skills and docs.** `.github/CODEOWNERS`, the `Protect main` check with
    its transition flag, `pr-create` and `release-tag` changes, CLAUDE.md, `docs/contributing/agents.md`,
    the switch-over runbook. Depends on 1. *Note from milestone 1 (ADR 0031, d): the App keeps Actions
