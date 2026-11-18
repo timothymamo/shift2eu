@@ -466,6 +466,8 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 // fakeLaunchctl stands in for launchctl in the devenv tests: it records its argv, answers `print` with
 // SHIFT2EU_TEST_LAUNCHCTL_STATUS (0 stands for a loaded job) and every other verb with status 113, which is
 // what launchctl returns for a job it does not know, so no test needs a launchd of the machine (issue #229).
+// A test that pins what the start target reads of a loaded job's arguments makes `print` also print the block
+// in SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE, the way the real launchctl prints a job.
 const fakeLaunchctl = `#!/bin/sh
 {
   printf 'tool=launchctl\n'
@@ -474,6 +476,9 @@ const fakeLaunchctl = `#!/bin/sh
 status=113
 if [ "$#" -ge 2 ] && [ "$1" = print ]; then
   status="${SHIFT2EU_TEST_LAUNCHCTL_STATUS:-0}"
+  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE:-}" ]; then
+    cat "${SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE}"
+  fi
 fi
 exit "${status}"
 `
@@ -483,14 +488,149 @@ exit "${status}"
 func (sb *sandbox) useFakeLaunchctl(t *testing.T, env map[string]string, status string) {
 	t.Helper()
 
+	sb.writeFakeLaunchctl(t)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_STATUS"] = status
+}
+
+// useFakeLaunchctlPrint is useFakeLaunchctl with a job behind the loaded label: `launchctl print` answers
+// status and then prints output, which a test builds with launchctlPrintBlock so it has the shape the real
+// command prints.
+func (sb *sandbox) useFakeLaunchctlPrint(t *testing.T, env map[string]string, status, output string) {
+	t.Helper()
+
+	sb.useFakeLaunchctl(t, env, status)
+
+	path := filepath.Join(sb.root, "launchctl-print.txt")
+	writeFileMode(t, path, []byte(output), 0o600)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE"] = path
+}
+
+func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
+	t.Helper()
+
 	path := filepath.Join(sb.binDir, "launchctl")
 
 	//nolint:gosec // the fake launchctl is a script the tests run, so it must be executable
 	if err := os.WriteFile(path, []byte(fakeLaunchctl), 0o700); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
 
-	env["SHIFT2EU_TEST_LAUNCHCTL_STATUS"] = status
+// logOnlySudo stands in for sudo when a host-side recipe that needs root is under test: it records its argv
+// and never runs install, rm or launchctl, so no test reaches /Library or the machine's launchd; every other
+// command runs with the fake tools first on PATH, as it would under the real sudo.
+const logOnlySudo = `#!/bin/sh
+{
+  printf 'tool=sudo\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -n | -E | -H | -S | -k | --) shift ;;
+  -u | -g | -p | -C | -T) shift 2 ;;
+  *) break ;;
+  esac
+done
+command="${1:-}"
+[ -n "${command}" ] || {
+  echo 'fake sudo: nothing to run' >&2
+  exit 64
+}
+shift
+case "${command}" in
+install | rm | launchctl)
+  # Root's own tools: a test pins the argv, and nothing may reach the real /Library or launchd.
+  exit 0
+  ;;
+*)
+  exec "${command}" "$@"
+  ;;
+esac
+`
+
+// useLogOnlySudo puts the log-only sudo first on PATH, so a host-side install or uninstall recipe records every
+// command it would run as root and changes nothing on the machine the tests run on (issue #229).
+func (sb *sandbox) useLogOnlySudo(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "sudo")
+
+	//nolint:gosec // the log-only sudo is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(logOnlySudo), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
+// fakePlutil stands in for plutil: it records its argv and answers SHIFT2EU_TEST_PLUTIL_STATUS, so a test can
+// pin that a plist was linted before root ever saw it, and what the install does when the plist is refused.
+const fakePlutil = `#!/bin/sh
+{
+  printf 'tool=plutil\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+status="${SHIFT2EU_TEST_PLUTIL_STATUS:-0}"
+if [ "${status}" -ne 0 ]; then
+  echo "${SHIFT2EU_TEST_PLUTIL_MESSAGE:-plutil: the plist is malformed}" >&2
+fi
+exit "${status}"
+`
+
+// useFakePlutil puts the recording plutil first on PATH and makes it answer status, so no test runs the
+// machine's plutil and a test can pin a plist plutil refuses.
+func (sb *sandbox) useFakePlutil(t *testing.T, env map[string]string, status string) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "plutil")
+
+	//nolint:gosec // the fake plutil is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(fakePlutil), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	env["SHIFT2EU_TEST_PLUTIL_STATUS"] = status
+}
+
+// fakeMountLimactl stands in for limactl when a test pins the mount locations of the VM: it records its argv,
+// answers `list` with the locations SHIFT2EU_TEST_LIMA_MOUNTS holds one per line, and refuses anything else,
+// so a test can prove which limactl call the install makes and nothing else.
+const fakeMountLimactl = `#!/bin/sh
+{
+  printf 'tool=limactl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+if [ "${1:-}" = list ]; then
+  cat "${SHIFT2EU_TEST_LIMA_MOUNTS:?set SHIFT2EU_TEST_LIMA_MOUNTS}"
+  exit 0
+fi
+echo "fake limactl: the tests answer limactl list only, not $*" >&2
+exit 64
+`
+
+// useFakeLimactlMounts makes the sandbox's limactl answer `list` with mounts, one location per line, the way
+// `limactl list --format '{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}'` does (issue #229).
+func (sb *sandbox) useFakeLimactlMounts(t *testing.T, env map[string]string, mounts []string) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "limactl")
+
+	//nolint:gosec // the fake limactl is a script the tests run, so it must be executable
+	if err := os.WriteFile(path, []byte(fakeMountLimactl), 0o700); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	list := filepath.Join(sb.root, "lima-mounts.txt")
+
+	body := ""
+
+	for _, mount := range mounts {
+		body += mount + "\n"
+	}
+
+	writeFileMode(t, list, []byte(body), 0o600)
+
+	env["SHIFT2EU_TEST_LIMA_MOUNTS"] = list
 }
 
 // vmClockShim answers the fake VM's clock with SHIFT2EU_TEST_VM_CLOCK for `date +%s` and hands every other
@@ -657,6 +797,39 @@ func zeroPadWithAnEightOrNine(n int64) string {
 
 		n++
 	}
+}
+
+// pathWithout returns a directory that holds a link to every tool the machine keeps in /bin and /usr/bin
+// except name, for a PATH on which name is not found: a test can then pin what a recipe does on a host that
+// has no such tool, such as Linux CI, which has no launchctl (issue #229).
+func pathWithout(t *testing.T, name string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	for _, system := range []string{"/bin", "/usr/bin"} {
+		entries, err := os.ReadDir(system)
+		if err != nil {
+			t.Fatalf("list %s: %v", system, err)
+		}
+
+		for _, entry := range entries {
+			if entry.Name() == name {
+				continue
+			}
+
+			link := filepath.Join(dir, entry.Name())
+			if _, err := os.Lstat(link); err == nil {
+				continue
+			}
+
+			if err := os.Symlink(filepath.Join(system, entry.Name()), link); err != nil {
+				t.Fatalf("link %s: %v", link, err)
+			}
+		}
+	}
+
+	return dir
 }
 
 // toolDir returns the directory of a tool the machine has, for a PATH a script needs it on.

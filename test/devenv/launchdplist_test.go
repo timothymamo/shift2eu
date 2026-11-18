@@ -1,11 +1,12 @@
-// Pins the LaunchDaemon of the agents App token refresh (issue #229, ADR 0031): `sh dev/agents-token-launchd.sh
+// Pins the LaunchDaemon of the agents App token refresh (issue #229, ADR 0034): `sh dev/agents-token-launchd.sh
 // plist` prints the property list launchd loads so a refresh that a reboot or a power cut killed comes back
 // without anyone logged in. The job runs the host clone's own refresh script through /bin/sh as the maintainer,
-// one label per VM instance, and the plist holds the App ID, the installation ID and the key's path but never
-// the key, a token or a git pull, and keeps its logs out of the instance directory, which launchd would
+// one label per VM instance, opens its own log as the maintainer (launchd would open StandardOutPath as root),
+// and the plist holds the App ID, the installation ID, the key's path and XDG_STATE_HOME when it is set, but
+// never the key, a token or a git pull, and keeps its logs out of the instance directory, which launchd would
 // otherwise recreate after every removal (issue #229's note from #237). A value that cannot be written into
-// the plist is refused before anything is printed, with the offending variable's name and never the key's
-// contents.
+// the plist, XML markup or a control character included, is refused before anything is printed, with the
+// offending variable's name and never the key's contents.
 package devenv_test
 
 import (
@@ -46,9 +47,20 @@ type launchdFixture struct {
 	instance string
 }
 
-// newLaunchdFixture builds the fixture for one VM instance; xdgStateHome says whether XDG_STATE_HOME is set,
-// so a test can pin where the log goes with and without it.
-func newLaunchdFixture(t *testing.T, instance string, xdgStateHome bool) *launchdFixture {
+// xdgStateHomeMode says how the fixture leaves XDG_STATE_HOME: unset, set to a directory, or set to the empty
+// string, which the refresh reads as unset (${XDG_STATE_HOME:-$HOME/.local/state} in dev/agents-app-token.sh and
+// in the Makefile).
+type xdgStateHomeMode int
+
+const (
+	xdgStateHomeUnset xdgStateHomeMode = iota
+	xdgStateHomeEmpty
+	xdgStateHomeSet
+)
+
+// newLaunchdFixture builds the fixture for one VM instance; xdg says how XDG_STATE_HOME is set, so a test can
+// pin where the log goes with it, without it, and with it empty.
+func newLaunchdFixture(t *testing.T, instance string, xdg xdgStateHomeMode) *launchdFixture {
 	t.Helper()
 
 	sb := newSandbox(t)
@@ -60,7 +72,12 @@ func newLaunchdFixture(t *testing.T, instance string, xdgStateHome bool) *launch
 	env["SHIFT2EU_AGENTS_APP_INSTALLATION_ID"] = launchdInstallationID
 	env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = key.path
 
-	if !xdgStateHome {
+	switch xdg {
+	case xdgStateHomeSet:
+		env["XDG_STATE_HOME"] = filepath.Join(sb.root, "state")
+	case xdgStateHomeEmpty:
+		env["XDG_STATE_HOME"] = ""
+	case xdgStateHomeUnset:
 		delete(env, "XDG_STATE_HOME")
 	}
 
@@ -76,9 +93,10 @@ func (f *launchdFixture) plist(t *testing.T) (string, string, error) {
 }
 
 // stateDir is `${XDG_STATE_HOME:-$HOME/.local/state}`, where the refresh keeps its log: the same directory
-// make agents-token-refresh-start writes it in.
+// make agents-token-refresh-start writes it in, and an empty XDG_STATE_HOME counts as no XDG_STATE_HOME, as
+// ${XDG_STATE_HOME:-...} says in the Makefile and in dev/agents-app-token.sh.
 func (f *launchdFixture) stateDir() string {
-	if state, ok := f.env["XDG_STATE_HOME"]; ok {
+	if state := f.env["XDG_STATE_HOME"]; state != "" {
 		return state
 	}
 
@@ -132,29 +150,31 @@ func currentUsername(t *testing.T) string {
 }
 
 // TestAgentsTokenLaunchdPlistDescribesTheJob pins the whole of the generated job: its label per instance, the
-// maintainer it runs as, the three words launchd runs (the host clone's own script, never make and never git),
-// the working directory, the environment it hands the refresh, the keep-alive settings and the two log paths.
+// maintainer it runs as, the shell line that runs the host clone's own script and opens the log as the
+// maintainer (never make and never git), the working directory, the environment it hands the refresh, the
+// keep-alive settings and the two log paths.
 func TestAgentsTokenLaunchdPlistDescribesTheJob(t *testing.T) {
 	t.Parallel()
 
 	repo := launchdRepoRoot(t)
 
 	cases := []struct {
-		name         string
-		instance     string
-		xdgStateHome bool
+		name     string
+		instance string
+		xdg      xdgStateHomeMode
 	}{
-		{name: "the shift2eu instance", instance: "shift2eu", xdgStateHome: true},
-		{name: "another instance gets another label", instance: "other-repo", xdgStateHome: true},
-		{name: "an instance whose name holds a dot and an underscore", instance: "shift2eu.local_1", xdgStateHome: true},
-		{name: "no XDG_STATE_HOME", instance: "shift2eu", xdgStateHome: false},
+		{name: "the shift2eu instance", instance: "shift2eu", xdg: xdgStateHomeSet},
+		{name: "another instance gets another label", instance: "other-repo", xdg: xdgStateHomeSet},
+		{name: "an instance whose name holds a dot and an underscore", instance: "shift2eu.local_1", xdg: xdgStateHomeSet},
+		{name: "no XDG_STATE_HOME", instance: "shift2eu", xdg: xdgStateHomeUnset},
+		{name: "an empty XDG_STATE_HOME is no XDG_STATE_HOME", instance: "shift2eu", xdg: xdgStateHomeEmpty},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newLaunchdFixture(t, tc.instance, tc.xdgStateHome)
+			f := newLaunchdFixture(t, tc.instance, tc.xdg)
 
 			stdout, stderr, err := f.plist(t)
 			if err != nil {
@@ -172,9 +192,17 @@ func TestAgentsTokenLaunchdPlistDescribesTheJob(t *testing.T) {
 				t.Errorf("the plist's UserName is %q, want %q: the job runs as the maintainer who installed it, at boot and with nobody logged in (issue #229)", got, want)
 			}
 
-			wantArgs := []string{"/bin/sh", filepath.Join(repo, "dev", "agents-app-token.sh"), "refresh"}
+			wantLog := filepath.Join(f.stateDir(), "shift2eu", "agents-token-refresh-"+tc.instance+".log")
+
+			// The job opens its own log: launchd opens StandardOutPath as root, and the log lives in a
+			// directory the maintainer writes, so a symlink planted there would make root write anywhere. The
+			// shell line therefore opens the log as the maintainer, and the script and the log travel as two
+			// arguments of their own, spliced into no shell text (issue #229, auditor's finding).
+			const openLog = `exec /bin/sh "$0" refresh >>"$1" 2>&1`
+
+			wantArgs := []string{"/bin/sh", "-c", openLog, filepath.Join(repo, "dev", "agents-app-token.sh"), wantLog}
 			if diff := cmp.Diff(wantArgs, plistStrings(t, plistList(t, dict, "ProgramArguments"))); diff != "" {
-				t.Errorf("the plist's ProgramArguments differ from what launchd would run (-want +got):\n%s\nthe job runs this repository's own refresh through /bin/sh, never make and never git: a plist cannot carry the host clone's direnv environment, and no check run in the workspace can vouch for it (issue #229, ADR 0031)\nstdout:\n%s", diff, stdout)
+				t.Errorf("the plist's ProgramArguments differ from what launchd would run (-want +got):\n%s\nthe job runs this repository's own refresh through /bin/sh, never make and never git, and the shell line opens the log as the maintainer, with the script and the log as arguments of their own (issue #229, ADR 0034)\nstdout:\n%s", diff, stdout)
 			}
 
 			if got := plistString(t, dict, "WorkingDirectory"); got != repo {
@@ -192,6 +220,14 @@ func TestAgentsTokenLaunchdPlistDescribesTheJob(t *testing.T) {
 				"SHIFT2EU_AGENTS_APP_KEY_FILE",
 			}
 
+			// XDG_STATE_HOME joins them only when the host clone sets it to a directory: an empty one is no
+			// XDG_STATE_HOME (${XDG_STATE_HOME:-...}), so the job then finds the log under $HOME/.local/state.
+			if tc.xdg == xdgStateHomeSet {
+				wantEnv = append(wantEnv, "XDG_STATE_HOME")
+			}
+
+			slices.Sort(wantEnv)
+
 			var gotEnv []string
 
 			for name := range env {
@@ -201,17 +237,23 @@ func TestAgentsTokenLaunchdPlistDescribesTheJob(t *testing.T) {
 			slices.Sort(gotEnv)
 
 			if diff := cmp.Diff(wantEnv, gotEnv); diff != "" {
-				t.Errorf("the plist's EnvironmentVariables hold other names than the six the refresh reads (-want +got):\n%s\na launchd job inherits no shell environment, so the plist supplies these and nothing else, and no token variable may join them (issue #229)", diff)
+				t.Errorf("the plist's EnvironmentVariables hold other names than the ones the refresh reads (-want +got):\n%s\na launchd job inherits no shell environment, so the plist supplies these and nothing else: the six the refresh always needs, and XDG_STATE_HOME only when it names a directory, and no token variable may join them (issue #229)", diff)
 			}
 
-			for name, want := range map[string]string{
+			wantValues := map[string]string{
 				"LIMA_INSTANCE":                       tc.instance,
 				"SHIFT2EU_AGENTS_APP_ID":              launchdAppID,
 				"SHIFT2EU_AGENTS_APP_INSTALLATION_ID": launchdInstallationID,
 				// The path of the key, never the key: launchd reads the plist as a world-readable file.
 				"SHIFT2EU_AGENTS_APP_KEY_FILE": f.key.path,
 				"HOME":                         f.env["HOME"],
-			} {
+			}
+
+			if tc.xdg == xdgStateHomeSet {
+				wantValues["XDG_STATE_HOME"] = f.env["XDG_STATE_HOME"]
+			}
+
+			for name, want := range wantValues {
 				if got := plistString(t, env, name); got != want {
 					t.Errorf("the plist's EnvironmentVariables %s is %q, want %q (issue #229)", name, got, want)
 				}
@@ -246,19 +288,19 @@ func TestAgentsTokenLaunchdPlistDescribesTheJob(t *testing.T) {
 				t.Errorf("the plist's ThrottleInterval is %d, want at least 60: a job launchd restarts faster than once a minute mints a token per restart against a GitHub that may be the reason it failed (issue #229)", throttle)
 			}
 
-			wantLog := filepath.Join(f.stateDir(), "shift2eu", "agents-token-refresh-"+tc.instance+".log")
+			// launchd opens these as root, before the job's UserName applies, so nothing of the maintainer's
+			// may be behind them: the job opens its own log as the maintainer instead. Losing the log there is
+			// the price of not letting a planted symlink in the state directory aim root's write anywhere.
 			limaInstanceDir := filepath.Join(f.env["HOME"], ".lima") + string(filepath.Separator)
 
 			for _, key := range []string{"StandardOutPath", "StandardErrorPath"} {
-				got := plistString(t, dict, key)
-
-				if got != wantLog {
-					t.Errorf("the plist's %s is %q, want %q: launchd writes the refresh's log where make agents-token-refresh-start writes it, so a maintainer finds one log per instance (issue #229)", key, got, wantLog)
+				if got := plistString(t, dict, key); got != "/dev/null" {
+					t.Errorf("the plist's %s is %q, want /dev/null: launchd opens it as root, and the log lives in a directory the maintainer writes, so a symlink planted there would make root write anywhere; the job opens the log itself (issue #229)\nstdout:\n%s", key, got, stdout)
 				}
+			}
 
-				if strings.HasPrefix(got, limaInstanceDir) {
-					t.Errorf("the plist's %s is %q, inside the instance directory %s: launchd creates a job's log files there every time it runs it, so a deleted instance would come back (issue #229, the note from #237)", key, got, limaInstanceDir)
-				}
+			if strings.HasPrefix(wantLog, limaInstanceDir) {
+				t.Errorf("the log the job opens is %q, inside the instance directory %s: launchd creates a job's log files there every time it runs it, so a deleted instance would come back (issue #229, the note from #237)", wantLog, limaInstanceDir)
 			}
 
 			// Rendering a plist reaches neither the VM nor GitHub.
@@ -279,7 +321,7 @@ func TestAgentsTokenLaunchdPlistDescribesTheJob(t *testing.T) {
 func TestAgentsTokenLaunchdPlistIsAPropertyList(t *testing.T) {
 	t.Parallel()
 
-	f := newLaunchdFixture(t, "shift2eu", true)
+	f := newLaunchdFixture(t, "shift2eu", xdgStateHomeSet)
 
 	stdout, stderr, err := f.plist(t)
 	if err != nil {
@@ -325,7 +367,7 @@ func TestAgentsTokenLaunchdPlistIsAPropertyList(t *testing.T) {
 func TestAgentsTokenLaunchdPlistHoldsNoSecretAndPullsNothing(t *testing.T) {
 	t.Parallel()
 
-	f := newLaunchdFixture(t, "shift2eu", true)
+	f := newLaunchdFixture(t, "shift2eu", xdgStateHomeSet)
 
 	stdout, stderr, err := f.plist(t)
 	if err != nil {
@@ -458,11 +500,55 @@ func TestAgentsTokenLaunchdPlistRefusesBadInput(t *testing.T) {
 		})
 	}
 
+	// A control character in a path is unprintable and unreadable in a plist (auditor's finding): the
+	// generator refuses every byte 0x01-0x1F and 0x7F, in all three paths it writes, not just the line break
+	// and the tab it refused first. A value with one is a mistake in the .envrc, never something to install.
+	controlCharacters := []struct {
+		name string
+		bite string
+	}{
+		{name: "0x01", bite: "\x01"},
+		{name: "ESC (0x1b)", bite: "\x1b"},
+		{name: "0x7F, the delete character", bite: "\x7f"},
+	}
+
+	for _, control := range controlCharacters {
+		cases = append(cases,
+			launchdRefusal{
+				name: "a key path holding " + control.name,
+				mutate: func(t *testing.T, f *launchdFixture) {
+					t.Helper()
+
+					// A real key file at that path: the only bad thing about the value is the control character.
+					path := filepath.Join(f.sb.root, "keys"+control.bite+"more", "agents-app.pem")
+					writeInventedKey(t, path, 0o600)
+
+					f.env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = path
+				},
+				wantStderr: "SHIFT2EU_AGENTS_APP_KEY_FILE",
+			},
+			launchdRefusal{
+				name: "a HOME holding " + control.name,
+				mutate: func(_ *testing.T, f *launchdFixture) {
+					f.env["HOME"] = filepath.Join(f.sb.root, "home"+control.bite+"more")
+				},
+				wantStderr: "HOME",
+			},
+			launchdRefusal{
+				name: "an XDG_STATE_HOME holding " + control.name,
+				mutate: func(_ *testing.T, f *launchdFixture) {
+					f.env["XDG_STATE_HOME"] = filepath.Join(f.sb.root, "state"+control.bite+"more")
+				},
+				wantStderr: "XDG_STATE_HOME",
+			},
+		)
+	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			f := newLaunchdFixture(t, "shift2eu", true)
+			f := newLaunchdFixture(t, "shift2eu", xdgStateHomeSet)
 			tc.mutate(t, f)
 
 			stdout, stderr, err := f.plist(t)
