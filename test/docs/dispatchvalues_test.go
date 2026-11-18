@@ -3,6 +3,7 @@ package docs_test
 import (
 	"io/fs"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -203,9 +204,9 @@ func claudeDispatcherValues(t *testing.T, fsys fs.FS) valueTable {
 	return table
 }
 
-// withoutTables returns data with every line of every table in tables dropped,
-// so a name that only appears in a table is not counted as prose.
-func withoutTables(data string, tables []valueTable) string {
+// tableLineNumbers returns the 1-based number of every line that belongs to
+// one of tables, their header and delimiter rows included.
+func tableLineNumbers(tables []valueTable) map[int]bool {
 	drop := make(map[int]bool)
 	for _, table := range tables {
 		if len(table.rows) == 0 {
@@ -215,6 +216,13 @@ func withoutTables(data string, tables []valueTable) string {
 			drop[n] = true
 		}
 	}
+	return drop
+}
+
+// withoutTables returns data with every line of every table in tables dropped,
+// so a name that only appears in a table is not counted as prose.
+func withoutTables(data string, tables []valueTable) string {
+	drop := tableLineNumbers(tables)
 	var kept []string
 	for i, line := range strings.Split(data, "\n") {
 		if !drop[i+1] {
@@ -222,6 +230,160 @@ func withoutTables(data string, tables []valueTable) string {
 		}
 	}
 	return strings.Join(kept, "\n")
+}
+
+// placeholderToken matches a `<name>` placeholder: one or more lowercase words
+// of two letters or more, separated by single spaces, in angle brackets.
+var placeholderToken = regexp.MustCompile(`<[a-z]{2,}(?: [a-z]{2,})*>`)
+
+// The placeholder rule, shared by the name tables and the skill's prose: a
+// placeholder names a value, and is `<` + one or more lowercase words + `>`,
+// such as `<unit limit>` or `<unit dir>`. Three things are deliberately not
+// placeholders:
+//
+//   - a command's own metavariable, a single letter such as `<n>` or `<a>`,
+//     which no word of a name matches;
+//   - a command written as an inline code span, such as `git -C <repository
+//     root> pull`: the span is not a placeholder, and neither are its
+//     arguments (`--task-file <file>`, `--text "<message>"`); only a span that
+//     is nothing but a placeholder counts, which is how the skill names a value
+//     in prose;
+//   - anything whose brackets hold more than lowercase words, such as a URL,
+//     a path, or a shell redirection.
+//
+// A lone HTML tag such as `<br>` reads as a placeholder, but the skills write
+// no HTML and a code span that is one is indistinguishable from a name, so the
+// rule does not special-case it. A bare `<file>` written in a code span of its
+// own does count: the skill names its values that way, and a placeholder that
+// names nothing is what this check exists to report.
+//
+// placeholderSpan returns the placeholder that span, the content of an inline
+// code span, is, and false when span is more than that or not one.
+func placeholderSpan(span string) (string, bool) {
+	trimmed := strings.TrimSpace(span)
+	match := placeholderToken.FindString(trimmed)
+	if match == "" || match != trimmed {
+		return "", false
+	}
+	return match, true
+}
+
+// placeholderTokens returns the placeholders in text, in the order they
+// appear: the tokens of a name table's cell, or of a command in a shell block.
+func placeholderTokens(text string) []string {
+	return placeholderToken.FindAllString(text, -1)
+}
+
+// inlineCodeSpans returns the contents of the `inline code` spans of line. An
+// inline code span never runs past the end of its line and the skills wrap
+// their lines, so an odd backtick is left open and its text is not code.
+func inlineCodeSpans(line string) []string {
+	parts := strings.Split(line, "`")
+	spans := make([]string, 0, len(parts)/2)
+	for i := 1; i+1 < len(parts); i += 2 {
+		spans = append(spans, parts[i])
+	}
+	return spans
+}
+
+// placeholderUse is one placeholder of the skill, and the line it sits on.
+type placeholderUse struct {
+	line int
+	name string
+}
+
+// skillPlaceholders returns every placeholder the skill uses outside its name
+// tables, in document order: the inline code spans of its prose that are
+// nothing but a placeholder, and every placeholder of a command inside a
+// fenced shell block.
+func skillPlaceholders(data string, tables []valueTable) []placeholderUse {
+	drop := tableLineNumbers(tables)
+	var (
+		uses    []placeholderUse
+		inFence bool
+		shell   bool
+		marker  byte
+		width   int
+	)
+	for i, line := range strings.Split(data, "\n") {
+		n := i + 1
+		if inFence {
+			if closesFence(line, marker, width) {
+				inFence = false
+				continue
+			}
+			if shell {
+				for _, name := range placeholderTokens(line) {
+					uses = append(uses, placeholderUse{line: n, name: name})
+				}
+			}
+			continue
+		}
+		if m, w, info, ok := openingFence(line); ok {
+			inFence, marker, width, shell = true, m, w, shellFence(info)
+			continue
+		}
+		if drop[n] {
+			continue
+		}
+		for _, span := range inlineCodeSpans(line) {
+			if name, ok := placeholderSpan(span); ok {
+				uses = append(uses, placeholderUse{line: n, name: name})
+			}
+		}
+	}
+	return uses
+}
+
+// listedNames returns the placeholders the name tables of a skill list in
+// their first cells: the values it takes from CLAUDE.md and the names it takes
+// from the work.
+func listedNames(tables []valueTable) map[string]bool {
+	listed := make(map[string]bool)
+	for _, table := range tables {
+		for _, row := range table.rows {
+			if len(row.cells) == 0 {
+				continue
+			}
+			for _, name := range placeholderTokens(row.cells[0]) {
+				listed[name] = true
+			}
+		}
+	}
+	return listed
+}
+
+// TestPlaceholderRule pins what counts as a placeholder in the dispatch skill
+// (issue #269): a name the skill defines, and not a command, its arguments, or
+// a single-letter metavariable.
+func TestPlaceholderRule(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		text string
+		want string
+	}{
+		{name: "a one-word name", text: "<checks>", want: "<checks>"},
+		{name: "a two-word name", text: "<unit limit>", want: "<unit limit>"},
+		{name: "a three-word name", text: "<absolute path>", want: "<absolute path>"},
+		{name: "a name with padding", text: "  <unit dir> ", want: "<unit dir>"},
+		{name: "a command", text: "`<cli> close <unit>`"},
+		{name: "a command argument", text: "--task-file <file>"},
+		{name: "a name with a path", text: "<unit dir>/.worktrees/"},
+		{name: "a single-letter metavariable", text: "<n>"},
+		{name: "a URL", text: "<https://example.com>"},
+		{name: "a redirection", text: "< <absolute path>"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, _ := placeholderSpan(tc.text)
+			if got != tc.want {
+				t.Errorf("placeholderSpan(%q) = %q, want %q", tc.text, got, tc.want)
+			}
+		})
+	}
 }
 
 // TestDispatchSkillNamesTheCLAUDEValues fails when the dispatch skill and
@@ -297,6 +459,21 @@ func TestDispatchSkillNamesTheCLAUDEValues(t *testing.T) {
 		}
 		if !strings.Contains(withoutTables(skillDoc, skillTables), name) {
 			t.Errorf("%s: %s appears nowhere but the values table: the process must say what the limit allows (issue #269)", dispatchSkill, name)
+		}
+	})
+
+	t.Run("every placeholder the skill uses is a name one of its tables lists", func(t *testing.T) {
+		t.Parallel()
+
+		if len(skillTables) < 2 {
+			t.Fatalf("%s: %d name tables, want the values table and the table of names from the work (issue #269)", dispatchSkill, len(skillTables))
+		}
+		listed := listedNames(skillTables)
+		for _, use := range skillPlaceholders(skillDoc, skillTables) {
+			if !listed[use.name] {
+				t.Errorf("%s:%d uses %s, which neither name table lists: a placeholder is a value of the first table or a name from the work in the second, so using a new one needs its row (issue #269)",
+					dispatchSkill, use.line, use.name)
+			}
 		}
 	})
 }
