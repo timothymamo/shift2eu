@@ -590,7 +590,9 @@ run of the agents' code into a job that runs it at every boot: install refuses a
 VM's mounts, or one that holds a mount (through it the agents could edit the clone's `dev/`), and a clone
 whose `dev/` or `dev/agents-app-token.sh` is a symlink. It asks `limactl list` for the VM's name and mounts
 and refuses when limactl fails or the first line is not exactly the instance: limactl may print nothing and
-exit 0 for a VM it does not know, and another VM's mounts prove nothing. So create the VM first. One LaunchDaemon
+exit 0 for a VM it does not know, and another VM's mounts prove nothing. So create the VM first. The mount
+comparison is case-sensitive although APFS usually is not: keep the locations in `dev/lima.yaml` in their
+real case, as Lima writes them. One LaunchDaemon
 per `LIMA_INSTANCE`: for a second VM, install again with that instance's name. A `kill` of the job's
 refresh only restarts it (within 5 minutes): stop it with `make agents-token-refresh-uninstall`.
 
@@ -668,8 +670,10 @@ Over SSH on the Mac Mini, each step with its check (the instance `shift2eu`; for
    ```
 
    It stops the refresh and removes the plist; the log stays. The VM's token stays valid until it expires.
+   If it warns that the job is still loaded, run the `sudo launchctl bootout system/<label>` it names.
    Both targets put the plist in `AGENTS_TOKEN_LAUNCHD_DIR` (`/Library/LaunchDaemons`): that variable is a
-   hook for the tests only, never set it on the Mac.
+   hook for the tests only, never set it on the Mac. Both refuse it from the environment: a stale export
+   would install the plist where launchd never looks at boot.
 
 5. **Roll back to the hand-started refresh**: after step 4, from the host clone,
    `direnv exec . make agents-token-refresh-start`, and check its log as before. Without the LaunchDaemon a reboot needs

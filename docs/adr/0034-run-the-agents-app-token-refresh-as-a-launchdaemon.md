@@ -34,7 +34,11 @@ it with its SHA-256, the script the job runs and every `sudo` command, installs 
 bootstraps it into the `system` domain; `make agents-token-refresh-uninstall` boots it out and removes
 that one file. The directory is the Makefile's `AGENTS_TOKEN_LAUNCHD_DIR`, a hook only for the tests,
 which point it into their sandbox; since root writes there, both targets refuse a value that is not
-absolute or holds anything but letters, digits, `/`, `.`, `_` and `-`, or a `..` component.
+absolute or holds anything but letters, digits, `/`, `.`, `_` and `-`, or a `..` component. The value may
+come only from the `make` command line or from the Makefile: both targets refuse, before any `sudo`, one
+whose `$(origin)` is `environment` (or `environment override`), since a stale export, from a test or an
+earlier session, would have root install the plist where launchd never looks at boot, and the job would
+quietly be gone after the next reboot.
 
 **The install fails closed.** Over a loaded job it runs `launchctl bootout` and waits, at most 10 seconds,
 while `launchctl print` still finds the job; a job still loaded then stops the install before it installs
@@ -43,8 +47,15 @@ anything (the old job keeps running, and the message says so, never that no job 
 printed: on a mismatch, or when the file cannot be read, it removes the file again with `sudo rm -f`,
 loads nothing and fails, saying no token refresh job of the instance is loaded. A plist left behind would
 be loaded at the next boot without anyone having checked it, so a warning is not enough. A failing
-`launchctl bootstrap` is tried once more, then the install fails, naming the two ways to restore a job:
-the install again, or `make agents-token-refresh-start`. `make agents-token-refresh-start` stays as it was, but warns and starts nothing
+`launchctl bootstrap` is tried once more; when that fails too, `launchctl print system/<label>` decides,
+since bootstrap can load the job and still exit non-zero: a loaded job is a success and the install says
+it is loaded; otherwise the install fails, says the checked plist stays in place and loads at the next
+boot, and names the two ways to restore a job now: the install again, or
+`make agents-token-refresh-start`. The uninstall boots the job out, waits at most 5 seconds while
+`launchctl print` still finds it, and removes the plist either way; a job still loaded is reported with
+`sudo launchctl bootout system/<label>`, which the maintainer runs by hand (it otherwise runs until the
+next reboot), and the uninstall exits 0, since the plist is gone and running it again would change
+nothing. `make agents-token-refresh-start` stays as it was, but warns and starts nothing
 while the instance's LaunchDaemon is loaded (`launchctl print system/<label>` succeeds), says so when the
 loaded job runs another clone's script, and needs no launchctl on Linux.
 
@@ -101,7 +112,10 @@ The open points of issue #229:
   maintainer, with the key in reach. Four guards stand against that: the install asks `limactl list` once
   for the instance's name and mounts and refuses, before any `sudo`, a clone that is a mount, lies under
   one or holds one (a mount inside the clone lets the agents edit its `dev/`; compared by path components,
-  `~` and `~/...` expanded against `HOME` and symlinked locations resolved), and refuses too when limactl
+  `~` and `~/...` expanded against `HOME` and symlinked locations resolved; the comparison is
+  case-sensitive while APFS usually is not, which holds because Lima writes mount locations in their
+  canonical case and the clone's path comes from `pwd -P`; a location typed in another case in
+  `dev/lima.yaml` would slip past it), and refuses too when limactl
   fails or its first line is not exactly the instance, since the check cannot be done then: limactl may
   print nothing and exit 0 for an instance it does not know, and another instance's mounts prove nothing
   (create the VM first). It also refuses a clone whose `dev/` or `dev/agents-app-token.sh` is a symlink,

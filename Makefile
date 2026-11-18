@@ -533,11 +533,22 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # finding it; one that stays loaded stops the install before it installs anything. After `sudo install` it
 # reads the installed file back, as you, and compares its SHA-256 with the one it printed: on a mismatch, or
 # when the file cannot be read, it removes the file again (a plist left there would load at the next boot)
-# and fails. launchctl bootstrap is tried twice before the install fails.
+# and fails. launchctl bootstrap is tried twice; when both fail, launchctl print decides: a loaded job is a
+# success (bootstrap can load the job and still exit non-zero), otherwise the install fails and says that the
+# checked plist stays where launchd loads it at the next boot.
+#
+# uninstall boots the job out, waits (at most 5 seconds) until launchctl print stops finding it and removes the
+# plist either way. A job that stays loaded is reported with the command that unloads it, and the uninstall
+# still exits 0: the plist is gone, and running it again would change nothing.
 #
 # AGENTS_TOKEN_LAUNCHD_DIR is where launchd reads LaunchDaemons from. It is a hook for the tests, which point
 # it into their sandbox; never change it on a real Mac. Root writes there, so install and uninstall refuse a
-# value that is not absolute or holds anything but letters, digits, /, ., _ and -, or a .. component.
+# value that is not absolute or holds anything but letters, digits, /, ., _ and -, or a .. component. The value
+# comes only from the make command line or from this file, never from the environment: a stale export (from a
+# test, an earlier session) would have root install the plist where launchd never looks at boot, and the job
+# would be gone after the next reboot, so both targets refuse it before any sudo. Its origin is read here, at
+# parse time, since the target-specific export below would change it inside the recipes.
+AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN := $(origin AGENTS_TOKEN_LAUNCHD_DIR)
 AGENTS_TOKEN_LAUNCHD_DIR ?= /Library/LaunchDaemons
 AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX = io.github.timothymamo.shift2eu.agents-token-refresh.
 AGENTS_TOKEN_LAUNCHD_LABEL = $(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$(LIMA_INSTANCE)
@@ -551,7 +562,11 @@ AGENTS_TOKEN_INSTANCE_CHECK = case "$${LIMA_INSTANCE:-}" in \
 		echo "$@: LIMA_INSTANCE must be letters, digits, ., _ and -, beginning with a letter or digit" >&2; exit 1 ;; \
 	esac
 # The check of AGENTS_TOKEN_LAUNCHD_DIR, the directory root writes the plist into and removes it from.
-AGENTS_TOKEN_LAUNCHD_DIR_CHECK = case "$${AGENTS_TOKEN_LAUNCHD_DIR:-}" in \
+AGENTS_TOKEN_LAUNCHD_DIR_CHECK = case "$(AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN)" in \
+	environment*) \
+		echo "$@: refused: AGENTS_TOKEN_LAUNCHD_DIR comes from the environment, where a stale export would have root install the plist where launchd never looks at boot: unset it (it is a test hook: leave it at /Library/LaunchDaemons, or pass it on the make command line)" >&2; exit 1 ;; \
+	esac; \
+	case "$${AGENTS_TOKEN_LAUNCHD_DIR:-}" in \
 	/*) ;; \
 	*) echo "$@: AGENTS_TOKEN_LAUNCHD_DIR must be an absolute path (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
 	esac; \
@@ -648,10 +663,14 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 	if ! sudo launchctl bootstrap system "$$dest"; then \
 		sleep 1; \
 		echo "+ sudo launchctl bootstrap system $$dest"; \
-		sudo launchctl bootstrap system "$$dest" || { \
-			echo "agents-token-refresh-install: ERROR: launchctl bootstrap failed twice: NO token refresh job of $$LIMA_INSTANCE is loaded now, and the VM's token expires within the hour. Run make agents-token-refresh-install again, or start a refresh by hand with make agents-token-refresh-start" >&2; \
-			exit 1; \
-		}; \
+		if ! sudo launchctl bootstrap system "$$dest"; then \
+			if launchctl print "system/$$label" >/dev/null 2>&1; then \
+				echo "agents-token-refresh-install: launchctl bootstrap exited non-zero twice, but launchctl print finds $$label loaded: the job is loaded" >&2; \
+			else \
+				echo "agents-token-refresh-install: ERROR: launchctl bootstrap failed twice: NO token refresh job of $$LIMA_INSTANCE is loaded now, and the VM's token expires within the hour. The checked plist stays at $$dest, so launchd loads it at the next boot. Run make agents-token-refresh-install again, or start a refresh by hand with make agents-token-refresh-start" >&2; \
+				exit 1; \
+			fi; \
+		fi; \
 	fi; \
 	echo "agents-token-refresh-install: loaded $$label: it runs now, at every boot, and again whenever it exits"; \
 	pid="$$(cat "$$lock_pid" 2>/dev/null || true)"; \
@@ -669,14 +688,23 @@ agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh'
 	$(AGENTS_TOKEN_LAUNCHD_DIR_CHECK); \
 	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${AGENTS_TOKEN_LAUNCHD_DIR%/}/$$label.plist"; \
 	echo "+ sudo launchctl bootout system/$$label"; \
-	if sudo launchctl bootout "system/$$label"; then \
-		echo "agents-token-refresh-uninstall: stopped and unloaded $$label"; \
+	if sudo launchctl bootout "system/$$label"; then booted=1; else booted=0; fi; \
+	tries=0; \
+	while [ "$$tries" -lt 5 ] && launchctl print "system/$$label" >/dev/null 2>&1; do sleep 1; tries=$$((tries + 1)); done; \
+	if launchctl print "system/$$label" >/dev/null 2>&1; then \
+		stuck=1; \
+		echo "agents-token-refresh-uninstall: warning: $$label is still loaded $$tries second(s) after launchctl bootout: it keeps running until the next reboot or until you run sudo launchctl bootout system/$$label; removing its plist anyway, so the next boot does not load it" >&2; \
+	elif [ "$$booted" = 1 ]; then \
+		stuck=0; echo "agents-token-refresh-uninstall: stopped and unloaded $$label"; \
 	else \
-		echo "agents-token-refresh-uninstall: $$label was not loaded (launchctl bootout failed); removing its plist anyway"; \
+		stuck=0; echo "agents-token-refresh-uninstall: $$label was not loaded (launchctl bootout failed); removing its plist anyway"; \
 	fi; \
 	echo "+ sudo rm -f $$dest"; \
 	sudo rm -f "$$dest" || exit 1; \
-	echo "agents-token-refresh-uninstall: removed $$dest; the log stays. The VM's token stays valid until it expires, within the hour: start a refresh by hand with make agents-token-refresh-start"
+	echo "agents-token-refresh-uninstall: removed $$dest; the log stays. The VM's token stays valid until it expires, within the hour: start a refresh by hand with make agents-token-refresh-start"; \
+	if [ "$$stuck" = 1 ]; then \
+		echo "agents-token-refresh-uninstall: warning: $$label is still loaded: unload it with sudo launchctl bootout system/$$label" >&2; \
+	fi
 
 # For a VM created before dev/lima.yaml installed the gh wrapper: moves the real gh off the PATH, installs the
 # wrapper with the real gh's path pinned and points the git credential helper at it, all over limactl's
