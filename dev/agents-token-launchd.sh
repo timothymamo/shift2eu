@@ -22,8 +22,10 @@
 #     ThrottleInterval seconds (300): a refresh that finds another one holding the instance's lock exits 0,
 #     so a refresh started by hand beside the job costs one log line every five minutes, and a permanent
 #     failure one mint attempt every five minutes;
-#   - opens its own log, as the maintainer, through a shell line (`exec /bin/sh "$0" refresh >>"$1" 2>&1`,
-#     with the script and the log as arguments of their own, spliced into no shell text): the log make
+#   - opens its own log, as the maintainer, through a shell line
+#     (`umask 077 && mkdir -p "${1%/*}" && exec /bin/sh "$0" refresh >>"$1" 2>&1`, with the script and the
+#     log as arguments of their own, spliced into no shell text; the umask keeps a recreated log 0600 and
+#     mkdir -p recreates a missing state directory, so the job does not fail before its first line): the log make
 #     agents-token-refresh-start writes, ${XDG_STATE_HOME:-$HOME/.local/state}/shift2eu/
 #     agents-token-refresh-<instance>.log, never inside ~/.lima, where a log launchd creates would bring a
 #     deleted instance's directory back (issue #229, the note from #237). StandardOutPath and
@@ -126,9 +128,12 @@ plist() {
     xdg_entry="$(printf '\t\t<key>XDG_STATE_HOME</key>\n\t\t<string>%s</string>' "${xdg_state_home}")"
   fi
   # The shell line the job runs, XML-escaped: it opens the log ($1) for appending as the job's UserName and
-  # execs the script ($0). Both reach it as arguments of their own, never spliced into the shell text.
+  # execs the script ($0). Both reach it as arguments of their own, never spliced into the shell text. It
+  # sets umask 077 first, so a log the job recreates (after it was removed or rotated) is the maintainer's
+  # alone (0600), and creates the log's directory, so a state directory removed since the install makes the
+  # job recreate it rather than fail before the script writes a single line.
   # shellcheck disable=SC2016 # expanded by the job's /bin/sh -c, not here
-  open_log='exec /bin/sh "$0" refresh &gt;&gt;"$1" 2&gt;&amp;1'
+  open_log='umask 077 &amp;&amp; mkdir -p "${1%/*}" &amp;&amp; exec /bin/sh "$0" refresh &gt;&gt;"$1" 2&gt;&amp;1'
   {
     printf '%s\n' \
     '<?xml version="1.0" encoding="UTF-8"?>' \
