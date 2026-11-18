@@ -19,8 +19,8 @@
 | partial | 1 | 5 | 2 |
 | none | 5 | 2 | 5 |
 | total | 13 | 13 | 13 |
-| `OVHcloud` estimate | €797.66 per month for 8 of 13 resources |  |  |
-| `Scaleway` estimate |  | €587.58 per month for 8 of 13 resources |  |
+| `OVHcloud` estimate | €797.66 per month for 8 of 13 resources (storage not included in 4 estimates) |  |  |
+| `Scaleway` estimate |  | €587.58 per month for 8 of 13 resources (storage not included in 4 estimates) |  |
 | `UpCloud` estimate |  |  | €359.31 per month for 8 of 13 resources |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
@@ -32,15 +32,15 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-assets` | `storage.object` | direct | `Object Storage` | €1.78 | direct | `Object Storage` | €4.03 | direct | `Managed Object Storage` | €5.08 |
 | `shop-cdn` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
 | `shop-db` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` | €236.81 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL High Availability` | €81.29 (count assumed 1) (730 hours assumed) | direct | `Managed PostgreSQL Multi-node` | €98.35 (count assumed 1) (730 hours assumed) |
-| `shop-eks` | `kubernetes.managed` | direct | `Managed Kubernetes Service` | €224.04 (730 hours assumed) | direct | `Kubernetes Kapsule` | €245.72 (730 hours assumed) | partial | `Managed Kubernetes` | €84.00 (730 hours assumed) |
+| `shop-eks` | `kubernetes.managed` | direct | `Managed Kubernetes Service` | €224.04 (730 hours assumed) (boot volume not included) | direct | `Kubernetes Kapsule` | €245.72 (730 hours assumed) (boot volume not included) | partial | `Managed Kubernetes` | €84.00 (730 hours assumed) |
 | `shop-legacy-mysql` | `database.mysql` | direct | `Managed MySQL Multi-node` | €162.79 (count assumed 1) (730 hours assumed) | partial | `Managed Database for PostgreSQL and MySQL High Availability` | €66.39 (count assumed 1) (730 hours assumed) | direct | `Managed MySQL Multi-node` | €67.93 (count assumed 1) (730 hours assumed) |
 | `shop-orders` | `messaging.queue` | none |  | not estimated: no fit | partial | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-orders-dlq` | `messaging.queue` | none |  | not estimated: no fit | partial | `Queues` | not estimated: usage-priced | none |  | not estimated: no fit |
 | `shop-thumbnailer` | `serverless.function` | none |  | not estimated: no fit | direct | `Serverless Functions` | not estimated: usage-priced | none |  | not estimated: no fit |
-| `shop-web-1` | `compute.vm` | direct | `Instances` | €37.38 (count assumed 1) (730 hours assumed) | direct | `Instances` | €40.21 (count assumed 1) (730 hours assumed) | direct | `Cloud Servers` | €18.00 (count assumed 1) (730 hours assumed) |
+| `shop-web-1` | `compute.vm` | direct | `Instances` | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Instances` | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | direct | `Cloud Servers` | €18.00 (count assumed 1) (730 hours assumed) |
 | `shop-web-1-data` | `storage.block` | direct | `Block Storage` | €4.31 (count assumed 1) | direct | `Block Storage` | €9.49 (count assumed 1) | direct | `Block Storage` | €22.31 (count assumed 1) |
-| `shop-web-2` | `compute.vm` | direct | `Instances` | €18.43 (count assumed 1) | direct | `Instances` | €19.83 (count assumed 1) | direct | `Cloud Servers` | €9.64 (count assumed 1) |
-| `shop-web-asg` | `compute.vm` | partial | `Instances` | €112.13 (730 hours assumed) | partial | `Instances` | €120.63 (730 hours assumed) | partial | `Cloud Servers` | €54.00 (730 hours assumed) |
+| `shop-web-2` | `compute.vm` | direct | `Instances` | €18.43 (count assumed 1) (boot volume not included) | direct | `Instances` | €19.83 (count assumed 1) (boot volume not included) | direct | `Cloud Servers` | €9.64 (count assumed 1) |
+| `shop-web-asg` | `compute.vm` | partial | `Instances` | €112.13 (730 hours assumed) (boot volume not included) | partial | `Instances` | €120.63 (730 hours assumed) (boot volume not included) | partial | `Cloud Servers` | €54.00 (730 hours assumed) |
 | `shop.example.com` | `unclassified` | none |  | not estimated: no fit | none |  | not estimated: no fit | none |  | not estimated: no fit |
 
 ### Blockers on every target
@@ -72,15 +72,15 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` (tie: `Object Storage 3-AZ`) |  | €1.78 |  | `Object Storage` offers every capability the resource uses |
 | `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
 | `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | direct | `Managed PostgreSQL Multi-node Advanced` (tie: `Managed PostgreSQL Multi-node Advanced 3-AZ`) | `Advanced B3-8` (2 vCPU, 8 GiB) | €236.81 (count assumed 1) (730 hours assumed) |  | `Managed PostgreSQL Multi-node Advanced` offers every capability the resource uses |
-| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service` (tie: `Managed Kubernetes Service 3-AZ`) | `b3-16` (4 vCPU, 16 GiB) | €224.04 (730 hours assumed) | depends-on `shop-db` | `Managed Kubernetes Service` offers every capability the resource uses |
+| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Managed Kubernetes Service` (tie: `Managed Kubernetes Service 3-AZ`) | `b3-16` (4 vCPU, 16 GiB) | €224.04 (730 hours assumed) (boot volume not included) | depends-on `shop-db` | `Managed Kubernetes Service` offers every capability the resource uses |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | direct | `Managed MySQL Multi-node` (tie: `Managed MySQL Multi-node 3-AZ`, `Managed MySQL Multi-node Advanced`, `Managed MySQL Multi-node Advanced 3-AZ`) | `Production B3-8` (2 vCPU, 8 GiB) | €162.79 (count assumed 1) (730 hours assumed) |  | `Managed MySQL Multi-node` offers every capability the resource uses |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit |  | no offering in the `OVHcloud` catalog for `messaging.queue` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | none |  |  | not estimated: no fit | dead-letter-queue-of `shop-orders` | no offering in the `OVHcloud` catalog for `messaging.queue` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | none |  |  | not estimated: no fit | depends-on `shop-assets` | no offering in the `OVHcloud` catalog for `serverless.function` |
-| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €37.38 (count assumed 1) (730 hours assumed) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
+| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €37.38 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage` (tie: `Block Storage LUKS`) |  | €4.31 (count assumed 1) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
-| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €18.43 (count assumed 1) |  | `Instances` offers every capability the resource uses |
-| `shop-web-asg` | `AWS::AutoScaling::AutoScalingGroup` | `compute.vm` | partial | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €112.13 (730 hours assumed) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €18.43 (count assumed 1) (boot volume not included) |  | `Instances` offers every capability the resource uses |
+| `shop-web-asg` | `AWS::AutoScaling::AutoScalingGroup` | `compute.vm` | partial | `Instances` | `b3-8` (2 vCPU, 8 GiB) | €112.13 (730 hours assumed) (boot volume not included) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
 | `shop.example.com` | `AWS::Route53::HostedZone` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
 
 ### Required changes
@@ -110,7 +110,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `shop`
 
 - Fit: 5 direct, 1 partial, 3 none
-- Monthly estimate: €633.10 per month for 6 of 9 resources, list prices on 2026-11-14, excluding VAT and discounts
+- Monthly estimate: €633.10 per month for 6 of 9 resources (storage not included in 4 estimates), list prices on 2026-11-14, excluding VAT and discounts
 - Source cost: `USD` $518.92 for 4 of 9 resources
 - Blockers:
   - `shop-orders`: no offering in the `OVHcloud` catalog for `messaging.queue`
@@ -126,7 +126,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €797.66 per month for 8 of 13 resources
+- Total: €797.66 per month for 8 of 13 resources (storage not included in 4 estimates)
 - Estimate: list prices on 2026-11-14, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
@@ -150,15 +150,15 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 | `shop-assets` | `AWS::S3::Bucket` | `storage.object` | direct | `Object Storage` |  | €4.03 |  | `Object Storage` offers every capability the resource uses |
 | `shop-cdn` | `AWS::CloudFront::Distribution` | `unclassified` | none |  |  | not estimated: no fit | depends-on `shop-assets` | not classified |
 | `shop-db` | `AWS::RDS::DBInstance` | `database.postgresql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €81.29 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
-| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
+| `shop-eks` | `AWS::EKS::Cluster` | `kubernetes.managed` | direct | `Kubernetes Kapsule` (tie: `Kubernetes Kapsule Dedicated`) | `PRO2-XS` (4 vCPU, 16 GiB) | €245.72 (730 hours assumed) (boot volume not included) | depends-on `shop-db` | `Kubernetes Kapsule` offers every capability the resource uses |
 | `shop-legacy-mysql` | `AWS::RDS::DBInstance` | `database.mysql` | partial | `Managed Database for PostgreSQL and MySQL High Availability` | `DB-PRO2-XXS` (2 vCPU, 8 GiB) | €66.39 (count assumed 1) (730 hours assumed) |  | `Managed Database for PostgreSQL and MySQL High Availability` does not offer `point-in-time-restore` |
 | `shop-orders` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced |  | `Queues` does not offer `encryption-at-rest` |
 | `shop-orders-dlq` | `AWS::SQS::Queue` | `messaging.queue` | partial | `Queues` |  | not estimated: usage-priced | dead-letter-queue-of `shop-orders` | `Queues` does not offer `encryption-at-rest` |
 | `shop-thumbnailer` | `AWS::Lambda::Function` | `serverless.function` | direct | `Serverless Functions` |  | not estimated: usage-priced | depends-on `shop-assets` | `Serverless Functions` offers every capability the resource uses |
-| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
+| `shop-web-1` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €40.21 (count assumed 1) (730 hours assumed) (boot volume not included) | depends-on `shop-orders` | `Instances` offers every capability the resource uses |
 | `shop-web-1-data` | `AWS::EC2::Volume` | `storage.block` | direct | `Block Storage` |  | €9.49 (count assumed 1) | attached-to `shop-web-1` | `Block Storage` offers every capability the resource uses |
-| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €19.83 (count assumed 1) |  | `Instances` offers every capability the resource uses |
-| `shop-web-asg` | `AWS::AutoScaling::AutoScalingGroup` | `compute.vm` | partial | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €120.63 (730 hours assumed) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
+| `shop-web-2` | `AWS::EC2::Instance` | `compute.vm` | direct | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €19.83 (count assumed 1) (boot volume not included) |  | `Instances` offers every capability the resource uses |
+| `shop-web-asg` | `AWS::AutoScaling::AutoScalingGroup` | `compute.vm` | partial | `Instances` | `PLAY2-MICRO` (4 vCPU, 8 GiB) | €120.63 (730 hours assumed) (boot volume not included) |  | `Instances` does not offer `autoscaling`; `Instances` does not offer `zone-high-availability` |
 | `shop.example.com` | `AWS::Route53::HostedZone` | `unclassified` | none |  |  | not estimated: no fit |  | not classified |
 
 ### Required changes
@@ -187,7 +187,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 #### `shop`
 
 - Fit: 4 direct, 4 partial, 1 none
-- Monthly estimate: €517.16 per month for 6 of 9 resources, list prices on 2026-11-13, excluding VAT and discounts
+- Monthly estimate: €517.16 per month for 6 of 9 resources (storage not included in 4 estimates), list prices on 2026-11-13, excluding VAT and discounts
 - Source cost: `USD` $518.92 for 4 of 9 resources
 - Blockers:
   - `shop.example.com`: not classified
@@ -201,7 +201,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €587.58 per month for 8 of 13 resources
+- Total: €587.58 per month for 8 of 13 resources (storage not included in 4 estimates)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none

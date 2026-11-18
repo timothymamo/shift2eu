@@ -19,7 +19,9 @@
 //     the plan (name and size, or "no plan large enough" and the largest plan)
 //     and the monthly estimate (the amount, any fixed fee it includes, then
 //     "(count assumed 1)" and "(730 hours assumed)" when the resource gives no
-//     count or no hours, or "not estimated: " and the reason in plain words,
+//     count or no hours, then "(boot volume not included)" or "(data storage
+//     not included)" when the estimate leaves out storage its plan does not
+//     include (ADR 0032), or "not estimated: " and the reason in plain words,
 //     the region named for a missing price or storage price), then, when some
 //     resource has a relation, its relations, and last the reasons. The best
 //     offering is followed by "(tie: ...)" naming, in candidate order, the other
@@ -35,7 +37,9 @@
 //     with estimates on its total and the source's cost per currency, and its
 //     blockers;
 //   - "## Cost estimate", only with estimates on: the total "for N of M
-//     resources" ("resource" when M is 1), the basis (list prices on the retrieval date, excluding VAT
+//     resources" ("resource" when M is 1), followed, like every total, by
+//     "(storage not included in K estimates)" when K > 0 estimates carry that
+//     note, the basis (list prices on the retrieval date, excluding VAT
 //     and discounts, a fixed fee as the offering's listed fee), the region the
 //     prices are for, the hours basis, followed by one clause per distinct
 //     billing cap of the estimated resources' plans, ascending (ADR 0029), and

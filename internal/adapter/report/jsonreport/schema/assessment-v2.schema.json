@@ -369,6 +369,11 @@
           "description": "The most hours a month the estimated plan is billed for: its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
           "minimum": 1
         },
+        "storageNotIncluded": {
+          "type": "string",
+          "description": "The storage the estimate leaves out (boot-volume for a server or Kubernetes node, data-storage for a managed database): the chosen plan includes no storage, its offering prices storage per GiB in the estimate region, and the resource gives no storage size, so the amount does not include it (ADR 0032); present only when estimated and the note applies, never empty. A consumer must accept a value it does not know.",
+          "pattern": "^.+$"
+        },
         "breakdown": {
           "$ref": "#/$defs/breakdown"
         },
@@ -427,6 +432,11 @@
           "type": "integer",
           "description": "How many resources there are, estimated or not.",
           "minimum": 0
+        },
+        "storageNotIncluded": {
+          "type": "integer",
+          "description": "How many of the estimates leave out storage their plan does not include (resourceEstimate.storageNotIncluded, ADR 0032); present only when at least one does, absent means 0.",
+          "minimum": 1
         }
       },
       "required": [

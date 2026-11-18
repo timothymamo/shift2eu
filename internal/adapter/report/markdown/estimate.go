@@ -121,7 +121,24 @@ func renderEstimate(e *estimate.Estimate) string {
 		cell += " (" + hoursPerMonth + " hours assumed)"
 	}
 
+	if e.StorageNotIncluded != "" {
+		cell += " (" + renderStorageNotIncluded(e.StorageNotIncluded) + " not included)"
+	}
+
 	return cell
+}
+
+// renderStorageNotIncluded names in plain words the storage an estimate leaves
+// out (ADR 0032). A value the report does not know is "storage".
+func renderStorageNotIncluded(s estimate.StorageNotIncluded) string {
+	switch s {
+	case estimate.BootVolume:
+		return "boot volume"
+	case estimate.DataStorage:
+		return "data storage"
+	default:
+		return "storage"
+	}
 }
 
 // renderNotEstimated says in plain words why e is not estimated. A reason the
@@ -159,15 +176,27 @@ func renderRelations(v assessment.Verdict) string {
 }
 
 // renderTotal renders a total: "€2,535.00 per month for 4 of 8 resources", with
-// "resource" when there is one.
+// "resource" when there is one, then "(storage not included in 2 estimates)"
+// when some estimates leave out storage their plan does not include (ADR 0032).
 func renderTotal(t estimate.Total) string {
 	noun := " resources"
 	if t.Resources == 1 {
 		noun = " resource"
 	}
 
-	return euros(t.Monthly) + " per month for " + strconv.Itoa(t.Estimated) + " of " +
+	line := euros(t.Monthly) + " per month for " + strconv.Itoa(t.Estimated) + " of " +
 		strconv.Itoa(t.Resources) + noun
+
+	if t.StorageNotIncluded > 0 {
+		estimates := " estimates"
+		if t.StorageNotIncluded == 1 {
+			estimates = " estimate"
+		}
+
+		line += " (storage not included in " + strconv.Itoa(t.StorageNotIncluded) + estimates + ")"
+	}
+
+	return line
 }
 
 // basisNote is the basis an estimate is given on: the snapshot's retrieval date,

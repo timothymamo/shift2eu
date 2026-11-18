@@ -29,11 +29,14 @@ type estimateBasis struct {
 }
 
 // total sums some estimates: the amount over the estimated resources, how many
-// those are and how many resources there are.
+// those are and how many resources there are. StorageNotIncluded is how many
+// estimates leave out storage their plan does not include, written only when
+// at least one does (ADR 0032).
 type total struct {
-	Amount    string `json:"amount"`
-	Estimated int    `json:"estimated"`
-	Resources int    `json:"resources"`
+	Amount             string `json:"amount"`
+	Estimated          int    `json:"estimated"`
+	Resources          int    `json:"resources"`
+	StorageNotIncluded int    `json:"storageNotIncluded,omitempty"`
 }
 
 // sourceCost is what the source charges, per currency, never converted, and how
@@ -86,15 +89,18 @@ type plan struct {
 // code when it is not. The two flags are pointers so that an estimated resource
 // always writes both, false included, and one that is not writes neither.
 // BillingCapHours is the cap on the billed hours of the estimated plan, written
-// only when the plan's offering has one (ADR 0029).
+// only when the plan's offering has one (ADR 0029). StorageNotIncluded names the
+// storage the estimate leaves out, written only when it leaves some out
+// (ADR 0032).
 type resourceEstimate struct {
-	Estimated       bool       `json:"estimated"`
-	Amount          string     `json:"amount,omitempty"`
-	CountAssumed    *bool      `json:"countAssumed,omitempty"`
-	HoursAssumed    *bool      `json:"hoursAssumed,omitempty"`
-	BillingCapHours int64      `json:"billingCapHours,omitempty"`
-	Breakdown       *breakdown `json:"breakdown,omitempty"`
-	Reason          string     `json:"reason,omitempty"`
+	Estimated          bool       `json:"estimated"`
+	Amount             string     `json:"amount,omitempty"`
+	CountAssumed       *bool      `json:"countAssumed,omitempty"`
+	HoursAssumed       *bool      `json:"hoursAssumed,omitempty"`
+	BillingCapHours    int64      `json:"billingCapHours,omitempty"`
+	StorageNotIncluded string     `json:"storageNotIncluded,omitempty"`
+	Breakdown          *breakdown `json:"breakdown,omitempty"`
+	Reason             string     `json:"reason,omitempty"`
 }
 
 // breakdown is what an estimate is made of.
@@ -124,7 +130,12 @@ func newEstimateBasis(a assessment.Assessment) *estimateBasis {
 
 // newTotal returns t as a total object.
 func newTotal(t estimate.Total) total {
-	return total{Amount: t.Monthly.String(), Estimated: t.Estimated, Resources: t.Resources}
+	return total{
+		Amount:             t.Monthly.String(),
+		Estimated:          t.Estimated,
+		Resources:          t.Resources,
+		StorageNotIncluded: t.StorageNotIncluded,
+	}
 }
 
 // newAssessmentSourceCost returns the source cost of a, or nil when a has no
@@ -242,11 +253,12 @@ func newResourceEstimate(e *estimate.Estimate) *resourceEstimate {
 	countAssumed, hoursAssumed := e.CountAssumed, e.HoursAssumed
 
 	return &resourceEstimate{
-		Estimated:       true,
-		Amount:          e.Monthly.String(),
-		CountAssumed:    &countAssumed,
-		HoursAssumed:    &hoursAssumed,
-		BillingCapHours: e.BillingCapHours,
+		Estimated:          true,
+		Amount:             e.Monthly.String(),
+		CountAssumed:       &countAssumed,
+		HoursAssumed:       &hoursAssumed,
+		BillingCapHours:    e.BillingCapHours,
+		StorageNotIncluded: string(e.StorageNotIncluded),
 		Breakdown: &breakdown{
 			Plan:     e.Breakdown.Plan.String(),
 			Storage:  e.Breakdown.Storage.String(),

@@ -151,6 +151,7 @@
         "amount": "245.72",
         "countAssumed": false,
         "hoursAssumed": true,
+        "storageNotIncluded": "boot-volume",
         "breakdown": {
           "plan": "245.72",
           "storage": "0.00",
@@ -318,6 +319,7 @@
         "amount": "40.21",
         "countAssumed": true,
         "hoursAssumed": true,
+        "storageNotIncluded": "boot-volume",
         "breakdown": {
           "plan": "40.21",
           "storage": "0.00",
@@ -390,6 +392,7 @@
         "amount": "19.83",
         "countAssumed": true,
         "hoursAssumed": false,
+        "storageNotIncluded": "boot-volume",
         "breakdown": {
           "plan": "19.83",
           "storage": "0.00",
@@ -437,6 +440,7 @@
         "amount": "120.63",
         "countAssumed": false,
         "hoursAssumed": true,
+        "storageNotIncluded": "boot-volume",
         "breakdown": {
           "plan": "120.63",
           "storage": "0.00",
@@ -536,7 +540,8 @@
       "estimate": {
         "amount": "517.16",
         "estimated": 6,
-        "resources": 9
+        "resources": 9,
+        "storageNotIncluded": 4
       },
       "sourceCost": {
         "covered": 4,
@@ -586,7 +591,8 @@
     "total": {
       "amount": "587.58",
       "estimated": 8,
-      "resources": 13
+      "resources": 13,
+      "storageNotIncluded": 4
     }
   },
   "sourceCost": {

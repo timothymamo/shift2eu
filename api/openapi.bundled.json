@@ -619,6 +619,11 @@
               "reason": {
                 "description": "Why the resource is not estimated (no-fit, usage-priced, no-size, no-plan, no-plan-large-enough, no-price, no-storage-price); present only when not estimated. A consumer must accept a reason it does not know.",
                 "type": "string"
+              },
+              "storageNotIncluded": {
+                "description": "The storage the estimate leaves out (boot-volume for a server or Kubernetes node, data-storage for a managed database): the chosen plan includes no storage, its offering prices storage per GiB in the estimate region, and the resource gives no storage size, so the amount does not include it (ADR 0032); present only when estimated and the note applies, never empty. A consumer must accept a value it does not know.",
+                "pattern": "^.+$",
+                "type": "string"
               }
             },
             "required": [
@@ -743,6 +748,11 @@
               "resources": {
                 "description": "How many resources there are, estimated or not.",
                 "minimum": 0,
+                "type": "integer"
+              },
+              "storageNotIncluded": {
+                "description": "How many of the estimates leave out storage their plan does not include (resourceEstimate.storageNotIncluded, ADR 0032); present only when at least one does, absent means 0.",
+                "minimum": 1,
                 "type": "integer"
               }
             },
@@ -1252,6 +1262,11 @@
               "reason": {
                 "description": "Why the resource is not estimated (no-fit, usage-priced, no-size, no-plan, no-plan-large-enough, no-price, no-storage-price); present only when not estimated. A consumer must accept a reason it does not know.",
                 "type": "string"
+              },
+              "storageNotIncluded": {
+                "description": "The storage the estimate leaves out (boot-volume for a server or Kubernetes node, data-storage for a managed database): the chosen plan includes no storage, its offering prices storage per GiB in the estimate region, and the resource gives no storage size, so the amount does not include it (ADR 0032); present only when estimated and the note applies, never empty. A consumer must accept a value it does not know.",
+                "pattern": "^.+$",
+                "type": "string"
               }
             },
             "required": [
@@ -1476,6 +1491,11 @@
               "resources": {
                 "description": "How many resources there are, estimated or not.",
                 "minimum": 0,
+                "type": "integer"
+              },
+              "storageNotIncluded": {
+                "description": "How many of the estimates leave out storage their plan does not include (resourceEstimate.storageNotIncluded, ADR 0032); present only when at least one does, absent means 0.",
+                "minimum": 1,
                 "type": "integer"
               }
             },
