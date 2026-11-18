@@ -56,7 +56,10 @@ estimate by plan carries a note that storage is not included exactly when all of
    (`catalog.Offering.StoragePrice(region)` returns true);
 4. the resource gives no storage size (`Size.StorageGiB` is nil). A resource that gives `storageGiB` 0
    said it needs none and gets no note; one that gives any size has that size priced, as today, and
-   gets no note.
+   gets no note;
+5. the resource's count is not 0. A resource whose count is 0 is estimated at 0.00 and leaves nothing
+   out, so it gets no note (only a hand-built resource can have one: `inventory.New` refuses a count
+   below 1).
 
 The note says what is left out, by category:
 

@@ -354,7 +354,7 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 	e.CountAssumed = countAssumed
 	e.HoursAssumed = hoursAssumed
 	e.BillingCapHours = chosen.offering.PlanBillingCapHours
-	e.StorageNotIncluded = storageNotIncluded(r.Category, stored, chosen, region)
+	e.StorageNotIncluded = storageNotIncluded(r.Category, count, stored, chosen, region)
 
 	return e
 }
@@ -363,8 +363,9 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 // (ADR 0032): none unless the resource gives no storage size, the chosen plan
 // includes no storage and its offering prices storage in region; then the
 // data storage for a category stored once, the boot volume otherwise.
-func storageNotIncluded(c taxonomy.Category, stored *big.Rat, chosen offeredPlan, region string) StorageNotIncluded {
-	if stored != nil || chosen.plan.IncludedStorageGiB != 0 {
+// A count of 0 is estimated at 0 and leaves nothing out, so it gets none.
+func storageNotIncluded(c taxonomy.Category, count, stored *big.Rat, chosen offeredPlan, region string) StorageNotIncluded {
+	if count.Sign() == 0 || stored != nil || chosen.plan.IncludedStorageGiB != 0 {
 		return ""
 	}
 
