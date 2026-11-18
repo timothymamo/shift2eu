@@ -5,6 +5,7 @@
 package devenv_test
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"os"
@@ -206,6 +207,238 @@ func TestAgentsAppTokenRefreshSurvivesAVMThatIsNotRunning(t *testing.T) {
 
 	if !refresh.running() {
 		t.Fatalf("the refresh exited after the VM came back; stderr:\n%s", refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshSurvivesAGitConfigLockAnotherWriterHolds pins the other half of the mint's refusal when
+// another writer holds the VM's ~/.gitconfig.lock: the refusal is transient, because a lock git config takes for the
+// moment of one write is gone by the next check, so the loop says it will try again instead of stopping and never
+// removes the other writer's lock (issue #241, the mint's status 4).
+func TestAgentsAppTokenRefreshSurvivesAGitConfigLockAnotherWriterHolds(t *testing.T) {
+	t.Parallel()
+
+	const lockBody = "a git config another writer runs in the VM holds this lock\n"
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	lock := filepath.Join(f.sb.vmHome, ".gitconfig.lock")
+	writeFileMode(t, lock, []byte(lockBody), 0o600)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	// Two mints: the first write was refused because the lock was held, and the loop tried again instead of
+	// stopping. mint_once mints before it writes, so a second token proves the retry.
+	waitFor(t, 30*time.Second, "the refresh to try a second mint while ~/.gitconfig.lock is held", func() bool {
+		return len(f.api.minted()) >= 2 || !refresh.running()
+	})
+
+	if !refresh.running() {
+		t.Fatalf("the refresh exited while another writer held the VM's %s, although a held lock is gone by the next check and the loop must never stop on it; stderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	if strings.Contains(refresh.errOut(), "agents App token refresh stopped") {
+		t.Errorf("the refresh said it stopped while another writer held the VM's %s: a lock held for the moment of one write is retried, never stopped on (issue #241)\nstderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	// The refusal the loop retried is the lock's, not some other failure that leaves the lock looking untouched.
+	if text := strings.ToLower(refresh.errOut()); !strings.Contains(text, "lock") {
+		t.Errorf("the refresh retried but no line mentions the lock on ~/.gitconfig, so this test cannot tell a refusal by the lock from any other transient failure (issue #241)\nstderr:\n%s",
+			refresh.errOut())
+	}
+
+	held, err := os.ReadFile(lock)
+	if err != nil {
+		t.Fatalf("the refresh removed the VM's %s, a lock it did not create: another writer's git config must survive it untouched (%v)", lock, err)
+	}
+
+	if string(held) != lockBody {
+		t.Errorf("the VM's %s holds %q after the refresh retried, want %q: the refresh leaves another writer's lock exactly as it found it (issue #241)",
+			lock, held, lockBody)
+	}
+
+	// The token is written before the bot's identity is known, so the held lock refuses the identity and not the
+	// token; the identity file must not be there, because no write of it succeeded.
+	if _, err := os.Stat(f.sb.vmPath(agentsIdentityFile)); err == nil {
+		t.Errorf("the refresh wrote %s although another writer's lock refused every write of the bot identity (issue #241)",
+			agentsIdentityFile)
+	}
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh did not stop on SIGTERM while another writer held the VM's %s; stderr:\n%s", lock, refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshStopsOnALockThatIsNotARegularFile is the other half of the pair the test above pins: a
+// ~/.gitconfig.lock that is a symlink is no lock git wrote, so refusing it is permanent (status 3) and the loop
+// stops with the stop line and status 1, where another writer's regular lock is transient and only retried. A
+// refresh that retried this one would mint a token at every check for as long as it runs, and none would ever
+// reach the VM's git configuration (issue #241).
+func TestAgentsAppTokenRefreshStopsOnALockThatIsNotARegularFile(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	target := filepath.Join(f.sb.vmHome, "stale-lock-target")
+	writeFileMode(t, target, []byte(staleGitLockBody), 0o600)
+
+	lock := filepath.Join(f.sb.vmHome, ".gitconfig.lock")
+	if err := os.Symlink(target, lock); err != nil {
+		t.Fatalf("symlink %s to %s: %v", lock, target, err)
+	}
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh was still running 30s after the fake VM's %s was a symlink, an entry no git wrote and no retry can turn into a lock; stderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	if code := refresh.exitCode(t); code != 1 {
+		t.Errorf("the refresh exited with %d although the fake VM's %s is a symlink, not the regular file git itself creates, want 1: that refusal is permanent, so the loop stops like every failure a maintainer has to fix (issue #241)\nstderr:\n%s",
+			code, lock, refresh.errOut())
+	}
+
+	assertStopLineNamesWhereToRestart(t, refresh.errOut())
+
+	// The refusal the stop line follows is the lock's, not some other permanent failure.
+	if text := strings.ToLower(refresh.errOut()); !strings.Contains(text, "lock") {
+		t.Errorf("the refresh stopped but no line mentions the lock on ~/.gitconfig, so a maintainer cannot tell what to remove (issue #241)\nstderr:\n%s",
+			refresh.errOut())
+	}
+
+	// An entry the mint may not take for a lock is left exactly as it was found: never followed, never removed.
+	info, err := os.Lstat(lock)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the refresh removed or replaced %s, a symlink to a file it may neither follow nor remove (%v)", lock, err)
+	}
+
+	body, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read %s: %v", target, err)
+	}
+
+	if string(body) != staleGitLockBody {
+		t.Errorf("%s holds %q after the refresh stopped, want %q: no write of the bot identity went through the lock's symlink (issue #241)",
+			target, body, staleGitLockBody)
+	}
+
+	if _, err := os.Stat(filepath.Join(f.sb.vmHome, ".gitconfig")); err == nil {
+		t.Errorf("the refresh created the fake VM's ~/.gitconfig although it refused to write the bot identity: a refused write leaves no half-written file behind (issue #241)")
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshIgnoresAStaleGitLockWhenTheIdentityIsAlreadyTheBots pins the third review's finding as
+// the refresh sees it: once the VM's ~/.gitconfig holds exactly the bot's identity, a lock a killed git left behind
+// is no obstacle to any later mint, so the loop keeps the VM's token fresh across mints with the stale lock in
+// place, and leaves both the file and the lock exactly as it found them (issue #241).
+func TestAgentsAppTokenRefreshIgnoresAStaleGitLockWhenTheIdentityIsAlreadyTheBots(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+
+	name := f.api.slug + "[bot]"
+	email := fmt.Sprintf("%d+%s[bot]@users.noreply.github.com", f.api.botUserID, f.api.slug)
+
+	gitconfig := filepath.Join(f.sb.vmHome, ".gitconfig")
+	writeFileMode(t, gitconfig, gitConfigBody(name, email), 0o600)
+
+	before, err := os.Stat(gitconfig)
+	if err != nil {
+		t.Fatalf("stat the fake VM's .gitconfig before the refresh: %v", err)
+	}
+
+	lock := f.writeStaleGitLock(t)
+	env := f.refreshEagerEnv()
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	// A second token in the file proves a mint that ran while the stale lock was there both minted and wrote: the
+	// loop mints at every check (refreshEagerEnv), so a token file that still held the first token is the refusal.
+	// The loop polls here rather than through waitFor, because the failure has to say what the VM's file still holds
+	// and why the loop refused, not only that a condition did not come true.
+	replaced := false
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) && !replaced {
+		tokens := f.api.minted()
+		if len(tokens) >= 2 {
+			if line, ok := tokenLine(f.sb.vmPath(agentsTokenFile)); ok && line != tokens[0] {
+				replaced = true
+			}
+		}
+
+		if !replaced {
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+
+	if !replaced {
+		line, _ := tokenLine(f.sb.vmPath(agentsTokenFile))
+
+		t.Fatalf("the refresh minted %d tokens in 30s but the fake VM's %s still holds %q: the stale %s beside a ~/.gitconfig that already holds the bot's identity refused every write, so the VM's gh keeps a token the loop cannot replace although nothing needed writing (issue #241)\nstderr:\n%s",
+			len(f.api.minted()), agentsTokenFile, line, lock, refresh.errOut())
+	}
+
+	if !refresh.running() {
+		t.Fatalf("the refresh exited although the fake VM's ~/.gitconfig already held the bot's identity and the stale %s belongs to no writer; stderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	if strings.Contains(refresh.errOut(), "agents App token refresh stopped") {
+		t.Errorf("the refresh stopped with a stale %s beside a ~/.gitconfig that already holds the bot's identity: a lock nobody holds is no reason to stop the loop (issue #241)\nstderr:\n%s",
+			lock, refresh.errOut())
+	}
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh did not stop on SIGTERM; stderr:\n%s", refresh.errOut())
+	}
+
+	after, err := os.Stat(gitconfig)
+	if err != nil {
+		t.Fatalf("stat the fake VM's .gitconfig after the refresh: %v", err)
+	}
+
+	if !os.SameFile(before, after) {
+		t.Errorf("the refresh replaced the fake VM's ~/.gitconfig although it already held exactly the bot's identity %s <%s>: every mint of the loop would otherwise rewrite a file nothing changed (issue #241)",
+			name, email)
+	}
+
+	body, err := os.ReadFile(gitconfig)
+	if err != nil {
+		t.Fatalf("read the fake VM's .gitconfig after the refresh: %v", err)
+	}
+
+	if want := gitConfigBody(name, email); !bytes.Equal(body, want) {
+		t.Errorf("the fake VM's ~/.gitconfig holds\n%s\nafter the refresh, want\n%s\n(issue #241)", body, want)
+	}
+
+	held, err := os.ReadFile(lock)
+	if err != nil {
+		t.Errorf("the refresh removed %s, a lock it never took: a stale lock belongs to no writer, and the mint that took none leaves it alone (%v)",
+			lock, err)
+	} else if string(held) != staleGitLockBody {
+		t.Errorf("the fake VM's %s holds %q after the refresh, want %q: the mint that needed no write touched no lock (issue #241)",
+			lock, held, staleGitLockBody)
+	}
+
+	identity := readTwoLines(t, f.sb.vmPath(agentsIdentityFile), 0o600)
+	if identity[0] != name || identity[1] != email {
+		t.Errorf("%s holds %q <%q> after the refresh, want the bot %q <%q>: the identity file is written by every mint that knows the bot (issue #241)",
+			agentsIdentityFile, identity[0], identity[1], name, email)
 	}
 
 	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
@@ -633,6 +866,85 @@ func TestAgentsAppTokenRefreshStopsOnAPermanentFailure(t *testing.T) {
 			f.assertNoLeaks(t, refresh.out(), stopped)
 		})
 	}
+}
+
+// TestAgentsAppTokenRefreshStopsOnAMalformedSlug pins the second review's finding that a slug no App has stops the
+// loop instead of being retried forever: a slug comes from GitHub and never fixes itself, and a `-example-agents` would
+// reach the VM's name check and be refused at every check, so a refresh that took that for a transient failure would
+// retry it for as long as it runs, with no token ever reaching the VM (issue #241).
+func TestAgentsAppTokenRefreshStopsOnAMalformedSlug(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	f.api.setSlug("-example-agents")
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh was still running 30s after GET /app answered the slug -example-agents, which no retry can fix: the loop must stop as it does on any other permanent failure (issue #241)\nstderr:\n%s",
+			refresh.errOut())
+	}
+
+	if code := refresh.exitCode(t); code != 1 {
+		t.Errorf("the refresh exited with %d after GET /app answered the slug -example-agents, want 1: make deck, and the maintainer reading its log, relies on a stopped refresh being a failure (issue #241)", code)
+	}
+
+	assertStopLineNamesWhereToRestart(t, refresh.errOut())
+
+	if posted := f.api.posted(); len(posted) != 0 {
+		t.Errorf("the refresh posted to %v although the App's slug begins with -: the slug is refused before a token is minted, at every check as at the first (issue #241)",
+			posted)
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshSurvivesAnEmptySlug pins the other side of TestAgentsAppTokenRefreshStopsOnAMalformedSlug:
+// an empty slug is no malformed one. A 200 whose answer holds no slug reads as GitHub having said nothing yet, so the
+// loop keeps trying, and a refresh that took every unusable slug for a permanent failure would stop on it and leave the
+// VM without a token until a maintainer restarted it (issue #241).
+func TestAgentsAppTokenRefreshSurvivesAnEmptySlug(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEagerEnv()
+
+	f.api.setSlug("")
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	// Two requests for the App's slug: the loop went back to GitHub instead of stopping after the first.
+	waitFor(t, 30*time.Second, "the refresh to ask GET /app again after an empty slug", func() bool {
+		asked := 0
+
+		for _, request := range f.api.requestOrder() {
+			if request == "GET /app" {
+				asked++
+			}
+		}
+
+		return asked >= 2 || !refresh.running()
+	})
+
+	if !refresh.running() {
+		t.Fatalf("the refresh exited after GET /app answered an empty slug, which is transient and must never stop it; stderr:\n%s",
+			refresh.errOut())
+	}
+
+	if strings.Contains(refresh.errOut(), "agents App token refresh stopped") {
+		t.Errorf("the refresh said it stopped after GET /app answered an empty slug: an answer with no slug is retried, not stopped on (issue #241)\nstderr:\n%s",
+			refresh.errOut())
+	}
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh did not stop on SIGTERM after an empty slug; stderr:\n%s", refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
 }
 
 // TestAgentsAppTokenRefreshHoldsOneLockPerVM pins the first half of review item 7: the refresh takes a lock

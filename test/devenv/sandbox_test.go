@@ -1102,7 +1102,11 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 	// GitHub answers GET /users/<slug>[bot] only for an installation token: an App's JWT is refused there,
 	// and a call without any authorization is refused too (PRD #161 milestone 1 second review, item 4).
 	// Every other call is the App's, with its JWT.
-	if r.Method == http.MethodGet && r.URL.Path == "/users/"+f.slug+"[bot]" {
+	f.mu.Lock()
+	slug := f.slug
+	f.mu.Unlock()
+
+	if r.Method == http.MethodGet && r.URL.Path == "/users/"+slug+"[bot]" {
 		f.serveBotUser(w, r)
 
 		return
@@ -1212,9 +1216,20 @@ func (f *fakeGitHub) serveBotUser(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	f.lookups++
+	login := f.slug + "[bot]"
 	f.mu.Unlock()
 
-	writeJSON(w, map[string]any{"id": f.botUserID, "login": f.slug + "[bot]"})
+	writeJSON(w, map[string]any{"id": f.botUserID, "login": login})
+}
+
+// setSlug makes the fake API answer GET /app and GET /users/<slug>[bot] with slug, so a test can pin what the
+// scripts make of a slug that is not the App's ordinary one (issue #241). It is called before the first request,
+// and the server reads the slug under the same mutex.
+func (f *fakeGitHub) setSlug(slug string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.slug = slug
 }
 
 // bearerOf returns the Bearer value of a request's Authorization header.

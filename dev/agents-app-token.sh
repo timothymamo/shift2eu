@@ -37,6 +37,8 @@
 #   ~/.config/shift2eu/agents-app-token     the token, then its expiry as Unix seconds
 #   ~/.config/shift2eu/agents-app-identity  the git user.name <slug>[bot], then the git user.email
 #                                           <bot user id>+<slug>[bot]@users.noreply.github.com
+#   ~/.gitconfig                            user.name and user.email set to that identity, whenever the
+#                                           identity is written (git config; issue #241)
 #
 # The token is written into the VM as soon as it is minted. The bot user is looked up after that, with the
 # installation token, never with the JWT or without one, and its identity file is written once the lookup
@@ -260,7 +262,11 @@ classify() {
   fi
 }
 
-# lookup_slug sets slug from GET /app, with the App's JWT.
+# lookup_slug sets slug from GET /app, with the App's JWT. A slug is letters, digits and -, and begins with a
+# letter or digit, as the VM's name check wants it: anything else is refused before a token is minted, so the
+# bot name <slug>[bot] never reaches git config shaped like an option (issue #241). A malformed slug is a
+# permanent failure (GitHub's answer will not fix itself, and the refresh stops on it); an empty one is
+# transient, an answer that said nothing yet.
 lookup_slug() {
   call GET /app "${jwt}"
   [ "${status}" = 200 ] || {
@@ -270,9 +276,15 @@ lookup_slug() {
   }
   slug="$(json_string slug)"
   case "${slug}" in
-  '' | *[!A-Za-z0-9-]*)
+  '')
     failure=transient
-    say "GET /app gave no usable slug"
+    say "GET /app gave no slug: cannot name the bot yet"
+    return 1
+    ;;
+  [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-]*)
+    failure=permanent
+    slug=""
+    say "GET /app gave a slug no App has: the bot name would not be an App bot name (<slug>[bot], letters, digits and -, beginning with a letter or digit)"
     return 1
     ;;
   esac
@@ -308,13 +320,46 @@ lookup_identity() {
 # The script the VM runs: it reads four lines from its standard input (the token, its expiry, the git
 # user.name, the git user.email) and writes the identity file when the name is not empty and the token file
 # when the token is not empty, each atomically (a temporary file beside it, then mv), so a gh running at the
-# same time never reads half a token. It
-# refuses, with status 3, a ~/.config/shift2eu that is a symlink or that resolves (pwd -P) outside the VM
-# user's real home, and a token or identity file that is a symlink or not a regular file. That keeps the token
+# same time never reads half a token. With the identity it also sets the VM user's global git identity
+# (user.name and user.email in ~/.gitconfig, replacing every value there, one value per key), so the agents
+# commit as the bot even when vm-init ran before the first mint (issue #241). Once the bot identity is known
+# every mint sends it, so every mint of a refresh applies it again; only a mint before the bot user's lookup
+# has worked (a process's first one, or one while the lookup keeps failing) writes the token alone, and such
+# a write never touches the git configuration. First, without any lock, it reads ~/.gitconfig itself (with
+# its [include] files followed): an [includeIf] is refused, and a file that already holds exactly one
+# user.name and one user.email, the bot's, is left untouched (same inode, same mode) and no lock is looked at,
+# so a stale ~/.gitconfig.lock never blocks the mints after the first. Only when the identity needs writing
+# does it take git's own lock: an existing ~/.gitconfig.lock that is a symlink or not a regular file is no lock
+# git wrote and is refused with status 3 (never opened, followed or removed); a regular one belongs to another
+# git writer, which the script leaves alone, exiting with status 4 before it writes anything, which the host
+# reads as transient (such a lock is held for a moment; the next mint tries again, and when no git runs in the
+# VM it is a crashed git's, for the maintainer to remove). Otherwise the script takes the lock with a primitive
+# that never opens or follows what is there: it creates its own file (mktemp, mode 0600) beside ~/.gitconfig
+# and hard-links it to ~/.gitconfig.lock (ln -T: link(2) fails on any existing entry, a symlink, FIFO or
+# directory planted after the check included, which is then classified as above), then drops the temporary
+# name. It copies ~/.gitconfig into that lock; the copy is checked again (the file may have changed in
+# between): an [includeIf] is refused, a copy already holding the bot's identity is dropped, and
+# else the copy gets the two keys (--replace-all), git reads the identity back from it, and only when that is
+# the bot's does the copy replace ~/.gitconfig (mv); otherwise ~/.gitconfig is left as it was. The lock is
+# removed on every way out but the mv, and only ever the one this script created: the traps are set before the
+# lock is taken, and the path they remove is set only while the script holds the lock (or, before the link,
+# its own temporary file, which is removed on every way out too). A git that cannot read
+# ~/.gitconfig's includes (any status but 1, no match) is refused with status 3, never taken for none. It
+# refuses, with status 3, before it writes anything: a ~/.config/shift2eu that is a symlink or that resolves
+# (pwd -P) outside the VM user's real home, a token or identity file or a ~/.gitconfig that is a symlink or
+# not a regular file, a name or email that is not a bot's (the patterns of dev/vm-git-identity.sh, with a
+# slug that begins with a letter or digit), and, with an identity, a VM without git (its image always has
+# git, so a missing one is a broken VM that would leave the agents committing as someone else: refused
+# loudly, not skipped), a ~/.gitconfig it cannot read, git failing to set the keys, an [include] in
+# ~/.gitconfig that would override the bot's name or address (the effective identity a commit would use is not
+# the bot's), and any [includeIf] (the check runs outside every repository, where git never evaluates a
+# conditional include, while the agents commit inside the workspace's, where it applies). Values read out of
+# the VM's git configuration are printed with their non-printable characters stripped. That keeps the token
 # from being written through a symlink by mistake; it is no boundary against the VM user, who can read the
 # token anyway and could swap a path between the check and the mv.
-# It then prints, never a secret, the VM's clock as clock=<Unix seconds> and, when the real gh is not where
-# the gh wrapper keeps it ($1), gh-wrapper=missing: a VM created before the wrapper.
+# It then prints, never a secret, git-identity=set when it set the git identity, the VM's clock as
+# clock=<Unix seconds> and, when the real gh is not where the gh wrapper keeps it ($1), gh-wrapper=missing:
+# a VM created before the wrapper.
 # shellcheck disable=SC2016 # expanded by the VM's sh, not here
 vm_write='set -eu
 umask 077
@@ -338,6 +383,11 @@ for d in "$HOME/.config" "$dir"; do
     exit 3
   fi
 done
+gitconfig="$HOME/.gitconfig"
+if [ -L "$gitconfig" ] || { [ -e "$gitconfig" ] && [ ! -f "$gitconfig" ]; }; then
+  echo "agents-token: $gitconfig is a symlink or not a regular file; the VM writes no token and no git identity: make it a regular file (or remove it) in the VM" >&2
+  exit 3
+fi
 mkdir -p "$dir"
 if ! inside "$dir"; then
   echo "agents-token: $dir resolves outside $HOME; the VM writes no token there: make it a directory in the VM user home" >&2
@@ -354,7 +404,122 @@ IFS= read -r token
 IFS= read -r expiry
 IFS= read -r name
 IFS= read -r email
+slug_only() {
+  case "$1" in
+  [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]*) return 1 ;;
+  *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-]*) return 1 ;;
+  "") return 1 ;;
+  esac
+}
 if [ -n "$name" ]; then
+  name_slug="${name%"[bot]"}"
+  if [ "$name_slug" = "$name" ] || ! slug_only "$name_slug"; then
+    echo "agents-token: the bot name is not an App bot name (<slug>[bot]); the VM writes no git identity" >&2
+    exit 3
+  fi
+  email_rest="${email%"[bot]@users.noreply.github.com"}"
+  email_id="${email_rest%%+*}"
+  email_slug="${email_rest#*+}"
+  if [ "$email_rest" = "$email" ] || [ "$email_id" = "$email_rest" ] || ! slug_only "$email_slug"; then
+    echo "agents-token: the bot email is not a bot noreply address; the VM writes no git identity" >&2
+    exit 3
+  fi
+  case "$email_id" in
+  "" | *[!0123456789]*)
+    echo "agents-token: the bot email is not a bot noreply address; the VM writes no git identity" >&2
+    exit 3
+    ;;
+  esac
+  if ! command -v git >/dev/null 2>&1; then
+    echo "agents-token: git is not installed in the VM, so the agents cannot commit as the bot: install it (make vm-init)" >&2
+    exit 3
+  fi
+  printable() {
+    printf "%s" "$1" | tr -cd "[:print:]"
+  }
+  no_conditional() {
+    found=0
+    conditional="$(git config --includes --file "$1" --name-only --get-regexp "^includeif\..*\.path$")" || found=$?
+    if [ "$found" -ne 0 ] && [ "$found" -ne 1 ]; then
+      echo "agents-token: cannot read the includes of $gitconfig (git config exited $found), so the VM writes no token and no git identity: fix $gitconfig in the VM" >&2
+      exit 3
+    fi
+    if [ -n "$conditional" ]; then
+      conditional="$(printf "%s\n" "$conditional" | tr -cd "[:print:]\n" | tr "\n" " ")"
+      echo "agents-token: $gitconfig has a conditional include ($conditional); git applies an includeIf only inside the repositories it matches, so the identity a commit in the workspace would use cannot be checked, and $gitconfig is unchanged: remove the includeIf in the VM" >&2
+      exit 3
+    fi
+  }
+  is_bots() {
+    got_name="$(git config --includes --file "$1" --get-all user.name)" || got_name=""
+    got_email="$(git config --includes --file "$1" --get-all user.email)" || got_email=""
+    [ "$got_name" = "$name" ] && [ "$got_email" = "$email" ]
+  }
+  lock="$gitconfig.lock"
+  gitnew=""
+  trap '\''rm -f "$gitnew"'\'' EXIT
+  trap '\''exit 1'\'' HUP INT TERM
+  if [ -e "$gitconfig" ]; then
+    no_conditional "$gitconfig"
+  fi
+  if [ -e "$gitconfig" ] && is_bots "$gitconfig"; then
+    :
+  else
+    if [ -e "$lock" ] || [ -L "$lock" ]; then
+      if [ -L "$lock" ] || [ ! -f "$lock" ]; then
+        echo "agents-token: $lock is a symlink or not a regular file, so no lock git wrote: the VM writes no token and no git identity, and leaves it alone: remove $lock in the VM" >&2
+        exit 3
+      fi
+      echo "agents-token: $lock exists: another git writer holds the lock on $gitconfig, so the VM writes no token and no git identity now; the next mint tries again. If no git is running in the VM, remove $lock there (a crashed git leaves it behind)" >&2
+      exit 4
+    fi
+    if ! locktmp="$(mktemp "$HOME/.gitconfig.agents-token.XXXXXX")"; then
+      echo "agents-token: cannot create the lock $lock, so the VM writes no git identity: fix the VM user home" >&2
+      exit 3
+    fi
+    gitnew="$locktmp"
+    chmod 600 "$locktmp"
+    if ! ln -T "$locktmp" "$lock" 2>/dev/null; then
+      rm -f "$locktmp"
+      gitnew=""
+      if [ -L "$lock" ] || { [ -e "$lock" ] && [ ! -f "$lock" ]; }; then
+        echo "agents-token: $lock is a symlink or not a regular file, so no lock git wrote: the VM writes no token and no git identity, and leaves it alone: remove $lock in the VM" >&2
+        exit 3
+      fi
+      if [ -e "$lock" ]; then
+        echo "agents-token: $lock exists: another git writer holds the lock on $gitconfig, so the VM writes no token and no git identity now; the next mint tries again. If no git is running in the VM, remove $lock there (a crashed git leaves it behind)" >&2
+        exit 4
+      fi
+      echo "agents-token: cannot create the lock $lock, so the VM writes no git identity: fix the VM user home" >&2
+      exit 3
+    fi
+    gitnew="$lock"
+    rm -f "$locktmp"
+    if [ -e "$gitconfig" ] && ! cat "$gitconfig" >"$gitnew"; then
+      echo "agents-token: cannot read $gitconfig, so the VM writes no git identity: make it readable by the VM user" >&2
+      exit 3
+    fi
+    no_conditional "$gitnew"
+    if is_bots "$gitnew"; then
+      rm -f "$gitnew"
+      gitnew=""
+    else
+      if ! git config --file "$gitnew" --replace-all user.name "$name" || ! git config --file "$gitnew" --replace-all user.email "$email"; then
+        echo "agents-token: git could not set the bot identity in a copy of $gitconfig, which is unchanged: fix that file in the VM" >&2
+        exit 3
+      fi
+      got_name="$(git config --includes --file "$gitnew" --get user.name)" || got_name=""
+      got_email="$(git config --includes --file "$gitnew" --get user.email)" || got_email=""
+      if [ "$got_name" != "$name" ] || [ "$got_email" != "$email" ]; then
+        echo "agents-token: with the bot identity set, the effective git identity in the VM would still be $(printable "$got_name") <$(printable "$got_email")>, from an [include] in $gitconfig that sets user.name or user.email after it; $gitconfig is unchanged: remove that include in the VM" >&2
+        exit 3
+      fi
+      mv -f "$gitnew" "$gitconfig"
+      gitnew=""
+    fi
+  fi
+  trap - EXIT
+  printf "git-identity=set\n"
   tmp="$(mktemp "$dir/.agents-app-identity.XXXXXX")"
   printf "%s\n%s\n" "$name" "$email" >"$tmp"
   chmod 600 "$tmp"
@@ -389,9 +554,20 @@ check_vm() {
   fi
 }
 
+# said_git_identity says the VM user's global git identity is now the bot's, when vm_write printed that it
+# set it (git-identity=set): the agents commit as the bot from here on (issue #241).
+said_git_identity() {
+  case "${written}" in
+  *git-identity=set*)
+    say "set the VM ${instance}'s git identity (user.name and user.email in ~/.gitconfig) to ${bot_name} <${bot_email}>"
+    ;;
+  esac
+}
+
 # vm_send <token> <expiry> <name> <email> runs vm_write in the VM, which writes each file whose first field is
 # not empty, and sets written to what it printed. On failure it says why, never a secret, and sets failure:
-# permanent when the VM refused the write (status 3), transient otherwise.
+# permanent when the VM refused the write (status 3), transient otherwise (status 4 is another git writer's
+# lock on ~/.gitconfig).
 vm_send() {
   written="$(printf '%s\n%s\n%s\n%s\n' "$1" "$2" "$3" "$4" |
     "${limactl}" shell --workdir / "${instance}" sh -c "${vm_write}" vm-write "${vm_real_gh}")" || {
@@ -399,6 +575,9 @@ vm_send() {
     if [ "${written}" -eq 3 ]; then
       failure=permanent
       say "the VM ${instance} refused to write the ${5} (see above)"
+    elif [ "${written}" -eq 4 ]; then
+      failure=transient
+      say "the VM ${instance} did not write the ${5} now: another git writer holds the lock on ~/.gitconfig (see above); if no git is running in the VM, remove ~/.gitconfig.lock there (a crashed git leaves it behind)"
     else
       failure=transient
       say "could not write the ${5} into the VM ${instance}: is it running (make vm-up)?"
@@ -483,6 +662,7 @@ mint_once() {
     identity_written=1
     held=""
     say "wrote a token for ${bot_name} into the VM ${instance}, valid until $(show_time "${expiry}")"
+    said_git_identity
   else
     held="${token}"
     say "wrote a token into the VM ${instance}, valid until $(show_time "${expiry}"); looking up the bot user next"
@@ -503,6 +683,7 @@ identify() {
   vm_send "" "" "${bot_name}" "${bot_email}" "bot identity" || return 1
   identity_written=1
   say "wrote the bot identity ${bot_name} into the VM ${instance}"
+  said_git_identity
 }
 
 # stopped <why> says the refresh stopped, when, until when the VM's token is valid, and how to start it
@@ -607,7 +788,7 @@ refresh() {
     if [ "${ok}" -eq 1 ] && [ -n "${expiry}" ] && [ "${identity_written}" -eq 0 ]; then
       if ! identify; then
         ok=0
-        why="the bot user's identity cannot be read, and trying again cannot fix it"
+        why="the bot user's identity cannot be read or written into the VM, and trying again cannot fix it"
       fi
     fi
     if [ "${ok}" -eq 1 ]; then

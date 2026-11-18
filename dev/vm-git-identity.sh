@@ -7,7 +7,9 @@
 #
 #   - $HOME/.config/shift2eu/agents-app-identity present (make agents-token wrote it): its two lines, the
 #     agents App's bot name and noreply address, replace any identity the VM has. A file that is not exactly
-#     that is refused, and nothing changes.
+#     that is refused, and nothing changes. The mint that writes the file (dev/agents-app-token.sh) sets the
+#     same identity at once, since on a new VM this step runs before the first mint (issue #241); here it
+#     is applied again, which changes nothing when the mint already did.
 #   - absent: the fallback (the identity make vm-init was given, the Mac's own by default) is set where the
 #     VM has none, and replaces a bot's identity left from an earlier run (the rollback). Any other identity
 #     the VM has is kept.
@@ -45,6 +47,8 @@ fi
 # Set only where the VM has none, so a re-run never replaces an identity chosen in the VM. Two exceptions,
 # for the switch to the App and back: the bot's identity replaces any other, and with no identity file a
 # bot's identity left from an earlier run gives way to the fallback.
+# Known gap: a key with several values in ~/.gitconfig makes git config <key> <value> refuse (status 5),
+# where the mint (dev/agents-app-token.sh) uses --replace-all; no test pins that case here yet (issue #241).
 for pair in "user.name=${git_name}" "user.email=${git_email}"; do
   key="${pair%%=*}"
   value="${pair#*=}"
