@@ -1,11 +1,11 @@
-// Pins the Protect main gate check (PRD #161 milestone 2). dev/protect-main-check.sh reads the repository,
-// the `Protect main` ruleset and .github/CODEOWNERS on main (with GitHub's CODEOWNERS errors for it) through
-// gh's read-only API, prints one line per check of three kinds - `ok: ...`, `gap: ...` and `unverified: ...` -
-// and fails closed once the switch-over is done. The `unverified:` kind is for what only the maintainer's own
-// token may read: an installation token cannot see the ruleset's bypass list, so an empty one proves nothing.
-// Before the switch-over --transition reports the gaps and the unverified lines without failing the release,
-// and it is honoured only while the gate was never turned on. It exits 2 whenever it cannot make the checks at
-// all.
+// Pins the Protect main gate check (PRD #161 milestone 2, and milestone 3 for the transition flag's removal).
+// dev/protect-main-check.sh reads the repository, the `Protect main` ruleset and .github/CODEOWNERS on main
+// (with GitHub's CODEOWNERS errors for it) through gh's read-only API, prints one line per check of three kinds
+// - `ok: ...`, `gap: ...` and `unverified: ...` - and fails closed: after the switch-over a gap fails the check,
+// and the `--transition` mode of milestone 2 is an unknown argument now. The `unverified:` kind is for what only
+// the maintainer's own token may read: an installation token cannot see the ruleset's bypass list, so an empty
+// one proves nothing. It exits 2 whenever it cannot make the checks at all, and an argument it does not know -
+// `--transition` included - is such a case.
 //
 // The recorded answers are GitHub's documented REST shapes with invented identifiers, in
 // testdata/gatecheck/; a fake gh on PATH serves them, refuses any endpoint that is not the pinned repository
@@ -68,7 +68,7 @@ const (
 )
 
 // The lines the gate check prints on a repository whose gate is complete, read with the maintainer's own
-// token, in the order its contract prints them. The transition lines come last, and only when they apply.
+// token, in the order its contract prints them.
 const (
 	okEnforced             = "ok: Protect main is enforced"
 	okTargetsBranches      = "ok: Protect main targets branches"
@@ -100,11 +100,8 @@ const (
 // an empty bypass list proves nothing when the token could not have read a non-empty one.
 const unverifiedActors = "unverified: bypass_actors cannot be verified with this token (not a repository admin): run make gate-check as the maintainer"
 
-// transitionIgnored is the line --transition adds once the gate is on, where it changes nothing.
-const transitionIgnored = "transition: ignored, the gate is on"
-
 // reportPrefixes are the only prefixes a line of the report may start with.
-var reportPrefixes = []string{"ok: ", "gap: ", "unverified: ", "transition: "}
+var reportPrefixes = []string{"ok: ", "gap: ", "unverified: "}
 
 // gateOkLines is the report of a gate that is complete in every respect but nothing else, in contract order.
 func gateOkLines() []string {
@@ -126,12 +123,6 @@ func gateOkLines() []string {
 		okCodeownersMaintainer,
 		okCodeownersNoErrors,
 	}
-}
-
-// transitionNotFailing is the line --transition adds before the switch-over, naming both counts it reports
-// without failing the release.
-func transitionNotFailing(gaps, unverified int) string {
-	return fmt.Sprintf("transition: gaps=%d, unverified=%d, not failing the release", gaps, unverified)
 }
 
 // gateFakeGH stands in for gh in the gate check's tests: it records its argv the way the sandbox's other
@@ -600,46 +591,22 @@ func withoutRule(t *testing.T, ruleset map[string]any, ruleType string) map[stri
 func TestProtectMainCheckPassesOnASwitchedOverRepository(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name string
-		args []string
-		want []string
-	}{
-		{
-			name: "fails closed and passes when nothing is a gap",
-			want: gateOkLines(),
-		},
-		{
-			// The gate is on, so --transition can no longer hold anything back: the check says so and passes,
-			// because there is nothing to hold back either.
-			name: "with --transition, which the gate's own state has already switched off",
-			args: []string{"--transition"},
-			want: slices.Concat(gateOkLines(), []string{transitionIgnored}),
-		},
+	f := newGateFixture(t)
+	f.serveSwitchedOverAs(t, true)
+
+	stdout, stderr, status := f.run(t)
+
+	if status != 0 {
+		t.Fatalf("the gate check exited %d on a switched-over repository, want 0: no check is a gap and none is unverified\nstdout: %s\nstderr: %s", status, stdout, stderr)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			f := newGateFixture(t)
-			f.serveSwitchedOverAs(t, true)
-
-			stdout, stderr, status := f.run(t, tc.args...)
-
-			if status != 0 {
-				t.Fatalf("the gate check exited %d on a switched-over repository, want 0: no check is a gap and none is unverified\nstdout: %s\nstderr: %s", status, stdout, stderr)
-			}
-
-			assertReport(t, tc.want, stdout, stderr)
-		})
-	}
+	assertReport(t, gateOkLines(), stdout, stderr)
 }
 
 // TestProtectMainCheckCannotVerifyTheBypassListWithoutAnAdminToken pins the third kind of line: an installation
 // token's repository answer holds no permissions object, so the token may not read the ruleset's bypass list,
 // and an empty list proves nothing. It is not a gap - the token says nothing about the repository - but it is
-// no passing check either, so the check exits 3 without --transition and still 3 once the gate is on.
+// no passing check either, so the check exits 3.
 func TestProtectMainCheckCannotVerifyTheBypassListWithoutAnAdminToken(t *testing.T) {
 	t.Parallel()
 
@@ -683,14 +650,6 @@ func TestProtectMainCheckCannotVerifyTheBypassListWithoutAnAdminToken(t *testing
 			wantStatus: 3,
 			want:       want,
 		},
-		{
-			// The gate is on, so --transition is ignored: an unverified check is still no passing check.
-			name:       "with --transition once the gate is on",
-			prepare:    noPermissions,
-			args:       []string{"--transition"},
-			wantStatus: 3,
-			want:       slices.Concat(want, []string{transitionIgnored}),
-		},
 	}
 
 	for _, tc := range cases {
@@ -700,7 +659,7 @@ func TestProtectMainCheckCannotVerifyTheBypassListWithoutAnAdminToken(t *testing
 			f := newGateFixture(t)
 			tc.prepare(t, f)
 
-			stdout, stderr, status := f.run(t, tc.args...)
+			stdout, stderr, status := f.run(t)
 
 			if status != tc.wantStatus {
 				t.Fatalf("the gate check exited %d on a switched-over repository it cannot fully verify, want %d\nstdout: %s\nstderr: %s",
@@ -743,33 +702,19 @@ func TestProtectMainCheckReportsTodaysGaps(t *testing.T) {
 	cases := []struct {
 		name       string
 		admin      bool
-		args       []string
 		wantStatus int
 		want       []string
 	}{
 		{
-			name:       "before the switch-over a gap fails the check",
+			name:       "a gap fails the check",
 			admin:      true,
 			wantStatus: 1,
 			want:       wantAdmin,
 		},
 		{
-			name:       "with --transition it reports the gaps and passes",
-			admin:      true,
-			args:       []string{"--transition"},
-			wantStatus: 0,
-			want:       slices.Concat(wantAdmin, []string{transitionNotFailing(4, 0)}),
-		},
-		{
 			name:       "an App installation token's gaps fail it too",
 			wantStatus: 1,
 			want:       wantApp,
-		},
-		{
-			name:       "with --transition it reports the gaps and the unverified line, and passes",
-			args:       []string{"--transition"},
-			wantStatus: 0,
-			want:       slices.Concat(wantApp, []string{transitionNotFailing(4, 1)}),
 		},
 	}
 
@@ -780,7 +725,7 @@ func TestProtectMainCheckReportsTodaysGaps(t *testing.T) {
 			f := newGateFixture(t)
 			f.serveTodayAs(t, tc.admin)
 
-			stdout, stderr, status := f.run(t, tc.args...)
+			stdout, stderr, status := f.run(t)
 
 			if status != tc.wantStatus {
 				t.Fatalf("the gate check exited %d on today's ruleset, want %d\nstdout: %s\nstderr: %s", status, tc.wantStatus, stdout, stderr)
@@ -795,31 +740,29 @@ func TestProtectMainCheckReportsTodaysGaps(t *testing.T) {
 	}
 }
 
-// TestProtectMainCheckIgnoresTheTransitionOnceTheGateIsOn pins the self-closing transition flag: once one
-// approval is required or code owner review is on, the switch-over has happened and the gaps fail the check
-// whatever the Makefile passes.
-func TestProtectMainCheckIgnoresTheTransitionOnceTheGateIsOn(t *testing.T) {
+// TestProtectMainCheckRejectsTheTransitionFlag pins PRD #161 milestone 3: once the switch-over is done the
+// check has no transition mode any more, so its own flag is an unknown argument. It is refused before any read
+// - exit 2 with nothing that looks like a report, as any other argument the script does not know - and the gaps
+// it does find always fail: there is no mode in which a gap passes.
+//
+// The gate's own state decides nothing here either: a repository whose gate is on and one whose gate is off both
+// get the same refusal, so a Makefile that still passed the flag could not hold a gap back.
+func TestProtectMainCheckRejectsTheTransitionFlag(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name   string
-		change func(t *testing.T, ruleset map[string]any)
+		name    string
+		prepare func(t *testing.T, f *gateFixture)
 	}{
 		{
-			name: "one approval required",
-			change: func(t *testing.T, ruleset map[string]any) {
-				t.Helper()
-
-				pullRequestParameters(t, ruleset)["require_last_push_approval"] = false
-			},
+			name:    "on a switched-over repository",
+			prepare: func(t *testing.T, f *gateFixture) { t.Helper(); f.serveSwitchedOverAs(t, true) },
 		},
 		{
-			name: "code owner review on",
-			change: func(t *testing.T, ruleset map[string]any) {
-				t.Helper()
-
-				pullRequestParameters(t, ruleset)["required_approving_review_count"] = float64(0)
-			},
+			// Today's ruleset, before the switch-over: the gaps must fail, and the flag that used to pass them
+			// is no longer something the script accepts at all.
+			name:    "on a repository with gaps",
+			prepare: func(t *testing.T, f *gateFixture) { t.Helper(); f.serveTodayAs(t, true) },
 		},
 	}
 
@@ -828,23 +771,28 @@ func TestProtectMainCheckIgnoresTheTransitionOnceTheGateIsOn(t *testing.T) {
 			t.Parallel()
 
 			f := newGateFixture(t)
-			f.serveSwitchedOverAs(t, true)
-			f.serveRulesetWith(t, tc.change)
+			tc.prepare(t, f)
 
 			stdout, stderr, status := f.run(t, "--transition")
 
-			if status != 1 {
-				t.Fatalf("the gate check exited %d with --transition and the gate already on (%s), want 1: the flag changes nothing there\nstdout: %s\nstderr: %s",
+			if status != 2 {
+				t.Fatalf("the gate check exited %d with --transition (%s), want 2: the transition mode is gone in PRD #161 milestone 3, so the flag is an unknown argument, as every unknown argument is a check the script cannot make\nstdout: %s\nstderr: %s",
 					status, tc.name, stdout, stderr)
 			}
 
-			if last := outputLines(stdout); len(last) == 0 || last[len(last)-1] != transitionIgnored {
-				t.Errorf("the last line of the report is not %q, so the maintainer cannot tell that --transition was ignored:\n%s", transitionIgnored, stdout)
+			if !strings.Contains(stderr, "--transition") {
+				t.Errorf("the refusal does not name --transition, so a maintainer who still passes it cannot tell that it is what the script does not know: %s", stderr)
 			}
 
-			if gaps := gapLines(stdout); len(gaps) != 1 {
-				t.Errorf("the gate check reported %d gaps, want 1 (%s):\n%s", len(gaps), tc.name, strings.Join(gaps, "\n"))
+			if lines := outputLines(stdout); len(lines) != 0 {
+				t.Errorf("the gate check printed %v before refusing --transition: an argument it does not know is refused before it reads anything, so no line of a report can be mistaken for a verdict on the gate", lines)
 			}
+
+			if calls := invocations(f.sb.argvLogText(t), "gh"); len(calls) != 0 {
+				t.Errorf("the gate check ran gh %d time(s) with --transition: the argument is refused before any read, so a maintainer does not wait on the API to learn that the flag is gone", len(calls))
+			}
+
+			assertCleanReport(t, "the refusal's stderr", stderr)
 		})
 	}
 }
@@ -1271,8 +1219,8 @@ func TestProtectMainCheckReportsEachGapOnItsOwn(t *testing.T) {
 }
 
 // TestProtectMainCheckCannotCheckExitsTwo pins that a check the script cannot make is no passing check: it
-// exits 2 in both modes, so neither a release nor the maintainer's manual run reads a gap it could not read as
-// a gate that holds.
+// exits 2, so neither a release nor the maintainer's manual run reads a gap it could not read as a gate that
+// holds. An unknown argument - `--transition` included, now that the transition mode is gone - is one of them.
 func TestProtectMainCheckCannotCheckExitsTwo(t *testing.T) {
 	t.Parallel()
 
@@ -1403,42 +1351,32 @@ func TestProtectMainCheckCannotCheckExitsTwo(t *testing.T) {
 		},
 	}
 
-	modes := []struct {
-		name string
-		args []string
-	}{
-		{name: "without --transition"},
-		{name: "with --transition", args: []string{"--transition"}},
-	}
-
 	for _, tc := range cases {
-		for _, mode := range modes {
-			t.Run(tc.name+", "+mode.name, func(t *testing.T) {
-				t.Parallel()
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-				f := newGateFixture(t)
-				tc.prepare(t, f)
+			f := newGateFixture(t)
+			tc.prepare(t, f)
 
-				stdout, stderr, status := f.run(t, slices.Concat(mode.args, tc.extraArgs)...)
+			stdout, stderr, status := f.run(t, tc.extraArgs...)
 
-				if status != 2 {
-					t.Fatalf("the gate check exited %d when it cannot make the checks (%s), want 2 in both modes: a check it could not make is no passing check\nstdout: %s\nstderr: %s",
-						status, tc.name, stdout, stderr)
+			if status != 2 {
+				t.Fatalf("the gate check exited %d when it cannot make the checks (%s), want 2: a check it could not make is no passing check\nstdout: %s\nstderr: %s",
+					status, tc.name, stdout, stderr)
+			}
+
+			if strings.TrimSpace(stderr) == "" {
+				t.Fatalf("the gate check exits 2 for %s and says nothing on stderr, so a maintainer cannot tell what stopped it", tc.name)
+			}
+
+			assertCleanReport(t, "the refusal's stderr", stderr)
+
+			for _, want := range tc.wantStderr {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("the refusal does not name %q, so a maintainer cannot tell what to fix: %s", want, stderr)
 				}
-
-				if strings.TrimSpace(stderr) == "" {
-					t.Fatalf("the gate check exits 2 for %s and says nothing on stderr, so a maintainer cannot tell what stopped it", tc.name)
-				}
-
-				assertCleanReport(t, "the refusal's stderr", stderr)
-
-				for _, want := range tc.wantStderr {
-					if !strings.Contains(stderr, want) {
-						t.Errorf("the refusal does not name %q, so a maintainer cannot tell what to fix: %s", want, stderr)
-					}
-				}
-			})
-		}
+			}
+		})
 	}
 }
 

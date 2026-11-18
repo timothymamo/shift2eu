@@ -323,9 +323,11 @@ func TestVMGHWrapperScriptRunsNothingOnATruncatedStream(t *testing.T) {
 			reason: "the here-document the wrapper travels in never reaches its delimiter",
 		},
 		{
+			// The wrapper's last substantive line before its exec, whatever the wrapper's comment or unset
+			// line above it becomes: the cut must land inside the here-document either way.
 			name:   "inside the here-document, near the wrapper's end",
-			cutAt:  "unset GITHUB_TOKEN token",
-			reason: "the here-document stops two lines before its delimiter",
+			cutAt:  "export GH_TOKEN",
+			reason: "the here-document stops before its delimiter",
 		},
 		{
 			name:   "inside the function, before the wrapper is moved into place",

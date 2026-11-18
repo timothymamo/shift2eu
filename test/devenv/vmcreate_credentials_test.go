@@ -6,10 +6,10 @@
 //
 // Every case runs against the fake limactl of the vm-up tests (vmUpFixture), so what a refusal must leave behind
 // is pinned as "no limactl call at all" - not as "no VM was created", which would need a real Lima. The
-// fixture's environment holds none of the test machine's own variables; the three VM_ENV credentials get
-// obviously invented values here, and a case that leaves one unset deletes it from that environment instead of
-// relying on the host's (CLAUDE.md rules 3 and 4). A run with every credential set is already pinned by
-// TestMakeVMCreatePassesTheVMResourcesToVMUp (issue #228), which sets all three through the same fixture: it
+// fixture's environment holds none of the test machine's own variables; the VM_ENV credentials get obviously
+// invented values here, and a case that leaves one unset deletes it from that environment instead of relying on
+// the host's (CLAUDE.md rules 3 and 4). A run with every credential set is already pinned by
+// TestMakeVMCreatePassesTheVMResourcesToVMUp (issue #228), which sets them all through the same fixture: it
 // shows that vm-create still reaches limactl, so issue #258 does not need a second test for that.
 //
 // Two further properties are pinned here. vm-env-check run on its own is a host-side check and nothing more: with
@@ -169,8 +169,8 @@ func TestMakeVMCreateRefusesMissingCredentialsBeforeLimactl(t *testing.T) {
 	}{
 		{
 			name:  "one credential unset",
-			unset: []string{"GITHUB_TOKEN"},
-			named: []string{"GITHUB_TOKEN"},
+			unset: []string{"CLAUDE_CODE_OAUTH_TOKEN"},
+			named: []string{"CLAUDE_CODE_OAUTH_TOKEN"},
 		},
 		{
 			name:  "one credential set to an empty string",
@@ -179,8 +179,8 @@ func TestMakeVMCreateRefusesMissingCredentialsBeforeLimactl(t *testing.T) {
 		},
 		{
 			name:  "two credentials unset",
-			unset: []string{"CLAUDE_CODE_OAUTH_TOKEN", "GITHUB_TOKEN"},
-			named: []string{"CLAUDE_CODE_OAUTH_TOKEN", "GITHUB_TOKEN"},
+			unset: []string{"CLAUDE_CODE_OAUTH_TOKEN", "DEEPSEEK_API_KEY"},
+			named: []string{"CLAUDE_CODE_OAUTH_TOKEN", "DEEPSEEK_API_KEY"},
 		},
 		{
 			name:  "every credential unset",
@@ -190,12 +190,11 @@ func TestMakeVMCreateRefusesMissingCredentialsBeforeLimactl(t *testing.T) {
 		{
 			// The values are the point: a refusal may name a variable, never print what one holds.
 			name:  "the values of the credentials that are set are never printed",
-			unset: []string{"GITHUB_TOKEN"},
+			unset: []string{"DEEPSEEK_API_KEY"},
 			set: map[string]string{
 				"CLAUDE_CODE_OAUTH_TOKEN": fakeNotRealValue("oauth"),
-				"DEEPSEEK_API_KEY":        fakeNotRealValue("deepseek"),
 			},
-			named: []string{"GITHUB_TOKEN"},
+			named: []string{"DEEPSEEK_API_KEY"},
 		},
 	}
 
@@ -239,33 +238,33 @@ func TestMakeVMCreateRefusesMissingCredentialsBeforeLimactl(t *testing.T) {
 
 // TestMakeVMCreateChecksANarrowedVMEnv pins that a VM_ENV given on the make command line is checked the same way
 // (issue #258): it names the credentials a maintainer copies on purpose (issue #234), so `make vm-create
-// VM_ENV=GITHUB_TOKEN` refuses before limactl when GITHUB_TOKEN is unset, and does not refuse for the two that
-// very VM_ENV never named.
+// VM_ENV=DEEPSEEK_API_KEY` refuses before limactl when DEEPSEEK_API_KEY is unset, and does not refuse for the one
+// that very VM_ENV never named.
 func TestMakeVMCreateChecksANarrowedVMEnv(t *testing.T) {
 	t.Parallel()
 
-	const narrowed = "VM_ENV=GITHUB_TOKEN"
+	const narrowed = "VM_ENV=DEEPSEEK_API_KEY"
 
 	t.Run("the credential it names is unset", func(t *testing.T) {
 		t.Parallel()
 
 		f := newVMUpFixture(t, "", "")
-		delete(f.env, "GITHUB_TOKEN")
+		delete(f.env, "DEEPSEEK_API_KEY")
 
 		stdout, stderr, err := f.run(t, "vm-create", narrowed)
 		if err == nil {
-			t.Fatalf("make vm-create %s exited 0 with GITHUB_TOKEN unset: a VM_ENV narrowed on the command line is checked like the default one, before vm-up (issue #258)\nstdout: %s\nstderr: %s",
+			t.Fatalf("make vm-create %s exited 0 with DEEPSEEK_API_KEY unset: a VM_ENV narrowed on the command line is checked like the default one, before vm-up (issue #258)\nstdout: %s\nstderr: %s",
 				narrowed, stdout, stderr)
 		}
 
-		if !strings.Contains(stderr, "GITHUB_TOKEN") {
-			t.Errorf("make vm-create %s' refusal does not name GITHUB_TOKEN, so a maintainer cannot tell which credential the VM_ENV they narrowed names is missing (issue #258)\nstdout: %s\nstderr: %s",
+		if !strings.Contains(stderr, "DEEPSEEK_API_KEY") {
+			t.Errorf("make vm-create %s' refusal does not name DEEPSEEK_API_KEY, so a maintainer cannot tell which credential the VM_ENV they narrowed names is missing (issue #258)\nstdout: %s\nstderr: %s",
 				narrowed, stdout, stderr)
 		}
 
 		assertVMCreateRefusalSaysHowToFixIt(t, stdout, stderr)
 		assertVMCreateSaysNothingWasCreated(t, stdout, stderr)
-		assertNoLimactlCalls(t, f, "GITHUB_TOKEN is unset")
+		assertNoLimactlCalls(t, f, "DEEPSEEK_API_KEY is unset")
 		assertNoCredentialValuesOf(t, "make vm-create's output", stdout+stderr, f.env)
 	})
 
@@ -274,11 +273,10 @@ func TestMakeVMCreateChecksANarrowedVMEnv(t *testing.T) {
 
 		f := newVMUpFixture(t, "", "")
 		delete(f.env, "CLAUDE_CODE_OAUTH_TOKEN")
-		delete(f.env, "DEEPSEEK_API_KEY")
 
 		stdout, stderr, err := f.run(t, "vm-create", narrowed)
 		if err != nil {
-			t.Fatalf("make vm-create %s exited non-zero with GITHUB_TOKEN set: the check covers the names VM_ENV holds, and this VM_ENV holds only GITHUB_TOKEN (issue #258)\nstdout: %s\nstderr: %s",
+			t.Fatalf("make vm-create %s exited non-zero with DEEPSEEK_API_KEY set: the check covers the names VM_ENV holds, and this VM_ENV holds only DEEPSEEK_API_KEY (issue #258)\nstdout: %s\nstderr: %s",
 				narrowed, stdout, stderr)
 		}
 
@@ -309,7 +307,7 @@ func TestMakeVMCreateRefusesAVMEnvTheHostCheckRefuses(t *testing.T) {
 	}{
 		{
 			name:       "a value holding characters other than names, commas and spaces",
-			vmEnv:      "GITHUB_TOKEN=" + fakeNotRealValue("token"),
+			vmEnv:      "INVENTED_TOKEN=" + fakeNotRealValue("token"),
 			want:       []string{"VM_ENV", "not shown"},
 			reason:     "a value may be a credential pasted into VM_ENV by mistake, so the refusal never shows it",
 			neverShown: true,

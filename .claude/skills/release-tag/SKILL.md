@@ -109,13 +109,9 @@ moves or deletes a tag.
    without a `pull_request` rule, fewer than 1 required approval, `require_code_owner_review`,
    `dismiss_stale_reviews_on_push` or `require_last_push_approval` not `true`, a bypass actor, a token
    that may bypass `Protect main`, or a CODEOWNERS file without rules, without a `*` rule, with an
-   ownerless rule, with an owner other than the maintainer or with errors GitHub reports. Until milestone 3
-   of PRD #161 removes it, the Makefile runs it with the transition flag (`GATE_TRANSITION=1`,
-   `--transition`): while the gate is off it reports without failing and prints a
-   `transition: gaps=<n>, unverified=<m>, not failing the release` line; once the gate is on it prints
-   `transition: ignored, the gate is on` and exits as without the flag. Quote any `transition:` line first
-   in the report, then act on its exit status:
-   - **0**: put every `gap:` and `unverified:` line it printed in the report and go on;
+   ownerless rule, with an owner other than the maintainer or with errors GitHub reports. Any gap fails
+   it: the check has no mode that lets a gap through. Act on its exit status:
+   - **0**: every check holds; go on;
    - **1**: stop the release and report the `gap:` lines;
    - **2**: it could not check (a `gh api` read failed, not exactly one ruleset named `Protect main`, an
      unexpected answer): report its stderr and stop;

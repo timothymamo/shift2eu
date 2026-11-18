@@ -1,8 +1,8 @@
-// Pins the repository files the Protect main gate rests on (PRD #161 milestone 2): the Makefile's gate-check
-// target, which the maintainer runs and the release-tag skill runs before a release, with the transition flag
-// that keeps it from failing a release before the switch-over; .github/CODEOWNERS, which names the maintainer
-// for every path and nobody else; and .github/renovate.json5, which never automerges, so a Renovate pull
-// request needs the maintainer's approval like any other.
+// Pins the repository files the Protect main gate rests on (PRD #161 milestones 2 and 3): the Makefile's
+// gate-check target, which the maintainer runs and the release-tag skill runs before a release, with no
+// transition flag any more - the switch-over is done, so a gap always fails; .github/CODEOWNERS, which names the
+// maintainer for every path and nobody else; and .github/renovate.json5, which never automerges, so a Renovate
+// pull request needs the maintainer's approval like any other.
 package devenv_test
 
 import (
@@ -45,6 +45,10 @@ func parseCodeowners(body string) []codeownersRule {
 	return rules
 }
 
+// The release-tag skill runs the same gate check in its step 2, so a maintainer who reads it reads the same
+// contract the script has.
+const releaseTagSkill = ".claude/skills/release-tag/SKILL.md"
+
 func TestMakefileHasAGateCheckTarget(t *testing.T) {
 	t.Parallel()
 
@@ -56,22 +60,23 @@ func TestMakefileHasAGateCheckTarget(t *testing.T) {
 		t.Errorf("%s has no 'gate-check: ... ## <help text>' line, so make help does not list the gate check", makefilePath)
 	}
 
-	transition, ok := makeVariable(body, "GATE_TRANSITION")
-	if !ok {
-		t.Fatalf("%s has no 'GATE_TRANSITION ?=' assignment: before the switch-over the gate check reports its gaps without failing a release, and the maintainer turns that off by setting it to 0", makefilePath)
+	// PRD #161 milestone 3 removed the transition flag entirely: not only is it no longer passed, there is no
+	// variable left through which a run could ask for it. `make gate-check GATE_TRANSITION=0` used to be the
+	// documented way to check as the gate would after the switch-over; it is a variable make does not know now.
+	if transition, ok := makeVariable(body, "GATE_TRANSITION"); ok {
+		t.Errorf("%s still assigns GATE_TRANSITION (%q): the transition mode is gone, so the gate check fails on any gap, always, and a variable that could pass a gap would let a release through it (PRD #161 milestone 3)",
+			makefilePath, transition)
 	}
 
-	if transition != "1" {
-		t.Errorf("GATE_TRANSITION's default is %q, want 1: the gate check reports without failing a release until the switch-over is done (PRD #161 milestone 2)", transition)
-	}
-
+	// Whatever a run is given - nothing, or the two values the old variable took - the recipe runs the script
+	// without the flag it no longer accepts.
 	cases := []struct {
-		name           string
-		args           []string
-		wantTransition bool
+		name string
+		args []string
 	}{
-		{name: "the default GATE_TRANSITION=1 passes --transition", wantTransition: true},
-		{name: "GATE_TRANSITION=0 does not", args: []string{"GATE_TRANSITION=0"}},
+		{name: "the default run"},
+		{name: "with the old GATE_TRANSITION=0 on the command line", args: []string{"GATE_TRANSITION=0"}},
+		{name: "with the old GATE_TRANSITION=1 on the command line", args: []string{"GATE_TRANSITION=1"}},
 	}
 
 	for _, tc := range cases {
@@ -87,11 +92,34 @@ func TestMakefileHasAGateCheckTarget(t *testing.T) {
 				t.Fatalf("make -n gate-check %s does not run dev/protect-main-check.sh:\n%s", strings.Join(tc.args, " "), stdout)
 			}
 
-			if got := strings.Contains(stdout, "--transition"); got != tc.wantTransition {
-				t.Errorf("make -n gate-check %s %s --transition, want %v: a release run must be able to fail closed while the maintainer's own run before the switch-over does not\n%s",
-					strings.Join(tc.args, " "), map[bool]string{true: "passes", false: "does not pass"}[got], tc.wantTransition, stdout)
+			if strings.Contains(stdout, "--transition") {
+				t.Errorf("make -n gate-check %s still passes --transition, which the script no longer accepts (PRD #161 milestone 3): a gap must fail the release in every run\n%s",
+					strings.Join(tc.args, " "), stdout)
 			}
 		})
+	}
+}
+
+// TestReleaseTagSkillRunsTheGateCheckWithoutATransitionFlag pins the other place the contract is written down:
+// the release-tag skill's step 2 runs `make gate-check` and acts on its exit status, so it must not tell a
+// maintainer or an agent to quote a `transition:` line, nor offer GATE_TRANSITION or --transition as an option
+// (PRD #161 milestone 3).
+func TestReleaseTagSkillRunsTheGateCheckWithoutATransitionFlag(t *testing.T) {
+	t.Parallel()
+
+	body := readRepoFile(t, releaseTagSkill)
+
+	if !strings.Contains(body, "make gate-check") {
+		t.Errorf("%s no longer runs the gate check, so this test cannot pin how the skill reads its result (PRD #161 milestone 2)", releaseTagSkill)
+	}
+
+	for _, forbidden := range []string{"--transition", "GATE_TRANSITION", "transition:"} {
+		for i, line := range strings.Split(body, "\n") {
+			if strings.Contains(line, forbidden) {
+				t.Errorf("%s:%d still mentions %q: the transition mode is gone (PRD #161 milestone 3), so the gate check fails on any gap and has no line of a fourth kind to quote: %s",
+					releaseTagSkill, i+1, forbidden, strings.TrimSpace(line))
+			}
+		}
 	}
 }
 

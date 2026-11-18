@@ -42,8 +42,10 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
    ```bash
    export CLAUDE_CODE_OAUTH_TOKEN=...   # the token from step 1
    export DEEPSEEK_API_KEY=...          # the tester (pi)
-   export GITHUB_TOKEN=...              # fine-grained, limited to this repository
    ```
+
+   The agents' GitHub credential is not one of them: it is the agents App's installation token, which a
+   job on the Mac mints and writes into the VM ([The agents App](#the-agents-app)).
 
 4. Create the VM, copy the credentials into it and set it up:
 
@@ -58,7 +60,7 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
    |---|---|
    | `make vm-env-check` | Checks on the Mac that every `VM_ENV` variable is set, before anything is created ([Credentials](#credentials)) |
    | `make vm-up` | Creates and provisions the VM, or starts it |
-   | `make vm-env` | Copies the three variables into the VM ([Credentials](#credentials)) |
+   | `make vm-env` | Copies the two variables into the VM ([Credentials](#credentials)) |
    | `make vm-claude-settings` | Claude Code user settings for the agents ([Agent permissions](#agent-permissions)) |
    | `make vm-init` | The once-only setup below, and the checks that the credentials work |
 
@@ -66,6 +68,10 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
    (`dev/lima.yaml`), enough for all six roles to run `make check` at once. Leave the Mac enough free
    memory to run it. `VM_CPUS`, `VM_MEMORY`, `VM_DISK` and `VM_SSH_PORT` set another size and a fixed SSH
    port when the VM is created ([Several VMs on one host](#several-vms-on-one-host)).
+
+   On a new VM, `make vm-init`'s `gh` step fails until the agents App's token is in the VM: set up the App
+   and the host clone ([The agents App](#the-agents-app)), run `make agents-token-refresh-start` from the
+   host clone, then run `make vm-init` again.
 
 5. Open the deck: type what `make deck` runs, from a directory outside the workspace, such as your home
    (`cd ~`), not `make deck` in the workspace: a git-aware prompt in the workspace runs git there with
@@ -90,7 +96,7 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 | `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run |
 | `claude auth` | Checks that Claude Code uses the OAuth token (your subscription), not an API key |
 | `pi` | `pi auth check --provider deepseek` |
-| `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository, with the agents App's token when its file is in the VM, otherwise `GITHUB_TOKEN`. Not `gh auth status`, which an installation token may fail (ADR 0031) |
+| `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository with the agents App's token; without the token file the gh wrapper refuses to run gh at all. Not `gh auth status`, which an installation token may fail (ADR 0031) |
 | `deck` | `dot-agent-deck validate`: checks `.dot-agent-deck.toml` |
 | `deck command` | Sets the deck's `default_command` to `claude --model opus --permission-mode auto`, the orchestrator's command: the New Agent form pre-fills it, and a dispatcher started with a blank command, and the single units it dispatches, run it. A command already set in the VM is kept (`dot-agent-deck config set default_command ...` changes it) |
 | `deck dir` | Sets the deck's `default_dir` to the main checkout, on every run (see below) |
@@ -347,7 +353,10 @@ read the file:
 |---|---|---|
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code roles | From `claude setup-token`. Billed to your Claude subscription (Pro, Max, Ultra, Team or Enterprise), valid for a year, and limited to model requests. |
 | `DEEPSEEK_API_KEY` | pi (tester) | Create a key for this project, so it can be revoked on its own, and keep the balance low. |
-| `GITHUB_TOKEN` | `gh`, and `git push` through `gh auth git-credential` | A [fine-grained token](https://github.com/settings/personal-access-tokens) limited to this repository: contents, pull requests and issues read/write; actions read. |
+
+`gh`, and `git push` through `gh auth git-credential`, use the agents App's installation token, which is
+not in `VM_ENV`: the mint on the Mac writes it into the VM ([The agents App](#the-agents-app)). No personal
+GitHub token of yours enters the VM (PRD #161 milestone 3).
 
 - **Subscription, not pay-as-you-go.** Whenever `ANTHROPIC_API_KEY` is set, Claude Code uses it instead
   of the token and bills each call. `VM_ENV` leaves it out on purpose; do not add it. The five Claude
@@ -364,14 +373,15 @@ read the file:
   holding anything but variable names, commas and spaces (a quote, a `$`, a `*`) is refused before any
   shell reads it; the refusal names `VM_ENV` but never shows its value, which may be a credential typed
   by mistake.
-- **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the three
-  variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY`, is removed. Only a
+- **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the two
+  variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY` or the personal GitHub
+  token a VM was set up with before PRD #161 milestone 3, is removed. Only a
   `VM_ENV` on the make command line merges; an exported `VM_ENV` replaces like the default, so a `VM_ENV`
   left in a `.envrc` cannot keep a stale credential.
 - **A `VM_ENV` on the command line merges.** `make vm-env VM_ENV=...` (or `make vm-create VM_ENV=...`)
   replaces the lines of the names in `VM_ENV` and keeps the other variable lines already in `daemon.env`
-  (it creates the file when there is none). So `make vm-env VM_ENV=GITHUB_TOKEN` replaces only
-  `GITHUB_TOKEN` and keeps the OAuth token and the DeepSeek key. Only plain `NAME=value` lines are kept:
+  (it creates the file when there is none). So `make vm-env VM_ENV=DEEPSEEK_API_KEY` replaces only
+  `DEEPSEEK_API_KEY` and keeps the OAuth token. Only plain `NAME=value` lines are kept:
   any other line (a command, a comment, a value the shell would expand) is dropped, with a warning that
   says how many lines were dropped, never what they held. A merge prints the names of the variable lines
   it kept, never their values: `vm-env: kept (unchanged): CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY`.
@@ -379,18 +389,28 @@ read the file:
   place, so a failure does not leave half a file. An interrupted run removes its temporary file, and a
   leftover from a killed run is removed by the next `make vm-env` once it is older than a minute, so a
   concurrent run's fresh temporary file is left alone (running `make vm-env` twice at once is not
-  otherwise supported). A merge whose `daemon.env` exists but cannot be read is refused with a `vm-env:`
-  message naming `daemon.env`, and nothing is written: make the file readable and run it again.
+  otherwise supported). A run whose `daemon.env` exists but cannot be read, merge or replace, is refused
+  with a `vm-env:` message naming `daemon.env` (it cannot check the file for a GitHub token), and nothing is
+  written: make the file readable and run it again.
 - **Rotating a credential:** change it on the Mac, then `make vm-env deck-restart`. Restarting the service
   stops its running agents, so do it between tasks. Run `claude setup-token` again before the year is up.
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the
   workspace or this repository would be readable by every agent and by the model providers they send
   files to. A direnv `.envrc` in a directory above the workspace works: direnv loads it in this
   repository, and the VM cannot see it.
-- **No token that can push images.** Never put a classic personal access token, or any token with
-  `write:packages`, into `VM_ENV`: the token's scope is what stops agents pushing to GHCR.
-- **Every agent gets every variable.** The tester holds the GitHub and Claude tokens, the Claude roles
-  the DeepSeek key. Scope each one narrowly so it is cheap to revoke. The file stays on the VM's disk
+- **No GitHub token in `VM_ENV`.** Never put a personal access token, or any token with
+  `write:packages`, into `VM_ENV`: the agents' only GitHub credential is the agents App's token, whose
+  permissions (no Packages) are what stop agents pushing to GHCR. `make vm-env-check`, and so `make vm-env`
+  and `make vm-create`, refuses a `VM_ENV` that names a GitHub token variable gh reads (the personal one,
+  `GH_TOKEN`, `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`) before any `limactl` call: it names the
+  variable, never its value, points at `make agents-token`, and writes nothing. A merge drops a stale line
+  of any of them from the VM's `daemon.env` instead of keeping it (a replace rewrites the whole file), and
+  either one then warns on stderr: it names the variable it removed, never its value, and says to revoke
+  that token at GitHub, as every agent in the VM could read it. The warning covers any line that assigns
+  one of those names (spaces around the `=`, behind `export` or `declare -x`), not a longer name that
+  only ends in one (a `MY_` prefix).
+- **Every agent gets every variable.** The tester holds the Claude token and the App's token, the Claude
+  roles the DeepSeek key. Scope each one narrowly so it is cheap to revoke. The file stays on the VM's disk
   (under `~/.lima` on the Mac) until `make vm-delete`.
 - **Cloud accounts (for integration tests and real analyses, later):** read-only identities only
   (`ReadOnlyAccess` or narrower on AWS, `Reader` on Azure, `roles/viewer` or narrower on GCP). Do not
@@ -421,12 +441,12 @@ The VM's `daemon.env` is untouched by the refused run, so the running agents kee
 
 ### The agents App
 
-PRD #161 moves the agents from your `GITHUB_TOKEN` to a GitHub App of yours, the **agents App**, so their
-pull requests are the App's and you can approve them
+PRD #161 moved the agents from your personal GitHub token to a GitHub App of yours, the **agents App**,
+so their pull requests are the App's and you can approve them
 ([ADR 0031](adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)). Its
 private key stays on the Mac: a job there mints installation tokens, valid for an hour, and writes only
-those into the VM. Until you switch ([The switch-over runbook](#the-switch-over-runbook)), nothing
-changes: without a token file in the VM, `gh` and `git push` use `GITHUB_TOKEN` as before.
+those into the VM. The App's token is the agents' only GitHub credential: without a token file in the VM,
+`gh` and `git push` fail (PRD #161 milestone 3, [The switch-over runbook](#the-switch-over-runbook)).
 
 **Creating the App** (runbook step 1): install it on this repository only, with these repository
 permissions:
@@ -501,8 +521,7 @@ can also tamper with the host clone itself (its `.git/hooks`, its `.git/config`,
 is therefore one of the credentials code run from the workspace on the Mac can reach, with every
 credential `make vm-env` copies from the `.envrc` above the workspace:
 
-- `GITHUB_TOKEN` (milestone 3 removes it);
-- the Claude token;
+- the Claude token and the DeepSeek key;
 - the agents App's private key, the file `SHIFT2EU_AGENTS_APP_KEY_FILE` names, which never expires.
 
 Until the follow-ups below, keep that code's chances few:
@@ -575,13 +594,15 @@ the git configuration.
 | `~/.config/shift2eu/agents-app-identity` | `<slug>[bot]`, then `<bot user id>+<slug>[bot]@users.noreply.github.com` | Written by the mint, which applies it to the VM's git at once; `make vm-init` applies it again (the `git` step, `dev/vm-git-identity.sh`) |
 
 `/usr/local/bin/gh` is a root-owned wrapper (`dev/gh-app-token.sh`, with the real gh's path pinned); the
-real gh is `/usr/local/libexec/shift2eu/gh`. With the token file it runs gh with that token and without
-`GITHUB_TOKEN`; without it, gh falls back to `GITHUB_TOKEN`; with a file that is expired, malformed or not
-mode 0600, it fails and asks for you to run `make agents-token-refresh-start` in the host clone on the
-Mac. The git credential
-helper calls the wrapper, so `git push` follows the same rule, and a running agent's next call uses the
-newest token without restarting the deck. The wrapper is plumbing, not a boundary: the VM user has `sudo`,
-and until milestone 3 an agent can delete the token file and fall back to `GITHUB_TOKEN`.
+real gh is `/usr/local/libexec/shift2eu/gh`. With the token file it runs gh with that token as `GH_TOKEN`
+and unsets the other GitHub token variables gh reads (the personal one, `GH_ENTERPRISE_TOKEN` and
+`GITHUB_ENTERPRISE_TOKEN`) first; without the file, or with one that is expired, malformed or not mode
+0600, it fails without running gh, names the file, and asks for you to run
+`make agents-token-refresh-start` in the host clone on the Mac. There is no fallback (PRD #161 milestone 3).
+The git credential helper calls the wrapper, so `git push` follows the same rule, and a running agent's
+next call uses the newest token without restarting the deck. The wrapper is plumbing, not a boundary: the
+VM user has `sudo` and can run the real gh, but with no GitHub credential in the VM other than the App's
+token, that gh has nothing else to act as.
 
 A VM created before this change keeps the real gh at `/usr/local/bin/gh`, and `make agents-token` warns
 that it "predates the gh wrapper". Run `make vm-gh-wrapper` (it moves the real gh, installs the wrapper
@@ -599,8 +620,9 @@ workspace repository prints the identity a commit there uses, the bot's name and
 whenever the token in the VM is within 20 minutes
 of expiring, so up to 40 minutes after a rollback it would quietly write a new one, and every mint it makes
 sets the bot's git identity again, undoing `make vm-init`. Only once the refresh is stopped, delete the
-token file in the VM, and gh falls back to `GITHUB_TOKEN`; delete the identity file too and run
-`make vm-init` to commit as yourself again:
+token file in the VM; delete the identity file too and run `make vm-init` to commit as yourself again.
+Since milestone 3 the agents have no other GitHub credential, so without the token file `gh` and
+`git push` fail in the VM (and `make vm-init`'s `gh` step with them) until a token file is back:
 
 ```bash
 kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"
@@ -642,9 +664,9 @@ bypass list missing on a repository admin's token, a token that may bypass `Prot
 
 | Exit | Means |
 |---|---|
-| 0 | The gate holds, or the transition flag applies (see below) and it only reported the gaps |
+| 0 | The gate holds |
 | 1 | The gate has gaps: the release-tag skill stops the release |
-| 2 | It could not check, in both modes: a `gh api` read failed (no access), not exactly one ruleset is named `Protect main`, an answer it did not expect, or an unknown argument |
+| 2 | It could not check: a `gh api` read failed (no access), not exactly one ruleset is named `Protect main`, an answer it did not expect, or an argument (it takes none) |
 | 3 | No gap, but a check is `unverified:`: run `make gate-check` yourself, with your own admin token |
 
 GitHub returns a ruleset's bypass list only to a token that may change the ruleset, which the agents App
@@ -659,13 +681,8 @@ the check reports `gap: bypass_actors is missing although this token is a reposi
 returned `[]` without being able to see the bypass actors would make the check pass falsely, so run the
 gate check only with `gh auth login`'s token, whose answer runbook step 5 checks once by hand.
 
-The transition flag, `GATE_TRANSITION`, is `1` by default until milestone 3 of PRD #161 removes it: the
-check runs with `--transition`, and while the gate is off (no pull request rule, or one that requires
-neither an approval nor code owner review) it reports the gaps and unverified checks, adds
-`transition: gaps=<n>, unverified=<m>, not failing the release` and exits 0, so releases go on before the
-switch. The flag closes itself: once `Protect main` requires an approval or code owner review, the check
-prints `transition: ignored, the gate is on` and exits as without the flag. `make gate-check
-GATE_TRANSITION=0` checks as it will after milestone 3.
+A gap always fails the check: the mode that reported gaps without failing a release before the switch-over
+is gone (PRD #161 milestone 3), and its old flag is refused like any other argument (exit 2).
 
 ### The switch-over runbook
 
@@ -677,10 +694,11 @@ before it still hold. Rolling back is under each step.
    *Check:* the installation's settings page says "Only select repositories" with only this one, and its
    permissions are exactly the table's (no Administration, Actions read).
    *Roll back:* delete the App.
-2. **Merge milestone 1**, still opened under your `GITHUB_TOKEN`.
+2. **Merge milestone 1**, still opened under your personal token.
    *Check:* after `git -C ~/src/shift2eu-host pull --ff-only`, `make -n agents-token` in the host clone
    prints its commands instead of "No rule to make target".
-   *Roll back:* nothing is enforced; without a token file the VM goes on with `GITHUB_TOKEN`.
+   *Roll back:* nothing is enforced; until milestone 3, without a token file the VM went on with your
+   personal token, `GITHUB_TOKEN`.
 3. **Switch the agents to the App.** Give a VM created before milestone 1 the gh wrapper
    (`make vm-gh-wrapper`, or `make vm-delete vm-create`). From the host clone, run `make agents-token`,
    then `make agents-token-refresh-start`; the mint sets the bot as the VM's git identity, so the agents
@@ -711,7 +729,7 @@ before it still hold. Rolling back is under each step.
    review from Code Owners, dismiss stale pull request approvals when new commits are pushed, require
    approval of the most recent reviewable push. Leave the bypass list empty.
    *Check:* from the host clone (`git -C ~/src/shift2eu-host pull --ff-only`), logged in to `gh` as
-   yourself with an admin token, `make gate-check GATE_TRANSITION=0` exits 0 and prints no `gap:` and no
+   yourself with an admin token, `make gate-check` exits 0 and prints no `gap:` and no
    `unverified:` line (an exit of 3 means the token is not a repository admin: `gh auth login` and run it
    again). Once, by hand, with that same `gh auth login` token: the ruleset id from
    `gh api repos/timothymamo/shift2eu/rulesets --jq '.[] | select(.name == "Protect main") | .id'`, then
@@ -721,18 +739,27 @@ before it still hold. Rolling back is under each step.
    gives `REVIEW_REQUIRED`) until you approve it.
    *Roll back:* put the `pull_request` rule of `Protect main` back as it was before this step, turning
    off all four settings: required approvals 0, no review from Code Owners, no dismissal of stale
-   approvals, no approval of the most recent reviewable push. *Check:* `make gate-check
-   GATE_TRANSITION=0` reports those review gaps again, and an open agent pull request's
+   approvals, no approval of the most recent reviewable push. *Check:* `make gate-check`
+   reports those review gaps again and exits 1, and an open agent pull request's
    `reviewDecision` (`gh pr view <n> --json reviewDecision`) is no longer `REVIEW_REQUIRED`.
 6. **Remove your token from the VM** (milestone 3, approved and merged by you: the first change through
-   the gate): drop `GITHUB_TOKEN` from `VM_ENV` and the `.envrc` above the workspace, recreate the VM's
-   environment, then revoke that personal token on GitHub.
-   *Check:* the token no longer appears under your
-   [fine-grained tokens](https://github.com/settings/personal-access-tokens); `make vm-init`'s `gh` step
-   still passes, on the App token; and from the host clone, as yourself with an admin token,
-   `make gate-check` (its transition flag now gone) exits 0.
-   *Roll back:* create a new fine-grained token and put it back in `VM_ENV` (milestone 3's revert brings
-   the fallback back).
+   the gate). Once it is merged, the default `VM_ENV` no longer names `GITHUB_TOKEN`, your personal
+   GitHub token, and the gh wrapper has no fallback to it. Then, on the Mac:
+   - delete the `GITHUB_TOKEN` line from the `.envrc` above the workspace (`direnv allow` there again),
+     and `GITHUB_TOKEN` from any `VM_ENV` override you keep (a `VM_ENV` exported in a `.envrc`, or a
+     habit of `make vm-env VM_ENV=...`);
+   - run `make vm-env` with the default `VM_ENV`: it replaces the VM's whole `daemon.env`, so the old
+     `GITHUB_TOKEN` line is gone (it says so: `vm-env: warning: removed GITHUB_TOKEN ...`); then
+     `make deck-restart` between tasks;
+   - revoke the personal token that `GITHUB_TOKEN` held on GitHub
+     ([personal access tokens](https://github.com/settings/personal-access-tokens)).
+
+   *Check:* the token no longer appears on GitHub's list of your personal access tokens; `make vm-init`'s
+   `gh` step still passes, on the App token; and from the host clone, as yourself with an admin token,
+   `make gate-check` exits 0 (it has no transition flag any more: a gap always fails it).
+   *Roll back:* revert milestone 3, which brings the fallback and the `VM_ENV` entry back, create a new
+   personal token limited to this repository, put it back in the `.envrc` above the workspace and run
+   `make vm-env`.
 7. **Add the AI reviewer** (milestone 4): create the reviewer App (Pull requests write, Contents read,
    this repository only), the `ai-review` environment (deployment branches: `main` only) and its secrets,
    then approve and merge milestone 4.
