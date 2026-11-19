@@ -568,18 +568,23 @@ them. Never add the App's three to `VM_ENV`: `make vm-env` refuses any `SHIFT2EU
 neither the key nor its path enters the VM. The host targets that open a shell in the VM (`make deck`,
 `make deck-restart`, `make vm-claude-settings`, `make vm-init`, `make vm-shell`) run `limactl` without the
 App's three variables (`env -u`), and the background refresh `make agents-token-refresh-start` starts runs
-without `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEEK_API_KEY`: each process gets only what its work needs.
+without the default `VM_ENV` credentials, `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEEK_API_KEY` (a name a custom
+`VM_ENV` adds is not stripped): each process gets only what its work needs.
 
 **The refusal.** A host target refuses to run, before it runs anything (no prerequisite, no sub-make, no
 `limactl`, no `git config`), and names itself, the host clone and this section, when `WORKSPACE_REPO` is
-unset, holds a character other than letters, digits and `. _ - / + @ , ~ # =` (no whitespace, no quote, no
-`$`, no `\`, no `%`, and no `:`, which Lima splits a `--mount-only` value on; the message never shows the
-value), or is not an absolute path, or when the checkout `make` runs in is the workspace, lies inside it
-or holds it. make checks this while it reads the Makefile, keyed on the targets named on its command line
-and on a `.DEFAULT_GOAL` set there (`make .DEFAULT_GOAL=vm-up`); it refuses any run with `MAKECMDGOALS` set
-on the command line (`make MAKECMDGOALS= vm-up`), which hides the real goals. `make -k`, `-i` and `-n` do
-not get past it. Targets the agents run in the VM (`make check`, `make test`, `make worktree`,
-`make git-hooks`, ...) never read `WORKSPACE_REPO` and are not refused.
+unset, holds a character other than letters, digits and `. _ - / + @ # =` (no whitespace, no quote, no
+`$`, no `\`, no `%`, no `:`, which Lima splits a `--mount-only` value on, and no `,` or `~`: `limactl`'s
+`--mount-only` splits its value on commas and expands a leading `~` of every part, so
+`/Users/x/ws,~/shift2eu` would mount your home directory writable), or is not an absolute path, or when
+the checkout `make` runs in is the workspace, lies inside it or holds it. No message shows a value that
+fails these checks. make checks this while it reads the Makefile, keyed on the targets named on its
+command line. It refuses any run, whatever its goals, in which `MAKECMDGOALS` or `.DEFAULT_GOAL` comes from
+the command line or the environment (`make MAKECMDGOALS= vm-up`, `MAKECMDGOALS=help make vm-up`,
+`make .DEFAULT_GOAL=vm-up`, `.DEFAULT_GOAL` set in the environment of `make -e`), as each hides the goals
+make runs, and names that variable. `make -k`, `-i` and `-n` do not get past it. Targets the agents run
+in the VM (`make check`, `make test`, `make worktree`, `make git-hooks`, ...) never read `WORKSPACE_REPO`
+and are not refused.
 
 `make vm-up` also checks, before any `limactl` call and with nothing but `test` and `ls`, that
 `WORKSPACE_REPO` is a directory holding `.git` and that the workspace can be listed, and it matches the
