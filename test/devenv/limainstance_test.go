@@ -294,14 +294,16 @@ func (f *limaTargetFixture) clearMarker(t *testing.T) {
 	}
 }
 
-// recordingLimactl stands in for limactl in these tests: it records its argv and exits 0 without running
-// anything, so a test pins which command lines a recipe runs, never what a VM on this machine would do.
+// recordingLimactl stands in for limactl in these tests: it records its argv, and which of the credentials
+// these tests work with are set in its own environment (limactlEnvProbe: names only, never a value), and exits
+// 0 without running anything, so a test pins which command lines and which environment a recipe gives it,
+// never what a VM on this machine would do.
 const recordingLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
-exit 0
+` + limactlEnvProbe + `exit 0
 `
 
 // newLimaMakeFixture builds one environment for a target that reads LIMA_INSTANCE and needs nothing but

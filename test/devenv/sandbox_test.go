@@ -283,17 +283,62 @@ func envList(env map[string]string) []string {
 	return list
 }
 
+// limactlEnvProbe is the part of a fake limactl that records which of the credentials these tests work with
+// are set in its own environment, for a test that pins what a process on the Mac does not need: the App's key,
+// its path and its IDs, and the two credentials vm-env copies into the VM. It records the Names only, never a
+// value: ${NAME+NAME} expands to the name when NAME is set and to nothing when it is not, so no value of the
+// environment ever reaches the log (CLAUDE.md rule 3). envNamesSet reads what it records.
+const limactlEnvProbe = `for name in \
+  "${SHIFT2EU_AGENTS_APP_ID+SHIFT2EU_AGENTS_APP_ID}" \
+  "${SHIFT2EU_AGENTS_APP_INSTALLATION_ID+SHIFT2EU_AGENTS_APP_INSTALLATION_ID}" \
+  "${SHIFT2EU_AGENTS_APP_KEY_FILE+SHIFT2EU_AGENTS_APP_KEY_FILE}" \
+  "${CLAUDE_CODE_OAUTH_TOKEN+CLAUDE_CODE_OAUTH_TOKEN}" \
+  "${DEEPSEEK_API_KEY+DEEPSEEK_API_KEY}"; do
+  if [ -n "${name}" ]; then printf 'envset=%s\n' "${name}"; fi
+done >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+`
+
+// envNamesSet returns the names the fake limactl recorded as set in its own environment, sorted and without
+// duplicates: the fakes of this package record a credential's name, never its value (limactlEnvProbe).
+func envNamesSet(t *testing.T, log string) []string {
+	t.Helper()
+
+	seen := map[string]bool{}
+
+	var names []string
+
+	for _, line := range strings.Split(log, "\n") {
+		if !strings.HasPrefix(line, "envset=") {
+			continue
+		}
+
+		name := strings.TrimPrefix(line, "envset=")
+		if seen[name] {
+			continue
+		}
+
+		seen[name] = true
+
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	return names
+}
+
 // fakeLimactl is dev/limactl for the tests: it records its argv and then runs the sh -c command the host
 // script asks the VM to run, on this machine, with HOME set to the fake VM user's home. Its stdin is passed
 // through, so a host script that hands the token over standard input works unchanged, and one that puts it
-// on the limactl command line is caught by the argv log.
+// on the limactl command line is caught by the argv log. It also records which credentials are set in its own
+// environment (limactlEnvProbe), so a test can pin what a process on the Mac is not given.
 const fakeLimactl = `#!/bin/sh
 # Stands in for limactl in the devenv tests: records its argv and runs the command after the instance name.
 {
   printf 'tool=limactl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
-if [ -n "${SHIFT2EU_TEST_LIMA_CAPTURE:-}" ]; then
+` + limactlEnvProbe + `if [ -n "${SHIFT2EU_TEST_LIMA_CAPTURE:-}" ]; then
   # Capture mode: a test that only wants what a recipe sends over standard input (make deck, make
   # vm-gh-wrapper) records it and runs nothing on this machine. What it answers is what the VM would
   # answer: the vm-gh-wrapper stream ends with the call to the function that prints the done line, so a
