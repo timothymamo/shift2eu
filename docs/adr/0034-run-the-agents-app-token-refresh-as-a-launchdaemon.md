@@ -6,6 +6,78 @@
 Supersedes in part [ADR 0031](0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md),
 open question (1) a): the refresh can now also run under launchd. Everything else in ADR 0031 stands.
 
+> **Update (issue #227 part 2), 2026-11-19.** Open points c) and d) below are superseded by the **account
+> mode** of [ADR 0031](0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)'s
+> update of the same date: the job runs as the separate account `_shift2euagents`, from that account's
+> clone, and writes the token over the VM's SSH port. Where the decision below says the job runs as the
+> maintainer, from the maintainer's host clone, or with Homebrew on its `PATH`, that holds only in the
+> single-account mode, which stays as the fallback until the switch.
+>
+> - **c) The install in account mode.** `sudo -u <account> -i` (the old c) cannot work: the account has
+>   no login shell. The maintainer runs `make agents-token-refresh-install` from the **maintainer's**
+>   host clone, as today, with `SHIFT2EU_AGENTS_ACCOUNT` and `SHIFT2EU_AGENTS_VM_SSH_PORT` set in its
+>   `.envrc` (and `SHIFT2EU_AGENTS_VM_SSH_USER` when needed); the install renders the plist **as the
+>   account, with the account's generator**, and installs it with `sudo` as before. In order:
+>   1. Every check of today that does not need the account's files: not root, `launchctl` present,
+>      `AGENTS_TOKEN_LAUNCHD_DIR`, the instance, the App ID and installation ID set. The account name is
+>      checked (ADR 0031, update of 2026-11-19, 1), and the port.
+>   2. The mount check of d), unchanged, against the account's clone path
+>      `/Users/<account>/shift2eu-host` (a Lima mount there is as dangerous as one of the maintainer's
+>      clone, and the maintainer's `limactl list` still answers). The symlink check of `dev/` and the
+>      script moves into the generator (step 3): the maintainer's uid cannot look inside the account's
+>      home.
+>   3. The plist is rendered by one printed `sudo`, with the values on the command line and nothing
+>      inherited:
+>
+>      ```sh
+>      sudo -u <account> -H /usr/bin/env -i HOME=/Users/<account> PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+>        LIMA_INSTANCE=<instance> SHIFT2EU_AGENTS_APP_ID=<id> SHIFT2EU_AGENTS_APP_INSTALLATION_ID=<id> \
+>        SHIFT2EU_AGENTS_APP_KEY_FILE=/Users/<account>/.config/shift2eu/agents-app.pem \
+>        SHIFT2EU_AGENTS_VM_SSH_PORT=<port> SHIFT2EU_AGENTS_VM_SSH_USER=<vm user> \
+>        SHIFT2EU_AGENTS_VM_SSH_KEY=/Users/<account>/.config/shift2eu/agents-vm-ssh-key \
+>        SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS=/Users/<account>/.config/shift2eu/known-hosts-<instance> \
+>        /bin/sh /Users/<account>/shift2eu-host/dev/agents-token-launchd.sh plist
+>      ```
+>
+>      The account's own `dev/agents-token-launchd.sh` renders it, so `UserName` (`id -un`), `HOME` and
+>      the clone (from `$0`) are the account's, as the old c) wanted; no `XDG_STATE_HOME` is passed, so
+>      the job's lock and log are under `/Users/<account>/.local/state/shift2eu`.
+>   4. The generator, in **SSH mode** (all four `SHIFT2EU_AGENTS_VM_SSH_*` set; a partial set is refused,
+>      naming the missing ones, as the token script refuses it), additionally: puts the four variables in
+>      `EnvironmentVariables` (each through the same `plain` check of XML markup and control characters);
+>      sets `PATH` to exactly `/usr/bin:/bin:/usr/sbin:/sbin`, **without `/opt/homebrew/bin`**, which the
+>      maintainer's uid owns: a planted `openssl`, `curl` or `ssh` there would run as the account with
+>      the key (SSH mode needs no `limactl`); refuses the clone's `dev/` or `dev/agents-app-token.sh`
+>      being a symlink (the install's old check, now made as the account); and applies the trusted path
+>      rule (ADR 0031, update of 2026-11-19, 2) to the script, the App's key, the SSH key and the
+>      known-hosts file, refusing with the path and the reason. In limactl mode it renders exactly what
+>      it renders today.
+>   5. Then as today: `plutil -lint`, the plist and its SHA-256 printed, the script the job runs named
+>      (it must be `/Users/<account>/shift2eu-host/dev/agents-app-token.sh`, and the job runs "as
+>      <account>"), bootout of a loaded job, `sudo install`, the SHA-256 read back, bootstrap. Two steps
+>      change: the install creates no state directory or log (the maintainer's uid cannot write the
+>      account's home; the job's shell line creates both, as the account, under `umask 077`), and it reads
+>      no lock (no hand-started refresh exists in account mode: only the account holds the key, and it has
+>      no login). The recipe ends with `sudo -k`, on success and on failure (a `trap`), so no `sudo`
+>      timestamp outlives it.
+>
+>   `make agents-token-refresh-uninstall` works the same in both modes (the label does not depend on the
+>   account) and, in account mode, ends with `sudo -k` too. The log is read with
+>   `sudo tail -n 50 /Users/<account>/.local/state/shift2eu/agents-token-refresh-<instance>.log`, which
+>   prompts. The plist stays world-readable: it holds the account's name and the paths of its files, none
+>   of them secret, and never the key, the SSH key or a token.
+> - **d) The trust boundary moves.** The job no longer runs code the maintainer's uid can write: it runs
+>   the account's clone, which only the account (and root) can change, and the account's script refuses
+>   to start when the trusted path rule fails. The boundary is now the account's home and root: the
+>   account's clone is updated only by the maintainer's `sudo -u <account> -H git -C
+>   /Users/<account>/shift2eu-host pull --ff-only`, followed by `sudo launchctl kickstart -k
+>   system/<label>`. The maintainer's host clone keeps two roles: it renders nothing that runs with the
+>   key (the account's generator renders the plist) but it does run the install, whose `sudo` installs
+>   whatever plist it was given; a tampered maintainer's host clone at install time is the accepted
+>   residual, behind a password prompt and the printed plist (ADR 0031, update of 2026-11-19, 7). The
+>   mount check stays: no Lima mount may reach the account's clone. In single-account mode the old d)
+>   holds unchanged.
+
 ## Context
 
 ADR 0031 a) runs the agents App token refresh as a background loop that the maintainer starts from the
