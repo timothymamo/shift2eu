@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -640,6 +641,89 @@ func TestReportHonoursACancelledContext(t *testing.T) {
 	}
 }
 
+// TestIDOrNameAttributeCheck pins the check the hostile tests rely on. A value
+// that reaches the fragment as an id or a name attribute must be caught however
+// it is written (any case, any quoting or none, an attribute after a newline),
+// because a browser reads all of those; the same text outside a tag, which is
+// what the reporter's escaping leaves, must pass.
+func TestIDOrNameAttributeCheck(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fragment string
+		want     []string
+	}{
+		{
+			name:     "no attribute at all",
+			fragment: `<p class="wide">x</p><td>y</td>`,
+		},
+		{
+			name:     "the same text outside a tag",
+			fragment: `&lt;p id=&#34;x&#34;&gt;`,
+		},
+		{
+			name:     "the same text between tags",
+			fragment: `<p>id="x" name='y'</p>`,
+		},
+		{
+			name:     "a data attribute whose name ends in id",
+			fragment: `<p data-id="x" data-name="y">z</p>`,
+		},
+		{
+			name:     "double quoted id",
+			fragment: `<p id="x">`,
+			want:     []string{"id"},
+		},
+		{
+			name:     "single quoted id",
+			fragment: `<p id='x'>`,
+			want:     []string{"id"},
+		},
+		{
+			name:     "unquoted id",
+			fragment: `<p id=x>`,
+			want:     []string{"id"},
+		},
+		{
+			name:     "upper case attribute name",
+			fragment: `<td ID=x>`,
+			want:     []string{"id"},
+		},
+		{
+			name:     "attribute after a newline",
+			fragment: "<li\nname=\"y\">",
+			want:     []string{"name"},
+		},
+		{
+			name:     "attribute after another one",
+			fragment: `<p class="wide" id="x">`,
+			want:     []string{"id"},
+		},
+		{
+			name:     "name attribute with spaces around the equals sign",
+			fragment: "<input NAME = 'y'>",
+			want:     []string{"name"},
+		},
+		{
+			name:     "both attributes, in the order they appear",
+			fragment: `<a name="n" href="#x" id="i">x</a>`,
+			want:     []string{"name", "id"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := strings.Join(idOrNameAttributes([]byte(tc.fragment)), ",")
+			if want := strings.Join(tc.want, ","); got != want {
+				t.Errorf("idOrNameAttributes(%q) = %q, want %q", tc.fragment, got, want)
+			}
+		})
+	}
+}
+
 // hostileSourceName is the source of the hostile inventory. It is a valid
 // source, so the reporter is what keeps it from being read as markup.
 const hostileSourceName = "aws"
@@ -709,14 +793,41 @@ func checkValuesAreEscaped(t *testing.T, got []byte, ids []string) {
 func checkNoIDOrNameAttribute(t *testing.T, got []byte) {
 	t.Helper()
 
-	lower := strings.ToLower(string(got))
+	for _, attribute := range idOrNameAttributes(got) {
+		t.Errorf("the fragment writes the %s attribute, want no id or name attribute at all:\n%s",
+			attribute, got)
+	}
+}
 
-	for _, attribute := range []string{` id="`, ` name="`} {
-		if strings.Contains(lower, attribute) {
-			t.Errorf("the fragment holds the attribute %q, want no id or name attribute at all:\n%s",
-				attribute, got)
+// markupTag matches a tag, so the attribute check looks only inside one and the
+// same text between tags, which is what the reporter's escaping leaves, passes.
+var markupTag = regexp.MustCompile(`<[^>]*>`)
+
+// idOrNameAttribute matches an id or a name attribute inside a tag, in any case,
+// with any quoting or none and whatever separates it from the tag name: a
+// browser reads all of those as an attribute, so a value that reached the
+// fragment as one is a value that can address the document (PRD #297).
+var idOrNameAttribute = regexp.MustCompile(`(?i)\s(id|name)\s*=`)
+
+// idOrNameAttributes returns the names of the id and name attributes the
+// fragment's markup holds, without repetition, in the order they first appear.
+func idOrNameAttributes(got []byte) []string {
+	var found []string
+
+	seen := make(map[string]bool)
+
+	for _, tag := range markupTag.FindAll(got, -1) {
+		for _, match := range idOrNameAttribute.FindAllSubmatch(tag, -1) {
+			name := strings.ToLower(string(match[1]))
+			if !seen[name] {
+				seen[name] = true
+
+				found = append(found, name)
+			}
 		}
 	}
+
+	return found
 }
 
 // checkValuesShownAsText fails when a value the report was given does not reach
