@@ -10,7 +10,7 @@ manual: its flags, its report formats, the regions and estimates, the comparison
 
 ```text
 shift2eu assess --inventory <file> --target <targets> [--format <format>] [--output <file>]
-               [--region <target>=<region>,...] [--no-estimate]
+               [--region <target>=<region>,...] [--no-estimate] [--schema-version <version>]
 ```
 
 `<targets>` is one of `ovhcloud`, `scaleway` or `upcloud`, a comma-separated list of them, or `all` for
@@ -24,6 +24,7 @@ make build
 ./bin/shift2eu assess --inventory inventory.json --target ovhcloud,upcloud
 ./bin/shift2eu assess --inventory inventory.json --target all --output comparison.md
 ./bin/shift2eu assess --inventory inventory.json --target scaleway --format json --output report.json
+./bin/shift2eu assess --inventory inventory.json --target scaleway --format json --schema-version 2
 ./bin/shift2eu assess --inventory inventory.json --target scaleway --region scaleway=nl-ams
 ./bin/shift2eu assess --inventory inventory.json --target all --region scaleway=fr-par,ovhcloud=GRA
 ./bin/shift2eu assess --inventory inventory.json --target all --no-estimate
@@ -42,7 +43,7 @@ symbolic link to it) is refused with exit code 1 before the inventory is read; l
 write to standard output.
 
 `--format` chooses the report format: `markdown` (the default) or `json`. The JSON report holds the same
-content as the Markdown one, as a versioned document (`"schemaVersion": 2`, `"kind": "assessment"`, or
+content as the Markdown one, as a versioned document (`"schemaVersion": 3`, `"kind": "assessment"`, or
 `"comparison"` for several targets) for scripts and other tools: per resource its plan and estimate,
 then the workloads, the estimate's basis (region, price date, currency, what it excludes) and total,
 and the source's cost. Its format, its JSON Schemas
@@ -52,6 +53,15 @@ and the source's cost. Its format, its JSON Schemas
 `vcpus` or `includedStorageGiB`, is a JSON number; an amount of money, such as `"587.58"`, and a
 quantity that can be fractional, such as a plan's `memoryGiB` (`"0.5"`, `"1.875"`), are exact decimal
 strings, so a script never reads a rounded float. Parse them as decimals, not as floating point.
+
+`--schema-version` chooses the JSON report's version: `3`, the default, or `2`, the document earlier
+releases wrote, byte for byte. The two differ in one rule: in version 3 a total that estimated nothing
+(`"estimated": 0`), the report's, a workload's or a compared target's, has no `amount` key at all,
+where version 2 writes `"0.00"`; its counts stay. Test for the key, or for `estimated` above 0, before
+you read an amount. Its schemas are `assessment-v3.schema.json` and `comparison-v3.schema.json`
+beside the version 2 ones ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md),
+issue #307). `--schema-version` with any format but `json`, or a version other than 2 or 3, is a usage
+error (exit code 2).
 
 With two or more targets, `assess` reads the inventory once and writes one comparison report. The
 targets are compared in sorted key order, whatever order they are given in. The report starts with a

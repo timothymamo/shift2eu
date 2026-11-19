@@ -255,6 +255,145 @@ func TestDecodeEstimateOptions(t *testing.T) {
 	}
 }
 
+// TestDecodeSchemaVersion pins the optional schemaVersion key of the envelope
+// (docs/adr/0018, docs/adr/0030, issue #307): a body that names none asks for
+// version 2, the version every client sent before the key existed, and a body
+// that names 2 or 3 gets that version. This package validates nothing else about
+// the value: whether the negotiated representation writes the version is the
+// HTTP layer's decision.
+func TestDecodeSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want int
+	}{
+		{
+			name: "absent asks for version 2",
+			body: `{"inventory":` + compactInventory + `,"targets":["scaleway"]}`,
+			want: 2,
+		},
+		{
+			name: "absent beside the other options asks for version 2",
+			body: `{"inventory":` + compactInventory + `,"targets":["scaleway"],` +
+				`"regions":{"scaleway":"fr-par"},"estimate":false}`,
+			want: 2,
+		},
+		{
+			name: "version 2 named",
+			body: `{"inventory":` + compactInventory + `,"targets":["scaleway"],"schemaVersion":2}`,
+			want: 2,
+		},
+		{
+			name: "version 3 named",
+			body: `{"inventory":` + compactInventory + `,"targets":["scaleway"],"schemaVersion":3}`,
+			want: 3,
+		},
+		{
+			name: "version 3 before the other keys",
+			body: `{"schemaVersion":3,"targets":["ovhcloud"],"inventory":` + compactInventory + `}`,
+			want: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := assessmentrequest.Decode([]byte(tt.body))
+			if err != nil {
+				t.Fatalf("Decode() returned unexpected error: %v", err)
+			}
+
+			if got.SchemaVersion != tt.want {
+				t.Errorf("Decode() SchemaVersion = %d, want %d", got.SchemaVersion, tt.want)
+			}
+
+			// The version does not change what the rest of the envelope decodes
+			// to.
+			if len(got.Inventory) == 0 || len(got.Targets) == 0 {
+				t.Errorf("Decode() returned inventory %q and targets %q, want both beside the version",
+					got.Inventory, got.Targets)
+			}
+		})
+	}
+}
+
+// TestDecodeRefusesASchemaVersionItCannotWrite pins how a schemaVersion the
+// format does not write is refused (docs/adr/0018, issue #307): a value that is
+// not the integer 2 or 3, whatever its JSON type, is an error wrapping ErrDecode
+// that never echoes the value, so a client cannot make the decoder repeat text of
+// its choosing. Version 1 is the frozen first format and version 4 does not
+// exist, so neither is one a new document may ask for.
+func TestDecodeRefusesASchemaVersionItCannotWrite(t *testing.T) {
+	t.Parallel()
+
+	const marker = "MARKER-VERSION-7"
+
+	tests := []struct {
+		name string
+		// value is the JSON of the schemaVersion member.
+		value string
+		// echoes is the text the error must not hold, when the value has one.
+		echoes string
+		// kind is the JSON type the error must name, when the value has one: the
+		// message says what was sent, never the value itself.
+		kind string
+	}{
+		{name: "version 1", value: `1`},
+		{name: "version 4", value: `4`},
+		{name: "a fraction", value: `2.5`},
+		{name: "a string", value: `"` + marker + `"`, echoes: marker},
+		{name: "a string holding a version", value: `"3"`, echoes: `"3"`},
+		{name: "null", value: `null`},
+		{name: "true", value: `true`},
+		{name: "an object", value: `{"version":3}`, kind: "an object"},
+		{name: "an array", value: `[3]`, kind: "an array"},
+		{name: "a large number", value: `987654321`, echoes: `987654321`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := `{"inventory":` + compactInventory + `,"targets":["scaleway"],"schemaVersion":` + tt.value + `}`
+
+			got, err := assessmentrequest.Decode([]byte(body))
+			if err == nil {
+				t.Fatalf("Decode() returned %+v, want an error wrapping %v for schemaVersion %s",
+					got, assessmentrequest.ErrDecode, tt.value)
+			}
+
+			if !errors.Is(err, assessmentrequest.ErrDecode) {
+				t.Errorf("Decode() error = %v, want it to wrap %v", err, assessmentrequest.ErrDecode)
+			}
+
+			msg := err.Error()
+
+			if !strings.Contains(msg, "schemaVersion") {
+				t.Errorf("Decode() error = %q, want it to name schemaVersion", msg)
+			}
+
+			if tt.echoes != "" && strings.Contains(msg, tt.echoes) {
+				t.Errorf("Decode() error = %q, want it not to repeat the value %q", msg, tt.echoes)
+			}
+
+			if tt.kind != "" && !strings.Contains(msg, tt.kind) {
+				t.Errorf("Decode() error = %q, want it to name the JSON type %q", msg, tt.kind)
+			}
+
+			if strings.ContainsAny(msg, "\r\n") {
+				t.Errorf("Decode() error = %q, want a single line", msg)
+			}
+
+			if diff := cmp.Diff(assessmentrequest.Request{}, got, cmpopts.EquateEmpty()); diff != "" {
+				t.Errorf("Decode() returned a request beside an error (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestDecodeErrors pins every request body the decoder refuses: the envelope
 // must be one JSON object with exactly the keys inventory (an object) and
 // targets (a non-empty array of strings), and nothing else, exactly once, and
@@ -357,6 +496,38 @@ func TestDecodeErrors(t *testing.T) {
 		{
 			name: "duplicate estimate key",
 			body: []byte(`{"inventory":{},"targets":["scaleway"],"estimate":true,"estimate":false}`),
+		},
+		{
+			name: "schemaVersion is a string",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"schemaVersion":"3"}`),
+		},
+		{
+			name: "schemaVersion is a fraction",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"schemaVersion":2.5}`),
+		},
+		{
+			name: "schemaVersion is null",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"schemaVersion":null}`),
+		},
+		{
+			name: "schemaVersion is a boolean",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"schemaVersion":true}`),
+		},
+		{
+			name: "schemaVersion is an object",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"schemaVersion":{"version":3}}`),
+		},
+		{
+			name: "a version the format does not write",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"schemaVersion":4}`),
+		},
+		{
+			name: "the frozen version 1",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"schemaVersion":1}`),
+		},
+		{
+			name: "duplicate schemaVersion key",
+			body: []byte(`{"inventory":{},"targets":["scaleway"],"schemaVersion":2,"schemaVersion":3}`),
 		},
 		{
 			name: "trailing data after the object",

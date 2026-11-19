@@ -31,10 +31,14 @@ import (
 // The JSON reporter renders the same content as the Markdown report, so it must
 // be usable wherever the use cases expect a reporter: the goldens pin what it
 // writes, this pins the ports it implements. It implements both, because a run
-// with several targets writes a comparison document (docs/adr/0016).
+// with several targets writes a comparison document (docs/adr/0016). A reporter
+// writes the schemaVersion it was built with, so both ports are pinned in the
+// two versions this package writes.
 var (
-	_ analysis.Reporter           = jsonreport.New()
-	_ analysis.ComparisonReporter = jsonreport.New()
+	_ analysis.Reporter           = jsonreport.New(jsonreport.Version2)
+	_ analysis.ComparisonReporter = jsonreport.New(jsonreport.Version2)
+	_ analysis.Reporter           = jsonreport.New(jsonreport.Version3)
+	_ analysis.ComparisonReporter = jsonreport.New(jsonreport.Version3)
 )
 
 const (
@@ -114,16 +118,103 @@ func newInventory(t *testing.T, source string, resources []inventory.Resource) i
 	return inv
 }
 
-// render writes the document of a and meta and returns it.
+// render writes the schemaVersion 2 document of a and meta and returns it: the
+// goldens this package pinned before version 3 existed, which stay byte for byte
+// what they were (docs/adr/0018, docs/adr/0030).
 func render(tb testing.TB, a assessment.Assessment, meta analysis.ReportMeta) []byte {
 	tb.Helper()
 
+	return renderVersion(tb, a, meta, jsonreport.Version2)
+}
+
+// renderVersion writes the document of a and meta in version and returns it.
+func renderVersion(tb testing.TB, a assessment.Assessment, meta analysis.ReportMeta, version int) []byte {
+	tb.Helper()
+
 	var out bytes.Buffer
-	if err := jsonreport.New().Report(tb.Context(), &out, a, meta); err != nil {
-		tb.Fatalf("Report() returned unexpected error: %v", err)
+	if err := jsonreport.New(version).Report(tb.Context(), &out, a, meta); err != nil {
+		tb.Fatalf("Report() in schemaVersion %d returned unexpected error: %v", version, err)
 	}
 
 	return out.Bytes()
+}
+
+// TestReporterRefusesAnUnsupportedSchemaVersion pins that a reporter writes one of
+// the versions this package defines and refuses any other when it reports:
+// version 1 is the frozen first format and version 4 does not exist, so neither
+// is a document this package may write (docs/adr/0018, docs/adr/0030). The
+// refusal happens at report time, writes nothing, and names the version it was
+// built with and the ones it writes.
+func TestReporterRefusesAnUnsupportedSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	a := assessment.Assess(newInventory(t, sourceName, awsResources()), testutil.ScalewayCatalog(t))
+	c := assessment.Compare(assessTargets(t, comparisonInventory(t), threeTargetKeys()))
+	meta := analysis.ReportMeta{InventoryName: inventoryFileName}
+
+	tests := []struct {
+		name    string
+		version int
+	}{
+		{name: "the frozen version 1", version: 1},
+		{name: "a version that does not exist", version: 4},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			reporter := jsonreport.New(tc.version)
+
+			var single bytes.Buffer
+
+			err := reporter.Report(t.Context(), &single, a, meta)
+			if err == nil {
+				t.Fatalf("Report() in schemaVersion %d = nil, want an error", tc.version)
+			}
+
+			if single.Len() != 0 {
+				t.Errorf("Report() in schemaVersion %d wrote %d bytes, want none:\n%s",
+					tc.version, single.Len(), single.String())
+			}
+
+			var comparison bytes.Buffer
+
+			err = reporter.ReportComparison(t.Context(), &comparison, c, meta)
+			if err == nil {
+				t.Fatalf("ReportComparison() in schemaVersion %d = nil, want an error", tc.version)
+			}
+
+			if comparison.Len() != 0 {
+				t.Errorf("ReportComparison() in schemaVersion %d wrote %d bytes, want none:\n%s",
+					tc.version, comparison.Len(), comparison.String())
+			}
+		})
+	}
+}
+
+// TestReporterRefusalNamesTheVersionsItWrites pins the message of the refusal: a
+// caller that asked for a version this package does not write learns which ones
+// it does, so it can pick one without reading the source.
+func TestReporterRefusalNamesTheVersionsItWrites(t *testing.T) {
+	t.Parallel()
+
+	a := assessment.Assess(newInventory(t, sourceName, awsResources()), testutil.ScalewayCatalog(t))
+
+	var out bytes.Buffer
+
+	err := jsonreport.New(4).Report(t.Context(), &out, a, analysis.ReportMeta{InventoryName: inventoryFileName})
+	if err == nil {
+		t.Fatal("Report() in schemaVersion 4 = nil, want an error")
+	}
+
+	msg := err.Error()
+
+	for _, want := range []string{"schemaVersion", "4", "2", "3"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("Report() error = %q, want it to mention %q", msg, want)
+		}
+	}
 }
 
 // TestReport pins the whole document against the Scaleway fixture catalog: the
@@ -247,7 +338,8 @@ func TestReportDocumentShape(t *testing.T) {
 			want any
 		}{
 			// encoding/json decodes every JSON number into a float64.
-			{name: "schema version", path: []any{"schemaVersion"}, want: float64(currentSchemaVersion)},
+			// The document is the frozen version 2 one render writes.
+			{name: "schema version", path: []any{"schemaVersion"}, want: float64(jsonreport.Version2)},
 			{name: "kind", path: []any{"kind"}, want: "assessment"},
 			{name: "inventory name", path: []any{"inventoryName"}, want: inventoryFileName},
 			{name: "source", path: []any{"source"}, want: sourceName},
@@ -574,6 +666,28 @@ func TestReportDocumentShape(t *testing.T) {
 		if diff := cmp.Diff(want, valueAt(t, emptyDocument, "summary")); diff != "" {
 			t.Errorf("the empty assessment's summary mismatch (-want +got):\n%s", diff)
 		}
+	})
+
+	// The same assessment in version 3, the version a run writes when it names
+	// none: without estimates the two versions write the same document but for
+	// the version it declares, and that document is one the version 3 schema
+	// describes (docs/adr/0018, issue #307).
+	t.Run("version 3", func(t *testing.T) {
+		t.Parallel()
+
+		got := renderVersion(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}, jsonreport.Version3)
+		v3 := decodeJSON(t, got)
+
+		if diff := cmp.Diff(float64(jsonreport.Version3), valueAt(t, v3, "schemaVersion")); diff != "" {
+			t.Errorf("schemaVersion mismatch (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff(objectKeysAt(t, document), objectKeysAt(t, v3)); diff != "" {
+			t.Errorf("the version 3 document's keys differ from version 2's, want only the version to differ:\n%s",
+				diff)
+		}
+
+		checkDocumentAgainstSchema(t, got, schemaFileFor("assessment", jsonreport.Version3))
 	})
 }
 
@@ -909,7 +1023,7 @@ func TestReportReturnsWriteError(t *testing.T) {
 	writeErr := errors.New("disk is full")
 	a := assessment.Assess(newInventory(t, sourceName, awsResources()), testutil.ScalewayCatalog(t))
 
-	err := jsonreport.New().Report(t.Context(), failingWriter{err: writeErr}, a,
+	err := jsonreport.New(jsonreport.Version2).Report(t.Context(), failingWriter{err: writeErr}, a,
 		analysis.ReportMeta{InventoryName: inventoryFileName})
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("Report() error = %v, want an error wrapping %v", err, writeErr)
@@ -936,13 +1050,13 @@ func TestReportsCancelledContext(t *testing.T) {
 		{
 			name: "the single-target document",
 			write: func(w io.Writer) error {
-				return jsonreport.New().Report(ctx, w, a, meta)
+				return jsonreport.New(jsonreport.Version2).Report(ctx, w, a, meta)
 			},
 		},
 		{
 			name: "the comparison document",
 			write: func(w io.Writer) error {
-				return jsonreport.New().ReportComparison(ctx, w, c, meta)
+				return jsonreport.New(jsonreport.Version2).ReportComparison(ctx, w, c, meta)
 			},
 		},
 	}
@@ -1659,11 +1773,19 @@ func TestReportWithEstimates(t *testing.T) {
 // nothing there, while every fitted resource is still offered somewhere.
 const reportNotOfferedRegion = "xx-none"
 
-// reportNotOfferedDocument renders the document of an inventory the report
-// fixture's catalog cannot price in region, where a region names no offering at
-// all: a compute.vm resource and a storage.object one, both with a fit and
-// neither estimated.
-func reportNotOfferedDocument(t *testing.T, region string) []byte {
+// reportNotOfferedDocument renders the document of a and meta in version of an
+// inventory the report fixture's catalog cannot price in region, where a region
+// names no offering at all: a compute.vm resource and a storage.object one, both
+// with a fit and neither estimated.
+func reportNotOfferedDocument(t *testing.T, region string, version int) []byte {
+	t.Helper()
+
+	return renderVersion(t, reportNotOfferedAssessment(t, region), analysis.ReportMeta{InventoryName: inventoryFileName}, version)
+}
+
+// reportNotOfferedAssessment assesses the not-offered fixture with estimates on in
+// region, where nothing is priced.
+func reportNotOfferedAssessment(t *testing.T, region string) assessment.Assessment {
 	t.Helper()
 
 	snapshot := testutil.PricedSnapshot()
@@ -1688,8 +1810,8 @@ func reportNotOfferedDocument(t *testing.T, region string) []byte {
 		},
 	})
 
-	return render(t, assessment.AssessWith(inv, testutil.ReportCatalogIn(t, reportTarget, snapshot),
-		assessment.Options{Estimate: true}), analysis.ReportMeta{InventoryName: inventoryFileName})
+	return assessment.AssessWith(inv, testutil.ReportCatalogIn(t, reportTarget, snapshot),
+		assessment.Options{Estimate: true})
 }
 
 // checkDocumentAgainstSchema fails the test when document does not match the
@@ -1718,7 +1840,7 @@ func checkDocumentAgainstSchema(t *testing.T, document []byte, file string) {
 func TestReportNotOfferedReason(t *testing.T) {
 	t.Parallel()
 
-	got := reportNotOfferedDocument(t, reportNotOfferedRegion)
+	got := reportNotOfferedDocument(t, reportNotOfferedRegion, jsonreport.Version2)
 	checkDocument(t, got)
 
 	document := decodeJSON(t, got)
@@ -1783,6 +1905,143 @@ func TestReportNotOfferedReason(t *testing.T) {
 
 		checkDocumentAgainstSchema(t, got, "assessment-v2.schema.json")
 	})
+}
+
+// TestReportV3WithoutAmountWhenNothingEstimated pins the schemaVersion 3 rule for
+// a total that estimated nothing (issue #307): when estimated is 0, the total
+// writes no amount at all, because a key that is absent cannot be misread as a
+// price of 0.00 (docs/adr/0018, docs/adr/0030). Its counts stay, so a consumer
+// still learns how many resources there are and how many of them were estimated,
+// and the document matches the version 3 schema.
+func TestReportV3WithoutAmountWhenNothingEstimated(t *testing.T) {
+	t.Parallel()
+
+	got := reportNotOfferedDocument(t, reportNotOfferedRegion, jsonreport.Version3)
+	checkDocument(t, got)
+
+	document := decodeJSON(t, got)
+
+	t.Run("the document is version 3", func(t *testing.T) {
+		t.Parallel()
+
+		if diff := cmp.Diff(float64(3), valueAt(t, document, "schemaVersion")); diff != "" {
+			t.Errorf("schemaVersion mismatch (-want +got):\n%s", diff)
+		}
+
+		checkDocumentAgainstSchema(t, got, "assessment-v3.schema.json")
+	})
+
+	t.Run("a total that estimated nothing writes no amount", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name      string
+			path      []any
+			resources float64
+		}{
+			{
+				name:      "the report's total",
+				path:      []any{"estimate", "total"},
+				resources: 2,
+			},
+			{
+				name:      "the workload's total",
+				path:      []any{"workloads", 0, "estimate"},
+				resources: 2,
+			},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+
+				if diff := cmp.Diff([]string{"estimated", "resources"}, objectKeysAt(t, document, test.path...)); diff != "" {
+					t.Errorf("%s keys mismatch (-want +got), a total that estimated nothing writes no amount:\n%s",
+						test.name, diff)
+				}
+
+				checks := []struct {
+					step string
+					want any
+				}{
+					{step: "estimated", want: float64(0)},
+					{step: "resources", want: test.resources},
+				}
+
+				for _, check := range checks {
+					if diff := cmp.Diff(check.want, valueAt(t, document, extend(test.path, check.step)...)); diff != "" {
+						t.Errorf("%s.%s mismatch (-want +got):\n%s", test.name, check.step, diff)
+					}
+				}
+			})
+		}
+	})
+
+	testutil.Golden(t, "testdata/report-no-amount-v3.golden", got)
+}
+
+// TestReportV3WithEstimates pins the schemaVersion 3 document of the estimate
+// fixture (issue #307): every total that estimated something keeps its amount,
+// exactly as version 2 writes it, and the one workload whose estimate estimated
+// nothing writes no amount. The document matches the version 3 schema, whose
+// total no longer requires an amount.
+func TestReportV3WithEstimates(t *testing.T) {
+	t.Parallel()
+
+	got := renderVersion(t, assessEstimates(t, ""), analysis.ReportMeta{InventoryName: inventoryFileName},
+		jsonreport.Version3)
+	checkDocument(t, got)
+
+	document := decodeJSON(t, got)
+
+	t.Run("the document is version 3", func(t *testing.T) {
+		t.Parallel()
+
+		if diff := cmp.Diff(float64(3), valueAt(t, document, "schemaVersion")); diff != "" {
+			t.Errorf("schemaVersion mismatch (-want +got):\n%s", diff)
+		}
+
+		checkDocumentAgainstSchema(t, got, "assessment-v3.schema.json")
+	})
+
+	t.Run("a total that estimated something keeps its amount", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name string
+			path []any
+			want string
+		}{
+			{name: "the report's total", path: []any{"estimate", "total"}, want: "2535.00"},
+			{name: "the shop workload's total", path: []any{"workloads", 1, "estimate"}, want: "2525.00"},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+
+				if diff := cmp.Diff(test.want, valueAt(t, document, extend(test.path, "amount")...)); diff != "" {
+					t.Errorf("%s.amount mismatch (-want +got):\n%s", test.name, diff)
+				}
+			})
+		}
+	})
+
+	t.Run("a workload that estimated nothing writes no amount", func(t *testing.T) {
+		t.Parallel()
+
+		at := []any{"workloads", 2}
+
+		if diff := cmp.Diff([]string{"estimated", "resources"}, objectKeysAt(t, document, extend(at, "estimate")...)); diff != "" {
+			t.Errorf("the workload without an estimate keys mismatch (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff(float64(0), valueAt(t, document, extend(at, "estimate", "estimated")...)); diff != "" {
+			t.Errorf("the workload's estimated mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	testutil.Golden(t, "testdata/report-estimates-v3.golden", got)
 }
 
 // TestReportEstimateAssumptionFlags pins that an estimated resource says in the
@@ -2241,7 +2500,9 @@ func counted(v int) *int { return &v }
 // chose, at the top level, with or without estimates (PRD #190 milestone 8: the
 // report header names the region per target), and names none when no region was
 // chosen: the estimate basis is not in a document without estimates, so the
-// top-level key is all such a document has to say about the region.
+// top-level key is all such a document has to say about the region. It pins both
+// versions this package writes, each against the schema file of its own version
+// (docs/adr/0018, issue #307).
 func TestReportNamesTheChosenRegion(t *testing.T) {
 	t.Parallel()
 
@@ -2270,35 +2531,37 @@ func TestReportNamesTheChosenRegion(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	for _, version := range writtenSchemaVersions {
+		for _, tc := range tests {
+			t.Run(tc.name+" in schemaVersion "+strconv.Itoa(version), func(t *testing.T) {
+				t.Parallel()
 
-			a := assessment.AssessWith(newInventory(t, sourceName, estimateResources()), testutil.ReportCatalog(t), tc.opts)
-			got := render(t, a, meta)
-			checkDocument(t, got)
+				a := assessment.AssessWith(newInventory(t, sourceName, estimateResources()), testutil.ReportCatalog(t), tc.opts)
+				got := renderVersion(t, a, meta, version)
+				checkDocument(t, got)
 
-			document := decodeJSON(t, got)
+				document := decodeJSON(t, got)
 
-			if _, ok := document["region"]; ok != (tc.want != "") {
-				t.Errorf("the document holds a region key = %t, want %t: %q",
-					ok, tc.want != "", objectKeysAt(t, document))
-			}
-
-			if tc.want != "" {
-				if diff := cmp.Diff(tc.want, valueAt(t, document, "region")); diff != "" {
-					t.Errorf("region mismatch (-want +got):\n%s", diff)
+				if _, ok := document["region"]; ok != (tc.want != "") {
+					t.Errorf("the document holds a region key = %t, want %t: %q",
+						ok, tc.want != "", objectKeysAt(t, document))
 				}
-			}
 
-			// The document must stay one the schema file describes: a key it
-			// declares no property for fails closed objects.
-			s := readSchema(t, filepath.Join("schema", schemaFileFor("assessment", currentSchemaVersion)))
+				if tc.want != "" {
+					if diff := cmp.Diff(tc.want, valueAt(t, document, "region")); diff != "" {
+						t.Errorf("region mismatch (-want +got):\n%s", diff)
+					}
+				}
 
-			for _, problem := range s.validate(document, "$") {
-				t.Errorf("the document does not match the schema: %s", problem)
-			}
-		})
+				// The document must stay one the schema file of its version
+				// describes: a key it declares no property for fails closed objects.
+				s := readSchema(t, filepath.Join("schema", schemaFileFor("assessment", version)))
+
+				for _, problem := range s.validate(document, "$") {
+					t.Errorf("the document does not match the schema: %s", problem)
+				}
+			})
+		}
 	}
 }
 

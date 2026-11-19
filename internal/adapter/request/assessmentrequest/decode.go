@@ -27,15 +27,27 @@ const (
 	keyTargets   = "targets"
 	keyRegions   = "regions"
 	keyEstimate  = "estimate"
+
+	keySchemaVersion = "schemaVersion"
+)
+
+// The JSON report versions a request may ask for (docs/adr/0018,
+// docs/adr/0030): 2 when it names none, the version every client got before
+// the key existed, or 3. An adapter imports no other adapter, so they are
+// written out here rather than taken from jsonreport.
+const (
+	defaultSchemaVersion = 2
+	latestSchemaVersion  = 3
 )
 
 // envelopeKeys lists the keys of the request object: inventory and targets are
-// required, regions and estimate optional. It is never modified.
+// required, regions, estimate and schemaVersion optional. It is never modified.
 var envelopeKeys = []jsondoc.Key{
 	{Name: keyInventory, Required: true},
 	{Name: keyTargets, Required: true},
 	{Name: keyRegions},
 	{Name: keyEstimate},
+	{Name: keySchemaVersion},
 }
 
 // Request is a decoded request body.
@@ -51,6 +63,9 @@ type Request struct {
 	Regions map[string]string
 	// Estimate turns plans and estimates on: true unless the body says false.
 	Estimate bool
+	// SchemaVersion is the JSON report version the client asks for: 2 unless
+	// the body says 3 (docs/adr/0030, issue #307).
+	SchemaVersion int
 }
 
 // Decode strictly decodes body, the body of POST /v1/assessments, and returns
@@ -58,9 +73,10 @@ type Request struct {
 // zero Request: a body over MaxBodySize, anything jsondoc.Open refuses, an
 // unknown, inexact or repeated key, a missing required key, an inventory that
 // is not an object, targets that are not a non-empty array of strings, regions
-// that are not an object of strings (at most MaxRegions, no key twice), and an
-// estimate that is not a boolean. null is refused for every key. No target
-// key and no region is validated here.
+// that are not an object of strings (at most MaxRegions, no key twice), an
+// estimate that is not a boolean, and a schemaVersion that is not the integer 2
+// or 3. null is refused for every key. No target key and no region is
+// validated here.
 func Decode(body []byte) (Request, error) {
 	doc, err := jsondoc.Open(body, MaxBodySize, ErrDecode)
 	if err != nil {
@@ -68,7 +84,7 @@ func Decode(body []byte) (Request, error) {
 	}
 
 	w := doc.Walker()
-	req := Request{Estimate: true}
+	req := Request{Estimate: true, SchemaVersion: defaultSchemaVersion}
 
 	err = w.Object(envelopeKeys, func(key string) error {
 		var err error
@@ -82,6 +98,8 @@ func Decode(body []byte) (Request, error) {
 			req.Regions, err = regions(w)
 		case keyEstimate:
 			req.Estimate, err = w.Bool()
+		case keySchemaVersion:
+			req.SchemaVersion, err = schemaVersion(w)
 		}
 
 		return err
@@ -91,6 +109,28 @@ func Decode(body []byte) (Request, error) {
 	}
 
 	return req, nil
+}
+
+// schemaVersion reads the next value, which must be the JSON integer 2 or 3
+// spelled as such, and returns it. Any other value, whatever its JSON type, is
+// refused with an error that names the key and where it is, never the value.
+func schemaVersion(w *jsondoc.Walker) (int, error) {
+	at := w.Position()
+
+	raw, err := w.Raw()
+	if err != nil {
+		return 0, err
+	}
+
+	switch string(raw) {
+	case "2":
+		return defaultSchemaVersion, nil
+	case "3":
+		return latestSchemaVersion, nil
+	}
+
+	return 0, fmt.Errorf("%w: %s at %s is %s that is not a version the API writes, want the integer %d or %d",
+		ErrDecode, keySchemaVersion, at, kindOf(raw), defaultSchemaVersion, latestSchemaVersion)
 }
 
 // regions reads the next value, which must be an object of strings, and
@@ -159,6 +199,8 @@ func kindOf(raw []byte) string {
 	switch raw[0] {
 	case '[':
 		return "an array"
+	case '{':
+		return "an object"
 	case '"':
 		return "a string"
 	case 't', 'f':

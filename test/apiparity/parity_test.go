@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -60,6 +61,11 @@ type parityCase struct {
 	format string
 	accept string
 }
+
+// paritySchemaVersion is the JSON report version both sides ask for: version 2,
+// the document every client of both driving adapters receives today. The version a
+// run asks for is tested in each adapter's own tests (docs/adr/0018, issue #307).
+const paritySchemaVersion = 2
 
 // TestTheAPIAndTheCLIAgreeOnTheReport pins the parity PRD #103 promises: for the
 // same inventory and targets, POST /v1/assessments answers the bytes
@@ -126,7 +132,7 @@ func TestTheAPIAndTheCLIAgreeOnTheReport(t *testing.T) {
 			inventoryPath := writeInventory(t, document)
 
 			cliReport := runAssess(t, inventoryPath, tc)
-			apiReport := postAssessment(t, document, tc.targets, tc.accept)
+			apiReport := postAssessment(t, document, tc.targets, tc.format, tc.accept)
 
 			if !bytes.Equal(cliReport, apiReport) {
 				t.Errorf("the API's body differs from `shift2eu assess --target %s --format %s` (-CLI +API):\n%s",
@@ -138,6 +144,36 @@ func TestTheAPIAndTheCLIAgreeOnTheReport(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTheAPIDocumentsEveryReportVersion pins that the API document describes
+// every version the JSON report has: a request may name schemaVersion 3, which
+// the API answers with a version 3 document, so the 200 JSON answer must
+// reference the schemas of both versions of both kinds beside the version 2 ones
+// it referenced before version 3 existed (docs/adr/0018, docs/adr/0030, issue
+// #307).
+func TestTheAPIDocumentsEveryReportVersion(t *testing.T) {
+	t.Parallel()
+
+	schemas := reportSchemas(t)
+
+	for _, version := range []int{2, 3} {
+		for _, kind := range []string{"assessment", "comparison"} {
+			if _, ok := schemas[reportSchemaKey{kind: kind, version: version}]; !ok {
+				t.Errorf("%s references no version %d %s schema for the 200 JSON answer to POST %s, so a client "+
+					"that asks for schemaVersion %d holds a document the API document does not describe: want a "+
+					"$ref to %s",
+					openAPIPath, version, kind, assessmentsPath, version, schemaRefPath(kind, version))
+			}
+		}
+	}
+}
+
+// schemaRefPath is where the API document references the schema of a report kind
+// and version, relative to its own directory, as the document writes it.
+func schemaRefPath(kind string, version int) string {
+	return filepath.ToSlash(filepath.Join("..", "internal", "adapter", "report", "jsonreport", "schema",
+		kind+"-v"+strconv.Itoa(version)+".schema.json"))
 }
 
 // emptyRegionExit is the exit code of a command line the CLI refuses: its usage
@@ -244,6 +280,12 @@ func runAssess(t *testing.T, inventoryPath string, tc parityCase) []byte {
 		"--format", tc.format,
 	}
 
+	// The CLI writes version 3 unless the run names one, so the parity case asks
+	// for the version both sides are compared on.
+	if tc.format == jsonFormat {
+		args = append(args, "--schema-version", strconv.Itoa(paritySchemaVersion))
+	}
+
 	var stdout, stderr bytes.Buffer
 
 	if code := cli.Run(t.Context(), args, &stdout, &stderr, cliDeps()); code != 0 {
@@ -259,13 +301,21 @@ func runAssess(t *testing.T, inventoryPath string, tc parityCase) []byte {
 
 // postAssessment posts document and targets to the real API handler and returns
 // its report body, failing the test when the request is not answered with 200.
-func postAssessment(t *testing.T, document []byte, targets []string, accept string) []byte {
+// The body asks for paritySchemaVersion when the format is JSON, as the CLI run
+// it is compared with does.
+func postAssessment(t *testing.T, document []byte, targets []string, format, accept string) []byte {
 	t.Helper()
 
+	var schemaVersion *int
+	if format == jsonFormat {
+		schemaVersion = &[]int{paritySchemaVersion}[0]
+	}
+
 	body, err := json.Marshal(struct {
-		Inventory json.RawMessage `json:"inventory"`
-		Targets   []string        `json:"targets"`
-	}{Inventory: document, Targets: targets})
+		Inventory     json.RawMessage `json:"inventory"`
+		Targets       []string        `json:"targets"`
+		SchemaVersion *int            `json:"schemaVersion,omitempty"`
+	}{Inventory: document, Targets: targets, SchemaVersion: schemaVersion})
 	if err != nil {
 		t.Fatalf("encoding the request body: %v", err)
 	}
@@ -333,32 +383,43 @@ type reportDocument struct {
 	} `json:"paths"`
 }
 
-// reportSchemas returns the schema of every report kind the API documents for a
-// 200 JSON answer, keyed by the kind each schema describes. The document decides
-// which schemas those are: it references them by path from the 200 response's
-// oneOf, so a schema the document stops referencing stops being checked here.
-func reportSchemas(t *testing.T) map[string]*testutil.Schema {
+// reportSchemaKey identifies a report schema the API documents: the kind of
+// document it describes and the schemaVersion it pins. The 200 answer may
+// reference several versions of both kinds, because a client asks for the
+// version it reads (docs/adr/0018, issue #307).
+type reportSchemaKey struct {
+	kind    string
+	version int
+}
+
+// reportSchemas returns the schema of every report kind and schemaVersion the
+// API documents for a 200 JSON answer, keyed by the kind and schemaVersion each
+// schema describes. The document decides which schemas those are: it references
+// them by path from the 200 response's oneOf, so a schema the document stops
+// referencing stops being checked here.
+func reportSchemas(t *testing.T) map[reportSchemaKey]*testutil.Schema {
 	t.Helper()
 
 	refs := reportSchemaRefs(t)
 
-	schemas := make(map[string]*testutil.Schema, len(refs))
+	schemas := make(map[reportSchemaKey]*testutil.Schema, len(refs))
 
 	for _, ref := range refs {
 		path := filepath.Join(filepath.Dir(openAPIPath), filepath.FromSlash(ref))
 		data := readFixture(t, path)
-		kind := schemaKind(t, path, data)
+		key := schemaIdentity(t, path, data)
 
-		if _, ok := schemas[kind]; ok {
-			t.Errorf("the document references two report schemas of the kind %q: %s", kind, path)
+		if _, ok := schemas[key]; ok {
+			t.Errorf("the document references two report schemas of the kind %q and schemaVersion %d: %s",
+				key.kind, key.version, path)
 		}
 
 		_, schema, err := testutil.ParseSchema(data)
 		if err != nil {
-			t.Fatalf("parsing the %s schema %s: %v", kind, path, err)
+			t.Fatalf("parsing the %s schemaVersion %d schema %s: %v", key.kind, key.version, path, err)
 		}
 
-		schemas[kind] = schema
+		schemas[key] = schema
 	}
 
 	return schemas
@@ -403,9 +464,10 @@ func reportSchemaRefs(t *testing.T) []string {
 	return refs
 }
 
-// schemaKind returns the report kind a schema describes: the constant of its
-// kind property, or its title when the constant is missing.
-func schemaKind(t *testing.T, path string, data []byte) string {
+// schemaIdentity returns what a report schema describes: its kind, the constant
+// of its kind property or its title when the constant is missing, and the
+// schemaVersion its schemaVersion property pins.
+func schemaIdentity(t *testing.T, path string, data []byte) reportSchemaKey {
 	t.Helper()
 
 	var schema struct {
@@ -414,6 +476,9 @@ func schemaKind(t *testing.T, path string, data []byte) string {
 			Kind struct {
 				Const string `json:"const"`
 			} `json:"kind"`
+			SchemaVersion struct {
+				Const int `json:"const"`
+			} `json:"schemaVersion"`
 		} `json:"properties"`
 	}
 
@@ -421,34 +486,45 @@ func schemaKind(t *testing.T, path string, data []byte) string {
 		t.Fatalf("decoding the schema %s: %v", path, err)
 	}
 
-	if schema.Properties.Kind.Const != "" {
-		return schema.Properties.Kind.Const
+	key := reportSchemaKey{
+		kind:    schema.Properties.Kind.Const,
+		version: schema.Properties.SchemaVersion.Const,
 	}
 
-	if schema.Title != "" {
-		return schema.Title
+	if key.kind == "" {
+		key.kind = schema.Title
 	}
 
-	t.Fatalf("the schema %s names no kind constant and has no title, so a report cannot be matched to it", path)
+	if key.kind == "" {
+		t.Fatalf("the schema %s names no kind constant and has no title, so a report cannot be matched to it", path)
+	}
 
-	return ""
+	if key.version == 0 {
+		t.Fatalf("the schema %s pins no schemaVersion constant, so the report version it describes is unknown", path)
+	}
+
+	return key
 }
 
-// validateReport holds a JSON report to the schema of the kind it declares.
-func validateReport(t *testing.T, schemas map[string]*testutil.Schema, report []byte) {
+// validateReport holds a JSON report to the schema of the kind and schemaVersion
+// it declares.
+func validateReport(t *testing.T, schemas map[reportSchemaKey]*testutil.Schema, report []byte) {
 	t.Helper()
 
 	var envelope struct {
-		Kind string `json:"kind"`
+		Kind          string `json:"kind"`
+		SchemaVersion int    `json:"schemaVersion"`
 	}
 
 	if err := json.Unmarshal(report, &envelope); err != nil {
-		t.Fatalf("decoding the report's kind: %v; body: %s", err, report)
+		t.Fatalf("decoding the report's kind and schemaVersion: %v; body: %s", err, report)
 	}
 
-	schema, ok := schemas[envelope.Kind]
+	schema, ok := schemas[reportSchemaKey{kind: envelope.Kind, version: envelope.SchemaVersion}]
 	if !ok {
-		t.Fatalf("the report's kind %q is neither assessment nor comparison", envelope.Kind)
+		t.Fatalf("the document references no version %d schema of the kind %q for the 200 JSON answer to POST %s, "+
+			"so a client that asks for that version holds a document the API document does not describe",
+			envelope.SchemaVersion, envelope.Kind, assessmentsPath)
 	}
 
 	schema.ValidateJSON(t, report)
@@ -465,12 +541,12 @@ func cliDeps() cli.Deps {
 		Targets: targetSources(),
 		Formats: map[string]cli.Format{
 			jsonFormat: {
-				NewReporter:           func() analysis.Reporter { return jsonreport.New() },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return jsonreport.New() },
+				NewReporter:           func(schemaVersion int) analysis.Reporter { return jsonreport.New(schemaVersion) },
+				NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter { return jsonreport.New(schemaVersion) },
 			},
 			markdownFormat: {
-				NewReporter:           func() analysis.Reporter { return markdown.New() },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return markdown.New() },
+				NewReporter:           func(int) analysis.Reporter { return markdown.New() },
+				NewComparisonReporter: func(int) analysis.ComparisonReporter { return markdown.New() },
 			},
 		},
 	}
@@ -486,10 +562,11 @@ func decodeRequest(body []byte) (httpapi.Request, error) {
 	}
 
 	return httpapi.Request{
-		Inventory: req.Inventory,
-		Targets:   req.Targets,
-		Regions:   req.Regions,
-		Estimate:  req.Estimate,
+		Inventory:     req.Inventory,
+		Targets:       req.Targets,
+		Regions:       req.Regions,
+		Estimate:      req.Estimate,
+		SchemaVersion: req.SchemaVersion,
 	}, nil
 }
 
@@ -506,12 +583,12 @@ func apiHandler(tb testing.TB) http.Handler {
 		},
 		Targets: targetSources(),
 		JSON: httpapi.Format{
-			NewReporter:           func() analysis.Reporter { return jsonreport.New() },
-			NewComparisonReporter: func() analysis.ComparisonReporter { return jsonreport.New() },
+			NewReporter:           func(schemaVersion int) analysis.Reporter { return jsonreport.New(schemaVersion) },
+			NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter { return jsonreport.New(schemaVersion) },
 		},
 		Markdown: httpapi.Format{
-			NewReporter:           func() analysis.Reporter { return markdown.New() },
-			NewComparisonReporter: func() analysis.ComparisonReporter { return markdown.New() },
+			NewReporter:           func(int) analysis.Reporter { return markdown.New() },
+			NewComparisonReporter: func(int) analysis.ComparisonReporter { return markdown.New() },
 		},
 	}, httpapi.WithMaxBodyBytes(assessmentrequest.MaxBodySize))
 	if err != nil {

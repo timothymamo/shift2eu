@@ -248,6 +248,28 @@ type fakeReporter struct {
 	metas       []analysis.ReportMeta
 	targets     []string
 	assessments []assessment.Assessment
+	// schemaVersion is the version the harness's constructor built the reporter
+	// for, so a test can see which version the handler asked for.
+	schemaVersion int
+}
+
+// forSchemaVersion records the version the reporter is built for and returns it,
+// as the harness's NewReporter does.
+func (r *fakeReporter) forSchemaVersion(schemaVersion int) *fakeReporter {
+	r.mu.Lock()
+	r.schemaVersion = schemaVersion
+	r.mu.Unlock()
+
+	return r
+}
+
+// builtSchemaVersion returns the schemaVersion the handler built the reporter
+// for.
+func (r *fakeReporter) builtSchemaVersion() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.schemaVersion
 }
 
 func (r *fakeReporter) Report(_ context.Context, w io.Writer, a assessment.Assessment,
@@ -329,6 +351,28 @@ type fakeComparisonReporter struct {
 	calls      int
 	metas      []analysis.ReportMeta
 	comparison assessment.Comparison
+	// schemaVersion is the version the harness's constructor built the reporter
+	// for.
+	schemaVersion int
+}
+
+// forSchemaVersion records the version the reporter is built for and returns it,
+// as the harness's NewComparisonReporter does.
+func (r *fakeComparisonReporter) forSchemaVersion(schemaVersion int) *fakeComparisonReporter {
+	r.mu.Lock()
+	r.schemaVersion = schemaVersion
+	r.mu.Unlock()
+
+	return r
+}
+
+// builtSchemaVersion returns the schemaVersion the handler built the comparison
+// reporter for.
+func (r *fakeComparisonReporter) builtSchemaVersion() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.schemaVersion
 }
 
 func (r *fakeComparisonReporter) ReportComparison(_ context.Context, w io.Writer, c assessment.Comparison,
@@ -384,10 +428,11 @@ func (d *fakeDecoder) decode(body []byte) (httpapi.Request, error) {
 
 	// estimate defaults to true, as the real decoder's does (PRD #190).
 	envelope := struct {
-		Inventory json.RawMessage   `json:"inventory"`
-		Targets   []string          `json:"targets"`
-		Regions   map[string]string `json:"regions"`
-		Estimate  *bool             `json:"estimate"`
+		Inventory     json.RawMessage   `json:"inventory"`
+		Targets       []string          `json:"targets"`
+		Regions       map[string]string `json:"regions"`
+		Estimate      *bool             `json:"estimate"`
+		SchemaVersion *int              `json:"schemaVersion"`
 	}{Estimate: &[]bool{true}[0]}
 
 	if err := json.Unmarshal(body, &envelope); err != nil {
@@ -398,11 +443,18 @@ func (d *fakeDecoder) decode(body []byte) (httpapi.Request, error) {
 		return httpapi.Request{}, errors.New(`decode request: missing field "inventory"`)
 	}
 
+	// schemaVersion defaults to 2, as the real decoder's does (docs/adr/0030).
+	schemaVersion := 2
+	if envelope.SchemaVersion != nil {
+		schemaVersion = *envelope.SchemaVersion
+	}
+
 	return httpapi.Request{
-		Inventory: envelope.Inventory,
-		Targets:   envelope.Targets,
-		Regions:   envelope.Regions,
-		Estimate:  *envelope.Estimate,
+		Inventory:     envelope.Inventory,
+		Targets:       envelope.Targets,
+		Regions:       envelope.Regions,
+		Estimate:      *envelope.Estimate,
+		SchemaVersion: schemaVersion,
 	}, nil
 }
 
@@ -497,12 +549,14 @@ func (h *harness) deps() httpapi.Deps {
 		},
 		Targets: targets,
 		JSON: httpapi.Format{
-			NewReporter:           func() analysis.Reporter { return h.jsonReporter },
-			NewComparisonReporter: func() analysis.ComparisonReporter { return h.jsonComparison },
+			NewReporter: func(schemaVersion int) analysis.Reporter { return h.jsonReporter.forSchemaVersion(schemaVersion) },
+			NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter {
+				return h.jsonComparison.forSchemaVersion(schemaVersion)
+			},
 		},
 		Markdown: httpapi.Format{
-			NewReporter:           func() analysis.Reporter { return h.markdownReporter },
-			NewComparisonReporter: func() analysis.ComparisonReporter { return h.markdownComparison },
+			NewReporter:           func(int) analysis.Reporter { return h.markdownReporter },
+			NewComparisonReporter: func(int) analysis.ComparisonReporter { return h.markdownComparison },
 		},
 	}
 }
