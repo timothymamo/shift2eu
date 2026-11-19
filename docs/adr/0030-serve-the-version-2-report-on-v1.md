@@ -42,8 +42,8 @@ absent; any other value or JSON type, `null` included, is 400 `invalid_request`,
 echoes the value. The opt-in changes nothing for a client that leaves the key out, so it is additive
 under ADR 0019's rules, and it spares the API a `/v2/` route that would differ only in the report's
 version, for the reasons this ADR gave against one. `api/openapi.json` refers to the version 2 and
-version 3 schemas for the response. A later `/v2/` route, or a maintainer decision, may change the
-default.
+version 3 schemas for the response. The default on `/v1` stays 2: a client that names no version
+keeps getting the document it got, and changing the default is a new route (ADR 0019).
 
 The report itself:
 
@@ -130,6 +130,9 @@ The request options and their errors:
 
 - A client of `/v1/assessments` gets a `schemaVersion` 2 document after this release and must read
   `schemaVersion`; the CLI's `--format json` writes the same document. The release notes say so.
+  *Amended (2026-11-19, issue #307):* the CLI and the API write the same document for the same
+  `schemaVersion`; their defaults differ, the CLI's `--format json` writing version 3 and `/v1`
+  version 2, and `--schema-version 2` writes the document `/v1` serves by default.
 - The tests that pinned "a version 2 inventory changes no report" (PRD #190 milestone 1) no longer
   hold: a version 2 inventory's relations and workloads now reach the report.
 - The next change of the report's version is a new route, as ADR 0019 says. *Amended (2026-11-19,

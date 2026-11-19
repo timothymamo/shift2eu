@@ -26,7 +26,7 @@ decimal string ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cl
 Outside the repository those relative paths do not resolve, so each release, from the first after
 `v0.3.0`, also publishes the self-contained document as the asset `shift2eu-server_openapi.json`: the
 same document with the report schemas bundled under `components.schemas` (`AssessmentReportV2`,
-`ComparisonReportV2`). The latest release's, that of the highest version released, as for the
+`ComparisonReportV2`, `AssessmentReportV3`, `ComparisonReportV3`). The latest release's, that of the highest version released, as for the
 images' `latest` tag, is always at
 <https://github.com/timothymamo/shift2eu/releases/latest/download/shift2eu-server_openapi.json>, and a
 given release's at `https://github.com/timothymamo/shift2eu/releases/download/vX.Y.Z/shift2eu-server_openapi.json`.

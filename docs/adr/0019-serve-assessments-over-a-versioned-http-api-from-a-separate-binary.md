@@ -6,8 +6,8 @@
   amended by [ADR 0030](0030-serve-the-version-2-report-on-v1.md) (PRD #190): `/v1` serves the JSON report
   `schemaVersion` 2 (Versioning), and an `invalid_region` message may name a region-shaped region the
   client sent (Errors); and by ADR 0030's amendment of 2026-11-19 (issue #307): the report's
-  `schemaVersion` 3 is opt-in on `/v1` through the request's `schemaVersion`, not a new route
-  (Versioning)
+  `schemaVersion` 3 is opt-in on `/v1` through the request's `schemaVersion`, not a new route; the
+  default on `/v1` stays 2, and changing it is a new route (Versioning)
 - Date: 2026-11-11 (accepted 2026-11-12, issue #112; milestone 3 decisions added 2026-11-12)
 
 ## Context

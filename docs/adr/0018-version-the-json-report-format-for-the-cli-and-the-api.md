@@ -32,7 +32,8 @@ Forces:
 - Reports must be deterministic (CLAUDE.md, Testing): golden files pin them byte for byte.
 - The JSON report must say what the Markdown report says, ties and required changes included, so the
   two never disagree.
-- The CLI and the API must give the same bytes for the same request (PRD #103, Decisions).
+- The CLI and the API must give the same bytes for the same request and the same `schemaVersion`
+  (PRD #103, Decisions; issue #307).
 - CLAUDE.md rule 6 prefers the standard library; there is no JSON Schema validator in it.
 
 ## Decision
@@ -146,7 +147,7 @@ whose `$defs/total` no longer requires `amount` and says it is absent exactly wh
 
 **One format for the CLI and the API.** `shift2eu assess --format json` writes these documents (the
 default stays `markdown`, byte-identical to before), and the HTTP API of PRD #103 answers with the
-same reporter and therefore the same bytes. The schema files are where milestone 2's API can serve
+same reporter and therefore the same bytes for the same `schemaVersion`. The schema files are where milestone 2's API can serve
 or reference them from; embedding them is left to that milestone, so the reporter today imports only
 `encoding/json` beyond what the Markdown reporter does (the `reporters-stay-offline` depguard rule).
 
