@@ -10,7 +10,8 @@ import (
 	"strings"
 )
 
-// The severities and categories ParseAnswer accepts, compared exactly.
+// The severities and categories ParseAnswer accepts. Severities are compared
+// exactly, categories after normalisation (readCategory).
 // CategoryUncategorised is not one of them: it is the fallback for any other
 // category.
 var (
@@ -51,10 +52,14 @@ type rawFinding struct {
 // the constants of this package (compared exactly, so "Blocker" is refused), a
 // negative line, a line above 0 without a path, a path that is absolute or
 // holds a ".." element, a backslash or a control character. The category is
-// the one field that is not strict: a missing or null one, or one outside the
-// accepted categories (compared exactly, so "Readability" is not
-// readability), keeps the finding with CategoryUncategorised, so one unknown
-// category costs no finding. An answer with no findings is valid, findings
+// the one field that is not strict. It is normalised first (surrounding white
+// space trimmed, lower-cased, every "_" and space turned into "-"), so
+// "Readability" and "prompt_injection" are accepted categories. A normalised
+// category that is still not accepted but contains "inject" is read as
+// CategoryPromptInjection, so a near-miss spelling of it still blocks. Any
+// other, and a missing or null one, keeps the finding with
+// CategoryUncategorised, so one unknown category costs no finding. The raw
+// category text is never kept. An answer with no findings is valid, findings
 // then being empty, not nil.
 func ParseAnswer(text string) (Answer, error) {
 	src := strings.NewReader(text)
@@ -100,11 +105,9 @@ func (rf rawFinding) finding() (Finding, error) {
 		return Finding{}, errors.New("missing or unknown severity")
 	}
 
-	// One category the model got wrong costs no finding: it falls back to
-	// CategoryUncategorised (issue #292).
 	category := CategoryUncategorised
-	if rf.Category != nil && slices.Contains(categories, Category(*rf.Category)) {
-		category = Category(*rf.Category)
+	if rf.Category != nil {
+		category = readCategory(*rf.Category)
 	}
 
 	if rf.Title == nil || strings.TrimSpace(*rf.Title) == "" {
@@ -143,6 +146,33 @@ func (rf rawFinding) finding() (Finding, error) {
 	}
 
 	return f, nil
+}
+
+// readCategory reads the model's category leniently, so one category the model
+// got wrong costs no finding (issue #292). raw is normalised: surrounding white
+// space trimmed, lower-cased, every "_" and space turned into "-". A normalised
+// value equal to an accepted category is that category. Otherwise one that
+// contains "inject" is CategoryPromptInjection, so a near-miss spelling of it
+// still blocks rather than failing open; anything else is
+// CategoryUncategorised. raw itself is never kept.
+func readCategory(raw string) Category {
+	normalised := strings.Map(func(r rune) rune {
+		if r == '_' || r == ' ' {
+			return '-'
+		}
+
+		return r
+	}, strings.ToLower(strings.TrimSpace(raw)))
+
+	if c := Category(normalised); slices.Contains(categories, c) {
+		return c
+	}
+
+	if strings.Contains(normalised, "inject") {
+		return CategoryPromptInjection
+	}
+
+	return CategoryUncategorised
 }
 
 // validPath reports whether p is a slash-separated path relative to the
