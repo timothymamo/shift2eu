@@ -11,9 +11,21 @@ import (
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 )
 
-// schemaVersion is the version of the JSON report format this package writes,
-// the schemaVersion of every document (docs/adr/0018, docs/adr/0030).
-const schemaVersion = 2
+// The versions of the JSON report format this package writes, the
+// schemaVersion of a document (docs/adr/0018, docs/adr/0030). Version 1 is
+// frozen: its schema files stay for documents an earlier release wrote, but no
+// reporter writes it.
+const (
+	// Version2 is the format the HTTP API serves by default on /v1.
+	Version2 = 2
+	// Version3 is version 2 with no amount on a total that estimated nothing
+	// (issue #307): the format the CLI writes by default.
+	Version3 = 3
+)
+
+// supportedVersions lists the versions a Reporter writes, in the words of an
+// error that refuses any other.
+const supportedVersions = "2, 3"
 
 // The kinds of document the format defines.
 const (
@@ -30,12 +42,34 @@ const indent = "  "
 
 // Reporter renders an assessment, or a comparison of several targets, as a JSON
 // document. It holds no state, so one Reporter may render any number of
-// documents, concurrently too.
-type Reporter struct{}
+// documents, concurrently too. It writes the schemaVersion it was built with.
+type Reporter struct {
+	version int
+}
 
-// New returns a JSON reporter.
-func New() *Reporter {
-	return &Reporter{}
+// New returns a JSON reporter that writes documents of schemaVersion version,
+// Version2 or Version3. Any other version is refused when the reporter
+// reports: Report and ReportComparison then return an error and write nothing.
+func New(version int) *Reporter {
+	return &Reporter{version: version}
+}
+
+// checkVersion returns an error when r was built with a version this package
+// does not write.
+func (r *Reporter) checkVersion() error {
+	switch r.version {
+	case Version2, Version3:
+		return nil
+	default:
+		return fmt.Errorf("render json report: unsupported schemaVersion %d; supported schemaVersions: %s",
+			r.version, supportedVersions)
+	}
+}
+
+// omitsZeroAmount reports whether r's version leaves the amount out of a total
+// that estimated nothing (Version3, issue #307).
+func (r *Reporter) omitsZeroAmount() bool {
+	return r.version >= Version3
 }
 
 // assessmentDocument is the single-target document, kind "assessment".
@@ -119,14 +153,20 @@ type blocker struct {
 //
 // The output depends on a and meta only. Report encodes the whole document
 // before writing it to w in one call; a write error is returned, wrapped. When
-// ctx is already done Report writes nothing and returns ctx.Err().
-func (*Reporter) Report(ctx context.Context, w io.Writer, a assessment.Assessment, meta analysis.ReportMeta) error {
+// ctx is already done Report writes nothing and returns ctx.Err(). A reporter
+// built with a version this package does not write returns an error and writes
+// nothing.
+func (r *Reporter) Report(ctx context.Context, w io.Writer, a assessment.Assessment, meta analysis.ReportMeta) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
+	if err := r.checkVersion(); err != nil {
+		return err
+	}
+
 	doc := assessmentDocument{
-		SchemaVersion: schemaVersion,
+		SchemaVersion: r.version,
 		Kind:          kindAssessment,
 		InventoryName: meta.InventoryName,
 		Source:        a.Source,
@@ -135,8 +175,8 @@ func (*Reporter) Report(ctx context.Context, w io.Writer, a assessment.Assessmen
 		Summary:       newSummary(a.Summary),
 		Resources:     newResources(a.Verdicts),
 		Blockers:      newBlockers(a.Blockers),
-		Workloads:     newWorkloads(a.Workloads),
-		Estimate:      newEstimateBasis(a),
+		Workloads:     r.newWorkloads(a.Workloads),
+		Estimate:      r.newEstimateBasis(a),
 		SourceCost:    newAssessmentSourceCost(a),
 	}
 

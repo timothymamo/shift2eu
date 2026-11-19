@@ -110,10 +110,16 @@ total over different resources says little.
 ```
 
 `--format json` writes the same content as a versioned document for scripts and other tools
-([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md), schema version 2 from [ADR 0030](../adr/0030-serve-the-version-2-report-on-v1.md)). Each resource
-carries its fit, best offering, reasons with a stable `code`, required changes, relations, and its
-plan and estimate; the document ends with the workloads, the estimate's basis and total, and the
-source's cost ([`aws-scaleway-estimates.json.golden`](../../test/examples/testdata/aws-scaleway-estimates.json.golden)):
+([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md)): schema version 3
+by default. `--schema-version 2` writes the older document, the one the HTTP API serves by default
+([ADR 0030](../adr/0030-serve-the-version-2-report-on-v1.md)). The two differ in one rule: in
+version 3 a total that estimated nothing (`"estimated": 0`) has no `amount` key instead of `"0.00"`.
+Each resource carries its fit, best offering, reasons with a stable `code`, required changes,
+relations, and its plan and estimate; the document ends with the workloads, the estimate's basis and
+total, and the source's cost. The excerpt is the version 2 document
+([`aws-scaleway-estimates.json.golden`](../../test/examples/testdata/aws-scaleway-estimates.json.golden)):
+every total in it estimated something, so the command above writes the same document but for
+`"schemaVersion": 3`.
 
 ```json
 {

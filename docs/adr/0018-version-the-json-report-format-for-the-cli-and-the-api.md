@@ -1,7 +1,10 @@
 # 0018. Version the JSON report format, shared by the CLI and the HTTP API
 
 - Status: Accepted; amended 2026-11-18 by [issue #247](https://github.com/timothymamo/shift2eu/issues/247):
-  the quantity rule (Encoding) records how the report already writes numbers, changing no document
+  the quantity rule (Encoding) records how the report already writes numbers, changing no document;
+  amended 2026-11-19 by [issue #307](https://github.com/timothymamo/shift2eu/issues/307):
+  `schemaVersion` 3 leaves the amount out of a total that estimated nothing, the CLI writes it by
+  default, and the version 1 and 2 schema files are frozen (Versioning)
 - Date: 2026-11-11
 
 ## Context
@@ -29,7 +32,8 @@ Forces:
 - Reports must be deterministic (CLAUDE.md, Testing): golden files pin them byte for byte.
 - The JSON report must say what the Markdown report says, ties and required changes included, so the
   two never disagree.
-- The CLI and the API must give the same bytes for the same request (PRD #103, Decisions).
+- The CLI and the API must give the same bytes for the same request and the same `schemaVersion`
+  (PRD #103, Decisions; issue #307).
 - CLAUDE.md rule 6 prefers the standard library; there is no JSON Schema validator in it.
 
 ## Decision
@@ -86,7 +90,10 @@ state the rule in the description of every amount of money and every measured qu
 `vcpus`, `memoryGiB` and `includedStorageGiB`, `billingCapHours` and `hoursBasis` ("whole number" or
 "exact decimal"); a count of resources (the `summary` counts, a `total`'s `estimated`, `resources`
 and `storageNotIncluded`, a `sourceCost`'s `covered`, every other `resources`) is whole by nature and
-says only what it counts. `TestSchemaQuantitiesStateTheQuantityRule` and
+says only what it counts. `schemaVersion` is left out of the rule too, but not as a count: it
+identifies the document's format, says which schema a reader must use, and counts nothing, so no
+representation rule applies to it ([issue #284](https://github.com/timothymamo/shift2eu/issues/284);
+the test lists it in `countAndIdentifierFields`). `TestSchemaQuantitiesStateTheQuantityRule` and
 `TestSchemaQuantitiesAreNeverNumbers` pin it; `TestSchemaQuantitiesClassifyEveryField` makes every new
 field be classified as a quantity or a count. Version 1 has only counts, no money and no fractional
 quantity, so the rule holds for it as written; its schema files keep the prose they shipped with
@@ -109,9 +116,38 @@ field follows the rule; turning a string into a number or the reverse is a retyp
   issue #117) moved them from the old repository to `https://github.com/timothymamo/shift2eu` this
   way. The OpenAPI document's references to the schemas are relative and did not change.
 
+*Amended (2026-11-19, [issue #307](https://github.com/timothymamo/shift2eu/issues/307)):* **version 3**.
+A `schemaVersion` 2 total (`estimate.total`, each workload's `estimate`, the "No workload" group's
+included, and each comparison target's total) always carries `amount`, and when nothing was estimated
+(`estimated: 0`) it reads `"0.00"`, which the version 2 schemas call meaningless; a consumer that reads
+the amount without the count shows a free bill. In `schemaVersion` 3 such a total has **no `amount` key
+at all**; its counts stay, and a total that estimated something is written exactly as in version 2.
+This makes a required key optional, which the rule above makes a new version, with the new schema files
+`assessment-v3.schema.json` and `comparison-v3.schema.json` beside the old ones: copies of version 2
+whose `$defs/total` no longer requires `amount` and says it is absent exactly when `estimated` is 0.
+
+- **Absent, not `null`.** [ADR 0030](0030-serve-the-version-2-report-on-v1.md) already chose an absent
+  key over a flag or an empty value for estimates off, because an absent key cannot be misread as a
+  zero; the schemas' keyword subset has no `null` type; and a consumer tests for the key in either
+  case.
+- **Which version is written.** `jsonreport.New` takes the version, `jsonreport.Version2` or
+  `Version3`, and refuses any other when it reports. `shift2eu assess --format json` writes version 3
+  by default; `--schema-version 2` writes the previous document, byte for byte, and the flag with any
+  other format is a usage error. The HTTP API keeps serving version 2 on `/v1/assessments` unless the
+  request asks for 3 (its optional `schemaVersion`, ADR 0030's amendment), so no existing client sees
+  a change.
+- **Frozen files.** The version 1 and version 2 schema files never change again: a reader of an old
+  document must find the schema it was published with. `TestFrozenSchemaFilesAreUnchanged` pins their
+  SHA-256 digests ([issue #293](https://github.com/timothymamo/shift2eu/issues/293)); version 2 is
+  pinned now because version 3 supersedes it. A deliberate change records the new digest with an ADR.
+- **Wording in version 3 only.** The reworded `breakdown.storage` description
+  ([issue #285](https://github.com/timothymamo/shift2eu/issues/285), "The storage's price per GiB, never
+  scaled by hours, as an exact decimal string rounded to the cent.") is in the version 3 files only, so
+  the version 2 files stay byte for byte what shipped.
+
 **One format for the CLI and the API.** `shift2eu assess --format json` writes these documents (the
 default stays `markdown`, byte-identical to before), and the HTTP API of PRD #103 answers with the
-same reporter and therefore the same bytes. The schema files are where milestone 2's API can serve
+same reporter and therefore the same bytes for the same `schemaVersion`. The schema files are where milestone 2's API can serve
 or reference them from; embedding them is left to that milestone, so the reporter today imports only
 `encoding/json` beyond what the Markdown reporter does (the `reporters-stay-offline` depguard rule).
 

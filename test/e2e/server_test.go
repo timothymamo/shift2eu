@@ -314,19 +314,46 @@ func (s *serverRun) get(t *testing.T, path string) (int, []byte) {
 	return got.status, got.body
 }
 
-// assessRequest returns the body POST /v1/assessments takes.
+// assessmentRequest is the body POST /v1/assessments takes: the inventory, the
+// targets, and the report's schemaVersion when the request names one.
+type assessmentRequest struct {
+	Inventory     json.RawMessage `json:"inventory"`
+	Targets       []string        `json:"targets"`
+	SchemaVersion *int            `json:"schemaVersion,omitempty"`
+}
+
+// assessRequest returns the body POST /v1/assessments takes for document and
+// targets, naming no schemaVersion: the API answers the version it defaults to.
 func assessRequest(t *testing.T, document []byte, targets ...string) []byte {
 	t.Helper()
 
-	body, err := json.Marshal(struct {
-		Inventory json.RawMessage `json:"inventory"`
-		Targets   []string        `json:"targets"`
-	}{Inventory: document, Targets: targets})
+	return encodeAssessmentRequest(t, assessmentRequest{Inventory: document, Targets: targets})
+}
+
+// assessRequestVersion returns the body POST /v1/assessments takes for document
+// and targets, naming schemaVersion: the API answers that version
+// (docs/adr/0018, issue #307).
+func assessRequestVersion(t *testing.T, document []byte, schemaVersion int, targets ...string) []byte {
+	t.Helper()
+
+	return encodeAssessmentRequest(t, assessmentRequest{
+		Inventory:     document,
+		Targets:       targets,
+		SchemaVersion: &schemaVersion,
+	})
+}
+
+// encodeAssessmentRequest encodes body as a request body, failing the test when
+// it cannot.
+func encodeAssessmentRequest(t *testing.T, body assessmentRequest) []byte {
+	t.Helper()
+
+	encoded, err := json.Marshal(body)
 	if err != nil {
 		t.Fatalf("encoding the request body: %v", err)
 	}
 
-	return body
+	return encoded
 }
 
 // postAssessment posts an assessment of document against targets and returns the
@@ -702,9 +729,10 @@ func TestServerShutsDownOnSIGTERM(t *testing.T) {
 // TestServerMatchesTheCLIBytes pins the byte parity PRD #103 promises end to end:
 // for the shared fixture and for each target and every target, the body of POST
 // /v1/assessments equals the stdout of `shift2eu assess` for the same inventory and
-// targets, in JSON and in Markdown. Each binary is wired by its own composition
-// root, so a difference in decoding, ordering or rendering shows as a difference
-// in the bytes.
+// targets, in JSON and in Markdown, and in both JSON report versions, each binary
+// asked for the version that makes the two comparable (docs/adr/0018, issue #307).
+// Each binary is wired by its own composition root, so a difference in decoding,
+// ordering or rendering shows as a difference in the bytes.
 func TestServerMatchesTheCLIBytes(t *testing.T) {
 	t.Parallel()
 
@@ -723,12 +751,33 @@ func TestServerMatchesTheCLIBytes(t *testing.T) {
 
 	targetLists = append(targetLists, []string{allKey})
 
+	// The JSON report has two versions, and the two binaries default to different
+	// ones: the API answers version 2 unless the request names a version, and the
+	// CLI writes version 3 unless --schema-version names one (docs/adr/0018,
+	// docs/adr/0030, issue #307). Each version is compared like with like. The
+	// Markdown report has no version.
 	formats := []struct {
 		name   string
 		format string
 		accept string
+		// apiVersion is the schemaVersion the request body names, and 0 for no
+		// schemaVersion at all: the version the API defaults to.
+		apiVersion int
+		// cliArgs are the arguments that select the version the CLI writes.
+		cliArgs []string
 	}{
-		{name: "JSON", format: jsonFormat, accept: "application/json"},
+		{
+			name:    "JSON in the API's default version 2",
+			format:  jsonFormat,
+			accept:  "application/json",
+			cliArgs: []string{"--schema-version", "2"},
+		},
+		{
+			name:       "JSON in version 3",
+			format:     jsonFormat,
+			accept:     "application/json",
+			apiVersion: 3,
+		},
 		{name: "Markdown", format: markdownFormat, accept: "text/markdown"},
 	}
 
@@ -737,8 +786,13 @@ func TestServerMatchesTheCLIBytes(t *testing.T) {
 			t.Run(f.name+"/"+strings.Join(targetList, "+"), func(t *testing.T) {
 				t.Parallel()
 
+				body := assessRequest(t, document, targetList...)
+				if f.apiVersion != 0 {
+					body = assessRequestVersion(t, document, f.apiVersion, targetList...)
+				}
+
 				req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "/v1/assessments",
-					bytes.NewReader(assessRequest(t, document, targetList...)))
+					bytes.NewReader(body))
 				if err != nil {
 					t.Fatalf("building the request: %v", err)
 				}
@@ -753,15 +807,18 @@ func TestServerMatchesTheCLIBytes(t *testing.T) {
 						got.status, http.StatusOK, got.body)
 				}
 
-				cli := assess(t, strings.Join(targetList, ","), inventory, "--format", f.format)
+				cliArgs := append([]string{"--format", f.format}, f.cliArgs...)
+
+				cli := assess(t, strings.Join(targetList, ","), inventory, cliArgs...)
 
 				if cli.code != 0 {
-					t.Fatalf("shift2eu assess --format %s = %d; stderr = %q", f.format, cli.code, cli.stderr)
+					t.Fatalf("shift2eu assess %s = %d; stderr = %q",
+						strings.Join(cliArgs, " "), cli.code, cli.stderr)
 				}
 
 				if diff := cmp.Diff(cli.stdout, string(got.body)); diff != "" {
 					t.Errorf("the API and the CLI differ for %v in %s (-CLI +API):\n%s",
-						targetList, f.format, diff)
+						targetList, f.name, diff)
 				}
 			})
 		}

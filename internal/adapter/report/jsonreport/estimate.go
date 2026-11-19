@@ -31,12 +31,13 @@ type estimateBasis struct {
 // total sums some estimates: the amount over the estimated resources, how many
 // those are and how many resources there are. StorageNotIncluded is how many
 // estimates leave out storage their plan does not include, written only when
-// at least one does (ADR 0032).
+// at least one does (ADR 0032). Amount is a pointer so that Version3 can leave
+// it out when nothing was estimated (issue #307); Version2 always writes it.
 type total struct {
-	Amount             string `json:"amount"`
-	Estimated          int    `json:"estimated"`
-	Resources          int    `json:"resources"`
-	StorageNotIncluded int    `json:"storageNotIncluded,omitempty"`
+	Amount             *string `json:"amount,omitempty"`
+	Estimated          int     `json:"estimated"`
+	Resources          int     `json:"resources"`
+	StorageNotIncluded int     `json:"storageNotIncluded,omitempty"`
 }
 
 // sourceCost is what the source charges, per currency, never converted, and how
@@ -112,7 +113,7 @@ type breakdown struct {
 
 // newEstimateBasis returns the estimate basis and total of a, or nil when a has
 // no estimates (its Total is set exactly when it has, assessment.AssessWith).
-func newEstimateBasis(a assessment.Assessment) *estimateBasis {
+func (r *Reporter) newEstimateBasis(a assessment.Assessment) *estimateBasis {
 	if a.Total == nil {
 		return nil
 	}
@@ -124,14 +125,21 @@ func newEstimateBasis(a assessment.Assessment) *estimateBasis {
 		Currency:     estimateCurrency,
 		Excluded:     append([]string(nil), excludedFromEstimates...),
 		HoursBasis:   estimate.HoursPerMonth,
-		Total:        newTotal(*a.Total),
+		Total:        r.newTotal(*a.Total),
 	}
 }
 
-// newTotal returns t as a total object.
-func newTotal(t estimate.Total) total {
+// newTotal returns t as a total object. In Version3 a total that estimated
+// nothing has no amount: an absent key cannot be misread as a price of 0.00.
+func (r *Reporter) newTotal(t estimate.Total) total {
+	var amount *string
+	if t.Estimated > 0 || !r.omitsZeroAmount() {
+		s := t.Monthly.String()
+		amount = &s
+	}
+
 	return total{
-		Amount:             t.Monthly.String(),
+		Amount:             amount,
 		Estimated:          t.Estimated,
 		Resources:          t.Resources,
 		StorageNotIncluded: t.StorageNotIncluded,
@@ -165,7 +173,7 @@ func newSourceCost(sc estimate.SourceCost) *sourceCost {
 // newWorkloads returns one workload per group, in the order given, never nil.
 // A group's estimate and source cost are written only when it has a Total, that
 // is when the assessment has estimates.
-func newWorkloads(groups []assessment.WorkloadSummary) []workload {
+func (r *Reporter) newWorkloads(groups []assessment.WorkloadSummary) []workload {
 	out := make([]workload, 0, len(groups))
 
 	for _, g := range groups {
@@ -178,7 +186,7 @@ func newWorkloads(groups []assessment.WorkloadSummary) []workload {
 		}
 
 		if g.Total != nil {
-			t := newTotal(*g.Total)
+			t := r.newTotal(*g.Total)
 			w.Estimate = &t
 			w.SourceCost = newSourceCost(g.SourceCost)
 		}

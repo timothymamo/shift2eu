@@ -56,12 +56,16 @@ func deps() cli.Deps {
 		},
 		Formats: map[string]cli.Format{
 			"markdown": {
-				NewReporter:           func() analysis.Reporter { return markdown.New() },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return markdown.New() },
+				NewReporter:           func(int) analysis.Reporter { return markdown.New() },
+				NewComparisonReporter: func(int) analysis.ComparisonReporter { return markdown.New() },
 			},
 			"json": {
-				NewReporter:           func() analysis.Reporter { return jsonreport.New() },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return jsonreport.New() },
+				NewReporter: func(schemaVersion int) analysis.Reporter {
+					return jsonreport.New(schemaVersion)
+				},
+				NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter {
+					return jsonreport.New(schemaVersion)
+				},
 			},
 		},
 	}

@@ -157,12 +157,12 @@ func (h *targetListHarness) deps() cli.Deps {
 		Targets: targets,
 		Formats: map[string]cli.Format{
 			markdownFormat: {
-				NewReporter:           func() analysis.Reporter { return h.reporter },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return h.comparison },
+				NewReporter:           func(int) analysis.Reporter { return h.reporter },
+				NewComparisonReporter: func(int) analysis.ComparisonReporter { return h.comparison },
 			},
 			jsonFormat: {
-				NewReporter:           func() analysis.Reporter { return h.jsonReporter },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return h.jsonComparison },
+				NewReporter:           func(int) analysis.Reporter { return h.jsonReporter },
+				NewComparisonReporter: func(int) analysis.ComparisonReporter { return h.jsonComparison },
 			},
 		},
 	}

@@ -59,9 +59,14 @@ type targetReasons struct {
 // document before writing it to w in one call; a write error is returned,
 // wrapped. When ctx is already done it writes nothing and returns ctx.Err(). A
 // comparison of no target, or one that fails assessment.Comparison.Validate,
-// is an error, and nothing is written.
-func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment.Comparison, meta analysis.ReportMeta) error {
+// is an error, and nothing is written. So is a reporter built with a version
+// this package does not write.
+func (r *Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment.Comparison, meta analysis.ReportMeta) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if err := r.checkVersion(); err != nil {
 		return err
 	}
 
@@ -82,8 +87,8 @@ func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment
 			Summary:    newSummary(t.Assessment.Summary),
 			Resources:  newResources(t.Assessment.Verdicts),
 			Blockers:   newBlockers(t.Assessment.Blockers),
-			Workloads:  newWorkloads(t.Assessment.Workloads),
-			Estimate:   newEstimateBasis(t.Assessment),
+			Workloads:  r.newWorkloads(t.Assessment.Workloads),
+			Estimate:   r.newEstimateBasis(t.Assessment),
 			SourceCost: newAssessmentSourceCost(t.Assessment),
 		})
 	}
@@ -99,7 +104,7 @@ func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment
 	}
 
 	doc := comparisonDocument{
-		SchemaVersion:  schemaVersion,
+		SchemaVersion:  r.version,
 		Kind:           kindComparison,
 		InventoryName:  meta.InventoryName,
 		Source:         c.Targets[0].Assessment.Source,
