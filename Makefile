@@ -647,14 +647,15 @@ AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2e
 # single-account mode below is unchanged: the fallback until the maintainer has switched.
 
 # AGENTS_ACCOUNT_CHECK sets account to SHIFT2EU_AGENTS_ACCOUNT (empty: single-account mode) and refuses a name that
-# starts with -, holds anything but letters, digits, ., _ and -, or is root or the maintainer's own (id -un): it
-# becomes part of root's commands and the job's paths. It never shows the value it refuses. In account mode a
-# SHIFT2EU_AGENTS_APP_KEY_FILE still set gets a warning: the account's key is the derived path.
+# does not begin with a letter or _ (so no -, ., .. or digit first), holds anything but letters, digits, ., _ and
+# -, or is root or the maintainer's own (id -un): it becomes part of root's commands and the job's paths. It never
+# shows the value it refuses. In account mode a SHIFT2EU_AGENTS_APP_KEY_FILE still set gets a warning: the
+# account's key is the derived path.
 AGENTS_ACCOUNT_CHECK = account="$${SHIFT2EU_AGENTS_ACCOUNT:-}"; \
 	if [ -n "$$account" ]; then \
 		case "$$account" in \
-		-* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) \
-			echo "$@: SHIFT2EU_AGENTS_ACCOUNT must be letters, digits, ., _ and -, not beginning with -: it becomes part of root's commands and the job's paths (its value is not shown; docs/dev-environment.md, The agents App)" >&2; exit 1 ;; \
+		[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) \
+			echo "$@: SHIFT2EU_AGENTS_ACCOUNT must be letters, digits, ., _ and -, beginning with a letter or _: it becomes part of root's commands and the job's paths (its value is not shown; docs/dev-environment.md, The agents App)" >&2; exit 1 ;; \
 		esac; \
 		if [ "$$account" = root ] || [ "$$account" = "$$(id -un)" ]; then \
 			echo "$@: SHIFT2EU_AGENTS_ACCOUNT must name the separate account that holds the App's key, never root or your own account (docs/dev-environment.md, The agents App)" >&2; exit 1; \
@@ -794,6 +795,8 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # parse time, since the target-specific export below would change it inside the recipes.
 AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN := $(origin AGENTS_TOKEN_LAUNCHD_DIR)
 AGENTS_TOKEN_LAUNCHD_DIR ?= /Library/LaunchDaemons
+# Also spelled out in dev/agents-token-launchd.sh (label_prefix) and dev/agents-app-token.sh (stopped): keep the
+# three alike.
 AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX = io.github.timothymamo.shift2eu.agents-token-refresh.
 # The script a loaded job runs, read from `launchctl print system/<label>`: the first line of its arguments
 # block that ends in /dev/agents-app-token.sh, with the indentation removed (empty when there is none).
@@ -823,9 +826,14 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 	fi; \
 	$(AGENTS_ACCOUNT_CHECK); \
 	if [ -n "$$account" ]; then \
-		case "$${SHIFT2EU_AGENTS_APP_ID:-}:$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" in \
-		:* | *: | *[!0123456789:]*) \
-			echo "agents-token-refresh-install: set SHIFT2EU_AGENTS_APP_ID and SHIFT2EU_AGENTS_APP_INSTALLATION_ID, both numbers, in the host clone's .envrc (docs/dev-environment.md, The agents App)" >&2; \
+		case "$${SHIFT2EU_AGENTS_APP_ID:-}" in \
+		'' | *[!0123456789]*) \
+			echo "agents-token-refresh-install: set SHIFT2EU_AGENTS_APP_ID, a number, in the host clone's .envrc (docs/dev-environment.md, The agents App)" >&2; \
+			exit 1 ;; \
+		esac; \
+		case "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" in \
+		'' | *[!0123456789]*) \
+			echo "agents-token-refresh-install: set SHIFT2EU_AGENTS_APP_INSTALLATION_ID, a number, in the host clone's .envrc (docs/dev-environment.md, The agents App)" >&2; \
 			exit 1 ;; \
 		esac; \
 		$(AGENTS_SSH_CONFIG); \
@@ -1024,7 +1032,8 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 # set; safe to run again (after make vm-delete vm-create, after a new SSH key). In order, stopping at the first
 # failure: it refuses unless limactl reports exactly SHIFT2EU_AGENTS_VM_SSH_PORT as the instance's SSH port (Lima
 # picks a random one unless ssh.localPort pins it); reads the account's public key as the account, with a printed
-# sudo; generates the VM's script with dev/vm-agents-token-ssh.sh, which refuses anything but one line
+# sudo (every command run as the account goes through /usr/bin/env -i with PATH=/usr/bin:/bin and tools by full
+# path, so nothing of the maintainer's environment reaches it); generates the VM's script with dev/vm-agents-token-ssh.sh, which refuses anything but one line
 # `ssh-ed25519 <base64>` with an optional plain comment, and sends it only when it is whole over limactl shell's
 # standard input, as vm-gh-wrapper does, failing unless the VM prints "vm-agents-token-ssh: done"; pins the
 # VM's host key, read through limactl shell (no trust on first use), into the account's known-hosts file as the
@@ -1052,8 +1061,8 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 	writer="$$(mktemp "$${TMPDIR:-/tmp}/agents-token-write.XXXXXX")" || exit 1; \
 	trap 'rm -f "$$writer"; sudo -k' EXIT; \
 	dev/agents-app-token.sh vm-writer >"$$writer" || exit 1; \
-	echo "+ sudo -u $$account -H /bin/cat $$secrets/agents-vm-ssh-key.pub"; \
-	pub="$$(sudo -u "$$account" -H /bin/cat "$$secrets/agents-vm-ssh-key.pub")" || { \
+	echo "+ sudo -u $$account -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/cat $$secrets/agents-vm-ssh-key.pub"; \
+	pub="$$(sudo -u "$$account" -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/cat "$$secrets/agents-vm-ssh-key.pub")" || { \
 		echo "vm-agents-token-ssh: cannot read the account's public key $$secrets/agents-vm-ssh-key.pub: generate it as the account (docs/dev-environment.md, The agents App)" >&2; \
 		exit 1; \
 	}; \
@@ -1074,9 +1083,9 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 		echo "vm-agents-token-ssh: the VM printed no host-key=ssh-ed25519 <base64> line, so its host key cannot be pinned for the account; run make vm-agents-token-ssh again" >&2; \
 		exit 1; \
 	fi; \
-	echo "+ sudo -u $$account -H /bin/sh -c 'umask 077 && cat >\"\$$1.new\" && mv -f \"\$$1.new\" \"\$$1\"' pin $$known"; \
+	echo "+ sudo -u $$account -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c 'umask 077 && /bin/cat >\"\$$1.new\" && /bin/mv -f \"\$$1.new\" \"\$$1\"' pin $$known"; \
 	printf 'shift2eu-vm-%s %s\n' "$$LIMA_INSTANCE" "$$host_key" | \
-		sudo -u "$$account" -H /bin/sh -c 'umask 077 && cat >"$$1.new" && mv -f "$$1.new" "$$1"' pin "$$known" || { \
+		sudo -u "$$account" -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c 'umask 077 && /bin/cat >"$$1.new" && /bin/mv -f "$$1.new" "$$1"' pin "$$known" || { \
 		echo "vm-agents-token-ssh: could not pin the VM's host key in $$known as $$account" >&2; \
 		exit 1; \
 	}; \

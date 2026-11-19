@@ -33,7 +33,7 @@
 #     limactl at all, and refuses, before it mints, any of the App's key, the SSH key, the known-hosts file and
 #     this script itself that fails the trusted path rule: the file and every directory above it, up to /,
 #     owned by the running uid or root, with no group or other write bit, except a root-owned directory with
-#     the sticky bit (/tmp). The refusal names the path and why, never a file's content.
+#     the sticky bit (/tmp), and no ACL with an allow entry (a deny-only ACL is accepted). The refusal names the path and why, never a file's content.
 #
 # Inputs, from the direnv .envrc of the maintainer's host clone (outside the workspace, where the VM cannot
 # reach), never from the workspace or the .envrc above it (docs/dev-environment.md, The host clone):
@@ -169,7 +169,8 @@ refuse() {
 
 # trusted_entry <what> <path> refuses one entry that fails the trusted path rule (ADR 0031, update of
 # 2026-11-19, 2): owned by the running uid or root, and no group or other write bit, unless it is a root-owned
-# directory with the sticky bit, where no one else can rename an entry (/tmp). A symlink's own mode means
+# directory with the sticky bit, where no one else can rename an entry (/tmp); and no ACL with an allow entry
+# (issue #227 part 2, audit 3), while a deny-only ACL is accepted. A symlink's own mode means
 # nothing, so only its owner is checked; trusted_path checks where it leads. ls -ldn, not stat: a stock Mac has
 # no GNU stat, and the two print the same first and third fields.
 trusted_entry() {
@@ -181,6 +182,19 @@ trusted_entry() {
   fi
   case "${perms}" in
   l*) return 0 ;;
+  esac
+  # A Mac's ls ends the mode with + when the entry carries an ACL; ls -lde lists its entries, a line each after
+  # the long line. An allow entry can grant another account what the mode bits deny, so it is refused; a
+  # deny-only ACL (every macOS home carries group:everyone deny delete) grants nothing and is accepted.
+  case "${perms}" in
+  *+)
+    acl="$(ls -lde "$2" 2>/dev/null)" || refuse "$1: cannot read the ACL of $2 (the trusted path rule)"
+    if printf '%s\n' "${acl}" | sed 1d | grep -Eq '[[:space:]]allow([[:space:]]|$)'; then
+      refuse "$1: $2 carries an ACL with an allow entry, which can let another account replace what runs with the App's key: remove it (chmod -N, or chmod -a for the entry; ls -lde shows it) (the trusted path rule, docs/dev-environment.md)"
+    fi
+    ;;
+  esac
+  case "${perms}" in
   ?????????[tT]*) [ "${owner}" != 0 ] || return 0 ;;
   esac
   case "${perms}" in
@@ -898,7 +912,9 @@ stopped() {
     left="the VM holds no token from this refresh"
   fi
   if [ "${mode}" = ssh ]; then
-    # SSH mode is the account's LaunchDaemon: launchd starts it again within its ThrottleInterval.
+    # SSH mode is the account's LaunchDaemon: launchd starts it again within its ThrottleInterval. The label is
+    # spelled out here and in two other places, the Makefile's AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX and
+    # dev/agents-token-launchd.sh's label_prefix: keep the three alike.
     restart="as the account's LaunchDaemon it starts again within 5 minutes, or now with sudo launchctl kickstart -k system/io.github.timothymamo.shift2eu.agents-token-refresh.${instance}; in single-account mode start it again from the host clone on the Mac with make agents-token-refresh-start"
   else
     restart="start it again from the host clone on the Mac with make agents-token-refresh-start"

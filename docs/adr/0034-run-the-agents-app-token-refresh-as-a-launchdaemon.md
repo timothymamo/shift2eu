@@ -69,7 +69,8 @@ open question (1) a): the refresh can now also run under launchd. Everything els
 > - **d) The trust boundary moves.** The job no longer runs code the maintainer's uid can write: it runs
 >   the account's clone, which only the account (and root) can change, and the account's script refuses
 >   to start when the trusted path rule fails. The boundary is now the account's home and root: the
->   account's clone is updated only by the maintainer's `sudo -u <account> -H git -C
+>   account's clone is updated only by the maintainer's `cd / && sudo -u <account> -H /usr/bin/env -i
+>   HOME=/Users/<account> PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat -C
 >   /Users/<account>/shift2eu-host pull --ff-only`, followed by `sudo launchctl kickstart -k
 >   system/<label>`. The maintainer's host clone keeps two roles: it renders nothing that runs with the
 >   key (the account's generator renders the plist) but it does run the install, whose `sudo` installs

@@ -56,6 +56,7 @@
 # curl, gh or git.
 set -eu
 
+# Also in the Makefile (AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX) and dev/agents-app-token.sh (stopped): keep the three alike.
 label_prefix=io.github.timothymamo.shift2eu.agents-token-refresh.
 throttle_seconds=300
 
@@ -142,8 +143,8 @@ check_inputs() {
 # trusted_entry <what> <path> and trusted_path <what> <absolute path>: the trusted path rule, as
 # dev/agents-app-token.sh applies it at every start of the refresh (keep the two alike): the path and every
 # directory above it, up to /, owned by the running uid or root, with no group or other write bit, except a
-# root-owned directory with the sticky bit; a symlink's own mode is not checked, and the path's directory is
-# checked again with its symlinks resolved.
+# root-owned directory with the sticky bit, and no ACL with an allow entry (a deny-only ACL is accepted); a
+# symlink's own mode is not checked, and the path's directory is checked again with its symlinks resolved.
 trusted_entry() {
   listing="$(ls -ldn "$2" 2>/dev/null)" || die "$1: cannot read the owner and mode of $2 (the trusted path rule)"
   perms="$(printf '%s\n' "${listing}" | awk '{ print $1; exit }')"
@@ -153,6 +154,19 @@ trusted_entry() {
   fi
   case "${perms}" in
   l*) return 0 ;;
+  esac
+  # A Mac's ls ends the mode with + when the entry carries an ACL; ls -lde lists its entries, a line each after
+  # the long line. An allow entry can grant another account what the mode bits deny, so it is refused; a
+  # deny-only ACL (every macOS home carries group:everyone deny delete) grants nothing and is accepted.
+  case "${perms}" in
+  *+)
+    acl="$(ls -lde "$2" 2>/dev/null)" || die "$1: cannot read the ACL of $2 (the trusted path rule)"
+    if printf '%s\n' "${acl}" | sed 1d | grep -Eq '[[:space:]]allow([[:space:]]|$)'; then
+      die "$1: $2 carries an ACL with an allow entry, which can let another account replace what runs with the App's key: remove it (chmod -N, or chmod -a for the entry; ls -lde shows it) (the trusted path rule, docs/dev-environment.md)"
+    fi
+    ;;
+  esac
+  case "${perms}" in
   ?????????[tT]*) [ "${owner}" != 0 ] || return 0 ;;
   esac
   case "${perms}" in

@@ -29,7 +29,10 @@
 #      running sshd and leaves an inactive one (Ubuntu's ssh.socket starts it at the next connection, reading
 #      the new configuration) instead of failing as reload does; on a failing sshd -t it removes the drop-in
 #      again and fails;
-#   4. prints the keys line it wrote, the VM's host key as host-key=ssh-ed25519 <base64>, and
+#   4. asks sshd what it reads for the VM user (sshd -T -C user=<vm user>,host=localhost,addr=127.0.0.1) and,
+#      unless its authorizedkeysfile line names /etc/ssh/shift2eu-agents-token/%u.keys, removes the drop-in
+#      again, reloads sshd once more, says what sshd reads for authorizedkeysfile and fails;
+#   5. prints the keys line it wrote, the VM's host key as host-key=ssh-ed25519 <base64>, and
 #      "vm-agents-token-ssh: done", which the make recipe requires.
 # vm_agents_token_ssh_uninstall removes the drop-in, the keys file and the writer, reloads sshd once sshd -t
 # passes, and prints "vm-agents-token-ssh-uninstall: done". Both are safe to run again. Nothing secret travels:
@@ -108,6 +111,7 @@ vm_agents_token_ssh() {
   keys_dir=/etc/ssh/shift2eu-agents-token
   dropin=/etc/ssh/sshd_config.d/50-shift2eu-agents-token.conf
 INSTALL
+printf "  vm_user='%s'\n" "$3"
 printf "  keys=\"\${keys_dir}/%s.keys\"\n" "$3"
 printf "  keys_line='%s'\n" "${keys_line}"
 cat <<'INSTALL'
@@ -138,6 +142,19 @@ SHIFT2EU_AGENTS_TOKEN_WRITE
     return 1
   fi
   sudo systemctl try-reload-or-restart ssh.service
+  # What sshd reads for the VM user, not what the drop-in says: an earlier AuthorizedKeysFile (sshd takes the
+  # first) or a Match block would leave the account's keys file unread.
+  effective="$(sudo sshd -T -C "user=${vm_user},host=localhost,addr=127.0.0.1")" || effective=""
+  effective="$(printf '%s\n' "${effective}" | grep -i '^authorizedkeysfile ' || true)"
+  case " ${effective} " in
+  *' /etc/ssh/shift2eu-agents-token/%u.keys '*) ;;
+  *)
+    sudo rm -f "${dropin}"
+    sudo systemctl try-reload-or-restart ssh.service
+    echo "vm-agents-token-ssh: sshd reads authorizedkeysfile as '${effective:-nothing}' for ${vm_user}, not /etc/ssh/shift2eu-agents-token/%u.keys, so the account's key could not write the token: the drop-in ${dropin} was removed again and sshd reloaded; check /etc/ssh/sshd_config and sshd_config.d in the VM for an earlier AuthorizedKeysFile or a Match block" >&2
+    return 1
+    ;;
+  esac
   printf 'vm-agents-token-ssh: %s holds: %s\n' "${keys}" "${keys_line}"
   printf 'host-key=%s\n' "$(cut -d ' ' -f 1,2 /etc/ssh/ssh_host_ed25519_key.pub)"
   echo "vm-agents-token-ssh: done"

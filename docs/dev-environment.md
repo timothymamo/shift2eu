@@ -901,8 +901,10 @@ only to run one root-owned writer, `/usr/local/libexec/shift2eu/agents-token-wri
 command. It never runs `limactl`. Every start of the refresh first checks the **trusted path rule**: the
 App's key, the SSH key, the known-hosts file and the script itself, and every directory above each up to
 `/`, are owned by the account or root and have no group or other write bit (a root-owned sticky directory
-such as `/tmp` excepted); the keys have no group or other bit at all. A path that fails stops the refresh
-with the path and the reason (`owned by uid <n>`, `group-writable`, `other-writable`).
+such as `/tmp` excepted), and carry no ACL with an `allow` entry (a deny-only ACL, such as the
+`group:everyone deny delete` of every macOS home, is accepted); the keys have no group or other bit at all.
+A path that fails stops the refresh with the path and the reason (`owned by uid <n>`, `group-writable`,
+`other-writable`, `ACL with an allow entry`).
 
 Your uid can no longer read the key, the SSH key or the known-hosts file, write the account's clone, or
 signal the job. With `sudo` and your password it can do all of that, so: run `sudo -k` after every `sudo`
@@ -948,44 +950,76 @@ step says what passing looks like; stop at the first step that does not pass.
    sudo -k
    ```
 
-   Passing: `id _shift2euagents` prints `uid=<ID>(_shift2euagents) gid=<ID>(_shift2euagents)`, the account
-   is not in the login window, `ls /Users/_shift2euagents` as you says `Permission denied`, and
-   `sudo ls -ldn /Users/_shift2euagents` shows `drwx------` with `<ID> <ID>` (then `sudo -k`). Every command
-   as the account from here on is `sudo -u _shift2euagents -H <command>`: its shell is `/usr/bin/false`, so
-   `sudo -u _shift2euagents -i` cannot work. Name the tools by their full path under `/usr/bin`: a bare
-   `git` or `ssh-keygen` may find Homebrew's, which your uid owns, and would run it as the account.
+   Passing: `id _shift2euagents` prints `uid=<ID>(_shift2euagents) gid=<ID>(_shift2euagents)`,
+   `dscl . -read /Users/_shift2euagents UniqueID` prints a number below 500 (a hidden role account, out of the
+   login window), `dseditgroup -o checkmember -m _shift2euagents admin` says `no` (the account is no admin),
+   `ls /Users/_shift2euagents` as you says `Permission denied`, and `sudo ls -ldn /Users/_shift2euagents`
+   shows `drwx------` with `<ID> <ID>` (then `sudo -k`).
+
+   Every command as the account from here on has one form, run from `/`:
+
+   ```bash
+   cd / && sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin <tool by full path> ...
+   ```
+
+   Its shell is `/usr/bin/false`, so `sudo -u _shift2euagents -i` cannot work. `env -i` keeps your
+   environment (`PATH`, `GIT_*`, `PAGER`, `DYLD_*` and the rest) away from what runs as the account, and the
+   full path keeps a tool your uid owns (Homebrew's `git` or `ssh-keygen`) from running as the account. `cd /`
+   first, because the account cannot read your home as its working directory. `git` gets `--no-pager` on
+   `log` and `-c core.pager=cat` on `clone` and `pull`, so no pager of yours runs either.
 
 3. **Its clone and secrets directory**:
 
    ```bash
-   sudo -u _shift2euagents -H /usr/bin/git clone https://github.com/timothymamo/shift2eu.git /Users/_shift2euagents/shift2eu-host
-   sudo -u _shift2euagents -H /bin/mkdir -p -m 0700 /Users/_shift2euagents/.config/shift2eu
-   sudo -u _shift2euagents -H /bin/chmod 0700 /Users/_shift2euagents/.config
+   cd /
+   sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat clone https://github.com/timothymamo/shift2eu.git /Users/_shift2euagents/shift2eu-host
+   sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/mkdir -p -m 0700 /Users/_shift2euagents/.config/shift2eu
+   sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/chmod 0700 /Users/_shift2euagents/.config
    sudo tmutil addexclusion -p /Users/_shift2euagents/.config/shift2eu   # keeps the keys out of backups
    sudo -k
    ```
 
-   Passing: `sudo -u _shift2euagents -H /usr/bin/git -C /Users/_shift2euagents/shift2eu-host log -1 --oneline`
-   prints the head of `main` on GitHub, and `sudo ls -ldn /Users/_shift2euagents/.config/shift2eu` shows
-   `drwx------` owned by `<ID>`.
+   Passing:
+   `cd / && sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git --no-pager -C /Users/_shift2euagents/shift2eu-host log -1 --oneline`
+   prints the head of `main` on GitHub, `sudo ls -ldn /Users/_shift2euagents/.config/shift2eu` shows
+   `drwx------` owned by `<ID>`, and `ls -ldn "$(xcode-select -p)"` shows the developer directory owned by
+   `0` (root): `/usr/bin/git` is a shim that runs the `git` of that directory, so one your uid owns would run
+   as the account. If it is not root's, `sudo xcode-select -s /Library/Developer/CommandLineTools` and check
+   again.
 
-4. **The App's key**: generate a **new** private key on the App's settings page (the download lands in
-   `~/Downloads`), and move it in at once:
+4. **The App's key**: generate a **new** private key on the App's settings page. The download is usually
+   on another machine (the browser you use for GitHub), so carry it to the Mini as a file only you can read,
+   and move it in at once. On the downloading machine:
 
    ```bash
-   sudo install -o _shift2euagents -g _shift2euagents -m 0600 ~/Downloads/<app>.<date>.private-key.pem /Users/_shift2euagents/.config/shift2eu/agents-app.pem
+   ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
    rm ~/Downloads/<app>.<date>.private-key.pem
+   ```
+
+   and on the Mini (when you downloaded it on the Mini itself, install it from `~/Downloads` and remove it
+   there instead):
+
+   ```bash
+   sudo install -o _shift2euagents -g _shift2euagents -m 0600 ~/agents-app.pem.tmp /Users/_shift2euagents/.config/shift2eu/agents-app.pem
+   rm ~/agents-app.pem.tmp
    sudo -k
    ```
 
-   Passing: `sudo ls -ln /Users/_shift2euagents/.config/shift2eu/agents-app.pem` shows `-rw-------` owned by
-   `<ID>`. Keep the old key on the App's page until step 10: deleting it now would break nothing, but it is
-   your way back if a step below fails.
+   Empty the Trash on both machines if the file went there. Passing:
+   `sudo ls -ln /Users/_shift2euagents/.config/shift2eu/agents-app.pem` shows `-rw-------` owned by `<ID>`,
+   and no `*.private-key.pem` (nor `~/agents-app.pem.tmp`) is left on either machine
+   (`ls ~/Downloads ~/.Trash | grep private-key.pem` prints nothing). Until then the key was in your reach:
+   on each machine, `tmutil listlocalsnapshots /` must list no snapshot taken since the download; delete any
+   that is (`sudo tmutil deletelocalsnapshots <date>`). A Time Machine backup that ran in that window keeps
+   the key too: rotating it (generate another key, repeat this step, delete this one on the App's page)
+   closes the window for good. Keep the old key on the App's page until step 10: deleting it now would break
+   nothing, but it is your way back if a step below fails.
 
 5. **The account's SSH key to the VM**:
 
    ```bash
-   sudo -u _shift2euagents -H /usr/bin/ssh-keygen -t ed25519 -N '' -C shift2eu-agents-token -f /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key
+   cd /
+   sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/ssh-keygen -t ed25519 -N '' -C shift2eu-agents-token -f /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key
    sudo -k
    ```
 
@@ -997,18 +1031,21 @@ step says what passing looks like; stop at the first step that does not pass.
 
    ```bash
    limactl stop shift2eu
-   limactl edit --set '.ssh.localPort = 48022' shift2eu
+   limactl edit --set '.ssh.localPort = 48022' shift2eu   # answer no if it asks to start the instance
    limactl start shift2eu
    limactl list --format '{{.SSHLocalPort}}' shift2eu
+   nc -z 127.0.0.1 48022 && echo open
    ```
 
-   Passing: the last command prints exactly `48022`, and `limactl list --format '{{.SSHLocalPort}}' shift2eu`
-   still prints it after another `limactl stop shift2eu` and `limactl start shift2eu`. **Two points no test
-   could check, so check them here:** that `limactl edit --set` works on this vz instance (it must exit 0, and
-   `grep -n localPort ~/.lima/shift2eu/lima.yaml` must show `localPort: 48022`), and that
-   `limactl list --format '{{.SSHLocalPort}}'` prints the bare number (`make vm-agents-token-ssh` compares its
-   output with `SHIFT2EU_AGENTS_VM_SSH_PORT` as it is). If either does not, stop and report it with
-   `limactl --version`.
+   Passing: the `limactl list` prints exactly `48022`, `nc` prints `open`, and
+   `limactl list --format '{{.SSHLocalPort}}' shift2eu` still prints it after another `limactl stop shift2eu`
+   and `limactl start shift2eu`. **Points no test could check, so check them here:** that `limactl edit --set`
+   works on this vz instance (it must exit 0, and `grep -n localPort ~/.lima/shift2eu/lima.yaml` must show
+   `localPort: 48022`); that `limactl list --format '{{.SSHLocalPort}}'` prints the bare number
+   (`make vm-agents-token-ssh` compares its output with `SHIFT2EU_AGENTS_VM_SSH_PORT` as it is); and that
+   something listens on `127.0.0.1:48022` while the VM is up (the `nc` line): on vz, Lima may reach the VM's
+   ssh over vsock and not listen on `ssh.localPort` at all, and then the account's job has nothing to connect
+   to. If any of them fails, stop and report it with `limactl --version`.
 
 7. **Your host clone's `.envrc`**: the account mode's switch, beside what is there:
 
@@ -1032,15 +1069,19 @@ step says what passing looks like; stop at the first step that does not pass.
 
    It checks the port, reads the account's public key (a printed `sudo`, which asks for your password),
    installs the writer, the keys file `/etc/ssh/shift2eu-agents-token/<vm user>.keys` and the sshd drop-in
-   `/etc/ssh/sshd_config.d/50-shift2eu-agents-token.conf` in the VM, runs `sshd -t` and reloads sshd, pins the
-   VM's host key in the account's `known-hosts-shift2eu`, and ends with `sudo -k`. Passing: it prints the keys
+   `/etc/ssh/sshd_config.d/50-shift2eu-agents-token.conf` in the VM, runs `sshd -t` and reloads sshd, asks
+   sshd what it reads for the VM user (`sshd -T -C user=<vm user>,host=localhost,addr=127.0.0.1`) and, unless
+   its `authorizedkeysfile` names `/etc/ssh/shift2eu-agents-token/%u.keys`, removes the drop-in again, reloads
+   sshd and fails with what sshd reads (look for an earlier `AuthorizedKeysFile` or a `Match` block in the
+   VM's `/etc/ssh/sshd_config` and `sshd_config.d`), then pins the VM's host key in the account's `known-hosts-shift2eu`, and ends with `sudo -k`. Passing: it prints the keys
    line (`restrict,command="/usr/local/libexec/shift2eu/agents-token-write /usr/local/libexec/shift2eu/gh"
    ssh-ed25519 ... shift2eu-agents-token`), `host-key=ssh-ed25519 ...`, `vm-agents-token-ssh: done`, the pin
    and the next step. Then check, as the account, that the key reaches the VM and runs only the writer (four
    empty lines write nothing; the writer only prints the VM's clock):
 
    ```bash
-   printf '\n\n\n\n' | sudo -u _shift2euagents -H /usr/bin/ssh -F /dev/null -T -p 48022 -l "$(id -un)" \
+   cd /
+   printf '\n\n\n\n' | sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/ssh -F /dev/null -T -p 48022 -l "$(id -un)" \
      -i /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key -o BatchMode=yes -o IdentitiesOnly=yes \
      -o IdentityAgent=none -o StrictHostKeyChecking=yes \
      -o UserKnownHostsFile=/Users/_shift2euagents/.config/shift2eu/known-hosts-shift2eu \
@@ -1099,7 +1140,8 @@ step says what passing looks like; stop at the first step that does not pass.
 **Updating the account's clone** is yours, from GitHub only, never from the workspace or your clone:
 
 ```bash
-sudo -u _shift2euagents -H /usr/bin/git -C /Users/_shift2euagents/shift2eu-host pull --ff-only
+cd /
+sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat -C /Users/_shift2euagents/shift2eu-host pull --ff-only
 sudo launchctl kickstart -k system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu   # runs the pulled code now
 sudo -k
 ```
@@ -1118,20 +1160,21 @@ sudo -k
   `make vm-agents-token-ssh` and `make agents-token-refresh-install` again (the port is in the plist). The
   pin stays: it is under the alias `shift2eu-vm-<instance>`, not the port.
 - **A new SSH key for the account:** remove the old pair as the account
-  (`sudo -u _shift2euagents -H /bin/rm /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key.pub`),
+  (`cd / && sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /bin/rm /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key.pub`),
   generate a new one (step 5), then `make vm-agents-token-ssh`.
 
 **Back to single-account mode**, from your host clone:
 
 1. `direnv exec . make agents-token-refresh-uninstall` (it boots the job out whichever mode installed it).
-2. Generate a new key on the App's page, and keep it where `SHIFT2EU_AGENTS_APP_KEY_FILE` will name it,
+2. `direnv exec . make vm-agents-token-ssh-uninstall`, while `SHIFT2EU_AGENTS_VM_SSH_USER` is still in
+   `.envrc` (it names the keys file to remove); it ends with `vm-agents-token-ssh-uninstall: done`.
+3. Generate a new key on the App's page, and keep it where `SHIFT2EU_AGENTS_APP_KEY_FILE` will name it,
    outside the workspace, mode 0600. Never copy the account's key out; delete it on the App's page once the
    new one works.
-3. Remove `SHIFT2EU_AGENTS_ACCOUNT` and the `SHIFT2EU_AGENTS_VM_SSH_*` variables from `.envrc`, set
+4. Remove `SHIFT2EU_AGENTS_ACCOUNT` and the `SHIFT2EU_AGENTS_VM_SSH_*` variables from `.envrc`, set
    `SHIFT2EU_AGENTS_APP_KEY_FILE`, `direnv allow`.
-4. `direnv exec . make agents-token-refresh-install` (or `make agents-token-refresh-start`), and check its log
+5. `direnv exec . make agents-token-refresh-install` (or `make agents-token-refresh-start`), and check its log
    as in [The refresh as a LaunchDaemon](#the-refresh-as-a-launchdaemon).
-5. `direnv exec . make vm-agents-token-ssh-uninstall`; it ends with `vm-agents-token-ssh-uninstall: done`.
 6. To remove the account itself: `sudo dscl . -delete /Users/_shift2euagents`,
    `sudo dscl . -delete /Groups/_shift2euagents`, `sudo rm -r /Users/_shift2euagents`, `sudo -k`.
 

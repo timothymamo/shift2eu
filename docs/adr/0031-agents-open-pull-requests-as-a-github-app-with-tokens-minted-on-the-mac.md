@@ -86,8 +86,12 @@
 >    login shell. The underscore marks a role account, as macOS's own daemons have (`_www`), and keeps it
 >    out of the login window with its uid below 500. Its shell is `/usr/bin/false`, so `sudo -u
 >    _shift2euagents -i` (which ADR 0034 c named) cannot work: every command run as it is
->    `sudo -u _shift2euagents -H <command>`, which runs the command directly, never a login shell, with
->    `HOME` set to its home (`-H`; macOS's sudoers keeps the caller's `HOME` otherwise). Created once by
+>    `sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents
+>    PATH=/usr/bin:/bin:/usr/sbin:/sbin <tool by full path>`, run from `/`, which runs the command directly,
+>    never a login shell, with `HOME` set to its home (`-H`; macOS's sudoers keeps the caller's `HOME`
+>    otherwise), none of the maintainer's environment (`env -i`: no `PATH`, `GIT_*`, pager or `DYLD_*` of
+>    the maintainer's reaches it) and no tool the maintainer's uid owns (the full path; Homebrew's `git`
+>    is the maintainer's). The make targets' own `sudo -u <account>` calls take the same form. Created once by
 >    the maintainer with `sudo` (`docs/dev-environment.md` carries the runbook; no agent ever runs it,
 >    and no make target creates or deletes an account): a group and a user of the same name and id, the
 >    first free id from 450 to 499 (`dscl . -list /Users UniqueID`, `dscl . -list /Groups
@@ -96,9 +100,10 @@
 >    home created by `sudo mkdir -m 0700 /Users/_shift2euagents` and `sudo chown
 >    _shift2euagents:_shift2euagents` on it. `sysadminctl -addUser` is not used: it creates a login
 >    account with a password and a shell. The make targets take the name from `SHIFT2EU_AGENTS_ACCOUNT`
->    (2 below) and derive its home as `/Users/<account>`; they refuse a name that is empty, starts with
->    `-`, holds anything but letters, digits, `.`, `_` and `-`, or is `root` or the maintainer's own
->    (`id -un`).
+>    (2 below) and derive its home as `/Users/<account>`; they refuse a name that is empty, does not
+>    begin with a letter or `_` (so no `-`, `.`, `..` or digit first), holds anything but letters, digits,
+>    `.`, `_` and `-`, or is `root` or the maintainer's own (`id -un`). The runbook's passing check of the
+>    account confirms its `UniqueID` is below 500 and that it is no member of `admin`.
 > 2. **Where everything lives, and the new trust boundary.** Everything that holds or runs with the key
 >    is owned by the account, inside its home, out of reach of the maintainer's uid:
 >
@@ -121,24 +126,33 @@
 >    the plist under `sudo`, but no code of it ever runs with the key. **Trusted path rule:** a file and
 >    each directory above it, up to `/`, is owned by the running uid or by root, and has no group or other
 >    write bit, except a root-owned directory with the sticky bit (`/tmp`), where no one else can rename an
->    entry. The account mode checks it with `ls -ldn` (a stock Mac has no GNU `stat`) and `id -u`, on the
+>    entry, and carries no ACL with an `allow` entry: a Mac's `ls -ldn` ends such an entry's mode with `+`,
+>    the rule then reads the entries with `ls -lde` and refuses any `allow`, which could grant another
+>    account what the mode bits deny, while a deny-only ACL (`group:everyone deny delete`, on every macOS
+>    home) grants nothing and is accepted. The account mode checks it with `ls -ldn` (a stock Mac has no
+>    GNU `stat`) and `id -u`, on the
 >    App's key, the SSH key, the known-hosts file and the script itself (`$0`), at install time (as the
 >    account, by `dev/agents-token-launchd.sh plist`) and again at every start of the refresh (by
 >    `dev/agents-app-token.sh`, before it mints), and refuses with the path that fails and why ("owned by
->    uid <n>", "group-writable", "other-writable"), never a file's content. The key and the SSH key must
+>    uid <n>", "group-writable", "other-writable", "an ACL with an allow entry"), never a file's content. The key and the SSH key must
 >    also have no group or other bit at all (0600 or 0400). **Updating the account's clone** is the
 >    maintainer's step, under `sudo`, from GitHub only:
->    `sudo -u _shift2euagents -H git -C /Users/_shift2euagents/shift2eu-host pull --ff-only`, then
->    `sudo launchctl kickstart -k system/<label>` to run the pulled code now. It is cloned once the same
->    way (`sudo -u _shift2euagents -H git clone https://github.com/timothymamo/shift2eu.git
->    /Users/_shift2euagents/shift2eu-host`). git runs as the account there, with the account's own (empty)
+>    `cd / && sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents
+>    PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat -C /Users/_shift2euagents/shift2eu-host
+>    pull --ff-only`, then `sudo launchctl kickstart -k system/<label>` to run the pulled code now. It is
+>    cloned once the same way (`cd / && sudo -u _shift2euagents -H /usr/bin/env -i
+>    HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat clone
+>    https://github.com/timothymamo/shift2eu.git /Users/_shift2euagents/shift2eu-host`). `/usr/bin/git` is
+>    a shim for the developer directory `xcode-select -p` names, which the runbook checks is root's. git runs as the account there, with the account's own (empty)
 >    git config and the clone's own hooks, which the maintainer's uid cannot write.
 >    **The key** is put there by the maintainer: a **new** private key generated on the App's page, moved
 >    in with `sudo install -o _shift2euagents -g _shift2euagents -m 0600 <download>
 >    /Users/_shift2euagents/.config/shift2eu/agents-app.pem`, the download then removed, and **every
 >    older key deleted on the App's page**: a key the maintainer's uid ever held must be revoked, or
 >    moving it gains nothing. The download sits in the maintainer's `~/Downloads` for that moment; that
->    window is accepted.
+>    window is accepted. For that moment the download is in the maintainer's reach, usually on another
+>    machine too, carried to the Mini as a 0600 temporary file and removed on both (local Time Machine
+>    snapshots taken in the window deleted; rotating the key closes it for good).
 > 3. **Transport: SSH, not limactl.** The account cannot run `limactl` against the maintainer's
 >    `~/.lima`, so it connects to the VM's forwarded SSH port on `127.0.0.1` itself. Four variables choose
 >    and configure it in `dev/agents-app-token.sh`: `SHIFT2EU_AGENTS_VM_SSH_PORT`,
@@ -306,16 +320,18 @@
 >    - **Port change:** set `SHIFT2EU_AGENTS_VM_SSH_PORT` in the host clone's `.envrc`, pin it in Lima,
 >      run `make vm-agents-token-ssh` and `make agents-token-refresh-install` again (the port is in the
 >      plist); the pin needs no change, thanks to `HostKeyAlias`.
->    - **A new account SSH key:** `sudo -u _shift2euagents -H ssh-keygen -t ed25519 -N '' -C
+>    - **A new account SSH key:** `cd / && sudo -u _shift2euagents -H /usr/bin/env -i
+>      HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/ssh-keygen -t ed25519 -N '' -C
 >      shift2eu-agents-token -f /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key` (after
 >      removing the old pair as the account), then `make vm-agents-token-ssh`.
 > 9. **Back to single-account mode.** From the maintainer's host clone: `make
->    agents-token-refresh-uninstall` (it boots out the job whichever mode installed it); generate a new
->    key on the App's page and put it where `SHIFT2EU_AGENTS_APP_KEY_FILE` names, outside the workspace,
->    0600, as before this update (never copy the account's key out: delete it on the App's page once
->    the new one works); remove `SHIFT2EU_AGENTS_ACCOUNT` and the `SHIFT2EU_AGENTS_VM_SSH_*` variables
->    from `.envrc`; `make agents-token-refresh-install` (or `make agents-token-refresh-start`); then
->    `make vm-agents-token-ssh-uninstall`. The account itself is removed by hand, with `sudo dscl .
+>    agents-token-refresh-uninstall` (it boots out the job whichever mode installed it); `make
+>    vm-agents-token-ssh-uninstall`, while `SHIFT2EU_AGENTS_VM_SSH_USER` (which names the keys file) is
+>    still in `.envrc`; generate a new key on the App's page and put it where
+>    `SHIFT2EU_AGENTS_APP_KEY_FILE` names, outside the workspace, 0600, as before this update (never copy
+>    the account's key out: delete it on the App's page once the new one works); remove
+>    `SHIFT2EU_AGENTS_ACCOUNT` and the `SHIFT2EU_AGENTS_VM_SSH_*` variables from `.envrc`; then `make
+>    agents-token-refresh-install` (or `make agents-token-refresh-start`). The account itself is removed by hand, with `sudo dscl .
 >    -delete /Users/_shift2euagents`, `sudo dscl . -delete /Groups/_shift2euagents` and removing its home.
 >
 > **Implementation notes (same date).** Where the implementation settled what the points above left open:
