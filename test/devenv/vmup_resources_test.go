@@ -1,11 +1,12 @@
-// Pins make vm-up's optional VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT (issue #228): on creation they reach
-// limactl start in Lima's own flag form, unset the creation command line is byte for byte what it was, an
-// invalid value fails before limactl runs, make vm-create hands the four on to make vm-up, and an existing VM -
-// Stopped or Running - is started by its name without any of them, with a warning that they apply only when
-// the VM is created. Since issue #254 that start is a limactl shell --start, which never creates the VM. vm-up also refuses a workspace that holds anything but the repository and its dispatch
-// worktrees, and neither check may be bypassed by make -i or make -k. Every run uses the fake limactl and the
-// throwaway clone of vmup_test.go, which also pins what vm-up does with an instance that is Broken (issue
-// #237): no test starts a real VM.
+// Pins make vm-up's optional VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT (issue #228): on creation they
+// reach limactl start in Lima's own flag form, unset the creation command line is byte for byte what it was,
+// an invalid value fails before limactl runs, make vm-create hands the four on to make vm-up, and an existing
+// VM - Stopped or Running - is started by its name without any of them, with a warning that they apply only
+// when the VM is created. Since issue #254 that start is a limactl shell --start, which never creates the VM.
+// vm-up also refuses a workspace that holds anything but the repository and its dispatch worktrees, and
+// neither check may be bypassed by make -i or make -k. Every run uses the fake limactl and the throwaway clone
+// of vmup_test.go, which also pins what vm-up does with an instance that is Broken (issue #237): no test
+// starts a real VM.
 package devenv_test
 
 import (
