@@ -1016,6 +1016,79 @@ func TestReportComparisonWithEstimates(t *testing.T) {
 	testutil.Golden(t, "testdata/comparison-estimates.golden", out)
 }
 
+// reportNowhereTarget is the display name of the comparison target whose catalog
+// prices nothing in the region its estimates are for: every fitted resource is
+// then "not offered" there, and the target estimates no resource.
+const reportNowhereTarget = "Example Cloud Nowhere"
+
+// TestReportComparisonNoneEstimated pins what a comparison's estimate row says of
+// a target that estimates no resource (issue #246): the row holds no amount at
+// all — never "€0.00 per month for 0 of N" — and names the reasons that target
+// gives its resources instead, while a target that estimates its resource keeps
+// the amount it always showed.
+func TestReportComparisonNoneEstimated(t *testing.T) {
+	t.Parallel()
+
+	snapshot := testutil.PricedSnapshot()
+	snapshot.DefaultRegion = reportNotOfferedRegion
+
+	inv := newInventory(t, sourceName, []inventory.Resource{{
+		ID:       "server-small",
+		RawType:  "AWS::EC2::Instance",
+		Category: taxonomy.ComputeVM,
+		Region:   "eu-west-1",
+		Size:     &inventory.Size{VCPUs: sized(1), MemoryGiB: sized(2)},
+	}})
+
+	c := assessment.Compare([]assessment.TargetAssessment{
+		{
+			Key: reportKey,
+			Assessment: assessment.AssessWith(inv, testutil.ReportCatalog(t),
+				assessment.Options{Estimate: true}),
+		},
+		{
+			Key: "example-nowhere",
+			Assessment: assessment.AssessWith(inv, testutil.ReportCatalogIn(t, reportNowhereTarget, snapshot),
+				assessment.Options{Estimate: true}),
+		},
+	})
+
+	out := renderComparison(t, c, analysis.ReportMeta{InventoryName: inventoryFileName})
+	checkTableShape(t, out)
+
+	tests := []struct {
+		row   string
+		cells []string
+	}{
+		{
+			row:   "`Example Cloud` estimate",
+			cells: []string{"`Example Cloud` estimate", "€10.00 per month for 1 of 1 resource", ""},
+		},
+		{
+			row: "`" + reportNowhereTarget + "` estimate",
+			cells: []string{
+				"`" + reportNowhereTarget + "` estimate",
+				"",
+				"none of 1 resource could be estimated (not offered in `" + reportNotOfferedRegion + "`)",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.row, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(test.cells, tableRow(t, out, test.row)); diff != "" {
+				t.Errorf("summary row mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+
+	if strings.Contains(string(out), "per month for 0 of") {
+		t.Errorf("the comparison prices nothing at zero:\n%s", out)
+	}
+}
+
 // TestReportComparisonStorageNotIncluded pins where a comparison shows the note
 // that an estimate leaves out storage its plan does not include (ADR 0032): in
 // each target's Monthly estimate cells of the resources table, and in its own

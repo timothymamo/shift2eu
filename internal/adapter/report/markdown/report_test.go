@@ -1502,8 +1502,8 @@ func TestReportWithEstimates(t *testing.T) {
 			"- Blockers: none",
 			"### No workload",
 			"- Fit: 1 direct, 0 partial, 0 none",
-			"- Monthly estimate: €0.00 per month for 0 of 1 resource, list prices on " + reportRetrievedOn +
-				", excluding VAT and discounts",
+			"- Monthly estimate: none of 1 resource could be estimated (no plan large enough), list prices on " +
+				reportRetrievedOn + ", excluding VAT and discounts",
 			"- Source cost: `USD` $200.00",
 			"- Blockers: none",
 		}
@@ -1930,6 +1930,205 @@ func TestReportEstimateNoStoragePrice(t *testing.T) {
 
 // counted is a given int, as an inventory count carries it.
 func counted(v int) *int { return &v }
+
+// TestReportEstimateNotOffered pins the two reasons about a region, which a
+// reader must be able to tell apart (issue #243): an offering that is not offered
+// in the estimate region is "not estimated: not offered in `<region>`", while one
+// that is offered there and prices no plan of the resource is still "not
+// estimated: no price in `<region>`". The total of such a report names those
+// reasons instead of a zero amount (issue #246).
+func TestReportEstimateNotOffered(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		offerings []catalog.Offering
+		// wantCell is the resource's Monthly estimate cell.
+		wantCell string
+		// wantTotal is the report's Total line.
+		wantTotal string
+	}{
+		{
+			// The offering is sold in another region alone: the resource keeps its
+			// fit, and nothing prices it in the default region.
+			name: "an offering not offered in the region",
+			offerings: []catalog.Offering{{
+				Name:       "Example Virtual Machines",
+				Categories: []taxonomy.Category{taxonomy.ComputeVM},
+				Regions:    []string{"nl-ams"},
+				Plans: []catalog.Plan{{
+					Name:           "EX-S",
+					VCPUs:          1,
+					MemoryMilliGiB: 2000,
+					Prices:         []catalog.Price{{Amount: 100000, Currency: catalog.EUR}},
+				}},
+			}},
+			wantCell:  "not estimated: not offered in `fr-par`",
+			wantTotal: "- Total: none of 1 resource could be estimated (not offered in `fr-par`)",
+		},
+		{
+			// The offering is sold in the region and prices its plan elsewhere: the
+			// gap is in the price list, not in where the offering is sold.
+			name: "an offering offered in the region without a price there",
+			offerings: []catalog.Offering{{
+				Name:       "Example Virtual Machines",
+				Categories: []taxonomy.Category{taxonomy.ComputeVM},
+				Regions:    []string{"fr-par", "nl-ams"},
+				Plans: []catalog.Plan{{
+					Name:           "EX-S",
+					VCPUs:          1,
+					MemoryMilliGiB: 2000,
+					Prices:         []catalog.Price{{Amount: 100000, Currency: catalog.EUR, Regions: []string{"nl-ams"}}},
+				}},
+			}},
+			wantCell:  "not estimated: no price in `fr-par`",
+			wantTotal: "- Total: none of 1 resource could be estimated (no price in `fr-par`)",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			inv := newInventory(t, sourceName, []inventory.Resource{{
+				ID:       "server-small",
+				RawType:  "AWS::EC2::Instance",
+				Category: taxonomy.ComputeVM,
+				Region:   "eu-west-1",
+				Size:     &inventory.Size{VCPUs: sized(1), MemoryGiB: sized(2)},
+			}})
+
+			a := assessment.AssessWith(inv, newCatalog(t, test.offerings), assessment.Options{Estimate: true})
+			out := render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName})
+
+			if got := tableRow(t, out, "`server-small`")[6]; got != test.wantCell {
+				t.Errorf("the Monthly estimate cell = %q, want %q:\n%s", got, test.wantCell, out)
+			}
+
+			if got := lineWithPrefix(t, out, "- Total: "); got != test.wantTotal {
+				t.Errorf("the total = %q, want %q:\n%s", got, test.wantTotal, out)
+			}
+		})
+	}
+}
+
+// reportNotOfferedRegion is a region the report fixture's offerings are not sold
+// in. A catalog whose snapshot names it as the default region prices nothing
+// there, while every resource keeps the fit the target's other regions give it.
+const reportNotOfferedRegion = "xx-none"
+
+// reportNotOfferedAssessment assesses the estimate fixture against the report
+// fixture's offerings as a catalog whose estimates are for a region none of them
+// is sold in: every fitted resource is then "not offered" there, and no resource
+// is estimated.
+func reportNotOfferedAssessment(t *testing.T) assessment.Assessment {
+	t.Helper()
+
+	snapshot := testutil.PricedSnapshot()
+	snapshot.DefaultRegion = reportNotOfferedRegion
+
+	return assessment.AssessWith(newInventory(t, sourceName, estimateResources()),
+		testutil.ReportCatalogIn(t, reportTarget, snapshot), assessment.Options{Estimate: true})
+}
+
+// TestReportNoneEstimated pins what a workload and a total say when not one of
+// their resources could be estimated (issue #246): the estimate line holds no
+// amount at all — never "€0.00 per month for 0 of N" — and names the reasons the
+// report gives the resources instead, with "resource" for one.
+func TestReportNoneEstimated(t *testing.T) {
+	t.Parallel()
+
+	out := render(t, reportNotOfferedAssessment(t), analysis.ReportMeta{InventoryName: inventoryFileName})
+
+	// The reasons name the region the offerings are not sold in, as the estimate
+	// cell does, and the line keeps the basis a workload's estimate line gives.
+	basis := ", list prices on " + reportRetrievedOn + ", excluding VAT and discounts"
+
+	t.Run("a workload of one resource names its one reason", func(t *testing.T) {
+		t.Parallel()
+
+		// server-huge is the "No workload" group: larger than the largest plan,
+		// so no plan of the offering covers it.
+		want := "- Monthly estimate: none of 1 resource could be estimated (no plan large enough)" + basis
+
+		workload := sectionLines(t, out, "## Workloads")
+		if !slices.Contains(workload, want) {
+			t.Errorf("the workloads hold no %q: %q", want, workload)
+		}
+	})
+
+	t.Run("a workload of several resources is plural and names their reasons", func(t *testing.T) {
+		t.Parallel()
+
+		// shop's three resources are all not offered in the region, so the reason
+		// is the same for each.
+		line := workloadEstimateLine(t, out, "### `shop`")
+
+		prefix := "- Monthly estimate: none of 3 resources could be estimated ("
+		if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, ")"+basis) {
+			t.Errorf("the shop workload's estimate line = %q, want %q…%q", line, prefix, ")"+basis)
+		}
+
+		if !strings.Contains(line, "not offered in `"+reportNotOfferedRegion+"`") {
+			t.Errorf("the shop workload's estimate line = %q, want it to hold %q", line,
+				"not offered in `"+reportNotOfferedRegion+"`")
+		}
+	})
+
+	t.Run("the total names every reason of the report", func(t *testing.T) {
+		t.Parallel()
+
+		total := lineWithPrefix(t, out, "- Total: ")
+
+		prefix := "- Total: none of 8 resources could be estimated ("
+		if !strings.HasPrefix(total, prefix) || !strings.HasSuffix(total, ")") {
+			t.Errorf("the total = %q, want %q…%q", total, prefix, ")")
+		}
+
+		for _, reason := range []string{
+			"no plan large enough",
+			"not offered in `" + reportNotOfferedRegion + "`",
+			"size unknown",
+			"usage-priced",
+		} {
+			if !strings.Contains(total, reason) {
+				t.Errorf("the total = %q, want it to hold the reason %q", total, reason)
+			}
+		}
+	})
+
+	t.Run("no line prices nothing at zero", func(t *testing.T) {
+		t.Parallel()
+
+		for _, unwanted := range []string{"per month for 0 of", "€0.00"} {
+			if strings.Contains(string(out), unwanted) {
+				t.Errorf("a report that estimates nothing holds %q:\n%s", unwanted, out)
+			}
+		}
+	})
+}
+
+// workloadEstimateLine returns the Monthly estimate line of the workload
+// section named heading, which is the line after the section's Fit line.
+func workloadEstimateLine(t *testing.T, out []byte, heading string) string {
+	t.Helper()
+
+	for i, line := range sectionLines(t, out, "## Workloads") {
+		if line != heading {
+			continue
+		}
+
+		for _, next := range sectionLines(t, out, "## Workloads")[i+1:] {
+			if strings.HasPrefix(next, "- Monthly estimate: ") {
+				return next
+			}
+		}
+	}
+
+	t.Fatalf("the workloads hold no Monthly estimate line for %q:\n%s", heading, out)
+
+	return ""
+}
 
 // TestReportWithoutEstimates pins that estimates off is today's report: the same
 // bytes as the golden files the repository already had, no Plan or Monthly

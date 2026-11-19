@@ -48,6 +48,12 @@ const (
 	noEstimateTotal = " per month for 0 of "
 )
 
+// noPriceInRegion is how the report words a plan the snapshot has no price for in
+// region: "not estimated: no price in `<region>`".
+func noPriceInRegion(region string) string {
+	return "not estimated: no price in `" + region + "`"
+}
+
 // sampleSources are the source directories under examples/, one per
 // hyperscaler: each holds an inventory.json the walkthrough assesses.
 var sampleSources = []string{"aws", "azure", "gcp"}
@@ -114,6 +120,23 @@ func TestExamplesAssess(t *testing.T) {
 				} else if strings.Contains(got.stdout, noEstimateTotal) {
 					t.Errorf("the cost summary estimates no resource: the sample gives its priced resources "+
 						"a size, so the report shows estimates:\n%s", got.stdout)
+				}
+
+				// The GCP sample's zone-HA database is served by OVHcloud's
+				// "Managed PostgreSQL Multi-node Advanced 3-AZ" offering, which
+				// OVHcloud sells in MIL and PAR only: in the region the estimates
+				// are for, that is "not offered", not a gap in the price list
+				// (issue #243).
+				if source == "gcp" && tc.target == allKey {
+					if strings.Contains(got.stdout, noPriceInRegion("GRA")) {
+						t.Errorf("the report says %q: the zone-HA offering is not offered in GRA, "+
+							"which no price list of the offering could fill in:\n%s",
+							noPriceInRegion("GRA"), got.stdout)
+					}
+
+					if want := "not estimated: not offered in `GRA`"; !strings.Contains(got.stdout, want) {
+						t.Errorf("the report holds no %q for the zone-HA database:\n%s", want, got.stdout)
+					}
 				}
 
 				testutil.Golden(t, goldenPath(tc.golden), []byte(got.stdout))

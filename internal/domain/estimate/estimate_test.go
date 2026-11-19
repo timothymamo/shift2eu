@@ -1060,15 +1060,22 @@ func TestFor(t *testing.T) {
 			},
 		},
 		{
-			// NoPlanLargeEnough comes before NoPrice: too large is a fact about
-			// the plans, not about a region's price list, and the largest plan
-			// names its price only when the region has one.
-			name:      "no-plan-large-enough comes before no-price",
-			resource:  computeResource(&inventory.Size{VCPUs: f(8), MemoryGiB: f(8)}, nil),
-			offerings: testutil.PricedOfferings(),
-			region:    "xx-zz",
+			// NoPlanLargeEnough comes before the region's prices: too large is a
+			// fact about the plans, not about a region's price list, and the
+			// largest plan names its price only when the region has one. The
+			// offering is offered in the estimate region, so the case is about
+			// the plans alone.
+			name:     "no-plan-large-enough comes before the prices of the region",
+			resource: computeResource(&inventory.Size{VCPUs: f(8), MemoryGiB: f(8)}, nil),
+			offerings: []catalog.Offering{{
+				Name:       "Example Virtual Machines",
+				Categories: []taxonomy.Category{taxonomy.ComputeVM},
+				Regions:    []string{testutil.PricedDefaultRegion, testutil.ReportSecondRegion},
+				Plans:      []catalog.Plan{plan("EX-L", 4, 8000, 80, 540000, testutil.ReportSecondRegion)},
+			}},
+			region: testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:   "xx-zz",
+				Region:   testutil.PricedDefaultRegion,
 				Reason:   estimate.NoPlanLargeEnough,
 				Offering: "Example Virtual Machines",
 				Largest:  unpricedPlan("EX-L", 4, 8000, 80),
@@ -1137,37 +1144,66 @@ func TestFor(t *testing.T) {
 			},
 		},
 		{
-			name:      "no-price: covering plans exist but none is priced in the region",
+			// NotOffered, not NoPrice: the fixture's compute offering is sold in
+			// xx-par and xx-ams only, so the region has no offering to price at
+			// all (PRD #190, issue #243).
+			name:      "not-offered: the offering is not available in the region",
 			resource:  computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, nil),
 			offerings: testutil.PricedOfferings(),
 			region:    "xx-zz",
+			want:      estimate.Estimate{Region: "xx-zz", Reason: estimate.NotOffered},
+		},
+		{
+			// NoPrice stays for the other case: the offering is offered in the
+			// estimate region, and only the covering plan's price is missing there.
+			name:     "no-price: the offering is offered in the region but its covering plan has no price there",
+			resource: computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4)}, nil),
+			offerings: []catalog.Offering{{
+				Name:       "Example Virtual Machines",
+				Categories: []taxonomy.Category{taxonomy.ComputeVM},
+				Regions:    []string{testutil.PricedDefaultRegion, testutil.ReportSecondRegion},
+				Plans:      []catalog.Plan{plan("EX-M", 2, 4500, 40, 250000, testutil.ReportSecondRegion)},
+			}},
+			region: testutil.PricedDefaultRegion,
 			want: estimate.Estimate{
-				Region:   "xx-zz",
+				Region:   testutil.PricedDefaultRegion,
 				Reason:   estimate.NoPrice,
 				Offering: "Example Virtual Machines",
 				Plan:     unpricedPlan("EX-M", 2, 4500, 40),
 			},
 		},
 		{
-			name:      "no-price: a storage category whose offering is not in the region",
+			// A storage category whose offering is sold in another region only is
+			// not offered in this one; the fixture's object offering is sold in
+			// the default region alone.
+			name:      "not-offered: a storage category whose offering is not in the region",
 			resource:  objectResource(&inventory.Size{StorageGiB: f(1000)}),
 			offerings: testutil.PricedOfferings(),
-			region:    "xx-ams",
-			want:      estimate.Estimate{Region: "xx-ams", Reason: estimate.NoPrice},
+			region:    testutil.ReportSecondRegion,
+			want:      estimate.Estimate{Region: testutil.ReportSecondRegion, Reason: estimate.NotOffered},
 		},
 		{
-			// NoPrice comes before NoStoragePrice: no plan is priced, so there is
-			// no plan whose included storage could be exceeded.
-			name:      "no-price comes before no-storage-price",
+			// The other storage case: the offering is offered in the estimate
+			// region, and only its per-GiB price is missing there.
+			name:     "no-price: a storage offering is offered in the region but prices no GiB there",
+			resource: objectResource(&inventory.Size{StorageGiB: f(1000)}),
+			offerings: []catalog.Offering{{
+				Name:          "Example Object Storage",
+				Categories:    []taxonomy.Category{taxonomy.StorageObject},
+				Regions:       []string{testutil.PricedDefaultRegion, testutil.ReportSecondRegion},
+				StoragePrices: []catalog.Price{price(150, testutil.ReportSecondRegion)},
+			}},
+			region: testutil.PricedDefaultRegion,
+			want:   estimate.Estimate{Region: testutil.PricedDefaultRegion, Reason: estimate.NoPrice},
+		},
+		{
+			// NotOffered comes before NoStoragePrice: the offering is not offered
+			// there, so there is no plan whose included storage could be exceeded.
+			name:      "not-offered comes before no-storage-price",
 			resource:  computeResource(&inventory.Size{VCPUs: f(2), MemoryGiB: f(4), StorageGiB: f(100)}, nil),
 			offerings: testutil.PricedOfferings(),
 			region:    "xx-zz",
-			want: estimate.Estimate{
-				Region:   "xx-zz",
-				Reason:   estimate.NoPrice,
-				Offering: "Example Virtual Machines",
-				Plan:     unpricedPlan("EX-M", 2, 4500, 40),
-			},
+			want:      estimate.Estimate{Region: "xx-zz", Reason: estimate.NotOffered},
 		},
 		{
 			name:      "no-storage-price: the plan is priced but the offering has no per-GiB price",
