@@ -320,7 +320,7 @@ func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody [
 
 	if n := countUncategorised(answer.Findings); n > 0 {
 		fmt.Fprintf(&body, "%s had a missing or unrecognised category and %s shown as uncategorised.\n",
-			findings(n), plural(n, "is", "are"))
+			findingsPhrase(n), plural(n, "is", "are"))
 	}
 
 	if len(inBody) > 0 {
@@ -370,8 +370,8 @@ func inlineSentence(n int) string {
 	return fmt.Sprintf("%d findings are inline comments on the diff", n)
 }
 
-// findings returns "1 finding" or "N findings".
-func findings(n int) string {
+// findingsPhrase returns "1 finding" or "N findings".
+func findingsPhrase(n int) string {
 	return fmt.Sprintf("%d %s", n, plural(n, "finding", "findings"))
 }
 
@@ -403,12 +403,12 @@ func eventReason(fs []Finding, event Event) string {
 
 	switch {
 	case blocking == 0:
-		return findings(len(fs)) + ", none blocking."
+		return findingsPhrase(len(fs)) + ", none blocking."
 	case event == EventRequestChanges:
-		return fmt.Sprintf("%s, %d blocking: this review requests changes.", findings(len(fs)), blocking)
+		return fmt.Sprintf("%s, %d blocking: this review requests changes.", findingsPhrase(len(fs)), blocking)
 	default:
 		return fmt.Sprintf("%s, %d blocking. Change requests are off (AI_REVIEW_REQUEST_CHANGES), "+
-			"so this review is a comment; with them on, it would have requested changes.", findings(len(fs)), blocking)
+			"so this review is a comment; with them on, it would have requested changes.", findingsPhrase(len(fs)), blocking)
 	}
 }
 
