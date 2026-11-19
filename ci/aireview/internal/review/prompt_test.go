@@ -151,7 +151,7 @@ func untrustedPart(t *testing.T, user string) string {
 		t.Fatalf("the user message holds no %q: %q", review.UntrustedOpenTag, user)
 	}
 
-	before, after, found := strings.Cut(after, review.UntrustedCloseTag)
+	before, _, found := strings.Cut(after, review.UntrustedCloseTag)
 	if !found {
 		t.Fatalf("the user message holds no %q: %q", review.UntrustedCloseTag, user)
 	}
