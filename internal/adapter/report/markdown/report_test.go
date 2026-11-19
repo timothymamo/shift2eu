@@ -2130,6 +2130,79 @@ func workloadEstimateLine(t *testing.T, out []byte, heading string) string {
 	return ""
 }
 
+// reportPipeRegion is an estimate region holding the Markdown table's column
+// separator. A table cell must escape it to keep one column; a list item has no
+// column to keep and shows it as it is.
+const reportPipeRegion = "xx|par"
+
+// reportPipeRegionAssessment assesses the estimate fixture against the report
+// fixture's offerings as a catalog whose estimates are for reportPipeRegion,
+// where none of them is sold: every resource with a fit is not offered there.
+func reportPipeRegionAssessment(t *testing.T) assessment.Assessment {
+	t.Helper()
+
+	snapshot := testutil.PricedSnapshot()
+	snapshot.DefaultRegion = reportPipeRegion
+
+	return assessment.AssessWith(newInventory(t, sourceName, estimateResources()),
+		testutil.ReportCatalogIn(t, reportTarget, snapshot), assessment.Options{Estimate: true})
+}
+
+// TestReportEstimateRegionEscaping pins where a region holding "|" is escaped
+// and where it is not (issue #246): the Monthly estimate cell is a table cell,
+// so the pipe is escaped there and the cell keeps one column, while a workload's
+// Monthly estimate line and the Total line are list items, where the same escape
+// reaches a reader as a literal backslash. Both list items show the same code
+// span as the cell, unescaped.
+func TestReportEstimateRegionEscaping(t *testing.T) {
+	t.Parallel()
+
+	out := render(t, reportPipeRegionAssessment(t), analysis.ReportMeta{InventoryName: inventoryFileName})
+
+	// The code span as a list item shows it, and as the table cell shows it.
+	span := "`" + reportPipeRegion + "`"
+	escapedSpan := "`xx\\|par`"
+
+	t.Run("the Monthly estimate cell escapes the pipe", func(t *testing.T) {
+		t.Parallel()
+
+		want := "not estimated: not offered in " + escapedSpan
+		if got := tableRow(t, out, "`bucket-storage`")[6]; got != want {
+			t.Errorf("the Monthly estimate cell = %q, want %q:\n%s", got, want, out)
+		}
+	})
+
+	t.Run("a workload's estimate line keeps the pipe as it is", func(t *testing.T) {
+		t.Parallel()
+
+		line := workloadEstimateLine(t, out, "### `shop`")
+
+		want := "not offered in " + span
+		if !strings.Contains(line, want) {
+			t.Errorf("the shop workload's estimate line = %q, want it to hold %q", line, want)
+		}
+
+		if strings.Contains(line, "\\|") {
+			t.Errorf("the shop workload's estimate line = %q, want no escaped pipe", line)
+		}
+	})
+
+	t.Run("the Total line keeps the pipe as it is", func(t *testing.T) {
+		t.Parallel()
+
+		line := lineWithPrefix(t, out, "- Total: ")
+
+		want := "not offered in " + span
+		if !strings.Contains(line, want) {
+			t.Errorf("the total = %q, want it to hold %q", line, want)
+		}
+
+		if strings.Contains(line, "\\|") {
+			t.Errorf("the total = %q, want no escaped pipe", line)
+		}
+	})
+}
+
 // TestReportWithoutEstimates pins that estimates off is today's report: the same
 // bytes as the golden files the repository already had, no Plan or Monthly
 // estimate column, no cost summary, no euro amount and, with no region chosen, no
