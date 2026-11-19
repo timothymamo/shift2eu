@@ -33,7 +33,10 @@
 // --region by) are priced. When none is (for a plan, none with a covering
 // plan, checked after the plans' own reasons), the reason is NotOffered, never
 // NoPrice: NoPrice is for an offering offered there whose covering plans or
-// per-GiB storage have no price in the snapshot (issue #243).
+// per-GiB storage have no price in the snapshot (issue #243). So a resource
+// whose tied best candidate offered in the region has only plans too small,
+// while another, not offered there, has a covering plan, is NotOffered, not
+// NoPlanLargeEnough: a covering plan exists, only not in the region.
 //
 // Money is exact: an amount of euros held as a rational number (math/big), so
 // no product of the inventory's and the catalog's capped numbers can wrap. It

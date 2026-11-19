@@ -131,7 +131,7 @@ func writeComparisonSummary(b *strings.Builder, targets []assessment.TargetAsses
 		estimated = true
 		row := make([]string, len(targets)+1)
 		row[0] = codeSpan(t.Assessment.Target, true) + " estimate"
-		row[i+1] = renderTotal(*t.Assessment.Total, estimatesOf(t.Assessment.Verdicts, nil))
+		row[i+1] = renderTotal(*t.Assessment.Total, estimatesOf(t.Assessment.Verdicts), true)
 		writeRow(b, row...)
 	}
 
