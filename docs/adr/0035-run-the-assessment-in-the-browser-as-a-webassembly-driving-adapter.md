@@ -53,7 +53,24 @@ composition root, built with Go's standard toolchain for `GOOS=js GOARCH=wasm`:
   reporters (`web-composition-root-wire`). Wire's tests run `internal/cli` and `internal/web` over the same
   adapters: one option-parity table, and download parity over every example inventory and the hostile
   fixtures with seven option sets. Only those test files may import `internal/cli`
-  (`web-composition-root-wire-tests`).
+  (`web-composition-root-wire-tests`); every other test file under `cmd/shift2eu-web` is refused it
+  (`web-root-tests-never-run-the-cli`), and `cli-and-cmd-imported-only-by-cmd` leaves out only the glue's
+  own files, which import `wire`.
+- **The glue is hardened against the page's values.** It reads, sets and calls JavaScript names only through
+  three helpers that take a `jsName`, and every name is a constant of that type: the constants are the
+  glue's named allow list, it never computes a name, and none of them reaches another window (PRD #297,
+  *Layer 1*; milestone 2's static test pins the rule). `targets` and `regions` must be real arrays
+  (`Array.isArray`) of at most one entry per target (plus `all` for `targets`), of strings and of
+  `{target, region}` objects of strings; anything else, or a mistyped `estimate`, `schemaVersion` or
+  `inventoryName`, is a `usage` failure with a constant message that echoes no value. The glue never
+  converts more entries than the option rules could accept. A panic during an assessment is recovered and
+  returned as an `internal` failure with a constant message, so the module stays usable for the next one.
+- **The trust boundary of the module's answer.** The object `shift2euAssess` returns has `error` and `kind`,
+  plain text that the page shows with `textContent` and never as markup; `markdown` and `json`, the
+  downloads' bytes, which the page offers as blobs and never inserts as HTML; and `html`, the only markup,
+  the HTML reporter's fragment, inserted once. The glue's doc comment and `doc.go` state it. None of this
+  can be tested natively, since the glue builds only for `js && wasm`: milestone 2's browser smoke test
+  pins it, with the page script's static checks.
 - **Only `cmd/shift2eu-web` imports `syscall/js`.** The lax rule `syscall-js-only-in-the-web-root` refuses it
   everywhere else, tests included. `web-imported-only-by-the-web-root` keeps `internal/web` and `htmlreport`
   to the site's root and its wiring, so neither the CLI, the HTTP API nor their roots import them. The
@@ -83,9 +100,9 @@ composition root, built with Go's standard toolchain for `GOOS=js GOARCH=wasm`:
 
   | | Bytes |
   |---|---|
-  | Raw module | 6,682,834 |
-  | Base64 module script | 8,910,481 |
-  | Gzip-compressed module script | 2,509,088 (2.39 MiB, 80% of the budget) |
+  | Raw module | 6,688,906 |
+  | Base64 module script | 8,918,576 |
+  | Gzip-compressed module script | 2,512,821 (2.40 MiB, 80% of the budget) |
 
   Above the budget, TinyGo is reconsidered, as the PRD decides.
 - **The standard toolchain, not TinyGo** (the maintainer's decision). One compiler builds the CLI and the
@@ -94,8 +111,11 @@ composition root, built with Go's standard toolchain for `GOOS=js GOARCH=wasm`:
 - **`wasm_exec.js` is tied to the toolchain and trusted as toolchain code.** The site's glue needs Go's
   `wasm_exec.js` for its version of the runtime ABI. It is taken at build time from the toolchain that
   builds the module, `$(go env GOROOT)/lib/wasm/wasm_exec.js`, and is never committed and never fetched. The
-  toolchain is pinned by `go.mod`'s `go` and `toolchain` lines, which Renovate updates, and every job that
-  builds the site sets Go up from `go.mod`. It is Go's own code, shipped with and reviewed as the toolchain, so
+  toolchain is pinned by `go.mod`'s `go` line (`go 1.27.4`; there is no `toolchain` line), which Renovate
+  updates, with every CI and release job that installs Go setting it up from `go.mod`
+  (`actions/setup-go` with `go-version-file: go.mod` in `ci.yml`, `release.yml`, `security.yml` and
+  `ai-review.yml`; `security.yml` also fails when the installed version differs from the declared one).
+  Milestone 2's job that builds the site does the same. It is Go's own code, shipped with and reviewed as the toolchain, so
   it is trusted like the compiler rather than scanned by the site's banned-API checks, which cover the
   site's own script and the glue. Milestone 2 bundles it and adds the test that fails when the bundled file
   differs from the building toolchain's.
