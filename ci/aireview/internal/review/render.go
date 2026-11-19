@@ -53,8 +53,12 @@ func Render(headSHA string, answer Answer, event Event, diff string) Review {
 // of excluded, the files FilterDiff left out, and says they were not reviewed
 // (issue #324). Each path is shown in a code span, escaped as a finding's path
 // in the body is: its backticks made apostrophes, its control characters
-// spaces, its mentions defused. With no path excluded there is no note, and the
-// review is Render's, byte for byte.
+// spaces, its mentions defused. The note states how many files were left out,
+// names the first MaxListedExcluded of them and says how many more it does not
+// name; it sits after the part cut at MaxTextUnits and its room is taken off
+// that part, so a truncated review still holds it whole (reviewer M1, auditor
+// L2). With no path excluded there is no note, and the review is Render's, byte
+// for byte.
 func RenderFiltered(headSHA string, answer Answer, event Event, diff string, excluded []string) Review {
 	shown := newSideLines(diff)
 
@@ -78,14 +82,18 @@ func RenderFiltered(headSHA string, answer Answer, event Event, diff string, exc
 	}
 
 	head := fmt.Sprintf("**AI review** of %s\n\n", headSHA)
-	middle := renderMiddle(answer, event, comments, inBody) + notReviewedNote(excluded)
+	middle := renderMiddle(answer, event, comments, inBody)
+	note := notReviewedNote(excluded)
 
-	room := MaxTextUnits - utf16Len(head) - utf16Len(adviceFooter)
+	// The note, like the head and the footer, is never cut: its room comes off
+	// the review's, so a truncated review still names what it did not read
+	// (reviewer M1, auditor L2). notReviewedNote bounds its own length.
+	room := MaxTextUnits - utf16Len(head) - utf16Len(note) - utf16Len(adviceFooter)
 
 	return Review{
 		CommitID: headSHA,
 		Event:    event,
-		Body:     head + truncate(middle, room, truncatedBody) + adviceFooter,
+		Body:     head + truncate(middle, room, truncatedBody) + note + adviceFooter,
 		Comments: comments,
 	}
 }
@@ -379,8 +387,35 @@ func pathSpan(path string) string {
 	return "`" + defuseMentions(oneLine(strings.ReplaceAll(path, "`", "'"))) + "`"
 }
 
+// shortPathSpan returns path as pathSpan does, its escaped text cut to
+// maxListedPathUnits and ended with "…" when longer. The cut comes after the
+// escaping, so it can only shorten a defused mention or reference (an @ left
+// without its handle, an "&am" no reference), never undo it.
+func shortPathSpan(path string) string {
+	span := pathSpan(path)
+	text := span[1 : len(span)-1]
+
+	if utf16Len(text) > maxListedPathUnits {
+		text = prefixUnits(text, maxListedPathUnits-1) + "…"
+	}
+
+	return "`" + text + "`"
+}
+
+// MaxListedExcluded is how many left-out paths the body's "Not reviewed" note
+// names; it counts the rest (reviewer M1, auditor L2).
+const MaxListedExcluded = 50
+
+// maxListedPathUnits caps each path the note names, in UTF-16 code units, so
+// that MaxListedExcluded paths stay a small part of MaxTextUnits whatever names
+// a pull request chooses.
+const maxListedPathUnits = 300
+
 // notReviewedNote returns the body's note that names the files the reviewer
-// left out of the diff it read, and "" when it left none out (issue #324).
+// left out of the diff it read, and "" when it left none out (issue #324). It
+// states the total, names the first MaxListedExcluded paths in the order given,
+// each cut to maxListedPathUnits, and says how many more it does not name, so
+// it stays under 16,000 UTF-16 code units whatever excluded holds.
 func notReviewedNote(excluded []string) string {
 	if len(excluded) == 0 {
 		return ""
@@ -392,8 +427,15 @@ func notReviewedNote(excluded []string) string {
 		"as a generated or golden file (ADR 0033), and not reviewed:\n\n",
 		plural(len(excluded), "This file was", fmt.Sprintf("Each of these %d files was", len(excluded))))
 
-	for _, path := range excluded {
-		note.WriteString("- " + pathSpan(path) + "\n")
+	listed := excluded[:min(len(excluded), MaxListedExcluded)]
+
+	for _, path := range listed {
+		note.WriteString("- " + shortPathSpan(path) + "\n")
+	}
+
+	if more := len(excluded) - len(listed); more > 0 {
+		fmt.Fprintf(&note, "\n%d more of the %d left-out files %s not listed here.\n",
+			more, len(excluded), plural(more, "is", "are"))
 	}
 
 	return note.String()

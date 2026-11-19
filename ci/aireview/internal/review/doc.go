@@ -21,9 +21,12 @@
 //
 // The model reads the pull request's diff without the generated and golden
 // files of a list fixed in this package (FilterDiff, issue #324), and the size
-// limit measures what remains; the review names every file left out. An answer
-// of the wrong shape is asked once more, and two in turn post a comment that
-// says the review could not be read while the run still fails (issue #316).
+// limit measures what remains; a symbolic link, a submodule or a mode change is
+// never left out. The prompt lists the left-out paths as untrusted data, and the
+// review names them in a note its truncation never cuts. An answer of the wrong
+// shape is asked once more, and two in turn post a comment that says the review
+// could not be read, on a context the run's cancellation does not reach, while
+// the run still fails (issue #316). Run takes its deadline from its context.
 //
 // The poster supports exactly two events, COMMENT and REQUEST_CHANGES, and
 // refuses any other before it makes an HTTP call: the reviewer never

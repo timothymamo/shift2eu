@@ -21,7 +21,10 @@ const diffHeader = "diff --git "
 // git writes them, case-sensitively and uncleaned, so a path with an empty, "."
 // or ".." element is never left out. A section goes only when every path its
 // "diff --git a/<old> b/<new>" header names is left out, so a rename or copy
-// between a reviewed path and a left-out one is reviewed. A header the filter
+// between a reviewed path and a left-out one is reviewed, and only when its
+// extended header shows a regular file's content change (isRegularContentChange):
+// a symbolic link, a submodule or a mode change is always reviewed, whatever its
+// path (auditor L1). A header the filter
 // cannot read with certainty (a path git quoted, or one holding " b/") keeps
 // its section. A section starts at a line beginning "diff --git " and runs to
 // the next: a hunk's lines begin with " ", "+", "-" or "\", so no line of a
@@ -35,7 +38,8 @@ func FilterDiff(diff string) (kept string, excluded []string) {
 	)
 
 	flush := func() {
-		if paths, ok := sectionPaths(section.String()); ok && !slices.ContainsFunc(paths, isReviewed) {
+		if paths, ok := sectionPaths(section.String()); ok && !slices.ContainsFunc(paths, isReviewed) &&
+			isRegularContentChange(section.String()) {
 			excluded = append(excluded, paths...)
 		} else {
 			out.WriteString(section.String())
@@ -77,6 +81,52 @@ func sectionPaths(section string) ([]string, bool) {
 	}
 
 	return []string{oldPath, newPath}, true
+}
+
+// The file modes git writes for a symbolic link and a submodule (a gitlink).
+const (
+	symlinkMode = "120000"
+	gitlinkMode = "160000"
+)
+
+// isRegularContentChange reports whether a file section's extended header (its
+// lines after "diff --git " and before the first "---", "+++", "@@" or "Binary
+// files" line) shows a change to a regular file's content alone: no symbolic
+// link or submodule ("new file mode", "deleted file mode" or an "index" line
+// carrying mode 120000 or 160000) and no mode change ("old mode", "new mode").
+// Only the extended header is read, never a hunk's content, which the pull
+// request's author writes (auditor L1, issue #324).
+func isRegularContentChange(section string) bool {
+	lines := strings.Split(section, "\n")
+
+	for _, line := range lines[1:] {
+		if strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") ||
+			strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "Binary files") {
+			return true
+		}
+
+		if strings.HasPrefix(line, "old mode ") || strings.HasPrefix(line, "new mode ") {
+			return false
+		}
+
+		mode := ""
+
+		switch {
+		case strings.HasPrefix(line, "new file mode "):
+			mode = strings.TrimPrefix(line, "new file mode ")
+		case strings.HasPrefix(line, "deleted file mode "):
+			mode = strings.TrimPrefix(line, "deleted file mode ")
+		case strings.HasPrefix(line, "index "):
+			fields := strings.Fields(line)
+			mode = fields[len(fields)-1]
+		}
+
+		if mode == symlinkMode || mode == gitlinkMode {
+			return false
+		}
+	}
+
+	return true
 }
 
 // isReviewed reports whether the reviewer reads the file at path: every path

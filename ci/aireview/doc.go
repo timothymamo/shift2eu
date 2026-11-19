@@ -9,7 +9,8 @@
 // constant never read from the environment, and the model to a run of the
 // Claude Code CLI at the path it is given, which the workflow installed at a
 // pinned version and verified against a pinned checksum. It then runs
-// review.Run. It exits 0 after posting a review and 1 on any failure, with one
+// review.Run under a deadline of 15 minutes (runDeadline), inside the
+// workflow job's timeout of 20. It exits 0 after posting a review and 1 on any failure, with one
 // workflow error annotation whose text is escaped, so no text of the pull
 // request, the model or an API can become a workflow command. It prints no
 // credential.

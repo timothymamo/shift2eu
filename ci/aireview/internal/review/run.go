@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // PullRequests is what Run needs of GitHub; *GitHub implements it.
@@ -51,8 +52,9 @@ type Result struct {
 // Run reviews pull request cfg.Number: it reads the pull request (a draft fails
 // with ErrDraft), its diff, leaves the generated and golden files out of it
 // (FilterDiff; what remains over MaxDiffBytes fails with ErrDiffTooLarge before
-// the model is asked) and reads its files, builds the prompt of what remains
-// (BuildPrompt), asks the model, parses the answer (ParseAnswer), decides the
+// the model is asked) and reads its files, builds the prompt of what remains,
+// naming the files it left out (BuildPrompt), asks the model, parses the
+// answer (ParseAnswer), decides the
 // event (Decide), renders the review of the head SHA it read, naming the files
 // it left out (RenderFiltered), and posts it. Then, only when no finding is
 // blocking, it dismisses the reviews DismissalsFor picks. Any error before the
@@ -60,7 +62,12 @@ type Result struct {
 // (issue #316): an answer of the wrong shape is asked once more with the same
 // prompt while ctx is not done, and when the second answer has the wrong shape
 // too Run posts a COMMENT review with no finding that says the review could not
-// be read, and still fails with an error wrapping ErrMalformedAnswer.
+// be read, and still fails with an error wrapping ErrMalformedAnswer. That post
+// is made on a context detached from ctx's cancellation, bounded by
+// unreadablePostTimeout, so it is made even when ctx ends right after the
+// second answer. Run sets no deadline of its own: ctx carries the run's
+// deadline, which ci/aireview's main sets (runDeadline), and every call but
+// that one post ends with it.
 func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result, error) {
 	pr, err := gh.PullRequest(ctx, cfg.Number)
 	if err != nil {
@@ -87,12 +94,21 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 		return Result{}, err
 	}
 
-	answer, err := askForAnswer(ctx, model, BuildPrompt(cfg.Instructions, pr, files, diff), cfg.Number)
+	answer, err := askForAnswer(ctx, model, BuildPrompt(cfg.Instructions, pr, files, diff, excluded), cfg.Number)
 	if err != nil {
 		if errors.Is(err, errUnreadableTwice) {
 			// Two answers of the wrong shape: say so on the pull request, and
-			// still fail the run, so the check stays red (issue #316).
-			if postErr := gh.PostReview(ctx, cfg.Number, unreadableReview(pr.HeadSHA)); postErr != nil {
+			// still fail the run, so the check stays red (issue #316). The two
+			// model calls are spent, so the comment is posted even when the
+			// run's context ended right after the second answer: on a context
+			// its cancellation does not reach, with a short timeout of its own
+			// (reviewer m3).
+			postCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unreadablePostTimeout)
+			postErr := gh.PostReview(postCtx, cfg.Number, unreadableReview(pr.HeadSHA))
+
+			cancel()
+
+			if postErr != nil {
 				return Result{}, fmt.Errorf("%w; then: %w", err, postErr)
 			}
 		}
@@ -138,13 +154,20 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 	return result, nil
 }
 
+// unreadablePostTimeout bounds the post of the review that says the model's
+// answer could not be read, which Run makes on a context detached from the
+// run's cancellation (issue #316, reviewer m3): it is the one call that may
+// outlive the run's deadline, and by no more than this.
+const unreadablePostTimeout = 30 * time.Second
+
 // errUnreadableTwice marks a run whose model answered twice in turn with an
 // answer of the wrong shape (issue #316); Run then posts unreadableReview.
-var errUnreadableTwice = errors.New("two answers in turn could not be read")
+var errUnreadableTwice = errors.New("the model was asked twice and neither answer could be read")
 
 // askForAnswer asks model with prompt and parses its answer. An answer refused
 // for its shape (shapeError) is asked once more with the same prompt, unless
-// ctx is done by then: the retry stays inside the run's deadline. A second
+// ctx is done by then: the retry stays inside the run's deadline, which also
+// caps the retry's own model timeout. A second
 // answer of the wrong shape gives an error wrapping errUnreadableTwice and
 // ErrMalformedAnswer. A finding ParseAnswer refuses is not asked again (#295
 // keeps those fields strict), and neither is a failed model call.
@@ -160,7 +183,7 @@ func askForAnswer(ctx context.Context, model Asker, prompt Prompt, number int) (
 
 	answer, err = askOnce(ctx, model, prompt, number)
 	if err != nil && isShapeError(err) {
-		return Answer{}, fmt.Errorf("%w, asked twice: %w", errUnreadableTwice, err)
+		return Answer{}, fmt.Errorf("%w: %w", errUnreadableTwice, err)
 	}
 
 	return answer, err
