@@ -27,11 +27,19 @@ maintainer has not approved: the maintainer's approval and merge are the single 
 
 ## Verify
 
-6. `gh pr checks <n> --watch --required --fail-fast` until every required check completes. Some checks
-   are not required (`Container image`, `Dependency review`), so then wait for every check but
-   `AI review`: every 30 seconds run
-   `gh pr checks <n> --json name,bucket --jq '[.[] | select(.name != "AI review" and .bucket == "pending")] | length'`
-   until it prints `0`. Then `gh pr checks <n>` for every check.
+6. `timeout 3600 gh pr checks <n> --watch --required --fail-fast` until every required check
+   completes; if it stops on a failed check, go straight to step 7. Some checks are not required
+   (`Container image`, `Dependency review`), so then wait for every check but `AI review` with this
+   command, which polls every 30 seconds until none is pending:
+
+   ```sh
+   timeout 3600 sh -c 'until [ "$(gh pr checks <n> --json name,bucket --jq '\''[.[] | select(.name != "AI review" and .bucket == "pending")] | length'\'')" = 0 ]; do sleep 30; done'
+   ```
+
+   Judge by its exit status, not gh's (gh exits 8 for pending in other modes; a network error prints
+   nothing, so the loop goes on): 0 means nothing is pending. Either command exits 124 when its
+   60-minute cap hits: then report the pending checks by name (`gh pr checks <n>`) and stop, as step 7
+   does for a failure. Otherwise `gh pr checks <n>` for every check.
 7. On a failed check other than `AI review` (required or not, bucket `fail` or `cancel`):
    `gh run view <run-id> --log-failed`, report the failing job and the exact error, and stop. Do not
    diagnose or fix; the orchestrator re-delegates. A failed `AI review` is no such failure: report it as
