@@ -269,7 +269,8 @@ letters, digits, `.`, `_` and `-`, starting with a letter or digit, as every tar
 `deck-restart` and the `agents-token*` targets, issue #252): the check runs before any of the target's own
 commands, and make itself never expands the value, so a name that carries a `$(...)` is refused, not run.
 Only the prerequisites run first, and neither reads the name: `vm-up`'s `git-hooks` sets git's hooks path
-and `vm-env`'s `vm-env-check` checks the credentials on the host. Targets that do not use it, such as `make check`, ignore it.
+and `vm-env`'s `vm-env-check` checks the credentials on the host.
+Targets that do not use it, such as `make check`, ignore it.
 
 Those checks cannot close the window between the status query and the start: the directory can still go
 in between, and no flag of Lima 2.x stops `limactl start shift2eu` from creating the VM then. So

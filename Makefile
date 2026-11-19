@@ -28,8 +28,7 @@ VM_RESOURCES_SET = $(strip $(if $(VM_CPUS),VM_CPUS) $(if $(VM_MEMORY),VM_MEMORY)
 # not shell: make expands a target's whole recipe before it runs its first line, so a refused name stops the
 # target before any of its own commands runs, even under make -i or -k. Its prerequisites run first, but
 # none of them reads the name: vm-up's git-hooks sets git's hooks path and vm-env's vm-env-check checks the
-# credentials on the host. Targets that do not read LIMA_INSTANCE
-# (make check, make build) never check it.
+# credentials on the host. Targets that do not read LIMA_INSTANCE (make check, make build) never check it.
 LIMA_INSTANCE ?= shift2eu
 override LIMA_INSTANCE := $(value LIMA_INSTANCE)
 export LIMA_INSTANCE
