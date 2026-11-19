@@ -99,10 +99,7 @@ func writeFakeRealGh(t *testing.T, sb *sandbox) string {
 
 	path := filepath.Join(sb.binDir, "real-gh")
 
-	//nolint:gosec // the fake real gh is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeRealGh), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakeRealGh), 0o700)
 
 	return path
 }

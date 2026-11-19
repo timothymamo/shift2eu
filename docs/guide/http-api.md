@@ -18,7 +18,10 @@ for the same inventory and targets.
 error; it refers to the report's JSON Schemas in
 [`internal/adapter/report/jsonreport/schema/`](../../internal/adapter/report/jsonreport/schema/) by relative
 path. Every error is `{"error": {"code": "...", "message": "..."}}`, and no message echoes a value from
-the request.
+the request. In the report, a whole-number quantity (`vcpus`, `includedStorageGiB`) is a JSON number,
+and an amount of money or a quantity that can be fractional (`memoryGiB`, such as `"0.5"`) is an exact
+decimal string ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md),
+[issue #247](https://github.com/timothymamo/shift2eu/issues/247)).
 
 Outside the repository those relative paths do not resolve, so each release, from the first after
 `v0.3.0`, also publishes the self-contained document as the asset `shift2eu-server_openapi.json`: the

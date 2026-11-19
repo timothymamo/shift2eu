@@ -152,6 +152,9 @@ func (sb *sandbox) baseEnv() map[string]string {
 		"TMPDIR":                 filepath.Join(sb.root, "tmp"),
 		"SHIFT2EU_TEST_ARGV_LOG": sb.argvLog,
 		"SHIFT2EU_TEST_VM_HOME":  sb.vmHome,
+		// The only tree a host-side install or uninstall recipe's root commands may touch: the log-only sudo
+		// copies, removes and loads files inside it and refuses every path outside it (issue #229).
+		"SHIFT2EU_TEST_SUDO_ROOT": sb.root,
 		// The state dir of the refresh's pid, log and lock files, outside the workspace and never the
 		// test machine's own (PRD #161 milestone 1 review, item 7).
 		"XDG_STATE_HOME": filepath.Join(sb.root, "state"),
@@ -302,10 +305,7 @@ func (sb *sandbox) writeFakeLimactl(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "limactl")
 
-	//nolint:gosec // the fake limactl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeLimactl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakeLimactl), 0o700)
 }
 
 // ghTrapScript is what the gh on PATH is in a sandbox: a wrapper that runs gh from PATH instead of the
@@ -320,10 +320,7 @@ func (sb *sandbox) writeTripwireGH(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "gh")
 
-	//nolint:gosec // the trap is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(ghTrapScript), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(ghTrapScript), 0o700)
 }
 
 // blockedCurlShim logs its argv and then fails the way curl reports a connection it never made, so a test
@@ -345,10 +342,7 @@ func (sb *sandbox) blockCurl(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "curl")
 
-	//nolint:gosec // the blocked curl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(blockedCurlShim), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(blockedCurlShim), 0o700)
 }
 
 // fakeSudo stands in for sudo in the devenv tests: it records its argv and then runs the command as the user
@@ -433,10 +427,7 @@ func (sb *sandbox) useFakeSudo(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "sudo")
 
-	//nolint:gosec // the fake sudo is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeSudo), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fakeSudo), 0o700)
 }
 
 // fakeSystemctl stands in for systemctl in the devenv tests: it records its argv and exits 0. A test that pins
@@ -457,10 +448,401 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 
 	path := filepath.Join(sb.binDir, "systemctl")
 
-	//nolint:gosec // the fake systemctl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fakeSystemctl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
+	writeFileMode(t, path, []byte(fakeSystemctl), 0o700)
+}
+
+// fakeLaunchctl stands in for launchctl in the devenv tests: it records its argv, answers `print` with
+// SHIFT2EU_TEST_LAUNCHCTL_STATUS (0 stands for a loaded job) and every other verb with status 113, which is
+// what launchctl returns for a job it does not know, so no test needs a launchd of the machine (issue #229).
+// A test that pins what the start target reads of a loaded job's arguments makes `print` also print the block
+// in SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE, the way the real launchctl prints a job.
+//
+// A test that needs launchd's state to change between two calls names a state file in
+// SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE instead: the job is loaded while that file exists, and `bootout` unloads
+// it by removing the file, so a `print` after a `bootout` fails, as it does for a job that was just unloaded.
+// SHIFT2EU_TEST_LAUNCHCTL_STUCK=1 makes that `bootout` leave the file: the job never unloads.
+// `bootstrap` answers SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS (0 when unset), so a test can make loading the
+// new plist fail, and `bootout` answers SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS. SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS=1
+// makes `bootstrap` create the loaded state file before it answers, so a bootstrap can load the job and still exit
+// non-zero, as launchd does when it loads a job it then cannot confirm (issue #229, fourth review).
+// SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE, with the pid in SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID, makes
+// `bootstrap` write that file with that pid: a job whose refresh takes the instance's lock as launchd starts it,
+// which is what the install finds in the lock right after the bootstrap (issue #229, fifth review).
+const fakeLaunchctl = `#!/bin/sh
+{
+  printf 'tool=launchctl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+status=113
+verb="${1:-}"
+case "${verb}" in
+print)
+  status="${SHIFT2EU_TEST_LAUNCHCTL_STATUS:-0}"
+  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ]; then
+    if [ -e "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}" ]; then status=0; else status=113; fi
+  fi
+  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE:-}" ] && [ "${status}" -eq 0 ]; then
+    cat "${SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE}"
+  fi
+  ;;
+bootout)
+  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ] && [ "${SHIFT2EU_TEST_LAUNCHCTL_STUCK:-0}" != 1 ]; then
+    rm -f "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}"
+  fi
+  status="${SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS:-0}"
+  ;;
+bootstrap)
+  if [ "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS:-0}" = 1 ] && [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ]; then
+    : > "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}"
+  fi
+  if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE:-}" ]; then
+    mkdir -p "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE%/*}" || exit 1
+    printf '%s\n' "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID:?set SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID}" > "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE}" || exit 1
+  fi
+  status="${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS:-0}"
+  ;;
+esac
+exit "${status}"
+`
+
+// useFakeLaunchctl puts the recording launchctl first on PATH and makes `launchctl print` answer status, so a
+// test can pretend the instance's LaunchDaemon is loaded without a real launchd and on any machine.
+func (sb *sandbox) useFakeLaunchctl(t *testing.T, env map[string]string, status string) {
+	t.Helper()
+
+	sb.writeFakeLaunchctl(t)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_STATUS"] = status
+}
+
+// useFakeLaunchctlPrint is useFakeLaunchctl with a job behind the loaded label: `launchctl print` answers
+// status and then prints output, which a test builds with launchctlPrintBlock so it has the shape the real
+// command prints.
+func (sb *sandbox) useFakeLaunchctlPrint(t *testing.T, env map[string]string, status, output string) {
+	t.Helper()
+
+	sb.useFakeLaunchctl(t, env, status)
+
+	path := filepath.Join(sb.root, "launchctl-print.txt")
+	writeFileMode(t, path, []byte(output), 0o600)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE"] = path
+}
+
+// useFakeLaunchctlLoaded makes launchd's state a file instead of a fixed status, so a test can pin what the
+// install does when the old job is loaded now and unloads (or never unloads) during the install: `launchctl
+// print` answers 0 while the file exists, and `launchctl bootout` removes it through sudo, as the real one
+// unloads the job. stuck asks for a bootout that leaves the job loaded (issue #229).
+func (sb *sandbox) useFakeLaunchctlLoaded(t *testing.T, env map[string]string, stuck bool) {
+	t.Helper()
+
+	sb.writeFakeLaunchctl(t)
+
+	state := filepath.Join(sb.root, "launchctl-loaded")
+	writeFileMode(t, state, nil, 0o600)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"] = state
+
+	if stuck {
+		env["SHIFT2EU_TEST_LAUNCHCTL_STUCK"] = "1"
 	}
+}
+
+// useFakeLaunchctlTakingTheLockAtLoad makes `launchctl bootstrap` write lockPidFile with pid, as a job does that
+// takes the instance's lock as launchd starts its refresh: the install reads that lock after the bootstrap, so a
+// test can pin what it says about a lock the job's own refresh holds (issue #229, fifth review).
+func (sb *sandbox) useFakeLaunchctlTakingTheLockAtLoad(t *testing.T, env map[string]string, lockPidFile string, pid int) {
+	t.Helper()
+
+	sb.writeFakeLaunchctl(t)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE"] = lockPidFile
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID"] = strconv.Itoa(pid)
+}
+
+// useFakeLaunchctlJobPrintingPid makes the job not loaded until `launchctl bootstrap` loads it, and makes
+// `launchctl print` afterwards report pid as the job's own: the job launchd started is running that process, as
+// it is when the refresh it runs took the instance's lock. A test can then pin what the install says about a
+// lock that holds the very pid launchctl names for the job (issue #229, sixth review).
+func (sb *sandbox) useFakeLaunchctlJobPrintingPid(t *testing.T, env map[string]string, label string, pid int) {
+	t.Helper()
+
+	sb.writeFakeLaunchctl(t)
+
+	// Nothing is loaded until the bootstrap runs, so the install's first `launchctl print` fails as it does for
+	// a label launchd does not know, and the bootstrap loads the job it then reads the pid of.
+	env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"] = filepath.Join(sb.root, "launchctl-loaded")
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS"] = "1"
+
+	path := filepath.Join(sb.root, "launchctl-print.txt")
+	// The print output of a job launchd is running: the header every pinned block starts with, naming the
+	// job's own process.
+	printed := launchctlPrintHeader(label, pid) + "}\n"
+
+	writeFileMode(t, path, []byte(printed), 0o600)
+
+	env["SHIFT2EU_TEST_LAUNCHCTL_PRINT_FILE"] = path
+}
+
+// useFakeLaunchctlBootstrapThatLoadsAndFails makes the job not loaded now and `launchctl bootstrap` load it -
+// it creates the loaded state file, so a `launchctl print` afterwards succeeds - while bootstrap still exits
+// non-zero, as launchd does when it loaded a job and could not answer with success. A test can then pin what the
+// install says when the load it was told failed did happen (issue #229, fourth review).
+func (sb *sandbox) useFakeLaunchctlBootstrapThatLoadsAndFails(t *testing.T, env map[string]string) {
+	t.Helper()
+
+	sb.writeFakeLaunchctl(t)
+
+	// The file is not created here: the job is not loaded until bootstrap runs, and every `print` before it
+	// must fail as launchd's does for a label it does not know.
+	env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"] = filepath.Join(sb.root, "launchctl-loaded")
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS"] = "1"
+	env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS"] = "1"
+}
+
+func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "launchctl")
+
+	writeFileMode(t, path, []byte(fakeLaunchctl), 0o700)
+}
+
+// logOnlySudo stands in for sudo when a host-side recipe that needs root is under test: it records its argv
+// and runs nothing of the machine's own, so no test reaches /Library, the machine's launchd or its plist. What
+// it does run stays inside the sandbox:
+//
+//   - `install ... <src> <dest>` copies src to dest, so the recipe reads back the file it installed, and
+//     SHIFT2EU_TEST_SUDO_INSTALL changes what lands there: `different` writes other bytes (a file that changed
+//     between the hash check and the install), `nothing` writes no file at all, `unreadable` copies the plist and
+//     then takes every permission away, so the file is there and the maintainer's own read-back cannot open it.
+//     A destination outside SHIFT2EU_TEST_SUDO_ROOT is refused.
+//   - `rm -f <path>` really removes a sandbox path, and refuses any path outside it.
+//   - `launchctl` runs the fake launchctl first on PATH, so a test can pin the load and unload commands and
+//     see launchd's state change between them.
+//   - every other command runs with the fake tools first on PATH, as it would under the real sudo.
+const logOnlySudo = `#!/bin/sh
+{
+  printf 'tool=sudo\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -n | -E | -H | -S | -k | --) shift ;;
+  -u | -g | -p | -C | -T) shift 2 ;;
+  *) break ;;
+  esac
+done
+command="${1:-}"
+[ -n "${command}" ] || {
+  echo 'fake sudo: nothing to run' >&2
+  exit 64
+}
+shift
+root="${SHIFT2EU_TEST_SUDO_ROOT:-}"
+inside() {
+  [ -n "${root}" ] || return 1
+  case "$1" in "${root}"/*) return 0 ;; esac
+  return 1
+}
+case "${command}" in
+install)
+  # The last two arguments are the file to copy and where it goes; root writes only inside the sandbox.
+  src=''
+  dest=''
+  for a in "$@"; do
+    src="${dest}"
+    dest="$a"
+  done
+  inside "${dest}" || {
+    echo "fake sudo: refusing to install outside the sandbox: ${dest}" >&2
+    exit 1
+  }
+  case "${SHIFT2EU_TEST_SUDO_INSTALL:-copy}" in
+  copy) cp "${src}" "${dest}" || exit 1 ;;
+  unreadable) cp "${src}" "${dest}" || exit 1; chmod 000 "${dest}" || exit 1 ;;
+  different) printf 'fake sudo: other bytes than the plist it was handed\n' >"${dest}" || exit 1 ;;
+  nothing) ;;
+  *)
+    echo "fake sudo: unknown SHIFT2EU_TEST_SUDO_INSTALL: ${SHIFT2EU_TEST_SUDO_INSTALL}" >&2
+    exit 64
+    ;;
+  esac
+  exit 0
+  ;;
+rm)
+  for a in "$@"; do
+    case "$a" in -*) continue ;; esac
+    inside "$a" || {
+      echo "fake sudo: refusing to remove a path outside the sandbox: ${a}" >&2
+      exit 1
+    }
+    rm -f "$a" || exit 1
+  done
+  exit 0
+  ;;
+*)
+  exec "${command}" "$@"
+  ;;
+esac
+`
+
+// useLogOnlySudo puts the log-only sudo first on PATH, so a host-side install or uninstall recipe records every
+// command it would run as root and changes nothing on the machine the tests run on (issue #229).
+func (sb *sandbox) useLogOnlySudo(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "sudo")
+
+	writeFileMode(t, path, []byte(logOnlySudo), 0o700)
+}
+
+// fakeSleep stands in for sleep in a test that reaches a wait loop or a retry: it records its argv and returns
+// at once, so a bounded wait adds no seconds to the suite and the test can still count how often it waited
+// (issue #229).
+const fakeSleep = `#!/bin/sh
+{
+  printf 'tool=sleep\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+exit 0
+`
+
+// useFakeSleep puts the recording sleep first on PATH, so a test that reaches the install's wait loop or its
+// bootstrap retry runs no real sleep and can count the waits from the argv log.
+func (sb *sandbox) useFakeSleep(t *testing.T) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "sleep")
+
+	writeFileMode(t, path, []byte(fakeSleep), 0o700)
+}
+
+// fakeID stands in for id in a test that pins what a recipe does when it runs as root: it records its argv and
+// answers uid 0 and the account name root for the options the Makefile and the plist generator read (`id -u`,
+// `id -un`, and the short forms `id -ur` and `id -nur`), and hands every other call to the real id, so a test
+// fails on the refusal it pins and not on an id its stand-in could not answer (issue #229, sixth review).
+const fakeID = `#!/bin/sh
+{
+  printf 'tool=id\n'
+  for a in "$@"; do printf 'arg=%%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+case "$*" in
+'-u' | '-ur') printf '0\n'; exit 0 ;;
+'-un' | '-nu' | '-urn' | '-nur') printf 'root\n'; exit 0 ;;
+esac
+exec %s "$@"
+`
+
+// useFakeIDAsRoot puts an id first on PATH that answers uid 0 and the account name root, as id does in a shell
+// that runs under sudo, and hands every other call to the machine's own id.
+func (sb *sandbox) useFakeIDAsRoot(t *testing.T) {
+	t.Helper()
+
+	shim := fmt.Sprintf(fakeID, strconv.Quote(realTool(t, "id")))
+	path := filepath.Join(sb.binDir, "id")
+
+	writeFileMode(t, path, []byte(shim), 0o700)
+}
+
+// fakePlutil stands in for plutil: it records its argv and answers SHIFT2EU_TEST_PLUTIL_STATUS, so a test can
+// pin that a plist was linted before root ever saw it, and what the install does when the plist is refused.
+const fakePlutil = `#!/bin/sh
+{
+  printf 'tool=plutil\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+status="${SHIFT2EU_TEST_PLUTIL_STATUS:-0}"
+if [ "${status}" -ne 0 ]; then
+  echo "${SHIFT2EU_TEST_PLUTIL_MESSAGE:-plutil: the plist is malformed}" >&2
+fi
+exit "${status}"
+`
+
+// useFakePlutil puts the recording plutil first on PATH and makes it answer status, so no test runs the
+// machine's plutil and a test can pin a plist plutil refuses.
+func (sb *sandbox) useFakePlutil(t *testing.T, env map[string]string, status string) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "plutil")
+
+	writeFileMode(t, path, []byte(fakePlutil), 0o700)
+
+	env["SHIFT2EU_TEST_PLUTIL_STATUS"] = status
+}
+
+// fakeMountLimactl stands in for limactl when a test pins the instance's name and mount locations: it records
+// its argv and answers `list` the way `limactl list --format '{{.Name}}{{"\n"}}{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}' <instance>`
+// does, with the instance's name on the first line and one mount location per line after it (issue #229).
+//
+// SHIFT2EU_TEST_LIMA_LIST_NAME names the instance the list is about (default: the instance the recipe asked
+// about, the last argument), SHIFT2EU_TEST_LIMA_LIST_EMPTY=1 answers nothing at all (an instance limactl does
+// not know: exit 0, no output) and SHIFT2EU_TEST_LIMA_LIST_STATUS exits with that status instead (an instance
+// that is not running, or a limactl that cannot read it).
+const fakeMountLimactl = `#!/bin/sh
+{
+  printf 'tool=limactl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+if [ "${1:-}" = list ]; then
+  if [ "${SHIFT2EU_TEST_LIMA_LIST_STATUS:-0}" -ne 0 ]; then
+    echo "fake limactl: the instance ${SHIFT2EU_TEST_LIMA_LIST_NAME:-} is not readable" >&2
+    exit "${SHIFT2EU_TEST_LIMA_LIST_STATUS}"
+  fi
+  if [ "${SHIFT2EU_TEST_LIMA_LIST_EMPTY:-0}" != 1 ]; then
+    name="${SHIFT2EU_TEST_LIMA_LIST_NAME:-}"
+    if [ -z "${name}" ]; then
+      for a in "$@"; do name="$a"; done
+    fi
+    printf '%s\n' "${name}"
+    cat "${SHIFT2EU_TEST_LIMA_MOUNTS:?set SHIFT2EU_TEST_LIMA_MOUNTS}"
+  fi
+  exit 0
+fi
+echo "fake limactl: the tests answer limactl list only, not $*" >&2
+exit 64
+`
+
+// useFakeLimactlMounts makes the sandbox's limactl answer `list` with the instance's name and then mounts, one
+// location per line, the way
+// `limactl list --format '{{.Name}}{{"\n"}}{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}'` does
+// (issue #229).
+func (sb *sandbox) useFakeLimactlMounts(t *testing.T, env map[string]string, mounts []string) {
+	t.Helper()
+
+	path := filepath.Join(sb.binDir, "limactl")
+
+	writeFileMode(t, path, []byte(fakeMountLimactl), 0o700)
+
+	list := filepath.Join(sb.root, "lima-mounts.txt")
+
+	body := ""
+
+	for _, mount := range mounts {
+		body += mount + "\n"
+	}
+
+	writeFileMode(t, list, []byte(body), 0o600)
+
+	env["SHIFT2EU_TEST_LIMA_MOUNTS"] = list
+}
+
+// useFakeLimactlListNamed names the instance the fake limactl's list is about, so a test can pin what the
+// install does with a list that names another instance than the one it asked about (issue #229).
+func (sb *sandbox) useFakeLimactlListNamed(env map[string]string, name string) {
+	env["SHIFT2EU_TEST_LIMA_LIST_NAME"] = name
+}
+
+// useFakeLimactlListEmpty makes the fake limactl's list answer nothing at all, as it does for an instance it
+// does not know: exit 0 and no output, not even a name line (issue #229).
+func (sb *sandbox) useFakeLimactlListEmpty(env map[string]string) {
+	env["SHIFT2EU_TEST_LIMA_LIST_EMPTY"] = "1"
+}
+
+// useFakeLimactlListFailing makes the fake limactl's list exit 1, as it does when the instance is not running
+// or its configuration cannot be read (issue #229).
+func (sb *sandbox) useFakeLimactlListFailing(env map[string]string) {
+	env["SHIFT2EU_TEST_LIMA_LIST_STATUS"] = "1"
 }
 
 // vmClockShim answers the fake VM's clock with SHIFT2EU_TEST_VM_CLOCK for `date +%s` and hands every other
@@ -486,10 +868,7 @@ func (sb *sandbox) useFakeVMClock(t *testing.T, env map[string]string, clock str
 	shim := fmt.Sprintf(vmClockShim, strconv.Quote(realTool(t, "date")))
 	path := filepath.Join(sb.binDir, "date")
 
-	//nolint:gosec // the clock shim is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(shim), 0o700)
 
 	env["SHIFT2EU_TEST_VM_CLOCK"] = clock
 }
@@ -515,21 +894,77 @@ func (sb *sandbox) useFailingLimactl(t *testing.T, marker string) {
 
 	real := filepath.Join(sb.binDir, "limactl-real")
 
-	//nolint:gosec // the fake limactl is a script the tests run, so it must be executable
-	if err := os.WriteFile(real, []byte(fakeLimactl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", real, err)
-	}
+	writeFileMode(t, real, []byte(fakeLimactl), 0o700)
 
 	path := filepath.Join(sb.binDir, "limactl")
 
-	//nolint:gosec // the failing limactl is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(failingLimactl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(failingLimactl), 0o700)
 
 	if err := os.WriteFile(marker, nil, 0o600); err != nil {
 		t.Fatalf("create %s: %v", marker, err)
 	}
+}
+
+// takeoverMVShim stands in for mv in the test that forces the interleaving of issue #240, the way the second
+// contender of the race acts on the lock: once, when the refresh renames the temporary directory holding its own
+// pid into a lock that is not there (the move that wins a takeover), the shim does first what that contender does
+// to the winner - it moves the lock the refresh has just won aside - and returns success, so the refresh's own
+// read of the lock's pid finds no lock. Every other call is the machine's own mv.
+const takeoverMVShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+lock="${SHIFT2EU_TEST_LOCK:?set SHIFT2EU_TEST_LOCK}"
+if [ "${SHIFT2EU_TEST_LOCK_TAKEOVER:-0}" = 1 ] && [ "$#" -eq 2 ] && [ "$2" = "${lock}" ] &&
+  [ -d "$1" ] && [ ! -e "${lock}" ] && [ ! -e "${race}/parked" ]; then
+  %s "$@" || exit $?
+  %s "${lock}" "${race}/aside" || exit $?
+  echo moved-aside >> "${race}/log"
+  : > "${race}/parked"
+  exit 0
+fi
+exec %s "$@"
+`
+
+// takeoverRMShim is the other half of the same interleaving: the contender, finding a pid in the lock it moved
+// aside that is not the owner it read while the lock was missing, puts that lock back. The first rm after the lock
+// was moved aside is the refresh's own cleanup of the takeover it has just lost, and this shim restores the lock
+// before it hands on to the machine's own rm, so the refresh reads its own pid back from the lock (issue #240).
+const takeoverRMShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+if [ "${SHIFT2EU_TEST_LOCK_TAKEOVER:-0}" = 1 ] && [ -e "${race}/parked" ]; then
+  %s "${race}/aside" "${SHIFT2EU_TEST_LOCK:?set SHIFT2EU_TEST_LOCK}" || exit $?
+  echo put-back >> "${race}/log"
+  %s -f "${race}/parked"
+fi
+exec %s "$@"
+`
+
+// useLockRacedByAContender puts the mv and rm shims of issue #240 first on PATH, armed for the lock at lock, and
+// returns the directory they record the interleaving in: its log holds moved-aside once the lock the refresh had
+// won was moved aside and put-back once it was restored, so a test can prove it forced the race rather than a
+// plain takeover. Neither shim waits on anything, so the order inside the refresh's own take_lock is the whole
+// interleaving and the test needs no sleep and no second process.
+func (sb *sandbox) useLockRacedByAContender(t *testing.T, env map[string]string, lock string) string {
+	t.Helper()
+
+	mvTool, rmTool := realTool(t, "mv"), realTool(t, "rm")
+
+	trace := filepath.Join(sb.root, "lock-race")
+
+	if err := os.MkdirAll(filepath.Join(trace, "bin"), 0o700); err != nil {
+		t.Fatalf("create %s: %v", filepath.Join(trace, "bin"), err)
+	}
+
+	writeFileMode(t, filepath.Join(trace, "bin", "mv"),
+		[]byte(fmt.Sprintf(takeoverMVShim, strconv.Quote(mvTool), strconv.Quote(mvTool), strconv.Quote(mvTool))), 0o700)
+	writeFileMode(t, filepath.Join(trace, "bin", "rm"),
+		[]byte(fmt.Sprintf(takeoverRMShim, strconv.Quote(mvTool), strconv.Quote(rmTool), strconv.Quote(rmTool))), 0o700)
+
+	env["PATH"] = filepath.Join(trace, "bin") + ":" + env["PATH"]
+	env["SHIFT2EU_TEST_LOCK_TAKEOVER"] = "1"
+	env["SHIFT2EU_TEST_LOCK"] = lock
+	env["SHIFT2EU_TEST_LOCK_RACE"] = trace
+
+	return trace
 }
 
 func (sb *sandbox) writeRecordingShim(t *testing.T, name string) {
@@ -543,10 +978,7 @@ func (sb *sandbox) writeRecordingShim(t *testing.T, name string) {
 		shim = fmt.Sprintf(recordingCurlShim, strconv.Quote(real))
 	}
 
-	//nolint:gosec // the recording shim is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(shim), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(shim), 0o700)
 }
 
 // recordingCurlShim is the recording stand-in for curl. It logs its argv, and it refuses any URL that is not
@@ -629,6 +1061,39 @@ func zeroPadWithAnEightOrNine(n int64) string {
 	}
 }
 
+// pathWithout returns a directory that holds a link to every tool the machine keeps in /bin and /usr/bin
+// except name, for a PATH on which name is not found: a test can then pin what a recipe does on a host that
+// has no such tool, such as Linux CI, which has no launchctl (issue #229).
+func pathWithout(t *testing.T, name string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+
+	for _, system := range []string{"/bin", "/usr/bin"} {
+		entries, err := os.ReadDir(system)
+		if err != nil {
+			t.Fatalf("list %s: %v", system, err)
+		}
+
+		for _, entry := range entries {
+			if entry.Name() == name {
+				continue
+			}
+
+			link := filepath.Join(dir, entry.Name())
+			if _, err := os.Lstat(link); err == nil {
+				continue
+			}
+
+			if err := os.Symlink(filepath.Join(system, entry.Name()), link); err != nil {
+				t.Fatalf("link %s: %v", link, err)
+			}
+		}
+	}
+
+	return dir
+}
+
 // toolDir returns the directory of a tool the machine has, for a PATH a script needs it on.
 func toolDir(t *testing.T, name string) string {
 	t.Helper()
@@ -641,52 +1106,55 @@ func toolDir(t *testing.T, name string) string {
 	return filepath.Dir(path)
 }
 
-// safeBuffer is a buffer two goroutines share: one copies a running script's output into it, the test reads
-// it while the script runs.
-type safeBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-}
-
-func (b *safeBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.Write(p)
-}
-
-func (b *safeBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	return b.buf.String()
-}
-
 // runningScript is a script a test started and keeps watching: a refresh loop is meant to keep running, so a
 // test reads its output while it runs and can see it survive a failure instead of returning.
+//
+// Its stdout and stderr are files, not pipes (issue #267). With a pipe, Wait returns only once every process
+// holding the pipe's write end has closed it, so a child the script leaves behind - a `sleep 3600 &` that a
+// SIGTERM caught before the script stored its pid - keeps Wait, and so waitExit, blocked for as long as that
+// child runs, although the script itself stopped at once. With a file Wait returns when the script exits, and
+// running and waitExit tell what the test asks: whether the script runs. The script runs in a process group of
+// its own, led by a holder the test reaps only after the cleanup has killed the group, so no child the script
+// leaves behind outlives the test and the kill reaches no process outside the group (processGroup).
 type runningScript struct {
 	cmd    *exec.Cmd
-	stdout safeBuffer
-	stderr safeBuffer
+	group  *processGroup // the process group the script runs in
+	stdout string        // the file the script's stdout goes to
+	stderr string        // the file the script's stderr goes to
 	exited chan struct{} // closed once Wait has returned
 	status error         // what Wait returned; read it only after exited is closed
 }
 
 // start runs a script of dev/ in the background, under env alone, from the sandbox's host home, and removes
-// it with the test.
+// it, and every process it started, with the test.
 func (sb *sandbox) start(t *testing.T, script string, args []string, env map[string]string) *runningScript {
 	t.Helper()
 
+	output := t.TempDir()
 	r := &runningScript{
 		cmd:    exec.Command("sh", append([]string{script}, args...)...),
+		stdout: filepath.Join(output, "stdout"),
+		stderr: filepath.Join(output, "stderr"),
 		exited: make(chan struct{}),
 	}
 	r.cmd.Env = envList(env)
 	r.cmd.Dir = sb.hostHome
-	r.cmd.Stdout = &r.stdout
-	r.cmd.Stderr = &r.stderr
+	r.group = newProcessGroup(t)
+	t.Cleanup(func() { r.kill(t) })
+	r.group.join(r.cmd)
+	stdout, stderr := createOutput(t, r.stdout), createOutput(t, r.stderr)
+	r.cmd.Stdout, r.cmd.Stderr = stdout, stderr
 
-	if err := r.cmd.Start(); err != nil {
+	err := r.cmd.Start()
+
+	// The script holds its own descriptors now; the test reads the files by name.
+	for _, file := range []*os.File{stdout, stderr} {
+		if closeErr := file.Close(); closeErr != nil {
+			t.Errorf("close %s: %v", file.Name(), closeErr)
+		}
+	}
+
+	if err != nil {
 		t.Fatalf("start %s %s: %v", script, strings.Join(args, " "), err)
 	}
 
@@ -695,14 +1163,35 @@ func (sb *sandbox) start(t *testing.T, script string, args []string, env map[str
 		close(r.exited)
 	}()
 
-	t.Cleanup(func() { r.kill(t) })
-
 	return r
 }
 
+// createOutput creates the file a running script's stdout or stderr goes to.
+func createOutput(t *testing.T, path string) *os.File {
+	t.Helper()
+
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("create %s: %v", path, err)
+	}
+
+	return file
+}
+
 // out and errOut are the script's stdout and stderr so far.
-func (r *runningScript) out() string    { return r.stdout.String() }
-func (r *runningScript) errOut() string { return r.stderr.String() }
+func (r *runningScript) out() string    { return readOutput(r.stdout) }
+func (r *runningScript) errOut() string { return readOutput(r.stderr) }
+
+// readOutput is what a running script has written to path so far. It never fails a test: the output is read
+// for a failure message too, which a read error must not replace.
+func readOutput(path string) string {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("<cannot read %s: %v>", path, err)
+	}
+
+	return string(body)
+}
 
 // running reports whether the script is still running.
 func (r *runningScript) running() bool {
@@ -761,14 +1250,18 @@ func (r *runningScript) exitCode(t *testing.T) int {
 // pid is the process id of the script the test started.
 func (r *runningScript) pid() int { return r.cmd.Process.Pid }
 
-// kill ends the script if it is still running: the cleanup of every started script.
+// kill ends every process left in the script's group, the script included if it is still running: the cleanup
+// of every started script. It also runs when the script never started, and then ends the group alone.
 func (r *runningScript) kill(t *testing.T) {
 	t.Helper()
 
-	if !r.running() {
+	r.group.end()
+
+	if r.cmd.Process == nil || !r.running() {
 		return
 	}
 
+	// Where there are no process groups, the group's end killed nothing.
 	_ = r.cmd.Process.Kill()
 
 	if !r.waitExit(30 * time.Second) {
@@ -878,6 +1371,14 @@ func writeInventedKey(t *testing.T, path string, mode os.FileMode) inventedKey {
 
 // writeFileMode writes content to path with mode, creating the directory above it. The file is created
 // 0600 and then chmodded, because a plain write loses the group and world bits to the umask.
+//
+// Every executable a test runs is written here (issue #267), holding syscall.ForkLock for reading while the
+// file is open for writing. Go opens the file O_CLOEXEC, but a parallel test that forks in that window
+// gives its child a copy of the write descriptor, which the child holds until its own exec. Linux refuses
+// to exec a file any process holds open for writing, so this test's exec of path then fails with
+// ETXTBSY ("text file busy"), or sh reports it and exits 126. Every fork in the process takes ForkLock for
+// writing, so no fork happens while the descriptor is open. Writing to a temporary name and renaming it
+// into place would not help: the child's descriptor is on the same inode.
 func writeFileMode(t *testing.T, path string, content []byte, mode os.FileMode) {
 	t.Helper()
 
@@ -885,7 +1386,11 @@ func writeFileMode(t *testing.T, path string, content []byte, mode os.FileMode) 
 		t.Fatalf("create %s: %v", filepath.Dir(path), err)
 	}
 
-	if err := os.WriteFile(path, content, 0o600); err != nil {
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(path, content, 0o600)
+	syscall.ForkLock.RUnlock()
+
+	if err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 
@@ -1669,14 +2174,58 @@ func jwtPart(raw string) ([]byte, error) {
 func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool) {
 	t.Helper()
 
+	if !poll(timeout, cond) {
+		t.Fatalf("timed out after %s waiting for %s", timeout, what)
+	}
+}
+
+// poll polls cond until it holds or timeout passes, and reports whether it held: waitFor for a test that
+// says more than waitFor's message when it times out.
+func poll(timeout time.Duration, cond func() bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if cond() {
-			return
+			return true
 		}
 
 		time.Sleep(25 * time.Millisecond)
 	}
 
-	t.Fatalf("timed out after %s waiting for %s", timeout, what)
+	return false
+}
+
+// describeTree lists every entry under root, one per line with its type, and the content of each regular
+// file up to a line: a failure message's view of a small directory such as the refresh's lock.
+func describeTree(root string) string {
+	var lines []string
+
+	tree := os.DirFS(root)
+
+	err := fs.WalkDir(tree, ".", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("%s: %v", path, err))
+
+			return nil
+		}
+
+		line := fmt.Sprintf("%s %s", entry.Type(), path)
+
+		if entry.Type().IsRegular() {
+			body, readErr := fs.ReadFile(tree, path)
+			if readErr != nil {
+				line += fmt.Sprintf(" (cannot read: %v)", readErr)
+			} else {
+				line += fmt.Sprintf(" = %q", strings.SplitN(string(body), "\n", 2)[0])
+			}
+		}
+
+		lines = append(lines, line)
+
+		return nil
+	})
+	if err != nil {
+		lines = append(lines, fmt.Sprintf("walk %s: %v", root, err))
+	}
+
+	return strings.Join(lines, "\n")
 }

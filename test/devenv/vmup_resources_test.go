@@ -9,6 +9,7 @@
 package devenv_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -405,6 +406,17 @@ func TestMakeVMUpRefusesAnInvalidValueWhateverMakeIsTold(t *testing.T) {
 	}
 }
 
+// exitStderr is the stderr an exec.Cmd.Output call kept for its failure message, "" for any other error: a
+// command that failed to run says why there, such as sh's "Text file busy" for a script it could not exec.
+func exitStderr(err error) string {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
+		return "\nstderr:\n" + string(exitErr.Stderr)
+	}
+
+	return ""
+}
+
 // TestVMUpGitShimRunsTheRealGitAtAnyPath pins the shim's quoting (issue #228 review, item D): the path of the
 // real git is one single-quoted sh word, so a path that carries a $, a backtick, a space or a single quote
 // reaches sh as it is. Quoted for Go instead, sh would expand part of the path, split it, or run a command in
@@ -434,17 +446,13 @@ func TestVMUpGitShimRunsTheRealGitAtAnyPath(t *testing.T) {
 			}
 
 			real := filepath.Join(dir, "git")
-
-			//nolint:gosec // the fake real git is a script the tests run, so it must be executable
-			if err := os.WriteFile(real, []byte(vmUpRealGit), 0o700); err != nil {
-				t.Fatalf("write %s: %v", real, err)
-			}
+			writeFileMode(t, real, []byte(vmUpRealGit), 0o700)
 
 			shim := writeGitShim(t, t.TempDir(), real)
 
 			out, err := exec.Command(shim, "rev-parse", "--show-toplevel").Output()
 			if err != nil {
-				t.Fatalf("the git shim of the real git at %s: %v", real, err)
+				t.Fatalf("the git shim of the real git at %s: %v%s", real, err, exitStderr(err))
 			}
 
 			want, got := "real-git rev-parse --show-toplevel\n", string(out)
@@ -460,17 +468,13 @@ func TestVMUpGitShimRunsTheRealGitAtAnyPath(t *testing.T) {
 
 		dir := t.TempDir()
 		real := filepath.Join(dir, "git")
-
-		//nolint:gosec // the fake real git is a script the tests run, so it must be executable
-		if err := os.WriteFile(real, []byte(vmUpRealGit), 0o700); err != nil {
-			t.Fatalf("write %s: %v", real, err)
-		}
+		writeFileMode(t, real, []byte(vmUpRealGit), 0o700)
 
 		shim := writeGitShim(t, dir, real)
 
 		out, err := exec.Command(shim, "config", "core.hooksPath").Output()
 		if err != nil {
-			t.Fatalf("the git shim with git config core.hooksPath: %v", err)
+			t.Fatalf("the git shim with git config core.hooksPath: %v%s", err, exitStderr(err))
 		}
 
 		if got := string(out); got != "" {

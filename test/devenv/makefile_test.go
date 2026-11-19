@@ -1,10 +1,13 @@
 // Pins the Makefile's part in the agents App's credential (PRD #161 milestone 1): VM_ENV names no
 // SHIFT2EU_AGENTS_APP_* variable, make vm-env refuses one a maintainer adds rather than copying it into the
 // VM, make agents-token / make agents-token-refresh run the mint and the refresh, make
-// agents-token-refresh-start starts one refresher per VM in the background from the host clone, make deck
-// warns about App variables in a workspace shell and starts nothing, and make vm-gh-wrapper installs the
-// pinned wrapper an existing VM lacks, whole or not at all
-// (.dot-agent-deck/prd161m1-fixes.md items 3, 7 and 8 and .dot-agent-deck/prd161m1-fixes2.md items 1 and 2).
+// agents-token-refresh-start starts one refresher per VM in the background from the host clone and warns about
+// the instance's LaunchDaemon - and about a loaded job that runs another clone's script - make
+// agents-token-refresh-install installs the LaunchDaemon after checking the instance's mounts and linting the
+// plist, make agents-token-refresh-uninstall removes it, make deck warns about App variables in a workspace
+// shell and starts nothing, and make vm-gh-wrapper installs the pinned wrapper an existing VM lacks, whole or
+// not at all (.dot-agent-deck/prd161m1-fixes.md items 3, 7 and 8 and .dot-agent-deck/prd161m1-fixes2.md items 1
+// and 2, issue #229).
 package devenv_test
 
 import (
@@ -21,6 +24,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // agentsAppPrefix is the prefix of the three inputs dev/agents-app-token.sh reads from the maintainer's
@@ -634,6 +639,1516 @@ func TestMakeAgentsTokenRefreshStartKeepsOneRefresherPerVM(t *testing.T) {
 			return len(f.api.minted()) >= 1
 		})
 	})
+
+	// Issue #229: the LaunchDaemon runs one refresh per instance, so a second one started by hand beside it is a
+	// second loop minting for the same VM. Once `launchctl print` answers for the instance's label, the target
+	// warns and starts nothing. The fake launchctl answers that print, so these two cases pin both halves on a
+	// machine without launchd, which is what Linux CI has.
+	t.Run("a loaded LaunchDaemon is warned about and no refresher starts", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTokenFixture(t, "shift2eu")
+		f.sb.useFakeLaunchctl(t, f.env, "0")
+
+		label := launchdLabelPrefix + "shift2eu"
+
+		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-start with the LaunchDaemon %s loaded: %v\nstdout: %s\nstderr: %s", label, err, stdout, stderr)
+		}
+
+		for _, want := range []string{"LaunchDaemon", label} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("make agents-token-refresh-start does not name %q on stderr although launchd runs the refresh as %s: a maintainer would start a second loop and never learn why not to (issue #229)\nstdout: %s\nstderr: %s", want, label, stdout, stderr)
+			}
+		}
+
+		// It asked launchd about this instance's job, so the warning is about the job that runs this VM's
+		// refresh and not about another instance's. launchctl takes the service target as one argument,
+		// `launchctl print system/<label>`, so the same invocation must carry `print` and that target.
+		var askedLabel bool
+
+		for _, args := range invocations(f.sb.argvLogText(t), "launchctl") {
+			if slices.Contains(args, "print") && slices.Contains(args, "system/"+label) {
+				askedLabel = true
+			}
+		}
+
+		if !askedLabel {
+			t.Errorf("make agents-token-refresh-start never ran launchctl print system/%s, so it cannot know the LaunchDaemon runs the refresh:\n%s", label, f.sb.argvLogText(t))
+		}
+
+		// The warning is a refusal to start a second loop: no pid file, no log, and no mint.
+		entries, err := os.ReadDir(f.state)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read %s: %v", f.state, err)
+		}
+
+		for _, entry := range entries {
+			t.Errorf("make agents-token-refresh-start left %s in %s although the LaunchDaemon runs the refresh: it must start nothing beside the job (issue #229)", entry.Name(), f.state)
+		}
+
+		if got := len(f.api.minted()); got != 0 {
+			t.Errorf("make agents-token-refresh-start started a refresher beside the LaunchDaemon: the fake API minted %d token(s) (issue #229)", got)
+		}
+	})
+
+	t.Run("no loaded LaunchDaemon leaves the start target as it was", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTokenFixture(t, "shift2eu")
+		// 113 is what launchctl returns for a job it does not know: the instance's LaunchDaemon is not
+		// loaded, so the refresh is still the maintainer's to start by hand.
+		f.sb.useFakeLaunchctl(t, f.env, "113")
+
+		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-start with no LaunchDaemon loaded: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		if combined := stdout + stderr; strings.Contains(combined, "LaunchDaemon") {
+			t.Errorf("make agents-token-refresh-start warns about a LaunchDaemon although launchctl knows no job for this instance (issue #229):\n%s", combined)
+		}
+
+		pid := readPid(t, f.statePath("agents-token-refresh-shift2eu.pid"))
+
+		if !pidAlive(pid) {
+			t.Errorf("the pid file holds %d, which is not running: with no LaunchDaemon loaded the target still starts the refresher it always started (issue #229)", pid)
+		}
+	})
+
+	// A shell that never exported LIMA_INSTANCE still gets the default instance's refresher: the recipe exports
+	// LIMA_INSTANCE := $(LIMA_INSTANCE), and the Makefile defaults it to shift2eu, so the pid and log files are
+	// named after that VM and not after an empty name (issue #229, sixth review).
+	t.Run("no LIMA_INSTANCE in the environment starts the default instance's refresher", func(t *testing.T) {
+		t.Parallel()
+
+		f := newTokenFixture(t, "shift2eu")
+		delete(f.env, "LIMA_INSTANCE")
+
+		f.sb.useFakeLaunchctl(t, f.env, "113")
+
+		stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-start with no LIMA_INSTANCE in its environment: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		pidPath := f.statePath("agents-token-refresh-shift2eu.pid")
+		pid := readPid(t, pidPath)
+
+		if !pidAlive(pid) {
+			t.Errorf("the pid file %s holds %d, which is not running: a start with no LIMA_INSTANCE in the environment starts the default instance's refresher", pidPath, pid)
+		}
+
+		if _, err := os.Stat(f.statePath("agents-token-refresh-.pid")); err == nil {
+			t.Errorf("make agents-token-refresh-start named the pid file after an empty instance: with no LIMA_INSTANCE in the environment it must use the Makefile's default, shift2eu")
+		}
+
+		waitFor(t, 60*time.Second, "the default instance's refresher to mint a token", func() bool {
+			return len(f.api.minted()) >= 1
+		})
+	})
+}
+
+// TestMakeAgentsTokenRefreshStartRefusesAnInvalidInstance pins the fifth review's finding: the start target uses
+// LIMA_INSTANCE in the paths of its pid, log and lock files and in the label it asks launchd about, and make splices
+// the value into the shell text it runs. An instance name with a space, a slash or a quote is no name this
+// Makefile supports (the install and the uninstall already refuse one), so the start target refuses it before it
+// asks launchctl anything and before it starts a refresher, and the refusal names the variable.
+func TestMakeAgentsTokenRefreshStartRefusesAnInvalidInstance(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		instance string
+	}{
+		{name: "a name with a space", instance: "a b"},
+		{name: "a name with a slash", instance: "a/b"},
+		{name: "a name with a quote", instance: `x"y`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newTokenFixture(t, "shift2eu")
+
+			stdout, stderr, err := runMake(t, []string{"LIMA_INSTANCE=" + tc.instance, "agents-token-refresh-start"}, f.env)
+			if err == nil {
+				t.Fatalf("make agents-token-refresh-start with LIMA_INSTANCE=%q exited 0: the value becomes part of the pid, log and lock file names and of the label launchd is asked about, and make splices it into the shell text it runs, so a name this Makefile does not support must be refused (issue #229, fifth review)\nstdout: %s\nstderr: %s", tc.instance, stdout, stderr)
+			}
+
+			if calls := invocations(f.sb.argvLogText(t), "launchctl"); len(calls) != 0 {
+				t.Errorf("make agents-token-refresh-start asked launchctl about LIMA_INSTANCE=%q before it refused it, and the check of the name must come before any use: %v\nstdout: %s\nstderr: %s", tc.instance, calls, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "LIMA_INSTANCE") {
+				t.Errorf("the refusal does not name LIMA_INSTANCE, so a maintainer cannot tell which value to fix:\nstderr: %s", stderr)
+			}
+
+			pids, globErr := filepath.Glob(f.statePath("*.pid"))
+			if globErr != nil {
+				t.Fatalf("look for pid files in %s: %v", f.state, globErr)
+			}
+
+			if len(pids) != 0 {
+				t.Errorf("make agents-token-refresh-start started a refresher for LIMA_INSTANCE=%q and left %v: a name it refuses must start nothing (issue #229, fifth review)", tc.instance, pids)
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh pins the fifth review's finding: after
+// `launchctl bootstrap` the job starts and the refresh it runs takes the instance's lock at once, so the lock's
+// pid file names that refresh by the time the install reads it. Telling the maintainer that "a refresh you
+// started by hand (pid N) holds the lock" and to kill N would then point at the job's own loop - the one process
+// the job exists to keep running, and one launchd starts again five minutes later. A refresh that held the lock
+// before the install is still the one to warn about, with its pid.
+func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name           string
+		lockHeldBefore bool // a refresh started by hand holds the lock before make runs
+		jobRunsLock    bool // launchctl print reports the lock's pid as the job's own after the bootstrap
+		wantWarned     bool
+	}{
+		{
+			name: "the job's own refresh takes the lock as it loads",
+		},
+		{
+			name:           "a refresh started by hand held the lock before the install",
+			lockHeldBefore: true,
+			wantWarned:     true,
+		},
+		{
+			// The install reads the lock's pid before the bootstrap and warns only about a refresh that still
+			// holds that pid and is not the pid `launchctl print` reports for the job: the lock can belong to the
+			// job's own refresh even when the maintainer started that refresh by hand, and the last condition is
+			// what the pid comparison is for (issue #229, sixth review).
+			name:           "the job runs the very pid the lock holds",
+			lockHeldBefore: true,
+			jobRunsLock:    true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, "shift2eu")
+
+			// A running refresh of the instance, as the lock names one: it is the pid the lock holds when the
+			// install reads the file, and it belongs to the job when the lock appears with the bootstrap.
+			refresh := standInForARefresh(t, f.sb)
+			pid := strconv.Itoa(refresh.pid())
+			lockPid := filepath.Join(f.sb.refreshLockDir(f.instance), "pid")
+
+			if tc.lockHeldBefore {
+				writeFileMode(t, lockPid, []byte(pid+"\n"), 0o600)
+			} else {
+				f.sb.useFakeLaunchctlTakingTheLockAtLoad(t, f.env, lockPid, refresh.pid())
+			}
+
+			if tc.jobRunsLock {
+				// The job is not loaded yet (the install's first `launchctl print` fails), the bootstrap loads it,
+				// and from then on launchctl names the refresh's own pid as the job's.
+				f.sb.useFakeLaunchctlJobPrintingPid(t, f.env, f.label(), refresh.pid())
+			}
+
+			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+			if err != nil {
+				t.Fatalf("make agents-token-refresh-install with the lock of %s held by pid %s: %v\nstdout: %s\nstderr: %s", f.instance, pid, err, stdout, stderr)
+			}
+
+			if calls := f.bootstrapCalls(t); len(calls) != 1 {
+				t.Fatalf("the install ran launchctl bootstrap %d time(s), want one: %v", len(calls), calls)
+			}
+
+			combined := stdout + stderr
+
+			if tc.wantWarned {
+				var named bool
+
+				for _, line := range strings.Split(combined, "\n") {
+					if strings.Contains(line, "started by hand") && strings.Contains(line, pid) {
+						named = true
+					}
+				}
+
+				if !named {
+					t.Errorf("the install does not warn that a refresh started by hand (pid %s) holds the lock of %s, so a maintainer never learns that the job waits for it, trying again every 5 minutes (issue #229, fifth review)\nstdout: %s\nstderr: %s", pid, f.instance, stdout, stderr)
+				}
+
+				return
+			}
+
+			// The lock belongs to the job's own refresh: the install must not warn about it, and must not send the
+			// maintainer to kill the loop it just loaded.
+			if strings.Contains(combined, "started by hand") {
+				t.Errorf("the install warns about a refresh started by hand although the lock of %s holds pid %s, the refresh its own bootstrap loaded: the maintainer would kill the job's loop, and launchd would start it again 5 minutes later (issue #229, fifth review)\nstdout: %s\nstderr: %s", f.instance, pid, stdout, stderr)
+			}
+
+			for _, line := range strings.Split(combined, "\n") {
+				if strings.Contains(line, "kill") && strings.Contains(line, pid) {
+					t.Errorf("the install tells the maintainer to kill pid %s, the refresh the job it just loaded runs: that is the process the job exists to keep running (issue #229, fifth review)\nline: %s", pid, line)
+				}
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesToRunAsRoot pins the sixth review's finding: the plist names the
+// account that rendered it (id -un) as the job's UserName, so an install run under sudo -E would install a job
+// that runs the host clone's script as root - a script the maintainer can still edit, and everything it reaches.
+// The install must refuse such a run before it runs anything as root, prints no plist and installs nothing, and
+// must say to run it as the maintainer and not under sudo.
+func TestMakeAgentsTokenRefreshInstallRefusesToRunAsRoot(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	f.sb.useFakeIDAsRoot(t)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err == nil {
+		t.Fatalf("make agents-token-refresh-install exited 0 with id -u answering 0: the plist it renders would name root as the job's UserName, and the job would run the host clone's script - which the maintainer can still edit - as root, at every boot\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	// The refusal must be the install recipe's own, before it runs anything: dev/agents-token-launchd.sh refuses
+	// a root run as well (agents-token-launchd: refused: ...), so a recipe whose own check is gone still exits
+	// non-zero, and a test that only looks for a refusal passes on the generator's, after the recipe read the
+	// VM's mounts as root (issue #229, seventh review).
+	firstLine, _, _ := strings.Cut(stderr, "\n")
+	if !strings.HasPrefix(firstLine, "agents-token-refresh-install: refused") {
+		t.Errorf("the first line of stderr is not the install recipe's own refusal, which starts with %q: the generator dev/agents-token-launchd.sh refuses a root run too, so the refusal may come from it alone, after the recipe's own check - and the work before it - ran as root (issue #229, seventh review)\nfirst line: %q\nstdout: %s\nstderr: %s", "agents-token-refresh-install: refused", firstLine, stdout, stderr)
+	}
+
+	refusal := strings.ToLower(stderr)
+
+	for _, want := range []string{"maintainer", "sudo"} {
+		if !strings.Contains(refusal, want) {
+			t.Errorf("the refusal does not mention %q, so a maintainer who ran sudo -E make agents-token-refresh-install cannot tell how to run it instead:\nstdout: %s\nstderr: %s", want, stdout, stderr)
+		}
+	}
+
+	// Refusing means doing nothing: no VM is asked about its mounts, no plist is rendered or linted, no file is
+	// installed and no job is loaded, so a refused run leaves the machine exactly as it was (issue #229, sixth
+	// and seventh reviews).
+	for _, tool := range []string{"sudo", "limactl", "launchctl", "plutil"} {
+		if calls := invocations(f.sb.argvLogText(t), tool); len(calls) != 0 {
+			t.Errorf("the install ran %s although it refuses to run as root, so the refusal comes after work that root should never have been asked for: %v\nstdout: %s\nstderr: %s", tool, calls, stdout, stderr)
+		}
+	}
+
+	if _, err := os.Stat(f.dest()); err == nil {
+		t.Errorf("the install wrote the plist %s although it refuses to run as root: then a refused run still leaves a job behind for root to load at the next boot", f.dest())
+	}
+}
+
+// standInForARefresh starts a harmless process whose command line ends in agents-app-token.sh refresh, the
+// shape the install and the start target look for in the lock's pid: they compare the command line of the pid the
+// lock names, so a test needs a process that looks like a refresh and never mints. It is a stand-in copied into
+// the sandbox, not the repository's script, and it only sleeps until the test ends - which kills it.
+func standInForARefresh(t *testing.T, sb *sandbox) *runningScript {
+	t.Helper()
+
+	path := filepath.Join(sb.root, "a-copy", "dev", "agents-app-token.sh")
+	writeFileMode(t, path, []byte("#!/bin/sh\n# A stand-in for the refresh the job runs: it runs, and does nothing else.\ntrap 'exit 0' TERM\nwhile :; do sleep 1; done\n"), 0o755)
+
+	r := sb.start(t, path, []string{"refresh"}, sb.baseEnv())
+
+	// The lock is only about a running refresh: a stand-in that died would make the install skip the lock, and
+	// the test would pass for the wrong reason.
+	if !r.running() {
+		t.Fatalf("the stand-in refresh %s exited at once; stderr:\n%s", path, r.errOut())
+	}
+
+	return r
+}
+
+// TestMakefileHasTheAgentsTokenLaunchDaemonTargets pins the install target's shape only: it renders the
+// instance's plist through dev/agents-token-launchd.sh, which launchdplist_test.go pins in full. Installing
+// and uninstalling need sudo and a real launchctl, so neither runs here.
+func TestMakefileHasTheAgentsTokenLaunchDaemonTargets(t *testing.T) {
+	t.Parallel()
+
+	// The plist goes where launchd reads LaunchDaemons, and a variable holds that directory: a test points it
+	// at its own tree, so no test writes into /Library (issue #229, second review).
+	if dir, ok := makeVariable(readRepoFile(t, makefilePath), "AGENTS_TOKEN_LAUNCHD_DIR"); !ok || dir != "/Library/LaunchDaemons" {
+		t.Errorf("the Makefile's AGENTS_TOKEN_LAUNCHD_DIR is %q (declared: %v), want the default /Library/LaunchDaemons: the install and the uninstall write and remove the job's plist under that directory, and a test must be able to point it at its own tree (issue #229, second review)", dir, ok)
+	}
+
+	stdout, stderr, err := runMake(t, []string{"-n", "agents-token-refresh-install"}, makeEnv(t, nil))
+	if err != nil {
+		t.Fatalf("make -n agents-token-refresh-install: %v\nstderr: %s", err, stderr)
+	}
+
+	for _, want := range []string{"agents-token-launchd.sh", "plist"} {
+		if !strings.Contains(stdout, want) {
+			t.Errorf("make -n agents-token-refresh-install does not mention %q: the target installs the plist dev/agents-token-launchd.sh renders for this VM instance, so one generator and one test cover every target that writes one (issue #229)\n%s", want, stdout)
+		}
+	}
+}
+
+// launchdMountsFormat is the limactl --format argument the install reads the instance's name and mount
+// locations with: the instance's name on the first line and one mount location per line after it. The install
+// needs the name to tell that limactl answered about the instance it asked about, and the locations to tell
+// whether the clone it runs from is one of the directories the VM mounts and can edit (issue #229). The fake
+// limactl answers the same shape.
+const launchdMountsFormat = `{{.Name}}{{"\n"}}{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}`
+
+// launchdInstallFixture is one environment for a run of make agents-token-refresh-install or
+// agents-token-refresh-uninstall: a sandbox with a temporary HOME, a state directory inside it, the log-only
+// fake sudo and the fake launchctl, plutil and limactl first on PATH, an invented key, the three App variables
+// and a LaunchDaemons directory inside the sandbox, handed to make on its command line. No test reaches the
+// machine's sudo, launchctl or plutil, and nothing writes into /Library.
+type launchdInstallFixture struct {
+	sb         *sandbox
+	key        inventedKey
+	env        map[string]string
+	instance   string
+	repo       string // the clone make runs in, symlinks resolved: what the plist names and the mount check reads
+	dir        string // where make runs: the repository, or a clone a test grew inside its sandbox
+	launchdDir string // where launchd reads LaunchDaemons from: the make command line's AGENTS_TOKEN_LAUNCHD_DIR
+}
+
+// launchdInstallOption changes the environment an install fixture runs make with, before the test uses it.
+type launchdInstallOption func(t *testing.T, f *launchdInstallFixture)
+
+// withoutOnPath leaves tool off the fixture's PATH, for a subtest that pins what a recipe does on a host that
+// has no such tool, such as Linux CI, which has no launchctl (issue #229). The fake tool the fixture installed
+// in binDir is removed, so it cannot be found there either, and every other fake tool stays reachable: the
+// log-only sudo included, so a refusal that runs it would still be caught.
+func withoutOnPath(tool string) launchdInstallOption {
+	return func(t *testing.T, f *launchdInstallFixture) {
+		t.Helper()
+
+		path := filepath.Join(f.sb.binDir, tool)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("remove the fake %s from %s: %v", tool, f.sb.binDir, err)
+		}
+
+		f.env["PATH"] = f.sb.binDir + ":" + pathWithout(t, tool)
+	}
+}
+
+// launchdClone writes a clone of the repository at dir: the Makefile and the two scripts an install reads. A
+// test that needs the clone somewhere of its own - inside its HOME, for the mount locations the install expands
+// `~` into - grows one here, and the real recipe still runs, from the sandbox (issue #229).
+func launchdClone(t *testing.T, dir string) string {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(dir, makefilePath), []byte(readRepoFile(t, makefilePath)), 0o600)
+
+	for _, script := range []string{launchdScript, agentsMintScript} {
+		writeFileMode(t, filepath.Join(dir, script), []byte(readRepoFile(t, script)), 0o755)
+	}
+
+	return dir
+}
+
+// resolvedPath returns path with its symlinks resolved, the way the install's own pwd -P resolves the clone it
+// runs from, so a test can compare the refusal with the path the install prints.
+func resolvedPath(t *testing.T, path string) string {
+	t.Helper()
+
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolve the symlinks of %s: %v", path, err)
+	}
+
+	return resolved
+}
+
+// inAClone makes make run in a clone grown inside the sandbox instead of in the repository, so the mount check
+// reads the clone a test built rather than this worktree.
+func inAClone(where func(f *launchdInstallFixture) string) launchdInstallOption {
+	return func(t *testing.T, f *launchdInstallFixture) {
+		t.Helper()
+
+		clone := launchdClone(t, where(f))
+		f.dir, f.repo = clone, resolvedPath(t, clone)
+	}
+}
+
+// inACloneInsideHome grows the clone under the fixture's HOME, so a mount location `~` or `~/clone` names a
+// directory that really holds the clone (issue #229, second review).
+func inACloneInsideHome() launchdInstallOption {
+	return inAClone(func(f *launchdInstallFixture) string { return filepath.Join(f.env["HOME"], "clone") })
+}
+
+// newLaunchdInstallFixture builds the fixture for one VM instance, with a VM that mounts nothing near the clone.
+func newLaunchdInstallFixture(t *testing.T, instance string, opts ...launchdInstallOption) *launchdInstallFixture {
+	t.Helper()
+
+	sb := newSandbox(t)
+	key := writeInventedKey(t, filepath.Join(sb.root, "keys", "agents-app.pem"), 0o600)
+
+	env := sb.baseEnv()
+	env["LIMA_INSTANCE"] = instance
+	env["SHIFT2EU_AGENTS_APP_ID"] = launchdAppID
+	env["SHIFT2EU_AGENTS_APP_INSTALLATION_ID"] = launchdInstallationID
+	env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = key.path
+
+	// Where launchd reads LaunchDaemons from, pointed at the sandbox: the recipe writes the plist under this
+	// directory and no test may reach the real /Library (issue #229). It travels on make's command line, never
+	// in the environment, since a stale export would install where launchd never looks at boot (issue #229,
+	// fourth review).
+	launchdDir := filepath.Join(sb.root, "LaunchDaemons")
+	if err := os.MkdirAll(launchdDir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", launchdDir, err)
+	}
+
+	sb.useLogOnlySudo(t)
+	// 113 is what launchctl returns for a job it does not know: no job of this instance is loaded yet.
+	sb.useFakeLaunchctl(t, env, "113")
+	sb.useFakePlutil(t, env, "0")
+	sb.useFakeLimactlMounts(t, env, nil)
+
+	dir, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		t.Fatalf("resolve the repository root: %v", err)
+	}
+
+	f := &launchdInstallFixture{sb: sb, key: key, env: env, instance: instance, repo: launchdRepoRoot(t), dir: dir, launchdDir: launchdDir}
+
+	for _, opt := range opts {
+		opt(t, f)
+	}
+
+	return f
+}
+
+// label is the LaunchDaemon's label of the fixture's instance.
+func (f *launchdInstallFixture) label() string { return launchdLabelPrefix + f.instance }
+
+// dest is the file launchd reads the job from: inside the sandbox, since the recipe writes it under
+// AGENTS_TOKEN_LAUNCHD_DIR and nothing here may reach /Library (issue #229).
+func (f *launchdInstallFixture) dest() string {
+	return filepath.Join(f.launchdDir, f.label()+".plist")
+}
+
+// run runs one target in the fixture's clone with the fixture's environment, never the test process's own, and
+// with AGENTS_TOKEN_LAUNCHD_DIR on make's command line, which is one of the only two places the recipe reads it
+// from (issue #229, fourth review).
+func (f *launchdInstallFixture) run(t *testing.T, target string) (string, string, error) {
+	t.Helper()
+
+	return runMakeIn(t, f.dir, []string{"AGENTS_TOKEN_LAUNCHD_DIR=" + f.launchdDir, target}, f.env)
+}
+
+// runWithTheDirectoryInTheEnvironment runs one target with AGENTS_TOKEN_LAUNCHD_DIR exported in the environment
+// and not on make's command line, the way a stale export in a maintainer's shell would reach it (issue #229,
+// fourth review).
+func (f *launchdInstallFixture) runWithTheDirectoryInTheEnvironment(t *testing.T, target string) (string, string, error) {
+	t.Helper()
+
+	env := make(map[string]string, len(f.env)+1)
+	for name, value := range f.env {
+		env[name] = value
+	}
+
+	env["AGENTS_TOKEN_LAUNCHD_DIR"] = f.launchdDir
+
+	return runMakeIn(t, f.dir, []string{target}, env)
+}
+
+// sudoCommands returns the argv of every command the recipe ran through sudo, in call order.
+func (f *launchdInstallFixture) sudoCommands(t *testing.T) [][]string {
+	t.Helper()
+
+	return invocations(f.sb.argvLogText(t), "sudo")
+}
+
+// bootstrapCalls returns the argv of every `sudo launchctl bootstrap` the recipe ran, in call order.
+func (f *launchdInstallFixture) bootstrapCalls(t *testing.T) [][]string {
+	t.Helper()
+
+	var calls [][]string
+
+	for _, args := range f.sudoCommands(t) {
+		if len(args) > 1 && args[0] == "launchctl" && args[1] == "bootstrap" {
+			calls = append(calls, args)
+		}
+	}
+
+	return calls
+}
+
+// script is the host clone's refresh script the installed job runs.
+func (f *launchdInstallFixture) script() string {
+	return filepath.Join(f.repo, "dev", "agents-app-token.sh")
+}
+
+// subCommand returns the first sudo invocation whose command is name, failing the test when there is none.
+func (f *launchdInstallFixture) subCommand(t *testing.T, name string) []string {
+	t.Helper()
+
+	for _, args := range invocations(f.sb.argvLogText(t), "sudo") {
+		if len(args) > 0 && args[0] == name {
+			return args
+		}
+	}
+
+	t.Fatalf("the install ran no `sudo %s`; the commands it did run as root: %v", name, invocations(f.sb.argvLogText(t), "sudo"))
+
+	return nil
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesACloneInsideTheVMsMounts pins the reviewer's finding: the clone the
+// job runs from must not be one of the directories the VM mounts, and no mount may reach into the clone either.
+// The agents write in the mounted workspace, so a job that ran a mounted clone would run their code at every
+// boot, as the maintainer, with the App's key in reach. The same goes for a mount the clone itself holds: it
+// lets the agents edit the clone's dev/. The install reads the instance's name and mounts with limactl, expands
+// `~` and resolves a symlinked location, and refuses before any sudo.
+func TestMakeAgentsTokenRefreshInstallRefusesACloneInsideTheVMsMounts(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name          string
+		opts          []launchdInstallOption
+		mounts        func(t *testing.T, f *launchdInstallFixture) []string
+		wantInstalled bool // the install proceeds and installs the job
+	}{
+		{
+			name:   "the clone itself is a mount of the VM",
+			mounts: func(_ *testing.T, f *launchdInstallFixture) []string { return []string{f.repo} },
+		},
+		{
+			name:   "the clone sits under a mount of the VM",
+			mounts: func(_ *testing.T, f *launchdInstallFixture) []string { return []string{filepath.Dir(f.repo)} },
+		},
+		{
+			name: "one of several mounts holds the clone",
+			mounts: func(_ *testing.T, f *launchdInstallFixture) []string {
+				return []string{filepath.Join(f.sb.root, "unrelated"), filepath.Dir(f.repo)}
+			},
+		},
+		{
+			name: "the VM mounts nothing near the clone",
+			mounts: func(_ *testing.T, f *launchdInstallFixture) []string {
+				return []string{filepath.Join(f.sb.root, "unrelated")}
+			},
+			wantInstalled: true,
+		},
+		{
+			// A mount inside the clone is as bad as a mount above it: through the VM the agents can edit the
+			// clone's own dev/agents-app-token.sh, which the job runs at every boot (issue #229, second
+			// review).
+			name:   "a mount inside the clone",
+			opts:   []launchdInstallOption{inACloneInsideHome()},
+			mounts: func(_ *testing.T, f *launchdInstallFixture) []string { return []string{filepath.Join(f.repo, "dev")} },
+		},
+		{
+			name:   "a mount inside the clone, written with ~",
+			opts:   []launchdInstallOption{inACloneInsideHome()},
+			mounts: func(_ *testing.T, _ *launchdInstallFixture) []string { return []string{"~/clone/dev"} },
+		},
+		{
+			// A bare ~ is HOME, and HOME holds the clone: the install must expand it before it compares.
+			name:   "a mount that is HOME, which holds the clone",
+			opts:   []launchdInstallOption{inACloneInsideHome()},
+			mounts: func(_ *testing.T, _ *launchdInstallFixture) []string { return []string{"~"} },
+		},
+		{
+			name:   "a mount HOME holds the clone in, written with ~",
+			opts:   []launchdInstallOption{inACloneInsideHome()},
+			mounts: func(_ *testing.T, _ *launchdInstallFixture) []string { return []string{"~/clone"} },
+		},
+		{
+			// A mount location that is a symlink to a directory holding the clone: the install resolves it,
+			// as the VM does when it mounts the directory the link names.
+			name: "a mount location that is a symlink to a directory holding the clone",
+			opts: []launchdInstallOption{inACloneInsideHome()},
+			mounts: func(t *testing.T, f *launchdInstallFixture) []string {
+				t.Helper()
+
+				link := filepath.Join(f.sb.root, "home-link")
+				if err := os.Symlink(f.env["HOME"], link); err != nil {
+					t.Fatalf("symbolic link %s to %s: %v", link, f.env["HOME"], err)
+				}
+
+				return []string{link}
+			},
+		},
+		{
+			// A mount beside the clone whose path begins with the clone's: a common text prefix is no parent,
+			// and the install must not refuse a clone that merely shares a beginning with a mount.
+			name:          "a mount beside the clone whose path begins with the clone's",
+			opts:          []launchdInstallOption{inACloneInsideHome()},
+			mounts:        func(_ *testing.T, f *launchdInstallFixture) []string { return []string{f.repo + "-sibling"} },
+			wantInstalled: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, "shift2eu", tc.opts...)
+			f.sb.useFakeLimactlMounts(t, f.env, tc.mounts(t, f))
+
+			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+
+			// The install asks this instance for its name and mounts, with a format whose output is the
+			// instance's name on the first line and one location per line after it: anything else and it cannot
+			// tell that limactl answered about this instance, nor whether the clone is among the mounts.
+			wantLimactl := []string{"list", "--format", launchdMountsFormat, "shift2eu"}
+			if diff := cmp.Diff([][]string{wantLimactl}, invocations(f.sb.argvLogText(t), "limactl")); diff != "" {
+				t.Errorf("the install's limactl calls differ from `limactl list --format ... shift2eu`, which prints the instance's name and then one mount location per line (-want +got):\n%s", diff)
+			}
+
+			if tc.wantInstalled {
+				if err != nil {
+					t.Fatalf("make agents-token-refresh-install refused with no mount holding the clone: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+				}
+
+				if args := f.subCommand(t, "install"); args[len(args)-1] != f.dest() {
+					t.Errorf("the install put the plist at %q, want %q (issue #229)", args[len(args)-1], f.dest())
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("make agents-token-refresh-install exited 0 although a mount of the VM reaches the clone it runs from: the agents can edit that clone through the mount, and the job would run their code at every boot, as the maintainer, with the App's key in reach (issue #229)\nstdout: %s\nstderr: %s", stdout, stderr)
+			}
+
+			if calls := f.sudoCommands(t); len(calls) != 0 {
+				t.Errorf("make agents-token-refresh-install ran sudo although a mount of the VM reaches the clone, and every root command it runs must come after that check: %v\nstdout: %s\nstderr: %s", calls, stdout, stderr)
+			}
+
+			// The refusal has to say what to do, and where: the host clone. A maintainer who reads only
+			// "refused" would have no idea where to run it instead.
+			if !strings.Contains(stderr, "host clone") {
+				t.Errorf("the refusal does not say to install the job from the host clone, so a maintainer cannot tell where to run it instead:\nstderr: %s", stderr)
+			}
+
+			if !strings.Contains(stderr, f.repo) {
+				t.Errorf("the refusal does not name the clone %s it refused, so a maintainer cannot tell which directory the VM mounts:\nstderr: %s", f.repo, stderr)
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesAListOfAnotherInstance pins the second review's finding: the install
+// must know that limactl answered about the instance it asked about. The format prints the instance's name on
+// the first line, so a limactl that fails, answers nothing at all (an instance it does not know) or names
+// another instance leaves the install unable to check the clone: it refuses before any sudo, and says which
+// instance it could not check.
+func TestMakeAgentsTokenRefreshInstallRefusesAListOfAnotherInstance(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		answer func(t *testing.T, f *launchdInstallFixture)
+	}{
+		{
+			name: "limactl fails",
+			answer: func(t *testing.T, f *launchdInstallFixture) {
+				t.Helper()
+
+				f.sb.useFakeLimactlMounts(t, f.env, nil)
+				f.sb.useFakeLimactlListFailing(f.env)
+			},
+		},
+		{
+			name: "limactl answers nothing, as for an instance it does not know",
+			answer: func(t *testing.T, f *launchdInstallFixture) {
+				t.Helper()
+
+				f.sb.useFakeLimactlMounts(t, f.env, nil)
+				f.sb.useFakeLimactlListEmpty(f.env)
+			},
+		},
+		{
+			// The mounts would hold the clone, but they are another instance's: trusting them would let a VM
+			// the maintainer never asked about decide whether the install proceeds.
+			name: "limactl answers about another instance",
+			answer: func(t *testing.T, f *launchdInstallFixture) {
+				t.Helper()
+
+				f.sb.useFakeLimactlMounts(t, f.env, []string{filepath.Dir(f.repo)})
+				f.sb.useFakeLimactlListNamed(f.env, "another-vm")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, "shift2eu")
+			tc.answer(t, f)
+
+			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+			if err == nil {
+				t.Fatalf("make agents-token-refresh-install exited 0 although limactl gave it no list of this instance's mounts: it cannot tell whether the clone it runs from is one the VM can edit, so it must refuse\nstdout: %s\nstderr: %s", stdout, stderr)
+			}
+
+			if calls := f.sudoCommands(t); len(calls) != 0 {
+				t.Errorf("make agents-token-refresh-install ran sudo although it never got a usable list of the instance's mounts, and every root command must come after that check: %v\nstdout: %s\nstderr: %s", calls, stdout, stderr)
+			}
+
+			for _, want := range []string{"limactl", f.instance, "host clone"} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("the refusal does not name %q, so a maintainer cannot tell which instance's mounts were unreadable nor where to run the install: \nstderr: %s", want, stderr)
+				}
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesABadPlistBeforeSudo pins that a plist the generator refuses reaches no
+// sudo: root must never be handed a half-rendered or bad job.
+func TestMakeAgentsTokenRefreshInstallRefusesABadPlistBeforeSudo(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	// launchd starts the job from no directory of its own, so a relative key path is refused.
+	f.env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = filepath.Join("keys", "agents-app.pem")
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err == nil {
+		t.Fatalf("make agents-token-refresh-install exited 0 although the plist generator refuses the relative key path %q\nstdout: %s\nstderr: %s", f.env["SHIFT2EU_AGENTS_APP_KEY_FILE"], stdout, stderr)
+	}
+
+	if calls := invocations(f.sb.argvLogText(t), "sudo"); len(calls) != 0 {
+		t.Errorf("make agents-token-refresh-install ran sudo although the plist generator refused its input, so root got a job the tests never saw whole: %v\nstdout: %s\nstderr: %s", calls, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "SHIFT2EU_AGENTS_APP_KEY_FILE") {
+		t.Errorf("the refusal does not name SHIFT2EU_AGENTS_APP_KEY_FILE, so a maintainer cannot tell which value to fix:\nstderr: %s", stderr)
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallLintsThePlistBeforeSudo pins that the rendered plist is linted, and the very
+// file that lint accepted is the one root installs: a plist launchd cannot parse would load no job, and a
+// maintainer would believe the refresh runs at boot when nothing does.
+func TestMakeAgentsTokenRefreshInstallLintsThePlistBeforeSudo(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the linter sees the plist root installs", func(t *testing.T) {
+		t.Parallel()
+
+		f := newLaunchdInstallFixture(t, "shift2eu")
+
+		stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-install with a plist plutil accepts: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		lints := invocations(f.sb.argvLogText(t), "plutil")
+		if len(lints) != 1 {
+			t.Fatalf("the install ran plutil %d time(s), want exactly one `plutil -lint <plist>`: %v", len(lints), lints)
+		}
+
+		if len(lints[0]) != 2 || lints[0][0] != "-lint" {
+			t.Fatalf("the install ran plutil as %v, want `plutil -lint <plist>`: only -lint checks what launchd will parse", lints[0])
+		}
+
+		install := f.subCommand(t, "install")
+		if len(install) != 9 {
+			t.Fatalf("the install ran `sudo %s`, want `sudo install -m 0644 -o root -g wheel <plist> %s`", strings.Join(install, " "), f.dest())
+		}
+
+		if install[7] != lints[0][1] {
+			t.Errorf("the install lints %q but installs %q: root must install the very plist the linter accepted", lints[0][1], install[7])
+		}
+
+		logText := f.sb.argvLogText(t)
+		if linted, firstSudo := strings.Index(logText, "tool=plutil"), strings.Index(logText, "tool=sudo"); linted < 0 || firstSudo < 0 || linted > firstSudo {
+			t.Errorf("the plist is not linted before the first sudo command: the plutil call is at %d and the first sudo call at %d in the argv log, want plutil first (issue #229)\n%s", linted, firstSudo, logText)
+		}
+	})
+
+	t.Run("a plist the linter refuses is not installed", func(t *testing.T) {
+		t.Parallel()
+
+		f := newLaunchdInstallFixture(t, "shift2eu")
+		f.sb.useFakePlutil(t, f.env, "1")
+
+		stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+		if err == nil {
+			t.Fatalf("make agents-token-refresh-install exited 0 although plutil -lint refused the plist: launchd would load no job, and the maintainer would believe the refresh runs at boot\nstdout: %s\nstderr: %s", stdout, stderr)
+		}
+
+		if calls := invocations(f.sb.argvLogText(t), "sudo"); len(calls) != 0 {
+			t.Errorf("make agents-token-refresh-install ran sudo although plutil refused the plist, so root installed a job launchd cannot read: %v\nstdout: %s\nstderr: %s", calls, stdout, stderr)
+		}
+	})
+}
+
+// TestMakeAgentsTokenRefreshInstallPrintsItsSudoCommands pins what root is asked to do, exactly, and that the
+// maintainer sees each of those command lines: an install that changes /Library without showing what it runs
+// leaves no way to tell what happened.
+func TestMakeAgentsTokenRefreshInstallPrintsItsSudoCommands(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	// No job of the instance is loaded, so the install has nothing to boot out first: exactly two root
+	// commands, the install of the plist and the bootstrap of the job.
+	calls := invocations(f.sb.argvLogText(t), "sudo")
+	if len(calls) != 2 {
+		t.Fatalf("the install ran %d sudo command(s), want the two that install and load the job: %v", len(calls), calls)
+	}
+
+	install := f.subCommand(t, "install")
+	if len(install) != 9 {
+		t.Fatalf("the install ran `sudo %s`, want `sudo install -m 0644 -o root -g wheel <plist> %s`: the plist is root's and world-readable, as launchd requires of a LaunchDaemon", strings.Join(install, " "), f.dest())
+	}
+
+	if diff := cmp.Diff([]string{"install", "-m", "0644", "-o", "root", "-g", "wheel"}, install[:7]); diff != "" {
+		t.Errorf("the install's options differ from the ones a LaunchDaemon needs (-want +got):\n%s", diff)
+	}
+
+	tmpDir := filepath.Join(f.sb.root, "tmp")
+	if !strings.HasPrefix(install[7], tmpDir+string(filepath.Separator)) {
+		t.Errorf("the install copies %q, want the plist rendered into %s: nothing else may become the job", install[7], tmpDir)
+	}
+
+	if install[8] != f.dest() {
+		t.Errorf("the install puts the plist at %q, want %q (issue #229)", install[8], f.dest())
+	}
+
+	if diff := cmp.Diff([]string{"launchctl", "bootstrap", "system", f.dest()}, f.subCommand(t, "launchctl")); diff != "" {
+		t.Errorf("the install loads the job with a command that differs from `launchctl bootstrap system <plist>` (-want +got):\n%s\nsystem is the domain of a LaunchDaemon: a job bootstrapped into a user's domain starts only when that user logs in (issue #229)", diff)
+	}
+
+	// And each of those command lines is printed, exactly as it runs.
+	for _, args := range calls {
+		want := "+ sudo " + strings.Join(args, " ")
+		if !strings.Contains(stdout, want) {
+			t.Errorf("the install does not print %q before it runs it, so a maintainer never sees what changed /Library:\nstdout: %s\nstderr: %s", want, stdout, stderr)
+		}
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallSaysWhichScriptTheJobRuns pins the reviewer's finding: the install says,
+// before it runs any sudo command, which script the job will run and that it must be the host clone's. The job
+// runs that script at every boot, as the maintainer, with the App's key in reach, and the plist names it, but
+// the plist is a wall of XML a maintainer does not read before typing their password.
+func TestMakeAgentsTokenRefreshInstallSaysWhichScriptTheJobRuns(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	firstSudo := strings.Index(stdout, "+ sudo install")
+
+	var named bool
+
+	for _, line := range strings.Split(stdout, "\n") {
+		if !strings.Contains(line, f.script()) || !strings.Contains(strings.ToLower(line), "host clone") {
+			continue
+		}
+
+		named = true
+
+		if at := strings.Index(stdout, line); firstSudo >= 0 && at > firstSudo {
+			t.Errorf("the install names the script the job runs only after it printed the first sudo command, so a maintainer reads it too late:\nstdout: %s", stdout)
+		}
+	}
+
+	if !named {
+		t.Errorf("the install never says, before the first sudo command, that the job runs %s from this host clone: the job runs that script at every boot, as the maintainer, with the App's key in reach (issue #229)\nstdout: %s\nstderr: %s", f.script(), stdout, stderr)
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesAPlistRootChanged pins the second review's finding: when the file
+// root installed is not the plist the install printed, the install fails closed. It removes the plist again,
+// loads nothing, and says both, so a maintainer never ends up with a job, or a file named like one, that
+// launchd was never asked about - and never with a stale job the next boot would run.
+func TestMakeAgentsTokenRefreshInstallRefusesAPlistRootChanged(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		install string // what the fake root install leaves behind
+	}{
+		{
+			// A file that changed between the hash check and the install: another writer, or a symlink rooted
+			// somewhere else, replaced the plist root was handed.
+			name:    "root installed other bytes than the plist it was handed",
+			install: "different",
+		},
+		{
+			// Nothing readable landed there at all: no file to compare, and none to load.
+			name:    "root installed no file at all",
+			install: "nothing",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, "shift2eu")
+			f.env["SHIFT2EU_TEST_SUDO_INSTALL"] = tc.install
+
+			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+			if err == nil {
+				t.Fatalf("make agents-token-refresh-install exited 0 although %s: launchd would load a job the maintainer never saw as the printed plist (issue #229)\nstdout: %s\nstderr: %s", tc.name, stdout, stderr)
+			}
+
+			if line := "+ sudo rm -f " + f.dest(); !strings.Contains(stdout, line) {
+				t.Errorf("the install does not print %q before it runs it, so a maintainer never sees that the plist it could not check was removed again (issue #229, second review)\nstdout: %s\nstderr: %s", line, stdout, stderr)
+			}
+
+			if _, statErr := os.Stat(f.dest()); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("the plist %s is still there after the install refused it (stat: %v): the file launchd reads must not stay behind, or the next boot runs a job nobody loaded and nobody checked (issue #229, second review)", f.dest(), statErr)
+			}
+
+			if calls := f.bootstrapCalls(t); len(calls) != 0 {
+				t.Errorf("the install loaded the job anyway (%v): a plist it could not check must never become a loaded job (issue #229, second review)", calls)
+			}
+
+			lower := strings.ToLower(stderr)
+
+			if strings.Contains(lower, "warning") {
+				t.Errorf("the install only warns that it cannot check %s: a plist it cannot verify must fail the install, not leave a maybe-job behind:\nstderr: %s", f.dest(), stderr)
+			}
+
+			for _, want := range []string{"removed", "no token refresh job", f.instance} {
+				if !strings.Contains(lower, strings.ToLower(want)) {
+					t.Errorf("the failure does not say %q: a maintainer has to learn that the plist was removed again and that no job of the instance is loaded now (issue #229, second review)\nstderr: %s", want, stderr)
+				}
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallReplacesALoadedJob pins the reinstall: when the instance's job is loaded
+// already, the install boots it out, installs the new plist and bootstraps it again, in that order, and the
+// wait for the old job to unload ends as soon as launchctl reports it gone.
+func TestMakeAgentsTokenRefreshInstallReplacesALoadedJob(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	// The job of this instance is loaded now, and a bootout really unloads it: every launchctl print before
+	// the bootout succeeds, every one after it fails, as it does for a job that is gone.
+	f.sb.useFakeLaunchctlLoaded(t, f.env, false)
+	f.sb.useFakeSleep(t)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install over a loaded job: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	want := [][]string{
+		{"launchctl", "bootout", "system/" + f.label()},
+		f.subCommand(t, "install"),
+		{"launchctl", "bootstrap", "system", f.dest()},
+	}
+
+	if diff := cmp.Diff(want, f.sudoCommands(t)); diff != "" {
+		t.Errorf("the install's sudo commands over a loaded job differ from unloading the old job, installing the new plist and loading it again, in that order (-want +got):\n%s\nloading a plist over a loaded label fails, and the old job would keep running the plist the maintainer replaced (issue #229)", diff)
+	}
+
+	install := f.subCommand(t, "install")
+	if len(install) != 9 || install[8] != f.dest() {
+		t.Errorf("the install ran `sudo %s`, want `sudo install -m 0644 -o root -g wheel <plist> %s`", strings.Join(install, " "), f.dest())
+	}
+
+	for _, args := range want {
+		if line := "+ sudo " + strings.Join(args, " "); !strings.Contains(stdout, line) {
+			t.Errorf("the install does not print %q before it runs it, so a maintainer never sees what changed /Library:\nstdout: %s", line, stdout)
+		}
+	}
+
+	// The old job unloaded at the first check after the bootout, so nothing had to be waited for.
+	if waits := invocations(f.sb.argvLogText(t), "sleep"); len(waits) != 0 {
+		t.Errorf("the install waited %d time(s) although the bootout had already unloaded the old job: the wait must end as soon as launchctl reports it gone (issue #229, second review): %v", len(waits), waits)
+	}
+
+	if body, readErr := os.ReadFile(f.dest()); readErr != nil || !strings.Contains(string(body), "<plist") {
+		t.Errorf("the install left no plist at %s after replacing the loaded job (read: %v): a bootout without a new file leaves the instance with no job at all (issue #229)", f.dest(), readErr)
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallStopsWhenTheOldJobStaysLoaded pins the second review's finding: a job that
+// never unloads must stop the install before it touches the new plist, after a bounded wait. A second plist
+// installed while the old job still runs is a job launchd never loads, and a message that claims no job is
+// loaded would be a lie.
+func TestMakeAgentsTokenRefreshInstallStopsWhenTheOldJobStaysLoaded(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	// The old job is loaded and a bootout leaves it loaded: every launchctl print keeps succeeding.
+	f.sb.useFakeLaunchctlLoaded(t, f.env, true)
+	f.sb.useFakeSleep(t)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err == nil {
+		t.Fatalf("make agents-token-refresh-install exited 0 although the old job never unloaded: it would install a plist launchd loads over a loaded label, if at all, and report a job the maintainer cannot see running (issue #229, second review)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	want := [][]string{{"launchctl", "bootout", "system/" + f.label()}}
+	if diff := cmp.Diff(want, f.sudoCommands(t)); diff != "" {
+		t.Errorf("the install ran more root commands than the bootout of the old job although that job stayed loaded (-want +got):\n%s\nnothing may be installed or loaded while the old job still runs (issue #229, second review)\nstdout: %s", diff, stdout)
+	}
+
+	if _, statErr := os.Stat(f.dest()); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("the install put a plist at %s although the old job stayed loaded: launchd loads the file when the job next starts, so the maintainer would run a plist nothing ever checked was loaded (issue #229, second review)", f.dest())
+	}
+
+	// The wait is bounded: a bootout that never unloads must not hang the install.
+	if waits := len(invocations(f.sb.argvLogText(t), "sleep")); waits == 0 || waits > 10 {
+		t.Errorf("the install waited %d time(s) for the old job to unload, want between 1 and 10: the wait must be bounded, and it must happen at all (issue #229, second review)", waits)
+	}
+
+	lower := strings.ToLower(stderr)
+
+	if !strings.Contains(lower, "still loaded") {
+		t.Errorf("the failure does not say that the old job is still loaded, so a maintainer cannot tell why nothing was installed:\nstderr: %s", stderr)
+	}
+
+	if strings.Contains(lower, "no token refresh job") {
+		t.Errorf("the failure says no token refresh job is loaded although the old one still is: the maintainer would stop looking for a job that is running (issue #229, second review)\nstderr: %s", stderr)
+	}
+}
+
+// TestMakeAgentsTokenRefreshLaunchdDirComesOnlyFromTheCommandLine pins the fourth review's finding:
+// AGENTS_TOKEN_LAUNCHD_DIR may come from make's command line or from the Makefile, never from the environment. A
+// stale export in a maintainer's shell (a test's, an earlier session's) would otherwise make root write the plist
+// into a directory launchd never reads at boot, and the job would silently not exist after the next reboot. Both
+// targets refuse such a run before any sudo, and the refusal names the variable and the environment it came from.
+func TestMakeAgentsTokenRefreshLaunchdDirComesOnlyFromTheCommandLine(t *testing.T) {
+	t.Parallel()
+
+	for _, target := range []string{"agents-token-refresh-install", "agents-token-refresh-uninstall"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, "shift2eu")
+
+			stdout, stderr, err := f.runWithTheDirectoryInTheEnvironment(t, target)
+			if err == nil {
+				t.Fatalf("make %s exited 0 although AGENTS_TOKEN_LAUNCHD_DIR came from the environment (%s): a stale export would install the job where launchd never looks at boot, and the refresh would not come back after a reboot (issue #229, fourth review)\nstdout: %s\nstderr: %s", target, f.launchdDir, stdout, stderr)
+			}
+
+			if calls := f.sudoCommands(t); len(calls) != 0 {
+				t.Errorf("make %s ran sudo although AGENTS_TOKEN_LAUNCHD_DIR came from the environment, and the check of where root writes must come first: %v\nstdout: %s\nstderr: %s", target, calls, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "AGENTS_TOKEN_LAUNCHD_DIR") {
+				t.Errorf("the refusal does not name AGENTS_TOKEN_LAUNCHD_DIR, so a maintainer cannot tell which value to fix:\nstderr: %s", stderr)
+			}
+
+			if !strings.Contains(strings.ToLower(stderr), "environment") {
+				t.Errorf("the refusal does not say that the value came from the environment, so a maintainer would keep looking for it in the Makefile or on the command line:\nstderr: %s", stderr)
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRetriesTheBootstrapOnce pins the second review's finding: a bootstrap that
+// fails is retried once, never more, and a failure both times says that no job is loaded now and names both
+// ways to restore one. The VM's token lives an hour, so a silent failure costs the agents their credentials.
+// The plist root installed stays where launchd reads it, and the failure says that too: the maintainer has to
+// know that the next boot loads the job they were told was not loaded (fourth review).
+func TestMakeAgentsTokenRefreshInstallRetriesTheBootstrapOnce(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	// launchctl bootstrap fails: the job does not load, whatever the plist says.
+	f.env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS"] = "1"
+	f.sb.useFakeSleep(t)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err == nil {
+		t.Fatalf("make agents-token-refresh-install exited 0 although launchctl bootstrap failed: the maintainer would believe the refresh runs at boot while the VM's token expires within the hour (issue #229)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	if calls := f.bootstrapCalls(t); len(calls) != 2 {
+		t.Errorf("the install ran launchctl bootstrap %d time(s) with a launchctl that fails, want exactly two, one retry: %v\nstdout: %s\nstderr: %s", len(calls), calls, stdout, stderr)
+	}
+
+	lower := strings.ToLower(stderr)
+
+	for _, want := range []string{"no token refresh job", "agents-token-refresh-install", "agents-token-refresh-start"} {
+		if !strings.Contains(lower, want) {
+			t.Errorf("the failure does not name %q: a maintainer has to learn that no token refresh job is loaded now, and both ways to restore one - run the install again, or start a refresh by hand (issue #229)\nstderr: %s", want, stderr)
+		}
+	}
+
+	// The plist root installed stays in the directory launchd reads: it was checked and it is there, so the
+	// next boot loads it even though the install could not load it now. A maintainer who is not told would
+	// think the job is gone for good.
+	for _, want := range []string{"next boot", f.dest()} {
+		if !strings.Contains(lower, strings.ToLower(want)) {
+			t.Errorf("the failure does not say %q: the plist stays in the directory launchd reads, so it loads at the next boot although no job is loaded now, and a maintainer who is not told believes the refresh is gone until they install it again (issue #229, fourth review)\nstderr: %s", want, stderr)
+		}
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallSaysTheJobIsLoadedWhenTheBootstrapLoadedIt pins the fourth review's finding:
+// launchctl bootstrap can load the job and still exit non-zero (it loaded the job and then could not answer with
+// success). The retry finds the label loaded and fails as well. Saying "no token refresh job is loaded now" would
+// then be a lie, and a maintainer would either reinstall over a job that runs or start a second refresh by hand
+// beside it. The install says that the job is loaded, names the label and the commands that show it, and exits 0.
+func TestMakeAgentsTokenRefreshInstallSaysTheJobIsLoadedWhenTheBootstrapLoadedIt(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	// The first bootstrap loads the job and still exits non-zero; the retry finds it loaded and exits non-zero
+	// too, so both attempts fail although the job is loaded afterwards.
+	f.sb.useFakeLaunchctlBootstrapThatLoadsAndFails(t, f.env)
+	f.sb.useFakeSleep(t)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install exited %v although the job is loaded afterwards, which is what the install is for: a run that loaded the job must not fail and send the maintainer to install it again (issue #229, fourth review)\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if calls := f.bootstrapCalls(t); len(calls) != 2 {
+		t.Errorf("the install ran launchctl bootstrap %d time(s) with a bootstrap that fails, want exactly two, one retry: %v\nstdout: %s\nstderr: %s", len(calls), calls, stdout, stderr)
+	}
+
+	lower := strings.ToLower(stderr)
+
+	if strings.Contains(lower, "no token refresh job") {
+		t.Errorf("the install says no token refresh job is loaded although its own bootstrap loaded one: the maintainer would install it again over the job that runs, or start a second refresh beside it (issue #229, fourth review)\nstderr: %s", stderr)
+	}
+
+	for _, want := range []string{"loaded", f.label()} {
+		if !strings.Contains(lower, strings.ToLower(want)) {
+			t.Errorf("the install does not say %q on stderr, although the job is loaded: a maintainer has to learn that the Token refresh job runs now, and which label to look at with launchctl print (issue #229, fourth review)\nstderr: %s", want, stderr)
+		}
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesAPlistItCannotRead pins the other half of the read-back the second
+// review added: a file root installed that is there but cannot be read is as unloaded as no file at all, and the
+// install must fail closed for it too. It removes the plist again (a plist it cannot check must not stay behind
+// for the next boot), loads nothing, and says both. The unreadable file is the one branch `nothing` only reached
+// by absence, which is a different failure: a file that is there and unreadable is one root installed and nobody
+// checked.
+func TestMakeAgentsTokenRefreshInstallRefusesAPlistItCannotRead(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file with no permissions, so this test cannot make the installed plist unreadable")
+	}
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	// The fake root install copies the plist and takes every permission away: the file is there, and the
+	// install's read-back, run as the maintainer, cannot open it.
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL"] = "unreadable"
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err == nil {
+		t.Fatalf("make agents-token-refresh-install exited 0 although the plist root installed cannot be read: launchd would load a job the maintainer never saw as the printed plist, and the next boot would run it (issue #229)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	if line := "+ sudo rm -f " + f.dest(); !strings.Contains(stdout, line) {
+		t.Errorf("the install does not print %q before it runs it, so a maintainer never sees that the plist it could not read was removed again (issue #229, second review)\nstdout: %s\nstderr: %s", line, stdout, stderr)
+	}
+
+	if _, statErr := os.Stat(f.dest()); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("the plist %s is still there after the install refused it (stat: %v): the file launchd reads must not stay behind, or the next boot runs a job nobody checked (issue #229, second review)", f.dest(), statErr)
+	}
+
+	if calls := f.bootstrapCalls(t); len(calls) != 0 {
+		t.Errorf("the install loaded the job anyway (%v): a plist it could not read must never become a loaded job (issue #229, second review)", calls)
+	}
+
+	lower := strings.ToLower(stderr)
+
+	for _, want := range []string{"could not be read", "no token refresh job"} {
+		if !strings.Contains(lower, strings.ToLower(want)) {
+			t.Errorf("the failure does not say %q: a maintainer has to learn that the plist could not be read back, and that no job of the instance is loaded now (issue #229, second review)\nstderr: %s", want, stderr)
+		}
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesASymlinkedRefreshScript pins the second review's finding: the job runs
+// <clone>/dev/agents-app-token.sh at every boot, as the maintainer, with the App's key in reach. A dev/ that is
+// a symlink, or a script that is one, points the job at a file the install never checked, so the install refuses
+// both before any sudo.
+func TestMakeAgentsTokenRefreshInstallRefusesASymlinkedRefreshScript(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		symlink string                           // the path inside the clone that is a symlink
+		build   func(t *testing.T, clone string) // the rest of the clone, on top of the Makefile
+		want    string                           // the symlink the refusal must name, below the clone
+	}{
+		{
+			name: "the refresh script is a symlink",
+			build: func(t *testing.T, clone string) {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(clone, launchdScript), []byte(readRepoFile(t, launchdScript)), 0o755)
+
+				if err := os.Symlink(scriptPath(t, agentsMintScript), filepath.Join(clone, agentsMintScript)); err != nil {
+					t.Fatalf("symbolic link %s: %v", filepath.Join(clone, agentsMintScript), err)
+				}
+			},
+			want: filepath.Join("dev", "agents-app-token.sh"),
+		},
+		{
+			name: "the clone's dev directory is a symlink",
+			build: func(t *testing.T, clone string) {
+				t.Helper()
+
+				if err := os.Symlink(filepath.Dir(scriptPath(t, agentsMintScript)), filepath.Join(clone, "dev")); err != nil {
+					t.Fatalf("symbolic link %s: %v", filepath.Join(clone, "dev"), err)
+				}
+			},
+			want: "dev",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, "shift2eu")
+
+			clone := filepath.Join(f.sb.root, "clone")
+			writeFileMode(t, filepath.Join(clone, makefilePath), []byte(readRepoFile(t, makefilePath)), 0o600)
+			tc.build(t, clone)
+
+			f.dir, f.repo = clone, resolvedPath(t, clone)
+
+			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+			if err == nil {
+				t.Fatalf("make agents-token-refresh-install exited 0 although %s is a symlink: the job would run a file outside the clone at every boot, as the maintainer, with the App's key in reach (issue #229, second review)\nstdout: %s\nstderr: %s", tc.want, stdout, stderr)
+			}
+
+			if calls := f.sudoCommands(t); len(calls) != 0 {
+				t.Errorf("make agents-token-refresh-install ran sudo although %s is a symlink, and every root command must come after that check: %v\nstdout: %s\nstderr: %s", tc.want, calls, stdout, stderr)
+			}
+
+			lower := strings.ToLower(stderr)
+
+			for _, want := range []string{"symlink", f.repo} {
+				if !strings.Contains(lower, strings.ToLower(want)) {
+					t.Errorf("the refusal does not name %q: a maintainer has to learn that the clone's own path is a symlink, and which clone was refused (issue #229, second review)\nstderr: %s", want, stderr)
+				}
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshUninstall pins that uninstalling needs a launchctl - the LaunchDaemon is a macOS
+// thing, and removing the file without booting the job out of launchd leaves it running - and that it boots the
+// job out and removes its file through sudo, one label per instance.
+func TestMakeAgentsTokenRefreshUninstall(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no launchctl: a refusal, before any sudo", func(t *testing.T) {
+		t.Parallel()
+
+		// The fake launchctl is not on this fixture's PATH, so make agents-token-refresh-uninstall runs on a
+		// host that has none, as Linux CI does; the log-only sudo stays reachable.
+		f := newLaunchdInstallFixture(t, "shift2eu", withoutOnPath("launchctl"))
+
+		stdout, stderr, err := f.run(t, "agents-token-refresh-uninstall")
+		if err == nil {
+			t.Fatalf("make agents-token-refresh-uninstall exited 0 on a host with no launchctl: the LaunchDaemon is for the Mac, and the target must say so and run nothing\nstdout: %s\nstderr: %s", stdout, stderr)
+		}
+
+		if calls := invocations(f.sb.argvLogText(t), "sudo"); len(calls) != 0 {
+			t.Errorf("make agents-token-refresh-uninstall ran sudo on a host with no launchctl: %v\nstdout: %s\nstderr: %s", calls, stdout, stderr)
+		}
+
+		for _, want := range []string{"LaunchDaemon", "Mac"} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("the refusal does not name %q, so a maintainer on another host cannot tell why nothing was removed:\nstderr: %s", want, stderr)
+			}
+		}
+	})
+
+	t.Run("with launchctl: boot the job out and remove its plist through sudo", func(t *testing.T) {
+		t.Parallel()
+
+		f := newLaunchdInstallFixture(t, "shift2eu")
+
+		stdout, stderr, err := f.run(t, "agents-token-refresh-uninstall")
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-uninstall: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		want := [][]string{
+			{"launchctl", "bootout", "system/" + f.label()},
+			{"rm", "-f", f.dest()},
+		}
+
+		if diff := cmp.Diff(want, invocations(f.sb.argvLogText(t), "sudo")); diff != "" {
+			t.Errorf("the uninstall's sudo commands differ from booting the instance's job out of the system domain and removing its plist (-want +got):\n%s\nbootout takes the job's service target, system/<label>, so the job that stops is this instance's, and rm removes only the plist this instance's label names: another instance's job and file stay (issue #229)", diff)
+		}
+
+		for _, args := range want {
+			if line := "+ sudo " + strings.Join(args, " "); !strings.Contains(stdout, line) {
+				t.Errorf("the uninstall does not print %q before it runs it:\nstdout: %s\nstderr: %s", line, stdout, stderr)
+			}
+		}
+	})
+
+	t.Run("a stuck bootout: the job is still loaded, and the plist goes anyway", func(t *testing.T) {
+		t.Parallel()
+
+		f := newLaunchdInstallFixture(t, "shift2eu")
+		// The job is loaded and a bootout leaves it loaded: launchctl print keeps succeeding after the bootout,
+		// as it does for a job launchd never unloaded (issue #229, fourth review).
+		f.sb.useFakeLaunchctlLoaded(t, f.env, true)
+		f.sb.useFakeSleep(t)
+
+		// A plist is there to remove, so "the plist goes anyway" is a removal and not a file that never existed.
+		writeFileMode(t, f.dest(), []byte("<plist/>"), 0o644)
+
+		stdout, stderr, err := f.run(t, "agents-token-refresh-uninstall")
+		// Exit 0: the uninstall's purpose is to leave no plist behind for the next boot, and it did. The job that
+		// is still loaded is the one thing the maintainer has to finish by hand, and re-running the target would
+		// change nothing: a failure would send them looking for a retry that cannot work. The message names the
+		// command that does (issue #229, fourth review).
+		if err != nil {
+			t.Fatalf("make agents-token-refresh-uninstall exited %v although it removed the plist and only a bootout the maintainer runs by hand is left\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		if line := "+ sudo rm -f " + f.dest(); !strings.Contains(stdout, line) {
+			t.Errorf("the uninstall does not print %q before it runs it, so a maintainer never sees that the plist was removed although the job stays loaded (issue #229, fourth review)\nstdout: %s\nstderr: %s", line, stdout, stderr)
+		}
+
+		if _, statErr := os.Stat(f.dest()); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Errorf("the plist %s is still there although the uninstall ran (stat: %v): a job that cannot be unloaded must not leave its plist for the next boot to load again (issue #229, fourth review)", f.dest(), statErr)
+		}
+
+		lower := strings.ToLower(stderr)
+
+		if strings.Contains(lower, "was not loaded") {
+			t.Errorf("the uninstall says the job was not loaded although launchctl still reports it loaded: the maintainer would believe the refresh is stopped while it keeps running with the App's key in reach (issue #229, fourth review)\nstderr: %s", stderr)
+		}
+
+		// The wait is bounded: a bootout that never unloads must not hang the uninstall, and it must happen at all.
+		if waits := len(invocations(f.sb.argvLogText(t), "sleep")); waits == 0 || waits > 10 {
+			t.Errorf("the uninstall waited %d time(s) for the job to unload, want between 1 and 10: the wait must be bounded, and it must happen at all (issue #229, fourth review)", waits)
+		}
+
+		for _, want := range []string{"still loaded", "sudo launchctl bootout", f.label()} {
+			if !strings.Contains(lower, strings.ToLower(want)) {
+				t.Errorf("the uninstall does not say %q: the job is still loaded, and the command that unloads it is the one thing the maintainer has left to run (issue #229, fourth review)\nstderr: %s", want, stderr)
+			}
+		}
+	})
+}
+
+// launchctlPrintHeader renders the lines `launchctl print system/<label>` prints for any loaded LaunchDaemon,
+// with the `pid = N` line it adds for a job whose process is running: pid 0 prints no line, as launchctl prints
+// none for a loaded job whose process is not running. Every test builds its print output from this header, so the
+// block's shape lives here.
+func launchctlPrintHeader(label string, pid int) string {
+	header := "system/" + label + " = {\n" +
+		"\tactive count = 1\n" +
+		"\tpath = /Library/LaunchDaemons/" + label + ".plist\n" +
+		"\ttype = LaunchDaemon\n" +
+		"\tstate = running\n"
+
+	if pid != 0 {
+		header += "\tpid = " + strconv.Itoa(pid) + "\n"
+	}
+
+	return header
+}
+
+// launchctlPrintBlock renders what `launchctl print system/<label>` prints for a loaded job: the header
+// launchctlPrintHeader renders and, below it, a `program` line and an `arguments` block that holds one argument
+// per line, tab-indented, the way the real command prints a job's arguments. The start target reads the script
+// the job runs from that block.
+func launchctlPrintBlock(label, script, log string) string {
+	return launchctlPrintHeader(label, 0) +
+		"\n" +
+		"\tprogram = /bin/sh\n" +
+		"\targuments = {\n" +
+		"\t\t/bin/sh\n" +
+		"\t\t-c\n" +
+		"\t\tumask 077 && mkdir -p \"${1%/*}\" && exec /bin/sh \"$0\" refresh >>\"$1\" 2>&1\n" +
+		"\t\t" + script + "\n" +
+		"\t\t" + log + "\n" +
+		"\t}\n" +
+		"}\n"
+}
+
+// TestMakeAgentsTokenRefreshStartWarnsAboutAnotherClonesJob pins the reviewer's finding: launchctl print says
+// which script the loaded job runs, and when that is not this clone's dev/agents-app-token.sh the warning says
+// so and names the script. Otherwise a maintainer reads "a LaunchDaemon runs this VM's refresh" and believes it
+// runs the clone they edit.
+func TestMakeAgentsTokenRefreshStartWarnsAboutAnotherClonesJob(t *testing.T) {
+	t.Parallel()
+
+	label := launchdLabelPrefix + "shift2eu"
+	repo := launchdRepoRoot(t)
+	otherScript := filepath.Join(t.TempDir(), "another-clone", "dev", "agents-app-token.sh")
+
+	cases := []struct {
+		name       string
+		script     string
+		wantWarned bool
+	}{
+		{name: "the job runs another clone's script", script: otherScript, wantWarned: true},
+		{name: "the job runs this clone's script", script: filepath.Join(repo, "dev", "agents-app-token.sh")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newTokenFixture(t, "shift2eu")
+			log := filepath.Join(f.state, "agents-token-refresh-shift2eu.log")
+			f.sb.useFakeLaunchctlPrint(t, f.env, "0", launchctlPrintBlock(label, tc.script, log))
+
+			stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
+			if err != nil {
+				t.Fatalf("make agents-token-refresh-start with the LaunchDaemon %s loaded: %v\nstdout: %s\nstderr: %s", label, err, stdout, stderr)
+			}
+
+			// The warning about the loaded job is there either way, and it still starts nothing.
+			for _, want := range []string{"LaunchDaemon", label} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("make agents-token-refresh-start does not name %q on stderr although launchd runs the refresh as %s (issue #229)\nstdout: %s\nstderr: %s", want, label, stdout, stderr)
+				}
+			}
+
+			if tc.wantWarned {
+				var named bool
+
+				for _, line := range strings.Split(stderr, "\n") {
+					if !strings.Contains(line, tc.script) {
+						continue
+					}
+
+					named = true
+
+					if !strings.Contains(strings.ToLower(line), "another clone") {
+						t.Errorf("the warning names %s but does not say it is another clone's script, so a maintainer still believes the job runs this clone's:\nstderr: %s", tc.script, stderr)
+					}
+				}
+
+				if !named {
+					t.Errorf("make agents-token-refresh-start does not name %s on stderr, the script the loaded LaunchDaemon runs, so a maintainer edits one clone while the job runs another's (issue #229)\nstdout: %s\nstderr: %s", tc.script, stdout, stderr)
+				}
+			} else if strings.Contains(strings.ToLower(stderr), "another clone") {
+				t.Errorf("make agents-token-refresh-start warns about another clone's script although the loaded job runs this clone's %s:\nstderr: %s", tc.script, stderr)
+			}
+
+			if _, err := os.Stat(f.statePath("agents-token-refresh-shift2eu.pid")); err == nil {
+				t.Errorf("make agents-token-refresh-start started a second refresher beside the LaunchDaemon: it wrote a pid file (issue #229)")
+			}
+		})
+	}
 }
 
 // runMake runs make in the repository root with args and env alone, never the test process's own

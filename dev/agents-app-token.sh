@@ -712,8 +712,10 @@ is_refresh() {
 # exists, mv moves the temporary directory into it instead, and the pid file shows this one lost: it removes
 # its own directory again. A lock whose pid is no longer a running refresh (one killed without its trap) is
 # taken over atomically: it is renamed aside, which only one contender can do; the one that did checks that
-# what it moved still holds the stale owner (and puts it back if not), removes it, and tries again. While
-# another refresher holds the lock, this one says so and exits 0: that VM's token is already being refreshed.
+# what it moved still holds the stale owner (and puts it back if not), removes it, and tries again. A lock
+# holding this shell's own pid is this one's, even when its own read missed it because a contender had moved
+# it aside for a moment (issue #240). While another refresher holds the lock, this one says so and exits 0:
+# that VM's token is already being refreshed.
 take_lock() {
   state="${XDG_STATE_HOME:-${HOME:?set HOME}/.local/state}/shift2eu"
   lock="${state}/agents-token-refresh-${instance}.lock"
@@ -730,9 +732,12 @@ take_lock() {
     fi
     # Lost: the temporary directory is still there, or inside the other refresher's lock.
     rm -rf "${new}" "${lock:?}/${new##*/}"
+    owner="$(cat "${lock}/pid" 2>/dev/null || true)"
+    # A lock holding this shell's pid is this one's: only this shell writes its pid, so the lock it had won was
+    # moved aside by a contender and put back between the mv and the read above (issue #240).
+    [ "${owner}" != "$$" ] || break
     attempts=$((attempts + 1))
     [ "${attempts}" -le 5 ] || die "cannot take the lock ${lock}; remove it if no refresh for the VM ${instance} runs"
-    owner="$(cat "${lock}/pid" 2>/dev/null || true)"
     if is_refresh "${owner}"; then
       say "another agents App token refresh for the VM ${instance} is running (pid ${owner}, lock ${lock}); this one exits and leaves it to that one"
       exit 0
@@ -821,6 +826,8 @@ refresh() {
       fi
       say "will try again in ${wait_seconds}s (failure ${failures} in a row); ${left}"
     fi
+    # A TERM landing between the next two lines leaves the sleep running until it ends by itself: harmless
+    # under launchd, which kills the job's process group, and the tests kill the group themselves (issue #267).
     sleep "${wait_seconds}" &
     sleeper=$!
     wait "${sleeper}" || true

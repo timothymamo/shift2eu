@@ -502,7 +502,9 @@ nothing of the workspace:
 |---|---|
 | `make agents-token` | Mints one token and writes it, and the bot's identity, into the VM, and sets that identity as the VM user's git identity (`user.name` and `user.email` in `~/.gitconfig`) |
 | `make agents-token-refresh` | Mints now and again before each token expires, in the foreground, until stopped |
-| `make agents-token-refresh-start` | Starts that refresh in the background, unless one already runs for the VM, and prints where its log is |
+| `make agents-token-refresh-start` | Starts that refresh in the background, unless one already runs for the VM or its LaunchDaemon is loaded, and prints where its log is |
+| `make agents-token-refresh-install` | Installs (or updates) the LaunchDaemon that runs the refresh at boot, with nobody logged in, one per VM; needs `sudo` (macOS; [The refresh as a LaunchDaemon](#the-refresh-as-a-launchdaemon)) |
+| `make agents-token-refresh-uninstall` | Stops and removes that LaunchDaemon; needs `sudo` |
 
 And from the workspace, as before:
 
@@ -564,6 +566,135 @@ is running and exits with status 0, and `make agents-token-refresh-start` names 
 starts nothing. A lock left by a killed refresh is taken over, by one refresh only. Stop it with
 `kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,
 the JWT or the key, and nothing writes them to a log or the workspace.
+
+#### The refresh as a LaunchDaemon
+
+A refresh started by hand dies with a reboot or a power cut, while the VM comes back on its own, and within
+the hour the agents' `gh` and `git push` fail. On an unattended Mac, such as the Mac Mini, let launchd run
+it instead ([ADR 0034](adr/0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md)): a LaunchDaemon
+per VM instance, `io.github.timothymamo.shift2eu.agents-token-refresh.<instance>`, runs
+`/bin/sh <host clone>/dev/agents-app-token.sh refresh` as you, at boot with nobody logged in, and again
+whenever it exits (at most every 5 minutes). It opens its log itself, as you, and appends to the same log
+as `make agents-token-refresh-start`, `${XDG_STATE_HOME:-~/.local/state}/shift2eu/agents-token-refresh-<instance>.log`,
+owned by you and never under `~/.lima`; launchd's own output goes to `/dev/null`, because launchd would open
+a log path as root in a directory you can write. Under `umask 077` it creates the log's directory when it is
+missing and a removed log again as mode 0600, so a deleted state directory does not make it fail before
+it logs anything. It never starts the VM: it waits for it, like any
+refresh. Its plist (`/Library/LaunchDaemons/<label>.plist`, root-owned) holds the App ID, the
+installation ID, the key's path and your `XDG_STATE_HOME` when it is set, copied from the host clone's
+`.envrc` when you install it, never the key or a token: **install again after changing `.envrc`**. The job
+runs the host clone's `dev/agents-app-token.sh` as it is when the job starts, so after a
+`git pull --ff-only` of the host clone run `sudo launchctl kickstart -k system/<label>` to run the pulled
+code now. Installing it from the wrong clone, such as the workspace the VM mounts, would turn a one-off
+run of the agents' code into a job that runs it at every boot: install refuses a clone inside any of the
+VM's mounts, or one that holds a mount (through it the agents could edit the clone's `dev/`), and a clone
+whose `dev/` or `dev/agents-app-token.sh` is a symlink. It asks `limactl list` for the VM's name and mounts
+and refuses when limactl fails or the first line is not exactly the instance: limactl may print nothing and
+exit 0 for a VM it does not know, and another VM's mounts prove nothing. So create the VM first. The mount
+comparison is case-sensitive although APFS usually is not: keep the locations in `dev/lima.yaml` in their
+real case, as Lima writes them. One LaunchDaemon
+per `LIMA_INSTANCE`: for a second VM, install again with that instance's name. A `kill` of the job's
+refresh only restarts it (within 5 minutes): stop it with `make agents-token-refresh-uninstall`.
+
+Over SSH on the Mac Mini, each step with its check (the instance `shift2eu`; for another VM, pass
+`LIMA_INSTANCE=<name>` to each `make` and use its name in the label and paths):
+
+1. **Install**, from the host clone, never the workspace, with its `.envrc` loaded:
+
+   ```bash
+   cd ~/agents/shift2eu/host/shift2eu
+   git pull --ff-only
+   direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, even where no direnv hook runs
+   ```
+
+   Run it as yourself, never under `sudo`: it refuses to run as root, since the job runs as the account
+   that installs it, and runs `sudo` itself where it needs it. It refuses before any `sudo` when a mount of
+   the VM reaches the clone (above it, at it or inside it), when `limactl list` does not answer about this
+   VM, or when the clone's `dev/` or its script is a symlink.
+   It lints the plist with `plutil -lint`, prints it with its SHA-256 and the line naming the script the job
+   runs (`<host clone>/dev/agents-app-token.sh`: check it is this clone, outside the workspace), prints
+   every `sudo` command before running it, and asks for your password. Over a loaded job it first runs
+   `sudo launchctl bootout` and waits up to 10 seconds for the job to unload; if it is still loaded, the
+   install stops before installing anything and the old job keeps running: check it with
+   `sudo launchctl print system/<label>`, wait or run `make agents-token-refresh-uninstall`, then install
+   again. After installing it reads the plist back and checks it has the SHA-256 it printed; when it does
+   not, or cannot be read, it removes it again (`sudo rm -f`, so the next boot cannot load it), loads
+   nothing and fails, saying no token refresh job is loaded. A failing `launchctl bootstrap` is tried once
+   more; if it fails again no job is loaded: run the install again, or `make agents-token-refresh-start`. A refresh
+   you started by hand before the install keeps the VM's lock: install says so and names its pid; the job
+   then waits, trying every 5 minutes, until you stop that one (`kill <pid>`). It never names the job's own
+   refresh, which takes the lock as the job loads.
+
+2. **Check that it is loaded and minting**:
+
+   ```bash
+   sudo launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu | grep -E 'state|pid|last exit|agents-app-token.sh'
+   tail ~/.local/state/shift2eu/agents-token-refresh-shift2eu.log
+   ```
+
+   `state = running` and a pid, the job's arguments name the host clone's script
+   (`~/agents/shift2eu/host/shift2eu/dev/agents-app-token.sh`, never one in the workspace), and the log's
+   last lines say `wrote a token ... into the VM shift2eu`. If
+   `make agents-token-refresh-start` ever warns that the job runs another clone's script, uninstall it and
+   install again from the host clone.
+
+   Then check that `launchctl print` finds the job **without** `sudo` too:
+
+   ```bash
+   launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu >/dev/null && echo found
+   ```
+
+   The targets decide whether the job is loaded from exactly this unprivileged command (ADR 0034,
+   Unprivileged `launchctl print`), which the Linux tests cannot check. If it prints no `found` while the
+   `sudo` one shows the job, report it (an issue naming the macOS version), and until it is fixed rely on
+   the `sudo` commands: check the job with `sudo launchctl print`, never start a refresh by hand beside it
+   (`make agents-token-refresh-start` would not see the job), and before installing again over a loaded job
+   unload it first with `sudo launchctl bootout system/<label>`.
+
+   A log line every 5 minutes saying `another agents App token refresh ... is running` means a refresh you
+   started by hand still holds the lock: stop it as step 1 says. `make agents-token-refresh-start` now
+   warns about the LaunchDaemon and starts nothing.
+
+   **No new log lines?** Look at `last exit code` and `runs` in
+   `sudo launchctl print system/<label>`: a job that exits at once and keeps being restarted counts up
+   `runs` with a non-zero `last exit code` and writes nothing, since launchd's own output goes to
+   `/dev/null`. The job creates its state directory itself, so check that `HOME` and `XDG_STATE_HOME` in
+   the plist are the ones you expect, and that the host clone's script still exists.
+
+3. **The reboot test**, with nobody logged in (log out of any GUI session first). With FileVault on, a Mac
+   waits at the unlock screen after a reboot and runs nothing, the VM included, so reboot with
+   `sudo fdesetup authrestart` (it unlocks the disk once) or test with FileVault off:
+
+   ```bash
+   sudo shutdown -r now      # or sudo fdesetup authrestart
+   ```
+
+   SSH in again a few minutes after the VM is back, and check the log shows a mint after the boot, and the
+   VM holds a fresh token (the expiry, the second line, is about an hour ahead; never print the first
+   line, the token):
+
+   ```bash
+   tail ~/.local/state/shift2eu/agents-token-refresh-shift2eu.log
+   limactl shell --workdir / shift2eu sh -c 'sed -n 2p "$HOME/.config/shift2eu/agents-app-token"'; date +%s
+   ```
+
+4. **Uninstall**, from the host clone:
+
+   ```bash
+   make agents-token-refresh-uninstall
+   sudo launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu   # must fail now
+   ls /Library/LaunchDaemons/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu.plist   # must be gone
+   ```
+
+   It stops the refresh and removes the plist; the log stays. The VM's token stays valid until it expires.
+   If it warns that the job is still loaded, run the `sudo launchctl bootout system/<label>` it names.
+   Both targets put the plist in `AGENTS_TOKEN_LAUNCHD_DIR` (`/Library/LaunchDaemons`): that variable is a
+   hook for the tests only, never set it on the Mac. Both refuse it from the environment: a stale export
+   would install the plist where launchd never looks at boot.
+
+5. **Roll back to the hand-started refresh**: after step 4, from the host clone,
+   `direnv exec . make agents-token-refresh-start`, and check its log as before. Without the LaunchDaemon a reboot needs
+   it started again by hand.
 
 **In the VM**, both files are readable only by the VM user and replaced atomically; the write refuses
 a `~/.config/shift2eu` that is a symlink or resolves outside the VM user's home, or a token or identity

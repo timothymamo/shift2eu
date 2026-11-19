@@ -1059,6 +1059,111 @@ func TestAgentsAppTokenRefreshTakesOverAStaleLock(t *testing.T) {
 	f.assertNoLeaks(t, second.out(), second.errOut())
 }
 
+// TestAgentsAppTokenRefreshNeverTakesItsOwnLockForAnotherRefresh pins issue #240. The takeover of a stale lock is
+// atomic, but the winner is not done once it has renamed its temporary directory into place: a second contender
+// that moved the stale lock aside too can move the winner's fresh lock aside and, finding a pid there that is not
+// the owner it read while the lock was missing, put it back. The winner's own check then finds no lock, and the
+// lock it reads next holds its own pid. A refresh must never take its own pid for another refresher's: it holds
+// the lock, so it keeps it and mints the VM's token. The buggy script says another refresh is running with the
+// winner's own pid and exits 0, so no refresher is left and nothing mints (issue #240).
+//
+// No run forces that interleaving by itself, so the test forces it with the mv and rm shims of
+// useLockRacedByAContender: one moves the lock the refresh has just won aside, where the refresh's own read finds
+// no lock, and the other puts it back before the refresh reads the lock's owner, exactly where the race does.
+func TestAgentsAppTokenRefreshNeverTakesItsOwnLockForAnotherRefresh(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	env := f.refreshEnv()
+
+	// The lock a refresher killed without its trap leaves: the directory, with the pid of a process that is
+	// gone.
+	lock := f.sb.refreshLockDir("shift2eu")
+
+	if err := os.MkdirAll(lock, 0o700); err != nil {
+		t.Fatalf("create the stale lock %s: %v", lock, err)
+	}
+
+	writeFileMode(t, filepath.Join(lock, "pid"), []byte(strconv.Itoa(deadPid(t))+"\n"), 0o600)
+
+	race := f.sb.useLockRacedByAContender(t, env, lock)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	// What a failure has to show: the refresh's own pid and output, what the lock directory holds, and whether the
+	// shims forced the interleaving at all.
+	contest := func() string {
+		return fmt.Sprintf("the refresh (pid %d, running %t) stderr:\n%s\nstate directory:\n%s\nforced interleaving:\n%s",
+			refresh.pid(), refresh.running(), refresh.errOut(), describeTree(f.sb.stateDir()),
+			readOutput(filepath.Join(race, "log")))
+	}
+
+	minted := func() bool {
+		line, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
+
+		return ok && line != ""
+	}
+
+	// The refresh either keeps the lock and writes the VM's token or exits: the buggy one exits.
+	if !poll(30*time.Second, func() bool { return minted() || !refresh.running() }) {
+		t.Fatalf("timed out after 30s waiting for the refresh either to mint the VM's token or to exit\n%s", contest())
+	}
+
+	if !refresh.running() {
+		why := "no refresher is left to mint the VM's token"
+
+		if own := fmt.Sprintf("is running (pid %d", refresh.pid()); strings.Contains(refresh.errOut(), own) {
+			why = fmt.Sprintf("it took the lock for another refresher's because it holds its own pid %d", refresh.pid())
+		}
+
+		t.Fatalf("the refresh won the stale lock and had the lock it had just won moved aside and put back, as the other contender does in the race of issue #240, but it exited with %d instead of keeping the lock it holds and minting: %s (issue #240)\n%s",
+			refresh.exitCode(t), why, contest())
+	}
+
+	// The one refresher that is left holds the lock: the pid in it is the running refresher's own.
+	body, err := os.ReadFile(filepath.Join(lock, "pid"))
+	if err != nil {
+		t.Fatalf("read %s: %v\n%s", filepath.Join(lock, "pid"), err, contest())
+	}
+
+	owner, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil {
+		t.Fatalf("%s holds %q, not a pid\n%s", filepath.Join(lock, "pid"), strings.TrimSpace(string(body)), contest())
+	}
+
+	if owner != refresh.pid() {
+		t.Errorf("the lock %s holds pid %d but the only running refresher is %d: the refresher that wins the takeover must be the one that holds the lock (issue #240)\n%s",
+			lock, owner, refresh.pid(), contest())
+	}
+
+	// It mints: the lock exists for the VM's token, and a refresher that exited above left none.
+	waitFor(t, 30*time.Second, "the refresh that kept the lock to write the VM's token", minted)
+
+	// The interleaving was forced: without both steps the assertions above proved nothing about the race.
+	raced, err := os.ReadFile(filepath.Join(race, "log"))
+	if err != nil {
+		t.Fatalf("read %s: %v: the shims never moved the lock the refresh had won aside and put it back, so this run forced no interleaving of issue #240\n%s",
+			filepath.Join(race, "log"), err, contest())
+	}
+
+	if steps := strings.Fields(string(raced)); len(steps) != 2 || steps[0] != "moved-aside" || steps[1] != "put-back" {
+		t.Fatalf("%s holds %v, want the other contender's two steps, moved-aside then put-back, so this run forced no interleaving of issue #240\n%s",
+			filepath.Join(race, "log"), steps, contest())
+	}
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh did not stop on SIGTERM; stderr:\n%s", refresh.errOut())
+	}
+
+	if _, err := os.Stat(lock); err == nil {
+		t.Errorf("the lock %s outlived the refresher that held it", lock)
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
 // TestAgentsAppTokenRefreshNeverClaimsAPastExpiryWhenItStops pins the second review's item 9: the stop line must
 // not tell a maintainer the VM's token is valid until a time that has already passed, which is what a token that
 // GitHub already expired, or a VM whose clock ran ahead, leaves behind.
@@ -1147,12 +1252,22 @@ func TestAgentsAppTokenRefreshTakesOverAStaleLockOnce(t *testing.T) {
 			first := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
 			second := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
 
-			waitFor(t, 30*time.Second, "one of the two refreshers to take the stale lock over and mint", func() bool {
-				return len(f.api.minted()) >= 1
-			})
+			// What tells a loaded runner from a takeover neither contender won (issue #240): both scripts'
+			// output, whether each still runs, and what the lock directory holds.
+			contest := func() string {
+				return fmt.Sprintf("first (pid %d, running %t) stderr:\n%s\nsecond (pid %d, running %t) stderr:\n%s\nstate directory:\n%s",
+					first.pid(), first.running(), first.errOut(), second.pid(), second.running(), second.errOut(), describeTree(f.sb.stateDir()))
+			}
 
-			// Let the contender that lost finish its exit before counting the survivors.
-			time.Sleep(500 * time.Millisecond)
+			if !poll(30*time.Second, func() bool { return len(f.api.minted()) >= 1 }) {
+				t.Fatalf("timed out after 30s waiting for one of the two refreshers to take the stale lock over and mint\n%s", contest())
+			}
+
+			// The contender that lost says so and exits 0; the one that won keeps running. Wait for the exit
+			// itself rather than a while: when both win, neither exits and the check below names both.
+			if !poll(30*time.Second, func() bool { return !first.running() || !second.running() }) {
+				t.Fatalf("both refreshers that found the same stale lock are still running 30s after the first mint: a takeover that two contenders can win puts two loops on one token file (review item 5)\n%s", contest())
+			}
 
 			var holder *runningScript
 
@@ -1170,7 +1285,7 @@ func TestAgentsAppTokenRefreshTakesOverAStaleLockOnce(t *testing.T) {
 			}
 
 			if holder == nil {
-				t.Fatalf("neither refresher took the stale lock over; first stderr:\n%s\nsecond stderr:\n%s", first.errOut(), second.errOut())
+				t.Fatalf("neither refresher took the stale lock over\n%s", contest())
 			}
 
 			body, err := os.ReadFile(filepath.Join(lock, "pid"))

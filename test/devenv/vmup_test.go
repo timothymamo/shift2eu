@@ -126,10 +126,7 @@ func writeGitShim(t *testing.T, dir, realGit string) string {
 
 	path := filepath.Join(dir, "git")
 
-	//nolint:gosec // the git shim is a script the tests run, so it must be executable
-	if err := os.WriteFile(path, []byte(fmt.Sprintf(vmUpGitShim, shQuote(realGit))), 0o700); err != nil {
-		t.Fatalf("write %s: %v", path, err)
-	}
+	writeFileMode(t, path, []byte(fmt.Sprintf(vmUpGitShim, shQuote(realGit))), 0o700)
 
 	return path
 }
@@ -165,10 +162,7 @@ func newVMUpFixture(t *testing.T, instance, status string) *vmUpFixture {
 
 	limactl := filepath.Join(sb.binDir, "limactl")
 
-	//nolint:gosec // the fake limactl is a script the tests run, so it must be executable
-	if err := os.WriteFile(limactl, []byte(statusLimactl), 0o700); err != nil {
-		t.Fatalf("write %s: %v", limactl, err)
-	}
+	writeFileMode(t, limactl, []byte(statusLimactl), 0o700)
 
 	writeGitShim(t, sb.binDir, realTool(t, "git"))
 
