@@ -1,4 +1,4 @@
-# PRD #297: shift2eu in the browser at shift2eu.com
+# PRD #297: shift2eu in the browser at www.shift2eu.com
 
 **Status:** Draft
 **Issue:** #297
@@ -23,7 +23,8 @@ be checkable.
 
 ## Outcome
 
-`https://shift2eu.com` serves a static site from this repository, released with shift2eu. A user pastes
+`https://www.shift2eu.com`, the canonical host, serves a static site from this repository, released with
+shift2eu; the apex `shift2eu.com` redirects to it permanently over HTTPS. A user pastes
 or uploads an inventory document (schema version 1 or 2), or starts from a bundled example, chooses one
 or more targets (OVHcloud, Scaleway, UpCloud) and optionally a region, and sees the assessment or the
 comparison in the page, with estimates and their caveats. They can download the report as Markdown and as
@@ -53,7 +54,7 @@ to Scaleway Object Storage behind Scaleway Edge Services from `release.yml`.
 | Taxonomy categories | Every taxonomy category the release's catalogs and inventory reader know; the site adds none. | New taxonomy categories. |
 | Output | The assessment and the comparison shown in the page, per resource and per workload, with estimates (on by default, with an equivalent of `--no-estimate`). Downloads of the Markdown report and the JSON report (schema version 2, ADR 0018, ADR 0030). | PDF. A readiness score. Changes to the Markdown or JSON report. |
 | Site | Static pages (HTML, CSS, one small script, the WebAssembly module and Go's `wasm_exec.js`), a privacy page, built by Go's toolchain only and deployed by the release. | Accounts, saved or shared reports, any server-side code, analytics, a JavaScript framework, npm or any JavaScript build tool. The HTTP API (`shift2eu-server`): the site never calls it. |
-| Hosting | Scaleway Object Storage behind Scaleway Edge Services (Starter plan), the domain `shift2eu.com` at Namecheap, deployed from this repository's GitHub Actions only. | Any third-party builder or hosting (Netlify, Vercel, Cloudflare Pages, GitHub Pages). |
+| Hosting | Scaleway Object Storage behind Scaleway Edge Services (Starter plan, one pipeline) serving the canonical host `www.shift2eu.com`, the domain `shift2eu.com` registered and DNS-hosted at Namecheap with the apex redirecting to `www`, deployed from this repository's GitHub Actions only. | Any third-party builder or hosting (Netlify, Vercel, Cloudflare Pages, GitHub Pages). |
 
 ## Acceptance criteria
 
@@ -102,6 +103,17 @@ release), *live* (checked against the live site) or *review*.
   assignment, `document.cookie`, `localStorage`, `sessionStorage` and `indexedDB`. The glue calls
   `js.Global().Get`, `Value.Get` and `Value.Call` only with constant names from a named allow list; a
   forbidigo or test rule refuses a computed name.
+- [ ] The glue is the only Go code that can reach the browser: the dependency test (`go list -deps` with
+  `GOOS=js GOARCH=wasm` on `./cmd/shift2eu-web`, *Architecture*) also fails when any package in the
+  module's dependency tree other than `cmd/shift2eu-web` imports `syscall/js`, except the standard
+  library's own runtime and syscall internals, which the test names in an explicit list (a new standard
+  package that imports it fails the test until it is reviewed and added). So no domain or adapter package,
+  and no third-party dependency, can call `fetch` or any other sending API through `js.Global()`, and
+  `net/http`'s fetch transport stays out of the tree (the same test refuses `net/http`).
+- [ ] Go's `wasm_exec.js` is trusted as toolchain code, not scanned: the banned-API scan covers the page's
+  script and the glue only, and `wasm_exec.js` is pinned instead by the toolchain test (*`wasm_exec.js`*
+  below: byte-identical to the building toolchain's, which `go.mod` pins). Milestone 1's ADR and the
+  privacy page's technical note say so.
 - [ ] Every page has `<meta http-equiv="x-dns-prefetch-control" content="off">` and no `<link rel>` of
   `dns-prefetch`, `preconnect`, `prefetch` or `prerender` (static test).
 - [ ] The script stops, and shows why, when the page is framed (`window.top !== window.self`), since a
@@ -117,8 +129,13 @@ release), *live* (checked against the live site) or *review*.
   `object-src 'none'`; `require-trusted-types-for 'script'` and `trusted-types` naming the one policy that
   inserts the Go-rendered report; and no `report-uri` or `report-to` (violation reports carry blocked
   URLs and samples). A static test parses each built page's policy and fails on a missing, widened or
-  added directive. Where the host can also send the policy as a header (Open question 2), the header adds
-  `frame-ancestors 'none'`.
+  added directive. Where the host can also send the policy as a header (Hosting decision 2), the header
+  adds `frame-ancestors 'none'`.
+- [ ] `require-trusted-types-for` is not enforced in every browser (browsers without Trusted Types ignore
+  it). Milestone 2's ADR and the privacy page's technical note say so, and say that in such a browser the
+  one insertion of the report rests on `html/template`'s contextual escaping (pinned by the HTML
+  reporter's hostile golden) and on the CSP's ban on inline script, not on Trusted Types. No statement
+  claims Trusted Types protect every user.
 - [ ] Once the module is loaded, the page adds a second policy with `connect-src 'none'`, if the browser
   enforces a policy added after load; milestone 2's ADR records whether it does. *Browser:* after loading,
   the smoke test attempts, from the page, a `fetch` to another origin, to an own-origin path that is not
@@ -134,8 +151,9 @@ release), *live* (checked against the live site) or *review*.
   with `fetch(url, {integrity})`, its digest held in the script (itself SRI-pinned) or the page. A static
   test computes the SHA-384 of every built file and fails when an `integrity` value, including the
   module's digest in the script, is missing or does not match.
-- [ ] The page has no inline script, no inline style attribute that the CSP would refuse, and no inline
-  event handler (static test).
+- [ ] The page has no inline script, no inline `style` attribute or `<style>` element (with `style-src
+  'self'` the CSP refuses every one), and no inline event handler: a static test of every built page,
+  and the HTML reporter's goldens, hostile golden included, contain none.
 - [ ] No page, stylesheet or script references another origin as a loaded resource (no fonts, images,
   scripts or styles from a third party); links to other sites are plain `<a href>` navigations. A static
   test lists every URL in the built files and fails on a loaded resource that is not the site's own.
@@ -152,6 +170,12 @@ release), *live* (checked against the live site) or *review*.
   browser extensions can read any page; a user who must not trust the host can run the attested bundle
   locally (layer 3). *Review:* each statement names the tested criterion that backs it, and none rests on
   review alone.
+- [ ] If the maintainer waives HSTS at milestone 4 (its go/no-go), the privacy page states the first-visit
+  downgrade risk next to its "nothing leaves the browser" statement, not only on the verification page:
+  without HSTS, a network attacker can strip HTTPS on a user's first visit and serve a look-alike page
+  that sends the inventory away, and the way to avoid it is to type `https://www.shift2eu.com` or run the
+  attested bundle locally. A static test of the privacy page fails when the site is built without HSTS
+  declared (a build setting of milestone 3) and the statement is missing.
 
 **`wasm_exec.js`.**
 
@@ -172,7 +196,7 @@ release), *live* (checked against the live site) or *review*.
   `-trimpath`, a fixed or no VCS stamp, sorted archive entries with fixed times, owners and modes, and
   compressed files with zero mtime and a fixed level.
 - [ ] *Release:* after the deploy, `release.yml` fetches every file of the manifest from the canonical
-  host, with no query string, and fails when one does not match its SHA-256 after content decoding. It
+  host (`https://www.shift2eu.com`), with no query string, and fails when one does not match its SHA-256 after content decoding. It
   retries for a stated bound at least as long as the HTML's cache lifetime, and records which host it
   checked and the `Age` of each response.
 - [ ] The release verification guide (`docs/guide/verify-releases.md`) documents the same check as
@@ -208,7 +232,7 @@ release), *live* (checked against the live site) or *review*.
   already checks are what let only the release-tag App create such a tag (ADR 0021).
 - [ ] The key belongs to a Scaleway IAM application that can write objects **only to the site's bucket**:
   no other bucket, project or product, and no bucket-configuration, bucket-policy or ACL permission
-  (runbook and Open question 5). The bucket policy allows that application only the object writes and
+  (runbook and Hosting decision 5). The bucket policy allows that application only the object writes and
   reads the deploy needs. The key has an expiry date, and the runbook has a rotation step. *Review:* the
   runbook's policies are checked against Scaleway's permission sets.
 - [ ] The `release-tag` skill's step 2 checks the `site` environment: `custom_branch_policies` `true` and
@@ -249,7 +273,7 @@ release), *live* (checked against the live site) or *review*.
   ([cache](https://www.scaleway.com/en/docs/edge-services/how-to/configure-cache/)); *live:* the release's
   site check reads these headers and the `Age` of the HTML.
 - [ ] *Live:* the module is served with `Content-Type: application/wasm` and, if Scaleway serves it so
-  (Open question 4), `Content-Encoding: gzip`. If it cannot, a second test also holds the uncompressed
+  (Hosting decision 4), `Content-Encoding: gzip`. If it cannot, a second test also holds the uncompressed
   module to a budget set in milestone 3's ADR.
 - [ ] *Browser:* once loaded, the page runs an assessment with the network disabled.
 
@@ -322,10 +346,12 @@ release), *live* (checked against the live site) or *review*.
 - [ ] A one-time runbook for the maintainer, written in milestone 3 and followed in milestone 4: the
   Scaleway project that holds only the site's bucket; the bucket, its website setting, versioning (if
   Scaleway offers it for a website bucket, so an overwrite can be rolled back) and its bucket policy; the
-  Edge Services subscription (Starter) and pipeline, its cache and custom domain; the IAM application, its
+  Edge Services subscription (Starter) and its one pipeline, its cache and the custom domain
+  `www.shift2eu.com` with a managed Let's Encrypt certificate; the IAM application, its
   policy, and its API key with an expiry and a rotation step; the `site` GitHub environment, its
-  deployment policy and secrets; the Namecheap records (the Edge Services CNAME, the redirect of the
-  second host, CAA allowing only the certificate authority Edge Services uses, DNSSEC on); and, last,
+  deployment policy and secrets; the Namecheap records (the `www` CNAME to the Edge Services endpoint, the
+  apex's permanent redirect to `https://www.shift2eu.com` by the means chosen in milestone 4, CAA allowing
+  only the certificate authority Edge Services uses, DNSSEC on); and, last,
   `SITE_DEPLOY_ENABLED`. It also says to remove the DNS record before deleting the pipeline or the bucket,
   so no dangling CNAME can be taken over. Every step names what the `release-tag` checks or the live check
   verify afterwards.
@@ -342,15 +368,17 @@ skill), since every one of them touches the trust model or the release.
    depguard rules and their pin, `js/wasm` in `make lint`, CI's lint matrix and `test/architecture`,
    CLAUDE.md's table and `docs/architecture.md`. An ADR records the WebAssembly driving adapter, its
    composition root and wiring package, the HTML reporter, the standard toolchain over TinyGo, the size
-   budget and the measured size, and how `wasm_exec.js` is tied to the toolchain.
+   budget and the measured size, how `wasm_exec.js` is tied to the toolchain and trusted as toolchain code
+   rather than scanned, and that only `cmd/shift2eu-web` may import `syscall/js`.
 2. [ ] **The pages, their tests and the CSP.** The static pages under a new directory (HTML, CSS, one
    small script), the privacy page, `make site` (a Go program, standard library only, that assembles the
    bundle: content-addressed names, SRI values, the version, the snapshot dates), the static tests (CSP,
    SRI, banned APIs, prefetch, links resolve, no third-party resource, contrast), the reproducibility test,
    and the `chromedp` smoke test with `make test-browser` and its CI job. `chromedp` is a new dependency
    with its reason in the commit message (CLAUDE.md rule 6). An ADR records the site's trust model (its
-   three layers, the CSP and its known gaps, SRI, Trusted Types, no storage, how the report is inserted)
-   and the headless-browser test. Depends on 1.
+   three layers, the CSP and its known gaps, SRI, Trusted Types and the browsers that do not enforce
+   `require-trusted-types-for`, no storage, how the report is inserted) and the headless-browser test.
+   Depends on 1.
 3. [ ] **Release, attestation and deploy.** The bundle built, tested in the browser, attested and
    published by `release.yml`; the deploy program and the `site` deploy job behind `SITE_DEPLOY_ENABLED`
    and `latest`; the live site check; `check.ReleaseWorkflow` and the CI dry run; the `release-tag`
@@ -359,15 +387,19 @@ skill), since every one of them touches the trust model or the release.
    headers, rollback guard) and the bundle's attestation. Releases cut after this merge skip the deploy
    visibly until the variable is set. Depends on 2.
 4. [ ] **First deploy and the privacy statement live.** After the maintainer has followed the runbook and
-   answered the hosting questions (Open questions 1 to 5, 9 and 10), and the go/no-go below is met: the
-   first release that deploys, the live checks green (files match the manifest, headers, no cookie, HTTPS
-   and the redirects), any fix the live site needs, the README's link to the site, and this PRD moved to
-   `prds/done/` (`Closes #297`). **Go/no-go:** both hosts answer `http://` with a 301 or 308 to the
-   canonical `https://` URL and nothing else, and the canonical host sends `Strict-Transport-Security`;
-   or the maintainer explicitly accepts the risk of a stripped first visit without HSTS, recorded in the
-   ADR and stated on the verification page (Open question 2). Depends on 3.
+   settled the items left to check for this milestone (*To be checked by the maintainer*: how the apex
+   redirect is served over valid HTTPS, Edge Services' response headers and redirects, HSTS), and the
+   go/no-go below is met: the first release that deploys, the live checks green (files match the
+   manifest, headers, no cookie, HTTPS and the redirects), any fix the live site needs, the README's link
+   to the site, and this PRD moved to `prds/done/` (`Closes #297`). **Go/no-go:** `http://shift2eu.com`,
+   `https://shift2eu.com` and `http://www.shift2eu.com` each answer with a 301 or 308 to
+   `https://www.shift2eu.com` (same path) and nothing else, the apex's HTTPS answer with a valid
+   certificate for `shift2eu.com`, and `www.shift2eu.com` sends `Strict-Transport-Security`; or the
+   maintainer explicitly accepts the risk of a stripped first visit without HSTS, recorded in the ADR and
+   stated on the verification page and on the privacy page next to its claim (*Privacy statement*,
+   Hosting decision 2). Depends on 3.
 
-## Decisions and open questions
+## Decisions
 
 ### Decided by the maintainer (2026-11-19)
 
@@ -386,10 +418,19 @@ skill), since every one of them touches the trust model or the release.
 - **Decided: hosting on Scaleway Object Storage behind Scaleway Edge Services, Starter plan,** deployed
   from this repository's GitHub Actions as part of the release (`release.yml`, which runs on the tag the
   release PR's merge creates), never from a third-party builder.
-- **Decided: canonical host `shift2eu.com`;** `www.shift2eu.com` redirects to it permanently. *See Open
-  question 1:* Scaleway's documentation says Edge Services cannot serve an apex domain.
+- **Decided: canonical host `www.shift2eu.com`;** the apex `shift2eu.com` redirects to
+  `https://www.shift2eu.com` permanently (301 or 308) over HTTPS with a valid certificate. Edge Services
+  serves only a subdomain: "You cannot customize your endpoint with a primary domain directly (e.g.
+  `beautiful-domain.com`), only with a subdomain of it", and "It is **not** possible to use only a root
+  domain [...] CNAME records [...] cannot by definition be created for root domains"
+  ([How to configure a custom domain](https://www.scaleway.com/en/docs/edge-services/how-to/configure-custom-domain/),
+  docs validated 2026-06-08, read 2026-11-19). This replaces the earlier decision of the apex as canonical.
+  How the apex redirect is served over valid HTTPS (Namecheap's URL redirect or another means) is left to
+  check for milestone 4 (*To be checked by the maintainer*); it does not block milestones 1 to 3, where the
+  canonical host is one value of the build and the deploy.
 - **Decided: the domain `shift2eu.com`, registered and DNS-hosted at Namecheap.** The maintainer sets the
-  records the runbook lists: the Edge Services CNAME, CAA restricting certificate issuance, DNSSEC on.
+  records the runbook lists: the `www` CNAME to the Edge Services endpoint, the apex redirect, CAA
+  restricting certificate issuance, DNSSEC on.
 - **Decided: Go's standard toolchain, not TinyGo.** One compiler keeps the downloads identical to the
   CLI's, `encoding/json` and reflection are fully supported, and no second toolchain trails Go's
   releases. The module is served compressed and cached per release; a test enforces a compressed-size
@@ -423,82 +464,115 @@ skill), since every one of them touches the trust model or the release.
 - **The deploy program is built in a job without secrets** and runs in the deploy job from a digest-checked
   artifact, so no toolchain download or third-party action runs beside the key.
 
-### Open questions (numbered as in the report to the maintainer)
+### Hosting decisions (decided by the maintainer, 2026-11-19)
 
-1. **The apex domain on Edge Services.** Scaleway's documentation says an Edge Services endpoint can be
-   customized only with a subdomain, never an apex domain ("It is **not** possible to use only a root
-   domain", [How to configure a custom domain](https://www.scaleway.com/en/docs/edge-services/how-to/configure-custom-domain/)),
-   and its pricing example gives the Starter plan one pipeline
-   ([Understanding Edge Services pricing](https://www.scaleway.com/en/docs/edge-services/reference-content/understanding-pricing/)).
-   So the decided canonical host, `shift2eu.com`, cannot be served by Edge Services as documented, and the
-   documentation says nothing of serving two hosts on one pipeline or of redirects. *Recommendation:*
-   ask Scaleway support whether the Starter plan can serve the apex (for example with an ALIAS or
-   flattened record at Namecheap) and redirect `www`. If not, make `www.shift2eu.com` canonical on Edge
-   Services and redirect the apex to it permanently, but only with a redirect that serves HTTPS with a
-   valid certificate and can send HSTS (see 2 and 3 and milestone 4's go/no-go). Milestones 1 to 3 do not
-   depend on the answer: the canonical host is one value of the build and the deploy; milestone 4 does.
-2. **Security headers at Edge Services.** The documentation lists caching, WAF and a custom domain, and no
-   way to set response headers ([Edge Services FAQ](https://www.scaleway.com/en/docs/edge-services/faq/));
-   Object Storage lets an object carry `Cache-Control` and `x-amz-meta-*` headers only
-   ([Object Storage FAQ](https://www.scaleway.com/en/docs/object-storage/faq/)). To be checked by the
-   maintainer: whether Edge Services can add `Strict-Transport-Security`, `Content-Security-Policy` (for
-   `frame-ancestors`), `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`.
-   *Recommendation:* the CSP is in a `<meta>` element in any case (it travels with the pages, to the
-   bucket's direct URL too), and the script refuses to run framed. HSTS has no substitute: without it, a
-   network attacker can strip HTTPS on a user's first visit and serve a look-alike page that sends the
-   inventory away. Treat it as milestone 4's go/no-go: HSTS on the canonical host (then submit the domain
-   to the HSTS preload list), or the maintainer's recorded acceptance of the risk.
-3. **The redirect between the two hosts** depends on 1. To be checked by the maintainer: whether Edge
-   Services or Namecheap can answer the second host with a permanent (301 or 308) redirect over HTTPS.
-   *Recommendation:* a 301 from Edge Services if it can redirect; otherwise Namecheap's URL redirect
-   record only if it serves HTTPS with a valid certificate for the host; decide together with 1.
-4. **Compression and content types.** To be checked by the maintainer: whether Edge Services compresses
-   responses itself, and whether an object uploaded with `Content-Encoding: gzip` and `Content-Type:
-   application/wasm` is served with those headers (the Object Storage FAQ names only `Cache-Control` and
-   `x-amz-meta-*` as headers that can be changed). *Recommendation:* upload the module pre-compressed with
-   `Content-Encoding: gzip` if it is served so; otherwise serve it uncompressed, hold the uncompressed size
-   to a budget too, and reconsider TinyGo only if that budget fails.
-5. **Scoping the deploy key to one bucket.** Object Storage is not among the products that support IAM
-   resource-level conditions ([Products supporting resource-level conditions](https://www.scaleway.com/en/docs/iam/policies-permissions/supported-products-resource-level/)),
-   so an IAM policy cannot name one bucket. *Recommendation:* a Scaleway project that holds only the
-   site's bucket; an IAM application whose policy grants `ObjectStorageObjectsWrite` and
-   `ObjectStorageObjectsRead` ([permission sets](https://www.scaleway.com/en/docs/iam/policies-permissions/permission-sets/))
-   in that project only; and a bucket policy, version `2023-04-17`, which allows only what it lists ("Deny
+These were the PRD's open questions 1 to 11, numbered as in the report to the maintainer. The maintainer
+accepted every recommendation on 2026-11-19; each is worded below as decided. What is still unknown is
+listed under *To be checked by the maintainer*, with the milestone that needs it.
+
+1. **Decided: `www.shift2eu.com` on Edge Services, the apex redirected to it.** Edge Services serves only
+   a subdomain ([How to configure a custom domain](https://www.scaleway.com/en/docs/edge-services/how-to/configure-custom-domain/)),
+   so the one pipeline serves `www.shift2eu.com` with a managed certificate, and the apex `shift2eu.com`
+   answers with a permanent redirect to `https://www.shift2eu.com` over HTTPS with a valid certificate
+   (*Decided by the maintainer*). Asking Scaleway support about an apex on Edge Services is no longer
+   needed. Milestones 1 to 3 do not depend on how the apex redirect is served; milestone 4 does.
+2. **Decided: the CSP in a `<meta>` element, the framing guard in the script, and HSTS as milestone 4's
+   go/no-go.** The documentation lists caching, WAF and a custom domain, and no way to set response
+   headers ([Edge Services FAQ](https://www.scaleway.com/en/docs/edge-services/faq/)); Object Storage
+   lets an object carry `Cache-Control` and `x-amz-meta-*` headers only
+   ([Object Storage FAQ](https://www.scaleway.com/en/docs/object-storage/faq/)). The CSP is in a `<meta>`
+   element in any case (it travels with the pages, to the bucket's direct URL too), and the script refuses
+   to run framed. If Edge Services can add headers, the site also sends `Content-Security-Policy` (with
+   `frame-ancestors 'none'`), `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. HSTS
+   has no substitute: without it, a network attacker can strip HTTPS on a user's first visit and serve a
+   look-alike page that sends the inventory away. So milestone 4's go/no-go is HSTS on `www.shift2eu.com`
+   (then the domain is submitted to the HSTS preload list, which needs the apex to send it too), or the
+   maintainer's recorded acceptance of the risk, stated on the verification page and on the privacy page
+   next to its claim.
+3. **Decided: permanent redirects over HTTPS only.** The apex, and `http://www.shift2eu.com`, answer with
+   a 301 or 308 to `https://www.shift2eu.com`. For `http://www`, a redirect from Edge Services if it can
+   redirect. For the apex, which Edge Services cannot serve, Namecheap's URL redirect record is used only
+   if it serves HTTPS with a valid certificate for `shift2eu.com`; otherwise another means that does (to
+   be checked for milestone 4).
+4. **Decided: the module is uploaded pre-compressed with `Content-Encoding: gzip`** if Edge Services
+   serves it with that header and `Content-Type: application/wasm`; otherwise it is served uncompressed,
+   the uncompressed size is held to a budget too (milestone 3's ADR), and TinyGo is reconsidered only if
+   that budget fails.
+5. **Decided: the deploy key is scoped by project and bucket policy.** Object Storage is not among the
+   products that support IAM resource-level conditions
+   ([Products supporting resource-level conditions](https://www.scaleway.com/en/docs/iam/policies-permissions/supported-products-resource-level/)),
+   so an IAM policy cannot name one bucket. The site's bucket lives in a Scaleway project that holds only
+   it; an IAM application's policy grants `ObjectStorageObjectsWrite` and `ObjectStorageObjectsRead`
+   ([permission sets](https://www.scaleway.com/en/docs/iam/policies-permissions/permission-sets/)) in that
+   project only; and a bucket policy, version `2023-04-17`, which allows only what it lists ("Deny
    statements are therefore useless",
-   [bucket policies](https://www.scaleway.com/en/docs/object-storage/api-cli/bucket-policy/)), that allows
-   the application `s3:PutObject` and `s3:GetObject` (and `s3:ListBucket` only if the deploy needs it) on
-   that bucket and nothing else, with public `s3:GetObject` for the site. To be checked by the maintainer:
-   that this policy refuses the application `DeleteObject`, ACL and bucket configuration calls even if
-   `ObjectStorageObjectsWrite` would allow them, the actions Edge Services' bucket-website backend needs,
-   and whether bucket versioning works with a website bucket. A leaked key can still overwrite the pages;
-   versioning, the key's expiry and the release's live check limit that.
-6. **Pinning Chromium for the smoke test.** *Recommendation:* the `chromedp/headless-shell` container
-   image by digest, with a `# renovate: datasource=docker` comment, run by the CI job and in the Lima VM's
-   container runtime (ADR 0017); `chromedp` connects to it on loopback. The alternative, a Chromium
-   download pinned by version and checksum, needs its own update path.
-7. **Where `chromedp` lives.** It is the first test-only third-party dependency that drives a browser.
-   *Recommendation:* in the main module, in `test/browser` behind a build tag (`browser`), with a depguard
-   rule that confines it there and a test that the product binaries do not reach it or its dependencies;
-   not a nested module, which ADR 0012 names as a way past the architecture checks.
-8. **The deploy program.** *Recommendation:* a standard-library Go program under `ci/` (like the AI
-   reviewer, ADR 0033) that signs S3 requests itself, tested against a fake object store; not the AWS CLI
-   or `s3cmd`, which are unpinned on GitHub's runners or need a Python install, and would hold the key.
-9. **Edge Services Starter plan's price and limits** are not in the saved pages (no pricing page was
-   saved; the docs' figures are examples "subject to change"). To be checked by the maintainer on
-   [Scaleway's pricing page](https://www.scaleway.com/en/pricing/network/#edge-services) before
-   milestone 4: the plan's monthly price, pipelines and cache egress. *Recommendation:* go ahead if the
-   Starter plan covers one pipeline and the site's expected egress (a module of a few MiB, cached per
-   release); if 1 needs a second pipeline, weigh the extra pipeline's fee against the Professional plan.
-10. **CAA and the certificate authority.** The documentation says Edge Services generates managed
-    certificates with Let's Encrypt ([SSL/TLS certificates](https://www.scaleway.com/en/docs/edge-services/reference-content/ssl-tls-certificate/)).
-    *Recommendation:* CAA `0 issue "letsencrypt.org"` and `0 issuewild ";"` (and an `iodef` address if the
-    maintainer wants reports); the maintainer checks that Scaleway's managed issuance passes with it, and
-    that Namecheap supports CAA and DNSSEC for the domain. DNSSEC covers Namecheap's records only; the
-    CNAME's target zone is Scaleway's.
-11. **The bucket's direct URL.** The bucket website endpoint also serves the files, outside Edge
-    Services, on its own origin. *Recommendation:* accept it (the content is public and the `<meta>` CSP
-    travels with the pages), and keep the objects private behind Edge Services if bucket website allows
-    it, as its quickstart suggests ([Edge Services quickstart](https://www.scaleway.com/en/docs/edge-services/quickstart/)).
+   [bucket policies](https://www.scaleway.com/en/docs/object-storage/api-cli/bucket-policy/)), allows the
+   application `s3:PutObject` and `s3:GetObject` (and `s3:ListBucket` only if the deploy needs it) on that
+   bucket and nothing else, with public `s3:GetObject` for the site. Bucket versioning is turned on if it
+   works with a website bucket. A leaked key can still overwrite the pages; versioning, the key's expiry
+   and the release's live check limit that.
+6. **Decided: Chromium for the smoke test is the `chromedp/headless-shell` container image, pinned by
+   digest** with a `# renovate: datasource=docker` comment, run by the CI job and in the Lima VM's
+   container runtime (ADR 0017); `chromedp` connects to it on loopback. A Chromium download pinned by
+   version and checksum was rejected: it needs its own update path.
+7. **Decided: `chromedp` lives in the main module, in `test/browser` behind a build tag (`browser`),**
+   with a depguard rule that confines it there and a test that the product binaries do not reach it or its
+   dependencies. It is the first test-only third-party dependency that drives a browser. A nested module
+   was rejected: ADR 0012 names it as a way past the architecture checks.
+8. **Decided: the deploy program is a standard-library Go program under `ci/`** (like the AI reviewer,
+   ADR 0033) that signs S3 requests itself, tested against a fake object store; not the AWS CLI or
+   `s3cmd`, which are unpinned on GitHub's runners or need a Python install, and would hold the key.
+9. **Decided: the Starter plan, with one pipeline.** Scaleway's network pricing page, *Edge Services*
+   (saved by the maintainer on 2026-11-19, `scaleway-pricing-network-2026-11-19`): **Starter €0.99/month**,
+   cache 100 GB, custom domain included, SSL certificate "Let's Encrypt: free" (a custom, uploaded
+   certificate is billed by Secret Manager), egress fees free, **1 pipeline**; an additional pipeline
+   €4/pipeline per month, additional cache €0.0135/GB. Edge Services' documentation counts the cache limit
+   as the data egressed from all pipelines' caches in a month; transfers from the backend into the cache
+   are not counted
+   ([Understanding Edge Services pricing](https://www.scaleway.com/en/docs/edge-services/reference-content/understanding-pricing/)).
+   Object Storage, Scaleway's storage pricing page for Amsterdam (saved 2026-11-19,
+   `scaleway-pricing-storage-2026-11-19`): Standard One Zone €0.00803/GB-month, Standard Multi-AZ
+   €0.01606/GB-month, requests and ingress included, egress 75 GB free every month, then €0.01/GB. A
+   bundle of a few MiB per release, kept for earlier releases too, and cache fills of a few MiB per
+   release cost cents a month. **One pipeline is enough:** the site is one backend (the bucket) served on
+   one host (`www.shift2eu.com`). The apex redirect cannot use a pipeline at all, because Edge Services
+   cannot serve an apex domain (decision 1), so a second pipeline (€4/month) would not serve it either;
+   the apex redirect is served outside Edge Services. Only if the maintainer later wants a second
+   Edge-served host (none is planned) would it cost a second pipeline, €4/month, or the Professional plan
+   (€12.99/month, 10 pipelines).
+10. **Decided: CAA `0 issue "letsencrypt.org"` and `0 issuewild ";"`** (and an `iodef` address if the
+    maintainer wants reports), since Edge Services generates managed certificates with Let's Encrypt
+    ([SSL/TLS certificates](https://www.scaleway.com/en/docs/edge-services/reference-content/ssl-tls-certificate/)),
+    and DNSSEC on at Namecheap. DNSSEC covers Namecheap's records only; the CNAME's target zone is
+    Scaleway's. If the apex redirect's provider issues its own certificate, the CAA record also names
+    that provider's certificate authority (milestone 4).
+11. **Decided: the bucket's direct URL is accepted.** The bucket website endpoint also serves the files,
+    outside Edge Services, on its own origin; the content is public and the `<meta>` CSP travels with the
+    pages. The objects are kept private behind Edge Services if bucket website allows it, as its
+    quickstart suggests ([Edge Services quickstart](https://www.scaleway.com/en/docs/edge-services/quickstart/)).
+
+### To be checked by the maintainer
+
+Facts still unknown, each with the milestone that needs it. None blocks milestones 1 and 2.
+
+- **Milestone 3** (the runbook, the deploy program and its ADR):
+  - Edge Services' compression and content types: whether it compresses responses itself, and whether an
+    object uploaded with `Content-Encoding: gzip` and `Content-Type: application/wasm` is served with
+    those headers (decision 4; it sets whether milestone 3 adds the uncompressed budget).
+  - The IAM permission-set details (decision 5): that the bucket policy refuses the application
+    `DeleteObject`, ACL and bucket configuration calls even if `ObjectStorageObjectsWrite` would allow
+    them, and the actions Edge Services' bucket-website backend needs.
+  - Versioning (decision 5): whether bucket versioning works with a website bucket.
+- **Milestone 4** (the first deploy and its go/no-go):
+  - How the apex redirect is served over valid HTTPS (decisions 1 and 3): whether Namecheap's URL
+    redirect serves `https://shift2eu.com` with a valid certificate and a 301 or 308, or which other means
+    does, and whether it can send HSTS.
+  - Edge Services' response headers and redirects (decisions 2 and 3): whether it can add
+    `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `Referrer-Policy`
+    and `Permissions-Policy`, and redirect `http://www.shift2eu.com` to HTTPS.
+  - The HSTS go/no-go (decision 2): HSTS on `www.shift2eu.com`, or the recorded acceptance of the risk.
+  - CAA and DNSSEC (decision 10): that Scaleway's managed issuance passes with the CAA record, and that
+    Namecheap supports CAA and DNSSEC for the domain.
 
 ### Proposed follow-ups (not filed)
 
@@ -523,3 +597,9 @@ and Object Storage
 ([bucket policies](https://www.scaleway.com/en/docs/object-storage/api-cli/bucket-policy/),
 [bucket website](https://www.scaleway.com/en/docs/object-storage/how-to/use-bucket-website/),
 [FAQ](https://www.scaleway.com/en/docs/object-storage/faq/)).
+
+Scaleway's prices were read from its pricing pages as saved by the maintainer from a browser on
+2026-11-19 (scaleway.com refuses automated requests; the saved copies are not in the repository):
+[network, Edge Services](https://www.scaleway.com/en/pricing/network/#edge-services) and
+[storage, Object Storage](https://www.scaleway.com/en/pricing/storage/) (region Amsterdam). Prices
+change; the runbook rechecks them before the subscription is taken out.
