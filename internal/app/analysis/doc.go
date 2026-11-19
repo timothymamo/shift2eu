@@ -21,6 +21,15 @@
 // not list is a *RegionError wrapping ErrUnknownRegion, returned before
 // anything is assessed (ADR 0027).
 //
+// The option rules decide which of a user's choices a run takes (PRD #297):
+// SelectTargets (target keys, AllTargets, duplicates), SelectRegions (a region
+// per selected target), SelectFormat, SelectSchemaVersion (the JSON report's
+// version and the formats it applies to) and RegionChoiceError (a region the
+// catalog does not list, found by RunWith). Every driving adapter that offers
+// these choices parses its own input and checks it here, so the CLI and the
+// page accept the same choices and refuse the rest with the same messages,
+// each wrapping ErrInvalidChoice.
+//
 // The package depends only on internal/domain/... and the standard library.
 // Concrete adapters implement the ports and are wired in cmd/shift2eu, never
 // imported here. The port shapes are recorded in docs/adr/0005.
