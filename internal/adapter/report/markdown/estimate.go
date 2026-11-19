@@ -105,7 +105,7 @@ func renderEstimate(e *estimate.Estimate) string {
 	}
 
 	if !e.Estimated {
-		return "not estimated: " + renderNotEstimated(*e)
+		return "not estimated: " + renderNotEstimated(*e, true)
 	}
 
 	cell := euros(e.Monthly)
@@ -141,9 +141,11 @@ func renderStorageNotIncluded(s estimate.StorageNotIncluded) string {
 	}
 }
 
-// renderNotEstimated says in plain words why e is not estimated. A reason the
-// report does not know is shown as its code, escaped.
-func renderNotEstimated(e estimate.Estimate) string {
+// renderNotEstimated says in plain words why e is not estimated, in reasonOrder.
+// The region it names is a code span escaped for a table cell when inTable is
+// set (codeSpan), and as it is in a list item otherwise. A reason the report
+// does not know is shown as its code, escaped.
+func renderNotEstimated(e estimate.Estimate, inTable bool) string {
 	switch e.Reason {
 	case estimate.NoFit:
 		return "no fit"
@@ -155,10 +157,12 @@ func renderNotEstimated(e estimate.Estimate) string {
 		return "no plan"
 	case estimate.NoPlanLargeEnough:
 		return "no plan large enough"
+	case estimate.NotOffered:
+		return "not offered in " + codeSpan(e.Region, inTable)
 	case estimate.NoPrice:
-		return "no price in " + codeSpan(e.Region, true)
+		return "no price in " + codeSpan(e.Region, inTable)
 	case estimate.NoStoragePrice:
-		return "no storage price in " + codeSpan(e.Region, true)
+		return "no storage price in " + codeSpan(e.Region, inTable)
 	default:
 		return escapeText(string(e.Reason))
 	}
@@ -175,13 +179,41 @@ func renderRelations(v assessment.Verdict) string {
 	return strings.Join(rendered, nameSeparator)
 }
 
+// reasonOrder is the order a total names the reasons its resources are not
+// estimated in: the order estimate.For checks them. A reason the report does not
+// know comes after these, in the order the estimates give it.
+var reasonOrder = []estimate.Reason{
+	estimate.NoFit,
+	estimate.UsagePriced,
+	estimate.NoSize,
+	estimate.NoPlan,
+	estimate.NoPlanLargeEnough,
+	estimate.NotOffered,
+	estimate.NoPrice,
+	estimate.NoStoragePrice,
+}
+
 // renderTotal renders a total: "€2,535.00 per month for 4 of 8 resources", with
 // "resource" when there is one, then "(storage not included in 2 estimates)"
 // when some estimates leave out storage their plan does not include (ADR 0032).
-func renderTotal(t estimate.Total) string {
+// A total of at least one resource that estimates none has no amount (issue
+// #246): "none of 8 resources could be estimated", then the reasons of
+// estimates, the estimates it sums, in parentheses (notEstimatedReasons), or
+// nothing more when there is no reason to give. inTable says whether the total
+// is a table cell, which escapes a region the reasons name (renderNotEstimated).
+func renderTotal(t estimate.Total, estimates []estimate.Estimate, inTable bool) string {
 	noun := " resources"
 	if t.Resources == 1 {
 		noun = " resource"
+	}
+
+	if t.Estimated == 0 && t.Resources > 0 {
+		line := "none of " + strconv.Itoa(t.Resources) + noun + " could be estimated"
+		if reasons := notEstimatedReasons(estimates, inTable); reasons != "" {
+			line += " (" + reasons + ")"
+		}
+
+		return line
 	}
 
 	line := euros(t.Monthly) + " per month for " + strconv.Itoa(t.Estimated) + " of " +
@@ -197,6 +229,91 @@ func renderTotal(t estimate.Total) string {
 	}
 
 	return line
+}
+
+// notEstimatedReasons renders why the estimates that are not estimated are not:
+// each one's phrase as its Monthly estimate cell gives it after "not estimated:
+// ", once each, in reasonOrder, then any reason the report does not know in
+// the order the estimates give it, joined with ", ". inTable is passed on to
+// renderNotEstimated.
+func notEstimatedReasons(estimates []estimate.Estimate, inTable bool) string {
+	var phrases []string
+
+	add := func(e estimate.Estimate) {
+		if p := renderNotEstimated(e, inTable); !contains(phrases, p) {
+			phrases = append(phrases, p)
+		}
+	}
+
+	for _, r := range reasonOrder {
+		for _, e := range estimates {
+			if !e.Estimated && e.Reason == r {
+				add(e)
+			}
+		}
+	}
+
+	for _, e := range estimates {
+		if !e.Estimated && !contains(reasonOrder, e.Reason) {
+			add(e)
+		}
+	}
+
+	return strings.Join(phrases, nameSeparator)
+}
+
+// contains reports whether list holds v.
+func contains[T comparable](list []T, v T) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+
+	return false
+}
+
+// estimatesOf returns the estimates of verdicts, in their order, leaving out a
+// verdict without one.
+func estimatesOf(verdicts []assessment.Verdict) []estimate.Estimate {
+	var out []estimate.Estimate
+
+	for _, v := range verdicts {
+		if v.Estimate != nil {
+			out = append(out, *v.Estimate)
+		}
+	}
+
+	return out
+}
+
+// workloadEstimates returns, for each group of a.Workloads at the same index,
+// the estimates of the resources it names, in a.Verdicts' order, leaving out a
+// verdict without one. It indexes the groups' resource IDs once and walks the
+// verdicts once, so a report of many workloads costs one pass over its
+// resources, not one per workload (security audit, issue #246).
+func workloadEstimates(a assessment.Assessment) [][]estimate.Estimate {
+	groups := make(map[string][]int)
+
+	for i, w := range a.Workloads {
+		for _, id := range w.ResourceIDs {
+			groups[id] = append(groups[id], i)
+		}
+	}
+
+	out := make([][]estimate.Estimate, len(a.Workloads))
+
+	for _, v := range a.Verdicts {
+		if v.Estimate == nil {
+			continue
+		}
+
+		for _, i := range groups[v.Resource.ID] {
+			out[i] = append(out[i], *v.Estimate)
+		}
+	}
+
+	return out
 }
 
 // basisNote is the basis an estimate is given on: the snapshot's retrieval date,
@@ -267,7 +384,9 @@ func writeSourceCost(b *strings.Builder, sc estimate.SourceCost, indent string) 
 func writeWorkloads(b *strings.Builder, a assessment.Assessment, heading string) {
 	b.WriteString("\n" + heading + " Workloads\n")
 
-	for _, w := range a.Workloads {
+	estimates := workloadEstimates(a)
+
+	for i, w := range a.Workloads {
 		name := "No workload"
 		if !w.NoWorkload {
 			name = codeSpan(w.Name, false)
@@ -278,7 +397,8 @@ func writeWorkloads(b *strings.Builder, a assessment.Assessment, heading string)
 			" partial, " + strconv.Itoa(w.Summary.None) + " none\n")
 
 		if w.Total != nil {
-			b.WriteString("- Monthly estimate: " + renderTotal(*w.Total) + ", " + basisNote(a) + "\n")
+			b.WriteString("- Monthly estimate: " + renderTotal(*w.Total, estimates[i], false) +
+				", " + basisNote(a) + "\n")
 			writeSourceCost(b, w.SourceCost, "")
 		}
 
@@ -299,7 +419,7 @@ func writeWorkloads(b *strings.Builder, a assessment.Assessment, heading string)
 // ends the section before it and ends with a single newline.
 func writeCostEstimate(b *strings.Builder, a assessment.Assessment, heading string) {
 	b.WriteString("\n" + heading + " Cost estimate\n\n")
-	b.WriteString("- Total: " + renderTotal(*a.Total) + "\n")
+	b.WriteString("- Total: " + renderTotal(*a.Total, estimatesOf(a.Verdicts), false) + "\n")
 	b.WriteString("- Estimate: " + basisNote(a) + "; " + fixedFeeNote + "\n")
 	b.WriteString("- Prices in " + codeSpan(a.EstimateRegion, false) + "\n")
 	b.WriteString("- Hours: " + hoursLine(a) + "\n")
