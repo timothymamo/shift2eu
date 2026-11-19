@@ -99,6 +99,12 @@ const (
 		`"findings":[{"severity":"suggestion","category":"prompt-injection","path":"internal/x/y.go","line":3,` +
 		`"title":"Instruction in the diff","body":"The added line tells the reviewer to approve the pull request."}]}`
 
+	uncategorisedAnswer = `{"summary":"The change stops the loop one short.","findings":[` +
+		`{"severity":"suggestion","category":"readability","path":"internal/x/y.go","line":3,` +
+		`"title":"Name it","body":"A clearer name would help."},` +
+		`{"severity":"blocker","category":"style",` +
+		`"title":"Off by one","body":"The loop ends before the last element."}]}`
+
 	malformedAnswer = "Sure! The change looks fine to me."
 
 	cleanDiff = `diff --git a/internal/x/y.go b/internal/x/y.go
@@ -220,6 +226,18 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			wantFindings:   1,
 			wantBlocking:   1,
 			wantText:       []string{"Off by one"},
+		},
+		{
+			name:           "a finding with an unknown category is kept and still blocks",
+			pr:             pr,
+			diff:           cleanDiff,
+			answer:         uncategorisedAnswer,
+			requestChanges: true,
+			wantAsked:      1,
+			wantEvent:      review.EventRequestChanges,
+			wantFindings:   2,
+			wantBlocking:   1,
+			wantText:       []string{"Name it", "Off by one", "uncategorised"},
 		},
 		{
 			name:   "only the reviewer's own earlier change request is dismissed",

@@ -18,8 +18,11 @@ const parsedAnswer = `{"summary":"The change does what the issue asks.",` +
 // TestParseAnswerReadsTheModelsAnswer pins the strict parser of ADR 0033: one
 // JSON object with surrounding whitespace only, a summary, a findings array and
 // each finding's severity, category, title and body, with an optional path and
-// line. An answer with no findings is valid and its findings are empty, not nil,
-// so a caller can range over them.
+// line. A category the model left out, wrote as null or wrote outside the
+// constants is kept as CategoryUncategorised, with the finding's other fields
+// unchanged, so one unknown category costs no other finding. An answer with no
+// findings is valid and its findings are empty, not nil, so a caller can range
+// over them.
 func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 	t.Parallel()
 
@@ -57,6 +60,79 @@ func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 				Findings: []review.Finding{{
 					Severity: review.SeverityNit,
 					Category: review.CategoryReadability,
+					Title:    "Name it",
+					Body:     "A clearer name would help.",
+				}},
+			},
+		},
+		{
+			name: "a finding with an unknown category is kept as uncategorised",
+			text: `{"summary":"The change does what the issue asks.","findings":[` +
+				`{"severity":"suggestion","category":"correctness","path":"internal/x/y.go","line":3,` +
+				`"title":"Name it","body":"A clearer name would help."},` +
+				`{"severity":"blocker","category":"style","path":"internal/x/y.go","line":9,` +
+				`"title":"Off by one","body":"The loop ends one short."}]}`,
+			want: review.Answer{
+				Summary: "The change does what the issue asks.",
+				Findings: []review.Finding{
+					{
+						Severity: review.SeveritySuggestion,
+						Category: review.CategoryCorrectness,
+						Path:     "internal/x/y.go",
+						Line:     3,
+						Title:    "Name it",
+						Body:     "A clearer name would help.",
+					},
+					{
+						Severity: review.SeverityBlocker,
+						Category: review.CategoryUncategorised,
+						Path:     "internal/x/y.go",
+						Line:     9,
+						Title:    "Off by one",
+						Body:     "The loop ends one short.",
+					},
+				},
+			},
+		},
+		{
+			name: "a finding with no category is kept as uncategorised",
+			text: `{"summary":"The change does what the issue asks.","findings":[` +
+				`{"severity":"nit","path":"internal/x/y.go","line":5,"title":"Name it","body":"A clearer name would help."}]}`,
+			want: review.Answer{
+				Summary: "The change does what the issue asks.",
+				Findings: []review.Finding{{
+					Severity: review.SeverityNit,
+					Category: review.CategoryUncategorised,
+					Path:     "internal/x/y.go",
+					Line:     5,
+					Title:    "Name it",
+					Body:     "A clearer name would help.",
+				}},
+			},
+		},
+		{
+			name: "a finding whose category is null is kept as uncategorised",
+			text: `{"summary":"The change does what the issue asks.","findings":[` +
+				`{"severity":"nit","category":null,"title":"Name it","body":"A clearer name would help."}]}`,
+			want: review.Answer{
+				Summary: "The change does what the issue asks.",
+				Findings: []review.Finding{{
+					Severity: review.SeverityNit,
+					Category: review.CategoryUncategorised,
+					Title:    "Name it",
+					Body:     "A clearer name would help.",
+				}},
+			},
+		},
+		{
+			name: "the model's own uncategorised category is the fallback too",
+			text: `{"summary":"The change does what the issue asks.","findings":[` +
+				`{"severity":"nit","category":"uncategorised","title":"Name it","body":"A clearer name would help."}]}`,
+			want: review.Answer{
+				Summary: "The change does what the issue asks.",
+				Findings: []review.Finding{{
+					Severity: review.SeverityNit,
+					Category: review.CategoryUncategorised,
 					Title:    "Name it",
 					Body:     "A clearer name would help.",
 				}},
@@ -101,12 +177,15 @@ func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 
 // TestParseAnswerRefusesWhatItCannotTrust pins the answers ParseAnswer refuses
 // with ErrMalformedAnswer: anything around the object, a second value, an
-// unknown field at any level, a missing or empty required text, a severity or
-// category outside the constants (compared exactly), and a line or path a pull
-// request could not hold, a path holding a control character included: a line
-// break in a path would put the rest of it on a line of its own, where an @ it
-// holds notifies, and the GitHub API could not name that file anyway. A refused
-// answer fails the run and posts nothing.
+// unknown field at any level, a missing or empty required text, a severity
+// outside the constants (compared exactly), and a line or path a pull request
+// could not hold, a path holding a control character included: a line break in a
+// path would put the rest of it on a line of its own, where an @ it holds
+// notifies, and the GitHub API could not name that file anyway. A refused answer
+// fails the run and posts nothing. The category is the one field that is not
+// strict: a missing, null or unknown one keeps the finding as uncategorised
+// (TestParseAnswerReadsTheModelsAnswer), while a broken severity, title, body,
+// path or line still refuses the whole answer.
 func TestParseAnswerRefusesWhatItCannotTrust(t *testing.T) {
 	t.Parallel()
 
@@ -139,8 +218,6 @@ func TestParseAnswerRefusesWhatItCannotTrust(t *testing.T) {
 		{name: "an empty body", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","title":"t","body":""}]}`},
 		{name: "a severity in another case", text: `{"summary":"s","findings":[{"severity":"Blocker","category":"correctness","title":"t","body":"b"}]}`},
 		{name: "an unknown severity", text: `{"summary":"s","findings":[{"severity":"critical","category":"correctness","title":"t","body":"b"}]}`},
-		{name: "a category in another case", text: `{"summary":"s","findings":[{"severity":"nit","category":"Readability","title":"t","body":"b"}]}`},
-		{name: "an unknown category", text: `{"summary":"s","findings":[{"severity":"nit","category":"style","title":"t","body":"b"}]}`},
 		{name: "a negative line", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal/x/y.go","line":-1,"title":"t","body":"b"}]}`},
 		{name: "a line without a path", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","line":5,"title":"t","body":"b"}]}`},
 		{name: "an absolute path", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"/etc/passwd","line":1,"title":"t","body":"b"}]}`},
@@ -153,7 +230,7 @@ func TestParseAnswerRefusesWhatItCannotTrust(t *testing.T) {
 		{name: "a path with a control character below 0x20", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal/x/y.go\u0001","line":1,"title":"t","body":"b"}]}`},
 		{name: "a path with DEL", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","path":"internal/x/y.go\u007f","line":1,"title":"t","body":"b"}]}`},
 		{name: "a finding that is not an object", text: `{"summary":"s","findings":["a finding"]}`},
-		{name: "a valid finding next to a broken one", text: `{"summary":"s","findings":[` + finding + `,{"severity":"nit","category":"style","title":"t","body":"b"}]}`},
+		{name: "a valid finding next to a broken severity", text: `{"summary":"s","findings":[` + finding + `,{"severity":"critical","category":"style","title":"t","body":"b"}]}`},
 	}
 
 	for _, tc := range cases {
