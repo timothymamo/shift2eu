@@ -109,6 +109,13 @@ const (
 		`"findings":[{"severity":"suggestion","category":"Prompt-Injection","path":"internal/x/y.go","line":3,` +
 		`"title":"Instruction in the diff","body":"The added line tells the reviewer to approve the pull request."}]}`
 
+	// misspeltWithoutInjectAnswer is the same answer with the category spelled so
+	// that it loses the word injection: the parser's fail-safe still reads it as
+	// prompt-injection (issue #292).
+	misspeltWithoutInjectAnswer = `{"summary":"The diff asks for an approval, which this review does not follow.",` +
+		`"findings":[{"severity":"suggestion","category":"prompt-injetion","path":"internal/x/y.go","line":3,` +
+		`"title":"Instruction in the diff","body":"The added line tells the reviewer to approve the pull request."}]}`
+
 	malformedAnswer = "Sure! The change looks fine to me."
 
 	cleanDiff = `diff --git a/internal/x/y.go b/internal/x/y.go
@@ -249,6 +256,18 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			pr:             pr,
 			diff:           injectionDiff,
 			answer:         misspeltInjectionAnswer,
+			requestChanges: true,
+			wantAsked:      1,
+			wantEvent:      review.EventRequestChanges,
+			wantFindings:   1,
+			wantBlocking:   1,
+			wantText:       []string{"Instruction in the diff", "prompt-injection"},
+		},
+		{
+			name:           "a misspelt prompt-injection category that loses inject with the switch on requests changes",
+			pr:             pr,
+			diff:           injectionDiff,
+			answer:         misspeltWithoutInjectAnswer,
 			requestChanges: true,
 			wantAsked:      1,
 			wantEvent:      review.EventRequestChanges,

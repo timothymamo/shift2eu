@@ -12,7 +12,7 @@ import (
 // TestRunOutcomeZeroValueFailsClosed pins that a RunOutcome nobody decided is a
 // failure and never an answer: a reader's own, fresh RunOutcome must not pass
 // for a run that answered, so a forgotten assignment fails the run instead of
-// publishing an answer that was never read (ADR 0033, issue #292). OutcomeFailed
+// publishing an answer that was never read (ADR 0033, issue #274). OutcomeFailed
 // therefore keeps the iota's zero slot; a later reordering that put an answer
 // first would have to change this test on purpose.
 func TestRunOutcomeZeroValueFailsClosed(t *testing.T) {

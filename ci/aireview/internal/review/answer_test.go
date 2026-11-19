@@ -21,9 +21,10 @@ const parsedAnswer = `{"summary":"The change does what the issue asks.",` +
 // line. The model's category is normalised before it is matched (issue #292):
 // white space around it trimmed, lower-cased, every underscore and space turned
 // into a hyphen, so " Correctness " is correctness and "Prompt_Injection" is
-// prompt-injection, and a category that still holds "inject" is
+// prompt-injection, and a category that still holds "inject" or "prompt" is
 // CategoryPromptInjection whatever else it says, so a misspelt prompt-injection
-// finding keeps blocking. A category the model left out, wrote as null or wrote
+// finding keeps blocking even when the misspelling loses the word injection.
+// A category the model left out, wrote as null or wrote
 // outside the constants is kept as CategoryUncategorised, with the finding's
 // other fields unchanged, so one unknown category costs no other finding. An
 // answer with no findings is valid and its findings are empty, not nil, so a
@@ -187,7 +188,7 @@ func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 			want: readAs(review.CategoryPromptInjection),
 		},
 		{
-			name: "a category in another case and with an underscore is the category it spells",
+			name: "an unknown category in another case and with an underscore is uncategorised",
 			text: withCategory(" Unknown_Category"),
 			want: readAs(review.CategoryUncategorised),
 		},
@@ -195,6 +196,35 @@ func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 			name: "a misspelt prompt-injection category is still prompt-injection",
 			text: withCategory("promptinjection"),
 			want: readAs(review.CategoryPromptInjection),
+		},
+		// The next three cases pin the parser's fail-safe for a spelling that
+		// loses the word injection altogether: an off-list category that still
+		// names a prompt is read as prompt-injection too, so a typo in the
+		// category never lets an instruction the diff carries through as an
+		// ordinary finding (issue #292).
+		{
+			name: "a misspelt prompt-injection category that loses inject is still prompt-injection",
+			text: withCategory("prompt-injetion"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		{
+			name: "a truncated prompt-injection category is still prompt-injection",
+			text: withCategory("prompt-inj"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		{
+			name: "a misspelt prompt-injection category in another case and with a space is prompt-injection",
+			text: withCategory("Prompt Injektion"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		// A known residual of the rule above: an off-list category that names
+		// neither a prompt nor an injection is uncategorised. Reading an off-list
+		// jailbreak category as prompt-injection is out of scope for issue #292,
+		// so this case pins that a later widening has to be a deliberate change.
+		{
+			name: "an off-list jailbreak category is uncategorised",
+			text: withCategory("jailbreak"),
+			want: readAs(review.CategoryUncategorised),
 		},
 		{
 			name: "a bare injection category is prompt-injection",
