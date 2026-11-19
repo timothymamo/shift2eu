@@ -341,9 +341,9 @@ func TestGHAppTokenRefusesABadTokenFile(t *testing.T) {
 		{name: "empty", content: "", mode: 0o600},
 		{name: "group readable", content: token + "\n" + future + "\n", mode: 0o640, token: token},
 		// The format GitHub mints since 2026 is accepted, so the checks around it must still hold (issue #232).
-		{name: "expired, in the new format", content: newToken + "\n" + past + "\n", mode: 0o600, token: newToken},
-		{name: "one line, in the new format", content: newToken + "\n", mode: 0o600, token: newToken},
-		{name: "group readable, in the new format", content: newToken + "\n" + future + "\n", mode: 0o640, token: newToken},
+		{name: "expired in the new format", content: newToken + "\n" + past + "\n", mode: 0o600, token: newToken},
+		{name: "one line in the new format", content: newToken + "\n", mode: 0o600, token: newToken},
+		{name: "group readable in the new format", content: newToken + "\n" + future + "\n", mode: 0o640, token: newToken},
 	}
 
 	for _, tc := range cases {

@@ -17,6 +17,63 @@
 > `make agents-token-refresh-start` warns and starts nothing while it is loaded. Where a) says launchd lost,
 > ADR 0034 decides otherwise; the hand-started loop stays as the fallback.
 
+> **Update (issue #227 part 1), 2026-11-19.** The first open follow-up in Consequences is done: **every
+> host target runs from the host clone**, not only the token targets. The host targets are every target
+> that runs on the Mac as the maintainer: the `vm-*` targets, `deck`, `deck-restart`, `gate-check` and the
+> `agents-token*` targets (the Makefile's `HOST_TARGETS`; `test/devenv` keeps the list complete against
+> every recipe that calls `limactl`, `launchctl`, `sudo`, `gh`, `curl`, `openssl` or `plutil`, runs a script of
+> `dev/` that works on the Mac, or runs a host target as a sub-make).
+>
+> - **`WORKSPACE_REPO`.** A new make variable, the absolute path of the repository's checkout inside the
+>   workspace, set in the host clone's `.envrc` (or on the command line). The host targets reach the
+>   workspace only through it, instead of `CURDIR` and the paths derived from the checkout make runs in:
+>   `deck`, `vm-shell`, `vm-claude-settings` and `vm-init` open the VM at it, `vm-init` gets it and its
+>   parent, and `vm-up` mounts its parent, the workspace, and checks that for stray entries. The VM_ENV
+>   credentials now come from the host clone's `.envrc` too, so no `.envrc` in or above the workspace
+>   holds a credential any more.
+> - **The refusal.** make refuses a host target while it reads the Makefile, keyed on `MAKECMDGOALS`
+>   (GNU make 3.81's `$(error)`, so before any prerequisite, sub-make or recipe line, even under `-i`,
+>   `-k` or `-n`), when `WORKSPACE_REPO` is unset, holds a character other than letters, digits and
+>   `. _ - / + @ # =` (an allow list: no whitespace, quote, `$`, `\`, `%`, no `:`, which Lima splits a
+>   `--mount-only` value on, and no `,` or `~`, as `limactl`'s `--mount-only` is a pflag StringSlice that
+>   splits on commas and expands a leading `~` of every part, so `/Users/x/ws,~/shift2eu` would mount the
+>   home directory writable), or is not absolute, or when the checkout make runs in is the workspace,
+>   lies inside it or holds it; no message shows a value that fails these checks. It refuses any run in
+>   which `MAKECMDGOALS` or `.DEFAULT_GOAL` comes from the command line or the environment, which would
+>   hide the real goals, and names that variable. Its message names the target, the host clone and
+>   `docs/dev-environment.md`.
+>   The targets the agents run in the VM never read `WORKSPACE_REPO` and are not refused. `vm-up` also
+>   refuses, before any `limactl` call, a `WORKSPACE_REPO` that is no directory holding `.git` and a
+>   workspace it cannot list, and matches the repository's name in the listing literally.
+> - **Only the credentials a process needs.** The host targets that open a shell in the VM run `limactl`
+>   without the App's three variables (`env -u`), and the background refresher runs without the default
+>   `VM_ENV` credentials (`CLAUDE_CODE_OAUTH_TOKEN`, `DEEPSEEK_API_KEY`).
+> - **A guard, not a boundary.** The refusal protects the maintainer from a mistake (a `make deck` typed
+>   in the wrong directory). It is no security boundary: the workspace's `Makefile` is agent-editable, so
+>   a make run there runs whatever that file says. The protection is that the maintainer never runs
+>   `make` or `git` in the workspace on the Mac (`docs/dev-environment.md`, The host clone).
+> - **`vm-up` no longer sets git hooks.** Its `git-hooks` prerequisite would set the host clone's hooks
+>   from there, and running git in the workspace from the Mac is what this forbids. `make vm-init` turns
+>   the workspace checkout's hooks on inside the VM (`git -C <WORKSPACE_REPO> config core.hooksPath
+>   .githooks`); the setting lives in the mounted `.git/config`.
+> - `make gate-check` is a host target, so the release-tag skill runs `dev/protect-main-check.sh` in the
+>   VM and asks the maintainer for `make gate-check` from the host clone; a trusted fresh clone of `main`
+>   on a machine with no workspace runs `dev/protect-main-check.sh` directly. `make deck`'s warning about
+>   the App variables in "the workspace's shell" is gone: from the host clone they are the normal case,
+>   and `make deck` hands them to no process in the VM.
+>
+> **What part 2 leaves open.** The App's key is still a file the maintainer's uid can read, so code that
+> runs as the maintainer anywhere (agent-editable code run on the Mac by mistake, a git-aware prompt or an
+> editor in the workspace, a tampered host clone) can read it silently; the Consequences below still hold
+> for that. The maintainer ruled out prompting stores for the unattended Mac Mini (issue #227, comment of
+> 2026-11-15): the option that fits is a separate macOS account that owns the key and runs the refresher,
+> composing with [ADR 0034](0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md) as the
+> LaunchDaemon's `UserName`. As the Lima instance lives in the maintainer's `~/.lima`, that account would
+> write the token into the VM over its SSH port with a key of its own, a change to
+> `dev/agents-app-token.sh`. Where the decision or the Consequences below describe host targets run from
+> the workspace, `make deck` typed by hand, or credentials in the `.envrc` above the workspace as current,
+> this update supersedes them.
+
 ## Context
 
 The agents in the Lima VM push branches, open pull requests and file issues with the maintainer's own
@@ -276,8 +333,9 @@ the table with the App token, and that `bypass_actors` is absent or empty for th
   `core.fsmonitor` makes it run a command). Hence the host clone: outside the workspace, its own `.git`,
   updated only with `git -C <clone> pull --ff-only` from GitHub, the only place the three App variables
   are set (its own `.envrc`), and where `make agents-token`, `make agents-token-refresh` and
-  `make agents-token-refresh-start` run; they need only `limactl` and `LIMA_INSTANCE`, nothing of the
-  workspace.
+  `make agents-token-refresh-start` run; their recipes use only `limactl` and `LIMA_INSTANCE`, nothing
+  of the workspace, but like every host target they refuse to run without `WORKSPACE_REPO` set (the
+  host-clone refusal).
 - **The host clone does not put the key out of reach of code run from the workspace.** It keeps the key's
   path out of the workspace's shells and keeps the token targets on code the agents cannot edit. But every
   host target the maintainer still runs from the workspace (`make deck`, `make vm-env`, `make vm-init`,

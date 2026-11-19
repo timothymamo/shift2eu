@@ -21,36 +21,50 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
 
 ### On the Mac
 
-1. Clone the repository into a directory of its own, the workspace. The VM mounts the workspace, and
-   `make vm-up` refuses to start while it holds anything other than the repository and its dispatch
-   worktrees ([Dispatcher mode](#dispatcher-mode)):
+You keep two clones of the repository: the **workspace's checkout**, which the VM mounts and the agents
+work in, and the **host clone**, outside the workspace, which is the only place you run `make` on the Mac
+([The host clone](#the-host-clone)). Never run `make` or `git` in the workspace on the Mac: the agents can
+edit everything there, and `make` and `git` run what its files say.
+
+1. Clone the repository into a directory of its own, the workspace, without entering it. The VM mounts
+   the workspace, and `make vm-up` refuses to start while it holds anything other than the repository
+   and its dispatch worktrees ([Dispatcher mode](#dispatcher-mode)):
 
    ```bash
-   mkdir shift2eu-ws && cd shift2eu-ws
-   git clone https://github.com/timothymamo/shift2eu.git && cd shift2eu
+   mkdir -p ~/src/shift2eu-ws
+   git clone https://github.com/timothymamo/shift2eu.git ~/src/shift2eu-ws/shift2eu   # the workspace's checkout
    ```
 
-2. Create the credentials ([Credentials](#credentials) explains each one). For Claude, generate a token
+2. Clone it again outside the workspace, the host clone:
+
+   ```bash
+   git clone https://github.com/timothymamo/shift2eu.git ~/src/shift2eu-host
+   ```
+
+3. Create the credentials ([Credentials](#credentials) explains each one). For Claude, generate a token
    for your subscription:
 
    ```bash
    claude setup-token        # opens the browser, then prints a token valid for a year
    ```
 
-3. Export them from a direnv `.envrc` in a directory **above the workspace**, then `direnv allow`:
+4. Give the host clone a direnv `.envrc` (`~/src/shift2eu-host/.envrc`), then `direnv allow` there. It
+   names the workspace's checkout and holds the credentials `make vm-env` copies into the VM:
 
    ```bash
-   export CLAUDE_CODE_OAUTH_TOKEN=...   # the token from step 1
-   export DEEPSEEK_API_KEY=...          # the tester (pi)
+   export WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu"   # absolute: the workspace's checkout
+   export CLAUDE_CODE_OAUTH_TOKEN=...                       # the token from step 3
+   export DEEPSEEK_API_KEY=...                              # the tester (pi)
    ```
 
    The agents' GitHub credential is not one of them: it is the agents App's installation token, which a
    job on the Mac mints and writes into the VM ([The agents App](#the-agents-app)).
 
-4. Create the VM, copy the credentials into it and set it up:
+5. Create the VM, copy the credentials into it and set it up, from the host clone:
 
    ```bash
    brew install lima          # the LIMA_VERSION in .github/workflows/vm-tools.yml (see below)
+   cd ~/src/shift2eu-host
    make vm-create             # several minutes the first time
    ```
 
@@ -70,16 +84,18 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
    port when the VM is created ([Several VMs on one host](#several-vms-on-one-host)).
 
    On a new VM, `make vm-init`'s `gh` step fails until the agents App's token is in the VM: set up the App
-   and the host clone ([The agents App](#the-agents-app)), run `make agents-token-refresh-start` from the
-   host clone, then run `make vm-init` again.
+   ([The agents App](#the-agents-app)), run `make agents-token-refresh-start` from the host clone, then
+   run `make vm-init` again.
 
-5. Open the deck: type what `make deck` runs, from a directory outside the workspace, such as your home
-   (`cd ~`), not `make deck` in the workspace: a git-aware prompt in the workspace runs git there with
-   its `.git/config`, which the agents can edit (What the host clone does not do, in
-   [The agents App](#the-agents-app)).
+   Note: `make vm-init` also turns on the workspace checkout's git hooks, which refuse commits and pushes
+   to `main` (its `git` step runs `git -C <WORKSPACE_REPO> config core.hooksPath .githooks` inside the VM).
+   `make vm-up` no longer does (issue #227): it runs on the Mac, from the host clone, and runs no `git` in
+   the workspace. The setting is kept in the workspace's `.git/config`, which the VM mounts.
+
+6. Open the deck, from the host clone:
 
    ```bash
-   limactl shell --workdir <path of the main checkout> shift2eu dot-agent-deck   # the VM instance's name, LIMA_INSTANCE
+   make deck                  # limactl shell --workdir "$WORKSPACE_REPO" shift2eu dot-agent-deck
    ```
 
 ### What `make vm-init` does
@@ -93,7 +109,7 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 |---|---|
 | `theme` | Sets `theme` in Claude Code's `~/.claude/settings.json` to `CLAUDE_THEME` (default `dark`; `make vm-init CLAUDE_THEME=light`) |
 | `claude` | Marks Claude Code's onboarding done and trusts the workspace and the repository, in `~/.claude.json`, so the Claude Code roles start without first-run screens (see below) |
-| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run |
+| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run. Then it turns on the main checkout's git hooks (`git -C <main checkout> config core.hooksPath .githooks`), which refuse commits and pushes to `main`: `make vm-up` runs on the Mac and sets none (issue #227) |
 | `claude auth` | Checks that Claude Code uses the OAuth token (your subscription), not an API key |
 | `pi` | `pi auth check --provider deepseek` |
 | `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository with the agents App's token; without the token file the gh wrapper refuses to run gh at all. Not `gh auth status`, which an installation token may fail (ADR 0031) |
@@ -157,13 +173,10 @@ It never prints a credential: the checks show only the field they test.
 ### Every day
 
 ```bash
-make vm-up    # from the workspace
-cd ~ && limactl shell --workdir <path of the main checkout> shift2eu dot-agent-deck   # the TUI attaches to the daemon service
+cd ~/src/shift2eu-host     # the host clone, never the workspace
+make vm-up
+make deck                  # the TUI attaches to the daemon service
 ```
-
-Type the second line from outside the workspace, not `make deck` in it: a git-aware prompt in the
-workspace runs git there with its `.git/config`, which the agents can edit (What the host clone does not
-do, in [The agents App](#the-agents-app)).
 
 - **Detach, don't stop.** Leave the TUI with `Ctrl+c` and **Detach**: the agents keep running in the
   service, and the deck shows them again the next time you open it. **Stop** ends the agents and the
@@ -209,7 +222,8 @@ that Lima refuses the new template with that text.
 ### Several VMs on one host
 
 A host that runs one Lima VM per repository gives each VM a size and an SSH port of its own. `make vm-up`
-and `make vm-create` (which hands them on to `make vm-up`) take four optional variables:
+and `make vm-create` (which hands them on to `make vm-up`), run from the host clone like every command on
+this page that runs `limactl`, take four optional variables:
 
 | Variable | Value | Passed to `limactl start` as |
 |---|---|---|
@@ -268,8 +282,9 @@ letters, digits, `.`, `_` and `-`, starting with a letter or digit, as every tar
 `LIMA_INSTANCE` does (the `vm-*` targets that use it, which is all of them but `vm-env-check`, and `deck`,
 `deck-restart` and the `agents-token*` targets, issue #252): the check runs before any of the target's own
 commands, and make itself never expands the value, so a name that carries a `$(...)` is refused, not run.
-Only the prerequisites run first, and neither reads the name: `vm-up`'s `git-hooks` sets git's hooks path
-and `vm-env`'s `vm-env-check` checks the credentials on the host.
+Only the prerequisites run first, and none reads the name: `vm-env`'s `vm-env-check` checks the
+credentials on the host. Before even that, every one of these targets refuses to run anywhere but the host
+clone ([The host clone](#the-host-clone)).
 Targets that do not use it, such as `make check`, ignore it.
 
 Those checks cannot close the window between the status query and the start: the directory can still go
@@ -338,22 +353,28 @@ start work on an issue or PRD.
   worktrees on a disk that is not mounted.
   `dot-agent-deck worktree list` shows what is left. The `agent/dispatch-*` branches stay. Deleting
   local branches is left to you: an agent writes the list to a file and hands you the command to run,
-  `xargs git branch -D < <file>` (CLAUDE.md, rule 8).
+  `xargs git branch -D < <file>` (CLAUDE.md, rule 8), which you run in the VM (with `!` in a Claude Code
+  pane, or in `make vm-shell`), never in the workspace on the Mac ([The host clone](#the-host-clone)).
 
 ### Moving an existing checkout into a workspace
 
 A checkout made before ADR 0008 sits directly in a shared directory, and its VM mounts only the
 repository. Move it, then point the existing VM at the workspace; the VM keeps its tools, login and
-configuration:
+configuration. Run everything from the host clone ([The host clone](#the-host-clone)), and the `git`
+command in the VM, never in the moved checkout on the Mac. Set `WORKSPACE_REPO` first: every host target,
+`make vm-stop` included, refuses to run without it:
 
 ```bash
+cd ~/src/shift2eu-host                                         # the host clone
+# set WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu" in the host clone's .envrc, then:
+direnv allow
 make vm-stop
-mkdir ../shift2eu-ws && mv ../shift2eu ../shift2eu-ws/
-cd ../shift2eu-ws/shift2eu
-git worktree repair .worktrees/*                               # only if .worktrees/ holds any
-limactl edit --tty=false --mount-only "$(dirname "$PWD"):w" shift2eu
+mkdir ~/src/shift2eu-ws && mv ~/src/shift2eu ~/src/shift2eu-ws/
+limactl edit --tty=false --mount-only "$HOME/src/shift2eu-ws:w" shift2eu
 make vm-up
-direnv allow                                                   # direnv tracks .envrc files by path
+make vm-shell                                                  # in the VM, at the moved checkout:
+git worktree repair .worktrees/*                               # only if .worktrees/ holds any
+exit
 ```
 
 Then, before `make deck`, run `make vm-init`, which trusts the new workspace and repository paths: the
@@ -362,7 +383,8 @@ trust given to the old paths does not carry over.
 ## Credentials
 
 Nothing from the Mac's home directory is visible in the VM. `make vm-env` copies the variables named in
-`VM_ENV` (Makefile) from the shell you run it in to `~/.config/dot-agent-deck/daemon.env` in the VM,
+`VM_ENV` (Makefile) from the shell you run it in, the host clone's, which its direnv `.envrc` sets
+([The host clone](#the-host-clone)), to `~/.config/dot-agent-deck/daemon.env` in the VM,
 readable only by the VM user. The values travel over standard input, never on a command line. Two things
 read the file:
 
@@ -433,9 +455,10 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
 - **Rotating a credential:** change it on the Mac, then `make vm-env deck-restart`. Restarting the service
   stops its running agents, so do it between tasks. Run `claude setup-token` again before the year is up.
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the
-  workspace or this repository would be readable by every agent and by the model providers they send
-  files to. A direnv `.envrc` in a directory above the workspace works: direnv loads it in this
-  repository, and the VM cannot see it.
+  workspace or the workspace's checkout would be readable by every agent and by the model providers they
+  send files to. Keep them in the host clone's `.envrc`, where `make vm-env` runs and the VM cannot see
+  them. A `.envrc` above the workspace, where they were kept before issue #227, is no longer read by any
+  target: remove them from it, so a shell in the workspace does not hold them.
 - **No GitHub token in `VM_ENV`.** Never put a personal access token, or any token with
   `write:packages`, into `VM_ENV`: the agents' only GitHub credential is the agents App's token, whose
   permissions (no Packages) are what stop agents pushing to GHCR. `make vm-env-check`, and so `make vm-env`
@@ -469,10 +492,9 @@ in this order:
    security unlock-keychain ~/Library/Keychains/login.keychain-db
    ```
 
-2. Leave and re-enter the checkout, so direnv reads the `.envrc` again:
-   `cd ~ && cd /Users/example/agents/shift2eu-ws/shift2eu`. On a host without the Keychain, check that the
-   `.envrc` above the workspace exists, sets the variables and is allowed (`direnv allow`), or export
-   them in the shell yourself.
+2. Leave and re-enter the host clone, so direnv reads its `.envrc` again:
+   `cd ~ && cd ~/src/shift2eu-host`. On a host without the Keychain, check that the host clone's `.envrc`
+   exists, sets the variables and is allowed (`direnv allow`), or export them in the shell yourself.
 3. Re-run `make vm-env`, or the target that ran it (`make vm-create`).
 
 The VM's `daemon.env` is untouched by the refused run, so the running agents keep their credentials.
@@ -506,82 +528,107 @@ Never give it Administration: the rulesets' bypass lists need Administration wri
 Generate a private key and keep the `.pem` **outside the workspace**, a regular file (not a symlink: the
 script refuses one), readable only by you (`chmod 600`). The App's slug is never configured: the token script reads it from the App (`GET /app`).
 
-**The host clone.** The token targets run on the Mac, as you, with the key's path in their environment,
-so they must run code the agents cannot edit. The workspace is mounted read-write into the VM, `.git`
-included: an agent can change its `Makefile` (or add a `GNUmakefile`, which make reads first), `dev/`, and
-`.git/config`, whose `core.fsmonitor`, `core.pager`, hooks and remote URL make `git` itself run commands
-or fetch another `main`. So no check run in the workspace helps: a `git diff` against `origin/main`, or any
-other `git` or `make` command there, is agent-controlled code the moment an agent wants it to be. Keep a
-second clone outside the workspace instead, which the VM never mounts, for example `~/src/shift2eu-host`:
+#### The host clone
+
+Every target that runs on the Mac, as you, with your credentials in reach, is a **host target**: the
+`vm-*` targets, `deck`, `deck-restart`, `gate-check` and the `agents-token*` targets (the Makefile's
+`HOST_TARGETS`). They must run code the agents cannot edit. The workspace is mounted read-write into the
+VM, `.git` included: an agent can change its `Makefile` (or add a `GNUmakefile`, which make reads first),
+`dev/`, and `.git/config`, whose `core.fsmonitor`, `core.pager`, hooks and remote URL make `git` itself run
+commands or fetch another `main`. So no check run in the workspace helps: a `git diff` against
+`origin/main`, or any other `git` or `make` command there, is agent-controlled code the moment an agent
+wants it to be. The host targets run from a second clone outside the workspace instead, which the VM never
+mounts, for example `~/src/shift2eu-host` (issue #227):
 
 ```bash
 git clone https://github.com/timothymamo/shift2eu.git ~/src/shift2eu-host   # once
 git -C ~/src/shift2eu-host pull --ff-only                                  # before each use: reviewed main from GitHub
 ```
 
-Update it only like that, never from the workspace, and never edit it. Give it its own direnv `.envrc`
-(`~/src/shift2eu-host/.envrc`, then `direnv allow` there) with the App's three variables, and only there,
-**never in the `.envrc` above the workspace**, so a shell in the workspace does not have the key's path in
-its environment (code run from the workspace can still find it and read the key: see below):
+Update it only like that, never from the workspace, and never edit it. Keep it outside the workspace, and
+keep the workspace outside it. Give it its own direnv `.envrc` (`~/src/shift2eu-host/.envrc`, then
+`direnv allow` there), the only `.envrc` the host targets read:
 
 ```bash
-export SHIFT2EU_AGENTS_APP_ID=...               # the App's settings page: App ID
-export SHIFT2EU_AGENTS_APP_INSTALLATION_ID=...  # the number at the end of the installation's settings URL
-export SHIFT2EU_AGENTS_APP_KEY_FILE=...         # the path of the .pem, outside the workspace and the clone
+export WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu"   # absolute path of the workspace's checkout
+export CLAUDE_CODE_OAUTH_TOKEN=...                       # VM_ENV: make vm-env copies these into the VM
+export DEEPSEEK_API_KEY=...
+export SHIFT2EU_AGENTS_APP_ID=...                        # the App's settings page: App ID
+export SHIFT2EU_AGENTS_APP_INSTALLATION_ID=...           # the number at the end of the installation's settings URL
+export SHIFT2EU_AGENTS_APP_KEY_FILE=...                  # the path of the .pem, outside the workspace and the clone
 ```
 
-Never add them to `VM_ENV`: `make vm-env` refuses any `SHIFT2EU_AGENTS_APP_*` name, so neither the key
-nor its path enters the VM. `make deck` warns when one of them reaches it (it still opens the deck).
+`WORKSPACE_REPO` names the repository's checkout inside the workspace (`make WORKSPACE_REPO=... <target>`
+works too). The host targets work on the workspace through it: `make deck`, `make vm-shell`,
+`make vm-claude-settings` and `make vm-init` open the VM at it, and `make vm-up` mounts its parent
+directory, the workspace, and checks that it holds nothing but the checkout and its dispatch worktrees.
 
-Run these from the host clone (`cd ~/src/shift2eu-host`); they need only `limactl` and `LIMA_INSTANCE`,
-nothing of the workspace:
+Never put any of these in a `.envrc` in or above the workspace, so a shell in the workspace holds none of
+them. Never add the App's three to `VM_ENV`: `make vm-env` refuses any `SHIFT2EU_AGENTS_APP_*` name, so
+neither the key nor its path enters the VM. The host targets that open a shell in the VM (`make deck`,
+`make deck-restart`, `make vm-claude-settings`, `make vm-init`, `make vm-shell`) run `limactl` without the
+App's three variables (`env -u`), and the background refresh `make agents-token-refresh-start` starts runs
+without the default `VM_ENV` credentials, `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEEK_API_KEY` (a name a custom
+`VM_ENV` adds is not stripped): each process gets only what its work needs.
+
+**The refusal.** A host target refuses to run, before it runs anything (no prerequisite, no sub-make, no
+`limactl`, no `git config`), and names itself, the host clone and this section, when `WORKSPACE_REPO` is
+unset, holds a character other than letters, digits and `. _ - / + @ # =` (no whitespace, no quote, no
+`$`, no `\`, no `%`, no `:`, which Lima splits a `--mount-only` value on, and no `,` or `~`: `limactl`'s
+`--mount-only` splits its value on commas and expands a leading `~` of every part, so
+`/Users/x/ws,~/shift2eu` would mount your home directory writable), or is not an absolute path, or when
+the checkout `make` runs in is the workspace, lies inside it or holds it. No message shows a value that
+fails these checks. make checks this while it reads the Makefile, keyed on the targets named on its
+command line. It refuses any run, whatever its goals, in which `MAKECMDGOALS` or `.DEFAULT_GOAL` comes from
+the command line or the environment (`make MAKECMDGOALS= vm-up`, `MAKECMDGOALS=help make vm-up`,
+`make .DEFAULT_GOAL=vm-up`, `.DEFAULT_GOAL` set in the environment of `make -e`), as each hides the goals
+make runs, and names that variable. `make -k`, `-i` and `-n` do not get past it. Targets the agents run
+in the VM (`make check`, `make test`, `make worktree`, `make git-hooks`, ...) never read `WORKSPACE_REPO`
+and are not refused.
+
+`make vm-up` also checks, before any `limactl` call and with nothing but `test` and `ls`, that
+`WORKSPACE_REPO` is a directory holding `.git` and that the workspace can be listed, and it matches the
+repository's name in that listing literally, so a repository `a.b` never takes a stray `axb` for its own.
+
+The refusal is a guard against your mistakes, **not a security boundary**: the workspace's `Makefile` is
+one the agents can edit, so a `make` run in the workspace runs whatever that file says, refusal or not.
+The protection is that you never run `make` or `git` in the workspace on the Mac, and run the host targets
+only in the host clone.
+
+Run these from the host clone (`cd ~/src/shift2eu-host`):
 
 | Command | Does |
 |---|---|
+| `make vm-create`, `make vm-up`, `make vm-env`, `make vm-env-check`, `make vm-claude-settings`, `make vm-init`, `make vm-shell`, `make vm-stop`, `make vm-delete` | The VM's life cycle and setup ([First-time setup](#first-time-setup)) |
+| `make deck` | Opens the deck in the VM at `WORKSPACE_REPO`; it starts no refresh |
+| `make deck-restart` | Restarts the deck's daemon service in the VM |
+| `make vm-gh-wrapper` | Gives a VM created before the gh wrapper the wrapper, without recreating it |
+| `make gate-check` | Checks `Protect main` and CODEOWNERS, with your own `gh` login |
 | `make agents-token` | Mints one token and writes it, and the bot's identity, into the VM, and sets that identity as the VM user's git identity (`user.name` and `user.email` in `~/.gitconfig`) |
 | `make agents-token-refresh` | Mints now and again before each token expires, in the foreground, until stopped |
 | `make agents-token-refresh-start` | Starts that refresh in the background, unless one already runs for the VM or its LaunchDaemon is loaded, and prints where its log is |
 | `make agents-token-refresh-install` | Installs (or updates) the LaunchDaemon that runs the refresh at boot, with nobody logged in, one per VM; needs `sudo` (macOS; [The refresh as a LaunchDaemon](#the-refresh-as-a-launchdaemon)) |
 | `make agents-token-refresh-uninstall` | Stops and removes that LaunchDaemon; needs `sudo` |
 
-And from the workspace, as before:
+**What the host clone does not do.** It keeps every host target on code the agents cannot edit, and the
+credentials out of the workspace's shells. It does not put the App's key, nor the credentials in its
+`.envrc`, out of reach of code that runs as you: your uid can read the key file, whose path is in the host
+clone's `.envrc` and in the running refresher's environment. Any agent-editable code you run on the Mac as
+you anyway can read it, and can tamper with the host clone itself (its `.git/hooks`, its `.git/config`,
+its files), which `git pull --ff-only` does not undo, so the next host target there would run it with
+your credentials: a `make` or `git` command in the workspace on the Mac, a git-aware shell prompt or an
+editor that runs git or project tasks there. So:
 
-| Command | Does |
-|---|---|
-| `make vm-gh-wrapper` | Gives a VM created before the gh wrapper the wrapper, without recreating it |
-| `make deck` | Opens the deck; it starts no refresh. Rather type `limactl shell --workdir <main checkout> shift2eu dot-agent-deck` from outside the workspace, such as your home (What the host clone does not do, below) |
+- Never run `make` or `git` in the workspace on the Mac, and keep shells with a git-aware prompt, and
+  editors that run git or tasks, out of it. Read the agents' work on GitHub, or in the VM (`make vm-shell`).
+  Run the commands the agents hand you on the Mac (`gh run rerun`, `gh pr merge`, ...) from the host clone
+  too: `gh` runs `git` to find the repository it is in.
+- No git check in the host clone is a safeguard: once the clone is tampered with, git there runs the
+  tampered hooks and config too.
 
-**What the host clone does not do.** It keeps the key's path out of the workspace's shells and keeps the
-token targets on code the agents cannot edit. It does not put the key out of reach of code run from the
-workspace. Every host target you still run from the workspace (`make deck`, `make vm-env`, `make vm-init`,
-`make vm-gh-wrapper`) runs agent-editable code on the Mac as you, and so with your uid, which can read the
-key file: its path is in the host clone's `.envrc` and in the running refresher's environment. That code
-can also tamper with the host clone itself (its `.git/hooks`, its `.git/config`, its files), which
-`git pull --ff-only` does not undo, so the next token target there would run it with the key. The App key
-is therefore one of the credentials code run from the workspace on the Mac can reach, with every
-credential `make vm-env` copies from the `.envrc` above the workspace:
-
-- the Claude token and the DeepSeek key;
-- the agents App's private key, the file `SHIFT2EU_AGENTS_APP_KEY_FILE` names, which never expires.
-
-Until the follow-ups below, keep that code's chances few:
-
-- Open the deck by typing what `make deck` runs, directly, not through `make` in the workspace, and type
-  it from a directory outside the workspace, such as your home: a git-aware prompt in the workspace runs
-  git there with its `.git/config`, which the agents can edit:
-
-  ```bash
-  limactl shell --workdir <path of the main checkout> shift2eu dot-agent-deck   # the VM instance's name, LIMA_INSTANCE
-  ```
-
-- Run `make vm-env`, `make vm-init` and `make vm-gh-wrapper` only rarely, and only after reading the diff
-  of the `Makefile` and `dev/` on GitHub.
-
-No git check in the host clone is a safeguard: once the clone is tampered with, git there runs the
-tampered hooks and config too. The open follow-ups (ADR 0031, Consequences): run every host target from
-the host clone (`make deck` needs a variable for the workspace path instead of `CURDIR`), and keep the key
-where your uid cannot read it silently (a Keychain item or a password-manager read that prompts, or a
-separate macOS account running the refresher).
+The open follow-up (issue #227 part 2, ADR 0031, Consequences) is to keep the key where code running as
+your uid cannot read it silently: on an unattended Mac, a separate macOS account that owns the key and runs
+the refresher, as the LaunchDaemon's `UserName` ([ADR 0034](adr/0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md)).
 
 `make agents-token-refresh-start` keeps the refresh's pid and log in
 `${XDG_STATE_HOME:-~/.local/state}/shift2eu/` on the Mac, named after the VM instance
@@ -844,7 +891,9 @@ check therefore reads the repository's `permissions.admin` first, and on a token
 admin it prints `unverified: bypass_actors cannot be verified with this token (not a repository admin):
 run make gate-check as the maintainer` instead of a verdict. That part is yours: run `make gate-check` from
 the host clone, logged in to `gh` as yourself with an admin token (`gh auth login` on the Mac), as runbook
-step 5 does. A fine-grained personal token reports your role on the repository in `permissions.admin`, not
+step 5 does. On a machine with no workspace, such as a trusted fresh clone of `main` on another machine,
+run `dev/protect-main-check.sh` there directly instead of `make gate-check`: `make gate-check` is a host
+target, and with `WORKSPACE_REPO` unset there make refuses it. A fine-grained personal token reports your role on the repository in `permissions.admin`, not
 what the token itself may do: without Administration on the token, GitHub leaves the bypass list out and
 the check reports `gap: bypass_actors is missing although this token is a repository admin`. A token that
 returned `[]` without being able to see the bypass actors would make the check pass falsely, so run the
@@ -914,7 +963,8 @@ before it still hold. Rolling back is under each step.
 6. **Remove your token from the VM** (milestone 3, approved and merged by you: the first change through
    the gate). Once it is merged, the default `VM_ENV` no longer names `GITHUB_TOKEN`, your personal
    GitHub token, and the gh wrapper has no fallback to it. Then, on the Mac:
-   - delete the `GITHUB_TOKEN` line from the `.envrc` above the workspace (`direnv allow` there again),
+   - delete the `GITHUB_TOKEN` line from the `.envrc` that holds it (above the workspace before issue
+     #227, the host clone's since; `direnv allow` there again),
      and `GITHUB_TOKEN` from any `VM_ENV` override you keep (a `VM_ENV` exported in a `.envrc`, or a
      habit of `make vm-env VM_ENV=...`);
    - run `make vm-env` with the default `VM_ENV`: it replaces the VM's whole `daemon.env`, so the old
@@ -927,8 +977,8 @@ before it still hold. Rolling back is under each step.
    `gh` step still passes, on the App token; and from the host clone, as yourself with an admin token,
    `make gate-check` exits 0 (it has no transition flag any more: a gap always fails it).
    *Roll back:* revert milestone 3, which brings the fallback and the `VM_ENV` entry back, create a new
-   personal token limited to this repository, put it back in the `.envrc` above the workspace and run
-   `make vm-env`.
+   personal token limited to this repository, put it back in the host clone's `.envrc` and run
+   `make vm-env` there.
 7. **Add the AI reviewer** (milestone 4): create the reviewer App, the `ai-review` environment, its three
    secrets (the App's client ID and key, and your Claude subscription token from `claude setup-token`,
    made on your own machine, never in the VM) and its variable as [The AI reviewer](#the-ai-reviewer)

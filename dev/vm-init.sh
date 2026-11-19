@@ -15,6 +15,9 @@
 #   3. git         The git identity the agents commit with (git config --global), where the VM has none:
 #                  the agents App's bot from ~/.config/shift2eu/agents-app-identity when make agents-token
 #                  wrote it (it replaces any other), otherwise the one passed in (step 3 below runs it).
+#                  Then the main checkout's git hooks (.githooks, which refuse commits and pushes to main),
+#                  set here in the VM because make vm-up runs on the Mac and runs no git in the workspace
+#                  (issue #227).
 #   4. claude auth Claude Code uses the subscription's OAuth token, not an API key.
 #   5. pi          pi has the DeepSeek key.
 #   6. gh          gh can read this repository, with the agents App's token.
@@ -98,6 +101,10 @@ fi
 # 3. git: the agents App's bot when make agents-token has written its identity into the VM (PRD #161,
 # ADR 0031), otherwise the identity passed in; a script of its own, so its cases are tested without a VM.
 bash "${repo}/dev/vm-git-identity.sh" "${git_name}" "${git_email}" || exit 1
+# The workspace checkout's hooks, as make git-hooks sets them: in its mounted .git/config, so they last and
+# every worktree of it gets them. The same value on every run, so a re-run changes nothing.
+git -C "${main_checkout}" config core.hooksPath .githooks || fail "git: cannot set core.hooksPath in ${main_checkout}"
+say "git: ${main_checkout} uses the hooks in .githooks"
 
 # 4. claude auth: filtered to the one field checked.
 method="$({ claude auth status --json 2>/dev/null || true; } | jq -r '.authMethod // "none"' 2>/dev/null || true)"

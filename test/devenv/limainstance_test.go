@@ -294,27 +294,30 @@ func (f *limaTargetFixture) clearMarker(t *testing.T) {
 	}
 }
 
-// recordingLimactl stands in for limactl in these tests: it records its argv and exits 0 without running
-// anything, so a test pins which command lines a recipe runs, never what a VM on this machine would do.
+// recordingLimactl stands in for limactl in these tests: it records its argv, and which of the credentials
+// these tests work with are set in its own environment (limactlEnvProbe: names only, never a value), and exits
+// 0 without running anything, so a test pins which command lines and which environment a recipe gives it,
+// never what a VM on this machine would do.
 const recordingLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
-exit 0
+` + limactlEnvProbe + `exit 0
 `
 
 // newLimaMakeFixture builds one environment for a target that reads LIMA_INSTANCE and needs nothing but
 // limactl to run: a clone of the Makefile and the two scripts make vm-gh-wrapper generates its work from
 // inside the sandbox, the recording limactl first on PATH, and no credential of this machine in the
-// environment.
+// environment. The clone is the host clone the target must run from (issue #227): it lies outside the sandbox's
+// workspace, whose checkout WORKSPACE_REPO names.
 func newLimaMakeFixture(t *testing.T) *limaTargetFixture {
 	t.Helper()
 
 	sb := newSandbox(t)
 	writeFileMode(t, filepath.Join(sb.binDir, "limactl"), []byte(recordingLimactl), 0o700)
 
-	dir := filepath.Join(sb.root, "ws", "shift2eu")
+	dir := filepath.Join(sb.root, "clone")
 	writeFileMode(t, filepath.Join(dir, makefilePath), []byte(readRepoFile(t, makefilePath)), 0o600)
 	writeFileMode(t, filepath.Join(dir, vmGHWrapperScript), []byte(readRepoFile(t, vmGHWrapperScript)), 0o755)
 	writeFileMode(t, filepath.Join(dir, ghWrapperScript), []byte(readRepoFile(t, ghWrapperScript)), 0o755)

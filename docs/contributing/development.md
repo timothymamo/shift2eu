@@ -20,8 +20,8 @@ make build    # ./bin/shift2eu and ./bin/shift2eu-server
 
 1. Start from a PRD (`prds/`) or an issue.
 2. Work in its own worktree, never on `main`: `make worktree BRANCH=feat/<issue>-<slug>` prints the
-   path. The hooks in `.githooks/` refuse commits and pushes to `main` (`make git-hooks` enables them;
-   `make vm-up` does too).
+   path. The hooks in `.githooks/` refuse commits and pushes to `main` (`make vm-init`
+   enables them in the VM, as `make git-hooks` there does).
 3. Test first, then implement; keep `make check` green.
 4. Conventional Commits, one PR per milestone.
 

@@ -18,7 +18,8 @@
 #   - CODEOWNERS on main has rules, a * rule, an owner for every rule, and no owner but the maintainer, and
 #     GitHub reports no errors for it.
 #
-# Usage: dev/protect-main-check.sh   (make gate-check, from the repository root; it takes no arguments)
+# Usage: dev/protect-main-check.sh   (from the repository root, in the VM; on the Mac make gate-check, from
+#                                     the host clone, issue #227; it takes no arguments)
 #
 # Exit status:
 #   0  every check holds

@@ -4,10 +4,11 @@
 // agents-token-refresh-start starts one refresher per VM in the background from the host clone and warns about
 // the instance's LaunchDaemon - and about a loaded job that runs another clone's script - make
 // agents-token-refresh-install installs the LaunchDaemon after checking the instance's mounts and linting the
-// plist, make agents-token-refresh-uninstall removes it, make deck warns about App variables in a workspace
-// shell and starts nothing, and make vm-gh-wrapper installs the pinned wrapper an existing VM lacks, whole or
-// not at all (.dot-agent-deck/prd161m1-fixes.md items 3, 7 and 8 and .dot-agent-deck/prd161m1-fixes2.md items 1
-// and 2, issue #229).
+// plist, make agents-token-refresh-uninstall removes it, make deck runs from the host clone with the App's
+// variables in its environment without saying anything about them and starts nothing, and make vm-gh-wrapper
+// installs the pinned wrapper an existing VM lacks, whole or not at all (.dot-agent-deck/prd161m1-fixes.md items
+// 3, 7 and 8 and .dot-agent-deck/prd161m1-fixes2.md items 1 and 2, issue #229; issue #227 for what make deck does
+// with the App's variables now that it runs from the host clone).
 package devenv_test
 
 import (
@@ -259,90 +260,90 @@ func TestMakeDeckLeavesTheTokenPlumbingAloneWithoutTheAppVariables(t *testing.T)
 	}
 }
 
-// TestMakeDeckWarnsAboutTheAppVariablesInTheWorkspaceShell pins the other half of second review item 1: when
-// any SHIFT2EU_AGENTS_APP_* variable reaches make deck's environment, it says so, points at a direnv .envrc
-// outside the workspace, and still opens the deck: the App's variables belong in the maintainer's host clone,
-// not in a shell the agents' workspace can read.
-func TestMakeDeckWarnsAboutTheAppVariablesInTheWorkspaceShell(t *testing.T) {
+// TestMakeDeckKeepsTheAppVariablesOutOfTheVM pins what issue #227 changed about make deck: the deck runs from the
+// host clone, whose .envrc holds the agents App's three variables, so make deck with them set says nothing about
+// them any more - the note about a workspace shell it used to print belonged to the layout the issue removed -
+// opens the deck anyway, and hands limactl neither their names nor their values: the deck itself never needed
+// them, and make agents-token-refresh-start or agents-token-refresh-install, in the host clone, are what do.
+func TestMakeDeckKeepsTheAppVariablesOutOfTheVM(t *testing.T) {
 	t.Parallel()
 
-	all := []string{
+	f := newTokenFixture(t, "shift2eu")
+
+	// The three values in the fixture's environment, the fake App's own: none may reach the VM.
+	values := make([]string, 0, 3)
+
+	for _, name := range []string{
 		"SHIFT2EU_AGENTS_APP_ID",
 		"SHIFT2EU_AGENTS_APP_INSTALLATION_ID",
 		"SHIFT2EU_AGENTS_APP_KEY_FILE",
+	} {
+		values = append(values, f.env[name])
 	}
 
-	cases := []struct {
-		name string
-		set  []string
-	}{
-		{name: "one App variable set", set: []string{"SHIFT2EU_AGENTS_APP_KEY_FILE"}},
-		{name: "the App ID alone", set: []string{"SHIFT2EU_AGENTS_APP_ID"}},
-		{name: "all three set", set: all},
+	// make runs in the host clone, a clone outside the workspace, as a maintainer runs it (issue #227).
+	stdout, stderr, err := runMakeIn(t, writeClone(t, filepath.Join(f.sb.root, "host", "shift2eu")), []string{"deck"}, f.env)
+	if err != nil {
+		t.Fatalf("make deck from the host clone with the App's variables in its environment: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	if strings.Contains(stderr, agentsAppPrefix) {
+		t.Errorf("make deck says something about %s on stderr: with make deck running from the host clone, whose .envrc holds those variables, that is the normal case and needs no note (issue #227)\nstdout: %s\nstderr: %s",
+			agentsAppPrefix, stdout, stderr)
+	}
 
-			f := newTokenFixture(t, "shift2eu")
+	// It still opens the deck - the variables change nothing about it - and hands the VM neither the names nor
+	// the values: no agents App variable belongs in the VM, which gets only the one-hour token.
+	var ranDeck bool
 
-			values := make(map[string]string, len(all))
+	for _, args := range invocations(f.sb.argvLogText(t), "limactl") {
+		if !slices.Contains(args, "dot-agent-deck") {
+			continue
+		}
 
-			for _, name := range all {
-				values[name] = f.env[name]
-				delete(f.env, name)
+		ranDeck = true
+
+		for _, arg := range args {
+			if strings.Contains(arg, agentsAppPrefix) {
+				t.Errorf("make deck handed limactl %q, one of the App's variables: the deck never needs them, and the VM must only ever get the one-hour token make agents-token writes (issue #227)\nstdout: %s\nstderr: %s",
+					arg, stdout, stderr)
 			}
 
-			for _, name := range tc.set {
-				f.env[name] = values[name]
-			}
-
-			stdout, stderr, err := runMake(t, []string{"deck"}, f.env)
-			if err != nil {
-				t.Fatalf("make deck with an App variable in its environment: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
-			}
-
-			combined := stdout + stderr
-
-			if !strings.Contains(combined, agentsAppPrefix) {
-				t.Errorf("make deck with an App variable in its environment says nothing about %s, so a maintainer never learns the App's variables are visible in the workspace shell:\n%s", agentsAppPrefix, combined)
-			}
-
-			if !strings.Contains(combined, ".envrc") {
-				t.Errorf("the warning does not name the direnv .envrc the App's variables belong in: outside the workspace, in the maintainer's host clone (second review, item 1):\n%s", combined)
-			}
-
-			// It warns and still opens the deck: a warning is no refusal.
-			var ranDeck bool
-
-			for _, args := range invocations(f.sb.argvLogText(t), "limactl") {
-				if slices.Contains(args, "dot-agent-deck") {
-					ranDeck = true
+			for _, value := range values {
+				if value != "" && strings.Contains(arg, value) {
+					t.Errorf("make deck handed limactl %q, which carries the value of one of the App's variables: the deck never needs them, and the VM must only ever get the one-hour token make agents-token writes (issue #227)\nstdout: %s\nstderr: %s",
+						arg, stdout, stderr)
 				}
 			}
+		}
+	}
 
-			if !ranDeck {
-				t.Errorf("make deck did not open the deck when an App variable was set:\nstdout: %s\nstderr: %s", stdout, stderr)
-			}
+	if !ranDeck {
+		t.Errorf("make deck did not open the deck:\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
 
-			// And it runs nothing of the token plumbing: no refresher, no state file, no mint (second review,
-			// item 1: the refresh belongs to make agents-token-refresh-start in the host clone).
-			entries, err := os.ReadDir(f.state)
-			if err != nil {
-				if !errors.Is(err, os.ErrNotExist) {
-					t.Fatalf("read %s: %v", f.state, err)
-				}
-			}
+	for _, name := range envNamesSet(t, f.sb.argvLogText(t)) {
+		if strings.HasPrefix(name, agentsAppPrefix) {
+			t.Errorf("make deck left %s in the environment of the process it runs in the VM: the App's key, its path and its IDs stay on the Mac, and a process in the VM needs none of them (issue #227, ADR 0031)",
+				name)
+		}
+	}
 
-			for _, entry := range entries {
-				t.Errorf("make deck with an App variable set left %s in %s: it must start no agents App token refresh", entry.Name(), f.state)
-			}
+	// And it starts nothing of the token plumbing: no refresher, no state file, no mint (second review, item 1:
+	// the refresh belongs to make agents-token-refresh-start in the host clone).
+	entries, err := os.ReadDir(f.state)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read %s: %v", f.state, err)
+		}
+	}
 
-			if got := len(f.api.minted()); got != 0 {
-				t.Errorf("make deck with an App variable set minted %d token(s): the refresh is not its job any more", got)
-			}
-		})
+	for _, entry := range entries {
+		t.Errorf("make deck with the App's variables set left %s in %s: it must start no agents App token refresh", entry.Name(), f.state)
+	}
+
+	if got := len(f.api.minted()); got != 0 {
+		t.Errorf("make deck with the App's variables set minted %d token(s): the refresh is not its job any more", got)
 	}
 }
 
@@ -1949,7 +1950,7 @@ func TestMakeAgentsTokenRefreshInstallRefusesASymlinkedRefreshScript(t *testing.
 func TestMakeAgentsTokenRefreshUninstall(t *testing.T) {
 	t.Parallel()
 
-	t.Run("no launchctl: a refusal, before any sudo", func(t *testing.T) {
+	t.Run("no launchctl is a refusal before any sudo", func(t *testing.T) {
 		t.Parallel()
 
 		// The fake launchctl is not on this fixture's PATH, so make agents-token-refresh-uninstall runs on a
@@ -2188,13 +2189,22 @@ func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (
 }
 
 // makeEnv is the environment make runs with in a test: a PATH of the machine's own and a temporary HOME, so
-// the Makefile's $(shell git config ...) reads nothing of the maintainer's.
+// the Makefile's $(shell git config ...) reads nothing of the maintainer's, and a WORKSPACE_REPO naming a
+// checkout inside a temporary workspace, so a host target runs in the host clone layout a maintainer has and
+// not in the workspace it refuses (docs/dev-environment.md, The host clone, issue #227).
 func makeEnv(t *testing.T, extra map[string]string) map[string]string {
 	t.Helper()
 
+	workspaceRepo := filepath.Join(t.TempDir(), "ws", "shift2eu")
+
+	if err := os.MkdirAll(workspaceRepo, 0o700); err != nil {
+		t.Fatalf("create %s: %v", workspaceRepo, err)
+	}
+
 	env := map[string]string{
-		"PATH": "/usr/local/bin:/usr/bin:/bin",
-		"HOME": t.TempDir(),
+		"PATH":           "/usr/local/bin:/usr/bin:/bin",
+		"HOME":           t.TempDir(),
+		"WORKSPACE_REPO": workspaceRepo,
 	}
 
 	for name, value := range extra {

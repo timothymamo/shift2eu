@@ -40,7 +40,6 @@ package devenv_test
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -156,14 +155,15 @@ func shQuote(s string) string {
 }
 
 // vmUpFixture is one throwaway environment for a run of make vm-up or make vm-create: a sandbox whose limactl
-// answers the listing and the status its case names, and a clone of the Makefile in a workspace that holds
-// nothing but the clone, so vm-up's workspace check and its git-hooks prerequisite pass without touching the
-// repository the tests run from. The clone is a git repository of its own, so the Makefile resolves REPO_ROOT
-// and WORKSPACE from it and the VM would mount a path inside the sandbox.
+// answers the listing and the status its case names, and the maintainer's layout of issue #227 - make runs in a
+// clone of the Makefile in the host clone, a clone outside the workspace, and the workspace it mounts holds
+// nothing but the repository's own checkout, which WORKSPACE_REPO names. So vm-up's workspace check and the
+// paths it hands limactl read the sandbox, and no run touches the repository the tests run from. Both clones
+// are git repositories of their own, so the Makefile resolves REPO_ROOT from the host clone it runs in.
 type vmUpFixture struct {
 	sb   *sandbox
 	env  map[string]string
-	root string // the clone make runs in
+	root string // the host clone make runs in
 	// limaInstance is the LIMA_INSTANCE make runs with: vmUpInstance unless a case picks another name.
 	limaInstance string
 	// marker is a file no run may create: what a value the Makefile got wrong would run (issue #228).
@@ -183,21 +183,10 @@ func newVMUpFixture(t *testing.T, instance, status string) *vmUpFixture {
 
 	writeGitShim(t, sb.binDir, realTool(t, "git"))
 
-	// vm-up depends on git-hooks, so make must run in a git repository, and its workspace may hold only
-	// the repository itself: the clone sits alone in a directory of its own inside the sandbox.
-	root := filepath.Join(sb.root, "ws", "shift2eu")
-	writeFileMode(t, filepath.Join(root, makefilePath), []byte(readRepoFile(t, makefilePath)), 0o600)
-	writeFileMode(t, filepath.Join(root, "dev", "lima.yaml"), []byte(readRepoFile(t, "dev/lima.yaml")), 0o600)
-
-	init := exec.Command("git", "init", "--quiet", root)
-	init.Env = envList(map[string]string{
-		"PATH": "/usr/local/bin:/usr/bin:/bin",
-		"HOME": sb.hostHome,
-	})
-
-	if out, err := init.CombinedOutput(); err != nil {
-		t.Fatalf("git init %s: %v\n%s", root, err, out)
-	}
+	// make runs in the host clone, a clone outside the workspace (ADR 0031, issue #227), and the workspace holds
+	// the repository's own checkout as WORKSPACE_REPO names it: both are git repositories, as the real ones are.
+	root := writeClone(t, filepath.Join(sb.root, "host", "shift2eu"))
+	writeClone(t, sb.workspaceRepo())
 
 	env := sb.baseEnv()
 	env["SHIFT2EU_TEST_LIMA_INSTANCE"] = instance
@@ -220,9 +209,9 @@ func newVMUpFixture(t *testing.T, instance, status string) *vmUpFixture {
 	}
 }
 
-// workspace is the directory the run mounts: the clone's parent, which holds only the clone.
+// workspace is the directory the run mounts: the parent of the checkout WORKSPACE_REPO names.
 func (f *vmUpFixture) workspace() string {
-	return filepath.Dir(f.root)
+	return filepath.Dir(f.env["WORKSPACE_REPO"])
 }
 
 // instanceDir is the directory Lima keeps the instance in, as a maintainer has to find it to remove it:

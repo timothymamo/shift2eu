@@ -476,7 +476,7 @@ func TestAgentsAppTokenRefreshWaitsOutARateLimit(t *testing.T) {
 		},
 		{
 			// Never earlier than either: the retry-after asks for two seconds, the reset lies seven away.
-			name: "both, and the reset is the later one",
+			name: "both headers and the reset is the later one",
 			fail: func(api *fakeGitHub) { api.failNextMintsWithRateLimit(2, time.Now().Add(wait).Unix(), 1) },
 		},
 	}

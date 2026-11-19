@@ -495,12 +495,22 @@ func TestAgentsTokenLaunchdPlistRefusesBadInput(t *testing.T) {
 	}
 
 	// A value that holds a character an XML plist uses as markup cannot be written into one unescaped, so
-	// the generator refuses it instead of printing a plist that says something else.
-	for _, character := range []string{"<", ">", "&", `"`, "'"} {
+	// the generator refuses it instead of printing a plist that says something else. The subtest names spell
+	// the character out, because a name is half of the sandbox path t.TempDir() builds (issue #227).
+	for _, markup := range []struct {
+		name      string
+		character string
+	}{
+		{name: "a key path holding a less-than sign", character: "<"},
+		{name: "a key path holding a greater-than sign", character: ">"},
+		{name: "a key path holding an ampersand", character: "&"},
+		{name: "a key path holding a double quote", character: `"`},
+		{name: "a key path holding a single quote", character: "'"},
+	} {
 		cases = append(cases, launchdRefusal{
-			name: "a key path holding " + character,
+			name: markup.name,
 			mutate: func(_ *testing.T, f *launchdFixture) {
-				f.env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = filepath.Join(f.sb.root, "keys"+character+"more", "agents-app.pem")
+				f.env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = filepath.Join(f.sb.root, "keys"+markup.character+"more", "agents-app.pem")
 			},
 			wantStderr: "SHIFT2EU_AGENTS_APP_KEY_FILE",
 		})
@@ -514,8 +524,8 @@ func TestAgentsTokenLaunchdPlistRefusesBadInput(t *testing.T) {
 		bite string
 	}{
 		{name: "0x01", bite: "\x01"},
-		{name: "ESC (0x1b)", bite: "\x1b"},
-		{name: "0x7F, the delete character", bite: "\x7f"},
+		{name: "ESC 0x1b", bite: "\x1b"},
+		{name: "0x7F the delete character", bite: "\x7f"},
 	}
 
 	for _, control := range controlCharacters {

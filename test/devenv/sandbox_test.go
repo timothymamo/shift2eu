@@ -106,9 +106,111 @@ func realTool(t *testing.T, name string) string {
 	return path
 }
 
+// writeClone writes a clone of the repository at dir - the Makefile and dev/lima.yaml, the files these tests
+// run - and makes it a git repository of its own, so the Makefile resolves REPO_ROOT from the clone it runs in,
+// and returns dir. The maintainer's host clone and the repository's checkout inside the workspace are both such
+// clones (ADR 0031, docs/dev-environment.md, The host clone, issue #227): a fixture that puts make in one of
+// them stands in for the real layout, without touching the worktree the tests run from.
+func writeClone(t *testing.T, dir string) string {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(dir, makefilePath), []byte(readRepoFile(t, makefilePath)), 0o600)
+	writeFileMode(t, filepath.Join(dir, "dev", "lima.yaml"), []byte(readRepoFile(t, "dev/lima.yaml")), 0o600)
+
+	init := exec.Command("git", "init", "--quiet", dir)
+	init.Env = envList(map[string]string{
+		"PATH": "/usr/local/bin:/usr/bin:/bin",
+		"HOME": t.TempDir(),
+	})
+
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, out)
+	}
+
+	return dir
+}
+
+// sandboxRootPattern names the directory one sandbox lives in: a fixed pattern of characters WORKSPACE_REPO
+// allows. t.TempDir is not the root itself, because it names its directory after the test, and testing keeps
+// every character of a test's name but a handful - a comma, a space, a tilde and a percent all stay in it. The
+// whole path of WORKSPACE_REPO is checked against the Makefile's allow list, so a test name would otherwise put
+// a refused character in the path of the value it pins, and a refusal could fire because of the directory the
+// test runs in rather than the value under test (issue #227).
+const sandboxRootPattern = "shift2eu-devenv-sandbox-"
+
+// newSandboxRoot creates the directory one sandbox lives in and removes it with the test, as t.TempDir does.
+// Whatever the test is called, its path holds only the characters a WORKSPACE_REPO may: letters, digits and
+// . _ - / + @ # = (the Makefile's WORKSPACE_REPO_CHARS). A path holding any other character fails the test here,
+// where the reason is plain, instead of letting a sandbox test pass for the wrong reason (issue #227).
+func newSandboxRoot(t *testing.T) string {
+	t.Helper()
+
+	// Not t.TempDir: it would name the directory after the test. The machine's temporary directory, with a
+	// pattern of this helper's own, and the cleanup t.TempDir would register.
+	root, err := os.MkdirTemp("", sandboxRootPattern) //nolint:usetesting // t.TempDir names its directory after the test, which puts a character WORKSPACE_REPO refuses in the sandbox's path (issue #227)
+	if err != nil {
+		t.Fatalf("create the sandbox root: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove the sandbox root %s: %v", root, err)
+		}
+	})
+
+	if refused := workspaceRepoRefusedChar(root); refused != "" {
+		t.Fatalf("the sandbox root %q holds %q, which a WORKSPACE_REPO may not: every path of the sandbox, WORKSPACE_REPO and the workspace included, must hold only letters, digits and . _ - / + @ # =, or a refusal a test pins can fire because of the directory the test runs in rather than the value under test (issue #227)",
+			root, refused)
+	}
+
+	return root
+}
+
+// workspaceRepoRefusedChar returns a character of path that the Makefile's WORKSPACE_REPO_CHARS does not allow,
+// as a one-character string, or "" when path holds only allowed characters.
+func workspaceRepoRefusedChar(path string) string {
+	for _, r := range path {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', strings.ContainsRune("._-/+@#=", r):
+			continue
+		default:
+			return string(r)
+		}
+	}
+
+	return ""
+}
+
+// TestNewSandboxRootHoldsOnlyAllowedCharacters pins that the directory a sandbox lives in holds nothing a
+// WORKSPACE_REPO may not, whatever the test is called. testing names a test's t.TempDir after the test, and it
+// keeps a comma, a tilde and a percent of the name, so a sandbox rooted there would put a refused character in
+// the path of WORKSPACE_REPO - the whole of which the Makefile checks against its allow list - and a refusal a
+// test pins could fire because of the directory the test runs in rather than the value under test (issue #227).
+func TestNewSandboxRootHoldsOnlyAllowedCharacters(t *testing.T) {
+	t.Parallel()
+
+	names := []string{
+		"a comma, a tilde ~ and a percent %",
+		"only allowed characters",
+	}
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			root := newSandboxRoot(t)
+
+			if refused := workspaceRepoRefusedChar(root); refused != "" {
+				t.Errorf("the sandbox root %q holds %q: the path of WORKSPACE_REPO, which lies inside it, must hold only letters, digits and . _ - / + @ # =, or a refusal a test pins can fire because of the directory the test runs in rather than the value under test (issue #227)",
+					root, refused)
+			}
+		})
+	}
+}
+
 // sandbox is one throwaway environment for a run of a host script.
 type sandbox struct {
-	root     string // the directory holding everything, from t.TempDir()
+	root     string // the directory holding everything, from newSandboxRoot()
 	hostHome string // HOME of the process that runs the host script
 	vmHome   string // HOME of the fake VM user; the token and identity files must land here
 	binDir   string // first on PATH: the fake limactl and the recording curl and openssl
@@ -120,7 +222,7 @@ type sandbox struct {
 func newSandbox(t *testing.T) *sandbox {
 	t.Helper()
 
-	root := t.TempDir()
+	root := newSandboxRoot(t)
 	sb := &sandbox{
 		root:     root,
 		hostHome: filepath.Join(root, "host-home"),
@@ -129,7 +231,10 @@ func newSandbox(t *testing.T) *sandbox {
 		argvLog:  filepath.Join(root, "argv.log"),
 	}
 
-	for _, dir := range []string{sb.hostHome, sb.vmHome, sb.binDir, filepath.Join(root, "tmp")} {
+	// The workspace the VM mounts, and the repository checkout inside it that WORKSPACE_REPO names: the
+	// maintainer's host clone is a clone outside it (ADR 0031, docs/dev-environment.md, The host clone), and a
+	// host target refuses a run from anywhere in it (issue #227).
+	for _, dir := range []string{sb.hostHome, sb.vmHome, sb.binDir, filepath.Join(root, "tmp"), sb.workspaceRepo()} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatalf("create %s: %v", dir, err)
 		}
@@ -144,12 +249,24 @@ func newSandbox(t *testing.T) *sandbox {
 	return sb
 }
 
+// workspaceRoot is the directory the VM mounts, the parent of the repository checkout inside it.
+func (sb *sandbox) workspaceRoot() string {
+	return filepath.Join(sb.root, "ws")
+}
+
+// workspaceRepo is the repository checkout inside the sandbox's workspace: what WORKSPACE_REPO names on the
+// maintainer's host, set by the host clone's direnv .envrc (ADR 0031, issue #227).
+func (sb *sandbox) workspaceRepo() string {
+	return filepath.Join(sb.workspaceRoot(), "shift2eu")
+}
+
 // baseEnv is the environment one run of a script gets: only the variables the scripts may read, never the
 // test process's own, so no real credential of the machine can reach the script (CLAUDE.md rule 3).
 func (sb *sandbox) baseEnv() map[string]string {
 	return map[string]string{
 		"PATH":                   sb.binDir + ":/usr/local/bin:/usr/bin:/bin",
 		"HOME":                   sb.hostHome,
+		"WORKSPACE_REPO":         sb.workspaceRepo(),
 		"TMPDIR":                 filepath.Join(sb.root, "tmp"),
 		"SHIFT2EU_TEST_ARGV_LOG": sb.argvLog,
 		"SHIFT2EU_TEST_VM_HOME":  sb.vmHome,
@@ -245,17 +362,62 @@ func envList(env map[string]string) []string {
 	return list
 }
 
+// limactlEnvProbe is the part of a fake limactl that records which of the credentials these tests work with
+// are set in its own environment, for a test that pins what a process on the Mac does not need: the App's key,
+// its path and its IDs, and the two credentials vm-env copies into the VM. It records the Names only, never a
+// value: ${NAME+NAME} expands to the name when NAME is set and to nothing when it is not, so no value of the
+// environment ever reaches the log (CLAUDE.md rule 3). envNamesSet reads what it records.
+const limactlEnvProbe = `for name in \
+  "${SHIFT2EU_AGENTS_APP_ID+SHIFT2EU_AGENTS_APP_ID}" \
+  "${SHIFT2EU_AGENTS_APP_INSTALLATION_ID+SHIFT2EU_AGENTS_APP_INSTALLATION_ID}" \
+  "${SHIFT2EU_AGENTS_APP_KEY_FILE+SHIFT2EU_AGENTS_APP_KEY_FILE}" \
+  "${CLAUDE_CODE_OAUTH_TOKEN+CLAUDE_CODE_OAUTH_TOKEN}" \
+  "${DEEPSEEK_API_KEY+DEEPSEEK_API_KEY}"; do
+  if [ -n "${name}" ]; then printf 'envset=%s\n' "${name}"; fi
+done >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+`
+
+// envNamesSet returns the names the fake limactl recorded as set in its own environment, sorted and without
+// duplicates: the fakes of this package record a credential's name, never its value (limactlEnvProbe).
+func envNamesSet(t *testing.T, log string) []string {
+	t.Helper()
+
+	seen := map[string]bool{}
+
+	var names []string
+
+	for _, line := range strings.Split(log, "\n") {
+		if !strings.HasPrefix(line, "envset=") {
+			continue
+		}
+
+		name := strings.TrimPrefix(line, "envset=")
+		if seen[name] {
+			continue
+		}
+
+		seen[name] = true
+
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	return names
+}
+
 // fakeLimactl is dev/limactl for the tests: it records its argv and then runs the sh -c command the host
 // script asks the VM to run, on this machine, with HOME set to the fake VM user's home. Its stdin is passed
 // through, so a host script that hands the token over standard input works unchanged, and one that puts it
-// on the limactl command line is caught by the argv log.
+// on the limactl command line is caught by the argv log. It also records which credentials are set in its own
+// environment (limactlEnvProbe), so a test can pin what a process on the Mac is not given.
 const fakeLimactl = `#!/bin/sh
 # Stands in for limactl in the devenv tests: records its argv and runs the command after the instance name.
 {
   printf 'tool=limactl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
-if [ -n "${SHIFT2EU_TEST_LIMA_CAPTURE:-}" ]; then
+` + limactlEnvProbe + `if [ -n "${SHIFT2EU_TEST_LIMA_CAPTURE:-}" ]; then
   # Capture mode: a test that only wants what a recipe sends over standard input (make deck, make
   # vm-gh-wrapper) records it and runs nothing on this machine. What it answers is what the VM would
   # answer: the vm-gh-wrapper stream ends with the call to the function that prints the done line, so a

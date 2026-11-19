@@ -1,11 +1,12 @@
 // Pins that vm-init runs the git identity step of PRD #161 milestone 1 through dev/vm-git-identity.sh, whose
-// behaviour is tested for real in vmgitidentity_test.go (review item 5), and that it sets the deck's
-// default_dir to the main checkout (issue #234).
+// behaviour is tested for real in vmgitidentity_test.go (review item 5), that it sets the deck's default_dir to
+// the main checkout (issue #234), and that it sets the workspace checkout's git hooks, which make vm-up no
+// longer does (issue #227).
 //
 // vm-init itself cannot be run in make test: its first step refuses to run outside the Lima VM unless
 // /etc/profile.d/shift2eu.sh exists, and a test cannot create that file without root and without the VM's own
-// provisioning. So the file's calls - the identity step's and the deck's default_dir - are pinned here, and the
-// behaviour they feed is checked by each script's own tests.
+// provisioning. So the file's calls - the identity step's, the deck's default_dir and the hooks - are pinned
+// here, and the behaviour they feed is checked by each script's own tests.
 package devenv_test
 
 import (
@@ -162,5 +163,47 @@ func TestVMInitSetsTheDeckDefaultDir(t *testing.T) {
 	// argument, so the script never reads it back and leaves a changed value in the VM (issue #234).
 	if at := lineWith("config get default_dir"); at >= 0 {
 		t.Errorf("%s reads default_dir back with `dot-agent-deck config get` at line %d: every run must make the same `config set default_dir` call with the same argument, so a re-run is harmless and never skips the setting (issue #234)", vmInitScript, at+1)
+	}
+}
+
+// TestVMInitSetsTheWorkspaceHooks pins issue #227's third part: make vm-up no longer sets git hooks - run from the
+// host clone it would set the host clone's, and running git in the workspace from the Mac is exactly what the
+// issue forbids - so the hooks of the workspace's checkout are set inside the VM, by vm-init, with
+// `git -C <the checkout WORKSPACE_REPO names> config core.hooksPath .githooks`. Without it the agents' commits in
+// the workspace's checkout are no longer refused on main and no commit message gets its trailer, with nothing in
+// the setup saying so.
+//
+// vm-init cannot be run in make test (see the package comment above), so the call is pinned in the script's own
+// text, the way the identity step's and the default_dir step's are.
+func TestVMInitSetsTheWorkspaceHooks(t *testing.T) {
+	t.Parallel()
+
+	body := readRepoFile(t, vmInitScript)
+	lines := strings.Split(body, "\n")
+
+	// The hooks are the workspace checkout's, so git runs there: -C with the main checkout, never in whatever
+	// directory the script happens to run in (the VM user's home) and never the VM user's global config.
+	at := slices.IndexFunc(lines, func(line string) bool {
+		return !strings.HasPrefix(strings.TrimSpace(line), "#") && strings.Contains(line, "core.hooksPath")
+	})
+	if at < 0 {
+		t.Fatalf("%s never sets the workspace checkout's git hooks: make vm-up no longer runs git-hooks (issue #227), so without a `git -C <main checkout> config core.hooksPath .githooks` here the agents' commits in the workspace are not refused on main and the commit-msg hook never runs", vmInitScript)
+	}
+
+	line := strings.TrimSpace(lines[at])
+
+	for _, want := range []string{"git", "-C", "main_checkout", "config", "core.hooksPath", ".githooks"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("%s sets the hooks with %q, which does not hold %q: the setting belongs to the workspace's checkout, the main checkout the script is given as its second argument (issue #227)",
+				vmInitScript, line, want)
+		}
+	}
+
+	// A re-run must be harmless, as every other step is: nothing reads the setting back or skips it.
+	if extra := slices.IndexFunc(lines, func(l string) bool {
+		return !strings.HasPrefix(strings.TrimSpace(l), "#") && strings.Contains(l, "hooksPath") && !strings.Contains(l, "-C")
+	}); extra >= 0 {
+		t.Errorf("%s runs a git command about hooksPath at line %d without -C: %q. It would set the hooks of the directory the script runs in, or of the VM user's global config, and not of the workspace's checkout (issue #227)",
+			vmInitScript, extra+1, strings.TrimSpace(lines[extra]))
 	}
 }
