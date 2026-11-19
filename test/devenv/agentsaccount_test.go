@@ -1,0 +1,612 @@
+// Pins the account mode of the host targets and the VM setup target of issue #227 part 2
+// (docs/adr/0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md, update of
+// 2026-11-19; docs/adr/0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md, its update of the same date).
+//
+// The App's key moves to the hidden macOS account `_shift2euagents`: SHIFT2EU_AGENTS_ACCOUNT turns the token
+// targets over to it - the maintainer cannot mint any more, and the plist is rendered as the account with the
+// account's own generator - and make vm-agents-token-ssh installs the one writer the account's SSH key may run.
+//
+// Every run is a sandbox run: a fake sudo that records every command and runs nothing of the machine's own, a
+// fake launchctl, plutil and limactl, and, for the account's home under /Users - which no test can create - a fake
+// sudo that answers for the two files the target reads and writes there. No test reaches /Library, a real
+// launchd, a real account, a real VM or the network (CLAUDE.md rules 2 and 3).
+package devenv_test
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
+)
+
+// agentsAccount is the hidden role account of ADR 0031's update: a name with an underscore, as macOS's own
+// daemons have, so the tests never name a real login account.
+const agentsAccount = "_shift2euagents"
+
+// agentsAccountHome is the account's home as the make targets derive it, /Users/<account> (ADR 0031, update of
+// 2026-11-19, 1). No test creates it: the log-only sudo answers for the files there.
+func agentsAccountHome() string {
+	return "/Users/" + agentsAccount
+}
+
+// accountEnv turns a fixture's environment into the account mode of the token targets: the account, the VM's
+// pinned SSH port and the VM user, which the host clone's .envrc holds beside the account's name.
+func accountEnv(env map[string]string) map[string]string {
+	env["SHIFT2EU_AGENTS_ACCOUNT"] = agentsAccount
+	env["SHIFT2EU_AGENTS_VM_SSH_PORT"] = sshModePort
+	env["SHIFT2EU_AGENTS_VM_SSH_USER"] = sshModeUser
+
+	return env
+}
+
+// refusalTimeout is how long a target that must refuse an account-mode run may take before the test gives up: a
+// target that runs instead of refusing (make agents-token-refresh loops until it is stopped) fails the test there
+// instead of hanging it.
+const refusalTimeout = 20 * time.Second
+
+// runMakeForRefusal runs make like runMake does - in the repository, under env alone - in a process group of its
+// own, and stops it after refusalTimeout with everything it started: the account-mode targets must refuse in
+// milliseconds, and a target that offers to run instead would otherwise keep the suite waiting.
+func runMakeForRefusal(t *testing.T, target string, env map[string]string) (string, string, error) {
+	t.Helper()
+
+	root, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		t.Fatalf("resolve the repository root: %v", err)
+	}
+
+	output := t.TempDir()
+	stdoutPath, stderrPath := filepath.Join(output, "stdout"), filepath.Join(output, "stderr")
+
+	cmd := exec.Command("make", "-C", root, "--no-print-directory", target)
+	cmd.Env = envList(env)
+	cmd.Dir = root
+
+	group := newProcessGroup(t)
+	t.Cleanup(group.end)
+	group.join(cmd)
+
+	stdout, stderr := createOutput(t, stdoutPath), createOutput(t, stderrPath)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start make %s: %v", target, err)
+	}
+
+	// make holds its own descriptors now; the test reads the files by name.
+	for _, file := range []*os.File{stdout, stderr} {
+		if closeErr := file.Close(); closeErr != nil {
+			t.Errorf("close %s: %v", file.Name(), closeErr)
+		}
+	}
+
+	done := make(chan error, 1)
+
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case runErr := <-done:
+		return readOutput(stdoutPath), readOutput(stderrPath), runErr
+	case <-time.After(refusalTimeout):
+		t.Fatalf("make %s ran for %s without refusing, so the test stopped it and everything it started: in account mode it refuses before it runs anything (ADR 0031, update of 2026-11-19, 5)\nstdout: %s\nstderr: %s",
+			target, refusalTimeout, readOutput(stdoutPath), readOutput(stderrPath))
+
+		return "", "", nil
+	}
+}
+
+// TestMakeTokenTargetsRefuseInAccountMode pins the first refusal of the account mode (ADR 0031, update of
+// 2026-11-19, 5): with SHIFT2EU_AGENTS_ACCOUNT set, make agents-token, make agents-token-refresh and make
+// agents-token-refresh-start refuse before they run anything, because the key is the account's and the
+// maintainer's uid cannot read it any more; the message sends the maintainer to launchctl and the docs.
+func TestMakeTokenTargetsRefuseInAccountMode(t *testing.T) {
+	t.Parallel()
+
+	want := []string{
+		"the refresh runs as " + agentsAccount + ", which holds the App's key",
+		"sudo launchctl kickstart -k system/" + launchdLabelPrefix + hostTargetInstance,
+		"docs/dev-environment.md",
+	}
+
+	for _, target := range []string{"agents-token", "agents-token-refresh", "agents-token-refresh-start"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			f := newTokenFixture(t, hostTargetInstance)
+			accountEnv(f.env)
+
+			stdout, stderr, err := runMakeForRefusal(t, target, f.env)
+			if err == nil {
+				t.Fatalf("make %s exited 0 with SHIFT2EU_AGENTS_ACCOUNT set: the account holds the App's key, so the maintainer cannot mint any more (ADR 0031, update of 2026-11-19, 5)\nstdout: %s\nstderr: %s", target, stdout, stderr)
+			}
+
+			for _, fragment := range want {
+				if !strings.Contains(stderr, fragment) {
+					t.Errorf("make %s's refusal does not say %q, so a maintainer cannot tell why it refused or where to mint now (ADR 0031, update of 2026-11-19, 5)\nstdout: %s\nstderr: %s",
+						target, fragment, stdout, stderr)
+				}
+			}
+
+			if strings.TrimSpace(stdout) != "" {
+				t.Errorf("make %s printed on stdout although it refused: the refusal comes before anything runs (ADR 0031, update of 2026-11-19, 5)\nstdout: %s", target, stdout)
+			}
+
+			for _, tool := range []string{"curl", "limactl", "launchctl", "ssh", "sudo"} {
+				if calls := invocations(f.sb.argvLogText(t), tool); len(calls) > 0 {
+					t.Errorf("make %s ran %s %v although it refused: in account mode the maintainer's shell mints nothing and loads nothing (ADR 0031, update of 2026-11-19, 5)",
+						target, tool, calls[0])
+				}
+			}
+
+			if minted := f.api.minted(); len(minted) != 0 {
+				t.Errorf("make %s minted %d token(s) although it refused", target, len(minted))
+			}
+		})
+	}
+}
+
+// TestMakeTokenTargetsRefuseABadAgentsAccount pins the name check of ADR 0031's update (item 1): the account's
+// name becomes part of root's commands and of the job's paths, so a name that is empty, begins with a dash,
+// holds a character outside letters, digits, . _ and -, or names root or the maintainer is refused.
+func TestMakeTokenTargetsRefuseABadAgentsAccount(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		account string
+	}{
+		{name: "a name beginning with a dash", account: "-shift2euagents"},
+		{name: "a name holding a space", account: "shift 2eu agents"},
+		{name: "a name holding a slash", account: "agents/account"},
+		{name: "a name holding a colon", account: "agents:account"},
+		{name: "the root account", account: "root"},
+		{name: "the maintainer's own account", account: currentUsername(t)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newTokenFixture(t, hostTargetInstance)
+			accountEnv(f.env)
+			f.env["SHIFT2EU_AGENTS_ACCOUNT"] = tc.account
+
+			stdout, stderr, err := runMakeForRefusal(t, "agents-token", f.env)
+			if err == nil {
+				t.Fatalf("make agents-token exited 0 with SHIFT2EU_AGENTS_ACCOUNT=%q: the name reaches root's commands and the job's paths, so a bad one is refused (ADR 0031, update of 2026-11-19, 1)\nstdout: %s\nstderr: %s",
+					tc.account, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "SHIFT2EU_AGENTS_ACCOUNT") {
+				t.Errorf("the refusal of %q does not name SHIFT2EU_AGENTS_ACCOUNT, so a maintainer cannot tell which variable to fix:\n%s", tc.account, stderr)
+			}
+
+			for _, tool := range []string{"curl", "limactl", "launchctl", "ssh", "sudo"} {
+				if calls := invocations(f.sb.argvLogText(t), tool); len(calls) > 0 {
+					t.Errorf("make agents-token ran %s %v although it refused the account name %q", tool, calls[0], tc.account)
+				}
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRendersAsTheAccount pins step 3 of ADR 0034's update: in account mode the
+// maintainer's clone installs the job but renders nothing with the key, so the plist comes from the account's own
+// generator, run by one printed sudo with the account's environment and the derived paths and nothing inherited;
+// a rendering that cannot run leaves nothing installed and still ends with sudo -k, so no sudo timestamp outlives
+// the install.
+func TestMakeAgentsTokenRefreshInstallRendersAsTheAccount(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, hostTargetInstance)
+	accountEnv(f.env)
+
+	home := agentsAccountHome()
+	secrets := filepath.Join(home, ".config", "shift2eu")
+
+	want := []string{
+		"-u", agentsAccount,
+		"-H", "/usr/bin/env", "-i",
+		"HOME=" + home,
+		"PATH=/usr/bin:/bin:/usr/sbin:/sbin",
+		"LIMA_INSTANCE=" + f.instance,
+		"SHIFT2EU_AGENTS_APP_ID=" + launchdAppID,
+		"SHIFT2EU_AGENTS_APP_INSTALLATION_ID=" + launchdInstallationID,
+		"SHIFT2EU_AGENTS_APP_KEY_FILE=" + filepath.Join(secrets, "agents-app.pem"),
+		"SHIFT2EU_AGENTS_VM_SSH_PORT=" + sshModePort,
+		"SHIFT2EU_AGENTS_VM_SSH_USER=" + sshModeUser,
+		"SHIFT2EU_AGENTS_VM_SSH_KEY=" + filepath.Join(secrets, "agents-vm-ssh-key"),
+		"SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS=" + filepath.Join(secrets, "known-hosts-"+f.instance),
+		"/bin/sh",
+		filepath.Join(home, "shift2eu-host", "dev", "agents-token-launchd.sh"),
+		"plist",
+	}
+
+	stdout, stderr, _ := f.run(t, "agents-token-refresh-install")
+
+	sudo := f.sudoCommands(t)
+	if len(sudo) == 0 {
+		t.Fatalf("the install ran no sudo: in account mode the plist is rendered as the account with its own generator, so the job's UserName, HOME and paths are the account's (ADR 0034, update of 2026-11-19, c)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	if diff := cmp.Diff(want, sudo[0]); diff != "" {
+		t.Errorf("the install's first sudo is not the one the ADR gives, with the values on the command line and nothing inherited (-want +got):\n%s", diff)
+	}
+
+	if !strings.Contains(stdout, "+ sudo -u "+agentsAccount+" -H ") {
+		t.Errorf("the install does not print the command it runs as the account with a + before it, as it prints every sudo:\nstdout: %s", stdout)
+	}
+
+	// The account's key is the derived path: a SHIFT2EU_AGENTS_APP_KEY_FILE of the maintainer's must not reach
+	// the job (ADR 0031, update of 2026-11-19, 2 and 5).
+	if strings.Contains(strings.Join(sudo[0], " "), f.key.path) {
+		t.Errorf("the render hands the job the maintainer's key path %s: in account mode the make targets derive the account's own (ADR 0031, update of 2026-11-19, 2)", f.key.path)
+	}
+
+	for _, args := range sudo {
+		if len(args) > 0 && (args[0] == "install" || args[0] == "launchctl") {
+			t.Errorf("the install ran sudo %v although the plist could not be rendered as the account: nothing is installed unchecked", args)
+		}
+	}
+
+	assertEndsWithSudoK(t, sudo)
+
+	if _, err := os.Stat(f.dest()); err == nil {
+		t.Errorf("%s is there although no plist was rendered: the install installs only what the account rendered", f.dest())
+	}
+}
+
+// TestMakeAgentsTokenRefreshUninstallEndsWithSudoK pins the other half of ADR 0034's update: the uninstall works
+// the same in both modes and, in account mode, ends with sudo -k too, so the sudo timestamp its commands started
+// does not outlive it.
+func TestMakeAgentsTokenRefreshUninstallEndsWithSudoK(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, hostTargetInstance)
+	accountEnv(f.env)
+
+	// The plist a loaded job was installed from, so the uninstall removes a file as it does on the Mac.
+	writeFileMode(t, f.dest(), []byte("a plist an earlier install left\n"), 0o644)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-uninstall")
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-uninstall in account mode: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	assertEndsWithSudoK(t, f.sudoCommands(t))
+
+	if _, err := os.Stat(f.dest()); err == nil {
+		t.Errorf("%s is still there after the uninstall", f.dest())
+	}
+}
+
+// assertEndsWithSudoK fails unless the last command the recipe ran through sudo is `sudo -k`: the account-mode
+// targets end with it, on success and on failure (ADR 0034, update of 2026-11-19, c).
+func assertEndsWithSudoK(t *testing.T, sudo [][]string) {
+	t.Helper()
+
+	if len(sudo) == 0 {
+		t.Fatalf("the run ran no sudo at all")
+	}
+
+	if diff := cmp.Diff([]string{"-k"}, sudo[len(sudo)-1]); diff != "" {
+		t.Errorf("the last sudo the run made is not `sudo -k`, so a sudo timestamp outlives an account-mode target (ADR 0034, update of 2026-11-19, c) (-want +got):\n%s\nevery sudo the run made: %v", diff, sudo)
+	}
+}
+
+// vmAgentsTokenSSHFixture is one environment for a run of make vm-agents-token-ssh (ADR 0031, update of
+// 2026-11-19, 4): the account mode's variables, a fake limactl that answers the VM's pinned SSH port and stands in
+// for the VM, a log-only sudo that answers for the account's public key and records the pinned host key, and the
+// fake API's server, which this target never uses.
+type vmAgentsTokenSSHFixture struct {
+	sb         *sandbox
+	env        map[string]string
+	portFile   string // what `limactl list --format '{{.SSHLocalPort}}'` answers
+	pubKeyFile string // what `sudo ... /bin/cat .../agents-vm-ssh-key.pub` answers
+	pinCapture string // what the pin writes on standard input
+	capture    string // everything the target sends the VM over limactl shell's standard input
+}
+
+// The VM's host key the fake limactl reports, and the account's public key the fake sudo answers with: invented
+// base64, never a real key (CLAUDE.md rule 2).
+const (
+	fakeHostKey   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGxldHNpbnZlbnRhbmV4YW1wbGVrZXlibG9i"
+	fakeVMPubKey  = fakeHostKey + " the-maintainer@example.com\n"
+	sshWriterPath = "/usr/local/libexec/shift2eu/agents-token-write"
+	sshRealGHTool = "/usr/local/libexec/shift2eu/gh"
+)
+
+// newVMAgentsTokenSSHFixture builds the fixture: the pinned port the ADR's example uses, the account's public key
+// with a comment that must not reach the VM's keys file, and a fake limactl that records what it is sent.
+func newVMAgentsTokenSSHFixture(t *testing.T) *vmAgentsTokenSSHFixture {
+	t.Helper()
+
+	sb := newSandbox(t)
+	env := sb.baseEnv()
+	env["PATH"] = sb.binDir + ":/usr/local/bin:/usr/bin:/bin"
+	accountEnv(env)
+
+	f := &vmAgentsTokenSSHFixture{
+		sb:         sb,
+		env:        env,
+		portFile:   filepath.Join(sb.root, "lima-ssh-port"),
+		pubKeyFile: filepath.Join(sb.root, "account-vm-ssh-key.pub"),
+		pinCapture: filepath.Join(sb.root, "known-hosts-pinned"),
+		capture:    filepath.Join(sb.root, "lima-stdin.log"),
+	}
+
+	f.setPort(t, sshModePort)
+	writeFileMode(t, f.pubKeyFile, []byte(fakeVMPubKey), 0o600)
+
+	writeFileMode(t, filepath.Join(sb.binDir, "limactl"), []byte(fakeAccountLimactl), 0o700)
+
+	env["SHIFT2EU_TEST_LIMA_SSH_PORT_FILE"] = f.portFile
+	env["SHIFT2EU_TEST_LIMA_LIST_NAME"] = hostTargetInstance
+	env["SHIFT2EU_TEST_LIMA_CAPTURE"] = f.capture
+	env["SHIFT2EU_TEST_ACCOUNT_HOME"] = agentsAccountHome()
+	env["SHIFT2EU_TEST_ACCOUNT_PUBKEY_FILE"] = f.pubKeyFile
+	env["SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE"] = f.pinCapture
+
+	sb.useLogOnlySudo(t)
+
+	return f
+}
+
+// setPort makes the fake limactl answer port for the instance's SSH local port.
+func (f *vmAgentsTokenSSHFixture) setPort(t *testing.T, port string) {
+	t.Helper()
+
+	writeFileMode(t, f.portFile, []byte(port+"\n"), 0o600)
+}
+
+// setPubKey makes the fake sudo answer with what the account's public key file holds.
+func (f *vmAgentsTokenSSHFixture) setPubKey(t *testing.T, line string) {
+	t.Helper()
+
+	writeFileMode(t, f.pubKeyFile, []byte(line), 0o600)
+}
+
+// run runs one target of the fixture in the repository, the host clone of these tests.
+func (f *vmAgentsTokenSSHFixture) run(t *testing.T, target string) (string, string, error) {
+	t.Helper()
+
+	return runMake(t, []string{target}, f.env)
+}
+
+// shellCalls returns the argv of every `limactl shell` the target ran.
+func (f *vmAgentsTokenSSHFixture) shellCalls(t *testing.T) [][]string {
+	t.Helper()
+
+	var calls [][]string
+
+	for _, args := range invocations(f.sb.argvLogText(t), "limactl") {
+		if len(args) > 0 && args[0] == "shell" {
+			calls = append(calls, args)
+		}
+	}
+
+	return calls
+}
+
+// pinned returns what the target wrote into the account's known-hosts file, or "" when it never ran the pin.
+func (f *vmAgentsTokenSSHFixture) pinned(t *testing.T) string {
+	t.Helper()
+
+	body, err := os.ReadFile(f.pinCapture)
+	if err != nil {
+		return ""
+	}
+
+	return string(body)
+}
+
+// fakeAccountLimactl stands in for limactl in the vm-agents-token-ssh tests: it records its argv, answers the
+// instance's SSH local port for the format the target pins the port with, records what the target sends the VM on
+// standard input, and answers as the VM's script does - the host key as host-key=ssh-ed25519 <base64> and the done
+// line the target insists on (ADR 0031, update of 2026-11-19, 4).
+const fakeAccountLimactl = `#!/bin/sh
+{
+  printf 'tool=limactl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+key="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGxldHNpbnZlbnRhbmV4YW1wbGVrZXlibG9i"
+case "${1:-}" in
+list)
+  case "${3:-}" in
+  *SSHLocalPort*)
+    cat "${SHIFT2EU_TEST_LIMA_SSH_PORT_FILE:?set SHIFT2EU_TEST_LIMA_SSH_PORT_FILE}" || exit 1
+    exit 0
+    ;;
+  esac
+  printf '%s\n' "${SHIFT2EU_TEST_LIMA_LIST_NAME:?set SHIFT2EU_TEST_LIMA_LIST_NAME}"
+  exit 0
+  ;;
+shell) ;;
+*)
+  echo "fake limactl: the tests answer list and shell only, not $*" >&2
+  exit 64
+  ;;
+esac
+copy="$(mktemp "${TMPDIR:-/tmp}/lima-stdin.XXXXXX")" || exit 1
+cat > "${copy}" || exit 1
+cat "${copy}" >> "${SHIFT2EU_TEST_LIMA_CAPTURE:?set SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
+printf '\n--- end of call ---\n' >> "${SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
+last=""
+for a in "$@"; do last="$a"; done
+if [ "${last}" = -s ]; then
+  printf 'host-key=%s\n' "${key}"
+  printf 'vm-agents-token-ssh: done\n'
+else
+  printf '%s\n' "${key}"
+fi
+rm -f "${copy}"
+exit 0
+`
+
+// TestMakeVMAgentsTokenSSHPinsThePort pins step 1 of ADR 0031's update (item 4): Lima picks a random SSH port at
+// every start unless the instance pins it, so the target refuses unless limactl reports exactly the port the
+// environment names, before it reads the key or sends anything to the VM.
+func TestMakeVMAgentsTokenSSHPinsThePort(t *testing.T) {
+	t.Parallel()
+
+	f := newVMAgentsTokenSSHFixture(t)
+	f.setPort(t, "48099")
+
+	stdout, stderr, err := f.run(t, "vm-agents-token-ssh")
+	if err == nil {
+		t.Fatalf("make vm-agents-token-ssh exited 0 although the VM listens on 48099 and SHIFT2EU_AGENTS_VM_SSH_PORT names %s: the port must be pinned, or the job writes nowhere (ADR 0031, update of 2026-11-19, 3)\nstdout: %s\nstderr: %s",
+			sshModePort, stdout, stderr)
+	}
+
+	if !strings.Contains(strings.ToLower(stderr), "port") {
+		t.Errorf("the refusal does not say the VM's SSH port is what failed, so a maintainer cannot tell what to pin (ADR 0031, update of 2026-11-19, 3)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	if calls := f.shellCalls(t); len(calls) > 0 {
+		t.Errorf("the refused run sent the VM a script (%v): the port is checked before anything is written (ADR 0031, update of 2026-11-19, 4)", calls[0])
+	}
+
+	if pinned := f.pinned(t); pinned != "" {
+		t.Errorf("the refused run pinned the host key %q although the port did not match", pinned)
+	}
+}
+
+// TestMakeVMAgentsTokenSSHRefusesAMalformedPublicKey pins step 2 of ADR 0031's update (item 4): the account's
+// public key reaches a root-owned keys file the VM's sshd reads, so the target refuses anything but one line
+// `ssh-ed25519 <base64>` with an optional comment of letters, digits and @ . _ -: no options, quotes, commas or
+// second line can reach that file.
+func TestMakeVMAgentsTokenSSHRefusesAMalformedPublicKey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "a key of another type", line: "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQ shift2eu-agents-token\n"},
+		{name: "no base64 at all", line: "ssh-ed25519\n"},
+		{name: "an option before the key", line: `command="/bin/sh" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 shift2eu-agents-token` + "\n"},
+		{name: "a quoted comment", line: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 \"two words\"\n"},
+		{name: "a comma in the comment", line: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 one,two\n"},
+		{name: "a second line", line: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5 one\nssh-ed25519 AAAAC3NzaC1lZDI1NTE5 two\n"},
+		{name: "no key at all", line: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMAgentsTokenSSHFixture(t)
+			f.setPubKey(t, tc.line)
+
+			stdout, stderr, err := f.run(t, "vm-agents-token-ssh")
+			if err == nil {
+				t.Fatalf("make vm-agents-token-ssh exited 0 with %s in the account's public key: anything but one `ssh-ed25519 <base64>` line is refused, or it reaches the VM's keys file as the sshd reads it (ADR 0031, update of 2026-11-19, 4)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+
+			if !strings.Contains(strings.ToLower(stderr), "key") {
+				t.Errorf("the refusal of %s does not say the account's key is what failed:\n%s", tc.name, stderr)
+			}
+
+			if calls := f.shellCalls(t); len(calls) > 0 {
+				t.Errorf("the refused run sent the VM a script (%v): the key is checked before anything is written (ADR 0031, update of 2026-11-19, 4)", calls[0])
+			}
+
+			if pinned := f.pinned(t); pinned != "" {
+				t.Errorf("the refused run pinned the host key %q although the key line was malformed", pinned)
+			}
+		})
+	}
+}
+
+// TestMakeVMAgentsTokenSSHInstallsTheWriter pins the happy path of ADR 0031's update (item 4): the target sends the
+// VM one script over `limactl shell --workdir / <instance> sh -s` whose keys line authorises the account's key to
+// run the root-owned writer and nothing else, with the comment replaced, requires the VM's
+// `vm-agents-token-ssh: done` line, and pins the host key into the account's known-hosts file through the exact
+// sudo of the ADR.
+func TestMakeVMAgentsTokenSSHInstallsTheWriter(t *testing.T) {
+	t.Parallel()
+
+	f := newVMAgentsTokenSSHFixture(t)
+
+	stdout, stderr, err := f.run(t, "vm-agents-token-ssh")
+	if err != nil {
+		t.Fatalf("make vm-agents-token-ssh: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, "vm-agents-token-ssh: done") {
+		t.Errorf("make vm-agents-token-ssh does not report the VM's `vm-agents-token-ssh: done` line, so a connection that dropped after the stream arrived reads as success (ADR 0031, update of 2026-11-19, 4):\nstdout: %s", stdout)
+	}
+
+	calls := f.shellCalls(t)
+	if len(calls) == 0 {
+		t.Fatalf("the target sent the VM no script: it installs the writer, the keys file and the sshd drop-in over limactl shell's standard input (ADR 0031, update of 2026-11-19, 4)\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	wantArgs := []string{"shell", "--workdir", "/", hostTargetInstance, "sh", "-s"}
+	if diff := cmp.Diff(wantArgs, calls[0]); diff != "" {
+		t.Errorf("the script does not reach the VM the way make vm-gh-wrapper sends its own (-want +got):\n%s", diff)
+	}
+
+	sent, err := os.ReadFile(f.capture)
+	if err != nil {
+		t.Fatalf("read what the target sent the VM: %v", err)
+	}
+
+	// The one line the VM's keys file holds: only the account's key, and only for the writer, with the real gh as
+	// its argument (ADR 0031, update of 2026-11-19, 4).
+	keysLine := `restrict,command="` + sshWriterPath + " " + sshRealGHTool + `" ` + fakeHostKey + ` shift2eu-agents-token`
+	if !strings.Contains(string(sent), keysLine) {
+		t.Errorf("the script sent to the VM does not hold the keys line the ADR gives, so the account's key could log in as anything:\nwant it to hold: %s\nsent:\n%s", keysLine, sent)
+	}
+
+	if strings.Contains(string(sent), "the-maintainer@example.com") {
+		t.Errorf("the script sent to the VM keeps the comment of the account's public key: the comment is replaced with shift2eu-agents-token (ADR 0031, update of 2026-11-19, 4)")
+	}
+
+	for _, want := range []string{sshWriterPath, "/etc/ssh/shift2eu-agents-token/", "/etc/ssh/sshd_config.d/50-shift2eu-agents-token.conf", "sshd -t", "vm-agents-token-ssh: done"} {
+		if !strings.Contains(string(sent), want) {
+			t.Errorf("the script sent to the VM does not hold %q, so the VM misses a step of the install (ADR 0031, update of 2026-11-19, 4):\n%s", want, sent)
+		}
+	}
+
+	// The pin: the host key under the instance's alias, written as the account through the exact sudo of the ADR,
+	// with the line on standard input.
+	knownHosts := filepath.Join(agentsAccountHome(), ".config", "shift2eu", "known-hosts-"+hostTargetInstance)
+	wantPin := []string{
+		"-u", agentsAccount, "-H", "/bin/sh", "-c",
+		`umask 077 && cat >"$1.new" && mv -f "$1.new" "$1"`,
+		"pin", knownHosts,
+	}
+
+	var pin []string
+
+	for _, args := range invocations(f.sb.argvLogText(t), "sudo") {
+		if len(args) > 2 && args[len(args)-2] == "pin" {
+			pin = args
+
+			break
+		}
+	}
+
+	if pin == nil {
+		t.Fatalf("the target pinned no host key: it writes the VM's host key into the account's %s, or every later ssh warns or fails (ADR 0031, update of 2026-11-19, 4)\nevery sudo it ran: %v", knownHosts, invocations(f.sb.argvLogText(t), "sudo"))
+	}
+
+	if diff := cmp.Diff(wantPin, pin); diff != "" {
+		t.Errorf("the pin is not the sudo the ADR gives (-want +got):\n%s", diff)
+	}
+
+	wantPinned := "shift2eu-vm-" + hostTargetInstance + " " + fakeHostKey + "\n"
+	if diff := cmp.Diff(wantPinned, f.pinned(t)); diff != "" {
+		t.Errorf("the known-hosts line the target wrote is not the instance's alias and the VM's host key (-want +got):\n%s", diff)
+	}
+
+	if strings.Contains(strings.Join(pin, " "), fakeHostKey) {
+		t.Errorf("the host key reached the pin's command line: the line goes in on standard input (ADR 0031, update of 2026-11-19, 4)")
+	}
+}

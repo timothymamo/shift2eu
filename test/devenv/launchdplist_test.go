@@ -616,6 +616,131 @@ func TestAgentsTokenLaunchdPlistRefusesToRunAsRoot(t *testing.T) {
 	f.assertNoLeaks(t, stdout, stderr)
 }
 
+// TestAgentsTokenLaunchdPlistAccountMode pins the plist the account mode renders (ADR 0031, update of 2026-11-19,
+// 2; ADR 0034, update of 2026-11-19, c): the generator runs as the account, from the account's own clone, so
+// UserName is that account and ProgramArguments and WorkingDirectory are under its home; in SSH mode the four
+// SHIFT2EU_AGENTS_VM_SSH_* variables go into EnvironmentVariables, and PATH is exactly /usr/bin:/bin:/usr/sbin:/sbin
+// with no /opt/homebrew/bin, which the maintainer's uid owns and where a planted openssl, curl or ssh would run as
+// the account with the key. A partial set of the four is refused, naming the missing ones, as the token script
+// refuses it.
+func TestAgentsTokenLaunchdPlistAccountMode(t *testing.T) {
+	t.Parallel()
+
+	// The account's home, as /Users/<account> is on the Mac: the generator derives the clone from $0 and HOME
+	// from the environment the install hands it, so a home of the test's own stands in for the real one, which no
+	// test may create.
+	home := t.TempDir()
+	clone := filepath.Join(home, "shift2eu-host")
+	script := filepath.Join(clone, launchdScript)
+	writeFileMode(t, script, []byte(readRepoFile(t, launchdScript)), 0o755)
+
+	secrets := filepath.Join(home, ".config", "shift2eu")
+	sshKey := filepath.Join(secrets, "agents-vm-ssh-key")
+	writeFileMode(t, sshKey, []byte("an invented ed25519 private key, never a real one\n"), 0o600)
+
+	knownHosts := filepath.Join(secrets, "known-hosts-shift2eu")
+	writeFileMode(t, knownHosts, []byte("shift2eu-vm-shift2eu ssh-ed25519 AAAA-invented-host-key\n"), 0o600)
+
+	newAccountFixture := func(t *testing.T) *launchdFixture {
+		t.Helper()
+
+		f := newLaunchdFixture(t, "shift2eu", xdgStateHomeUnset)
+		f.env["HOME"] = home
+		f.env["SHIFT2EU_AGENTS_VM_SSH_PORT"] = sshModePort
+		f.env["SHIFT2EU_AGENTS_VM_SSH_USER"] = sshModeUser
+		f.env["SHIFT2EU_AGENTS_VM_SSH_KEY"] = sshKey
+		f.env["SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS"] = knownHosts
+		f.sb.useFakeIDName(t, f.env, agentsAccount)
+
+		return f
+	}
+
+	t.Run("SSH mode renders the account's job", func(t *testing.T) {
+		t.Parallel()
+
+		f := newAccountFixture(t)
+
+		stdout, stderr, err := f.sb.run(t, script, []string{"plist"}, f.env, "")
+		if err != nil {
+			t.Fatalf("sh %s plist as the account exited %v\nstdout: %s\nstderr: %s", launchdScript, err, stdout, stderr)
+		}
+
+		f.assertNoLeaks(t, stdout, stderr)
+
+		dict := parsePlist(t, stdout)
+
+		if got := plistString(t, dict, "UserName"); got != agentsAccount {
+			t.Errorf("the plist's UserName is %q, want the account that rendered it, %q: in account mode the job runs as the account, which owns the key and the clone (ADR 0034, update of 2026-11-19, c)", got, agentsAccount)
+		}
+
+		wantArgs := []string{
+			"/bin/sh",
+			"-c",
+			`umask 077 && mkdir -p "${1%/*}" && exec /bin/sh "$0" refresh >>"$1" 2>&1`,
+			filepath.Join(clone, agentsMintScript),
+			filepath.Join(home, ".local", "state", "shift2eu", "agents-token-refresh-shift2eu.log"),
+		}
+
+		if diff := cmp.Diff(wantArgs, plistStrings(t, plistList(t, dict, "ProgramArguments"))); diff != "" {
+			t.Errorf("the plist's ProgramArguments do not name the account's own clone (-want +got):\n%s\non the Mac they are %s, which is /Users/%s/shift2eu-host (ADR 0034, update of 2026-11-19, c)", diff, filepath.Join(clone, agentsMintScript), agentsAccount)
+		}
+
+		if got := plistString(t, dict, "WorkingDirectory"); got != clone {
+			t.Errorf("the plist's WorkingDirectory is %q, want the account's clone %q", got, clone)
+		}
+
+		env := plistMap(t, dict, "EnvironmentVariables")
+
+		if got, want := plistString(t, env, "PATH"), "/usr/bin:/bin:/usr/sbin:/sbin"; got != want {
+			t.Errorf("the plist's PATH is %q, want exactly %q: /opt/homebrew/bin belongs to the maintainer's uid, and a planted openssl, curl or ssh there would run as the account with the key (ADR 0034, update of 2026-11-19, c)", got, want)
+		}
+
+		wantEnv := map[string]string{
+			"LIMA_INSTANCE":                       "shift2eu",
+			"SHIFT2EU_AGENTS_APP_ID":              launchdAppID,
+			"SHIFT2EU_AGENTS_APP_INSTALLATION_ID": launchdInstallationID,
+			"SHIFT2EU_AGENTS_APP_KEY_FILE":        f.key.path,
+			"SHIFT2EU_AGENTS_VM_SSH_PORT":         sshModePort,
+			"SHIFT2EU_AGENTS_VM_SSH_USER":         sshModeUser,
+			"SHIFT2EU_AGENTS_VM_SSH_KEY":          sshKey,
+			"SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS":  knownHosts,
+			"HOME":                                home,
+		}
+
+		for name, want := range wantEnv {
+			if got := plistString(t, env, name); got != want {
+				t.Errorf("the plist's EnvironmentVariables give %s=%q, want %q: a launchd job inherits no environment, so the plist supplies the SSH mode's variables too (ADR 0034, update of 2026-11-19, c)", name, got, want)
+			}
+		}
+
+		if strings.Contains(stdout, "/opt/homebrew/bin") {
+			t.Errorf("the account's plist names /opt/homebrew/bin, which the maintainer's uid owns (ADR 0034, update of 2026-11-19, c):\n%s", stdout)
+		}
+	})
+
+	t.Run("a partial SSH configuration is refused", func(t *testing.T) {
+		t.Parallel()
+
+		f := newAccountFixture(t)
+		delete(f.env, "SHIFT2EU_AGENTS_VM_SSH_KEY")
+
+		stdout, stderr, err := f.sb.run(t, script, []string{"plist"}, f.env, "")
+		if err == nil {
+			t.Fatalf("sh %s plist exited 0 with three of the four SHIFT2EU_AGENTS_VM_SSH_* variables set, so the job would mint in neither mode: a partial set is refused, naming the missing ones, as the token script refuses it (ADR 0034, update of 2026-11-19, c)\nstdout: %s\nstderr: %s", launchdScript, stdout, stderr)
+		}
+
+		if !strings.Contains(stderr, "SHIFT2EU_AGENTS_VM_SSH_KEY") {
+			t.Errorf("the refusal of a partial SSH configuration does not name the missing SHIFT2EU_AGENTS_VM_SSH_KEY:\n%s", stderr)
+		}
+
+		if strings.TrimSpace(stdout) != "" {
+			t.Errorf("the generator printed a plist although it refused a partial SSH configuration:\n%s", stdout)
+		}
+
+		f.assertNoLeaks(t, stdout, stderr)
+	})
+}
+
 // plistValue is one value of a parsed property list: the kinds these tests read, and no more.
 type plistValue struct {
 	kind  string // "dict", "array", "string", "integer", or one of the self-closing booleans

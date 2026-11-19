@@ -508,6 +508,68 @@ func (sb *sandbox) blockCurl(t *testing.T) {
 	writeFileMode(t, path, []byte(blockedCurlShim), 0o700)
 }
 
+// fakeSSH stands in for the account's ssh in the tests of SSH mode (issue #227 part 2): it records its argv in
+// the sandbox log, records its standard input in a numbered file of SHIFT2EU_TEST_SSH_RECORD, writes
+// SHIFT2EU_TEST_SSH_STDERR to stderr when it is set, and exits with the status its status file holds (0 when the
+// file is missing, so a test can let the VM "come back" in the middle of a run). No test needs a key, a VM or the
+// network.
+const fakeSSH = `#!/bin/sh
+{
+  printf 'tool=ssh\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+record="${SHIFT2EU_TEST_SSH_RECORD:?set SHIFT2EU_TEST_SSH_RECORD}"
+mkdir -p "${record}" || exit 1
+n=0
+while [ -e "${record}/stdin-${n}" ]; do n=$((n + 1)); done
+cat > "${record}/stdin-${n}" || exit 1
+[ -z "${SHIFT2EU_TEST_SSH_STDERR:-}" ] || printf '%s\n' "${SHIFT2EU_TEST_SSH_STDERR}" >&2
+status="$(cat "${SHIFT2EU_TEST_SSH_STATUS_FILE:?set SHIFT2EU_TEST_SSH_STATUS_FILE}" 2>/dev/null || printf '0')"
+case "${status}" in
+'' | *[!0-9]*) status=0 ;;
+esac
+exit "${status}"
+`
+
+// sshOnPathTrap is the ssh a test leaves first on PATH while SHIFT2EU_AGENTS_SSH names the recording fake: a run
+// that calls it is recorded as the wrong binary's call and fails, so a test proves the script runs the binary the
+// hook names, never the one PATH offers (issue #227 part 2).
+const sshOnPathTrap = `#!/bin/sh
+{
+  printf 'tool=ssh\n'
+  printf 'arg=the-ssh-on-PATH\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+echo 'the script ran the ssh on PATH, not the one SHIFT2EU_AGENTS_SSH names' >&2
+exit 97
+`
+
+// useFakeSSH puts the recording ssh where SHIFT2EU_AGENTS_SSH points, a tripwire first on PATH where a plain ssh
+// would be found, and a status file that starts at 0. It returns the recorder, so a test can read the argv of
+// every write and its standard input, and let the VM come back by setting the status (issue #227 part 2).
+func (sb *sandbox) useFakeSSH(t *testing.T, env map[string]string) *sshRecorder {
+	t.Helper()
+
+	path := filepath.Join(sb.root, "account", "bin", "ssh")
+
+	writeFileMode(t, path, []byte(fakeSSH), 0o700)
+	writeFileMode(t, filepath.Join(sb.binDir, "ssh"), []byte(sshOnPathTrap), 0o700)
+
+	recorder := &sshRecorder{
+		sb:         sb,
+		dir:        filepath.Join(sb.root, "ssh-calls"),
+		statusFile: filepath.Join(sb.root, "ssh-status"),
+	}
+
+	writeFileMode(t, recorder.statusFile, []byte("0\n"), 0o600)
+
+	env["SHIFT2EU_AGENTS_SSH"] = path
+	env["SHIFT2EU_TEST_SSH_RECORD"] = recorder.dir
+	env["SHIFT2EU_TEST_SSH_STATUS_FILE"] = recorder.statusFile
+
+	return recorder
+}
+
 // fakeSudo stands in for sudo in the devenv tests: it records its argv and then runs the command as the user
 // who runs the tests, which is all the paths the tests point the VM's script at (SHIFT2EU_VM_BIN_GH and
 // SHIFT2EU_VM_LIBEXEC_GH) need. It applies install the way root would - ownership options only root can use are
@@ -781,6 +843,13 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 //     then takes every permission away, so the file is there and the maintainer's own read-back cannot open it.
 //     A destination outside SHIFT2EU_TEST_SUDO_ROOT is refused.
 //   - `rm -f <path>` really removes a sandbox path, and refuses any path outside it.
+//   - `sudo -k` alone forgets the timestamp and runs nothing, so a recipe that ends with it records one
+//     argv and no command; it is not the empty command the fake reports as a bug.
+//   - `sudo -u <account> -H /bin/cat .../agents-vm-ssh-key.pub` prints the line
+//     SHIFT2EU_TEST_ACCOUNT_PUBKEY_FILE holds, standing in for the account's key file under a
+//     SHIFT2EU_TEST_ACCOUNT_HOME no test can create.
+//   - `sudo -u <account> -H /bin/sh -c ... pin <path>` records its standard input in
+//     SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE instead of writing the account's known-hosts file.
 //   - `launchctl` runs the fake launchctl first on PATH, so a test can pin the load and unload commands and
 //     see launchd's state change between them.
 //   - every other command runs with the fake tools first on PATH, as it would under the real sudo.
@@ -789,6 +858,10 @@ const logOnlySudo = `#!/bin/sh
   printf 'tool=sudo\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+# sudo -k forgets the timestamp and runs nothing: a recipe that ends with it runs no command at all.
+case "$*" in
+'-k') exit 0 ;;
+esac
 while [ "$#" -gt 0 ]; do
   case "$1" in
   -n | -E | -H | -S | -k | --) shift ;;
@@ -843,6 +916,25 @@ rm)
     rm -f "$a" || exit 1
   done
   exit 0
+  ;;
+/bin/cat)
+  # The account's public key, read as the account: the sandbox answers with the line the test wrote, since no
+  # /Users/<account> exists here (issue #227 part 2).
+  if [ -n "${SHIFT2EU_TEST_ACCOUNT_PUBKEY_FILE:-}" ] &&
+    [ "${1:-}" = "${SHIFT2EU_TEST_ACCOUNT_HOME:-}/.config/shift2eu/agents-vm-ssh-key.pub" ]; then
+    cat "${SHIFT2EU_TEST_ACCOUNT_PUBKEY_FILE}" || exit 1
+    exit 0
+  fi
+  exec "${command}" "$@"
+  ;;
+/bin/sh)
+  # The known-hosts pin: the recipe writes the line on standard input, so the fake records it instead of
+  # writing into an account home the sandbox does not have (issue #227 part 2).
+  if [ -n "${SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE:-}" ] && [ "${3:-}" = pin ]; then
+    cat > "${SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE}" || exit 1
+    exit 0
+  fi
+  exec "${command}" "$@"
   ;;
 *)
   exec "${command}" "$@"
@@ -906,6 +998,31 @@ func (sb *sandbox) useFakeIDAsRoot(t *testing.T) {
 	path := filepath.Join(sb.binDir, "id")
 
 	writeFileMode(t, path, []byte(shim), 0o700)
+}
+
+// fakeIDName stands in for id in a test that pins what a generator renders for the account a job runs as
+// (issue #227 part 2): it answers SHIFT2EU_TEST_ID_NAME for `id -un`, and hands every other call, `id -u`
+// included, to the machine's own id, so the uid the trusted path rule checks is the one the test's own files
+// have, and the generator does not refuse a run that is not root.
+const fakeIDName = `#!/bin/sh
+{
+  printf 'tool=id\n'
+  for a in "$@"; do printf 'arg=%%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+case "$*" in
+'-un' | '-nu' | '-urn' | '-nur') printf '%%s\n' "${SHIFT2EU_TEST_ID_NAME:?set SHIFT2EU_TEST_ID_NAME}"; exit 0 ;;
+esac
+exec %s "$@"
+`
+
+// useFakeIDName makes id answer name for `id -un`, the account the job runs as, and everything else as the
+// machine's own id does: a test can render the plist as an account of its own without creating one.
+func (sb *sandbox) useFakeIDName(t *testing.T, env map[string]string, name string) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "id"), []byte(fmt.Sprintf(fakeIDName, strconv.Quote(realTool(t, "id")))), 0o700)
+
+	env["SHIFT2EU_TEST_ID_NAME"] = name
 }
 
 // fakePlutil stands in for plutil: it records its argv and answers SHIFT2EU_TEST_PLUTIL_STATUS, so a test can
