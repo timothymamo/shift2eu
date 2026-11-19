@@ -105,6 +105,30 @@ func realTool(t *testing.T, name string) string {
 	return path
 }
 
+// writeClone writes a clone of the repository at dir - the Makefile and dev/lima.yaml, the files these tests
+// run - and makes it a git repository of its own, so the Makefile resolves REPO_ROOT from the clone it runs in,
+// and returns dir. The maintainer's host clone and the repository's checkout inside the workspace are both such
+// clones (ADR 0031, docs/dev-environment.md, The host clone, issue #227): a fixture that puts make in one of
+// them stands in for the real layout, without touching the worktree the tests run from.
+func writeClone(t *testing.T, dir string) string {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(dir, makefilePath), []byte(readRepoFile(t, makefilePath)), 0o600)
+	writeFileMode(t, filepath.Join(dir, "dev", "lima.yaml"), []byte(readRepoFile(t, "dev/lima.yaml")), 0o600)
+
+	init := exec.Command("git", "init", "--quiet", dir)
+	init.Env = envList(map[string]string{
+		"PATH": "/usr/local/bin:/usr/bin:/bin",
+		"HOME": t.TempDir(),
+	})
+
+	if out, err := init.CombinedOutput(); err != nil {
+		t.Fatalf("git init %s: %v\n%s", dir, err, out)
+	}
+
+	return dir
+}
+
 // sandbox is one throwaway environment for a run of a host script.
 type sandbox struct {
 	root     string // the directory holding everything, from t.TempDir()
@@ -128,7 +152,10 @@ func newSandbox(t *testing.T) *sandbox {
 		argvLog:  filepath.Join(root, "argv.log"),
 	}
 
-	for _, dir := range []string{sb.hostHome, sb.vmHome, sb.binDir, filepath.Join(root, "tmp")} {
+	// The workspace the VM mounts, and the repository checkout inside it that WORKSPACE_REPO names: the
+	// maintainer's host clone is a clone outside it (ADR 0031, docs/dev-environment.md, The host clone), and a
+	// host target refuses a run from anywhere in it (issue #227).
+	for _, dir := range []string{sb.hostHome, sb.vmHome, sb.binDir, filepath.Join(root, "tmp"), sb.workspaceRepo()} {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			t.Fatalf("create %s: %v", dir, err)
 		}
@@ -143,12 +170,24 @@ func newSandbox(t *testing.T) *sandbox {
 	return sb
 }
 
+// workspaceRoot is the directory the VM mounts, the parent of the repository checkout inside it.
+func (sb *sandbox) workspaceRoot() string {
+	return filepath.Join(sb.root, "ws")
+}
+
+// workspaceRepo is the repository checkout inside the sandbox's workspace: what WORKSPACE_REPO names on the
+// maintainer's host, set by the host clone's direnv .envrc (ADR 0031, issue #227).
+func (sb *sandbox) workspaceRepo() string {
+	return filepath.Join(sb.workspaceRoot(), "shift2eu")
+}
+
 // baseEnv is the environment one run of a script gets: only the variables the scripts may read, never the
 // test process's own, so no real credential of the machine can reach the script (CLAUDE.md rule 3).
 func (sb *sandbox) baseEnv() map[string]string {
 	return map[string]string{
 		"PATH":                   sb.binDir + ":/usr/local/bin:/usr/bin:/bin",
 		"HOME":                   sb.hostHome,
+		"WORKSPACE_REPO":         sb.workspaceRepo(),
 		"TMPDIR":                 filepath.Join(sb.root, "tmp"),
 		"SHIFT2EU_TEST_ARGV_LOG": sb.argvLog,
 		"SHIFT2EU_TEST_VM_HOME":  sb.vmHome,

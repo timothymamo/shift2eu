@@ -2188,13 +2188,22 @@ func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (
 }
 
 // makeEnv is the environment make runs with in a test: a PATH of the machine's own and a temporary HOME, so
-// the Makefile's $(shell git config ...) reads nothing of the maintainer's.
+// the Makefile's $(shell git config ...) reads nothing of the maintainer's, and a WORKSPACE_REPO naming a
+// checkout inside a temporary workspace, so a host target runs in the host clone layout a maintainer has and
+// not in the workspace it refuses (docs/dev-environment.md, The host clone, issue #227).
 func makeEnv(t *testing.T, extra map[string]string) map[string]string {
 	t.Helper()
 
+	workspaceRepo := filepath.Join(t.TempDir(), "ws", "shift2eu")
+
+	if err := os.MkdirAll(workspaceRepo, 0o700); err != nil {
+		t.Fatalf("create %s: %v", workspaceRepo, err)
+	}
+
 	env := map[string]string{
-		"PATH": "/usr/local/bin:/usr/bin:/bin",
-		"HOME": t.TempDir(),
+		"PATH":           "/usr/local/bin:/usr/bin:/bin",
+		"HOME":           t.TempDir(),
+		"WORKSPACE_REPO": workspaceRepo,
 	}
 
 	for name, value := range extra {

@@ -307,14 +307,15 @@ exit 0
 // newLimaMakeFixture builds one environment for a target that reads LIMA_INSTANCE and needs nothing but
 // limactl to run: a clone of the Makefile and the two scripts make vm-gh-wrapper generates its work from
 // inside the sandbox, the recording limactl first on PATH, and no credential of this machine in the
-// environment.
+// environment. The clone is the host clone the target must run from (issue #227): it lies outside the sandbox's
+// workspace, whose checkout WORKSPACE_REPO names.
 func newLimaMakeFixture(t *testing.T) *limaTargetFixture {
 	t.Helper()
 
 	sb := newSandbox(t)
 	writeFileMode(t, filepath.Join(sb.binDir, "limactl"), []byte(recordingLimactl), 0o700)
 
-	dir := filepath.Join(sb.root, "ws", "shift2eu")
+	dir := filepath.Join(sb.root, "clone")
 	writeFileMode(t, filepath.Join(dir, makefilePath), []byte(readRepoFile(t, makefilePath)), 0o600)
 	writeFileMode(t, filepath.Join(dir, vmGHWrapperScript), []byte(readRepoFile(t, vmGHWrapperScript)), 0o755)
 	writeFileMode(t, filepath.Join(dir, ghWrapperScript), []byte(readRepoFile(t, ghWrapperScript)), 0o755)
