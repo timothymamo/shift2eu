@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.8.0](https://github.com/timothymamo/shift2eu/compare/v0.7.0...v0.8.0) (2026-11-19)
+
+
+### Features
+
+* **aireview:** review pull requests with an AI reviewer that only comments (PRD [#161](https://github.com/timothymamo/shift2eu/issues/161) M4) ([#272](https://github.com/timothymamo/shift2eu/issues/272)) ([452c9f6](https://github.com/timothymamo/shift2eu/commit/452c9f68e4a023fcde1631f7c7250280205e01d0))
+
+
+### Bug Fixes
+
+* **devenv:** make the flaky devenv tests deterministic and fix the refresh lock takeover race ([#286](https://github.com/timothymamo/shift2eu/issues/286)) ([07f144a](https://github.com/timothymamo/shift2eu/commit/07f144a29c9c05449804a3f972711dab9ff7c36e))
+
 ## [0.7.0](https://github.com/timothymamo/shift2eu/compare/v0.6.0...v0.7.0) (2026-11-18)
 
 
