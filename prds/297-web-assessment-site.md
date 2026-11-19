@@ -233,9 +233,11 @@ release), *live* (checked against the live site) or *review*.
   allow-listed names, and shows no `id` or `name` with them.
 - [ ] `require-trusted-types-for` is not enforced in every browser (browsers without Trusted Types ignore
   it). Milestone 2's ADR and the privacy page's technical note say so, and say that in such a browser the
-  one insertion of the report rests on `html/template`'s contextual escaping (pinned by the HTML
-  reporter's hostile golden) and on the CSP's ban on inline script, not on Trusted Types. No statement
-  claims Trusted Types protect every user.
+  one insertion of the report rests on the HTML reporter's escaping (a closed set of constant elements,
+  values only as element content, escaped with `html/template`'s text-context replacements, pinned by a
+  differential test against `html/template` and by the reporter's hostile golden; ADR 0035, pending the
+  maintainer's confirmation, *Decided by the orchestrator in review*) and on the CSP's ban on inline
+  script, not on Trusted Types. No statement claims Trusted Types protect every user.
 - [ ] *Browser:* after loading, the smoke test attempts, from the page, a `fetch` and an
   `XMLHttpRequest` to another origin, to an own-origin path, and to the module script's own URL, and
   records every request made while the page is open, on the `httptest` server that serves the bundle
@@ -551,8 +553,11 @@ release), *live* (checked against the live site) or *review*.
 - [ ] Every control has a label; the whole flow (choose an input, choose targets and region, run, read,
   download) works with the keyboard alone; focus is visible; text and controls meet WCAG 2.2 AA contrast
   (a test checks the stylesheet's colour pairs).
-- [ ] The report is semantic HTML (headings, tables with header cells, lists) rendered in Go with
-  `html/template` by the HTML reporter, not tables assembled in JavaScript. Errors are announced to
+- [ ] The report is semantic HTML (headings, tables with header cells, lists) rendered in Go by the HTML
+  reporter, not tables assembled in JavaScript: a closed set of constant elements, values only as element
+  content, escaped with `html/template`'s text-context replacements, pinned by a differential test
+  against `html/template` (ADR 0035; pending the maintainer's confirmation, *Decided by the orchestrator
+  in review*). Errors are announced to
   assistive technology (`role="alert"`). *Browser:* the smoke test checks the labels and the tab order of
   the main flow.
 
@@ -560,7 +565,10 @@ release), *live* (checked against the live site) or *review*.
 
 - [ ] The report in the page is rendered by a new reporter adapter, `internal/adapter/report/htmlreport`,
   which writes an HTML fragment for an assessment and a comparison through the same reporter ports as
-  `markdown` and `jsonreport`, with `html/template`'s contextual escaping. It is held by
+  `markdown` and `jsonreport`: a closed set of constant elements, values only as element content,
+  escaped with `html/template`'s text-context replacements, pinned by a differential test against
+  `html/template` (ADR 0035; pending the maintainer's confirmation, *Decided by the orchestrator in
+  review*). It is held by
   `reporters-stay-offline` and named in CLAUDE.md's adapters row; its goldens, hostile golden included,
   are in its own `testdata/`.
 - [ ] The logic the browser calls is a new driving adapter, `internal/web`, beside `internal/cli` and
@@ -579,9 +587,12 @@ release), *live* (checked against the live site) or *review*.
 - [ ] New depguard rules, written like their siblings and added to the depguard pin
   (`TestDepguardRulesArePinned`): `web-gets-adapters-from-cmd` (the strict allow list of `internal/web`),
   `web-imported-only-by-the-web-root` (only `cmd/shift2eu-web` and its `wire` package import it),
-  `web-composition-root` (the strict allow lists of `cmd/shift2eu-web` and of `wire`, with the parity
-  tests' extra imports, `internal/cli` among them, allowed in `wire`'s test files only). The existing rules
-  are extended so that neither `internal/cli`, `internal/httpapi`, `cmd/shift2eu` nor `cmd/shift2eu-server`
+  `web-composition-root` (the strict allow list of the glue, `cmd/shift2eu-web`),
+  `web-composition-root-wire` (the strict allow list of `wire`), `web-composition-root-wire-tests` (the
+  strict allow list of `wire`'s test files, with the parity tests' extra imports, `internal/cli` among
+  them), `web-root-tests-never-run-the-cli` (every other test file under `cmd/shift2eu-web` is refused
+  `internal/cli`, so only `wire`'s test files import it) and `syscall-js-only-in-the-web-root` (no package
+  outside `cmd/shift2eu-web` imports `syscall/js`, tests included). The existing rules are extended so that neither `internal/cli`, `internal/httpapi`, `cmd/shift2eu` nor `cmd/shift2eu-server`
   imports `internal/web`, `htmlreport` aside from the composition roots that wire it.
 - [ ] `make lint` and CI's lint matrix also run golangci-lint with `GOOS=js GOARCH=wasm`, and
   `test/architecture` checks `js/wasm` as an explicit extra target beside those it reads from
@@ -690,7 +701,7 @@ Each milestone ships as one PR (milestone 4 as two: its HSTS and preload records
 through a `Release-As` footer, then the rest after the first deploy), in this order, and each gets the
 security audit (`security-audit` skill), since every one of them touches the trust model or the release.
 
-1. [ ] **The WebAssembly adapter and its ADR.** `internal/web`, the HTML reporter `htmlreport`,
+1. [x] **The WebAssembly adapter and its ADR.** `internal/web`, the HTML reporter `htmlreport`,
    `cmd/shift2eu-web` (the thin `syscall/js` glue) and its `wire` package, with native tests: the
    option-parity table, the download parity with the CLI over every example and the hostile fixtures, the
    HTML reporter's goldens, the module size budget, the offline dependency test for `js/wasm`. The
@@ -834,9 +845,12 @@ security audit (`security-audit` skill), since every one of them touches the tru
 
 ### Decided in this PRD (the maintainer can overrule them)
 
-- **The report in the page is HTML rendered in Go by a new reporter, `htmlreport`,** with
-  `html/template`; the downloads are the existing reporters' bytes. Contextual auto-escaping covers
-  hostile inventory values, Trusted Types confine the one insertion, and the CSP's ban on inline script is
+- **The report in the page is HTML rendered in Go by a new reporter, `htmlreport`;** the downloads are
+  the existing reporters' bytes. The reporter writes a closed set of constant elements, values only as
+  element content, escaped with `html/template`'s text-context replacements, pinned by a differential
+  test against `html/template` (ADR 0035; amended from "with `html/template`", pending the maintainer's
+  confirmation, *Decided by the orchestrator in review*). That escaping covers hostile inventory values,
+  Trusted Types confine the one insertion, and the CSP's ban on inline script is
   a further layer. Rendering Markdown in JavaScript would need a parser the project does not want to ship,
   and building tables in JavaScript would move logic out of tested Go. Rendering is a reporter's job, so
   it is an adapter, not part of `internal/web`.
@@ -980,6 +994,15 @@ security audit (`security-audit` skill), since every one of them touches the tru
   remaining handle (no COOP: it can navigate the tab or post messages in, read nothing) as a remaining
   gap, not a closed one; the smoke test checks the page's own `window.opener` reference is `null` after
   load in a page opened by another.
+- **Decided (2026-11-19, milestone 1 review): the HTML reporter does not use `html/template`.** Rendering
+  with `html/template` grew the gzip-compressed module script to 3,638,609 bytes, 16% over the 3 MiB
+  budget, since `text/template`'s reflection keeps every exported method of every reachable type. The
+  reporter instead writes a closed set of constant elements, values only as element content, escaped with
+  `html/template`'s text-context replacements, pinned by a differential test against `html/template`
+  (ADR 0035). The passages of *Trust*, *Accessibility*, *Architecture* and *Decided in this PRD* that said
+  "with `html/template`" are amended to match, and the *Architecture* criterion names the depguard rules
+  as milestone 1 split them. Pending the maintainer's confirmation; to go back, the budget would rise to
+  about 3.5 MiB or the module would move to TinyGo.
 
 ### Hosting decisions (decided by the maintainer, 2026-11-19)
 
