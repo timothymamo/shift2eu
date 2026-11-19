@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/google/go-cmp/cmp"
 )
@@ -158,6 +159,115 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 	}
 }
 
+// TestNonUTF8TextIsNotSkipped pins that a checked file whose bytes are not
+// valid UTF-8 is still read for values. A fixture arrives in whatever encoding
+// the tool that wrote it chose: a Windows editor writes UTF-16 with a
+// byte-order mark, and a page saved from a browser may be in a Latin-1
+// encoding. A real account ID or host name in such a file is still real data,
+// so skipping the file would let one into the repository unseen.
+func TestNonUTF8TextIsNotSkipped(t *testing.T) {
+	t.Parallel()
+
+	text := "account " + realAccountID + " runs " + realHost
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "UTF-16LE with a byte-order mark",
+			content: utf16LEBOM(text),
+		},
+		{
+			// Z\xfcrich is Zürich in Latin-1: the 0xFC byte makes the file invalid
+			// UTF-8, the way a name in a page a person saved does.
+			name:    "Latin-1",
+			content: text + " Z\xfcrich",
+		},
+	}
+
+	const plantedPath = "test/e2e/testdata/planted-encoding.json"
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			plantFixture(t, dir, plantedPath, tc.content)
+
+			problems, err := fixtureProblems(dir)
+			if err != nil {
+				t.Fatalf("fixtureProblems(%q): %v", dir, err)
+			}
+
+			got := problemValues(problems[plantedPath])
+			for _, want := range []string{realAccountID, realHost} {
+				if !slices.Contains(got, want) {
+					t.Errorf("%s holds %q in %s, but fixtureProblems reports %v there, which lacks %q",
+						plantedPath, text, tc.name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestSymlinkInACheckedPathFailsTheCheck pins that a symbolic link in a checked
+// path cannot smuggle a value past the check: the link's target may be a file
+// outside the checked paths, so reading through the link is how a real value
+// would reach a checked path. Either design fails the run - a problem that
+// carries the values read through the link, or one that names the link itself -
+// but the link never goes unreported, and the check never follows it silently
+// and passes.
+func TestSymlinkInACheckedPathFailsTheCheck(t *testing.T) {
+	t.Parallel()
+
+	const (
+		target = "docs/adr/planted-real-value.json"
+		link   = "test/e2e/testdata/link.json"
+	)
+
+	content := "account " + realAccountID + " runs " + realHost
+
+	dir := t.TempDir()
+	plantFixture(t, dir, target, content)
+
+	linkPath := filepath.Join(dir, filepath.FromSlash(link))
+	if err := os.MkdirAll(filepath.Dir(linkPath), 0o750); err != nil {
+		t.Fatalf("create the directory for %s: %v", link, err)
+	}
+
+	if err := os.Symlink(filepath.Join(dir, filepath.FromSlash(target)), linkPath); err != nil {
+		t.Skipf("this filesystem cannot hold a symbolic link, so the case cannot be planted: %v", err)
+	}
+
+	problems, err := fixtureProblems(dir)
+	if err != nil {
+		t.Fatalf("fixtureProblems(%q): %v", dir, err)
+	}
+
+	// The check may report the link itself or the values it reads through it,
+	// so only a non-empty result under the link's key is pinned.
+	if len(problems[link]) == 0 {
+		t.Errorf("%s is a symbolic link to %s, which holds %q, but fixtureProblems reports no problem under it (it reports problems for %v)",
+			link, target, content, slices.Sorted(maps.Keys(problems)))
+	}
+}
+
+// utf16LEBOM returns text encoded as UTF-16 little-endian behind a byte-order
+// mark (0xFF 0xFE), the shape a Windows editor writes a UTF-16 file in.
+func utf16LEBOM(text string) string {
+	units := utf16.Encode([]rune(text))
+
+	encoded := make([]byte, 0, 2+2*len(units))
+	encoded = append(encoded, 0xff, 0xfe)
+
+	for _, unit := range units {
+		encoded = append(encoded, byte(unit), byte(unit>>8))
+	}
+
+	return string(encoded)
+}
+
 // TestFilesOutsideTheCheckedPathsAreIgnored pins the other side of the rule: a
 // Go file in a package directory and an ADR page are not fixtures and hold no
 // sample to copy, so a value in either of them is no fixture problem. Without
@@ -249,20 +359,30 @@ func TestAllowListEntriesAreNarrowAndUsed(t *testing.T) {
 		}
 	}
 
-	for i := range realDataAllowList {
-		for j := i + 1; j < len(realDataAllowList); j++ {
-			if cmp.Equal(realDataAllowList[i], realDataAllowList[j]) {
-				t.Errorf("realDataAllowList[%d] and realDataAllowList[%d] are the same entry (%s: %q): one entry each",
-					i, j, realDataAllowList[i].file, realDataAllowList[i].value)
-			}
+	// The allow list is keyed on a (file, value) pair, so two entries that name
+	// the same pair differ only in their reason and cover one value twice: the
+	// second one excuses nothing the first does not.
+	seen := make(map[[2]string]int, len(realDataAllowList))
+
+	for i, entry := range realDataAllowList {
+		key := [2]string{entry.file, entry.value}
+
+		if first, ok := seen[key]; ok {
+			t.Errorf("realDataAllowList[%d] and realDataAllowList[%d] excuse the same file and value (%s: %q): one entry each",
+				first, i, entry.file, entry.value)
+
+			continue
 		}
+
+		seen[key] = i
 	}
 }
 
 // TestAllowListDoesNotLeakToOtherFiles pins that an entry covers the value in
-// the one file it names and nowhere else: the same value planted at another
-// checked path is still reported. An allow list keyed on a value alone would let
-// a real value into a new file, whichever file it came from.
+// the one file it names and nowhere else: every value the allow list excuses,
+// planted at another checked path, is still reported. An allow list keyed on a
+// value alone would let a real value into a new file, whichever file it came
+// from, so every distinct value is tried rather than the first entry's.
 func TestAllowListDoesNotLeakToOtherFiles(t *testing.T) {
 	t.Parallel()
 
@@ -270,23 +390,35 @@ func TestAllowListDoesNotLeakToOtherFiles(t *testing.T) {
 		t.Skip("the allow list is empty, so no entry can leak into another file")
 	}
 
-	entry := realDataAllowList[0]
+	var excused []string
 
-	// A testdata path the allow-listed file does not name, so only the
-	// (file, value) pair of an entry could excuse the value.
-	const plantedPath = "test/e2e/testdata/planted-leak.txt"
-
-	dir := t.TempDir()
-	plantFixture(t, dir, plantedPath, "leaked value: "+entry.value)
-
-	problems, err := fixtureProblems(dir)
-	if err != nil {
-		t.Fatalf("fixtureProblems(%q): %v", dir, err)
+	for _, entry := range realDataAllowList {
+		if !slices.Contains(excused, entry.value) {
+			excused = append(excused, entry.value)
+		}
 	}
 
-	if got := problemValues(problems[plantedPath]); !slices.Contains(got, entry.value) {
-		t.Errorf("%s carries %q, which the allow list excuses only in %s, but fixtureProblems reports %v there",
-			plantedPath, entry.value, entry.file, got)
+	// A testdata path no allow-listed file names, so only the (file, value)
+	// pair of an entry could excuse the value.
+	const plantedPath = "test/e2e/testdata/planted-leak.txt"
+
+	for _, value := range excused {
+		t.Run(value, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			plantFixture(t, dir, plantedPath, "leaked value: "+value)
+
+			problems, err := fixtureProblems(dir)
+			if err != nil {
+				t.Fatalf("fixtureProblems(%q): %v", dir, err)
+			}
+
+			if got := problemValues(problems[plantedPath]); !slices.Contains(got, value) {
+				t.Errorf("%s carries %q, which the allow list excuses only in another file, but fixtureProblems reports %v there",
+					plantedPath, value, got)
+			}
+		})
 	}
 }
 

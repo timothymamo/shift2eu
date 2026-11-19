@@ -19,12 +19,16 @@ import (
 // flagged those would report some sixteen hundred legitimate values, so the
 // fixture check narrows it: a dotted name is a host name only if its last
 // label, lowercased, is a public top-level domain (com, net, org, io, dev, app,
-// cloud, ai, co, eu and common country codes such as de, fr, nl, uk, ch, at, be,
-// se, fi, no, dk, es, it, pl, us, plus info, biz, tech, online, site, xyz -
-// deliberately not md, sh, py, rs or another file-extension clash), and it is
-// not one of the exact public vendor hosts a page may link to (github.com,
-// www.scaleway.com, ... ). The vendor list is exact, never a suffix match: the
-// subdomain of a listed vendor host is a customer's name and is reported.
+// cloud, ai, co, plus the generic info, biz, tech, online, site, xyz; every
+// EU/EEA country code, so de, fr, nl, uk, ch, at, be, se, fi, no, dk, es, it, pl,
+// us, ie, lu, cz, pt and the rest; and OVHcloud's own ovh - deliberately not md,
+// sh, py, rs or another file-extension clash, and deliberately not is, which a
+// Go selector reads as errors.Is and a name ends with), or if it ends in one of
+// the private DNS suffixes an internal name is built from (.internal, the AWS
+// and GCP private zone; .corp; .lan), and it is not one of the exact public
+// vendor hosts a page may link to (github.com, www.scaleway.com, ... ). The
+// vendor list is exact, never a suffix match: the subdomain of a listed vendor
+// host is a customer's name and is reported.
 //
 // The account-ID, GUID, IPv4 and IPv6 rules are unchanged, and the names the
 // examples/ allow list already accepts (example.com and its subdomains, the
@@ -77,6 +81,55 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			name: "subdomain of a listed vendor host that is itself unlisted",
 			text: "the assets come from evil.ghcr.io.acme-corp.com",
 			want: []string{"evil.ghcr.io.acme-corp.com"},
+		},
+		{
+			name: "customer host in the Luxembourg TLD",
+			text: "the database is at db.acme.lu",
+			want: []string{"db.acme.lu"},
+		},
+		{
+			name: "customer host in the Irish TLD",
+			text: "the shop answers at shop.acme.ie",
+			want: []string{"shop.acme.ie"},
+		},
+		{
+			name: "customer host in the Czech TLD",
+			text: `"endpoint": "api.acme.cz"`,
+			want: []string{"api.acme.cz"},
+		},
+		{
+			name: "customer host in the Portuguese TLD",
+			text: "the portal is portal.acme.pt",
+			want: []string{"portal.acme.pt"},
+		},
+		{
+			// OVHcloud's own TLD: a customer of the target hosts its site there
+			// just as it does under any other TLD.
+			name: "customer host in the OVHcloud TLD",
+			text: "the site is on mysite.ovh",
+			want: []string{"mysite.ovh"},
+		},
+		{
+			// An AWS private DNS name: .internal is no public TLD, but the name
+			// still identifies a customer's own network.
+			name: "AWS private DNS name",
+			text: `"hostname": "ip-10-0-1-23.eu-central-1.compute.internal"`,
+			want: []string{"ip-10-0-1-23.eu-central-1.compute.internal"},
+		},
+		{
+			name: "GCP internal DNS name",
+			text: `"hostname": "vm-1.europe-west1-b.c.acme-prod.internal"`,
+			want: []string{"vm-1.europe-west1-b.c.acme-prod.internal"},
+		},
+		{
+			name: "private name under the corp suffix",
+			text: "the file server is db01.acme.corp",
+			want: []string{"db01.acme.corp"},
+		},
+		{
+			name: "private name under the lan suffix",
+			text: "the NAS is nas.home.lan",
+			want: []string{"nas.home.lan"},
 		},
 
 		// Not reported: a dotted value with another meaning, or a public host
@@ -149,6 +202,18 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 		{
 			name: "Go package selector in a Go-source fixture",
 			text: "the code calls os.Getenv",
+			want: nil,
+		},
+		{
+			// is is a real country code, but a name ending in it is a Go
+			// selector far more often than a host, so it is never a host.
+			name: "Go errors.Is selector",
+			text: "the code checks errors.Is for the sentinel",
+			want: nil,
+		},
+		{
+			name: "Go time.Local value",
+			text: "the deadline is measured in time.Local",
 			want: nil,
 		},
 		{
