@@ -27,11 +27,15 @@ maintainer has not approved: the maintainer's approval and merge are the single 
 
 ## Verify
 
-6. `gh pr checks <n> --watch --required --fail-fast` until every required check completes. `AI review`
-   is not required, so its failure does not stop the watch; then `gh pr checks <n>` for every check.
-7. On a failed required check: `gh run view <run-id> --log-failed`, report the failing job and the exact
-   error, and stop. Do not diagnose or fix; the orchestrator re-delegates. A failed `AI review` is no
-   such failure: report it as step 8 says.
+6. `gh pr checks <n> --watch --required --fail-fast` until every required check completes. Some checks
+   are not required (`Container image`, `Dependency review`), so then wait for every check but
+   `AI review`: every 30 seconds run
+   `gh pr checks <n> --json name,bucket --jq '[.[] | select(.name != "AI review" and .bucket == "pending")] | length'`
+   until it prints `0`. Then `gh pr checks <n>` for every check.
+7. On a failed check other than `AI review` (required or not, bucket `fail` or `cancel`):
+   `gh run view <run-id> --log-failed`, report the failing job and the exact error, and stop. Do not
+   diagnose or fix; the orchestrator re-delegates. A failed `AI review` is no such failure: report it as
+   step 8 says.
 
 ## Report and stop
 
