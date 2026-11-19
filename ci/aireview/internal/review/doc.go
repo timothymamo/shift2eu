@@ -19,6 +19,12 @@
 // it httptest servers as base URLs and a fake CLI, so no test reaches the
 // network.
 //
+// The model reads the pull request's diff without the generated and golden
+// files of a list fixed in this package (FilterDiff, issue #324), and the size
+// limit measures what remains; the review names every file left out. An answer
+// of the wrong shape is asked once more, and two in turn post a comment that
+// says the review could not be read while the run still fails (issue #316).
+//
 // The poster supports exactly two events, COMMENT and REQUEST_CHANGES, and
 // refuses any other before it makes an HTTP call: the reviewer never
 // approves. Everything taken from the pull request is untrusted data, kept

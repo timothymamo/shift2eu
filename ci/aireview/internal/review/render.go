@@ -45,6 +45,17 @@ type InlineComment struct {
 // its closing statement that the review is advice and never an approval
 // (ADR 0033).
 func Render(headSHA string, answer Answer, event Event, diff string) Review {
+	return RenderFiltered(headSHA, answer, event, diff, nil)
+}
+
+// RenderFiltered renders the review of headSHA as Render does, of the diff the
+// reviewer read, and ends the body's findings with a note that names each path
+// of excluded, the files FilterDiff left out, and says they were not reviewed
+// (issue #324). Each path is shown in a code span, escaped as a finding's path
+// in the body is: its backticks made apostrophes, its control characters
+// spaces, its mentions defused. With no path excluded there is no note, and the
+// review is Render's, byte for byte.
+func RenderFiltered(headSHA string, answer Answer, event Event, diff string, excluded []string) Review {
 	shown := newSideLines(diff)
 
 	var (
@@ -67,7 +78,7 @@ func Render(headSHA string, answer Answer, event Event, diff string) Review {
 	}
 
 	head := fmt.Sprintf("**AI review** of %s\n\n", headSHA)
-	middle := renderMiddle(answer, event, comments, inBody)
+	middle := renderMiddle(answer, event, comments, inBody) + notReviewedNote(excluded)
 
 	room := MaxTextUnits - utf16Len(head) - utf16Len(adviceFooter)
 
@@ -347,7 +358,7 @@ func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody [
 				// ParseAnswer refuses a path with a control character, but
 				// Render refuses nothing: the path stays on its line and
 				// notifies nobody whatever reaches it.
-				fmt.Fprintf(&body, "`%s`\n\n", defuseMentions(oneLine(strings.ReplaceAll(where, "`", "'"))))
+				fmt.Fprintf(&body, "%s\n\n", pathSpan(where))
 			}
 
 			body.WriteString(findingText(f))
@@ -358,6 +369,48 @@ func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody [
 	}
 
 	return body.String()
+}
+
+// pathSpan returns path as a Markdown code span on one line that notifies
+// nobody: its backticks made apostrophes, so none ends the span, its control
+// characters spaces and its mentions defused. A path is text a pull request or
+// the model chose.
+func pathSpan(path string) string {
+	return "`" + defuseMentions(oneLine(strings.ReplaceAll(path, "`", "'"))) + "`"
+}
+
+// notReviewedNote returns the body's note that names the files the reviewer
+// left out of the diff it read, and "" when it left none out (issue #324).
+func notReviewedNote(excluded []string) string {
+	if len(excluded) == 0 {
+		return ""
+	}
+
+	var note strings.Builder
+
+	fmt.Fprintf(&note, "\n### Not reviewed\n\n%s left out of the diff the AI review read, "+
+		"as a generated or golden file (ADR 0033), and not reviewed:\n\n",
+		plural(len(excluded), "This file was", fmt.Sprintf("Each of these %d files was", len(excluded))))
+
+	for _, path := range excluded {
+		note.WriteString("- " + pathSpan(path) + "\n")
+	}
+
+	return note.String()
+}
+
+// unreadableReview returns the review a run posts when the model's answer
+// could not be read twice in turn (issue #316): a comment on headSHA that
+// says so, holds no finding and is never a change request.
+func unreadableReview(headSHA string) Review {
+	return Review{
+		CommitID: headSHA,
+		Event:    EventComment,
+		Body: fmt.Sprintf("**AI review** of %s\n\n", headSHA) +
+			"The AI review of this commit could not be read: the model answered twice, and neither answer " +
+			"had the form the reviewer reads, so this review holds no finding. The check fails so that this " +
+			"stays visible; re-run it to ask for a review again.\n" + adviceFooter,
+	}
 }
 
 // inlineSentence says that n findings are inline comments, without its full

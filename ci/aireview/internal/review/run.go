@@ -2,6 +2,7 @@ package review
 
 import (
 	"context"
+	"errors"
 	"fmt"
 )
 
@@ -48,12 +49,18 @@ type Result struct {
 }
 
 // Run reviews pull request cfg.Number: it reads the pull request (a draft fails
-// with ErrDraft), its diff (over MaxDiffBytes fails with ErrDiffTooLarge) and
-// its files, builds the prompt (BuildPrompt), asks the model, parses the answer
-// (ParseAnswer), decides the event (Decide), renders the review of the head SHA
-// it read (Render) and posts it. Then, only when no finding is blocking, it
-// dismisses the reviews DismissalsFor picks. Any error before the post returns
-// with nothing posted and nothing dismissed.
+// with ErrDraft), its diff, leaves the generated and golden files out of it
+// (FilterDiff; what remains over MaxDiffBytes fails with ErrDiffTooLarge before
+// the model is asked) and reads its files, builds the prompt of what remains
+// (BuildPrompt), asks the model, parses the answer (ParseAnswer), decides the
+// event (Decide), renders the review of the head SHA it read, naming the files
+// it left out (RenderFiltered), and posts it. Then, only when no finding is
+// blocking, it dismisses the reviews DismissalsFor picks. Any error before the
+// post returns with nothing posted and nothing dismissed, with one exception
+// (issue #316): an answer of the wrong shape is asked once more with the same
+// prompt while ctx is not done, and when the second answer has the wrong shape
+// too Run posts a COMMENT review with no finding that says the review could not
+// be read, and still fails with an error wrapping ErrMalformedAnswer.
 func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result, error) {
 	pr, err := gh.PullRequest(ctx, cfg.Number)
 	if err != nil {
@@ -64,9 +71,15 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 		return Result{}, fmt.Errorf("pull request %d: %w", cfg.Number, ErrDraft)
 	}
 
-	diff, err := gh.Diff(ctx, pr)
+	raw, err := gh.Diff(ctx, pr)
 	if err != nil {
 		return Result{}, err
+	}
+
+	diff, excluded := FilterDiff(raw)
+	if len(diff) > MaxDiffBytes {
+		return Result{}, fmt.Errorf("pull request %d: %w: more than %d bytes once generated and golden files are left out",
+			cfg.Number, ErrDiffTooLarge, MaxDiffBytes)
 	}
 
 	files, err := gh.ChangedFiles(ctx, cfg.Number)
@@ -74,19 +87,22 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 		return Result{}, err
 	}
 
-	text, err := model.Ask(ctx, BuildPrompt(cfg.Instructions, pr, files, diff))
+	answer, err := askForAnswer(ctx, model, BuildPrompt(cfg.Instructions, pr, files, diff), cfg.Number)
 	if err != nil {
-		return Result{}, fmt.Errorf("ask the model to review pull request %d: %w", cfg.Number, err)
-	}
+		if errors.Is(err, errUnreadableTwice) {
+			// Two answers of the wrong shape: say so on the pull request, and
+			// still fail the run, so the check stays red (issue #316).
+			if postErr := gh.PostReview(ctx, cfg.Number, unreadableReview(pr.HeadSHA)); postErr != nil {
+				return Result{}, fmt.Errorf("%w; then: %w", err, postErr)
+			}
+		}
 
-	answer, err := ParseAnswer(text)
-	if err != nil {
-		return Result{}, fmt.Errorf("read the model's review of pull request %d: %w", cfg.Number, err)
+		return Result{}, err
 	}
 
 	event := Decide(answer.Findings, cfg.RequestChanges)
 
-	if err := gh.PostReview(ctx, cfg.Number, Render(pr.HeadSHA, answer, event, diff)); err != nil {
+	if err := gh.PostReview(ctx, cfg.Number, RenderFiltered(pr.HeadSHA, answer, event, diff, excluded)); err != nil {
 		return Result{}, err
 	}
 
@@ -120,6 +136,49 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 	}
 
 	return result, nil
+}
+
+// errUnreadableTwice marks a run whose model answered twice in turn with an
+// answer of the wrong shape (issue #316); Run then posts unreadableReview.
+var errUnreadableTwice = errors.New("two answers in turn could not be read")
+
+// askForAnswer asks model with prompt and parses its answer. An answer refused
+// for its shape (shapeError) is asked once more with the same prompt, unless
+// ctx is done by then: the retry stays inside the run's deadline. A second
+// answer of the wrong shape gives an error wrapping errUnreadableTwice and
+// ErrMalformedAnswer. A finding ParseAnswer refuses is not asked again (#295
+// keeps those fields strict), and neither is a failed model call.
+func askForAnswer(ctx context.Context, model Asker, prompt Prompt, number int) (Answer, error) {
+	answer, err := askOnce(ctx, model, prompt, number)
+	if err == nil || !isShapeError(err) {
+		return answer, err
+	}
+
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return Answer{}, fmt.Errorf("%w; not asked again: %w", err, ctxErr)
+	}
+
+	answer, err = askOnce(ctx, model, prompt, number)
+	if err != nil && isShapeError(err) {
+		return Answer{}, fmt.Errorf("%w, asked twice: %w", errUnreadableTwice, err)
+	}
+
+	return answer, err
+}
+
+// askOnce asks model once and parses its answer.
+func askOnce(ctx context.Context, model Asker, prompt Prompt, number int) (Answer, error) {
+	text, err := model.Ask(ctx, prompt)
+	if err != nil {
+		return Answer{}, fmt.Errorf("ask the model to review pull request %d: %w", number, err)
+	}
+
+	answer, err := ParseAnswer(text)
+	if err != nil {
+		return Answer{}, fmt.Errorf("read the model's review of pull request %d: %w", number, err)
+	}
+
+	return answer, nil
 }
 
 // DismissalsFor returns the reviews to dismiss after a review with findings:

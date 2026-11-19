@@ -60,7 +60,9 @@ type rawFinding struct {
 // blocks. Any other, and a missing or null one, keeps the finding with
 // CategoryUncategorised, so one unknown category costs no finding. The raw
 // category text is never kept. An answer with no findings is valid, findings
-// then being empty, not nil.
+// then being empty, not nil. An error for the answer's shape, refused before
+// any one finding is validated, is a shapeError, which Run asks again for
+// (issue #316).
 func ParseAnswer(text string) (Answer, error) {
 	src := strings.NewReader(text)
 	dec := json.NewDecoder(src)
@@ -68,21 +70,21 @@ func ParseAnswer(text string) (Answer, error) {
 
 	var raw rawAnswer
 	if err := dec.Decode(&raw); err != nil {
-		return Answer{}, fmt.Errorf("%w: not one JSON object of the answer's form: %w", ErrMalformedAnswer, err)
+		return Answer{}, shapeError{fmt.Errorf("%w: not one JSON object of the answer's form: %w", ErrMalformedAnswer, err)}
 	}
 
 	// What the decoder buffered but did not use, then what it never read.
 	rest, err := io.ReadAll(io.MultiReader(dec.Buffered(), src))
 	if err != nil || len(bytes.TrimSpace(rest)) != 0 {
-		return Answer{}, fmt.Errorf("%w: text after the JSON object", ErrMalformedAnswer)
+		return Answer{}, shapeError{fmt.Errorf("%w: text after the JSON object", ErrMalformedAnswer)}
 	}
 
 	if raw.Summary == nil || strings.TrimSpace(*raw.Summary) == "" {
-		return Answer{}, fmt.Errorf("%w: no summary", ErrMalformedAnswer)
+		return Answer{}, shapeError{fmt.Errorf("%w: no summary", ErrMalformedAnswer)}
 	}
 
 	if raw.Findings == nil {
-		return Answer{}, fmt.Errorf("%w: no findings array", ErrMalformedAnswer)
+		return Answer{}, shapeError{fmt.Errorf("%w: no findings array", ErrMalformedAnswer)}
 	}
 
 	answer := Answer{Summary: *raw.Summary, Findings: make([]Finding, 0, len(*raw.Findings))}
@@ -97,6 +99,27 @@ func ParseAnswer(text string) (Answer, error) {
 	}
 
 	return answer, nil
+}
+
+// shapeError is a malformed answer refused for its shape, before any one
+// finding is validated: no single JSON object of the answer's form (not JSON, a
+// top level that is no object, a findings that is no array, an unknown field or
+// a field of the wrong type), text around the object, no summary or no
+// findings array. Run asks the model once more for such an answer (issue
+// #316); a finding ParseAnswer refuses is no shapeError and is not asked again.
+// It wraps ErrMalformedAnswer as every malformed answer's error does, and its
+// text is the error's own.
+type shapeError struct{ err error }
+
+func (e shapeError) Error() string { return e.err.Error() }
+
+func (e shapeError) Unwrap() error { return e.err }
+
+// isShapeError reports whether err is, or wraps, a shapeError.
+func isShapeError(err error) bool {
+	var shape shapeError
+
+	return errors.As(err, &shape)
 }
 
 // finding validates rf and returns it as a Finding.
