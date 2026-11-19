@@ -26,7 +26,9 @@ VM_RESOURCES_SET = $(strip $(if $(VM_CPUS),VM_CPUS) $(if $(VM_MEMORY),VM_MEMORY)
 # '-' starting with a letter or digit: an empty name matches the empty line an empty listing prints and would
 # point at all of ~/.lima, a leading dash reads as an option and a slash as a path. The check is make code,
 # not shell: make expands a target's whole recipe before it runs its first line, so a refused name stops the
-# target before any of its commands runs, even under make -i or -k. Targets that do not read LIMA_INSTANCE
+# target before any of its own commands runs, even under make -i or -k. Its prerequisites run first, but
+# none of them reads the name: vm-up's git-hooks sets git's hooks path and vm-env's vm-env-check checks the
+# credentials on the host. Targets that do not read LIMA_INSTANCE
 # (make check, make build) never check it.
 LIMA_INSTANCE ?= shift2eu
 override LIMA_INSTANCE := $(value LIMA_INSTANCE)
@@ -36,10 +38,15 @@ LIMA_INSTANCE_RULE = a Lima instance name is letters, digits, '.', '_' and '-', 
 LIMA_INSTANCE_CHARS := a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9 . _ -
 # $(call lima_instance_strip,<chars>,<text>) is <text> without any of the space-separated <chars>.
 lima_instance_strip = $(if $(1),$(call lima_instance_strip,$(wordlist 2,$(words $(1)),$(1)),$(subst $(firstword $(1)),,$(2))),$(2))
-# Non-empty when LIMA_INSTANCE follows the rule: it is set, holds no whitespace (one word even with an x glued
-# to either end), starts with neither '.', '_' nor '-', and has nothing left once the allowed characters are
-# removed.
-LIMA_INSTANCE_VALID = $(and $(LIMA_INSTANCE),$(filter 1,$(words x$(LIMA_INSTANCE)x)),$(if $(filter .% _% -%,$(LIMA_INSTANCE)),,ok),$(if $(call lima_instance_strip,$(LIMA_INSTANCE_CHARS),$(LIMA_INSTANCE)),,ok))
+# Non-empty when LIMA_INSTANCE follows the rule: it is set, starts with neither '.', '_' nor '-', and has
+# nothing left once the allowed characters are removed. Whitespace is refused by that last test alone, which
+# is why it never hands the remainder to $(if) or $(words) bare: $(if) strips every isspace character (LF, CR,
+# VT, FF too) before it tests, and make 3.81 (macOS /usr/bin/make) splits words on blanks only, so a name
+# like a<LF>b would leave a lone LF that $(if) reads as empty and $(words) counts as part of one word. 'x' is
+# an allowed character, so the remainder never holds one: x<remainder>x is exactly xx, and empty after
+# $(subst xx,,...), only when the remainder is empty. Once that test passes the name holds no whitespace, so
+# the $(filter) sees it as one word and tests its first character.
+LIMA_INSTANCE_VALID = $(and $(LIMA_INSTANCE),$(if $(filter .% _% -%,$(LIMA_INSTANCE)),,ok),$(if $(subst xx,,x$(call lima_instance_strip,$(LIMA_INSTANCE_CHARS),$(LIMA_INSTANCE))x),,ok))
 LIMA_INSTANCE_CHECK = $(if $(LIMA_INSTANCE_VALID),,$(error $@: invalid LIMA_INSTANCE '$(LIMA_INSTANCE)': $(LIMA_INSTANCE_RULE)))
 
 BINARY  := shift2eu
