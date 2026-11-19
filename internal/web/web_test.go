@@ -464,19 +464,25 @@ func TestAssessRefusesBadOptions(t *testing.T) {
 func TestAssessRefusesAnUnknownRegion(t *testing.T) {
 	t.Parallel()
 
+	// want is the message the CLI's rules produce: analysis.RegionChoiceError
+	// names the one target of a single-target run (the *RegionError of an
+	// Analysis carries no target) and keeps the target a Comparison names.
 	tests := []struct {
 		name    string
 		targets []string
+		regions []web.Region
 		want    string
 	}{
 		{
 			name:    "one target",
 			targets: []string{alphaKey},
-			want:    `--region: region "xx-nope" is not one of the target's regions: "xx-par"`,
+			regions: []web.Region{{Target: alphaKey, Region: "xx-nope"}},
+			want:    `--region: target "alpha": region "xx-nope" is not one of the target's regions: "xx-par"`,
 		},
 		{
 			name:    "a comparison names the target",
 			targets: []string{alphaKey, betaKey},
+			regions: []web.Region{{Target: betaKey, Region: "xx-nope"}},
 			want:    `--region: target "beta": region "xx-nope" is not one of the target's regions: "xx-par"`,
 		},
 	}
@@ -489,7 +495,7 @@ func TestAssessRefusesAnUnknownRegion(t *testing.T) {
 
 			_, err := f.assessor.Assess(t.Context(), []byte(`{}`), web.Options{
 				Targets: tc.targets,
-				Regions: []web.Region{{Target: betaKey, Region: "xx-nope"}},
+				Regions: tc.regions,
 			})
 			if err == nil {
 				t.Fatal("Assess() returned no error for an unknown region, want a usage error")
