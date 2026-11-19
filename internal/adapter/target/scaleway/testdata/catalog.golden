@@ -55,10 +55,10 @@ Kubernetes Kapsule | kubernetes.managed | autoscaling | fr-par, it-mil, nl-ams, 
   plan: PRO2-XS | 4 vcpu | 16 GiB | 0 GiB storage | 81.906 EUR @ fr-par, nl-ams, pl-waw
   plan: PRO2-XXS | 2 vcpu | 8 GiB | 0 GiB storage | 40.953 EUR @ fr-par, nl-ams, pl-waw
   storage price: 0.0949 EUR @ -
-Kubernetes Kapsule Dedicated | kubernetes.managed | autoscaling, node-high-availability | fr-par, nl-ams, pl-waw
-  plan: PLAY2-MICRO | 4 vcpu | 8 GiB | 0 GiB storage | 40.2084 EUR @ -
-  plan: PLAY2-NANO | 2 vcpu | 4 GiB | 0 GiB storage | 20.1042 EUR @ -
-  plan: PLAY2-PICO | 1 vcpu | 2 GiB | 0 GiB storage | 10.4244 EUR @ -
+Kubernetes Kapsule Dedicated | kubernetes.managed | autoscaling, node-high-availability | fr-par, it-mil, nl-ams, pl-waw
+  plan: PLAY2-MICRO | 4 vcpu | 8 GiB | 0 GiB storage | 40.2084 EUR @ fr-par, nl-ams, pl-waw
+  plan: PLAY2-NANO | 2 vcpu | 4 GiB | 0 GiB storage | 20.1042 EUR @ fr-par, nl-ams, pl-waw
+  plan: PLAY2-PICO | 1 vcpu | 2 GiB | 0 GiB storage | 10.4244 EUR @ fr-par, nl-ams, pl-waw
   plan: POP2-12C-48G | 12 vcpu | 48 GiB | 0 GiB storage | 317.55 EUR @ -
   plan: POP2-16C-64G | 16 vcpu | 64 GiB | 0 GiB storage | 430.70 EUR @ -
   plan: POP2-24C-96G | 24 vcpu | 96 GiB | 0 GiB storage | 646.05 EUR @ -
@@ -69,11 +69,11 @@ Kubernetes Kapsule Dedicated | kubernetes.managed | autoscaling, node-high-avail
   plan: POP2-64C-256G | 64 vcpu | 256 GiB | 0 GiB storage | 1715.50 EUR @ -
   plan: POP2-6C-24G | 6 vcpu | 24 GiB | 0 GiB storage | 160.965 EUR @ -
   plan: POP2-8C-32G | 8 vcpu | 32 GiB | 0 GiB storage | 211.70 EUR @ -
-  plan: PRO2-L | 32 vcpu | 128 GiB | 0 GiB storage | 653.0142 EUR @ -
-  plan: PRO2-M | 16 vcpu | 64 GiB | 0 GiB storage | 326.1348 EUR @ -
-  plan: PRO2-S | 8 vcpu | 32 GiB | 0 GiB storage | 163.0674 EUR @ -
-  plan: PRO2-XS | 4 vcpu | 16 GiB | 0 GiB storage | 81.906 EUR @ -
-  plan: PRO2-XXS | 2 vcpu | 8 GiB | 0 GiB storage | 40.953 EUR @ -
+  plan: PRO2-L | 32 vcpu | 128 GiB | 0 GiB storage | 653.0142 EUR @ fr-par, nl-ams, pl-waw
+  plan: PRO2-M | 16 vcpu | 64 GiB | 0 GiB storage | 326.1348 EUR @ fr-par, nl-ams, pl-waw
+  plan: PRO2-S | 8 vcpu | 32 GiB | 0 GiB storage | 163.0674 EUR @ fr-par, nl-ams, pl-waw
+  plan: PRO2-XS | 4 vcpu | 16 GiB | 0 GiB storage | 81.906 EUR @ fr-par, nl-ams, pl-waw
+  plan: PRO2-XXS | 2 vcpu | 8 GiB | 0 GiB storage | 40.953 EUR @ fr-par, nl-ams, pl-waw
   storage price: 0.0949 EUR @ -
 Managed Database for PostgreSQL and MySQL | database.mysql, database.postgresql | encryption-at-rest, read-replicas, snapshots | fr-par, nl-ams, pl-waw
   plan: DB-PLAY2-NANO | 2 vcpu | 4 GiB | 0 GiB storage | 31.536 EUR @ -
