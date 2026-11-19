@@ -311,7 +311,8 @@ vm-shell: ## Open a shell in the VM at the repository root
 vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', ' '\n\n' | awk 'NF && !seen[$$0]++')
 # How a message names the entry $$name at 1-based position $$i of that list, in $$label (issue #268 L1): the
 # entry itself only when it is an upper-case variable name (^[A-Z_][A-Z0-9_]*$), the shape of every credential
-# name; anything else may be a credential pasted where a name goes, so only its position is given. The rule has
+# name; anything else may be a credential pasted where a name goes, so only its position is given: entry N is the
+# Nth name of VM_ENV counting each name once, at its first place, and skipping empty entries. The rule has
 # a limit: a pasted value of that shape (upper-case letters, digits and underscores only, such as an AWS access
 # key ID, AKIA..., not secret on its own) is still printed, e.g. in the not-set list. The letters
 # are spelled out, as a range such as [A-Z] can match lower-case letters in some shells' locales. It sets
@@ -328,7 +329,8 @@ vm_env_entry_why = $${ehidden:+ It may be a credential typed by mistake.}
 # reads the name's value, so make -i, which runs the write step although vm-env-check failed, cannot copy a
 # refused name into the VM (issue #268 L2): an agents App variable, a GitHub token (github_token_names below) or
 # no variable name. Each names the entry by $$label (vm_env_label, which it runs first), so a refused entry that
-# may be a credential is never printed, and exits 1.
+# may be a credential is never printed, and exits 1. The GitHub-token refusal adds no $(vm_env_entry_why): its
+# names are literal upper-case names, which are always shown, never hidden.
 vm_env_refuse = $(vm_env_label); \
 	case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
 		echo "vm-env: refusing $$label: the agents App's key and its path never enter the VM; make agents-token writes its tokens there.$(vm_env_entry_why) Nothing was written." >&2; \

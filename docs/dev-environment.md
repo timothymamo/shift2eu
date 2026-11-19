@@ -375,7 +375,8 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   by mistake. A refusal of one entry (not set, not a variable name) names it only when it is an upper-case
   variable name, the shape of every credential name; any other entry, such as a token pasted where a name
   goes, is given by its position alone: `VM_ENV entry 2 (entry 2 is not shown)`, with the reason (it may
-  be a credential typed by mistake) said once per message. The rule rests on the shape of a name, so it
+  be a credential typed by mistake) said once per message. Entry N is the Nth name of `VM_ENV`, counting
+  each name once (a repeated name only at its first place) and skipping empty entries. The rule rests on the shape of a name, so it
   has a limit: a value of that shape pasted into `VM_ENV` (upper-case letters, digits and underscores
   only, such as an AWS access key ID, `AKIA...`, which is not secret on its own) is still printed, e.g.
   in the not-set list. `make vm-env`'s write step repeats, before it calls `limactl`, the refusals that
