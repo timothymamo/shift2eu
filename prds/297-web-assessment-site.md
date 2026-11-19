@@ -35,9 +35,10 @@ backend. The trust model has three layers:
 
 1. **The code.** The page's code is reviewed Go plus three scripts, each held a stated way: the page
    script, small and reviewed, is scanned by a static rule that bans every browser API that can send data
-   (fetch, navigation, WebSocket, WebRTC, beacons, workers), as the Go glue is; Go's `wasm_exec.js` is
-   pinned byte for byte to the building toolchain's; and the module script is pinned to one fixed
-   template that carries only the encoded module.
+   (fetch, navigation, WebSocket, WebRTC, beacons, workers) and every computed property name that could
+   hide one, as the Go glue is; Go's `wasm_exec.js` is pinned byte for byte to the building
+   toolchain's; and the module script is pinned to one fixed template that carries only the encoded
+   module.
 2. **The browser.** A strict Content Security Policy refuses network connections, third-party resources,
    inline script and forms, so a bug or an injection that slips past the first layer is still refused for
    every channel the CSP governs. Its known gaps (navigation, WebRTC, DNS prefetch) are documented and
@@ -102,19 +103,26 @@ release), *live* (checked against the live site) or *review*.
 - [ ] A static test fails when the page's script or the `syscall/js` glue names a browser API that can
   send data or load a resource: `fetch` (with no exception: the module is not fetched, *Layer 2*),
   `XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`, `RTCPeerConnection`, `Worker`, `SharedWorker`,
-  `importScripts`, `open`, `location` (assignment or navigation methods), `href`, `src` or `action`
-  assignment, `setAttribute` or `setAttributeNS` with `href`, `src` or `action` (outside the one download
-  function below), `document.cookie`, `localStorage`, `sessionStorage`, `indexedDB` and
-  `navigator.serviceWorker` (outside the one unregister function below). Two uses are allowed, each in
+  `importScripts`, `open`, `location` (assignment or navigation methods), assignment to `href`, `src`,
+  `action`, `search`, `pathname`, `hash`, `host`, `hostname`, `port`, `protocol`, `username` or
+  `password` (on any object: a `location` or an `<a>` navigates or changes its target through each),
+  `setAttribute` or `setAttributeNS` with `href`, `src` or `action`, `click()` and `dispatchEvent` (each
+  outside the one download function below), `document.cookie`, `localStorage`, `sessionStorage`,
+  `indexedDB` and `navigator.serviceWorker` (outside the one unregister function below). Since a name
+  scan cannot see a computed name, the test also fails on any computed-key member access in the page
+  script, read or assignment (`x[expr]`, `x[expr] = ...`), and on `Object.assign`, `Reflect.set`,
+  `Reflect.get`, `Object.defineProperty` and `Object.defineProperties`, with no exception: the script
+  decodes the module with `atob` and `Uint8Array.from`, which needs none. Two uses are allowed, each in
   one named function of the page script that the test names and confines them to: the **download
   function** creates a `blob:` URL with `URL.createObjectURL` from the report bytes and sets it as the
   `href` of an `<a download>` it clicks (a `blob:` URL is same-document and sends nothing), then revokes
   it; and the **unregister function** calls `navigator.serviceWorker.getRegistrations()` and
   `unregister()` on each, on load (*Decided by the orchestrator in review*; it registers nothing). The
   test fails when either API appears outside its function, or when the functions do anything else
-  that the scan bans. The glue calls
-  `js.Global().Get`, `Value.Get` and `Value.Call` only with constant names from a named allow list; a
-  forbidigo or test rule refuses a computed name.
+  that the scan bans. The glue calls `js.Global().Get`, `Value.Get`, `Value.Set`, `Value.Delete` and
+  `Value.Call` only with constant names from a named allow list, and `Value.New` and `Value.Invoke`,
+  which take no name, only on a value it obtained through such a constant name; a forbidigo or test
+  rule refuses a computed name and a `New` or `Invoke` on any other value.
 - [ ] The glue is the only Go code that can reach the browser: the dependency test (`go list -deps` with
   `GOOS=js GOARCH=wasm` on `./cmd/shift2eu-web`, *Architecture*) also fails when any package in the
   module's dependency tree other than `cmd/shift2eu-web` imports `syscall/js`, except the standard
@@ -129,8 +137,9 @@ release), *live* (checked against the live site) or *review*.
   Milestone 1's ADR and the privacy page's technical note say so.
 - [ ] Every page has `<meta http-equiv="x-dns-prefetch-control" content="off">` and no `<link rel>` of
   `dns-prefetch`, `preconnect`, `prefetch` or `prerender` (static test).
-- [ ] The script stops, and shows why, when the page is framed (`window.top !== window.self`), since a
-  `<meta>` CSP cannot carry `frame-ancestors` (static test of the script and *browser*).
+- [ ] The page script, which every page loads (*Layer 2*, the scripts per page), stops, and shows why,
+  when the page is framed (`window.top !== window.self`), since a `<meta>` CSP cannot carry
+  `frame-ancestors` (static test of the script and *browser*).
 
 **Layer 2, the browser.**
 
@@ -155,12 +164,17 @@ release), *live* (checked against the live site) or *review*.
   one newline, with nothing but the standard base64 alphabet (`A-Z`, `a-z`, `0-9`, `+`, `/`, trailing
   `=`) between the quotes, and unless that base64 decodes to the built module byte for byte. So the
   module script can carry no code, only the module.
-- [ ] The page loads exactly three scripts, all classic scripts with `defer`, never `async` or
-  `type="module"`, in this order: `wasm_exec.js`, the module script, the page script. `defer` runs them
-  in document order after parsing, so the global is set before the page script reads it. A static test
-  of every built page pins the three elements, their attributes and their order. The `<noscript>`
-  message, and the static loading notice the HTML shows, are in the HTML itself, so no script delays
-  them; the no-WebAssembly message is shown by the page script before it reads the module.
+- [ ] The assessment page loads exactly three scripts, all classic scripts with `defer`, never `async`
+  or `type="module"`, in this order: `wasm_exec.js`, the module script, the page script. `defer` runs
+  them in document order after parsing, so the global is set before the page script reads it. The
+  privacy page and the verification page load exactly one script, the page script (classic, `defer`),
+  and never `wasm_exec.js` or the module script: there the page script runs only the framing guard and
+  the unregister function, and reads no module, since it reads the module only on the page whose
+  `<body>` carries the fixed attribute `data-page="assessment"`. A static test of every built page pins,
+  per page, the script elements, their attributes and their order: the three on the assessment page,
+  the page script alone on the privacy and verification pages. The `<noscript>` message, and the static
+  loading notice the HTML shows, are in the HTML itself, so no script delays them; the no-WebAssembly
+  message is shown by the page script before it reads the module.
 - [ ] The page script reads `globalThis.__shift2euModule` once, before any report fragment is inserted,
   checks that `typeof` it is `"string"` (and otherwise stops with an error), and deletes the global; a
   static test of the script and the *browser* smoke test (the global is gone after load) pin it. The HTML
@@ -229,13 +243,16 @@ release), *live* (checked against the live site) or *review*.
   `checkVisibility()` returns `true` and its bounding box has a non-zero width and height. Only a change
   made after preload is live in shipping browsers may remove it, and that change retires the static test
   in the same commit; the live check (*Layer 3* and milestone 4) refuses the removal before then.
-- [ ] If milestone 4's HSTS outcome is recorded as `waived` (*Layer 3*, the HSTS record), the privacy page
-  and the site's verification page also carry a statement with the marker `id="hsts-waived"`, shown by
-  default, saying that without HSTS the downgrade risk also covers returning visitors, not only a first
-  visit. A static test reads the HSTS record and fails when the outcome is `waived` and either page's
-  marker is missing, hidden (as above) or empty; *browser:* when the outcome is `waived`, the smoke test
-  asserts `#hsts-waived` visible on both pages as it does `#downgrade-risk`; the live check enforces it
-  on the deployed pages.
+- [ ] If milestone 4's HSTS outcome is recorded as `waived` (*Layer 3*, the HSTS record
+  `site/records/hsts.json`), the privacy page and the site's verification page also carry a statement
+  with the marker `id="hsts-waived"`, shown by default, saying that without HSTS the downgrade risk also
+  covers returning visitors, not only a first visit. A static test reads the HSTS record and fails when
+  the outcome is `waived` and either page's marker is missing, hidden (as above) or empty; *browser:*
+  when the outcome is `waived`, the smoke test asserts `#hsts-waived` visible on both pages as it does
+  `#downgrade-risk`; the live check enforces it on the deployed pages. The record does not exist before
+  milestone 4: the static and browser tests treat a missing record as "not waived" (and require
+  `downgrade-risk` regardless, as above), while the release's live check and the scheduled one fail
+  safe on a missing record (*Layer 3*).
 - [ ] The privacy page names the apex redirect's provider (chosen in milestone 4), says what it sees of a
   visitor who enters through `shift2eu.com` (IP address, user agent, the requested path and the
   `Referer`), and that it only serves the redirect and never the site or the inventory. *Review* at
@@ -284,9 +301,11 @@ release), *live* (checked against the live site) or *review*.
   - the certificates of the apex and of `www.shift2eu.com`: each valid for its host, and not expiring
     within a stated margin (at least 14 days);
   - HSTS against the recorded HSTS state. Milestone 4 records the HSTS outcome (`met` or `waived`) and
-    whether preload is pursued in a file in the repository, next to the preload record; milestone 3's
-    ADR names both files, and the check reads them at the commit it runs from, failing safe when either
-    is missing or unreadable. If `met`, the check fails whenever `https://www.shift2eu.com/` sends no
+    whether preload is pursued in the HSTS record, `site/records/hsts.json`, and whether the domain is
+    on the preload list in shipping browsers in the preload record, `site/records/preload.json` (both
+    in the repository, never in the bundle; milestone 3's ADR refers to them and fixes their format),
+    and the check reads them at the commit it runs from, failing safe when either is missing or
+    unreadable. If `met`, the check fails whenever `https://www.shift2eu.com/` sends no
     `Strict-Transport-Security` or one weaker than the minimum (`max-age` at least 31536000 and
     `includeSubDomains`, plus `preload` when preload is pursued), whatever the deployed pages say; the
     apex's header is held to the same minimum, with `preload`, only when preload is pursued, and is
@@ -298,13 +317,24 @@ release), *live* (checked against the live site) or *review*.
 - [ ] *Live:* a scheduled workflow repeats that check (the manifest including the HTML, `/` against
   `index.html`, the service-worker paths, the HTML's `Cache-Control`, the redirects, both certificates'
   validity and expiry, and HSTS against the recorded state) at least daily. Its expected version is the
-  highest release tag on `main` (the deploy's `latest` rule, *Deploy*). A live version higher than the
-  highest release tag on `main` always fails. A live version lower than the expected one fails, except
-  within a window after the expected release: then only the expected release or the release immediately
-  before it is accepted, and anything else fails. The window starts at the start of the expected tag's
-  `release.yml` run and has a fixed bound of at least the release workflow's timeout plus the HTML's
-  `max-age` (milestone 4 sets the number; the workflow test pins it). Whichever version is live, the
-  check verifies that release's bundle attestation and compares the live files with that release's own
+  highest release tag on `main` (the deploy's `latest` rule, *Deploy*). The live version, read from the
+  live page, is untrusted text: it must match `^v[0-9]+\.[0-9]+\.[0-9]+$` and equal a tag in the
+  repository's own tag list, and a missing, unparseable or unknown version fails the check. Every
+  command after that (`gh attestation verify --source-ref refs/tags/<tag>`, the download of the
+  release's bundle) takes the tag name from the repository's tag list, never the page's text. A live
+  version higher than the highest release tag on `main` always fails. A live version lower than the
+  expected one fails, except within a window after the expected release: then only the expected release
+  or the release immediately before it is accepted, and anything else fails. The window is anchored at
+  the committer date of the commit the expected tag points to (readable with `contents: read`; the job
+  gets no `actions: read`), and has a fixed bound covering the delay from that commit to the end of the
+  release run: at least release-please's delay from the merge to the tag (the `timeout-minutes` of
+  `release-please.yml`'s `release-please` and `tag` jobs, 15 + 15 today) plus the release workflow's
+  timeout (the `timeout-minutes` along `release.yml`'s longest chain of jobs up to the live check;
+  `release.yml` sets none today, so milestone 3 sets one on every job and `check.ReleaseWorkflow` pins
+  them) plus the HTML's `max-age`. Time a run spends queued is not bounded by any timeout, so a release
+  queued past the bound fails the check once, which the alert reports like any failure (milestone 4
+  sets the number with a margin; the workflow test pins it). Whichever version is live, the check
+  verifies that release's bundle attestation and compares the live files with that release's own
   manifest; it never skips the file check. It verifies each attestation with `gh attestation verify`
   and the workflow's `GITHUB_TOKEN` only, with the same flags as the deploy and the guide:
   `--signer-workflow` naming `release.yml`, `--source-ref refs/tags/<tag>` and
@@ -320,8 +350,10 @@ release), *live* (checked against the live site) or *review*.
   is the alert because GitHub notifies a failed scheduled run only to whoever last changed its cron line
   (here the agents App), and disables a schedule after 60 days without repository activity; the runbook
   says how the maintainer re-enables a disabled schedule. A workflow test, like `check.ReleaseWorkflow`,
-  pins the schedule, both jobs' permissions, the alert job's `if` and its fixed text, the checkout's
-  `persist-credentials: false`, the attestation flags and the window's bound. The check's program,
+  pins the schedule, both jobs' permissions (no `actions: read`), the alert job's `if` and its fixed
+  text, the checkout's `persist-credentials: false`, the attestation flags, the window's anchor and
+  bound, and the live version's handling (the pattern, the tag-list match, the commands built from the
+  listed tag, and a failure on a missing, unparseable or unknown version). The check's program,
   shared by the release's check and the scheduled one, is CI tooling under `ci/`, standard library only,
   with depguard rules of its own, like `ci/aireview` (ADR 0033).
 - [ ] The checks compare only what the manifests name, `/`, and the service-worker paths: a path added
@@ -369,8 +401,15 @@ release), *live* (checked against the live site) or *review*.
   action after the key is in scope; it checks out nothing, or with `persist-credentials: false`; its
   permissions are `contents: read` and `attestations: read`; and the key's two secrets are the `env:` of
   the one step that uploads, never of the job.
-- [ ] The deploy program refuses to replace live HTML whose embedded version is higher than the bundle's
-  (one read of the live page before the upload).
+- [ ] The deploy program's rollback guard trusts the live page's version only when it is a real release:
+  before the upload it reads the live page once and refuses to deploy only when the embedded version is
+  a release tag on `main` (from the repository's own tag list, as the `latest` job reads it) higher
+  than the bundle's and the live HTML matches that tag's manifest. Otherwise it overwrites, with a
+  visible warning in the run's summary: when the live version is not a known tag, cannot be parsed, or
+  names a tag whose manifest the live HTML does not match (a page a leaked key could have written). So
+  a forged higher version cannot block the redeploy that repairs the site (Hosting decision 5). The
+  fake-object-store test (below) pins both cases: the refusal for a genuine higher release, and the
+  overwrite with its warning for each untrusted case.
 - [ ] The `site` environment holds the Scaleway API key as the environment secrets `SCW_ACCESS_KEY` and
   `SCW_SECRET_KEY`, never at repository level or in another environment. Its deployment policy is exactly
   one custom policy of type `tag`, named `v*.*.*`; the `v*` tag rulesets that the `release-tag` skill
@@ -404,7 +443,8 @@ release), *live* (checked against the live site) or *review*.
   `shift2eu version` does, and the guide link points to `main`.
 - [ ] Without JavaScript, a `<noscript>` message says the assessment needs JavaScript and WebAssembly and
   points to the CLI (static test); without WebAssembly support, the script shows the same message
-  (*browser*, with WebAssembly disabled). The privacy page and the links work without either.
+  (*browser*, with WebAssembly disabled). The privacy page, the verification page and the links work
+  without either: those two pages load neither `wasm_exec.js` nor the module script (*Layer 2*).
 
 ### Size and speed
 
@@ -413,8 +453,10 @@ release), *live* (checked against the live site) or *review*.
   the raw module, and gzip recovers part of that) exceeds the budget: **3 MiB**, recorded with the
   measured sizes of the raw module and of the compressed module script in milestone 1's ADR. Above it,
   TinyGo is reconsidered (Decisions). The module is compiled from bytes, not streamed (*Layer 2*), so
-  the HTML shows a static loading notice until the module is instantiated (*browser*: the notice is
-  visible before instantiation and replaced after it).
+  the HTML shows a static loading notice until the module is instantiated. The notice carries a stable
+  marker (the element id `loading-notice`); a static test of the built assessment page fails when it is
+  missing, empty or hidden (*Hidden* as the *Privacy statement* defines it). *Browser:* the notice is
+  replaced after instantiation.
 - [ ] The module script, the page script, `wasm_exec.js` and the stylesheet are served under
   content-addressed names with `Cache-Control: public, max-age=31536000, immutable`; the HTML pages with
   `max-age=300` or less, so a release shows within minutes without a cache purge. Scaleway's
@@ -502,13 +544,22 @@ release), *live* (checked against the live site) or *review*.
   deployment policy and secrets; the Namecheap records (the `www` CNAME to the Edge Services endpoint, the
   apex's permanent redirect to `https://www.shift2eu.com` by the means chosen in milestone 4, CAA allowing
   the certificate authorities of Edge Services and, if it issues its own certificate, the apex redirect's
-  provider (milestone 4), DNSSEC on); the HSTS record and the preload record committed, merged to `main`
-  and included in a release tag (the outcome is read from `www.shift2eu.com`'s headers before the first
-  deploy); and, last, only after that tag exists, `SITE_DEPLOY_ENABLED`. It also says to remove the DNS record before deleting the pipeline or the bucket,
-  so no dangling CNAME can be taken over. Every step names what the `release-tag` checks or the live check
-  verify afterwards. It also has the recovery steps: a version rollback plus a manual Edge Services cache
-  purge by the maintainer (Hosting decision 5), and how to re-enable the scheduled live check's workflow
-  if GitHub has disabled its schedule (*Layer 3*).
+  provider (milestone 4), DNSSEC on); the HSTS record (`site/records/hsts.json`) and the preload record
+  (`site/records/preload.json`) committed, merged to `main` and included in a release tag (the outcome
+  is read from `www.shift2eu.com`'s headers before the first deploy; the records PR is a `docs` change,
+  which cuts no release by itself, so its squash commit on `main` carries a `Release-As: <next version>`
+  footer, the version picked by the maintainer when approving and written by them into the squash
+  commit's message when merging, and release-please then opens the release PR whose tag contains the
+  records); and, last, only after that tag exists, `SITE_DEPLOY_ENABLED`. It also says to remove the DNS
+  record before deleting the pipeline or the bucket, so no dangling CNAME can be taken over. Every step
+  names what the `release-tag` checks or the live check verify afterwards. It also has the recovery
+  steps: a redeploy of the last good release (re-running the deploy job of the `release.yml` run of the
+  highest release tag on `main`, which overwrites a live page whose version is not a genuine higher
+  release, *Deploy*; the job takes its artifacts from that run, so the runbook states their retention
+  and how milestone 3 redeploys the last good release once they have expired) or, with versioning, a
+  version rollback, either followed by a manual Edge Services cache purge by the maintainer (Hosting
+  decision 5); and how to re-enable the scheduled live check's workflow if GitHub has disabled its
+  schedule (*Layer 3*).
 - [ ] The runbook has a step, run once the key exists, that verifies the key's limits rather than only
   reviewing them. With the deploy key, against a canary object under a prefix the site never serves,
   every write action in Scaleway's bucket-policy action list
@@ -525,35 +576,42 @@ release), *live* (checked against the live site) or *review*.
   any other answer (another 4xx, a 5xx, a 2xx, a timeout) is recorded in the hosting ADR as
   inconclusive, with the probe, the answer and the reason, and fails the step until it is explained.
   The probes are built to do no harm if one unexpectedly succeeds:
-  - Before the probes, the runbook saves the site bucket's current website configuration and bucket
-    policy with the maintainer's own credentials, and gives the commands that restore each.
-  - The two destructive bucket-level probes, `DeleteBucketWebsite` and `DeleteBucketPolicy`, never run
-    against the site's bucket: they run against a temporary canary bucket in the same project, created
-    by the maintainer with a website configuration and a bucket policy of the same shape as the site
-    bucket's (the deploy application allowed `s3:PutObject` and `s3:GetObject`, plus `s3:ListBucket` if
-    granted, and the same read grant), and deleted by the maintainer afterwards.
-  - Where the site bucket has a configuration (website, versioning, ACL), the probe re-submits it
-    unchanged. Where it has none (lifecycle, CORS, tagging, encryption, object lock), the probe submits
-    a stated no-op: an empty tag set, a CORS rule or a lifecycle rule scoped to the canary prefix only,
-    the bucket's current (default) encryption, and an object-lock configuration that sets no default
-    retention.
-  - Object probes target only the canary: `PutObjectAcl` sets it private, tagging and retention probes
-    use an empty tag set or no retention, `AbortMultipartUpload` names an upload ID that does not exist,
-    and `RestoreObject` and the delete probes name only the canary (`DeleteBucket` is refused anyway
-    while the bucket holds objects).
+  - Before the probes, the runbook saves the site bucket's current website configuration, versioning
+    state, ACL and bucket policy with the maintainer's own credentials, and gives the commands that
+    restore each.
+  - Only a probe that re-submits one of the site bucket's existing configurations unchanged runs against
+    the site's bucket: `PutBucketWebsite`, `PutBucketVersioning` (only if versioning is on, re-submitting
+    `Enabled`), `PutBucketAcl` and `PutBucketPolicy` (each re-submitting the saved configuration). Every
+    other bucket-level probe runs against a temporary canary bucket in the same project, created by the
+    maintainer with versioning on, a website configuration and a bucket policy of the same shape as the
+    site bucket's (the deploy application allowed `s3:PutObject` and `s3:GetObject`, plus
+    `s3:ListBucket` if granted, and the same read grant), and deleted by the maintainer afterwards: the
+    destructive `DeleteBucketWebsite`, `DeleteBucketPolicy` and `DeleteBucket`; suspending versioning;
+    and every probe that sets a configuration the site bucket does not have, which no re-submission can
+    make harmless there (`PutBucketObjectLockConfiguration`, since enabling object lock cannot be
+    undone; `PutBucketCORS`, since a CORS rule applies to the whole bucket and cannot be scoped to a
+    prefix; `PutLifecycleConfiguration`, `PutBucketTagging` and `PutEncryptionConfiguration`; and
+    `PutBucketVersioning` if the site bucket has no versioning). On the canary bucket each submits a
+    minimal valid configuration: an object-lock configuration with no default retention, one CORS rule,
+    one lifecycle rule, one tag, the default encryption. Should one unexpectedly succeed, only the canary
+    bucket is changed; with no default retention and no locked object, it can still be deleted.
+  - Object probes target only the canary object in the site's bucket: `PutObjectAcl` sets it private,
+    tagging and retention probes use an empty tag set or no retention, `AbortMultipartUpload` names an
+    upload ID that does not exist, and `RestoreObject` and the object delete probes name only the
+    canary object.
 
   A negative probe outside the project must also fail: a `PutObject` to a bucket in another project of
   the maintainer, and `ListBuckets`. If versioning is on, the key must not be able to delete an object
-  version or suspend versioning. The maintainer removes the canary object and the canary bucket with
-  their own credentials afterwards. Milestone 3 writes the step; the maintainer runs it in milestone 4
-  and again after every key rotation and every change to the IAM or bucket policy, and its result is
+  version (on the canary object) or suspend versioning (on the canary bucket). The maintainer removes
+  the canary object and the canary bucket with their own credentials afterwards. Milestone 3 writes the
+  step; the maintainer runs it in milestone 4 and again after every key rotation and every change to the IAM or bucket policy, and its result is
   recorded in milestone 3's hosting ADR (amended in milestone 4).
 
 ## Milestones
 
-Each milestone ships as one PR (milestone 4 as two: its HSTS and preload records first, then the rest
-after the first deploy), in this order, and each gets the security audit (`security-audit`
-skill), since every one of them touches the trust model or the release.
+Each milestone ships as one PR (milestone 4 as two: its HSTS and preload records first, released
+through a `Release-As` footer, then the rest after the first deploy), in this order, and each gets the
+security audit (`security-audit` skill), since every one of them touches the trust model or the release.
 
 1. [ ] **The WebAssembly adapter and its ADR.** `internal/web`, the HTML reporter `htmlreport`,
    `cmd/shift2eu-web` (the thin `syscall/js` glue) and its `wire` package, with native tests: the
@@ -564,15 +622,17 @@ skill), since every one of them touches the trust model or the release.
    composition root and wiring package, the HTML reporter, the standard toolchain over TinyGo, the size
    budget and the measured size, how `wasm_exec.js` is tied to the toolchain and trusted as toolchain code
    rather than scanned, and that only `cmd/shift2eu-web` may import `syscall/js`.
-2. [ ] **The pages, their tests and the CSP.** The static pages under a new directory (HTML, CSS, one
-   small page script), the privacy page and the verification page, `make site` (a Go program, standard library
+2. [ ] **The pages, their tests and the CSP.** The static pages under a new directory, `site/` (HTML,
+   CSS, one small page script; `site/records/`, which milestone 4 fills, is never bundled), the privacy
+   page and the verification page, `make site` (a Go program, standard library
    only, that assembles the bundle: content-addressed names, the module embedded in its script, SRI
-   values, the version, the snapshot dates), the static tests (CSP, SRI, banned APIs with the download
-   and unregister functions as their only exceptions, the module script's template, the three scripts'
-   attributes and order, the module global read once and deleted, prefetch, the `downgrade-risk` and
-   `hsts-waived` markers, links resolve, the verification page's link to the guide's path, no
-   third-party resource, contrast), the reproducibility test, and the `chromedp` smoke test with
-   `make test-browser` and its CI job. `chromedp` is a new dependency with its reason in the commit
+   values, the version, the snapshot dates), the static tests (CSP, SRI, banned APIs and computed
+   property names with the download and unregister functions as their only exceptions, the glue's
+   constant names, the module script's template, the scripts per page with their attributes and order,
+   the module global read once and deleted, prefetch, the `downgrade-risk`, `hsts-waived` (a missing
+   HSTS record read as not waived) and `loading-notice` markers, links resolve, the verification
+   page's link to the guide's path, no third-party resource, contrast), the reproducibility test, and
+   the `chromedp` smoke test with `make test-browser` and its CI job. `chromedp` is a new dependency with its reason in the commit
    message (CLAUDE.md rule 6). An ADR records the site's trust model (its three layers and how each of
    the three scripts is held, the CSP with `connect-src 'none'` and its known gaps, the module embedded
    in an SRI-pinned script of a fixed template rather than fetched, the script order, SRI, Trusted Types
@@ -584,9 +644,11 @@ skill), since every one of them touches the trust model or the release.
    and `latest`; the live site check and its program under `ci/`; `check.ReleaseWorkflow` and the CI dry
    run; the `release-tag` skill's step 2 for the `site` environment and its post-release check;
    `docs/guide/verify-releases.md`; the runbook. An ADR records the hosting, the deploy (environment, key
-   scope, upload order, cache headers, rollback guard, recovery by rollback plus a manual cache purge) and
-   the bundle's attestation. It names the files that hold the HSTS record and the preload record
-   (*Layer 3*). It also lists the origins that can serve the site, the bucket website endpoint
+   scope, upload order, cache headers, the rollback guard that trusts only a genuine higher release,
+   recovery by a redeploy of the last good release or a version rollback plus a manual cache purge,
+   `timeout-minutes` on every `release.yml` job) and the bundle's attestation. It refers to the HSTS
+   record `site/records/hsts.json` and the preload record `site/records/preload.json` and fixes their
+   format (*Layer 3*). It also lists the origins that can serve the site, the bucket website endpoint
    `<bucket>.s3-website.<region>.scw.cloud`, the pipeline's own endpoint `<id>.svc.edge.scw.cloud` and
    `www.shift2eu.com`, says which of them actually serve it under the bucket's chosen read rule (Hosting
    decision 11) and whether each answers over plain HTTP (checked and recorded in this milestone), and
@@ -602,15 +664,17 @@ skill), since every one of them touches the trust model or the release.
    redirect is served over valid HTTPS, Edge Services' response headers and redirects, HSTS and preload),
    and the go/no-go below is met: the HSTS record and the preload record merged to `main` and included
    in a release tag before `SITE_DEPLOY_ENABLED` is set (so this milestone's records land in a first
-   PR and release, and the variable is set only after that tag exists; the PR that closes the milestone
-   follows the first deploy); the first release that deploys, the live checks green (files match the
-   manifest, `/`, no service worker, headers, no cookie, HTTPS, the redirects, both certificates and
-   HSTS against the recorded state), the scheduled live check workflow (*Layer 3*) added and running at
+   PR, a `docs` change that cuts no release by itself, whose squash commit on `main` carries a
+   `Release-As: <next version>` footer that the maintainer picks when approving and writes when merging,
+   so release-please opens the release PR whose tag contains the records; the variable is set only
+   after that tag exists; the PR that closes the milestone follows the first deploy); the first release
+   that deploys, the live checks green (files match the manifest, `/`, no service worker, headers, no
+   cookie, HTTPS, the redirects, both certificates and HSTS against the recorded state), the scheduled live check workflow (*Layer 3*) added and running at
    least daily, with the version window's bound set and pinned, any fix the
    live site needs, the runbook updated with the apex redirect means chosen, milestone 3's hosting ADR
    amended with that means, the apex redirect's provider (what it sees, its certificate authority if it
    issues its own certificate) and the HSTS and preload outcome or the waiver, the HSTS record (`met` or
-   `waived`, and whether preload is pursued) committed in the file the ADR names, the privacy page
+   `waived`, and whether preload is pursued) committed in `site/records/hsts.json`, the privacy page
    naming the apex redirect's provider (*Privacy statement*), the README's link to the site with the
    first-visit downgrade advice and the exact URL `https://www.shift2eu.com` (pinned by the docs test,
    like the guide's), and this PRD moved to `prds/done/` (`Closes #297`).
@@ -688,8 +752,8 @@ skill), since every one of them touches the trust model or the release.
   it is an adapter, not part of `internal/web`.
 - **The CSP is a layer, not the guarantee.** It cannot govern navigation, WebRTC or DNS prefetch.
   "Nothing leaves the browser" rests on the code (layer 1, with a static rule against every sending
-  API), with the CSP refusing what it can and the attested bundle making the code checkable; the privacy
-  page says so.
+  API, every navigation and every computed property name that could hide one), with the CSP refusing
+  what it can and the attested bundle making the code checkable; the privacy page says so.
 - **The deploy is gated on `SITE_DEPLOY_ENABLED` and on `latest`.** Releases between milestones 3 and 4
   skip it visibly instead of failing, and no re-run or older line rolls the site back.
 - **No cache purge in the deploy.** Content-addressed assets never change, and the HTML pages expire within
@@ -730,21 +794,52 @@ skill), since every one of them touches the trust model or the release.
   `navigator.serviceWorker` in the banned-API scan (*Layer 1*), and the live checks also probe a few
   well-known worker paths (*Layer 3*). It helps only visitors whose browser loads a genuine page;
   a worker that intercepts every navigation keeps them from loading one, which the privacy page says.
-- **Decided: the destructive canary probes run against a temporary canary bucket.** `DeleteBucketWebsite`
-  and `DeleteBucketPolicy` would take the site down or open the bucket if they unexpectedly succeeded,
-  and cannot be made harmless by re-submitting a configuration. The runbook first saves the site bucket's
-  website configuration and bucket policy with the maintainer's credentials and gives their restore
-  commands; these two probes run against a temporary bucket in the same project with a policy of the
-  same shape, which the maintainer deletes afterwards. Probes for configurations the site bucket does
-  not have submit stated no-ops, and only `403 AccessDenied` counts as a pass (*Runbook*).
+- **Decided: only re-submission probes touch the site bucket; every other bucket-level probe runs
+  against a temporary canary bucket.** `DeleteBucketWebsite`, `DeleteBucketPolicy` and `DeleteBucket`
+  would take the site down or open the bucket if they unexpectedly succeeded; enabling object lock cannot
+  be undone; a CORS rule applies to the whole bucket and cannot be scoped to a prefix; and no probe that
+  sets a configuration the site bucket lacks (lifecycle, tagging, encryption, versioning if off) or
+  suspends versioning can be made harmless there. The runbook first saves the site bucket's website
+  configuration, versioning state, ACL and bucket policy with the maintainer's credentials and gives
+  their restore commands; only the probes that re-submit one of those unchanged (website, versioning if
+  on, ACL, policy) run on the site bucket, and all others run on a temporary bucket in the same project
+  with versioning on and a website configuration and policy of the same shape, which the maintainer
+  deletes afterwards. Object probes name only the canary object, and only `403 AccessDenied` counts as a
+  pass (*Runbook*). *Amended 2026-11-19 (fourth review):* this first moved only the two destructive
+  probes and gave stated no-ops for the rest, one of them a CORS rule scoped to a prefix, which S3 CORS
+  cannot express.
 - **Decided: one allowed download path.** The page script's one download function makes a `blob:` URL
   with `URL.createObjectURL` and sets it on an `<a download>`; a `blob:` URL is same-document and sends
   nothing. `setAttribute` and `setAttributeNS` with `href`, `src` or `action` are banned elsewhere
   (*Layer 1*).
 - **Decided: the scheduled check's version window** accepts only the expected release or the one before
-  it, for a fixed bound from the start of the expected tag's release run, and always checks the live
-  version against its own attested manifest; a version above the highest tag always fails (*Layer 3*).
-  Milestone 4 sets the bound.
+  it, for a fixed bound, and always checks the live version against its own attested manifest; a
+  version above the highest tag always fails (*Layer 3*). Milestone 4 sets the bound.
+- **Decided: the window is anchored at the tagged commit's committer date** (fourth review), not at the
+  start of the tag's `release.yml` run: reading a run's start needs `actions: read`, which the checking
+  job does not get, while the commit's date needs only `contents: read`. The bound therefore covers the
+  whole delay from that commit to the end of the release run: release-please's merge-to-tag delay
+  (its `release-please` and `tag` jobs' timeouts), the release workflow's timeout (milestone 3 sets
+  `timeout-minutes` on every `release.yml` job, which has none today) and the HTML's `max-age`. A run
+  queued past the bound fails the check once, a false alarm the maintainer reads in the alert issue.
+- **Decided: the scheduled check treats the live version as untrusted** (fourth review): it must match
+  `^v[0-9]+\.[0-9]+\.[0-9]+$` and equal a tag in the repository's own tag list, every command uses the
+  listed tag's name, never the page's text, and a missing or unparseable version fails (*Layer 3*).
+- **Decided: the deploy's rollback guard trusts only a genuine release** (fourth review): it refuses
+  only when the live page's version is a release tag on `main`, higher than the bundle's, and the live
+  HTML matches that tag's manifest; it overwrites with a visible warning when the version is unknown,
+  unparseable or does not match its manifest. Trusting the page's text would let a leaked key block
+  every repair by writing a page that claims a high version. Recovery is a redeploy of the last good
+  release, or a version rollback, plus a manual cache purge (*Deploy*, *Runbook*, Hosting decision 5).
+- **Decided: the records PR carries a `Release-As` footer** (fourth review). release-please cuts a
+  release only for `feat`, `fix`, `perf`, `revert` or a breaking change (`release-please-config.json`'s
+  visible changelog sections; the others are hidden), so milestone 4's records-only `docs` PR would
+  otherwise never reach a tag, and the live checks, which read the records at the tag, would fail safe
+  on every deploy. Its squash commit on `main` carries `Release-As: <next version>`, which release-please
+  honours (ADR 0021 and the `release-tag` skill already use it); the maintainer picks the version when
+  approving and writes the footer into the squash commit's message when merging, so no one pushes to
+  the agent's branch after approval. The `release-tag` skill's review of that release PR accepts the
+  version the footer sets.
 
 ### Hosting decisions (decided by the maintainer, 2026-11-19)
 
@@ -781,7 +876,8 @@ it. Decision 4 is amended by the orchestrator's decision above.
    `shift2eu.com` to HTTPS, and pursuing preload is effectively irreversible (removal takes months to
    reach shipping browsers); milestone 3's hosting ADR (as amended in milestone 4) records that and the
    subdomains that exist when preload is submitted. Milestone 4 records the HSTS outcome (`met` or
-   `waived`) and whether preload is pursued in a file the live checks read (*Layer 3*).
+   `waived`) and whether preload is pursued in `site/records/hsts.json`, which the live checks read
+   (*Layer 3*).
 3. **Decided: permanent redirects over HTTPS only.** The apex, and `http://www.shift2eu.com`, answer with
    a 301 or 308 to `https://www.shift2eu.com` with the same path. For `http://www`, a redirect from Edge
    Services if it can redirect; if it cannot, plain HTTP on `www` is refused or the connection closed, if
@@ -815,9 +911,12 @@ it. Decision 4 is amended by the orchestrator's decision above.
    is turned on if it works with a website bucket. The runbook verifies the key's limits with a canary
    object (*Runbook*). A leaked key can still overwrite the pages until it expires or is revoked. The
    scheduled live check notices a changed page within a day and the release's live check at each
-   release; until then, users are served the changed page. Recovery is a version rollback (versioning,
-   or a redeploy of the last good release) plus a manual Edge Services cache purge by the maintainer,
-   whose own credentials hold the Edge Services permission the deploy key lacks. Browsers may keep a
+   release; until then, users are served the changed page. Recovery is a redeploy of the last good
+   release (re-running the deploy job of the highest release tag's `release.yml` run; the rollback
+   guard refuses only a live page that is a genuine higher release, so a page a leaked key wrote,
+   whatever version it claims, is overwritten with a warning, *Deploy*) or, with versioning, a version
+   rollback, either followed by a manual Edge Services cache purge by the maintainer, whose own
+   credentials hold the Edge Services permission the deploy key lacks. Browsers may keep a
    released page served from a poisoned cache for up to its `max-age` (300 seconds) after that. A page
    uploaded with the leaked key is not bound by that: it sets its own caching (up to a year) and can
    register a same-origin service worker, and both can persist in visitors' browsers after the repair,
@@ -904,11 +1003,14 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
   - Listing the bucket (decision 5, *Layer 3*): whether the deploy key can hold `s3:ListBucket` on the
     site's bucket only; if it can, the deploy program lists the bucket and fails on any key that is in no
     release's manifest.
-  - The canary probes' no-ops (*Runbook*): that each stated no-op (an empty tag set, a CORS or lifecycle
-    rule scoped to the canary prefix, the default encryption, an object-lock configuration with no
-    default retention, an `AbortMultipartUpload` of an unknown upload ID) is accepted by Scaleway's API
-    as a request the policy evaluates, so a 403 is meaningful; and that a temporary canary bucket can
-    carry a website configuration and a bucket policy of the site bucket's shape.
+  - The canary probes (*Runbook*): that each probe's request (the re-submissions on the site bucket; on
+    the canary bucket an object-lock configuration with no default retention, one CORS rule, one
+    lifecycle rule, one tag, the default encryption; on the canary object an empty tag set, no
+    retention, an `AbortMultipartUpload` of an unknown upload ID) is evaluated by the policy before the
+    bucket's or object's state, so a 403 is meaningful (for instance, that a retention probe on a bucket
+    without object lock answers 403 to the deploy key, not an object-lock error); that a temporary
+    canary bucket can carry versioning, a website configuration and a bucket policy of the site
+    bucket's shape; and that it can be deleted after an object-lock probe that unexpectedly succeeded.
   - The manual cache purge (decision 5): how the maintainer purges the pipeline's cache, for the
     runbook's recovery step.
 - **Milestone 4** (the first deploy and its go/no-go):
@@ -925,18 +1027,23 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
   - The HSTS go/no-go (decision 2): HSTS on `www.shift2eu.com` with `max-age` of at least 31536000 and
     `includeSubDomains`, or the recorded waiver; whether preload is pursued, knowing it is effectively
     irreversible and binds every future subdomain; and the HSTS record (`met` or `waived`, preload or
-    not) committed in the file milestone 3's ADR names, merged to `main` and included in a release tag
-    before `SITE_DEPLOY_ENABLED` is set.
-  - The scheduled check's version window (*Layer 3*): its bound, at least the release workflow's
-    timeout plus the HTML's `max-age`.
+    not) committed in `site/records/hsts.json` and the preload record in `site/records/preload.json`,
+    merged to `main` and included in a release tag before `SITE_DEPLOY_ENABLED` is set.
+  - The scheduled check's version window (*Layer 3*): its bound, from the tagged commit's committer
+    date, at least release-please's merge-to-tag delay (its `release-please` and `tag` jobs' timeouts)
+    plus `release.yml`'s timeout (set in milestone 3) plus the HTML's `max-age`, with a margin for
+    queueing.
+  - The records' release (*Runbook*): the version the records PR's `Release-As` footer names, picked
+    when approving it and written into its squash commit's message when merging.
   - CAA and DNSSEC (decision 10): that Scaleway's managed issuance passes with the CAA record, and that
     Namecheap supports CAA and DNSSEC for the domain.
   - The deploy key's limits (decision 5): the runbook's canary step answers `403 AccessDenied` for every
     write action in the bucket-policy action list but `PutObject` and for the bucket calls IAM alone
     governs (any other answer recorded as inconclusive until explained), the site bucket's website
-    configuration and policy saved first, the two destructive probes run on the temporary canary
-    bucket, the negative probes outside the project fail, and the maintainer removes the canary object
-    and bucket; rerun after every key rotation and policy change.
+    configuration, versioning state, ACL and policy saved first, only the re-submission probes run on
+    the site bucket and every other bucket-level probe on the temporary canary bucket, the negative
+    probes outside the project fail, and the maintainer removes the canary object and bucket; rerun
+    after every key rotation and policy change.
 
 ### Proposed follow-ups (not filed)
 
