@@ -102,7 +102,8 @@ const (
 // TestModuleScriptIsTheFixedTemplate pins that the module script carries no
 // code, only the module: the one template, the standard base64 alphabet and
 // nothing else between the quotes, and that the base64 decodes byte for byte to
-// the module built with -trimpath, GOOS=js GOARCH=wasm and CGO_ENABLED=0.
+// the module built with -trimpath, no VCS stamp, GOOS=js GOARCH=wasm and
+// CGO_ENABLED=0.
 func TestModuleScriptIsTheFixedTemplate(t *testing.T) {
 	t.Parallel()
 
@@ -129,7 +130,7 @@ func TestModuleScriptIsTheFixedTemplate(t *testing.T) {
 	built := buildModule(t, t.TempDir())
 
 	if !bytes.Equal(decoded, built) {
-		t.Errorf("%s decodes to %d bytes, but the module built with -trimpath, GOOS=js GOARCH=wasm and CGO_ENABLED=0 from ./cmd/shift2eu-web is %d bytes: the page must run the module this commit builds",
+		t.Errorf("%s decodes to %d bytes, but the module built with -trimpath, -buildvcs=false, GOOS=js GOARCH=wasm and CGO_ENABLED=0 from ./cmd/shift2eu-web is %d bytes: the page must run the module this commit builds",
 			name, len(decoded), len(built))
 	}
 }

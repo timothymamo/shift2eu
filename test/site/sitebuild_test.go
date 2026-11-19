@@ -423,13 +423,16 @@ func goEnv(t *testing.T, name string) string {
 }
 
 // buildModule builds the site's WebAssembly module as the site ships it:
-// -trimpath, GOOS=js, GOARCH=wasm and CGO_ENABLED=0 from ./cmd/shift2eu-web.
+// -trimpath with no VCS stamp, GOOS=js, GOARCH=wasm and CGO_ENABLED=0 from
+// ./cmd/shift2eu-web. No VCS stamp keeps the bundle independent of the state of
+// the checkout that builds it, as the reproducibility criterion requires (PRD
+// #297, Layer 3: "a fixed or no VCS stamp").
 func buildModule(t *testing.T, dir string) []byte {
 	t.Helper()
 
 	module := filepath.Join(dir, "shift2eu-web.wasm")
 
-	cmd := exec.CommandContext(t.Context(), "go", "build", "-trimpath", "-o", module, "./cmd/shift2eu-web")
+	cmd := exec.CommandContext(t.Context(), "go", "build", "-trimpath", "-buildvcs=false", "-o", module, "./cmd/shift2eu-web")
 	cmd.Dir = theRepositoryRoot(t)
 	cmd.Env = append(buildEnv(), "GOOS=js", "GOARCH=wasm", "CGO_ENABLED=0")
 
