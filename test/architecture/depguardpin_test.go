@@ -448,7 +448,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"$all",
 			"!$test",
 			"!**/cmd/shift2eu/**",
-			"!**/cmd/shift2eu-web/**",
+			"!**/cmd/shift2eu-web/*.go",
 			"!**/internal/cli/**",
 		},
 		Allow: nil,
@@ -457,6 +457,21 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"github.com/timothymamo/shift2eu/internal/cli/",
 			"github.com/timothymamo/shift2eu/cmd$",
 			"github.com/timothymamo/shift2eu/cmd/",
+		},
+	},
+	{
+		Name:     "web-root-tests-never-run-the-cli",
+		ListMode: "lax",
+		Files: []string{
+			"**/cmd/shift2eu-web/*_test.go",
+			"**/cmd/shift2eu-web/**/*_test.go",
+			"!**/cmd/shift2eu-web/internal/wire/*_test.go",
+			"!**/cmd/shift2eu-web/internal/wire/**/*_test.go",
+		},
+		Allow: nil,
+		Deny: []string{
+			"github.com/timothymamo/shift2eu/internal/cli$",
+			"github.com/timothymamo/shift2eu/internal/cli/",
 		},
 	},
 	{

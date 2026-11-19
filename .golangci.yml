@@ -612,19 +612,21 @@ linters:
         # package added there later included; Go already refuses an import of
         # a main package such as cmd/shift2eu.
         #
-        # cmd/shift2eu-web is left out as well (PRD #297): its main imports its
-        # own wiring package, cmd/shift2eu-web/internal/wire, which Go's
-        # internal rule keeps to that tree. What the two may import is held by
-        # their strict rules, web-composition-root and
-        # web-composition-root-wire, which name neither internal/cli nor
-        # another package under cmd.
+        # The files directly in cmd/shift2eu-web, the site's glue, are left
+        # out as well (PRD #297): its main imports its own wiring package,
+        # cmd/shift2eu-web/internal/wire, which Go's internal rule keeps to
+        # that tree. What the glue may import is held by its strict rule,
+        # web-composition-root, which names neither internal/cli nor another
+        # package under cmd. The wire package and any later package under
+        # cmd/shift2eu-web stay covered. Test files are left out here; those
+        # of the site's root are held by web-root-tests-never-run-the-cli.
         cli-and-cmd-imported-only-by-cmd:
           list-mode: lax
           files:
             - "$all"
             - "!$test"
             - "!**/cmd/shift2eu/**"
-            - "!**/cmd/shift2eu-web/**"
+            - "!**/cmd/shift2eu-web/*.go"
             - "!**/internal/cli/**"
           deny:
             - pkg: github.com/timothymamo/shift2eu/internal/cli$
@@ -635,6 +637,24 @@ linters:
               desc: nothing imports the composition root; cmd/shift2eu imports the rest
             - pkg: github.com/timothymamo/shift2eu/cmd/
               desc: nothing imports the composition root; cmd/shift2eu imports the rest
+        # The test files of the site's root (PRD #297): only the wire
+        # package's parity tests run the CLI, under their strict rule
+        # web-composition-root-wire-tests. Every other test file under
+        # cmd/shift2eu-web, the glue's included, is refused internal/cli here,
+        # since cli-and-cmd-imported-only-by-cmd leaves test files out;
+        # httpapi-imported-only-by-the-server refuses them internal/httpapi.
+        web-root-tests-never-run-the-cli:
+          list-mode: lax
+          files:
+            - "**/cmd/shift2eu-web/*_test.go"
+            - "**/cmd/shift2eu-web/**/*_test.go"
+            - "!**/cmd/shift2eu-web/internal/wire/*_test.go"
+            - "!**/cmd/shift2eu-web/internal/wire/**/*_test.go"
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/internal/cli$
+              desc: only the wire package's parity tests run the CLI; the site's module runs internal/web
+            - pkg: github.com/timothymamo/shift2eu/internal/cli/
+              desc: only the wire package's parity tests run the CLI; the site's module runs internal/web
         # The HTTP API (ADR 0019) is a driving adapter like internal/cli: it gets
         # its adapters from its composition root, cmd/shift2eu-server, through
         # httpapi.Deps and never constructs one, so it imports only the
