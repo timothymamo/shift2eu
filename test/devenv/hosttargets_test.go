@@ -140,13 +140,20 @@ exec %s "$@"
 // credentials in reach (ADR 0031). A workspace of / refuses too: every checkout is inside it. A value the
 // recipes could not paste inside quotes is refused before it is expanded - whitespace, $, a quote, a backslash,
 // %, and a : (Lima splits --mount-only on ':') - and the message describes what a value may hold instead of
-// echoing it, which would put a credential typed where a path goes on the terminal.
+// echoing it, which would put a credential typed where a path goes on the terminal. A , and a ~ are refused the
+// same way: Lima's --mount-only is a pflag StringSlice, which splits the value on commas and expands a leading
+// ~ of every part, so /Users/x/ws,~/shift2eu would mount the home directory read-write while the workspace was
+// checked. A relative value is refused without being echoed either: it is no path, and may be a credential
+// typed where a path goes.
 //
 // The refusal is make code that runs while make reads this file, so no make flag and no way of writing the goal
 // may carry a host target past it: make -k, make -i and make -n, a command line with another goal beside the
 // host target, .DEFAULT_GOAL on the command line, which leaves MAKECMDGOALS empty, and MAKECMDGOALS= on the
-// command line, which empties it, all stop before the first recipe line. Nothing of git is needed for it either:
-// the refusal holds on a PATH without git, where REPO_ROOT falls back to CURDIR.
+// command line, which empties it, all stop before the first recipe line. So does a goal the environment hides:
+// MAKECMDGOALS set in the environment, which make reads in place of the goals of its command line, and
+// .DEFAULT_GOAL set there, which make -e runs as its only goal in the workspace and in the host clone alike.
+// Nothing of git is needed for it either: the refusal holds on a PATH without git, where REPO_ROOT falls back to
+// CURDIR.
 func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 	t.Parallel()
 
@@ -169,6 +176,24 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 			l.env["WORKSPACE_REPO"] = value(l)
 
 			return dir
+		}
+	}
+
+	// hostClone is the layout make accepts: make in the host clone, WORKSPACE_REPO naming the repository's
+	// checkout in the workspace - and, when value is set, WORKSPACE_REPO held to that value instead. Neither
+	// where make runs nor where the value points refuses a run here, so a case using it pins what make does
+	// about the value itself and about the goals alone (issue #227).
+	hostClone := func(value func(l *hostLayout) string) func(t *testing.T, l *hostLayout) string {
+		return func(t *testing.T, l *hostLayout) string {
+			t.Helper()
+
+			l.workspaceCheckout(t)
+
+			if value != nil {
+				l.env["WORKSPACE_REPO"] = value(l)
+			}
+
+			return l.root
 		}
 	}
 
@@ -247,6 +272,36 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 			notWant: []string{wasTheOldWord, "shift2eu:1"},
 		},
 		{
+			// Lima's --mount-only is a pflag StringSlice: it splits the value on commas, so a comma lets one
+			// value mount a second directory, which the workspace check here never sees (issue #227).
+			name:    "WORKSPACE_REPO holds a comma, which splits a --mount-only value in two",
+			layout:  hostClone(func(l *hostLayout) string { return filepath.Join(l.sb.workspaceRoot(), "shift2eu,1") }),
+			args:    []string{"vm-up"},
+			goal:    "vm-up",
+			want:    []string{notAllowed},
+			notWant: []string{wasTheOldWord, "shift2eu,1"},
+		},
+		{
+			// The same goes for a leading ~, which pflag expands per part: a value holding one mounts the home
+			// directory read-write, with the maintainer's credentials in reach (issue #227).
+			name:    "WORKSPACE_REPO holds a tilde, which Lima expands to a home directory",
+			layout:  hostClone(func(l *hostLayout) string { return filepath.Join(l.sb.workspaceRoot(), "~", "shift2eu") }),
+			args:    []string{"vm-up"},
+			goal:    "vm-up",
+			want:    []string{notAllowed},
+			notWant: []string{wasTheOldWord, "~/shift2eu"},
+		},
+		{
+			// A relative value is no path, so the refusal says so without printing it: the maintainer may have
+			// typed a credential where a path goes, and the terminal keeps what it is shown (issue #227).
+			name:    "WORKSPACE_REPO is relative, which its refusal must not echo",
+			layout:  hostClone(func(*hostLayout) string { return "fake-not-a-path-value" }),
+			args:    []string{"vm-up"},
+			goal:    "vm-up",
+			want:    []string{"WORKSPACE_REPO", "absolute path"},
+			notWant: []string{"fake-not-a-path-value"},
+		},
+		{
 			name:   "make -k",
 			layout: workspaceWithoutRepo,
 			flags:  []string{"-k"},
@@ -296,6 +351,77 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 		},
 	}
 
+	// The goals the environment hides from make (issue #227): MAKECMDGOALS holds the goals make runs, so a value
+	// of it from anywhere but the command line leaves the real goal - vm-up here - unseen, and .DEFAULT_GOAL from
+	// the environment is the goal make -e runs instead of this file's help. A shell cannot set a name holding a
+	// dot, so a run sets .DEFAULT_GOAL the way it sets MAKECMDGOALS: through the environment of the process.
+	// Every one of them must be refused where make runs - in the workspace, where the host targets must never
+	// run, and in the host clone, where make cannot know the goal either.
+	hiddenGoals := []struct {
+		name string
+		env  map[string]string
+		args []string
+		// says is the variable whose environment value hid the goals, which the refusal must name.
+		says string
+	}{
+		{
+			name: "MAKECMDGOALS= in the environment",
+			env:  map[string]string{"MAKECMDGOALS": ""},
+			args: []string{"vm-up"},
+			says: "MAKECMDGOALS",
+		},
+		{
+			name: "MAKECMDGOALS=help in the environment",
+			env:  map[string]string{"MAKECMDGOALS": "help"},
+			args: []string{"vm-up"},
+			says: "MAKECMDGOALS",
+		},
+		{
+			name: "MAKECMDGOALS=x in the environment, which make -e honours",
+			env:  map[string]string{"MAKECMDGOALS": "x"},
+			args: []string{"-e", "vm-up"},
+			says: "MAKECMDGOALS",
+		},
+		{
+			name: ".DEFAULT_GOAL=vm-up in the environment, which make -e runs",
+			env:  map[string]string{".DEFAULT_GOAL": "vm-up"},
+			args: []string{"-e"},
+			says: ".DEFAULT_GOAL",
+		},
+	}
+
+	// The layouts those runs must be refused in: the workspace's own checkout, and the host clone.
+	where := []struct {
+		name   string
+		layout func(t *testing.T, l *hostLayout) string
+	}{
+		{
+			name: "in the workspace",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				return l.workspaceCheckout(t)
+			},
+		},
+		{
+			name:   "in the host clone",
+			layout: hostClone(nil),
+		},
+	}
+
+	for _, hidden := range hiddenGoals {
+		for _, layout := range where {
+			cases = append(cases, refusalCase{
+				name:        "goals hidden by " + hidden.name + ", " + layout.name,
+				layout:      layout.layout,
+				env:         hidden.env,
+				args:        hidden.args,
+				want:        []string{hidden.says},
+				emptyStdout: true,
+			})
+		}
+	}
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -306,6 +432,12 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 
 					l := newHostLayout(t)
 					dir := tc.layout(t, l)
+
+					// The layout's environment is the maintainer's own; the run may set more of it, such as the
+					// MAKECMDGOALS or the .DEFAULT_GOAL make also reads from the environment.
+					for name, value := range run.env {
+						l.env[name] = value
+					}
 
 					assertHostTargetRefused(t, l, dir, run)
 				})
@@ -321,6 +453,9 @@ type refusalCase struct {
 	name string
 	// layout returns the directory make runs in and sets WORKSPACE_REPO the way the case needs.
 	layout func(t *testing.T, l *hostLayout) string
+	// env holds the variables the run sets in the process environment beyond the layout's own, such as a
+	// MAKECMDGOALS or a .DEFAULT_GOAL the run hides its goals behind.
+	env map[string]string
 	// flags are make's own flags, placed before the goal.
 	flags []string
 	// args, when set, is the whole command line of a single run, whose goal's refusal the case pins with goal.
@@ -342,6 +477,7 @@ func (tc refusalCase) runs() []refusedRun {
 			name:        strings.Join(tc.args, " "),
 			args:        tc.args,
 			goal:        tc.goal,
+			env:         tc.env,
 			want:        tc.want,
 			notWant:     tc.notWant,
 			emptyStdout: tc.emptyStdout,
@@ -355,6 +491,7 @@ func (tc refusalCase) runs() []refusedRun {
 			name:        target,
 			args:        append(slices.Clone(tc.flags), target),
 			goal:        target,
+			env:         tc.env,
 			want:        tc.want,
 			notWant:     tc.notWant,
 			emptyStdout: tc.emptyStdout,
@@ -364,12 +501,15 @@ func (tc refusalCase) runs() []refusedRun {
 	return runs
 }
 
-// refusedRun is one run of a refusal case: make's arguments, the goal the refusal must name, and what its
-// message must and must not say beyond that.
+// refusedRun is one run of a refusal case: make's arguments, the environment the run hides its goals in, the
+// goal the refusal must name, and what its message must and must not say beyond that.
 type refusedRun struct {
-	name        string
-	args        []string
+	name string
+	args []string
+	// goal is the goal the refusal's message must name. It is empty for a run whose goals the environment
+	// hides: make never sees them, so the message names the variable that hid them instead (run.want).
 	goal        string
+	env         map[string]string
 	want        []string
 	notWant     []string
 	emptyStdout bool
@@ -391,7 +531,12 @@ func assertHostTargetRefused(t *testing.T, l *hostLayout, dir string, run refuse
 			name, dir, stdout, stderr)
 	}
 
-	for _, want := range append([]string{run.goal, "host clone", "dev-environment.md"}, run.want...) {
+	named := []string{"host clone", "dev-environment.md"}
+	if run.goal != "" {
+		named = append(named, run.goal)
+	}
+
+	for _, want := range append(named, run.want...) {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("%s's stderr does not say %q when it refuses in %s, so a maintainer cannot tell which target refused, that it runs from the host clone, where that is documented, or what a WORKSPACE_REPO may hold (issue #227)\nstdout: %s\nstderr: %s",
 				name, want, dir, stdout, stderr)
