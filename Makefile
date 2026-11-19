@@ -311,7 +311,9 @@ vm-shell: ## Open a shell in the VM at the repository root
 vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', ' '\n\n' | awk 'NF && !seen[$$0]++')
 # How a message names the entry $$name at 1-based position $$i of that list, in $$label (issue #268 L1): the
 # entry itself only when it is an upper-case variable name (^[A-Z_][A-Z0-9_]*$), the shape of every credential
-# name; anything else may be a credential pasted where a name goes, so only its position is given. The letters
+# name; anything else may be a credential pasted where a name goes, so only its position is given. The rule has
+# a limit: a pasted value of that shape (upper-case letters, digits and underscores only, such as an AWS access
+# key ID, AKIA..., not secret on its own) is still printed, e.g. in the not-set list. The letters
 # are spelled out, as a range such as [A-Z] can match lower-case letters in some shells' locales. It sets
 # $$ehidden for a hidden entry and clears it for a shown one, so a message about that one entry says why,
 # $(vm_env_entry_why), only when it hides the entry. A message listing several entries sets $$hidden only when it
@@ -408,15 +410,15 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 # tests' fake limactl runs this script on the host, which may be macOS without GNU mv). The small window left is
 # accepted: only the VM user's own account can race it, and that account can read daemon.env anyway. It also
 # refuses a daemon.env that exists but cannot be read, as it could not check it for a GitHub token; the token
-# read fails on sed's own
-# status (not a pipeline's), and a merge's greps accept only status 1 (no match), so a read error is never taken
-# for an empty file. Their status-2 branch is defence in depth: the -r pre-check refuses an unreadable file
-# first, so it is reached only if the file turns unreadable between the two, a race no fake reaches
-# deterministically. The write step refuses itself, before it calls limactl, a VM_ENV that names nothing, every
-# name vm-env-check refuses for what it is (vm_env_refuse, the same shell code) and an unset or empty credential,
-# so make -i, which runs it although vm-env-check failed, can neither wipe the VM's daemon.env nor copy a GitHub
-# token or the agents App's key into it (issue #268 L2); its messages name an entry the way vm-env-check does
-# (vm_env_label). It never re-runs vm-env-check through $(MAKE): make -i would pass -i to that sub-make too.
+# read fails on sed's own status (not a pipeline's), and a merge's greps accept only status 1 (no match), so a
+# read error is never taken for an empty file. Their status-2 branch is defence in depth: the -r pre-check
+# refuses an unreadable file first, so it is reached only if the file turns unreadable between the two, a race
+# no fake reaches deterministically. The write step refuses itself, before it calls limactl, a VM_ENV that
+# names nothing, every name vm-env-check refuses for what it is (vm_env_refuse, the same shell code) and an
+# unset or empty credential, so make -i, which runs it although vm-env-check failed, can neither wipe the VM's
+# daemon.env nor copy a GitHub token or the agents App's key into it (issue #268 L2); its messages name an
+# entry the way vm-env-check does (vm_env_label). It never re-runs vm-env-check through $(MAKE): make -i would
+# pass -i to that sub-make too.
 .PHONY: vm-env
 vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
