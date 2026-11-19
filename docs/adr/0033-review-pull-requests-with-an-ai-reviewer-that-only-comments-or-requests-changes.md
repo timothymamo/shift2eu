@@ -239,6 +239,8 @@ reference data, and every schema version bump would be refused the same way. The
   `new file mode` or `deleted file mode` 120000 or 160000, an `index` line ending in either mode, or
   `old mode`/`new mode`, is kept. Only the extended header is read, never a hunk's content, which the
   author writes. A left-out name says nothing about a link's target or a pinned commit.
+  An `index` line not of the form `index <old>..<new>` (optionally followed by a mode) leaves the header
+  unclassifiable, and the section is kept.
 - **The review names the left-out files** under "Not reviewed", each in a code span escaped as a
   finding's path is (backticks made apostrophes, control characters spaces, mentions defused, each path
   cut to 300 UTF-16 code units), so the maintainer knows what the AI review did not read. The note
@@ -449,6 +451,8 @@ the trigger option below are the levers.
   the run's context and so capped by what remains of the deadline: after a first call of ten minutes,
   the retry has at most five. The run plus the detached post above takes at most 15.5 minutes, which
   leaves 4.5 minutes of the job for building the reviewer, installing the CLI and minting the token.
+  A CLI stopped because the run's deadline passed says so ("the run's deadline passed"), not that it was
+  cancelled, which stays the wording for a cancelled run.
 - An inline comment goes only on a line the diff shows on its new side; a finding on any other line, or
   on no line, goes in the review's body, so a made-up position cannot fail the review.
 
