@@ -3,6 +3,7 @@ package review_test
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -1147,6 +1148,239 @@ func TestRenderRendersAMisspeltPromptInjectionAnswerAsPromptInjection(t *testing
 			}
 		})
 	}
+}
+
+// TestRenderNamesTheFilesTheReviewDidNotRead pins the note the exclusion of
+// issue #324 leaves the reader: the review names every file the reviewer left
+// out of the diff, so the maintainer knows what the AI review did not read, and
+// names it escaped as every other text of a review is (ADR 0033), because a
+// file name is text a pull request chose: a mention in it notifies nobody, a
+// backtick in it cannot end the code span it is shown in, and an HTML tag in it
+// renders as text. A review that left nothing out has no such note, and its
+// body is the body Render renders.
+func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
+	t.Parallel()
+
+	mention := regexp.MustCompile(`@[A-Za-z0-9]`)
+
+	excluded := []string{
+		"api/openapi.bundled.json",
+		"testdata/comparison-v3.golden",
+		"testdata/`code`.golden",
+		"testdata/@octocat.golden",
+		"testdata/<img src=x>.golden",
+	}
+
+	answer := review.Answer{Summary: renderSummary, Findings: []review.Finding{renderAddedLine}}
+
+	got := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, excluded)
+
+	t.Run("every left-out file is named, escaped as the review escapes a path", func(t *testing.T) {
+		t.Parallel()
+
+		// A path is shown in a code span, as a finding's path in the body is,
+		// with the backticks it holds turned into apostrophes.
+		for _, want := range []string{
+			"`api/openapi.bundled.json`",
+			"`testdata/comparison-v3.golden`",
+			"`testdata/'code'.golden`",
+			"`testdata/<img src=x>.golden`",
+		} {
+			if !strings.Contains(got.Body, want) {
+				t.Errorf("the review does not name %q among the files it did not read; body:\n%s", want, got.Body)
+			}
+		}
+
+		if strings.Contains(got.Body, "testdata/`code`.golden") {
+			t.Errorf("the review names the path testdata/`code`.golden with its backticks whole, which closes the code span it is shown in; body:\n%s", got.Body)
+		}
+
+		if found := mention.FindString(got.Body); found != "" {
+			t.Errorf("the review's body holds the mention %q, which a left-out file's name carries: a file name notifies nobody either; body:\n%s", found, got.Body)
+		}
+
+		if !strings.Contains(got.Body, "octocat.golden") {
+			t.Errorf("the review drops the handle text of a left-out file's name: the name stays readable, only the @ goes; body:\n%s", got.Body)
+		}
+
+		if !strings.Contains(strings.ToLower(got.Body), "not reviewed") {
+			t.Errorf("the review's list of left-out files does not say they were not reviewed, so the reader cannot tell what the AI review skipped; body:\n%s", got.Body)
+		}
+
+		// The note is the body's, not a finding's: no finding of the answer is
+		// on a left-out file, so every finding stays where it was.
+		if len(got.Comments) != 1 {
+			t.Errorf("the review holds %d inline comments, want 1: the note changes no finding", len(got.Comments))
+		}
+	})
+
+	t.Run("a review that left nothing out has no note", func(t *testing.T) {
+		t.Parallel()
+
+		plain := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, nil)
+
+		if strings.Contains(strings.ToLower(plain.Body), "not reviewed") {
+			t.Errorf("the review of a diff it read whole says a file was not reviewed; body:\n%s", plain.Body)
+		}
+
+		if diff := cmp.Diff(review.Render(headSHA, answer, review.EventComment, renderDiff), plain); diff != "" {
+			t.Errorf("the review of a diff it read whole differs from Render's (-Render +RenderFiltered):\n%s", diff)
+		}
+	})
+
+	// The note is the reader's only sign of what the AI review did not read, so
+	// it is rendered outside the part Render cuts at GitHub's limit: a long
+	// review loses findings, never the note (reviewer M1, auditor L2).
+	t.Run("the note survives a body the limit cuts", func(t *testing.T) {
+		t.Parallel()
+
+		findings := make([]review.Finding, 0, 20)
+		for i := range 20 {
+			findings = append(findings, review.Finding{
+				Severity: review.SeveritySuggestion,
+				Category: review.CategoryReadability,
+				Title:    fmt.Sprintf("Finding %d", i),
+				Body:     strings.Repeat("b", 10_000),
+			})
+		}
+
+		leftOut := []string{"api/openapi.bundled.json", "internal/x/testdata/a.golden", "testdata/b.golden"}
+
+		got := review.RenderFiltered(headSHA,
+			review.Answer{Summary: renderSummary, Findings: findings}, review.EventComment, "", leftOut)
+
+		if !strings.Contains(strings.ToLower(got.Body), "truncated") {
+			t.Fatalf("the review's body says nothing of truncation, so nothing was cut and the test pins nothing: findings of %d characters each are over the limit; body length %d",
+				len(findings[0].Body), utf8.RuneCountInString(got.Body))
+		}
+
+		if !strings.Contains(got.Body, "### Not reviewed") {
+			t.Errorf("a review cut at GitHub's limit drops the note that names the files it did not read: the note is rendered outside the cut; body:\n%s", tail(got.Body, 2_000))
+		}
+
+		for _, path := range leftOut {
+			if !strings.Contains(got.Body, "`"+path+"`") {
+				t.Errorf("a review cut at GitHub's limit does not name the left-out file %q: the note is rendered outside the cut; body:\n%s", path, tail(got.Body, 2_000))
+			}
+		}
+
+		assertBodyWithinLimit(t, got.Body)
+	})
+
+	// A long list of left-out files must not push the body over GitHub's limit
+	// either: the note names the first paths and says how many more there were,
+	// and always states the total (reviewer M1, auditor L2). The number of paths
+	// the note lists is the coder's constant (proposed name: MaxListedExcluded);
+	// this test assumes 50.
+	t.Run("a long list of left-out files is capped and still counted", func(t *testing.T) {
+		t.Parallel()
+
+		const (
+			listed = 50
+			total  = 5_000
+		)
+
+		many := make([]string, 0, total)
+		for i := range total {
+			many = append(many, fmt.Sprintf("testdata/file-%04d.golden", i))
+		}
+
+		got := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, many)
+
+		assertBodyWithinLimit(t, got.Body)
+
+		if !strings.Contains(strings.ToLower(got.Body), "not reviewed") {
+			t.Errorf("the review of %d left-out files has no note that names them; body:\n%s", total, tail(got.Body, 2_000))
+		}
+
+		// The note keeps the list's sorted order, so the same diff renders the
+		// same note.
+		previous := -1
+
+		for i := range listed {
+			path := "`" + fmt.Sprintf("testdata/file-%04d.golden", i) + "`"
+			at := strings.Index(got.Body, path)
+
+			if at < 0 {
+				t.Fatalf("the note does not name %s, which is among the first %d of the %d left-out files; body:\n%s", path, listed, total, tail(got.Body, 2_000))
+			}
+
+			if at < previous {
+				t.Errorf("the note names %s after a path that sorts after it: the list keeps its sorted order; body:\n%s", path, tail(got.Body, 2_000))
+			}
+
+			previous = at
+		}
+
+		for _, unlisted := range []string{"testdata/file-0050.golden", "testdata/file-4999.golden"} {
+			if strings.Contains(got.Body, unlisted) {
+				t.Errorf("the note names %q too: the list is capped, so the review stays under GitHub's limit whatever the pull request changes; body length %d",
+					unlisted, utf8.RuneCountInString(got.Body))
+			}
+		}
+
+		// The note says how many files it left out of the list, and the total
+		// count, so a capped list never reads as the whole list.
+		if !hasNumber(got.Body, total-listed) {
+			t.Errorf("the note does not say how many of the %d left-out files it does not name (want %d); body:\n%s", total, total-listed, tail(got.Body, 2_000))
+		}
+
+		if !hasNumber(got.Body, total) {
+			t.Errorf("the note does not state the total of %d left-out files; body:\n%s", total, tail(got.Body, 2_000))
+		}
+
+		// The cap takes its own room off what the review may hold; it never
+		// costs the review itself.
+		if !strings.Contains(got.Body, renderSummary) {
+			t.Errorf("the review's body drops its summary: a capped note is no reason to cut the review; body:\n%s", tail(got.Body, 2_000))
+		}
+	})
+}
+
+// assertBodyWithinLimit fails when body is over MaxTextUnits UTF-16 code units,
+// which is how GitHub counts a review's body.
+func assertBodyWithinLimit(t *testing.T, body string) {
+	t.Helper()
+
+	if n := len(utf16.Encode([]rune(body))); n > review.MaxTextUnits {
+		t.Errorf("the review's body is %d UTF-16 code units, want at most %d: GitHub refuses a longer review", n, review.MaxTextUnits)
+	}
+
+	if n := utf8.RuneCountInString(body); n > review.MaxTextUnits {
+		t.Errorf("the review's body is %d characters, want at most %d: GitHub refuses a longer review", n, review.MaxTextUnits)
+	}
+}
+
+// hasNumber reports whether text holds n, written with or without thousands
+// separators.
+func hasNumber(text string, n int) bool {
+	plain := strconv.Itoa(n)
+
+	if strings.Contains(text, plain) {
+		return true
+	}
+
+	var grouped strings.Builder
+
+	for i, r := range plain {
+		if i > 0 && (len(plain)-i)%3 == 0 {
+			grouped.WriteByte(',')
+		}
+
+		grouped.WriteRune(r)
+	}
+
+	return strings.Contains(text, grouped.String())
+}
+
+// tail returns the last n characters of text, for an error message about a body
+// too long to print whole.
+func tail(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+
+	return "..." + text[len(text)-n:]
 }
 
 // renderedWith returns the review's text that renders f: the body of the inline

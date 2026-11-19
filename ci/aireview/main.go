@@ -22,9 +22,16 @@ const (
 )
 
 // The timeouts: GitHub's calls are quick, the model's answer can take minutes.
+// runDeadline bounds the whole run, both model calls of a retry included: each
+// call's modelTimeout is capped by what remains of it, so the run ends within
+// the job's timeout-minutes of 20 (.github/workflows/ai-review.yml) with room
+// for the steps before it and for the one post Run makes past it, the review
+// saying the answer could not be read, bounded by 30 seconds (issue #316,
+// auditor L3).
 const (
 	gitHubTimeout = 30 * time.Second
 	modelTimeout  = 10 * time.Minute
+	runDeadline   = 15 * time.Minute
 )
 
 // usage is the program's one command line: the absolute path of the Claude
@@ -36,8 +43,11 @@ func main() {
 }
 
 func run() int {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	signalled, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	ctx, cancel := context.WithTimeout(signalled, runDeadline)
+	defer cancel()
 
 	if len(os.Args) != 2 || os.Args[1] == "" || os.Args[1][0] != '/' {
 		return fail(fmt.Errorf("%s", usage))

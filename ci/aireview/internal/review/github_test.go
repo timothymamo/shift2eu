@@ -196,21 +196,31 @@ func TestPostReviewPostsOneReviewOnTheHeadCommit(t *testing.T) {
 	}
 }
 
-// TestDiffRefusesABodyOverTheLimit pins the size limit of ADR 0033: a diff of
-// exactly MaxDiffBytes is reviewed, and one byte over fails the run with
-// ErrDiffTooLarge, so an oversized pull request costs no model call and posts no
-// review. The client reads the diff of the compare of the pull request's two
-// SHAs, so the review is of the head it read.
-func TestDiffRefusesABodyOverTheLimit(t *testing.T) {
+// TestDiffReadsUpToTheRawLimit pins the client's read of the diff (ADR 0033,
+// issue #324): it reads a whole diff up to MaxRawDiffBytes, so the run can leave
+// the generated and golden files out and measure what remains, and a raw diff it
+// cannot read whole fails the run with ErrDiffTooLarge instead of being filtered
+// in part, since a section cut in half is no diff. MaxRawDiffBytes leaves room
+// above MaxDiffBytes: a diff over MaxDiffBytes is read whole, and the run's size
+// check on what it kept is the one that refuses it. The client reads the diff of
+// the compare of the pull request's two SHAs, so the review is of the head it
+// read.
+func TestDiffReadsUpToTheRawLimit(t *testing.T) {
 	t.Parallel()
+
+	if review.MaxRawDiffBytes <= review.MaxDiffBytes {
+		t.Fatalf("MaxRawDiffBytes = %d, want more than MaxDiffBytes = %d: the run reads a whole diff and leaves the generated files out before it measures what remains",
+			review.MaxRawDiffBytes, review.MaxDiffBytes)
+	}
 
 	cases := []struct {
 		name    string
 		size    int
 		wantErr error
 	}{
-		{name: "a diff exactly at the limit is reviewed", size: review.MaxDiffBytes},
-		{name: "a diff one byte over the limit fails the run", size: review.MaxDiffBytes + 1, wantErr: review.ErrDiffTooLarge},
+		{name: "a diff exactly at the raw limit is read", size: review.MaxRawDiffBytes},
+		{name: "a diff one byte over the raw limit fails the run", size: review.MaxRawDiffBytes + 1, wantErr: review.ErrDiffTooLarge},
+		{name: "a diff over MaxDiffBytes is read whole, for the run to filter and measure", size: review.MaxDiffBytes + 1},
 	}
 
 	for _, tc := range cases {
@@ -239,7 +249,7 @@ func TestDiffRefusesABodyOverTheLimit(t *testing.T) {
 				}
 			} else {
 				if err != nil {
-					t.Fatalf("Diff of %d bytes, all of MaxDiffBytes: %v, want it read: the limit refuses a longer diff only", tc.size, err)
+					t.Fatalf("Diff of %d bytes, all of it read whole: %v, want it read: the raw limit refuses a longer diff only", tc.size, err)
 				}
 
 				if len(diff) != tc.size {

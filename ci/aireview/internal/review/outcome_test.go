@@ -21,11 +21,11 @@ func TestRunOutcomeZeroValueFailsClosed(t *testing.T) {
 	var zero review.RunOutcome
 
 	if zero != review.OutcomeFailed {
-		t.Errorf("the zero RunOutcome = %d, want OutcomeFailed (%d)", zero, review.OutcomeFailed)
+		t.Errorf("the zero RunOutcome = %v, want OutcomeFailed (%v)", zero, review.OutcomeFailed)
 	}
 
 	if zero == review.OutcomeAnswer {
-		t.Errorf("the zero RunOutcome reads as OutcomeAnswer (%d), want it to fail closed", zero)
+		t.Errorf("the zero RunOutcome reads as OutcomeAnswer (%v), want it to fail closed", zero)
 	}
 }
 
@@ -107,7 +107,7 @@ func TestDecideRunOutcomePinsWhichOutcomeWins(t *testing.T) {
 			t.Parallel()
 
 			if got := review.DecideRunOutcome(tc.answerErr, tc.parentErr, tc.runErr); got != tc.want {
-				t.Errorf("DecideRunOutcome(%v, %v, %v) = %d, want %d", tc.answerErr, tc.parentErr, tc.runErr, got, tc.want)
+				t.Errorf("DecideRunOutcome(%v, %v, %v) = %v, want %v", tc.answerErr, tc.parentErr, tc.runErr, got, tc.want)
 			}
 		})
 	}
