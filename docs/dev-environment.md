@@ -546,11 +546,13 @@ git -C ~/src/shift2eu-host pull --ff-only                                  # bef
 ```
 
 Update it only like that, never from the workspace, and never edit it. The `agents-token*` targets run
-`dev/agents-app-token.sh` and `dev/agents-token-launchd.sh` by path, so the clone must keep their executable
-bit: git stores them as 100755, but a clone with `core.fileMode=false` or a copied tree loses it, and the
-target then fails with `Permission denied`; `git -C ~/src/shift2eu-host checkout -- dev/` restores it. Keep it outside the workspace, and
-keep the workspace outside it. Give it its own direnv `.envrc` (`~/src/shift2eu-host/.envrc`, then
-`direnv allow` there), the only `.envrc` the host targets read:
+`dev/agents-app-token.sh` and `dev/agents-token-launchd.sh` by path, so the clone must keep their
+executable bit: git stores them as 100755 and a fresh `git clone` sets it, but a copied tree (`cp` without
+`-p`, an archive) can lose it, and the target then fails with `Permission denied`. Run
+`chmod +x dev/agents-app-token.sh dev/agents-token-launchd.sh` in the host clone to restore it; a
+`git checkout` does not when `core.fileMode` is `false`, since git then ignores mode changes. Keep it
+outside the workspace, and keep the workspace outside it. Give it its own direnv `.envrc`
+(`~/src/shift2eu-host/.envrc`, then `direnv allow` there), the only `.envrc` the host targets read:
 
 ```bash
 export WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu"   # absolute path of the workspace's checkout
@@ -648,8 +650,8 @@ App, its installation or the bot user, a key that cannot sign, a symlink in the 
 or on a signal, and then writes `agents App token refresh stopped`, the time and where to start it again
 (the host clone on the Mac, `make agents-token-refresh-start`) to the log; the next `make agents-token-refresh-start`
 warns that it stopped (with its pid, or `unknown` when the pid file holds anything but digits), shows the
-log's last lines and starts a new one. One refresh runs per VM: it holds
-the lock `agents-token-refresh-shift2eu.lock` in the same directory, with its pid inside. A second one (a
+log's last lines and starts a new one. One refresh runs per VM: it holds the lock
+`agents-token-refresh-shift2eu.lock` in the same directory, with its pid inside. A second one (a
 `make agents-token-refresh` while the background one runs, say) says that another refresher for that VM
 is running and exits with status 0, and `make agents-token-refresh-start` names the pid in the lock and
 starts nothing. A lock left by a killed refresh is taken over, by one refresh only. Should a refresh that
@@ -657,8 +659,8 @@ moved a lock aside during a takeover fail to put it back (a full disk, say), it 
 directory (`.agents-token-refresh-shift2eu.lock.stale.<pid>`), so no lock is lost while none exists, says
 so in the log and stops. The refresh whose lock that was finds no lock within seconds and exits too, and
 nothing removes the moved-aside directory: once no refresh runs, remove it
-(`rm -r ~/.local/state/shift2eu/.agents-token-refresh-shift2eu.lock.stale.<pid>`) and start a refresh again
-(`make agents-token-refresh-start` from the host clone). Stop it with
+(`rm -r ~/.local/state/shift2eu/.agents-token-refresh-shift2eu.lock.stale.<pid>`) and start a refresh
+again (`make agents-token-refresh-start` from the host clone). Stop it with
 `kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,
 the JWT or the key, and nothing writes them to a log or the workspace.
 
@@ -797,10 +799,10 @@ file or a `~/.gitconfig` that is a symlink or not a regular file (a guard agains
 mistake, not against the VM user). Whenever it writes the identity file it also sets the VM user's git
 identity to it (`user.name` and `user.email` in `~/.gitconfig`, replacing every value there), and says
 so ("set the VM shift2eu's git identity ..."); when `~/.gitconfig` already holds the bot's identity it
-leaves the file untouched and says "the VM shift2eu's git identity is already ..." instead. That write is atomic and takes git's own lock: a copy
-of `~/.gitconfig` in `~/.gitconfig.lock` gets the bot's identity, and replaces the file only when git,
-following the copy's `[include]` files, reads the bot's identity back; otherwise `~/.gitconfig` stays as
-it was. A rewritten `~/.gitconfig` is mode 0600; one that already holds exactly the bot's identity is not
+leaves the file untouched and says "the VM shift2eu's git identity is already ..." instead. That write
+is atomic and takes git's own lock: a copy of `~/.gitconfig` in `~/.gitconfig.lock` gets the bot's
+identity, and replaces the file only when git, following the copy's `[include]` files, reads the bot's
+identity back; otherwise `~/.gitconfig` stays as it was. A rewritten `~/.gitconfig` is mode 0600; one that already holds exactly the bot's identity is not
 rewritten at all, and then no lock is looked at, so a stale `~/.gitconfig.lock` blocks only a mint that
 must still write the identity. A `~/.gitconfig.lock` another git writer holds is left alone: that mint
 writes nothing and the next one tries again. If no git is running in the VM, the lock is a crashed git's:

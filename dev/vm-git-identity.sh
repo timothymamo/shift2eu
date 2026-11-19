@@ -56,8 +56,10 @@ for pair in "user.name=${git_name}" "user.email=${git_email}"; do
   current="$(git config --global --get-all "${key}" || true)"
   # Only what is printed is stripped of the bytes a terminal acts on (escapes, carriage returns, bells), the
   # way the mint's printable does; the comparisons and the writes use the values as they are (issue #262).
-  shown="$(printf '%s' "${current}" | tr '\n' ',' | tr -cd '[:print:]')"
-  shown_value="$(printf '%s' "${value}" | tr -cd '[:print:]')"
+  # Only C0 control bytes and DEL go, byte by byte in the C locale, so UTF-8 names (José Müller) survive
+  # whatever the locale; [:print:] would drop their bytes in the C locale.
+  shown="$(printf '%s' "${current}" | tr '\n' ',' | LC_ALL=C tr -d '\000-\037\177')"
+  shown_value="$(printf '%s' "${value}" | LC_ALL=C tr -d '\000-\037\177')"
   if [ -n "${current}" ] && [ "${current}" != "${value}" ] &&
     { [ "${bot_identity}" -eq 1 ] || [[ "${current}" == *"[bot]"* ]]; }; then
     git config --global --replace-all "${key}" "${value}"
