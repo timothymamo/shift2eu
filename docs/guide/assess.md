@@ -186,9 +186,12 @@ priced.
   fee alone never makes an estimate.
 - **Not estimated.** A resource that cannot be priced says "not estimated" and why: `no fit`,
   `usage-priced` (`serverless.function`, `messaging.queue`), `size unknown`, `no plan` (the offering
-  lists none), `no plan large enough`, or `no price in <region>` / `no storage price in <region>` (the
-  offering has no price there, for example because it is not offered in that region). It is never priced at €0: totals add only the estimated resources and say how
-  many they cover, "€587.58 per month for 8 of 13 resources".
+  lists none), `no plan large enough`, `not offered in <region>` (the offering is not sold in that
+  region), or `no price in <region>` / `no storage price in <region>` (the offering is sold there but
+  the snapshot has no price for it). It is never priced at €0: totals add only the estimated resources and say how
+  many they cover, "€587.58 per month for 8 of 13 resources". A total that covers none of its
+  resources gives no amount, only why: "none of 2 resources could be estimated (usage-priced, not
+  offered in `GRA`)", each reason once, in the order above.
 
 The rules are in [ADR 0027](../adr/0027-match-plans-and-estimate-monthly-prices-in-a-domain-package.md).
 

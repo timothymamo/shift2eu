@@ -1654,6 +1654,137 @@ func TestReportWithEstimates(t *testing.T) {
 	testutil.Golden(t, "testdata/report-estimates.golden", got)
 }
 
+// reportNotOfferedRegion is a region the report fixture's offerings are not sold
+// in: a catalog whose snapshot names it as the region estimates are for prices
+// nothing there, while every fitted resource is still offered somewhere.
+const reportNotOfferedRegion = "xx-none"
+
+// reportNotOfferedDocument renders the document of an inventory the report
+// fixture's catalog cannot price in region, where a region names no offering at
+// all: a compute.vm resource and a storage.object one, both with a fit and
+// neither estimated.
+func reportNotOfferedDocument(t *testing.T, region string) []byte {
+	t.Helper()
+
+	snapshot := testutil.PricedSnapshot()
+	snapshot.DefaultRegion = region
+
+	inv := newInventory(t, sourceName, []inventory.Resource{
+		{
+			ID:       "server-small",
+			RawType:  "AWS::EC2::Instance",
+			Category: taxonomy.ComputeVM,
+			Region:   "eu-west-1",
+			Size:     &inventory.Size{VCPUs: sized(1), MemoryGiB: sized(2)},
+			Workload: "shop",
+		},
+		{
+			ID:       "bucket-storage",
+			RawType:  "AWS::S3::Bucket",
+			Category: taxonomy.StorageObject,
+			Region:   "eu-west-1",
+			Size:     &inventory.Size{StorageGiB: sized(1000)},
+			Workload: "shop",
+		},
+	})
+
+	return render(t, assessment.AssessWith(inv, testutil.ReportCatalogIn(t, reportTarget, snapshot),
+		assessment.Options{Estimate: true}), analysis.ReportMeta{InventoryName: inventoryFileName})
+}
+
+// checkDocumentAgainstSchema fails the test when document does not match the
+// named schema of this package, as checkGoldenAgainstSchema does for a file.
+func checkDocumentAgainstSchema(t *testing.T, document []byte, file string) {
+	t.Helper()
+
+	s := readSchema(t, filepath.Join("schema", file))
+
+	var decoded any
+	if err := json.Unmarshal(document, &decoded); err != nil {
+		t.Fatalf("the document is not valid JSON: %v", err)
+	}
+
+	for _, problem := range s.validate(decoded, "$") {
+		t.Errorf("the document does not match schema/%s: %s", file, problem)
+	}
+}
+
+// TestReportNotOfferedReason pins the reason code of a resource whose offering is
+// not offered in the estimate region (issue #243): the document says
+// "not-offered", not "no-price", and says nothing else about its estimate. It
+// also pins that a total which estimates nothing keeps a machine-readable count —
+// estimated 0 of its resources — and stays a document of the version 2 format
+// (ADR 0018), whose amount is required.
+func TestReportNotOfferedReason(t *testing.T) {
+	t.Parallel()
+
+	got := reportNotOfferedDocument(t, reportNotOfferedRegion)
+	checkDocument(t, got)
+
+	document := decodeJSON(t, got)
+
+	t.Run("a resource not offered in the region says so", func(t *testing.T) {
+		t.Parallel()
+
+		for _, id := range []string{"server-small", "bucket-storage"} {
+			t.Run(id, func(t *testing.T) {
+				t.Parallel()
+
+				at := resourceIndex(t, document, id)
+
+				if diff := cmp.Diff([]string{"estimated", "reason"},
+					objectKeysAt(t, document, extend(at, "estimate")...)); diff != "" {
+					t.Errorf("%q estimate keys mismatch (-want +got), a resource that is not estimated "+
+						"has no amount and no breakdown:\n%s", id, diff)
+				}
+
+				if diff := cmp.Diff(false, valueAt(t, document, extend(at, "estimate", "estimated")...)); diff != "" {
+					t.Errorf("%q estimate.estimated mismatch (-want +got):\n%s", id, diff)
+				}
+
+				if diff := cmp.Diff("not-offered", valueAt(t, document, extend(at, "estimate", "reason")...)); diff != "" {
+					t.Errorf("%q estimate.reason mismatch (-want +got):\n%s", id, diff)
+				}
+			})
+		}
+	})
+
+	t.Run("a total that estimates nothing keeps a count", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name string
+			path []any
+			want any
+		}{
+			{name: "the report counts no estimate", path: []any{"estimate", "total", "estimated"}, want: float64(0)},
+			{name: "the report counts its resources", path: []any{"estimate", "total", "resources"}, want: float64(2)},
+			{name: "the workload counts no estimate", path: []any{"workloads", 0, "estimate", "estimated"}, want: float64(0)},
+			{name: "the workload counts its resources", path: []any{"workloads", 0, "estimate", "resources"}, want: float64(2)},
+		}
+
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				t.Parallel()
+
+				if diff := cmp.Diff(test.want, valueAt(t, document, test.path...)); diff != "" {
+					t.Errorf("%v mismatch (-want +got):\n%s", test.path, diff)
+				}
+			})
+		}
+	})
+
+	t.Run("the document matches the version 2 schema", func(t *testing.T) {
+		t.Parallel()
+
+		if diff := cmp.Diff(float64(2), valueAt(t, document, "schemaVersion")); diff != "" {
+			t.Errorf("schemaVersion mismatch (-want +got):\n%s", diff)
+		}
+
+		checkDocumentAgainstSchema(t, got, "assessment-v2.schema.json")
+	})
+}
+
 // TestReportEstimateAssumptionFlags pins that an estimated resource says in the
 // document itself what the estimate assumed: whether it priced a count the
 // resource does not give as one, and whether it priced a resource that gives no

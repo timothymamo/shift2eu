@@ -453,7 +453,7 @@
         },
         "reason": {
           "type": "string",
-          "description": "Why the resource is not estimated (no-fit, usage-priced, no-size, no-plan, no-plan-large-enough, no-price, no-storage-price); present only when not estimated. A consumer must accept a reason it does not know."
+          "description": "Why the resource is not estimated (no-fit, usage-priced, no-size, no-plan, no-plan-large-enough, not-offered, no-price, no-storage-price; not-offered when none of the best offerings with a covering plan, or for storage none of them, is offered in the estimate region, no-price when one is but has no price there); present only when not estimated. A consumer must accept a reason it does not know."
         }
       },
       "required": [
@@ -494,7 +494,7 @@
       "properties": {
         "amount": {
           "type": "string",
-          "description": "The sum in EUR, an exact decimal string rounded to the cent from the exact sum of the estimates, not summed from the rounded amounts of the resources, so it can differ from that by a cent or so.",
+          "description": "The sum in EUR, an exact decimal string rounded to the cent from the exact sum of the estimates, not summed from the rounded amounts of the resources, so it can differ from that by a cent or so. When estimated is 0 it is \"0.00\" and meaningless: nothing was estimated, which is not a price of 0.",
           "pattern": "^[0-9]+\\.[0-9]{2}$"
         },
         "estimated": {

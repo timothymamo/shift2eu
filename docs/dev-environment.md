@@ -264,7 +264,28 @@ without a terminal it does so without asking. So `make vm-up` starts an existing
 names the directory, for a `Stopped` or `Running` instance whose `lima.yaml` is gone or a dangling symlink
 it stops too, for any other status it stops and names the status, and when it cannot list the instances or
 read the status at all it stops and says so. Before any of that it refuses a `LIMA_INSTANCE` that is not
-letters, digits, `.`, `_` and `-`, starting with a letter or digit.
+letters, digits, `.`, `_` and `-`, starting with a letter or digit, as every target that uses
+`LIMA_INSTANCE` does (the `vm-*` targets that use it, which is all of them but `vm-env-check`, and `deck`,
+`deck-restart` and the `agents-token*` targets, issue #252): the check runs before any of the target's own
+commands, and make itself never expands the value, so a name that carries a `$(...)` is refused, not run.
+Only the prerequisites run first, and neither reads the name: `vm-up`'s `git-hooks` sets git's hooks path
+and `vm-env`'s `vm-env-check` checks the credentials on the host.
+Targets that do not use it, such as `make check`, ignore it.
+
+Those checks cannot close the window between the status query and the start: the directory can still go
+in between, and no flag of Lima 2.x stops `limactl start shift2eu` from creating the VM then. So
+`make vm-up` never starts an existing instance with `limactl start`. It runs
+`limactl shell --start --workdir / shift2eu true` instead, which since Lima 2.0 starts a `Stopped`
+instance, only runs `true` in a `Running` one and fails with `does not exist` for one that is gone; it
+never creates a VM (issue #254). That failure fails `make vm-up`, and nothing runs after it.
+
+Do not let Lima start the VM for you with `limactl autostart enable shift2eu`: its launchd job (a
+LaunchAgent `io.lima-vm.autostart.shift2eu`, or with `--condition=boot` the LaunchDaemon
+`io.lima-vm.daemon.shift2eu`) runs `limactl start shift2eu --foreground`, the form that falls back to
+`template:default` (#237). If you enabled it, turn it off with `limactl autostart disable shift2eu` while
+the instance still has its `lima.yaml` (it reads that file first, and answers `instance not found` without
+it; unload such a job by hand as below). The agents App's refresh LaunchDaemon ([The refresh as a
+LaunchDaemon](#the-refresh-as-a-launchdaemon)) does not start the VM.
 
 Which fix applies depends on whether the directory still holds a `lima.yaml`:
 

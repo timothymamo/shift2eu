@@ -74,10 +74,20 @@ const (
 	// no plan of the best candidate offerings covers. Estimate.Largest names the
 	// largest plan.
 	NoPlanLargeEnough Reason = "no-plan-large-enough"
+	// NotOffered is the reason for a resource none of whose best candidate
+	// offerings is offered in the estimate region (catalog.Offering.AvailableIn,
+	// the availability mapping.MapIn scopes --region by): for ByStorage, none at
+	// all; for ByPlan, none with a covering plan. So when the tied best
+	// candidate offered in the region has only plans too small, and another,
+	// not offered there, has a covering plan, the reason is NotOffered, not
+	// NoPlanLargeEnough (ADR 0027, amended 2026-11-19). There is nothing to
+	// price there, which is not a gap in the price data (issue #243). Only
+	// Estimate.Region is set.
+	NotOffered Reason = "not-offered"
 	// NoPrice is the reason for a resource whose covering plans (ByPlan), or
 	// whose best candidate offerings' storage (ByStorage), have no price in the
-	// estimate region. For ByPlan, Estimate.Plan names the covering plan that
-	// would have been chosen.
+	// estimate region, although an offering of them is offered there. For
+	// ByPlan, Estimate.Plan names the covering plan that would have been chosen.
 	NoPrice Reason = "no-price"
 	// NoStoragePrice is the reason for a ByPlan resource with storage above
 	// what its chosen plan includes, whose offering has no per-GiB storage price
@@ -233,6 +243,36 @@ func bestOfferings(candidates []mapping.Candidate) []catalog.Offering {
 	return out
 }
 
+// offeredIn returns the offerings available in region
+// (catalog.Offering.AvailableIn, the availability mapping.MapIn scopes a
+// region by), in their order. An offering elsewhere has no price in region, so
+// leaving it out changes no price.
+func offeredIn(offerings []catalog.Offering, region string) []catalog.Offering {
+	var out []catalog.Offering
+
+	for _, o := range offerings {
+		if o.AvailableIn(region) {
+			out = append(out, o)
+		}
+	}
+
+	return out
+}
+
+// plansOfferedIn returns the plans of plans whose offering is available in
+// region, in their order: offeredIn for plans.
+func plansOfferedIn(plans []offeredPlan, region string) []offeredPlan {
+	var out []offeredPlan
+
+	for _, op := range plans {
+		if op.offering.AvailableIn(region) {
+			out = append(out, op)
+		}
+	}
+
+	return out
+}
+
 // offeredPlan is one plan of one of the best candidate offerings.
 type offeredPlan struct {
 	offering catalog.Offering
@@ -296,6 +336,13 @@ func byPlan(r inventory.Resource, offerings []catalog.Offering, region string) E
 		e.Reason = NoPlanLargeEnough
 		e.Offering = largest.offering.Name
 		e.Largest = planOf(largest, region)
+
+		return e
+	}
+
+	covering = plansOfferedIn(covering, region)
+	if len(covering) == 0 {
+		e.Reason = NotOffered
 
 		return e
 	}
@@ -401,6 +448,13 @@ func byStorage(r inventory.Resource, offerings []catalog.Offering, region string
 
 	if !okStored || (r.Category == taxonomy.StorageBlock && !okCount) {
 		e.Reason = NoSize
+
+		return e
+	}
+
+	offerings = offeredIn(offerings, region)
+	if len(offerings) == 0 {
+		e.Reason = NotOffered
 
 		return e
 	}
