@@ -374,8 +374,14 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   shell reads it; the refusal names `VM_ENV` but never shows its value, which may be a credential typed
   by mistake. A refusal of one entry (not set, not a variable name) names it only when it is an upper-case
   variable name, the shape of every credential name; any other entry, such as a token pasted where a name
-  goes, is given by its position alone: `VM_ENV entry 2 (entry 2 is not shown, ...)`. `make vm-env`'s write
-  step refuses an unset or empty credential too, so even `make -i vm-env` writes nothing then.
+  goes, is given by its position alone: `VM_ENV entry 2 (entry 2 is not shown)`, with the reason (it may
+  be a credential typed by mistake) said once per message. `make vm-env`'s write step repeats, before it
+  calls `limactl`, the refusals that `make -i` would otherwise skip: a `VM_ENV` that names nothing, a
+  name refused for what it is (a GitHub token, a `SHIFT2EU_AGENTS_APP_*` variable, not a variable name),
+  and an unset or empty credential, each naming a hidden entry by its position alone. So even
+  `make -i vm-env` leaves `daemon.env` as it was and never says it wrote it in those cases; `make -i` still
+  exits 0, so read its messages. The character check of the whole `VM_ENV` runs only in
+  `make vm-env-check`, but a name with such a character is refused by the write step as not a variable name.
 - **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the two
   variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY` or the personal GitHub
   token a VM was set up with before PRD #161 milestone 3, is removed. Only a
