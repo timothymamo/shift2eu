@@ -5,7 +5,7 @@
 
 ## Context
 
-PRD #161 milestone 4 (`prds/161-agent-bot-identity.md`, "The AI reviewer (milestone 4)"). After the
+PRD #161 milestone 4 (`prds/done/161-agent-bot-identity.md`, "The AI reviewer (milestone 4)"). After the
 switch-over (milestones 1 to 3, [ADR 0031](0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)),
 the agents App opens every agent pull request and `Protect main` requires one approval from a code owner,
 the maintainer. The units' own reviewer and auditor run in the same VM, from the same branch, with the
