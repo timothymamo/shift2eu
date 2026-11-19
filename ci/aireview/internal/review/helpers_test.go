@@ -48,7 +48,7 @@ func writeExecutable(t *testing.T, path string, content []byte) {
 		t.Fatalf("write the executable %s: %v", path, err)
 	}
 
-	if err := os.Chmod(path, 0o700); err != nil {
+	if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // a fake CLI the test runs must be executable
 		t.Fatalf("make %s executable: %v", path, err)
 	}
 }
