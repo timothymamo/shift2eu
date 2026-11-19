@@ -51,11 +51,12 @@ const (
 // milestone 1, VM side). They are vars, not consts: a const whose name says what it is and whose value is a
 // string literal trips gosec's hardcoded-credential rule, and these are paths, not credentials.
 var (
-	agentsMintScript   = filepath.Join("dev", "agents-app-token.sh")
-	ghWrapperScript    = filepath.Join("dev", "gh-app-token.sh")
-	vmGHWrapperScript  = filepath.Join("dev", "vm-gh-wrapper.sh")
-	agentsTokenFile    = filepath.Join(".config", "shift2eu", "agents-app-token")
-	agentsIdentityFile = filepath.Join(".config", "shift2eu", "agents-app-identity")
+	agentsMintScript       = filepath.Join("dev", "agents-app-token.sh")
+	ghWrapperScript        = filepath.Join("dev", "gh-app-token.sh")
+	vmGHWrapperScript      = filepath.Join("dev", "vm-gh-wrapper.sh")
+	vmAgentsTokenSSHScript = filepath.Join("dev", "vm-agents-token-ssh.sh")
+	agentsTokenFile        = filepath.Join(".config", "shift2eu", "agents-app-token")
+	agentsIdentityFile     = filepath.Join(".config", "shift2eu", "agents-app-identity")
 )
 
 // readRepoFile reads a file of the repository, failing when it is not there.
@@ -852,7 +853,8 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 //     argv and no command; it is not the empty command the fake reports as a bug.
 //   - `sudo -u <account> -H /bin/cat .../agents-vm-ssh-key.pub` prints the line
 //     SHIFT2EU_TEST_ACCOUNT_PUBKEY_FILE holds, standing in for the account's key file under a
-//     SHIFT2EU_TEST_ACCOUNT_HOME no test can create.
+//     SHIFT2EU_TEST_ACCOUNT_HOME no test can create. The command may also arrive through
+//     `/usr/bin/env -i PATH=...`, which the fake resolves first (security audit 1).
 //   - `sudo -u <account> -H /bin/sh -c ... pin <path>` records its standard input in
 //     SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE instead of writing the account's known-hosts file.
 //   - `launchctl` runs the fake launchctl first on PATH, so a test can pin the load and unload commands and
@@ -873,6 +875,20 @@ while [ "$#" -gt 0 ]; do
   -u | -g | -p | -C | -T) shift 2 ;;
   *) break ;;
   esac
+done
+# A sudo that must not pass the caller's PATH on hands its command over through /usr/bin/env -i PATH=... <command>
+# (issue #227 part 2, security audit 1): the fake resolves env first, so it answers for the command the way it
+# would without it, and a test can pin the env form as the argv it records.
+while [ "${1:-}" = /usr/bin/env ] || [ "${1:-}" = /bin/env ]; do
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+    -i | -0 | -v) shift ;;
+    -u | -C | -S) shift 2 ;;
+    *=*) shift ;;
+    *) break ;;
+    esac
+  done
 done
 command="${1:-}"
 [ -n "${command}" ] || {
@@ -955,6 +971,153 @@ func (sb *sandbox) useLogOnlySudo(t *testing.T) {
 	path := filepath.Join(sb.binDir, "sudo")
 
 	writeFileMode(t, path, []byte(logOnlySudo), 0o700)
+}
+
+// fakeVMSudo stands in for the VM user's sudo when the script `make vm-agents-token-ssh` sends is run as that
+// user in the sandbox (issue #227 part 2, review 2): it records its argv, runs its command as the user who runs
+// the tests, and redirects the root paths the script hard-codes (/etc/..., /usr/local/...) into
+// SHIFT2EU_TEST_SUDO_ROOT, so nothing of the machine's own /etc or /usr/local is touched. `install` loses the
+// -o and -g options only root can use and reaches the machine's own install, as fakeSudo does; mv, rm and
+// rmdir see the redirected paths; every other command, sshd and systemctl included, runs as it is, with the
+// fakes first on PATH.
+const fakeVMSudo = `#!/bin/sh
+{
+  printf 'tool=sudo\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+case "$*" in
+'-k') exit 0 ;;
+esac
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -n | -E | -H | -S | -k | --) shift ;;
+  -u | -g | -p | -C | -T) shift 2 ;;
+  *) break ;;
+  esac
+done
+command="${1:-}"
+[ -n "${command}" ] || {
+  echo 'fake sudo: nothing to run' >&2
+  exit 64
+}
+shift
+root="${SHIFT2EU_TEST_SUDO_ROOT:?set SHIFT2EU_TEST_SUDO_ROOT}"
+map() {
+  case "$1" in
+  /etc/* | /usr/local/*) printf '%s%s' "${root}" "$1" ;;
+  *) printf '%s' "$1" ;;
+  esac
+}
+case "${command}" in
+install)
+  kept="$#"
+  while [ "${kept}" -gt 0 ]; do
+    case "$1" in
+    -o | -g) shift 2; kept="$((kept - 2))" ;;
+    *)
+      a="$1"
+      shift
+      kept="$((kept - 1))"
+      set -- "$@" "$(map "${a}")"
+      ;;
+    esac
+  done
+  exec install "$@"
+  ;;
+mv | rm | rmdir)
+  kept="$#"
+  while [ "${kept}" -gt 0 ]; do
+    a="$1"
+    shift
+    kept="$((kept - 1))"
+    set -- "$@" "$(map "${a}")"
+  done
+  exec "${command}" "$@"
+  ;;
+*)
+  exec "${command}" "$@"
+  ;;
+esac
+`
+
+// useFakeVMSudo puts the redirecting fake sudo first on PATH, for a test that runs the VM's script as the VM user
+// in the sandbox.
+func (sb *sandbox) useFakeVMSudo(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "sudo"), []byte(fakeVMSudo), 0o700)
+}
+
+// fakeSSHD stands in for the VM's sshd in a test that runs the script `make vm-agents-token-ssh` sends (issue
+// #227 part 2, review 2): it records its argv, answers `-t` with SHIFT2EU_TEST_SSHD_CONFIG_STATUS (0 when
+// unset), and answers `-T` with the effective configuration the test wrote, as sshd -T prints it.
+const fakeSSHD = `#!/bin/sh
+{
+  printf 'tool=sshd\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+case "${1:-}" in
+-t) exit "${SHIFT2EU_TEST_SSHD_CONFIG_STATUS:-0}" ;;
+-T) cat "${SHIFT2EU_TEST_SSHD_EFFECTIVE_FILE:?set SHIFT2EU_TEST_SSHD_EFFECTIVE_FILE}" ;;
+*)
+  echo "fake sshd: the tests answer -t and -T only, not $*" >&2
+  exit 64
+  ;;
+esac
+`
+
+// useFakeSSHD puts the recording sshd first on PATH and makes it answer `-T` with an effective configuration, so
+// a test can pin what the VM's script does with what sshd reads of the drop-in, without a real sshd.
+func (sb *sandbox) useFakeSSHD(t *testing.T, env map[string]string, effective string) {
+	t.Helper()
+
+	path := filepath.Join(sb.root, "sshd-T.txt")
+	writeFileMode(t, path, []byte(effective), 0o600)
+	writeFileMode(t, filepath.Join(sb.binDir, "sshd"), []byte(fakeSSHD), 0o700)
+
+	env["SHIFT2EU_TEST_SSHD_EFFECTIVE_FILE"] = path
+}
+
+// fakeLSWithACL answers `ls -ldn <one path>` and `ls -lde <it>` from two files, the way a Mac's ls reports a mode
+// with an ACL: a trailing + on the mode, and the entries a line each; every other call reaches the machine's own
+// ls (issue #227 part 2, audit 3, review 11). It stands in for ACLs, which Linux has none of.
+const fakeLSWithACL = `#!/bin/sh
+if [ "${2:-}" = "${SHIFT2EU_TEST_ACL_PATH:?set SHIFT2EU_TEST_ACL_PATH}" ]; then
+  case "${1:-}" in
+  -ldn | -dln) cat "${SHIFT2EU_TEST_ACL_LDN:?set SHIFT2EU_TEST_ACL_LDN}"; exit $? ;;
+  -lde | -led) cat "${SHIFT2EU_TEST_ACL_LDE:?set SHIFT2EU_TEST_ACL_LDE}"; exit $? ;;
+  esac
+fi
+exec %s "$@"
+`
+
+// useFakeLSWithACL puts an ls first on PATH that reports path as long and, with the -e that asks for the ACL
+// entries, as long plus acl, and hands every other call to the machine's own ls.
+func (sb *sandbox) useFakeLSWithACL(t *testing.T, env map[string]string, path, long, acl string) {
+	t.Helper()
+
+	longFile := filepath.Join(sb.root, "ls-ldn.txt")
+	aclFile := filepath.Join(sb.root, "ls-lde.txt")
+
+	writeFileMode(t, longFile, []byte(long), 0o600)
+	writeFileMode(t, aclFile, []byte(acl), 0o600)
+	writeFileMode(t, filepath.Join(sb.binDir, "ls"), []byte(fmt.Sprintf(fakeLSWithACL, strconv.Quote(realTool(t, "ls")))), 0o700)
+
+	env["SHIFT2EU_TEST_ACL_PATH"] = path
+	env["SHIFT2EU_TEST_ACL_LDN"] = longFile
+	env["SHIFT2EU_TEST_ACL_LDE"] = aclFile
+}
+
+// aclProbe makes the sandbox's ls report path the way a Mac reports a file with an ACL: the mode with a trailing
+// +, then the entry denyOnly picks, which is either one that allows an account (entries with an allow) or the
+// deny-only ACL macOS gives a home (group:everyone deny delete) (issue #227 part 2, audit 3, review 11).
+func aclProbe(t *testing.T, sb *sandbox, env map[string]string, path, entries string) {
+	t.Helper()
+
+	uid := strconv.Itoa(os.Getuid())
+	long := fmt.Sprintf("-rw-------+ 1 %s %s 1874 Nov 19 10:00 %s\n", uid, uid, path)
+
+	sb.useFakeLSWithACL(t, env, path, long, long+entries)
 }
 
 // fakeSleep stands in for sleep in a test that reaches a wait loop or a retry: it records its argv and returns
@@ -1761,6 +1924,14 @@ func invocations(log, tool string) [][]string {
 	}
 
 	return calls
+}
+
+// lastLine returns the last line of text that holds anything, without its line break: the line a whole-script
+// check reads.
+func lastLine(text string) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+
+	return lines[len(lines)-1]
 }
 
 // nonEmptyLines counts the lines of text that hold anything.

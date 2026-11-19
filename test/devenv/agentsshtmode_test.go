@@ -548,6 +548,42 @@ func TestAgentsAppTokenRefusesAPathTheTrustedRuleRejects(t *testing.T) {
 			paths:  func(f *sshModeFixture) []string { return []string{f.sshKey} },
 		},
 		{
+			name: "the App's key is in a sticky directory the running account owns",
+			change: func(t *testing.T, f *sshModeFixture) {
+				t.Helper()
+
+				// 1777 with the sticky bit, as /tmp is - but owned by the running account, not by root: only root
+				// gets the exception a sticky directory carries, since root's entries are the ones another account
+				// cannot rename away.
+				shared := filepath.Join(filepath.Dir(f.key.path), "shared")
+				if err := os.Mkdir(shared, 0o700); err != nil {
+					t.Fatalf("create %s: %v", shared, err)
+				}
+
+				chmodDir(t, shared, 0o777|os.ModeSticky)
+
+				info, err := os.Stat(shared)
+				if err != nil {
+					t.Fatalf("read the mode of %s: %v", shared, err)
+				}
+
+				if info.Mode()&os.ModeSticky == 0 || info.Mode()&os.ModeDir == 0 {
+					t.Fatalf("%s has the mode %v, without the sticky bit the test needs: the refusal below would then pin something else (issue #227 part 2, review 5)", shared, info.Mode())
+				}
+
+				if info.Mode().Perm() != 0o777 {
+					t.Fatalf("%s has the mode %v, want 1777: the test pins a sticky directory another account can write, as /tmp is (issue #227 part 2, review 5)", shared, info.Mode())
+				}
+
+				keyPath := filepath.Join(shared, "agents-app.pem")
+				writeFileMode(t, keyPath, f.key.pem, 0o600)
+
+				f.env["SHIFT2EU_AGENTS_APP_KEY_FILE"] = keyPath
+			},
+			reason: "writable",
+			paths:  func(f *sshModeFixture) []string { return []string{filepath.Join(filepath.Dir(f.key.path), "shared")} },
+		},
+		{
 			name:     "a compliant layout is accepted",
 			change:   func(*testing.T, *sshModeFixture) {},
 			accepted: true,
@@ -627,5 +663,76 @@ func chmodDir(t *testing.T, path string, mode os.FileMode) {
 
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatalf("chmod %s to %v: %v", path, mode, err)
+	}
+}
+
+// TestAgentsAppTokenTrustedPathChecksACLs pins audit 3 and review 11 of issue #227 part 2: a Mac's ls marks a mode
+// that carries an ACL with a trailing +, so the rule reads the ACL with ls -lde and refuses the entry when a
+// permission it grants is an allow for any account; a deny-only ACL, which every macOS home carries, grants
+// nothing and is accepted. The refresh refuses before it mints, naming the path and the ACL.
+func TestAgentsAppTokenTrustedPathChecksACLs(t *testing.T) {
+	t.Parallel()
+
+	const (
+		allowEntry = " 0: user:_shift2euagents allow read,write\n"
+		denyEntry  = " 0: group:everyone deny delete\n"
+	)
+
+	cases := []struct {
+		name     string
+		entries  string
+		accepted bool
+	}{
+		{name: "an ACL that allows another account", entries: allowEntry},
+		{name: "a deny-only ACL", entries: denyEntry, accepted: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newSSHModeFixture(t)
+			aclProbe(t, f.sb, f.env, f.key.path, tc.entries)
+
+			stdout, stderr, err := f.sb.run(t, f.script, []string{"mint"}, f.env, "")
+
+			if tc.accepted {
+				if err != nil {
+					t.Fatalf("the mint refused a path whose only ACL entry denies, exiting %d: a deny grants nothing, and every macOS home carries one, so the rule accepts it (issue #227 part 2, audit 3)\nstdout: %s\nstderr: %s",
+						exitStatusOf(t, err), stdout, stderr)
+				}
+
+				if len(f.api.minted()) != 1 {
+					t.Errorf("the accepted path minted %d tokens, want one", len(f.api.minted()))
+				}
+
+				f.assertNoLeaks(t, stdout, stderr)
+
+				return
+			}
+
+			if status := exitStatusOf(t, err); status != 1 {
+				t.Errorf("the mint exited %d for a key whose directory ACL allows another account, want the permanent failure's status 1 (issue #227 part 2, audit 3)\nstdout: %s\nstderr: %s",
+					status, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "ACL") {
+				t.Errorf("the refusal does not say the entry's ACL is what failed, so a maintainer cannot tell why the path is refused:\n%s", stderr)
+			}
+
+			if !mentionsOneOf(stderr, f.key.path, filepath.Dir(f.key.path)) {
+				t.Errorf("the refusal names neither %s nor its directory, so a maintainer cannot tell which path to fix:\n%s", f.key.path, stderr)
+			}
+
+			if got := f.api.posted(); len(got) != 0 {
+				t.Errorf("the run posted to %v before it refused the ACL: the rule is checked before the script mints", got)
+			}
+
+			if calls := f.ssh.calls(t); len(calls) > 0 {
+				t.Errorf("the run called ssh %v before it refused the ACL", calls[0])
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
 	}
 }

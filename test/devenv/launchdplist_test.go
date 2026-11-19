@@ -755,6 +755,98 @@ func TestAgentsTokenLaunchdPlistAccountMode(t *testing.T) {
 	})
 }
 
+// TestAgentsTokenLaunchdTrustedPathChecksACLs pins audit 3 and review 11 of issue #227 part 2 for the generator:
+// it applies the same rule the refresh does, so a path whose ACL allows another account is refused at install time
+// - naming the path and the ACL - and a deny-only ACL, which every macOS home carries, is accepted.
+func TestAgentsTokenLaunchdTrustedPathChecksACLs(t *testing.T) {
+	t.Parallel()
+
+	const (
+		allowEntry = " 0: user:_shift2euagents allow read,write\n"
+		denyEntry  = " 0: group:everyone deny delete\n"
+	)
+
+	home := accountHome(t)
+	clone := filepath.Join(home, "shift2eu-host")
+	script := filepath.Join(clone, launchdScript)
+	writeFileMode(t, script, []byte(readRepoFile(t, launchdScript)), 0o755)
+
+	secrets := filepath.Join(home, ".config", "shift2eu")
+	sshKey := filepath.Join(secrets, "agents-vm-ssh-key")
+	writeFileMode(t, sshKey, []byte("an invented ed25519 private key, never a real one\n"), 0o600)
+
+	knownHosts := filepath.Join(secrets, "known-hosts-shift2eu")
+	writeFileMode(t, knownHosts, []byte("shift2eu-vm-shift2eu ssh-ed25519 AAAA-invented-host-key\n"), 0o600)
+
+	newAccountFixture := func(t *testing.T) *launchdFixture {
+		t.Helper()
+
+		f := newLaunchdFixture(t, "shift2eu", xdgStateHomeUnset)
+		f.env["HOME"] = home
+		f.env["SHIFT2EU_AGENTS_VM_SSH_PORT"] = sshModePort
+		f.env["SHIFT2EU_AGENTS_VM_SSH_USER"] = sshModeUser
+		f.env["SHIFT2EU_AGENTS_VM_SSH_KEY"] = sshKey
+		f.env["SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS"] = knownHosts
+		f.sb.useFakeIDName(t, f.env, agentsAccount)
+
+		return f
+	}
+
+	cases := []struct {
+		name     string
+		entries  string
+		accepted bool
+	}{
+		{name: "an ACL that allows another account", entries: allowEntry},
+		{name: "a deny-only ACL", entries: denyEntry, accepted: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccountFixture(t)
+			aclProbe(t, f.sb, f.env, f.key.path, tc.entries)
+
+			stdout, stderr, err := f.sb.run(t, script, []string{"plist"}, f.env, "")
+
+			if tc.accepted {
+				if err != nil {
+					t.Fatalf("sh %s plist refused a path whose only ACL entry denies, exiting %d: a deny grants nothing, and every macOS home carries one, so the rule accepts it (issue #227 part 2, audit 3)\nstdout: %s\nstderr: %s",
+						launchdScript, exitStatusOf(t, err), stdout, stderr)
+				}
+
+				if strings.TrimSpace(stdout) == "" {
+					t.Errorf("the generator printed no plist for a path with a deny-only ACL")
+				}
+
+				f.assertNoLeaks(t, stdout, stderr)
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("sh %s plist exited 0 although the App key's ACL allows another account: the generator applies the trusted path rule at install time, so the job is never rendered for a path another account controls (issue #227 part 2, audit 3)\nstdout: %s\nstderr: %s",
+					launchdScript, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "ACL") {
+				t.Errorf("the refusal does not say the entry's ACL is what failed, so a maintainer cannot tell why the path is refused:\n%s", stderr)
+			}
+
+			if !mentionsOneOf(stderr, f.key.path, filepath.Dir(f.key.path)) {
+				t.Errorf("the refusal names neither %s nor its directory, so a maintainer cannot tell which path to fix:\n%s", f.key.path, stderr)
+			}
+
+			if strings.TrimSpace(stdout) != "" {
+				t.Errorf("the generator printed a plist although it refused a path the rule rejects:\n%s", stdout)
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
+}
+
 // plistValue is one value of a parsed property list: the kinds these tests read, and no more.
 type plistValue struct {
 	kind  string // "dict", "array", "string", "integer", or one of the self-closing booleans
