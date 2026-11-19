@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.9.0](https://github.com/timothymamo/shift2eu/compare/v0.8.1...v0.9.0) (2026-11-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **jsonreport:** shift2eu assess --format json now writes schemaVersion 3 by default: a total whose estimated count is 0 has no amount key. Pass --schema-version 2 for the previous document. The HTTP API's /v1/assessments still answers schemaVersion 2 unless the request asks for 3.
+
+### Features
+
+* **jsonreport:** write schemaVersion 3, with no amount when nothing is estimated ([#307](https://github.com/timothymamo/shift2eu/issues/307)) ([#322](https://github.com/timothymamo/shift2eu/issues/322)) ([6a6acc4](https://github.com/timothymamo/shift2eu/commit/6a6acc47a9fc29c913c40b59c646c42a5cb2343e))
+
+
+### Bug Fixes
+
+* **devenv:** keep one refresher on a contested stale lock and kill the sleep in the trap window ([#288](https://github.com/timothymamo/shift2eu/issues/288), [#289](https://github.com/timothymamo/shift2eu/issues/289)) ([#317](https://github.com/timothymamo/shift2eu/issues/317)) ([1f82cbf](https://github.com/timothymamo/shift2eu/commit/1f82cbf07d61483cf1f94686ab5d2b6646b69014))
+* **devenv:** run every host target only from the host clone ([#227](https://github.com/timothymamo/shift2eu/issues/227) part 1) ([#323](https://github.com/timothymamo/shift2eu/issues/323)) ([e8b8df1](https://github.com/timothymamo/shift2eu/commit/e8b8df129c6b59e14713d2e70eefbfb439fa6015))
+* **scaleway:** list Kubernetes Kapsule Dedicated in it-mil ([#325](https://github.com/timothymamo/shift2eu/issues/325)) ([5f77772](https://github.com/timothymamo/shift2eu/commit/5f77772a26c1e82d082b1c0de2e9b149ea49abaa))
+
 ## [0.8.1](https://github.com/timothymamo/shift2eu/compare/v0.8.0...v0.8.1) (2026-11-19)
 
 
