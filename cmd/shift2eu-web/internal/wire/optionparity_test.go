@@ -116,6 +116,14 @@ func TestThePageAndTheCLIRefuseTheSameOptions(t *testing.T) {
 			estimate: true,
 		},
 		{
+			// The comparison branch names the target in the message, so both
+			// driving adapters must refuse with that same line.
+			name:     "an unknown region for one of several targets",
+			targets:  []string{"ovhcloud", "scaleway"},
+			regions:  []web.Region{{Target: "scaleway", Region: "xx-nope"}},
+			estimate: true,
+		},
+		{
 			name:     "an empty region",
 			targets:  []string{"scaleway"},
 			regions:  []web.Region{{Target: "scaleway"}},

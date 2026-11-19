@@ -66,7 +66,8 @@ func wantLintTargets(targets []releasetarget.Target) []string {
 
 // forbiddenWebDeps are the packages the site's module may not reach, each with
 // why: a page that reaches one can send the inventory it was given, or start a
-// process, which no browser page can honestly promise.
+// process, which no browser page can honestly promise. The net packages are
+// refused by the rule below instead, which allows the pure parsing ones.
 var forbiddenWebDeps = []struct {
 	// path is refused as the import path itself.
 	path string
@@ -75,14 +76,19 @@ var forbiddenWebDeps = []struct {
 	// why is what reaching it would allow.
 	why string
 }{
-	{path: "net", why: "a host name lookup or a raw connection"},
-	{path: "net/http", prefix: true, why: "an HTTP request, the module's whole content included"},
 	{path: "os/exec", why: "a process that could carry the inventory out of the browser"},
 	{path: "github.com/aws/", prefix: true, why: "a cloud SDK, which speaks to a hyperscaler"},
 	{path: "github.com/Azure/", prefix: true, why: "a cloud SDK, which speaks to a hyperscaler"},
 	{path: "cloud.google.com/", prefix: true, why: "a cloud SDK, which speaks to a hyperscaler"},
 	{path: "google.golang.org/api", prefix: true, why: "a cloud SDK, which speaks to a hyperscaler"},
 }
+
+// pureNetPackages are the net packages the site's module may reach: the ones that
+// parse a value and open nothing. Every other net and net/... package is refused
+// below, so a new one is reviewed before the page may reach it. A package that
+// resolves a name or dials (net, net/http, net/smtp, net/rpc, ...) can carry the
+// inventory out of the browser.
+var pureNetPackages = []string{"net/netip", "net/url"}
 
 // syscallJSImporters are the standard packages whose js/wasm implementations may
 // import syscall/js beside the site's own glue, named on purpose: a new one fails
@@ -96,6 +102,9 @@ var syscallJSImporters = []string{"syscall", "time"}
 // point must not hold net, net/http, os/exec or a cloud SDK, and only the site's
 // own package may import syscall/js. It fails when go list fails too, so a
 // dependency tree the check could not read is no pass.
+//
+// Every net and net/... package is refused except pureNetPackages' few, so a
+// package added to that tree later is reviewed here rather than shipped.
 func TestWebBinaryReachesNoNetworkAndNoCloud(t *testing.T) {
 	t.Parallel()
 
@@ -115,6 +124,13 @@ func TestWebBinaryReachesNoNetworkAndNoCloud(t *testing.T) {
 
 	for _, pkg := range pkgs {
 		listed = append(listed, pkg.ImportPath)
+
+		if isNetPackage(pkg.ImportPath) && !slices.Contains(pureNetPackages, pkg.ImportPath) {
+			t.Errorf("%s reaches %s, a net package that is not one of the pure parsing ones (%s): the page promises that no inventory leaves the browser, so review what it does, then add it here and to the record",
+				webMain, pkg.ImportPath, strings.Join(pureNetPackages, ", "))
+
+			continue
+		}
 
 		for _, forbidden := range forbiddenWebDeps {
 			if pkg.ImportPath != forbidden.path &&
@@ -151,6 +167,12 @@ func TestWebBinaryReachesNoNetworkAndNoCloud(t *testing.T) {
 			t.Errorf("go list did not list %s in %s, so the check above read nothing of it", want, webMain)
 		}
 	}
+}
+
+// isNetPackage reports whether path is the net package or one under it, the
+// packages the offline check allows only from pureNetPackages.
+func isNetPackage(path string) bool {
+	return path == "net" || strings.HasPrefix(path, "net/")
 }
 
 // TestWebReleaseTargetDependencies holds the site's binary to the architecture
@@ -215,10 +237,22 @@ func TestWebBinaryRunsNeitherTheCLINorTheHTTPAPI(t *testing.T) {
 // until then the budget fails the test rather than the release.
 const webModuleSizeBudget = 3 << 20
 
+// webModuleScriptTemplate is the module script the site ships, in the one form
+// PRD #297 (Layer 2) fixes it: the module base64-encoded in a single assignment
+// to globalThis.__shift2euModule, then one newline. Nothing else may be in the
+// file, so the script carries no code but the module. The size below is measured
+// on this exact template, the file the edge serves.
+const webModuleScriptTemplate = "globalThis.__shift2euModule=\"%s\";\n"
+
 // TestWebModuleStaysWithinTheSizeBudget builds the site's module as the site
 // ships it, base64-encodes it as the module script carries it and gzips it, and
 // fails when the transferred script is over webModuleSizeBudget. The raw and the
 // compressed size are logged, so the record is in the test's output.
+//
+// The script is compressed at gzip's default level. Which level and encoding the
+// edge actually serves it with is milestone 3's decision (PRD #297, Hosting
+// decision 4), so this measures the transferred file at the default level and
+// leaves the edge's own settings to that milestone.
 func TestWebModuleStaysWithinTheSizeBudget(t *testing.T) {
 	t.Parallel()
 
@@ -238,14 +272,12 @@ func TestWebModuleStaysWithinTheSizeBudget(t *testing.T) {
 		t.Fatalf("read the built module: %v", err)
 	}
 
-	// The module script carries the module base64-encoded in a string, as
-	// milestone 2's fixed template does; the template's own bytes are fixed and
-	// negligible, so the budget is measured on the encoded module alone.
+	// The module script carries the module base64-encoded in a string, as the
+	// fixed template writes it: no byte of it is anything but the module, so the
+	// budget is measured on the whole script.
 	var script bytes.Buffer
 
-	script.WriteString(`globalThis.__shift2euModule = "`)
-	script.WriteString(base64.StdEncoding.EncodeToString(raw))
-	script.WriteString(`";`)
+	fmt.Fprintf(&script, webModuleScriptTemplate, base64.StdEncoding.EncodeToString(raw))
 
 	var compressed bytes.Buffer
 

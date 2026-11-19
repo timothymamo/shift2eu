@@ -58,6 +58,12 @@ func newAssessor(tb testing.TB) *web.Assessor {
 // Markdown and JSON reports. The page reads an inventory document, so its
 // inventory reader is the in-memory one; the CLI reads a file, and the reports
 // must not differ for that.
+//
+// It mirrors the deps function of cmd/shift2eu/main.go, which this test cannot
+// import: that is a main package, and a main package is not importable. Every
+// target, format and reader the CLI's composition root wires must be wired here
+// too, and kept in step with it by hand, or the parity below compares the page
+// with a CLI nobody runs.
 func cliDeps() cli.Deps {
 	deps := webDeps()
 

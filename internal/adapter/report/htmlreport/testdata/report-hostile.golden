@@ -13,8 +13,8 @@
 <tbody>
 <tr><td>direct</td><td>1</td></tr>
 <tr><td>partial</td><td>0</td></tr>
-<tr><td>none</td><td>2</td></tr>
-<tr><td>total</td><td>3</td></tr>
+<tr><td>none</td><td>3</td></tr>
+<tr><td>total</td><td>4</td></tr>
 </tbody>
 </table>
 <h3>Resources</h3>
@@ -24,6 +24,7 @@
 </thead>
 <tbody>
 <tr><td><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></td><td><code>&lt;img src=x onerror=alert(1)&gt;</code></td><td><code>storage.object</code></td><td><code>eu&#34;west</code></td><td>direct</td><td><code>Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code></td><td><code>Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>__shift2euModule</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></td></tr>
 <tr><td><code>a&#34;b&#39;c&amp;d</code></td><td><code>javascript:alert(1)</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></td></tr>
 <tr><td><code>onerror=alert(1) x=</code></td><td><code>&#34; onmouseover=&#34;alert(1)</code></td><td><code>unclassified</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>not classified</td></tr>
 </tbody>
@@ -32,10 +33,20 @@
 <p>None.</p>
 <h3>Blockers</h3>
 <ul>
+<li><code>__shift2euModule</code>: no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></li>
 <li><code>a&#34;b&#39;c&amp;d</code>: no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></li>
 <li><code>onerror=alert(1) x=</code>: not classified</li>
 </ul>
 <h3>Workloads</h3>
+<h4><code>shift2euAssess</code></h4>
+<ul>
+<li>Fit: 0 direct, 0 partial, 1 none</li>
+<li>Blockers:
+<ul>
+<li><code>__shift2euModule</code>: no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></li>
+</ul>
+</li>
+</ul>
 <h4><code>ws &lt;script&gt;alert(&#39;workload&#39;)&lt;/script&gt;</code></h4>
 <ul>
 <li>Fit: 1 direct, 0 partial, 0 none</li>

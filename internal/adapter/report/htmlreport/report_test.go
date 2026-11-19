@@ -192,6 +192,11 @@ func comparisonResources() []inventory.Resource {
 // hostileResources is an inventory whose text values would be markup in a page
 // if the reporter wrote them unescaped. They are valid free text, so the domain
 // takes them as they are and the reporter is what must escape them.
+//
+// The last resource is named after the page's module global and the glue's
+// function (PRD #297, Layer 2): a report shows those names as text and writes no
+// id or name attribute with them, so no report element can shadow the global or
+// a name the glue reads.
 func hostileResources() []inventory.Resource {
 	return []inventory.Resource{
 		{
@@ -216,7 +221,76 @@ func hostileResources() []inventory.Resource {
 				taxonomy.Snapshots,
 			},
 		},
+		{
+			ID:       `__shift2euModule`,
+			RawType:  `AWS::EC2::Instance`,
+			Category: taxonomy.ComputeVM,
+			Region:   `eu-west-1`,
+			Workload: `shift2euAssess`,
+		},
 	}
+}
+
+// hostileComparisonResources is the inventory the hostile comparison golden
+// assesses: the values of hostileResources, this time sized and grouped by
+// workload, so the comparison's estimates and workload sections carry hostile
+// plan, offering and workload names too, and one relation, so a blocker on one
+// resource reaches another.
+func hostileComparisonResources() []inventory.Resource {
+	return []inventory.Resource{
+		{
+			ID:          `<script>alert(1)</script>`,
+			RawType:     `<img src=x onerror=alert(1)>`,
+			Category:    taxonomy.StorageObject,
+			Region:      `eu"west`,
+			Size:        &inventory.Size{StorageGiB: sized(500)},
+			Workload:    `ws <script>alert('workload')</script>`,
+			MonthlyCost: &inventory.Cost{Amount: sized(12), Currency: "EUR"},
+		},
+		{
+			ID:       `onerror=alert(1) x=`,
+			RawType:  `" onmouseover="alert(1)`,
+			Category: taxonomy.Unclassified,
+			Region:   `eu-west-1`,
+			Workload: `shift2euAssess`,
+		},
+		{
+			ID:           `a"b'c&d`,
+			RawType:      `javascript:alert(1)`,
+			Category:     taxonomy.ComputeVM,
+			Region:       `eu-west-1`,
+			Capabilities: []taxonomy.Capability{taxonomy.Snapshots},
+			Size:         &inventory.Size{VCPUs: sized(1), MemoryGiB: sized(2)},
+			Workload:     `orders<script>alert('orders')</script>`,
+			Relations: []inventory.Relation{
+				{Type: inventory.DependsOn, Target: `onerror=alert(1) x=`},
+			},
+		},
+		{
+			// A capability the hostile catalogs lack, so the resource is partial
+			// and its required change names a hostile offering.
+			ID:           `__shift2euModule`,
+			RawType:      `AWS::EC2::Instance`,
+			Category:     taxonomy.ComputeVM,
+			Region:       `eu-west-1`,
+			Capabilities: []taxonomy.Capability{taxonomy.NodeHighAvailability, taxonomy.Snapshots},
+			Size:         &inventory.Size{VCPUs: sized(1), MemoryGiB: sized(2)},
+			Workload:     `shift2euAssess`,
+		},
+	}
+}
+
+// catalogFor builds a catalog through catalog.New, failing the test when the
+// domain refuses it.
+func catalogFor(tb testing.TB, target string, snapshot catalog.Snapshot, offerings []catalog.Offering) catalog.Catalog {
+	tb.Helper()
+
+	cat, err := catalog.New(target, snapshot, offerings)
+	if err != nil {
+		tb.Fatalf("catalog.New() returned unexpected error: %v", err)
+	}
+
+	return cat
 }
 
 // hostileCatalog is a catalog whose target and offering names carry the same
@@ -224,18 +298,43 @@ func hostileResources() []inventory.Resource {
 func hostileCatalog(tb testing.TB) catalog.Catalog {
 	tb.Helper()
 
-	cat, err := catalog.New(`Evil "Target" & <b>`, testutil.ScalewaySnapshot(), []catalog.Offering{
+	return catalogFor(tb, `Evil "Target" & <b>`, testutil.ScalewaySnapshot(), []catalog.Offering{
 		{
 			Name:       `Object <script>alert('offering')</script> Storage`,
 			Categories: []taxonomy.Category{taxonomy.StorageObject},
 			Regions:    []string{"fr-par"},
 		},
 	})
-	if err != nil {
-		tb.Fatalf("catalog.New() returned unexpected error: %v", err)
-	}
+}
 
-	return cat
+// hostilePricedOfferings is the offerings of one hostile target: storage.object
+// priced by the GiB and compute.vm with one plan, both offered in region. Each
+// name is target's own hostile name with a hostile name of its part, so two
+// targets' offerings and plans stay apart in the golden.
+func hostilePricedOfferings(region, target string) []catalog.Offering {
+	return []catalog.Offering{
+		{
+			Name:          target + ` Object <script>alert('offering')</script> Storage`,
+			Categories:    []taxonomy.Category{taxonomy.StorageObject},
+			Capabilities:  []taxonomy.Capability{taxonomy.IPv6},
+			Regions:       []string{region},
+			StoragePrices: []catalog.Price{{Amount: 500, Currency: catalog.EUR}},
+		},
+		{
+			Name:         target + ` Compute "Tier" & <i>`,
+			Categories:   []taxonomy.Category{taxonomy.ComputeVM},
+			Capabilities: []taxonomy.Capability{taxonomy.Snapshots},
+			Regions:      []string{region},
+			Plans: []catalog.Plan{
+				{
+					Name:           target + ` Plan <b>Small</b>`,
+					VCPUs:          1,
+					MemoryMilliGiB: 2000,
+					Prices:         []catalog.Price{{Amount: 100000, Currency: catalog.EUR}},
+				},
+			},
+		},
+	}
 }
 
 // render writes the report of a and meta and returns it.
@@ -342,14 +441,89 @@ func TestReportHostileValues(t *testing.T) {
 
 	checkFragment(t, got)
 	checkNoInjectedMarkup(t, got)
+	checkNoIDOrNameAttribute(t, got)
 
-	for _, value := range hostileValues() {
-		if want := escapedText(value); !strings.Contains(string(got), want) {
-			t.Errorf("the fragment does not show %q as text (%q):\n%s", value, want, got)
+	checkValuesShownAsText(t, got, hostileValues())
+
+	testutil.Golden(t, "testdata/report-hostile.golden", got)
+}
+
+// TestReportHostileComparison pins that a comparison whose inventory values,
+// target names, offering names and plan names would all be markup in a page
+// reaches the fragment as text. Estimates are on and the resources are grouped
+// by workload, so the comparison's own sections, the shared blockers and each
+// target's estimate and workload sections are covered with hostile names too.
+func TestReportHostileComparison(t *testing.T) {
+	t.Parallel()
+
+	inv := newInventory(t, hostileSourceName, hostileComparisonResources())
+
+	// Two targets, each with offerings named after it, so the golden shows two
+	// different hostile names in every comparison section.
+	targets := []struct {
+		key       string
+		target    string
+		snapshot  catalog.Snapshot
+		offerings []catalog.Offering
+	}{
+		{
+			key:       "ovhcloud",
+			target:    `Evil "Target" & <b>`,
+			snapshot:  testutil.OVHcloudSnapshot(),
+			offerings: hostilePricedOfferings("gra", `Evil "Target" & <b>`),
+		},
+		{
+			key:       "scaleway",
+			target:    `<script>Target</script> "Two"`,
+			snapshot:  testutil.ScalewaySnapshot(),
+			offerings: hostilePricedOfferings("fr-par", `<script>Target</script> "Two"`),
+		},
+	}
+
+	assessed := make([]assessment.TargetAssessment, 0, len(targets))
+	values := make([]string, 0, len(targets)*3)
+
+	for _, target := range targets {
+		assessed = append(assessed, assessment.TargetAssessment{
+			Key: target.key,
+			Assessment: assessment.AssessWith(inv, catalogFor(t, target.target, target.snapshot, target.offerings),
+				assessment.Options{Estimate: true}),
+		})
+
+		values = append(values, target.target)
+
+		for _, offering := range target.offerings {
+			values = append(values, offering.Name)
+
+			for _, plan := range offering.Plans {
+				values = append(values, plan.Name)
+			}
 		}
 	}
 
-	testutil.Golden(t, "testdata/report-hostile.golden", got)
+	got := renderComparison(t, assessment.Compare(assessed), analysis.ReportMeta{InventoryName: hostileInventoryName})
+
+	checkFragment(t, got)
+	checkNoInjectedMarkup(t, got)
+	checkNoIDOrNameAttribute(t, got)
+	checkValuesAreEscaped(t, got, resourceIDs(hostileComparisonResources()))
+	checkValuesShownAsText(t, got, append(values, hostileComparisonWorkloads()...))
+
+	testutil.Golden(t, "testdata/comparison-hostile.golden", got)
+}
+
+// hostileComparisonWorkloads returns the workloads of the hostile comparison
+// inventory, which the golden shows as the headings of its workload sections.
+func hostileComparisonWorkloads() []string {
+	var workloads []string
+
+	for _, r := range hostileComparisonResources() {
+		if r.Workload != "" {
+			workloads = append(workloads, r.Workload)
+		}
+	}
+
+	return workloads
 }
 
 // TestReportControlCharacters pins that a value the domain's constructors would
@@ -473,6 +647,8 @@ const hostileSourceName = "aws"
 // hostileValues returns every hostile fixture value a report must show as text.
 func hostileValues() []string {
 	return []string{
+		`__shift2euModule`,
+		`shift2euAssess`,
 		`<script>alert(1)</script>`,
 		`<img src=x onerror=alert(1)>`,
 		`eu"west`,
@@ -520,6 +696,37 @@ func checkValuesAreEscaped(t *testing.T, got []byte, ids []string) {
 	for _, id := range ids {
 		if want := escapedText(id); !strings.Contains(string(got), want) {
 			t.Errorf("the fragment does not show the resource ID %q as text (%q):\n%s", id, want, got)
+		}
+	}
+}
+
+// checkNoIDOrNameAttribute fails when the fragment writes an id or a name
+// attribute. A report holds none: a value is never written into a tag, so no
+// report element can shadow the page's global or a name the glue reads through
+// DOM named access (PRD #297, Layer 2). The hostile goldens carry inventories
+// whose names equal those globals, so a reporter that started writing one into an
+// id would be caught here and in the golden's diff.
+func checkNoIDOrNameAttribute(t *testing.T, got []byte) {
+	t.Helper()
+
+	lower := strings.ToLower(string(got))
+
+	for _, attribute := range []string{` id="`, ` name="`} {
+		if strings.Contains(lower, attribute) {
+			t.Errorf("the fragment holds the attribute %q, want no id or name attribute at all:\n%s",
+				attribute, got)
+		}
+	}
+}
+
+// checkValuesShownAsText fails when a value the report was given does not reach
+// the fragment as text.
+func checkValuesShownAsText(t *testing.T, got []byte, values []string) {
+	t.Helper()
+
+	for _, value := range values {
+		if want := escapedText(value); !strings.Contains(string(got), want) {
+			t.Errorf("the fragment does not show %q as text (%q):\n%s", value, want, got)
 		}
 	}
 }

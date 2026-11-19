@@ -24,17 +24,23 @@ const (
 )
 
 // downloadOption is one set of options a download is compared for: the target
-// choice, the region per target and the estimate switch.
+// choice, the region per target, the estimate switch and the JSON report's
+// schemaVersion.
 type downloadOption struct {
 	name     string
 	targets  []string
 	regions  []web.Region
 	estimate bool
+	// schemaVersion is the schemaVersion the JSON download is written in: "2", or
+	// "" for the default. The Markdown download has no schemaVersion, and the CLI
+	// refuses --schema-version beside another format, so it reaches the JSON
+	// comparison alone.
+	schemaVersion string
 }
 
 // downloadOptions are the option sets every inventory is downloaded with: one
 // target, several and every target, with and without a region, and with and
-// without estimates.
+// without estimates, and schema version 2 for one target and for every target.
 func downloadOptions() []downloadOption {
 	return []downloadOption{
 		{name: "one target", targets: []string{"scaleway"}, estimate: true},
@@ -54,6 +60,18 @@ func downloadOptions() []downloadOption {
 		},
 		{name: "one target without estimates", targets: []string{"scaleway"}, estimate: false},
 		{name: "every target without estimates", targets: []string{"all"}, estimate: false},
+		{
+			name:          "one target in schema version 2",
+			targets:       []string{"scaleway"},
+			estimate:      true,
+			schemaVersion: "2",
+		},
+		{
+			name:          "every target in schema version 2",
+			targets:       []string{"all"},
+			estimate:      true,
+			schemaVersion: "2",
+		},
 	}
 }
 
@@ -61,7 +79,8 @@ func downloadOptions() []downloadOption {
 // inventory and options, the page's Markdown and JSON downloads are byte for
 // byte what `shift2eu assess --format markdown` and `--format json` print, for
 // every bundled example and the hostile fixture, for one target, several and
-// every target, with and without a region and estimates.
+// every target, with and without a region and estimates, and in the JSON report's
+// schema version 2 as well as the default.
 func TestDownloadsMatchTheCLI(t *testing.T) {
 	t.Parallel()
 
@@ -81,6 +100,7 @@ func TestDownloadsMatchTheCLI(t *testing.T) {
 					Targets:       option.targets,
 					Regions:       option.regions,
 					Estimate:      option.estimate,
+					SchemaVersion: option.schemaVersion,
 					InventoryName: name,
 				})
 				if err != nil {
@@ -88,11 +108,19 @@ func TestDownloadsMatchTheCLI(t *testing.T) {
 				}
 
 				for _, format := range []string{markdownFormat, jsonFormat} {
+					// --schema-version is the JSON report's alone: the CLI refuses it
+					// beside another format, so the Markdown comparison is given none.
+					schemaVersion := option.schemaVersion
+					if format != jsonFormat {
+						schemaVersion = ""
+					}
+
 					args := assessArgs(path, optionCase{
-						targets:  option.targets,
-						regions:  option.regions,
-						estimate: option.estimate,
-						format:   format,
+						targets:       option.targets,
+						regions:       option.regions,
+						estimate:      option.estimate,
+						schemaVersion: schemaVersion,
+						format:        format,
 					})
 					outcome := runCLI(t, args...)
 					if outcome.exit != 0 {
