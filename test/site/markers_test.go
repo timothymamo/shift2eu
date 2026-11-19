@@ -111,7 +111,7 @@ func checkMarker(t *testing.T, bundle *bundle, page, marker string, shown bool, 
 	t.Helper()
 
 	doc := bundle.html(t, page)
-	stylesheet, _ := bundle.asset(t, "style", ".css")
+	_, stylesheet := bundle.asset(t, "style", ".css")
 
 	rules := parseCSS(t, "stylesheet", []byte(stylesheet))
 	props := customProperties(rules)
@@ -152,6 +152,105 @@ func checkMarker(t *testing.T, bundle *bundle, page, marker string, shown bool, 
 
 	if reason := hiddenReason(t, el, rules, props); reason != "" {
 		t.Errorf("%s's element with id %q is hidden because %s: %s must be shown by default", page, marker, reason, statement)
+	}
+}
+
+// TestHiddenReasonFiresOnAHiddenMarker pins the Hidden definition in both
+// directions on synthetic pages, so a marker check cannot pass vacuously: a
+// checkMarker that answered "shown" to everything would let a hidden statement
+// through. Every construct PRD #297's Privacy statement lists as hidden is
+// reported, and a plainly shown statement is not. The synthetic pages keep this
+// test independent of the built bundle, which is what checkMarker reads.
+func TestHiddenReasonFiresOnAHiddenMarker(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		source     string
+		stylesheet string
+		hidden     bool
+	}{
+		{
+			name:   "a statement in plain markup is shown",
+			source: `<body><p id="marker">A statement.</p></body>`,
+		},
+		{
+			name:   "the hidden attribute on the statement hides it",
+			source: `<body><p id="marker" hidden>A statement.</p></body>`,
+			hidden: true,
+		},
+		{
+			name:   "the hidden attribute on an ancestor hides it",
+			source: `<body><div hidden><p id="marker">A statement.</p></div></body>`,
+			hidden: true,
+		},
+		{
+			name:   "aria-hidden=\"true\" on an ancestor hides it",
+			source: `<body><section aria-hidden="true"><p id="marker">A statement.</p></section></body>`,
+			hidden: true,
+		},
+		{
+			name:   "a closed details ancestor hides it",
+			source: `<body><details><p id="marker">A statement.</p></details></body>`,
+			hidden: true,
+		},
+		{
+			name:   "an open details ancestor does not hide it",
+			source: `<body><details open><p id="marker">A statement.</p></details></body>`,
+		},
+		{
+			name:       "a rule on the statement's id setting display: none hides it",
+			source:     `<body><p id="marker">A statement.</p></body>`,
+			stylesheet: `#marker { display: none; }`,
+			hidden:     true,
+		},
+		{
+			name:       "a rule on an ancestor's class setting visibility: hidden hides it",
+			source:     `<body><div class="notice"><p id="marker">A statement.</p></div></body>`,
+			stylesheet: `.notice { visibility: hidden; }`,
+			hidden:     true,
+		},
+		{
+			name:       "a rule on an ancestor setting a zero height hides it",
+			source:     `<body><div class="fold"><p id="marker">A statement.</p></div></body>`,
+			stylesheet: `.fold { height: 0; }`,
+			hidden:     true,
+		},
+		{
+			name:       "a rule that matches nothing leaves it shown",
+			source:     `<body><p id="marker">A statement.</p></body>`,
+			stylesheet: `.other { display: none; }`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := parseHTML(t, "synthetic.html", []byte(tc.source))
+
+			var marker *element
+
+			for _, el := range doc.all() {
+				if id, ok := el.attr("id"); ok && id == "marker" {
+					marker = el
+				}
+			}
+
+			if marker == nil {
+				t.Fatalf("the reader found no element with id %q in %q, so this check would test nothing", "marker", tc.source)
+			}
+
+			rules := parseCSS(t, "stylesheet", []byte(tc.stylesheet))
+			reason := hiddenReason(t, marker, rules, customProperties(rules))
+
+			switch {
+			case tc.hidden && reason == "":
+				t.Errorf("hiddenReason reports nothing about %q, but PRD #297's Privacy statement counts it as hidden: a marker behind it must not pass as shown", tc.source)
+			case !tc.hidden && reason != "":
+				t.Errorf("hiddenReason reports %q about %q, but nothing hides the statement there", reason, tc.source)
+			}
+		})
 	}
 }
 
