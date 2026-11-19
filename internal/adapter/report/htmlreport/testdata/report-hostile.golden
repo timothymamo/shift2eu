@@ -1,0 +1,54 @@
+<section class="shift2eu-report">
+<h2>Migration assessment: <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code></h2>
+<ul>
+<li>Inventory file: <code>inv &#34;report&#34; &lt;script&gt;alert(&#39;name&#39;)&lt;/script&gt;.json</code></li>
+<li>Source: <code>aws</code></li>
+<li>Catalog: <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> snapshot from <code>https://www.scaleway.com/en/pricing/</code>, retrieved 2026-11-01</li>
+</ul>
+<h3>Summary</h3>
+<table>
+<thead>
+<tr><th scope="col">Fit</th><th scope="col">Resources</th></tr>
+</thead>
+<tbody>
+<tr><td>direct</td><td>1</td></tr>
+<tr><td>partial</td><td>0</td></tr>
+<tr><td>none</td><td>2</td></tr>
+<tr><td>total</td><td>3</td></tr>
+</tbody>
+</table>
+<h3>Resources</h3>
+<table>
+<thead>
+<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
+</thead>
+<tbody>
+<tr><td><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></td><td><code>&lt;img src=x onerror=alert(1)&gt;</code></td><td><code>storage.object</code></td><td><code>eu&#34;west</code></td><td>direct</td><td><code>Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code></td><td><code>Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>a&#34;b&#39;c&amp;d</code></td><td><code>javascript:alert(1)</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></td></tr>
+<tr><td><code>onerror=alert(1) x=</code></td><td><code>&#34; onmouseover=&#34;alert(1)</code></td><td><code>unclassified</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>not classified</td></tr>
+</tbody>
+</table>
+<h3>Required changes</h3>
+<p>None.</p>
+<h3>Blockers</h3>
+<ul>
+<li><code>a&#34;b&#39;c&amp;d</code>: no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></li>
+<li><code>onerror=alert(1) x=</code>: not classified</li>
+</ul>
+<h3>Workloads</h3>
+<h4><code>ws &lt;script&gt;alert(&#39;workload&#39;)&lt;/script&gt;</code></h4>
+<ul>
+<li>Fit: 1 direct, 0 partial, 0 none</li>
+<li>Blockers: none</li>
+</ul>
+<h4>No workload</h4>
+<ul>
+<li>Fit: 0 direct, 0 partial, 2 none</li>
+<li>Blockers:
+<ul>
+<li><code>a&#34;b&#39;c&amp;d</code>: no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></li>
+<li><code>onerror=alert(1) x=</code>: not classified</li>
+</ul>
+</li>
+</ul>
+</section>

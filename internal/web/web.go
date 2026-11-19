@@ -1,10 +1,17 @@
 package web
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
+	"maps"
+	"slices"
 
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
+	"github.com/timothymamo/shift2eu/internal/domain/assessment"
+	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/version"
 )
 
@@ -118,9 +125,6 @@ func (e *Error) Error() string { return e.Err.Error() }
 // Unwrap returns Err.
 func (e *Error) Unwrap() error { return e.Err }
 
-// errNotImplemented is what the skeleton's Assess returns.
-var errNotImplemented = errors.New("web: not implemented")
-
 // errMissingAdapter is returned by New for a Deps without an adapter it
 // needs: a wiring mistake in the composition root.
 var errMissingAdapter = errors.New("the web adapter is wired without an adapter it needs")
@@ -161,8 +165,225 @@ func New(deps Deps) (*Assessor, error) {
 // doc is read, KindInventory for a document the inventory reader refuses and
 // KindInternal for anything else. Assess takes ownership of doc, as
 // inventoryfile.FromBytes does.
-func (*Assessor) Assess(_ context.Context, _ []byte, _ Options) (Result, error) {
-	return Result{}, &Error{Kind: KindInternal, Err: errNotImplemented}
+func (a *Assessor) Assess(ctx context.Context, doc []byte, opts Options) (Result, error) {
+	run, err := a.plan(opts)
+	if err != nil {
+		return Result{}, &Error{Kind: KindUsage, Err: err}
+	}
+
+	reports := &reportSet{
+		markdown:       a.deps.Markdown,
+		json:           a.deps.JSON,
+		html:           a.deps.HTML,
+		schemaVersion:  run.schemaVersion,
+		markdownReport: &bytes.Buffer{},
+		jsonReport:     &bytes.Buffer{},
+		htmlReport:     &bytes.Buffer{},
+	}
+
+	source := &inventorySource{source: a.deps.NewInventorySource(doc)}
+	meta := analysis.ReportMeta{InventoryName: opts.InventoryName}
+
+	if err := a.run(ctx, run, source, reports, meta); err != nil {
+		return Result{}, classify(err, run.targets)
+	}
+
+	// A run cancelled while the reports were rendered returns none: the page
+	// asked it to stop.
+	if err := ctx.Err(); err != nil {
+		return Result{}, &Error{Kind: KindInternal, Err: fmt.Errorf("cancelled before returning the report: %w", err)}
+	}
+
+	return Result{
+		Markdown: reports.markdownReport.Bytes(),
+		JSON:     reports.jsonReport.Bytes(),
+		HTML:     reports.htmlReport.Bytes(),
+	}, nil
+}
+
+// runOptions are the checked options of one run.
+type runOptions struct {
+	// targets are the selected target keys, sorted and distinct.
+	targets []string
+	// regions maps a selected target's key to its chosen region.
+	regions map[string]string
+	// estimate turns plans and estimates on.
+	estimate bool
+	// schemaVersion is the JSON report's schemaVersion.
+	schemaVersion int
+}
+
+// plan checks opts by the application's option rules, in the CLI's order
+// (targets, regions, the schemaVersion), and returns the run they select.
+// Every error it returns is a usage error.
+func (a *Assessor) plan(opts Options) (runOptions, error) {
+	targets, err := analysis.SelectTargets(opts.Targets, a.targetKeys())
+	if err != nil {
+		return runOptions{}, err
+	}
+
+	choices := make([]analysis.RegionChoice, 0, len(opts.Regions))
+	for _, r := range opts.Regions {
+		// The page writes no <target>=<region> text, so a refusal quotes the
+		// choice as the CLI's --region would have taken it.
+		choices = append(choices, analysis.RegionChoice{Target: r.Target, Region: r.Region, Text: r.Target + "=" + r.Region})
+	}
+
+	regions, err := analysis.SelectRegions(choices, targets)
+	if err != nil {
+		return runOptions{}, err
+	}
+
+	// The page always offers the JSON download, so the schemaVersion is
+	// checked as the CLI checks it for --format json.
+	schemaVersion, err := analysis.SelectSchemaVersion(analysis.JSONFormat, opts.SchemaVersion, opts.SchemaVersion != "")
+	if err != nil {
+		return runOptions{}, err
+	}
+
+	return runOptions{targets: targets, regions: regions, estimate: opts.Estimate, schemaVersion: schemaVersion}, nil
+}
+
+// targetKeys returns the keys of every supported target, sorted.
+func (a *Assessor) targetKeys() []string {
+	return slices.Sorted(maps.Keys(a.deps.Targets))
+}
+
+// run builds the use case the checked options select, one target or a
+// comparison, over source and the reporters of reports, and runs it once: the
+// inventory is read once and every format rendered from the same assessment.
+func (a *Assessor) run(ctx context.Context, run runOptions, source analysis.InventorySource, reports *reportSet,
+	meta analysis.ReportMeta,
+) error {
+	if len(run.targets) == 1 {
+		key := run.targets[0]
+
+		single, err := analysis.New(source, a.deps.Targets[key](), reports)
+		if err != nil {
+			return err
+		}
+
+		return single.RunWith(ctx, io.Discard, meta, analysis.Options{Region: run.regions[key], Estimate: run.estimate})
+	}
+
+	targets := make([]analysis.Target, 0, len(run.targets))
+	for _, key := range run.targets {
+		targets = append(targets, analysis.Target{Key: key, Catalog: a.deps.Targets[key](), Region: run.regions[key]})
+	}
+
+	comparison, err := analysis.NewComparison(source, targets, reports)
+	if err != nil {
+		return err
+	}
+
+	return comparison.RunWith(ctx, io.Discard, meta, analysis.ComparisonOptions{Estimate: run.estimate})
+}
+
+// classify returns the *Error for err, the error of a run over targets: a
+// region the target's catalog does not list and an inventory name ReportMeta
+// refuses are usage errors, a document the inventory reader refused an
+// inventory error, anything else internal.
+func classify(err error, targets []string) *Error {
+	if regionErr := analysis.RegionChoiceError(err, targets); regionErr != nil {
+		return &Error{Kind: KindUsage, Err: regionErr}
+	}
+
+	if errors.Is(err, analysis.ErrInvalidReportMeta) {
+		return &Error{Kind: KindUsage, Err: err}
+	}
+
+	var refused *inventoryError
+	if errors.As(err, &refused) {
+		return &Error{Kind: KindInventory, Err: refused}
+	}
+
+	return &Error{Kind: KindInternal, Err: err}
+}
+
+// inventorySource is the inventory source of one run: the one Deps gives, its
+// refusals marked as *inventoryError, so a document the reader refused is told
+// apart from every other failure however the use case wraps it.
+type inventorySource struct {
+	source analysis.InventorySource
+}
+
+// Inventory returns the inventory of the source. An error the source returns
+// while ctx is still live is the document's, an *inventoryError; one after
+// ctx is done is the cancellation's and is returned as it is.
+func (s *inventorySource) Inventory(ctx context.Context) (inventory.Inventory, error) {
+	inv, err := s.source.Inventory(ctx)
+	if err != nil && ctx.Err() == nil {
+		return inventory.Inventory{}, &inventoryError{err: err}
+	}
+
+	return inv, err
+}
+
+// inventoryError is a document the inventory reader refused. Its message is the
+// reader's, which names a position and a field, never a value (the in-memory
+// mode of inventoryfile.FromBytes).
+type inventoryError struct {
+	err error
+}
+
+// Error returns the reader's message.
+func (e *inventoryError) Error() string { return e.err.Error() }
+
+// Unwrap returns the reader's error.
+func (e *inventoryError) Unwrap() error { return e.err }
+
+// reportSet is the one reporter a run renders through: it renders the
+// assessment, or the comparison, once per format into that format's buffer
+// and writes nothing to the writer the use case gives it. Each format's
+// reporter is built once, the JSON one with the run's schemaVersion and the
+// others with 0, as the CLI builds them.
+type reportSet struct {
+	markdown, json, html Format
+	schemaVersion        int
+	// markdownReport, jsonReport and htmlReport hold each format's report.
+	markdownReport, jsonReport, htmlReport *bytes.Buffer
+}
+
+// Report renders a in every format.
+func (r *reportSet) Report(ctx context.Context, _ io.Writer, a assessment.Assessment, meta analysis.ReportMeta) error {
+	for _, f := range r.formats() {
+		if err := f.format.NewReporter(f.schemaVersion).Report(ctx, f.out, a, meta); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ReportComparison renders c in every format.
+func (r *reportSet) ReportComparison(ctx context.Context, _ io.Writer, c assessment.Comparison,
+	meta analysis.ReportMeta,
+) error {
+	for _, f := range r.formats() {
+		if err := f.format.NewComparisonReporter(f.schemaVersion).ReportComparison(ctx, f.out, c, meta); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// renderTarget is one format a reportSet renders: its reporters, the
+// schemaVersion they are built with and the buffer they write to.
+type renderTarget struct {
+	format        Format
+	schemaVersion int
+	out           io.Writer
+}
+
+// formats returns the formats r renders, Markdown, JSON and HTML, in that
+// order.
+func (r *reportSet) formats() []renderTarget {
+	return []renderTarget{
+		{format: r.markdown, out: r.markdownReport},
+		{format: r.json, schemaVersion: r.schemaVersion, out: r.jsonReport},
+		{format: r.html, out: r.htmlReport},
+	}
 }
 
 // Version returns the version of the build, as `shift2eu version` prints it.

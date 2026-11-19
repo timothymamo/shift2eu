@@ -11,5 +11,7 @@
 // targets, the Markdown and JSON reporters) and an inventory file reader, and
 // compare the options both accept and the reports both write. Only those test
 // files import internal/cli; the package itself never does, so the module
-// carries no CLI.
+// carries no CLI. The depguard rules web-composition-root-wire and
+// web-composition-root-wire-tests hold the two to strict allow lists
+// (docs/adr/0035).
 package wire

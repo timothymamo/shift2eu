@@ -402,6 +402,8 @@ linters:
           deny:
             - pkg: github.com/timothymamo/shift2eu/internal/adapter
               desc: the CLI gets its adapters through cli.Deps; construct them in cmd/shift2eu
+            - pkg: github.com/timothymamo/shift2eu/internal/web
+              desc: the CLI and the web adapter are separate driving adapters; share what both need through the application or the domain (PRD #297)
         # internal/version is the build metadata: three variables the release
         # sets with -X and the one function that formats them. Both driving
         # adapters may import it, so without a rule of its own it would be a
@@ -609,12 +611,20 @@ linters:
         # placed directly in cmd, and cmd/ every package under cmd, a library
         # package added there later included; Go already refuses an import of
         # a main package such as cmd/shift2eu.
+        #
+        # cmd/shift2eu-web is left out as well (PRD #297): its main imports its
+        # own wiring package, cmd/shift2eu-web/internal/wire, which Go's
+        # internal rule keeps to that tree. What the two may import is held by
+        # their strict rules, web-composition-root and
+        # web-composition-root-wire, which name neither internal/cli nor
+        # another package under cmd.
         cli-and-cmd-imported-only-by-cmd:
           list-mode: lax
           files:
             - "$all"
             - "!$test"
             - "!**/cmd/shift2eu/**"
+            - "!**/cmd/shift2eu-web/**"
             - "!**/internal/cli/**"
           deny:
             - pkg: github.com/timothymamo/shift2eu/internal/cli$
@@ -686,6 +696,8 @@ linters:
               desc: the HTTP API gets its adapters through httpapi.Deps; construct them in cmd/shift2eu-server
             - pkg: github.com/timothymamo/shift2eu/internal/cli
               desc: the HTTP API and the CLI are separate driving adapters; share what both need through the application or the domain
+            - pkg: github.com/timothymamo/shift2eu/internal/web
+              desc: the HTTP API and the web adapter are separate driving adapters; share what both need through the application or the domain (PRD #297)
             - pkg: github.com/timothymamo/shift2eu/cmd
               desc: nothing imports the composition root
             - pkg: os
@@ -727,7 +739,12 @@ linters:
         # connection and calls no JavaScript: os, net, syscall (syscall/js
         # among it) belong to nobody here, and syscall/js to cmd/shift2eu-web
         # alone. The allow list is what the package imports today; add a
-        # package only when the adapter needs it.
+        # package only when the adapter needs it. bytes, fmt, io, maps and
+        # slices hold the reports in memory and sort the target keys; the
+        # domain's assessment and inventory are the types of the ports the
+        # adapter implements around the use cases (the one reporter that
+        # renders every format, the inventory source that marks a refused
+        # document).
         #
         # The allow list already refuses every package below; these entries
         # only say why.
@@ -737,9 +754,16 @@ linters:
             - "**/internal/web/**"
             - "!$test"
           allow:
+            - bytes$
             - context$
             - errors$
+            - fmt$
+            - io$
+            - maps$
+            - slices$
             - github.com/timothymamo/shift2eu/internal/app/analysis$
+            - github.com/timothymamo/shift2eu/internal/domain/assessment$
+            - github.com/timothymamo/shift2eu/internal/domain/inventory$
             - github.com/timothymamo/shift2eu/internal/version$
           deny:
             - pkg: github.com/timothymamo/shift2eu/internal/adapter
@@ -760,6 +784,162 @@ linters:
               desc: the web adapter loads no code at run time
             - pkg: unsafe
               desc: the web adapter needs no unsafe code
+        # Only the site's composition root, cmd/shift2eu-web, and its wiring
+        # package cmd/shift2eu-web/internal/wire import internal/web (PRD #297),
+        # as httpapi-imported-only-by-the-server keeps internal/httpapi to its
+        # root: so neither internal/cli, internal/httpapi, cmd/shift2eu nor
+        # cmd/shift2eu-server imports it. The same holds for the HTML reporter,
+        # htmlreport: the page is the one place its fragment is shown, so only
+        # the wiring package constructs it, and cmd/shift2eu and
+        # cmd/shift2eu-server, which adapters-are-built-in-cmd leaves free to
+        # construct adapters, may not. Test files are covered too; the
+        # packages' own directories, whose tests import them, are left out.
+        web-imported-only-by-the-web-root:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!**/cmd/shift2eu-web/**"
+            - "!**/internal/web/**"
+            - "!**/internal/adapter/report/htmlreport/**"
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/internal/web$
+              desc: only cmd/shift2eu-web and its wire package import the web adapter (PRD #297)
+            - pkg: github.com/timothymamo/shift2eu/internal/web/
+              desc: only cmd/shift2eu-web and its wire package import the web adapter (PRD #297)
+            - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport$
+              desc: only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI and the HTTP API write Markdown and JSON (PRD #297)
+            - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport/
+              desc: only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI and the HTTP API write Markdown and JSON (PRD #297)
+        # The site's composition root (PRD #297), the sibling of
+        # composition-root and server-composition-root, held in two parts.
+        # cmd/shift2eu-web itself (build constraint js && wasm) is the thin
+        # glue between the page's script and internal/web: it takes the Deps
+        # its wire package builds and registers one JavaScript function. Its
+        # imports are a strict allow list, each entry ending in $: the wire
+        # package, internal/web, syscall/js, which no other package of the
+        # module may import (syscall-js-only-in-the-web-root), and the
+        # standard packages the glue needs. Unlike the other roots it names no
+        # module prefix: it constructs no adapter itself, so it imports no
+        # adapter, no internal/cli, no internal/httpapi, no request decoder
+        # and no cloud SDK. Its files build for js/wasm only, which make lint
+        # and CI's lint matrix lint as an explicit extra target (ADR 0012).
+        #
+        # The allow list already refuses every package below; these entries
+        # only say why.
+        web-composition-root:
+          list-mode: strict
+          files:
+            - "**/cmd/shift2eu-web/**"
+            - "!**/cmd/shift2eu-web/internal/wire/**"
+            - "!$test"
+          allow:
+            - context$
+            - errors$
+            - syscall/js$
+            - github.com/timothymamo/shift2eu/cmd/shift2eu-web/internal/wire$
+            - github.com/timothymamo/shift2eu/internal/web$
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/internal/adapter
+              desc: cmd/shift2eu-web constructs no adapter; its wire package does
+            - pkg: github.com/timothymamo/shift2eu/internal/cli
+              desc: the page never runs the CLI; it runs internal/web
+            - pkg: github.com/timothymamo/shift2eu/internal/httpapi
+              desc: the page never calls the HTTP API; no inventory leaves the browser
+            - pkg: os
+              desc: the site's module reads no file and no environment; it runs in the browser
+            - pkg: net
+              desc: the site's module opens no connection; no inventory leaves the browser
+            - pkg: github.com/aws/aws-sdk-go-v2
+              desc: a cloud SDK lives only in its provider's adapter; the page takes inventory documents, never credentials
+            - pkg: github.com/Azure/azure-sdk-for-go
+              desc: a cloud SDK lives only in its provider's adapter; the page takes inventory documents, never credentials
+            - pkg: cloud.google.com/go
+              desc: a cloud SDK lives only in its provider's adapter; the page takes inventory documents, never credentials
+            - pkg: google.golang.org/api
+              desc: a cloud SDK lives only in its provider's adapter; the page takes inventory documents, never credentials
+        # The site's wiring package, cmd/shift2eu-web/internal/wire: untagged,
+        # so it builds and is tested natively. It constructs what
+        # cmd/shift2eu's offline path constructs, the inventory reader (its
+        # in-memory mode), the three target catalogs and the Markdown and JSON
+        # reporters, and the HTML reporter, into internal/web's Deps. Its
+        # imports are a strict allow list naming each of those packages,
+        # ending in $: no request decoder, no source adapter that reaches a
+        # cloud, no internal/cli and no internal/httpapi, and no standard
+        # package at all.
+        web-composition-root-wire:
+          list-mode: strict
+          files:
+            - "**/cmd/shift2eu-web/internal/wire/**"
+            - "!$test"
+          allow:
+            - github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport$
+            - github.com/timothymamo/shift2eu/internal/adapter/report/jsonreport$
+            - github.com/timothymamo/shift2eu/internal/adapter/report/markdown$
+            - github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile$
+            - github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud$
+            - github.com/timothymamo/shift2eu/internal/adapter/target/scaleway$
+            - github.com/timothymamo/shift2eu/internal/adapter/target/upcloud$
+            - github.com/timothymamo/shift2eu/internal/app/analysis$
+            - github.com/timothymamo/shift2eu/internal/web$
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/internal/adapter/request
+              desc: the page decodes no HTTP request; it reads the inventory through inventoryfile.FromBytes
+            - pkg: github.com/timothymamo/shift2eu/internal/cli
+              desc: only wire's test files run the CLI, for the parity tests; the page never does
+            - pkg: github.com/timothymamo/shift2eu/internal/httpapi
+              desc: the page never calls the HTTP API; no inventory leaves the browser
+            - pkg: os
+              desc: the wiring constructs adapters and reads nothing
+            - pkg: net
+              desc: the wiring opens no connection; no inventory leaves the browser
+            - pkg: syscall
+              desc: only cmd/shift2eu-web itself calls JavaScript; the wiring makes no system call
+        # The wire package's test files: the option-parity table and the
+        # download parity run internal/cli and internal/web over the same Deps
+        # and compare their answers, so these files alone may import
+        # internal/cli (and inventoryfile's file mode, the CLI's reader), and
+        # os and path/filepath to write the inventory the CLI reads. They are a
+        # strict allow list too, each entry ending in $; composition-root-tests
+        # denies them a process, a plugin and syscall/js beside it.
+        web-composition-root-wire-tests:
+          list-mode: strict
+          files:
+            - "**/cmd/shift2eu-web/internal/wire/**/*_test.go"
+            - "**/cmd/shift2eu-web/internal/wire/*_test.go"
+          allow:
+            - bytes$
+            - errors$
+            - os$
+            - path/filepath$
+            - strconv$
+            - strings$
+            - testing$
+            - github.com/timothymamo/shift2eu/cmd/shift2eu-web/internal/wire$
+            - github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile$
+            - github.com/timothymamo/shift2eu/internal/app/analysis$
+            - github.com/timothymamo/shift2eu/internal/cli$
+            - github.com/timothymamo/shift2eu/internal/web$
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/internal/httpapi
+              desc: the parity tests compare the page with the CLI; the HTTP API has its own (test/apiparity)
+            - pkg: os/exec
+              desc: the parity tests run the CLI in process, never as a program
+        # Only cmd/shift2eu-web, the site's glue, may call JavaScript (PRD
+        # #297): syscall/js is the one way out of Go in the browser, so every
+        # other file of the module, tests included, is refused it. The strict
+        # rules refuse it already wherever they hold; this rule names the
+        # reason everywhere else, lax rules and test files included. It leaves
+        # out the whole of cmd/shift2eu-web, whose wire package is refused
+        # syscall by web-composition-root-wire and whose tests by
+        # composition-root-tests.
+        syscall-js-only-in-the-web-root:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!**/cmd/shift2eu-web/**"
+          deny:
+            - pkg: syscall/js
+              desc: only cmd/shift2eu-web, the site's glue, calls JavaScript (PRD #297)
         # Only the packages under internal/adapter/target import the shared
         # snapshot reader (ADR 0007): the target adapters, their contract suite
         # and the reader itself. A source adapter, a reporter, internal/config
@@ -1223,8 +1403,12 @@ linters:
         # names it here, ending in $, never by prefix: make lint runs on
         # ./..., which skips testdata directories and directories whose name
         # starts with _, so a helper placed there is never linted. The list
-        # is what markdown and jsonreport import; encoding/json$ is for the
-        # JSON report (docs/adr/0018) and does no I/O.
+        # is what markdown, jsonreport and htmlreport import; encoding/json$
+        # is for the JSON report (docs/adr/0018) and does no I/O. htmlreport,
+        # the HTML fragment the site shows (PRD #297), needs nothing beyond
+        # the list: it escapes values with strings, and html/template, which
+        # would make the site's module too large, is left out on purpose
+        # (docs/adr/0035).
         #
         # context$ is for the context Report takes, fmt$ for fmt.Fprintf to
         # the given writer, and io$ for io.Writer. An allowed package can
@@ -1331,6 +1515,10 @@ linters:
         # holds internal/httpapi's tests. The CLI's tests import syscall for
         # syscall.Mkfifo (output_unix_test.go), which neither this deny list
         # nor cli-no-env-or-process names.
+        #
+        # PRD #297 adds the site's root, cmd/shift2eu-web with its wire
+        # package, whose parity tests run internal/cli in process, and its
+        # driving adapter, internal/web.
         composition-root-tests:
           list-mode: lax
           files:
@@ -1338,10 +1526,14 @@ linters:
             - "**/cmd/shift2eu/**/*_test.go"
             - "**/cmd/shift2eu-server/*_test.go"
             - "**/cmd/shift2eu-server/**/*_test.go"
+            - "**/cmd/shift2eu-web/*_test.go"
+            - "**/cmd/shift2eu-web/**/*_test.go"
             - "**/internal/cli/*_test.go"
             - "**/internal/cli/**/*_test.go"
             - "**/internal/httpapi/*_test.go"
             - "**/internal/httpapi/**/*_test.go"
+            - "**/internal/web/*_test.go"
+            - "**/internal/web/**/*_test.go"
           deny:
             - pkg: go/build
               desc: a composition root's test builds no package; it runs the root's code in process

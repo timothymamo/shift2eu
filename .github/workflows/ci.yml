@@ -30,6 +30,7 @@ jobs:
           - { goos: darwin, goarch: arm64, cgo: "0" }
           - { goos: windows, goarch: amd64, cgo: "0" }
           - { goos: windows, goarch: arm64, cgo: "0" }
+          - { goos: js, goarch: wasm, cgo: "0" }
           - { goos: linux, goarch: amd64, cgo: "1" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

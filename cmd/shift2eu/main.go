@@ -1,3 +1,5 @@
+//go:build !(js && wasm)
+
 // Command shift2eu analyses infrastructure running in a hyperscaler (AWS, Azure,
 // GCP) and reports what can move to an EU cloud provider (OVHcloud, Scaleway,
 // UpCloud).
@@ -5,6 +7,10 @@
 // main is the composition root: it is the only place that wires concrete
 // adapters into the application use cases. The command line itself is handled
 // by internal/cli.
+//
+// The CLI is never built for js/wasm, the site's module target, where syscall
+// has no SIGHUP: make lint lints that target too (docs/adr/0035), so the
+// package holds no file there.
 package main
 
 import (

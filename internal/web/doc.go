@@ -21,6 +21,12 @@
 // cmd/shift2eu-web, the thin glue between the page's script and this package,
 // imports. It runs natively too, which is how its tests run.
 //
-// Status: a skeleton. Assess returns an error until PRD #297 milestone 1
-// implements it.
+// One assessment reads the inventory once and renders every format from the
+// same assessment: the use case is given one reporter that renders the
+// Markdown report, the JSON report and the HTML fragment in turn, each into its
+// own buffer, so the downloads are the bytes the CLI's reporters write for the
+// same options. The inventory source Deps gives is wrapped so that a document
+// the reader refuses is told apart from every other failure (KindInventory)
+// however the use case wraps the error; its message is the reader's, without
+// the use case's "load inventory: " prefix (docs/adr/0035).
 package web
