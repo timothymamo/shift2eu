@@ -138,12 +138,12 @@ func (h *estimateHarness) deps() cli.Deps {
 		Targets: targets,
 		Formats: map[string]cli.Format{
 			markdownFormat: {
-				NewReporter:           func() analysis.Reporter { return markdown.New() },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return markdown.New() },
+				NewReporter:           func(int) analysis.Reporter { return markdown.New() },
+				NewComparisonReporter: func(int) analysis.ComparisonReporter { return markdown.New() },
 			},
 			jsonFormat: {
-				NewReporter:           func() analysis.Reporter { return jsonreport.New() },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return jsonreport.New() },
+				NewReporter:           func(schemaVersion int) analysis.Reporter { return jsonreport.New(schemaVersion) },
+				NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter { return jsonreport.New(schemaVersion) },
 			},
 		},
 	}
@@ -350,6 +350,159 @@ func TestRunAssessFormatJSONHonoursTheOptions(t *testing.T) {
 				"region:\n%s", diff)
 		}
 	})
+}
+
+// TestRunAssessJSONSchemaVersion pins --schema-version (docs/adr/0018, issue
+// #307): --format json writes schemaVersion 3 unless the run names version 2,
+// and a run that names version 3 writes the same as the default. Both
+// documents are the reporter's own, so the version in the output is the one the
+// CLI asked the reporter for.
+func TestRunAssessJSONSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		args        []string
+		wantVersion float64
+	}{
+		{
+			name:        "no flag writes the current version",
+			args:        []string{"--format", jsonFormat},
+			wantVersion: 3,
+		},
+		{
+			name:        "version 3 named",
+			args:        []string{"--format", jsonFormat, "--schema-version", "3"},
+			wantVersion: 3,
+		},
+		{
+			name:        "version 2 named",
+			args:        []string{"--format", jsonFormat, "--schema-version", "2"},
+			wantVersion: 2,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newEstimateHarness(t)
+
+			code, stdout, stderr := h.run(t.Context(), assessArgs(tc.args...)...)
+			if code != 0 {
+				t.Fatalf("Run() = %d, want 0; stderr = %q", code, stderr)
+			}
+
+			if stderr != "" {
+				t.Errorf("stderr = %q, want empty", stderr)
+			}
+
+			document := decodeDocument(t, stdout)
+
+			if diff := cmp.Diff(tc.wantVersion, document["schemaVersion"]); diff != "" {
+				t.Errorf("schemaVersion mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestRunAssessSchemaVersionUsage pins the usage errors of --schema-version
+// (docs/adr/0018, issue #307): a version json does not write, a value that is not
+// a number, and the flag with a format that has no schemaVersion are all exit
+// code 2, with the usage text, nothing on stdout and no adapter built. A run
+// that names a version it cannot write must never quietly write another one.
+func TestRunAssessSchemaVersionUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		// wantFirstLine lists the values the error line must hold.
+		wantFirstLine []string
+	}{
+		{
+			name:          "a version json does not write",
+			args:          []string{"--format", jsonFormat, "--schema-version", "4"},
+			wantFirstLine: []string{"--schema-version", "4", "2", "3"},
+		},
+		{
+			name:          "a version that is not a number",
+			args:          []string{"--format", jsonFormat, "--schema-version", "three"},
+			wantFirstLine: []string{"--schema-version", "three", "2", "3"},
+		},
+		{
+			name:          "a version with markdown",
+			args:          []string{"--format", markdownFormat, "--schema-version", "3"},
+			wantFirstLine: []string{"--schema-version", markdownFormat},
+		},
+		{
+			name:          "a version with the default format",
+			args:          []string{"--schema-version", "3"},
+			wantFirstLine: []string{"--schema-version", markdownFormat},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newEstimateHarness(t)
+
+			code, stdout, stderr := h.run(t.Context(), assessArgs(tc.args...)...)
+
+			if code != 2 {
+				t.Errorf("Run() = %d, want 2; stderr = %q", code, stderr)
+			}
+
+			if stdout != "" {
+				t.Errorf("stdout = %q, want empty", stdout)
+			}
+
+			if !strings.Contains(strings.ToLower(stderr), "usage") {
+				t.Errorf("stderr = %q, want the usage text", stderr)
+			}
+
+			firstLine, _, _ := strings.Cut(stderr, "\n")
+
+			for _, want := range tc.wantFirstLine {
+				if !strings.Contains(firstLine, want) {
+					t.Errorf("the first line %q, want it to hold %q", firstLine, want)
+				}
+			}
+
+			if len(h.paths) != 0 {
+				t.Errorf("a usage error built adapters: inventory paths %q", h.paths)
+			}
+		})
+	}
+}
+
+// TestRunAssessSchemaVersionFlagHelp pins that the usage text tells the user what
+// --schema-version accepts (docs/adr/0018, issue #307): the versions, the one a
+// run writes, and that it applies only to the JSON report.
+func TestRunAssessSchemaVersionFlagHelp(t *testing.T) {
+	t.Parallel()
+
+	h := newEstimateHarness(t)
+
+	code, stdout, stderr := h.run(t.Context(), assessArgs("--help")...)
+
+	if code != 0 {
+		t.Fatalf("Run() = %d, want 0; stderr = %q", code, stderr)
+	}
+
+	if stderr != "" {
+		t.Errorf("stderr = %q, want empty", stderr)
+	}
+
+	entry := flagHelp(t, stdout, "--schema-version")
+	lowered := strings.ToLower(entry)
+
+	for _, want := range []string{"2", "3", jsonFormat, "default"} {
+		if !strings.Contains(lowered, want) {
+			t.Errorf("the --schema-version usage entry %q, want it to mention %q", entry, want)
+		}
+	}
 }
 
 // decodeDocument decodes a JSON report, failing the test on anything else.

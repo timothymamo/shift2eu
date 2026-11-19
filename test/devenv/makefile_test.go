@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,6 +85,10 @@ func TestMakeVMEnvRefusesAnAgentsAppVariable(t *testing.T) {
 	}
 }
 
+// TestMakefileHasTheAgentsTokenTargets pins the command lines of the agents-token targets (issue #242): the
+// scripts of dev/ are run by their path and shebang, as every other dev script the Makefile runs is, never through
+// an explicit `sh`, which ignores the script's shebang and its executable bit. The background start keeps its
+// `env -u ... nohup` prefix, so the refresh it starts has the same command line as the one started by hand.
 func TestMakefileHasTheAgentsTokenTargets(t *testing.T) {
 	t.Parallel()
 
@@ -91,10 +96,13 @@ func TestMakefileHasTheAgentsTokenTargets(t *testing.T) {
 		target string
 		want   string
 	}{
-		{target: "agents-token", want: "agents-app-token.sh mint"},
-		{target: "agents-token-refresh", want: "agents-app-token.sh refresh"},
-		// The background start the maintainer runs from the host clone (second review, item 1).
-		{target: "agents-token-refresh-start", want: "agents-app-token.sh refresh"},
+		{target: "agents-token", want: "dev/agents-app-token.sh mint"},
+		{target: "agents-token-refresh", want: "dev/agents-app-token.sh refresh"},
+		// The background start the maintainer runs from the host clone (second review, item 1): the `nohup`
+		// prefix stays, and only the `sh ` in front of the script goes (issue #242).
+		{target: "agents-token-refresh-start", want: "nohup dev/agents-app-token.sh refresh"},
+		// The plist generator the install runs is a script of dev/ too, run the same way (issue #242).
+		{target: "agents-token-refresh-install", want: "dev/agents-token-launchd.sh plist"},
 	}
 
 	for _, tc := range cases {
@@ -109,7 +117,43 @@ func TestMakefileHasTheAgentsTokenTargets(t *testing.T) {
 			if !strings.Contains(stdout, tc.want) {
 				t.Errorf("make -n %s does not run %q:\n%s", tc.target, tc.want, stdout)
 			}
+
+			// Running the script through `sh` reads no shebang and needs no executable bit, so a recipe that still
+			// does it runs whatever interpreter the maintainer's `sh` is, and a change to the script's shebang
+			// never reaches it (issue #242).
+			if strings.Contains(stdout, "sh dev/") {
+				t.Errorf("make -n %s runs a script of dev/ through `sh`, which ignores its shebang and executable bit: run it by its path, as the other dev scripts are (issue #242):\n%s", tc.target, stdout)
+			}
 		})
+	}
+}
+
+// TestMakefileRunsNoAgentsTokenRecipeThroughSh pins the same convention across every agents-token target at once,
+// over the recipes themselves rather than their make -n output, so a target the cases above do not name is held to
+// it too: no agents-token* recipe runs a script of dev/ through an explicit `sh` (issue #242). The LaunchDaemon's
+// own `/bin/sh dev/agents-app-token.sh refresh` program argument is not a recipe and is left as issue #229 pins it.
+func TestMakefileRunsNoAgentsTokenRecipeThroughSh(t *testing.T) {
+	t.Parallel()
+
+	recipes := makeRecipes(t, readRepoFile(t, makefilePath))
+
+	var found int
+
+	for _, name := range slices.Sorted(maps.Keys(recipes)) {
+		if !strings.HasPrefix(name, "agents-token") {
+			continue
+		}
+
+		found++
+
+		if strings.Contains(recipes[name], "sh dev/") {
+			t.Errorf("the recipe of make %s runs a script of dev/ through `sh`, which ignores its shebang and executable bit: run it by its path, as the other dev scripts are (issue #242):\n%s",
+				name, recipes[name])
+		}
+	}
+
+	if found == 0 {
+		t.Fatal("the Makefile declares no agents-token* target, so this test pins nothing: the targets are agents-token, agents-token-refresh and the LaunchDaemon's install and uninstall")
 	}
 }
 
@@ -749,6 +793,103 @@ func TestMakeAgentsTokenRefreshStartKeepsOneRefresherPerVM(t *testing.T) {
 			return len(f.api.minted()) >= 1
 		})
 	})
+}
+
+// TestMakeAgentsTokenRefreshStartPrintsOnlyANumericPid pins issue #320: the start target prints the pid file it
+// reads as it reads it, and that file is untrusted text in the refresh's state directory - a terminal escape in it
+// drives the maintainer's terminal and lands in the log. It prints the pid only when it is a number, as the
+// refresh's own show_pid does, and the word unknown or invalid otherwise; a numeric stale pid is printed as before.
+func TestMakeAgentsTokenRefreshStartPrintsOnlyANumericPid(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// pid is what the pid file holds, and want is what the warning prints for it. garbage is the text no line
+		// of the output may carry.
+		pid     string
+		want    string
+		garbage string
+	}{
+		{
+			name: "a stale pid that is a number is printed as before",
+			want: "<pid>", // the dead pid this case writes, told apart from the started refresher's
+		},
+		{
+			name:    "a stale pid file holding text and an escape sequence prints neither",
+			pid:     "abc\x1b[31mX",
+			want:    "unknown",
+			garbage: "abc",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newTokenFixture(t, "shift2eu")
+
+			// A pid file whose process is gone: the refresher it names has stopped, which is the warning this test
+			// reads. The numeric case uses a pid no process owns, so the target cannot leave the refresher alone.
+			stale := tc.pid
+			if stale == "" {
+				dead := deadPid(t)
+				stale = strconv.Itoa(dead)
+				tc.want = strconv.Itoa(dead)
+			}
+
+			f.writeStateFile(t, "agents-token-refresh-shift2eu.pid", stale+"\n", 0o600)
+			f.writeStateFile(t, "agents-token-refresh-shift2eu.log", "agents-token: wrote a token\n", 0o600)
+
+			stdout, stderr, err := runMake(t, []string{"agents-token-refresh-start"}, f.env)
+			if err != nil {
+				t.Fatalf("make agents-token-refresh-start: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			}
+
+			combined := stdout + stderr
+
+			line, ok := warningAboutTheStoppedRefresher(combined)
+			if !ok {
+				t.Fatalf("make agents-token-refresh-start says nothing about the refresher whose pid file it found, so a maintainer cannot see that the last one stopped before the token ran out (issue #320):\n%s",
+					combined)
+			}
+
+			if !strings.Contains(line, tc.want) {
+				t.Errorf("the warning about the refresher that stopped reads %q, want it to name %q: the pid file's pid when it is a number, and a word for it when it is not (issue #320)\noutput:\n%s",
+					line, tc.want, combined)
+			}
+
+			if strings.ContainsRune(combined, '\x1b') {
+				t.Errorf("make agents-token-refresh-start printed a raw ESC, copied out of the refresh's pid file: a value out of that file must not reach the maintainer's terminal, where it drives it instead of being read (issue #320)\noutput:\n%q",
+					combined)
+			}
+
+			if tc.garbage != "" && strings.Contains(combined, tc.garbage) {
+				t.Errorf("make agents-token-refresh-start printed %q out of the refresh's pid file (issue #320)\noutput:\n%q",
+					tc.garbage, combined)
+			}
+
+			if tc.garbage != "" {
+				lower := strings.ToLower(line)
+				if !strings.Contains(lower, "unknown") && !strings.Contains(lower, "invalid") {
+					t.Errorf("the warning about the refresher that stopped reads %q, want the word unknown or invalid where the pid would be: the refresh's own show_pid prints those, and this recipe must not print the file's text (issue #320)\noutput:\n%s",
+						line, combined)
+				}
+			}
+		})
+	}
+}
+
+// warningAboutTheStoppedRefresher returns the line of the start target's output that warns about the refresher it
+// found stopped: the one naming that it had stopped, which is the only line that prints the pid file's content
+// (issue #320).
+func warningAboutTheStoppedRefresher(text string) (string, bool) {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, "had stopped") {
+			return line, true
+		}
+	}
+
+	return "", false
 }
 
 // TestMakeAgentsTokenRefreshStartRefusesAnInvalidInstance pins the fifth review's finding: the start target uses

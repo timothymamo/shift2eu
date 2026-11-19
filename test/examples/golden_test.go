@@ -54,7 +54,7 @@ func TestSampleReports(t *testing.T) {
 			render: func(t *testing.T) []byte {
 				t.Helper()
 
-				return runSingle(t, inventoryPath, scaleway.New(), jsonreport.New(), meta)
+				return runSingle(t, inventoryPath, scaleway.New(), jsonreport.New(jsonreport.Version2), meta)
 			},
 		},
 	}

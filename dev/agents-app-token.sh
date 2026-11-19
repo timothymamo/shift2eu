@@ -357,7 +357,8 @@ lookup_identity() {
 # the VM's git configuration are printed with their non-printable characters stripped. That keeps the token
 # from being written through a symlink by mistake; it is no boundary against the VM user, who can read the
 # token anyway and could swap a path between the check and the mv.
-# It then prints, never a secret, git-identity=set when it set the git identity, the VM's clock as
+# It then prints, never a secret, git-identity=set when it replaced ~/.gitconfig with the bot's identity, or
+# git-identity=unchanged when ~/.gitconfig already held it and was left untouched (issue #263), the VM's clock as
 # clock=<Unix seconds> and, when the real gh is not where the gh wrapper keeps it ($1), gh-wrapper=missing:
 # a VM created before the wrapper.
 # shellcheck disable=SC2016 # expanded by the VM's sh, not here
@@ -462,6 +463,7 @@ if [ -n "$name" ]; then
   if [ -e "$gitconfig" ]; then
     no_conditional "$gitconfig"
   fi
+  identity=unchanged
   if [ -e "$gitconfig" ] && is_bots "$gitconfig"; then
     :
   else
@@ -479,6 +481,7 @@ if [ -n "$name" ]; then
     fi
     gitnew="$locktmp"
     chmod 600 "$locktmp"
+    # An entry planted after the pre-check above: TestAgentsAppTokenMintRefusesAnEntryPlantedAfterTheLockPreCheck.
     if ! ln -T "$locktmp" "$lock" 2>/dev/null; then
       rm -f "$locktmp"
       gitnew=""
@@ -516,10 +519,15 @@ if [ -n "$name" ]; then
       fi
       mv -f "$gitnew" "$gitconfig"
       gitnew=""
+      identity=set
     fi
   fi
   trap - EXIT
-  printf "git-identity=set\n"
+  if [ "$identity" = set ]; then
+    printf "git-identity=set\n"
+  else
+    printf "git-identity=unchanged\n"
+  fi
   tmp="$(mktemp "$dir/.agents-app-identity.XXXXXX")"
   printf "%s\n%s\n" "$name" "$email" >"$tmp"
   chmod 600 "$tmp"
@@ -555,11 +563,16 @@ check_vm() {
 }
 
 # said_git_identity says the VM user's global git identity is now the bot's, when vm_write printed that it
-# set it (git-identity=set): the agents commit as the bot from here on (issue #241).
+# set it (git-identity=set): the agents commit as the bot from here on (issue #241). When ~/.gitconfig already
+# held it (git-identity=unchanged) it says so instead, so the refresher's log claims no change it did not make
+# (issue #263).
 said_git_identity() {
   case "${written}" in
   *git-identity=set*)
     say "set the VM ${instance}'s git identity (user.name and user.email in ~/.gitconfig) to ${bot_name} <${bot_email}>"
+    ;;
+  *git-identity=unchanged*)
+    say "the VM ${instance}'s git identity is already ${bot_name} <${bot_email}> (~/.gitconfig unchanged)"
     ;;
   esac
 }
@@ -733,7 +746,9 @@ show_pid() {
 # that VM's token is already being refreshed. A lock moved aside that held no stale owner is put back only
 # while no lock exists; when a third contender has created one meanwhile, the one moved aside is dropped and
 # this one loses, so a lock never ends up nested inside another (issue #288). The refresher whose lock was
-# dropped is not told here: still_locked, before each mint, finds the lock no longer its own.
+# dropped is not told here: still_locked, before each mint, finds the lock no longer its own. A put-back that
+# fails is tried once more; what was moved aside is removed only when a lock exists afterwards, and when none
+# does it is kept and this one stops, or, when it is gone too, this one says so and tries again (issue #319).
 take_lock() {
   state="${XDG_STATE_HOME:-${HOME:?set HOME}/.local/state}/shift2eu"
   lock="${state}/agents-token-refresh-${instance}.lock"
@@ -770,11 +785,30 @@ take_lock() {
         # onto a lock a third contender has created meanwhile, where mv would nest it inside that lock as a copy
         # nobody removes (issue #288). Then the lock is that third one's: drop what was moved aside, which
         # leaves its own owner without the lock (that owner finds out before its next mint), and lose.
-        if [ ! -e "${lock}" ] && [ ! -L "${lock}" ]; then
-          mv "${aside}" "${lock}" 2>/dev/null || true
+        # A put-back that fails (a full disk, a permission) is tried once more, so a transient failure leaves
+        # the winner its lock (issue #319).
+        putback=0
+        while [ "${putback}" -lt 2 ] && [ ! -e "${lock}" ] && [ ! -L "${lock}" ]; do
+          if mv "${aside}" "${lock}" 2>/dev/null; then
+            break
+          fi
+          putback=$((putback + 1))
+        done
+        if [ -e "${lock}" ] || [ -L "${lock}" ]; then
+          # Only with a lock in place is what was moved aside a duplicate, and dropped. The lock can still
+          # appear between the test and the mv: whatever then landed inside it goes too.
+          rm -rf "${aside}" "${lock:?}/${aside##*/}"
+        elif [ -e "${aside}" ] || [ -L "${aside}" ]; then
+          # No lock, and the put-back failed: the aside is another refresher's lock, so it is kept, never
+          # removed (removing it cost the only refresher its lock, issue #319), and this one stops. The next
+          # loop round would remove ${aside}, so it must not go on. Its owner's still_locked finds no lock within
+          # seconds and exits, so the aside is then a stale entry that nothing removes: the message says so.
+          die "cannot put the lock moved aside to ${aside} back to ${lock}; it is kept so no lock is lost while none exists at ${lock}, and this refresh stops. Once no refresh runs, remove it (rm -r ${aside}) and start a refresh again from the host clone on the Mac with make agents-token-refresh-start"
+        else
+          # Neither is left: nothing of the other refresher's lock remains to keep, so this one tries again.
+          say "the lock ${lock} and the one moved aside to ${aside} are both gone: the moved-aside lock could not be put back; this refresh tries to take the lock again"
+          continue
         fi
-        # The lock can still appear between the test and the mv: whatever then landed inside it goes.
-        rm -rf "${aside}" "${lock:?}/${aside##*/}"
         if [ -e "${lock}" ] && [ "$(cat "${lock}/pid" 2>/dev/null || true)" != "$$" ]; then
           say "another agents App token refresh for the VM ${instance} took the lock ${lock} over first (pid $(show_pid "$(cat "${lock}/pid" 2>/dev/null || true)")); this one exits and leaves it to that one"
           exit 0
@@ -798,7 +832,13 @@ still_locked() {
   holder="$(cat "${lock}/pid" 2>/dev/null || true)"
   tries=0
   while [ -z "${holder}" ] && [ "${tries}" -lt 5 ]; do
-    sleep 1
+    # The loop's background sleep, so the TERM and INT traps kill it and run at once, rather than up to a
+    # second late after a foreground sleep (issue #319); see refresh for sleeper.
+    sleeper=""
+    sleep 1 &
+    sleeper=$!
+    wait "${sleeper}" || true
+    sleeper=none
     holder="$(cat "${lock}/pid" 2>/dev/null || true)"
     tries=$((tries + 1))
   done

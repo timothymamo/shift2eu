@@ -34,7 +34,9 @@
 //
 // Content negotiation on Accept: none, */*, application/* or application/json
 // gives the JSON report (ADR 0018), byte for byte what shift2eu assess --format
-// json prints; text/markdown or text/* gives the Markdown report, byte for
+// json --schema-version N prints, N being the request's schemaVersion: 2
+// unless the body asks for 3 (ADR 0030, issue #307), passed to the
+// representation's reporter constructor; text/markdown or text/* gives the Markdown report, byte for
 // byte the CLI's, as text/markdown; charset=utf-8. A media range with q=0 is
 // excluded, and an entry whose q is not a number in [0, 1] (NaN included) is
 // invalid and skipped. Nothing acceptable is 406 not_acceptable.

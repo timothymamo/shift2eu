@@ -6,7 +6,7 @@
 // # Commands
 //
 //	shift2eu assess --inventory <file> --target <targets> [--format <format>] [--output <file>]
-//	                [--region <target>=<region>,...] [--no-estimate]
+//	                [--region <target>=<region>,...] [--no-estimate] [--schema-version <version>]
 //	shift2eu version
 //	shift2eu help
 //
@@ -35,7 +35,10 @@
 // default region. Whether the target lists the region is checked by the use
 // case against the loaded catalog, before the inventory is read; an
 // *analysis.RegionError is a usage error naming the region and the target's
-// regions. Flags are parsed by the standard library
+// regions. --schema-version selects the JSON report's schemaVersion, 2 or 3,
+// 3 by default (docs/adr/0018, issue #307); it applies only to --format json,
+// and the CLI passes it to the format's reporter constructors (0 for any
+// other format, whose reporters ignore it). Flags are parsed by the standard library
 // flag package, so -flag and --flag are the same.
 //
 // # Exit codes
@@ -52,7 +55,8 @@
 //     all with another target (each error lists the supported targets), an
 //     unknown or empty --format (the error lists the supported formats), a
 //     malformed --region pair, a --region target --target does not select or
-//     one named twice, an unknown flag or an extra argument. An error line and
+//     one named twice, a --schema-version other than 2 or 3 or with a format
+//     other than json, an unknown flag or an extra argument. An error line and
 //     the usage text go to standard error, nothing goes to standard output, and
 //     no adapter is built. A --region the target's catalog does not list is a
 //     usage error too: it is found once the catalogs are loaded, but before the

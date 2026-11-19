@@ -281,6 +281,21 @@ func isRegionName(s string) bool {
 	return true
 }
 
+// defaultSchemaVersion is the JSON report version /v1 writes for a request
+// that names none (docs/adr/0030, issue #307).
+const defaultSchemaVersion = 2
+
+// schemaVersionOf returns the version req asks for, or defaultSchemaVersion
+// when its SchemaVersion is 0, so a Request built without one gets what a body
+// naming none gets.
+func schemaVersionOf(req Request) int {
+	if req.SchemaVersion == 0 {
+		return defaultSchemaVersion
+	}
+
+	return req.SchemaVersion
+}
+
 // run builds the use case for the selected targets, one target's analysis or
 // a comparison of several, with the request's regions and estimate switch,
 // runs it and returns the whole report. An error the inventory source returns
@@ -289,11 +304,12 @@ func isRegionName(s string) bool {
 func (a *api) run(ctx context.Context, req Request, keys []string, format Format) ([]byte, error) {
 	source := inventorySource{inner: a.deps.NewInventorySource(req.Inventory)}
 	meta := analysis.ReportMeta{InventoryName: inventoryName}
+	version := schemaVersionOf(req)
 
 	var report bytes.Buffer
 
 	if len(keys) == 1 {
-		single, err := analysis.New(source, a.deps.Targets[keys[0]](), format.NewReporter())
+		single, err := analysis.New(source, a.deps.Targets[keys[0]](), format.NewReporter(version))
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +327,7 @@ func (a *api) run(ctx context.Context, req Request, keys []string, format Format
 		targets = append(targets, analysis.Target{Key: key, Catalog: a.deps.Targets[key](), Region: req.Regions[key]})
 	}
 
-	comparison, err := analysis.NewComparison(source, targets, format.NewComparisonReporter())
+	comparison, err := analysis.NewComparison(source, targets, format.NewComparisonReporter(version))
 	if err != nil {
 		return nil, err
 	}

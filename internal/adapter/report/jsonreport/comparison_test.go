@@ -160,13 +160,25 @@ func threeTargetKeys() []string {
 	return []string{ovhcloudKey, scalewayKey, upcloudKey}
 }
 
-// renderComparison writes the comparison document of c and meta and returns it.
+// renderComparison writes the schemaVersion 2 comparison document of c and meta
+// and returns it: the goldens this package pinned before version 3 existed, which
+// stay byte for byte what they were (docs/adr/0018, docs/adr/0030).
 func renderComparison(tb testing.TB, c assessment.Comparison, meta analysis.ReportMeta) []byte {
 	tb.Helper()
 
+	return renderComparisonVersion(tb, c, meta, jsonreport.Version2)
+}
+
+// renderComparisonVersion writes the comparison document of c and meta in version
+// and returns it.
+func renderComparisonVersion(tb testing.TB, c assessment.Comparison, meta analysis.ReportMeta,
+	version int,
+) []byte {
+	tb.Helper()
+
 	var out bytes.Buffer
-	if err := jsonreport.New().ReportComparison(tb.Context(), &out, c, meta); err != nil {
-		tb.Fatalf("ReportComparison() returned unexpected error: %v", err)
+	if err := jsonreport.New(version).ReportComparison(tb.Context(), &out, c, meta); err != nil {
+		tb.Fatalf("ReportComparison() in schemaVersion %d returned unexpected error: %v", version, err)
 	}
 
 	return out.Bytes()
@@ -187,7 +199,8 @@ func TestReportComparison(t *testing.T) {
 
 	document := decodeJSON(t, got)
 
-	if diff := cmp.Diff(float64(currentSchemaVersion), valueAt(t, document, "schemaVersion")); diff != "" {
+	// The document is the frozen version 2 one renderComparison writes.
+	if diff := cmp.Diff(float64(jsonreport.Version2), valueAt(t, document, "schemaVersion")); diff != "" {
 		t.Errorf("schemaVersion mismatch (-want +got):\n%s", diff)
 	}
 
@@ -518,7 +531,7 @@ func TestReportComparisonRefusesMalformedComparison(t *testing.T) {
 
 			var out bytes.Buffer
 
-			err := jsonreport.New().ReportComparison(t.Context(), &out, c,
+			err := jsonreport.New(jsonreport.Version2).ReportComparison(t.Context(), &out, c,
 				analysis.ReportMeta{InventoryName: inventoryFileName})
 			if err == nil {
 				t.Fatalf("ReportComparison() error = nil, want an error when %s", tc.name)
@@ -539,7 +552,7 @@ func TestReportComparisonNoTarget(t *testing.T) {
 
 	var out bytes.Buffer
 
-	err := jsonreport.New().ReportComparison(t.Context(), &out, assessment.Comparison{},
+	err := jsonreport.New(jsonreport.Version2).ReportComparison(t.Context(), &out, assessment.Comparison{},
 		analysis.ReportMeta{InventoryName: inventoryFileName})
 	if err == nil {
 		t.Fatalf("ReportComparison() error = nil for a comparison of no target, want an error")
@@ -560,7 +573,7 @@ func TestReportComparisonReturnsWriteError(t *testing.T) {
 
 	c := assessment.Compare(assessTargets(t, comparisonInventory(t), threeTargetKeys()))
 
-	err := jsonreport.New().ReportComparison(t.Context(), failingWriter{err: writeErr}, c,
+	err := jsonreport.New(jsonreport.Version2).ReportComparison(t.Context(), failingWriter{err: writeErr}, c,
 		analysis.ReportMeta{InventoryName: inventoryFileName})
 	if !errors.Is(err, writeErr) {
 		t.Fatalf("ReportComparison() error = %v, want an error wrapping %v", err, writeErr)
@@ -964,7 +977,7 @@ func TestReportComparisonNamesTheChosenRegions(t *testing.T) {
 				}
 			}
 
-			s := readSchema(t, filepath.Join("schema", schemaFileFor("comparison", currentSchemaVersion)))
+			s := readSchema(t, filepath.Join("schema", schemaFileFor("comparison", jsonreport.Version2)))
 
 			for _, problem := range s.validate(document, "$") {
 				t.Errorf("the document does not match the schema: %s", problem)
@@ -1083,6 +1096,129 @@ func TestReportComparisonWithEstimates(t *testing.T) {
 	testutil.Golden(t, "testdata/comparison-estimates.golden", got)
 }
 
+// reportEmptyKey and reportEmptyTarget are the comparison's target whose estimates
+// estimated nothing: the report fixture's offerings sold in no region the
+// estimates are for, so every resource has a fit and no price.
+const (
+	reportEmptyKey    = "example-empty"
+	reportEmptyTarget = "Example Cloud None"
+)
+
+// assessEstimateAndEmptyTargets assesses the estimate fixture with estimates on
+// against the priced report fixture and against the same offerings in a region
+// that prices nothing.
+func assessEstimateAndEmptyTargets(t *testing.T) []assessment.TargetAssessment {
+	t.Helper()
+
+	snapshot := testutil.PricedSnapshot()
+	snapshot.DefaultRegion = reportNotOfferedRegion
+
+	inv := newInventory(t, sourceName, estimateResources())
+
+	return []assessment.TargetAssessment{
+		{
+			Key: reportKey,
+			Assessment: assessment.AssessWith(inv, testutil.ReportCatalog(t),
+				assessment.Options{Estimate: true}),
+		},
+		{
+			Key: reportEmptyKey,
+			Assessment: assessment.AssessWith(inv, testutil.ReportCatalogIn(t, reportEmptyTarget, snapshot),
+				assessment.Options{Estimate: true}),
+		},
+	}
+}
+
+// TestReportComparisonV3WithoutAmountWhenNothingEstimated pins the schemaVersion 3
+// comparison (issue #307): a target whose total estimated nothing writes no
+// amount at all, on its total and on each of its workloads' totals, while the
+// other target's totals keep theirs exactly as version 2 writes them. The counts
+// stay, so a consumer still learns how many resources there are, and the document
+// matches the version 3 comparison schema.
+func TestReportComparisonV3WithoutAmountWhenNothingEstimated(t *testing.T) {
+	t.Parallel()
+
+	c := assessment.Compare(assessEstimateAndEmptyTargets(t))
+	got := renderComparisonVersion(t, c, analysis.ReportMeta{InventoryName: inventoryFileName}, jsonreport.Version3)
+	checkDocument(t, got)
+
+	document := decodeJSON(t, got)
+
+	t.Run("the document is version 3", func(t *testing.T) {
+		t.Parallel()
+
+		if diff := cmp.Diff(float64(3), valueAt(t, document, "schemaVersion")); diff != "" {
+			t.Errorf("schemaVersion mismatch (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff("comparison", valueAt(t, document, "kind")); diff != "" {
+			t.Errorf("kind mismatch (-want +got):\n%s", diff)
+		}
+
+		checkDocumentAgainstSchema(t, got, "comparison-v3.schema.json")
+	})
+
+	t.Run("the target that estimated nothing writes no amount", func(t *testing.T) {
+		t.Parallel()
+
+		at := []any{"targets", 1}
+
+		if diff := cmp.Diff([]string{"estimated", "resources"}, objectKeysAt(t, document, extend(at, "estimate", "total")...)); diff != "" {
+			t.Errorf("the target's total keys mismatch (-want +got), a total that estimated nothing writes no amount:\n%s", diff)
+		}
+
+		if diff := cmp.Diff(float64(0), valueAt(t, document, extend(at, "estimate", "total", "estimated")...)); diff != "" {
+			t.Errorf("the target's total estimated mismatch (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff(float64(8), valueAt(t, document, extend(at, "estimate", "total", "resources")...)); diff != "" {
+			t.Errorf("the target's total resources mismatch (-want +got):\n%s", diff)
+		}
+
+		workloads := arrayAt(t, document, extend(at, "workloads")...)
+		if len(workloads) == 0 {
+			t.Fatalf("the target holds no workload, want the fixture's workloads")
+		}
+
+		for i := range workloads {
+			if diff := cmp.Diff([]string{"estimated", "resources"},
+				objectKeysAt(t, document, extend(at, "workloads", i, "estimate")...)); diff != "" {
+				t.Errorf("workload %d of the target keys mismatch (-want +got):\n%s", i, diff)
+			}
+		}
+	})
+
+	t.Run("the target that estimated keeps its amounts", func(t *testing.T) {
+		t.Parallel()
+
+		at := []any{"targets", 0}
+
+		if diff := cmp.Diff("2535.00", valueAt(t, document, extend(at, "estimate", "total", "amount")...)); diff != "" {
+			t.Errorf("the target's total amount mismatch (-want +got):\n%s", diff)
+		}
+
+		for i := range arrayAt(t, document, extend(at, "workloads")...) {
+			if i == 2 {
+				// The workload without an estimate writes no amount, in this
+				// target too: it estimated nothing.
+				if diff := cmp.Diff([]string{"estimated", "resources"},
+					objectKeysAt(t, document, extend(at, "workloads", i, "estimate")...)); diff != "" {
+					t.Errorf("workload %d keys mismatch (-want +got):\n%s", i, diff)
+				}
+
+				continue
+			}
+
+			if diff := cmp.Diff([]string{"amount", "estimated", "resources"},
+				objectKeysAt(t, document, extend(at, "workloads", i, "estimate")...)); diff != "" {
+				t.Errorf("workload %d keys mismatch (-want +got):\n%s", i, diff)
+			}
+		}
+	})
+
+	testutil.Golden(t, "testdata/comparison-no-amount-v3.golden", got)
+}
+
 // TestReportComparisonBillingCapHours pins that a cap belongs to a target's
 // estimate in a comparison document too (billingCapHours, ADR 0029): the capped
 // target's plan-priced estimates carry it, the uncapped target's do not, and the
@@ -1135,7 +1271,9 @@ func TestReportComparisonBillingCapHours(t *testing.T) {
 		}
 	}
 
-	s := readSchema(t, filepath.Join("schema", schemaFileFor("comparison", currentSchemaVersion)))
+	// The document is the version 2 one renderComparison writes, so it must
+	// match the version 2 schema (docs/adr/0018, issue #307).
+	s := readSchema(t, filepath.Join("schema", schemaFileFor("comparison", jsonreport.Version2)))
 
 	for _, problem := range s.validate(document, "$") {
 		t.Errorf("the document does not match the schema: %s", problem)
