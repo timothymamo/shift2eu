@@ -700,7 +700,9 @@ stopped() {
   say "agents App token refresh stopped at $(show_time "$(now)") ($1); ${left}; start it again from the host clone on the Mac with make agents-token-refresh-start"
 }
 
-# is_refresh <pid> tells whether pid is a running refresh.
+# is_refresh <pid> tells whether pid is a running refresh. is_number and kill -0 must stay ahead of ps -p:
+# ps -p accepts a list of pids (123,456 or "123 456"), and the lock's pid file is untrusted text
+# (TestAgentsAppTokenRefreshTakesOverALockWhosePidIsNoNumber pins this).
 is_refresh() {
   is_number "$1" && kill -0 "$1" 2>/dev/null &&
     ps -p "$1" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'
@@ -803,7 +805,7 @@ still_locked() {
   [ "${tries}" -eq 0 ] || current="$(now)"
   [ "${holder}" != "$$" ] || return 0
   if [ -z "${holder}" ]; then
-    say "the lock ${lock} is gone: no agents App token refresh holds it, so this one exits without minting and nothing refreshes the VM ${instance}'s token now; start a refresh again from the host clone on the Mac with make agents-token-refresh-start"
+    say "the lock ${lock} is gone or holds no pid: no agents App token refresh holds it, so this one exits without minting and nothing refreshes the VM ${instance}'s token now; start a refresh again from the host clone on the Mac with make agents-token-refresh-start"
   else
     say "the lock ${lock} is no longer this refresh's (it holds pid $(show_pid "${holder}")): another agents App token refresh for the VM ${instance} took it over, so this one exits without minting and leaves it to that one"
   fi
@@ -827,7 +829,9 @@ refresh() {
   # when ps names this shell as its parent: a child this shell has not reaped keeps its pid, so that pid is
   # still the sleep. One already reaped (the last round's sleep, which $! still names between `sleeper=""` and
   # `sleep ... &`, or the sleep wait has just reaped before `sleeper=none`) is no child of this shell any more,
-  # even when the system has given its pid to another process, and is never killed. Each trap stays one line.
+  # even when the system has given its pid to another process, and is not killed, short of its pid being
+  # reused in the instant between the ppid check and the kill (the two are not atomic: the shell may reap a
+  # sleep that exits while it waits for ps). Each trap stays one line.
   sleeper=none
   locked=0
   trap 'release_lock' EXIT

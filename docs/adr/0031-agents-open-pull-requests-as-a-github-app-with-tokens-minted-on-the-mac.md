@@ -169,7 +169,10 @@ or none; then no refresher runs until the next `make agents-token-refresh-start`
 it), which takes the stale lock over. A refresher's exit trap removes only a lock that holds its own pid.
 Its TERM and INT traps also kill a sleep started just before its pid was stored (issue #289), and kill a
 pid only while `ps` names the refresher as its parent: a sleep the shell has already reaped, whose pid the
-system may have given to another process, is never killed.
+system may have given to another process, is not killed, short of its pid being reused in the instant
+between that check and the kill (the check and the kill are not atomic, and the shell may reap the sleep
+while it waits for `ps`). If `ps` fails or is missing, the traps kill nothing, and the worst case is a
+harmless `sleep` that outlives the refresher and runs out on its own.
 `make agents-token-refresh-start` starts the refresh in the background with `nohup`, unless the lock's pid,
 or the pid it recorded itself, is a running refresh, in which case it names that pid; its pid and log are
 `agents-token-refresh-<instance>.{pid,log}` in the same directory (mode 0600), and it says where the log
