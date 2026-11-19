@@ -113,7 +113,7 @@ func checkMarker(t *testing.T, bundle *bundle, page, marker string, shown bool, 
 	doc := bundle.html(t, page)
 	_, stylesheet := bundle.asset(t, "style", ".css")
 
-	rules := parseCSS(t, "stylesheet", []byte(stylesheet))
+	rules := parseCSS(t, "stylesheet", stylesheet)
 	props := customProperties(rules)
 
 	var found []*element
