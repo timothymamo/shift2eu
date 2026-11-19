@@ -18,13 +18,41 @@ const parsedAnswer = `{"summary":"The change does what the issue asks.",` +
 // TestParseAnswerReadsTheModelsAnswer pins the strict parser of ADR 0033: one
 // JSON object with surrounding whitespace only, a summary, a findings array and
 // each finding's severity, category, title and body, with an optional path and
-// line. A category the model left out, wrote as null or wrote outside the
-// constants is kept as CategoryUncategorised, with the finding's other fields
-// unchanged, so one unknown category costs no other finding. An answer with no
-// findings is valid and its findings are empty, not nil, so a caller can range
-// over them.
+// line. The model's category is normalised before it is matched (issue #292):
+// white space around it trimmed, lower-cased, every underscore and space turned
+// into a hyphen, so " Correctness " is correctness and "Prompt_Injection" is
+// prompt-injection, and a category that still holds "inject" is
+// CategoryPromptInjection whatever else it says, so a misspelt prompt-injection
+// finding keeps blocking. A category the model left out, wrote as null or wrote
+// outside the constants is kept as CategoryUncategorised, with the finding's
+// other fields unchanged, so one unknown category costs no other finding. An
+// answer with no findings is valid and its findings are empty, not nil, so a
+// caller can range over them.
 func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 	t.Parallel()
+
+	// The answer of one finding whose category the model wrote as raw, and the
+	// same answer once the category is read as want: the finding's other fields
+	// are the same in both.
+	withCategory := func(raw string) string {
+		return `{"summary":"The change does what the issue asks.","findings":[` +
+			`{"severity":"suggestion","category":"` + raw + `","path":"internal/x/y.go","line":3,` +
+			`"title":"Off by one","body":"The loop ends one short."}]}`
+	}
+
+	readAs := func(want review.Category) review.Answer {
+		return review.Answer{
+			Summary: "The change does what the issue asks.",
+			Findings: []review.Finding{{
+				Severity: review.SeveritySuggestion,
+				Category: want,
+				Path:     "internal/x/y.go",
+				Line:     3,
+				Title:    "Off by one",
+				Body:     "The loop ends one short.",
+			}},
+		}
+	}
 
 	cases := []struct {
 		name string
@@ -137,6 +165,51 @@ func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 					Body:     "A clearer name would help.",
 				}},
 			},
+		},
+		{
+			name: "a category with surrounding white space is that category",
+			text: withCategory(" Correctness "),
+			want: readAs(review.CategoryCorrectness),
+		},
+		{
+			name: "a category in another case is that category",
+			text: withCategory("Security"),
+			want: readAs(review.CategorySecurity),
+		},
+		{
+			name: "a category with an underscore is the category it spells",
+			text: withCategory("Prompt_Injection"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		{
+			name: "a category with a space is the category it spells",
+			text: withCategory("prompt injection"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		{
+			name: "a category in another case and with an underscore is the category it spells",
+			text: withCategory(" Unknown_Category"),
+			want: readAs(review.CategoryUncategorised),
+		},
+		{
+			name: "a misspelt prompt-injection category is still prompt-injection",
+			text: withCategory("promptinjection"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		{
+			name: "a bare injection category is prompt-injection",
+			text: withCategory("injection"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		{
+			name: "an injection word in a longer category is prompt-injection",
+			text: withCategory("prompt-injection-attempt"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		{
+			name: "an injection category in another case and with a space is prompt-injection",
+			text: withCategory("Code Injection"),
+			want: readAs(review.CategoryPromptInjection),
 		},
 		{
 			name: "surrounding whitespace",

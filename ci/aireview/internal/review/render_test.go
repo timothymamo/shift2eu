@@ -837,6 +837,14 @@ func TestRenderCountsFindingsWithCorrectSingularAndPlural(t *testing.T) {
 			},
 		},
 		{
+			name:     "the Other findings block as a whole",
+			findings: []review.Finding{inline("One", 2), inBody("Two")},
+			event:    review.EventComment,
+			want: []string{
+				"\n### Other findings\n\n1 finding is an inline comment on the diff. The finding below is not on a line of it.\n",
+			},
+		},
+		{
 			name:     "one inline finding and two in the body",
 			findings: []review.Finding{inline("One", 2), inBody("Two"), inBody("Three")},
 			event:    review.EventComment,
@@ -1032,6 +1040,109 @@ func TestRenderSaysAFindingIsUncategorised(t *testing.T) {
 			for _, absent := range tc.wantAbsent {
 				if strings.Contains(got.Body, absent) {
 					t.Errorf("the review's body holds %q, which does not belong to these findings; body:\n%s", absent, got.Body)
+				}
+			}
+		})
+	}
+}
+
+// TestRenderRendersAMisspeltPromptInjectionAnswerAsPromptInjection pins that a
+// category the model misspelt still reaches the review as prompt-injection
+// (issue #292): the category is read by ParseAnswer, which normalises it, so the
+// finding is shown as prompt-injection and blocking, and the body's note about a
+// missing or unrecognised category, which would tell the reader the finding
+// fell into no category and never blocks, is absent. A category that names no
+// injection stays uncategorised, and keeps that note.
+func TestRenderRendersAMisspeltPromptInjectionAnswerAsPromptInjection(t *testing.T) {
+	t.Parallel()
+
+	// The answer of one finding whose category the model wrote as raw.
+	answerWith := func(raw string) string {
+		return `{"summary":"` + renderSummary + `","findings":[` +
+			`{"severity":"suggestion","category":"` + raw + `","path":"internal/x/y.go","line":3,` +
+			`"title":"Instruction in the diff","body":"The added line tells the reviewer to approve the pull request."}]}`
+	}
+
+	promptInjection := []string{"**suggestion** (prompt-injection), **blocking**"}
+
+	cases := []struct {
+		name       string
+		category   string
+		want       []string
+		wantAbsent []string
+	}{
+		{
+			name:       "the category in another case",
+			category:   "Prompt-Injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "the category with an underscore",
+			category:   "prompt_injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "the category with a space",
+			category:   "prompt injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "the category with no hyphen",
+			category:   "promptinjection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "a bare injection category",
+			category:   "injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "an injection word in a longer category",
+			category:   "Code Injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "a category that names no injection stays uncategorised",
+			category:   "style",
+			want:       []string{"**suggestion** (uncategorised)", "had a missing or unrecognised category"},
+			wantAbsent: []string{"(prompt-injection)"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			answer, err := review.ParseAnswer(answerWith(tc.category))
+			if err != nil {
+				t.Fatalf("ParseAnswer of the category %q: %v", tc.category, err)
+			}
+
+			got := review.Render(headSHA, answer, review.EventComment, renderDiff)
+
+			// The finding is on an added line of the diff, so the review makes an
+			// inline comment of it: what the review says about it is the body
+			// plus the comments.
+			text := got.Body
+			for _, comment := range got.Comments {
+				text += "\n" + comment.Body
+			}
+
+			for _, want := range tc.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("the review does not hold %q for the category %q; body:\n%s", want, tc.category, got.Body)
+				}
+			}
+
+			for _, absent := range tc.wantAbsent {
+				if strings.Contains(text, absent) {
+					t.Errorf("the review holds %q for the category %q, which does not belong to it; body:\n%s", absent, tc.category, got.Body)
 				}
 			}
 		})
