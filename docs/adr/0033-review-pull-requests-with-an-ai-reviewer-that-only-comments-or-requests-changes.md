@@ -344,7 +344,7 @@ the trigger option below are the levers.
   line break would put the rest of the path on a line of its own), or anything around the object fails
   the run, and nothing is posted. The category alone is not strict (issue #292): a missing one, or one
   outside the list, keeps the finding as `uncategorised`, and the review says how many findings it shows
-  so; the severity still decides whether it blocks. The model never names the event: the program decides
+  as uncategorised; the severity still decides whether it blocks. The model never names the event: the program decides
   it from the findings, so no answer can make it approve, and the poster refuses anything but `COMMENT`
   and `REQUEST_CHANGES` even if the program asked.
 - An inline comment goes only on a line the diff shows on its new side; a finding on any other line, or
