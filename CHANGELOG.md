@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.8.1](https://github.com/timothymamo/shift2eu/compare/v0.8.0...v0.8.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* **aireview:** keep a review with one bad category, count findings plainly, and pin the CLI outcome ([#295](https://github.com/timothymamo/shift2eu/issues/295)) ([f645a30](https://github.com/timothymamo/shift2eu/commit/f645a30e5cfb552cb54f38316e7eea0ef147bb84))
+* **devenv:** check LIMA_INSTANCE on every target and start an existing VM without template:default ([#252](https://github.com/timothymamo/shift2eu/issues/252), [#254](https://github.com/timothymamo/shift2eu/issues/254)) ([#312](https://github.com/timothymamo/shift2eu/issues/312)) ([f853a5e](https://github.com/timothymamo/shift2eu/commit/f853a5e302b34b13084a528a5fd2b1b84fbdd0bc))
+* **devenv:** harden vm-env and vm-env-check ([#268](https://github.com/timothymamo/shift2eu/issues/268), [#259](https://github.com/timothymamo/shift2eu/issues/259)) ([#296](https://github.com/timothymamo/shift2eu/issues/296)) ([ff3a754](https://github.com/timothymamo/shift2eu/commit/ff3a754bfb3aba206cdc6bfc4f46fcf8753c2161))
+* **estimate:** say "not offered in &lt;region&gt;", and print no amount when nothing is estimated ([#299](https://github.com/timothymamo/shift2eu/issues/299)) ([1268c6c](https://github.com/timothymamo/shift2eu/commit/1268c6c32218a4a366efec6285374be1a59e4363))
+
 ## [0.8.0](https://github.com/timothymamo/shift2eu/compare/v0.7.0...v0.8.0) (2026-11-19)
 
 
