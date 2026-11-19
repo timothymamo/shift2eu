@@ -34,7 +34,7 @@ type assessOptions struct {
 	// --no-estimate was given (PRD #190).
 	estimate bool
 	// schemaVersion is the version of the JSON report --format json writes:
-	// --schema-version, or defaultSchemaVersion. It is 0 for a format that has
+	// --schema-version, or analysis.DefaultSchemaVersion. It is 0 for a format that has
 	// no schemaVersion, whose reporters ignore it.
 	schemaVersion int
 }
