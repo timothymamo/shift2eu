@@ -1,6 +1,7 @@
 package examples_test
 
 import (
+	"encoding/binary"
 	"maps"
 	"os"
 	"path/filepath"
@@ -262,7 +263,7 @@ func utf16LEBOM(text string) string {
 	encoded = append(encoded, 0xff, 0xfe)
 
 	for _, unit := range units {
-		encoded = append(encoded, byte(unit), byte(unit>>8))
+		encoded = binary.LittleEndian.AppendUint16(encoded, unit)
 	}
 
 	return string(encoded)
