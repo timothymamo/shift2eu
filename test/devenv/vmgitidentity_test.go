@@ -4,6 +4,11 @@
 // replaces the maintainer's, and with the identity file gone the fallback comes back, so a maintainer who rolls
 // back commits as themselves again.
 //
+// The identity the VM has is printed when the step keeps it and when it replaces it, and it comes from the VM's
+// ~/.gitconfig, which anything may have written: the output must not carry the bytes a terminal acts on, so a
+// value holding an escape sequence, a carriage return or a bell never recolours, rewrites or rings the
+// maintainer's terminal and log (issue #262's review, issue #319).
+//
 // vm-init itself cannot be run in make test: its first step refuses to run outside the Lima VM unless
 // /etc/profile.d/shift2eu.sh exists, which a test cannot create without the VM's own provisioning. Its remaining
 // claim, that it runs this script, is pinned in vminit_test.go.
@@ -12,9 +17,11 @@ package devenv_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -120,6 +127,34 @@ func (f *identityFixture) set(t *testing.T, key, value string) {
 	}
 }
 
+// add appends one more value of a key to the global git configuration: --add, the way a home that has seen a
+// few git config calls ends up holding several values for one key (issue #262).
+func (f *identityFixture) add(t *testing.T, key, value string) {
+	t.Helper()
+
+	if _, err := f.git(t, "config", "--global", "--add", key, value); err != nil {
+		t.Fatalf("add %s to %s: %v", value, key, err)
+	}
+}
+
+// values returns every value of one key of the global git configuration: --get-all, so a key the VM's
+// ~/.gitconfig holds twice shows both values, where --get would hide all but the last (issue #262).
+func (f *identityFixture) values(t *testing.T, key string) []string {
+	t.Helper()
+
+	out, err := f.git(t, "config", "--global", "--get-all", key)
+	if err != nil {
+		return nil // git's status for a key the global configuration does not hold
+	}
+
+	out = strings.TrimRight(out, "\n")
+	if out == "" {
+		return nil
+	}
+
+	return strings.Split(out, "\n")
+}
+
 // get reads one key of the global git configuration, empty when it is not set.
 func (f *identityFixture) get(t *testing.T, key string) string {
 	t.Helper()
@@ -172,21 +207,40 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 		fallbackEmail = "maintainer@example.com"
 		humanName     = "Ada Lovelace"
 		humanEmail    = "ada@example.com"
+		// A maintainer's name and address are text, not ASCII: a filter that keeps bytes 0x20-0x7e only prints
+		// this name as "Jos Mller" (issue #262).
+		utf8Name  = "José Müller"
+		utf8Email = "josé.müller@example.com"
 	)
 
 	human := map[string]string{"user.name": humanName, "user.email": humanEmail}
 	bot := map[string]string{"user.name": botName, "user.email": botEmail}
+
+	// The bytes a terminal acts on rather than prints, in the values a ~/.gitconfig may hold: an escape
+	// sequence that would colour or clear the terminal, a carriage return that would overwrite the line, and a
+	// bell. git accepts them in a value, and --get-all prints them back verbatim.
+	controlName := "Ada\x1b[31mLovelace"
+	controlEmail := "ada\rbell\x07@example.com"
 
 	cases := []struct {
 		name         string
 		fallbackName string
 		fallbackMail string
 		existing     map[string]string
-		identityFile *string // nil: no identity file in the VM
-		wantFailure  bool
-		wantMessages []string
-		wantName     string // the identity afterwards; empty together with wantFailure
-		wantEmail    string
+		// existingValues are keys the VM's ~/.gitconfig holds more than once, each value added with --add:
+		// a git config <key> <value> over one of them refuses (status 5), where --replace-all writes one value
+		// (issue #262).
+		existingValues map[string][]string
+		identityFile   *string // nil: no identity file in the VM
+		wantFailure    bool
+		wantMessages   []string
+		// wantOutput are strings the output must hold byte for byte: the values the step prints, which are text
+		// out of the VM's ~/.gitconfig and may be non-ASCII, as a name like José Müller is. Stripping the bytes
+		// a terminal acts on must leave them alone, or the step prints the name with its UTF-8 letters missing
+		// (issue #262).
+		wantOutput []string
+		wantName   string // the identity afterwards; empty together with wantFailure
+		wantEmail  string
 	}{
 		{
 			name:         "no identity file and no identity at all: the fallback is set",
@@ -212,6 +266,103 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 			identityFile: identityText(botName + "\n" + botEmail + "\n"),
 			wantName:     botName,
 			wantEmail:    botEmail,
+		},
+		{
+			// Issue #262: a ~/.gitconfig that holds two user.email values makes git config user.email <value>
+			// refuse with "cannot overwrite multiple values with a single value" (status 5), so the identity
+			// step failed on a home a few git config calls had left that way, and it must replace both values
+			// with the one the identity file names.
+			name:           "the identity file replaces two user.email values",
+			fallbackName:   fallbackName,
+			fallbackMail:   fallbackEmail,
+			existingValues: map[string][]string{"user.name": {humanName}, "user.email": {humanEmail, "other@example.com"}},
+			identityFile:   identityText(botName + "\n" + botEmail + "\n"),
+			wantName:       botName,
+			wantEmail:      botEmail,
+		},
+		{
+			// The same for user.name: git refuses to write one value over several (issue #262).
+			name:           "the identity file replaces two user.name values",
+			fallbackName:   fallbackName,
+			fallbackMail:   fallbackEmail,
+			existingValues: map[string][]string{"user.name": {humanName, "Other Maintainer"}, "user.email": {humanEmail}},
+			identityFile:   identityText(botName + "\n" + botEmail + "\n"),
+			wantName:       botName,
+			wantEmail:      botEmail,
+		},
+		{
+			// Issue #262's review: the kept message prints the current value, and that value is text out of the
+			// VM's ~/.gitconfig. A user.name holding an escape sequence must not reach the terminal as one.
+			name:         "no identity file and a user.name with terminal control bytes: it is kept",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": controlName, "user.email": humanEmail},
+			wantMessages: []string{"kept"},
+			wantName:     controlName,
+			wantEmail:    humanEmail,
+		},
+		{
+			name:         "no identity file and a user.email with terminal control bytes: it is kept",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": humanName, "user.email": controlEmail},
+			wantMessages: []string{"kept"},
+			wantName:     humanName,
+			wantEmail:    controlEmail,
+		},
+		{
+			name:         "the identity file replaces an identity that holds terminal control bytes",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": controlName, "user.email": controlEmail},
+			identityFile: identityText(botName + "\n" + botEmail + "\n"),
+			wantMessages: []string{"replaced"},
+			wantName:     botName,
+			wantEmail:    botEmail,
+		},
+		{
+			// Issue #262: the kept message prints the value out of the VM's ~/.gitconfig, and a name is not ASCII.
+			name:         "no identity file and a non-ASCII user.name: it is kept and printed as it is",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": utf8Name, "user.email": humanEmail},
+			wantMessages: []string{"kept"},
+			wantOutput:   []string{utf8Name},
+			wantName:     utf8Name,
+			wantEmail:    humanEmail,
+		},
+		{
+			name:         "no identity file and a non-ASCII user.email: it is kept and printed as it is",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": humanName, "user.email": utf8Email},
+			wantMessages: []string{"kept"},
+			wantOutput:   []string{utf8Email},
+			wantName:     humanName,
+			wantEmail:    utf8Email,
+		},
+		{
+			name:         "the identity file replaces a non-ASCII identity",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": utf8Name, "user.email": utf8Email},
+			identityFile: identityText(botName + "\n" + botEmail + "\n"),
+			wantMessages: []string{"replaced"},
+			wantOutput:   []string{utf8Name, utf8Email},
+			wantName:     botName,
+			wantEmail:    botEmail,
+		},
+		{
+			// Both at once: the escape sequence goes, the non-ASCII letters stay, so the step neither recolours
+			// the terminal nor prints the name as "Jos Mller" (issue #262).
+			name:         "no identity file and a user.name with both terminal control bytes and non-ASCII letters: it is kept",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": "José\x1b[31mMüller", "user.email": humanEmail},
+			wantMessages: []string{"kept"},
+			wantOutput:   []string{"José", "Müller"},
+			wantName:     "José\x1b[31mMüller",
+			wantEmail:    humanEmail,
 		},
 		{
 			name:         "the identity file removed: the fallback comes back over the bot's identity",
@@ -279,6 +430,12 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 				f.set(t, key, value)
 			}
 
+			for key, values := range tc.existingValues {
+				for _, value := range values {
+					f.add(t, key, value)
+				}
+			}
+
 			before := f.config(t)
 
 			if tc.identityFile != nil {
@@ -286,6 +443,14 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 			}
 
 			stdout, stderr, err := f.run(t, tc.fallbackName, tc.fallbackMail)
+
+			// The current identity is printed either way, kept or replaced, and it is whatever the VM's
+			// ~/.gitconfig holds. A value with an escape sequence, a carriage return or a bell in it must not put
+			// those bytes into the output: the printable rest of the value may appear (issue #262's review).
+			if control := controlBytes(stdout + stderr); control != "" {
+				t.Errorf("the identity step's output holds control bytes (%s), so a value out of the VM's ~/.gitconfig reaches the maintainer's terminal as a terminal escape, a carriage return that overwrites the line or a bell: the step must print the value without the bytes a terminal acts on (issue #262's review)\nstdout: %q\nstderr: %q",
+					control, stdout, stderr)
+			}
 
 			if tc.wantFailure {
 				if err == nil {
@@ -315,6 +480,16 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 				}
 			}
 
+			// The value it prints is text out of the VM's ~/.gitconfig. Removing the bytes a terminal acts on must
+			// not take the printable non-ASCII ones with them: a maintainer named José Müller reads "José Müller",
+			// not "Jos Mller" (issue #262).
+			for _, want := range tc.wantOutput {
+				if !strings.Contains(stdout+stderr, want) {
+					t.Errorf("the identity step's output does not hold %q byte for byte, so a name out of the VM's ~/.gitconfig loses its non-ASCII letters when the step strips the bytes a terminal acts on: %q\nstdout: %q\nstderr: %q",
+						want, stdout+stderr, stdout, stderr)
+				}
+			}
+
 			name, email := f.identity(t)
 
 			if name != tc.wantName {
@@ -324,6 +499,18 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 			if email != tc.wantEmail {
 				t.Errorf("git user.email is %q, want %q: %s", email, tc.wantEmail, tc.name)
 			}
+
+			// --get-all, so a key the step left with several values shows all of them: the identity is one value
+			// per key, and a key holding two is one git config <key> <value> away from failing again (issue #262).
+			for _, want := range []struct {
+				key  string
+				want string
+			}{{"user.name", tc.wantName}, {"user.email", tc.wantEmail}} {
+				if got := f.values(t, want.key); !slices.Equal(got, []string{want.want}) {
+					t.Errorf("the global git %s holds %v after the identity step, want exactly [%q]: with several values, or one the step left behind, a later git config on that key refuses with status 5 (issue #262): %s",
+						want.key, got, want.want, tc.name)
+				}
+			}
 		})
 	}
 }
@@ -331,4 +518,29 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 // identityText returns a pointer to s, for a case that has an identity file.
 func identityText(s string) *string {
 	return &s
+}
+
+// controlBytes names the bytes of text that a terminal acts on rather than prints - every byte below 0x20 but the
+// newline that ends a line, and 0x7f (delete) - with where each one is, and is empty when text holds none. It is
+// how a test says that a value out of the VM's ~/.gitconfig never reaches the maintainer's terminal as a
+// terminal escape, a carriage return that overwrites the line or a bell (issue #262's review).
+func controlBytes(text string) string {
+	var found []string
+
+	for i := 0; i < len(text); i++ {
+		b := text[i]
+		if b == '\n' || (b >= 0x20 && b != 0x7f) {
+			continue
+		}
+
+		if len(found) == 5 {
+			found = append(found, "and more")
+
+			break
+		}
+
+		found = append(found, fmt.Sprintf("%#02x at byte %d", b, i))
+	}
+
+	return strings.Join(found, ", ")
 }

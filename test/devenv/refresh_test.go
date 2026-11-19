@@ -1930,6 +1930,190 @@ func TestAgentsAppTokenRefreshHandlesALockThatGoesMissing(t *testing.T) {
 	})
 }
 
+// TestAgentsAppTokenRefreshAnswersASignalInTheStillLockedWait pins issue #319's second half: still_locked waits a
+// second for the lock it holds to come back, and while that wait was a foreground `sleep 1` of a script whose TERM
+// and INT traps know only the loop's background sleep, a signal took up to a second to be handled. The wait is the
+// loop's background sleep now, so a trap kills it and runs at once.
+//
+// The staging of issue #288's missing-lock path brings the refresher into that wait: the lock it holds goes aside
+// while the refresher is held at its clock read, the last point before still_locked reads that lock. The sleep
+// shim is armed for that retry alone and runs the machine's own sleep, so the refresher waits on a real second as
+// it does in the VM. The test sends the SIGTERM into that second and measures how long the refresher needs to
+// stop: the trap's work is a handful of processes, while a foreground sleep defers the trap to the end of its
+// second.
+func TestAgentsAppTokenRefreshAnswersASignalInTheStillLockedWait(t *testing.T) {
+	t.Parallel()
+
+	// The bound between the two behaviours. The trap's work is a few processes (ps, kill, rm) on a machine that
+	// runs this test twenty times at once under -race, which measures in milliseconds; the signal sent early into
+	// the wait, a foreground sleep would add the rest of its whole second, some 950ms. 700ms leaves the trap's
+	// work a wide margin and the foreground sleep none.
+	const bound = 700 * time.Millisecond
+
+	f := newMintFixture(t)
+	env := f.refreshEnv()
+	lock := f.sb.refreshLockDir("shift2eu")
+	gone := f.sb.useGoneLockShims(t, env, lock)
+	wait := useRealSleepShim(t, env)
+
+	// The refresher holds the lock and parks at the loop's clock read.
+	gone.holdTheNextClock(t)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	if !poll(30*time.Second, func() bool {
+		return gone.reached(heldAtTheClock) && lockHoldsPid(lock, refresh.pid())
+	}) {
+		t.Fatalf("the refresher did not come to its clock read with the lock in hand within 30s\n%s\nstderr:\n%s",
+			gone.describe(), refresh.errOut())
+	}
+
+	// The lock goes missing just before still_locked reads it, so the retry is the next thing the refresher does,
+	// and the shim holds that retry's sleep, a real second.
+	gone.moveTheLockAside(t)
+	wait.arm(t)
+	gone.letTheClockGo(t)
+
+	if !poll(30*time.Second, wait.reached) {
+		t.Fatalf("the refresher did not wait for the lock it holds once it found it missing within 30s\n%s\nstderr:\n%s",
+			gone.describe(), refresh.errOut())
+	}
+
+	sleepPid := wait.sleepPid(t)
+
+	// The sleep must be the machine's own, still running, and in the refresher's process group: a signal sent to a
+	// shim that already returned, or to a child outside the group, would prove nothing about the wait.
+	waitFor(t, 30*time.Second, "the sleep of the refresher's still_locked wait to run", func() bool {
+		comm, err := exec.Command(realTool(t, "ps"), "-p", strconv.Itoa(sleepPid), "-o", "comm=").Output()
+
+		return err == nil && strings.TrimSpace(string(comm)) == "sleep"
+	})
+
+	if got, want := processGroupOf(t, sleepPid), processGroupOf(t, refresh.pid()); got != want {
+		t.Fatalf("the sleep of the wait (pid %d) runs in process group %s, not in the refresher's %s, so this run pins nothing about what the refresher leaves behind in its group",
+			sleepPid, got, want)
+	}
+
+	// The lock comes back while the refresher waits on it, as the contender that moved it puts it back: the
+	// refresher holds it again when the signal arrives, so the trap's release_lock has a lock of its own to remove.
+	gone.putTheLockBack(t)
+
+	if !lockHoldsPid(lock, refresh.pid()) {
+		t.Fatalf("the lock %s does not hold the pid %d of the refresher that waits for it\n%s", lock, refresh.pid(), gone.describe())
+	}
+
+	sent := time.Now()
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresher was still running 30s after the SIGTERM it took in still_locked's wait; stderr:\n%s", refresh.errOut())
+	}
+
+	if elapsed := time.Since(sent); elapsed > bound {
+		t.Errorf("the refresher needed %s to stop after the SIGTERM it took in still_locked's wait, want under %s: the wait must be the loop's background sleep, so the trap kills it and runs at once, rather than a foreground sleep that defers the signal to the end of its second (issue #319)\nstderr:\n%s",
+			elapsed.Round(time.Millisecond), bound, refresh.errOut())
+	}
+
+	if status := refresh.exitCode(t); status != 143 {
+		t.Errorf("the refresher exited with %d, want 143: its TERM trap, not the signal's default action, must handle the signal it takes in still_locked's wait\nstderr:\n%s",
+			status, refresh.errOut())
+	}
+
+	// The trap ends in release_lock: the lock the refresher held must be gone with it, as every other way out of
+	// the refresh leaves it.
+	waitFor(t, 30*time.Second, "the refresher's lock to be gone after it stopped", func() bool {
+		_, err := os.Stat(lock)
+
+		return errors.Is(err, fs.ErrNotExist)
+	})
+
+	// A sleep the trap never killed sleeps on after the refresher has exited, up to its own second, in the group
+	// the signal was meant for.
+	if !poll(10*time.Second, func() bool { return sleepStopped(t, sleepPid) }) {
+		t.Errorf("the refresher left the sleep of its still_locked wait (pid %d) running in its process group after it had exited: the TERM trap must kill the sleep the wait runs, or the wait outlives the refresher (issue #319)\nstderr:\n%s",
+			sleepPid, refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// realSleepShimText stands in for sleep while the test forces issue #319's wait. Armed, it records its pid in
+// sleep-pid, touches the marker at-wait and runs the machine's own sleep with the arguments the script gave it, so
+// the refresher's wait lasts the second the script asked for and its child is a `sleep` in the refresher's process
+// group; exec keeps the pid, so the pid the test reads is the sleep the trap has to kill. Unarmed, it returns at
+// once, as the goneLock shim does, so every other sleep of the loop costs the test nothing.
+const realSleepShimText = `#!/bin/sh
+dir="${SHIFT2EU_TEST_STILL_LOCKED_WAIT:?set SHIFT2EU_TEST_STILL_LOCKED_WAIT}"
+if [ -e "${dir}/armed" ]; then
+  %s -f "${dir}/armed"
+  printf '%%s\n' "$$" > "${dir}/sleep-pid"
+  : > "${dir}/at-wait"
+  exec %s "$@"
+fi
+exit 0
+`
+
+// stillLockedWait is the staging of issue #319's wait: the sleep shim armed for the one wait still_locked runs,
+// the marker it touches when it runs that wait and the file it records its sleep's pid in.
+type stillLockedWait struct {
+	dir string
+}
+
+// useRealSleepShim puts the sleep shim of issue #319's wait first on PATH, ahead of the goneLock shims' own sleep.
+func useRealSleepShim(t *testing.T, env map[string]string) *stillLockedWait {
+	t.Helper()
+
+	dir := filepath.Join(t.TempDir(), "still-locked-wait")
+	binDir := filepath.Join(dir, "bin")
+
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+
+	writeFileMode(t, filepath.Join(binDir, "sleep"),
+		[]byte(fmt.Sprintf(realSleepShimText, strconv.Quote(realTool(t, "rm")), strconv.Quote(realTool(t, "sleep")))), 0o700)
+
+	env["PATH"] = binDir + ":" + env["PATH"]
+	env["SHIFT2EU_TEST_STILL_LOCKED_WAIT"] = dir
+
+	return &stillLockedWait{dir: dir}
+}
+
+// arm makes the shim hold the next sleep the refresher runs, which is still_locked's retry.
+func (w *stillLockedWait) arm(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(w.dir, "armed"), nil, 0o600)
+}
+
+// reached reports whether the shim has held a sleep, so the refresher is in still_locked's wait.
+func (w *stillLockedWait) reached() bool {
+	_, err := os.Stat(filepath.Join(w.dir, "at-wait"))
+
+	return err == nil
+}
+
+// sleepPid is the pid of the sleep the shim ran, which the exec of the machine's sleep keeps.
+func (w *stillLockedWait) sleepPid(t *testing.T) int {
+	t.Helper()
+
+	return pidFrom(t, filepath.Join(w.dir, "sleep-pid"), "the sleep of still_locked's wait")
+}
+
+// processGroupOf is the process group pid runs in: a child a script starts inherits the script's group, so the
+// group is where a sleep the refresh leaves behind outlives it.
+func processGroupOf(t *testing.T, pid int) string {
+	t.Helper()
+
+	out, err := exec.Command(realTool(t, "ps"), "-o", "pgid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		t.Fatalf("read the process group of pid %d: %v", pid, err)
+	}
+
+	return strings.TrimSpace(string(out))
+}
+
 // TestAgentsAppTokenRefreshDoesNotEchoTheLockFilesPid pins the finding of issue #288's review: the file the lock
 // keeps its owner's pid in is a file in the refresh's state directory, and the refresh echoes what it reads there
 // into the log a maintainer reads, unvalidated. A pid file holding text instead of a pid - with the escape that
@@ -2241,6 +2425,306 @@ func TestAgentsAppTokenRefreshTakesOverAStaleLockOnce(t *testing.T) {
 			}
 
 			f.assertNoLeaks(t, holder.out(), holder.errOut())
+		})
+	}
+}
+
+// putBackMVShim stands in for mv in front of the mover's own mv shim: a put-back whose source is a moved-aside lock
+// fails, the way a full disk or a permission makes it fail, and every other call is the sandbox's own mv shim, so
+// the interleaving of issue #288 still comes from the holds that staged it. SHIFT2EU_TEST_PUTBACK says how the
+// put-back fails: once (a transient failure a second attempt gets past), always, or gone (the moved-aside lock
+// vanishes too, so neither it nor a lock at the lock's path is left).
+const putBackMVShim = `#!/bin/sh
+case "${1:-}" in
+*/.agents-token-refresh-*.lock.stale.*)
+  case "${SHIFT2EU_TEST_PUTBACK:?set SHIFT2EU_TEST_PUTBACK}" in
+  once)
+    if [ ! -e "${SHIFT2EU_TEST_PUTBACK_DIR:?}/failed-once" ]; then
+      : > "${SHIFT2EU_TEST_PUTBACK_DIR}/failed-once"
+      echo "mv: cannot move ${1}: failed by the devenv tests" >&2
+      exit 1
+    fi
+    ;;
+  always)
+    echo "mv: cannot move ${1}: failed by the devenv tests" >&2
+    exit 1
+    ;;
+  gone)
+    "${SHIFT2EU_TEST_REAL_MV:?}" "${1}" "${SHIFT2EU_TEST_PUTBACK_DIR:?}/vanished" 2>/dev/null || true
+    echo "mv: cannot stat ${1}: no such file or directory" >&2
+    exit 1
+    ;;
+  *)
+    echo "the devenv tests know no SHIFT2EU_TEST_PUTBACK=${SHIFT2EU_TEST_PUTBACK}" >&2
+    exit 64
+    ;;
+  esac
+  ;;
+esac
+exec %s "$@"
+`
+
+// locksHoldingPid returns the names in dir of the directories whose pid file holds pid: the lock a refresher holds,
+// wherever a contender that moved it aside left it (issues #288 and #319).
+func locksHoldingPid(dir string, pid int) []string {
+	var names []string
+
+	for _, name := range dirNames(dir) {
+		if lockHoldsPid(filepath.Join(dir, name), pid) {
+			names = append(names, name)
+		}
+	}
+
+	return names
+}
+
+// assertSaysThePutBackFailed fails unless the refresher's output says that the lock it moved aside could not be put
+// back: a line about a lock, with one of the words a message about that state uses. The wording is not pinned, only
+// that a maintainer reading the run learns that neither a lock at the lock's path nor the one that was moved aside
+// is left, rather than seeing a silent takeover of a lock the winner still expected (issue #319).
+func assertSaysThePutBackFailed(t *testing.T, text string) {
+	t.Helper()
+
+	said := []string{"put back", "put it back", "cannot move", "both", "neither", "moved aside", "restore", "lost"}
+
+	for _, line := range strings.Split(text, "\n") {
+		lower := strings.ToLower(line)
+		if !strings.Contains(lower, "lock") {
+			continue
+		}
+
+		for _, word := range said {
+			if strings.Contains(lower, word) {
+				return
+			}
+		}
+	}
+
+	t.Errorf("the refresher's output says nothing about the lock it moved aside and could not put back: no line names a lock with one of %s, so a maintainer reads a silent takeover although neither the aside nor a lock at the lock's path is left (issue #319)\noutput:\n%s",
+		strings.Join(said, ", "), text)
+}
+
+// TestAgentsAppTokenRefreshKeepsTheMovedAsideLockWhenThePutBackFails pins issue #319: in take_lock a contender that
+// moved a lock aside puts it back only while no lock exists, and a put-back that fails for another reason
+// (permissions, a full disk) was swallowed and followed by the removal of the aside - the very directory that holds
+// the winner's lock. The aside must be kept unless a lock exists after the put-back attempt (only then is it a
+// duplicate), the winner must keep its lock, and when neither the aside nor the lock is left the refresher says so.
+//
+// The staging is the three-contender one of issue #288: the winner takes a stale lock over and is held in its loop
+// before it mints, and the mover, which read the stale owner before the winner took it, is held after it moved the
+// winner's fresh lock aside and before it puts it back. An mv shim on the mover's PATH fails that put-back alone,
+// so no test waits on a clock and the test alone decides how it fails.
+func TestAgentsAppTokenRefreshKeepsTheMovedAsideLockWhenThePutBackFails(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// mode is how the mv shim fails the put-back, and check pins what the refreshers and the lock's state must
+		// show afterwards, while the winner is still held and before it reads its lock again.
+		mode  string
+		check func(t *testing.T, f *mintFixture, lock string, mover, winner *runningScript)
+	}{
+		{
+			// A put-back that fails once is the transient failure the retry or the next attempt gets past: the
+			// winner's lock must be back in place, so the winner goes on holding it and mints.
+			name: "the put-back fails once, and the winner keeps its lock",
+			mode: "once",
+			check: func(t *testing.T, f *mintFixture, lock string, mover, winner *runningScript) {
+				t.Helper()
+
+				if !lockHoldsPid(lock, winner.pid()) {
+					t.Errorf("the lock %s does not hold the winner's pid %d after the mover's put-back failed once: the aside holds the winner's lock and must be put back, never removed, or the winner's still_locked finds the lock gone and no refresher runs until the next start (issue #319)\nstate directory:\n%s",
+						lock, winner.pid(), describeTree(f.sb.stateDir()))
+				}
+
+				if mover.running() {
+					t.Errorf("the mover (pid %d) still runs although the winner holds the lock %s: the put-back failed once, and a second attempt must find the lock free and put it back, after which the mover loses as it does to any lock another refresher holds (issue #319)\nmover stderr:\n%s",
+						mover.pid(), lock, mover.errOut())
+				}
+
+				for _, name := range dirNames(f.sb.stateDir()) {
+					if strings.Contains(name, ".stale.") {
+						t.Errorf("the state directory holds %s after the aside was put back: the aside left over is no duplicate of the lock it was moved from, and nothing removes it (issues #288 and #319)\nstate directory:\n%s",
+							name, describeTree(f.sb.stateDir()))
+					}
+				}
+			},
+		},
+		{
+			// A put-back that keeps failing is the disk that stays full: the aside must be kept - it holds the
+			// winner's lock, and deleting it is what issue #319 names - and the mover must not take it for its own.
+			name: "the put-back keeps failing, and the moved-aside lock is kept",
+			mode: "always",
+			check: func(t *testing.T, f *mintFixture, lock string, _ *runningScript, winner *runningScript) {
+				t.Helper()
+
+				held := locksHoldingPid(f.sb.stateDir(), winner.pid())
+				if len(held) == 0 {
+					t.Fatalf("no directory in the state directory holds the winner's pid %d after the put-back kept failing: the moved-aside lock was removed, and with it the lock the winner holds, so its still_locked finds it gone and nothing refreshes the VM's token (issue #319)\nstate directory:\n%s",
+						winner.pid(), describeTree(f.sb.stateDir()))
+				}
+
+				var kept bool
+
+				for _, name := range held {
+					if name != filepath.Base(lock) {
+						kept = true
+					}
+				}
+
+				if !kept {
+					t.Errorf("only %s holds the winner's pid %d after the put-back kept failing: the moved-aside directory that holds the winner's lock must be kept, since no lock exists at %s (issue #319)\nstate directory:\n%s",
+						filepath.Base(lock), winner.pid(), lock, describeTree(f.sb.stateDir()))
+				}
+			},
+		},
+		{
+			// Neither the aside nor a lock at the lock's path is left: the refresher must say so, rather than take
+			// a fresh lock over what a maintainer can no longer find.
+			name: "both the lock and the aside are gone, and the refresher says so",
+			mode: "gone",
+			check: func(t *testing.T, f *mintFixture, _ string, mover, winner *runningScript) {
+				t.Helper()
+
+				assertSaysThePutBackFailed(t, mover.out()+mover.errOut())
+
+				if got := locksHoldingPid(f.sb.stateDir(), winner.pid()); len(got) != 0 {
+					t.Errorf("%v holds the winner's pid %d although the mv shim took the moved-aside lock away: this case needs neither the lock nor the aside to be there (issue #319)\nstate directory:\n%s",
+						got, winner.pid(), describeTree(f.sb.stateDir()))
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			env := f.refreshEnv()
+			lock := f.sb.refreshLockDir("shift2eu")
+
+			// The stale lock a refresher killed without its trap leaves: a lock whose pid is alive but runs no refresh.
+			if err := os.MkdirAll(lock, 0o700); err != nil {
+				t.Fatalf("create the stale lock %s: %v", lock, err)
+			}
+
+			writeFileMode(t, filepath.Join(lock, "pid"), []byte(strconv.Itoa(liveNonRefreshPid(t))+"\n"), 0o600)
+
+			race := f.sb.useThreeContendersOnAStaleLock(t, env, lock)
+
+			// The put-back shim in front of the mover's own mv shim: it fails only the move whose source is a
+			// moved-aside lock, and the contender shim behind it still forces the interleaving.
+			putBack := filepath.Join(race.dir, "putback")
+
+			writeFileMode(t, filepath.Join(putBack, "mv"),
+				[]byte(fmt.Sprintf(putBackMVShim, strconv.Quote(filepath.Join(race.dir, "mover", "mv")))), 0o700)
+
+			race.envMover["PATH"] = putBack + ":" + race.envMover["PATH"]
+			race.envMover["SHIFT2EU_TEST_PUTBACK"] = tc.mode
+			race.envMover["SHIFT2EU_TEST_PUTBACK_DIR"] = putBack
+			race.envMover["SHIFT2EU_TEST_REAL_MV"] = realTool(t, "mv")
+
+			contest := func(contenders ...*runningScript) string {
+				lines := make([]string, 0, len(contenders)+2)
+				for _, c := range contenders {
+					lines = append(lines, fmt.Sprintf("pid %d, running %t, stderr:\n%s", c.pid(), c.running(), c.errOut()))
+				}
+
+				lines = append(lines, "state directory:", describeTree(f.sb.stateDir()))
+
+				return strings.Join(lines, "\n")
+			}
+
+			// The mover starts against the stale lock and is held once it has read the stale owner, before it asks
+			// whether that owner runs a refresh: it cannot take the stale lock over from here.
+			mover := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, race.envMover)
+
+			if !poll(30*time.Second, func() bool { return race.held(contenderAskedOwnership) }) {
+				t.Fatalf("the mover did not read the stale lock's owner within 30s: the steps reached were %s\n%s",
+					race.reached(), contest(mover))
+			}
+
+			// The winner takes the stale lock over and is held in its loop, with its own lock in hand, before it mints.
+			winner := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, race.envWinner)
+
+			if !poll(30*time.Second, func() bool {
+				return race.held(contenderReadTheClock) && lockHoldsPid(lock, winner.pid())
+			}) {
+				t.Fatalf("the winner did not reach its hold in the refresh loop with the stale lock in hand within 30s: the steps reached were %s\n%s",
+					race.reached(), contest(mover, winner))
+			}
+
+			if minted := len(f.api.minted()); minted != 0 {
+				t.Fatalf("%d token(s) were minted before the test released any refresher, so the holds staged no interleaving: the winner must wait in its loop before it mints (issue #319)\n%s",
+					minted, contest(mover, winner))
+			}
+
+			// The mover takes the stale lock over and moves the winner's fresh lock aside, because the pid it reads
+			// there is not the stale owner it read before; it is then held before it puts that lock back.
+			race.release(t, holdTheMover)
+
+			if !poll(30*time.Second, func() bool { return race.held(contenderMovedTheLockAside) }) {
+				t.Fatalf("the mover did not move the winner's fresh lock aside within 30s: the steps reached were %s\n%s",
+					race.reached(), contest(mover, winner))
+			}
+
+			if _, err := os.Stat(lock); err == nil {
+				t.Fatalf("the lock %s is still in place after the mover moved the winner's lock aside, so the mover took something else: this run forced no put-back (issue #319)\n%s",
+					lock, contest(mover, winner))
+			}
+
+			// The put-back: the shim fails it, in the way this case names.
+			race.release(t, holdThePutBack)
+
+			if !poll(30*time.Second, func() bool { return !mover.running() || lockHoldsPid(lock, mover.pid()) }) {
+				t.Fatalf("the mover neither lost the lock nor took a fresh one within 30s after its put-back failed: this run did not reach the state issue #319 is about\n%s",
+					contest(mover, winner))
+			}
+
+			tc.check(t, f, lock, mover, winner)
+
+			// The winner goes on from its hold with whatever lock it holds now: it mints with its own, or says that
+			// it lost it and stops, as a refresher whose lock another one holds does.
+			race.release(t, holdTheWinner)
+
+			if !poll(30*time.Second, func() bool { return !winner.running() || len(f.api.minted()) > 0 }) {
+				t.Fatalf("the winner neither minted nor stopped 30s after the test let it go\n%s", contest(mover, winner))
+			}
+
+			if tc.mode == "once" {
+				if !winner.running() {
+					t.Errorf("the winner (pid %d) exited although its lock was put back after one failed attempt: a transient failure of the put-back must not cost the only refresher its lock (issue #319)\n%s",
+						winner.pid(), contest(mover, winner))
+				}
+
+				out := strings.ToLower(winner.errOut())
+
+				for _, wrong := range []string{"is gone", "took it over", "no longer this refresh"} {
+					if strings.Contains(out, wrong) {
+						t.Errorf("the winner's stderr says %q although its own lock was put back: a put-back that failed once must leave the winner holding the lock it won (issue #319)\nstderr:\n%s",
+							wrong, winner.errOut())
+					}
+				}
+			}
+
+			if winner.running() {
+				winner.signal(t, syscall.SIGTERM)
+
+				if !winner.waitExit(30 * time.Second) {
+					t.Fatalf("the winner did not stop on SIGTERM; stderr:\n%s", winner.errOut())
+				}
+			}
+
+			if mover.running() {
+				mover.signal(t, syscall.SIGTERM)
+
+				if !mover.waitExit(30 * time.Second) {
+					t.Fatalf("the mover did not stop on SIGTERM; stderr:\n%s", mover.errOut())
+				}
+			}
+
+			f.assertNoLeaks(t, mover.out()+winner.out(), mover.errOut()+winner.errOut())
 		})
 	}
 }
