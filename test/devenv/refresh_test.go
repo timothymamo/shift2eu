@@ -1930,6 +1930,190 @@ func TestAgentsAppTokenRefreshHandlesALockThatGoesMissing(t *testing.T) {
 	})
 }
 
+// TestAgentsAppTokenRefreshAnswersASignalInTheStillLockedWait pins issue #319's second half: still_locked waits a
+// second for the lock it holds to come back, and while that wait was a foreground `sleep 1` of a script whose TERM
+// and INT traps know only the loop's background sleep, a signal took up to a second to be handled. The wait is the
+// loop's background sleep now, so a trap kills it and runs at once.
+//
+// The staging of issue #288's missing-lock path brings the refresher into that wait: the lock it holds goes aside
+// while the refresher is held at its clock read, the last point before still_locked reads that lock. The sleep
+// shim is armed for that retry alone and runs the machine's own sleep, so the refresher waits on a real second as
+// it does in the VM. The test sends the SIGTERM into that second and measures how long the refresher needs to
+// stop: the trap's work is a handful of processes, while a foreground sleep defers the trap to the end of its
+// second.
+func TestAgentsAppTokenRefreshAnswersASignalInTheStillLockedWait(t *testing.T) {
+	t.Parallel()
+
+	// The bound between the two behaviours. The trap's work is a few processes (ps, kill, rm) on a machine that
+	// runs this test twenty times at once under -race, which measures in milliseconds; the signal sent early into
+	// the wait, a foreground sleep would add the rest of its whole second, some 950ms. 700ms leaves the trap's
+	// work a wide margin and the foreground sleep none.
+	const bound = 700 * time.Millisecond
+
+	f := newMintFixture(t)
+	env := f.refreshEnv()
+	lock := f.sb.refreshLockDir("shift2eu")
+	gone := f.sb.useGoneLockShims(t, env, lock)
+	wait := useRealSleepShim(t, env)
+
+	// The refresher holds the lock and parks at the loop's clock read.
+	gone.holdTheNextClock(t)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	if !poll(30*time.Second, func() bool {
+		return gone.reached(heldAtTheClock) && lockHoldsPid(lock, refresh.pid())
+	}) {
+		t.Fatalf("the refresher did not come to its clock read with the lock in hand within 30s\n%s\nstderr:\n%s",
+			gone.describe(), refresh.errOut())
+	}
+
+	// The lock goes missing just before still_locked reads it, so the retry is the next thing the refresher does,
+	// and the shim holds that retry's sleep, a real second.
+	gone.moveTheLockAside(t)
+	wait.arm(t)
+	gone.letTheClockGo(t)
+
+	if !poll(30*time.Second, wait.reached) {
+		t.Fatalf("the refresher did not wait for the lock it holds once it found it missing within 30s\n%s\nstderr:\n%s",
+			gone.describe(), refresh.errOut())
+	}
+
+	sleepPid := wait.sleepPid(t)
+
+	// The sleep must be the machine's own, still running, and in the refresher's process group: a signal sent to a
+	// shim that already returned, or to a child outside the group, would prove nothing about the wait.
+	waitFor(t, 30*time.Second, "the sleep of the refresher's still_locked wait to run", func() bool {
+		comm, err := exec.Command(realTool(t, "ps"), "-p", strconv.Itoa(sleepPid), "-o", "comm=").Output()
+
+		return err == nil && strings.TrimSpace(string(comm)) == "sleep"
+	})
+
+	if got, want := processGroupOf(t, sleepPid), processGroupOf(t, refresh.pid()); got != want {
+		t.Fatalf("the sleep of the wait (pid %d) runs in process group %s, not in the refresher's %s, so this run pins nothing about what the refresher leaves behind in its group",
+			sleepPid, got, want)
+	}
+
+	// The lock comes back while the refresher waits on it, as the contender that moved it puts it back: the
+	// refresher holds it again when the signal arrives, so the trap's release_lock has a lock of its own to remove.
+	gone.putTheLockBack(t)
+
+	if !lockHoldsPid(lock, refresh.pid()) {
+		t.Fatalf("the lock %s does not hold the pid %d of the refresher that waits for it\n%s", lock, refresh.pid(), gone.describe())
+	}
+
+	sent := time.Now()
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresher was still running 30s after the SIGTERM it took in still_locked's wait; stderr:\n%s", refresh.errOut())
+	}
+
+	if elapsed := time.Since(sent); elapsed > bound {
+		t.Errorf("the refresher needed %s to stop after the SIGTERM it took in still_locked's wait, want under %s: the wait must be the loop's background sleep, so the trap kills it and runs at once, rather than a foreground sleep that defers the signal to the end of its second (issue #319)\nstderr:\n%s",
+			elapsed.Round(time.Millisecond), bound, refresh.errOut())
+	}
+
+	if status := refresh.exitCode(t); status != 143 {
+		t.Errorf("the refresher exited with %d, want 143: its TERM trap, not the signal's default action, must handle the signal it takes in still_locked's wait\nstderr:\n%s",
+			status, refresh.errOut())
+	}
+
+	// The trap ends in release_lock: the lock the refresher held must be gone with it, as every other way out of
+	// the refresh leaves it.
+	waitFor(t, 30*time.Second, "the refresher's lock to be gone after it stopped", func() bool {
+		_, err := os.Stat(lock)
+
+		return errors.Is(err, fs.ErrNotExist)
+	})
+
+	// A sleep the trap never killed sleeps on after the refresher has exited, up to its own second, in the group
+	// the signal was meant for.
+	if !poll(10*time.Second, func() bool { return sleepStopped(t, sleepPid) }) {
+		t.Errorf("the refresher left the sleep of its still_locked wait (pid %d) running in its process group after it had exited: the TERM trap must kill the sleep the wait runs, or the wait outlives the refresher (issue #319)\nstderr:\n%s",
+			sleepPid, refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// realSleepShimText stands in for sleep while the test forces issue #319's wait. Armed, it records its pid in
+// sleep-pid, touches the marker at-wait and runs the machine's own sleep with the arguments the script gave it, so
+// the refresher's wait lasts the second the script asked for and its child is a `sleep` in the refresher's process
+// group; exec keeps the pid, so the pid the test reads is the sleep the trap has to kill. Unarmed, it returns at
+// once, as the goneLock shim does, so every other sleep of the loop costs the test nothing.
+const realSleepShimText = `#!/bin/sh
+dir="${SHIFT2EU_TEST_STILL_LOCKED_WAIT:?set SHIFT2EU_TEST_STILL_LOCKED_WAIT}"
+if [ -e "${dir}/armed" ]; then
+  %s -f "${dir}/armed"
+  printf '%%s\n' "$$" > "${dir}/sleep-pid"
+  : > "${dir}/at-wait"
+  exec %s "$@"
+fi
+exit 0
+`
+
+// stillLockedWait is the staging of issue #319's wait: the sleep shim armed for the one wait still_locked runs,
+// the marker it touches when it runs that wait and the file it records its sleep's pid in.
+type stillLockedWait struct {
+	dir string
+}
+
+// useRealSleepShim puts the sleep shim of issue #319's wait first on PATH, ahead of the goneLock shims' own sleep.
+func useRealSleepShim(t *testing.T, env map[string]string) *stillLockedWait {
+	t.Helper()
+
+	dir := filepath.Join(t.TempDir(), "still-locked-wait")
+	binDir := filepath.Join(dir, "bin")
+
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+
+	writeFileMode(t, filepath.Join(binDir, "sleep"),
+		[]byte(fmt.Sprintf(realSleepShimText, strconv.Quote(realTool(t, "rm")), strconv.Quote(realTool(t, "sleep")))), 0o700)
+
+	env["PATH"] = binDir + ":" + env["PATH"]
+	env["SHIFT2EU_TEST_STILL_LOCKED_WAIT"] = dir
+
+	return &stillLockedWait{dir: dir}
+}
+
+// arm makes the shim hold the next sleep the refresher runs, which is still_locked's retry.
+func (w *stillLockedWait) arm(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(w.dir, "armed"), nil, 0o600)
+}
+
+// reached reports whether the shim has held a sleep, so the refresher is in still_locked's wait.
+func (w *stillLockedWait) reached() bool {
+	_, err := os.Stat(filepath.Join(w.dir, "at-wait"))
+
+	return err == nil
+}
+
+// sleepPid is the pid of the sleep the shim ran, which the exec of the machine's sleep keeps.
+func (w *stillLockedWait) sleepPid(t *testing.T) int {
+	t.Helper()
+
+	return pidFrom(t, filepath.Join(w.dir, "sleep-pid"), "the sleep of still_locked's wait")
+}
+
+// processGroupOf is the process group pid runs in: a child a script starts inherits the script's group, so the
+// group is where a sleep the refresh leaves behind outlives it.
+func processGroupOf(t *testing.T, pid int) string {
+	t.Helper()
+
+	out, err := exec.Command(realTool(t, "ps"), "-o", "pgid=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		t.Fatalf("read the process group of pid %d: %v", pid, err)
+	}
+
+	return strings.TrimSpace(string(out))
+}
+
 // TestAgentsAppTokenRefreshDoesNotEchoTheLockFilesPid pins the finding of issue #288's review: the file the lock
 // keeps its owner's pid in is a file in the refresh's state directory, and the refresh echoes what it reads there
 // into the log a maintainer reads, unvalidated. A pid file holding text instead of a pid - with the escape that

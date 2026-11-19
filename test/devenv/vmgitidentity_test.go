@@ -4,6 +4,11 @@
 // replaces the maintainer's, and with the identity file gone the fallback comes back, so a maintainer who rolls
 // back commits as themselves again.
 //
+// The identity the VM has is printed when the step keeps it and when it replaces it, and it comes from the VM's
+// ~/.gitconfig, which anything may have written: the output must not carry the bytes a terminal acts on, so a
+// value holding an escape sequence, a carriage return or a bell never recolours, rewrites or rings the
+// maintainer's terminal and log (issue #262's review, issue #319).
+//
 // vm-init itself cannot be run in make test: its first step refuses to run outside the Lima VM unless
 // /etc/profile.d/shift2eu.sh exists, which a test cannot create without the VM's own provisioning. Its remaining
 // claim, that it runs this script, is pinned in vminit_test.go.
@@ -12,6 +17,7 @@ package devenv_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -206,6 +212,12 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 	human := map[string]string{"user.name": humanName, "user.email": humanEmail}
 	bot := map[string]string{"user.name": botName, "user.email": botEmail}
 
+	// The bytes a terminal acts on rather than prints, in the values a ~/.gitconfig may hold: an escape
+	// sequence that would colour or clear the terminal, a carriage return that would overwrite the line, and a
+	// bell. git accepts them in a value, and --get-all prints them back verbatim.
+	controlName := "Ada\x1b[31mLovelace"
+	controlEmail := "ada\rbell\x07@example.com"
+
 	cases := []struct {
 		name         string
 		fallbackName string
@@ -268,6 +280,36 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 			identityFile:   identityText(botName + "\n" + botEmail + "\n"),
 			wantName:       botName,
 			wantEmail:      botEmail,
+		},
+		{
+			// Issue #262's review: the kept message prints the current value, and that value is text out of the
+			// VM's ~/.gitconfig. A user.name holding an escape sequence must not reach the terminal as one.
+			name:         "no identity file and a user.name with terminal control bytes: it is kept",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": controlName, "user.email": humanEmail},
+			wantMessages: []string{"kept"},
+			wantName:     controlName,
+			wantEmail:    humanEmail,
+		},
+		{
+			name:         "no identity file and a user.email with terminal control bytes: it is kept",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": humanName, "user.email": controlEmail},
+			wantMessages: []string{"kept"},
+			wantName:     humanName,
+			wantEmail:    controlEmail,
+		},
+		{
+			name:         "the identity file replaces an identity that holds terminal control bytes",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": controlName, "user.email": controlEmail},
+			identityFile: identityText(botName + "\n" + botEmail + "\n"),
+			wantMessages: []string{"replaced"},
+			wantName:     botName,
+			wantEmail:    botEmail,
 		},
 		{
 			name:         "the identity file removed: the fallback comes back over the bot's identity",
@@ -349,6 +391,14 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 
 			stdout, stderr, err := f.run(t, tc.fallbackName, tc.fallbackMail)
 
+			// The current identity is printed either way, kept or replaced, and it is whatever the VM's
+			// ~/.gitconfig holds. A value with an escape sequence, a carriage return or a bell in it must not put
+			// those bytes into the output: the printable rest of the value may appear (issue #262's review).
+			if control := controlBytes(stdout + stderr); control != "" {
+				t.Errorf("the identity step's output holds control bytes (%s), so a value out of the VM's ~/.gitconfig reaches the maintainer's terminal as a terminal escape, a carriage return that overwrites the line or a bell: the step must print the value without the bytes a terminal acts on (issue #262's review)\nstdout: %q\nstderr: %q",
+					control, stdout, stderr)
+			}
+
 			if tc.wantFailure {
 				if err == nil {
 					t.Fatalf("the identity step exited 0 with %s; it must refuse it and exit non-zero\nstdout: %s", tc.name, stdout)
@@ -405,4 +455,29 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 // identityText returns a pointer to s, for a case that has an identity file.
 func identityText(s string) *string {
 	return &s
+}
+
+// controlBytes names the bytes of text that a terminal acts on rather than prints - every byte below 0x20 but the
+// newline that ends a line, and 0x7f (delete) - with where each one is, and is empty when text holds none. It is
+// how a test says that a value out of the VM's ~/.gitconfig never reaches the maintainer's terminal as a
+// terminal escape, a carriage return that overwrites the line or a bell (issue #262's review).
+func controlBytes(text string) string {
+	var found []string
+
+	for i := 0; i < len(text); i++ {
+		b := text[i]
+		if b == '\n' || (b >= 0x20 && b != 0x7f) {
+			continue
+		}
+
+		if len(found) == 5 {
+			found = append(found, "and more")
+
+			break
+		}
+
+		found = append(found, fmt.Sprintf("%#02x at byte %d", b, i))
+	}
+
+	return strings.Join(found, ", ")
 }
