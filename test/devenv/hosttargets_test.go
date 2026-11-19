@@ -154,6 +154,12 @@ exec %s "$@"
 // .DEFAULT_GOAL set there, which make -e runs as its only goal in the workspace and in the host clone alike.
 // Nothing of git is needed for it either: the refusal holds on a PATH without git, where REPO_ROOT falls back to
 // CURDIR.
+//
+// The rows that refuse a colon, a comma and a tilde each have a positive control: the same layout with that
+// character taken out of the value, which make must accept and mount. They pin the refusal to the character - a
+// row whose value is never accepted without it could pass because of the directory the test runs in rather than
+// the value under test (newSandboxRoot keeps the path of WORKSPACE_REPO free of the characters a test's own name
+// holds).
 func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 	t.Parallel()
 
@@ -441,6 +447,53 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 
 					assertHostTargetRefused(t, l, dir, run)
 				})
+			}
+		})
+	}
+
+	// The positive controls: the value of each row above that refuses a character Lima reads in a --mount-only
+	// value, with that character taken out - shift2eu:1, shift2eu,1 and ~/shift2eu become shift2eu1, shift2eu1
+	// and shift2eu. make must accept each of them and mount the workspace the value names, its parent (issue
+	// #227).
+	controls := []struct {
+		name string
+		repo string // the value without its character, as the checkout's name inside the workspace
+	}{
+		{name: "the colon row's value without the colon is accepted", repo: "shift2eu1"},
+		{name: "the comma row's value without the comma is accepted", repo: "shift2eu1"},
+		{name: "the tilde row's value without the tilde is accepted", repo: hostTargetInstance},
+	}
+
+	for _, tc := range controls {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			l := newHostLayout(t)
+
+			// A workspace of the control's own: the sandbox's workspace already holds the empty directory
+			// WORKSPACE_REPO names there, which vm-up would refuse as a stray entry beside this checkout.
+			workspace := filepath.Join(l.sb.root, "ws-without-the-character")
+			repo := writeClone(t, filepath.Join(workspace, tc.repo))
+			l.env["WORKSPACE_REPO"] = repo
+
+			stdout, stderr, err := runMakeIn(t, l.root, []string{"vm-up"}, l.env)
+			if err != nil {
+				t.Fatalf("make vm-up with WORKSPACE_REPO=%s exited non-zero, although the value holds only characters the allow list accepts: the refusal of the row above must come from the character that row holds, or it pins nothing about it (issue #227): %v\nstdout: %s\nstderr: %s",
+					repo, err, stdout, stderr)
+			}
+
+			want := [][]string{
+				// The existence check answers that the instance is not listed, so the create line follows.
+				{"list", "--quiet"},
+				{
+					"start", "--name=" + hostTargetInstance, "--mount-only", workspace + ":w",
+					"--tty=false", "dev/lima.yaml",
+				},
+			}
+
+			if diff := cmp.Diff(want, invocations(l.sb.argvLogText(t), "limactl")); diff != "" {
+				t.Errorf("make vm-up with WORKSPACE_REPO=%s ran the wrong limactl calls (-want +got):\n%s\nit must mount the workspace the value names, the value's parent (issue #227)",
+					repo, diff)
 			}
 		})
 	}

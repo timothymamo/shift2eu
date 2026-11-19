@@ -129,9 +129,87 @@ func writeClone(t *testing.T, dir string) string {
 	return dir
 }
 
+// sandboxRootPattern names the directory one sandbox lives in: a fixed pattern of characters WORKSPACE_REPO
+// allows. t.TempDir is not the root itself, because it names its directory after the test, and testing keeps
+// every character of a test's name but a handful - a comma, a space, a tilde and a percent all stay in it. The
+// whole path of WORKSPACE_REPO is checked against the Makefile's allow list, so a test name would otherwise put
+// a refused character in the path of the value it pins, and a refusal could fire because of the directory the
+// test runs in rather than the value under test (issue #227).
+const sandboxRootPattern = "shift2eu-devenv-sandbox-"
+
+// newSandboxRoot creates the directory one sandbox lives in and removes it with the test, as t.TempDir does.
+// Whatever the test is called, its path holds only the characters a WORKSPACE_REPO may: letters, digits and
+// . _ - / + @ # = (the Makefile's WORKSPACE_REPO_CHARS). A path holding any other character fails the test here,
+// where the reason is plain, instead of letting a sandbox test pass for the wrong reason (issue #227).
+func newSandboxRoot(t *testing.T) string {
+	t.Helper()
+
+	// Not t.TempDir: it would name the directory after the test. The machine's temporary directory, with a
+	// pattern of this helper's own, and the cleanup t.TempDir would register.
+	root, err := os.MkdirTemp("", sandboxRootPattern) //nolint:usetesting // t.TempDir names its directory after the test, which puts a character WORKSPACE_REPO refuses in the sandbox's path (issue #227)
+	if err != nil {
+		t.Fatalf("create the sandbox root: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.RemoveAll(root); err != nil {
+			t.Errorf("remove the sandbox root %s: %v", root, err)
+		}
+	})
+
+	if refused := workspaceRepoRefusedChar(root); refused != "" {
+		t.Fatalf("the sandbox root %q holds %q, which a WORKSPACE_REPO may not: every path of the sandbox, WORKSPACE_REPO and the workspace included, must hold only letters, digits and . _ - / + @ # =, or a refusal a test pins can fire because of the directory the test runs in rather than the value under test (issue #227)",
+			root, refused)
+	}
+
+	return root
+}
+
+// workspaceRepoRefusedChar returns a character of path that the Makefile's WORKSPACE_REPO_CHARS does not allow,
+// as a one-character string, or "" when path holds only allowed characters.
+func workspaceRepoRefusedChar(path string) string {
+	for _, r := range path {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', strings.ContainsRune("._-/+@#=", r):
+			continue
+		default:
+			return string(r)
+		}
+	}
+
+	return ""
+}
+
+// TestNewSandboxRootHoldsOnlyAllowedCharacters pins that the directory a sandbox lives in holds nothing a
+// WORKSPACE_REPO may not, whatever the test is called. testing names a test's t.TempDir after the test, and it
+// keeps a comma, a tilde and a percent of the name, so a sandbox rooted there would put a refused character in
+// the path of WORKSPACE_REPO - the whole of which the Makefile checks against its allow list - and a refusal a
+// test pins could fire because of the directory the test runs in rather than the value under test (issue #227).
+func TestNewSandboxRootHoldsOnlyAllowedCharacters(t *testing.T) {
+	t.Parallel()
+
+	names := []string{
+		"a comma, a tilde ~ and a percent %",
+		"only allowed characters",
+	}
+
+	for _, name := range names {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			root := newSandboxRoot(t)
+
+			if refused := workspaceRepoRefusedChar(root); refused != "" {
+				t.Errorf("the sandbox root %q holds %q: the path of WORKSPACE_REPO, which lies inside it, must hold only letters, digits and . _ - / + @ # =, or a refusal a test pins can fire because of the directory the test runs in rather than the value under test (issue #227)",
+					root, refused)
+			}
+		})
+	}
+}
+
 // sandbox is one throwaway environment for a run of a host script.
 type sandbox struct {
-	root     string // the directory holding everything, from t.TempDir()
+	root     string // the directory holding everything, from newSandboxRoot()
 	hostHome string // HOME of the process that runs the host script
 	vmHome   string // HOME of the fake VM user; the token and identity files must land here
 	binDir   string // first on PATH: the fake limactl and the recording curl and openssl
@@ -143,7 +221,7 @@ type sandbox struct {
 func newSandbox(t *testing.T) *sandbox {
 	t.Helper()
 
-	root := t.TempDir()
+	root := newSandboxRoot(t)
 	sb := &sandbox{
 		root:     root,
 		hostHome: filepath.Join(root, "host-home"),
