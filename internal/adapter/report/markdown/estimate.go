@@ -151,6 +151,8 @@ func renderNotEstimated(e estimate.Estimate) string {
 		return "usage-priced"
 	case estimate.NoSize:
 		return "size unknown"
+	case estimate.NotOffered:
+		return "not offered in " + codeSpan(e.Region, true)
 	case estimate.NoPlan:
 		return "no plan"
 	case estimate.NoPlanLargeEnough:
@@ -175,13 +177,35 @@ func renderRelations(v assessment.Verdict) string {
 	return strings.Join(rendered, nameSeparator)
 }
 
+// reasonOrder is the order a total names the reasons its resources are not
+// estimated in: the order estimate.For checks them. A reason the report does not
+// know comes after these, in the order the estimates give it.
+var reasonOrder = []estimate.Reason{
+	estimate.NoFit,
+	estimate.UsagePriced,
+	estimate.NoSize,
+	estimate.NoPlan,
+	estimate.NoPlanLargeEnough,
+	estimate.NotOffered,
+	estimate.NoPrice,
+	estimate.NoStoragePrice,
+}
+
 // renderTotal renders a total: "€2,535.00 per month for 4 of 8 resources", with
 // "resource" when there is one, then "(storage not included in 2 estimates)"
 // when some estimates leave out storage their plan does not include (ADR 0032).
-func renderTotal(t estimate.Total) string {
+// A total of at least one resource that estimates none has no amount (issue
+// #246): "none of 8 resources could be estimated (" and the reasons of
+// estimates, the estimates it sums, then ")" (notEstimatedReasons).
+func renderTotal(t estimate.Total, estimates []estimate.Estimate) string {
 	noun := " resources"
 	if t.Resources == 1 {
 		noun = " resource"
+	}
+
+	if t.Estimated == 0 && t.Resources > 0 {
+		return "none of " + strconv.Itoa(t.Resources) + noun + " could be estimated (" +
+			notEstimatedReasons(estimates) + ")"
 	}
 
 	line := euros(t.Monthly) + " per month for " + strconv.Itoa(t.Estimated) + " of " +
@@ -197,6 +221,63 @@ func renderTotal(t estimate.Total) string {
 	}
 
 	return line
+}
+
+// notEstimatedReasons renders why the estimates that are not estimated are not:
+// each one's phrase as its Monthly estimate cell gives it after "not estimated:
+// ", once each, in reasonOrder, then any reason the report does not know in
+// the order the estimates give it, joined with ", ".
+func notEstimatedReasons(estimates []estimate.Estimate) string {
+	var phrases []string
+
+	add := func(e estimate.Estimate) {
+		if p := renderNotEstimated(e); !contains(phrases, p) {
+			phrases = append(phrases, p)
+		}
+	}
+
+	for _, r := range reasonOrder {
+		for _, e := range estimates {
+			if !e.Estimated && e.Reason == r {
+				add(e)
+			}
+		}
+	}
+
+	for _, e := range estimates {
+		if !e.Estimated && !contains(reasonOrder, e.Reason) {
+			add(e)
+		}
+	}
+
+	return strings.Join(phrases, nameSeparator)
+}
+
+// contains reports whether list holds v.
+func contains[T comparable](list []T, v T) bool {
+	for _, x := range list {
+		if x == v {
+			return true
+		}
+	}
+
+	return false
+}
+
+// estimatesOf returns the estimates of verdicts, in their order, leaving out a
+// verdict without one; with ids set, only those of the resources it names.
+func estimatesOf(verdicts []assessment.Verdict, ids []string) []estimate.Estimate {
+	var out []estimate.Estimate
+
+	for _, v := range verdicts {
+		if v.Estimate == nil || (ids != nil && !contains(ids, v.Resource.ID)) {
+			continue
+		}
+
+		out = append(out, *v.Estimate)
+	}
+
+	return out
 }
 
 // basisNote is the basis an estimate is given on: the snapshot's retrieval date,
@@ -278,7 +359,8 @@ func writeWorkloads(b *strings.Builder, a assessment.Assessment, heading string)
 			" partial, " + strconv.Itoa(w.Summary.None) + " none\n")
 
 		if w.Total != nil {
-			b.WriteString("- Monthly estimate: " + renderTotal(*w.Total) + ", " + basisNote(a) + "\n")
+			b.WriteString("- Monthly estimate: " + renderTotal(*w.Total, estimatesOf(a.Verdicts, w.ResourceIDs)) +
+				", " + basisNote(a) + "\n")
 			writeSourceCost(b, w.SourceCost, "")
 		}
 
@@ -299,7 +381,7 @@ func writeWorkloads(b *strings.Builder, a assessment.Assessment, heading string)
 // ends the section before it and ends with a single newline.
 func writeCostEstimate(b *strings.Builder, a assessment.Assessment, heading string) {
 	b.WriteString("\n" + heading + " Cost estimate\n\n")
-	b.WriteString("- Total: " + renderTotal(*a.Total) + "\n")
+	b.WriteString("- Total: " + renderTotal(*a.Total, estimatesOf(a.Verdicts, nil)) + "\n")
 	b.WriteString("- Estimate: " + basisNote(a) + "; " + fixedFeeNote + "\n")
 	b.WriteString("- Prices in " + codeSpan(a.EstimateRegion, false) + "\n")
 	b.WriteString("- Hours: " + hoursLine(a) + "\n")

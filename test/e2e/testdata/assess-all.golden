@@ -19,9 +19,9 @@
 | partial | 2 | 5 | 3 |
 | none | 3 | 1 | 3 |
 | total | 11 | 11 | 11 |
-| `OVHcloud` estimate | €0.00 per month for 0 of 11 resources |  |  |
-| `Scaleway` estimate |  | €0.00 per month for 0 of 11 resources |  |
-| `UpCloud` estimate |  |  | €0.00 per month for 0 of 11 resources |
+| `OVHcloud` estimate | none of 11 resources could be estimated (no fit, size unknown) |  |  |
+| `Scaleway` estimate |  | none of 11 resources could be estimated (no fit, usage-priced, size unknown) |  |
+| `UpCloud` estimate |  |  | none of 11 resources could be estimated (no fit, size unknown) |
 
 Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts; each target's own section gives its basis.
 
@@ -88,7 +88,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €0.00 per month for 0 of 11 resources
+- Total: none of 11 resources could be estimated (no fit, size unknown)
 - Estimate: list prices on 2026-11-14, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `GRA`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
@@ -135,7 +135,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €0.00 per month for 0 of 11 resources
+- Total: none of 11 resources could be estimated (no fit, usage-priced, size unknown)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `fr-par`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none
@@ -182,7 +182,7 @@ Estimates are list prices on each catalog's retrieval date, excluding VAT and di
 
 ### Cost estimate
 
-- Total: €0.00 per month for 0 of 11 resources
+- Total: none of 11 resources could be estimated (no fit, size unknown)
 - Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering's listed fee
 - Prices in `de-fra1`
 - Hours: plan price × count × hours / 730, 730 hours for a resource that gives none

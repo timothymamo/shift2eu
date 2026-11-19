@@ -3,7 +3,10 @@
 - Status: Accepted. Amended by
   [0029](0029-cap-the-billed-hours-of-an-offerings-plans-in-target-snapshot-format-v2.md): on an offering with
   `planBillingCapHours`, the plan part of a `ByPlan` estimate is min(hours, cap) / cap of the plan price;
-  fixed fees and storage are unchanged
+  fixed fees and storage are unchanged; amended 2026-11-19 by issues
+  [#243](https://github.com/timothymamo/shift2eu/issues/243) and
+  [#246](https://github.com/timothymamo/shift2eu/issues/246): the reason `not-offered`, and a total that
+  estimates nothing gives no amount in the Markdown report
 - Date: 2026-11-14
 
 ## Context
@@ -167,6 +170,7 @@ chosen plan's offering.
 | `no-size` | a `ByPlan` resource without `vcpus` or `memoryGiB`, or a `ByStorage` one without `storageGiB`; or a size or usage it reads that is NaN, infinite or negative |
 | `no-plan` | `ByPlan`, and the best candidate offerings list no plan |
 | `no-plan-large-enough` | `ByPlan`, and no plan covers the resource |
+| `not-offered` | no best candidate offering (`ByStorage`), or none with a covering plan (`ByPlan`), is offered in the estimate region (amended 2026-11-19, below) |
 | `no-price` | no covering plan (`ByPlan`) or no storage (`ByStorage`) has a price in the estimate region |
 | `no-storage-price` | `ByPlan` with storage above the chosen plan, and no per-GiB price for it in the region |
 
@@ -174,6 +178,27 @@ The order goes from facts about the resource and the target to facts about one r
 so a resource reads "not offered" before "no size", and "no size" before anything a price list could
 fix. An estimate with a reason has `Estimated` false and a zero `Monthly`; `Sum` leaves it out of the
 total and counts it in `Resources`, never as 0 EUR.
+
+*Amended (2026-11-19, issues [#243](https://github.com/timothymamo/shift2eu/issues/243) and
+[#246](https://github.com/timothymamo/shift2eu/issues/246)):*
+
+- **`not-offered`**, checked after `no-plan-large-enough` and before `no-price`: none of the best
+  candidate offerings is offered in the estimate region (for `ByPlan`, none with a covering plan; for
+  `ByStorage`, none at all), decided by `catalog.Offering.AvailableIn`, the availability
+  `mapping.MapIn` already scopes `--region` by, so there is one notion of "offered in a region".
+  `no-price` keeps the other case: an offering offered there whose covering plan or per-GiB storage
+  has no price in the snapshot. Without `--region` the mapping judges availability across every
+  region while the estimate is for the default region, which is how a resource with a fit gets
+  `not-offered` (the Markdown cell "not estimated: not offered in `<region>`"). Only `Region` is set.
+- In the JSON report `not-offered` is a new value of an open reason set, so `schemaVersion` stays 2
+  ([ADR 0018](0018-version-the-json-report-format-for-the-cli-and-the-api.md), Versioning); the v2
+  schemas list it, and the v1 schemas are unchanged
+  ([ADR 0030](0030-serve-the-version-2-report-on-v1.md)).
+- A total of at least one resource that estimates none gives no amount in the Markdown report: "none
+  of N resources could be estimated (reasons)", the reasons its resources' cells give, each once, in
+  this table's order. The JSON report keeps `total.amount` required: it is `"0.00"` there, and the v2
+  schema says it is meaningless when `estimated` is 0. Dropping it would make a required key optional,
+  a new `schemaVersion`, which is deferred to the next one.
 
 ### The switch
 
