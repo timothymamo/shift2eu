@@ -218,7 +218,8 @@
 >       VM's output holds the line `vm-agents-token-ssh: done`. In the VM the script, with `sudo`,
 >       installs the writer as `/usr/local/libexec/shift2eu/.agents-token-write.new` after `sh -n`, then
 >       `mv`s it into place; writes the keys file and the drop-in the same way (a `.new` beside each,
->       then `mv`); runs `sshd -t` and, only when that passes, `systemctl reload ssh.service` (on a failing
+>       then `mv`); runs `sshd -t` and, only when that passes, `systemctl try-reload-or-restart
+>       ssh.service` (implementation note below; on a failing
 >       `sshd -t` it removes the drop-in again and fails); and prints the keys line it wrote and the VM's
 >       `/etc/ssh/ssh_host_ed25519_key.pub` as `host-key=ssh-ed25519 <base64>`;
 >    4. pins the host key: writes `shift2eu-vm-<instance> ssh-ed25519 <base64>` to
@@ -231,7 +232,8 @@
 >
 >    **`make vm-agents-token-ssh-uninstall`** removes the drop-in, the keys file and the writer (with
 >    `sudo`, in the VM, over `limactl shell`'s standard input, the same whole-script check and a
->    `vm-agents-token-ssh-uninstall: done` line), reloads sshd, and leaves the account's files alone.
+>    `vm-agents-token-ssh-uninstall: done` line; its script comes from `sh dev/vm-agents-token-ssh.sh
+>    --uninstall <vm user>`), reloads sshd, and leaves the account's files alone.
 >    Residual: the agents run as the VM user, who has passwordless `sudo` (ADR 0017), so they can change
 >    the writer, the keys file or sshd. That gains them nothing they lack: the token lands in their own
 >    home either way, and the key never enters the VM.
@@ -315,6 +317,23 @@
 >    from `.envrc`; `make agents-token-refresh-install` (or `make agents-token-refresh-start`); then
 >    `make vm-agents-token-ssh-uninstall`. The account itself is removed by hand, with `sudo dscl .
 >    -delete /Users/_shift2euagents`, `sudo dscl . -delete /Groups/_shift2euagents` and removing its home.
+>
+> **Implementation notes (same date).** Where the implementation settled what the points above left open:
+>
+> - sshd is reloaded with `systemctl try-reload-or-restart ssh.service`, not `reload`: under Ubuntu's
+>   socket-activated ssh (`ssh.socket`) `ssh.service` can be inactive, where `reload` fails; the try form
+>   reloads a running sshd and leaves an inactive one to the next connection, which reads the new
+>   configuration. The runbook checks it on the real VM.
+> - The account's public key is checked (4, step 2) by `dev/vm-agents-token-ssh.sh` itself, before it prints
+>   anything, so the check runs before anything is sent or pinned.
+> - Commands run as the account in the runbook name their tool by path (`/usr/bin/git`, `/usr/bin/ssh-keygen`,
+>   `/usr/bin/ssh`): macOS's sudoers sets no `secure_path`, so `sudo` can keep the caller's `PATH`, where a bare
+>   name could find Homebrew's, which the maintainer's uid owns.
+> - The generator (ADR 0034, update of the same date, c, step 4) applies the trusted path rule to itself and,
+>   when it is there, to the clone's `dev/agents-app-token.sh`; the token script applies it to itself at every
+>   start in any case.
+> - In SSH mode the refresh's stop line keeps naming `make agents-token-refresh-start` for the single-account
+>   mode and adds `sudo launchctl kickstart -k system/<label>` for the account's job.
 >
 > **Alternatives considered for part 2.** A Keychain item or a password-manager read that prompts: ruled
 > out by the maintainer for the unattended Mac Mini (issue #227, 2026-11-15), every mint after a reboot
