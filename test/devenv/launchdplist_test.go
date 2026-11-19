@@ -757,7 +757,9 @@ func TestAgentsTokenLaunchdPlistAccountMode(t *testing.T) {
 
 // TestAgentsTokenLaunchdTrustedPathChecksACLs pins audit 3 and review 11 of issue #227 part 2 for the generator:
 // it applies the same rule the refresh does, so a path whose ACL allows another account is refused at install time
-// - naming the path and the ACL - and a deny-only ACL, which every macOS home carries, is accepted.
+// - naming the path and the ACL - and a deny-only ACL, which every macOS home carries, is accepted. The mode a
+// Mac's ls ends with @ when the entry carries extended attributes beside the ACL is read too (the security
+// audit's second pass).
 func TestAgentsTokenLaunchdTrustedPathChecksACLs(t *testing.T) {
 	t.Parallel()
 
@@ -794,11 +796,15 @@ func TestAgentsTokenLaunchdTrustedPathChecksACLs(t *testing.T) {
 
 	cases := []struct {
 		name     string
+		mode     string // the trailer a Mac's ls prints: + for an ACL, @ for extended attributes beside it
 		entries  string
 		accepted bool
 	}{
-		{name: "an ACL that allows another account", entries: allowEntry},
-		{name: "a deny-only ACL", entries: denyEntry, accepted: true},
+		{name: "an ACL that allows another account", mode: "+", entries: allowEntry},
+		{name: "a deny-only ACL", mode: "+", entries: denyEntry, accepted: true},
+		{name: "an extended-attribute mode over an ACL that allows another account", mode: "@", entries: allowEntry},
+		{name: "an extended-attribute mode over a deny-only ACL", mode: "@", entries: denyEntry, accepted: true},
+		{name: "an extended-attribute mode with no ACL", mode: "@", accepted: true},
 	}
 
 	for _, tc := range cases {
@@ -806,7 +812,7 @@ func TestAgentsTokenLaunchdTrustedPathChecksACLs(t *testing.T) {
 			t.Parallel()
 
 			f := newAccountFixture(t)
-			aclProbe(t, f.sb, f.env, f.key.path, tc.entries)
+			aclProbe(t, f.sb, f.env, f.key.path, tc.mode, tc.entries)
 
 			stdout, stderr, err := f.sb.run(t, script, []string{"plist"}, f.env, "")
 

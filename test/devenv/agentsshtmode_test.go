@@ -669,7 +669,9 @@ func chmodDir(t *testing.T, path string, mode os.FileMode) {
 // TestAgentsAppTokenTrustedPathChecksACLs pins audit 3 and review 11 of issue #227 part 2: a Mac's ls marks a mode
 // that carries an ACL with a trailing +, so the rule reads the ACL with ls -lde and refuses the entry when a
 // permission it grants is an allow for any account; a deny-only ACL, which every macOS home carries, grants
-// nothing and is accepted. The refresh refuses before it mints, naming the path and the ACL.
+// nothing and is accepted. The refresh refuses before it mints, naming the path and the ACL. A Mac's ls ends the
+// mode with @, not +, when the entry carries extended attributes beside the ACL, so the rule reads the ACL then
+// too (the security audit's second pass).
 func TestAgentsAppTokenTrustedPathChecksACLs(t *testing.T) {
 	t.Parallel()
 
@@ -680,11 +682,15 @@ func TestAgentsAppTokenTrustedPathChecksACLs(t *testing.T) {
 
 	cases := []struct {
 		name     string
+		mode     string // the trailer a Mac's ls prints: + for an ACL, @ for extended attributes beside it
 		entries  string
 		accepted bool
 	}{
-		{name: "an ACL that allows another account", entries: allowEntry},
-		{name: "a deny-only ACL", entries: denyEntry, accepted: true},
+		{name: "an ACL that allows another account", mode: "+", entries: allowEntry},
+		{name: "a deny-only ACL", mode: "+", entries: denyEntry, accepted: true},
+		{name: "an extended-attribute mode over an ACL that allows another account", mode: "@", entries: allowEntry},
+		{name: "an extended-attribute mode over a deny-only ACL", mode: "@", entries: denyEntry, accepted: true},
+		{name: "an extended-attribute mode with no ACL", mode: "@", accepted: true},
 	}
 
 	for _, tc := range cases {
@@ -692,7 +698,7 @@ func TestAgentsAppTokenTrustedPathChecksACLs(t *testing.T) {
 			t.Parallel()
 
 			f := newSSHModeFixture(t)
-			aclProbe(t, f.sb, f.env, f.key.path, tc.entries)
+			aclProbe(t, f.sb, f.env, f.key.path, tc.mode, tc.entries)
 
 			stdout, stderr, err := f.sb.run(t, f.script, []string{"mint"}, f.env, "")
 

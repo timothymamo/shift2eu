@@ -458,7 +458,9 @@ func (f *vmAgentsTokenSSHFixture) sent(t *testing.T) string {
 // standard input, and answers as the VM's script does - the host key as host-key=ssh-ed25519 <base64> and the done
 // line the target insists on (ADR 0031, update of 2026-11-19, 4). SHIFT2EU_TEST_LIMA_REPLY says what it prints
 // instead: uninstall prints the uninstall's done line, silent nothing at all (a connection that dropped after the
-// stream arrived), and no-host-key the done line alone (issue #227 part 2, review 5).
+// stream arrived), and no-host-key the done line alone (issue #227 part 2, review 5). escape and escape-uninstall
+// print a terminal escape sequence first, the way code in the VM can, then the same lines (issue #227 part 2, the
+// security audit's second pass).
 const fakeAccountLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
@@ -497,6 +499,15 @@ if [ "${last}" = -s ]; then
   uninstall) printf 'vm-agents-token-ssh-uninstall: done\n' ;;
   no-host-key) printf 'vm-agents-token-ssh: done\n' ;;
   silent) ;;
+  escape)
+    printf '\033[2J\n'
+    printf 'host-key=%s\n' "${key}"
+    printf 'vm-agents-token-ssh: done\n'
+    ;;
+  escape-uninstall)
+    printf '\033[2J\n'
+    printf 'vm-agents-token-ssh-uninstall: done\n'
+    ;;
   *)
     echo "fake limactl: unknown SHIFT2EU_TEST_LIMA_REPLY: ${SHIFT2EU_TEST_LIMA_REPLY}" >&2
     exit 64
@@ -1135,6 +1146,210 @@ func TestVMAgentsTokenSSHGeneratorRefusesABadWriterFile(t *testing.T) {
 			if !strings.Contains(stderr, tc.want) {
 				t.Errorf("the refusal of %s does not say %q, so a maintainer cannot tell what to fix (issue #227 part 2, review 5):\nstderr: %s", tc.name, tc.want, stderr)
 			}
+		})
+	}
+}
+
+// assertAccountKindRefused fails unless the refusal of run names one of checks - the check of the account's kind
+// that failed - and SHIFT2EU_AGENTS_ACCOUNT, the variable that holds the account, so a maintainer can tell what
+// to fix (issue #227 part 2, the security audit's second pass).
+func assertAccountKindRefused(t *testing.T, run string, checks []string, stdout, stderr string) {
+	t.Helper()
+
+	if !mentionsOneOf(stderr, checks...) {
+		t.Errorf("%s's refusal says none of %v, so a maintainer cannot tell which check of the account's kind failed (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+			run, checks, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "SHIFT2EU_AGENTS_ACCOUNT") {
+		t.Errorf("%s's refusal does not name SHIFT2EU_AGENTS_ACCOUNT, so a maintainer cannot tell which variable to fix (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+			run, stdout, stderr)
+	}
+}
+
+// assertNoSudo fails when the sandbox recorded a sudo call: the account's kind is checked before anything runs as
+// root, so no recipe reaches sudo for an account that is no role account (issue #227 part 2, the security audit's
+// second pass).
+func assertNoSudo(t *testing.T, sb *sandbox) {
+	t.Helper()
+
+	if calls := invocations(sb.argvLogText(t), "sudo"); len(calls) > 0 {
+		t.Errorf("the run called sudo %v although it refused the account's kind: the check comes before any sudo call, so nothing runs as root for an account that is no hidden role account (issue #227 part 2, the security audit's second pass)",
+			calls[0])
+	}
+}
+
+// kindCheckCase is one answer of the fake directory tools to the account check: what they say the account's kind
+// is, and the checks the refusal must name. A case with no checks is one the check accepts (issue #227 part 2,
+// the security audit's second pass).
+type kindCheckCase struct {
+	name   string
+	env    map[string]string // what the fake dscl and dseditgroup answer
+	checks []string          // one of them must appear in the refusal; empty: the account passes the check
+}
+
+// kindCheckCases are the account kinds the check must refuse, and the hidden role account it must accept:
+// macOS gives a login account a UniqueID of 500 and above, and the role account of docs/dev-environment.md one
+// below 500, hidden from the login window and no admin.
+func kindCheckCases() []kindCheckCase {
+	return []kindCheckCase{
+		{name: "a login account, UniqueID 501", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "501"}, checks: []string{"UniqueID"}},
+		{name: "an account that is an admin", env: map[string]string{"SHIFT2EU_TEST_DS_ADMIN": "1"}, checks: []string{"admin"}},
+		{name: "an account dscl cannot read", env: map[string]string{"SHIFT2EU_TEST_DS_STATUS": "1"}, checks: []string{"UniqueID", "dscl"}},
+		{name: "a hidden role account", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "401"}},
+	}
+}
+
+// TestMakeTokenTargetsRefuseAnAgentsAccountThatIsNoRoleAccount pins the account's kind for the minting targets
+// (issue #227 part 2, the security audit's second pass): the App's key sits in SHIFT2EU_AGENTS_ACCOUNT precisely
+// because the maintainer's own uid cannot read it, so an account that is a login account (UniqueID 500 and
+// above) or an admin puts the key back in silent reach, and the targets that run AGENTS_ACCOUNT_CHECK refuse it.
+// The three minting targets refuse as well, before the refusal that tells the maintainer to mint through
+// launchctl: there is no job for an account that is no role account.
+func TestMakeTokenTargetsRefuseAnAgentsAccountThatIsNoRoleAccount(t *testing.T) {
+	t.Parallel()
+
+	for _, target := range []string{"agents-token", "agents-token-refresh", "agents-token-refresh-start"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+
+			f := newTokenFixture(t, hostTargetInstance)
+			accountEnv(f.env)
+			// 501 is the first UniqueID macOS gives a login account.
+			f.env["SHIFT2EU_TEST_DS_UNIQUEID"] = "501"
+
+			stdout, stderr, err := runMakeForRefusal(t, target, f.env)
+			if err == nil {
+				t.Fatalf("make %s exited 0 with SHIFT2EU_AGENTS_ACCOUNT naming an account whose UniqueID is 501: a login account is no hidden role account, and the maintainer can read the App's key from it, so the targets that run AGENTS_ACCOUNT_CHECK refuse it (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+					target, stdout, stderr)
+			}
+
+			assertAccountKindRefused(t, "make "+target, []string{"UniqueID"}, stdout, stderr)
+			assertNoSudo(t, f.sb)
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallRefusesAnAgentsAccountThatIsNoRoleAccount pins the account's kind for the two
+// targets that load and remove the job (issue #227 part 2, the security audit's second pass): before it runs a
+// single sudo, each refuses an account whose UniqueID is 501, one that is an admin, and one dscl cannot read,
+// naming the check and SHIFT2EU_AGENTS_ACCOUNT.
+func TestMakeAgentsTokenRefreshInstallRefusesAnAgentsAccountThatIsNoRoleAccount(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range kindCheckCases() {
+		if tc.checks == nil {
+			continue
+		}
+
+		for _, target := range []string{"agents-token-refresh-install", "agents-token-refresh-uninstall"} {
+			t.Run(tc.name+", "+target, func(t *testing.T) {
+				t.Parallel()
+
+				f := newLaunchdInstallFixture(t, hostTargetInstance)
+				accountEnv(f.env)
+
+				for name, value := range tc.env {
+					f.env[name] = value
+				}
+
+				stdout, stderr, err := f.run(t, target)
+				if err == nil {
+					t.Fatalf("make %s exited 0 with SHIFT2EU_AGENTS_ACCOUNT naming %s: the App's key is the account's because the maintainer's uid cannot read it, and an account that is no hidden role account hands it back, so the target refuses before it runs any sudo (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+						target, tc.name, stdout, stderr)
+				}
+
+				assertAccountKindRefused(t, "make "+target, tc.checks, stdout, stderr)
+				assertNoSudo(t, f.sb)
+			})
+		}
+	}
+}
+
+// TestMakeVMAgentsTokenSSHRefusesAnAgentsAccountThatIsNoRoleAccount pins the account's kind for the target that
+// lets the account's key write into the VM (issue #227 part 2, the security audit's second pass): it refuses an
+// account whose UniqueID is 501, one that is an admin, and one dscl cannot read, naming the check and
+// SHIFT2EU_AGENTS_ACCOUNT, before it runs any sudo or sends the VM anything; the hidden role account of
+// docs/dev-environment.md passes and the writer is installed.
+func TestMakeVMAgentsTokenSSHRefusesAnAgentsAccountThatIsNoRoleAccount(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range kindCheckCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMAgentsTokenSSHFixture(t)
+
+			for name, value := range tc.env {
+				f.env[name] = value
+			}
+
+			stdout, stderr, err := f.run(t, "vm-agents-token-ssh")
+
+			if tc.checks == nil {
+				if err != nil {
+					t.Fatalf("make vm-agents-token-ssh refused %s, exiting %d: the hidden role account of docs/dev-environment.md (a UniqueID below 500, no admin membership) is the account the App's key belongs to, so the target installs the writer and pins the key (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+						tc.name, exitStatusOf(t, err), stdout, stderr)
+				}
+
+				if pinned := f.pinned(t); pinned == "" {
+					t.Errorf("make vm-agents-token-ssh accepted the hidden role account but pinned no host key: an account the check passes reaches every step of the target")
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("make vm-agents-token-ssh exited 0 with SHIFT2EU_AGENTS_ACCOUNT naming %s: an account that is no hidden role account hands the App's key back to the maintainer, so the target refuses before it runs any sudo (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+
+			assertAccountKindRefused(t, "make vm-agents-token-ssh", tc.checks, stdout, stderr)
+			assertNoSudo(t, f.sb)
+
+			if calls := f.shellCalls(t); len(calls) > 0 {
+				t.Errorf("the run sent the VM a script (%v) although it refused the account's kind: the check comes before anything is sent, or the VM's keys file would name a key an account the maintainer can read holds (issue #227 part 2, the security audit's second pass)",
+					calls[0])
+			}
+		})
+	}
+}
+
+// TestMakeVMAgentsTokenSSHEchoesNoEscapeFromTheVM pins the second pass of the security audit on what the VM's own
+// code prints (issue #227 part 2): the script that runs in the VM is written by the agents, so a line it prints
+// may carry a terminal escape sequence, and make must strip the ESC before it echoes the VM's output. The rest of
+// the line, and the VM's done line, are still printed, so nothing the maintainer needs is lost.
+func TestMakeVMAgentsTokenSSHEchoesNoEscapeFromTheVM(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		target string
+		reply  string
+	}{
+		{name: "the install", target: "vm-agents-token-ssh", reply: "escape"},
+		{name: "the uninstall", target: "vm-agents-token-ssh-uninstall", reply: "escape-uninstall"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMAgentsTokenSSHFixture(t)
+			f.setReply(t, tc.reply)
+
+			stdout, stderr, err := f.run(t, tc.target)
+			if err != nil {
+				t.Fatalf("make %s exited %d although the VM printed its done line beside an escape sequence: the escape is stripped and the rest of the line is read as before (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+					tc.target, exitStatusOf(t, err), stdout, stderr)
+			}
+
+			if !strings.Contains(stdout, tc.target+": done") {
+				t.Errorf("make %s printed no %q line although the VM printed it: the escape is stripped and the rest of the line kept (issue #227 part 2, the security audit's second pass)\nstdout: %s",
+					tc.target, tc.target+": done", stdout)
+			}
+
+			assertNoEscape(t, "make "+tc.target, stdout, stderr)
 		})
 	}
 }

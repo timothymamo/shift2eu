@@ -493,6 +493,33 @@ func TestMakeVMGHWrapperInstallsIntoATemporaryRoot(t *testing.T) {
 	}
 }
 
+// TestMakeVMGHWrapperEchoesNoEscapeFromTheVM pins the second pass of the security audit on what the VM's own code
+// prints (issue #227 part 2): the script that runs in the VM is written by the agents, so a line it prints may
+// carry a terminal escape sequence, and make must strip the ESC before it echoes the VM's output. The VM's done
+// line is still printed, so a maintainer still sees the installation finished.
+func TestMakeVMGHWrapperEchoesNoEscapeFromTheVM(t *testing.T) {
+	t.Parallel()
+
+	sb := newSandbox(t)
+
+	env := sb.baseEnv()
+	env["SHIFT2EU_TEST_LIMA_CAPTURE"] = filepath.Join(sb.root, "lima-stdin.log")
+	env["SHIFT2EU_TEST_LIMA_ESCAPE"] = "1"
+
+	stdout, stderr, err := runMake(t, []string{"vm-gh-wrapper"}, env)
+	if err != nil {
+		t.Fatalf("make vm-gh-wrapper exited %d although the VM printed its done line beside an escape sequence: the escape is stripped and the rest of the line is read as before (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+			exitStatusOf(t, err), stdout, stderr)
+	}
+
+	if !strings.Contains(stdout+stderr, doneLine) {
+		t.Errorf("make vm-gh-wrapper printed no %q line although the VM printed it: the escape is stripped and the rest of the line kept (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+			doneLine, stdout, stderr)
+	}
+
+	assertNoEscape(t, "make vm-gh-wrapper", stdout, stderr)
+}
+
 // TestMakeVMGHWrapperFailsWhenTheScriptDoesNotArrive pins the rest of second review item 2: the recipe
 // generates the script first and pipes it second, so a generator that fails fails make before the VM is
 // touched, and a script that ends without the done line fails make too, instead of looking like a success.

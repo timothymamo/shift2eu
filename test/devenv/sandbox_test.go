@@ -247,6 +247,7 @@ func newSandbox(t *testing.T) *sandbox {
 
 	sb.writeFakeLimactl(t)
 	sb.writeTripwireGH(t)
+	sb.writeFakeDirectoryTools(t)
 	for _, tool := range []string{"curl", "openssl"} {
 		sb.writeRecordingShim(t, tool)
 	}
@@ -427,11 +428,15 @@ const fakeLimactl = `#!/bin/sh
   # vm-gh-wrapper) records it and runs nothing on this machine. What it answers is what the VM would
   # answer: the vm-gh-wrapper stream ends with the call to the function that prints the done line, so a
   # whole stream gets that line back. SHIFT2EU_TEST_LIMA_SILENT stands for a connection that dropped after
-  # the stream arrived: sh -s exits 0 and says nothing.
+  # the stream arrived: sh -s exits 0 and says nothing. SHIFT2EU_TEST_LIMA_ESCAPE makes the VM print a
+  # terminal escape sequence, as code in the VM can (issue #227 part 2, the security audit's second pass).
   stdin_copy="$(mktemp "${TMPDIR:-/tmp}/lima-stdin.XXXXXX")" || exit 1
   cat > "${stdin_copy}" || exit 1
   cat "${stdin_copy}" >> "${SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
   printf '\n--- end of call ---\n' >> "${SHIFT2EU_TEST_LIMA_CAPTURE}"
+  if [ -n "${SHIFT2EU_TEST_LIMA_ESCAPE:-}" ]; then
+    printf '\033[2J\n'
+  fi
   if [ -z "${SHIFT2EU_TEST_LIMA_SILENT:-}" ] && [ "$(tail -n 1 "${stdin_copy}")" = vm_gh_wrapper ]; then
     printf 'vm-gh-wrapper: done\n'
   fi
@@ -659,6 +664,97 @@ func (sb *sandbox) useFakeSudo(t *testing.T) {
 	path := filepath.Join(sb.binDir, "sudo")
 
 	writeFileMode(t, path, []byte(fakeSudo), 0o700)
+}
+
+// fakeDSCl stands in for dscl, which the Makefile reads the agents account's kind with before any sudo call
+// (issue #227 part 2, the security audit's second pass): it records its argv and answers a `-read` with the
+// account's UniqueID. SHIFT2EU_TEST_DS_UNIQUEID is what it prints (default 401, the hidden role account of
+// docs/dev-environment.md), and SHIFT2EU_TEST_DS_STATUS exits non-zero instead, the way dscl answers an account
+// that is not there. No test may reach the machine's own directory services or create a real account.
+const fakeDSCl = `#!/bin/sh
+{
+  printf 'tool=dscl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+if [ "${SHIFT2EU_TEST_DS_STATUS:-0}" -ne 0 ]; then
+  echo 'DS Error: -14136 (eDSRecordNotFound)' >&2
+  exit "${SHIFT2EU_TEST_DS_STATUS}"
+fi
+case "${2:-}" in
+-read) ;;
+*)
+  echo "fake dscl: the tests answer a -read only, not $*" >&2
+  exit 64
+  ;;
+esac
+printf 'UniqueID: %s\n' "${SHIFT2EU_TEST_DS_UNIQUEID:-401}"
+`
+
+// fakeDSEditGroup stands in for dseditgroup, which the Makefile reads whether the agents account is an admin
+// with (issue #227 part 2, the security audit's second pass): it records its argv and answers -m <account> the
+// way dseditgroup answers checkmember - yes, exit 0, when SHIFT2EU_TEST_DS_ADMIN is 1, and dseditgroup's no,
+// exit 67, for the role account that is no admin.
+const fakeDSEditGroup = `#!/bin/sh
+{
+  printf 'tool=dseditgroup\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+account=""
+group=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -m)
+    account="${2:-}"
+    shift
+    [ "$#" -gt 0 ] && shift
+    ;;
+  -o)
+    shift
+    [ "$#" -gt 0 ] && shift
+    ;;
+  *)
+    group="$1"
+    shift
+    ;;
+  esac
+done
+[ -n "${account}" ] || {
+  echo 'fake dseditgroup: the tests answer -m <account> only' >&2
+  exit 64
+}
+[ -n "${group}" ] || group=admin
+if [ "${SHIFT2EU_TEST_DS_ADMIN:-0}" = 1 ]; then
+  printf 'yes %s is a member of %s\n' "${account}" "${group}"
+  exit 0
+fi
+printf 'no %s is NOT a member of %s\n' "${account}" "${group}"
+# dseditgroup exits 67 for a user that is not a member of the group.
+exit 67
+`
+
+// writeFakeDirectoryTools puts the stand-ins for dscl and dseditgroup first on PATH, so a test of the account
+// check reads an invented account's kind and never the directory services of the machine the tests run on. The
+// defaults are the hidden role account of docs/dev-environment.md: UniqueID 401, and no admin membership.
+func (sb *sandbox) writeFakeDirectoryTools(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "dscl"), []byte(fakeDSCl), 0o700)
+	writeFileMode(t, filepath.Join(sb.binDir, "dseditgroup"), []byte(fakeDSEditGroup), 0o700)
+}
+
+// assertNoEscape fails unless what make printed holds no terminal escape byte: the scripts that run in the VM
+// are code the agents can write, so a line they print may carry an escape sequence that drives the maintainer's
+// terminal, and make must strip it before it echoes the VM's output (issue #227 part 2, the security audit's
+// second pass). What is left of the VM's line may be printed: only the ESC byte is pinned.
+func assertNoEscape(t *testing.T, run, stdout, stderr string) {
+	t.Helper()
+
+	for _, stream := range []struct{ name, text string }{{"stdout", stdout}, {"stderr", stderr}} {
+		if strings.ContainsRune(stream.text, '\x1b') {
+			t.Errorf("%s echoed a terminal escape byte that came from the VM, so code in the VM can drive the maintainer's terminal: strip the ESC before printing the VM's output (issue #227 part 2, the security audit's second pass)\n%s:\n%q",
+				run, stream.name, stream.text)
+		}
+	}
 }
 
 // fakeSystemctl stands in for systemctl in the devenv tests: it records its argv and exits 0. A test that pins
@@ -1108,14 +1204,17 @@ func (sb *sandbox) useFakeLSWithACL(t *testing.T, env map[string]string, path, l
 	env["SHIFT2EU_TEST_ACL_LDE"] = aclFile
 }
 
-// aclProbe makes the sandbox's ls report path the way a Mac reports a file with an ACL: the mode with a trailing
-// +, then the entry denyOnly picks, which is either one that allows an account (entries with an allow) or the
-// deny-only ACL macOS gives a home (group:everyone deny delete) (issue #227 part 2, audit 3, review 11).
-func aclProbe(t *testing.T, sb *sandbox, env map[string]string, path, entries string) {
+// aclProbe makes the sandbox's ls report path the way a Mac reports an entry that carries an ACL: the mode with
+// the trailer a Mac prints for it, then the entries of entries, which are either one that allows an account (an
+// allow entry) or the deny-only ACL macOS gives a home (group:everyone deny delete). The trailer is + when the
+// entry carries an ACL and nothing else, and @ when it carries extended attributes too: a Mac's ls prints @
+// then, so a rule that reads the ACL only after a + misses the entry's allow entries (issue #227 part 2, audit
+// 3, review 11, and the audit's second pass).
+func aclProbe(t *testing.T, sb *sandbox, env map[string]string, path, mode, entries string) {
 	t.Helper()
 
 	uid := strconv.Itoa(os.Getuid())
-	long := fmt.Sprintf("-rw-------+ 1 %s %s 1874 Nov 19 10:00 %s\n", uid, uid, path)
+	long := fmt.Sprintf("-rw-------%s 1 %s %s 1874 Nov 19 10:00 %s\n", mode, uid, uid, path)
 
 	sb.useFakeLSWithACL(t, env, path, long, long+entries)
 }
