@@ -961,9 +961,9 @@ var (
 		"/$defs/estimateBasis/properties/hoursBasis",
 	}
 
-	// countAndIdentifierFields hold a count, not a quantity: an integer whose
-	// description says what it counts and promises no representation, so the rule
-	// does not cover it. They are listed so every integer field of a current
+	// countAndIdentifierFields hold a count or an identifier, not a quantity: an
+	// integer whose description says what it counts and promises no representation,
+	// so the rule does not cover it. They are listed so every integer field of a current
 	// schema is classified, and a new measured integer quantity cannot slip in
 	// without a statement of the rule. schemaVersion is here because it is an
 	// identifier of the document's format, not a quantity: it says which schema a

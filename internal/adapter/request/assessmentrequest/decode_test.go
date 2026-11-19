@@ -337,6 +337,9 @@ func TestDecodeRefusesASchemaVersionItCannotWrite(t *testing.T) {
 		value string
 		// echoes is the text the error must not hold, when the value has one.
 		echoes string
+		// kind is the JSON type the error must name, when the value has one: the
+		// message says what was sent, never the value itself.
+		kind string
 	}{
 		{name: "version 1", value: `1`},
 		{name: "version 4", value: `4`},
@@ -345,9 +348,9 @@ func TestDecodeRefusesASchemaVersionItCannotWrite(t *testing.T) {
 		{name: "a string holding a version", value: `"3"`, echoes: `"3"`},
 		{name: "null", value: `null`},
 		{name: "true", value: `true`},
-		{name: "an object", value: `{"version":3}`},
-		{name: "an array", value: `[3]`},
-		{name: "a number outside the integer range", value: `987654321`, echoes: `987654321`},
+		{name: "an object", value: `{"version":3}`, kind: "an object"},
+		{name: "an array", value: `[3]`, kind: "an array"},
+		{name: "a large number", value: `987654321`, echoes: `987654321`},
 	}
 
 	for _, tt := range tests {
@@ -374,6 +377,10 @@ func TestDecodeRefusesASchemaVersionItCannotWrite(t *testing.T) {
 
 			if tt.echoes != "" && strings.Contains(msg, tt.echoes) {
 				t.Errorf("Decode() error = %q, want it not to repeat the value %q", msg, tt.echoes)
+			}
+
+			if tt.kind != "" && !strings.Contains(msg, tt.kind) {
+				t.Errorf("Decode() error = %q, want it to name the JSON type %q", msg, tt.kind)
 			}
 
 			if strings.ContainsAny(msg, "\r\n") {

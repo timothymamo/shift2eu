@@ -10,6 +10,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 
 	"github.com/timothymamo/shift2eu/internal/adapter/report/jsonreport"
+	"github.com/timothymamo/shift2eu/internal/adapter/report/markdown"
 	"github.com/timothymamo/shift2eu/internal/adapter/request/assessmentrequest"
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/httpapi"
@@ -509,6 +510,58 @@ func jsonDocumentDeps(t *testing.T, h *harness) httpapi.Deps {
 	return deps
 }
 
+// markdownDocumentDeps returns the harness's deps with the real request decoder
+// and the real Markdown reporter, so a test compares the bytes text/markdown
+// answers with.
+func markdownDocumentDeps(t *testing.T, h *harness) httpapi.Deps {
+	t.Helper()
+
+	deps := h.deps()
+	deps.DecodeRequest = decodeRequest
+	deps.Markdown = httpapi.Format{
+		NewReporter:           func(int) analysis.Reporter { return markdown.New() },
+		NewComparisonReporter: func(int) analysis.ComparisonReporter { return markdown.New() },
+	}
+
+	return deps
+}
+
+// jsonResponse returns the body of the application/json answer to body, through
+// the real request decoder and the real JSON reporters, and fails the test when
+// the answer is not 200.
+func jsonResponse(t *testing.T, body string) string {
+	t.Helper()
+
+	h := newHarness(t)
+	rec := serve(mustNew(t, jsonDocumentDeps(t, h)), newAssessRequest(body))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/assessments = %d, want %d; body: %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	requireJSONContentType(t, rec)
+
+	return rec.Body.String()
+}
+
+// markdownResponse returns the body of the text/markdown answer to body, through
+// the real request decoder and the real Markdown reporter, and fails the test
+// when the answer is not 200.
+func markdownResponse(t *testing.T, body string) string {
+	t.Helper()
+
+	h := newHarness(t)
+	rec := serve(mustNew(t, markdownDocumentDeps(t, h)), withAccept(newAssessRequest(body), "text/markdown"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /v1/assessments = %d, want %d; body: %q", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	requireMediaType(t, rec, markdownContentType)
+
+	return rec.Body.String()
+}
+
 // decodeRequest decodes body with the real decoder and converts the result, as
 // cmd/shift2eu-server's DecodeRequest does.
 func decodeRequest(body []byte) (httpapi.Request, error) {
@@ -736,6 +789,91 @@ func TestAssessForwardsTheRequestedSchemaVersion(t *testing.T) {
 
 			if got := h.jsonComparison.builtSchemaVersion(); got != tc.want {
 				t.Errorf("the JSON comparison reporter was built for schemaVersion %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAssessMarkdownIgnoresSchemaVersion pins that text/markdown answers the same
+// bytes whatever schemaVersion the body names (docs/adr/0018, docs/adr/0030,
+// issue #307): the Markdown report has no schemaVersion, so the handler passes
+// the version only to the JSON reporter, and a body naming 3 answers what a body
+// naming none answers.
+func TestAssessMarkdownIgnoresSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		targets []string
+	}{
+		{name: "one target", targets: []string{alphaKey}},
+		{name: "several targets", targets: []string{alphaKey, betaKey}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			without := markdownResponse(t, assessBody(t, tc.targets...))
+			withVersion := markdownResponse(t, assessBodySchemaVersion(t, 3, tc.targets...))
+
+			if diff := cmp.Diff(without, withVersion); diff != "" {
+				t.Errorf("the Markdown answer to a body naming schemaVersion 3 differs from the body naming none "+
+					"(-without +with):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestAssessTreatsAZeroSchemaVersionAsVersion2 pins the default for a Request
+// whose SchemaVersion is 0 (docs/adr/0030, issue #307): the decoder never
+// produces one, but a Deps wrapping it can, and the handler must answer the
+// version 2 document a body naming none gets, not a 500 from a reporter built for
+// a version the format does not write.
+func TestAssessTreatsAZeroSchemaVersionAsVersion2(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		targets []string
+	}{
+		{name: "one target", targets: []string{alphaKey}},
+		{name: "several targets", targets: []string{alphaKey, betaKey}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+
+			deps := jsonDocumentDeps(t, h)
+			deps.DecodeRequest = func(body []byte) (httpapi.Request, error) {
+				req, err := decodeRequest(body)
+				if err != nil {
+					return httpapi.Request{}, err
+				}
+
+				req.SchemaVersion = 0
+
+				return req, nil
+			}
+
+			body := assessBody(t, tc.targets...)
+			rec := serve(mustNew(t, deps), newAssessRequest(body))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("POST /v1/assessments for a Request with SchemaVersion 0 = %d, want %d; body: %q",
+					rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			requireJSONContentType(t, rec)
+
+			want := jsonResponse(t, body)
+
+			if diff := cmp.Diff(want, rec.Body.String()); diff != "" {
+				t.Errorf("the document for a Request with SchemaVersion 0 differs from the version 2 document "+
+					"(-want +got):\n%s", diff)
 			}
 		})
 	}
