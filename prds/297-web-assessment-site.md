@@ -146,12 +146,26 @@ release), *live* (checked against the live site) or *review*.
 - [ ] Every page carries a Content Security Policy in a `<meta http-equiv>` element, the first child of
   `<head>` (before any `<link>` or `<script>`), with at least: `default-src 'none'`; `script-src 'self'
   'wasm-unsafe-eval'` and nothing else (no `'unsafe-inline'`, no `'unsafe-eval'`, no other host);
-  `style-src 'self'`; `img-src 'self'`; `connect-src 'none'` from the first byte; `form-action 'none'`;
+  `style-src 'self'`; `img-src 'none'`; `connect-src 'none'` from the first byte; `form-action 'none'`;
   `base-uri 'none'`; `object-src 'none'`; `require-trusted-types-for 'script'` and `trusted-types` naming
   the one policy that inserts the Go-rendered report; and no `report-uri` or `report-to` (violation
   reports carry blocked URLs and samples). A static test parses each built page's policy and fails on a
-  missing, widened or added directive, and on a `connect-src` other than exactly `'none'`. Where the host
-  can also send the policy as a header (Hosting decision 2), the header adds `frame-ancestors 'none'`.
+  missing, widened or added directive, and on a `connect-src` or `img-src` other than exactly `'none'`.
+  Where the host can also send the policy as a header (Hosting decision 2), the header adds
+  `frame-ancestors 'none'`.
+- [ ] The site loads no image (*Decided by the orchestrator in review*). `img-src 'none'`, not `'self'`:
+  an own-origin image GET carries data in its path or query to the host's logs, the same channel for
+  which `connect-src 'self'` is rejected, and a CSP host-source that pins exact paths needs a host,
+  which breaks the run-anywhere bundle. Any icon or logo is inline SVG markup in the HTML, which loads
+  nothing; no `<img>`, `<picture>`, `<input type="image">`, `<link rel="icon">` or other image link, and
+  no `data:` image either (`img-src 'none'` refuses it). Fonts and media fall to `default-src 'none'`
+  (no `font-src` or `media-src` directive is set, and the static test fails if one is added), so the
+  site uses the browser's system fonts. CSS `url()` loads are governed by the directive of what they
+  load (`img-src` for images and `background-image`, `font-src` for `@font-face`), so the stylesheet,
+  loaded under `style-src 'self'`, references no `url()` and no `@import`; a static test of the built
+  stylesheet fails on either. The site ships no favicon. A browser may request `/favicon.ico` on its own,
+  outside the page's CSP; that request is a fixed URL sent by the browser, not the page, and carries no
+  data from the page, and since the bundle has no such file the host answers it with an error.
 - [ ] The module is never fetched (*Decided by the orchestrator in review*). `make site` emits the
   module's bytes, base64-encoded, in a content-addressed script (`module.<sha>.js`), which the page loads
   with `<script src integrity="sha384-...">` under `script-src 'self'`; the page script decodes the bytes
@@ -192,6 +206,10 @@ release), *live* (checked against the live site) or *review*.
   `XMLHttpRequest` to another origin, to an own-origin path, and to the module script's own URL, and
   records every request the page made. Every attempt must be blocked by `connect-src 'none'`, and the
   recorded requests must be only the site's own files, loaded as the page, its stylesheet and its scripts.
+  It also attempts, from the page, an image load (an `Image` with its `src` set and an inserted `<img>`)
+  and a CSS `url()` load (a `background-image` in a style rule constructed by the test through CSSOM),
+  each to an own-origin path and to another origin; every one must be blocked by `img-src 'none'`, and
+  none may appear in the recorded requests.
   The smoke test serves the bundle from an `httptest` origin and passes there unchanged, which shows the
   bundle runs on an origin other than `www.shift2eu.com`; the release's smoke test does the same with the
   attested bundle.
@@ -626,7 +644,8 @@ security audit (`security-audit` skill), since every one of them touches the tru
    CSS, one small page script; `site/records/`, which milestone 4 fills, is never bundled), the privacy
    page and the verification page, `make site` (a Go program, standard library
    only, that assembles the bundle: content-addressed names, the module embedded in its script, SRI
-   values, the version, the snapshot dates), the static tests (CSP, SRI, banned APIs and computed
+   values, the version, the snapshot dates), the static tests (CSP, no image and no stylesheet `url()`
+   or `@import`, SRI, banned APIs and computed
    property names with the download and unregister functions as their only exceptions, the glue's
    constant names, the module script's template, the scripts per page with their attributes and order,
    the module global read once and deleted, prefetch, the `downgrade-risk`, `hsts-waived` (a missing
@@ -634,7 +653,9 @@ security audit (`security-audit` skill), since every one of them touches the tru
    page's link to the guide's path, no third-party resource, contrast), the reproducibility test, and
    the `chromedp` smoke test with `make test-browser` and its CI job. `chromedp` is a new dependency with its reason in the commit
    message (CLAUDE.md rule 6). An ADR records the site's trust model (its three layers and how each of
-   the three scripts is held, the CSP with `connect-src 'none'` and its known gaps, the module embedded
+   the three scripts is held, the CSP with `connect-src 'none'` and `img-src 'none'` (no image, no CSS
+   `url()`, icons as inline SVG, no favicon, and the browser's own `/favicon.ico` request as a fixed URL
+   that carries no page data) and its known gaps, the module embedded
    in an SRI-pinned script of a fixed template rather than fetched, the script order, SRI, Trusted Types
    and the browsers that do not enforce `require-trusted-types-for`, no storage, the one download path,
    the service-worker unregister, how the report is inserted and why it carries no inventory-derived
@@ -753,7 +774,10 @@ security audit (`security-audit` skill), since every one of them touches the tru
 - **The CSP is a layer, not the guarantee.** It cannot govern navigation, WebRTC or DNS prefetch.
   "Nothing leaves the browser" rests on the code (layer 1, with a static rule against every sending
   API, every navigation and every computed property name that could hide one), with the CSP refusing
-  what it can and the attested bundle making the code checkable; the privacy page says so.
+  what it can and the attested bundle making the code checkable; the privacy page says so. What the CSP
+  does govern it closes to the host as well as to third parties: `connect-src 'none'` and `img-src
+  'none'`, since an own-origin request carries data in its path or query to the host's logs. The one
+  own-origin request it leaves is the browser's own `/favicon.ico` fetch, a fixed URL with no page data.
 - **The deploy is gated on `SITE_DEPLOY_ENABLED` and on `latest`.** Releases between milestones 3 and 4
   skip it visibly instead of failing, and no re-run or older line rolls the site back.
 - **No cache purge in the deploy.** Content-addressed assets never change, and the HTML pages expire within
@@ -840,6 +864,16 @@ security audit (`security-audit` skill), since every one of them touches the tru
   approving and writes the footer into the squash commit's message when merging, so no one pushes to
   the agent's branch after approval. The `release-tag` skill's review of that release PR accepts the
   version the footer sets.
+- **Decided: `img-src 'none'`, not `'self'`** (AI reviewer on 031835d). An own-origin image GET, from
+  an `<img>`, an `Image` or a CSS `url()`, carries data in its path or query to the host's logs, the
+  same channel for which `connect-src 'self'` is rejected above. Pinning `img-src` to the exact paths of
+  content-addressed images would need a host-source, which breaks the run-anywhere bundle, and a
+  `data:` source is not allowed either. So the site loads no image: any icon or logo is inline SVG in
+  the HTML, the stylesheet has no `url()` or `@import`, fonts and media fall to `default-src 'none'`
+  (system fonts only), and the site ships no favicon. The residual: a browser may request
+  `/favicon.ico` on its own, a fixed URL that carries no page data (*Layer 2*). The static test pins
+  `img-src 'none'`, and the smoke test shows an image and a CSS `url()` load blocked, own-origin and
+  cross-origin.
 
 ### Hosting decisions (decided by the maintainer, 2026-11-19)
 
