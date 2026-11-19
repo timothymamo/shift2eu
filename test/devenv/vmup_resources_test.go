@@ -1,11 +1,12 @@
-// Pins make vm-up's optional VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT (issue #228): on creation they reach
-// limactl start in Lima's own flag form, unset the creation command line is byte for byte what it was, an
-// invalid value fails before limactl runs, make vm-create hands the four on to make vm-up, and an existing VM -
-// Stopped or Running - is started by its name without any of them, with a warning that they apply only when
-// the VM is created. vm-up also refuses a workspace that holds anything but the repository and its dispatch
-// worktrees, and neither check may be bypassed by make -i or make -k. Every run uses the fake limactl and the
-// throwaway clone of vmup_test.go, which also pins what vm-up does with an instance that is Broken (issue
-// #237): no test starts a real VM.
+// Pins make vm-up's optional VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT (issue #228): on creation they
+// reach limactl start in Lima's own flag form, unset the creation command line is byte for byte what it was,
+// an invalid value fails before limactl runs, make vm-create hands the four on to make vm-up, and an existing
+// VM - Stopped or Running - is started by its name without any of them, with a warning that they apply only
+// when the VM is created. Since issue #254 that start is a limactl shell --start, which never creates the VM.
+// vm-up also refuses a workspace that holds anything but the repository and its dispatch worktrees, and
+// neither check may be bypassed by make -i or make -k. Every run uses the fake limactl and the throwaway clone
+// of vmup_test.go, which also pins what vm-up does with an instance that is Broken (issue #237): no test
+// starts a real VM.
 package devenv_test
 
 import (
@@ -507,10 +508,12 @@ func TestMakeVMCreatePassesTheVMResourcesToVMUp(t *testing.T) {
 
 // TestMakeVMUpNeverResizesAnExistingVM pins issue #228's third acceptance: with the four variables set, an
 // instance that already exists is started by its name alone - never resized - and vm-up says that they apply
-// only when the VM is created. A value that is invalid still fails first, so the variables are checked before
-// vm-up looks at the instance at all. An instance that is Broken never reaches that path: issue #237 refuses it
-// before the start, and the warning about the four variables is not printed for it, as there is nothing vm-up
-// would start and so nothing that applies only at creation.
+// only when the VM is created. The call that starts it is the limactl shell --start of issue #254, so the four
+// flags of creation reach it no more than they reached the limactl start it replaces. A value that is invalid
+// still fails first, so the variables are checked before vm-up looks at the instance at all. An instance that is
+// Broken never reaches that path: issue #237 refuses it before the start, and the warning about the four
+// variables is not printed for it, as there is nothing vm-up would start and so nothing that applies only at
+// creation.
 func TestMakeVMUpNeverResizesAnExistingVM(t *testing.T) {
 	t.Parallel()
 
@@ -533,8 +536,8 @@ func TestMakeVMUpNeverResizesAnExistingVM(t *testing.T) {
 				t.Fatalf("make vm-up %s on a %s instance that exists: %v\nstdout: %s\nstderr: %s", strings.Join(vars, " "), status, err, stdout, stderr)
 			}
 
-			want := []string{"start", f.env["LIMA_INSTANCE"]}
-			starts := f.starts(t)
+			want := f.startExistingArgs()
+			starts := f.starting(t)
 
 			if len(starts) == 0 {
 				t.Fatalf("make vm-up did not start the %s instance that exists, so the VM stays down; stdout: %s\nstderr: %s", status, stdout, stderr)
@@ -542,7 +545,7 @@ func TestMakeVMUpNeverResizesAnExistingVM(t *testing.T) {
 
 			for _, got := range starts {
 				if diff := cmp.Diff(want, got); diff != "" {
-					t.Errorf("make vm-up %s resized or reconfigured an existing %s VM: an instance that exists is started by its name alone, never with the flags that only apply at creation (issue #228) (-want +got):\n%s",
+					t.Errorf("make vm-up %s resized or reconfigured an existing %s VM: an instance that exists is started by its name alone, with the limactl shell --start that never creates one, never with the flags that only apply at creation (issue #228, issue #254) (-want +got):\n%s",
 						strings.Join(vars, " "), status, diff)
 				}
 			}

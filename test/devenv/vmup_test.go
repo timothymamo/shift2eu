@@ -23,6 +23,16 @@
 // before any limactl call at all - an empty name matches the empty line an empty listing prints, so it would
 // take the branch of a listed instance and could send a maintainer off to remove all of ~/.lima by hand.
 //
+// An instance that is listed must never be started with limactl start <name>, whatever its status or its
+// lima.yaml looks like at the moment of the call (issue #254): lima-vm/lima offers no flag that refuses to create
+// an instance, and limactl start <name> falls back to template:default when the instance directory has gone since
+// the status check - a VM that mounts the home directory, created without a prompt when there is no terminal. So
+// a Stopped or Running instance is started with limactl shell --start, which starts a Stopped instance, only runs
+// its command on a Running one and fails for an instance that is not there, and never creates a VM. The tests
+// below pin that command line, that no recorded call starts with `start` for a listed instance, and that a shell
+// which reports the instance as gone fails vm-up without a limactl call after it. The create line of an instance
+// that is not listed stays byte for byte what it was.
+//
 // The fixture below is shared with vmup_resources_test.go, which pins make vm-up's VM_CPUS, VM_MEMORY, VM_DISK
 // and VM_SSH_PORT (issue #228) against the same fake limactl and the same throwaway clone.
 package devenv_test
@@ -66,6 +76,9 @@ const (
 // SHIFT2EU_TEST_LIMA_LIST_FAIL stands for a limactl whose existence listing fails: it says so on stderr and
 // exits non-zero. A limactl shell answers without running anything either, draining what the recipe pipes into
 // it, because make vm-create runs vm-env, vm-claude-settings and vm-init after its vm-up (issue #228).
+// SHIFT2EU_TEST_LIMA_SHELL_MISSING stands for the instance the fake's status still reports but Lima no longer
+// has: the shell says so on stderr and exits non-zero, as limactl shell does for an instance that is gone, and
+// as limactl start <name> would not - it would create the VM from template:default instead (issue #254).
 const statusLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
@@ -94,6 +107,10 @@ if [ "${1:-}" = list ]; then
   exit 0
 fi
 if [ "${1:-}" = shell ]; then
+  if [ -n "${SHIFT2EU_TEST_LIMA_SHELL_MISSING:-}" ]; then
+    printf 'instance "%s" does not exist, run limactl create to create a new instance\n' "${SHIFT2EU_TEST_LIMA_INSTANCE}" >&2
+    exit 1
+  fi
   # make vm-env, make vm-claude-settings and make vm-init pipe their work into limactl shell: drain it, so the
   # writer never meets a closed pipe.
   cat >/dev/null 2>&1 || true
@@ -271,7 +288,44 @@ func (f *vmUpFixture) statusQueries(t *testing.T) [][]string {
 	return queries
 }
 
-// starts returns the argv of every limactl start the run made, in call order.
+// vmUpStartExistingArgs is the argv make vm-up starts an instance that is listed and Stopped or Running with
+// (issue #254): limactl shell --start runs the command in the VM, starting a Stopped instance first and doing
+// nothing to a Running one, and fails with "instance ... does not exist" for an instance that is gone - limactl
+// start <name> would create it from template:default instead. --workdir / keeps the command out of every mounted
+// directory and true is the whole command.
+func vmUpStartExistingArgs(instance string) []string {
+	return []string{"shell", "--start", "--workdir", "/", instance, "true"}
+}
+
+// startExistingArgs is vmUpStartExistingArgs for the instance make in this fixture runs with.
+func (f *vmUpFixture) startExistingArgs() []string {
+	return vmUpStartExistingArgs(f.env["LIMA_INSTANCE"])
+}
+
+// starting returns the argv of every limactl call that starts a VM, in call order (issue #254): the
+// dev/lima.yaml create line of an instance that is not listed, and the limactl shell --start of one that is
+// listed. A limactl shell without --start (make vm-env, make vm-init) runs a command and starts nothing.
+func (f *vmUpFixture) starting(t *testing.T) [][]string {
+	t.Helper()
+
+	var starting [][]string
+
+	for _, args := range invocations(f.sb.argvLogText(t), "limactl") {
+		if len(args) == 0 {
+			continue
+		}
+
+		if args[0] == "start" || (args[0] == "shell" && slices.Contains(args, "--start")) {
+			starting = append(starting, args)
+		}
+	}
+
+	return starting
+}
+
+// starts returns the argv of every limactl start the run made, in call order. For an instance that is listed
+// this must stay empty however the run ends, because limactl start <name> creates a VM from template:default
+// when the instance has gone since the status check (issue #254).
 func (f *vmUpFixture) starts(t *testing.T) [][]string {
 	t.Helper()
 
@@ -502,14 +556,19 @@ func TestVMUpStopsWhenItCannotListInstances(t *testing.T) {
 }
 
 // TestVMUpStartsOrCreatesTheInstance pins the other half of issue #237: an instance that is Stopped or
-// Running and whose directory holds a lima.yaml still gets exactly one limactl start <name>, an instance that
-// is not listed gets exactly the dev/lima.yaml command line with this repository's workspace mounted,
+// Running and whose directory holds a lima.yaml is started with exactly one limactl shell --start, an instance
+// that is not listed gets exactly the dev/lima.yaml command line with this repository's workspace mounted,
 // unchanged, and a listed instance whose directory holds no lima.yaml is started by neither branch: limactl
 // start <name> would read the name as a template and fall back to template:default (issue #237). A lima.yaml
 // that is a dangling symlink is there for a Stopped or Running instance as well: the directory may still hold
 // an intact disk, so that case stops too, pointing at limactl list instead of a removal by hand. The status
 // of a listed instance is read by asking limactl for that instance by name, never by any other query, and an
 // instance that is not listed gets no status query at all: there is no status to read.
+//
+// The start of a listed instance is a limactl shell --start and never a limactl start <name> (issue #254):
+// limactl start <name> creates the VM from template:default when the instance directory has gone since the
+// status check, which no flag of Lima 2.x refuses, while limactl shell --start only ever starts an instance
+// that is there. No call of a listed instance may therefore start with `start` as its first argument.
 func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 	t.Parallel()
 
@@ -525,7 +584,8 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 		limaYaml     bool     // the instance directory holds a lima.yaml
 		limaYamlLink bool     // the instance directory holds a lima.yaml that is a dangling symlink instead
 		limaInstance string   // the LIMA_INSTANCE make runs with; empty means vmUpInstance
-		want         []string // the one limactl start vm-up must run; nil means vm-up must refuse to start
+		listed       bool     // limactl lists this instance: vm-up must start it without ever running limactl start
+		want         []string // the one limactl call that starts the VM; nil means vm-up must refuse to start
 		wantStderr   []string // substrings stderr must hold when vm-up refuses; <instance-dir> stands for the directory
 		forbidStderr []string // substrings stderr must not hold when vm-up refuses
 		// wantQueries is the status query vm-up must make, in call order: nil, the zero value, means it
@@ -538,7 +598,8 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 			status:      "Stopped",
 			limaHome:    true,
 			limaYaml:    true,
-			want:        []string{"start", vmUpInstance},
+			listed:      true,
+			want:        vmUpStartExistingArgs(vmUpInstance),
 			wantQueries: [][]string{statusQuery},
 		},
 		{
@@ -546,7 +607,8 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 			instance:    vmUpInstance,
 			status:      "Running",
 			limaYaml:    true,
-			want:        []string{"start", vmUpInstance},
+			listed:      true,
+			want:        vmUpStartExistingArgs(vmUpInstance),
 			wantQueries: [][]string{statusQuery},
 		},
 		{
@@ -642,9 +704,9 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 						tc.name, stdout, stderr)
 				}
 
-				if starts := f.starts(t); len(starts) != 0 {
-					t.Errorf("make vm-up %s ran limactl start %v: a listed instance without a lima.yaml must never be started, or Lima falls back to template:default (issue #237)",
-						tc.name, starts[0])
+				if calls := f.starting(t); len(calls) != 0 {
+					t.Errorf("make vm-up %s ran limactl %v: a listed instance without a lima.yaml must never be started, or Lima falls back to template:default (issue #237), and a limactl shell --start is a start too (issue #254)",
+						tc.name, calls[0])
 				}
 
 				for _, w := range tc.wantStderr {
@@ -674,18 +736,76 @@ func TestVMUpStartsOrCreatesTheInstance(t *testing.T) {
 				want[i] = strings.ReplaceAll(arg, vmUpWorkspaceMarker, f.workspace())
 			}
 
-			starts := f.starts(t)
-			if len(starts) != 1 {
-				t.Fatalf("make vm-up %s ran %d limactl starts, want exactly one (%v)\nstdout: %s\nstderr: %s",
-					tc.name, len(starts), tc.want, stdout, stderr)
+			if tc.listed {
+				if starts := f.starts(t); len(starts) != 0 {
+					t.Errorf("make vm-up %s ran limactl start %v for an instance that is listed: limactl start <name> creates a VM from template:default when the instance directory has gone since the status check, and no flag of Lima refuses that - a listed instance is started with limactl shell --start, which never creates one (issue #254)",
+						tc.name, starts[0])
+				}
 			}
 
-			if diff := cmp.Diff(want, starts[0]); diff != "" {
-				t.Errorf("make vm-up %s ran the wrong limactl start (-want +got):\n%s", tc.name, diff)
+			starting := f.starting(t)
+			if len(starting) != 1 {
+				t.Fatalf("make vm-up %s ran %d limactl calls that start a VM, want exactly one (%v)\nstdout: %s\nstderr: %s",
+					tc.name, len(starting), tc.want, stdout, stderr)
+			}
+
+			if diff := cmp.Diff(want, starting[0]); diff != "" {
+				t.Errorf("make vm-up %s started the VM with the wrong limactl argv (issue #254) (-want +got):\n%s", tc.name, diff)
 			}
 
 			if diff := cmp.Diff(tc.wantQueries, f.statusQueries(t)); diff != "" {
 				t.Errorf("make vm-up %s read the status of the instance with the wrong limactl calls (-want +got), or read a status an instance that is not listed does not have:\n%s", tc.name, diff)
+			}
+		})
+	}
+}
+
+// vmUpStartGoneMessage is what the fake limactl's shell says for an instance the status still reports but
+// Lima no longer has, in the words limactl shell uses.
+const vmUpStartGoneMessage = `does not exist, run limactl create to create a new instance`
+
+// TestVMUpFailsWhenTheInstanceIsGoneAtTheStart pins the window a shell check cannot close (issue #254):
+// between vm-up's status query and the call that starts the VM, the instance directory can disappear - the
+// launchd job of issue #229, a removal by hand, a concurrent make. limactl start <name> then reads the name as
+// a template and creates template:default unattended, a VM that mounts the home directory; limactl shell --start
+// fails instead. So the shell failing the way limactl shell does must fail make vm-up, and no limactl call may
+// follow it: a later start would build the default VM the whole decision is meant to prevent.
+func TestVMUpFailsWhenTheInstanceIsGoneAtTheStart(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{"Stopped", "Running"} {
+		t.Run("the instance is gone by the time it is started: "+status, func(t *testing.T) {
+			t.Parallel()
+
+			// The instance pass the #237 checks: listed, Stopped or Running, with the lima.yaml an
+			// instance that was started once has. Only the start itself meets the instance gone (issue #254).
+			f := newVMUpFixture(t, vmUpInstance, status)
+			f.writeInstanceLimaYaml(t)
+			f.env["SHIFT2EU_TEST_LIMA_SHELL_MISSING"] = "1"
+
+			stdout, stderr, err := f.run(t, "vm-up")
+			if err == nil {
+				t.Fatalf("make vm-up exited 0 although the instance was gone when it started it: a start that reports success without a VM is the one that creates template:default, a VM that mounts the whole home directory (issue #254)\nstdout: %s\nstderr: %s",
+					stdout, stderr)
+			}
+
+			if starts := f.starts(t); len(starts) != 0 {
+				t.Errorf("make vm-up ran limactl start %v for an instance that is listed: the same call creates the VM from template:default when the instance directory is gone, the window this case opens (issue #254)",
+					starts[0])
+			}
+
+			calls := invocations(f.sb.argvLogText(t), "limactl")
+			if len(calls) == 0 {
+				t.Fatalf("make vm-up ran no limactl call at all, so this case pins nothing (issue #254)\nstdout: %s\nstderr: %s", stdout, stderr)
+			}
+
+			if diff := cmp.Diff(f.startExistingArgs(), calls[len(calls)-1]); diff != "" {
+				t.Errorf("make vm-up's last limactl call is not the start that failed (-want +got):\n%s\nit went on after the start reported the instance as gone, and anything it runs next can create the VM the decision is meant to prevent (issue #254)", diff)
+			}
+
+			if !strings.Contains(stderr, vmUpStartGoneMessage) {
+				t.Errorf("make vm-up's stderr does not hold limactl shell's %q, so a maintainer cannot see why the run stopped (issue #254)\nstderr: %s",
+					vmUpStartGoneMessage, stderr)
 			}
 		})
 	}

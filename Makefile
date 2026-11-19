@@ -19,6 +19,35 @@ export VM_CPUS VM_MEMORY VM_DISK VM_SSH_PORT
 # The ones that are set, for vm-up's warning when the VM exists already.
 VM_RESOURCES_SET = $(strip $(if $(VM_CPUS),VM_CPUS) $(if $(VM_MEMORY),VM_MEMORY) $(if $(VM_DISK),VM_DISK) $(if $(VM_SSH_PORT),VM_SSH_PORT))
 
+# The Lima VM instance every vm-*, deck* and agents-token* target works on (issue #252). Read raw and exported
+# like the VM_* above, and for the same reason in this first block: make expands nothing in it, and the
+# recipes read it as "$$LIMA_INSTANCE", so no shell parses the value either. Every target that reads it starts
+# its recipe with $(LIMA_INSTANCE_CHECK) below, which refuses a name that is not letters, digits, '.', '_' and
+# '-' starting with a letter or digit: an empty name matches the empty line an empty listing prints and would
+# point at all of ~/.lima, a leading dash reads as an option and a slash as a path. The check is make code,
+# not shell: make expands a target's whole recipe before it runs its first line, so a refused name stops the
+# target before any of its own commands runs, even under make -i or -k. Its prerequisites run first, but
+# none of them reads the name: vm-up's git-hooks sets git's hooks path and vm-env's vm-env-check checks the
+# credentials on the host. Targets that do not read LIMA_INSTANCE (make check, make build) never check it.
+LIMA_INSTANCE ?= shift2eu
+override LIMA_INSTANCE := $(value LIMA_INSTANCE)
+export LIMA_INSTANCE
+LIMA_INSTANCE_RULE = a Lima instance name is letters, digits, '.', '_' and '-', starting with a letter or digit
+# Spelled out, one per word: what is left of a name once these are removed is what the rule does not allow.
+LIMA_INSTANCE_CHARS := a b c d e f g h i j k l m n o p q r s t u v w x y z A B C D E F G H I J K L M N O P Q R S T U V W X Y Z 0 1 2 3 4 5 6 7 8 9 . _ -
+# $(call lima_instance_strip,<chars>,<text>) is <text> without any of the space-separated <chars>.
+lima_instance_strip = $(if $(1),$(call lima_instance_strip,$(wordlist 2,$(words $(1)),$(1)),$(subst $(firstword $(1)),,$(2))),$(2))
+# Non-empty when LIMA_INSTANCE follows the rule: it is set, starts with neither '.', '_' nor '-', and has
+# nothing left once the allowed characters are removed. Whitespace is refused by that last test alone, which
+# is why it never hands the remainder to $(if) or $(words) bare: $(if) strips every isspace character (LF, CR,
+# VT, FF too) before it tests, and make 3.81 (macOS /usr/bin/make) splits words on blanks only, so a name
+# like a<LF>b would leave a lone LF that $(if) reads as empty and $(words) counts as part of one word. 'x' is
+# an allowed character, so the remainder never holds one: x<remainder>x is exactly xx, and empty after
+# $(subst xx,,...), only when the remainder is empty. Once that test passes the name holds no whitespace, so
+# the $(filter) sees it as one word and tests its first character.
+LIMA_INSTANCE_VALID = $(and $(LIMA_INSTANCE),$(if $(filter .% _% -%,$(LIMA_INSTANCE)),,ok),$(if $(subst xx,,x$(call lima_instance_strip,$(LIMA_INSTANCE_CHARS),$(LIMA_INSTANCE))x),,ok))
+LIMA_INSTANCE_CHECK = $(if $(LIMA_INSTANCE_VALID),,$(error $@: invalid LIMA_INSTANCE '$(LIMA_INSTANCE)': $(LIMA_INSTANCE_RULE)))
+
 BINARY  := shift2eu
 # The HTTP API's binary (PRD #103, docs/adr/0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md).
 SERVER  := shift2eu-server
@@ -44,7 +73,6 @@ PLATFORMS ?=
 # .goreleaser.yaml: test/architecture checks this by running make lint with a fake golangci-lint.
 RELEASE_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-LIMA_INSTANCE ?= shift2eu
 # The directory the VM mounts: this repository's parent, which must hold nothing but this repository and
 # the worktrees dot-agent-deck's dispatcher creates beside it
 # (docs/adr/0008-mount-a-workspace-directory-for-dispatcher-mode.md). Found from the main checkout, so it
@@ -219,15 +247,21 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # with a dot never matches a look-alike. A Broken instance with any entry named lima.yaml in place, even a
 # dangling symlink, is broken for another reason and may keep an intact disk: vm-up points at limactl list
 # and limactl start --debug, never at removing it by hand. A Stopped or Running instance whose lima.yaml is a
-# dangling symlink is not started either, and gets the same pointer. Before any limactl call, vm-up refuses a
-# LIMA_INSTANCE that is not letters, digits, '.', '_' and '-' starting with a letter or digit: an empty name
-# matches the empty line an empty listing prints and would point at all of ~/.lima, a leading dash reads as an
-# option and a slash as a path. The name is single-quoted for the shell, so a space or quote cannot break out.
-# vm-up checks VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT, then LIMA_INSTANCE, then that the workspace holds
-# nothing stray, then the instance's status, all in one shell line with its limactl calls, so no make flag (-i,
-# -k) can run limactl after any of these checks failed.
+# dangling symlink is not started either, and gets the same pointer. These checks cannot close the window
+# between the status query and the start: the directory can still go in between (a launchd job, a removal by
+# hand, a concurrent make), and no flag of Lima 2.x stops limactl start <name> from creating the VM then. So
+# an instance that passes them is started with limactl shell --start --workdir / <name> true, never with
+# limactl start <name> (issue #254): since Lima 2.0 it starts a Stopped instance, only runs true in a Running
+# one and fails with "does not exist" for one that is gone, never creating a VM. Its failure is the recipe's
+# last command, so it fails vm-up and no limactl call follows it. --workdir / runs true in a directory every VM
+# has, not in the host's current one. Like every target that reads
+# LIMA_INSTANCE, vm-up refuses an invalid one with $(LIMA_INSTANCE_CHECK) before its recipe runs (issue #252).
+# vm-up then checks VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT, then that the workspace holds nothing stray,
+# then the instance's status, all in one shell line with its limactl calls, so no make flag (-i, -k) can run
+# limactl after any of these checks failed.
 .PHONY: vm-up
 vm-up: git-hooks ## Create or start the Lima VM with only this repository's workspace mounted (VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT on creation)
+	$(LIMA_INSTANCE_CHECK)
 	@LC_ALL=C; export LC_ALL; \
 	whole() { case "$$1" in ([1-9]*) case "$$1" in (*[!0-9]*) return 1;; esac;; (*) return 1;; esac; \
 		[ "$${#1}" -le "$$2" ]; }; \
@@ -240,12 +274,6 @@ vm-up: git-hooks ## Create or start the Lima VM with only this repository's work
 	[ -z "$$VM_SSH_PORT" ] || { whole "$$VM_SSH_PORT" 5 && \
 		[ "$$VM_SSH_PORT" -ge 1024 ] && [ "$$VM_SSH_PORT" -le 65535 ]; } || \
 		refuse VM_SSH_PORT "$$VM_SSH_PORT" 'a port from 1024 to 65535'; \
-	name='$(subst ','\'',$(LIMA_INSTANCE))'; \
-	case "$$name" in \
-	("" | [!A-Za-z0-9]* | *[!A-Za-z0-9._-]*) \
-		printf "vm-up: invalid LIMA_INSTANCE '%s': a Lima instance name is letters, digits, '.', '_' and '-', starting with a letter or digit\n" "$$name" >&2; \
-		exit 1;; \
-	esac; \
 	stray="$$(ls -A "$(WORKSPACE)" | grep -vx -e '$(REPO_NAME)' -e '$(REPO_NAME)-dispatch-.*' -e '\.DS_Store' || true)"; \
 	if [ -n "$$stray" ]; then \
 		echo "vm-up: the VM mounts $(WORKSPACE), which must hold only $(REPO_NAME) and its dispatch worktrees; move these out first:" >&2; \
@@ -253,56 +281,57 @@ vm-up: git-hooks ## Create or start the Lima VM with only this repository's work
 		exit 1; \
 	fi; \
 	list="$$(limactl list --quiet)" || { \
-		echo "vm-up: could not list the Lima instances, so it cannot tell whether $(LIMA_INSTANCE) exists" >&2; \
+		echo "vm-up: could not list the Lima instances, so it cannot tell whether $$LIMA_INSTANCE exists" >&2; \
 		exit 1; \
 	}; \
-	if printf '%s\n' "$$list" | grep -qxF -- "$(LIMA_INSTANCE)"; then \
-		dir="$${LIMA_HOME:-$$HOME/.lima}/$(LIMA_INSTANCE)"; \
-		status="$$(limactl list --format '{{.Status}}' "$(LIMA_INSTANCE)")" || { \
-			echo "vm-up: could not read the status of the Lima instance $(LIMA_INSTANCE)" >&2; \
+	if printf '%s\n' "$$list" | grep -qxF -- "$$LIMA_INSTANCE"; then \
+		dir="$${LIMA_HOME:-$$HOME/.lima}/$$LIMA_INSTANCE"; \
+		status="$$(limactl list --format '{{.Status}}' "$$LIMA_INSTANCE")" || { \
+			echo "vm-up: could not read the status of the Lima instance $$LIMA_INSTANCE" >&2; \
 			exit 1; \
 		}; \
 		case "$$status" in \
 		(Stopped|Running) \
 			if [ -L "$$dir/lima.yaml" ] && [ ! -e "$$dir/lima.yaml" ]; then \
-				echo "vm-up: the Lima instance $(LIMA_INSTANCE) is $$status, but $$dir/lima.yaml is a dangling symlink: it is there, but Lima cannot use it." >&2; \
-				echo "  Its disk may be intact: see why with 'limactl list' and 'limactl start --debug $(LIMA_INSTANCE)', and fix the link instead of deleting the instance." >&2; \
+				echo "vm-up: the Lima instance $$LIMA_INSTANCE is $$status, but $$dir/lima.yaml is a dangling symlink: it is there, but Lima cannot use it." >&2; \
+				echo "  Its disk may be intact: see why with 'limactl list' and 'limactl start --debug $$LIMA_INSTANCE', and fix the link instead of deleting the instance." >&2; \
 				echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
 				exit 1; \
 			elif [ ! -f "$$dir/lima.yaml" ]; then \
-				echo "vm-up: the Lima instance $(LIMA_INSTANCE) is $$status, but $$dir has no lima.yaml:" >&2; \
-				echo "  limactl start $(LIMA_INSTANCE) would read the name as a template and fall back to template:default, a VM that mounts the home directory." >&2; \
+				echo "vm-up: the Lima instance $$LIMA_INSTANCE is $$status, but $$dir has no lima.yaml:" >&2; \
+				echo "  limactl start $$LIMA_INSTANCE would read the name as a template and fall back to template:default, a VM that mounts the home directory." >&2; \
 				echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
 				exit 1; \
 			fi; \
-			$(if $(VM_RESOURCES_SET),echo "vm-up: warning: $(VM_RESOURCES_SET) apply only when the VM is created; $(LIMA_INSTANCE) exists and starts as it is: an existing VM is never resized (stop it and resize it with limactl edit, or rebuild it with make vm-delete and make vm-create)" >&2;) \
-			limactl start "$(LIMA_INSTANCE)";; \
+			$(if $(VM_RESOURCES_SET),echo "vm-up: warning: $(VM_RESOURCES_SET) apply only when the VM is created; $$LIMA_INSTANCE exists and starts as it is: an existing VM is never resized (stop it and resize it with limactl edit, or rebuild it with make vm-delete and make vm-create)" >&2;) \
+			limactl shell --start --workdir / "$$LIMA_INSTANCE" true;; \
 		(Broken) \
 			if [ -e "$$dir/lima.yaml" ] || [ -L "$$dir/lima.yaml" ]; then \
-				echo "vm-up: the Lima instance $(LIMA_INSTANCE) is Broken although $$dir/lima.yaml is there: it is broken for another reason, such as a lima.yaml Lima cannot load." >&2; \
-				echo "  Its disk may be intact: see why with 'limactl list' and 'limactl start --debug $(LIMA_INSTANCE)', and fix the cause instead of deleting the instance." >&2; \
+				echo "vm-up: the Lima instance $$LIMA_INSTANCE is Broken although $$dir/lima.yaml is there: it is broken for another reason, such as a lima.yaml Lima cannot load." >&2; \
+				echo "  Its disk may be intact: see why with 'limactl list' and 'limactl start --debug $$LIMA_INSTANCE', and fix the cause instead of deleting the instance." >&2; \
 				echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
 				exit 1; \
 			fi; \
-			echo "vm-up: the Lima instance $(LIMA_INSTANCE) is Broken: $$dir has no lima.yaml, and starting it would create a default VM that mounts the home directory" >&2; \
+			echo "vm-up: the Lima instance $$LIMA_INSTANCE is Broken: $$dir has no lima.yaml, and starting it would create a default VM that mounts the home directory" >&2; \
 			echo "  Remove $$dir by hand once no limactl job uses it; make vm-delete cannot, as limactl delete --force refuses a directory without lima.yaml." >&2; \
 			echo "  A launchd job running limactl start may recreate it through its log paths; look for one with" >&2; \
 			echo "  'launchctl print system | grep -i lima' and in ~/Library/LaunchAgents and /Library/LaunchDaemons, and unload it first." >&2; \
 			echo "  See Troubleshooting: a Broken instance, in docs/dev-environment.md." >&2; \
 			exit 1;; \
 		(*) \
-			echo "vm-up: the Lima instance $(LIMA_INSTANCE) has the status '$$status'; vm-up starts only a Stopped or Running instance" >&2; \
+			echo "vm-up: the Lima instance $$LIMA_INSTANCE has the status '$$status'; vm-up starts only a Stopped or Running instance" >&2; \
 			exit 1;; \
 		esac; \
 	else \
-		limactl start --name="$(LIMA_INSTANCE)" --mount-only "$(WORKSPACE):w" --tty=false \
+		limactl start --name="$$LIMA_INSTANCE" --mount-only "$(WORKSPACE):w" --tty=false \
 			$${VM_CPUS:+--cpus="$$VM_CPUS"} $${VM_MEMORY:+--memory="$${VM_MEMORY%GiB}"} \
 			$${VM_DISK:+--disk="$${VM_DISK%GiB}"} $${VM_SSH_PORT:+--ssh-port="$$VM_SSH_PORT"} dev/lima.yaml; \
 	fi
 
 .PHONY: vm-shell
 vm-shell: ## Open a shell in the VM at the repository root
-	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)"
+	$(LIMA_INSTANCE_CHECK)
+	limactl shell --workdir "$(CURDIR)" "$$LIMA_INSTANCE"
 
 # The names in VM_ENV, one per line: commas and spaces separate them, and a name listed twice is listed once.
 # The recipe reads VM_ENV from its environment ("$$VM_ENV"), never pasted into its own text, and refuses any
@@ -424,6 +453,7 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 .PHONY: vm-env
 vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
+	$(LIMA_INSTANCE_CHECK)
 	@set -f; env_file="$$(i=0; [ -n "$(vm_env_names)" ] || { \
 		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
 	for name in $(vm_env_names); do \
@@ -432,7 +462,7 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 		[ -n "$$value" ] || { echo "vm-env: $$label is not set or empty.$(vm_env_entry_why) Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
 		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$label has unsupported characters.$(vm_env_entry_why) Nothing was written." >&2; exit 1;; esac; \
 		printf '%s=%s\n' "$$name" "$$value"; \
-	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
+	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$$LIMA_INSTANCE" \
 		sh -c 'umask 077 && LC_ALL=C && export LC_ALL && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && \
 		t= && trap "rm -f \"\$$t\"" EXIT && trap "exit 1" HUP INT TERM && \
 		unreadable() { echo "vm-env: cannot read ~/.config/dot-agent-deck/daemon.env in the VM, so it cannot check the file for a GitHub token to warn about (nor a merge keep its lines). Nothing was written: make it readable by the VM user (chmod 600) and run make vm-env again." >&2; exit 1; } && \
@@ -470,14 +500,16 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 
 .PHONY: vm-claude-settings
 vm-claude-settings: ## Merge dev/claude-user-settings.json into Claude Code's user settings in the VM
-	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)" dev/claude-settings.sh "$(WORKSPACE)"
+	$(LIMA_INSTANCE_CHECK)
+	limactl shell --workdir "$(CURDIR)" "$$LIMA_INSTANCE" dev/claude-settings.sh "$(WORKSPACE)"
 
 # A login shell (bash -l), because only a login shell loads the credentials vm-env wrote
 # (/etc/profile.d/shift2eu.sh). Safe to run again: it changes only what is not set up yet, and the theme
 # when CLAUDE_THEME differs. Run it before make deck (docs/dev-environment.md, What make vm-init does).
 .PHONY: vm-init
 vm-init: ## Once-only VM setup after vm-env and vm-claude-settings: Claude Code first run, git identity, credential checks, deck command, daemon service
-	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)" bash -l dev/vm-init.sh \
+	$(LIMA_INSTANCE_CHECK)
+	limactl shell --workdir "$(CURDIR)" "$$LIMA_INSTANCE" bash -l dev/vm-init.sh \
 		"$(WORKSPACE)" "$(REPO_ROOT)" "$(GIT_USER_NAME)" "$(GIT_USER_EMAIL)" "$(CLAUDE_THEME)"
 
 # One target at a time, in order, even under make -j. vm-env-check runs first, before vm-up and any limactl
@@ -486,6 +518,7 @@ vm-init: ## Once-only VM setup after vm-env and vm-claude-settings: Claude Code 
 # When the check refuses, vm-create says on stderr that it created nothing, after vm-env's own messages.
 .PHONY: vm-create
 vm-create: ## Create and set up the VM, ready for make deck: vm-env-check, vm-up (VM_CPUS, ... pass through), vm-env, vm-claude-settings, vm-init
+	$(LIMA_INSTANCE_CHECK)
 	@$(MAKE) vm-env-check || { echo "vm-create: nothing was created: the credential check runs before the VM is created" >&2; exit 1; }
 	$(MAKE) vm-up
 	$(MAKE) vm-env
@@ -506,26 +539,28 @@ AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2e
 
 .PHONY: agents-token
 agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM (host clone)
-	@LIMA_INSTANCE="$(LIMA_INSTANCE)" sh dev/agents-app-token.sh mint
+	$(LIMA_INSTANCE_CHECK)
+	@sh dev/agents-app-token.sh mint
 
 .PHONY: agents-token-refresh
 agents-token-refresh: ## Mint the agents App token now and again before each one expires, in the foreground, until stopped (host clone)
-	@LIMA_INSTANCE="$(LIMA_INSTANCE)" sh dev/agents-app-token.sh refresh
+	$(LIMA_INSTANCE_CHECK)
+	@sh dev/agents-app-token.sh refresh
 
 # Starts the refresh of this VM instance in the background unless one already runs: the one whose pid the
 # instance's lock holds (a refresh started by hand with make agents-token-refresh holds it too), or the one
 # this target started earlier. It warns when that one has stopped, and prints where the log is. When launchd
 # has the instance's LaunchDaemon loaded (agents-token-refresh-install), it warns and starts nothing, writing
 # no file: the job is the instance's refresher. Without launchctl (Linux) that check is skipped. Like install
-# and uninstall below, it reads LIMA_INSTANCE from its environment ($$LIMA_INSTANCE, exported with theirs) and
-# refuses an unsupported name before any use: the name becomes part of its file names and of the job's label.
+# and uninstall below, it reads LIMA_INSTANCE from its environment ($$LIMA_INSTANCE) and refuses an invalid
+# name with $(LIMA_INSTANCE_CHECK) before it runs: the name becomes part of its file names and of the job's label.
 .PHONY: agents-token-refresh-start
 agents-token-refresh-start: ## Start the agents App token refresh in the background, one per VM instance, and print where its log is (host clone)
+	$(LIMA_INSTANCE_CHECK)
 	@if [ -z "$${SHIFT2EU_AGENTS_APP_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
 		echo "agents-token-refresh-start: set SHIFT2EU_AGENTS_APP_ID, SHIFT2EU_AGENTS_APP_INSTALLATION_ID and SHIFT2EU_AGENTS_APP_KEY_FILE in the host clone's .envrc (docs/dev-environment.md, The host clone)" >&2; \
 		exit 1; \
 	fi; \
-	$(AGENTS_TOKEN_INSTANCE_CHECK); \
 	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; \
 	state="$(AGENTS_TOKEN_STATE)"; pid_file="$$state/agents-token-refresh-$$LIMA_INSTANCE.pid"; log="$$state/agents-token-refresh-$$LIMA_INSTANCE.log"; \
 	if command -v launchctl >/dev/null 2>&1 && printed="$$(launchctl print "system/$$label" 2>/dev/null)"; then \
@@ -568,8 +603,8 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # the lock before the bootstrap, since the job's own refresh takes the lock as soon as it loads, and warns only
 # about a refresh that held it then, still holds it, and is not the pid launchctl print reports for the job.
 #
-# install and uninstall read LIMA_INSTANCE from their environment ($$LIMA_INSTANCE, exported below) and check
-# it before any use, so make never splices an unchecked value into the shell text that runs sudo.
+# install and uninstall read LIMA_INSTANCE from their environment ($$LIMA_INSTANCE) and refuse an invalid one
+# with $(LIMA_INSTANCE_CHECK) before they run, so make never splices a value into the shell text that runs sudo.
 #
 # install refuses, before any sudo:
 #   - a run as root (sudo make, sudo -E make), before anything else: the job runs as the account that installs
@@ -610,12 +645,6 @@ AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX = io.github.timothymamo.shift2eu.agents-token-
 # The script a loaded job runs, read from `launchctl print system/<label>`: the first line of its arguments
 # block that ends in /dev/agents-app-token.sh, with the indentation removed (empty when there is none).
 AGENTS_TOKEN_LAUNCHD_SCRIPT_OF = awk '/^[[:space:]]*arguments = \{/ { a = 1; next } a && /^[[:space:]]*\}/ { exit } a { sub(/^[[:space:]]+/, ""); if ($$0 ~ /\/dev\/agents-app-token\.sh$$/) { print; exit } }'
-# The check of LIMA_INSTANCE, the same rule as dev/agents-app-token.sh's: it becomes part of the job's label.
-# Spelled out, not A-Z: some shells match a range by the locale's collation.
-AGENTS_TOKEN_INSTANCE_CHECK = case "$${LIMA_INSTANCE:-}" in \
-	'' | [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) \
-		echo "$@: LIMA_INSTANCE must be letters, digits, ., _ and -, beginning with a letter or digit" >&2; exit 1 ;; \
-	esac
 # The check of AGENTS_TOKEN_LAUNCHD_DIR, the directory root writes the plist into and removes it from.
 AGENTS_TOKEN_LAUNCHD_DIR_CHECK = case "$(AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN)" in \
 	environment*) \
@@ -630,11 +659,11 @@ AGENTS_TOKEN_LAUNCHD_DIR_CHECK = case "$(AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN)" in \
 		echo "$@: AGENTS_TOKEN_LAUNCHD_DIR may hold only letters, digits, /, ., _ and -, and no .. component, since root writes there (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
 	esac
 
-agents-token-refresh-start agents-token-refresh-install agents-token-refresh-uninstall: export LIMA_INSTANCE := $(LIMA_INSTANCE)
 agents-token-refresh-install agents-token-refresh-uninstall: export AGENTS_TOKEN_LAUNCHD_DIR := $(AGENTS_TOKEN_LAUNCHD_DIR)
 
 .PHONY: agents-token-refresh-install
 agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs the agents App token refresh at boot, one per VM instance; needs sudo (host clone, macOS)
+	$(LIMA_INSTANCE_CHECK)
 	@if [ "$$(id -u)" = 0 ]; then \
 		echo "agents-token-refresh-install: refused: run it as the maintainer, not as root (no sudo make); it runs sudo itself. The job runs as the account that installs it, and as root it would run the host clone's script, which the maintainer can edit, at every boot" >&2; \
 		exit 1; \
@@ -644,7 +673,6 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 		exit 1; \
 	fi; \
 	command -v launchctl >/dev/null 2>&1 || { echo "agents-token-refresh-install: no launchctl: the LaunchDaemon is for the Mac; elsewhere use make agents-token-refresh-start" >&2; exit 1; }; \
-	$(AGENTS_TOKEN_INSTANCE_CHECK); \
 	$(AGENTS_TOKEN_LAUNCHD_DIR_CHECK); \
 	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${AGENTS_TOKEN_LAUNCHD_DIR%/}/$$label.plist"; \
 	clone="$$(pwd -P)" || exit 1; script="$$clone/dev/agents-app-token.sh"; \
@@ -746,8 +774,8 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 
 .PHONY: agents-token-refresh-uninstall
 agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh's LaunchDaemon of this VM instance; needs sudo (host clone, macOS)
+	$(LIMA_INSTANCE_CHECK)
 	@command -v launchctl >/dev/null 2>&1 || { echo "agents-token-refresh-uninstall: no launchctl: the LaunchDaemon is for the Mac, and there is none to remove here" >&2; exit 1; }; \
-	$(AGENTS_TOKEN_INSTANCE_CHECK); \
 	$(AGENTS_TOKEN_LAUNCHD_DIR_CHECK); \
 	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${AGENTS_TOKEN_LAUNCHD_DIR%/}/$$label.plist"; \
 	echo "+ sudo launchctl bootout system/$$label"; \
@@ -778,12 +806,13 @@ agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh'
 # run again.
 .PHONY: vm-gh-wrapper
 vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it (instead of make vm-delete vm-create)
+	$(LIMA_INSTANCE_CHECK)
 	@script="$$(sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh)" || exit 1; \
 	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_gh_wrapper ]; then \
 		echo "vm-gh-wrapper: dev/vm-gh-wrapper.sh printed no whole script (its last line is not vm_gh_wrapper); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$(LIMA_INSTANCE)" sh -s)"; status=$$?; \
+	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s)"; status=$$?; \
 	if [ -n "$$out" ]; then printf '%s\n' "$$out"; fi; \
 	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-gh-wrapper: done'; then \
@@ -796,20 +825,24 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 # workspace's shell, and still opens the deck.
 .PHONY: deck
 deck: ## Open the dot-agent-deck TUI in the VM (attaches to the daemon service)
+	$(LIMA_INSTANCE_CHECK)
 	@if [ -n "$${SHIFT2EU_AGENTS_APP_ID:-}$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
 		echo "deck: warning: a SHIFT2EU_AGENTS_APP_* variable is set in this shell, where the workspace's code runs: move the three into the direnv .envrc of your host clone, outside the workspace, never into the .envrc above it, and run make agents-token-refresh-start there (docs/dev-environment.md, The host clone)" >&2; \
 	fi
-	limactl shell --workdir "$(CURDIR)" "$(LIMA_INSTANCE)" dot-agent-deck
+	limactl shell --workdir "$(CURDIR)" "$$LIMA_INSTANCE" dot-agent-deck
 
 .PHONY: deck-restart
 deck-restart: ## Reload the units and restart the deck's daemon service in the VM, e.g. after vm-env (stops running agents)
-	limactl shell --workdir / "$(LIMA_INSTANCE)" systemctl --user daemon-reload
-	limactl shell --workdir / "$(LIMA_INSTANCE)" systemctl --user restart dot-agent-deck.service
+	$(LIMA_INSTANCE_CHECK)
+	limactl shell --workdir / "$$LIMA_INSTANCE" systemctl --user daemon-reload
+	limactl shell --workdir / "$$LIMA_INSTANCE" systemctl --user restart dot-agent-deck.service
 
 .PHONY: vm-stop
 vm-stop: ## Stop the VM
-	limactl stop "$(LIMA_INSTANCE)"
+	$(LIMA_INSTANCE_CHECK)
+	limactl stop "$$LIMA_INSTANCE"
 
 .PHONY: vm-delete
 vm-delete: ## Delete the VM and everything inside it
-	limactl delete --force "$(LIMA_INSTANCE)"
+	$(LIMA_INSTANCE_CHECK)
+	limactl delete --force "$$LIMA_INSTANCE"
