@@ -1066,7 +1066,7 @@ agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh'
 STRIP_CONTROL = LC_ALL=C tr -cd '\011\012\040-\176'
 
 # VM_OUTPUT prints what the VM printed ($$out, its two streams together) through $(STRIP_CONTROL) and, when
-# limactl's $$status is non-zero, sends it to make's stderr and exits with that status: a failure the maintainer
+# limactl's $$status is non-zero, sends it to make's stderr and the recipe exits with that status: a failure the maintainer
 # pipes away with make's stdout would be a failure they never see. A run that succeeds prints it on stdout (issue
 # #227 part 2, the closing review).
 VM_OUTPUT = if [ "$$status" -ne 0 ]; then \
@@ -1080,7 +1080,7 @@ VM_OUTPUT = if [ "$$status" -ne 0 ]; then \
 # standard input (dev/vm-gh-wrapper.sh). The script is generated first and sent only when it is whole (its
 # last line is the call that runs it), so a generator that fails fails make before the VM is touched. The VM's
 # output, stdout and stderr together, is captured and printed through $(VM_OUTPUT) (filtered, and on make's stderr
-# when limactl fails, with its status), and make fails unless it holds the line "vm-gh-wrapper: done", so a
+# when limactl fails, the recipe exiting with its status), and make fails unless it holds the line "vm-gh-wrapper: done", so a
 # connection that drops after the stream arrived (sh -s exits 0 having run nothing) is no success. Safe to
 # run again.
 .PHONY: vm-gh-wrapper
