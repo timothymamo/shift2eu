@@ -299,7 +299,8 @@ count is not given and is taken as 1, which the cell says. A Scaleway Instance's
 disk: its boot volume is Block Storage, priced per GiB, and `shop-web-2` gives no disk size, so the
 cell says "(boot volume not included)" and the estimate is the plan alone. A resource that cannot be priced says
 "not estimated" and why: no fit, a usage-priced category (functions and queues), size unknown, no
-plan large enough, or no price in the region. It is counted, never priced at €0.
+plan large enough, not offered in the region, or no price in the region. It is counted, never priced
+at €0.
 [Assess an inventory](assess.md#read-the-estimate) explains every rule.
 
 Where several offerings fit equally well, the others are named as a tie:

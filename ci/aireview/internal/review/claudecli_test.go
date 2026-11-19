@@ -63,9 +63,7 @@ func newFakeClaudeCLI(t *testing.T, behaviour claudeFake) (string, claudeRecordi
 
 	path := filepath.Join(t.TempDir(), "claude")
 
-	if err := os.WriteFile(path, []byte(claudeFakeScript(rec.dir, behaviour)), 0o755); err != nil {
-		t.Fatalf("write the fake CLI: %v", err)
-	}
+	writeExecutable(t, path, []byte(claudeFakeScript(rec.dir, behaviour)))
 
 	return path, rec
 }
@@ -170,7 +168,7 @@ func TestClaudeCLIAskPresentsThePromptAsTheCLIReadsIt(t *testing.T) {
 
 	got, err := asker.Ask(t.Context(), prompt)
 	if err != nil {
-		t.Fatalf("Ask: %v", err)
+		t.Fatalf("Ask: %v; the fake CLI's stderr: %s", err, rec.read(t, "canned-stderr"))
 	}
 
 	args := rec.args(t)
@@ -338,7 +336,7 @@ func TestClaudeCLIAskGivesTheCLIAnExplicitEnvironment(t *testing.T) {
 	cli, rec := newFakeClaudeCLI(t, claudeFake{stdout: cliSuccess})
 
 	if _, err := review.NewClaudeCLI(cli, fakeOAuthToken, 30*time.Second).Ask(t.Context(), review.Prompt{System: "s", User: "u"}); err != nil {
-		t.Fatalf("Ask: %v", err)
+		t.Fatalf("Ask: %v; the fake CLI's stderr: %s", err, rec.read(t, "canned-stderr"))
 	}
 
 	env := rec.env(t)

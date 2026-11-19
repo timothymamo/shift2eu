@@ -25,7 +25,18 @@
 //
 // A resource that cannot be priced is never priced at 0: its Estimate says it
 // is not estimated, and why (Reason). Sum totals only the estimated resources
-// and counts how many there were.
+// and counts how many there were; a report that estimates nothing reads the
+// reasons from the estimates themselves.
+//
+// Only the best candidate offerings that are offered in the estimate region
+// (catalog.Offering.AvailableIn, the availability mapping.MapIn scopes
+// --region by) are priced. When none is (for a plan, none with a covering
+// plan, checked after the plans' own reasons), the reason is NotOffered, never
+// NoPrice: NoPrice is for an offering offered there whose covering plans or
+// per-GiB storage have no price in the snapshot (issue #243). So a resource
+// whose tied best candidate offered in the region has only plans too small,
+// while another, not offered there, has a covering plan, is NotOffered, not
+// NoPlanLargeEnough: a covering plan exists, only not in the region.
 //
 // Money is exact: an amount of euros held as a rational number (math/big), so
 // no product of the inventory's and the catalog's capped numbers can wrap. It

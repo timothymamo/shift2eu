@@ -22,7 +22,8 @@
 //     count or no hours, then "(boot volume not included)" or "(data storage
 //     not included)" when the estimate leaves out storage its plan does not
 //     include (ADR 0032), or "not estimated: " and the reason in plain words,
-//     the region named for a missing price or storage price), then, when some
+//     the region named for an offering not offered there, "not offered in
+//     `<region>`", and for a missing price or storage price), then, when some
 //     resource has a relation, its relations, and last the reasons. The best
 //     offering is followed by "(tie: ...)" naming, in candidate order, the other
 //     candidates with the best one's fit and as many missing capabilities;
@@ -44,6 +45,15 @@
 //     prices are for, the hours basis, followed by one clause per distinct
 //     billing cap of the estimated resources' plans, ascending (ADR 0029), and
 //     the source's cost per currency, never converted.
+//
+// A total of at least one resource that estimates none (a workload's, the
+// report's, a comparison target's) has no amount (issue #246): "none of M
+// resources could be estimated (reasons)", where the reasons are the phrases
+// the resources' Monthly estimate cells give after "not estimated: ", each
+// once, in the order estimate.For checks the reasons (no fit, usage-priced,
+// size unknown, no plan, no plan large enough, not offered, no price, no
+// storage price; a reason the report does not know last, in verdict order),
+// joined with ", ". The renderer reads them from the verdicts the total sums.
 //
 // Estimates are on exactly when the assessment's Total is set
 // (assessment.AssessWith). With estimates off and no relation and no workload,

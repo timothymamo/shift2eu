@@ -90,6 +90,28 @@ func TestDecideReturnsTheEventTheProgramChooses(t *testing.T) {
 			want:           review.EventRequestChanges,
 		},
 		{
+			name: "an uncategorised blocker with the switch on requests changes",
+			findings: []review.Finding{{
+				Severity: review.SeverityBlocker,
+				Category: review.CategoryUncategorised,
+				Title:    "t",
+				Body:     "b",
+			}},
+			requestChanges: true,
+			want:           review.EventRequestChanges,
+		},
+		{
+			name: "an uncategorised blocker with the switch off is a comment",
+			findings: []review.Finding{{
+				Severity: review.SeverityBlocker,
+				Category: review.CategoryUncategorised,
+				Title:    "t",
+				Body:     "b",
+			}},
+			requestChanges: false,
+			want:           review.EventComment,
+		},
+		{
 			name:           "no blocking finding with the switch on is a comment",
 			findings:       []review.Finding{suggestion},
 			requestChanges: true,

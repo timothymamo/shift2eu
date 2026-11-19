@@ -123,19 +123,58 @@ func (c *ClaudeCLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	// Every other outcome of a run whose context is done is reported as the
 	// cancellation or the timeout it most likely is.
 	text, err := c.answer(runErr, stdout, stderr)
-	if err == nil {
+
+	switch DecideRunOutcome(err, ctx.Err(), runCtx.Err()) {
+	case OutcomeAnswer:
 		return text, nil
-	}
-
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return "", fmt.Errorf("%w: the Claude Code CLI was cancelled: %w", ErrModel, ctxErr)
-	}
-
-	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+	case OutcomeCancelled:
+		return "", fmt.Errorf("%w: the Claude Code CLI was cancelled: %w", ErrModel, ctx.Err())
+	case OutcomeTimedOut:
 		return "", fmt.Errorf("%w: the Claude Code CLI timed out after %s", ErrModel, c.timeout)
+	default:
+		return "", err
 	}
+}
 
-	return "", err
+// RunOutcome is how one run of the Claude Code CLI ended, as DecideRunOutcome
+// decides it.
+type RunOutcome int
+
+// The outcomes of a run of the Claude Code CLI. The zero value is
+// OutcomeFailed, so an outcome nobody decided fails closed: it never reads as
+// an answer.
+const (
+	// OutcomeFailed is a run with no usable result that failed on its own:
+	// its error is reported as it is.
+	OutcomeFailed RunOutcome = iota
+	// OutcomeAnswer is a run whose result was read: its answer is used.
+	OutcomeAnswer
+	// OutcomeCancelled is a run with no usable result whose caller cancelled.
+	OutcomeCancelled
+	// OutcomeTimedOut is a run with no usable result that reached its own
+	// deadline.
+	OutcomeTimedOut
+)
+
+// DecideRunOutcome decides a run's outcome from plain values (issue #274):
+// answerErr is the error reading the run's result, nil when it was read;
+// parentErr is the caller's context's error; runErr is the run's own context's
+// error (or an error wrapping it). The run's own result comes first: a CLI that
+// exited 0 with a successful result just as the deadline passed or the caller
+// cancelled has answered. A run with no usable result is a cancellation when
+// the caller's context is done, then a timeout when the run's deadline passed,
+// and otherwise a failure of its own.
+func DecideRunOutcome(answerErr, parentErr, runErr error) RunOutcome {
+	switch {
+	case answerErr == nil:
+		return OutcomeAnswer
+	case parentErr != nil:
+		return OutcomeCancelled
+	case errors.Is(runErr, context.DeadlineExceeded):
+		return OutcomeTimedOut
+	default:
+		return OutcomeFailed
+	}
 }
 
 // cliArgs returns the CLI's arguments with the system prompt in systemFile.

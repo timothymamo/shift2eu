@@ -27,16 +27,33 @@ maintainer has not approved: the maintainer's approval and merge are the single 
 
 ## Verify
 
-6. `gh pr checks <n> --watch --fail-fast` until every check completes.
-7. On failure: `gh run view <run-id> --log-failed`, report the failing job and the exact error, and stop.
-   Do not diagnose or fix; the orchestrator re-delegates.
+6. `timeout 3600 gh pr checks <n> --watch --required --fail-fast` until every required check
+   completes; if it stops on a failed check, go straight to step 7. Some checks are not required
+   (`Container image`, `Dependency review`), so then wait for every check but `AI review` with this
+   command, which polls every 30 seconds until none is pending:
+
+   ```sh
+   timeout 3600 sh -c 'until [ "$(gh pr checks <n> --json name,bucket --jq '\''[.[] | select(.name != "AI review" and .bucket == "pending")] | length'\'')" = 0 ]; do sleep 30; done'
+   ```
+
+   Judge by its exit status, not gh's (gh exits 8 for pending in other modes; a network error prints
+   nothing, so the loop goes on): 0 means nothing is pending. Either command exits 124 when its
+   60-minute cap hits: then report the pending checks by name (`gh pr checks <n>`) and stop, as step 7
+   does for a failure. Otherwise `gh pr checks <n>` for every check.
+7. On a failed check other than `AI review` (required or not, bucket `fail` or `cancel`):
+   `gh run view <run-id> --log-failed`, report the failing job and the exact error, and stop. Do not
+   diagnose or fix; the orchestrator re-delegates. A failed `AI review` is no such failure: report it as
+   step 8 says.
 
 ## Report and stop
 
 8. Report through `dot-agent-deck work-done`: the PR URL, each check and its result, the head commit, and
-   anything notable, such as the AI reviewer's findings once it runs (milestone 4 of PRD #161: advice for
-   the maintainer, never a reason to merge or not). **Do not merge, do not approve and do not enable
-   auto-merge.** The pull request now waits for the maintainer's approval.
+   anything notable. Always include the `AI review` check (ADR 0033), which runs on every pull request,
+   and summarise the reviewer's findings (`gh pr view <n> --json reviews,comments`) as advice for the
+   maintainer, never a reason to merge or not. It is not a required check: when it fails or errors,
+   report that with its error (`gh run view <run-id> --log-failed`); do not wait on it, re-run it or work
+   around it. **Do not merge, do not approve and do not enable auto-merge.** The pull request now waits
+   for the maintainer's approval.
 
 ## Merge (only when explicitly instructed)
 

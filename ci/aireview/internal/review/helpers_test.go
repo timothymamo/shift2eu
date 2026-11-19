@@ -3,6 +3,8 @@ package review_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"syscall"
 	"testing"
 )
 
@@ -27,4 +29,26 @@ func server(t *testing.T, handle http.HandlerFunc) *httptest.Server {
 	t.Cleanup(srv.Close)
 
 	return srv
+}
+
+// writeExecutable writes content to path as an executable without the ETXTBSY
+// race (issue #287, as test/devenv's writeFileMode does since #286).
+// syscall.ForkLock.RLock is held while the file is created, written and closed,
+// so a fork in a parallel test cannot inherit the write descriptor and make a
+// later exec of the file fail with "text file busy"; the executable bit is set
+// after the descriptor is closed, and chmod opens no write descriptor.
+func writeExecutable(t *testing.T, path string, content []byte) {
+	t.Helper()
+
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(path, content, 0o600)
+	syscall.ForkLock.RUnlock()
+
+	if err != nil {
+		t.Fatalf("write the executable %s: %v", path, err)
+	}
+
+	if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // a fake CLI the test runs must be executable
+		t.Fatalf("make %s executable: %v", path, err)
+	}
 }
