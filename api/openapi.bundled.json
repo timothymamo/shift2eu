@@ -879,6 +879,599 @@
         "title": "shift2eu assessment report, version 2",
         "type": "object"
       },
+      "AssessmentReportV3": {
+        "$defs": {
+          "blocker": {
+            "additionalProperties": false,
+            "description": "One reason a resource cannot move.",
+            "properties": {
+              "reason": {
+                "$ref": "#/components/schemas/AssessmentReportV3/$defs/reason"
+              },
+              "resourceId": {
+                "description": "The blocked resource's ID.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "resourceId",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "breakdown": {
+            "additionalProperties": false,
+            "description": "What an estimate is made of, each part in EUR as an exact decimal string rounded to the cent; each part is rounded from its exact value, so the parts sum to the amount give or take a cent.",
+            "properties": {
+              "fixedFee": {
+                "description": "The offering's listed fixed fee × hours a month / 730, an exact decimal string rounded to the cent, once per resource and never × count; 0.00 when the offering charges none. A fee the catalog records as the smallest paid size of a tier (such as Scaleway Kubernetes Kapsule Dedicated, see the Scaleway catalog's SOURCES.md) is a lower bound of what the resource is charged.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "plan": {
+                "description": "The plan price × count × hours a month / 730, an exact decimal string rounded to the cent; 0.00 for a resource priced by storage.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "storage": {
+                "description": "The storage's price per GiB, never scaled by hours, as an exact decimal string rounded to the cent.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "plan",
+              "storage",
+              "fixedFee"
+            ],
+            "type": "object"
+          },
+          "currencyCost": {
+            "additionalProperties": false,
+            "description": "The source's monthly cost in one currency.",
+            "properties": {
+              "amount": {
+                "description": "The sum in that currency, an exact decimal string rounded to the cent from the exact sum of the source costs.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "currency": {
+                "description": "The ISO 4217 code, as the inventory gives it.",
+                "type": "string"
+              },
+              "resources": {
+                "description": "How many resources have a cost in that currency.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "currency",
+              "amount",
+              "resources"
+            ],
+            "type": "object"
+          },
+          "estimateBasis": {
+            "additionalProperties": false,
+            "description": "What the estimates are given on, and their total. Present only when estimates are on.",
+            "properties": {
+              "currency": {
+                "const": "EUR",
+                "description": "The currency of every estimate."
+              },
+              "excluded": {
+                "description": "What the list prices leave out.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "hoursBasis": {
+                "const": 730,
+                "description": "The hours a month a plan price is for, a whole number (a JSON integer): a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
+                "type": "integer"
+              },
+              "priceDate": {
+                "description": "The UTC calendar date the catalog's prices were retrieved, YYYY-MM-DD.",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "type": "string"
+              },
+              "region": {
+                "description": "The target region the prices are for.",
+                "type": "string"
+              },
+              "regionChosen": {
+                "description": "True when the region was chosen (--region or the API's regions); false when it is the target's default region for estimates.",
+                "type": "boolean"
+              },
+              "total": {
+                "$ref": "#/components/schemas/AssessmentReportV3/$defs/total"
+              }
+            },
+            "required": [
+              "region",
+              "regionChosen",
+              "priceDate",
+              "currency",
+              "excluded",
+              "hoursBasis",
+              "total"
+            ],
+            "type": "object"
+          },
+          "plan": {
+            "additionalProperties": false,
+            "description": "The plan the estimate chose or, when no plan is large enough, the largest plan of the best offerings.",
+            "properties": {
+              "includedStorageGiB": {
+                "description": "The storage the plan includes, in GiB, a whole number (a JSON integer).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "memoryGiB": {
+                "description": "The plan's memory in GiB, an exact decimal string with at most three fractional digits, such as \"0.5\" or \"1.875\": memory can be fractional, so it is never a JSON number.",
+                "pattern": "^[0-9]+(\\.[0-9]{1,3})?$",
+                "type": "string"
+              },
+              "name": {
+                "description": "The plan's name, as the catalog lists it.",
+                "type": "string"
+              },
+              "price": {
+                "description": "The plan's monthly list price in EUR in the estimate region, an exact decimal string rounded to the cent; absent when the plan has no price there.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "vcpus": {
+                "description": "The plan's vCPU count, a whole number (a JSON integer).",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "vcpus",
+              "memoryGiB",
+              "includedStorageGiB"
+            ],
+            "type": "object"
+          },
+          "reason": {
+            "additionalProperties": false,
+            "description": "One reason: a code, its plain sentence, and the names it mentions, each present only when set.",
+            "properties": {
+              "capability": {
+                "description": "The capability the reason mentions.",
+                "type": "string"
+              },
+              "category": {
+                "description": "The taxonomy category the reason mentions.",
+                "type": "string"
+              },
+              "code": {
+                "description": "The reason code; a consumer must accept a code it does not know.",
+                "type": "string"
+              },
+              "offering": {
+                "description": "The offering name the reason mentions.",
+                "type": "string"
+              },
+              "target": {
+                "description": "The target display name the reason mentions.",
+                "type": "string"
+              },
+              "text": {
+                "description": "The reason as a plain sentence, not Markdown.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "text"
+            ],
+            "type": "object"
+          },
+          "relation": {
+            "additionalProperties": false,
+            "description": "One relation of the resource to another resource of the inventory.",
+            "properties": {
+              "target": {
+                "description": "The ID of the resource the relation points to.",
+                "type": "string"
+              },
+              "type": {
+                "description": "The relation type, in the inventory's vocabulary (such as depends-on or replica-of); a consumer must accept a type it does not know.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "target"
+            ],
+            "type": "object"
+          },
+          "resource": {
+            "additionalProperties": false,
+            "description": "The verdict on one resource.",
+            "properties": {
+              "affectedBy": {
+                "description": "The IDs of the resources this one depends on or is a replica of that have no fit here, sorted; not transitive.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "bestOffering": {
+                "description": "The best candidate offering's name, or empty when there is none.",
+                "type": "string"
+              },
+              "category": {
+                "description": "The taxonomy category.",
+                "type": "string"
+              },
+              "estimate": {
+                "$ref": "#/components/schemas/AssessmentReportV3/$defs/resourceEstimate"
+              },
+              "fit": {
+                "description": "How well the best offering fits.",
+                "enum": [
+                  "direct",
+                  "partial",
+                  "none"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "description": "The resource's ID.",
+                "type": "string"
+              },
+              "plan": {
+                "$ref": "#/components/schemas/AssessmentReportV3/$defs/plan"
+              },
+              "rawType": {
+                "description": "The source's own type name, or empty.",
+                "type": "string"
+              },
+              "reasons": {
+                "description": "The reasons for the fit.",
+                "items": {
+                  "$ref": "#/components/schemas/AssessmentReportV3/$defs/reason"
+                },
+                "type": "array"
+              },
+              "region": {
+                "description": "The source region, or empty.",
+                "type": "string"
+              },
+              "relations": {
+                "description": "The resource's relations, in the inventory's order.",
+                "items": {
+                  "$ref": "#/components/schemas/AssessmentReportV3/$defs/relation"
+                },
+                "type": "array"
+              },
+              "requiredChanges": {
+                "description": "For a partial fit, the capabilities the best offering lacks; empty otherwise.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "ties": {
+                "description": "The other candidates with the best one's fit and as many missing capabilities, in candidate order.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "rawType",
+              "category",
+              "region",
+              "fit",
+              "bestOffering",
+              "ties",
+              "reasons",
+              "requiredChanges",
+              "relations",
+              "affectedBy"
+            ],
+            "type": "object"
+          },
+          "resourceEstimate": {
+            "additionalProperties": false,
+            "description": "The resource's monthly estimate: the amount, its breakdown and what it assumed when it is estimated, the reason when it is not. A resource that is not estimated is never counted as 0.",
+            "properties": {
+              "amount": {
+                "description": "The monthly list price in EUR, excluding VAT and discounts, an exact decimal string rounded to the cent (half away from zero); present only when estimated.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "billingCapHours": {
+                "description": "The most hours a month the estimated plan is billed for, a whole number (a JSON integer): its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "breakdown": {
+                "$ref": "#/components/schemas/AssessmentReportV3/$defs/breakdown"
+              },
+              "countAssumed": {
+                "description": "Whether the estimate assumed a count of 1 because the resource gives none; present only when estimated.",
+                "type": "boolean"
+              },
+              "estimated": {
+                "description": "Whether the resource is estimated.",
+                "type": "boolean"
+              },
+              "hoursAssumed": {
+                "description": "Whether the estimate assumed 730 hours a month because the resource gives none; present only when estimated.",
+                "type": "boolean"
+              },
+              "reason": {
+                "description": "Why the resource is not estimated (no-fit, usage-priced, no-size, no-plan, no-plan-large-enough, not-offered, no-price, no-storage-price; not-offered when none of the best offerings with a covering plan, or for storage none of them, is offered in the estimate region, no-price when one is but has no price there); present only when not estimated. A consumer must accept a reason it does not know.",
+                "type": "string"
+              },
+              "storageNotIncluded": {
+                "description": "The storage the estimate leaves out (boot-volume for a server or Kubernetes node, data-storage for a managed database): the chosen plan includes no storage, its offering prices storage per GiB in the estimate region, and the resource gives no storage size, so the amount does not include it (ADR 0032); present only when estimated and the note applies, never empty. A consumer must accept a value it does not know.",
+                "pattern": "^.+$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "estimated"
+            ],
+            "type": "object"
+          },
+          "snapshot": {
+            "additionalProperties": false,
+            "description": "Where the target's catalog was taken from and when.",
+            "properties": {
+              "retrieved": {
+                "description": "The UTC calendar date the snapshot was retrieved, YYYY-MM-DD.",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "type": "string"
+              },
+              "source": {
+                "description": "The snapshot's source URL, as stored.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "retrieved"
+            ],
+            "type": "object"
+          },
+          "sourceCost": {
+            "additionalProperties": false,
+            "description": "What the source charges a month, per currency, never converted. Present only when estimates are on.",
+            "properties": {
+              "covered": {
+                "description": "How many resources the inventory gives a cost for.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "currencies": {
+                "description": "One sum per currency, by currency code in byte order.",
+                "items": {
+                  "$ref": "#/components/schemas/AssessmentReportV3/$defs/currencyCost"
+                },
+                "type": "array"
+              },
+              "resources": {
+                "description": "How many resources there are, with a cost or not.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "covered",
+              "resources",
+              "currencies"
+            ],
+            "type": "object"
+          },
+          "summary": {
+            "additionalProperties": false,
+            "description": "The number of resources per fit, and in total.",
+            "properties": {
+              "direct": {
+                "description": "Resources with a direct fit.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "none": {
+                "description": "Resources with no fit.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "partial": {
+                "description": "Resources with a partial fit.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "description": "Resources assessed.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "direct",
+              "partial",
+              "none",
+              "total"
+            ],
+            "type": "object"
+          },
+          "target": {
+            "additionalProperties": false,
+            "description": "The target assessed against and its catalog snapshot.",
+            "properties": {
+              "name": {
+                "description": "The target's display name.",
+                "type": "string"
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/AssessmentReportV3/$defs/snapshot"
+              }
+            },
+            "required": [
+              "name",
+              "snapshot"
+            ],
+            "type": "object"
+          },
+          "total": {
+            "additionalProperties": false,
+            "description": "A sum of estimates: the amount over the estimated resources only, how many those are, and how many resources there are.",
+            "properties": {
+              "amount": {
+                "description": "The sum in EUR, an exact decimal string rounded to the cent from the exact sum of the estimates, not summed from the rounded amounts of the resources, so it can differ from that by a cent or so. Absent exactly when estimated is 0: nothing was estimated, which is not a price of 0, so there is no sum to write.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "estimated": {
+                "description": "How many resources were estimated.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "resources": {
+                "description": "How many resources there are, estimated or not.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "storageNotIncluded": {
+                "description": "How many of the estimates leave out storage their plan does not include (resourceEstimate.storageNotIncluded, ADR 0032); present only when at least one does, absent means 0.",
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "estimated",
+              "resources"
+            ],
+            "type": "object"
+          },
+          "workload": {
+            "additionalProperties": false,
+            "description": "The assessment of one workload: the resources that name it, or, for noWorkload, those that name none.",
+            "properties": {
+              "blockers": {
+                "description": "The blockers of the group's resources, in resource order.",
+                "items": {
+                  "$ref": "#/components/schemas/AssessmentReportV3/$defs/blocker"
+                },
+                "type": "array"
+              },
+              "estimate": {
+                "$ref": "#/components/schemas/AssessmentReportV3/$defs/total"
+              },
+              "name": {
+                "description": "The workload's name, its runs of white space collapsed to one space; empty for the group without a workload.",
+                "type": "string"
+              },
+              "noWorkload": {
+                "description": "True for the group of the resources that name no workload.",
+                "type": "boolean"
+              },
+              "resources": {
+                "description": "How many resources the group holds.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sourceCost": {
+                "$ref": "#/components/schemas/AssessmentReportV3/$defs/sourceCost"
+              },
+              "summary": {
+                "$ref": "#/components/schemas/AssessmentReportV3/$defs/summary"
+              }
+            },
+            "required": [
+              "name",
+              "noWorkload",
+              "resources",
+              "summary",
+              "blockers"
+            ],
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The JSON report of one inventory assessed against one target.",
+        "properties": {
+          "blockers": {
+            "description": "One entry per reason a resource cannot move, in resource order.",
+            "items": {
+              "$ref": "#/components/schemas/AssessmentReportV3/$defs/blocker"
+            },
+            "type": "array"
+          },
+          "estimate": {
+            "$ref": "#/components/schemas/AssessmentReportV3/$defs/estimateBasis"
+          },
+          "inventoryName": {
+            "description": "The inventory file's base name, or empty when it did not come from a file.",
+            "type": "string"
+          },
+          "kind": {
+            "const": "assessment",
+            "description": "The document's kind."
+          },
+          "region": {
+            "description": "The region chosen for the target (--region or the API's regions), written only when one was chosen, with or without estimates. Absent when none was chosen.",
+            "type": "string"
+          },
+          "resources": {
+            "description": "One verdict per resource, in the inventory's order.",
+            "items": {
+              "$ref": "#/components/schemas/AssessmentReportV3/$defs/resource"
+            },
+            "type": "array"
+          },
+          "schemaVersion": {
+            "const": 3,
+            "description": "The format version: it identifies which schema the document follows (docs/adr/0018, docs/adr/0030).",
+            "type": "integer"
+          },
+          "source": {
+            "description": "The source the inventory was taken from.",
+            "type": "string"
+          },
+          "sourceCost": {
+            "$ref": "#/components/schemas/AssessmentReportV3/$defs/sourceCost"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/AssessmentReportV3/$defs/summary"
+          },
+          "target": {
+            "$ref": "#/components/schemas/AssessmentReportV3/$defs/target"
+          },
+          "workloads": {
+            "description": "One group per workload, by name in byte order, then the group without a workload; empty when there is no resource.",
+            "items": {
+              "$ref": "#/components/schemas/AssessmentReportV3/$defs/workload"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "kind",
+          "inventoryName",
+          "source",
+          "target",
+          "summary",
+          "resources",
+          "blockers",
+          "workloads"
+        ],
+        "title": "shift2eu assessment report, version 3",
+        "type": "object"
+      },
       "AssessmentRequest": {
         "additionalProperties": false,
         "description": "The body of POST /v1/assessments.",
@@ -1604,6 +2197,673 @@
         "title": "shift2eu comparison report, version 2",
         "type": "object"
       },
+      "ComparisonReportV3": {
+        "$defs": {
+          "blocker": {
+            "additionalProperties": false,
+            "description": "One reason a resource cannot move.",
+            "properties": {
+              "reason": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/reason"
+              },
+              "resourceId": {
+                "description": "The blocked resource's ID.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "resourceId",
+              "reason"
+            ],
+            "type": "object"
+          },
+          "breakdown": {
+            "additionalProperties": false,
+            "description": "What an estimate is made of, each part in EUR as an exact decimal string rounded to the cent; each part is rounded from its exact value, so the parts sum to the amount give or take a cent.",
+            "properties": {
+              "fixedFee": {
+                "description": "The offering's listed fixed fee × hours a month / 730, an exact decimal string rounded to the cent, once per resource and never × count; 0.00 when the offering charges none. A fee the catalog records as the smallest paid size of a tier (such as Scaleway Kubernetes Kapsule Dedicated, see the Scaleway catalog's SOURCES.md) is a lower bound of what the resource is charged.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "plan": {
+                "description": "The plan price × count × hours a month / 730, an exact decimal string rounded to the cent; 0.00 for a resource priced by storage.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "storage": {
+                "description": "The storage's price per GiB, never scaled by hours, as an exact decimal string rounded to the cent.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "plan",
+              "storage",
+              "fixedFee"
+            ],
+            "type": "object"
+          },
+          "currencyCost": {
+            "additionalProperties": false,
+            "description": "The source's monthly cost in one currency.",
+            "properties": {
+              "amount": {
+                "description": "The sum in that currency, an exact decimal string rounded to the cent from the exact sum of the source costs.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "currency": {
+                "description": "The ISO 4217 code, as the inventory gives it.",
+                "type": "string"
+              },
+              "resources": {
+                "description": "How many resources have a cost in that currency.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "currency",
+              "amount",
+              "resources"
+            ],
+            "type": "object"
+          },
+          "estimateBasis": {
+            "additionalProperties": false,
+            "description": "What the estimates are given on, and their total. Present only when estimates are on.",
+            "properties": {
+              "currency": {
+                "const": "EUR",
+                "description": "The currency of every estimate."
+              },
+              "excluded": {
+                "description": "What the list prices leave out.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "hoursBasis": {
+                "const": 730,
+                "description": "The hours a month a plan price is for, a whole number (a JSON integer): a plan is priced price × count × hours / hoursBasis. A plan on an offering that caps its billed hours carries billingCapHours in its resource's estimate and costs price × count × min(hours, billingCapHours) / billingCapHours instead (ADR 0029).",
+                "type": "integer"
+              },
+              "priceDate": {
+                "description": "The UTC calendar date the catalog's prices were retrieved, YYYY-MM-DD.",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "type": "string"
+              },
+              "region": {
+                "description": "The target region the prices are for.",
+                "type": "string"
+              },
+              "regionChosen": {
+                "description": "True when the region was chosen (--region or the API's regions); false when it is the target's default region for estimates.",
+                "type": "boolean"
+              },
+              "total": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/total"
+              }
+            },
+            "required": [
+              "region",
+              "regionChosen",
+              "priceDate",
+              "currency",
+              "excluded",
+              "hoursBasis",
+              "total"
+            ],
+            "type": "object"
+          },
+          "plan": {
+            "additionalProperties": false,
+            "description": "The plan the estimate chose or, when no plan is large enough, the largest plan of the best offerings.",
+            "properties": {
+              "includedStorageGiB": {
+                "description": "The storage the plan includes, in GiB, a whole number (a JSON integer).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "memoryGiB": {
+                "description": "The plan's memory in GiB, an exact decimal string with at most three fractional digits, such as \"0.5\" or \"1.875\": memory can be fractional, so it is never a JSON number.",
+                "pattern": "^[0-9]+(\\.[0-9]{1,3})?$",
+                "type": "string"
+              },
+              "name": {
+                "description": "The plan's name, as the catalog lists it.",
+                "type": "string"
+              },
+              "price": {
+                "description": "The plan's monthly list price in EUR in the estimate region, an exact decimal string rounded to the cent; absent when the plan has no price there.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "vcpus": {
+                "description": "The plan's vCPU count, a whole number (a JSON integer).",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "name",
+              "vcpus",
+              "memoryGiB",
+              "includedStorageGiB"
+            ],
+            "type": "object"
+          },
+          "reason": {
+            "additionalProperties": false,
+            "description": "One reason: a code, its plain sentence, and the names it mentions, each present only when set.",
+            "properties": {
+              "capability": {
+                "description": "The capability the reason mentions.",
+                "type": "string"
+              },
+              "category": {
+                "description": "The taxonomy category the reason mentions.",
+                "type": "string"
+              },
+              "code": {
+                "description": "The reason code; a consumer must accept a code it does not know.",
+                "type": "string"
+              },
+              "offering": {
+                "description": "The offering name the reason mentions.",
+                "type": "string"
+              },
+              "target": {
+                "description": "The target display name the reason mentions.",
+                "type": "string"
+              },
+              "text": {
+                "description": "The reason as a plain sentence, not Markdown.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "text"
+            ],
+            "type": "object"
+          },
+          "relation": {
+            "additionalProperties": false,
+            "description": "One relation of the resource to another resource of the inventory.",
+            "properties": {
+              "target": {
+                "description": "The ID of the resource the relation points to.",
+                "type": "string"
+              },
+              "type": {
+                "description": "The relation type, in the inventory's vocabulary (such as depends-on or replica-of); a consumer must accept a type it does not know.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "target"
+            ],
+            "type": "object"
+          },
+          "resource": {
+            "additionalProperties": false,
+            "description": "The verdict on one resource.",
+            "properties": {
+              "affectedBy": {
+                "description": "The IDs of the resources this one depends on or is a replica of that have no fit here, sorted; not transitive.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "bestOffering": {
+                "description": "The best candidate offering's name, or empty when there is none.",
+                "type": "string"
+              },
+              "category": {
+                "description": "The taxonomy category.",
+                "type": "string"
+              },
+              "estimate": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/resourceEstimate"
+              },
+              "fit": {
+                "description": "How well the best offering fits.",
+                "enum": [
+                  "direct",
+                  "partial",
+                  "none"
+                ],
+                "type": "string"
+              },
+              "id": {
+                "description": "The resource's ID.",
+                "type": "string"
+              },
+              "plan": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/plan"
+              },
+              "rawType": {
+                "description": "The source's own type name, or empty.",
+                "type": "string"
+              },
+              "reasons": {
+                "description": "The reasons for the fit.",
+                "items": {
+                  "$ref": "#/components/schemas/ComparisonReportV3/$defs/reason"
+                },
+                "type": "array"
+              },
+              "region": {
+                "description": "The source region, or empty.",
+                "type": "string"
+              },
+              "relations": {
+                "description": "The resource's relations, in the inventory's order.",
+                "items": {
+                  "$ref": "#/components/schemas/ComparisonReportV3/$defs/relation"
+                },
+                "type": "array"
+              },
+              "requiredChanges": {
+                "description": "For a partial fit, the capabilities the best offering lacks; empty otherwise.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "ties": {
+                "description": "The other candidates with the best one's fit and as many missing capabilities, in candidate order.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "id",
+              "rawType",
+              "category",
+              "region",
+              "fit",
+              "bestOffering",
+              "ties",
+              "reasons",
+              "requiredChanges",
+              "relations",
+              "affectedBy"
+            ],
+            "type": "object"
+          },
+          "resourceEstimate": {
+            "additionalProperties": false,
+            "description": "The resource's monthly estimate: the amount, its breakdown and what it assumed when it is estimated, the reason when it is not. A resource that is not estimated is never counted as 0.",
+            "properties": {
+              "amount": {
+                "description": "The monthly list price in EUR, excluding VAT and discounts, an exact decimal string rounded to the cent (half away from zero); present only when estimated.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "billingCapHours": {
+                "description": "The most hours a month the estimated plan is billed for, a whole number (a JSON integer): its offering caps the billed hours of its plans, so the plan costs price × count × min(hours, billingCapHours) / billingCapHours (ADR 0029); present only when estimated by plan on a capped offering.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "breakdown": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/breakdown"
+              },
+              "countAssumed": {
+                "description": "Whether the estimate assumed a count of 1 because the resource gives none; present only when estimated.",
+                "type": "boolean"
+              },
+              "estimated": {
+                "description": "Whether the resource is estimated.",
+                "type": "boolean"
+              },
+              "hoursAssumed": {
+                "description": "Whether the estimate assumed 730 hours a month because the resource gives none; present only when estimated.",
+                "type": "boolean"
+              },
+              "reason": {
+                "description": "Why the resource is not estimated (no-fit, usage-priced, no-size, no-plan, no-plan-large-enough, not-offered, no-price, no-storage-price; not-offered when none of the best offerings with a covering plan, or for storage none of them, is offered in the estimate region, no-price when one is but has no price there); present only when not estimated. A consumer must accept a reason it does not know.",
+                "type": "string"
+              },
+              "storageNotIncluded": {
+                "description": "The storage the estimate leaves out (boot-volume for a server or Kubernetes node, data-storage for a managed database): the chosen plan includes no storage, its offering prices storage per GiB in the estimate region, and the resource gives no storage size, so the amount does not include it (ADR 0032); present only when estimated and the note applies, never empty. A consumer must accept a value it does not know.",
+                "pattern": "^.+$",
+                "type": "string"
+              }
+            },
+            "required": [
+              "estimated"
+            ],
+            "type": "object"
+          },
+          "sharedBlocker": {
+            "additionalProperties": false,
+            "description": "A resource blocked on every compared target.",
+            "properties": {
+              "resourceId": {
+                "description": "The blocked resource's ID.",
+                "type": "string"
+              },
+              "targets": {
+                "description": "Each target's reasons, in target order.",
+                "items": {
+                  "$ref": "#/components/schemas/ComparisonReportV3/$defs/targetReasons"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "resourceId",
+              "targets"
+            ],
+            "type": "object"
+          },
+          "snapshot": {
+            "additionalProperties": false,
+            "description": "Where the target's catalog was taken from and when.",
+            "properties": {
+              "retrieved": {
+                "description": "The UTC calendar date the snapshot was retrieved, YYYY-MM-DD.",
+                "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+                "type": "string"
+              },
+              "source": {
+                "description": "The snapshot's source URL, as stored.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "source",
+              "retrieved"
+            ],
+            "type": "object"
+          },
+          "sourceCost": {
+            "additionalProperties": false,
+            "description": "What the source charges a month, per currency, never converted. Present only when estimates are on.",
+            "properties": {
+              "covered": {
+                "description": "How many resources the inventory gives a cost for.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "currencies": {
+                "description": "One sum per currency, by currency code in byte order.",
+                "items": {
+                  "$ref": "#/components/schemas/ComparisonReportV3/$defs/currencyCost"
+                },
+                "type": "array"
+              },
+              "resources": {
+                "description": "How many resources there are, with a cost or not.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "covered",
+              "resources",
+              "currencies"
+            ],
+            "type": "object"
+          },
+          "summary": {
+            "additionalProperties": false,
+            "description": "The number of resources per fit, and in total.",
+            "properties": {
+              "direct": {
+                "description": "Resources with a direct fit.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "none": {
+                "description": "Resources with no fit.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "partial": {
+                "description": "Resources with a partial fit.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "total": {
+                "description": "Resources assessed.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "direct",
+              "partial",
+              "none",
+              "total"
+            ],
+            "type": "object"
+          },
+          "target": {
+            "additionalProperties": false,
+            "description": "The target assessed against and its catalog snapshot.",
+            "properties": {
+              "name": {
+                "description": "The target's display name.",
+                "type": "string"
+              },
+              "snapshot": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/snapshot"
+              }
+            },
+            "required": [
+              "name",
+              "snapshot"
+            ],
+            "type": "object"
+          },
+          "targetEntry": {
+            "additionalProperties": false,
+            "description": "One compared target: its key and that target's own assessment.",
+            "properties": {
+              "blockers": {
+                "description": "One entry per reason a resource cannot move, in resource order.",
+                "items": {
+                  "$ref": "#/components/schemas/ComparisonReportV3/$defs/blocker"
+                },
+                "type": "array"
+              },
+              "estimate": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/estimateBasis"
+              },
+              "key": {
+                "description": "The target key, as --target names it.",
+                "type": "string"
+              },
+              "region": {
+                "description": "The region chosen for the target (--region or the API's regions), written only when one was chosen, with or without estimates. Absent when none was chosen.",
+                "type": "string"
+              },
+              "resources": {
+                "description": "One verdict per resource, in the inventory's order.",
+                "items": {
+                  "$ref": "#/components/schemas/ComparisonReportV3/$defs/resource"
+                },
+                "type": "array"
+              },
+              "sourceCost": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/sourceCost"
+              },
+              "summary": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/summary"
+              },
+              "target": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/target"
+              },
+              "workloads": {
+                "description": "One group per workload, by name in byte order, then the group without a workload; empty when there is no resource.",
+                "items": {
+                  "$ref": "#/components/schemas/ComparisonReportV3/$defs/workload"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "key",
+              "target",
+              "summary",
+              "resources",
+              "blockers",
+              "workloads"
+            ],
+            "type": "object"
+          },
+          "targetReasons": {
+            "additionalProperties": false,
+            "description": "One target's reasons for a shared blocker.",
+            "properties": {
+              "key": {
+                "description": "The target key.",
+                "type": "string"
+              },
+              "reasons": {
+                "description": "The reasons of the resource's verdict on that target.",
+                "items": {
+                  "$ref": "#/components/schemas/ComparisonReportV3/$defs/reason"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "key",
+              "reasons"
+            ],
+            "type": "object"
+          },
+          "total": {
+            "additionalProperties": false,
+            "description": "A sum of estimates: the amount over the estimated resources only, how many those are, and how many resources there are.",
+            "properties": {
+              "amount": {
+                "description": "The sum in EUR, an exact decimal string rounded to the cent from the exact sum of the estimates, not summed from the rounded amounts of the resources, so it can differ from that by a cent or so. Absent exactly when estimated is 0: nothing was estimated, which is not a price of 0, so there is no sum to write.",
+                "pattern": "^[0-9]+\\.[0-9]{2}$",
+                "type": "string"
+              },
+              "estimated": {
+                "description": "How many resources were estimated.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "resources": {
+                "description": "How many resources there are, estimated or not.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "storageNotIncluded": {
+                "description": "How many of the estimates leave out storage their plan does not include (resourceEstimate.storageNotIncluded, ADR 0032); present only when at least one does, absent means 0.",
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "estimated",
+              "resources"
+            ],
+            "type": "object"
+          },
+          "workload": {
+            "additionalProperties": false,
+            "description": "The assessment of one workload: the resources that name it, or, for noWorkload, those that name none.",
+            "properties": {
+              "blockers": {
+                "description": "The blockers of the group's resources, in resource order.",
+                "items": {
+                  "$ref": "#/components/schemas/ComparisonReportV3/$defs/blocker"
+                },
+                "type": "array"
+              },
+              "estimate": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/total"
+              },
+              "name": {
+                "description": "The workload's name, its runs of white space collapsed to one space; empty for the group without a workload.",
+                "type": "string"
+              },
+              "noWorkload": {
+                "description": "True for the group of the resources that name no workload.",
+                "type": "boolean"
+              },
+              "resources": {
+                "description": "How many resources the group holds.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sourceCost": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/sourceCost"
+              },
+              "summary": {
+                "$ref": "#/components/schemas/ComparisonReportV3/$defs/summary"
+              }
+            },
+            "required": [
+              "name",
+              "noWorkload",
+              "resources",
+              "summary",
+              "blockers"
+            ],
+            "type": "object"
+          }
+        },
+        "additionalProperties": false,
+        "description": "The JSON report of one inventory compared across several targets.",
+        "properties": {
+          "inventoryName": {
+            "description": "The inventory file's base name, or empty when it did not come from a file.",
+            "type": "string"
+          },
+          "kind": {
+            "const": "comparison",
+            "description": "The document's kind."
+          },
+          "schemaVersion": {
+            "const": 3,
+            "description": "The format version: it identifies which schema the document follows (docs/adr/0018, docs/adr/0030).",
+            "type": "integer"
+          },
+          "sharedBlockers": {
+            "description": "The resources blocked on every target, in resource ID order.",
+            "items": {
+              "$ref": "#/components/schemas/ComparisonReportV3/$defs/sharedBlocker"
+            },
+            "type": "array"
+          },
+          "source": {
+            "description": "The source the inventory was taken from.",
+            "type": "string"
+          },
+          "targets": {
+            "description": "One entry per target, in target key order.",
+            "items": {
+              "$ref": "#/components/schemas/ComparisonReportV3/$defs/targetEntry"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "kind",
+          "inventoryName",
+          "source",
+          "targets",
+          "sharedBlockers"
+        ],
+        "title": "shift2eu comparison report, version 3",
+        "type": "object"
+      },
       "Error": {
         "additionalProperties": false,
         "description": "Every error response. The message never echoes request content beyond a quoted, escaped key or field name: a refused inventory value is named by its position and field, never by the value.",
@@ -1894,6 +3154,12 @@
                     },
                     {
                       "$ref": "#/components/schemas/ComparisonReportV2"
+                    },
+                    {
+                      "$ref": "#/components/schemas/AssessmentReportV3"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ComparisonReportV3"
                     }
                   ]
                 }
@@ -1905,7 +3171,7 @@
                 }
               }
             },
-            "description": "The report. The JSON report is schemaVersion 2, or 3 when the request's schemaVersion is 3 (docs/adr/0018, docs/adr/0030); a client reads schemaVersion to know which version it holds. The schemas below are version 2's, the default; a version 3 document follows internal/adapter/report/jsonreport/schema/assessment-v3.schema.json or comparison-v3.schema.json, version 2 without the amount of a total that estimated nothing.",
+            "description": "The report. The JSON report is schemaVersion 2, or 3 when the request's schemaVersion is 3 (docs/adr/0018, docs/adr/0030); a client reads schemaVersion to know which version it holds. Version 2, the default, follows the assessment-v2 or comparison-v2 schema; version 3, when the request's schemaVersion is 3, follows the assessment-v3 or comparison-v3 schema, version 2 without the amount of a total that estimated nothing.",
             "headers": {
               "Cache-Control": {
                 "$ref": "#/components/headers/Cache-Control"
