@@ -152,11 +152,27 @@ already inside, renamed to the lock), so no reader sees a lock without its pid. 
 same instance says that another refresher for that VM is running and exits **0**: the VM's token is being
 refreshed, which is what was asked. A lock whose pid is no longer a running refresh (a refresher killed
 without its trap) is taken over atomically: it is renamed aside, which only one contender can do, checked
-to still hold the stale pid, removed, and the lock is created again. A known residue, accepted as
-negligible: three refreshers starting within milliseconds of each other against a stale lock can end with
-two running (one contender puts back a lock it moved aside after a third has created a new one, and the
-put-back lands inside it). That costs two mints an hour and corrupts nothing, as every write into the VM
-is atomic; a refresher's exit trap removes only a lock that holds its own pid.
+to still hold the stale pid, removed, and the lock is created again. A contender that moved aside a lock
+holding another pid puts it back only while no lock exists; when a third contender has created one
+meanwhile, it drops what it moved and exits as a losing refresher, so a lock never lands inside another
+(issue #288). Before each mint, a refresher checks that the lock still holds its own pid: a lock that reads
+empty is read again once a second for up to five seconds, as a contender may have it aside for a moment
+(and after such a wait the refresher reads the clock again before deciding to mint); a lock that holds
+another pid makes it stop without minting, and a lock still missing after the retries makes it stop
+without minting and say that the lock is gone and a refresh must be started again. This narrows the race
+but does not close it, and two residues are accepted. First, a lock that turns over while its old owner
+is already past that check and minting can still cost one duplicate mint; that owner stops at its next
+check. That is harmless: every write into the VM is atomic, and each token expires within the hour.
+Second, a contender stalled for more than about five seconds with the lock moved aside (or killed in that
+moment) can leave the other refresher giving up on a lock it reads as gone, and a lock holding a dead pid
+or none; then no refresher runs until the next `make agents-token-refresh-start` (or launchd's restart of
+it), which takes the stale lock over. A refresher's exit trap removes only a lock that holds its own pid.
+Its TERM and INT traps also kill a sleep started just before its pid was stored (issue #289), and kill a
+pid only while `ps` names the refresher as its parent: a sleep the shell has already reaped, whose pid the
+system may have given to another process, is not killed, short of its pid being reused in the instant
+between that check and the kill (the check and the kill are not atomic, and the shell may reap the sleep
+while it waits for `ps`). If `ps` fails or is missing, the traps kill nothing, and the worst case is a
+harmless `sleep` that outlives the refresher and runs out on its own.
 `make agents-token-refresh-start` starts the refresh in the background with `nohup`, unless the lock's pid,
 or the pid it recorded itself, is a running refresh, in which case it names that pid; its pid and log are
 `agents-token-refresh-<instance>.{pid,log}` in the same directory (mode 0600), and it says where the log

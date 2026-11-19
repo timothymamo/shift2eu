@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -965,6 +966,452 @@ func (sb *sandbox) useLockRacedByAContender(t *testing.T, env map[string]string,
 	env["SHIFT2EU_TEST_LOCK_RACE"] = trace
 
 	return trace
+}
+
+// The steps of the three-contender interleaving of issue #288 a test waits for, each a file the shim of that
+// step touches just before it holds its contender there.
+const (
+	contenderReadTheClock      = "a-clock-read"  // the winner read the loop's clock, before it mints
+	contenderAskedOwnership    = "b-asked"       // the mover asked whether the lock's owner is a refresh
+	contenderReachedItsTake    = "c-at-its-lock" // the taker reached take_lock, before it touches the lock
+	contenderMovedTheLockAside = "b-moved-aside" // the mover moved the winner's fresh lock aside
+)
+
+// The holds of the same interleaving, each a fifo the held contender reads: the line release writes lets it go.
+const (
+	holdTheWinner  = "await-a-clock"
+	holdTheMover   = "await-b-takeover"
+	holdThePutBack = "await-b-put-back"
+	holdTheTaker   = "await-c"
+)
+
+// contenderClockShim holds the first contender, the one that wins the stale lock, in its refresh loop: on the
+// first clock read, which is the loop's `current="$(now)"` and so comes after take_lock and before any mint,
+// it touches its marker and reads a fifo, so the refresher stays there until the test lets it go.
+const contenderClockShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+if [ ! -e "${race}/` + contenderReadTheClock + `" ]; then
+  : > "${race}/` + contenderReadTheClock + `"
+  read -r go < "${race}/` + holdTheWinner + `" || exit 1
+fi
+exec %s "$@"
+`
+
+// contenderPSShim holds the second contender, the one that read the stale lock's owner and then asked whether
+// that owner runs a refresh: take_lock asks ps only for a pid kill -0 found alive, so the hold lands after the
+// owner read and before the takeover, where the interleaving needs that contender.
+const contenderPSShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+if [ ! -e "${race}/` + contenderAskedOwnership + `" ]; then
+  : > "${race}/` + contenderAskedOwnership + `"
+  read -r go < "${race}/` + holdTheMover + `" || exit 1
+fi
+exec %s "$@"
+`
+
+// contenderMVShim holds the same contender once it has moved the winner's fresh lock aside, before it puts that
+// lock back: take_lock's own mv calls it with the lock as its first argument only for the takeover, so every
+// other move, the nested one of its own temporary directory included, is the machine's own.
+const contenderMVShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+lock="${SHIFT2EU_TEST_LOCK:?set SHIFT2EU_TEST_LOCK}"
+if [ "$#" -eq 2 ] && [ "$1" = "${lock}" ]; then
+  %s "$@" || exit $?
+  : > "${race}/` + contenderMovedTheLockAside + `"
+  read -r go < "${race}/` + holdThePutBack + `" || exit 1
+  exit 0
+fi
+exec %s "$@"
+`
+
+// contenderRMShim holds the third contender at the top of its take_lock, before it touches the lock at all: the
+// loop's first rm, the cleanup of its own temporary directory, is the first tool it runs there.
+const contenderRMShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+if [ ! -e "${race}/` + contenderReachedItsTake + `" ]; then
+  : > "${race}/` + contenderReachedItsTake + `"
+  read -r go < "${race}/` + holdTheTaker + `" || exit 1
+fi
+exec %s "$@"
+`
+
+// contendersOnAStaleLock stages issue #288's three-contender interleaving: three refreshers against one stale
+// lock, each held at the step that interleaving needs, so which of them wins the lock and which loses it is the
+// test's doing and never the runner's speed.
+//
+//   - the winner takes the stale lock over and is held in its loop, after the clock read and before its mint;
+//   - the mover, which read the stale lock's owner while the lock was still there, is held before it asks ps
+//     whether that owner runs a refresh, then moves the winner's fresh lock aside and is held again before it
+//     puts that lock back;
+//   - the taker is held at the top of its take_lock, so it starts after the mover has freed the lock.
+//
+// Every hold is a fifo the contender blocks reading, so no shim waits on a clock: the test alone decides the
+// order. A shim's marker is touched before the read, so a test knows the contender has reached its hold.
+type contendersOnAStaleLock struct {
+	dir                           string
+	envWinner, envMover, envTaker map[string]string
+}
+
+// held reports whether the contender of step has reached its hold.
+func (c *contendersOnAStaleLock) held(step string) bool {
+	_, err := os.Stat(filepath.Join(c.dir, step))
+
+	return err == nil
+}
+
+// reached lists the steps of the interleaving and whether a contender touched the marker of each, in the order
+// the interleaving needs them: a failure message's view of how far the three contenders came, which names the
+// one that never reached its hold instead of only saying that the wait timed out.
+func (c *contendersOnAStaleLock) reached() string {
+	steps := make([]string, 0, 4)
+
+	for _, step := range []string{contenderReadTheClock, contenderAskedOwnership, contenderReachedItsTake, contenderMovedTheLockAside} {
+		state := "not-reached"
+		if c.held(step) {
+			state = "reached"
+		}
+
+		steps = append(steps, step+"="+state)
+	}
+
+	return strings.Join(steps, " ")
+}
+
+// release lets the contender held of hold go. It fails the test instead of hanging it when no contender ever
+// came to read that fifo: the open of its write end waits for the reader the hold names.
+func (c *contendersOnAStaleLock) release(t *testing.T, hold string) {
+	t.Helper()
+
+	letGoOf(t, filepath.Join(c.dir, hold), "no contender came to read it, so this run forced no interleaving of issue #288")
+}
+
+// letGoOf lets the process held at the fifo path go: the line written into it ends that process's read. It fails
+// the test instead of hanging it when no process ever came to read that fifo, which why says in the test's terms.
+func letGoOf(t *testing.T, path, why string) {
+	t.Helper()
+
+	done := make(chan error, 1)
+
+	go func() {
+		file, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			done <- err
+
+			return
+		}
+
+		_, err = file.WriteString("go\n")
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("let the process held at %s go: %v", path, err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("timed out after 30s letting the process held at %s go: %s", path, why)
+	}
+}
+
+// useThreeContendersOnAStaleLock puts the shims of issue #288's three-contender interleaving first on each
+// contender's own PATH and returns the holds they read, the steps they reach, and the three environments: each
+// contender needs a PATH of its own, since each is held at a different step.
+func (sb *sandbox) useThreeContendersOnAStaleLock(t *testing.T, base map[string]string, lock string) *contendersOnAStaleLock {
+	t.Helper()
+
+	dir := filepath.Join(sb.root, "three-contenders")
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+
+	for _, hold := range []string{holdTheWinner, holdTheMover, holdThePutBack, holdTheTaker} {
+		makeFifo(t, filepath.Join(dir, hold))
+	}
+
+	shims := func(contender string, tools map[string]string) map[string]string {
+		binDir := filepath.Join(dir, contender)
+
+		for tool, body := range tools {
+			writeFileMode(t, filepath.Join(binDir, tool), []byte(body), 0o700)
+		}
+
+		env := maps.Clone(base)
+		env["PATH"] = binDir + ":" + env["PATH"]
+		env["SHIFT2EU_TEST_LOCK"] = lock
+		env["SHIFT2EU_TEST_LOCK_RACE"] = dir
+
+		return env
+	}
+
+	mvTool := strconv.Quote(realTool(t, "mv"))
+
+	return &contendersOnAStaleLock{
+		dir: dir,
+		envWinner: shims("winner", map[string]string{
+			"date": fmt.Sprintf(contenderClockShim, strconv.Quote(realTool(t, "date"))),
+		}),
+		envMover: shims("mover", map[string]string{
+			"ps": fmt.Sprintf(contenderPSShim, strconv.Quote(realTool(t, "ps"))),
+			"mv": fmt.Sprintf(contenderMVShim, mvTool, mvTool),
+		}),
+		envTaker: shims("taker", map[string]string{
+			"rm": fmt.Sprintf(contenderRMShim, strconv.Quote(realTool(t, "rm"))),
+		}),
+	}
+}
+
+// goneLockClockShim stands in for date in the tests of issue #288's missing-lock path. A clock read is
+// `date +%s` (the script's now), and the shim holds one while the file hold-clock is there, so the test can take
+// the lock a refresher holds away at the last point before still_locked reads it. It also answers the clock with
+// the offset the test writes into clock-offset, the way a Mac that woke from a long sleep finds it moved on.
+// Every other call is the machine's own date, which reads the times the script shows.
+const goneLockClockShim = `#!/bin/sh
+dir="${SHIFT2EU_TEST_GONE_LOCK:?set SHIFT2EU_TEST_GONE_LOCK}"
+if [ "$1" = '+%%s' ]; then
+  if [ -e "${dir}/hold-clock" ]; then
+    %s -f "${dir}/hold-clock"
+    : > "${dir}/at-clock"
+    read -r go < "${dir}/await-clock" || exit 1
+  fi
+  offset=0
+  if [ -e "${dir}/clock-offset" ]; then
+    offset="$(cat "${dir}/clock-offset")"
+  fi
+  printf '%%s\n' "$(( $(%s +%%s) + offset ))"
+  exit 0
+fi
+exec %s "$@"
+`
+
+// goneLockSleepShim stands in for sleep in the same tests: it holds a wait while the file hold-wait is there, so
+// the test can put the lock back while still_locked is retrying it, and returns at once otherwise, so no retry
+// costs the suite a second.
+const goneLockSleepShim = `#!/bin/sh
+dir="${SHIFT2EU_TEST_GONE_LOCK:?set SHIFT2EU_TEST_GONE_LOCK}"
+if [ -e "${dir}/hold-wait" ]; then
+  %s -f "${dir}/hold-wait"
+  : > "${dir}/at-wait"
+  read -r go < "${dir}/await-wait" || exit 1
+fi
+exit 0
+`
+
+// The markers goneLock's shims touch when they hold the refresher, and the fifos they read until the test lets
+// them go.
+const (
+	heldAtTheClock = "at-clock"    // the refresher read the loop's clock, before still_locked
+	heldAtTheWait  = "at-wait"     // the refresher waited in still_locked for the lock it holds
+	theClockHold   = "await-clock" // the fifo the refresher held at its clock read reads
+	theWaitHold    = "await-wait"  // the fifo the refresher held at a wait reads
+)
+
+// goneLock is the staging of issue #288's missing-lock path: the lock a refresher holds, the shims that hold it at
+// its clock read and at a wait, and the holds the test arms and lets go. Every hold is a fifo, so no test waits on
+// a clock and the test alone decides when the lock goes missing and when it comes back.
+type goneLock struct {
+	dir   string
+	lock  string
+	aside string // where the test puts the lock while it is missing
+}
+
+// useGoneLockShims puts the date and the sleep shim of issue #288's missing-lock path first on PATH, for the lock
+// at lock, and returns the staging whose holds the test arms and lets go.
+func (sb *sandbox) useGoneLockShims(t *testing.T, env map[string]string, lock string) *goneLock {
+	t.Helper()
+
+	dir := filepath.Join(sb.root, "gone-lock")
+	binDir := filepath.Join(dir, "bin")
+
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+
+	for _, hold := range []string{theClockHold, theWaitHold} {
+		makeFifo(t, filepath.Join(dir, hold))
+	}
+
+	dateTool := strconv.Quote(realTool(t, "date"))
+
+	writeFileMode(t, filepath.Join(binDir, "date"),
+		[]byte(fmt.Sprintf(goneLockClockShim, strconv.Quote(realTool(t, "rm")), dateTool, dateTool)), 0o700)
+	writeFileMode(t, filepath.Join(binDir, "sleep"),
+		[]byte(fmt.Sprintf(goneLockSleepShim, strconv.Quote(realTool(t, "rm")))), 0o700)
+
+	env["PATH"] = binDir + ":" + env["PATH"]
+	env["SHIFT2EU_TEST_GONE_LOCK"] = dir
+
+	return &goneLock{dir: dir, lock: lock, aside: filepath.Join(sb.root, "lock-in-transit")}
+}
+
+// holdTheNextClock arms the date shim to hold the refresher at its next clock read. The marker of an earlier
+// hold goes first, so the test waits for this hold and not for the one before it.
+func (g *goneLock) holdTheNextClock(t *testing.T) {
+	t.Helper()
+
+	clearMarker(t, filepath.Join(g.dir, heldAtTheClock))
+	writeFileMode(t, filepath.Join(g.dir, "hold-clock"), nil, 0o600)
+}
+
+// holdTheNextWait arms the sleep shim to hold the refresher at its next wait, with the marker of an earlier hold
+// gone for the same reason.
+func (g *goneLock) holdTheNextWait(t *testing.T) {
+	t.Helper()
+
+	clearMarker(t, filepath.Join(g.dir, heldAtTheWait))
+	writeFileMode(t, filepath.Join(g.dir, "hold-wait"), nil, 0o600)
+}
+
+// clearMarker removes a marker of an earlier hold, which need not be there.
+func clearMarker(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("clear %s: %v", path, err)
+	}
+}
+
+// letTheClockGo lets the refresher held at its clock read go.
+func (g *goneLock) letTheClockGo(t *testing.T) {
+	t.Helper()
+
+	letGoOf(t, filepath.Join(g.dir, theClockHold), "no refresher came to read it, so this run forced no missing-lock retry of issue #288")
+}
+
+// letTheWaitGo lets the refresher held at a wait go.
+func (g *goneLock) letTheWaitGo(t *testing.T) {
+	t.Helper()
+
+	letGoOf(t, filepath.Join(g.dir, theWaitHold), "no refresher came to read it, so this run forced no missing-lock retry of issue #288")
+}
+
+// reached reports whether the refresher has come to the hold that touches marker.
+func (g *goneLock) reached(marker string) bool {
+	_, err := os.Stat(filepath.Join(g.dir, marker))
+
+	return err == nil
+}
+
+// moveTheLockAside moves the lock the refresher holds out of its place, the way a contender that read a stale
+// owner moves it aside (issues #240 and #288); the test puts it back with putTheLockBack.
+func (g *goneLock) moveTheLockAside(t *testing.T) {
+	t.Helper()
+
+	if err := os.Rename(g.lock, g.aside); err != nil {
+		t.Fatalf("move the lock %s aside: %v\n%s", g.lock, err, g.describe())
+	}
+}
+
+// putTheLockBack puts the lock the test moved aside back in its place, as that contender does for the lock it
+// finds no owner for.
+func (g *goneLock) putTheLockBack(t *testing.T) {
+	t.Helper()
+
+	if err := os.Rename(g.aside, g.lock); err != nil {
+		t.Fatalf("put the lock %s back: %v\n%s", g.lock, err, g.describe())
+	}
+}
+
+// describe is a failure message's view of the staging: the steps the refresher reached and what its state
+// directory, with whatever lock or half-taken lock it holds, holds.
+func (g *goneLock) describe() string {
+	state := filepath.Dir(g.lock)
+
+	return fmt.Sprintf("the refresher's steps: %s=%t %s=%t; the lock is %s and the lock in transit is %s; the state directory:\n%s",
+		heldAtTheClock, g.reached(heldAtTheClock), heldAtTheWait, g.reached(heldAtTheWait),
+		entriesOf(g.lock), entriesOf(g.aside), describeTree(state))
+}
+
+// entriesOf names the entries of dir, or says the directory is not there.
+func entriesOf(dir string) string {
+	names := dirNames(dir)
+	if names == nil {
+		return "not there"
+	}
+
+	return strings.Join(names, ",")
+}
+
+// makeFifo creates the fifo at path: the hold a shim blocks on, which a test lets go by opening it for writing.
+func makeFifo(t *testing.T, path string) {
+	t.Helper()
+
+	cmd := exec.Command(realTool(t, "mkfifo"), path)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create the fifo %s a held process waits on: %v: %s", path, err, out)
+	}
+}
+
+// liveNonRefreshPid starts a process that is alive and is no refresh, and returns its pid: the owner a stale
+// lock names once the system reused the pid of a refresher that was killed without its trap. take_lock asks ps
+// whether the owner runs a refresh only for a pid kill -0 finds alive, and that question is where the mover of
+// the interleaving above is held, so a pid that is gone would never take that interleaving past the read.
+func liveNonRefreshPid(t *testing.T) int {
+	t.Helper()
+
+	stdin, release, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create the stdin of a process that is no refresher: %v", err)
+	}
+
+	cmd := exec.Command("cat")
+	cmd.Stdin = stdin
+
+	err = cmd.Start()
+
+	if closeErr := stdin.Close(); closeErr != nil {
+		t.Errorf("close the stdin of a process that is no refresher: %v", closeErr)
+	}
+
+	if err != nil {
+		_ = release.Close()
+
+		t.Fatalf("start a process that is no refresher: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = release.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	return cmd.Process.Pid
+}
+
+// lockHoldsPid reports whether the refresh's lock at lock holds pid.
+func lockHoldsPid(lock string, pid int) bool {
+	body, err := os.ReadFile(filepath.Join(lock, "pid"))
+	if err != nil {
+		return false
+	}
+
+	owner, err := strconv.Atoi(strings.TrimSpace(string(body)))
+
+	return err == nil && owner == pid
+}
+
+// dirNames lists the names in dir, sorted, and nothing when dir is not there: a failure message's and an
+// assertion's view of what a lock directory or the state directory holds.
+func dirNames(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+
+	slices.Sort(names)
+
+	return names
 }
 
 func (sb *sandbox) writeRecordingShim(t *testing.T, name string) {
