@@ -27,7 +27,8 @@ const (
 	// {target, region} objects of strings), estimate (a boolean),
 	// schemaVersion (a string, "" for the default) and inventoryName (a
 	// string, "" for a pasted inventory). A missing property is its zero
-	// value; a mistyped one, or an array too long, is a usage error.
+	// value; a mistyped one, or an array of more than maxEntries entries, is a
+	// usage error.
 	nameAssess jsName = "shift2euAssess"
 
 	nameTargets       jsName = "targets"
@@ -55,10 +56,19 @@ const (
 // page passed.
 const (
 	msgWrongArguments = "the page called the module with the wrong arguments"
-	msgBadOptions     = "the options are malformed: targets and regions must be arrays of at most one entry per target, " +
+	msgBadOptions     = "the options are malformed: targets and regions must be arrays of at most 64 entries, " +
 		"of strings and of {target, region} objects of strings, estimate a boolean, schemaVersion and inventoryName strings"
 	msgPanic = "the assessment failed unexpectedly; the page can run another one"
 )
+
+// maxEntries bounds the length of each list the page passes, targets and
+// regions alike. A longer array is refused before any entry is read, so a
+// hostile length never makes the glue convert millions of entries. The bound
+// is fixed and generous, far above any choice the page can make, so for any
+// realistic input (a target named twice, more regions than targets) the
+// option rules decide and their message, the CLI's usage error, is what the
+// page shows. msgBadOptions names the same number.
+const maxEntries = 64
 
 func main() {
 	deps := wire.Deps()
@@ -70,23 +80,12 @@ func main() {
 		panic(err)
 	}
 
-	limits := listLimits{targets: len(deps.Targets) + 1, regions: len(deps.Targets)}
-
 	set(js.Global(), nameAssess, js.FuncOf(func(_ js.Value, args []js.Value) any {
-		return assess(assessor, limits, args)
+		return assess(assessor, args)
 	}))
 
 	// The module serves the page until the page is closed.
 	select {}
-}
-
-// listLimits caps the lengths of the arrays the page passes, so the glue never
-// converts more entries than the option rules could accept: every target once,
-// or "all" beside them, and one region per target. A longer array is refused
-// before any entry is read.
-type listLimits struct {
-	targets int
-	regions int
 }
 
 // assess converts the page's arguments, runs the assessment and converts the
@@ -98,7 +97,7 @@ type listLimits struct {
 // inserts as HTML; only html is markup, the HTML reporter's fragment. A panic
 // in the assessment is recovered and returned as an internal failure with a
 // constant message, so the module stays usable for the next assessment.
-func assess(assessor *web.Assessor, limits listLimits, args []js.Value) (result any) {
+func assess(assessor *web.Assessor, args []js.Value) (result any) {
 	defer func() {
 		if recover() != nil {
 			result = failure(kindInternal, msgPanic)
@@ -109,7 +108,7 @@ func assess(assessor *web.Assessor, limits listLimits, args []js.Value) (result 
 		return failure(kindInternal, msgWrongArguments)
 	}
 
-	opts, ok := options(args[1], limits)
+	opts, ok := options(args[1])
 	if !ok {
 		return failure(kindUsage, msgBadOptions)
 	}
@@ -133,9 +132,9 @@ func assess(assessor *web.Assessor, limits listLimits, args []js.Value) (result 
 
 // options converts the page's options object to web.Options. A missing
 // property is the zero value, which web.Assessor.Assess checks; a mistyped
-// property, a list that is no array or is longer than limits allow, or an
+// property, a list that is no array or has more than maxEntries entries, or an
 // entry of the wrong type makes ok false.
-func options(v js.Value, limits listLimits) (opts web.Options, ok bool) {
+func options(v js.Value) (opts web.Options, ok bool) {
 	estimate, ok := property(v, nameEstimate, js.TypeBoolean)
 	if !ok {
 		return web.Options{}, false
@@ -151,7 +150,7 @@ func options(v js.Value, limits listLimits) (opts web.Options, ok bool) {
 		return web.Options{}, false
 	}
 
-	targets, ok := array(v, nameTargets, limits.targets)
+	targets, ok := array(v, nameTargets)
 	if !ok {
 		return web.Options{}, false
 	}
@@ -164,7 +163,7 @@ func options(v js.Value, limits listLimits) (opts web.Options, ok bool) {
 		opts.Targets = append(opts.Targets, target.String())
 	}
 
-	regions, ok := array(v, nameRegions, limits.regions)
+	regions, ok := array(v, nameRegions)
 	if !ok {
 		return web.Options{}, false
 	}
@@ -188,9 +187,9 @@ func options(v js.Value, limits listLimits) (opts web.Options, ok bool) {
 }
 
 // array returns the entries of v's property name: none when it is missing,
-// and ok false when it is no array (Array.isArray) or has more than limit
-// entries.
-func array(v js.Value, name jsName, limit int) ([]js.Value, bool) {
+// and ok false when it is no array (Array.isArray) or has more than
+// maxEntries entries.
+func array(v js.Value, name jsName) ([]js.Value, bool) {
 	p := get(v, name)
 	if p.IsUndefined() {
 		return nil, true
@@ -201,7 +200,7 @@ func array(v js.Value, name jsName, limit int) ([]js.Value, bool) {
 	}
 
 	n := p.Length()
-	if n > limit {
+	if n > maxEntries {
 		return nil, false
 	}
 

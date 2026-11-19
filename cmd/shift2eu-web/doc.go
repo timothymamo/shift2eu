@@ -17,9 +17,10 @@
 // call, which take a jsName: the constants of type jsName are its named allow
 // list, and it never computes a name (PRD #297, Layer 1). It refuses, as a
 // usage failure with a constant message, targets or regions that are not
-// real arrays (Array.isArray), are longer than one entry per target (plus
-// "all" for targets), or hold entries of the wrong type, and any mistyped
-// option. A panic during an assessment is recovered and returned as an
+// real arrays (Array.isArray), have more than maxEntries (64) entries, or
+// hold entries of the wrong type, and any mistyped option. The bound only
+// stops a hostile length before any entry is read; any realistic list reaches
+// the option rules, whose message is the CLI's usage error. A panic during an assessment is recovered and returned as an
 // internal failure with a constant message, so the page stays usable.
 //
 // The trust boundary of the returned object: error and kind are plain text,
