@@ -213,14 +213,12 @@ func TestMakeLintRunsEveryReleaseTarget(t *testing.T) {
 		t.Fatalf("cgo is off on this host (go env CGO_ENABLED = %q, as make lint sees it), so make lint's native run cannot lint the cgo build make test's -race compiles: install a C compiler, or set CC to one", cgo)
 	}
 
-	// wantRelease is the goos/goarch of every release target, sorted: what the
-	// runs with CGO_ENABLED=0 must be, once each.
-	wantRelease := make([]string, 0, len(targets))
-	for _, target := range targets {
-		wantRelease = append(wantRelease, target.GOOS+"/"+target.GOARCH)
-	}
-
-	slices.Sort(wantRelease)
+	// wantRelease is the goos/goarch of every target with cgo off, sorted: the
+	// release platforms plus js/wasm, the site's target, which no release build
+	// lists. Without the js/wasm run the site's js && wasm files are never
+	// type-checked, so it is required here as an explicit extra target (PRD
+	// #297).
+	wantRelease := wantLintTargets(targets)
 
 	scripts := trackedShellScripts(t, root)
 

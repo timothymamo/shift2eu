@@ -17,8 +17,8 @@ import (
 // golangci-lint never loads, so that no lint rule checks it, the
 // cloud-read-only and dependency rules included.
 //
-// make lint and every entry of CI's lint-target matrix lint the host and every
-// release target of .goreleaser.yaml, with the tags of run.build-tags
+// make lint and every entry of CI's lint-target matrix lint the host, every
+// release target of .goreleaser.yaml and js/wasm, with the tags of run.build-tags
 // (lintTags), and the release builds every one of those targets with
 // CGO_ENABLED=0. This test reads that list of targets from .goreleaser.yaml
 // (releasetarget.Read, the reader test/architecture holds the release to), so
@@ -52,6 +52,12 @@ func TestLintLoadsEveryGoFile(t *testing.T) {
 		t.Fatal("releasetarget.Read(.goreleaser.yaml) returned no target, so this test would pin nothing")
 	}
 
+	// make lint and CI's lint matrix also lint js/wasm, the site's WebAssembly
+	// module (PRD #297, ADR 0035), which no release build lists: its js && wasm
+	// files are loaded by that run alone. test/architecture requires the run in
+	// both lists.
+	targets = append(targets, releasetarget.Target{GOOS: "js", GOARCH: "wasm"})
+
 	platforms := make([]string, 0, len(targets))
 	for _, target := range targets {
 		platforms = append(platforms, target.GOOS+"/"+target.GOARCH)
@@ -65,7 +71,7 @@ func TestLintLoadsEveryGoFile(t *testing.T) {
 			continue
 		}
 		t.Errorf("%s: golangci-lint never loads this file, so no lint rule checks it: its build constraints or "+
-			"its name leave it out of every release target of .goreleaser.yaml (%s), each with CGO_ENABLED=0 and "+
+			"its name leave it out of every release target of .goreleaser.yaml and of js/wasm (%s), each with CGO_ENABLED=0 and "+
 			"the tags %s. Use no build tag but integration or e2e (never //go:build ignore), and let a file the "+
 			"release builds build for one of those platforms: a platform the release gains in .goreleaser.yaml "+
 			"is a platform this test holds files to", rel, strings.Join(platforms, ", "), lintTags)
