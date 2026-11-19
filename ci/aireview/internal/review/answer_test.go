@@ -211,6 +211,28 @@ func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 			text: withCategory("Code Injection"),
 			want: readAs(review.CategoryPromptInjection),
 		},
+		// The next three cases pin an over-match the parser makes on purpose: a
+		// category off the accepted list that only names injection (an SQL
+		// injection, say, which says nothing about the model's own answer) is
+		// still read as prompt-injection, so a category the model got wrong
+		// blocks rather than fails open. Narrowing this to the spellings of
+		// prompt-injection alone must be a deliberate decision, not a side
+		// effect of a later editing of readCategory.
+		{
+			name: "an off-list sql-injection category is prompt-injection",
+			text: withCategory("sql-injection"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		{
+			name: "an off-list command_injection category is prompt-injection",
+			text: withCategory("command_injection"),
+			want: readAs(review.CategoryPromptInjection),
+		},
+		{
+			name: "an off-list Dependency Injection category is prompt-injection",
+			text: withCategory("Dependency Injection"),
+			want: readAs(review.CategoryPromptInjection),
+		},
 		{
 			name: "surrounding whitespace",
 			text: "\n  " + parsedAnswer + "\n\t\n",

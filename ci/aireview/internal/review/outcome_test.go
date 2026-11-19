@@ -9,6 +9,26 @@ import (
 	"github.com/timothymamo/shift2eu/ci/aireview/internal/review"
 )
 
+// TestRunOutcomeZeroValueFailsClosed pins that a RunOutcome nobody decided is a
+// failure and never an answer: a reader's own, fresh RunOutcome must not pass
+// for a run that answered, so a forgotten assignment fails the run instead of
+// publishing an answer that was never read (ADR 0033, issue #292). OutcomeFailed
+// therefore keeps the iota's zero slot; a later reordering that put an answer
+// first would have to change this test on purpose.
+func TestRunOutcomeZeroValueFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	var zero review.RunOutcome
+
+	if zero != review.OutcomeFailed {
+		t.Errorf("the zero RunOutcome = %d, want OutcomeFailed (%d)", zero, review.OutcomeFailed)
+	}
+
+	if zero == review.OutcomeAnswer {
+		t.Errorf("the zero RunOutcome reads as OutcomeAnswer (%d), want it to fail closed", zero)
+	}
+}
+
 // TestDecideRunOutcomePinsWhichOutcomeWins pins the decision a run of the
 // Claude Code CLI makes from plain values, with no process and no clock (ADR
 // 0033, issue #274): a run whose result is read uses that result, whatever its
