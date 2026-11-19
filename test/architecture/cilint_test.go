@@ -85,13 +85,12 @@ func TestCILintMatrixCoversEveryReleaseTarget(t *testing.T) {
 		t.Fatal("releasetarget.Read(.goreleaser.yaml) returned no target, so this test would pin nothing")
 	}
 
-	wantRelease := make([]string, 0, len(targets))
-
-	for _, target := range targets {
-		wantRelease = append(wantRelease, target.GOOS+"/"+target.GOARCH)
-	}
-
-	slices.Sort(wantRelease)
+	// wantRelease is the goos/goarch of every matrix entry with cgo "0", sorted:
+	// the release platforms plus js/wasm, the site's target, which no release
+	// build lists. An entry without it leaves the site's js && wasm files
+	// unlinted in CI, so it is required here as an explicit extra target (PRD
+	// #297).
+	wantRelease := wantLintTargets(targets)
 
 	ci, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
 	if err != nil {

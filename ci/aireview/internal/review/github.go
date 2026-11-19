@@ -102,9 +102,10 @@ func (g *GitHub) PullRequest(ctx context.Context, number int) (PullRequest, erro
 
 // Diff reads the unified diff of pr, pinned to its SHAs:
 // GET /repos/{repository}/compare/{BaseSHA}...{HeadSHA} with Accept
-// application/vnd.github.diff. It reads at most MaxDiffBytes+1 bytes of the
+// application/vnd.github.diff. It reads at most MaxRawDiffBytes+1 bytes of the
 // body and returns an error wrapping ErrDiffTooLarge when the diff is longer
-// than MaxDiffBytes.
+// than MaxRawDiffBytes. It measures nothing against MaxDiffBytes: Run does,
+// once FilterDiff has left the generated and golden files out (issue #324).
 func (g *GitHub) Diff(ctx context.Context, pr PullRequest) (string, error) {
 	if !isCommitSHA(pr.BaseSHA) || !isCommitSHA(pr.HeadSHA) {
 		return "", fmt.Errorf("read the diff of pull request %d: %w: no base or head commit", pr.Number, ErrGitHub)
@@ -120,13 +121,14 @@ func (g *GitHub) Diff(ctx context.Context, pr PullRequest) (string, error) {
 		return "", fmt.Errorf("read the diff of pull request %d: %w: status %d", pr.Number, ErrGitHub, resp.StatusCode)
 	}
 
-	diff, err := io.ReadAll(io.LimitReader(resp.Body, MaxDiffBytes+1))
+	diff, err := io.ReadAll(io.LimitReader(resp.Body, MaxRawDiffBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read the diff of pull request %d: %w: %w", pr.Number, ErrGitHub, err)
 	}
 
-	if len(diff) > MaxDiffBytes {
-		return "", fmt.Errorf("pull request %d: %w: more than %d bytes", pr.Number, ErrDiffTooLarge, MaxDiffBytes)
+	if len(diff) > MaxRawDiffBytes {
+		return "", fmt.Errorf("pull request %d: %w: more than %d bytes before generated and golden files are left out",
+			pr.Number, ErrDiffTooLarge, MaxRawDiffBytes)
 	}
 
 	return string(diff), nil

@@ -1,0 +1,146 @@
+<section class="shift2eu-report">
+<h2>Migration assessment: <code>OVHcloud</code>, <code>Scaleway</code>, <code>UpCloud</code></h2>
+<ul>
+<li>Inventory file: <code>inventory.json</code></li>
+<li>Source: <code>aws</code></li>
+<li>Catalog: <code>OVHcloud</code> snapshot from <code>https://www.ovhcloud.com/en/public-cloud/prices/</code>, retrieved 2026-11-08</li>
+<li>Catalog: <code>Scaleway</code> snapshot from <code>https://www.scaleway.com/en/pricing/</code>, retrieved 2026-11-01</li>
+<li>Catalog: <code>UpCloud</code> snapshot from <code>https://upcloud.com/pricing/</code>, retrieved 2026-10-25</li>
+</ul>
+<h3>Comparison</h3>
+<h4>Summary</h4>
+<table>
+<thead>
+<tr><th scope="col">Fit</th><th scope="col"><code>OVHcloud</code></th><th scope="col"><code>Scaleway</code></th><th scope="col"><code>UpCloud</code></th></tr>
+</thead>
+<tbody>
+<tr><td>direct</td><td>2</td><td>2</td><td>0</td></tr>
+<tr><td>partial</td><td>1</td><td>1</td><td>2</td></tr>
+<tr><td>none</td><td>1</td><td>1</td><td>2</td></tr>
+<tr><td>total</td><td>4</td><td>4</td><td>4</td></tr>
+</tbody>
+</table>
+<h4>Resources</h4>
+<table>
+<thead>
+<tr><th scope="col">ID</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col"><code>OVHcloud</code> fit</th><th scope="col"><code>OVHcloud</code> best offering</th><th scope="col"><code>Scaleway</code> fit</th><th scope="col"><code>Scaleway</code> best offering</th><th scope="col"><code>UpCloud</code> fit</th><th scope="col"><code>UpCloud</code> best offering</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bucket-example</code></td><td><code>storage.object</code></td><td><code>eu-west-1</code></td><td>direct</td><td><code>Object Storage</code></td><td>direct</td><td><code>Object Storage</code></td><td>partial</td><td><code>Object Storage</code></td></tr>
+<tr><td><code>db-example</code></td><td><code>database.postgresql</code></td><td><code>eu-west-1</code></td><td>direct</td><td><code>Managed PostgreSQL</code></td><td>direct</td><td><code>Managed Database for PostgreSQL</code></td><td>none</td><td></td></tr>
+<tr><td><code>fn-example</code></td><td><code>serverless.function</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>none</td><td></td><td>none</td><td></td></tr>
+<tr><td><code>partial-example</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td>partial</td><td><code>Public Cloud Instances</code></td><td>partial</td><td><code>Instances</code></td><td>partial</td><td><code>Cloud Server</code></td></tr>
+</tbody>
+</table>
+<h4>Blockers on every target</h4>
+<ul>
+<li><code>fn-example</code>
+<ul>
+<li><code>OVHcloud</code>: no offering in the <code>OVHcloud</code> catalog for <code>serverless.function</code></li>
+<li><code>Scaleway</code>: no offering in the <code>Scaleway</code> catalog for <code>serverless.function</code></li>
+<li><code>UpCloud</code>: no offering in the <code>UpCloud</code> catalog for <code>serverless.function</code></li>
+</ul>
+</li>
+</ul>
+<h3><code>OVHcloud</code></h3>
+<h4>Summary</h4>
+<table>
+<thead>
+<tr><th scope="col">Fit</th><th scope="col">Resources</th></tr>
+</thead>
+<tbody>
+<tr><td>direct</td><td>2</td></tr>
+<tr><td>partial</td><td>1</td></tr>
+<tr><td>none</td><td>1</td></tr>
+<tr><td>total</td><td>4</td></tr>
+</tbody>
+</table>
+<h4>Resources</h4>
+<table>
+<thead>
+<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bucket-example</code></td><td><code>AWS::S3::Bucket</code></td><td><code>storage.object</code></td><td><code>eu-west-1</code></td><td>direct</td><td><code>Object Storage</code></td><td><code>Object Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>db-example</code></td><td><code>AWS::RDS::DBInstance</code></td><td><code>database.postgresql</code></td><td><code>eu-west-1</code></td><td>direct</td><td><code>Managed PostgreSQL</code></td><td><code>Managed PostgreSQL</code> offers every capability the resource uses</td></tr>
+<tr><td><code>fn-example</code></td><td><code>AWS::Lambda::Function</code></td><td><code>serverless.function</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>no offering in the <code>OVHcloud</code> catalog for <code>serverless.function</code></td></tr>
+<tr><td><code>partial-example</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td>partial</td><td><code>Public Cloud Instances</code></td><td><code>Public Cloud Instances</code> does not offer <code>node-high-availability</code></td></tr>
+</tbody>
+</table>
+<h4>Required changes</h4>
+<ul>
+<li><code>partial-example</code>: <code>node-high-availability</code> (not offered by <code>Public Cloud Instances</code>)</li>
+</ul>
+<h4>Blockers</h4>
+<ul>
+<li><code>fn-example</code>: no offering in the <code>OVHcloud</code> catalog for <code>serverless.function</code></li>
+</ul>
+<h3><code>Scaleway</code></h3>
+<h4>Summary</h4>
+<table>
+<thead>
+<tr><th scope="col">Fit</th><th scope="col">Resources</th></tr>
+</thead>
+<tbody>
+<tr><td>direct</td><td>2</td></tr>
+<tr><td>partial</td><td>1</td></tr>
+<tr><td>none</td><td>1</td></tr>
+<tr><td>total</td><td>4</td></tr>
+</tbody>
+</table>
+<h4>Resources</h4>
+<table>
+<thead>
+<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bucket-example</code></td><td><code>AWS::S3::Bucket</code></td><td><code>storage.object</code></td><td><code>eu-west-1</code></td><td>direct</td><td><code>Object Storage</code></td><td><code>Object Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>db-example</code></td><td><code>AWS::RDS::DBInstance</code></td><td><code>database.postgresql</code></td><td><code>eu-west-1</code></td><td>direct</td><td><code>Managed Database for PostgreSQL</code> (tie: <code>Managed Database for PostgreSQL and MySQL</code>)</td><td><code>Managed Database for PostgreSQL</code> offers every capability the resource uses</td></tr>
+<tr><td><code>fn-example</code></td><td><code>AWS::Lambda::Function</code></td><td><code>serverless.function</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>no offering in the <code>Scaleway</code> catalog for <code>serverless.function</code></td></tr>
+<tr><td><code>partial-example</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td>partial</td><td><code>Instances</code></td><td><code>Instances</code> does not offer <code>node-high-availability</code>; <code>Instances</code> does not offer <code>snapshots</code></td></tr>
+</tbody>
+</table>
+<h4>Required changes</h4>
+<ul>
+<li><code>partial-example</code>: <code>node-high-availability</code>, <code>snapshots</code> (not offered by <code>Instances</code>)</li>
+</ul>
+<h4>Blockers</h4>
+<ul>
+<li><code>fn-example</code>: no offering in the <code>Scaleway</code> catalog for <code>serverless.function</code></li>
+</ul>
+<h3><code>UpCloud</code></h3>
+<h4>Summary</h4>
+<table>
+<thead>
+<tr><th scope="col">Fit</th><th scope="col">Resources</th></tr>
+</thead>
+<tbody>
+<tr><td>direct</td><td>0</td></tr>
+<tr><td>partial</td><td>2</td></tr>
+<tr><td>none</td><td>2</td></tr>
+<tr><td>total</td><td>4</td></tr>
+</tbody>
+</table>
+<h4>Resources</h4>
+<table>
+<thead>
+<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
+</thead>
+<tbody>
+<tr><td><code>bucket-example</code></td><td><code>AWS::S3::Bucket</code></td><td><code>storage.object</code></td><td><code>eu-west-1</code></td><td>partial</td><td><code>Object Storage</code></td><td><code>Object Storage</code> does not offer <code>object-versioning</code></td></tr>
+<tr><td><code>db-example</code></td><td><code>AWS::RDS::DBInstance</code></td><td><code>database.postgresql</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>no offering in the <code>UpCloud</code> catalog for <code>database.postgresql</code></td></tr>
+<tr><td><code>fn-example</code></td><td><code>AWS::Lambda::Function</code></td><td><code>serverless.function</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>no offering in the <code>UpCloud</code> catalog for <code>serverless.function</code></td></tr>
+<tr><td><code>partial-example</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td>partial</td><td><code>Cloud Server</code></td><td><code>Cloud Server</code> does not offer <code>node-high-availability</code></td></tr>
+</tbody>
+</table>
+<h4>Required changes</h4>
+<ul>
+<li><code>bucket-example</code>: <code>object-versioning</code> (not offered by <code>Object Storage</code>)</li>
+<li><code>partial-example</code>: <code>node-high-availability</code> (not offered by <code>Cloud Server</code>)</li>
+</ul>
+<h4>Blockers</h4>
+<ul>
+<li><code>db-example</code>: no offering in the <code>UpCloud</code> catalog for <code>database.postgresql</code></li>
+<li><code>fn-example</code>: no offering in the <code>UpCloud</code> catalog for <code>serverless.function</code></li>
+</ul>
+</section>

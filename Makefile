@@ -81,6 +81,10 @@ PLATFORMS ?=
 # The GOOS/GOARCH pairs the release builds, all with CGO_ENABLED=0. Must match the goos and goarch lists in
 # .goreleaser.yaml: test/architecture checks this by running make lint with a fake golangci-lint.
 RELEASE_TARGETS := linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
+# The GOOS/GOARCH pairs make lint lints with CGO_ENABLED=0 beside the release targets, though no release build
+# lists them: js/wasm, the site's WebAssembly module (PRD #297), whose js && wasm files no other run
+# type-checks. test/architecture requires it in make lint and in CI's lint matrix.
+LINT_EXTRA_TARGETS := js/wasm
 
 # The main checkout of the clone make runs in, found from git's common directory, so it is the same when make
 # runs in a worktree.
@@ -223,7 +227,8 @@ fmt: ## Format code (gofumpt + goimports via golangci-lint)
 
 # make lint runs golangci-lint natively first, for the host's GOOS/GOARCH with cgo at the host's default (the
 # build make test's -race compiles; it warns when the host's cgo is off, and make test, so make check,
-# refuses such a host), then once per release target with cgo off, and last runs the source rules in
+# refuses such a host), then once per release target with cgo off and once for each of LINT_EXTRA_TARGETS
+# (js/wasm, the site's module) with cgo off, and last runs the source rules in
 # test/lint natively, with SHIFT2EU_LINT_PROBES=require so the forbidigo probes must run. Between the two, once
 # as they do not depend on the target, dev/shellcheck.sh runs shellcheck --norc on every shell script git tracks
 # and dev/actionlint.sh runs actionlint, pinned in tools/go.mod, on .github/workflows, handing it the path of
@@ -255,7 +260,7 @@ lint: ## Lint natively and for every release target, incl. the architecture (dep
 		{ [ "$$cgo" != 0 ] || echo "lint: warning: cgo is off on this host, so its cgo build is not linted" >&2; } && \
 		GOLANGCI_LINT_CACHE="$$cache/native-$$GOOS-$$GOARCH-cgo$$cgo" golangci-lint run --allow-serial-runners \
 	) || failed="$$failed native"; \
-	for target in $(RELEASE_TARGETS); do \
+	for target in $(RELEASE_TARGETS) $(LINT_EXTRA_TARGETS); do \
 		goos="$${target%/*}"; goarch="$${target#*/}"; \
 		echo "lint: GOOS=$$goos GOARCH=$$goarch CGO_ENABLED=0"; \
 		GOOS="$$goos" GOARCH="$$goarch" CGO_ENABLED=0 GOLANGCI_LINT_CACHE="$$cache/$$goos-$$goarch" \

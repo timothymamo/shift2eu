@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
@@ -35,7 +34,7 @@ type assessOptions struct {
 	// --no-estimate was given (PRD #190).
 	estimate bool
 	// schemaVersion is the version of the JSON report --format json writes:
-	// --schema-version, or defaultSchemaVersion. It is 0 for a format that has
+	// --schema-version, or analysis.DefaultSchemaVersion. It is 0 for a format that has
 	// no schemaVersion, whose reporters ignore it.
 	schemaVersion int
 }
@@ -58,7 +57,7 @@ func runAssess(ctx context.Context, args []string, stdout, stderr io.Writer, dep
 		// A --region the target's catalog does not list is only found once
 		// the catalog is loaded, before the inventory is read, but it is
 		// still a mistake on the command line.
-		if regionErr := regionUsageError(err, opts); regionErr != nil {
+		if regionErr := analysis.RegionChoiceError(err, opts.targets); regionErr != nil {
 			return usageError(stderr, deps, regionErr)
 		}
 
@@ -104,7 +103,10 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 		return assessOptions{}, fmt.Errorf("unexpected argument %s", text.Quote(flags.Arg(0)))
 	}
 
-	targets, err := parseTargets(target, deps)
+	// The values are parsed here; whether they are allowed is the option
+	// rules' decision (analysis.SelectTargets and its siblings), which
+	// internal/web shares.
+	targets, err := analysis.SelectTargets(strings.Split(target, ","), targetKeys(deps))
 	if err != nil {
 		return assessOptions{}, err
 	}
@@ -112,7 +114,7 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 	opts.targets = targets
 	opts.estimate = !noEstimate
 
-	regions, err := parseRegions(region, targets)
+	regions, err := analysis.SelectRegions(parseRegions(region), targets)
 	if err != nil {
 		return assessOptions{}, err
 	}
@@ -121,9 +123,10 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 
 	// A Deps without any format is a wiring mistake that newRunner reports,
 	// not a usage error.
-	if _, ok := deps.Formats[opts.format]; !ok && len(deps.Formats) > 0 {
-		return assessOptions{}, fmt.Errorf("unknown format %s; supported formats: %s",
-			text.Quote(opts.format), strings.Join(formatKeys(deps), ", "))
+	if len(deps.Formats) > 0 {
+		if err := analysis.SelectFormat(opts.format, formatKeys(deps)); err != nil {
+			return assessOptions{}, err
+		}
 	}
 
 	versionGiven := false
@@ -134,7 +137,7 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 		}
 	})
 
-	schemaVersion, err := parseSchemaVersion(opts.format, version, versionGiven)
+	schemaVersion, err := analysis.SelectSchemaVersion(opts.format, version, versionGiven)
 	if err != nil {
 		return assessOptions{}, err
 	}
@@ -148,147 +151,33 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 // report every run wrote before --format existed.
 const defaultFormat = "markdown"
 
-// The JSON report's versions (docs/adr/0018, issue #307). The CLI imports no
-// adapter, so it names the one format that has a schemaVersion, the versions
-// its reporter writes and the one a run writes when it names none, here.
-const (
-	// schemaVersionFlag is the flag that selects the version.
-	schemaVersionFlag = "schema-version"
-	// versionedFormat is the --format value whose report has a schemaVersion.
-	versionedFormat = "json"
-	// defaultSchemaVersion is the version --format json writes without
-	// --schema-version.
-	defaultSchemaVersion = 3
-)
-
-// schemaVersions are the --schema-version values, in the order the usage
-// text and the errors list them.
-var schemaVersions = []string{"2", "3"}
-
-// schemaVersionValues maps each of schemaVersions to the version it selects.
-var schemaVersionValues = map[string]int{"2": 2, "3": 3}
-
-// parseSchemaVersion returns the schemaVersion a run of format writes: value,
-// which must be one of schemaVersions, when given, or defaultSchemaVersion;
-// 0 for a format that has no schemaVersion. --schema-version with such a
-// format is a usage error, so a run never quietly ignores it. Every error it
-// returns is a usage error.
-func parseSchemaVersion(format, value string, given bool) (int, error) {
-	if format != versionedFormat {
-		if given {
-			return 0, fmt.Errorf("--%s applies only to --format %s, not to --format %s",
-				schemaVersionFlag, versionedFormat, text.Quote(format))
-		}
-
-		return 0, nil
-	}
-
-	if !given {
-		return defaultSchemaVersion, nil
-	}
-
-	n, ok := schemaVersionValues[value]
-	if !ok {
-		return 0, fmt.Errorf("--%s: unknown schema version %s; supported schema versions: %s",
-			schemaVersionFlag, text.Quote(value), strings.Join(schemaVersions, ", "))
-	}
-
-	return n, nil
-}
-
-// allTargets is the --target value that selects every supported target.
-const allTargets = "all"
-
-// parseTargets parses the --target value: one key of deps.Targets, a
-// comma-separated list of distinct keys, or all for every key. It returns the
-// selected keys sorted. Every error it returns is a usage error that ends with
-// the sorted list of supported targets.
-func parseTargets(value string, deps Deps) ([]string, error) {
-	supported := strings.Join(targetKeys(deps), ", ")
-
-	if value == allTargets {
-		return targetKeys(deps), nil
-	}
-
-	elements := strings.Split(value, ",")
-	selected := make([]string, 0, len(elements))
-
-	for _, key := range elements {
-		switch {
-		case key == "":
-			return nil, fmt.Errorf("--target %s has an empty target; supported targets: %s",
-				text.Quote(value), supported)
-		case key == allTargets:
-			return nil, fmt.Errorf("--target %s cannot be combined with other targets; supported targets: %s",
-				text.Quote(allTargets), supported)
-		case slices.Contains(selected, key):
-			return nil, fmt.Errorf("target %s given more than once; supported targets: %s",
-				text.Quote(key), supported)
-		}
-
-		if _, ok := deps.Targets[key]; !ok {
-			return nil, fmt.Errorf("unknown target %s; supported targets: %s", text.Quote(key), supported)
-		}
-
-		selected = append(selected, key)
-	}
-
-	slices.Sort(selected)
-
-	return selected, nil
-}
+// schemaVersionFlag is the flag that selects the JSON report's schemaVersion
+// (analysis.SelectSchemaVersion).
+const schemaVersionFlag = "schema-version"
 
 // parseRegions parses the --region value: comma-separated <target>=<region>
-// pairs, each naming one of the selected targets at most once. Spaces around a
-// pair, its key and its region are dropped, so "a=x, b=y" is two pairs. It
-// returns nil for an empty value. Whether the target lists the region is checked against
-// its catalog once loaded (analysis.RegionError), before the inventory is read.
-// Every error it returns is a usage error.
-func parseRegions(value string, selected []string) (map[string]string, error) {
+// pairs. Spaces around a pair, its key and its region are dropped, so
+// "a=x, b=y" is two pairs; a pair without "=" has an empty region. Each choice
+// keeps its pair as written, which a refusal quotes. It returns nil for an
+// empty value. analysis.SelectRegions decides which choices are allowed.
+func parseRegions(value string) []analysis.RegionChoice {
 	if value == "" {
-		return nil, nil
-	}
-
-	regions := make(map[string]string)
-
-	for _, pair := range strings.Split(value, ",") {
-		key, region, found := strings.Cut(pair, "=")
-		key, region = strings.TrimSpace(key), strings.TrimSpace(region)
-
-		switch {
-		case !found || key == "" || region == "":
-			return nil, fmt.Errorf("--region %s is not <target>=<region>; selected targets: %s",
-				text.Quote(pair), strings.Join(selected, ", "))
-		case !slices.Contains(selected, key):
-			return nil, fmt.Errorf("--region names target %s, which --target does not select; selected targets: %s",
-				text.Quote(key), strings.Join(selected, ", "))
-		}
-
-		if _, ok := regions[key]; ok {
-			return nil, fmt.Errorf("--region names target %s more than once", text.Quote(key))
-		}
-
-		regions[key] = region
-	}
-
-	return regions, nil
-}
-
-// regionUsageError returns the usage error for an *analysis.RegionError inside
-// err, naming the target by its --target key also for a single-target run, and
-// nil when err holds none.
-func regionUsageError(err error, opts assessOptions) error {
-	var regionErr *analysis.RegionError
-	if !errors.As(err, &regionErr) {
 		return nil
 	}
 
-	named := *regionErr
-	if named.Target == "" && len(opts.targets) == 1 {
-		named.Target = opts.targets[0]
+	pairs := strings.Split(value, ",")
+	choices := make([]analysis.RegionChoice, 0, len(pairs))
+
+	for _, pair := range pairs {
+		key, region, _ := strings.Cut(pair, "=")
+		choices = append(choices, analysis.RegionChoice{
+			Target: strings.TrimSpace(key),
+			Region: strings.TrimSpace(region),
+			Text:   pair,
+		})
 	}
 
-	return fmt.Errorf("--region: %w", &named)
+	return choices
 }
 
 // runFunc runs the use case assess built, the Run method of analysis.Analysis
