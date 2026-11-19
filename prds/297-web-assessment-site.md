@@ -35,14 +35,15 @@ backend. The trust model has three layers:
 
 1. **The code.** The page's code is reviewed Go plus three scripts, each held a stated way: the page
    script, small and reviewed, is scanned by a static rule that bans every browser API that can send data
-   (fetch, navigation, WebSocket, WebRTC, beacons, workers) and every computed property name that could
-   hide one, as the Go glue is; Go's `wasm_exec.js` is pinned byte for byte to the building
+   (fetch, navigation, WebSocket, WebRTC, beacons, workers, cross-origin messaging) and every computed
+   property name that could hide one, as the Go glue is; Go's `wasm_exec.js` is pinned byte for byte to the building
    toolchain's; and the module script is pinned to one fixed template that carries only the encoded
    module.
 2. **The browser.** A strict Content Security Policy refuses network connections, third-party resources,
    inline script and forms, so a bug or an injection that slips past the first layer is still refused for
-   every channel the CSP governs. Its known gaps (navigation, WebRTC, DNS prefetch) are documented and
-   closed by the first layer.
+   every channel the CSP governs. Its known gaps (navigation, WebRTC, DNS prefetch, and messaging to
+   another window: `postMessage`, `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`,
+   `window.name`) are documented and closed by the first layer.
 3. **Verification.** The site bundle is reproducible and attested by the release, and the release checks,
    and documents how a user can check, that the live site serves exactly the attested files.
 
@@ -108,18 +109,29 @@ release), *live* (checked against the live site) or *review*.
   `password` (on any object: a `location` or an `<a>` navigates or changes its target through each),
   `setAttribute` or `setAttributeNS` with `href`, `src` or `action`, `click()` and `dispatchEvent` (each
   outside the one download function below), `document.cookie`, `localStorage`, `sessionStorage`,
-  `indexedDB` and `navigator.serviceWorker` (outside the one unregister function below). Since a name
+  `indexedDB` and `navigator.serviceWorker` (outside the one unregister function below), and the
+  messaging APIs that reach another window or browsing context, which the CSP does not govern
+  (*Decided by the orchestrator in review*): `postMessage` (on any object: a window, a frame, a port, a
+  worker), `opener`, `parent` and `top` (each outside the framing guard's two uses below),
+  `BroadcastChannel`, `MessageChannel` and assignment to `name` (on any object: `window.name` survives
+  a navigation to another origin). Since a name
   scan cannot see a computed name, the test also fails on any computed-key member access in the page
   script, read or assignment (`x[expr]`, `x[expr] = ...`), and on `Object.assign`, `Reflect.set`,
   `Reflect.get`, `Object.defineProperty` and `Object.defineProperties`, with no exception: the script
-  decodes the module with `atob` and `Uint8Array.from`, which needs none. Two uses are allowed, each in
-  one named function of the page script that the test names and confines them to: the **download
+  decodes the module with `atob` and `Uint8Array.from`, which needs none. Three uses are allowed, each in
+  one named function of the page script that the test names and confines them to: the **framing
+  guard** compares `window.top !== window.self` once (its only use of `top`, and no use of `parent`)
+  and sets `window.opener = null` on load (its only use of `opener`: the site cannot send
+  `Cross-Origin-Opener-Policy`, so a page that opened this one keeps a handle to it until then); the **download
   function** creates a `blob:` URL with `URL.createObjectURL` from the report bytes and sets it as the
   `href` of an `<a download>` it clicks (a `blob:` URL is same-document and sends nothing), then revokes
   it; and the **unregister function** calls `navigator.serviceWorker.getRegistrations()` and
   `unregister()` on each, on load (*Decided by the orchestrator in review*; it registers nothing). The
-  test fails when either API appears outside its function, or when the functions do anything else
-  that the scan bans. The glue calls `js.Global().Get`, `Value.Get`, `Value.Set`, `Value.Delete` and
+  test fails when any of these APIs appears outside its function, when the framing guard's `top` or
+  `opener` use differs from the two forms above, or when the functions do anything else that the scan
+  bans. The glue's allow list of constant names holds none of the messaging names above (`postMessage`,
+  `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`, `name`), and the test fails when one
+  is added. The glue calls `js.Global().Get`, `Value.Get`, `Value.Set`, `Value.Delete` and
   `Value.Call` only with constant names from a named allow list, and `Value.New` and `Value.Invoke`,
   which take no name, only on a value it obtained through such a constant name; a forbidigo or test
   rule refuses a computed name and a `New` or `Invoke` on any other value.
@@ -139,7 +151,9 @@ release), *live* (checked against the live site) or *review*.
   `dns-prefetch`, `preconnect`, `prefetch` or `prerender` (static test).
 - [ ] The page script, which every page loads (*Layer 2*, the scripts per page), stops, and shows why,
   when the page is framed (`window.top !== window.self`), since a `<meta>` CSP cannot carry
-  `frame-ancestors` (static test of the script and *browser*).
+  `frame-ancestors`, and sets `window.opener = null` on load, since the site cannot send
+  `Cross-Origin-Opener-Policy` (static test of the script and *browser*: opened by another page with
+  `window.open`, the page's `window.opener` is `null` after load).
 
 **Layer 2, the browser.**
 
@@ -147,10 +161,20 @@ release), *live* (checked against the live site) or *review*.
   `<head>` (before any `<link>` or `<script>`), with at least: `default-src 'none'`; `script-src 'self'
   'wasm-unsafe-eval'` and nothing else (no `'unsafe-inline'`, no `'unsafe-eval'`, no other host);
   `style-src 'self'`; `img-src 'none'`; `connect-src 'none'` from the first byte; `form-action 'none'`;
-  `base-uri 'none'`; `object-src 'none'`; `require-trusted-types-for 'script'` and `trusted-types` naming
+  `base-uri 'none'`; `object-src 'none'`; `worker-src 'none'`; `child-src 'none'`; `frame-src 'none'`;
+  `manifest-src 'none'`; `require-trusted-types-for 'script'` and `trusted-types` naming
   the one policy that inserts the Go-rendered report; and no `report-uri` or `report-to` (violation
   reports carry blocked URLs and samples). A static test parses each built page's policy and fails on a
-  missing, widened or added directive, and on a `connect-src` or `img-src` other than exactly `'none'`.
+  missing, widened or added directive, and on a `connect-src`, `img-src`, `worker-src`, `child-src`,
+  `frame-src` or `manifest-src` other than exactly `'none'`. `worker-src` must be set (*Decided by the
+  orchestrator in review*): without it, CSP Level 3 falls back from `worker-src` to `child-src` to
+  `script-src`, so `script-src 'self'` would allow a same-origin dedicated or shared worker and a
+  service-worker registration, and a worker loaded from a same-origin URL takes its CSP from its own
+  response headers, which this site cannot send (Hosting decision 2), so its `fetch` would escape
+  `connect-src 'none'`. `child-src`, `frame-src` and `manifest-src` already fall back to `default-src
+  'none'`; they are pinned explicitly so no later directive can widen them by fallback. `worker-src 'none'`
+  does not hinder the unregister function: `getRegistrations()` and `unregister()` load no script, and
+  the CSP governs only the fetch of a worker's script.
   Where the host can also send the policy as a header (Hosting decision 2), the header adds
   `frame-ancestors 'none'`.
 - [ ] The site loads no image (*Decided by the orchestrator in review*). `img-src 'none'`, not `'self'`:
@@ -217,12 +241,21 @@ release), *live* (checked against the live site) or *review*.
   and a CSS `url()` load (a `background-image` in a style rule constructed by the test through CSSOM),
   each to an own-origin path and to another origin; every one must be blocked by `img-src 'none'`, and
   none may appear in the recorded requests.
+  It also attempts, from the page, a dedicated `Worker`, a `SharedWorker` and a
+  `navigator.serviceWorker.register()`, each with a same-origin script URL (served by the test's
+  `httptest` server, which the bundle does not contain) and the `Worker` also from a `blob:` URL; every
+  one must be blocked by `worker-src 'none'` (a CSP violation, or a rejected registration), no worker may
+  run, and no worker script may appear in the recorded requests.
   The smoke test serves the bundle from an `httptest` origin and passes there unchanged, which shows the
   bundle runs on an origin other than `www.shift2eu.com`; the release's smoke test does the same with the
   attested bundle.
 - [ ] *Browser:* the smoke test records that a navigation or an `RTCPeerConnection` started from the page
   is **not** blocked by the CSP, and the ADR documents both as gaps that layer 1 closes, so no criterion
-  or statement claims the CSP covers them.
+  or statement claims the CSP covers them. The same holds for messaging to another window or browsing
+  context (`postMessage`, `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`, `window.name`):
+  the CSP governs none of them, milestone 2's ADR and the privacy page's technical note list them as
+  gaps that layer 1 closes (its banned-API scan and the framing guard's `window.opener = null`), and the
+  smoke test records that the page's `window.opener` is `null` after load when another page opened it.
 - [ ] Every script, the module script included, and the stylesheet are loaded with Subresource
   Integrity, SHA-384: the `<script>` and `<link rel="stylesheet">` elements carry `integrity`. A static
   test computes the SHA-384 of every built file and fails when an `integrity` value is missing or does
@@ -654,8 +687,8 @@ security audit (`security-audit` skill), since every one of them touches the tru
    values, the version, the snapshot dates), the static tests (CSP, no image in any built page or HTML
    reporter golden, the hostile golden included (no `<img>`, `<picture>`, `<input type="image">`,
    `<link rel="icon">`, SVG `<image>`, `<use>` or `<feImage>` with an external `href` or `xlink:href`, or `data:` URL),
-   no stylesheet `url()` or `@import`, SRI, banned APIs and computed
-   property names with the download and unregister functions as their only exceptions, the glue's
+   no stylesheet `url()` or `@import`, SRI, banned APIs (cross-origin messaging included) and computed
+   property names with the framing guard, download and unregister functions as their only exceptions, the glue's
    constant names, the module script's template, the scripts per page with their attributes and order,
    the module global read once and deleted, prefetch, the `downgrade-risk`, `hsts-waived` (a missing
    HSTS record read as not waived) and `loading-notice` markers, links resolve, the verification
@@ -664,7 +697,13 @@ security audit (`security-audit` skill), since every one of them touches the tru
    message (CLAUDE.md rule 6). An ADR records the site's trust model (its three layers and how each of
    the three scripts is held, the CSP with `connect-src 'none'` and `img-src 'none'` (no image, no CSS
    `url()`, icons as inline SVG, no favicon, and the browser's own `/favicon.ico` request as a fixed URL
-   that carries no page data) and its known gaps, the module embedded
+   that carries no page data), `worker-src 'none'` and why the fallback matters (without it CSP Level 3
+   falls back to `child-src`, then to `script-src 'self'`, and a same-origin worker takes its CSP from its
+   own response headers, which the site cannot send, so its `fetch` would escape `connect-src 'none'`),
+   `child-src`, `frame-src` and `manifest-src` pinned to `'none'`, and its known gaps (navigation,
+   WebRTC, DNS prefetch, and messaging to another window or browsing context: `postMessage`, `opener`,
+   `parent`, `top`, `BroadcastChannel`, `MessageChannel`, `window.name`, closed by layer 1's scan and the
+   framing guard's `window.opener = null`, since the site cannot send `Cross-Origin-Opener-Policy`), the module embedded
    in an SRI-pinned script of a fixed template rather than fetched, the script order, SRI, Trusted Types
    and the browsers that do not enforce `require-trusted-types-for`, no storage, the one download path,
    the service-worker unregister, how the report is inserted and why it carries no inventory-derived
@@ -780,12 +819,16 @@ security audit (`security-audit` skill), since every one of them touches the tru
   a further layer. Rendering Markdown in JavaScript would need a parser the project does not want to ship,
   and building tables in JavaScript would move logic out of tested Go. Rendering is a reporter's job, so
   it is an adapter, not part of `internal/web`.
-- **The CSP is a layer, not the guarantee.** It cannot govern navigation, WebRTC or DNS prefetch.
+- **The CSP is a layer, not the guarantee.** It cannot govern navigation, WebRTC, DNS prefetch or
+  messaging to another window or browsing context (`postMessage`, `opener`, `parent`, `top`,
+  `BroadcastChannel`, `MessageChannel`, `window.name`).
   "Nothing leaves the browser" rests on the code (layer 1, with a static rule against every sending
-  API, every navigation and every computed property name that could hide one), with the CSP refusing
-  what it can and the attested bundle making the code checkable; the privacy page says so. What the CSP
-  does govern it closes to the host as well as to third parties: `connect-src 'none'` and `img-src
-  'none'`, since an own-origin request carries data in its path or query to the host's logs. The one
+  API, every navigation, every messaging API and every computed property name that could hide one), with
+  the CSP refusing what it can and the attested bundle making the code checkable; the privacy page says
+  so. What the CSP does govern it closes to the host as well as to third parties: `connect-src 'none'`,
+  `img-src 'none'` and `worker-src 'none'`, since an own-origin request carries data in its path or query
+  to the host's logs and a same-origin worker would run under its own response headers' CSP, not the
+  page's; `child-src`, `frame-src` and `manifest-src` are pinned to `'none'` as well. The one
   own-origin request it leaves is the browser's own `/favicon.ico` fetch, a fixed URL with no page data.
 - **The deploy is gated on `SITE_DEPLOY_ENABLED` and on `latest`.** Releases between milestones 3 and 4
   skip it visibly instead of failing, and no re-run or older line rolls the site back.
@@ -883,6 +926,29 @@ security audit (`security-audit` skill), since every one of them touches the tru
   `/favicon.ico` on its own, a fixed URL that carries no page data (*Layer 2*). The static test pins
   `img-src 'none'`, and the smoke test shows an image and a CSS `url()` load blocked, own-origin and
   cross-origin.
+- **Decided: `worker-src 'none'`, with `child-src`, `frame-src` and `manifest-src` pinned to `'none'`**
+  (AI reviewer on a5d7f72). With `script-src 'self'` and no `worker-src`, CSP Level 3 falls back from
+  `worker-src` to `child-src` to `script-src`, so same-origin dedicated and shared workers and a
+  service-worker registration would be allowed. A worker loaded from a same-origin URL takes its CSP
+  from its own response headers, not from the page, and this site sends no headers (Hosting decision 2),
+  so the worker's `fetch` would escape `connect-src 'none'`. `child-src`, `frame-src` and
+  `manifest-src` already fall back to `default-src 'none'`, but are pinned so a later directive cannot
+  widen them by fallback; the static test fails when any of the four is missing or other than exactly
+  `'none'` (*Layer 2*). It does not conflict with the unregister function: `getRegistrations()` and
+  `unregister()` fetch no script, and `worker-src` governs only the fetch of a worker's script. The
+  smoke test shows a dedicated worker, a shared worker and a service-worker registration blocked.
+- **Decided: layer 1 bans messaging to another window or browsing context** (AI reviewer on a5d7f72).
+  The CSP governs none of `postMessage`, `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`
+  or `window.name`, and each can hand the inventory to another page: a window that opened this one, a
+  frame's parent, another same-origin context (for instance a page uploaded with a leaked key, open in
+  another tab), or the next page loaded in the same tab, which reads `window.name`. The page script's
+  banned-API scan and the glue's allow-list rule therefore refuse `postMessage` (on any object),
+  `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel` and assignment to `name`, with two
+  exceptions, both in the framing guard: its one comparison `window.top !== window.self`, and
+  `window.opener = null` on load, which cuts the opener's handle since the site cannot send
+  `Cross-Origin-Opener-Policy` (*Layer 1*). Milestone 2's ADR and the privacy page's technical note list
+  these as gaps the CSP does not cover and layer 1 closes, and the smoke test records `window.opener`
+  as `null` after load in a page opened by another.
 
 ### Hosting decisions (decided by the maintainer, 2026-11-19)
 
