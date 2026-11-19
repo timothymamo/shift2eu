@@ -17,6 +17,48 @@
 > `make agents-token-refresh-start` warns and starts nothing while it is loaded. Where a) says launchd lost,
 > ADR 0034 decides otherwise; the hand-started loop stays as the fallback.
 
+> **Update (issue #227 part 1), 2026-11-19.** The first open follow-up in Consequences is done: **every
+> host target runs from the host clone**, not only the token targets. The host targets are every target
+> that runs on the Mac as the maintainer: the `vm-*` targets, `deck`, `deck-restart`, `gate-check` and the
+> `agents-token*` targets (the Makefile's `HOST_TARGETS`; `test/devenv` keeps the list complete against
+> every recipe that calls `limactl`, `launchctl` or `sudo`).
+>
+> - **`WORKSPACE_REPO`.** A new make variable, the absolute path of the repository's checkout inside the
+>   workspace, set in the host clone's `.envrc` (or on the command line). The host targets reach the
+>   workspace only through it, instead of `CURDIR` and the paths derived from the checkout make runs in:
+>   `deck`, `vm-shell`, `vm-claude-settings` and `vm-init` open the VM at it, `vm-init` gets it and its
+>   parent, and `vm-up` mounts its parent, the workspace, and checks that for stray entries. The VM_ENV
+>   credentials now come from the host clone's `.envrc` too, so no `.envrc` in or above the workspace
+>   holds a credential any more.
+> - **The refusal.** make refuses a host target while it reads the Makefile, keyed on `MAKECMDGOALS`
+>   (GNU make 3.81's `$(error)`, so before any prerequisite, sub-make or recipe line, even under `-i` or
+>   `-k`), when `WORKSPACE_REPO` is unset, holds whitespace or a character a shell or make pattern reads,
+>   or is not absolute, or when the checkout make runs in is the workspace, lies inside it or holds it. Its
+>   message names the target, the host clone and `docs/dev-environment.md`. The targets the agents run in
+>   the VM never read `WORKSPACE_REPO` and are not refused.
+> - **A guard, not a boundary.** The refusal protects the maintainer from a mistake (a `make deck` typed
+>   in the wrong directory). It is no security boundary: the workspace's `Makefile` is agent-editable, so
+>   a make run there runs whatever that file says. The protection is that the maintainer never runs
+>   `make` or `git` in the workspace on the Mac (`docs/dev-environment.md`, The host clone).
+> - **`vm-up` no longer sets git hooks.** Its `git-hooks` prerequisite would set the host clone's hooks
+>   from there, and running git in the workspace from the Mac is what this forbids. The workspace's hooks
+>   are turned on once in the VM (`make git-hooks` there); the setting lives in the mounted `.git/config`.
+> - `make gate-check` is a host target, so the release-tag skill runs `dev/protect-main-check.sh` in the
+>   VM and asks the maintainer for `make gate-check` from the host clone. `make deck`'s warning about the
+>   App variables in "the workspace's shell" became a note that it ignores them.
+>
+> **What part 2 leaves open.** The App's key is still a file the maintainer's uid can read, so code that
+> runs as the maintainer anywhere (agent-editable code run on the Mac by mistake, a git-aware prompt or an
+> editor in the workspace, a tampered host clone) can read it silently; the Consequences below still hold
+> for that. The maintainer ruled out prompting stores for the unattended Mac Mini (issue #227, comment of
+> 2026-11-15): the option that fits is a separate macOS account that owns the key and runs the refresher,
+> composing with [ADR 0034](0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md) as the
+> LaunchDaemon's `UserName`. As the Lima instance lives in the maintainer's `~/.lima`, that account would
+> write the token into the VM over its SSH port with a key of its own, a change to
+> `dev/agents-app-token.sh`. Where the decision or the Consequences below describe host targets run from
+> the workspace, `make deck` typed by hand, or credentials in the `.envrc` above the workspace as current,
+> this update supersedes them.
+
 ## Context
 
 The agents in the Lima VM push branches, open pull requests and file issues with the maintainer's own
