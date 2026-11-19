@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -556,43 +557,15 @@ func TestClaudeCLIAskCapsTheCLIErrorText(t *testing.T) {
 	}
 }
 
-// TestClaudeCLIAskReportsACancellationAfterTheCLIStarted drives Ask through its
-// OutcomeCancelled arm (issue #303): the CLI has started and is still running
-// when the caller's context is cancelled, so the run has no result of its own
-// to report and Ask answers with the cancellation of the caller's context,
-// wrapping ErrModel so the run fails visibly. The two are synchronised on a
-// FIFO the fake writes one line to as it starts: no sleep and no poll decides
-// the order, so the cancellation cannot come before the CLI ran.
-func TestClaudeCLIAskReportsACancellationAfterTheCLIStarted(t *testing.T) {
-	t.Parallel()
+// awaitFakeCLIStart blocks until the fake CLI has written its one start line to
+// the FIFO at fifo, and fails the test when the CLI never started. The read is
+// bounded, so a run that never starts the CLI fails the test instead of
+// blocking it for ever; the bound is no synchronisation, the FIFO's one line is
+// (issue #303). Both tests that reach a run's mid-CLI arm share it, so the
+// handshake is written once.
+func awaitFakeCLIStart(t *testing.T, fifo string) {
+	t.Helper()
 
-	// A FIFO is what makes the start of the CLI observable: the fake's write
-	// blocks until this test opens it, and this test's open blocks until the
-	// fake writes. It is made in a file split by build constraint, because
-	// syscall.Mkfifo is Unix-only and make lint typechecks this package's tests
-	// for every release target, Windows included (issue #303).
-	fifo := newStartFIFO(t)
-
-	cli, rec := newFakeClaudeCLI(t, claudeFake{started: fifo, stdout: cliSuccess})
-
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-
-	type askResult struct {
-		text string
-		err  error
-	}
-
-	done := make(chan askResult, 1)
-
-	go func() {
-		text, err := review.NewClaudeCLI(cli, fakeOAuthToken, 30*time.Second).Ask(ctx, review.Prompt{System: "s", User: "u"})
-		done <- askResult{text: text, err: err}
-	}()
-
-	// The read is bounded, so a run that never starts the CLI fails the test
-	// instead of blocking it for ever. The bound is no synchronisation: the
-	// FIFO's one line is.
 	started := make(chan error, 1)
 
 	go func() {
@@ -628,6 +601,43 @@ func TestClaudeCLIAskReportsACancellationAfterTheCLIStarted(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatal("the fake CLI never started: Ask did not run the CLI at its path")
 	}
+}
+
+// TestClaudeCLIAskReportsACancellationAfterTheCLIStarted drives Ask through its
+// OutcomeCancelled arm (issue #303): the CLI has started and is still running
+// when the caller's context is cancelled, so the run has no result of its own
+// to report and Ask answers with the cancellation of the caller's context,
+// wrapping ErrModel so the run fails visibly. The two are synchronised on a
+// FIFO the fake writes one line to as it starts: no sleep and no poll decides
+// the order, so the cancellation cannot come before the CLI ran.
+func TestClaudeCLIAskReportsACancellationAfterTheCLIStarted(t *testing.T) {
+	t.Parallel()
+
+	// A FIFO is what makes the start of the CLI observable: the fake's write
+	// blocks until this test opens it, and this test's open blocks until the
+	// fake writes. It is made in a file split by build constraint, because
+	// syscall.Mkfifo is Unix-only and make lint typechecks this package's tests
+	// for every release target, Windows included (issue #303).
+	fifo := newStartFIFO(t)
+
+	cli, rec := newFakeClaudeCLI(t, claudeFake{started: fifo, stdout: cliSuccess})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	type askResult struct {
+		text string
+		err  error
+	}
+
+	done := make(chan askResult, 1)
+
+	go func() {
+		text, err := review.NewClaudeCLI(cli, fakeOAuthToken, 30*time.Second).Ask(ctx, review.Prompt{System: "s", User: "u"})
+		done <- askResult{text: text, err: err}
+	}()
+
+	awaitFakeCLIStart(t, fifo)
 
 	// The CLI is running and blocked now, as a real one is mid-turn.
 	cancel()
@@ -670,6 +680,15 @@ func TestClaudeCLIAskReportsACancellationAfterTheCLIStarted(t *testing.T) {
 type runDeadlineReached struct {
 	context.Context
 	done chan struct{}
+	once sync.Once
+}
+
+// pass lets the run's deadline pass: it closes done, and exactly once, so a
+// test that reports a failure after letting it pass cannot close it twice (a
+// second close of a channel panics, which would hide the failure the test
+// reports).
+func (c *runDeadlineReached) pass() {
+	c.once.Do(func() { close(c.done) })
 }
 
 // Done returns the channel this test closes when the run's deadline passes.
@@ -720,48 +739,11 @@ func TestClaudeCLIAskReportsTheRunDeadlineAfterTheCLIStarted(t *testing.T) {
 		done <- askResult{text: text, err: err}
 	}()
 
-	// The read is bounded, so a run that never starts the CLI fails the test
-	// instead of blocking it for ever. The bound is no synchronisation: the
-	// FIFO's one line is.
-	started := make(chan error, 1)
-
-	go func() {
-		f, err := os.Open(fifo)
-		if err != nil {
-			started <- fmt.Errorf("open the fake CLI's start signal: %w", err)
-
-			return
-		}
-		defer f.Close()
-
-		line, err := bufio.NewReader(f).ReadString('\n')
-		if err != nil {
-			started <- fmt.Errorf("read the fake CLI's start signal: %w", err)
-
-			return
-		}
-
-		if got := strings.TrimSpace(line); got != "started" {
-			started <- fmt.Errorf("the fake CLI signalled %q, want %q", got, "started")
-
-			return
-		}
-
-		started <- nil
-	}()
-
-	select {
-	case err := <-started:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("the fake CLI never started: Ask did not run the CLI at its path")
-	}
+	awaitFakeCLIStart(t, fifo)
 
 	// The CLI is running and blocked now, as a real one is mid-turn: the run's
 	// deadline passes while it is.
-	close(ctx.done)
+	ctx.pass()
 
 	select {
 	case got := <-done:
@@ -783,7 +765,7 @@ func TestClaudeCLIAskReportsTheRunDeadlineAfterTheCLIStarted(t *testing.T) {
 			t.Errorf("Ask = %v once the run's deadline passed, want no cancelled wording: nobody cancelled this run, its deadline passed, and a cancellation sends the maintainer looking for a caller that does not exist (issue #324)", got.err)
 		}
 	case <-time.After(10 * time.Second):
-		close(ctx.done)
+		ctx.pass()
 		t.Fatal("Ask did not return within 10s of the run's deadline passing: a run whose deadline passed is killed and reported at once")
 	}
 
