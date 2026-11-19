@@ -109,7 +109,7 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 |---|---|
 | `theme` | Sets `theme` in Claude Code's `~/.claude/settings.json` to `CLAUDE_THEME` (default `dark`; `make vm-init CLAUDE_THEME=light`) |
 | `claude` | Marks Claude Code's onboarding done and trusts the workspace and the repository, in `~/.claude.json`, so the Claude Code roles start without first-run screens (see below) |
-| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run. Then it turns on the main checkout's git hooks (`git -C <main checkout> config core.hooksPath .githooks`), which refuse commits and pushes to `main`: `make vm-up` runs on the Mac and sets none (issue #227) |
+| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept (a key `~/.gitconfig` holds several times is never taken for the wanted identity, and every write replaces all its values, issue #262). With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run. Then it turns on the main checkout's git hooks (`git -C <main checkout> config core.hooksPath .githooks`), which refuse commits and pushes to `main`: `make vm-up` runs on the Mac and sets none (issue #227) |
 | `claude auth` | Checks that Claude Code uses the OAuth token (your subscription), not an API key |
 | `pi` | `pi auth check --provider deepseek` |
 | `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository with the agents App's token; without the token file the gh wrapper refuses to run gh at all. Not `gh auth status`, which an installation token may fail (ADR 0031) |
@@ -644,11 +644,15 @@ next check, without a new mint. It stops only on what you have to fix (GitHub re
 App, its installation or the bot user, a key that cannot sign, a symlink in the VM's `~/.config/shift2eu`),
 or on a signal, and then writes `agents App token refresh stopped`, the time and where to start it again
 (the host clone on the Mac, `make agents-token-refresh-start`) to the log; the next `make agents-token-refresh-start`
-warns that it stopped, shows the log's last lines and starts a new one. One refresh runs per VM: it holds
+warns that it stopped (with its pid, or `unknown` when the pid file holds anything but digits), shows the
+log's last lines and starts a new one. One refresh runs per VM: it holds
 the lock `agents-token-refresh-shift2eu.lock` in the same directory, with its pid inside. A second one (a
 `make agents-token-refresh` while the background one runs, say) says that another refresher for that VM
 is running and exits with status 0, and `make agents-token-refresh-start` names the pid in the lock and
-starts nothing. A lock left by a killed refresh is taken over, by one refresh only. Stop it with
+starts nothing. A lock left by a killed refresh is taken over, by one refresh only. Should a refresh that
+moved a lock aside during a takeover fail to put it back (a full disk, say), it keeps the moved-aside
+directory (`.agents-token-refresh-shift2eu.lock.stale.<pid>`), says so in the log and stops; move it back
+to the lock's name, or start a refresh again. Stop it with
 `kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,
 the JWT or the key, and nothing writes them to a log or the workspace.
 
@@ -786,7 +790,8 @@ a `~/.config/shift2eu` that is a symlink or resolves outside the VM user's home,
 file or a `~/.gitconfig` that is a symlink or not a regular file (a guard against a symlink left by
 mistake, not against the VM user). Whenever it writes the identity file it also sets the VM user's git
 identity to it (`user.name` and `user.email` in `~/.gitconfig`, replacing every value there), and says
-so ("set the VM shift2eu's git identity ..."). That write is atomic and takes git's own lock: a copy
+so ("set the VM shift2eu's git identity ..."); when `~/.gitconfig` already holds the bot's identity it
+leaves the file untouched and says "the VM shift2eu's git identity is already ..." instead. That write is atomic and takes git's own lock: a copy
 of `~/.gitconfig` in `~/.gitconfig.lock` gets the bot's identity, and replaces the file only when git,
 following the copy's `[include]` files, reads the bot's identity back; otherwise `~/.gitconfig` stays as
 it was. A rewritten `~/.gitconfig` is mode 0600; one that already holds exactly the bot's identity is not

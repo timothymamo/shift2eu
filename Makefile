@@ -633,16 +633,18 @@ AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2e
 # and LIMA_INSTANCE, not WORKSPACE_REPO, but like every host target they refuse to run without it (the
 # host-clone refusal). The host clone does not put the key out of reach of code that runs as you: what
 # remains open is issue #227's part 2 (ADR 0031, Consequences).
+# Like every dev script the Makefile calls (dev/protect-main-check.sh, dev/shellcheck.sh), their scripts run by
+# path and shebang, with no explicit interpreter (issue #242): both are executable (100755) in git.
 
 .PHONY: agents-token
 agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM (host clone)
 	$(LIMA_INSTANCE_CHECK)
-	@sh dev/agents-app-token.sh mint
+	@dev/agents-app-token.sh mint
 
 .PHONY: agents-token-refresh
 agents-token-refresh: ## Mint the agents App token now and again before each one expires, in the foreground, until stopped (host clone)
 	$(LIMA_INSTANCE_CHECK)
-	@sh dev/agents-app-token.sh refresh
+	@dev/agents-app-token.sh refresh
 
 # Starts the refresh of this VM instance in the background unless one already runs: the one whose pid the
 # instance's lock holds (a refresh started by hand with make agents-token-refresh holds it too), or the one
@@ -685,10 +687,11 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 		fi; \
 	done; \
 	if [ -n "$$started" ]; then \
+		case "$$started" in *[!0-9]*) started=unknown ;; esac; \
 		echo "agents-token-refresh-start: warning: the agents App token refresh of $$LIMA_INSTANCE (pid $$started) had stopped; its log's last lines:" >&2; \
 		tail -n 3 "$$log" 2>/dev/null | sed 's/^/  /' >&2 || true; \
 	fi; \
-	env -u CLAUDE_CODE_OAUTH_TOKEN -u DEEPSEEK_API_KEY nohup sh dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
+	env -u CLAUDE_CODE_OAUTH_TOKEN -u DEEPSEEK_API_KEY nohup dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
 	pid="$$!"; \
 	(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
 	echo "agents-token-refresh-start: started the agents App token refresh of $$LIMA_INSTANCE (pid $$pid); its log is $$log"
@@ -808,7 +811,7 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 	lock_pid="$$state/agents-token-refresh-$$LIMA_INSTANCE.lock/pid"; \
 	tmp="$$(mktemp "$${TMPDIR:-/tmp}/agents-token-refresh-plist.XXXXXX")" || exit 1; \
 	trap 'rm -f "$$tmp"' EXIT; \
-	sh dev/agents-token-launchd.sh plist >"$$tmp" || exit 1; \
+	dev/agents-token-launchd.sh plist >"$$tmp" || exit 1; \
 	plutil -lint "$$tmp" || { echo "agents-token-refresh-install: plutil refused the rendered plist, so launchd would load no job: nothing was installed" >&2; exit 1; }; \
 	sum="$$(shasum -a 256 <"$$tmp" | cut -d ' ' -f 1)" || exit 1; \
 	echo "agents-token-refresh-install: installing this plist as $$dest (it holds the App ID, the installation ID and the key's path, never the key):"; \

@@ -47,22 +47,24 @@ fi
 # Set only where the VM has none, so a re-run never replaces an identity chosen in the VM. Two exceptions,
 # for the switch to the App and back: the bot's identity replaces any other, and with no identity file a
 # bot's identity left from an earlier run gives way to the fallback.
-# Known gap: a key with several values in ~/.gitconfig makes git config <key> <value> refuse (status 5),
-# where the mint (dev/agents-app-token.sh) uses --replace-all; no test pins that case here yet (issue #241).
+# A key ~/.gitconfig holds several times is read with --get-all (one value per line), so several values are
+# never the wanted identity, and every write is --replace-all: git config <key> <value> refuses to write one
+# value over several (status 5), as the mint (dev/agents-app-token.sh) knows too (issue #262).
 for pair in "user.name=${git_name}" "user.email=${git_email}"; do
   key="${pair%%=*}"
   value="${pair#*=}"
-  current="$(git config --global --get "${key}" || true)"
+  current="$(git config --global --get-all "${key}" || true)"
+  shown="$(printf '%s' "${current}" | tr '\n' ',')"
   if [ -n "${current}" ] && [ "${current}" != "${value}" ] &&
     { [ "${bot_identity}" -eq 1 ] || [[ "${current}" == *"[bot]"* ]]; }; then
-    git config --global "${key}" "${value}"
-    say "replaced ${key} ${current} with ${value}"
+    git config --global --replace-all "${key}" "${value}"
+    say "replaced ${key} ${shown} with ${value}"
   elif [ -z "${current}" ]; then
-    git config --global "${key}" "${value}"
+    git config --global --replace-all "${key}" "${value}"
     say "set ${key} to ${value}"
   elif [ "${current}" = "${value}" ]; then
     say "${key} already ${value}"
   else
-    say "kept ${key} ${current}, not ${value}; change it with git config --global ${key} in the VM"
+    say "kept ${key} ${shown}, not ${value}; change it with git config --global ${key} in the VM"
   fi
 done
