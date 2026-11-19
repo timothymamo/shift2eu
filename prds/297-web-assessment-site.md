@@ -130,7 +130,10 @@ release), *live* (checked against the live site) or *review*.
   inserts the Go-rendered report; and no `report-uri` or `report-to` (violation reports carry blocked
   URLs and samples). A static test parses each built page's policy and fails on a missing, widened or
   added directive. Where the host can also send the policy as a header (Hosting decision 2), the header
-  adds `frame-ancestors 'none'`.
+  adds `frame-ancestors 'none'`. The script fetches the module by a same-origin relative path, never an
+  absolute URL, and the static test fails on an absolute module URL. A CSP source must name a host (CSP
+  Level 3's `host-source`), so `connect-src` itself cannot be a relative path: milestone 2's ADR records
+  which origin it names and how the attested bundle still runs locally (*Layer 3*) under it.
 - [ ] `require-trusted-types-for` is not enforced in every browser (browsers without Trusted Types ignore
   it). Milestone 2's ADR and the privacy page's technical note say so, and say that in such a browser the
   one insertion of the report rests on `html/template`'s contextual escaping (pinned by the HTML
@@ -170,12 +173,20 @@ release), *live* (checked against the live site) or *review*.
   browser extensions can read any page; a user who must not trust the host can run the attested bundle
   locally (layer 3). *Review:* each statement names the tested criterion that backs it, and none rests on
   review alone.
-- [ ] If the maintainer waives HSTS at milestone 4 (its go/no-go), the privacy page states the first-visit
-  downgrade risk next to its "nothing leaves the browser" statement, not only on the verification page:
-  without HSTS, a network attacker can strip HTTPS on a user's first visit and serve a look-alike page
-  that sends the inventory away, and the way to avoid it is to type `https://www.shift2eu.com` or run the
-  attested bundle locally. A static test of the privacy page fails when the site is built without HSTS
-  declared (a build setting of milestone 3) and the statement is missing.
+- [ ] The privacy page states the first-visit downgrade risk next to its "nothing leaves the browser"
+  statement, not only on the verification page, until `shift2eu.com` is on the HSTS preload list in
+  shipping browsers: HSTS on `www.shift2eu.com` protects only a browser that has already visited it over
+  HTTPS, so on a first visit, or a visit that starts at `http://shift2eu.com` (answered by the apex
+  redirect's provider, which may send no HSTS), a network attacker can strip HTTPS and serve a look-alike
+  page that sends the inventory away; the way to avoid it is to type `https://www.shift2eu.com` or run the
+  attested bundle locally. The statement carries a stable marker (the element id `downgrade-risk`) and is
+  shown by default: a static test of the built privacy page fails when the marker is missing, hidden or
+  empty. Only a change made after preload is live in shipping browsers may remove it, and the live check
+  (*Layer 3* and milestone 4) refuses that removal before then.
+- [ ] The privacy page names the apex redirect's provider (chosen in milestone 4), says what it sees of a
+  visitor who enters through `shift2eu.com` (IP address, user agent, the requested path and the
+  `Referer`), and that it only serves the redirect and never the site or the inventory. *Review* at
+  milestone 4, when the provider is known.
 
 **`wasm_exec.js`.**
 
@@ -196,9 +207,28 @@ release), *live* (checked against the live site) or *review*.
   `-trimpath`, a fixed or no VCS stamp, sorted archive entries with fixed times, owners and modes, and
   compressed files with zero mtime and a fixed level.
 - [ ] *Release:* after the deploy, `release.yml` fetches every file of the manifest from the canonical
-  host (`https://www.shift2eu.com`), with no query string, and fails when one does not match its SHA-256 after content decoding. It
-  retries for a stated bound at least as long as the HTML's cache lifetime, and records which host it
-  checked and the `Age` of each response.
+  host (`https://www.shift2eu.com`), with no query string, and fails when one does not match its SHA-256
+  after content decoding. It retries for a stated bound at least as long as the HTML's cache lifetime,
+  and records which host it checked and the `Age` of each response. The same check also asserts, and
+  fails on a mismatch:
+  - the redirects: `http://shift2eu.com`, `https://shift2eu.com` and `http://www.shift2eu.com` each
+    answer with a 301 or 308 to `https://www.shift2eu.com` with the same path and no other hop, except the
+    preload chain of Hosting decision 2; where milestone 4 accepted a refused or closed plain-HTTP `www`
+    instead (Hosting decision 3), `http://www.shift2eu.com` must refuse or close, and never answer 200;
+  - the apex's certificate: valid for `shift2eu.com`, and not expiring within a stated margin (at least
+    14 days);
+  - HSTS against the privacy page: it reads `Strict-Transport-Security` on `https://www.shift2eu.com/`
+    (and on `https://shift2eu.com/`) and fails when the header is missing or weaker than the minimum of
+    milestone 4's go/no-go while the deployed privacy page lacks the `downgrade-risk` statement, or when
+    the deployed page lacks the statement while the domain is not on the preload list. Without a record
+    that preload is live in shipping browsers (milestone 3's ADR says where the check reads it), the
+    check assumes it is not, so it fails safe.
+- [ ] *Live:* a scheduled workflow repeats that check (the manifest including the HTML, the redirects, the
+  apex certificate's validity and expiry, and HSTS against the privacy page) at least daily, with no
+  secret and `contents: read` only, and fails its run on any mismatch, so the maintainer is alerted by
+  the failing run. A page changed between releases (a leaked key, a changed bucket or Edge Services
+  setting) is noticed within a day, not at the next release. A workflow test, like
+  `check.ReleaseWorkflow`, pins its schedule and permissions.
 - [ ] The release verification guide (`docs/guide/verify-releases.md`) documents the same check as
   commands a user can run (`gh attestation verify` on the bundle with `--signer-workflow`,
   `--source-ref refs/tags/<tag>` and `--deny-self-hosted-runners`, then fetching each file of its manifest
@@ -351,10 +381,17 @@ release), *live* (checked against the live site) or *review*.
   policy, and its API key with an expiry and a rotation step; the `site` GitHub environment, its
   deployment policy and secrets; the Namecheap records (the `www` CNAME to the Edge Services endpoint, the
   apex's permanent redirect to `https://www.shift2eu.com` by the means chosen in milestone 4, CAA allowing
-  only the certificate authority Edge Services uses, DNSSEC on); and, last,
+  the certificate authorities of Edge Services and, if it issues its own certificate, the apex redirect's
+  provider (milestone 4), DNSSEC on); and, last,
   `SITE_DEPLOY_ENABLED`. It also says to remove the DNS record before deleting the pipeline or the bucket,
   so no dangling CNAME can be taken over. Every step names what the `release-tag` checks or the live check
   verify afterwards.
+- [ ] The runbook has a step, run once the key exists, that verifies the key's limits rather than only
+  reviewing them: with the deploy key, against a canary object in the site's bucket, each of
+  `DeleteObject`, `DeleteObjectVersion`, `PutObjectAcl`, `PutBucketPolicy`, `PutBucketWebsite` and
+  `PutBucketVersioning` must answer 403. If versioning is on, the key must not be able to delete an object
+  version or suspend versioning. Milestone 3 writes the step; the maintainer runs it in milestone 4, and
+  its result is recorded in milestone 3's hosting ADR (amended in milestone 4).
 
 ## Milestones
 
@@ -384,20 +421,39 @@ skill), since every one of them touches the trust model or the release.
    and `latest`; the live site check; `check.ReleaseWorkflow` and the CI dry run; the `release-tag`
    skill's step 2 for the `site` environment and its post-release check; `docs/guide/verify-releases.md`;
    the runbook. An ADR records the hosting, the deploy (environment, key scope, upload order, cache
-   headers, rollback guard) and the bundle's attestation. Releases cut after this merge skip the deploy
-   visibly until the variable is set. Depends on 2.
+   headers, rollback guard) and the bundle's attestation. It also lists every origin that serves the
+   site: the bucket website endpoint `<bucket>.s3-website.<region>.scw.cloud`, the pipeline's own
+   endpoint `<id>.svc.edge.scw.cloud` and `www.shift2eu.com`, and says that only `www.shift2eu.com` is
+   attested and checked (*Layer 3*); the bucket's access rule (Hosting decision 11); and the result of the
+   runbook's key-limit step. Releases cut after this merge skip the deploy visibly until the variable is
+   set. Depends on 2.
 4. [ ] **First deploy and the privacy statement live.** After the maintainer has followed the runbook and
    settled the items left to check for this milestone (*To be checked by the maintainer*: how the apex
-   redirect is served over valid HTTPS, Edge Services' response headers and redirects, HSTS), and the
-   go/no-go below is met: the first release that deploys, the live checks green (files match the
-   manifest, headers, no cookie, HTTPS and the redirects), any fix the live site needs, the README's link
-   to the site, and this PRD moved to `prds/done/` (`Closes #297`). **Go/no-go:** `http://shift2eu.com`,
-   `https://shift2eu.com` and `http://www.shift2eu.com` each answer with a 301 or 308 to
-   `https://www.shift2eu.com` (same path) and nothing else, the apex's HTTPS answer with a valid
-   certificate for `shift2eu.com`, and `www.shift2eu.com` sends `Strict-Transport-Security`; or the
-   maintainer explicitly accepts the risk of a stripped first visit without HSTS, recorded in the ADR and
-   stated on the verification page and on the privacy page next to its claim (*Privacy statement*,
-   Hosting decision 2). Depends on 3.
+   redirect is served over valid HTTPS, Edge Services' response headers and redirects, HSTS and preload),
+   and the go/no-go below is met: the first release that deploys, the live checks green (files match the
+   manifest, headers, no cookie, HTTPS, the redirects, the apex certificate and HSTS against the privacy
+   page), the scheduled live check workflow (*Layer 3*) added and running at least daily, any fix the live site needs, the
+   runbook updated with the apex redirect means chosen, milestone 3's hosting ADR amended with that
+   means, the apex redirect's provider (what it sees, its certificate authority if it issues its own
+   certificate) and the HSTS and preload outcome or the waiver, the privacy page naming the apex
+   redirect's provider (*Privacy statement*), the README's link to the site, and this PRD moved to
+   `prds/done/` (`Closes #297`).
+
+   **Go/no-go, mandatory (never waived):** `http://shift2eu.com`, `https://shift2eu.com` and
+   `http://www.shift2eu.com` each answer with a 301 or 308 (no other status) to exactly
+   `https://www.shift2eu.com` with the same path, and no other hop, except the preload chain
+   `http://shift2eu.com` -> `https://shift2eu.com` -> `https://www.shift2eu.com` when preload is pursued
+   (Hosting decision 2); and the apex's HTTPS answer carries a valid certificate for `shift2eu.com`. If
+   Edge Services cannot redirect `http://www.shift2eu.com` but can refuse or close plain HTTP on `www`,
+   that is accepted in place of its redirect; if it can do neither, it is a no-go (Hosting decision 3).
+   The site is never served over plain HTTP with a 200.
+
+   **Go/no-go, HSTS (met, or explicitly waived):** `https://www.shift2eu.com` sends
+   `Strict-Transport-Security` with `max-age` of at least 31536000 and `includeSubDomains` (plus `preload`,
+   and the apex the same, when preload is pursued); or the maintainer explicitly waives it, recorded in
+   the ADR. Either way the privacy page states the first-visit risk until preload is live (*Privacy
+   statement*); a waiver also means that risk covers returning visitors, and the verification page and
+   the privacy page say so. Depends on 3.
 
 ## Decisions
 
@@ -466,7 +522,8 @@ skill), since every one of them touches the trust model or the release.
 
 ### Hosting decisions (decided by the maintainer, 2026-11-19)
 
-These were the PRD's open questions 1 to 11, numbered as in the report to the maintainer. The maintainer
+These were the PRD's open questions 1 to 11, numbered as the open questions of the PRD's first draft
+(PR #298). The maintainer
 accepted every recommendation on 2026-11-19; each is worded below as decided. What is still unknown is
 listed under *To be checked by the maintainer*, with the milestone that needs it.
 
@@ -481,19 +538,32 @@ listed under *To be checked by the maintainer*, with the milestone that needs it
    headers ([Edge Services FAQ](https://www.scaleway.com/en/docs/edge-services/faq/)); Object Storage
    lets an object carry `Cache-Control` and `x-amz-meta-*` headers only
    ([Object Storage FAQ](https://www.scaleway.com/en/docs/object-storage/faq/)). The CSP is in a `<meta>`
-   element in any case (it travels with the pages, to the bucket's direct URL too), and the script refuses
+   element in any case (it travels with the pages, to the other origins too, decision 11), and the script refuses
    to run framed. If Edge Services can add headers, the site also sends `Content-Security-Policy` (with
    `frame-ancestors 'none'`), `X-Content-Type-Options`, `Referrer-Policy` and `Permissions-Policy`. HSTS
-   has no substitute: without it, a network attacker can strip HTTPS on a user's first visit and serve a
-   look-alike page that sends the inventory away. So milestone 4's go/no-go is HSTS on `www.shift2eu.com`
-   (then the domain is submitted to the HSTS preload list, which needs the apex to send it too), or the
-   maintainer's recorded acceptance of the risk, stated on the verification page and on the privacy page
-   next to its claim.
+   has no substitute against a stripped returning visit, so milestone 4's HSTS go/no-go is
+   `Strict-Transport-Security` on `www.shift2eu.com` with `max-age` of at least 31536000 and
+   `includeSubDomains`, or the maintainer's explicit, recorded waiver. HSTS on `www` never protects a
+   first visit, nor a visit that starts at `http://shift2eu.com` (served by the apex redirect's provider,
+   which may send no HSTS): only the HSTS preload list closes that. So the privacy page states that risk
+   and its mitigation always, until the domain is on the preload list in shipping browsers (*Privacy
+   statement*), and the live check holds the page to it. The domain is submitted to the preload list only
+   if the apex redirect can meet the list's requirements (checked in milestone 4): `https://shift2eu.com`
+   sends `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload` (`max-age` at least
+   31536000), and `http://shift2eu.com` redirects first to `https://shift2eu.com` (same host) and only
+   then to `https://www.shift2eu.com`. `includeSubDomains` binds every present and future subdomain of
+   `shift2eu.com` to HTTPS; milestone 3's hosting ADR (as amended in milestone 4) records that.
 3. **Decided: permanent redirects over HTTPS only.** The apex, and `http://www.shift2eu.com`, answer with
-   a 301 or 308 to `https://www.shift2eu.com`. For `http://www`, a redirect from Edge Services if it can
-   redirect. For the apex, which Edge Services cannot serve, Namecheap's URL redirect record is used only
-   if it serves HTTPS with a valid certificate for `shift2eu.com`; otherwise another means that does (to
-   be checked for milestone 4).
+   a 301 or 308 to `https://www.shift2eu.com` with the same path. For `http://www`, a redirect from Edge
+   Services if it can redirect; if it cannot, plain HTTP on `www` is refused or the connection closed, if
+   Edge Services allows that, and milestone 4's go/no-go accepts it; if it allows neither, that is a
+   no-go. The site is never served over plain HTTP with a 200. For the apex, which Edge Services cannot
+   serve, Namecheap's URL redirect record is used only if it serves HTTPS with a valid certificate for
+   `shift2eu.com`; otherwise another means that does (to be checked for milestone 4). The apex redirect's
+   provider is a third party: it sees the IP address, user agent, path and `Referer` of every visitor
+   who enters through `shift2eu.com`, and serves only the redirect. The privacy page and milestone 3's
+   hosting ADR (amended in milestone 4) name it, and if it issues its own certificate, its certificate
+   authority goes into the CAA record (decision 10) and the ADR.
 4. **Decided: the module is uploaded pre-compressed with `Content-Encoding: gzip`** if Edge Services
    serves it with that header and `Content-Type: application/wasm`; otherwise it is served uncompressed,
    the uncompressed size is held to a budget too (milestone 3's ADR), and TinyGo is reconsidered only if
@@ -508,9 +578,12 @@ listed under *To be checked by the maintainer*, with the milestone that needs it
    statements are therefore useless",
    [bucket policies](https://www.scaleway.com/en/docs/object-storage/api-cli/bucket-policy/)), allows the
    application `s3:PutObject` and `s3:GetObject` (and `s3:ListBucket` only if the deploy needs it) on that
-   bucket and nothing else, with public `s3:GetObject` for the site. Bucket versioning is turned on if it
-   works with a website bucket. A leaked key can still overwrite the pages; versioning, the key's expiry
-   and the release's live check limit that.
+   bucket and nothing else, plus the read grant for the site that decision 11 settles. Bucket versioning
+   is turned on if it works with a website bucket. The runbook verifies the key's limits with a canary
+   object (*Runbook*). A leaked key can still overwrite the pages until it expires or is revoked. The
+   scheduled live check notices a changed page within a day and the release's live check at each
+   release; until then, users are served the changed page. Versioning lets the maintainer roll it back
+   once noticed.
 6. **Decided: Chromium for the smoke test is the `chromedp/headless-shell` container image, pinned by
    digest** with a `# renovate: datasource=docker` comment, run by the CI job and in the Lima VM's
    container runtime (ADR 0017); `chromedp` connects to it on loopback. A Chromium download pinned by
@@ -534,7 +607,7 @@ listed under *To be checked by the maintainer*, with the milestone that needs it
    `scaleway-pricing-storage-2026-11-19`): Standard One Zone €0.00803/GB-month, Standard Multi-AZ
    €0.01606/GB-month, requests and ingress included, egress 75 GB free every month, then €0.01/GB. A
    bundle of a few MiB per release, kept for earlier releases too, and cache fills of a few MiB per
-   release cost cents a month. **One pipeline is enough:** the site is one backend (the bucket) served on
+   release (within the 75 GB of free egress) cost cents a month. **One pipeline is enough:** the site is one backend (the bucket) served on
    one host (`www.shift2eu.com`). The apex redirect cannot use a pipeline at all, because Edge Services
    cannot serve an apex domain (decision 1), so a second pipeline (€4/month) would not serve it either;
    the apex redirect is served outside Edge Services. Only if the maintainer later wants a second
@@ -546,10 +619,19 @@ listed under *To be checked by the maintainer*, with the milestone that needs it
     and DNSSEC on at Namecheap. DNSSEC covers Namecheap's records only; the CNAME's target zone is
     Scaleway's. If the apex redirect's provider issues its own certificate, the CAA record also names
     that provider's certificate authority (milestone 4).
-11. **Decided: the bucket's direct URL is accepted.** The bucket website endpoint also serves the files,
-    outside Edge Services, on its own origin; the content is public and the `<meta>` CSP travels with the
-    pages. The objects are kept private behind Edge Services if bucket website allows it, as its
-    quickstart suggests ([Edge Services quickstart](https://www.scaleway.com/en/docs/edge-services/quickstart/)).
+11. **Decided: other origins serving the site are accepted, and only `www` is attested and checked.**
+    Besides `www.shift2eu.com`, the bucket website endpoint `<bucket>.s3-website.<region>.scw.cloud` and
+    the pipeline's own endpoint `<id>.svc.edge.scw.cloud` serve the same files, each on its own origin;
+    the content is public anyway, the `<meta>` CSP travels with the pages, and the script fetches the
+    module by a same-origin relative path. Milestone 3's hosting ADR lists all three and says that only
+    `www.shift2eu.com` is attested and checked. **The bucket's read rule, decided for milestone 3:** the
+    objects stay private, with a bucket-policy grant to Edge Services' bucket-website backend, if Edge
+    Services supports it; otherwise the bucket policy grants public `s3:GetObject` on the site's objects.
+    Edge Services' quickstart says that with bucket website "objects can remain private"
+    ([Edge Services quickstart](https://www.scaleway.com/en/docs/edge-services/quickstart/)), while
+    enabling bucket website applies a default policy that makes every object public
+    ([bucket website](https://www.scaleway.com/en/docs/object-storage/how-to/use-bucket-website/)); what
+    the backend needs is to be checked for milestone 3, and the ADR records which rule applies.
 
 ### To be checked by the maintainer
 
@@ -560,24 +642,32 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
     object uploaded with `Content-Encoding: gzip` and `Content-Type: application/wasm` is served with
     those headers (decision 4; it sets whether milestone 3 adds the uncompressed budget).
   - The IAM permission-set details (decision 5): that the bucket policy refuses the application
-    `DeleteObject`, ACL and bucket configuration calls even if `ObjectStorageObjectsWrite` would allow
-    them, and the actions Edge Services' bucket-website backend needs.
+    `DeleteObject`, `DeleteObjectVersion`, ACL and bucket configuration calls (policy, website,
+    versioning) even if `ObjectStorageObjectsWrite` would allow them; the runbook's canary step verifies
+    it in milestone 4.
+  - The bucket's read rule (decision 11): whether Edge Services' bucket-website backend can read private
+    objects through a bucket-policy grant, and which principal and actions that grant names; if not, the
+    objects are public read.
   - Versioning (decision 5): whether bucket versioning works with a website bucket.
 - **Milestone 4** (the first deploy and its go/no-go):
   - How the apex redirect is served over valid HTTPS (decisions 1 and 3): whether Namecheap's URL
-    redirect serves `https://shift2eu.com` with a valid certificate and a 301 or 308, or which other means
-    does, and whether it can send HSTS.
+    redirect serves `https://shift2eu.com` with a valid certificate and a 301 or 308 to the same path, or
+    which other means does; who provides it and what it logs; whether it issues its own certificate (and
+    from which authority, for CAA); and whether it can send HSTS with `includeSubDomains` and `preload`
+    and redirect `http://shift2eu.com` to `https://shift2eu.com` first (the preload requirements,
+    decision 2).
   - Edge Services' response headers and redirects (decisions 2 and 3): whether it can add
     `Strict-Transport-Security`, `Content-Security-Policy`, `X-Content-Type-Options`, `Referrer-Policy`
-    and `Permissions-Policy`, and redirect `http://www.shift2eu.com` to HTTPS.
-  - The HSTS go/no-go (decision 2): HSTS on `www.shift2eu.com`, or the recorded acceptance of the risk.
+    and `Permissions-Policy`, and redirect `http://www.shift2eu.com` to HTTPS, or else refuse or close
+    plain HTTP on `www`.
+  - The HSTS go/no-go (decision 2): HSTS on `www.shift2eu.com` with `max-age` of at least 31536000 and
+    `includeSubDomains`, or the recorded waiver; and whether preload is pursued.
   - CAA and DNSSEC (decision 10): that Scaleway's managed issuance passes with the CAA record, and that
     Namecheap supports CAA and DNSSEC for the domain.
+  - The deploy key's limits (decision 5): the runbook's canary step answers 403 for every refused call.
 
 ### Proposed follow-ups (not filed)
 
-- A scheduled workflow that repeats the live manifest check daily, so a change to the live site between
-  releases is noticed.
 - Pruning earlier releases' assets from the bucket, by hand or with a separate key.
 
 ### Sources
