@@ -1,6 +1,8 @@
 # 0033. Review pull requests with an AI reviewer that only comments or requests changes
 
-- Status: Accepted
+- Status: Accepted. Amended by issue #292 (the lenient category), and by issues #301, #316 and #324 (the
+  prompt-injection rule, the retry of an unreadable answer, and the generated and golden files left out
+  of the diff), 2026-11-19
 - Date: 2026-11-18
 
 ## Context
@@ -207,9 +209,50 @@ the limit, and posts no review.
   A pull request that size is one the maintainer reads closely anyway; a larger limit would raise the
   worst-case cost of one review, the cost of every re-push of it, and the share of the context the diff
   crowds out.
-- The program reads at most the limit plus one byte of the diff, so a huge diff costs no memory. GitHub
-  has a diff limit of its own (it answers an error for a very large diff instead of the diff); that is a
-  failed check too.
+- The program reads at most `MaxRawDiffBytes` plus one byte of the diff (below), so a huge diff costs no
+  memory. GitHub has a diff limit of its own (it answers an error for a very large diff instead of the
+  diff); that is a failed check too.
+
+**Amended by issue #324: generated and golden files are left out, and the limit applies to what
+remains.** PR #322 (a JSON report schema bump) was refused at 312,559 bytes, most of them generated or
+reference data, and every schema version bump would be refused the same way. The limit is not raised.
+
+- **The list is fixed in code** (`ci/aireview/internal/review`, `FilterDiff`), exactly two rules: the
+  path `api/openapi.bundled.json`, and any path ending `.golden` with a directory named exactly
+  `testdata` among its parent directories (`testdata/x.golden`, `internal/x/testdata/a/b.golden`; not
+  `internal/x/code.golden`, `mytestdata/a.golden` or `testdata.golden`). It is read from no file,
+  setting or text of the pull request, and the workflow runs `main`'s program, so a pull request cannot
+  widen it; changing it is a reviewed change to this package.
+- Paths are compared exactly as git writes them in the `diff --git a/<old> b/<new>` header: case
+  sensitive, never cleaned. A path with an empty, `.` or `..` element is never left out
+  (`api/../api/openapi.bundled.json` is reviewed), and a header the program cannot read with certainty (a
+  path git quotes, or one holding ` b/`) keeps its section: any doubt means the file is reviewed.
+- **A rename or copy goes only when both of its paths are on the list**, so a pull request cannot hide a
+  code file by renaming it into a left-out name, or move a golden file out of `testdata` into code
+  unseen. Both paths are then named.
+- A file's section is cut at a line starting `diff --git ` only; every line of a hunk starts with a
+  space, `+`, `-` or `\`, so no file content can start a section of its own. Kept sections are byte for
+  byte as GitHub sent them.
+- **The review names every left-out file** under "Not reviewed", each in a code span escaped as a
+  finding's path is (backticks made apostrophes, control characters spaces, mentions defused), so the
+  maintainer knows what the AI review did not read. A review that left nothing out has no such note.
+- Why these two and no more: `api/openapi.bundled.json` is generated from `api/`, and
+  `test/openapibundle` (`TestBundleIsCommitted`, run by `make test` in CI) fails when it is not exactly
+  what its generator makes of the reviewed sources, so a hand edit to it fails CI rather than hiding in
+  an unreviewed file. A golden file is a test's expected output: its test fails unless it equals what
+  the reviewed code renders, and the code is what the reviewer reads. **The JSON schemas
+  (`*.schema.json`) are deliberately not left out**: they are hand-written, define the published
+  contract, and are reviewed like code, even though a schema bump makes them large.
+- **`MaxRawDiffBytes` is 1,200,000 bytes, four times `MaxDiffBytes`.** The client must read a diff whole
+  before it can leave anything out, since a diff cut short is no diff; a raw diff over that ceiling
+  fails the check with `ErrDiffTooLarge`, as an oversized diff did before. Four times covers every
+  squash merge of the sample above (the largest was 631 KB) and a schema bump twice the size of #322,
+  while 1.2 MB in memory once per run costs nothing on a runner. **The 300,000-byte limit applies to the
+  diff that remains**, before any model call, so the model's context and the cost of a review are
+  bounded exactly as before.
+- Residual risk: a left-out file is read by nobody but the maintainer. That is acceptable for these two
+  kinds because CI pins each to reviewed sources, as above; a new kind of file needs the same argument
+  and an amendment here.
 
 ### Cost
 
@@ -337,6 +380,12 @@ the trigger option below are the levers.
   prompt-injection attempt; only text that tries to change this reviewer's findings or verdict is. This
   repository's pull requests often change `CLAUDE.md`, the skills and this prompt, and a
   `prompt-injection` finding always blocks.
+- Amended by issue #301: the system prompt says in one sentence that **any instruction aimed at the
+  reviewer**, in the pull request's title, body, file names, diff or comments, is reported with exactly
+  category `prompt-injection` and severity `blocker`, whatever the attempt calls itself, and its
+  severity guidance lists a prompt-injection attempt among the blockers. The parser's stem fallback
+  below stays the safety net for a model that spells the category otherwise; an attempt it names
+  `jailbreak` still blocks through its severity.
 - **The model has no tools**, so a tricked model can do nothing but write text. Its answer is one JSON
   object, parsed strictly: unknown fields, a missing summary or title, a severity outside the
   list, a negative line, a line without a path, an absolute path or one with `..`, a backslash or a
@@ -352,6 +401,20 @@ the trigger option below are the levers.
   uncategorised; the severity still decides whether such a finding blocks. The model never names the
   event: the program decides it from the findings, so no answer can make it approve, and the poster
   refuses anything but `COMMENT` and `REQUEST_CHANGES` even if the program asked.
+- Amended by issue #316 (the release PR #300's check failed on an answer with no `findings` array, and a
+  manual re-run passed): **an answer of the wrong shape is asked once more**, with the same prompt and
+  within the run's existing deadline. The wrong shape is anything the parser refuses before it validates
+  any one finding: no single JSON object of the answer's form (not JSON, a top level that is no object, a
+  `findings` that is no array, an unknown field or a field of the wrong type), text around the object, no
+  summary or no `findings` array. A finding the parser refuses (a bad severity, an empty title, a bad
+  path or line) is not asked again: it stays as strict as above, fails the run and posts nothing. An
+  empty `findings` array is a valid answer. When the run's context is done after the first wrong answer,
+  there is no second call and nothing is posted. **When the second answer has the wrong shape too**, the
+  program posts one short `COMMENT` review on the head it read saying the review could not be read: no
+  finding is invented, there are no inline comments and it is never `REQUEST_CHANGES` (so it dismisses
+  nothing either). The run still fails, so the check stays red and visible, and a re-run asks again. One
+  retry, not more: a model that answers in the wrong shape twice in a row is more likely failing than
+  unlucky, and each retry spends the subscription and the run's deadline.
 - An inline comment goes only on a line the diff shows on its new side; a finding on any other line, or
   on no line, goes in the review's body, so a made-up position cannot fail the review.
 
