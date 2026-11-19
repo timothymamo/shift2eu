@@ -1368,6 +1368,13 @@ func TestAgentsAppTokenRefreshThreeContendersOnAStaleLockLeaveOneHolder(t *testi
 // pid the system may already have given to an unrelated process since. A trap that kills `$!` whenever sleeper is
 // empty kills that unrelated process, so the replay runs a background job to its end and reaps it, and records
 // every pid the trap asks to kill through a kill function of its own.
+//
+// The loop's first round has a third state: `sleeper=""` before the loop's first `sleep ... &`, when the shell
+// has never started a background job and $! is unset rather than the pid of a finished one. The script runs under
+// `set -eu`, and the trap names $! (`${sleeper:-$!}`) for both the ps call that asks whether it is a child of
+// this shell and the kill: a signal there makes the shell report the unset parameter ("!: parameter not set" in
+// dash, "$!: unbound variable" in bash --posix, measured), which the refresh writes into its log. So the replay
+// runs under `set -eu` as the script does, and expects the trap to name no pid there at all.
 func TestAgentsAppTokenRefreshLeavesNoSleepWhenASignalArrivesInTheWindow(t *testing.T) {
 	t.Parallel()
 
@@ -1390,6 +1397,10 @@ wait "${job}" || true`
 job=$!
 printf '%s\n' "${job}" > "${SHIFT2EU_TEST_JOB_PID:?}"
 wait "${job}" || true`
+		// noBackgroundJobEver is the loop's first round before its first `sleep ... &`: sleeper is empty and the
+		// shell has never started a background job, so $! is unset rather than the pid of a finished one. The
+		// script runs under `set -eu`, so a trap that expands $! here aborts instead of running to its end.
+		noBackgroundJobEver = `sleeper=""`
 	)
 
 	for _, tc := range []struct {
@@ -1404,8 +1415,12 @@ wait "${job}" || true`
 		startsTheSleep bool
 		// killsNothing is set for the window where sleeper is none and only a finished job's pid is left in $!:
 		// the trap must send no kill at all. The window where sleeper is empty over the same finished job must
-		// send none for that pid, which is the one case that names a pid a reused one would hit.
+		// send none for that pid, which is the one case that names a pid a reused one would hit. The window
+		// before the loop's first `sleep ... &` names no pid either, and has none to kill.
 		killsNothing bool
+		// noBackgroundJob is set for the window in which the shell has never started a background job, so the
+		// replay has no pid to record and $! is unset.
+		noBackgroundJob bool
 	}{
 		{
 			name: "a TERM between the sleep and the store of its pid", signal: syscall.SIGTERM, trap: "TERM", status: 143,
@@ -1423,6 +1438,14 @@ wait "${job}" || true`
 			name: "a TERM while no sleep runs, with the last sleep already reaped", signal: syscall.SIGTERM, trap: "TERM", status: 143,
 			window: aSleeperOfNoneOverAReapedJob, killsNothing: true,
 		},
+		{
+			name: "a TERM before any background job has ever been started", signal: syscall.SIGTERM, trap: "TERM", status: 143,
+			window: noBackgroundJobEver, killsNothing: true, noBackgroundJob: true,
+		},
+		{
+			name: "an INT before any background job has ever been started", signal: syscall.SIGINT, trap: "INT", status: 130,
+			window: noBackgroundJobEver, killsNothing: true, noBackgroundJob: true,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1432,6 +1455,7 @@ wait "${job}" || true`
 			sleepPidFile := filepath.Join(sb.root, "sleep.pid")
 			jobPidFile := filepath.Join(sb.root, "job.pid")
 			killedFile := filepath.Join(sb.root, "killed")
+			releasedFile := filepath.Join(sb.root, "released")
 			held := filepath.Join(sb.root, "held")
 			hold := filepath.Join(sb.root, "hold.fifo")
 
@@ -1439,13 +1463,17 @@ wait "${job}" || true`
 
 			// The loop's window, replayed: its own trap, then the state a signal in the loop finds, and then a
 			// hold. The hold is a fifo no one ever writes, so the replay is still in the window when the signal
-			// arrives. stopped and release_lock stand in for the script's own, which need the mint's state and say
-			// only where the refresh stopped. kill is a function here, not the builtin: a POSIX shell finds a
+			// arrives. stopped stands in for the script's own, which needs the mint's state and says only where the
+			// refresh stopped. release_lock records that the trap ran to its end, the step a trap that aborts on an
+			// unset variable never reaches. kill is a function here, not the builtin: a POSIX shell finds a
 			// function of a name before the builtin of that name, so the replay records every pid the trap asks to
-			// kill and a run can prove no kill went to a pid that a reused one would hit.
+			// kill and a run can prove no kill went to a pid that a reused one would hit. The replay runs under
+			// `set -eu` as dev/agents-app-token.sh does, so an expansion the script survives without the option
+			// fails here as it would there.
 			harnessText := fmt.Sprintf(`#!/bin/sh
+set -eu
 stopped() { :; }
-release_lock() { :; }
+release_lock() { printf 'released\n' >> "${SHIFT2EU_TEST_RELEASED:?}"; }
 kill() {
   if [ "$#" -gt 0 ]; then
     for pid in "$@"; do printf '%%s\n' "${pid}" >> "${SHIFT2EU_TEST_KILLED:?}"; done
@@ -1466,6 +1494,7 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 			env["SHIFT2EU_TEST_SLEEP_PID"] = sleepPidFile
 			env["SHIFT2EU_TEST_JOB_PID"] = jobPidFile
 			env["SHIFT2EU_TEST_KILLED"] = killedFile
+			env["SHIFT2EU_TEST_RELEASED"] = releasedFile
 			env["SHIFT2EU_TEST_HELD"] = held
 			env["SHIFT2EU_TEST_HOLD_FIFO"] = hold
 
@@ -1480,10 +1509,14 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 			})
 
 			// jobPid is the pid the trap finds in sleeper or in $!: the sleep the replay started, or the background
-			// job it ran to its end and reaped.
+			// job it ran to its end and reaped. A window in which the shell never started a background job has none,
+			// and leaves jobPid zero.
 			var jobPid int
 
-			if tc.startsTheSleep {
+			switch {
+			case tc.noBackgroundJob:
+				// Nothing to wait for: the replay started no background job at all, so $! is unset.
+			case tc.startsTheSleep:
 				jobPid = pidFrom(t, sleepPidFile, "the sleep the window started")
 
 				// The signal goes in once the sleep is the sleep: a background child a shell has just forked can
@@ -1495,7 +1528,7 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 
 					return err == nil && strings.TrimSpace(string(comm)) == "sleep"
 				})
-			} else {
+			default:
 				jobPid = pidFrom(t, jobPidFile, "the background job the window ran to its end")
 			}
 
@@ -1519,6 +1552,25 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 					tc.trap, run.errOut())
 			}
 
+			// release_lock is the trap's last step before its exit: a trap that aborted early, on an expansion under
+			// `set -u` say, never gets there and leaves the lock it holds behind.
+			if body, err := os.ReadFile(releasedFile); err != nil || strings.TrimSpace(string(body)) == "" {
+				t.Fatalf("the refresh's %s trap never reached release_lock, so it aborted before its end and left the lock the refresher holds unreleased (err %v); stderr:\n%s",
+					tc.trap, err, run.errOut())
+			}
+
+			// Under `set -u` the shell reports every expansion of a variable it has no value for: dash says
+			// "!: parameter not set", bash --posix "$!: unbound variable". The loop's first round, before its first
+			// `sleep ... &`, has no $! at all, so a trap that names it there writes such an error into the refresh's
+			// log on the one signal it takes. The stderr also carries the replay's interrupted fifo open, which is the
+			// hold's own doing and no behaviour of the script; only the shell's report of the unset parameter is.
+			for _, report := range []string{"parameter not set", "unbound variable"} {
+				if strings.Contains(run.errOut(), report) {
+					t.Fatalf("the refresh's %s trap made the shell report %q: the trap expands $! (${sleeper:-$!}) before the loop's first `sleep ... &`, when the shell has never started a background job and $! is unset, so a signal in that window writes a shell error into the refresh's log; the trap must name no pid while no background job has run (issue #289)\nstderr:\n%s",
+						tc.trap, report, run.errOut())
+				}
+			}
+
 			if tc.startsTheSleep {
 				// A killed sleep is a zombie until the system reaps it, so the sleep stopping is what the test
 				// waits for; a sleep the trap never killed sleeps on until its own time is up.
@@ -1534,10 +1586,14 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 
 			if tc.killsNothing {
 				if len(killed) > 0 {
-					t.Errorf("the refresh's %s trap killed %v although sleeper was none and no sleep of the loop was running: a finished sleep's pid, which the system may have given to another process since, must never be killed (issue #289)\nstderr:\n%s",
+					t.Errorf("the refresh's %s trap killed %v although the window held no sleep of the loop to kill (sleeper none, or empty with no background job started yet): a finished sleep's pid, which the system may have given to another process since, must never be killed, and before the loop's first `sleep ... &` there is no pid at all (issue #289)\nstderr:\n%s",
 						tc.trap, killed, run.errOut())
 				}
 
+				return
+			}
+
+			if jobPid == 0 {
 				return
 			}
 

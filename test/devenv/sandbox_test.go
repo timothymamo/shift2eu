@@ -997,10 +997,10 @@ fi
 exec %s "$@"
 `
 
-// contenderPSSHim holds the second contender, the one that read the stale lock's owner and then asked whether
+// contenderPSShim holds the second contender, the one that read the stale lock's owner and then asked whether
 // that owner runs a refresh: take_lock asks ps only for a pid kill -0 found alive, so the hold lands after the
 // owner read and before the takeover, where the interleaving needs that contender.
-const contenderPSSHim = `#!/bin/sh
+const contenderPSShim = `#!/bin/sh
 race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
 if [ ! -e "${race}/` + contenderAskedOwnership + `" ]; then
   : > "${race}/` + contenderAskedOwnership + `"
@@ -1157,7 +1157,7 @@ func (sb *sandbox) useThreeContendersOnAStaleLock(t *testing.T, base map[string]
 			"date": fmt.Sprintf(contenderClockShim, strconv.Quote(realTool(t, "date"))),
 		}),
 		envMover: shims("mover", map[string]string{
-			"ps": fmt.Sprintf(contenderPSSHim, strconv.Quote(realTool(t, "ps"))),
+			"ps": fmt.Sprintf(contenderPSShim, strconv.Quote(realTool(t, "ps"))),
 			"mv": fmt.Sprintf(contenderMVShim, mvTool, mvTool),
 		}),
 		envTaker: shims("taker", map[string]string{
@@ -1298,7 +1298,7 @@ func (g *goneLock) reached(marker string) bool {
 }
 
 // moveTheLockAside moves the lock the refresher holds out of its place, the way a contender that read a stale
-// owner moves it aside (issues #240 and #288), and returns where the test put it.
+// owner moves it aside (issues #240 and #288); the test puts it back with putTheLockBack.
 func (g *goneLock) moveTheLockAside(t *testing.T) {
 	t.Helper()
 
