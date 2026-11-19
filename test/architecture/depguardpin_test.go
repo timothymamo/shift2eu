@@ -422,6 +422,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"!$test",
 			"!**/cmd/shift2eu/**",
 			"!**/cmd/shift2eu-server/**",
+			"!**/cmd/shift2eu-web/**",
 		},
 		Allow: []string{
 			"github.com/timothymamo/shift2eu/internal/adapter/internal/jsondoc$",
@@ -517,6 +518,33 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny: []string{
 			"github.com/timothymamo/shift2eu/internal/httpapi$",
 			"github.com/timothymamo/shift2eu/internal/httpapi/",
+		},
+	},
+	{
+		// The site's driving adapter (PRD #297): a strict allow list of what
+		// it imports today, the sibling of httpapi-gets-adapters-from-cmd.
+		Name:     "web-gets-adapters-from-cmd",
+		ListMode: "strict",
+		Files: []string{
+			"**/internal/web/**",
+			"!$test",
+		},
+		Allow: []string{
+			"context$",
+			"errors$",
+			"github.com/timothymamo/shift2eu/internal/app/analysis$",
+			"github.com/timothymamo/shift2eu/internal/version$",
+		},
+		Deny: []string{
+			"github.com/timothymamo/shift2eu/internal/adapter",
+			"github.com/timothymamo/shift2eu/internal/cli",
+			"github.com/timothymamo/shift2eu/internal/httpapi",
+			"github.com/timothymamo/shift2eu/cmd",
+			"os",
+			"net",
+			"syscall",
+			"plugin",
+			"unsafe",
 		},
 	},
 	{
