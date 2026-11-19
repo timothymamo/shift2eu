@@ -253,7 +253,8 @@ reference data, and every schema version bump would be refused the same way. The
   own field, `left_out_of_diff` (they are the pull request's data, never in the system prompt), and the
   system prompt says that a file listed there was left out on purpose, so its absence is no missing or
   incomplete diff to report, and that the model has none of its content and neither judges it nor
-  guesses at it.
+  guesses at it. The list is capped as the note is (the first 50 paths, each cut to 300 UTF-16 code
+  units), and `left_out_of_diff_count` states the total, so left-out paths cannot grow the prompt.
 - Why these two and no more: `api/openapi.bundled.json` is generated from `api/`, and
   `test/openapibundle` (`TestBundleIsCommitted`, run by `make test` in CI) fails when it is not exactly
   what its generator makes of the reviewed sources, so a hand edit to it fails CI rather than hiding in
