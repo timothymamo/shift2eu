@@ -135,6 +135,20 @@ func materialChangedFile(path, mode, removed, added string) string {
 		"\\ No newline at end of file\n"
 }
 
+// bareIndexFile returns the section of a file section whose extended header
+// holds an "index" line with nothing after it but a space: no mode, no object
+// names, nothing the filter can read.
+func bareIndexFile(path, added string) string {
+	return "diff --git a/" + path + " b/" + path + "\n" +
+		"index \n" +
+		"--- a/" + path + "\n" +
+		"+++ b/" + path + "\n" +
+		"@@ -1,2 +1,3 @@\n" +
+		" package y\n" +
+		" \n" +
+		"+" + added + "\n"
+}
+
 // modeChangedFile returns the section git writes for a file whose permissions
 // alone changed: two extended-header lines and no hunk.
 func modeChangedFile(path, oldMode, newMode string) string {
@@ -330,6 +344,15 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 			name:     "a path with an empty element is kept",
 			diff:     diffFile("testdata//x.golden", "GOLDEN"),
 			wantKept: diffFile("testdata//x.golden", "GOLDEN"),
+		},
+		{
+			// An "index" line with nothing after it but a space carries no mode,
+			// so the extended header cannot be read as a regular file's content
+			// change: the section is kept, because the filter reviews what it
+			// cannot classify rather than dropping it unread.
+			name:     "a bare index line in a header keeps the golden file",
+			diff:     bareIndexFile("testdata/report.golden", "GOLDEN"),
+			wantKept: bareIndexFile("testdata/report.golden", "GOLDEN"),
 		},
 		{
 			name:         "a no-newline marker inside the sections keeps them intact",
