@@ -309,6 +309,38 @@ vm-shell: ## Open a shell in the VM at the repository root
 # character but those of names, commas and spaces before it splits the list (with globbing off), so no quote,
 # `$` or glob in VM_ENV ever reaches a shell as code.
 vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', ' '\n\n' | awk 'NF && !seen[$$0]++')
+# How a message names the entry $$name at 1-based position $$i of that list, in $$label (issue #268 L1): the
+# entry itself only when it is an upper-case variable name (^[A-Z_][A-Z0-9_]*$), the shape of every credential
+# name; anything else may be a credential pasted where a name goes, so only its position is given: entry N is the
+# Nth name of VM_ENV counting each name once, at its first place, and skipping empty entries. The rule has
+# a limit: a pasted value of that shape (upper-case letters, digits and underscores only, such as an AWS access
+# key ID, AKIA..., not secret on its own) is still printed, e.g. in the not-set list. The letters
+# are spelled out, as a range such as [A-Z] can match lower-case letters in some shells' locales. It sets
+# $$ehidden for a hidden entry and clears it for a shown one, so a message about that one entry says why,
+# $(vm_env_entry_why), only when it hides the entry. A message listing several entries sets $$hidden only when it
+# lists a hidden one, and says why once, after its list: $(vm_env_hidden_why).
+vm_env_upper = ABCDEFGHIJKLMNOPQRSTUVWXYZ
+vm_env_label = case "$$name" in ([!$(vm_env_upper)_]* | *[!$(vm_env_upper)0123456789_]*) \
+		label="VM_ENV entry $$i (entry $$i is not shown)"; ehidden=1;; \
+	(*) label="$$name"; ehidden=;; esac
+vm_env_hidden_why = $${hidden:+ It may be a credential typed by mistake.}
+vm_env_entry_why = $${ehidden:+ It may be a credential typed by mistake.}
+# The refusals of a name for what it is, shared by vm-env-check and vm-env's write step, which runs it before it
+# reads the name's value, so make -i, which runs the write step although vm-env-check failed, cannot copy a
+# refused name into the VM (issue #268 L2): an agents App variable, a GitHub token (github_token_names below) or
+# no variable name. Each names the entry by $$label (vm_env_label, which it runs first), so a refused entry that
+# may be a credential is never printed, and exits 1. The GitHub-token refusal adds no $(vm_env_entry_why): its
+# names are literal upper-case names, which are always shown, never hidden.
+vm_env_refuse = $(vm_env_label); \
+	case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
+		echo "vm-env: refusing $$label: the agents App's key and its path never enter the VM; make agents-token writes its tokens there.$(vm_env_entry_why) Nothing was written." >&2; \
+		exit 1;; esac; \
+	case "$$name" in ($(github_token_names)) \
+		echo "vm-env: refusing $$label: a GitHub token never enters the VM; the agents' only GitHub credential is the agents App's token, which make agents-token writes there (its value is not shown). Nothing was written." >&2; \
+		exit 1;; esac; \
+	case "$$name" in ([!A-Za-z_]* | *[!A-Za-z0-9_]*) \
+		echo "vm-env: refusing $$label: not a variable name.$(vm_env_entry_why) Nothing was written." >&2; \
+		exit 1;; esac
 # Only a VM_ENV on the make command line merges (make vm-create hands it to its sub-make the same way); the
 # default, an exported VM_ENV, make -e and override all replace, so a VM_ENV left in a .envrc cannot keep a
 # stale credential.
@@ -327,7 +359,9 @@ vm_env_safe_line = ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._~+/=-]*\$$
 # Keychain in an SSH session or an unloaded direnv .envrc must never wipe the credentials the VM has (issue
 # #234), nor leave a VM that make vm-create created and provisioned only to stop at vm-env (issue #258). It
 # checks VM_ENV the way vm-env reads it: from its environment, never expanded by make, so the refusal of a bad
-# VM_ENV never shows its value, which may be a credential typed by mistake.
+# VM_ENV never shows its value, which may be a credential typed by mistake. A per-name refusal names an entry
+# only when it is an upper-case variable name, and any other entry by its position alone (vm_env_label, issue
+# #268 L1).
 .PHONY: vm-env-check
 vm-env-check: export VM_ENV := $(value VM_ENV)
 vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-create do first (calls no limactl)
@@ -337,23 +371,16 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 	[ -n "$(vm_env_names)" ] || { \
 		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: name at least one, e.g. make vm-env VM_ENV=DEEPSEEK_API_KEY" >&2; \
 		exit 1; }
-	@set -f; for name in $(vm_env_names); do \
-		case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
-			echo "vm-env: refusing $$name: the agents App's key and its path never enter the VM; make agents-token writes its tokens there" >&2; \
-			exit 1;; esac; \
-		case "$$name" in ($(github_token_names)) \
-			echo "vm-env: refusing $$name: a GitHub token never enters the VM; the agents' only GitHub credential is the agents App's token, which make agents-token writes there (its value is not shown)" >&2; \
-			exit 1;; esac; \
-		case "$$name" in ([!A-Za-z_]* | *[!A-Za-z0-9_]*) \
-			echo "vm-env: refusing $$name: not a variable name" >&2; \
-			exit 1;; esac; \
+	@set -f; i=0; for name in $(vm_env_names); do \
+		i=$$((i + 1)); $(vm_env_refuse); \
 	done
-	@set -f; missing=''; \
+	@set -f; missing=''; i=0; hidden=; \
 	for name in $(vm_env_names); do \
-		[ -n "$$(printenv "$$name")" ] || missing="$$missing $$name"; \
+		i=$$((i + 1)); $(vm_env_label); \
+		[ -n "$$(printenv "$$name")" ] || { missing="$$missing $$label"; [ -z "$$ehidden" ] || hidden=1; }; \
 	done; \
 	if [ -n "$$missing" ]; then \
-		echo "vm-env: not set or empty:$$missing. Nothing was written: the VM's daemon.env is unchanged." >&2; \
+		echo "vm-env: not set or empty:$$missing.$(vm_env_hidden_why) Nothing was written: the VM's daemon.env is unchanged." >&2; \
 		echo "  1. If your credentials come from the macOS login Keychain, an SSH session has it locked: run" >&2; \
 		echo "     security unlock-keychain ~/Library/Keychains/login.keychain-db (it asks for the account password)." >&2; \
 		echo "  2. Run cd ~ && cd $(REPO_ROOT) so direnv reads the .envrc again. On any host, check that the" >&2; \
@@ -368,7 +395,8 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 # credential. A replace writes the VM's whole daemon.env with exactly those lines, so a stale line (an old
 # ANTHROPIC_API_KEY) is removed. A merge replaces the lines of the names in VM_ENV and keeps the other plain
 # NAME=value lines, so `make vm-env VM_ENV=DEEPSEEK_API_KEY` replaces only DEEPSEEK_API_KEY; it drops every other line (a command, a
-# comment, a value the shell would expand) with a warning that says how many (never their content), and
+# comment, a value the shell would expand) with a warning that says how many (never their content); it does not
+# keep blank lines either, and does not count them in that warning, as they held nothing (issue #259), and
 # prints the names (never the values) of the lines it kept. Either mode removes a GitHub token line
 # (one of github_token_names above) and names the variable on stderr, never its value, saying to revoke that token:
 # every agent in the VM could read it. The name read errs towards warning: it takes any line that assigns one of
@@ -376,24 +404,42 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 # MY_GITHUB_TOKEN, and prints only the literal name. The values travel on standard input, never on a
 # command line (only the mode does), and the file is written to a temporary file beside daemon.env and moved
 # into place, mode 0600, so a failure never leaves half a file; a trap removes the temporary file if the
-# VM-side shell is interrupted, and a leftover of a killed run older than a minute is removed by the next
-# vm-env: a fresh one may be a concurrent run's (concurrent vm-env runs are not supported beyond that). Either
-# mode refuses a daemon.env that exists but cannot be read before it writes anything, as it could not check it
-# for a GitHub token; the token read fails on sed's own status (not a pipeline's), and a merge's greps accept
-# only status 1 (no match), so a read error is never taken for an empty file.
+# VM-side shell is interrupted, and a leftover of a killed run (a regular file) older than a minute or two (find
+# rounds -mmin) is removed by the next vm-env: a fresh one may be a concurrent run's (concurrent vm-env runs are
+# not supported beyond that). Either mode refuses, before it writes anything, a daemon.env that is not a regular
+# file or is a symlink (the move would write into a directory or replace the link; issue #259), and checks that
+# again right before the move to narrow the window between the check and mv (mv -T would close it, but the
+# tests' fake limactl runs this script on the host, which may be macOS without GNU mv). The small window left is
+# accepted: only the VM user's own account can race it, and that account can read daemon.env anyway. It also
+# refuses a daemon.env that exists but cannot be read, as it could not check it for a GitHub token; the token
+# read fails on sed's own status (not a pipeline's), and a merge's greps accept only status 1 (no match), so a
+# read error is never taken for an empty file. Their status-2 branch is defence in depth: the -r pre-check
+# refuses an unreadable file first, so it is reached only if the file turns unreadable between the two, a race
+# no fake reaches deterministically. The write step refuses itself, before it calls limactl, a VM_ENV that
+# names nothing, every name vm-env-check refuses for what it is (vm_env_refuse, the same shell code) and an
+# unset or empty credential, so make -i, which runs it although vm-env-check failed, can neither wipe the VM's
+# daemon.env nor copy a GitHub token or the agents App's key into it (issue #268 L2); its messages name an
+# entry the way vm-env-check does (vm_env_label). It never re-runs vm-env-check through $(MAKE): make -i would
+# pass -i to that sub-make too.
 .PHONY: vm-env
 vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
-	@set -f; env_file="$$(for name in $(vm_env_names); do \
+	@set -f; env_file="$$(i=0; [ -n "$(vm_env_names)" ] || { \
+		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
+	for name in $(vm_env_names); do \
+		i=$$((i + 1)); $(vm_env_refuse); \
 		value="$$(printenv "$$name")"; \
-		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$name has unsupported characters" >&2; exit 1;; esac; \
+		[ -n "$$value" ] || { echo "vm-env: $$label is not set or empty.$(vm_env_entry_why) Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
+		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$label has unsupported characters.$(vm_env_entry_why) Nothing was written." >&2; exit 1;; esac; \
 		printf '%s=%s\n' "$$name" "$$value"; \
 	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
 		sh -c 'umask 077 && LC_ALL=C && export LC_ALL && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && \
 		t= && trap "rm -f \"\$$t\"" EXIT && trap "exit 1" HUP INT TERM && \
 		unreadable() { echo "vm-env: cannot read ~/.config/dot-agent-deck/daemon.env in the VM, so it cannot check the file for a GitHub token to warn about (nor a merge keep its lines). Nothing was written: make it readable by the VM user (chmod 600) and run make vm-env again." >&2; exit 1; } && \
-		mkdir -p "$$d" && if [ -e "$$f" ] && ! [ -r "$$f" ]; then unreadable; fi && \
-		find "$$d" -maxdepth 1 -name ".daemon.env.??????" -mmin +1 -exec rm -f {} + && \
+		notregular() { echo "vm-env: ~/.config/dot-agent-deck/daemon.env in the VM is not a regular file (a directory or a symlink), so moving the new file into place would write into it or replace it. Nothing was written: make it a regular file, or remove it, and run make vm-env again." >&2; exit 1; } && \
+		mkdir -p "$$d" && if [ -L "$$f" ] || { [ -e "$$f" ] && ! [ -f "$$f" ]; }; then notregular; fi && \
+		if [ -e "$$f" ] && ! [ -r "$$f" ]; then unreadable; fi && \
+		find "$$d" -maxdepth 1 -type f -name ".daemon.env.??????" -mmin +1 -exec rm -f {} + && \
 		new="$$(cat)" && safe="$(vm_env_safe_line)" && \
 		names="$$(printf "%s\n" "$$new" | sed -n "s/=.*//p" | paste -sd "|" -)" && \
 		removed= && if [ -f "$$f" ]; then \
@@ -407,7 +453,8 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 			kept=$$(printf "%s\n" "$$plain" | grep -a -v -E "^($$names|$(github_token_names))=") || [ "$$?" -eq 1 ] || exit 1; fi && \
 		t="$$(mktemp "$$d/.daemon.env.XXXXXX")" && \
 		{ if [ -n "$$kept" ]; then printf "%s\n" "$$kept"; fi && printf "%s\n" "$$new"; } > "$$t" && \
-		chmod 600 "$$t" && mv "$$t" "$$f" && t= && trap - EXIT HUP INT TERM && \
+		chmod 600 "$$t" && if [ -L "$$f" ] || { [ -e "$$f" ] && ! [ -f "$$f" ]; }; then notregular; fi && \
+		mv "$$t" "$$f" && t= && trap - EXIT HUP INT TERM && \
 		if [ "$$1" = merge ]; then printf "vm-env-dropped:%s\n" "$$dropped" && \
 			printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi && \
 		if [ -n "$$removed" ]; then printf "vm-env-removed:%s\n" "$$removed"; fi' sh $(vm_env_mode))" && \

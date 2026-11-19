@@ -372,7 +372,21 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   names no credential and is refused the same way; a name listed twice is written once. A `VM_ENV`
   holding anything but variable names, commas and spaces (a quote, a `$`, a `*`) is refused before any
   shell reads it; the refusal names `VM_ENV` but never shows its value, which may be a credential typed
-  by mistake.
+  by mistake. A refusal of one entry (not set, not a variable name) names it only when it is an upper-case
+  variable name, the shape of every credential name; any other entry, such as a token pasted where a name
+  goes, is given by its position alone: `VM_ENV entry 2 (entry 2 is not shown)`, with the reason (it may
+  be a credential typed by mistake) said once per message. Entry N is the Nth name of `VM_ENV`, counting
+  each name once (a repeated name only at its first place) and skipping empty entries. The rule rests on the shape of a name, so it
+  has a limit: a value of that shape pasted into `VM_ENV` (upper-case letters, digits and underscores
+  only, such as an AWS access key ID, `AKIA...`, which is not secret on its own) is still printed, e.g.
+  in the not-set list. `make vm-env`'s write step repeats, before it calls `limactl`, the refusals that
+  `make -i` would otherwise skip: a `VM_ENV` that names nothing, a name refused for what it is (a GitHub
+  token, a `SHIFT2EU_AGENTS_APP_*` variable, not a variable name), and an unset or empty credential, each
+  naming a hidden entry by its position alone. So even `make -i vm-env` leaves `daemon.env` as it was and
+  never says it wrote it in those cases; `make -i` still exits 0, so read its messages. The character
+  check of the whole `VM_ENV` runs only in `make vm-env-check`; in the write step a tab or newline only
+  separates names, and a name holding any other such character is refused as not a variable name, so
+  nothing it forbids reaches the VM.
 - **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the two
   variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY` or the personal GitHub
   token a VM was set up with before PRD #161 milestone 3, is removed. Only a
@@ -383,15 +397,18 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   (it creates the file when there is none). So `make vm-env VM_ENV=DEEPSEEK_API_KEY` replaces only
   `DEEPSEEK_API_KEY` and keeps the OAuth token. Only plain `NAME=value` lines are kept:
   any other line (a command, a comment, a value the shell would expand) is dropped, with a warning that
-  says how many lines were dropped, never what they held. A merge prints the names of the variable lines
+  says how many lines were dropped, never what they held. Blank lines are not kept either, and are not
+  counted in that warning, as they held nothing. A merge prints the names of the variable lines
   it kept, never their values: `vm-env: kept (unchanged): CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY`.
   Either way the file is written to a temporary file beside `daemon.env`, mode 0600, and moved into
   place, so a failure does not leave half a file. An interrupted run removes its temporary file, and a
-  leftover from a killed run is removed by the next `make vm-env` once it is older than a minute, so a
-  concurrent run's fresh temporary file is left alone (running `make vm-env` twice at once is not
-  otherwise supported). A run whose `daemon.env` exists but cannot be read, merge or replace, is refused
-  with a `vm-env:` message naming `daemon.env` (it cannot check the file for a GitHub token), and nothing is
-  written: make the file readable and run it again.
+  leftover from a killed run (a regular file) is removed by the next `make vm-env` once it is older than a
+  minute or two (`find` rounds its age), so a concurrent run's fresh temporary file is left alone (running
+  `make vm-env` twice at once is not otherwise supported). A run whose `daemon.env` exists but cannot be
+  read, merge or replace, is refused with a `vm-env:` message naming `daemon.env` (it cannot check the file
+  for a GitHub token), and nothing is written: make the file readable and run it again. So is a run whose
+  `daemon.env` is not a regular file, a directory or a symlink, which the move into place would write into
+  or replace: make it a regular file, or remove it, and run it again.
 - **Rotating a credential:** change it on the Mac, then `make vm-env deck-restart`. Restarting the service
   stops its running agents, so do it between tasks. Run `claude setup-token` again before the year is up.
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the
