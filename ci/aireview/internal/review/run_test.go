@@ -164,20 +164,32 @@ const (
 `
 )
 
-// TestRunReviewsThePullRequestHead pins a whole run (ADR 0033): a draft and a
-// diff over the limit fail before the model is asked; a model error posts
-// nothing; a structurally malformed answer — no findings array, or another
-// top-level shape error — is asked once more with the same prompt, a valid
-// second answer is posted, and two malformed answers post a review that says the
-// review could not be read and still fail the run (issue #316). A finding whose
-// severity the model got wrong stays as strict as #295 left it: one call, no
-// review. A blocking finding requests changes only with the switch on; the
-// reviewer withdraws its own earlier change request and nobody else's once
-// nothing blocks; and an instruction in the diff is a finding, never an
-// approval, whatever case or spelling the model gives its category (a misspelt
-// prompt-injection category still blocks).
+// TestRunReviewsThePullRequestHead pins a whole run (ADR 0033): a draft, a diff
+// over the limit and a raw diff the client could not read whole fail before the
+// model is asked; a model error posts nothing; a structurally malformed answer
+// — no findings array, or another top-level shape error — is asked once more with
+// the same prompt, a valid second answer is posted, and two malformed answers
+// post a review that says the review could not be read and still fail the run
+// (issue #316). A finding whose severity the model got wrong stays as strict as
+// #295 left it: one call, no review. A blocking finding requests changes only
+// with the switch on; the reviewer withdraws its own earlier change request and
+// nobody else's once nothing blocks; and an instruction in the diff is a
+// finding, never an approval, whatever case or spelling the model gives its
+// category (a misspelt prompt-injection category still blocks). A generated or
+// golden file's diff is left out of what the model reads and of what the limit
+// measures, and the review names it (issue #324).
 func TestRunReviewsThePullRequestHead(t *testing.T) {
 	t.Parallel()
+
+	// A diff of more than MaxDiffBytes that a generated file alone makes up: once
+	// it is left out nothing is over the limit, so the run reviews the pull
+	// request rather than failing it (issue #324). A golden file's content is in
+	// the prompt only when the reviewer did not leave its section out.
+	const excludedGoldenMarker = "EXCLUDED-GOLDEN-CONTENT"
+
+	generatedOnlyDiff := diffFile("api/openapi.bundled.json", strings.Repeat("x", review.MaxDiffBytes))
+	mixedDiff := cleanDiff + diffFile("testdata/report-v3.golden", excludedGoldenMarker)
+	oversizedDiff := diffFile("internal/x/y.go", strings.Repeat("x", review.MaxDiffBytes))
 
 	pr := review.PullRequest{
 		Number:  7,
@@ -220,6 +232,11 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 		// wantPostOnError says the run posts one review and still fails, as it
 		// does for an answer it could not read at all (issue #316).
 		wantPostOnError bool
+		// wantPromptHolds and wantPromptHides are texts the prompt the model was
+		// asked must hold, and must not hold: a diff the review kept, and one it
+		// left out (issue #324).
+		wantPromptHolds []string
+		wantPromptHides []string
 		// cancelAfterFirstAnswer cancels the run's context once the model has
 		// answered once, as a run that reaches its deadline does.
 		cancelAfterFirstAnswer bool
@@ -337,6 +354,37 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			cancelAfterFirstAnswer: true,
 			wantErr:                review.ErrMalformedAnswer,
 			wantAsked:              1,
+		},
+		{
+			name:            "a diff over the limit only because of a generated file is reviewed",
+			pr:              pr,
+			diff:            generatedOnlyDiff,
+			answer:          cleanAnswer,
+			wantAsked:       1,
+			wantEvent:       review.EventComment,
+			wantFindings:    1,
+			wantText:        []string{"Name it", "api/openapi.bundled.json", "not reviewed"},
+			wantPromptHides: []string{"GENERATED"},
+		},
+		{
+			name:      "a diff over the limit without generated files still fails the run",
+			pr:        pr,
+			diff:      oversizedDiff,
+			answer:    cleanAnswer,
+			wantErr:   review.ErrDiffTooLarge,
+			wantAsked: 0,
+		},
+		{
+			name:            "the review reads the code and leaves the golden file out",
+			pr:              pr,
+			diff:            mixedDiff,
+			answer:          cleanAnswer,
+			wantAsked:       1,
+			wantEvent:       review.EventComment,
+			wantFindings:    1,
+			wantText:        []string{"Name it", "testdata/report-v3.golden", "not reviewed"},
+			wantPromptHolds: []string{"Added is new."},
+			wantPromptHides: []string{excludedGoldenMarker},
 		},
 		{
 			name:         "a blocking finding with the switch off is a comment that says it would have requested changes",
@@ -511,6 +559,24 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			for i := 1; i < len(model.prompts); i++ {
 				if diff := cmp.Diff(model.prompts[0], model.prompts[i]); diff != "" {
 					t.Errorf("the model's prompt %d differs from the first (-first +this); a retry asks the same prompt:\n%s", i+1, diff)
+				}
+			}
+
+			if len(tc.wantPromptHolds) > 0 || len(tc.wantPromptHides) > 0 {
+				if len(model.prompts) == 0 {
+					t.Fatal("the model was asked nothing, so the test cannot check what it was asked")
+				}
+
+				for _, want := range tc.wantPromptHolds {
+					if !strings.Contains(model.prompts[0].User, want) {
+						t.Errorf("the prompt the model was asked does not hold %q, which is text of a file the review reads", want)
+					}
+				}
+
+				for _, hidden := range tc.wantPromptHides {
+					if strings.Contains(model.prompts[0].User, hidden) {
+						t.Errorf("the prompt the model was asked holds %q, which is text of a file the review leaves out: a generated or golden file's diff never reaches the model (issue #324)", hidden)
+					}
 				}
 			}
 

@@ -1149,6 +1149,85 @@ func TestRenderRendersAMisspeltPromptInjectionAnswerAsPromptInjection(t *testing
 	}
 }
 
+// TestRenderNamesTheFilesTheReviewDidNotRead pins the note the exclusion of
+// issue #324 leaves the reader: the review names every file the reviewer left
+// out of the diff, so the maintainer knows what the AI review did not read, and
+// names it escaped as every other text of a review is (ADR 0033), because a
+// file name is text a pull request chose: a mention in it notifies nobody, a
+// backtick in it cannot end the code span it is shown in, and an HTML tag in it
+// renders as text. A review that left nothing out has no such note, and its
+// body is the body Render renders.
+func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
+	t.Parallel()
+
+	mention := regexp.MustCompile(`@[A-Za-z0-9]`)
+
+	excluded := []string{
+		"api/openapi.bundled.json",
+		"testdata/comparison-v3.golden",
+		"testdata/`code`.golden",
+		"testdata/@octocat.golden",
+		"testdata/<img src=x>.golden",
+	}
+
+	answer := review.Answer{Summary: renderSummary, Findings: []review.Finding{renderAddedLine}}
+
+	got := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, excluded)
+
+	t.Run("every left-out file is named, escaped as the review escapes a path", func(t *testing.T) {
+		t.Parallel()
+
+		// A path is shown in a code span, as a finding's path in the body is,
+		// with the backticks it holds turned into apostrophes.
+		for _, want := range []string{
+			"`api/openapi.bundled.json`",
+			"`testdata/comparison-v3.golden`",
+			"`testdata/'code'.golden`",
+			"`testdata/<img src=x>.golden`",
+		} {
+			if !strings.Contains(got.Body, want) {
+				t.Errorf("the review does not name %q among the files it did not read; body:\n%s", want, got.Body)
+			}
+		}
+
+		if strings.Contains(got.Body, "testdata/`code`.golden") {
+			t.Errorf("the review names the path testdata/`code`.golden with its backticks whole, which closes the code span it is shown in; body:\n%s", got.Body)
+		}
+
+		if found := mention.FindString(got.Body); found != "" {
+			t.Errorf("the review's body holds the mention %q, which a left-out file's name carries: a file name notifies nobody either; body:\n%s", found, got.Body)
+		}
+
+		if !strings.Contains(got.Body, "octocat.golden") {
+			t.Errorf("the review drops the handle text of a left-out file's name: the name stays readable, only the @ goes; body:\n%s", got.Body)
+		}
+
+		if !strings.Contains(strings.ToLower(got.Body), "not reviewed") {
+			t.Errorf("the review's list of left-out files does not say they were not reviewed, so the reader cannot tell what the AI review skipped; body:\n%s", got.Body)
+		}
+
+		// The note is the body's, not a finding's: no finding of the answer is
+		// on a left-out file, so every finding stays where it was.
+		if len(got.Comments) != 1 {
+			t.Errorf("the review holds %d inline comments, want 1: the note changes no finding", len(got.Comments))
+		}
+	})
+
+	t.Run("a review that left nothing out has no note", func(t *testing.T) {
+		t.Parallel()
+
+		plain := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, nil)
+
+		if strings.Contains(strings.ToLower(plain.Body), "not reviewed") {
+			t.Errorf("the review of a diff it read whole says a file was not reviewed; body:\n%s", plain.Body)
+		}
+
+		if diff := cmp.Diff(review.Render(headSHA, answer, review.EventComment, renderDiff), plain); diff != "" {
+			t.Errorf("the review of a diff it read whole differs from Render's (-Render +RenderFiltered):\n%s", diff)
+		}
+	})
+}
+
 // renderedWith returns the review's text that renders f: the body of the inline
 // comment on f's line when the review makes one, the review's body otherwise.
 func renderedWith(t *testing.T, got review.Review, f review.Finding) string {
