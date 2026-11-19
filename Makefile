@@ -698,10 +698,19 @@ AGENTS_ACCOUNT_KIND = kind=""; \
 		fi; \
 		if [ -z "$$kind" ]; then \
 			account_admin="$$(dseditgroup -o checkmember -m "$$account" admin 2>/dev/null)"; account_admin_status=$$?; \
-			case "$$account_admin_status:$$account_admin" in \
-			0:* | *:yes*) \
+			account_admin_kind=refuse; \
+			if [ "$$account_admin_status" -eq 0 ]; then \
+				account_admin_kind=admin; \
+			else \
+				case "$$account_admin" in \
+				yes*) account_admin_kind=admin ;; \
+				"no "*) account_admin_kind=pass ;; \
+				esac; \
+			fi; \
+			case "$$account_admin_kind" in \
+			admin) \
 				kind="the account SHIFT2EU_AGENTS_ACCOUNT names is a member of the admin group (dseditgroup), so it is no hidden role account: remove it from admin (docs/dev-environment.md, The agents App)" ;; \
-			*:"no "*) ;; \
+			pass) ;; \
 			*) \
 				kind="the admin check (dseditgroup -o checkmember) gave no explicit no for the account SHIFT2EU_AGENTS_ACCOUNT names (status $$account_admin_status), so it cannot tell that the account is no admin: the check fails closed (docs/dev-environment.md, The agents App)" ;; \
 			esac; \
@@ -1056,11 +1065,22 @@ agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh'
 # #227 part 2, the security audit's second and third pass).
 STRIP_CONTROL = LC_ALL=C tr -cd '\011\012\040-\176'
 
+# VM_OUTPUT prints what the VM printed ($$out, its two streams together) through $(STRIP_CONTROL) and, when
+# limactl's $$status is non-zero, sends it to make's stderr and exits with that status: a failure the maintainer
+# pipes away with make's stdout would be a failure they never see. A run that succeeds prints it on stdout (issue
+# #227 part 2, the closing review).
+VM_OUTPUT = if [ "$$status" -ne 0 ]; then \
+		if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL) >&2; fi; \
+		exit "$$status"; \
+	fi; \
+	if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL); fi
+
 # For a VM created before dev/lima.yaml installed the gh wrapper: moves the real gh off the PATH, installs the
 # wrapper with the real gh's path pinned and points the git credential helper at it, all over limactl's
 # standard input (dev/vm-gh-wrapper.sh). The script is generated first and sent only when it is whole (its
 # last line is the call that runs it), so a generator that fails fails make before the VM is touched. The VM's
-# output, stdout and stderr together, is captured and printed through $(STRIP_CONTROL), and make fails unless it holds the line "vm-gh-wrapper: done", so a
+# output, stdout and stderr together, is captured and printed through $(VM_OUTPUT) (filtered, and on make's stderr
+# when limactl fails, with its status), and make fails unless it holds the line "vm-gh-wrapper: done", so a
 # connection that drops after the stream arrived (sh -s exits 0 having run nothing) is no success. Safe to
 # run again.
 .PHONY: vm-gh-wrapper
@@ -1072,8 +1092,7 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 		exit 1; \
 	fi; \
 	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
-	if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL); fi; \
-	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-gh-wrapper: done'; then \
 		echo "vm-gh-wrapper: the VM never printed vm-gh-wrapper: done, so the installation may not have finished; run make vm-gh-wrapper again" >&2; \
 		exit 1; \
@@ -1125,8 +1144,7 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 		exit 1; \
 	fi; \
 	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
-	if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL); fi; \
-	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-agents-token-ssh: done'; then \
 		echo "vm-agents-token-ssh: the VM never printed vm-agents-token-ssh: done, so the installation may not have finished; run make vm-agents-token-ssh again" >&2; \
 		exit 1; \
@@ -1159,8 +1177,7 @@ vm-agents-token-ssh-uninstall: ## Remove the agents App account's writer, keys f
 		exit 1; \
 	fi; \
 	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
-	if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL); fi; \
-	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-agents-token-ssh-uninstall: done'; then \
 		echo "vm-agents-token-ssh-uninstall: the VM never printed vm-agents-token-ssh-uninstall: done, so the removal may not have finished; run make vm-agents-token-ssh-uninstall again" >&2; \
 		exit 1; \

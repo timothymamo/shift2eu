@@ -635,7 +635,9 @@ account. The refusal names the check (`dscl`, `UniqueID`, `admin` or `dseditgrou
 account name, but on a failing kind check it only prints a warning naming the check and boots the job out
 anyway. The VM targets (`make vm-gh-wrapper`, `make vm-agents-token-ssh` and its uninstall) capture the VM's
 stdout and stderr together and print them reduced to printable ASCII, tab and newline, so a line code in the
-VM prints cannot carry a terminal escape sequence or a C1 control to your terminal.
+VM prints cannot carry a terminal escape sequence or a C1 control to your terminal. When the VM side fails
+(`limactl` exits non-zero), that output goes to make's stderr instead of its stdout, and make exits with
+`limactl`'s status.
 
 **What the host clone does not do.** It keeps every host target on code the agents cannot edit, and the
 credentials out of the workspace's shells. It does not put the App's key, nor the credentials in its

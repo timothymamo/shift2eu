@@ -240,7 +240,9 @@
 >       <instance> sh -s`'s standard input, exactly as `make vm-gh-wrapper` does, and fails unless the
 >       VM's output holds the line `vm-agents-token-ssh: done`. The VM's stdout and stderr are captured
 >       together and echoed reduced to printable ASCII, tab and newline (all three VM targets do so), so
->       code in the VM cannot drive the maintainer's terminal with an escape sequence or a C1 control. In the VM the script, with `sudo`,
+>       code in the VM cannot drive the maintainer's terminal with an escape sequence or a C1 control;
+>       when `limactl` exits non-zero they go, filtered the same way, to make's stderr, and make exits
+>       with that status. In the VM the script, with `sudo`,
 >       installs the writer as `/usr/local/libexec/shift2eu/.agents-token-write.new` after `sh -n`, then
 >       `mv`s it into place; writes the keys file and the drop-in the same way (a `.new` beside each,
 >       then `mv`); runs `sshd -t` and, only when that passes, `systemctl try-reload-or-restart
