@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
@@ -166,6 +165,9 @@ const (
 // text and the errors list them.
 var schemaVersions = []string{"2", "3"}
 
+// schemaVersionValues maps each of schemaVersions to the version it selects.
+var schemaVersionValues = map[string]int{"2": 2, "3": 3}
+
 // parseSchemaVersion returns the schemaVersion a run of format writes: value,
 // which must be one of schemaVersions, when given, or defaultSchemaVersion;
 // 0 for a format that has no schemaVersion. --schema-version with such a
@@ -185,14 +187,10 @@ func parseSchemaVersion(format, value string, given bool) (int, error) {
 		return defaultSchemaVersion, nil
 	}
 
-	if !slices.Contains(schemaVersions, value) {
+	n, ok := schemaVersionValues[value]
+	if !ok {
 		return 0, fmt.Errorf("--%s: unknown schema version %s; supported schema versions: %s",
 			schemaVersionFlag, text.Quote(value), strings.Join(schemaVersions, ", "))
-	}
-
-	n, err := strconv.Atoi(value)
-	if err != nil {
-		return 0, fmt.Errorf("--%s: %w", schemaVersionFlag, err)
 	}
 
 	return n, nil
