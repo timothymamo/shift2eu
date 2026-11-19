@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -569,12 +568,10 @@ func TestClaudeCLIAskReportsACancellationAfterTheCLIStarted(t *testing.T) {
 
 	// A FIFO is what makes the start of the CLI observable: the fake's write
 	// blocks until this test opens it, and this test's open blocks until the
-	// fake writes.
-	fifo := filepath.Join(t.TempDir(), "started")
-
-	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
-		t.Fatalf("make the FIFO the fake CLI signals its start with: %v", err)
-	}
+	// fake writes. It is made in a file split by build constraint, because
+	// syscall.Mkfifo is Unix-only and make lint typechecks this package's tests
+	// for every release target, Windows included (issue #303).
+	fifo := newStartFIFO(t)
 
 	cli, rec := newFakeClaudeCLI(t, claudeFake{started: fifo, stdout: cliSuccess})
 
