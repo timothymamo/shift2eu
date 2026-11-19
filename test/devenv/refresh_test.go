@@ -1688,6 +1688,11 @@ func TestAgentsAppTokenRefreshHandlesALockThatGoesMissing(t *testing.T) {
 		}
 
 		gone.putTheLockBack(t)
+
+		// The retry returns once the lock is back, and the loop's own sleep comes next: the test holds that one too,
+		// so the refresher parks at it instead of spinning its loop - the sleep shim returns at once while no hold
+		// is armed - until the SIGTERM below.
+		gone.holdTheNextWait(t)
 		gone.letTheWaitGo(t)
 
 		waitFor(t, 30*time.Second, "the refresher whose lock came back during the retry to write a token", func() bool {
@@ -1922,6 +1927,113 @@ func TestAgentsAppTokenRefreshDoesNotEchoTheLockFilesPid(t *testing.T) {
 	}
 
 	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshTakesOverALockWhosePidIsNoNumber pins the third review's finding on the lock's pid
+// file: take_lock asks is_refresh whether the pid it read runs a refresh, and is_refresh ends in `ps -p "$1"`,
+// which takes a list of pids too ("123,456" and "123 456"). A stale lock whose pid file lists a running refresh's
+// pid among others must still be taken over: no refresh owns that lock, so the next refresher takes it and mints,
+// as it does a lock whose pid is gone, where a lock read as a running refresh's stays behind and nothing writes
+// the VM's token. The script as it stands asks is_number first and kill -0 next, and kill -0 rejects both forms
+// on the Mac and in CI, so the pin already holds; what it catches is a change that lets such text read as a
+// running refresh's, which is what the guard is there to stop.
+func TestAgentsAppTokenRefreshTakesOverALockWhosePidIsNoNumber(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		// list writes a pid file holding both pids, in the form this case pins.
+		list func(first, second int) string
+	}{
+		{
+			name: "a comma-separated list of pids",
+			list: func(first, second int) string { return fmt.Sprintf("%d,%d", first, second) },
+		},
+		{
+			name: "a space-separated list of pids",
+			list: func(first, second int) string { return fmt.Sprintf("%d %d", first, second) },
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			env := f.refreshEnv()
+
+			// A live process that runs no refresh, and one whose command line is a refresh's: the pid file lists
+			// both, so the text ps is handed names a running refresh without being a pid of one.
+			bystander := liveNonRefreshPid(t)
+			live := standInForARefresh(t, f.sb)
+
+			// The stale lock a refresher killed without its trap leaves: the directory, with a pid file that holds
+			// a list instead of one pid.
+			lock := f.sb.refreshLockDir("shift2eu")
+
+			if err := os.MkdirAll(lock, 0o700); err != nil {
+				t.Fatalf("create the stale lock %s: %v", lock, err)
+			}
+
+			pidFile := filepath.Join(lock, "pid")
+			listed := tc.list(bystander, live.pid())
+
+			writeFileMode(t, pidFile, []byte(listed+"\n"), 0o600)
+
+			refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+			// What a failure has to show: what the lock holds, what the refresher said and whether it still runs.
+			contest := func() string {
+				return fmt.Sprintf("the lock's %s holds %q; the refresher (pid %d, running %t) stderr:\n%s\nstate directory:\n%s",
+					pidFile, listed, refresh.pid(), refresh.running(), refresh.errOut(), describeTree(f.sb.stateDir()))
+			}
+
+			minted := func() bool {
+				line, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
+
+				return ok && line != ""
+			}
+
+			if !poll(30*time.Second, func() bool { return minted() || !refresh.running() }) {
+				t.Fatalf("the refresh neither took the stale lock over and wrote a token nor exited within 30s\n%s", contest())
+			}
+
+			// The refresher that read the list must not leave the lock to a refresh that is none: it takes the
+			// stale lock over, keeps it and mints, where a refresher that read the list as a running refresh's says
+			// another refresh is running and exits.
+			if !refresh.running() {
+				t.Fatalf("the refresh exited with %d instead of taking over the stale lock %s, whose pid file holds %q: a pid file that is no pid is no running refresh's, so nothing refreshes the VM's token now\n%s",
+					refresh.exitCode(t), lock, listed, contest())
+			}
+
+			if strings.Contains(refresh.errOut(), "another agents App token refresh") {
+				t.Errorf("the refresh said another agents App token refresh is running with the list %q it read from the lock's pid file, so it left a stale lock to a refresh that is none (issue #288)\n%s",
+					listed, contest())
+			}
+
+			waitFor(t, 30*time.Second, "the refresh that took the stale lock over to write the VM's token", minted)
+
+			if got := len(f.api.minted()); got != 1 {
+				t.Errorf("%d token(s) were minted, want one: the refresher that took the stale lock over is the only one that mints\n%s",
+					got, contest())
+			}
+
+			if !lockHoldsPid(lock, refresh.pid()) {
+				t.Errorf("the lock %s does not hold the pid %d of the refresher that took the stale one over\n%s",
+					lock, refresh.pid(), contest())
+			}
+
+			refresh.signal(t, syscall.SIGTERM)
+
+			if !refresh.waitExit(30 * time.Second) {
+				t.Fatalf("the refresh did not stop on SIGTERM; stderr:\n%s", refresh.errOut())
+			}
+
+			if _, err := os.Stat(lock); err == nil {
+				t.Errorf("the lock %s outlived the refresh that took it over", lock)
+			}
+
+			f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+		})
+	}
 }
 
 // TestAgentsAppTokenRefreshNeverClaimsAPastExpiryWhenItStops pins the second review's item 9: the stop line must
