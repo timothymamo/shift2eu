@@ -656,9 +656,22 @@ AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2e
 # -, or is root or the maintainer's own (id -un): it becomes part of root's commands and the job's paths. It never
 # shows the value it refuses. Before any sudo it checks the account's kind (issue #227 part 2, the security audit's
 # second pass): dscl must read a UniqueID from 1 to 499 (a hidden role account; macOS gives a login account 500 and
-# above), and dseditgroup must not report it a member of admin; a refusal names the check, never the value. In account mode a SHIFT2EU_AGENTS_APP_KEY_FILE still set gets a warning: the
-# account's key is the derived path.
-AGENTS_ACCOUNT_CHECK = account="$${SHIFT2EU_AGENTS_ACCOUNT:-}"; \
+# above), and dseditgroup must answer its explicit negative, a non-zero status with an answer that begins "no ":
+# the admin check fails closed, so an exit 0, a yes, an error without an answer or a missing dseditgroup refuses
+# the account. A refusal names the check, never the value. In account mode a SHIFT2EU_AGENTS_APP_KEY_FILE still
+# set gets a warning: the account's key is the derived path.
+#
+# Its parts: AGENTS_ACCOUNT_NAME_CHECK refuses a bad name, AGENTS_ACCOUNT_KIND sets kind to what is wrong with the
+# account's kind (empty: a hidden role account, or single-account mode) and AGENTS_ACCOUNT_KEY_FILE_WARNING warns
+# about the key file. agents-token-refresh-uninstall, the kill switch, runs them with AGENTS_ACCOUNT_KIND_WARNING in
+# place of the refusal: a job loaded for an account that is no role account must still be removable.
+AGENTS_ACCOUNT_CHECK = $(AGENTS_ACCOUNT_NAME_CHECK); $(AGENTS_ACCOUNT_KIND); \
+	if [ -n "$$kind" ]; then echo "$@: $$kind" >&2; exit 1; fi; \
+	$(AGENTS_ACCOUNT_KEY_FILE_WARNING)
+AGENTS_ACCOUNT_KIND_WARNING = if [ -n "$$kind" ]; then \
+		echo "$@: warning: $$kind; booting the job out anyway, so it stops whatever the account is" >&2; \
+	fi
+AGENTS_ACCOUNT_NAME_CHECK = account="$${SHIFT2EU_AGENTS_ACCOUNT:-}"; \
 	if [ -n "$$account" ]; then \
 		case "$$account" in \
 		[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) \
@@ -667,25 +680,35 @@ AGENTS_ACCOUNT_CHECK = account="$${SHIFT2EU_AGENTS_ACCOUNT:-}"; \
 		if [ "$$account" = root ] || [ "$$account" = "$$(id -un)" ]; then \
 			echo "$@: SHIFT2EU_AGENTS_ACCOUNT must name the separate account that holds the App's key, never root or your own account (docs/dev-environment.md, The agents App)" >&2; exit 1; \
 		fi; \
-		account_uid="$$(dscl . -read "/Users/$$account" UniqueID 2>/dev/null)" || { \
-			echo "$@: dscl cannot read the UniqueID of the account SHIFT2EU_AGENTS_ACCOUNT names: create the hidden role account first (docs/dev-environment.md, The agents App)" >&2; exit 1; \
-		}; \
-		account_uid="$$(printf '%s\n' "$$account_uid" | sed -n 's/^UniqueID:[[:space:]]*\([0123456789][0123456789]*\)[[:space:]]*$$/\1/p' | head -n 1)"; \
-		case "$$account_uid" in \
-		'' | 0* | ????*) \
-			echo "$@: the account SHIFT2EU_AGENTS_ACCOUNT names has no UniqueID from 1 to 499 (dscl), so it is no hidden role account: a login account's key is in the maintainer's reach (docs/dev-environment.md, The agents App)" >&2; exit 1 ;; \
-		esac; \
-		if [ "$$account_uid" -ge 500 ]; then \
-			echo "$@: the account SHIFT2EU_AGENTS_ACCOUNT names has a UniqueID of 500 or above (dscl), a login account, not a hidden role account below 500 (docs/dev-environment.md, The agents App)" >&2; exit 1; \
+	fi
+AGENTS_ACCOUNT_KIND = kind=""; \
+	if [ -n "$$account" ]; then \
+		if ! account_uid="$$(dscl . -read "/Users/$$account" UniqueID 2>/dev/null)"; then \
+			kind="dscl cannot read the UniqueID of the account SHIFT2EU_AGENTS_ACCOUNT names: create the hidden role account first (docs/dev-environment.md, The agents App)"; \
+		else \
+			account_uid="$$(printf '%s\n' "$$account_uid" | sed -n 's/^UniqueID:[[:space:]]*\([0123456789][0123456789]*\)[[:space:]]*$$/\1/p' | head -n 1)"; \
+			case "$$account_uid" in \
+			'' | 0* | ????*) \
+				kind="the account SHIFT2EU_AGENTS_ACCOUNT names has no UniqueID from 1 to 499 (dscl), so it is no hidden role account: a login account's key is in the maintainer's reach (docs/dev-environment.md, The agents App)" ;; \
+			*) \
+				if [ "$$account_uid" -ge 500 ]; then \
+					kind="the account SHIFT2EU_AGENTS_ACCOUNT names has a UniqueID of 500 or above (dscl), a login account, not a hidden role account below 500 (docs/dev-environment.md, The agents App)"; \
+				fi ;; \
+			esac; \
 		fi; \
-		account_admin="$$(dseditgroup -o checkmember -m "$$account" admin 2>/dev/null)"; account_admin_status=$$?; \
-		case "$$account_admin_status:$$account_admin" in \
-		0:* | *:yes*) \
-			echo "$@: the account SHIFT2EU_AGENTS_ACCOUNT names is a member of the admin group (dseditgroup), so it is no hidden role account: remove it from admin (docs/dev-environment.md, The agents App)" >&2; exit 1 ;; \
-		esac; \
-		if [ -n "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
-			echo "$@: warning: SHIFT2EU_AGENTS_APP_KEY_FILE is set, but in account mode the App's key is the account's, /Users/$$account/.config/shift2eu/agents-app.pem: remove the variable from the host clone's .envrc, delete the file it names, and delete that key on the App's page (docs/dev-environment.md, The agents App)" >&2; \
+		if [ -z "$$kind" ]; then \
+			account_admin="$$(dseditgroup -o checkmember -m "$$account" admin 2>/dev/null)"; account_admin_status=$$?; \
+			case "$$account_admin_status:$$account_admin" in \
+			0:* | *:yes*) \
+				kind="the account SHIFT2EU_AGENTS_ACCOUNT names is a member of the admin group (dseditgroup), so it is no hidden role account: remove it from admin (docs/dev-environment.md, The agents App)" ;; \
+			*:"no "*) ;; \
+			*) \
+				kind="the admin check (dseditgroup -o checkmember) gave no explicit no for the account SHIFT2EU_AGENTS_ACCOUNT names (status $$account_admin_status), so it cannot tell that the account is no admin: the check fails closed (docs/dev-environment.md, The agents App)" ;; \
+			esac; \
 		fi; \
+	fi
+AGENTS_ACCOUNT_KEY_FILE_WARNING = if [ -n "$$account" ] && [ -n "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
+		echo "$@: warning: SHIFT2EU_AGENTS_APP_KEY_FILE is set, but in account mode the App's key is the account's, /Users/$$account/.config/shift2eu/agents-app.pem: remove the variable from the host clone's .envrc, delete the file it names, and delete that key on the App's page (docs/dev-environment.md, The agents App)" >&2; \
 	fi
 # AGENTS_ACCOUNT_NO_MINT refuses a minting target in account mode: only the account can read the key.
 AGENTS_ACCOUNT_NO_MINT = if [ -n "$$account" ]; then \
@@ -999,7 +1022,8 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh's LaunchDaemon of this VM instance; needs sudo (host clone, macOS)
 	$(LIMA_INSTANCE_CHECK)
 	@command -v launchctl >/dev/null 2>&1 || { echo "agents-token-refresh-uninstall: no launchctl: the LaunchDaemon is for the Mac, and there is none to remove here" >&2; exit 1; }; \
-	$(AGENTS_ACCOUNT_CHECK); \
+	$(AGENTS_ACCOUNT_NAME_CHECK); $(AGENTS_ACCOUNT_KIND); $(AGENTS_ACCOUNT_KIND_WARNING); \
+	$(AGENTS_ACCOUNT_KEY_FILE_WARNING); \
 	$(AGENTS_TOKEN_LAUNCHD_DIR_CHECK); \
 	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${AGENTS_TOKEN_LAUNCHD_DIR%/}/$$label.plist"; \
 	if [ -n "$$account" ]; then trap 'sudo -k' EXIT; fi; \
@@ -1026,16 +1050,17 @@ agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh'
 		echo "agents-token-refresh-uninstall: warning: $$label is still loaded: unload it with sudo launchctl bootout system/$$label" >&2; \
 	fi
 
-# STRIP_CONTROL deletes every control character but tab and newline, ESC among them, from what the VM printed
-# before make echoes it: the scripts in the VM are code the agents can write, and an escape sequence could drive
-# the maintainer's terminal (issue #227 part 2, the security audit's second pass).
-STRIP_CONTROL = LC_ALL=C tr -d '\000-\010\013-\037\177'
+# STRIP_CONTROL keeps only tab, newline and printable ASCII of what the VM printed, on stdout and stderr (the
+# recipes capture both, 2>&1), before make echoes it: the scripts in the VM are code the agents can write, and an
+# escape sequence or a C1 control (the byte 0x9B, or its UTF-8 form) could drive the maintainer's terminal (issue
+# #227 part 2, the security audit's second and third pass).
+STRIP_CONTROL = LC_ALL=C tr -cd '\011\012\040-\176'
 
-# For a VM created before dev/lima.yaml installed the gh wrapper:moves the real gh off the PATH, installs the
+# For a VM created before dev/lima.yaml installed the gh wrapper: moves the real gh off the PATH, installs the
 # wrapper with the real gh's path pinned and points the git credential helper at it, all over limactl's
 # standard input (dev/vm-gh-wrapper.sh). The script is generated first and sent only when it is whole (its
 # last line is the call that runs it), so a generator that fails fails make before the VM is touched. The VM's
-# output is captured and printed through $(STRIP_CONTROL), and make fails unless it holds the line "vm-gh-wrapper: done", so a
+# output, stdout and stderr together, is captured and printed through $(STRIP_CONTROL), and make fails unless it holds the line "vm-gh-wrapper: done", so a
 # connection that drops after the stream arrived (sh -s exits 0 having run nothing) is no success. Safe to
 # run again.
 .PHONY: vm-gh-wrapper
@@ -1046,7 +1071,7 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 		echo "vm-gh-wrapper: dev/vm-gh-wrapper.sh printed no whole script (its last line is not vm_gh_wrapper); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s)"; status=$$?; \
+	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
 	if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL); fi; \
 	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-gh-wrapper: done'; then \
@@ -1099,7 +1124,7 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 		echo "vm-agents-token-ssh: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s)"; status=$$?; \
+	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
 	if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL); fi; \
 	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-agents-token-ssh: done'; then \
@@ -1133,7 +1158,7 @@ vm-agents-token-ssh-uninstall: ## Remove the agents App account's writer, keys f
 		echo "vm-agents-token-ssh-uninstall: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh_uninstall); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s)"; status=$$?; \
+	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
 	if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL); fi; \
 	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-agents-token-ssh-uninstall: done'; then \

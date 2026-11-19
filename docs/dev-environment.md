@@ -628,10 +628,14 @@ account-mode target (`make agents-token`, `make agents-token-refresh`, `make age
 `make agents-token-refresh-install`, `make agents-token-refresh-uninstall`, `make vm-agents-token-ssh`) checks
 the account's kind: it refuses unless `dscl . -read /Users/<account> UniqueID` reads a `UniqueID` from 1 to 499
 (a hidden role account; macOS gives a login account 500 and above) and `dseditgroup -o checkmember -m
-<account> admin` does not report it a member of `admin`. The refusal names the check (`dscl`, `UniqueID` or
-`admin`) and `SHIFT2EU_AGENTS_ACCOUNT`. The VM targets (`make vm-gh-wrapper`, `make vm-agents-token-ssh` and
-its uninstall) print the VM's output with every control character but tab and newline removed, so a line
-code in the VM prints cannot carry a terminal escape sequence to your terminal.
+<account> admin` answers its explicit `no` (a non-zero status with an answer that begins `no `). The admin
+check fails closed: an exit 0, a `yes`, an error without an answer or a missing `dseditgroup` refuses the
+account. The refusal names the check (`dscl`, `UniqueID`, `admin` or `dseditgroup`) and
+`SHIFT2EU_AGENTS_ACCOUNT`. `make agents-token-refresh-uninstall` is the kill switch: it still refuses a bad
+account name, but on a failing kind check it only prints a warning naming the check and boots the job out
+anyway. The VM targets (`make vm-gh-wrapper`, `make vm-agents-token-ssh` and its uninstall) capture the VM's
+stdout and stderr together and print them reduced to printable ASCII, tab and newline, so a line code in the
+VM prints cannot carry a terminal escape sequence or a C1 control to your terminal.
 
 **What the host clone does not do.** It keeps every host target on code the agents cannot edit, and the
 credentials out of the workspace's shells. It does not put the App's key, nor the credentials in its
@@ -1176,7 +1180,8 @@ sudo -k
 
 **Back to single-account mode**, from your host clone:
 
-1. `direnv exec . make agents-token-refresh-uninstall` (it boots the job out whichever mode installed it).
+1. `direnv exec . make agents-token-refresh-uninstall` (it boots the job out whichever mode installed it;
+   if the account's kind check fails, it warns, naming the check, and boots the job out anyway).
 2. `direnv exec . make vm-agents-token-ssh-uninstall`, while `SHIFT2EU_AGENTS_VM_SSH_USER` is still in
    `.envrc` (it names the keys file to remove); it ends with `vm-agents-token-ssh-uninstall: done`.
 3. Generate a new key on the App's page, and keep it where `SHIFT2EU_AGENTS_APP_KEY_FILE` will name it,

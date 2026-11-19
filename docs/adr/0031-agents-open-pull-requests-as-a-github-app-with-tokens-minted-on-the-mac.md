@@ -105,9 +105,14 @@
 >    `.`, `_` and `-`, or is `root` or the maintainer's own (`id -un`). They check the account's kind too,
 >    before any `sudo` (issue #227 part 2, the security audit's second pass): they refuse unless
 >    `dscl . -read /Users/<account> UniqueID` reads a `UniqueID` from 1 to 499 and `dseditgroup -o
->    checkmember -m <account> admin` does not report it a member of `admin`, naming the check and
->    `SHIFT2EU_AGENTS_ACCOUNT`, never a value: a login account or an admin would put the key back in the
->    maintainer's silent reach. The runbook's passing check of the account confirms the same by hand.
+>    checkmember -m <account> admin` gives its explicit negative (a non-zero status with an answer that
+>    begins `no `), naming the check and `SHIFT2EU_AGENTS_ACCOUNT`, never a value: a login account or an
+>    admin would put the key back in the maintainer's silent reach. The admin check fails closed: an exit 0,
+>    a `yes`, an error without an answer or a missing `dseditgroup` refuses the account. The one exception
+>    is the kill switch, `make agents-token-refresh-uninstall`: it keeps the check of the name, but a
+>    failing check of the account's kind only makes it warn, naming the check, and boot the job out anyway,
+>    so a job loaded for such an account can always be removed. The runbook's passing check of the account
+>    confirms the same by hand.
 > 2. **Where everything lives, and the new trust boundary.** Everything that holds or runs with the key
 >    is owned by the account, inside its home, out of reach of the maintainer's uid:
 >
@@ -233,7 +238,9 @@
 >       from `dev/agents-app-token.sh vm-writer`, in a temporary file), a script whose last line is the
 >       call `vm_agents_token_ssh`, sends it only when it is whole, over `limactl shell --workdir /
 >       <instance> sh -s`'s standard input, exactly as `make vm-gh-wrapper` does, and fails unless the
->       VM's output holds the line `vm-agents-token-ssh: done`. In the VM the script, with `sudo`,
+>       VM's output holds the line `vm-agents-token-ssh: done`. The VM's stdout and stderr are captured
+>       together and echoed reduced to printable ASCII, tab and newline (all three VM targets do so), so
+>       code in the VM cannot drive the maintainer's terminal with an escape sequence or a C1 control. In the VM the script, with `sudo`,
 >       installs the writer as `/usr/local/libexec/shift2eu/.agents-token-write.new` after `sh -n`, then
 >       `mv`s it into place; writes the keys file and the drop-in the same way (a `.new` beside each,
 >       then `mv`); runs `sshd -t` and, only when that passes, `systemctl try-reload-or-restart
@@ -329,7 +336,8 @@
 >      shift2eu-agents-token -f /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key` (after
 >      removing the old pair as the account), then `make vm-agents-token-ssh`.
 > 9. **Back to single-account mode.** From the maintainer's host clone: `make
->    agents-token-refresh-uninstall` (it boots out the job whichever mode installed it); `make
+>    agents-token-refresh-uninstall` (it boots out the job whichever mode installed it, and only warns
+>    when the account's kind check fails); `make
 >    vm-agents-token-ssh-uninstall`, while `SHIFT2EU_AGENTS_VM_SSH_USER` (which names the keys file) is
 >    still in `.envrc`; generate a new key on the App's page and put it where
 >    `SHIFT2EU_AGENTS_APP_KEY_FILE` names, outside the workspace, 0600, as before this update (never copy
