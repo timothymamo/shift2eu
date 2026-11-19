@@ -114,15 +114,18 @@ release), *live* (checked against the live site) or *review*.
   (*Decided by the orchestrator in review*): `postMessage` (on any object: a window, a frame, a port, a
   worker), `opener`, `parent` and `top` (each outside the framing guard's two uses below),
   `BroadcastChannel`, `MessageChannel` and assignment to `name` (on any object: `window.name` survives
-  a navigation to another origin). Since a name
+  a navigation to another origin), and any `message` listener (`addEventListener("message", ...)` or
+  `onmessage`, on any object), so a message another window posts in is never read. Since a name
   scan cannot see a computed name, the test also fails on any computed-key member access in the page
   script, read or assignment (`x[expr]`, `x[expr] = ...`), and on `Object.assign`, `Reflect.set`,
   `Reflect.get`, `Object.defineProperty` and `Object.defineProperties`, with no exception: the script
   decodes the module with `atob` and `Uint8Array.from`, which needs none. Three uses are allowed, each in
   one named function of the page script that the test names and confines them to: the **framing
   guard** compares `window.top !== window.self` once (its only use of `top`, and no use of `parent`)
-  and sets `window.opener = null` on load (its only use of `opener`: the site cannot send
-  `Cross-Origin-Opener-Policy`, so a page that opened this one keeps a handle to it until then); the **download
+  and sets `window.opener = null` on load (its only use of `opener`; defence in depth behind the
+  `opener` and `postMessage` ban: it drops only this page's own handle to its opener, and since the
+  site cannot send `Cross-Origin-Opener-Policy` the opener keeps its handle to this page, with which
+  it can navigate the tab or post messages in but read nothing); the **download
   function** creates a `blob:` URL with `URL.createObjectURL` from the report bytes and sets it as the
   `href` of an `<a download>` it clicks (a `blob:` URL is same-document and sends nothing), then revokes
   it; and the **unregister function** calls `navigator.serviceWorker.getRegistrations()` and
@@ -130,8 +133,8 @@ release), *live* (checked against the live site) or *review*.
   test fails when any of these APIs appears outside its function, when the framing guard's `top` or
   `opener` use differs from the two forms above, or when the functions do anything else that the scan
   bans. The glue's allow list of constant names holds none of the messaging names above (`postMessage`,
-  `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`, `name`), and the test fails when one
-  is added. The glue calls `js.Global().Get`, `Value.Get`, `Value.Set`, `Value.Delete` and
+  `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`, `name`, `onmessage`, and
+  `addEventListener` with `message`), and the test fails when one is added. The glue calls `js.Global().Get`, `Value.Get`, `Value.Set`, `Value.Delete` and
   `Value.Call` only with constant names from a named allow list, and `Value.New` and `Value.Invoke`,
   which take no name, only on a value it obtained through such a constant name; a forbidigo or test
   rule refuses a computed name and a `New` or `Invoke` on any other value.
@@ -151,9 +154,13 @@ release), *live* (checked against the live site) or *review*.
   `dns-prefetch`, `preconnect`, `prefetch` or `prerender` (static test).
 - [ ] The page script, which every page loads (*Layer 2*, the scripts per page), stops, and shows why,
   when the page is framed (`window.top !== window.self`), since a `<meta>` CSP cannot carry
-  `frame-ancestors`, and sets `window.opener = null` on load, since the site cannot send
-  `Cross-Origin-Opener-Policy` (static test of the script and *browser*: opened by another page with
-  `window.open`, the page's `window.opener` is `null` after load).
+  `frame-ancestors`, and sets `window.opener = null` on load as defence in depth behind the `opener`
+  and `postMessage` ban (static test of the script and *browser*: opened by another page with
+  `window.open`, the page's own `window.opener` reference is `null` after load). This drops only the
+  page's own handle: the site cannot send `Cross-Origin-Opener-Policy`, so the opener keeps its handle
+  to the page, with which it can navigate the tab or post messages in, but read nothing (and a posted
+  message is never read, since the page adds no `message` listener, *Layer 1*). No criterion or
+  statement claims the assignment closes that handle.
 
 **Layer 2, the browser.**
 
@@ -241,11 +248,20 @@ release), *live* (checked against the live site) or *review*.
   and a CSS `url()` load (a `background-image` in a style rule constructed by the test through CSSOM),
   each to an own-origin path and to another origin; every one must be blocked by `img-src 'none'`, and
   none may appear in the recorded requests.
-  It also attempts, from the page, a dedicated `Worker`, a `SharedWorker` and a
+  It also attempts a dedicated `Worker`, a `SharedWorker` and a
   `navigator.serviceWorker.register()`, each with a same-origin script URL (served by the test's
-  `httptest` server, which the bundle does not contain) and the `Worker` also from a `blob:` URL; every
-  one must be blocked by `worker-src 'none'` (a CSP violation, or a rejected registration), no worker may
-  run, and no worker script may appear in the recorded requests.
+  `httptest` server, which the bundle does not contain) and the `Worker` also from a `blob:` URL. `new Worker(url)`,
+  `new SharedWorker(url)` and `register(url)` are Trusted Types `TrustedScriptURL` sinks, so on the built page a
+  string URL throws a Trusted Types `TypeError` before any `worker-src` check, and a test there would
+  pass with `worker-src` deleted. The four attempts therefore run on a test-only copy of the page whose
+  policy is the built one with only `trusted-types` widened by one test policy name, every other
+  directive byte-identical (the test compares them), and the test mints each `TrustedScriptURL` through
+  that policy. Each of the four must be observed blocked as a `worker-src` violation: a
+  `securitypolicyviolation` event or a DevTools log entry whose `effectiveDirective` is `worker-src`,
+  with no Trusted Types error for that attempt. The bundle's origin is a secure context (`127.0.0.1` or
+  `localhost`), and the test asserts `navigator.serviceWorker` is defined before the `register()`
+  attempt, so the attempt cannot pass vacuously. No worker may run, and no worker script may appear in
+  the recorded requests.
   The smoke test serves the bundle from an `httptest` origin and passes there unchanged, which shows the
   bundle runs on an origin other than `www.shift2eu.com`; the release's smoke test does the same with the
   attested bundle.
@@ -254,8 +270,11 @@ release), *live* (checked against the live site) or *review*.
   or statement claims the CSP covers them. The same holds for messaging to another window or browsing
   context (`postMessage`, `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`, `window.name`):
   the CSP governs none of them, milestone 2's ADR and the privacy page's technical note list them as
-  gaps that layer 1 closes (its banned-API scan and the framing guard's `window.opener = null`), and the
-  smoke test records that the page's `window.opener` is `null` after load when another page opened it.
+  gaps that layer 1 closes (its banned-API scan, `message` listener ban included, with the framing
+  guard's `window.opener = null` as defence in depth), and list as a remaining gap, not a closed one,
+  that the opener keeps a handle to the page (no COOP): it can navigate the tab or post messages in,
+  read nothing. The smoke test records that the page's own `window.opener` reference is `null` after
+  load when another page opened it.
 - [ ] Every script, the module script included, and the stylesheet are loaded with Subresource
   Integrity, SHA-384: the `<script>` and `<link rel="stylesheet">` elements carry `integrity`. A static
   test computes the SHA-384 of every built file and fails when an `integrity` value is missing or does
@@ -702,8 +721,10 @@ security audit (`security-audit` skill), since every one of them touches the tru
    own response headers, which the site cannot send, so its `fetch` would escape `connect-src 'none'`),
    `child-src`, `frame-src` and `manifest-src` pinned to `'none'`, and its known gaps (navigation,
    WebRTC, DNS prefetch, and messaging to another window or browsing context: `postMessage`, `opener`,
-   `parent`, `top`, `BroadcastChannel`, `MessageChannel`, `window.name`, closed by layer 1's scan and the
-   framing guard's `window.opener = null`, since the site cannot send `Cross-Origin-Opener-Policy`), the module embedded
+   `parent`, `top`, `BroadcastChannel`, `MessageChannel`, `window.name`, closed by layer 1's scan, which
+   also bans any `message` listener, with the framing guard's `window.opener = null` as defence in depth;
+   and, as a remaining gap, the opener keeps a handle to the page (no COOP): it can navigate the tab or
+   post messages in, read nothing), the module embedded
    in an SRI-pinned script of a fixed template rather than fetched, the script order, SRI, Trusted Types
    and the browsers that do not enforce `require-trusted-types-for`, no storage, the one download path,
    the service-worker unregister, how the report is inserted and why it carries no inventory-derived
@@ -936,19 +957,29 @@ security audit (`security-audit` skill), since every one of them touches the tru
   widen them by fallback; the static test fails when any of the four is missing or other than exactly
   `'none'` (*Layer 2*). It does not conflict with the unregister function: `getRegistrations()` and
   `unregister()` fetch no script, and `worker-src` governs only the fetch of a worker's script. The
-  smoke test shows a dedicated worker, a shared worker and a service-worker registration blocked.
+  smoke test shows a dedicated worker (same-origin and `blob:`), a shared worker and a service-worker
+  registration each blocked as a `worker-src` violation. Since `require-trusted-types-for 'script'`
+  makes each of them a `TrustedScriptURL` sink, a string URL would fail on Trusted Types first and the
+  test would pass with `worker-src` deleted; the attempts run on a test-only copy of the page whose
+  policy differs only by one test policy name in `trusted-types`, through which the test mints the URLs
+  (*Layer 2*).
 - **Decided: layer 1 bans messaging to another window or browsing context** (AI reviewer on a5d7f72).
   The CSP governs none of `postMessage`, `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`
   or `window.name`, and each can hand the inventory to another page: a window that opened this one, a
   frame's parent, another same-origin context (for instance a page uploaded with a leaked key, open in
   another tab), or the next page loaded in the same tab, which reads `window.name`. The page script's
   banned-API scan and the glue's allow-list rule therefore refuse `postMessage` (on any object),
-  `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel` and assignment to `name`, with two
-  exceptions, both in the framing guard: its one comparison `window.top !== window.self`, and
-  `window.opener = null` on load, which cuts the opener's handle since the site cannot send
-  `Cross-Origin-Opener-Policy` (*Layer 1*). Milestone 2's ADR and the privacy page's technical note list
-  these as gaps the CSP does not cover and layer 1 closes, and the smoke test records `window.opener`
-  as `null` after load in a page opened by another.
+  `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`, assignment to `name` and any
+  `message` listener (`addEventListener("message", ...)`, `onmessage`), so posted messages are never
+  read, with two exceptions, both in the framing guard: its one comparison `window.top !== window.self`,
+  and `window.opener = null` on load (*Layer 1*). That assignment is defence in depth behind the ban: it
+  drops only this page's own handle to its opener. Since the site cannot send
+  `Cross-Origin-Opener-Policy`, the opener keeps its handle to this page, with which it can navigate
+  the tab or post messages in, but read nothing. Milestone 2's ADR and the privacy page's technical note
+  list the messaging APIs as gaps the CSP does not cover and layer 1 closes, and list the opener's
+  remaining handle (no COOP: it can navigate the tab or post messages in, read nothing) as a remaining
+  gap, not a closed one; the smoke test checks the page's own `window.opener` reference is `null` after
+  load in a page opened by another.
 
 ### Hosting decisions (decided by the maintainer, 2026-11-19)
 
