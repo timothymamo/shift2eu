@@ -71,7 +71,7 @@ func TestStorageNotIncludedThroughTheOvhcloudSnapshot(t *testing.T) {
 
 	inventoryPath := filepath.Join("testdata", "boot-volume", "inventory.json")
 
-	rendered := runSingleWith(t, inventoryPath, ovhcloud.New(), jsonreport.New(),
+	rendered := runSingleWith(t, inventoryPath, ovhcloud.New(), jsonreport.New(jsonreport.Version2),
 		analysis.Options{Estimate: true}, analysis.ReportMeta{InventoryName: filepath.Base(inventoryPath)})
 
 	checkStorageNotes(t, rendered, "b3-", []storageNoteCase{
@@ -98,7 +98,7 @@ func TestStorageNotIncludedThroughTheUpcloudSnapshot(t *testing.T) {
 
 	inventoryPath := filepath.Join("testdata", "data-storage", "inventory.json")
 
-	rendered := runSingleWith(t, inventoryPath, upcloud.New(), jsonreport.New(),
+	rendered := runSingleWith(t, inventoryPath, upcloud.New(), jsonreport.New(jsonreport.Version2),
 		analysis.Options{Estimate: true}, analysis.ReportMeta{InventoryName: filepath.Base(inventoryPath)})
 
 	checkStorageNotes(t, rendered, "rdb.standard.", []storageNoteCase{

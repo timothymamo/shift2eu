@@ -1,6 +1,8 @@
 package jsonreport_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
@@ -13,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/timothymamo/shift2eu/internal/adapter/report/jsonreport"
 )
 
 // draft202012 is the JSON Schema dialect the report's schemas declare.
@@ -661,10 +665,14 @@ func TestJSONSchemaValidatorRefusesUnsupportedSchema(t *testing.T) {
 // reporters through the CLI, so the schemas must accept them too.
 const e2eGoldenDir = "../../../../test/e2e/testdata"
 
-// currentSchemaVersion is the schemaVersion every document this release writes
-// declares (docs/adr/0018, PRD #190 milestone 8): a new version gets new schema
-// files beside the old ones.
-const currentSchemaVersion = 2
+// currentSchemaVersion is the schemaVersion a run writes when it names none: the
+// version this release writes (docs/adr/0018, issue #307).
+const currentSchemaVersion = jsonreport.Version3
+
+// writtenSchemaVersions are the schemaVersions the reporter writes, one schema
+// file per kind and version: the frozen version 1 is not one of them, and a
+// version added later joins this list with its schema files (docs/adr/0018).
+var writtenSchemaVersions = []int{jsonreport.Version2, jsonreport.Version3}
 
 // TestGoldenDocumentsMatchSchema validates every golden document against the
 // schema of its own kind and schemaVersion: the goldens are the specification of
@@ -703,26 +711,39 @@ func TestGoldenDocumentsMatchSchema(t *testing.T) {
 				t.Run(filepath.Base(path), func(t *testing.T) {
 					t.Parallel()
 
-					// A golden of the current release is written by the current
-					// reporter, so it declares the current version.
-					if version := goldenSchemaVersion(t, path); version != currentSchemaVersion {
-						t.Fatalf("%s declares schemaVersion %d, want %d: the reporter's own goldens are "+
-							"documents of the version this release writes", path, version, currentSchemaVersion)
+					// A golden is a document the reporter itself wrote, so it declares
+					// one of the versions this package writes.
+					version := goldenSchemaVersion(t, path)
+					if !slices.Contains(writtenSchemaVersions, version) {
+						t.Fatalf("%s declares schemaVersion %d, want one the reporter writes: %v",
+							path, version, writtenSchemaVersions)
 					}
 
 					checkGoldenAgainstItsSchema(t, path)
 				})
 			}
+
+			// The goldens of the version this release writes by default must be
+			// among them, so a new version is never written without a document of
+			// its own in the package.
+			if !slices.ContainsFunc(goldens, func(path string) bool {
+				return goldenSchemaVersion(t, path) == currentSchemaVersion
+			}) {
+				t.Fatalf("no golden file matches testdata/%s with schemaVersion %d, the version a run writes "+
+					"when it names none", test.pattern, currentSchemaVersion)
+			}
 		})
 	}
 
-	// The end-to-end goldens, which the CLI wrote: the fixtures' documents of both
-	// kinds, and the hostile inventory's assessment, whose values the format has to
-	// write as JSON strings.
+	// The end-to-end goldens, which the CLI wrote: the fixtures' version 2
+	// documents of both kinds, and the hostile inventory's assessment, whose values
+	// the format has to write as JSON strings. A run with --schema-version 2 writes
+	// them byte for byte, so the frozen version 2 documents stay pinned end to end
+	// too (docs/adr/0030, issue #307).
 	e2eGoldens := []string{
-		"assess-ovhcloud-json.golden",
-		"assess-all-json.golden",
-		"assess-hostile-json.golden",
+		"assess-ovhcloud-json-v2.golden",
+		"assess-all-json-v2.golden",
+		"assess-hostile-json-v2.golden",
 	}
 
 	for _, golden := range e2eGoldens {
@@ -904,9 +925,12 @@ const (
 )
 
 // quantityRuleSchemas are the schema documents the quantity rule covers: the
-// current version's files. Version 1 is frozen and keeps the prose it shipped
-// with, so the rule is pinned on the version this release writes.
-var quantityRuleSchemas = []string{"assessment-v2.schema.json", "comparison-v2.schema.json"}
+// versions this release writes. Version 1 is frozen and keeps the prose it
+// shipped with, so the rule is pinned on the versions 2 and 3.
+var quantityRuleSchemas = []string{
+	"assessment-v2.schema.json", "comparison-v2.schema.json",
+	"assessment-v3.schema.json", "comparison-v3.schema.json",
+}
 
 // The fields the rule covers, named one by one rather than guessed from their
 // names, some money and some not. Every schema of quantityRuleSchemas declares
@@ -937,13 +961,15 @@ var (
 		"/$defs/estimateBasis/properties/hoursBasis",
 	}
 
-	// countFields hold a count, not a quantity: an integer whose description says
-	// what it counts and promises no representation, so the rule does not cover
-	// it. They are listed so every integer field of a current schema is
-	// classified, and a new measured integer quantity cannot slip in without a
-	// statement of the rule.
-	countFields = []string{
-		"/properties/schemaVersion",                  // the format version
+	// countAndIdentifierFields hold a count, not a quantity: an integer whose
+	// description says what it counts and promises no representation, so the rule
+	// does not cover it. They are listed so every integer field of a current
+	// schema is classified, and a new measured integer quantity cannot slip in
+	// without a statement of the rule. schemaVersion is here because it is an
+	// identifier of the document's format, not a quantity: it says which schema a
+	// reader must use, so no representation rule applies to it (issue #284).
+	countAndIdentifierFields = []string{
+		"/properties/schemaVersion",                  // the format's identifier, not a quantity (issue #284)
 		"/$defs/summary/properties/direct",           // resources per fit
 		"/$defs/summary/properties/partial",          //
 		"/$defs/summary/properties/none",             //
@@ -1084,13 +1110,13 @@ func TestSchemaQuantitiesClassifyEveryField(t *testing.T) {
 					case slices.Contains(property.types, "integer"):
 						integers++
 
-						if slices.Contains(wholeFields, where) || slices.Contains(countFields, where) {
+						if slices.Contains(wholeFields, where) || slices.Contains(countAndIdentifierFields, where) {
 							continue
 						}
 
 						t.Errorf("%s is typed integer but the quantity rule does not classify it: "+
 							"add it to wholeFields and state that it is a whole number if it measures a "+
-							"quantity, or to countFields if it counts something "+
+							"quantity, or to countAndIdentifierFields if it counts something "+
 							"(docs/adr/0018, issue #247)", fieldName(where))
 					case slices.Contains(property.types, "string") && property.pattern != nil &&
 						isDecimalNumberPattern(property.pattern):
@@ -1108,6 +1134,146 @@ func TestSchemaQuantitiesClassifyEveryField(t *testing.T) {
 			if integers == 0 || decimals == 0 {
 				t.Fatalf("the walk found %d integer and %d decimal fields, want some of each: "+
 					"the classification was not checked", integers, decimals)
+			}
+		})
+	}
+}
+
+// TestSchemaTotalAmountIsOptionalExactlyWhereItCanBeAbsent pins the one shape
+// change of version 3 (issue #307): its total keeps describing amount, but no
+// longer requires it, because a total that estimated nothing writes no amount at
+// all, and its description says so. The version 2 files stay unchanged and keep
+// requiring the amount (docs/adr/0018, docs/adr/0030).
+func TestSchemaTotalAmountIsOptionalExactlyWhereItCanBeAbsent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// required is whether the schema requires $defs/total.amount.
+		required bool
+	}{
+		{name: "assessment-v2.schema.json", required: true},
+		{name: "comparison-v2.schema.json", required: true},
+		{name: "assessment-v3.schema.json"},
+		{name: "comparison-v3.schema.json"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			s := readSchema(t, filepath.Join("schema", test.name))
+			total := schemaAt(t, s, "/$defs/total")
+
+			amount, described := total.properties["amount"]
+			if !described {
+				t.Fatalf("%s declares no $defs/total.amount, want it described for a total that estimated something",
+					test.name)
+			}
+
+			if got := slices.Contains(total.required, "amount"); got != test.required {
+				t.Errorf("%s requires $defs/total.amount = %t, want %t (issue #307)", test.name, got, test.required)
+			}
+
+			if test.required {
+				return
+			}
+
+			lowered := strings.ToLower(amount.description)
+
+			for _, want := range []string{"absent", "estimated"} {
+				if !strings.Contains(lowered, want) {
+					t.Errorf("the description of $defs/total.amount in %s is %q, want it to say the amount is absent "+
+						"exactly when nothing was estimated, so it holds %q (issue #307)",
+						test.name, amount.description, want)
+				}
+			}
+		})
+	}
+}
+
+// v3StorageBreakdownDescription is what version 3 says about the storage part of
+// an estimate's breakdown (issue #285): it is the price per GiB, never scaled by
+// hours, so a reader cannot take it for a monthly subtotal.
+const v3StorageBreakdownDescription = "The storage's price per GiB, never scaled by hours, as an exact decimal string rounded to the cent."
+
+// TestSchemaV3StorageBreakdownDescription pins the reworded description of the
+// breakdown's storage part in the version 3 files (issue #285). Version 2 keeps
+// the prose it shipped with, byte for byte (docs/adr/0030, issue #307).
+func TestSchemaV3StorageBreakdownDescription(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{"assessment-v3.schema.json", "comparison-v3.schema.json"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			s := readSchema(t, filepath.Join("schema", name))
+			storage := schemaAt(t, s, "/$defs/breakdown/properties/storage")
+
+			if storage.description != v3StorageBreakdownDescription {
+				t.Errorf("the description of $defs/breakdown.storage in %s is\n%q\nwant\n%q (issue #285)",
+					name, storage.description, v3StorageBreakdownDescription)
+			}
+		})
+	}
+}
+
+// frozenSchemaDigests are the SHA-256 digests of the schema files the project
+// froze: version 1, which no later release changes, and version 2, which version
+// 3 supersedes. A digest is recorded when the file is written and checked ever
+// after, so a release cannot change an old schema without saying so (ADR 0030,
+// ADR 0018, issue #293).
+var frozenSchemaDigests = []struct {
+	file   string
+	digest string
+}{
+	{
+		file:   "assessment-v1.schema.json",
+		digest: "489b2a52321363303e2311bc799a539ea25e4f7bc5435bdefe494ca35efdaac2",
+	},
+	{
+		file:   "comparison-v1.schema.json",
+		digest: "1469806bb5181df918fb8220f3c807e060c8cd58c96cc31c5d164247fe16f404",
+	},
+	{
+		file:   "assessment-v2.schema.json",
+		digest: "105cb16a3e2c78056e383e8d82db2a845a4f540c51bb053a3b752db5a29a8593",
+	},
+	{
+		file:   "comparison-v2.schema.json",
+		digest: "d61b4d11ad70f3ecf85545e8aa6900da76d96d20d3f23ed06984a06bd98e35eb",
+	},
+}
+
+// TestFrozenSchemaFilesAreUnchanged pins the bytes of the version 1 and version 2
+// schema files (issue #293): a document of an old version is one a consumer may
+// still receive, so its schema must say exactly what it said when it shipped.
+// A deliberate change to a frozen schema is a new decision: it records the new
+// digest here and adds an ADR, never a silent edit.
+func TestFrozenSchemaFilesAreUnchanged(t *testing.T) {
+	t.Parallel()
+
+	for _, frozen := range frozenSchemaDigests {
+		t.Run(frozen.file, func(t *testing.T) {
+			t.Parallel()
+
+			path := filepath.Join("schema", frozen.file)
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read the schema %s: %v", path, err)
+			}
+
+			sum := sha256.Sum256(data)
+			if got := hex.EncodeToString(sum[:]); got != frozen.digest {
+				t.Errorf("schema/%s changed: its SHA-256 is %s, want %s.\n"+
+					"The schema is frozen by ADR 0018 "+
+					"(docs/adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md) and "+
+					"ADR 0030 (docs/adr/0030-serve-the-version-2-report-on-v1.md): a reader "+
+					"of an old document must find the schema it was published with. "+
+					"A deliberate change records the new digest here, in the same change, "+
+					"with an ADR that says why (issue #293).",
+					frozen.file, got, frozen.digest)
 			}
 		})
 	}

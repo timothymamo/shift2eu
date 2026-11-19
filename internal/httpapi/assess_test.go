@@ -1,6 +1,7 @@
 package httpapi_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -8,6 +9,9 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"github.com/timothymamo/shift2eu/internal/adapter/report/jsonreport"
+	"github.com/timothymamo/shift2eu/internal/adapter/request/assessmentrequest"
+	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/httpapi"
 )
 
@@ -487,6 +491,254 @@ func assessRequestWithLength(t *testing.T, body string, contentLength int64) *ht
 	req.ContentLength = contentLength
 
 	return req
+}
+
+// jsonDocumentDeps returns the harness's deps with the real request decoder and
+// the real JSON reporters, so a test sees the document the API ships rather than
+// the line a fake writes: only the catalogs and the inventory source stay fakes.
+func jsonDocumentDeps(t *testing.T, h *harness) httpapi.Deps {
+	t.Helper()
+
+	deps := h.deps()
+	deps.DecodeRequest = decodeRequest
+	deps.JSON = httpapi.Format{
+		NewReporter:           func(schemaVersion int) analysis.Reporter { return jsonreport.New(schemaVersion) },
+		NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter { return jsonreport.New(schemaVersion) },
+	}
+
+	return deps
+}
+
+// decodeRequest decodes body with the real decoder and converts the result, as
+// cmd/shift2eu-server's DecodeRequest does.
+func decodeRequest(body []byte) (httpapi.Request, error) {
+	req, err := assessmentrequest.Decode(body)
+	if err != nil {
+		return httpapi.Request{}, err
+	}
+
+	return httpapi.Request{
+		Inventory:     req.Inventory,
+		Targets:       req.Targets,
+		Regions:       req.Regions,
+		Estimate:      req.Estimate,
+		SchemaVersion: req.SchemaVersion,
+	}, nil
+}
+
+// assessBodySchemaVersion returns a POST /v1/assessments body for targets whose
+// schemaVersion member holds value, or no member at all when value is nil and
+// omit is true.
+func assessBodySchemaVersion(t *testing.T, value any, targets ...string) string {
+	t.Helper()
+
+	body, err := json.Marshal(struct {
+		Inventory     json.RawMessage `json:"inventory"`
+		Targets       []string        `json:"targets"`
+		SchemaVersion any             `json:"schemaVersion"`
+	}{Inventory: json.RawMessage(inventoryDocument), Targets: targets, SchemaVersion: value})
+	if err != nil {
+		t.Fatalf("json.Marshal() returned unexpected error: %v", err)
+	}
+
+	return string(body)
+}
+
+// TestAssessSchemaVersion pins the opt-in version of a response (docs/adr/0018,
+// docs/adr/0030, issue #307): a body that names no schemaVersion answers version
+// 2, which is what every client sent before the key existed, and a body that
+// names 2 or 3 answers that version. The fixture estimates nothing, so a version
+// 3 document writes no amount for its total while version 2 writes "0.00".
+func TestAssessSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want int
+		// wantAmount is whether the estimate's total writes an amount.
+		wantAmount bool
+	}{
+		{
+			name:       "no schemaVersion is version 2",
+			body:       assessBody(t, alphaKey),
+			want:       2,
+			wantAmount: true,
+		},
+		{
+			name:       "version 2 named",
+			body:       assessBodySchemaVersion(t, 2, alphaKey),
+			want:       2,
+			wantAmount: true,
+		},
+		{
+			name: "version 3 named",
+			body: assessBodySchemaVersion(t, 3, alphaKey),
+			want: 3,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			handler := mustNew(t, jsonDocumentDeps(t, h))
+
+			rec := serve(handler, newAssessRequest(tc.body))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("POST /v1/assessments = %d, want %d; body: %q", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			requireJSONContentType(t, rec)
+
+			var document map[string]any
+			if err := json.Unmarshal(rec.Body.Bytes(), &document); err != nil {
+				t.Fatalf("the response is not a JSON document: %v", err)
+			}
+
+			if got := document["schemaVersion"]; got != float64(tc.want) {
+				t.Errorf("schemaVersion = %v, want %d", got, tc.want)
+			}
+
+			estimate, ok := document["estimate"].(map[string]any)
+			if !ok {
+				t.Fatalf("the document holds no estimate object: %v", document["estimate"])
+			}
+
+			total, ok := estimate["total"].(map[string]any)
+			if !ok {
+				t.Fatalf("the estimate holds no total object: %v", estimate["total"])
+			}
+
+			_, hasAmount := total["amount"]
+			if hasAmount != tc.wantAmount {
+				t.Errorf("estimate.total holds an amount = %t, want %t: version 3 writes no amount for a total "+
+					"that estimated nothing (issue #307)", hasAmount, tc.wantAmount)
+			}
+
+			if !tc.wantAmount {
+				if got := total["estimated"]; got != float64(0) {
+					t.Errorf("estimate.total.estimated = %v, want 0 without an amount", got)
+				}
+
+				if _, ok := total["resources"]; !ok {
+					t.Errorf("estimate.total = %v, want its counts kept beside the absent amount", total)
+				}
+			}
+		})
+	}
+}
+
+// TestAssessRefusesASchemaVersionItCannotWrite pins the refusal of a schemaVersion
+// the format does not write (docs/adr/0030, issue #307): version 1 is frozen and
+// version 4 does not exist, and a value of any other JSON type is refused too. The
+// answer is 400 invalid_request, and the message never repeats a value the client
+// sent.
+func TestAssessRefusesASchemaVersionItCannotWrite(t *testing.T) {
+	t.Parallel()
+
+	const marker = "MARKER-VERSION-7"
+
+	tests := []struct {
+		name  string
+		value any
+		// echoes is the value the message must not hold, if any.
+		echoes string
+	}{
+		{name: "version 1", value: 1},
+		{name: "version 4", value: 4},
+		{name: "a fraction", value: 2.5},
+		{name: "a string", value: marker, echoes: marker},
+		{name: "null", value: nil},
+		{name: "a boolean", value: true},
+		{name: "an object", value: map[string]int{"version": 3}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			handler := mustNew(t, jsonDocumentDeps(t, h))
+
+			rec := serve(handler, newAssessRequest(assessBodySchemaVersion(t, tc.value, alphaKey)))
+
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("POST /v1/assessments = %d, want %d; body: %q",
+					rec.Code, http.StatusBadRequest, rec.Body.String())
+			}
+
+			requireHardeningHeaders(t, rec)
+
+			message := decodeError(t, rec, "invalid_request")
+
+			if tc.echoes != "" && strings.Contains(message, tc.echoes) {
+				t.Errorf("the error message %q repeats the client's value %q", message, tc.echoes)
+			}
+		})
+	}
+}
+
+// TestAssessForwardsTheRequestedSchemaVersion pins that the handler builds the
+// reporter of the version the body asks for (issue #307): version 2 when it names
+// none, and the named version for both the single-target and the comparison path.
+func TestAssessForwardsTheRequestedSchemaVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		body   string
+		want   int
+		single bool
+	}{
+		{
+			name:   "no version names version 2",
+			body:   assessBody(t, alphaKey),
+			want:   2,
+			single: true,
+		},
+		{
+			name: "version 3 for one target",
+			body: assessBodySchemaVersion(t, 3, alphaKey),
+			want: 3,
+
+			single: true,
+		},
+		{
+			name: "version 3 for several targets",
+			body: assessBodySchemaVersion(t, 3, alphaKey, betaKey),
+			want: 3,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			handler := h.handler(t)
+
+			rec := serve(handler, newAssessRequest(tc.body))
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("POST /v1/assessments = %d, want %d; body: %q", rec.Code, http.StatusOK, rec.Body.String())
+			}
+
+			if tc.single {
+				if got := h.jsonReporter.builtSchemaVersion(); got != tc.want {
+					t.Errorf("the JSON reporter was built for schemaVersion %d, want %d", got, tc.want)
+				}
+
+				return
+			}
+
+			if got := h.jsonComparison.builtSchemaVersion(); got != tc.want {
+				t.Errorf("the JSON comparison reporter was built for schemaVersion %d, want %d", got, tc.want)
+			}
+		})
+	}
 }
 
 // TestDecodeError pins that a body the decoder refuses is 400 invalid_request.

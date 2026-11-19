@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -60,6 +61,11 @@ type parityCase struct {
 	format string
 	accept string
 }
+
+// paritySchemaVersion is the JSON report version both sides ask for: version 2,
+// the document every client of both driving adapters receives today. The version a
+// run asks for is tested in each adapter's own tests (docs/adr/0018, issue #307).
+const paritySchemaVersion = 2
 
 // TestTheAPIAndTheCLIAgreeOnTheReport pins the parity PRD #103 promises: for the
 // same inventory and targets, POST /v1/assessments answers the bytes
@@ -126,7 +132,7 @@ func TestTheAPIAndTheCLIAgreeOnTheReport(t *testing.T) {
 			inventoryPath := writeInventory(t, document)
 
 			cliReport := runAssess(t, inventoryPath, tc)
-			apiReport := postAssessment(t, document, tc.targets, tc.accept)
+			apiReport := postAssessment(t, document, tc.targets, tc.format, tc.accept)
 
 			if !bytes.Equal(cliReport, apiReport) {
 				t.Errorf("the API's body differs from `shift2eu assess --target %s --format %s` (-CLI +API):\n%s",
@@ -244,6 +250,12 @@ func runAssess(t *testing.T, inventoryPath string, tc parityCase) []byte {
 		"--format", tc.format,
 	}
 
+	// The CLI writes version 3 unless the run names one, so the parity case asks
+	// for the version both sides are compared on.
+	if tc.format == jsonFormat {
+		args = append(args, "--schema-version", strconv.Itoa(paritySchemaVersion))
+	}
+
 	var stdout, stderr bytes.Buffer
 
 	if code := cli.Run(t.Context(), args, &stdout, &stderr, cliDeps()); code != 0 {
@@ -259,13 +271,21 @@ func runAssess(t *testing.T, inventoryPath string, tc parityCase) []byte {
 
 // postAssessment posts document and targets to the real API handler and returns
 // its report body, failing the test when the request is not answered with 200.
-func postAssessment(t *testing.T, document []byte, targets []string, accept string) []byte {
+// The body asks for paritySchemaVersion when the format is JSON, as the CLI run
+// it is compared with does.
+func postAssessment(t *testing.T, document []byte, targets []string, format, accept string) []byte {
 	t.Helper()
 
+	var schemaVersion *int
+	if format == jsonFormat {
+		schemaVersion = &[]int{paritySchemaVersion}[0]
+	}
+
 	body, err := json.Marshal(struct {
-		Inventory json.RawMessage `json:"inventory"`
-		Targets   []string        `json:"targets"`
-	}{Inventory: document, Targets: targets})
+		Inventory     json.RawMessage `json:"inventory"`
+		Targets       []string        `json:"targets"`
+		SchemaVersion *int            `json:"schemaVersion,omitempty"`
+	}{Inventory: document, Targets: targets, SchemaVersion: schemaVersion})
 	if err != nil {
 		t.Fatalf("encoding the request body: %v", err)
 	}
@@ -465,12 +485,12 @@ func cliDeps() cli.Deps {
 		Targets: targetSources(),
 		Formats: map[string]cli.Format{
 			jsonFormat: {
-				NewReporter:           func() analysis.Reporter { return jsonreport.New() },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return jsonreport.New() },
+				NewReporter:           func(schemaVersion int) analysis.Reporter { return jsonreport.New(schemaVersion) },
+				NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter { return jsonreport.New(schemaVersion) },
 			},
 			markdownFormat: {
-				NewReporter:           func() analysis.Reporter { return markdown.New() },
-				NewComparisonReporter: func() analysis.ComparisonReporter { return markdown.New() },
+				NewReporter:           func(int) analysis.Reporter { return markdown.New() },
+				NewComparisonReporter: func(int) analysis.ComparisonReporter { return markdown.New() },
 			},
 		},
 	}
@@ -486,10 +506,11 @@ func decodeRequest(body []byte) (httpapi.Request, error) {
 	}
 
 	return httpapi.Request{
-		Inventory: req.Inventory,
-		Targets:   req.Targets,
-		Regions:   req.Regions,
-		Estimate:  req.Estimate,
+		Inventory:     req.Inventory,
+		Targets:       req.Targets,
+		Regions:       req.Regions,
+		Estimate:      req.Estimate,
+		SchemaVersion: req.SchemaVersion,
 	}, nil
 }
 
@@ -506,12 +527,12 @@ func apiHandler(tb testing.TB) http.Handler {
 		},
 		Targets: targetSources(),
 		JSON: httpapi.Format{
-			NewReporter:           func() analysis.Reporter { return jsonreport.New() },
-			NewComparisonReporter: func() analysis.ComparisonReporter { return jsonreport.New() },
+			NewReporter:           func(schemaVersion int) analysis.Reporter { return jsonreport.New(schemaVersion) },
+			NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter { return jsonreport.New(schemaVersion) },
 		},
 		Markdown: httpapi.Format{
-			NewReporter:           func() analysis.Reporter { return markdown.New() },
-			NewComparisonReporter: func() analysis.ComparisonReporter { return markdown.New() },
+			NewReporter:           func(int) analysis.Reporter { return markdown.New() },
+			NewComparisonReporter: func(int) analysis.ComparisonReporter { return markdown.New() },
 		},
 	}, httpapi.WithMaxBodyBytes(assessmentrequest.MaxBodySize))
 	if err != nil {

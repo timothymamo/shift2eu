@@ -289,56 +289,58 @@ func TestAssessOutput(t *testing.T) {
 	}
 }
 
-// jsonAssessmentGolden and jsonComparisonGolden are the JSON documents the shared
-// fixture renders: one target's assessment and the comparison of every target
-// (PRD #103, milestone 1).
+// jsonAssessmentGoldenV2, jsonComparisonGoldenV2 and jsonHostileGoldenV2 are the
+// version 2 JSON documents a run with --schema-version 2 writes for the shared
+// fixture: one target's assessment, the comparison of every target, and the
+// hostile inventory's assessment (PRD #103, milestone 1). They are the documents
+// earlier releases wrote, byte for byte, because version 2 is frozen now that
+// version 3 supersedes it (docs/adr/0030, issue #307).
 const (
-	jsonAssessmentGolden = "assess-ovhcloud-json.golden"
-	jsonComparisonGolden = "assess-all-json.golden"
-	// jsonHostileGolden is the JSON document of the hostile inventory: the values
-	// the Markdown golden shows, JSON-encoded instead of shown as text.
-	jsonHostileGolden = "assess-hostile-json.golden"
+	jsonAssessmentGoldenV2 = "assess-ovhcloud-json-v2.golden"
+	jsonComparisonGoldenV2 = "assess-all-json-v2.golden"
+	jsonHostileGoldenV2    = "assess-hostile-json-v2.golden"
 	// jsonFormat is the --format value that selects the JSON document.
 	jsonFormat = "json"
 	// markdownFormat is the --format value that selects the Markdown report, which
 	// is also what a run without --format writes.
 	markdownFormat = "markdown"
+	// schemaVersionCurrent is the schemaVersion --format json writes when the run
+	// names none (docs/adr/0018, issue #307).
+	schemaVersionCurrent = 3
+	// schemaVersionV2 is the schemaVersion --schema-version 2 writes: the version
+	// every release before version 3 wrote (docs/adr/0030).
+	schemaVersionV2 = 2
 )
 
-// TestAssessJSONFormat pins --format json end to end: the built binary writes the
-// versioned JSON document for one target and the comparison document for all of
-// them, naming the shared inventory by its base name. The hostile inventory's
-// document pins that the same escaping holds through the CLI: its values reach
-// stdout as JSON string escapes, so the document is valid JSON and valid UTF-8
-// and holds no raw <, > or &.
-func TestAssessJSONFormat(t *testing.T) {
-	t.Parallel()
+// jsonCase is one fixture TestAssessJSONFormat writes: the --target value, the
+// --inventory file (empty for the shared fixture), and the version 2 golden the
+// explicit version 2 run must reproduce byte for byte.
+type jsonCase struct {
+	name          string
+	target        string
+	inventory     string
+	goldenV2      string
+	kind          string
+	inventoryName string
+	// escapesHTML is true for the fixture that holds the characters JSON
+	// escapes: <, > and &.
+	escapesHTML bool
+}
 
-	tests := []struct {
-		name   string
-		target string
-		// inventory is the --inventory file, relative to this package, or empty
-		// for the shared fixture.
-		inventory string
-		golden    string
-		kind      string
-		// inventoryName is the base name the document must name.
-		inventoryName string
-		// escapesHTML is true for the fixture that holds the characters JSON
-		// escapes: <, > and &.
-		escapesHTML bool
-	}{
+// jsonCases returns the fixtures TestAssessJSONFormat writes.
+func jsonCases() []jsonCase {
+	return []jsonCase{
 		{
 			name:          "one target is an assessment",
 			target:        ovhcloudKey,
-			golden:        jsonAssessmentGolden,
+			goldenV2:      jsonAssessmentGoldenV2,
 			kind:          "assessment",
 			inventoryName: "inventory.json",
 		},
 		{
 			name:          "every target is a comparison",
 			target:        allKey,
-			golden:        jsonComparisonGolden,
+			goldenV2:      jsonComparisonGoldenV2,
 			kind:          "comparison",
 			inventoryName: "inventory.json",
 		},
@@ -346,14 +348,27 @@ func TestAssessJSONFormat(t *testing.T) {
 			name:          "hostile values are escaped",
 			target:        scalewayKey,
 			inventory:     filepath.Join("testdata", "inventory-hostile.json"),
-			golden:        jsonHostileGolden,
+			goldenV2:      jsonHostileGoldenV2,
 			kind:          "assessment",
 			inventoryName: "inventory-hostile.json",
 			escapesHTML:   true,
 		},
 	}
+}
 
-	for _, tc := range tests {
+// TestAssessJSONFormat pins --format json end to end: the built binary writes the
+// versioned JSON document for one target and the comparison document for all of
+// them, naming the shared inventory by its base name. A run without
+// --schema-version writes schemaVersion 3, and --schema-version 2 writes the
+// version 2 document earlier releases wrote, byte for byte (docs/adr/0018,
+// docs/adr/0030, issue #307). The hostile inventory's document also pins that the
+// same escaping holds through the CLI: its values reach stdout as JSON string
+// escapes, so the document is valid JSON and valid UTF-8 and holds no raw <, > or
+// &.
+func TestAssessJSONFormat(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range jsonCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -362,61 +377,83 @@ func TestAssessJSONFormat(t *testing.T) {
 				inventory = filepath.Join("testdata", "inventory.json")
 			}
 
-			got := assess(t, tc.target, inventory, "--format", jsonFormat)
+			t.Run("a run that names no version writes the current one", func(t *testing.T) {
+				t.Parallel()
 
-			if got.code != 0 {
-				t.Fatalf("exit code = %d, want 0; stderr = %q", got.code, got.stderr)
-			}
+				got := assess(t, tc.target, inventory, "--format", jsonFormat)
+				checkJSONDocument(t, got, tc, schemaVersionCurrent)
+			})
 
-			if got.stderr != "" {
-				t.Errorf("stderr = %q, want empty", got.stderr)
-			}
+			t.Run("--schema-version 2 writes the frozen version 2 document", func(t *testing.T) {
+				t.Parallel()
 
-			if !json.Valid([]byte(got.stdout)) {
-				t.Fatalf("stdout is not valid JSON:\n%s", got.stdout)
-			}
+				got := assess(t, tc.target, inventory, "--format", jsonFormat, "--schema-version", "2")
+				checkJSONDocument(t, got, tc, schemaVersionV2)
 
-			if !utf8.ValidString(got.stdout) {
-				t.Fatalf("stdout is not valid UTF-8:\n%q", got.stdout)
-			}
-
-			testutil.Golden(t, goldenPath(tc.golden), []byte(got.stdout))
-
-			var header struct {
-				SchemaVersion int    `json:"schemaVersion"`
-				Kind          string `json:"kind"`
-				InventoryName string `json:"inventoryName"`
-			}
-
-			if err := json.Unmarshal([]byte(got.stdout), &header); err != nil {
-				t.Fatalf("decoding the document: %v", err)
-			}
-
-			if header.SchemaVersion != 2 {
-				t.Errorf("schemaVersion = %d, want 2 (docs/adr/0030)", header.SchemaVersion)
-			}
-
-			if header.Kind != tc.kind {
-				t.Errorf("kind = %q, want %q", header.Kind, tc.kind)
-			}
-
-			if header.InventoryName != tc.inventoryName {
-				t.Errorf("inventoryName = %q, want the base name %q", header.InventoryName, tc.inventoryName)
-			}
-
-			if tc.escapesHTML {
-				for _, raw := range []string{"<", ">", "&"} {
-					if strings.Contains(got.stdout, raw) {
-						t.Errorf("stdout holds the raw character %q, so a document could be read as markup:\n%s",
-							raw, got.stdout)
-					}
-				}
-			}
-
-			if !strings.HasSuffix(got.stdout, "\n") || strings.HasSuffix(got.stdout, "\n\n") {
-				t.Errorf("stdout must end with exactly one newline")
-			}
+				// The document is the one earlier releases wrote: an absent amount
+				// is a version 3 change, so version 2 keeps every amount it always
+				// had.
+				testutil.Golden(t, goldenPath(tc.goldenV2), []byte(got.stdout))
+			})
 		})
+	}
+}
+
+// checkJSONDocument fails the test unless run wrote a valid JSON document of
+// wantVersion naming its kind and inventory, and, for the hostile fixture, no raw
+// character that could be read as markup.
+func checkJSONDocument(t *testing.T, run result, tc jsonCase, wantVersion int) {
+	t.Helper()
+
+	if run.code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", run.code, run.stderr)
+	}
+
+	if run.stderr != "" {
+		t.Errorf("stderr = %q, want empty", run.stderr)
+	}
+
+	if !json.Valid([]byte(run.stdout)) {
+		t.Fatalf("stdout is not valid JSON:\n%s", run.stdout)
+	}
+
+	if !utf8.ValidString(run.stdout) {
+		t.Fatalf("stdout is not valid UTF-8:\n%q", run.stdout)
+	}
+
+	var header struct {
+		SchemaVersion int    `json:"schemaVersion"`
+		Kind          string `json:"kind"`
+		InventoryName string `json:"inventoryName"`
+	}
+
+	if err := json.Unmarshal([]byte(run.stdout), &header); err != nil {
+		t.Fatalf("decoding the document: %v", err)
+	}
+
+	if header.SchemaVersion != wantVersion {
+		t.Errorf("schemaVersion = %d, want %d (docs/adr/0030, issue #307)", header.SchemaVersion, wantVersion)
+	}
+
+	if header.Kind != tc.kind {
+		t.Errorf("kind = %q, want %q", header.Kind, tc.kind)
+	}
+
+	if header.InventoryName != tc.inventoryName {
+		t.Errorf("inventoryName = %q, want the base name %q", header.InventoryName, tc.inventoryName)
+	}
+
+	if tc.escapesHTML {
+		for _, raw := range []string{"<", ">", "&"} {
+			if strings.Contains(run.stdout, raw) {
+				t.Errorf("stdout holds the raw character %q, so a document could be read as markup:\n%s",
+					raw, run.stdout)
+			}
+		}
+	}
+
+	if !strings.HasSuffix(run.stdout, "\n") || strings.HasSuffix(run.stdout, "\n\n") {
+		t.Errorf("stdout must end with exactly one newline")
 	}
 }
 

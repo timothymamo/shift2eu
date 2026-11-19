@@ -1,0 +1,111 @@
+{
+  "schemaVersion": 3,
+  "kind": "assessment",
+  "inventoryName": "inventory.json",
+  "source": "aws",
+  "target": {
+    "name": "Example Cloud",
+    "snapshot": {
+      "source": "https://www.example.com/pricing/",
+      "retrieved": "2026-11-13"
+    }
+  },
+  "summary": {
+    "direct": 2,
+    "partial": 0,
+    "none": 0,
+    "total": 2
+  },
+  "resources": [
+    {
+      "id": "bucket-storage",
+      "rawType": "AWS::S3::Bucket",
+      "category": "storage.object",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Example Object Storage",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Example Object Storage offers every capability the resource uses",
+          "offering": "Example Object Storage"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "not-offered"
+      }
+    },
+    {
+      "id": "server-small",
+      "rawType": "AWS::EC2::Instance",
+      "category": "compute.vm",
+      "region": "eu-west-1",
+      "fit": "direct",
+      "bestOffering": "Example Virtual Machines",
+      "ties": [],
+      "reasons": [
+        {
+          "code": "all-capabilities",
+          "text": "Example Virtual Machines offers every capability the resource uses",
+          "offering": "Example Virtual Machines"
+        }
+      ],
+      "requiredChanges": [],
+      "relations": [],
+      "affectedBy": [],
+      "estimate": {
+        "estimated": false,
+        "reason": "not-offered"
+      }
+    }
+  ],
+  "blockers": [],
+  "workloads": [
+    {
+      "name": "shop",
+      "noWorkload": false,
+      "resources": 2,
+      "summary": {
+        "direct": 2,
+        "partial": 0,
+        "none": 0,
+        "total": 2
+      },
+      "blockers": [],
+      "estimate": {
+        "estimated": 0,
+        "resources": 2
+      },
+      "sourceCost": {
+        "covered": 0,
+        "resources": 2,
+        "currencies": []
+      }
+    }
+  ],
+  "estimate": {
+    "region": "xx-none",
+    "regionChosen": false,
+    "priceDate": "2026-11-13",
+    "currency": "EUR",
+    "excluded": [
+      "VAT",
+      "discounts"
+    ],
+    "hoursBasis": 730,
+    "total": {
+      "estimated": 0,
+      "resources": 2
+    }
+  },
+  "sourceCost": {
+    "covered": 0,
+    "resources": 2,
+    "currencies": []
+  }
+}

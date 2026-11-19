@@ -613,7 +613,7 @@ func TestSampleReportVariants(t *testing.T) {
 			render: func(t *testing.T) []byte {
 				t.Helper()
 
-				return runSingleWith(t, inventoryPath, scaleway.New(), jsonreport.New(),
+				return runSingleWith(t, inventoryPath, scaleway.New(), jsonreport.New(jsonreport.Version2),
 					analysis.Options{Estimate: true}, meta)
 			},
 			check: checkSampleReportDocument,
