@@ -17,10 +17,15 @@
 // local httptest server on its own port, and pinning that proves the bundle
 // runs unchanged on any origin.
 //
-// The test files carry the browser build tag, so `go test ./...`, `make test`
-// and `make lint` never compile this package's tests and never need Chromium.
-// This file imports nothing and is the package's only non-test file, as
-// test/site's doc.go is: the depguard rule test-docs-are-pure holds it, and
-// without it `go test ./...` would report a package whose build constraints
-// exclude every file.
+// The test files carry the build constraint `browser && !js`: `go test ./...`
+// and `make test` never compile this package's tests and never need Chromium.
+// The js/wasm run of the lint skips them too, since the driver, chromedp,
+// needs syscall.SysProcAttr.Setsid, which js/wasm lacks: this smoke test drives
+// a browser from the host and never runs inside one. The lint's other runs load
+// them on the browser tag; the depguard rule browser-smoke-test holds the test
+// files, chromedp-only-in-the-browser-test confines the driver to them, and
+// this file, which imports nothing and is the package's only non-test file, is
+// held by browser-smoke-test-doc, as test/site's doc.go is by
+// test-docs-are-pure: without it `go test ./...` would report a package whose
+// build constraints exclude every file.
 package browser
