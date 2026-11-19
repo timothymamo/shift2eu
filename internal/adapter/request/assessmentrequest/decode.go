@@ -199,6 +199,8 @@ func kindOf(raw []byte) string {
 	switch raw[0] {
 	case '[':
 		return "an array"
+	case '{':
+		return "an object"
 	case '"':
 		return "a string"
 	case 't', 'f':

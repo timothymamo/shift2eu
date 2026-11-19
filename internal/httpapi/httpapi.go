@@ -31,9 +31,11 @@ type Request struct {
 	// Estimate turns plans and estimates on: true unless the body says false.
 	Estimate bool
 	// SchemaVersion is the JSON report version the body asks for, 2 or 3; the
-	// decoder makes it 2 when the body names none (docs/adr/0030). The API
-	// passes it to the selected representation's reporter constructor, which
-	// ignores it for a representation without a schemaVersion.
+	// decoder makes it 2 when the body names none (docs/adr/0030). 0 means the
+	// default, 2, so a Request built without one gets what a body naming none
+	// gets. The API passes it to the selected representation's reporter
+	// constructor, which ignores it for a representation without a
+	// schemaVersion.
 	SchemaVersion int
 }
 
