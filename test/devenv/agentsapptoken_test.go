@@ -986,6 +986,148 @@ func TestAgentsAppTokenMintRefusesAGitIncludeThatOverridesTheBotIdentity(t *test
 	}
 }
 
+// TestAgentsAppTokenMintRefusesAGitConfigWhoseIncludesItCannotRead pins the first half of issue #264: the VM's
+// no_conditional reads ~/.gitconfig's [includeIf] entries with `git config --includes --file ... --name-only
+// --get-regexp`, and git's status 1 (no match) is the only status that means "no conditional include". Any other
+// status - a git wrapper that fails, a configuration git cannot parse - left the mint unable to tell an include
+// check that passed from one that never ran, so the VM refused with status 3 before it wrote anything, and the
+// mint reported it. The test fails that one call with a git shim and hands every other call to the machine's git:
+// once driven directly, at the VM's own script, and once through the mint.
+func TestAgentsAppTokenMintRefusesAGitConfigWhoseIncludesItCannotRead(t *testing.T) {
+	t.Parallel()
+
+	const (
+		maintainerName  = "Example Maintainer"
+		maintainerEmail = "maintainer@example.com"
+
+		// The status the shim fails the include lookup with: git's own status for a configuration it cannot read,
+		// and no status the check reads as "no conditional include" (that is 1).
+		lookupStatus = 128
+	)
+
+	// refuse prepares a fake VM home with the maintainer's identity and the failing include lookup, and returns
+	// the fixture and the git config as it was before.
+	refuse := func(t *testing.T) (*mintFixture, []byte) {
+		t.Helper()
+
+		f := newMintFixture(t)
+		f.setVMGitIdentity(t, maintainerName, maintainerEmail)
+
+		before, err := os.ReadFile(filepath.Join(f.sb.vmHome, ".gitconfig"))
+		if err != nil {
+			t.Fatalf("read the fake VM's .gitconfig before the mint: %v", err)
+		}
+
+		shim := fmt.Sprintf(failingIncludesGitShim, lookupStatus, strconv.Quote(realTool(t, "git")))
+		writeFileMode(t, filepath.Join(f.sb.binDir, "git"), []byte(shim), 0o700)
+
+		return f, before
+	}
+
+	t.Run("the VM's script refuses it before it writes anything", func(t *testing.T) {
+		t.Parallel()
+
+		f, before := refuse(t)
+
+		name := f.api.slug + "[bot]"
+		email := fmt.Sprintf("%d+%s[bot]@users.noreply.github.com", f.api.botUserID, f.api.slug)
+
+		// A token and an expiry with the identity, as the mint that knows the bot user sends them: the script
+		// refuses the identity before it writes any of it.
+		stdout, stderr, err := f.vmWriteInVM(t, "ghs_inventedtoken\n1700000000\n"+name+"\n"+email+"\n")
+
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("the VM's script exited %v although git cannot read the includes of ~/.gitconfig (status %d), want status 3, the refusal the host reads as permanent (issue #264)\nstdout: %s\nstderr: %s",
+				err, lookupStatus, stdout, stderr)
+		}
+
+		if code := exitErr.ExitCode(); code != 3 {
+			t.Fatalf("the VM's script exited with %d although git cannot read the includes of ~/.gitconfig (status %d), want 3: an include lookup the script cannot trust is a refusal and never a write (issue #264)\nstdout: %s\nstderr: %s",
+				code, lookupStatus, stdout, stderr)
+		}
+
+		for _, want := range []string{"cannot read the includes of", fmt.Sprintf("(git config exited %d)", lookupStatus)} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("the refusal does not say %q, so a maintainer cannot tell an include lookup that failed from a ~/.gitconfig that holds a conditional include (issue #264)\nstderr:\n%s",
+					want, stderr)
+			}
+		}
+
+		for _, file := range []string{agentsTokenFile, agentsIdentityFile} {
+			if _, err := os.Stat(f.sb.vmPath(file)); err == nil {
+				t.Errorf("the VM's script wrote %s although git cannot read the includes of ~/.gitconfig: it must refuse before it writes anything (issue #264)", file)
+			}
+		}
+
+		after, err := os.ReadFile(filepath.Join(f.sb.vmHome, ".gitconfig"))
+		if err != nil {
+			t.Fatalf("read the fake VM's .gitconfig after the refused run: %v", err)
+		}
+
+		if !bytes.Equal(after, before) {
+			t.Errorf("the refused run changed the fake VM's .gitconfig although git cannot read its includes:\nbefore:\n%s\nafter:\n%s",
+				before, after)
+		}
+	})
+
+	t.Run("the mint reports the VM's refusal", func(t *testing.T) {
+		t.Parallel()
+
+		f, before := refuse(t)
+
+		stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+		if err == nil {
+			t.Fatalf("mint exited 0 although git cannot read the includes of ~/.gitconfig (status %d): the mint cannot tell whether an [include] or [includeIf] hands the agents another identity, so it must refuse (issue #264)\nstdout: %s\nstderr: %s",
+				lookupStatus, stdout, stderr)
+		}
+
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			t.Errorf("mint exited with %v after the VM's git failed the include lookup (status %d), want status 1, the status of a failed mint (issue #264)\nstderr: %s",
+				err, lookupStatus, stderr)
+		}
+
+		for _, want := range []string{"cannot read the includes of", fmt.Sprintf("(git config exited %d)", lookupStatus)} {
+			if !strings.Contains(stderr, want) {
+				t.Errorf("the refusal does not say %q, so a maintainer cannot tell an include lookup that failed from a ~/.gitconfig that holds a conditional include (issue #264)\nstderr:\n%s",
+					want, stderr)
+			}
+		}
+
+		// The bot identity is what this write was about, and it must not land: the token the mint wrote before it
+		// looked the bot user up is the design's (a failed lookup keeps it), the identity is this refusal's.
+		if _, err := os.Stat(f.sb.vmPath(agentsIdentityFile)); err == nil {
+			t.Errorf("the mint wrote %s although git cannot read the includes of ~/.gitconfig: it must refuse the identity before it writes that file (issue #264)", agentsIdentityFile)
+		}
+
+		after, err := os.ReadFile(filepath.Join(f.sb.vmHome, ".gitconfig"))
+		if err != nil {
+			t.Fatalf("read the fake VM's .gitconfig after the refused mint: %v", err)
+		}
+
+		if !bytes.Equal(after, before) {
+			t.Errorf("the refused mint changed the fake VM's .gitconfig although git cannot read its includes:\nbefore:\n%s\nafter:\n%s",
+				before, after)
+		}
+
+		f.assertNoLeaks(t, stdout, stderr)
+	})
+}
+
+// failingIncludesGitShim is a git for the VM that fails one call and only one: the include lookup of ~/.gitconfig,
+// with the status the test gives it (issue #264). Every other call is the machine's own git, so the mint's reads
+// and writes of the identity are the real ones.
+const failingIncludesGitShim = `#!/bin/sh
+if [ "$#" -eq 7 ] && [ "$1" = config ] && [ "$2" = --includes ] && [ "$3" = --file ] &&
+  [ "$4" = "${HOME:?}/.gitconfig" ] && [ "$5" = --name-only ] && [ "$6" = --get-regexp ] &&
+  [ "$7" = '^includeif\..*\.path$' ]; then
+  echo 'git: the include lookup is broken by the devenv tests' >&2
+  exit %d
+fi
+exec %s "$@"
+`
+
 // TestAgentsAppTokenMintRefusesASlugBeginningWithADashOnTheHost pins the review finding that a slug that begins with
 // - reaches git config as an argument shaped like an option, which no App's slug does: the mint refuses it before a
 // token is minted, so nothing that would carry such a name is ever written. The VM's own check is what the test below
@@ -1246,6 +1388,163 @@ func (f *mintFixture) configTheBotIdentity(t *testing.T, name, email string) str
 	writeFileMode(t, gitconfig, gitConfigBody(name, email), 0o640)
 
 	return gitconfig
+}
+
+// TestAgentsAppTokenMintSaysWhetherItSetTheVMGitIdentity pins issue #263: the VM step printed git-identity=set on
+// every mint, so a mint that found ~/.gitconfig already holding the bot's identity and wrote nothing said it had
+// set it - about every 45 minutes, in the refresher's log. The VM step says set only when it wrote the file and
+// unchanged when the file already held the bot's identity, and the mint says the same: set for the first mint,
+// and "already" for the one that changed nothing, which leaves the file byte for byte and its mtime as it was.
+func TestAgentsAppTokenMintSaysWhetherItSetTheVMGitIdentity(t *testing.T) {
+	t.Parallel()
+
+	// The two halves of what a maintainer reads: the first mint's word that it set the identity, and the second
+	// mint's that it was already there. The instance is the one the sandbox gives every run.
+	const (
+		setNotice       = "set the VM shift2eu's git identity"
+		unchangedNotice = "the VM shift2eu's git identity is already"
+	)
+
+	// The mtime the test gives ~/.gitconfig before the second mint, in the past, so a rewrite that keeps the
+	// content would still show in the mtime (issue #263).
+	past := time.Unix(1700000000, 0)
+
+	// botIdentity is the identity the fake App makes, and the four lines the host sends the VM's script: no
+	// token and no expiry, so only the identity is written.
+	botIdentity := func(t *testing.T, f *mintFixture) (name, email, stdin string) {
+		t.Helper()
+
+		name = f.api.slug + "[bot]"
+		email = fmt.Sprintf("%d+%s[bot]@users.noreply.github.com", f.api.botUserID, f.api.slug)
+
+		return name, email, "\n\n" + name + "\n" + email + "\n"
+	}
+
+	setTheMtime := func(t *testing.T, gitconfig string) {
+		t.Helper()
+
+		if err := os.Chtimes(gitconfig, past, past); err != nil {
+			t.Fatalf("set the mtime of the fake VM's .gitconfig: %v", err)
+		}
+	}
+
+	assertUnchanged := func(t *testing.T, gitconfig string, before []byte) {
+		t.Helper()
+
+		after, err := os.ReadFile(gitconfig)
+		if err != nil {
+			t.Fatalf("read the fake VM's .gitconfig: %v", err)
+		}
+
+		if !bytes.Equal(after, before) {
+			t.Errorf("the fake VM's .gitconfig holds\n%s\nafter the second mint, want the bytes it already held\n%s\n(issue #263)",
+				after, before)
+		}
+
+		info, err := os.Stat(gitconfig)
+		if err != nil {
+			t.Fatalf("stat the fake VM's .gitconfig: %v", err)
+		}
+
+		if got := info.ModTime(); !got.Equal(past) {
+			t.Errorf("the fake VM's .gitconfig has the mtime %s after the second mint, want %s: a mint that had nothing to write must not touch the file, not even with a copy that reads the same (issue #263)",
+				got, past)
+		}
+	}
+
+	t.Run("the VM step says set, and unchanged for the home that already holds the bot's identity", func(t *testing.T) {
+		t.Parallel()
+
+		f := newMintFixture(t)
+		name, email, stdin := botIdentity(t, f)
+
+		gitconfig := filepath.Join(f.sb.vmHome, ".gitconfig")
+
+		stdout, stderr, err := f.vmWriteInVM(t, stdin)
+		if err != nil {
+			t.Fatalf("the VM's script exited non-zero on a home without the bot's identity: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		if !strings.Contains(stdout, "git-identity=set") {
+			t.Errorf("the VM's script printed no git-identity=set although it wrote the bot identity %s <%s> into a home that had none (issue #263)\nstdout:\n%s\nstderr:\n%s",
+				name, email, stdout, stderr)
+		}
+
+		if got := f.vmGitValues(t, "user.name"); !slices.Equal(got, []string{name}) {
+			t.Fatalf("the fake VM's global user.name is %v, want [%q]: the fixture's first run must have set the bot identity (issue #263)", got, name)
+		}
+
+		before, err := os.ReadFile(gitconfig)
+		if err != nil {
+			t.Fatalf("read the fake VM's .gitconfig: %v", err)
+		}
+
+		setTheMtime(t, gitconfig)
+
+		stdout, stderr, err = f.vmWriteInVM(t, stdin)
+		if err != nil {
+			t.Fatalf("the VM's script exited non-zero on the home it had just given the bot's identity: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		if strings.Contains(stdout, "git-identity=set") {
+			t.Errorf("the VM's script printed git-identity=set a second time, although the fake VM's ~/.gitconfig already held the bot's identity and nothing was written (issue #263)\nstdout:\n%s\nstderr:\n%s",
+				stdout, stderr)
+		}
+
+		if !strings.Contains(stdout, "git-identity=unchanged") {
+			t.Errorf("the VM's script printed no git-identity=unchanged although the fake VM's ~/.gitconfig already held the bot's identity, so the mint cannot tell a write from no write (issue #263)\nstdout:\n%s\nstderr:\n%s",
+				stdout, stderr)
+		}
+
+		assertUnchanged(t, gitconfig, before)
+	})
+
+	t.Run("the mint says set, and already for the second mint into the same home", func(t *testing.T) {
+		t.Parallel()
+
+		f := newMintFixture(t)
+		name, email, _ := botIdentity(t, f)
+
+		stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+		if err != nil {
+			t.Fatalf("the first mint exited non-zero: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		if first := stdout + stderr; !strings.Contains(first, setNotice) {
+			t.Errorf("the first mint's output does not say %q although it wrote the bot identity %s <%s> into a home that had none (issue #263)\nstdout:\n%s\nstderr:\n%s",
+				setNotice, name, email, stdout, stderr)
+		}
+
+		gitconfig := filepath.Join(f.sb.vmHome, ".gitconfig")
+
+		before, err := os.ReadFile(gitconfig)
+		if err != nil {
+			t.Fatalf("read the fake VM's .gitconfig after the first mint: %v", err)
+		}
+
+		setTheMtime(t, gitconfig)
+
+		stdout, stderr, err = f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+		if err != nil {
+			t.Fatalf("the second mint exited non-zero: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		second := stdout + stderr
+
+		if strings.Contains(second, setNotice) {
+			t.Errorf("the second mint says %q although the fake VM's ~/.gitconfig already held the bot's identity and nothing was written: with a refresh minting about every 45 minutes the log claims a change that did not happen (issue #263)\nstdout:\n%s\nstderr:\n%s",
+				setNotice, stdout, stderr)
+		}
+
+		if !strings.Contains(second, unchangedNotice) {
+			t.Errorf("the second mint's output does not say %q, so a maintainer cannot tell from the run that the VM's git identity was already the bot's (issue #263)\nstdout:\n%s\nstderr:\n%s",
+				unchangedNotice, stdout, stderr)
+		}
+
+		assertUnchanged(t, gitconfig, before)
+
+		f.assertNoLeaks(t, stdout, stderr)
+	})
 }
 
 // TestAgentsAppTokenMintRefusesAGitConfigAnotherWriterHoldsALockOn pins the second review's finding that the mint
