@@ -75,7 +75,7 @@ type cliResult struct {
 // PATH and the switches that turn its updater, telemetry and error reports off:
 // nothing of the runner's environment, an ANTHROPIC_API_KEY included, is
 // inherited. It returns an error wrapping ErrModel when the CLI cannot start,
-// runs past the timeout, is cancelled, prints no JSON result, reports an error,
+// runs past the timeout, is cancelled or stopped by the run's deadline, prints no JSON result, reports an error,
 // ends its turn other than with success, or prints an empty result; the error
 // quotes at most maxCLIExcerpt bytes of the CLI's text, with the token
 // redacted.
@@ -128,6 +128,14 @@ func (c *ClaudeCLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	case outcomeAnswer:
 		return text, nil
 	case outcomeCancelled:
+		// The parent context ends either by a cancel or by the run's own
+		// deadline (ci/aireview's runDeadline); a deadline is no cancellation,
+		// and saying so sends the maintainer looking for a caller that does
+		// not exist (issue #324).
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("%w: the Claude Code CLI was stopped: the run's deadline passed: %w", ErrModel, ctx.Err())
+		}
+
 		return "", fmt.Errorf("%w: the Claude Code CLI was cancelled: %w", ErrModel, ctx.Err())
 	case outcomeTimedOut:
 		return "", fmt.Errorf("%w: the Claude Code CLI timed out after %s", ErrModel, c.timeout)

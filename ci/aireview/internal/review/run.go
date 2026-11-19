@@ -64,7 +64,7 @@ type Result struct {
 // too Run posts a COMMENT review with no finding that says the review could not
 // be read, and still fails with an error wrapping ErrMalformedAnswer. That post
 // is made on a context detached from ctx's cancellation, bounded by
-// unreadablePostTimeout, so it is made even when ctx ends right after the
+// UnreadablePostTimeout, so it is made even when ctx ends right after the
 // second answer. Run sets no deadline of its own: ctx carries the run's
 // deadline, which ci/aireview's main sets (runDeadline), and every call but
 // that one post ends with it.
@@ -103,7 +103,7 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 			// run's context ended right after the second answer: on a context
 			// its cancellation does not reach, with a short timeout of its own
 			// (reviewer m3).
-			postCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), unreadablePostTimeout)
+			postCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), UnreadablePostTimeout)
 			postErr := gh.PostReview(postCtx, cfg.Number, unreadableReview(pr.HeadSHA))
 
 			cancel()
@@ -154,11 +154,13 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 	return result, nil
 }
 
-// unreadablePostTimeout bounds the post of the review that says the model's
-// answer could not be read, which Run makes on a context detached from the
-// run's cancellation (issue #316, reviewer m3): it is the one call that may
-// outlive the run's deadline, and by no more than this.
-const unreadablePostTimeout = 30 * time.Second
+// UnreadablePostTimeout bounds the detached post of the review that says the
+// model's answer could not be read, which Run makes on a context detached from
+// the run's cancellation (issue #316, reviewer m3): it is the one call that may
+// outlive the run's deadline, and by no more than this. ci/aireview's
+// deadline_test.go checks that the run's deadline plus this still fits the
+// workflow's job timeout.
+const UnreadablePostTimeout = 30 * time.Second
 
 // errUnreadableTwice marks a run whose model answered twice in turn with an
 // answer of the wrong shape (issue #316); Run then posts unreadableReview.

@@ -94,6 +94,8 @@ const (
 // files" line) shows a change to a regular file's content alone: no symbolic
 // link or submodule ("new file mode", "deleted file mode" or an "index" line
 // carrying mode 120000 or 160000) and no mode change ("old mode", "new mode").
+// An "index" line not of the form "index <old>..<new> [mode]" leaves the header
+// unclassifiable, and the section is kept.
 // Only the extended header is read, never a hunk's content, which the pull
 // request's author writes (auditor L1, issue #324).
 func isRegularContentChange(section string) bool {
@@ -117,8 +119,12 @@ func isRegularContentChange(section string) bool {
 		case strings.HasPrefix(line, "deleted file mode "):
 			mode = strings.TrimPrefix(line, "deleted file mode ")
 		case strings.HasPrefix(line, "index "):
-			fields := strings.Fields(line)
-			mode = fields[len(fields)-1]
+			indexMode, ok := parseIndexLine(line)
+			if !ok {
+				return false
+			}
+
+			mode = indexMode
 		}
 
 		if mode == symlinkMode || mode == gitlinkMode {
@@ -127,6 +133,28 @@ func isRegularContentChange(section string) bool {
 	}
 
 	return true
+}
+
+// parseIndexLine reads an extended header's "index <old>..<new>" line,
+// optionally followed by a mode, and returns that mode ("" when the line names
+// none). It reports false for a line of any other form: such a header cannot be
+// classified, so its section is kept and reviewed (issue #324).
+func parseIndexLine(line string) (string, bool) {
+	fields := strings.Fields(line)
+	if len(fields) < 2 || len(fields) > 3 || fields[0] != "index" {
+		return "", false
+	}
+
+	before, after, found := strings.Cut(fields[1], "..")
+	if !found || before == "" || after == "" {
+		return "", false
+	}
+
+	if len(fields) == 3 {
+		return fields[2], true
+	}
+
+	return "", true
 }
 
 // isReviewed reports whether the reviewer reads the file at path: every path
