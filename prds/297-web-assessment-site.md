@@ -158,7 +158,10 @@ release), *live* (checked against the live site) or *review*.
   which `connect-src 'self'` is rejected, and a CSP host-source that pins exact paths needs a host,
   which breaks the run-anywhere bundle. Any icon or logo is inline SVG markup in the HTML, which loads
   nothing; no `<img>`, `<picture>`, `<input type="image">`, `<link rel="icon">` or other image link, and
-  no `data:` image either (`img-src 'none'` refuses it). Fonts and media fall to `default-src 'none'`
+  no `data:` image either (`img-src 'none'` refuses it). A static test of every built page and of the
+  HTML reporter's goldens (the hostile golden included) fails on an `<img>`, a `<picture>`, an
+  `<input type="image">`, a `<link rel="icon">`, any SVG element with an external `href` or
+  `xlink:href` (`<image>`, `<use>`, `<feImage>`), and any `data:` URL. Fonts and media fall to `default-src 'none'`
   (no `font-src` or `media-src` directive is set, and the static test fails if one is added), so the
   site uses the browser's system fonts. CSS `url()` loads are governed by the directive of what they
   load (`img-src` for images and `background-image`, `font-src` for `@font-face`), so the stylesheet,
@@ -204,8 +207,12 @@ release), *live* (checked against the live site) or *review*.
   claims Trusted Types protect every user.
 - [ ] *Browser:* after loading, the smoke test attempts, from the page, a `fetch` and an
   `XMLHttpRequest` to another origin, to an own-origin path, and to the module script's own URL, and
-  records every request the page made. Every attempt must be blocked by `connect-src 'none'`, and the
-  recorded requests must be only the site's own files, loaded as the page, its stylesheet and its scripts.
+  records every request made while the page is open, on the `httptest` server that serves the bundle
+  and in the page's DevTools Network events. Every attempt must be blocked by `connect-src 'none'`, and
+  the recorded requests must be only the site's own files, loaded as the page, its stylesheet and its
+  scripts. The one request tolerated beyond those files is a browser-initiated `GET /favicon.ico` with
+  no query string, which the server answers 404 (the site ships no favicon); any other request, a
+  `/favicon.ico` with a query or of another method included, fails the test.
   It also attempts, from the page, an image load (an `Image` with its `src` set and an inserted `<img>`)
   and a CSS `url()` load (a `background-image` in a style rule constructed by the test through CSSOM),
   each to an own-origin path and to another origin; every one must be blocked by `img-src 'none'`, and
@@ -644,8 +651,10 @@ security audit (`security-audit` skill), since every one of them touches the tru
    CSS, one small page script; `site/records/`, which milestone 4 fills, is never bundled), the privacy
    page and the verification page, `make site` (a Go program, standard library
    only, that assembles the bundle: content-addressed names, the module embedded in its script, SRI
-   values, the version, the snapshot dates), the static tests (CSP, no image and no stylesheet `url()`
-   or `@import`, SRI, banned APIs and computed
+   values, the version, the snapshot dates), the static tests (CSP, no image in any built page or HTML
+   reporter golden, the hostile golden included (no `<img>`, `<picture>`, `<input type="image">`,
+   `<link rel="icon">`, SVG `<image>`, `<use>` or `<feImage>` with an external `href` or `xlink:href`, or `data:` URL),
+   no stylesheet `url()` or `@import`, SRI, banned APIs and computed
    property names with the download and unregister functions as their only exceptions, the glue's
    constant names, the module script's template, the scripts per page with their attributes and order,
    the module global read once and deleted, prefetch, the `downgrade-risk`, `hsts-waived` (a missing
