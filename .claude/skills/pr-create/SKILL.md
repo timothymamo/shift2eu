@@ -29,14 +29,18 @@ maintainer has not approved: the maintainer's approval and merge are the single 
 
 6. `gh pr checks <n> --watch --fail-fast` until every check completes.
 7. On failure: `gh run view <run-id> --log-failed`, report the failing job and the exact error, and stop.
-   Do not diagnose or fix; the orchestrator re-delegates.
+   Do not diagnose or fix; the orchestrator re-delegates. A failed `AI review` is no such failure: watch
+   the other checks to the end and report it as step 8 says.
 
 ## Report and stop
 
 8. Report through `dot-agent-deck work-done`: the PR URL, each check and its result, the head commit, and
-   anything notable, such as the AI reviewer's findings once it runs (milestone 4 of PRD #161: advice for
-   the maintainer, never a reason to merge or not). **Do not merge, do not approve and do not enable
-   auto-merge.** The pull request now waits for the maintainer's approval.
+   anything notable. Always include the `AI review` check (ADR 0033), which runs on every pull request,
+   and summarise the reviewer's findings (`gh pr view <n> --json reviews,comments`) as advice for the
+   maintainer, never a reason to merge or not. It is not a required check: when it fails or errors,
+   report that with its error (`gh run view <run-id> --log-failed`); do not wait on it, re-run it or work
+   around it. **Do not merge, do not approve and do not enable auto-merge.** The pull request now waits
+   for the maintainer's approval.
 
 ## Merge (only when explicitly instructed)
 
