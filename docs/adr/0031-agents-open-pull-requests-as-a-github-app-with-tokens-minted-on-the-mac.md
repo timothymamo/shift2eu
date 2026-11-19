@@ -152,11 +152,13 @@ already inside, renamed to the lock), so no reader sees a lock without its pid. 
 same instance says that another refresher for that VM is running and exits **0**: the VM's token is being
 refreshed, which is what was asked. A lock whose pid is no longer a running refresh (a refresher killed
 without its trap) is taken over atomically: it is renamed aside, which only one contender can do, checked
-to still hold the stale pid, removed, and the lock is created again. A known residue, accepted as
-negligible: three refreshers starting within milliseconds of each other against a stale lock can end with
-two running (one contender puts back a lock it moved aside after a third has created a new one, and the
-put-back lands inside it). That costs two mints an hour and corrupts nothing, as every write into the VM
-is atomic; a refresher's exit trap removes only a lock that holds its own pid.
+to still hold the stale pid, removed, and the lock is created again. A contender that moved aside a lock
+holding another pid puts it back only while no lock exists; when a third contender has created one
+meanwhile, it drops what it moved and exits as a losing refresher, so a lock never lands inside another
+(issue #288). Before each mint, a refresher checks that the lock still holds its own pid (a missing lock is
+read again for a few seconds, as a contender may have it aside for a moment), and stops without minting
+when another refresher holds it. A refresher's exit trap removes only a lock that holds its own pid, and
+its TERM and INT traps also kill a sleep started just before its pid was stored (issue #289).
 `make agents-token-refresh-start` starts the refresh in the background with `nohup`, unless the lock's pid,
 or the pid it recorded itself, is a running refresh, in which case it names that pid; its pid and log are
 `agents-token-refresh-<instance>.{pid,log}` in the same directory (mode 0600), and it says where the log

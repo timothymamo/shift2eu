@@ -715,7 +715,10 @@ is_refresh() {
 # what it moved still holds the stale owner (and puts it back if not), removes it, and tries again. A lock
 # holding this shell's own pid is this one's, even when its own read missed it because a contender had moved
 # it aside for a moment (issue #240). While another refresher holds the lock, this one says so and exits 0:
-# that VM's token is already being refreshed.
+# that VM's token is already being refreshed. A lock moved aside that held no stale owner is put back only
+# while no lock exists; when a third contender has created one meanwhile, the one moved aside is dropped and
+# this one loses, so a lock never ends up nested inside another (issue #288). The refresher whose lock was
+# dropped is not told here: still_locked, before each mint, finds the lock no longer its own.
 take_lock() {
   state="${XDG_STATE_HOME:-${HOME:?set HOME}/.local/state}/shift2eu"
   lock="${state}/agents-token-refresh-${instance}.lock"
@@ -748,12 +751,42 @@ take_lock() {
       if [ "$(cat "${aside}/pid" 2>/dev/null || true)" = "${owner}" ]; then
         rm -rf "${aside}"
       else
-        # Another contender took the stale lock over first and this moved its new one: put it back.
-        mv "${aside}" "${lock}" 2>/dev/null || true
+        # Another contender took the stale lock over first and this moved its new one: put it back, but never
+        # onto a lock a third contender has created meanwhile, where mv would nest it inside that lock as a copy
+        # nobody removes (issue #288). Then the lock is that third one's: drop what was moved aside, which
+        # leaves its own owner without the lock (that owner finds out before its next mint), and lose.
+        if [ ! -e "${lock}" ] && [ ! -L "${lock}" ]; then
+          mv "${aside}" "${lock}" 2>/dev/null || true
+        fi
+        # The lock can still appear between the test and the mv: whatever then landed inside it goes.
+        rm -rf "${aside}" "${lock:?}/${aside##*/}"
+        if [ -e "${lock}" ] && [ "$(cat "${lock}/pid" 2>/dev/null || true)" != "$$" ]; then
+          say "another agents App token refresh for the VM ${instance} took the lock ${lock} over first (pid $(cat "${lock}/pid" 2>/dev/null || echo unknown)); this one exits and leaves it to that one"
+          exit 0
+        fi
       fi
     fi
   done
   locked=1
+}
+
+# still_locked exits 0, as a losing refresher does, once the lock holds another refresher's pid: a contender
+# that read a stale owner can move this refresher's fresh lock aside after take_lock returned and, finding a
+# third contender's lock in place, drop it (issue #288). A lock that is missing is only in transit, moved
+# aside by such a contender to be put back (issue #240): it is read again for up to five seconds, and only
+# a lock that is still missing then, or holds another pid, is lost. release_lock leaves the other's lock.
+still_locked() {
+  holder="$(cat "${lock}/pid" 2>/dev/null || true)"
+  tries=0
+  while [ -z "${holder}" ] && [ "${tries}" -lt 5 ]; do
+    sleep 1
+    holder="$(cat "${lock}/pid" 2>/dev/null || true)"
+    tries=$((tries + 1))
+  done
+  [ "${holder}" != "$$" ] || return 0
+  say "the lock ${lock} is no longer this refresh's (it holds pid ${holder:-none}): another agents App token refresh for the VM ${instance} took it over, so this one exits without minting and leaves it to that one"
+  release_lock
+  exit 0
 }
 
 # release_lock removes the lock, if this refresher holds it.
@@ -765,11 +798,16 @@ release_lock() {
 }
 
 refresh() {
-  sleeper=""
+  # sleeper is the pid of the loop's running sleep, empty from just before the sleep starts until its pid is
+  # stored, and none while no sleep runs. The traps kill ${sleeper}, or, while it is still empty, the last
+  # background job $!: a signal between `sleep ... &` and `sleeper=$!` would otherwise leave that sleep running
+  # after the script exits (issue #289). While it is none they kill nothing, so a finished sleep's pid, which
+  # the system may have given another process since, is never killed. Each trap stays one line.
+  sleeper=none
   locked=0
   trap 'release_lock' EXIT
-  trap 'stopped "signal"; [ -z "${sleeper}" ] || kill "${sleeper}" 2>/dev/null || true; release_lock; exit 143' TERM
-  trap 'stopped "interrupted"; [ -z "${sleeper}" ] || kill "${sleeper}" 2>/dev/null || true; release_lock; exit 130' INT
+  trap 'stopped "signal"; [ "${sleeper}" = none ] || [ -z "${sleeper:-$!}" ] || kill "${sleeper:-$!}" 2>/dev/null || true; release_lock; exit 143' TERM
+  trap 'stopped "interrupted"; [ "${sleeper}" = none ] || [ -z "${sleeper:-$!}" ] || kill "${sleeper:-$!}" 2>/dev/null || true; release_lock; exit 130' INT
   take_lock
   expiry=""
   failures=0
@@ -779,6 +817,9 @@ refresh() {
     # The wall clock, not a sleep of the token's lifetime: after the Mac sleeps, the first check sees how
     # little is left and mints at once.
     current="$(now)"
+    # After the clock read and right before any mint: the lock can have turned over since take_lock or the
+    # last check (issue #288), and a refresher that no longer holds it must not mint beside the one that does.
+    still_locked
     ok=1
     why="no token could be minted, and trying again cannot fix it"
     if [ -z "${expiry}" ] || [ "$((expiry - current))" -lt "${margin_seconds}" ]; then
@@ -826,12 +867,13 @@ refresh() {
       fi
       say "will try again in ${wait_seconds}s (failure ${failures} in a row); ${left}"
     fi
-    # A TERM landing between the next two lines leaves the sleep running until it ends by itself: harmless
-    # under launchd, which kills the job's process group, and the tests kill the group themselves (issue #267).
+    # A TERM landing between `sleep ... &` and `sleeper=$!` finds sleeper empty, and the trap kills $!, the
+    # sleep just started (issue #289).
+    sleeper=""
     sleep "${wait_seconds}" &
     sleeper=$!
     wait "${sleeper}" || true
-    sleeper=""
+    sleeper=none
   done
 }
 
