@@ -381,7 +381,8 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   and an unset or empty credential, each naming a hidden entry by its position alone. So even
   `make -i vm-env` leaves `daemon.env` as it was and never says it wrote it in those cases; `make -i` still
   exits 0, so read its messages. The character check of the whole `VM_ENV` runs only in
-  `make vm-env-check`, but a name with such a character is refused by the write step as not a variable name.
+  `make vm-env-check`; in the write step a tab or newline only separates names, and a name holding any other
+  such character is refused as not a variable name, so nothing it forbids reaches the VM.
 - **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the two
   variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY` or the personal GitHub
   token a VM was set up with before PRD #161 milestone 3, is removed. Only a

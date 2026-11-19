@@ -312,13 +312,16 @@ vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', ' '\n\n' | awk 'NF && !seen[$
 # How a message names the entry $$name at 1-based position $$i of that list, in $$label (issue #268 L1): the
 # entry itself only when it is an upper-case variable name (^[A-Z_][A-Z0-9_]*$), the shape of every credential
 # name; anything else may be a credential pasted where a name goes, so only its position is given. The letters
-# are spelled out, as a range such as [A-Z] can match lower-case letters in some shells' locales. A hidden entry
-# also sets $$hidden, so a message says once, after its list, why: $(vm_env_hidden_why).
+# are spelled out, as a range such as [A-Z] can match lower-case letters in some shells' locales. It sets
+# $$ehidden for a hidden entry and clears it for a shown one, so a message about that one entry says why,
+# $(vm_env_entry_why), only when it hides the entry. A message listing several entries sets $$hidden only when it
+# lists a hidden one, and says why once, after its list: $(vm_env_hidden_why).
 vm_env_upper = ABCDEFGHIJKLMNOPQRSTUVWXYZ
 vm_env_label = case "$$name" in ([!$(vm_env_upper)_]* | *[!$(vm_env_upper)0123456789_]*) \
-		label="VM_ENV entry $$i (entry $$i is not shown)"; hidden=1;; \
-	(*) label="$$name";; esac
+		label="VM_ENV entry $$i (entry $$i is not shown)"; ehidden=1;; \
+	(*) label="$$name"; ehidden=;; esac
 vm_env_hidden_why = $${hidden:+ It may be a credential typed by mistake.}
+vm_env_entry_why = $${ehidden:+ It may be a credential typed by mistake.}
 # The refusals of a name for what it is, shared by vm-env-check and vm-env's write step, which runs it before it
 # reads the name's value, so make -i, which runs the write step although vm-env-check failed, cannot copy a
 # refused name into the VM (issue #268 L2): an agents App variable, a GitHub token (github_token_names below) or
@@ -326,13 +329,13 @@ vm_env_hidden_why = $${hidden:+ It may be a credential typed by mistake.}
 # may be a credential is never printed, and exits 1.
 vm_env_refuse = $(vm_env_label); \
 	case "$$name" in (SHIFT2EU_AGENTS_APP_*) \
-		echo "vm-env: refusing $$label: the agents App's key and its path never enter the VM; make agents-token writes its tokens there.$(vm_env_hidden_why) Nothing was written." >&2; \
+		echo "vm-env: refusing $$label: the agents App's key and its path never enter the VM; make agents-token writes its tokens there.$(vm_env_entry_why) Nothing was written." >&2; \
 		exit 1;; esac; \
 	case "$$name" in ($(github_token_names)) \
 		echo "vm-env: refusing $$label: a GitHub token never enters the VM; the agents' only GitHub credential is the agents App's token, which make agents-token writes there (its value is not shown). Nothing was written." >&2; \
 		exit 1;; esac; \
 	case "$$name" in ([!A-Za-z_]* | *[!A-Za-z0-9_]*) \
-		echo "vm-env: refusing $$label: not a variable name.$(vm_env_hidden_why) Nothing was written." >&2; \
+		echo "vm-env: refusing $$label: not a variable name.$(vm_env_entry_why) Nothing was written." >&2; \
 		exit 1;; esac
 # Only a VM_ENV on the make command line merges (make vm-create hands it to its sub-make the same way); the
 # default, an exported VM_ENV, make -e and override all replace, so a VM_ENV left in a .envrc cannot keep a
@@ -364,13 +367,13 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 	[ -n "$(vm_env_names)" ] || { \
 		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: name at least one, e.g. make vm-env VM_ENV=DEEPSEEK_API_KEY" >&2; \
 		exit 1; }
-	@set -f; i=0; hidden=; for name in $(vm_env_names); do \
+	@set -f; i=0; for name in $(vm_env_names); do \
 		i=$$((i + 1)); $(vm_env_refuse); \
 	done
 	@set -f; missing=''; i=0; hidden=; \
 	for name in $(vm_env_names); do \
 		i=$$((i + 1)); $(vm_env_label); \
-		[ -n "$$(printenv "$$name")" ] || missing="$$missing $$label"; \
+		[ -n "$$(printenv "$$name")" ] || { missing="$$missing $$label"; [ -z "$$ehidden" ] || hidden=1; }; \
 	done; \
 	if [ -n "$$missing" ]; then \
 		echo "vm-env: not set or empty:$$missing.$(vm_env_hidden_why) Nothing was written: the VM's daemon.env is unchanged." >&2; \
@@ -417,13 +420,13 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 .PHONY: vm-env
 vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
-	@set -f; env_file="$$(i=0; hidden=; [ -n "$(vm_env_names)" ] || { \
+	@set -f; env_file="$$(i=0; [ -n "$(vm_env_names)" ] || { \
 		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
 	for name in $(vm_env_names); do \
 		i=$$((i + 1)); $(vm_env_refuse); \
 		value="$$(printenv "$$name")"; \
-		[ -n "$$value" ] || { echo "vm-env: $$label is not set or empty.$(vm_env_hidden_why) Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
-		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$label has unsupported characters. Nothing was written." >&2; exit 1;; esac; \
+		[ -n "$$value" ] || { echo "vm-env: $$label is not set or empty.$(vm_env_entry_why) Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
+		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$label has unsupported characters.$(vm_env_entry_why) Nothing was written." >&2; exit 1;; esac; \
 		printf '%s=%s\n' "$$name" "$$value"; \
 	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$(LIMA_INSTANCE)" \
 		sh -c 'umask 077 && LC_ALL=C && export LC_ALL && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && \
