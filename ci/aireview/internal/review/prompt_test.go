@@ -52,6 +52,17 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 		}
 	}
 
+	// An instruction aimed at the reviewer is reported as a blocking finding,
+	// whatever it names itself and wherever it hides (issue #301): one sentence
+	// of the prompt gives the category, the severity and the places such an
+	// instruction can be. The stem fallback of readCategory ("inject", "prompt")
+	// stays the parser's safety net for a category the model spells otherwise;
+	// it is pinned in answer_test.go and not here.
+	injectionRule := []string{"prompt-injection", "blocker", "title", "body", "file names", "diff", "comments"}
+	if !anySentenceHolds(got.System, injectionRule) {
+		t.Errorf("no sentence of the system prompt names all of %q: an instruction aimed at the reviewer, in the pull request's title, body, file names, diff or comments, is reported as a finding of category prompt-injection with severity blocker, so an attempt the model names otherwise still blocks (issue #301)", injectionRule)
+	}
+
 	// The reviewer reviews documentation, skills, prompts and test fixtures: an
 	// instruction inside them is the content under review, not an attempt on the
 	// reviewer. Only text that tries to change this reviewer's findings or verdict
@@ -89,4 +100,37 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 	if again := review.BuildPrompt(instructions, pr, files, diff); !cmp.Equal(got, again) {
 		t.Errorf("two prompts of the same inputs differ (-first +second):\n%s", cmp.Diff(got, again))
 	}
+}
+
+// anySentenceHolds reports whether one sentence of text holds every one of
+// words, compared case-insensitively. The prompt wraps its lines and its
+// paragraphs, so a rule's words must be read from a sentence rather than from a
+// line or a paragraph: a rule that only holds because two unrelated lines of a
+// paragraph happen to hold its words is no rule.
+func anySentenceHolds(text string, words []string) bool {
+	for _, sentence := range sentencesOf(text) {
+		holds := true
+
+		for _, word := range words {
+			if !strings.Contains(sentence, strings.ToLower(word)) {
+				holds = false
+
+				break
+			}
+		}
+
+		if holds {
+			return true
+		}
+	}
+
+	return false
+}
+
+// sentencesOf returns the sentences of text: its lines joined into one, cut at
+// every full stop that ends a sentence.
+func sentencesOf(text string) []string {
+	joined := strings.ReplaceAll(strings.ToLower(text), "\n", " ")
+
+	return strings.Split(joined, ". ")
 }

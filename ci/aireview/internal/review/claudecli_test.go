@@ -1,6 +1,7 @@
 package review_test
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -30,13 +32,16 @@ const untrustedMarker = "UNTRUSTED-PR-CONTENT-7f3a"
 const cliSuccess = `{"type":"result","subtype":"success","is_error":false,"result":"ANSWER TEXT"}`
 
 // claudeFake is one fake CLI's behaviour: what it prints on each stream, how it
-// exits and, for the timeout test, a command it runs before it records
-// anything.
+// exits, and, for the timeout test, a command it runs before it records
+// anything. started, when set, is the path of a FIFO the fake writes one line
+// to once it runs and then blocks on: the test reads that line as the signal
+// that the CLI started, and no sleep or poll stands between the two.
 type claudeFake struct {
-	stdout string
-	stderr string
-	exit   int
-	before string
+	stdout  string
+	stderr  string
+	exit    int
+	before  string
+	started string
 }
 
 // claudeRecording is the directory the fake CLI records into: a directory of its
@@ -73,7 +78,10 @@ func newFakeClaudeCLI(t *testing.T, behaviour claudeFake) (string, claudeRecordi
 // of its working directory and of $HOME, and the file its
 // --system-prompt-file names, then prints its canned answer, exits as told.
 // Every path it records into is baked in: the script reads nothing of the test
-// process's environment but $HOME, which the reviewer sets.
+// process's environment but $HOME, which the reviewer sets. A fake told to
+// signal its start writes one line to the FIFO that path names, which the test
+// reads, and then replaces itself with a sleep the reviewer's cancellation
+// kills: the run is blocked in the CLI, not in a test's timer.
 func claudeFakeScript(rec string, behaviour claudeFake) string {
 	return fmt.Sprintf(`#!/bin/sh
 rec=%q
@@ -89,10 +97,23 @@ for a in "$@"; do
 	if [ "$prev" = "--system-prompt-file" ]; then cat "$a" > "$rec/system"; fi
 	prev="$a"
 done
+%s
 cat "$rec/canned-stdout"
 cat "$rec/canned-stderr" >&2
 exit %d
-`, rec, behaviour.before, behaviour.exit)
+`, rec, behaviour.before, claudeStartSignal(behaviour.started), behaviour.exit)
+}
+
+// claudeStartSignal returns the script line that writes the start signal to the
+// FIFO at path and blocks the fake until the reviewer kills it, or "" when path
+// is empty. exec replaces the shell, so the process the reviewer kills is the
+// sleep itself and the CLI's output pipes close with it.
+func claudeStartSignal(path string) string {
+	if path == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("printf 'started\\n' > %q\nexec sleep 60", path)
 }
 
 // read returns the text the fake CLI recorded under name, and fails the test
@@ -533,6 +554,110 @@ func TestClaudeCLIAskCapsTheCLIErrorText(t *testing.T) {
 
 	if len(err.Error()) >= 2000 {
 		t.Errorf("the error is %d bytes, want fewer than 2000: the CLI's text is capped, so one failing run writes one readable annotation (ADR 0033)", len(err.Error()))
+	}
+}
+
+// TestClaudeCLIAskReportsACancellationAfterTheCLIStarted drives Ask through its
+// OutcomeCancelled arm (issue #303): the CLI has started and is still running
+// when the caller's context is cancelled, so the run has no result of its own
+// to report and Ask answers with the cancellation of the caller's context,
+// wrapping ErrModel so the run fails visibly. The two are synchronised on a
+// FIFO the fake writes one line to as it starts: no sleep and no poll decides
+// the order, so the cancellation cannot come before the CLI ran.
+func TestClaudeCLIAskReportsACancellationAfterTheCLIStarted(t *testing.T) {
+	t.Parallel()
+
+	// A FIFO is what makes the start of the CLI observable: the fake's write
+	// blocks until this test opens it, and this test's open blocks until the
+	// fake writes.
+	fifo := filepath.Join(t.TempDir(), "started")
+
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatalf("make the FIFO the fake CLI signals its start with: %v", err)
+	}
+
+	cli, rec := newFakeClaudeCLI(t, claudeFake{started: fifo, stdout: cliSuccess})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	type askResult struct {
+		text string
+		err  error
+	}
+
+	done := make(chan askResult, 1)
+
+	go func() {
+		text, err := review.NewClaudeCLI(cli, fakeOAuthToken, 30*time.Second).Ask(ctx, review.Prompt{System: "s", User: "u"})
+		done <- askResult{text: text, err: err}
+	}()
+
+	// The read is bounded, so a run that never starts the CLI fails the test
+	// instead of blocking it for ever. The bound is no synchronisation: the
+	// FIFO's one line is.
+	started := make(chan error, 1)
+
+	go func() {
+		f, err := os.Open(fifo)
+		if err != nil {
+			started <- fmt.Errorf("open the fake CLI's start signal: %w", err)
+
+			return
+		}
+		defer f.Close()
+
+		line, err := bufio.NewReader(f).ReadString('\n')
+		if err != nil {
+			started <- fmt.Errorf("read the fake CLI's start signal: %w", err)
+
+			return
+		}
+
+		if got := strings.TrimSpace(line); got != "started" {
+			started <- fmt.Errorf("the fake CLI signalled %q, want %q", got, "started")
+
+			return
+		}
+
+		started <- nil
+	}()
+
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the fake CLI never started: Ask did not run the CLI at its path")
+	}
+
+	// The CLI is running and blocked now, as a real one is mid-turn.
+	cancel()
+
+	select {
+	case got := <-done:
+		if got.text != "" {
+			t.Errorf("Ask = %q after the cancellation, want no answer: a cancelled run has none", got.text)
+		}
+
+		if !errors.Is(got.err, review.ErrModel) {
+			t.Fatalf("Ask = %v after the cancellation, want an error wrapping ErrModel, so the check fails and posts nothing", got.err)
+		}
+
+		if !errors.Is(got.err, context.Canceled) {
+			t.Errorf("Ask = %v after the cancellation, want an error wrapping context.Canceled: the caller cancelled and the CLI is not at fault", got.err)
+		}
+	case <-time.After(10 * time.Second):
+		cancel()
+		t.Fatal("Ask did not return within 10s of the cancellation: a cancelled run is killed and reported at once")
+	}
+
+	// The CLI ran: the recordings of the run that reached the cancellation are
+	// there, so the arm was reached by a CLI that started and not by one Ask
+	// refused to start.
+	if args := rec.args(t); !slices.Contains(args, "-p") {
+		t.Errorf("the fake CLI recorded the arguments %q, want the ones Ask passes: the arm is reached by a CLI that started", args)
 	}
 }
 
