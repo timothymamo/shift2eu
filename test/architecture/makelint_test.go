@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -513,21 +514,37 @@ func TestMakeLintRunsEveryReleaseTarget(t *testing.T) {
 func writeFakeLinter(t *testing.T, dir string) {
 	t.Helper()
 
-	path := filepath.Join(dir, "golangci-lint")
-
-	//nolint:gosec // the fake linter must be executable
-	if err := os.WriteFile(path, []byte(fakeLinter), 0o700); err != nil {
-		t.Fatalf("write the fake golangci-lint: %v", err)
-	}
+	writeExecutable(t, filepath.Join(dir, "golangci-lint"), []byte(fakeLinter))
 }
 
 // writeFakeShellcheck writes the fake shellcheck into dir, executable.
 func writeFakeShellcheck(t *testing.T, dir string) {
 	t.Helper()
 
-	//nolint:gosec // the fake shellcheck must be executable
-	if err := os.WriteFile(filepath.Join(dir, "shellcheck"), []byte(fakeShellcheck), 0o700); err != nil {
-		t.Fatalf("write the fake shellcheck: %v", err)
+	writeExecutable(t, filepath.Join(dir, "shellcheck"), []byte(fakeShellcheck))
+}
+
+// writeExecutable writes content to path, mode 0700, for a test to run. Every executable the package's tests
+// run is written here (issue #267), holding syscall.ForkLock for reading while the file is open for writing.
+// Go opens the file O_CLOEXEC, but a parallel test that forks in that window gives its child a copy of the
+// write descriptor, which the child holds until its own exec. Linux refuses to exec a file any process holds
+// open for writing, so this test's exec of path then fails with ETXTBSY ("text file busy") and no output.
+// Every fork in the process takes ForkLock for writing, so no fork happens while the descriptor is open.
+// Writing to a temporary name and renaming it into place would not help: the child's descriptor is on the
+// same inode. test/devenv's writeFileMode does the same.
+func writeExecutable(t *testing.T, path string, content []byte) {
+	t.Helper()
+
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(path, content, 0o600) //nolint:gosec // path is under the test's own temporary directory
+	syscall.ForkLock.RUnlock()
+
+	if err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	if err := os.Chmod(path, 0o700); err != nil { //nolint:gosec // a script the test runs must be executable
+		t.Fatalf("chmod %s: %v", path, err)
 	}
 }
 
@@ -689,10 +706,7 @@ func TestActionlintScriptRefusesAConfigFile(t *testing.T) {
 				}
 			}
 
-			//nolint:gosec // the script copy must be executable
-			if err := os.WriteFile(filepath.Join(work, "dev", "actionlint.sh"), script, 0o700); err != nil {
-				t.Fatalf("copy dev/actionlint.sh: %v", err)
-			}
+			writeExecutable(t, filepath.Join(work, "dev", "actionlint.sh"), script)
 
 			config := filepath.Join(work, filepath.FromSlash(tc.config))
 
@@ -725,7 +739,7 @@ func TestActionlintScriptRefusesAConfigFile(t *testing.T) {
 
 			want := "actionlint: " + tc.config + " exists: it can silence actionlint's checks"
 			if !strings.Contains(string(out), want) {
-				t.Errorf("dev/actionlint.sh with %s present said %q, want it to say %q", tc.config, out, want)
+				t.Errorf("dev/actionlint.sh with %s present said %q (%v), want it to say %q", tc.config, out, err, want)
 			}
 
 			if data, err := os.ReadFile(record); err == nil {
@@ -756,10 +770,7 @@ func writeFakeGo(t *testing.T, dir string) {
 		t.Fatalf("the go command's path %q holds a single quote, which the fake go cannot quote", realGo)
 	}
 
-	//nolint:gosec // the fake go must be executable
-	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(fmt.Sprintf(fakeGo, "'"+realGo+"'")), 0o700); err != nil {
-		t.Fatalf("write the fake go: %v", err)
-	}
+	writeExecutable(t, filepath.Join(dir, "go"), []byte(fmt.Sprintf(fakeGo, "'"+realGo+"'")))
 }
 
 // runMakeLint runs make lint in root and returns its combined output and error.
