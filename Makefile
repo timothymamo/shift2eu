@@ -27,7 +27,8 @@ VM_RESOURCES_SET = $(strip $(if $(VM_CPUS),VM_CPUS) $(if $(VM_MEMORY),VM_MEMORY)
 # point at all of ~/.lima, a leading dash reads as an option and a slash as a path. The check is make code,
 # not shell: make expands a target's whole recipe before it runs its first line, so a refused name stops the
 # target before any of its own commands runs, even under make -i or -k. Its prerequisites run first, but
-# none of them reads the name: vm-env's vm-env-check checks the credentials on the host. Targets that do not read LIMA_INSTANCE (make check, make build) never check it.
+# none of them reads the name: vm-env's vm-env-check checks the credentials on the host. Targets that do not
+# read LIMA_INSTANCE (make check, make build) never check it.
 LIMA_INSTANCE ?= shift2eu
 override LIMA_INSTANCE := $(value LIMA_INSTANCE)
 export LIMA_INSTANCE
@@ -103,25 +104,37 @@ HOST_REPO_NAME      := $(notdir $(HOST_WORKSPACE_REPO))
 # this file, that it runs from the host clone, and stops with $(error) otherwise: before any target, any
 # prerequisite (vm-env's vm-env-check), any sub-make and any recipe line runs, even under make -i or -k. A
 # sub-make (make vm-create's $(MAKE) vm-up) has its own goal and checks again. It refuses when WORKSPACE_REPO is
-# unset or empty, holds anything but letters, digits and . _ - / + @, or is not absolute, and when REPO_ROOT,
-# the checkout make runs from, is the workspace (WORKSPACE_REPO's parent, its symlinks resolved), inside it or
-# holds it. make with no goal runs help, which is no host target.
+# unset or empty, holds a character other than letters, digits and . _ - / + @ , ~ # = (WORKSPACE_REPO_CHARS), or
+# is not absolute, and when REPO_ROOT, the checkout make runs from, is the workspace (WORKSPACE_REPO's parent,
+# its symlinks resolved), inside it or holds it. make with no goal runs help, which is no host target. The goals
+# it checks are MAKECMDGOALS and a .DEFAULT_GOAL set on the command line (make .DEFAULT_GOAL=vm-up runs vm-up
+# with MAKECMDGOALS empty); a MAKECMDGOALS set on the command line (make MAKECMDGOALS= vm-up) hides the real
+# goals, so make refuses it whatever the goals are.
 #
 # This is a guard against the maintainer's mistakes, NOT a security boundary: the workspace's Makefile is one
 # the agents can edit, so a make run in the workspace runs whatever that file says, check or no check. The
 # protection is that the maintainer runs make for these targets only in the host clone, whose files come only
 # from git pull --ff-only of GitHub's reviewed main (docs/dev-environment.md, The host clone; ADR 0031).
-HOST_GOALS := $(filter $(HOST_TARGETS),$(MAKECMDGOALS))
+ifeq ($(origin MAKECMDGOALS),command line)
+$(error MAKECMDGOALS is set on the command line, which hides the goals make runs, so make cannot tell whether one is a host target ($(HOST_TARGETS)); those run only from the host clone, never with MAKECMDGOALS on the command line (docs/dev-environment.md, The host clone))
+endif
+HOST_GOALS := $(filter $(HOST_TARGETS),$(MAKECMDGOALS) $(if $(filter command line,$(origin .DEFAULT_GOAL)),$(.DEFAULT_GOAL)))
 host_refuse = $(error $(firstword $(HOST_GOALS)): runs only from the host clone, a clone outside the workspace the VM mounts, with WORKSPACE_REPO set in its .envrc to the absolute path of the repository's checkout in the workspace: $(1) (docs/dev-environment.md, The host clone))
-# The characters a WORKSPACE_REPO may hold: a path's, but no whitespace and none a shell reads inside double or
-# single quotes ($ ` " ' \) or make reads in a pattern (%). The recipes paste the value inside quotes, so these
-# leave it one literal word. The whitespace test is LIMA_INSTANCE_VALID's (see there).
-WORKSPACE_REPO_CHARS := $(LIMA_INSTANCE_CHARS) / + @ ! \# & ( ) , = ^ { } ~ : ;
+# The characters a WORKSPACE_REPO may hold: letters, digits and . _ - / + @ , ~ # =. That leaves out
+# whitespace, every character a shell reads inside double or single quotes ($ ` " ' \), make's pattern
+# character (%), the ':' Lima splits a --mount-only value on, and every other one a shell or make gives a
+# meaning (; & ( ) ^ { } ! * ? [ ] < > |). The recipes paste the value inside quotes, so these leave it one
+# literal word. '=' stays: Go's t.TempDir keeps it from a test's name (GATE_TRANSITION=1), and inside quotes it
+# means nothing to a shell, make or Lima. The whitespace test is LIMA_INSTANCE_VALID's (see there). The message
+# describes the list and never shows the value, which may be a credential typed where a path goes.
+host_comma := ,
+host_hash   := \#
+WORKSPACE_REPO_CHARS := $(LIMA_INSTANCE_CHARS) / + @ $(host_comma) ~ $(host_hash) =
 ifneq ($(HOST_GOALS),)
 ifeq ($(strip $(WORKSPACE_REPO)),)
 $(call host_refuse,WORKSPACE_REPO is not set)
 else ifneq ($(subst xx,,x$(call lima_instance_strip,$(WORKSPACE_REPO_CHARS),$(WORKSPACE_REPO))x),)
-$(call host_refuse,WORKSPACE_REPO holds whitespace or one of $$ ` " ' \ % (its value is not shown))
+$(call host_refuse,WORKSPACE_REPO holds a character other than letters$(host_comma) digits and . _ - / + @ $(host_comma) ~ $(host_hash) = (its value is not shown))
 else ifeq ($(filter /%,$(WORKSPACE_REPO)),)
 $(call host_refuse,WORKSPACE_REPO=$(WORKSPACE_REPO) is not an absolute path)
 else ifeq ($(HOST_REPO_NAME),)
@@ -136,6 +149,10 @@ else ifneq ($(filter $(REPO_ROOT)/%,$(host_workspace_real)),)
 $(call host_refuse,the workspace $(HOST_WORKSPACE) is inside $(REPO_ROOT) - the checkout make runs in)
 endif
 endif
+# What a host target that opens a shell in the VM (deck, deck-restart, vm-claude-settings, vm-init, vm-shell)
+# puts before limactl: the host clone's .envrc holds the agents App's variables, and none of those commands
+# needs them, so their limactl runs without them (issue #227, ADR 0031). macOS /usr/bin/env has -u too.
+VM_SHELL_ENV := env -u SHIFT2EU_AGENTS_APP_ID -u SHIFT2EU_AGENTS_APP_INSTALLATION_ID -u SHIFT2EU_AGENTS_APP_KEY_FILE
 # Credentials vm-env copies from your shell (e.g. direnv) into the VM, by name. Never add
 # ANTHROPIC_API_KEY: Claude Code prefers it over the subscription token and bills per call. Never add a
 # SHIFT2EU_AGENTS_APP_* variable either: vm-env refuses them, as the agents App's key and its path stay on
@@ -313,11 +330,13 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # has, not in the host's current one. Like every target that reads
 # LIMA_INSTANCE, vm-up refuses an invalid one with $(LIMA_INSTANCE_CHECK) before its recipe runs (issue #252).
 # vm-up sets no git hooks: run from the host clone, git-hooks would set the host clone's, and running git in the
-# workspace from the Mac is what issue #227 forbids. The workspace's are set inside the VM, with make git-hooks
-# in its checkout (docs/dev-environment.md); the setting lives in the mounted .git/config, so it lasts.
-# vm-up then checks VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT, then that the workspace holds nothing stray,
-# then the instance's status, all in one shell line with its limactl calls, so no make flag (-i, -k) can run
-# limactl after any of these checks failed.
+# workspace from the Mac is what issue #227 forbids. The workspace checkout's are set inside the VM,
+# by make vm-init (dev/vm-init.sh); the setting lives in the mounted .git/config, so it lasts.
+# vm-up then checks VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT, then that WORKSPACE_REPO is a directory holding
+# .git, then that the workspace can be listed and holds nothing stray - the repository's name matched literally
+# (a case pattern with the name quoted), so a repository a.b never takes a stray axb for its own - then the
+# instance's status, all in one shell line with its limactl calls, so no make flag (-i, -k) can run limactl
+# after any of these checks failed. It runs neither git nor anything else in the workspace: test and ls only.
 .PHONY: vm-up
 vm-up: ## Create or start the Lima VM with only this repository's workspace mounted (VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT on creation)
 	$(LIMA_INSTANCE_CHECK)
@@ -333,7 +352,17 @@ vm-up: ## Create or start the Lima VM with only this repository's workspace moun
 	[ -z "$$VM_SSH_PORT" ] || { whole "$$VM_SSH_PORT" 5 && \
 		[ "$$VM_SSH_PORT" -ge 1024 ] && [ "$$VM_SSH_PORT" -le 65535 ]; } || \
 		refuse VM_SSH_PORT "$$VM_SSH_PORT" 'a port from 1024 to 65535'; \
-	stray="$$(ls -A "$(HOST_WORKSPACE)" | grep -vx -e '$(HOST_REPO_NAME)' -e '$(HOST_REPO_NAME)-dispatch-.*' -e '\.DS_Store' || true)"; \
+	if [ ! -d "$(HOST_WORKSPACE_REPO)" ] || [ ! -e "$(HOST_WORKSPACE_REPO)/.git" ]; then \
+		echo "vm-up: WORKSPACE_REPO=$(HOST_WORKSPACE_REPO) is no directory holding .git: set it to the repository's checkout in the workspace the VM mounts (docs/dev-environment.md, The host clone)" >&2; \
+		exit 1; \
+	fi; \
+	entries="$$(ls -A "$(HOST_WORKSPACE)")" || { \
+		echo "vm-up: cannot list the workspace $(HOST_WORKSPACE), the parent of WORKSPACE_REPO=$(HOST_WORKSPACE_REPO), so it cannot check that it holds nothing stray" >&2; \
+		exit 1; \
+	}; \
+	stray="$$(printf '%s\n' "$$entries" | while IFS= read -r entry; do \
+		case "$$entry" in ('' | "$(HOST_REPO_NAME)" | "$(HOST_REPO_NAME)"-dispatch-* | .DS_Store) ;; (*) printf '%s\n' "$$entry";; esac; \
+	done)"; \
 	if [ -n "$$stray" ]; then \
 		echo "vm-up: the VM mounts $(HOST_WORKSPACE), which must hold only $(HOST_REPO_NAME) and its dispatch worktrees; move these out first:" >&2; \
 		echo "$$stray" | sed 's/^/  /' >&2; \
@@ -390,7 +419,7 @@ vm-up: ## Create or start the Lima VM with only this repository's workspace moun
 .PHONY: vm-shell
 vm-shell: ## Open a shell in the VM at the workspace's checkout, WORKSPACE_REPO (host clone)
 	$(LIMA_INSTANCE_CHECK)
-	limactl shell --workdir "$(HOST_WORKSPACE_REPO)" "$$LIMA_INSTANCE"
+	$(VM_SHELL_ENV) limactl shell --workdir "$(HOST_WORKSPACE_REPO)" "$$LIMA_INSTANCE"
 
 # The names in VM_ENV, one per line: commas and spaces separate them, and a name listed twice is listed once.
 # The recipe reads VM_ENV from its environment ("$$VM_ENV"), never pasted into its own text, and refuses any
@@ -560,7 +589,7 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 .PHONY: vm-claude-settings
 vm-claude-settings: ## Merge dev/claude-user-settings.json into Claude Code's user settings in the VM
 	$(LIMA_INSTANCE_CHECK)
-	limactl shell --workdir "$(HOST_WORKSPACE_REPO)" "$$LIMA_INSTANCE" dev/claude-settings.sh "$(HOST_WORKSPACE)"
+	$(VM_SHELL_ENV) limactl shell --workdir "$(HOST_WORKSPACE_REPO)" "$$LIMA_INSTANCE" dev/claude-settings.sh "$(HOST_WORKSPACE)"
 
 # A login shell (bash -l), because only a login shell loads the credentials vm-env wrote
 # (/etc/profile.d/shift2eu.sh). Safe to run again: it changes only what is not set up yet, and the theme
@@ -568,7 +597,7 @@ vm-claude-settings: ## Merge dev/claude-user-settings.json into Claude Code's us
 .PHONY: vm-init
 vm-init: ## Once-only VM setup after vm-env and vm-claude-settings: Claude Code first run, git identity, credential checks, deck command, daemon service
 	$(LIMA_INSTANCE_CHECK)
-	limactl shell --workdir "$(HOST_WORKSPACE_REPO)" "$$LIMA_INSTANCE" bash -l dev/vm-init.sh \
+	$(VM_SHELL_ENV) limactl shell --workdir "$(HOST_WORKSPACE_REPO)" "$$LIMA_INSTANCE" bash -l dev/vm-init.sh \
 		"$(HOST_WORKSPACE)" "$(HOST_WORKSPACE_REPO)" "$(GIT_USER_NAME)" "$(GIT_USER_EMAIL)" "$(CLAUDE_THEME)"
 
 # One target at a time, in order, even under make -j. vm-env-check runs first, before vm-up and any limactl
@@ -611,6 +640,8 @@ agents-token-refresh: ## Mint the agents App token now and again before each one
 # no file: the job is the instance's refresher. Without launchctl (Linux) that check is skipped. Like install
 # and uninstall below, it reads LIMA_INSTANCE from its environment ($$LIMA_INSTANCE) and refuses an invalid
 # name with $(LIMA_INSTANCE_CHECK) before it runs: the name becomes part of its file names and of the job's label.
+# The refresher runs without the two credentials vm-env copies into the VM (env -u), which it never needs and
+# which a shell with the host clone's .envrc loaded may hold (issue #227).
 .PHONY: agents-token-refresh-start
 agents-token-refresh-start: ## Start the agents App token refresh in the background, one per VM instance, and print where its log is (host clone)
 	$(LIMA_INSTANCE_CHECK)
@@ -645,7 +676,7 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 		echo "agents-token-refresh-start: warning: the agents App token refresh of $$LIMA_INSTANCE (pid $$started) had stopped; its log's last lines:" >&2; \
 		tail -n 3 "$$log" 2>/dev/null | sed 's/^/  /' >&2 || true; \
 	fi; \
-	nohup sh dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
+	env -u CLAUDE_CODE_OAUTH_TOKEN -u DEEPSEEK_API_KEY nohup sh dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
 	pid="$$!"; \
 	(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
 	echo "agents-token-refresh-start: started the agents App token refresh of $$LIMA_INSTANCE (pid $$pid); its log is $$log"
@@ -878,21 +909,18 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 	fi
 
 # deck opens the deck in the VM, at the workspace's checkout, and starts no token refresh: that is make
-# agents-token-refresh-start's (or the LaunchDaemon's). When the host clone's .envrc hands it the
-# SHIFT2EU_AGENTS_APP_* variables it says that it ignores them and which targets use them.
+# agents-token-refresh-start's (or the LaunchDaemon's). The host clone's .envrc hands it the
+# SHIFT2EU_AGENTS_APP_* variables; its limactl runs without them (VM_SHELL_ENV).
 .PHONY: deck
 deck: ## Open the dot-agent-deck TUI in the VM at WORKSPACE_REPO, attached to the daemon service (host clone)
 	$(LIMA_INSTANCE_CHECK)
-	@if [ -n "$${SHIFT2EU_AGENTS_APP_ID:-}$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
-		echo "deck: note: a SHIFT2EU_AGENTS_APP_* variable is set (from the host clone's direnv .envrc): deck never hands it to the VM and starts no token refresh; make agents-token-refresh-start or make agents-token-refresh-install, here in the host clone, do (docs/dev-environment.md, The host clone)" >&2; \
-	fi
-	limactl shell --workdir "$(HOST_WORKSPACE_REPO)" "$$LIMA_INSTANCE" dot-agent-deck
+	$(VM_SHELL_ENV) limactl shell --workdir "$(HOST_WORKSPACE_REPO)" "$$LIMA_INSTANCE" dot-agent-deck
 
 .PHONY: deck-restart
 deck-restart: ## Reload the units and restart the deck's daemon service in the VM, e.g. after vm-env (stops running agents)
 	$(LIMA_INSTANCE_CHECK)
-	limactl shell --workdir / "$$LIMA_INSTANCE" systemctl --user daemon-reload
-	limactl shell --workdir / "$$LIMA_INSTANCE" systemctl --user restart dot-agent-deck.service
+	$(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" systemctl --user daemon-reload
+	$(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" systemctl --user restart dot-agent-deck.service
 
 .PHONY: vm-stop
 vm-stop: ## Stop the VM
