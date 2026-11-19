@@ -1,6 +1,7 @@
 package review_test
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 
@@ -38,7 +39,12 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 	}
 	diff := "+DIFF-MARKER the added line\n"
 
-	got := review.BuildPrompt(instructions, pr, files, diff)
+	// The files FilterDiff left out of the diff: the model reads their paths and
+	// none of their text, and is told they were left out on purpose (issue #324,
+	// reviewer M2).
+	excluded := []string{"api/openapi.bundled.json", "internal/x/testdata/compare.golden"}
+
+	got := review.BuildPrompt(instructions, pr, files, diff, excluded)
 
 	for _, want := range []string{instructions.ClaudeMD, instructions.ReviewChangeSkill, instructions.SecurityAuditSkill} {
 		if !strings.Contains(got.System, want) {
@@ -97,9 +103,64 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 		}
 	}
 
-	if again := review.BuildPrompt(instructions, pr, files, diff); !cmp.Equal(got, again) {
+	// A file the reviewer left out is named in the untrusted document, so the
+	// model knows it exists and that its absence from the diff is no accident:
+	// the paths come from the pull request, so they go in the data part and
+	// never in the trusted instructions (reviewer M2).
+	untrusted := untrustedPart(t, got.User)
+
+	leftOutWord := regexp.MustCompile(`(?i)left[_ ]out|not[_ ]reviewed|exclud|omit`)
+	if !leftOutWord.MatchString(untrusted) {
+		t.Errorf("the untrusted part says nothing of a file left out of the diff, so the model cannot tell a file it was not given from one the diff does not show: %q", untrusted)
+	}
+
+	for _, path := range excluded {
+		if !strings.Contains(untrusted, path) {
+			t.Errorf("the prompt does not name the left-out file %q in its untrusted part, so the model reads a diff with a section silently missing (issue #324)", path)
+		}
+
+		if strings.Contains(got.System, path) {
+			t.Errorf("the system prompt holds the left-out file %q, which is the pull request's data: the paths go in the untrusted part alone", path)
+		}
+	}
+
+	// The trusted instructions say what a left-out file means to the review: it
+	// was left out on purpose, so it is neither judged nor guessed at, and its
+	// absence is no gap in the diff to report (reviewer M2).
+	for _, rule := range [][]string{
+		{"left out", "on purpose", "incomplete"},
+		{"left out", "judge", "guess"},
+	} {
+		if !anySentenceHolds(got.System, rule) {
+			t.Errorf("no sentence of the system prompt names all of %q: a file listed as left out was left out on purpose, it is not judged or guessed at, and its absence from the diff is no missing or incomplete diff to report (issue #324)", rule)
+		}
+	}
+
+	if again := review.BuildPrompt(instructions, pr, files, diff, excluded); !cmp.Equal(got, again) {
 		t.Errorf("two prompts of the same inputs differ (-first +second):\n%s", cmp.Diff(got, again))
 	}
+}
+
+// untrustedPart returns the pull request's data of a user message: the text
+// between the untrusted tags.
+func untrustedPart(t *testing.T, user string) string {
+	t.Helper()
+
+	_, after, found := strings.Cut(user, review.UntrustedOpenTag)
+	if !found {
+		t.Fatalf("the user message holds no %q: %q", review.UntrustedOpenTag, user)
+	}
+
+	before, after, found := strings.Cut(after, review.UntrustedCloseTag)
+	if !found {
+		t.Fatalf("the user message holds no %q: %q", review.UntrustedCloseTag, user)
+	}
+
+	if strings.Contains(before, review.UntrustedCloseTag) {
+		t.Fatalf("the untrusted part holds the closing tag twice: %q", user)
+	}
+
+	return before
 }
 
 // anySentenceHolds reports whether one sentence of text holds every one of

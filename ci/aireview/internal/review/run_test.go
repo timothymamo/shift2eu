@@ -56,7 +56,15 @@ func (f *fakeGitHub) Reviews(_ context.Context, _ int) ([]review.PostedReview, e
 	return f.reviews, nil
 }
 
-func (f *fakeGitHub) PostReview(_ context.Context, number int, r review.Review) error {
+func (f *fakeGitHub) PostReview(ctx context.Context, number int, r review.Review) error {
+	// A real client gives up on a cancelled context, so a run that posts on one
+	// posts nothing: the fake fails the same way, which is how the test tells
+	// the detached post of issue #316 apart from a post the run's cancellation
+	// takes away.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	f.posts = append(f.posts, fakePost{number: number, review: r})
 
 	return nil
@@ -240,6 +248,10 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 		// cancelAfterFirstAnswer cancels the run's context once the model has
 		// answered once, as a run that reaches its deadline does.
 		cancelAfterFirstAnswer bool
+		// cancelAfterSecondAnswer cancels the run's context once the model has
+		// answered twice, as a run whose deadline passes between the second
+		// answer and the review that says the answer could not be read does.
+		cancelAfterSecondAnswer bool
 	}{
 		{
 			name:      "a draft is not reviewed",
@@ -323,6 +335,22 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			wantText:        []string{"could not be read"},
 		},
 		{
+			// The comment that says the answer could not be read is the
+			// maintainer's only sign of a spent model call, so the run posts it
+			// on a context its own cancellation cannot take away (issue #316,
+			// reviewer m3), and still fails so the check stays red.
+			name:                    "an unreadable answer is still posted when the run's context ends after the second answer",
+			pr:                      pr,
+			diff:                    cleanDiff,
+			answer:                  malformedAnswer,
+			cancelAfterSecondAnswer: true,
+			wantErr:                 review.ErrMalformedAnswer,
+			wantAsked:               2,
+			wantPostOnError:         true,
+			wantEvent:               review.EventComment,
+			wantText:                []string{"could not be read"},
+		},
+		{
 			name:         "an answer with no findings is valid and is not asked again",
 			pr:           pr,
 			diff:         cleanDiff,
@@ -383,7 +411,7 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			wantEvent:       review.EventComment,
 			wantFindings:    1,
 			wantText:        []string{"Name it", "testdata/report-v3.golden", "not reviewed"},
-			wantPromptHolds: []string{"Added is new."},
+			wantPromptHolds: []string{"Added is new.", "testdata/report-v3.golden"},
 			wantPromptHides: []string{excludedGoldenMarker},
 		},
 		{
@@ -532,6 +560,18 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 				defer cancel()
 
 				model.afterAsk = cancel
+				ctx = cancelled
+			}
+
+			if tc.cancelAfterSecondAnswer {
+				cancelled, cancel := context.WithCancel(ctx)
+				defer cancel()
+
+				model.afterAsk = func() {
+					if model.asked == 2 {
+						cancel()
+					}
+				}
 				ctx = cancelled
 			}
 

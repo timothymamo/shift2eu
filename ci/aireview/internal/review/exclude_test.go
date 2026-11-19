@@ -81,6 +81,80 @@ func quotedFile(path, added string) string {
 		"+" + added + "\n"
 }
 
+// symlinkAddedFile returns the section git writes for a symbolic link the pull
+// request adds: the mode in its extended header is 120000, and its one added
+// line is the link's target.
+func symlinkAddedFile(path string) string {
+	return "diff --git a/" + path + " b/" + path + "\n" +
+		"new file mode 120000\n" +
+		"index 0000000..1111111\n" +
+		"--- /dev/null\n" +
+		"+++ b/" + path + "\n" +
+		"@@ -0,0 +1,1 @@\n" +
+		"+internal/x/y.go\n" +
+		"\\ No newline at end of file\n"
+}
+
+// symlinkDeletedFile returns the section git writes for a symbolic link the
+// pull request deletes.
+func symlinkDeletedFile(path string) string {
+	return "diff --git a/" + path + " b/" + path + "\n" +
+		"deleted file mode 120000\n" +
+		"index 1111111..0000000\n" +
+		"--- a/" + path + "\n" +
+		"+++ /dev/null\n" +
+		"@@ -1,1 +0,0 @@\n" +
+		"-internal/x/y.go\n" +
+		"\\ No newline at end of file\n"
+}
+
+// gitlinkAddedFile returns the section git writes for a submodule the pull
+// request adds: the mode in its extended header is 160000, and its one added
+// line is the commit the submodule pins.
+func gitlinkAddedFile(path string) string {
+	return "diff --git a/" + path + " b/" + path + "\n" +
+		"new file mode 160000\n" +
+		"index 0000000..1111111\n" +
+		"--- /dev/null\n" +
+		"+++ b/" + path + "\n" +
+		"@@ -0,0 +1,1 @@\n" +
+		"+Subproject commit 1111111111111111111111111111111111111111\n"
+}
+
+// materialChangedFile returns the section git writes for a symbolic link (mode
+// 120000) or a submodule (mode 160000) that changed: the index line carries the
+// mode, and the one changed line is the link's target or the pinned commit.
+func materialChangedFile(path, mode, removed, added string) string {
+	return "diff --git a/" + path + " b/" + path + "\n" +
+		"index 1111111..2222222 " + mode + "\n" +
+		"--- a/" + path + "\n" +
+		"+++ b/" + path + "\n" +
+		"@@ -1,1 +1,1 @@\n" +
+		"-" + removed + "\n" +
+		"+" + added + "\n" +
+		"\\ No newline at end of file\n"
+}
+
+// modeChangedFile returns the section git writes for a file whose permissions
+// alone changed: two extended-header lines and no hunk.
+func modeChangedFile(path, oldMode, newMode string) string {
+	return "diff --git a/" + path + " b/" + path + "\n" +
+		"old mode " + oldMode + "\n" +
+		"new mode " + newMode + "\n"
+}
+
+// noNewlineFile returns the section git writes for a file the pull request adds
+// whose last line has no newline: the marker line follows the added line.
+func noNewlineFile(path, added string) string {
+	return "diff --git a/" + path + " b/" + path + "\n" +
+		"new file mode 100644\n" +
+		"--- /dev/null\n" +
+		"+++ b/" + path + "\n" +
+		"@@ -0,0 +1,1 @@\n" +
+		"+" + added + "\n" +
+		"\\ No newline at end of file\n"
+}
+
 // TestFilterDiffLeavesGeneratedAndGoldenFilesOut pins what the reviewer does not
 // read (issue #324, ADR 0033): the diff it sends the model and measures against
 // MaxDiffBytes is the pull request's diff without the generated OpenAPI bundle
@@ -202,6 +276,75 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 			name:     "a quoted path is never left out",
 			diff:     quotedFile("x y.go", "CODE-QUOTED"),
 			wantKept: quotedFile("x y.go", "CODE-QUOTED"),
+		},
+		// A symbolic link and a submodule are no generated or golden file: a
+		// link's one line is a target path and a submodule's is a pinned
+		// commit, and a left-out name says nothing about either. The extended
+		// header between the diff --git line and the file headers is what tells
+		// them apart from the regular file of the same name, so a section that
+		// carries one of the materials below is always kept (reviewer #301).
+		{
+			name:     "an added symbolic link at a golden file's path is kept",
+			diff:     symlinkAddedFile("internal/x/testdata/report.golden"),
+			wantKept: symlinkAddedFile("internal/x/testdata/report.golden"),
+		},
+		{
+			name:     "a deleted symbolic link at a golden file's path is kept",
+			diff:     symlinkDeletedFile("testdata/report.golden"),
+			wantKept: symlinkDeletedFile("testdata/report.golden"),
+		},
+		{
+			name:     "a changed symbolic link at the generated bundle's path is kept",
+			diff:     materialChangedFile("api/openapi.bundled.json", "120000", "internal/x/y.go", "internal/x/z.go"),
+			wantKept: materialChangedFile("api/openapi.bundled.json", "120000", "internal/x/y.go", "internal/x/z.go"),
+		},
+		{
+			name:     "a submodule added at the generated bundle's path is kept",
+			diff:     gitlinkAddedFile("api/openapi.bundled.json"),
+			wantKept: gitlinkAddedFile("api/openapi.bundled.json"),
+		},
+		{
+			name:     "a changed submodule at the generated bundle's path is kept",
+			diff:     materialChangedFile("api/openapi.bundled.json", "160000", "Subproject commit 1111111111111111111111111111111111111111", "Subproject commit 2222222222222222222222222222222222222222"),
+			wantKept: materialChangedFile("api/openapi.bundled.json", "160000", "Subproject commit 1111111111111111111111111111111111111111", "Subproject commit 2222222222222222222222222222222222222222"),
+		},
+		{
+			name:     "a golden file whose mode alone changed is kept",
+			diff:     modeChangedFile("testdata/a.golden", "100644", "100755"),
+			wantKept: modeChangedFile("testdata/a.golden", "100644", "100755"),
+		},
+		{
+			name:         "a golden file added with the regular file mode is still left out",
+			diff:         addedFile("testdata/a.golden", "GOLDEN"),
+			wantExcluded: []string{"testdata/a.golden"},
+		},
+		// Header edge cases of untrusted input (reviewer #301): a header the
+		// filter cannot read with certainty keeps its section, and a marker line
+		// of a hunk never ends one.
+		{
+			name:     "a file named with a b/ in it is kept",
+			diff:     diffFile("x b/testdata/y.golden", "GOLDEN"),
+			wantKept: diffFile("x b/testdata/y.golden", "GOLDEN"),
+		},
+		{
+			name:     "a path with an empty element is kept",
+			diff:     diffFile("testdata//x.golden", "GOLDEN"),
+			wantKept: diffFile("testdata//x.golden", "GOLDEN"),
+		},
+		{
+			name:         "a no-newline marker inside the sections keeps them intact",
+			diff:         noNewlineFile("testdata/a.golden", "GOLDEN") + noNewlineFile("internal/x/y.go", "CODE"),
+			wantKept:     noNewlineFile("internal/x/y.go", "CODE"),
+			wantExcluded: []string{"testdata/a.golden"},
+		},
+		{
+			name: "a mode-only section between two reviewed files is kept",
+			diff: diffFile("internal/x/a.go", "CODE-ONE") +
+				modeChangedFile("internal/x/b.go", "100644", "100755") +
+				diffFile("internal/x/c.go", "CODE-TWO"),
+			wantKept: diffFile("internal/x/a.go", "CODE-ONE") +
+				modeChangedFile("internal/x/b.go", "100644", "100755") +
+				diffFile("internal/x/c.go", "CODE-TWO"),
 		},
 	}
 
