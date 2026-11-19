@@ -183,11 +183,13 @@ trusted_entry() {
   case "${perms}" in
   l*) return 0 ;;
   esac
-  # A Mac's ls ends the mode with + when the entry carries an ACL; ls -lde lists its entries, a line each after
-  # the long line. An allow entry can grant another account what the mode bits deny, so it is refused; a
-  # deny-only ACL (every macOS home carries group:everyone deny delete) grants nothing and is accepted.
+  # A Mac's ls ends the mode with + when the entry carries an ACL, and with @ when it carries extended attributes,
+  # ACL or not (issue #227 part 2, the security audit's second pass), so the ACL is read under either; ls -lde
+  # lists its entries, a line each after the long line. An allow entry can grant another account what the mode
+  # bits deny, so it is refused; a deny-only ACL (every macOS home carries group:everyone deny delete) grants
+  # nothing and is accepted, as is no ACL at all.
   case "${perms}" in
-  *+)
+  *+ | *@)
     acl="$(ls -lde "$2" 2>/dev/null)" || refuse "$1: cannot read the ACL of $2 (the trusted path rule)"
     if printf '%s\n' "${acl}" | sed 1d | grep -Eq '[[:space:]]allow([[:space:]]|$)'; then
       refuse "$1: $2 carries an ACL with an allow entry, which can let another account replace what runs with the App's key: remove it (chmod -N, or chmod -a for the entry; ls -lde shows it) (the trusted path rule, docs/dev-environment.md)"

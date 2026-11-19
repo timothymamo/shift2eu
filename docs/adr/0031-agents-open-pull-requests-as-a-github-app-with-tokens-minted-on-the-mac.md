@@ -102,8 +102,12 @@
 >    account with a password and a shell. The make targets take the name from `SHIFT2EU_AGENTS_ACCOUNT`
 >    (2 below) and derive its home as `/Users/<account>`; they refuse a name that is empty, does not
 >    begin with a letter or `_` (so no `-`, `.`, `..` or digit first), holds anything but letters, digits,
->    `.`, `_` and `-`, or is `root` or the maintainer's own (`id -un`). The runbook's passing check of the
->    account confirms its `UniqueID` is below 500 and that it is no member of `admin`.
+>    `.`, `_` and `-`, or is `root` or the maintainer's own (`id -un`). They check the account's kind too,
+>    before any `sudo` (issue #227 part 2, the security audit's second pass): they refuse unless
+>    `dscl . -read /Users/<account> UniqueID` reads a `UniqueID` from 1 to 499 and `dseditgroup -o
+>    checkmember -m <account> admin` does not report it a member of `admin`, naming the check and
+>    `SHIFT2EU_AGENTS_ACCOUNT`, never a value: a login account or an admin would put the key back in the
+>    maintainer's silent reach. The runbook's passing check of the account confirms the same by hand.
 > 2. **Where everything lives, and the new trust boundary.** Everything that holds or runs with the key
 >    is owned by the account, inside its home, out of reach of the maintainer's uid:
 >
@@ -127,7 +131,7 @@
 >    each directory above it, up to `/`, is owned by the running uid or by root, and has no group or other
 >    write bit, except a root-owned directory with the sticky bit (`/tmp`), where no one else can rename an
 >    entry, and carries no ACL with an `allow` entry: a Mac's `ls -ldn` ends such an entry's mode with `+`,
->    the rule then reads the entries with `ls -lde` and refuses any `allow`, which could grant another
+>    or with `@` when the entry also carries extended attributes, and under either the rule reads the entries with `ls -lde` and refuses any `allow`, which could grant another
 >    account what the mode bits deny, while a deny-only ACL (`group:everyone deny delete`, on every macOS
 >    home) grants nothing and is accepted. The account mode checks it with `ls -ldn` (a stock Mac has no
 >    GNU `stat`) and `id -u`, on the

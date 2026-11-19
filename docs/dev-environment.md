@@ -623,7 +623,15 @@ Run these from the host clone (`cd ~/src/shift2eu-host`):
 
 In account mode (`SHIFT2EU_AGENTS_ACCOUNT` set) `make agents-token`, `make agents-token-refresh` and
 `make agents-token-refresh-start` refuse: only the account can read the key, so you mint with
-`sudo launchctl kickstart -k system/<label>` instead.
+`sudo launchctl kickstart -k system/<label>` instead. Before anything else, and before any `sudo`, every
+account-mode target (`make agents-token`, `make agents-token-refresh`, `make agents-token-refresh-start`,
+`make agents-token-refresh-install`, `make agents-token-refresh-uninstall`, `make vm-agents-token-ssh`) checks
+the account's kind: it refuses unless `dscl . -read /Users/<account> UniqueID` reads a `UniqueID` from 1 to 499
+(a hidden role account; macOS gives a login account 500 and above) and `dseditgroup -o checkmember -m
+<account> admin` does not report it a member of `admin`. The refusal names the check (`dscl`, `UniqueID` or
+`admin`) and `SHIFT2EU_AGENTS_ACCOUNT`. The VM targets (`make vm-gh-wrapper`, `make vm-agents-token-ssh` and
+its uninstall) print the VM's output with every control character but tab and newline removed, so a line
+code in the VM prints cannot carry a terminal escape sequence to your terminal.
 
 **What the host clone does not do.** It keeps every host target on code the agents cannot edit, and the
 credentials out of the workspace's shells. It does not put the App's key, nor the credentials in its
@@ -902,7 +910,9 @@ command. It never runs `limactl`. Every start of the refresh first checks the **
 App's key, the SSH key, the known-hosts file and the script itself, and every directory above each up to
 `/`, are owned by the account or root and have no group or other write bit (a root-owned sticky directory
 such as `/tmp` excepted), and carry no ACL with an `allow` entry (a deny-only ACL, such as the
-`group:everyone deny delete` of every macOS home, is accepted); the keys have no group or other bit at all.
+`group:everyone deny delete` of every macOS home, is accepted; the ACL is read with `ls -lde` whenever
+`ls -ldn` ends the mode with `+` or with `@`, which a Mac prints when the entry also carries extended
+attributes); the keys have no group or other bit at all.
 A path that fails stops the refresh with the path and the reason (`owned by uid <n>`, `group-writable`,
 `other-writable`, `ACL with an allow entry`).
 
@@ -954,7 +964,8 @@ step says what passing looks like; stop at the first step that does not pass.
    `dscl . -read /Users/_shift2euagents UniqueID` prints a number below 500 (a hidden role account, out of the
    login window), `dseditgroup -o checkmember -m _shift2euagents admin` says `no` (the account is no admin),
    `ls /Users/_shift2euagents` as you says `Permission denied`, and `sudo ls -ldn /Users/_shift2euagents`
-   shows `drwx------` with `<ID> <ID>` (then `sudo -k`).
+   shows `drwx------` with `<ID> <ID>` (then `sudo -k`). The account-mode targets check the `UniqueID` and
+   the `admin` membership themselves before any `sudo`; this check confirms them before you go on.
 
    Every command as the account from here on has one form, run from `/`:
 
