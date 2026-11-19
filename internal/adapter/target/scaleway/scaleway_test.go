@@ -252,9 +252,11 @@ func TestCatalogFixedFees(t *testing.T) {
 		},
 		// The dedicated control plane is billed by the size of its node.
 		// Dedicated-4 is the smallest paid size, so its 80.30 EUR a month is a
-		// lower bound: Dedicated-8 charges 131.40 and Dedicated-16 255.50.
+		// lower bound: Dedicated-8 charges 131.40 and Dedicated-16 255.50. Milan
+		// bills it like Paris (issue #211).
 		"Kubernetes Kapsule Dedicated": {
 			"fr-par": dedicatedControlPlane,
+			"it-mil": dedicatedControlPlane,
 			"nl-ams": dedicatedControlPlane,
 			"pl-waw": dedicatedControlPlane,
 		},
@@ -309,6 +311,139 @@ func TestCatalogFixedFees(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestKapsuleDedicatedInMilan pins issue #211: Scaleway's Containers price page,
+// first read 2026-11-13 and re-checked in Milan on 2026-11-19, lists the dedicated
+// Kapsule control plane there, so the offering is available and billed in it-mil as
+// it is in Paris. Its worker-node plans are the mutualized offering's: the POP2
+// nodes, whose price applies to every region, are priced in it-mil, while the PLAY2
+// and PRO2 nodes are not priced there at all. The dedicated control plane is a fixed
+// fee only (ADR 0026, pinned in TestCatalogFixedFees), never a plan, so nothing in
+// Milan can pick or price a Dedicated-N size as if it were a worker node.
+func TestKapsuleDedicatedInMilan(t *testing.T) {
+	t.Parallel()
+
+	cat := catalogOf(t)
+
+	const (
+		mutualized = "Kubernetes Kapsule"
+		dedicated  = "Kubernetes Kapsule Dedicated"
+		milan      = "it-mil"
+	)
+
+	base := offeringNamed(t, cat, mutualized)
+	offering := offeringNamed(t, cat, dedicated)
+
+	if !offering.AvailableIn(milan) {
+		t.Errorf("offering %s reports AvailableIn(%s) = false, want true: Scaleway lists its control plane there (issue #211)",
+			text.Quote(dedicated), text.Quote(milan))
+	}
+
+	tests := []struct {
+		name string
+		plan string
+		want map[string]string
+	}{
+		{
+			name: "a POP2 worker node is priced in Milan as in the other regions",
+			plan: "POP2-2C-8G",
+			want: map[string]string{
+				"fr-par": "53.655",
+				"it-mil": "53.655",
+				"nl-ams": "53.655",
+				"pl-waw": "53.655",
+			},
+		},
+		{
+			name: "a PLAY2 worker node is not priced in Milan",
+			plan: "PLAY2-PICO",
+			want: map[string]string{
+				"fr-par": "10.4244",
+				"it-mil": unpricedPlan,
+				"nl-ams": "10.4244",
+				"pl-waw": "10.4244",
+			},
+		},
+		{
+			name: "a PRO2 worker node is not priced in Milan",
+			plan: "PRO2-XXS",
+			want: map[string]string{
+				"fr-par": "40.953",
+				"it-mil": unpricedPlan,
+				"nl-ams": "40.953",
+				"pl-waw": "40.953",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, pricedRegions(offering, tc.plan)); diff != "" {
+				t.Errorf("offering %s plan %s by region (-want +got):\n%s",
+					text.Quote(dedicated), text.Quote(tc.plan), diff)
+			}
+		})
+	}
+
+	// Every plan of the dedicated offering is priced exactly where the mutualized
+	// one prices it, and nowhere else: the worker nodes of a dedicated cluster are
+	// the same nodes, so a plan Scaleway does not sell in a region stays unpriced
+	// there rather than borrowing another region's price (ADR 0024).
+	for _, plan := range offering.Plans {
+		for _, region := range wantRegions() {
+			wantAmount, wantPriced := base.PlanPrice(plan.Name, region)
+			gotAmount, gotPriced := offering.PlanPrice(plan.Name, region)
+
+			if gotPriced != wantPriced {
+				t.Errorf("offering %s plan %s: PlanPrice(%s) reports a price = %t, want %t, as offering %s does",
+					text.Quote(dedicated), text.Quote(plan.Name), text.Quote(region), gotPriced, wantPriced, text.Quote(mutualized))
+
+				continue
+			}
+
+			if gotAmount != wantAmount {
+				t.Errorf("offering %s plan %s: PlanPrice(%s) = %s, want %s, as offering %s prices it",
+					text.Quote(dedicated), text.Quote(plan.Name), text.Quote(region), gotAmount, wantAmount, text.Quote(mutualized))
+			}
+		}
+	}
+
+	// The control plane is the offering's fixed fee, never a plan: a plan named
+	// Dedicated-N would let an estimate price a control-plane size as a worker
+	// node, which is the wrong shape of price altogether (ADR 0026).
+	for _, plan := range offering.Plans {
+		if strings.HasPrefix(plan.Name, "Dedicated-") {
+			t.Errorf("offering %s lists plan %s, want no plan named %s: the control plane is a fixed fee, not a plan",
+				text.Quote(dedicated), text.Quote(plan.Name), text.Quote("Dedicated-*"))
+		}
+	}
+}
+
+// unpricedPlan is what pricedRegions reports for a region an offering does not
+// price a plan in: an unpriced plan is "not estimated" there, never free (ADR 0027).
+const unpricedPlan = "not priced"
+
+// pricedRegions returns the price of plan in o in each of wantRegions, as the
+// amount's decimal string, or unpricedPlan where o prices no plan there. Keying
+// the result by region makes a diff read region by region.
+func pricedRegions(o catalog.Offering, plan string) map[string]string {
+	prices := make(map[string]string, len(wantRegions()))
+
+	for _, region := range wantRegions() {
+		amount, ok := o.PlanPrice(plan, region)
+		if !ok {
+			prices[region] = unpricedPlan
+
+			continue
+		}
+
+		prices[region] = amount.String()
+	}
+
+	return prices
 }
 
 // checkPrice pins what every price of the snapshot must be, wherever it appears: a

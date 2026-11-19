@@ -7,8 +7,10 @@ records where each fact comes from, so the snapshot can be checked and refreshed
 
 - **Retrieved on:** 2026-11-13, the date the plans and prices were read (PRD #190 milestone 4, ADR 0024).
   The snapshot's `retrievedOn` and `sourceURL` now name the prices, the facts most likely to change. The
-  regions and capabilities were compiled and verified on 2026-11-10 and last re-verified on 2026-11-11
-  for PRD #14 (below); the prices changed no offering, capability or region.
+  regions and capabilities were compiled and verified on 2026-11-10 and re-verified on 2026-11-11 for
+  PRD #14 (below); the prices changed no offering, capability or region. *Kubernetes Kapsule
+  Dedicated*'s regions, and its plans' price regions, were last re-checked on 2026-11-19 for issue #211
+  (below), which added `it-mil`. `retrievedOn` stays 2026-11-13, for the reason that bullet gives.
 - **Compiled, then verified against the live pages.** The snapshot was first compiled from Scaleway's
   documentation source and Go SDK at the commits below, because `www.scaleway.com` then answered HTTP 403.
   On the same date every region and capability was checked against the live public pages cited below
@@ -43,6 +45,17 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   `retrievedOn` stays 2026-11-13. The copies are not in the repository and were read as data; a refresh
   saves them the same way, from a logged-out browser session into a scratch directory outside the
   repository, and never commits them.
+- **Kapsule Dedicated in Milan re-checked on 2026-11-19 for issue #211.** The *Containers* price page,
+  the availability page with its CSV export, SDK `api/k8s/v1` and the Kubernetes documentation source
+  were read again, from the maintainer's saved browser copies and public GitHub (`www.scaleway.com`
+  refuses automated clients). The price page states, per region, which Dedicated control planes can be
+  ordered, and it offers Dedicated-4 and Dedicated-8 in Milan, so *Kubernetes Kapsule Dedicated* gained
+  the region `it-mil`; its section gives the sources. This re-check used the price page as the
+  tier-variant regions rule's source for one offering. Its worker-node plans took the price regions of
+  *Kubernetes Kapsule* (PLAY2 and PRO2 not priced in Milan), and its fixed fee and storage price hold in
+  Milan unchanged. No other offering, capability, region or price changed. `retrievedOn` stays
+  2026-11-13: it names the date every plan and price was read (above), and this re-check read the prices
+  of one offering only.
 - **Availability page:** <https://www.scaleway.com/en/product-availability-by-region/>, where every
   offering's regions come from, subject to the API check under *Rules applied*. It has one column per
   region (Paris, Amsterdam, Warsaw, Milan). For a zonal product it gives one mark per zone, and for a
@@ -74,8 +87,10 @@ records where each fact comes from, so the snapshot can be checked and refreshed
 - **`sourceURL`** is Scaleway's pricing page, <https://www.scaleway.com/en/pricing/>, the index of the
   per-product price pages every plan and storage price comes from (*Prices*). Until the prices were added
   it was the documentation root, <https://www.scaleway.com/en/docs/>, where the capabilities still come
-  from. The regions come from the availability page, which each offering's section cites. The price
-  pages do not change any offering's regions (*Prices*, *Which region*).
+  from. The regions come from the availability page, which each offering's section cites. The prices
+  read on 2026-11-13 changed no offering's regions (*Prices*, *Which region*). The re-check of
+  2026-11-19 used the *Containers* price page as the source that states a tier in a region, for the
+  tier variant *Kubernetes Kapsule Dedicated* only (*Rules applied*, tier-variant regions).
 
 ## Prices
 
@@ -253,7 +268,8 @@ Poland).
 `fr-par` (Paris, France) is the snapshot's `defaultRegion`: the region a cost estimate uses when the user names
 none (PRD #190, ADR 0024). Chosen provisionally in milestone 2, it was **confirmed in milestone 4**, when the
 prices were added, because it hosts the most offerings: all 10 of the snapshot. `nl-ams` hosts the same 10,
-`pl-waw` 9 (no Queues) and `it-mil` 4 (Block Storage, Instances, Kubernetes Kapsule and Object Storage).
+`pl-waw` 9 (no Queues) and `it-mil` 5 (Block Storage, Instances, Kubernetes Kapsule, Kubernetes Kapsule
+Dedicated, since issue #211, and Object Storage).
 `fr-par` and `nl-ams` also tie on prices: every plan and storage price of the snapshot applies in both, at
 the same amount (*Prices*). `fr-par` is kept over `nl-ams` because it was already the default and is the
 first of the declared codes, kept in code order: no price makes either one a better default.
@@ -468,45 +484,69 @@ Dedicated control plane, Dedicated 4, 8 or 16, which share the same availability
   zone fails globally, the control plane will be unreachable, even if the cluster spans multiple zones.
   This limitation also applies to HA Dedicated control planes." The cluster therefore does not keep
   serving through the loss of every zone, and `zone-high-availability` is not claimed (target rule).
-- Regions `fr-par`, `nl-ams`, `pl-waw` (tier-variant regions rule). The changelog entry *Dedicated
-  control plane offers are now available!* (2023-09-06) announces general availability; it names no
-  region and predates Warsaw and Milan. Warsaw has its own entry, *Dedicated control plane offers now
-  available in Warsaw* (2023-12-15). `fr-par` and `nl-ams` are inferred from the GA date and the
-  product's availability row, which marks Kapsule in both. No page read names Paris or Amsterdam for
-  the Dedicated tier.
-  **Milan is left out:** nothing read states Dedicated control planes in Milan, and Milan opened after
-  the GA entry. The entry opening MIL-1 (2026-03-10) names "Kapsule", not the tier, and the
-  availability page has one Kapsule row, with no separate row for Dedicated control planes. Add
-  `it-mil` once a source states it.
+- Regions `fr-par`, `it-mil`, `nl-ams`, `pl-waw` (tier-variant regions rule). The changelog entry
+  *Dedicated control plane offers are now available!* (2023-09-06) announces general availability; it
+  names no region and predates Warsaw and Milan. Warsaw has its own entry, *Dedicated control plane
+  offers now available in Warsaw* (2023-12-15). `fr-par` and `nl-ams` are inferred from the GA date and
+  the product's availability row, which marks Kapsule in both. No documentation page read names Paris or
+  Amsterdam for the Dedicated tier.
+  **Milan, added on 2026-11-19 (issue #211).** Until then Milan was left out, because nothing read
+  stated Dedicated control planes there, Milan opened after the GA entry, the entry opening MIL-1
+  (2026-03-10) names "Kapsule", not the tier, and the availability page has one Kapsule row. The
+  re-check found a source that states the tier per region: the *Containers* price page
+  (<https://www.scaleway.com/en/pricing/containers/>, read 2026-11-19 from a copy the maintainer saved
+  in a browser). With Milan selected, its Kapsule table prices "Kapsule Dedicated-4" at "€0.11 /HOUR"
+  and "Kapsule Dedicated-8" at "€0.18 /HOUR", and says of "Kapsule Dedicated-16": "Not available in this
+  region". Its embedded data agrees: it holds the price SKUs
+  `/k8s/control-plane/kapsule-dedicated-4/it-mil` and `/k8s/control-plane/kapsule-dedicated-8/it-mil`,
+  and Dedicated-16 SKUs only for `fr-par`, `nl-ams` and `pl-waw`. A statement, per region, of which
+  Dedicated tiers can be ordered is the source the tier-variant regions rule asks for. The two checks of
+  the regions rule hold too, read the same day: the availability page
+  (<https://www.scaleway.com/en/product-availability-by-region/>, the page and its CSV export, which
+  agree) still has one Kapsule row, "Available across the region" in Paris, Amsterdam, Warsaw and Milan,
+  with no separate row for Dedicated control planes; and SDK `api/k8s/v1` (`scaleway/scaleway-sdk-go`,
+  default branch `main` at commit `58b0d2c460afae73448b2392176d508f37d42b71`, file
+  `api/k8s/v1/k8s_sdk.go`) declares `Regions()` fr-par, nl-ams, pl-waw and it-mil. The documentation
+  source, `scaleway/docs-content` at commit `e10b284732eceefcaf55a5bdebdb20641f370fb5` (the Kubernetes
+  FAQ, the control-plane offers page and *Changing the control plane offer*), states no region for any
+  tier: only an example command's output and a note about the CLI's default region name `fr-par`.
+  **Dedicated-16 is not offered in Milan,** so in `it-mil` the largest Dedicated control plane is
+  Dedicated-8 (€131.40 a month). Dedicated-16 is not recorded in any region (*Left out on purpose*), so
+  nothing in the snapshot picks or prices it in Milan.
 
 - **Prices** (*Instances* price page, read 2026-11-13): the worker nodes, as for *Kubernetes Kapsule*
-  (the same inference about which Instance types are nodes). Every PLAY2, PRO2 and POP2 type is priced in
-  the three regions of this offering, at one price, so each plan has one price with an empty `regions`
-  list.
+  (the same inference about which Instance types are nodes), with the same price regions: PLAY2 and PRO2
+  are priced in Paris, Amsterdam and Warsaw only, so their prices list those three regions and an
+  estimate in `it-mil` finds no price for them; POP2 has one price in every region, so an empty
+  `regions` list. The *Containers* price page read on 2026-11-19 confirms these price regions: its
+  embedded node SKUs (`/instance/server/<type>/<zone>`) price PLAY2 and PRO2 only in zones of `fr-par`,
+  `nl-ams` and `pl-waw`, and every recorded POP2 type in those and in `it-mil-1` too.
 - **Fixed fee per cluster** (the control plane, ADR 0026; *Containers* price page
-  <https://www.scaleway.com/en/pricing/containers/>, read 2026-11-13): Dedicated-4 costs €0.11 an hour
-  per cluster, × 730 = 80.30, recorded as `80.30` with an empty `regions` list, since the page gives it
-  one price in `fr-par`, `nl-ams` and `pl-waw`. The fee is charged once per cluster, never per node.
+  <https://www.scaleway.com/en/pricing/containers/>, read 2026-11-13 and again on 2026-11-19 for
+  `it-mil`): Dedicated-4 costs €0.11 an hour per cluster, × 730 = 80.30, recorded as `80.30` with an
+  empty `regions` list, since the page gives it one price in all four regions of this offering, `it-mil`
+  included. The fee is charged once per cluster, never per node.
   Dedicated-4 is the **smallest paid control plane**, and an estimate uses it as a **lower bound**: the
   larger tiers cost Dedicated-8 €0.18 and Dedicated-16 €0.35 an hour, × 730 = €131.40 and €255.50 a
-  month, and the Kubernetes FAQ says dedicated control planes have "a minimum commitment period of 30
-  calendar days". The larger tiers are not recorded (*Left out on purpose*). Choosing Dedicated-4 is a
-  judgement the maintainer may overrule.
+  month (Dedicated-16 not in `it-mil`, above), and the Kubernetes FAQ says dedicated control planes have
+  "a minimum commitment period of 30 calendar days". The larger tiers are not recorded (*Left out on
+  purpose*). Choosing Dedicated-4 is a judgement the maintainer may overrule.
 - **Storage price:** as for *Kubernetes Kapsule*: node and persistent volumes are *Block Storage*
   volumes, billed separately, at `0.0949` per GiB a month (the "Block Storage 5K" row, read 2026-11-13;
-  see *Block Storage*), the same in every zone of the three regions of this offering, so one price with
-  an empty `regions` list.
+  see *Block Storage*), the same in every zone of the four regions of this offering, so one price with
+  an empty `regions` list. The *Containers* price page read on 2026-11-19 gives the 5K volume the same
+  hourly price in every zone of the four regions, `it-mil-1` to `it-mil-3` included.
 
 | Plan | vCPU | Memory | EUR/hour | EUR/month (× 730) | Price regions |
 |---|---|---|---|---|---|
-| `PLAY2-PICO` | 1 | 2 GB | 0.01428 | `10.4244` | all |
-| `PLAY2-NANO` | 2 | 4 GB | 0.02754 | `20.1042` | all |
-| `PLAY2-MICRO` | 4 | 8 GB | 0.05508 | `40.2084` | all |
-| `PRO2-XXS` | 2 | 8 GB | 0.0561 | `40.953` | all |
-| `PRO2-XS` | 4 | 16 GB | 0.1122 | `81.906` | all |
-| `PRO2-S` | 8 | 32 GB | 0.22338 | `163.0674` | all |
-| `PRO2-M` | 16 | 64 GB | 0.44676 | `326.1348` | all |
-| `PRO2-L` | 32 | 128 GB | 0.89454 | `653.0142` | all |
+| `PLAY2-PICO` | 1 | 2 GB | 0.01428 | `10.4244` | `fr-par`, `nl-ams`, `pl-waw` |
+| `PLAY2-NANO` | 2 | 4 GB | 0.02754 | `20.1042` | `fr-par`, `nl-ams`, `pl-waw` |
+| `PLAY2-MICRO` | 4 | 8 GB | 0.05508 | `40.2084` | `fr-par`, `nl-ams`, `pl-waw` |
+| `PRO2-XXS` | 2 | 8 GB | 0.0561 | `40.953` | `fr-par`, `nl-ams`, `pl-waw` |
+| `PRO2-XS` | 4 | 16 GB | 0.1122 | `81.906` | `fr-par`, `nl-ams`, `pl-waw` |
+| `PRO2-S` | 8 | 32 GB | 0.22338 | `163.0674` | `fr-par`, `nl-ams`, `pl-waw` |
+| `PRO2-M` | 16 | 64 GB | 0.44676 | `326.1348` | `fr-par`, `nl-ams`, `pl-waw` |
+| `PRO2-L` | 32 | 128 GB | 0.89454 | `653.0142` | `fr-par`, `nl-ams`, `pl-waw` |
 | `POP2-2C-8G` | 2 | 8 GB | 0.0735 | `53.655` | all |
 | `POP2-4C-16G` | 4 | 16 GB | 0.147 | `107.31` | all |
 | `POP2-6C-24G` | 6 | 24 GB | 0.2205 | `160.965` | all |
@@ -765,10 +805,9 @@ Prices and plans left out (PRD #190 milestone 4, read 2026-11-13):
   price page): €0.18 and €0.35 an hour, × 730 = €131.40 and €255.50 a month. An offering has one fixed
   fee per region (ADR 0026), and the snapshot records the smallest tier, Dedicated-4 (`80.30`), so an
   estimate for a cluster on a larger tier is low by the difference (*Kubernetes Kapsule Dedicated*).
-  The page's data prices Dedicated-4 and Dedicated-8 in `it-mil` too; the offering's regions are not
-  changed by this milestone (*Kubernetes Kapsule Dedicated*, Milan). **Flagged for the next region
-  re-verification:** that data is a source to weigh when this offering's regions are next checked, and
-  may justify adding `it-mil`.
+  The page prices Dedicated-4 and Dedicated-8 in `it-mil` too, and says Dedicated-16 is "Not available
+  in this region" there; that statement added `it-mil` to the offering on 2026-11-19 (issue #211,
+  *Kubernetes Kapsule Dedicated*, Milan).
 - **The `fr-par-3` zone prices** of PRO2 and POP2 Instances and Kubernetes nodes, about 1.5 times the
   other zones' (*Instances*): zones are not modelled, and a region has one price per plan (*Prices*).
 - **Instance and node ranges not recorded:** BASIC2, BASIC3, STANDARD2 and STANDARD3 (General Purpose,
