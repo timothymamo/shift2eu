@@ -458,9 +458,11 @@ func (f *vmAgentsTokenSSHFixture) sent(t *testing.T) string {
 // standard input, and answers as the VM's script does - the host key as host-key=ssh-ed25519 <base64> and the done
 // line the target insists on (ADR 0031, update of 2026-11-19, 4). SHIFT2EU_TEST_LIMA_REPLY says what it prints
 // instead: uninstall prints the uninstall's done line, silent nothing at all (a connection that dropped after the
-// stream arrived), and no-host-key the done line alone (issue #227 part 2, review 5). escape and escape-uninstall
-// print a terminal escape sequence first, the way code in the VM can, then the same lines (issue #227 part 2, the
-// security audit's second pass).
+// stream arrived), and no-host-key the done line alone (issue #227 part 2, review 5).
+// SHIFT2EU_TEST_LIMA_ESCAPE_STREAM (stdout or stderr) makes the VM print a terminal escape sequence there before
+// its lines, the way code in the VM can (issue #227 part 2, the security audit's second pass), and
+// SHIFT2EU_TEST_LIMA_CONTROL_STREAM (stdout or stderr) makes it print a C1 control and a tab there instead (issue
+// #227 part 2, the security audit's third pass).
 const fakeAccountLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
@@ -491,6 +493,24 @@ printf '\n--- end of call ---\n' >> "${SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
 last=""
 for a in "$@"; do last="$a"; done
 if [ "${last}" = -s ]; then
+  case "${SHIFT2EU_TEST_LIMA_ESCAPE_STREAM:-}" in
+  stdout) printf '\033[2J\n' ;;
+  stderr) printf '\033[2J\n' >&2 ;;
+  '') ;;
+  *)
+    echo "fake limactl: unknown SHIFT2EU_TEST_LIMA_ESCAPE_STREAM: ${SHIFT2EU_TEST_LIMA_ESCAPE_STREAM}" >&2
+    exit 64
+    ;;
+  esac
+  case "${SHIFT2EU_TEST_LIMA_CONTROL_STREAM:-}" in
+  stdout) printf 'vm: before\tafter\233mid\302\233end\n' ;;
+  stderr) printf 'vm: before\tafter\233mid\302\233end\n' >&2 ;;
+  '') ;;
+  *)
+    echo "fake limactl: unknown SHIFT2EU_TEST_LIMA_CONTROL_STREAM: ${SHIFT2EU_TEST_LIMA_CONTROL_STREAM}" >&2
+    exit 64
+    ;;
+  esac
   case "${SHIFT2EU_TEST_LIMA_REPLY:-install}" in
   install)
     printf 'host-key=%s\n' "${key}"
@@ -499,15 +519,6 @@ if [ "${last}" = -s ]; then
   uninstall) printf 'vm-agents-token-ssh-uninstall: done\n' ;;
   no-host-key) printf 'vm-agents-token-ssh: done\n' ;;
   silent) ;;
-  escape)
-    printf '\033[2J\n'
-    printf 'host-key=%s\n' "${key}"
-    printf 'vm-agents-token-ssh: done\n'
-    ;;
-  escape-uninstall)
-    printf '\033[2J\n'
-    printf 'vm-agents-token-ssh-uninstall: done\n'
-    ;;
   *)
     echo "fake limactl: unknown SHIFT2EU_TEST_LIMA_REPLY: ${SHIFT2EU_TEST_LIMA_REPLY}" >&2
     exit 64
@@ -1156,15 +1167,56 @@ func TestVMAgentsTokenSSHGeneratorRefusesABadWriterFile(t *testing.T) {
 func assertAccountKindRefused(t *testing.T, run string, checks []string, stdout, stderr string) {
 	t.Helper()
 
+	assertAccountKindNamed(t, run, "refusal", checks, stdout, stderr)
+}
+
+// assertAccountKindWarned fails unless the run warned about the account's kind on stderr and named one of checks
+// and SHIFT2EU_AGENTS_ACCOUNT: the uninstall goes on and boots the job out, but a maintainer must learn that the
+// account is no hidden role account (issue #227 part 2, the review of the account check).
+func assertAccountKindWarned(t *testing.T, run string, checks []string, stdout, stderr string) {
+	t.Helper()
+
+	if !strings.Contains(strings.ToLower(stderr), "warning") {
+		t.Errorf("%s printed no warning about the account's kind, so a maintainer never learns that the account is no hidden role account and the App's key may be in their reach (issue #227 part 2, the review of the account check)\nstdout: %s\nstderr: %s",
+			run, stdout, stderr)
+	}
+
+	assertAccountKindNamed(t, run, "warning", checks, stdout, stderr)
+}
+
+// assertAccountKindNamed fails unless stderr holds the refusal or the warning of run and names one of checks and
+// SHIFT2EU_AGENTS_ACCOUNT, the variable that holds the account (issue #227 part 2, the security audit's second
+// pass).
+func assertAccountKindNamed(t *testing.T, run, what string, checks []string, stdout, stderr string) {
+	t.Helper()
+
 	if !mentionsOneOf(stderr, checks...) {
-		t.Errorf("%s's refusal says none of %v, so a maintainer cannot tell which check of the account's kind failed (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
-			run, checks, stdout, stderr)
+		t.Errorf("%s's %s says none of %v, so a maintainer cannot tell which check of the account's kind failed (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+			run, what, checks, stdout, stderr)
 	}
 
 	if !strings.Contains(stderr, "SHIFT2EU_AGENTS_ACCOUNT") {
-		t.Errorf("%s's refusal does not name SHIFT2EU_AGENTS_ACCOUNT, so a maintainer cannot tell which variable to fix (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
-			run, stdout, stderr)
+		t.Errorf("%s's %s does not name SHIFT2EU_AGENTS_ACCOUNT, so a maintainer cannot tell which variable to fix (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+			run, what, stdout, stderr)
 	}
+}
+
+// assertBootoutRan fails unless the run booted the fixture's job out of launchd through sudo: the uninstall warns
+// about the account's kind and boots the job out anyway, or the job keeps running for an account the check refused
+// (issue #227 part 2, the review of the account check).
+func assertBootoutRan(t *testing.T, f *launchdInstallFixture) {
+	t.Helper()
+
+	want := []string{"launchctl", "bootout", "system/" + f.label()}
+
+	for _, args := range f.sudoCommands(t) {
+		if cmp.Equal(want, args) {
+			return
+		}
+	}
+
+	t.Errorf("make agents-token-refresh-uninstall ran no `sudo %s`: it warns about the account's kind and then boots the job out, or the job of that account keeps running (issue #227 part 2, the review of the account check)\nevery sudo it ran: %v",
+		strings.Join(want, " "), f.sudoCommands(t))
 }
 
 // assertNoSudo fails when the sandbox recorded a sudo call: the account's kind is checked before anything runs as
@@ -1190,13 +1242,28 @@ type kindCheckCase struct {
 
 // kindCheckCases are the account kinds the check must refuse, and the hidden role account it must accept:
 // macOS gives a login account a UniqueID of 500 and above, and the role account of docs/dev-environment.md one
-// below 500, hidden from the login window and no admin.
+// below 500, hidden from the login window and no admin. The admin check fails closed: only dseditgroup's explicit
+// no - its text, with its non-zero status - passes, so an answer that is missing, an error, or the tool itself
+// missing refuses the account (issue #227 part 2, the review of the account check). The UniqueID edges guard the
+// parser: 0 and 0450 keep a login account out of the role range, 499 is the last role UniqueID, 500 the first
+// login one, 1000 a login account, and an empty or non-numeric answer is no UniqueID at all (issue #227 part 2,
+// the audit of the account check).
 func kindCheckCases() []kindCheckCase {
 	return []kindCheckCase{
 		{name: "a login account, UniqueID 501", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "501"}, checks: []string{"UniqueID"}},
 		{name: "an account that is an admin", env: map[string]string{"SHIFT2EU_TEST_DS_ADMIN": "1"}, checks: []string{"admin"}},
 		{name: "an account dscl cannot read", env: map[string]string{"SHIFT2EU_TEST_DS_STATUS": "1"}, checks: []string{"UniqueID", "dscl"}},
+		{name: "an admin check that exits 64 and answers nothing", env: map[string]string{"SHIFT2EU_TEST_DS_ADMIN": "error"}, checks: []string{"admin", "dseditgroup"}},
+		{name: "no dseditgroup to run the admin check", env: map[string]string{"SHIFT2EU_TEST_DS_ADMIN": "missing"}, checks: []string{"admin", "dseditgroup"}},
+		{name: "a UniqueID of 0", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "0"}, checks: []string{"UniqueID"}},
+		{name: "a UniqueID of 0450", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "0450"}, checks: []string{"UniqueID"}},
+		{name: "a UniqueID of 500, the first login account", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "500"}, checks: []string{"UniqueID"}},
+		{name: "a UniqueID of 1000", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "1000"}, checks: []string{"UniqueID"}},
+		{name: "an empty UniqueID", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": ""}, checks: []string{"UniqueID"}},
+		{name: "a UniqueID that is no number", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "four-hundred-and-one"}, checks: []string{"UniqueID"}},
 		{name: "a hidden role account", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "401"}},
+		{name: "a UniqueID of 499, the last role account", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "499"}},
+		{name: "an explicit no of the admin check", env: map[string]string{"SHIFT2EU_TEST_DS_ADMIN": "no"}},
 	}
 }
 
@@ -1231,9 +1298,13 @@ func TestMakeTokenTargetsRefuseAnAgentsAccountThatIsNoRoleAccount(t *testing.T) 
 }
 
 // TestMakeAgentsTokenRefreshInstallRefusesAnAgentsAccountThatIsNoRoleAccount pins the account's kind for the two
-// targets that load and remove the job (issue #227 part 2, the security audit's second pass): before it runs a
-// single sudo, each refuses an account whose UniqueID is 501, one that is an admin, and one dscl cannot read,
-// naming the check and SHIFT2EU_AGENTS_ACCOUNT.
+// targets that load and remove the job (issue #227 part 2, the security audit's second pass and the review of the
+// account check). The install refuses, before it runs a single sudo, an account whose UniqueID is out of the role
+// range, one that is an admin, one dscl cannot read and one whose admin check cannot answer, naming the check and
+// SHIFT2EU_AGENTS_ACCOUNT. The uninstall is the kill switch: it keeps the check of the account's name
+// (TestMakeTokenTargetsRefuseABadAgentsAccount), but a kind check that fails only makes it warn, naming the check,
+// and boot the job out anyway, so a job that is loaded for such an account can be removed without first fixing the
+// account.
 func TestMakeAgentsTokenRefreshInstallRefusesAnAgentsAccountThatIsNoRoleAccount(t *testing.T) {
 	t.Parallel()
 
@@ -1242,27 +1313,53 @@ func TestMakeAgentsTokenRefreshInstallRefusesAnAgentsAccountThatIsNoRoleAccount(
 			continue
 		}
 
-		for _, target := range []string{"agents-token-refresh-install", "agents-token-refresh-uninstall"} {
-			t.Run(tc.name+", "+target, func(t *testing.T) {
-				t.Parallel()
+		t.Run(tc.name+", the install refuses", func(t *testing.T) {
+			t.Parallel()
 
-				f := newLaunchdInstallFixture(t, hostTargetInstance)
-				accountEnv(f.env)
+			f := newLaunchdInstallFixture(t, hostTargetInstance)
+			accountEnv(f.env)
 
-				for name, value := range tc.env {
-					f.env[name] = value
-				}
+			for name, value := range tc.env {
+				f.env[name] = value
+			}
 
-				stdout, stderr, err := f.run(t, target)
-				if err == nil {
-					t.Fatalf("make %s exited 0 with SHIFT2EU_AGENTS_ACCOUNT naming %s: the App's key is the account's because the maintainer's uid cannot read it, and an account that is no hidden role account hands it back, so the target refuses before it runs any sudo (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
-						target, tc.name, stdout, stderr)
-				}
+			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+			if err == nil {
+				t.Fatalf("make agents-token-refresh-install exited 0 with SHIFT2EU_AGENTS_ACCOUNT naming %s: the App's key is the account's because the maintainer's uid cannot read it, and an account that is no hidden role account hands it back, so the target refuses before it runs any sudo (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
 
-				assertAccountKindRefused(t, "make "+target, tc.checks, stdout, stderr)
-				assertNoSudo(t, f.sb)
-			})
-		}
+			assertAccountKindRefused(t, "make agents-token-refresh-install", tc.checks, stdout, stderr)
+			assertNoSudo(t, f.sb)
+		})
+
+		t.Run(tc.name+", the uninstall warns and boots the job out", func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, hostTargetInstance)
+			accountEnv(f.env)
+
+			for name, value := range tc.env {
+				f.env[name] = value
+			}
+
+			// The plist a loaded job was installed from, so the uninstall removes a file as it does on the Mac.
+			writeFileMode(t, f.dest(), []byte("a plist an earlier install left\n"), 0o644)
+
+			stdout, stderr, err := f.run(t, "agents-token-refresh-uninstall")
+			if err != nil {
+				t.Fatalf("make agents-token-refresh-uninstall exited %d with SHIFT2EU_AGENTS_ACCOUNT naming %s: the uninstall is the kill switch, so it warns about the account's kind and boots the job out anyway, or the job of an account that is no role account cannot be removed before the account is fixed (issue #227 part 2, the review of the account check)\nstdout: %s\nstderr: %s",
+					exitStatusOf(t, err), tc.name, stdout, stderr)
+			}
+
+			assertAccountKindWarned(t, "make agents-token-refresh-uninstall", tc.checks, stdout, stderr)
+			assertBootoutRan(t, f)
+			assertEndsWithSudoK(t, f.sudoCommands(t))
+
+			if _, err := os.Stat(f.dest()); err == nil {
+				t.Errorf("%s is still there after the uninstall, so the next boot loads the job again", f.dest())
+			}
+		})
 	}
 }
 
@@ -1315,10 +1412,11 @@ func TestMakeVMAgentsTokenSSHRefusesAnAgentsAccountThatIsNoRoleAccount(t *testin
 	}
 }
 
-// TestMakeVMAgentsTokenSSHEchoesNoEscapeFromTheVM pins the second pass of the security audit on what the VM's own
-// code prints (issue #227 part 2): the script that runs in the VM is written by the agents, so a line it prints
-// may carry a terminal escape sequence, and make must strip the ESC before it echoes the VM's output. The rest of
-// the line, and the VM's done line, are still printed, so nothing the maintainer needs is lost.
+// TestMakeVMAgentsTokenSSHEchoesNoEscapeFromTheVM pins the second and third pass of the security audit on what the
+// VM's own code prints (issue #227 part 2): the script that runs in the VM is written by the agents, so a line it
+// prints may carry a terminal escape sequence or a C1 control, on either stream, and make must strip it before it
+// echoes the VM's output. The VM's done line is still printed, so nothing the maintainer needs is lost, and a tab
+// and a line break of the VM's line survive.
 func TestMakeVMAgentsTokenSSHEchoesNoEscapeFromTheVM(t *testing.T) {
 	t.Parallel()
 
@@ -1326,9 +1424,19 @@ func TestMakeVMAgentsTokenSSHEchoesNoEscapeFromTheVM(t *testing.T) {
 		name   string
 		target string
 		reply  string
+		env    map[string]string
+		// control is whether the VM writes a C1 control beside printable text, so the tab and the line break of
+		// that line must survive the stripping.
+		control bool
 	}{
-		{name: "the install", target: "vm-agents-token-ssh", reply: "escape"},
-		{name: "the uninstall", target: "vm-agents-token-ssh-uninstall", reply: "escape-uninstall"},
+		{name: "the install, a terminal escape on stdout", target: "vm-agents-token-ssh", reply: "install", env: map[string]string{"SHIFT2EU_TEST_LIMA_ESCAPE_STREAM": "stdout"}},
+		{name: "the install, a terminal escape on stderr", target: "vm-agents-token-ssh", reply: "install", env: map[string]string{"SHIFT2EU_TEST_LIMA_ESCAPE_STREAM": "stderr"}},
+		{name: "the uninstall, a terminal escape on stdout", target: "vm-agents-token-ssh-uninstall", reply: "uninstall", env: map[string]string{"SHIFT2EU_TEST_LIMA_ESCAPE_STREAM": "stdout"}},
+		{name: "the uninstall, a terminal escape on stderr", target: "vm-agents-token-ssh-uninstall", reply: "uninstall", env: map[string]string{"SHIFT2EU_TEST_LIMA_ESCAPE_STREAM": "stderr"}},
+		{name: "the install, a C1 control on stdout", target: "vm-agents-token-ssh", reply: "install", env: map[string]string{"SHIFT2EU_TEST_LIMA_CONTROL_STREAM": "stdout"}, control: true},
+		{name: "the install, a C1 control on stderr", target: "vm-agents-token-ssh", reply: "install", env: map[string]string{"SHIFT2EU_TEST_LIMA_CONTROL_STREAM": "stderr"}, control: true},
+		{name: "the uninstall, a C1 control on stdout", target: "vm-agents-token-ssh-uninstall", reply: "uninstall", env: map[string]string{"SHIFT2EU_TEST_LIMA_CONTROL_STREAM": "stdout"}, control: true},
+		{name: "the uninstall, a C1 control on stderr", target: "vm-agents-token-ssh-uninstall", reply: "uninstall", env: map[string]string{"SHIFT2EU_TEST_LIMA_CONTROL_STREAM": "stderr"}, control: true},
 	}
 
 	for _, tc := range cases {
@@ -1338,18 +1446,27 @@ func TestMakeVMAgentsTokenSSHEchoesNoEscapeFromTheVM(t *testing.T) {
 			f := newVMAgentsTokenSSHFixture(t)
 			f.setReply(t, tc.reply)
 
+			for name, value := range tc.env {
+				f.env[name] = value
+			}
+
 			stdout, stderr, err := f.run(t, tc.target)
 			if err != nil {
-				t.Fatalf("make %s exited %d although the VM printed its done line beside an escape sequence: the escape is stripped and the rest of the line is read as before (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
-					tc.target, exitStatusOf(t, err), stdout, stderr)
+				t.Fatalf("make %s exited %d although the VM printed its done line beside %s: it is stripped and the rest of the line is read as before (issue #227 part 2, the security audit's second and third pass)\nstdout: %s\nstderr: %s",
+					tc.target, exitStatusOf(t, err), tc.name, stdout, stderr)
 			}
 
 			if !strings.Contains(stdout, tc.target+": done") {
-				t.Errorf("make %s printed no %q line although the VM printed it: the escape is stripped and the rest of the line kept (issue #227 part 2, the security audit's second pass)\nstdout: %s",
-					tc.target, tc.target+": done", stdout)
+				t.Errorf("make %s printed no %q line although the VM printed it: %s is stripped and the rest of the line kept (issue #227 part 2, the security audit's second and third pass)\nstdout: %s\nstderr: %s",
+					tc.target, tc.target+": done", tc.name, stdout, stderr)
 			}
 
 			assertNoEscape(t, "make "+tc.target, stdout, stderr)
+			assertNoC1Control(t, "make "+tc.target, stdout, stderr)
+
+			if tc.control {
+				assertTabAndNewlineSurvive(t, "make "+tc.target, stdout, stderr)
+			}
 		})
 	}
 }

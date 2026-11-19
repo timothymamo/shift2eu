@@ -428,15 +428,34 @@ const fakeLimactl = `#!/bin/sh
   # vm-gh-wrapper) records it and runs nothing on this machine. What it answers is what the VM would
   # answer: the vm-gh-wrapper stream ends with the call to the function that prints the done line, so a
   # whole stream gets that line back. SHIFT2EU_TEST_LIMA_SILENT stands for a connection that dropped after
-  # the stream arrived: sh -s exits 0 and says nothing. SHIFT2EU_TEST_LIMA_ESCAPE makes the VM print a
-  # terminal escape sequence, as code in the VM can (issue #227 part 2, the security audit's second pass).
+  # the stream arrived: sh -s exits 0 and says nothing. SHIFT2EU_TEST_LIMA_ESCAPE_STREAM (stdout or stderr) makes
+  # the VM print a terminal escape sequence there, as code in the VM can (issue #227 part 2, the security audit's
+  # second pass): stdout reaches make's output through the recipe, stderr reaches it beside the recipe.
+  # SHIFT2EU_TEST_LIMA_CONTROL_STREAM (stdout or stderr) makes it print a C1 control there instead, as the raw
+  # byte 0x9B and as its UTF-8 form C2 9B, with a tab beside it (issue #227 part 2, the security audit's third
+  # pass): a terminal reads the byte as the start of a control sequence.
   stdin_copy="$(mktemp "${TMPDIR:-/tmp}/lima-stdin.XXXXXX")" || exit 1
   cat > "${stdin_copy}" || exit 1
   cat "${stdin_copy}" >> "${SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
   printf '\n--- end of call ---\n' >> "${SHIFT2EU_TEST_LIMA_CAPTURE}"
-  if [ -n "${SHIFT2EU_TEST_LIMA_ESCAPE:-}" ]; then
-    printf '\033[2J\n'
-  fi
+  case "${SHIFT2EU_TEST_LIMA_ESCAPE_STREAM:-}" in
+  stdout) printf '\033[2J\n' ;;
+  stderr) printf '\033[2J\n' >&2 ;;
+  '') ;;
+  *)
+    echo "fake limactl: unknown SHIFT2EU_TEST_LIMA_ESCAPE_STREAM: ${SHIFT2EU_TEST_LIMA_ESCAPE_STREAM}" >&2
+    exit 64
+    ;;
+  esac
+  case "${SHIFT2EU_TEST_LIMA_CONTROL_STREAM:-}" in
+  stdout) printf 'vm: before\tafter\233mid\302\233end\n' ;;
+  stderr) printf 'vm: before\tafter\233mid\302\233end\n' >&2 ;;
+  '') ;;
+  *)
+    echo "fake limactl: unknown SHIFT2EU_TEST_LIMA_CONTROL_STREAM: ${SHIFT2EU_TEST_LIMA_CONTROL_STREAM}" >&2
+    exit 64
+    ;;
+  esac
   if [ -z "${SHIFT2EU_TEST_LIMA_SILENT:-}" ] && [ "$(tail -n 1 "${stdin_copy}")" = vm_gh_wrapper ]; then
     printf 'vm-gh-wrapper: done\n'
   fi
@@ -668,9 +687,10 @@ func (sb *sandbox) useFakeSudo(t *testing.T) {
 
 // fakeDSCl stands in for dscl, which the Makefile reads the agents account's kind with before any sudo call
 // (issue #227 part 2, the security audit's second pass): it records its argv and answers a `-read` with the
-// account's UniqueID. SHIFT2EU_TEST_DS_UNIQUEID is what it prints (default 401, the hidden role account of
-// docs/dev-environment.md), and SHIFT2EU_TEST_DS_STATUS exits non-zero instead, the way dscl answers an account
-// that is not there. No test may reach the machine's own directory services or create a real account.
+// account's UniqueID. SHIFT2EU_TEST_DS_UNIQUEID is what it prints (401, the hidden role account of
+// docs/dev-environment.md, when the variable is unset; an empty value prints an empty UniqueID), and
+// SHIFT2EU_TEST_DS_STATUS exits non-zero instead, the way dscl answers an account that is not there. No test may
+// reach the machine's own directory services or create a real account.
 const fakeDSCl = `#!/bin/sh
 {
   printf 'tool=dscl\n'
@@ -687,13 +707,16 @@ case "${2:-}" in
   exit 64
   ;;
 esac
-printf 'UniqueID: %s\n' "${SHIFT2EU_TEST_DS_UNIQUEID:-401}"
+printf 'UniqueID: %s\n' "${SHIFT2EU_TEST_DS_UNIQUEID-401}"
 `
 
 // fakeDSEditGroup stands in for dseditgroup, which the Makefile reads whether the agents account is an admin
 // with (issue #227 part 2, the security audit's second pass): it records its argv and answers -m <account> the
 // way dseditgroup answers checkmember - yes, exit 0, when SHIFT2EU_TEST_DS_ADMIN is 1, and dseditgroup's no,
-// exit 67, for the role account that is no admin.
+// exit 67, for the role account that is no admin. SHIFT2EU_TEST_DS_ADMIN=error exits 64 and answers nothing, and
+// SHIFT2EU_TEST_DS_ADMIN=missing exits 127 and answers nothing the way a shell reports a tool that is not there
+// (issue #227 part 2, the review and the audit of the account check): an admin check that cannot answer must not
+// read as "not an admin".
 const fakeDSEditGroup = `#!/bin/sh
 {
   printf 'tool=dseditgroup\n'
@@ -727,6 +750,10 @@ if [ "${SHIFT2EU_TEST_DS_ADMIN:-0}" = 1 ]; then
   printf 'yes %s is a member of %s\n' "${account}" "${group}"
   exit 0
 fi
+case "${SHIFT2EU_TEST_DS_ADMIN:-0}" in
+error) exit 64 ;;
+missing) exit 127 ;;
+esac
 printf 'no %s is NOT a member of %s\n' "${account}" "${group}"
 # dseditgroup exits 67 for a user that is not a member of the group.
 exit 67
@@ -754,6 +781,55 @@ func assertNoEscape(t *testing.T, run, stdout, stderr string) {
 			t.Errorf("%s echoed a terminal escape byte that came from the VM, so code in the VM can drive the maintainer's terminal: strip the ESC before printing the VM's output (issue #227 part 2, the security audit's second pass)\n%s:\n%q",
 				run, stream.name, stream.text)
 		}
+	}
+}
+
+// vmControlLine is the line the fake VM prints when a test asks for a C1 control: a tab, the C1 control U+009B as
+// the raw byte 0x9B and again as its UTF-8 form C2 9B, and printable text around them, which must survive. A
+// terminal reads 0x9B as CSI, the start of a control sequence, so only printable ASCII may reach make's output
+// (issue #227 part 2, the security audit's third pass). The fakes of the VM print the same line.
+const vmControlLine = "vm: before\tafter\233mid\302\233end"
+
+// assertNoC1Control fails unless neither stream holds a C1 control byte: the scripts that run in the VM are code
+// the agents can write, so a line they print may carry 0x9B - CSI, which a terminal takes as the start of a control
+// sequence - and a control byte is no printable ASCII. Both forms are pinned, the raw byte and its UTF-8 encoding
+// C2 9B, since deleting one leaves the other (issue #227 part 2, the security audit's third pass).
+func assertNoC1Control(t *testing.T, run, stdout, stderr string) {
+	t.Helper()
+
+	for _, stream := range []struct{ name, text string }{{"stdout", stdout}, {"stderr", stderr}} {
+		for _, form := range []struct{ name, bytes string }{
+			{"the raw C1 byte 0x9B", "\x9b"},
+			{"the UTF-8 form C2 9B", "\xc2\x9b"},
+		} {
+			if strings.Contains(stream.text, form.bytes) {
+				t.Errorf("%s let %s from the VM reach %s, so code in the VM can drive the maintainer's terminal: only printable ASCII may be printed of what the VM wrote, so strip every control character, the C1 controls among them, before echoing it (issue #227 part 2, the security audit's third pass)\n%s:\n%q",
+					run, form.name, stream.name, stream.name, stream.text)
+			}
+		}
+	}
+}
+
+// assertTabAndNewlineSurvive fails unless the run's output still holds a tab and a line break of the VM's line: only
+// control characters are stripped, so the line the VM wrote stays readable (issue #227 part 2, the security audit's
+// third pass). It reads both streams together, since a recipe may print the VM's standard error beside its output.
+func assertTabAndNewlineSurvive(t *testing.T, run, stdout, stderr string) {
+	t.Helper()
+
+	combined := stdout + stderr
+
+	if !strings.Contains(combined, "\t") {
+		t.Errorf("%s dropped the tab of the VM's line together with the control bytes: a tab and a line break are the only control characters that may stay (issue #227 part 2, the security audit's third pass)\nstdout: %q\nstderr: %q", run, stdout, stderr)
+	}
+
+	if !strings.Contains(combined, "\n") {
+		t.Errorf("%s dropped the line breaks of the VM's output together with the control bytes: a tab and a line break are the only control characters that may stay (issue #227 part 2, the security audit's third pass)\nstdout: %q\nstderr: %q", run, stdout, stderr)
+	}
+
+	printable, _, _ := strings.Cut(vmControlLine, "\t")
+
+	if !strings.Contains(combined, printable) {
+		t.Errorf("%s dropped the printable text %q of the VM's line together with its control bytes: strip only the control characters, so nothing the maintainer needs is lost (issue #227 part 2, the security audit's third pass)\nstdout: %q\nstderr: %q", run, printable, stdout, stderr)
 	}
 }
 

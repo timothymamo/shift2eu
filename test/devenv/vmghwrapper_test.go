@@ -493,31 +493,59 @@ func TestMakeVMGHWrapperInstallsIntoATemporaryRoot(t *testing.T) {
 	}
 }
 
-// TestMakeVMGHWrapperEchoesNoEscapeFromTheVM pins the second pass of the security audit on what the VM's own code
-// prints (issue #227 part 2): the script that runs in the VM is written by the agents, so a line it prints may
-// carry a terminal escape sequence, and make must strip the ESC before it echoes the VM's output. The VM's done
-// line is still printed, so a maintainer still sees the installation finished.
+// TestMakeVMGHWrapperEchoesNoEscapeFromTheVM pins the second and third pass of the security audit on what the VM's
+// own code prints (issue #227 part 2): the script that runs in the VM is written by the agents, so a line it prints
+// may carry a terminal escape sequence or a C1 control, on either stream, and make must strip it before it echoes
+// the VM's output. The VM's done line is still printed, so a maintainer still sees the installation finished, and a
+// tab and a line break of the VM's line survive.
 func TestMakeVMGHWrapperEchoesNoEscapeFromTheVM(t *testing.T) {
 	t.Parallel()
 
-	sb := newSandbox(t)
-
-	env := sb.baseEnv()
-	env["SHIFT2EU_TEST_LIMA_CAPTURE"] = filepath.Join(sb.root, "lima-stdin.log")
-	env["SHIFT2EU_TEST_LIMA_ESCAPE"] = "1"
-
-	stdout, stderr, err := runMake(t, []string{"vm-gh-wrapper"}, env)
-	if err != nil {
-		t.Fatalf("make vm-gh-wrapper exited %d although the VM printed its done line beside an escape sequence: the escape is stripped and the rest of the line is read as before (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
-			exitStatusOf(t, err), stdout, stderr)
+	cases := []struct {
+		name string
+		env  map[string]string
+		// control is whether the VM writes a C1 control beside printable text, so the tab and the line break of
+		// that line must survive the stripping.
+		control bool
+	}{
+		{name: "a terminal escape on stdout", env: map[string]string{"SHIFT2EU_TEST_LIMA_ESCAPE_STREAM": "stdout"}},
+		{name: "a terminal escape on stderr", env: map[string]string{"SHIFT2EU_TEST_LIMA_ESCAPE_STREAM": "stderr"}},
+		{name: "a C1 control on stdout", env: map[string]string{"SHIFT2EU_TEST_LIMA_CONTROL_STREAM": "stdout"}, control: true},
+		{name: "a C1 control on stderr", env: map[string]string{"SHIFT2EU_TEST_LIMA_CONTROL_STREAM": "stderr"}, control: true},
 	}
 
-	if !strings.Contains(stdout+stderr, doneLine) {
-		t.Errorf("make vm-gh-wrapper printed no %q line although the VM printed it: the escape is stripped and the rest of the line kept (issue #227 part 2, the security audit's second pass)\nstdout: %s\nstderr: %s",
-			doneLine, stdout, stderr)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	assertNoEscape(t, "make vm-gh-wrapper", stdout, stderr)
+			sb := newSandbox(t)
+
+			env := sb.baseEnv()
+			env["SHIFT2EU_TEST_LIMA_CAPTURE"] = filepath.Join(sb.root, "lima-stdin.log")
+
+			for name, value := range tc.env {
+				env[name] = value
+			}
+
+			stdout, stderr, err := runMake(t, []string{"vm-gh-wrapper"}, env)
+			if err != nil {
+				t.Fatalf("make vm-gh-wrapper exited %d although the VM printed its done line beside %s: it is stripped and the rest of the line is read as before (issue #227 part 2, the security audit's second and third pass)\nstdout: %s\nstderr: %s",
+					exitStatusOf(t, err), tc.name, stdout, stderr)
+			}
+
+			if !strings.Contains(stdout+stderr, doneLine) {
+				t.Errorf("make vm-gh-wrapper printed no %q line although the VM printed it: %s is stripped and the rest of the line kept (issue #227 part 2, the security audit's second and third pass)\nstdout: %s\nstderr: %s",
+					doneLine, tc.name, stdout, stderr)
+			}
+
+			assertNoEscape(t, "make vm-gh-wrapper", stdout, stderr)
+			assertNoC1Control(t, "make vm-gh-wrapper", stdout, stderr)
+
+			if tc.control {
+				assertTabAndNewlineSurvive(t, "make vm-gh-wrapper", stdout, stderr)
+			}
+		})
+	}
 }
 
 // TestMakeVMGHWrapperFailsWhenTheScriptDoesNotArrive pins the rest of second review item 2: the recipe
