@@ -317,8 +317,9 @@ the table with the App token, and that `bypass_actors` is absent or empty for th
   `core.fsmonitor` makes it run a command). Hence the host clone: outside the workspace, its own `.git`,
   updated only with `git -C <clone> pull --ff-only` from GitHub, the only place the three App variables
   are set (its own `.envrc`), and where `make agents-token`, `make agents-token-refresh` and
-  `make agents-token-refresh-start` run; they need only `limactl` and `LIMA_INSTANCE`, nothing of the
-  workspace.
+  `make agents-token-refresh-start` run; their recipes use only `limactl` and `LIMA_INSTANCE`, nothing
+  of the workspace, but like every host target they refuse to run without `WORKSPACE_REPO` set (the
+  host-clone refusal).
 - **The host clone does not put the key out of reach of code run from the workspace.** It keeps the key's
   path out of the workspace's shells and keeps the token targets on code the agents cannot edit. But every
   host target the maintainer still runs from the workspace (`make deck`, `make vm-env`, `make vm-init`,

@@ -629,9 +629,10 @@ AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2e
 
 # The token targets run on the Mac with the App's key in reach. Like every host target they run only from the
 # host clone, whose own direnv .envrc holds the three SHIFT2EU_AGENTS_APP_* variables, and make refuses them
-# elsewhere (HOST_TARGETS above; docs/dev-environment.md, The host clone). They need only limactl and
-# LIMA_INSTANCE, never WORKSPACE_REPO. The host clone does not put the key out of reach of code that runs as
-# you: what remains open is issue #227's part 2 (ADR 0031, Consequences).
+# elsewhere (HOST_TARGETS above; docs/dev-environment.md, The host clone). Their recipes use only limactl
+# and LIMA_INSTANCE, not WORKSPACE_REPO, but like every host target they refuse to run without it (the
+# host-clone refusal). The host clone does not put the key out of reach of code that runs as you: what
+# remains open is issue #227's part 2 (ADR 0031, Consequences).
 
 .PHONY: agents-token
 agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM (host clone)
