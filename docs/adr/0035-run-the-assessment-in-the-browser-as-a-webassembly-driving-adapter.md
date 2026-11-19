@@ -43,7 +43,9 @@ composition root, built with Go's standard toolchain for `GOOS=js GOARCH=wasm`:
   keeps its own parsing: the CLI splits `--target` on commas and `--region` into pairs, and the page passes
   lists. The CLI's output, messages and exit codes are unchanged byte for byte: no golden changed. The web
   adapter shows the CLI's message without its `shift2eu: ` prefix. Wire's option-parity table pins the
-  agreement over 22 option sets through the real CLI.
+  agreement through the real CLI over valid and invalid choices: each target key, `all`, several targets,
+  unknown, empty and duplicate targets, regions per target (unknown, empty, repeated or for a target not
+  chosen), the estimate switch and the JSON report's schema versions.
 - **`cmd/shift2eu-web`, the composition root, in two parts.** `cmd/shift2eu-web` itself (build constraint
   `js && wasm`) is the thin `syscall/js` glue. It registers one function, `shift2euAssess`, converts the
   page's values to `web.Options` and converts the result back. It imports only `wire`, `internal/web`,
@@ -52,7 +54,8 @@ composition root, built with Go's standard toolchain for `GOOS=js GOARCH=wasm`:
   the inventory reader in its in-memory mode, the three embedded catalogs, and the Markdown, JSON and HTML
   reporters (`web-composition-root-wire`). Wire's tests run `internal/cli` and `internal/web` over the same
   adapters: one option-parity table, and download parity over every example inventory and the hostile
-  fixtures with seven option sets. Only those test files may import `internal/cli`
+  fixtures, across one target and the comparison, chosen regions, the estimate on and off, and the JSON
+  report's schema versions. Only those test files may import `internal/cli`
   (`web-composition-root-wire-tests`); every other test file under `cmd/shift2eu-web` is refused it
   (`web-root-tests-never-run-the-cli`), and `cli-and-cmd-imported-only-by-cmd` leaves out only the glue's
   own files, which import `wire`.
@@ -60,10 +63,13 @@ composition root, built with Go's standard toolchain for `GOOS=js GOARCH=wasm`:
   three helpers that take a `jsName`, and every name is a constant of that type: the constants are the
   glue's named allow list, it never computes a name, and none of them reaches another window (PRD #297,
   *Layer 1*; milestone 2's static test pins the rule). `targets` and `regions` must be real arrays
-  (`Array.isArray`) of at most one entry per target (plus `all` for `targets`), of strings and of
-  `{target, region}` objects of strings; anything else, or a mistyped `estimate`, `schemaVersion` or
-  `inventoryName`, is a `usage` failure with a constant message that echoes no value. The glue never
-  converts more entries than the option rules could accept. A panic during an assessment is recovered and
+  (`Array.isArray`) of at most 64 entries each (`maxEntries`), of strings and of `{target, region}` objects
+  of strings; anything else, or a mistyped `estimate`, `schemaVersion` or `inventoryName`, is a `usage`
+  failure with a constant message that echoes no value. The bound is fixed and generous on purpose: it
+  refuses a hostile `length` before any entry is read, yet any realistic list (a target named twice, more
+  regions than targets) reaches the option rules, so the page shows the CLI's usage error, as the PRD
+  requires, rather than the glue's generic one. A bound derived from the number of targets would have
+  hidden those messages. A panic during an assessment is recovered and
   returned as an `internal` failure with a constant message, so the module stays usable for the next one.
 - **The trust boundary of the module's answer.** The object `shift2euAssess` returns has `error` and `kind`,
   plain text that the page shows with `textContent` and never as markup; `markdown` and `json`, the
@@ -100,9 +106,9 @@ composition root, built with Go's standard toolchain for `GOOS=js GOARCH=wasm`:
 
   | | Bytes |
   |---|---|
-  | Raw module | 6,688,906 |
-  | Base64 module script | 8,918,576 |
-  | Gzip-compressed module script | 2,512,821 (2.40 MiB, 80% of the budget) |
+  | Raw module | 6,688,360 |
+  | Base64 module script | 8,917,848 |
+  | Gzip-compressed module script | 2,513,376 (2.40 MiB, 80% of the budget) |
 
   Above the budget, TinyGo is reconsidered, as the PRD decides.
 - **The standard toolchain, not TinyGo** (the maintainer's decision). One compiler builds the CLI and the
