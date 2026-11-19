@@ -832,10 +832,10 @@ func TestMakeVMEnvHidesAPastedTokenEntryUnderDashI(t *testing.T) {
 	assertNoCredentialValues(t, "make -i vm-env's output", text)
 }
 
-// TestMakeVMEnvSaysMayBeACredentialOnlyOfAHiddenEntry pins the third-round review's and audit's finding on issue
+// TestMakeVMEnvSaysMayBeACredentialOnlyOfAHiddenEntry pins the second-round review's and audit's finding on issue
 // #268: the sentence "It may be a credential typed by mistake." belongs to the message about the entry of VM_ENV
-// whose text vm-env does not show, and to that message only. The shell code sets its flag for any hidden entry and
-// never resets it, so a later message about a different entry that IS shown by name carried the sentence too:
+// whose text vm-env does not show, and to that message only. The shell code set its flag for any hidden entry and
+// never reset it, so a later message about a different entry that IS shown by name carried the sentence too:
 // reverting the App variable the message names, "refusing SHIFT2EU_AGENTS_APP_X: ... It may be a credential typed by
 // mistake." tells a maintainer that a name they typed on purpose may be a pasted credential, and the
 // not-set-or-empty list said it whenever a hidden entry came before the name it lists.
