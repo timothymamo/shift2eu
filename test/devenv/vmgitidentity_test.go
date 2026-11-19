@@ -207,6 +207,10 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 		fallbackEmail = "maintainer@example.com"
 		humanName     = "Ada Lovelace"
 		humanEmail    = "ada@example.com"
+		// A maintainer's name and address are text, not ASCII: a filter that keeps bytes 0x20-0x7e only prints
+		// this name as "Jos Mller" (issue #262).
+		utf8Name  = "José Müller"
+		utf8Email = "josé.müller@example.com"
 	)
 
 	human := map[string]string{"user.name": humanName, "user.email": humanEmail}
@@ -230,8 +234,13 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 		identityFile   *string // nil: no identity file in the VM
 		wantFailure    bool
 		wantMessages   []string
-		wantName       string // the identity afterwards; empty together with wantFailure
-		wantEmail      string
+		// wantOutput are strings the output must hold byte for byte: the values the step prints, which are text
+		// out of the VM's ~/.gitconfig and may be non-ASCII, as a name like José Müller is. Stripping the bytes
+		// a terminal acts on must leave them alone, or the step prints the name with its UTF-8 letters missing
+		// (issue #262).
+		wantOutput []string
+		wantName   string // the identity afterwards; empty together with wantFailure
+		wantEmail  string
 	}{
 		{
 			name:         "no identity file and no identity at all: the fallback is set",
@@ -310,6 +319,50 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 			wantMessages: []string{"replaced"},
 			wantName:     botName,
 			wantEmail:    botEmail,
+		},
+		{
+			// Issue #262: the kept message prints the value out of the VM's ~/.gitconfig, and a name is not ASCII.
+			name:         "no identity file and a non-ASCII user.name: it is kept and printed as it is",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": utf8Name, "user.email": humanEmail},
+			wantMessages: []string{"kept"},
+			wantOutput:   []string{utf8Name},
+			wantName:     utf8Name,
+			wantEmail:    humanEmail,
+		},
+		{
+			name:         "no identity file and a non-ASCII user.email: it is kept and printed as it is",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": humanName, "user.email": utf8Email},
+			wantMessages: []string{"kept"},
+			wantOutput:   []string{utf8Email},
+			wantName:     humanName,
+			wantEmail:    utf8Email,
+		},
+		{
+			name:         "the identity file replaces a non-ASCII identity",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": utf8Name, "user.email": utf8Email},
+			identityFile: identityText(botName + "\n" + botEmail + "\n"),
+			wantMessages: []string{"replaced"},
+			wantOutput:   []string{utf8Name, utf8Email},
+			wantName:     botName,
+			wantEmail:    botEmail,
+		},
+		{
+			// Both at once: the escape sequence goes, the non-ASCII letters stay, so the step neither recolours
+			// the terminal nor prints the name as "Jos Mller" (issue #262).
+			name:         "no identity file and a user.name with both terminal control bytes and non-ASCII letters: it is kept",
+			fallbackName: fallbackName,
+			fallbackMail: fallbackEmail,
+			existing:     map[string]string{"user.name": "José\x1b[31mMüller", "user.email": humanEmail},
+			wantMessages: []string{"kept"},
+			wantOutput:   []string{"José", "Müller"},
+			wantName:     "José\x1b[31mMüller",
+			wantEmail:    humanEmail,
 		},
 		{
 			name:         "the identity file removed: the fallback comes back over the bot's identity",
@@ -424,6 +477,16 @@ func TestVMGitIdentitySetsTheAgentsAuthor(t *testing.T) {
 			for _, want := range tc.wantMessages {
 				if !strings.Contains(stdout+stderr, want) {
 					t.Errorf("the identity step does not say %q, so a maintainer cannot see that the VM kept its own identity: %s", want, stdout+stderr)
+				}
+			}
+
+			// The value it prints is text out of the VM's ~/.gitconfig. Removing the bytes a terminal acts on must
+			// not take the printable non-ASCII ones with them: a maintainer named José Müller reads "José Müller",
+			// not "Jos Mller" (issue #262).
+			for _, want := range tc.wantOutput {
+				if !strings.Contains(stdout+stderr, want) {
+					t.Errorf("the identity step's output does not hold %q byte for byte, so a name out of the VM's ~/.gitconfig loses its non-ASCII letters when the step strips the bytes a terminal acts on: %q\nstdout: %q\nstderr: %q",
+						want, stdout+stderr, stdout, stderr)
 				}
 			}
 
