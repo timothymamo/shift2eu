@@ -193,6 +193,22 @@ func (sb *sandbox) assertNoLimaCalls(t *testing.T, why string) {
 	}
 }
 
+// daemonEnvWrittenClaim matches the line make vm-env prints once it has written the VM's daemon.env: it says the
+// names it wrote and where. A refused run must never print it, or a maintainer whose credentials never reached
+// the VM believes they did and starts the deck on a file that holds nothing (issue #268 L2).
+var daemonEnvWrittenClaim = regexp.MustCompile(`(?i)\bwritten to\b[^\n]*daemon\.env`)
+
+// assertNoDaemonEnvWrittenClaim fails when make's output claims that the VM's daemon.env was written, the way the
+// write step reports a run that succeeded (issue #268 L2).
+func assertNoDaemonEnvWrittenClaim(t *testing.T, where, text, why string) {
+	t.Helper()
+
+	if claim := daemonEnvWrittenClaim.FindString(text); claim != "" {
+		t.Errorf("%s reports %q although %s: a run that refuses must never say that it wrote the VM's daemon.env, or a maintainer whose credentials never reached the VM believes they did (issue #268 L2)",
+			where, claim, why)
+	}
+}
+
 // assertNoCredentialValues fails when text holds the value of any credential the tests invented. The failure
 // names the variable, never its value (CLAUDE.md rule 3).
 func assertNoCredentialValues(t *testing.T, where, text string) {
@@ -618,6 +634,149 @@ func TestMakeVMEnvWritesNothingForAMissingCredentialUnderDashI(t *testing.T) {
 			assertNoCredentialValues(t, "make -i vm-env's output", stdout+stderr)
 		})
 	}
+}
+
+// TestMakeVMEnvWritesNothingForAnEmptyVMEnvUnderDashI pins the second-round review's finding on issue #268 L2
+// (defence in depth): `make -i vm-env` with a VM_ENV that names no credential - exported as the empty string, or
+// as separators alone - runs the write step although vm-env-check refused, and the write step's loop runs over no
+// name at all. It then sends an empty file to the VM, which replaces the whole daemon.env with a blank line: the
+// wipe issue #234 closed for the plain run, and the run even reports that it wrote the file. The write step must
+// refuse a VM_ENV that names nothing itself, in both the empty and the separators-only shape.
+//
+// make -i reports success for the recipe either way - it ignores every failed recipe, so the exit status says
+// nothing here - so the test pins what a maintainer reads and what the VM is left with: the file, and an output
+// that never claims a write.
+func TestMakeVMEnvWritesNothingForAnEmptyVMEnvUnderDashI(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		vmEnv string // the VM_ENV make finds in its environment, exported rather than given on the command line
+	}{
+		{name: "VM_ENV exported as the empty string", vmEnv: ""},
+		{name: "VM_ENV exported as one comma", vmEnv: ","},
+		{name: "VM_ENV exported as separators only", vmEnv: " , , "},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := withVMEnvInEnv(sb.vmEnvEnv(), tc.vmEnv)
+			seeded := sb.seedDaemonEnv(t)
+
+			stdout, stderr, err := runMake(t, []string{"-i", "vm-env"}, env)
+			text := stdout + stderr
+
+			got, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make -i vm-env with a VM_ENV that names no credential: %v", readErr)
+			}
+
+			if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+				t.Errorf("make -i vm-env rewrote the VM's daemon.env although the VM_ENV it read names no credential: the write step must refuse an empty list of names too, or the failed check is undone and the VM is left with a file - here a blank line - that starts no agent (issue #268 L2) (-want +got):\n%s\nmake's exit error: %v\nstdout: %s\nstderr: %s",
+					diff, err, stdout, stderr)
+			}
+
+			assertNoDaemonEnvWrittenClaim(t, "make -i vm-env's output", text, "the VM_ENV it read names no credential, so nothing was written")
+
+			assertNoCredentialValues(t, "make -i vm-env's output", text)
+		})
+	}
+}
+
+// TestMakeVMEnvWritesNothingForARefusedNameUnderDashI pins the second-round review's and audit's other finding on
+// issue #268 L2: under make -i the write step runs although vm-env-check refused an entry of VM_ENV, and it
+// re-checks only that the value is set and made of the characters a value may hold. A name vm-env-check refuses
+// for what it is - a GitHub token (github_token_names in the Makefile) or one of the agents App's variables - or
+// that names no credential the agents need is then copied into the VM anyway, so the personal token the VM was
+// cleared of in PRD #161 milestone 3, or the App's key that must stay on the Mac, lands in the VM's daemon.env.
+// The write step must refuse such a name itself, byte for byte as it leaves a missing credential alone.
+//
+// make -i ignores the failed recipe and reports success, so the test pins the file, the lines in it, and the
+// output: never a claim that the file was written, and never the invented value of the refused name.
+func TestMakeVMEnvWritesNothingForARefusedNameUnderDashI(t *testing.T) {
+	t.Parallel()
+
+	refused := slices.Concat(gitHubTokens, []string{"SHIFT2EU_AGENTS_APP_KEY", "SHIFT2EU_AGENTS_APP_ID"})
+
+	for _, name := range refused {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+			value := fakeEnvValue(name)
+			env[name] = value
+
+			seeded := sb.seedDaemonEnv(t)
+
+			// The name on the command line, so the run merges: the mode the refusal has to protect, as a
+			// replace would at least drop the other lines instead of keeping them beside a stale token.
+			stdout, stderr, err := runMake(t, []string{"-i", "vm-env", "VM_ENV=" + name}, env)
+			text := stdout + stderr
+
+			got, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make -i vm-env VM_ENV=%s: %v", name, readErr)
+			}
+
+			if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+				t.Errorf("make -i vm-env VM_ENV=%s rewrote the VM's daemon.env although vm-env-check refused that name and the write step must refuse it too: the failed check is otherwise undone and the VM gets a credential it must never hold (issue #268 L2) (-want +got):\n%s\nmake's exit error: %v\nstdout: %s\nstderr: %s",
+					name, diff, err, stdout, stderr)
+			}
+
+			for _, line := range sortedEnvLines(string(got)) {
+				if strings.HasPrefix(line, name+"=") {
+					t.Errorf("make -i vm-env VM_ENV=%s wrote a %s line into the VM's daemon.env although that name is refused: the write step must refuse it before it writes anything (issue #268 L2). The lines it wrote: %v",
+						name, name, sortedEnvLines(string(got)))
+
+					break
+				}
+			}
+
+			assertNoDaemonEnvWrittenClaim(t, "make -i vm-env's output", text, "the name it was given is refused, so nothing was written")
+
+			assertNoSecrets(t, "make -i vm-env's output", text, []secret{{kind: "value of " + name, value: value}})
+		})
+	}
+}
+
+// TestMakeVMEnvHidesAPastedTokenEntryUnderDashI pins issue #268 L1's write-step half: under make -i the write step
+// runs although vm-env-check refused the second entry of VM_ENV, and its own message must hide that entry the way
+// the check's does - only its position, never its text, which may be a token the maintainer pasted where a name
+// goes. The entry never reaches standard output or standard error, and the VM's daemon.env stays as it was.
+func TestMakeVMEnvHidesAPastedTokenEntryUnderDashI(t *testing.T) {
+	t.Parallel()
+
+	sb := newSandbox(t)
+
+	entry := fakePastedTokenEntry("pasted-token")
+	env := sb.vmEnvEnv()
+	seeded := sb.seedDaemonEnv(t)
+
+	// CLAUDE_CODE_OAUTH_TOKEN first and set, so the only reason to refuse is the pasted entry at position 2.
+	stdout, stderr, err := runMake(t, []string{"-i", "vm-env", "VM_ENV=CLAUDE_CODE_OAUTH_TOKEN," + entry}, env)
+	text := stdout + stderr
+
+	got, readErr := os.ReadFile(sb.daemonEnvPath())
+	if readErr != nil {
+		t.Fatalf("read the VM's daemon.env after make -i vm-env with a pasted token in VM_ENV: %v", readErr)
+	}
+
+	if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+		t.Errorf("make -i vm-env rewrote the VM's daemon.env although the second entry of VM_ENV is no variable name: a refused entry must leave the file as it was (issue #268 L2) (-want +got):\n%s\nmake's exit error: %v\nstdout: %s\nstderr: %s",
+			diff, err, stdout, stderr)
+	}
+
+	assertEntryPositionNotShown(t, "make -i vm-env's output", text, 2, "the write step refused the pasted entry")
+
+	assertNoSecrets(t, "make -i vm-env's output", text, []secret{{kind: "entry 2 of VM_ENV", value: entry}})
+
+	assertNoDaemonEnvWrittenClaim(t, "make -i vm-env's output", text, "the entry it was given is refused, so nothing was written")
+
+	assertNoCredentialValues(t, "make -i vm-env's output", text)
 }
 
 // TestMakeVMEnvRefusesADaemonEnvThatIsNotARegularFile pins issue #259's first item: vm-env writes the new
