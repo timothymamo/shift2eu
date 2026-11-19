@@ -434,6 +434,10 @@ const fakeLimactl = `#!/bin/sh
   # SHIFT2EU_TEST_LIMA_CONTROL_STREAM (stdout or stderr) makes it print a C1 control there instead, as the raw
   # byte 0x9B and as its UTF-8 form C2 9B, with a tab beside it (issue #227 part 2, the security audit's third
   # pass): a terminal reads the byte as the start of a control sequence.
+  # SHIFT2EU_TEST_LIMA_FAIL makes the VM print that line on stderr and exit with SHIFT2EU_TEST_LIMA_STATUS (1 when
+  # unset) instead of answering, the way a script in the VM reports a step it could not do (issue #227 part 2, the
+  # closing review): the recipe captures the VM's two streams together, and what it echoes must not read as a
+  # success.
   stdin_copy="$(mktemp "${TMPDIR:-/tmp}/lima-stdin.XXXXXX")" || exit 1
   cat > "${stdin_copy}" || exit 1
   cat "${stdin_copy}" >> "${SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
@@ -456,6 +460,11 @@ const fakeLimactl = `#!/bin/sh
     exit 64
     ;;
   esac
+  if [ -n "${SHIFT2EU_TEST_LIMA_FAIL:-}" ]; then
+    printf '%s\n' "${SHIFT2EU_TEST_LIMA_FAIL}" >&2
+    rm -f "${stdin_copy}"
+    exit "${SHIFT2EU_TEST_LIMA_STATUS:-1}"
+  fi
   if [ -z "${SHIFT2EU_TEST_LIMA_SILENT:-}" ] && [ "$(tail -n 1 "${stdin_copy}")" = vm_gh_wrapper ]; then
     printf 'vm-gh-wrapper: done\n'
   fi
@@ -716,7 +725,9 @@ printf 'UniqueID: %s\n' "${SHIFT2EU_TEST_DS_UNIQUEID-401}"
 // exit 67, for the role account that is no admin. SHIFT2EU_TEST_DS_ADMIN=error exits 64 and answers nothing, and
 // SHIFT2EU_TEST_DS_ADMIN=missing exits 127 and answers nothing the way a shell reports a tool that is not there
 // (issue #227 part 2, the review and the audit of the account check): an admin check that cannot answer must not
-// read as "not an admin".
+// read as "not an admin". SHIFT2EU_TEST_DS_ADMIN_ANSWER says exactly what it answers instead, with
+// SHIFT2EU_TEST_DS_ADMIN_STATUS as its exit status (67 when unset), so a test can pin that only an answer that
+// begins "no " passes (issue #227 part 2, the closing review).
 const fakeDSEditGroup = `#!/bin/sh
 {
   printf 'tool=dseditgroup\n'
@@ -754,6 +765,10 @@ case "${SHIFT2EU_TEST_DS_ADMIN:-0}" in
 error) exit 64 ;;
 missing) exit 127 ;;
 esac
+if [ -n "${SHIFT2EU_TEST_DS_ADMIN_ANSWER+set}" ]; then
+  printf '%s\n' "${SHIFT2EU_TEST_DS_ADMIN_ANSWER}"
+  exit "${SHIFT2EU_TEST_DS_ADMIN_STATUS:-67}"
+fi
 printf 'no %s is NOT a member of %s\n' "${account}" "${group}"
 # dseditgroup exits 67 for a user that is not a member of the group.
 exit 67

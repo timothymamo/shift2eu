@@ -462,7 +462,9 @@ func (f *vmAgentsTokenSSHFixture) sent(t *testing.T) string {
 // SHIFT2EU_TEST_LIMA_ESCAPE_STREAM (stdout or stderr) makes the VM print a terminal escape sequence there before
 // its lines, the way code in the VM can (issue #227 part 2, the security audit's second pass), and
 // SHIFT2EU_TEST_LIMA_CONTROL_STREAM (stdout or stderr) makes it print a C1 control and a tab there instead (issue
-// #227 part 2, the security audit's third pass).
+// #227 part 2, the security audit's third pass). SHIFT2EU_TEST_LIMA_FAIL makes it print that line on stderr and
+// exit with SHIFT2EU_TEST_LIMA_STATUS (1 when unset) instead of its done lines, the way a script in the VM reports
+// a step it could not do (issue #227 part 2, the closing review).
 const fakeAccountLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
@@ -511,6 +513,11 @@ if [ "${last}" = -s ]; then
     exit 64
     ;;
   esac
+  if [ -n "${SHIFT2EU_TEST_LIMA_FAIL:-}" ]; then
+    printf '%s\n' "${SHIFT2EU_TEST_LIMA_FAIL}" >&2
+    rm -f "${copy}"
+    exit "${SHIFT2EU_TEST_LIMA_STATUS:-1}"
+  fi
   case "${SHIFT2EU_TEST_LIMA_REPLY:-install}" in
   install)
     printf 'host-key=%s\n' "${key}"
@@ -1243,8 +1250,10 @@ type kindCheckCase struct {
 // kindCheckCases are the account kinds the check must refuse, and the hidden role account it must accept:
 // macOS gives a login account a UniqueID of 500 and above, and the role account of docs/dev-environment.md one
 // below 500, hidden from the login window and no admin. The admin check fails closed: only dseditgroup's explicit
-// no - its text, with its non-zero status - passes, so an answer that is missing, an error, or the tool itself
-// missing refuses the account (issue #227 part 2, the review of the account check). The UniqueID edges guard the
+// no - its text, beginning "no ", with its non-zero status - passes, so an answer that is missing, an error, or
+// the tool itself missing refuses the account (issue #227 part 2, the review of the account check). An answer that
+// merely holds "no " somewhere does not pass either: the pattern is anchored, so a status 1 "error:no record" and
+// a status 67 "x:no y" both refuse (issue #227 part 2, the closing review). The UniqueID edges guard the
 // parser: 0 and 0450 keep a login account out of the role range, 499 is the last role UniqueID, 500 the first
 // login one, 1000 a login account, and an empty or non-numeric answer is no UniqueID at all (issue #227 part 2,
 // the audit of the account check).
@@ -1255,6 +1264,16 @@ func kindCheckCases() []kindCheckCase {
 		{name: "an account dscl cannot read", env: map[string]string{"SHIFT2EU_TEST_DS_STATUS": "1"}, checks: []string{"UniqueID", "dscl"}},
 		{name: "an admin check that exits 64 and answers nothing", env: map[string]string{"SHIFT2EU_TEST_DS_ADMIN": "error"}, checks: []string{"admin", "dseditgroup"}},
 		{name: "no dseditgroup to run the admin check", env: map[string]string{"SHIFT2EU_TEST_DS_ADMIN": "missing"}, checks: []string{"admin", "dseditgroup"}},
+		{
+			name:   "an admin check whose answer holds :no but does not begin with no",
+			env:    map[string]string{"SHIFT2EU_TEST_DS_ADMIN_ANSWER": "error:no record", "SHIFT2EU_TEST_DS_ADMIN_STATUS": "1"},
+			checks: []string{"admin", "dseditgroup"},
+		},
+		{
+			name:   "an admin check whose answer begins x:no y",
+			env:    map[string]string{"SHIFT2EU_TEST_DS_ADMIN_ANSWER": "x:no y", "SHIFT2EU_TEST_DS_ADMIN_STATUS": "67"},
+			checks: []string{"admin", "dseditgroup"},
+		},
 		{name: "a UniqueID of 0", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "0"}, checks: []string{"UniqueID"}},
 		{name: "a UniqueID of 0450", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "0450"}, checks: []string{"UniqueID"}},
 		{name: "a UniqueID of 500, the first login account", env: map[string]string{"SHIFT2EU_TEST_DS_UNIQUEID": "500"}, checks: []string{"UniqueID"}},
@@ -1467,6 +1486,81 @@ func TestMakeVMAgentsTokenSSHEchoesNoEscapeFromTheVM(t *testing.T) {
 			if tc.control {
 				assertTabAndNewlineSurvive(t, "make "+tc.target, stdout, stderr)
 			}
+		})
+	}
+}
+
+// TestMakeVMAgentsTokenSSHSendsTheVMsFailureToStderr pins where the VM's output goes (issue #227 part 2, the
+// closing review): the recipes of vm-agents-token-ssh and vm-agents-token-ssh-uninstall capture the VM's stdout and
+// stderr together and echo the filtered result, so a VM that fails after printing an error line must leave that
+// line on make's stderr - a failure a maintainer pipes away with make's stdout is a failure they never see - and
+// make must exit non-zero. A VM that succeeds still prints its done line on make's stdout, as before.
+func TestMakeVMAgentsTokenSSHSendsTheVMsFailureToStderr(t *testing.T) {
+	t.Parallel()
+
+	// The VM's own error line, behind a terminal escape sequence the recipe must strip wherever it prints it.
+	const failure = "vm: could not write the keys file"
+
+	cases := []struct {
+		name   string
+		target string
+		reply  string // what the fake VM answers when it succeeds
+		fail   string // what it prints before it exits non-zero; empty: the run succeeds
+	}{
+		{name: "the install, a VM that fails", target: "vm-agents-token-ssh", reply: "install", fail: "\x1b[2J" + failure},
+		{name: "the uninstall, a VM that fails", target: "vm-agents-token-ssh-uninstall", reply: "uninstall", fail: "\x1b[2J" + failure},
+		{name: "the install, a VM that succeeds", target: "vm-agents-token-ssh", reply: "install"},
+		{name: "the uninstall, a VM that succeeds", target: "vm-agents-token-ssh-uninstall", reply: "uninstall"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMAgentsTokenSSHFixture(t)
+			f.setReply(t, tc.reply)
+
+			if tc.fail != "" {
+				f.env["SHIFT2EU_TEST_LIMA_FAIL"] = tc.fail
+				f.env["SHIFT2EU_TEST_LIMA_STATUS"] = "1"
+			}
+
+			stdout, stderr, err := f.run(t, tc.target)
+
+			if tc.fail == "" {
+				if err != nil {
+					t.Fatalf("make %s exited %d although the VM printed its done line:\nstdout: %s\nstderr: %s",
+						tc.target, exitStatusOf(t, err), stdout, stderr)
+				}
+
+				if !strings.Contains(stdout, tc.target+": done") {
+					t.Errorf("make %s does not print the VM's done line on its stdout:\nstdout: %s\nstderr: %s", tc.target, stdout, stderr)
+				}
+
+				if strings.Contains(stderr, tc.target+": done") {
+					t.Errorf("make %s prints the VM's done line on its stderr although the run succeeded: a successful run keeps printing to stdout (issue #227 part 2, the closing review)\nstdout: %s\nstderr: %s",
+						tc.target, stdout, stderr)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("make %s exited 0 although the VM printed %q and exited non-zero: a VM step that failed is no success (issue #227 part 2, the closing review)\nstdout: %q\nstderr: %q",
+					tc.target, failure, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, failure) {
+				t.Errorf("make %s exited %d and the VM's error line %q is not on make's stderr, so a maintainer who pipes make's stdout to a file never sees what the VM could not do (issue #227 part 2, the closing review)\nstdout: %q\nstderr: %q",
+					tc.target, exitStatusOf(t, err), failure, stdout, stderr)
+			}
+
+			if strings.Contains(stdout, failure) {
+				t.Errorf("make %s prints the VM's error line %q on its stdout, beside the failure make reports: the failure text goes to stderr (issue #227 part 2, the closing review)\nstdout: %q\nstderr: %q",
+					tc.target, failure, stdout, stderr)
+			}
+
+			assertNoEscape(t, "make "+tc.target, stdout, stderr)
 		})
 	}
 }

@@ -548,6 +548,79 @@ func TestMakeVMGHWrapperEchoesNoEscapeFromTheVM(t *testing.T) {
 	}
 }
 
+// TestMakeVMGHWrapperSendsTheVMsFailureToStderr pins where the VM's output goes (issue #227 part 2, the closing
+// review): the recipe captures the VM's stdout and stderr together and echoes the filtered result, so a VM that
+// fails after printing an error line must leave that line on make's stderr - a failure a maintainer pipes away
+// with make's stdout is a failure they never see - and make must exit non-zero. A VM that succeeds still prints
+// its done line on make's stdout, as before.
+func TestMakeVMGHWrapperSendsTheVMsFailureToStderr(t *testing.T) {
+	t.Parallel()
+
+	// The VM's own error line, behind a terminal escape sequence the recipe must strip wherever it prints it.
+	const failure = "vm: could not move the real gh"
+
+	cases := []struct {
+		name string
+		fail string // what the fake VM prints before it exits non-zero; empty: the run succeeds
+	}{
+		{name: "the VM fails", fail: "\x1b[2J" + failure},
+		{name: "the VM succeeds"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+
+			env := sb.baseEnv()
+			env["SHIFT2EU_TEST_LIMA_CAPTURE"] = filepath.Join(sb.root, "lima-stdin.log")
+
+			if tc.fail != "" {
+				env["SHIFT2EU_TEST_LIMA_FAIL"] = tc.fail
+				env["SHIFT2EU_TEST_LIMA_STATUS"] = "1"
+			}
+
+			stdout, stderr, err := runMake(t, []string{"vm-gh-wrapper"}, env)
+
+			if tc.fail == "" {
+				if err != nil {
+					t.Fatalf("make vm-gh-wrapper exited %d although the VM printed its done line:\nstdout: %s\nstderr: %s",
+						exitStatusOf(t, err), stdout, stderr)
+				}
+
+				if !strings.Contains(stdout, doneLine) {
+					t.Errorf("make vm-gh-wrapper does not print the VM's done line on its stdout:\nstdout: %s\nstderr: %s", stdout, stderr)
+				}
+
+				if strings.Contains(stderr, doneLine) {
+					t.Errorf("make vm-gh-wrapper prints the VM's done line on its stderr although the run succeeded: a successful run keeps printing to stdout (issue #227 part 2, the closing review)\nstdout: %s\nstderr: %s",
+						stdout, stderr)
+				}
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("make vm-gh-wrapper exited 0 although the VM printed %q and exited non-zero: a VM step that failed is no success (issue #227 part 2, the closing review)\nstdout: %q\nstderr: %q",
+					failure, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, failure) {
+				t.Errorf("make vm-gh-wrapper exited %d and the VM's error line %q is not on make's stderr, so a maintainer who pipes make's stdout to a file never sees what the VM could not do (issue #227 part 2, the closing review)\nstdout: %q\nstderr: %q",
+					exitStatusOf(t, err), failure, stdout, stderr)
+			}
+
+			if strings.Contains(stdout, failure) {
+				t.Errorf("make vm-gh-wrapper prints the VM's error line %q on its stdout, beside the failure make reports: the failure text goes to stderr (issue #227 part 2, the closing review)\nstdout: %q\nstderr: %q",
+					failure, stdout, stderr)
+			}
+
+			assertNoEscape(t, "make vm-gh-wrapper", stdout, stderr)
+		})
+	}
+}
+
 // TestMakeVMGHWrapperFailsWhenTheScriptDoesNotArrive pins the rest of second review item 2: the recipe
 // generates the script first and pipes it second, so a generator that fails fails make before the VM is
 // touched, and a script that ends without the done line fails make too, instead of looking like a success.
