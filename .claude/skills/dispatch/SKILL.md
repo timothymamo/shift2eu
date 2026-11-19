@@ -163,7 +163,8 @@ In order (for a unit already closed when its PR was ready, skip steps 3 to 5):
    round's) and the PR branch, one per line, to a file in
    `<notes dir>`. Never list the default branch or the repository root's current branch. Give the
    maintainer the file's absolute path, the PR each branch belongs to, and
-   `xargs git -C <repository root> branch -D < <absolute path>` (prefixed with `!` in Claude Code).
+   `xargs git -C <repository root> branch -D < <absolute path>` (prefixed with `!` in Claude Code), to run
+   in the VM, never in the workspace on the Mac (docs/dev-environment.md, The host clone).
 8. Dispatch the next queued item whose dependencies have merged, within `<unit limit>` and
    `<review limit>`. When `main` moved, re-verify the other waiting PRs (Verify, last paragraph).
 

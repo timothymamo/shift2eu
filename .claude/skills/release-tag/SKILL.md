@@ -119,8 +119,9 @@ moves or deletes a tag.
    check you could not make: report the rulesets as you read them, ask the maintainer to confirm their
    bypass lists against this step with their own token, and do not go on to step 5's merge until they
    have. Never count a missing or empty list as passing.
-   Then run the `Protect main` gate check from the repository root: `make gate-check`
-   (`dev/protect-main-check.sh`; PRD #161). It reads the repository, `Protect main`, `main`'s
+   Then run the `Protect main` gate check from the repository root: `dev/protect-main-check.sh`
+   (PRD #161). Not `make gate-check`: that is a host target, which make refuses outside the maintainer's
+   host clone (issue #227). It reads the repository, `Protect main`, `main`'s
    `.github/CODEOWNERS` and GitHub's CODEOWNERS errors, and prints one line per check: `ok:`, `gap:`, or
    `unverified:` for what this token may not read (on the App's token, `Protect main`'s bypass list). A
    gap is `Protect main` not enforced, not targeting branches, not including `main` or excluding it,
@@ -134,7 +135,8 @@ moves or deletes a tag.
    - **2**: it could not check (a `gh api` read failed, not exactly one ruleset named `Protect main`, an
      unexpected answer): report its stderr and stop;
    - **3**: no gap, but a check is unverified with this token: stop, and ask the maintainer to run
-     `make gate-check` with their own admin token (`gh auth login` on the Mac) and confirm it exits 0.
+     `make gate-check` from their host clone with their own admin token (`gh auth login` on the Mac) and
+     confirm it exits 0.
      Do not go on to step 5's merge until they have.
 3. Find the open release PR:
    `gh pr list --state open --label "autorelease: pending" --json number,title,headRefName,url`.

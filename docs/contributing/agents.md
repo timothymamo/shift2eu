@@ -28,16 +28,17 @@ directory you clone it into, which holds only the repository and the worktrees d
 dispatcher creates beside it) and nothing else on your Mac:
 
 ```bash
-mkdir shift2eu-ws && cd shift2eu-ws   # the workspace the VM mounts
-git clone https://github.com/timothymamo/shift2eu.git && cd shift2eu
+git clone https://github.com/timothymamo/shift2eu.git ~/src/shift2eu-ws/shift2eu   # the workspace the VM mounts
+git clone https://github.com/timothymamo/shift2eu.git ~/src/shift2eu-host          # the host clone, outside it
 brew install lima
+cd ~/src/shift2eu-host   # every make on the Mac runs here, never in the workspace
 make vm-create    # create and provision the VM (Go, Node.js, linters, gh, Claude Code, pi, dot-agent-deck),
                   # copy your Claude and DeepSeek credentials in, and do the once-only setup
 make deck         # open the deck; detach and the agents keep running in the VM
 ```
 
-The credentials come from your shell's environment, for example a direnv `.envrc` above the
-workspace. Claude Code runs on your Claude subscription, through a token from `claude setup-token`.
+The host clone's direnv `.envrc` sets `WORKSPACE_REPO` to the workspace's checkout and holds the
+credentials ([The host clone](../dev-environment.md#the-host-clone)). Claude Code runs on your Claude subscription, through a token from `claude setup-token`.
 The agents' GitHub credential is the agents App's installation token, which a job on the Mac mints and
 writes into the VM (PRD #161, ADR 0031).
 
