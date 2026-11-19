@@ -264,7 +264,10 @@ without a terminal it does so without asking. So `make vm-up` starts an existing
 names the directory, for a `Stopped` or `Running` instance whose `lima.yaml` is gone or a dangling symlink
 it stops too, for any other status it stops and names the status, and when it cannot list the instances or
 read the status at all it stops and says so. Before any of that it refuses a `LIMA_INSTANCE` that is not
-letters, digits, `.`, `_` and `-`, starting with a letter or digit.
+letters, digits, `.`, `_` and `-`, starting with a letter or digit, as every target that uses
+`LIMA_INSTANCE` does (`vm-*`, `deck`, `deck-restart` and the `agents-token*` targets, issue #252): the
+check runs before the target runs anything, and make itself never expands the value, so a name that
+carries a `$(...)` is refused, not run. Targets that do not use it, such as `make check`, ignore it.
 
 Which fix applies depends on whether the directory still holds a `lima.yaml`:
 
