@@ -344,9 +344,10 @@ the trigger option below are the levers.
   line break would put the rest of the path on a line of its own), or anything around the object fails
   the run, and nothing is posted. The category alone is not strict (issue #292). It is normalised first
   (surrounding white space trimmed, lower-cased, `_` and spaces turned into `-`), so `Readability` is
-  `readability`. A normalised category still outside the list that contains `inject` is read as
-  `prompt-injection`: it is the one category that blocks whatever its severity, so a near-miss spelling
-  of it must not fail open. A missing one, or any other one outside the list, keeps the finding as
+  `readability`. A normalised category still outside the list that contains `inject` or `prompt` is
+  read as `prompt-injection`: it is the one category that blocks whatever its severity, so a near-miss
+  spelling of it must not fail open, even one that loses `inject` (`prompt-inj`, `prompt-injetion`). A
+  missing one, or any other one outside the list, keeps the finding as
   `uncategorised` (its raw text is never shown), and the review says how many findings it shows as
   uncategorised; the severity still decides whether such a finding blocks. The model never names the
   event: the program decides it from the findings, so no answer can make it approve, and the poster

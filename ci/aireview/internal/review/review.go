@@ -74,8 +74,8 @@ const (
 // CategoryUncategorised is the category ParseAnswer gives a finding whose
 // category is missing or, once normalised, not one of the accepted categories,
 // so one category the model got wrong costs no finding (issue #292). A category
-// naming injection is read as CategoryPromptInjection first and never falls
-// back here. It is not an accepted category itself, and the prompt never
+// containing "inject" or "prompt" is read as CategoryPromptInjection first and
+// never falls back here. It is not an accepted category itself, and the prompt never
 // offers it: a model that writes "uncategorised" gets the same fallback. It
 // never blocks by itself; the finding's severity decides.
 const CategoryUncategorised Category = "uncategorised"

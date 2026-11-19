@@ -55,9 +55,9 @@ type rawFinding struct {
 // the one field that is not strict. It is normalised first (surrounding white
 // space trimmed, lower-cased, every "_" and space turned into "-"), so
 // "Readability" and "prompt_injection" are accepted categories. A normalised
-// category that is still not accepted but contains "inject" is read as
-// CategoryPromptInjection, so a near-miss spelling of it still blocks. Any
-// other, and a missing or null one, keeps the finding with
+// category that is still not accepted but contains "inject" or "prompt" is
+// read as CategoryPromptInjection, so a near-miss spelling of it still
+// blocks. Any other, and a missing or null one, keeps the finding with
 // CategoryUncategorised, so one unknown category costs no finding. The raw
 // category text is never kept. An answer with no findings is valid, findings
 // then being empty, not nil.
@@ -152,9 +152,10 @@ func (rf rawFinding) finding() (Finding, error) {
 // got wrong costs no finding (issue #292). raw is normalised: surrounding white
 // space trimmed, lower-cased, every "_" and space turned into "-". A normalised
 // value equal to an accepted category is that category. Otherwise one that
-// contains "inject" is CategoryPromptInjection, so a near-miss spelling of it
-// still blocks rather than failing open; anything else is
-// CategoryUncategorised. raw itself is never kept.
+// contains "inject" or "prompt" is CategoryPromptInjection, so a near-miss
+// spelling of it still blocks rather than failing open, even one that loses
+// the word injection ("prompt-inj"); anything else is CategoryUncategorised.
+// raw itself is never kept.
 func readCategory(raw string) Category {
 	normalised := strings.Map(func(r rune) rune {
 		if r == '_' || r == ' ' {
@@ -168,7 +169,7 @@ func readCategory(raw string) Category {
 		return c
 	}
 
-	if strings.Contains(normalised, "inject") {
+	if strings.Contains(normalised, "inject") || strings.Contains(normalised, "prompt") {
 		return CategoryPromptInjection
 	}
 
