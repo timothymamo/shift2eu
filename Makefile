@@ -104,41 +104,51 @@ HOST_REPO_NAME      := $(notdir $(HOST_WORKSPACE_REPO))
 # this file, that it runs from the host clone, and stops with $(error) otherwise: before any target, any
 # prerequisite (vm-env's vm-env-check), any sub-make and any recipe line runs, even under make -i or -k. A
 # sub-make (make vm-create's $(MAKE) vm-up) has its own goal and checks again. It refuses when WORKSPACE_REPO is
-# unset or empty, holds a character other than letters, digits and . _ - / + @ , ~ # = (WORKSPACE_REPO_CHARS), or
+# unset or empty, holds a character other than letters, digits and . _ - / + @ # = (WORKSPACE_REPO_CHARS), or
 # is not absolute, and when REPO_ROOT, the checkout make runs from, is the workspace (WORKSPACE_REPO's parent,
 # its symlinks resolved), inside it or holds it. make with no goal runs help, which is no host target. The goals
-# it checks are MAKECMDGOALS and a .DEFAULT_GOAL set on the command line (make .DEFAULT_GOAL=vm-up runs vm-up
-# with MAKECMDGOALS empty); a MAKECMDGOALS set on the command line (make MAKECMDGOALS= vm-up) hides the real
-# goals, so make refuses it whatever the goals are.
+# it checks are MAKECMDGOALS, which make sets from its command line's goals (origin default, or undefined with
+# no goal). make reads MAKECMDGOALS and .DEFAULT_GOAL from anywhere else too, and then runs goals this check
+# never sees: MAKECMDGOALS from the command line (make MAKECMDGOALS= vm-up) or the environment (MAKECMDGOALS=
+# make vm-up, honoured with or without make -e), and .DEFAULT_GOAL from the command line (make
+# .DEFAULT_GOAL=vm-up runs vm-up with MAKECMDGOALS empty) or the environment (make -e runs it). So make refuses
+# every run where either has such an origin, whatever the goals are, and names the variable. make sets neither
+# in a sub-make's environment (nothing here exports them), so vm-create's $(MAKE) vm-up is checked as any run.
 #
 # This is a guard against the maintainer's mistakes, NOT a security boundary: the workspace's Makefile is one
 # the agents can edit, so a make run in the workspace runs whatever that file says, check or no check. The
 # protection is that the maintainer runs make for these targets only in the host clone, whose files come only
 # from git pull --ff-only of GitHub's reviewed main (docs/dev-environment.md, The host clone; ADR 0031).
-ifeq ($(origin MAKECMDGOALS),command line)
-$(error MAKECMDGOALS is set on the command line, which hides the goals make runs, so make cannot tell whether one is a host target ($(HOST_TARGETS)); those run only from the host clone, never with MAKECMDGOALS on the command line (docs/dev-environment.md, The host clone))
+host_hidden = $(error $(1) is set on the command line or in the environment (its origin is $(origin $(1))), which hides the goals make runs, so make cannot tell whether one is a host target ($(HOST_TARGETS)); those run only from the host clone, never with MAKECMDGOALS or .DEFAULT_GOAL set on the command line or in the environment (docs/dev-environment.md, The host clone))
+ifeq ($(filter default undefined,$(origin MAKECMDGOALS)),)
+$(call host_hidden,MAKECMDGOALS)
 endif
-HOST_GOALS := $(filter $(HOST_TARGETS),$(MAKECMDGOALS) $(if $(filter command line,$(origin .DEFAULT_GOAL)),$(.DEFAULT_GOAL)))
+ifneq ($(filter command line environment override,$(origin .DEFAULT_GOAL)),)
+$(call host_hidden,.DEFAULT_GOAL)
+endif
+HOST_GOALS := $(filter $(HOST_TARGETS),$(MAKECMDGOALS))
 host_refuse = $(error $(firstword $(HOST_GOALS)): runs only from the host clone, a clone outside the workspace the VM mounts, with WORKSPACE_REPO set in its .envrc to the absolute path of the repository's checkout in the workspace: $(1) (docs/dev-environment.md, The host clone))
-# The characters a WORKSPACE_REPO may hold: letters, digits and . _ - / + @ , ~ # =. That leaves out
-# whitespace, every character a shell reads inside double or single quotes ($ ` " ' \), make's pattern
-# character (%), the ':' Lima splits a --mount-only value on, and every other one a shell or make gives a
-# meaning (; & ( ) ^ { } ! * ? [ ] < > |). The recipes paste the value inside quotes, so these leave it one
+# The characters a WORKSPACE_REPO may hold: letters, digits and . _ - / + @ # =. That leaves out whitespace,
+# every character a shell reads inside double or single quotes ($ ` " ' \), make's pattern character (%), the
+# ':' Lima splits a --mount-only value on, the ',' and '~' it reads too - limactl's --mount-only is a pflag
+# StringSlice, which splits its value on commas and expands a leading ~ of every part, so
+# /Users/x/ws,~/shift2eu would mount the home directory read-write - and every other one a shell or make gives
+# a meaning (; & ( ) ^ { } ! * ? [ ] < > |). The recipes paste the value inside quotes, so these leave it one
 # literal word. '=' stays: Go's t.TempDir keeps it from a test's name (GATE_TRANSITION=1), and inside quotes it
-# means nothing to a shell, make or Lima. The whitespace test is LIMA_INSTANCE_VALID's (see there). The message
-# describes the list and never shows the value, which may be a credential typed where a path goes.
+# means nothing to a shell, make or Lima. The whitespace test is LIMA_INSTANCE_VALID's (see there). No message
+# shows a value that fails these checks, which may be a credential typed where a path goes.
 host_comma := ,
 host_hash   := \#
-WORKSPACE_REPO_CHARS := $(LIMA_INSTANCE_CHARS) / + @ $(host_comma) ~ $(host_hash) =
+WORKSPACE_REPO_CHARS := $(LIMA_INSTANCE_CHARS) / + @ $(host_hash) =
 ifneq ($(HOST_GOALS),)
 ifeq ($(strip $(WORKSPACE_REPO)),)
 $(call host_refuse,WORKSPACE_REPO is not set)
 else ifneq ($(subst xx,,x$(call lima_instance_strip,$(WORKSPACE_REPO_CHARS),$(WORKSPACE_REPO))x),)
-$(call host_refuse,WORKSPACE_REPO holds a character other than letters$(host_comma) digits and . _ - / + @ $(host_comma) ~ $(host_hash) = (its value is not shown))
+$(call host_refuse,WORKSPACE_REPO holds a character other than letters$(host_comma) digits and . _ - / + @ $(host_hash) = (its value is not shown))
 else ifeq ($(filter /%,$(WORKSPACE_REPO)),)
-$(call host_refuse,WORKSPACE_REPO=$(WORKSPACE_REPO) is not an absolute path)
+$(call host_refuse,WORKSPACE_REPO is not an absolute path (its value is not shown))
 else ifeq ($(HOST_REPO_NAME),)
-$(call host_refuse,WORKSPACE_REPO=$(WORKSPACE_REPO) names no checkout below /)
+$(call host_refuse,WORKSPACE_REPO names no checkout below / (its value is not shown))
 endif
 # The workspace with its symlinks resolved, as git resolves REPO_ROOT's (macOS: /var is /private/var), or as
 # written when it does not exist. The value passed the character check above, so it is safe in single quotes.
@@ -640,8 +650,9 @@ agents-token-refresh: ## Mint the agents App token now and again before each one
 # no file: the job is the instance's refresher. Without launchctl (Linux) that check is skipped. Like install
 # and uninstall below, it reads LIMA_INSTANCE from its environment ($$LIMA_INSTANCE) and refuses an invalid
 # name with $(LIMA_INSTANCE_CHECK) before it runs: the name becomes part of its file names and of the job's label.
-# The refresher runs without the two credentials vm-env copies into the VM (env -u), which it never needs and
-# which a shell with the host clone's .envrc loaded may hold (issue #227).
+# The refresher runs without the default VM_ENV credentials, CLAUDE_CODE_OAUTH_TOKEN and DEEPSEEK_API_KEY
+# (env -u), which it never needs and which a shell with the host clone's .envrc loaded may hold (issue #227).
+# A name a custom VM_ENV adds is not stripped.
 .PHONY: agents-token-refresh-start
 agents-token-refresh-start: ## Start the agents App token refresh in the background, one per VM instance, and print where its log is (host clone)
 	$(LIMA_INSTANCE_CHECK)
