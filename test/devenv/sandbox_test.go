@@ -1059,6 +1059,24 @@ func (c *contendersOnAStaleLock) held(step string) bool {
 	return err == nil
 }
 
+// reached lists the steps of the interleaving and whether a contender touched the marker of each, in the order
+// the interleaving needs them: a failure message's view of how far the three contenders came, which names the
+// one that never reached its hold instead of only saying that the wait timed out.
+func (c *contendersOnAStaleLock) reached() string {
+	steps := make([]string, 0, 4)
+
+	for _, step := range []string{contenderReadTheClock, contenderAskedOwnership, contenderReachedItsTake, contenderMovedTheLockAside} {
+		state := "not-reached"
+		if c.held(step) {
+			state = "reached"
+		}
+
+		steps = append(steps, step+"="+state)
+	}
+
+	return strings.Join(steps, " ")
+}
+
 // release lets the contender held of hold go. It fails the test instead of hanging it when no contender ever
 // came to read that fifo: the open of its write end waits for the reader the hold names.
 func (c *contendersOnAStaleLock) release(t *testing.T, hold string) {

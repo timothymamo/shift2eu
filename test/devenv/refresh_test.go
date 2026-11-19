@@ -1181,6 +1181,14 @@ func TestAgentsAppTokenRefreshNeverTakesItsOwnLockForAnotherRefresh(t *testing.T
 // The winner is held in its loop right after the clock read and before its mint, so the check it needs is the one
 // before the mint itself, not one at the top of the loop: between the two, the lock can turn over exactly as it
 // does here.
+//
+// The order in which the three start is the test's too, not the runner's: the mover and the taker start first and
+// are held before either can touch the lock, the mover only after it has read the stale owner, and the winner
+// starts once both are held. Started together, the winner's takeover of the stale lock and the mover's read of
+// that lock's owner raced: the winner could take the lock over before the mover read the owner, which then found
+// a running refresh where it expected the stale one and left as a losing refresher without ever moving a lock
+// aside, and a mover that created its own lock in the winner's takeover window won the lock outright and left the
+// winner to do the same. Both left this test's holds unreached under load.
 func TestAgentsAppTokenRefreshThreeContendersOnAStaleLockLeaveOneHolder(t *testing.T) {
 	t.Parallel()
 
@@ -1197,26 +1205,52 @@ func TestAgentsAppTokenRefreshThreeContendersOnAStaleLockLeaveOneHolder(t *testi
 
 	race := f.sb.useThreeContendersOnAStaleLock(t, f.refreshEnv(), lock)
 
-	// All three start against the stale lock before the test waits on any: the mover cannot touch the lock
-	// before it is released, the taker cannot before its own release, and the winner is the only one left to
-	// take the stale lock over.
+	// The mover and the taker start against the stale lock: the mover is held once it has read the stale owner,
+	// before it asks whether that owner runs a refresh, and the taker at the top of its take_lock, before it
+	// touches the lock at all. Neither can take the lock over from here.
 	mover := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, race.envMover)
 	taker := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, race.envTaker)
-	winner := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, race.envWinner)
 
 	// What a failure has to show: each refresher's pid, whether it runs and its output, and the state directory
-	// with the lock's pid and whatever the put-back left behind.
-	contest := func() string {
-		return fmt.Sprintf("the winner (pid %d, running %t) stderr:\n%s\nthe mover (pid %d, running %t) stderr:\n%s\nthe taker (pid %d, running %t) stderr:\n%s\nstate directory:\n%s",
-			winner.pid(), winner.running(), winner.errOut(), mover.pid(), mover.running(), mover.errOut(),
-			taker.pid(), taker.running(), taker.errOut(), describeTree(f.sb.stateDir()))
+	// with the lock's pid and whatever the put-back left behind. The winner joins the report once it starts.
+	type contender struct {
+		name string
+		run  *runningScript
 	}
 
-	// Each of the three reaches its hold, and the winner holds the lock by then, before anything mints.
-	waitFor(t, 30*time.Second, "the three refreshers to reach their holds with the winner holding the stale lock", func() bool {
-		return race.held(contenderReadTheClock) && race.held(contenderAskedOwnership) &&
-			race.held(contenderReachedItsTake) && lockHoldsPid(lock, winner.pid())
-	})
+	contenders := []contender{{"the mover", mover}, {"the taker", taker}}
+
+	contest := func() string {
+		lines := make([]string, 0, len(contenders)+2)
+		for _, c := range contenders {
+			lines = append(lines, fmt.Sprintf("%s (pid %d, running %t) stderr:\n%s", c.name, c.run.pid(), c.run.running(), c.run.errOut()))
+		}
+
+		lines = append(lines, "state directory:", describeTree(f.sb.stateDir()))
+
+		return strings.Join(lines, "\n")
+	}
+
+	// The mover has read the stale lock's owner and the taker is at the top of its take_lock: the stale lock is
+	// still the stale one, and the winner is the only refresher left that can take it over.
+	if !poll(30*time.Second, func() bool {
+		return race.held(contenderAskedOwnership) && race.held(contenderReachedItsTake)
+	}) {
+		t.Fatalf("the mover and the taker did not reach their holds before the winner started within 30s: the steps reached were %s; the mover must reach ps only for the stale owner it read, so no refresher may have taken the stale lock over yet\n%s", race.reached(), contest())
+	}
+
+	// The winner starts now, and takes the stale lock over: nothing else can touch the lock until the test lets a
+	// contender go.
+	winner := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, race.envWinner)
+
+	contenders = append(contenders, contender{"the winner", winner})
+
+	// The winner reaches its hold with the lock in hand, before anything mints.
+	if !poll(30*time.Second, func() bool {
+		return race.held(contenderReadTheClock) && lockHoldsPid(lock, winner.pid())
+	}) {
+		t.Fatalf("the winner did not reach its hold in the refresh loop with the stale lock in hand within 30s: the steps reached were %s; the winner is the only refresher that may take the stale lock over, so a missing step above names the contender that took it\n%s", race.reached(), contest())
+	}
 
 	if minted := len(f.api.minted()); minted != 0 {
 		t.Fatalf("%d token(s) were minted before the test released any refresher, so the holds staged no interleaving: the winner must wait in its loop before it mints (issue #288)\n%s", minted, contest())
@@ -1226,9 +1260,9 @@ func TestAgentsAppTokenRefreshThreeContendersOnAStaleLockLeaveOneHolder(t *testi
 	// owner it read before, so what it moves aside is the winner's fresh lock and not the stale one.
 	race.release(t, holdTheMover)
 
-	waitFor(t, 30*time.Second, "the mover to move the winner's fresh lock aside", func() bool {
-		return race.held(contenderMovedTheLockAside)
-	})
+	if !poll(30*time.Second, func() bool { return race.held(contenderMovedTheLockAside) }) {
+		t.Fatalf("the mover did not move the winner's fresh lock aside within 30s, so this run forced no interleaving of issue #288: the steps reached were %s\n%s", race.reached(), contest())
+	}
 
 	if _, err := os.Stat(lock); err == nil {
 		t.Fatalf("the lock %s is still in place after the mover moved the winner's lock aside, so the mover took something else: this run forced no interleaving of issue #288\n%s", lock, contest())
