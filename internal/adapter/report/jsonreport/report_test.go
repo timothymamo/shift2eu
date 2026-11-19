@@ -338,7 +338,8 @@ func TestReportDocumentShape(t *testing.T) {
 			want any
 		}{
 			// encoding/json decodes every JSON number into a float64.
-			{name: "schema version", path: []any{"schemaVersion"}, want: float64(currentSchemaVersion)},
+			// The document is the frozen version 2 one render writes.
+			{name: "schema version", path: []any{"schemaVersion"}, want: float64(jsonreport.Version2)},
 			{name: "kind", path: []any{"kind"}, want: "assessment"},
 			{name: "inventory name", path: []any{"inventoryName"}, want: inventoryFileName},
 			{name: "source", path: []any{"source"}, want: sourceName},
@@ -665,6 +666,28 @@ func TestReportDocumentShape(t *testing.T) {
 		if diff := cmp.Diff(want, valueAt(t, emptyDocument, "summary")); diff != "" {
 			t.Errorf("the empty assessment's summary mismatch (-want +got):\n%s", diff)
 		}
+	})
+
+	// The same assessment in version 3, the version a run writes when it names
+	// none: without estimates the two versions write the same document but for
+	// the version it declares, and that document is one the version 3 schema
+	// describes (docs/adr/0018, issue #307).
+	t.Run("version 3", func(t *testing.T) {
+		t.Parallel()
+
+		got := renderVersion(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}, jsonreport.Version3)
+		v3 := decodeJSON(t, got)
+
+		if diff := cmp.Diff(float64(jsonreport.Version3), valueAt(t, v3, "schemaVersion")); diff != "" {
+			t.Errorf("schemaVersion mismatch (-want +got):\n%s", diff)
+		}
+
+		if diff := cmp.Diff(objectKeysAt(t, document), objectKeysAt(t, v3)); diff != "" {
+			t.Errorf("the version 3 document's keys differ from version 2's, want only the version to differ:\n%s",
+				diff)
+		}
+
+		checkDocumentAgainstSchema(t, got, schemaFileFor("assessment", jsonreport.Version3))
 	})
 }
 
@@ -2477,7 +2500,9 @@ func counted(v int) *int { return &v }
 // chose, at the top level, with or without estimates (PRD #190 milestone 8: the
 // report header names the region per target), and names none when no region was
 // chosen: the estimate basis is not in a document without estimates, so the
-// top-level key is all such a document has to say about the region.
+// top-level key is all such a document has to say about the region. It pins both
+// versions this package writes, each against the schema file of its own version
+// (docs/adr/0018, issue #307).
 func TestReportNamesTheChosenRegion(t *testing.T) {
 	t.Parallel()
 
@@ -2506,35 +2531,37 @@ func TestReportNamesTheChosenRegion(t *testing.T) {
 		},
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	for _, version := range writtenSchemaVersions {
+		for _, tc := range tests {
+			t.Run(tc.name+" in schemaVersion "+strconv.Itoa(version), func(t *testing.T) {
+				t.Parallel()
 
-			a := assessment.AssessWith(newInventory(t, sourceName, estimateResources()), testutil.ReportCatalog(t), tc.opts)
-			got := render(t, a, meta)
-			checkDocument(t, got)
+				a := assessment.AssessWith(newInventory(t, sourceName, estimateResources()), testutil.ReportCatalog(t), tc.opts)
+				got := renderVersion(t, a, meta, version)
+				checkDocument(t, got)
 
-			document := decodeJSON(t, got)
+				document := decodeJSON(t, got)
 
-			if _, ok := document["region"]; ok != (tc.want != "") {
-				t.Errorf("the document holds a region key = %t, want %t: %q",
-					ok, tc.want != "", objectKeysAt(t, document))
-			}
-
-			if tc.want != "" {
-				if diff := cmp.Diff(tc.want, valueAt(t, document, "region")); diff != "" {
-					t.Errorf("region mismatch (-want +got):\n%s", diff)
+				if _, ok := document["region"]; ok != (tc.want != "") {
+					t.Errorf("the document holds a region key = %t, want %t: %q",
+						ok, tc.want != "", objectKeysAt(t, document))
 				}
-			}
 
-			// The document must stay one the schema file describes: a key it
-			// declares no property for fails closed objects.
-			s := readSchema(t, filepath.Join("schema", schemaFileFor("assessment", currentSchemaVersion)))
+				if tc.want != "" {
+					if diff := cmp.Diff(tc.want, valueAt(t, document, "region")); diff != "" {
+						t.Errorf("region mismatch (-want +got):\n%s", diff)
+					}
+				}
 
-			for _, problem := range s.validate(document, "$") {
-				t.Errorf("the document does not match the schema: %s", problem)
-			}
-		})
+				// The document must stay one the schema file of its version
+				// describes: a key it declares no property for fails closed objects.
+				s := readSchema(t, filepath.Join("schema", schemaFileFor("assessment", version)))
+
+				for _, problem := range s.validate(document, "$") {
+					t.Errorf("the document does not match the schema: %s", problem)
+				}
+			})
+		}
 	}
 }
 

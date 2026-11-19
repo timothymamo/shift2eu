@@ -212,7 +212,10 @@ func TestExamplesReportVariants(t *testing.T) {
 	t.Run("json", func(t *testing.T) {
 		t.Parallel()
 
-		got := assess(t, scalewayKey, inventory, "--format", jsonFormat)
+		// The golden is the version 2 document earlier releases wrote, so the
+		// run names the version: `--format json` alone writes version 3
+		// (docs/adr/0030, issue #307).
+		got := assess(t, scalewayKey, inventory, "--format", jsonFormat, "--schema-version", "2")
 		if got.code != 0 {
 			t.Fatalf("exit code = %d, want 0; stderr = %q", got.code, got.stderr)
 		}
@@ -231,7 +234,8 @@ func TestExamplesReportVariants(t *testing.T) {
 		}
 
 		if doc.SchemaVersion != 2 {
-			t.Errorf("schemaVersion = %d, want 2 (docs/adr/0030)", doc.SchemaVersion)
+			t.Errorf("schemaVersion = %d, want 2, the version the run names with --schema-version (docs/adr/0030)",
+				doc.SchemaVersion)
 		}
 
 		if doc.Kind != "assessment" {

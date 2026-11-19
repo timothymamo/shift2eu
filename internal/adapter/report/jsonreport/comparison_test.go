@@ -199,7 +199,8 @@ func TestReportComparison(t *testing.T) {
 
 	document := decodeJSON(t, got)
 
-	if diff := cmp.Diff(float64(currentSchemaVersion), valueAt(t, document, "schemaVersion")); diff != "" {
+	// The document is the frozen version 2 one renderComparison writes.
+	if diff := cmp.Diff(float64(jsonreport.Version2), valueAt(t, document, "schemaVersion")); diff != "" {
 		t.Errorf("schemaVersion mismatch (-want +got):\n%s", diff)
 	}
 
@@ -1270,7 +1271,9 @@ func TestReportComparisonBillingCapHours(t *testing.T) {
 		}
 	}
 
-	s := readSchema(t, filepath.Join("schema", schemaFileFor("comparison", currentSchemaVersion)))
+	// The document is the version 2 one renderComparison writes, so it must
+	// match the version 2 schema (docs/adr/0018, issue #307).
+	s := readSchema(t, filepath.Join("schema", schemaFileFor("comparison", jsonreport.Version2)))
 
 	for _, problem := range s.validate(document, "$") {
 		t.Errorf("the document does not match the schema: %s", problem)
