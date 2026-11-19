@@ -10,7 +10,10 @@ import (
 	"strings"
 )
 
-// The severities and categories ParseAnswer accepts, compared exactly.
+// The severities and categories ParseAnswer accepts. Severities are compared
+// exactly, categories after normalisation (readCategory).
+// CategoryUncategorised is not one of them: it is the fallback for any other
+// category.
 var (
 	severities = []Severity{SeverityBlocker, SeveritySuggestion, SeverityNit}
 	categories = []Category{
@@ -41,15 +44,23 @@ type rawFinding struct {
 //	{"summary": "...", "findings": [{"severity": "blocker", "category": "correctness",
 //	  "path": "internal/x/y.go", "line": 12, "title": "...", "body": "..."}]}
 //
-// summary, findings, and each finding's severity, category, title and body are
-// required; path and line are optional. It returns an error wrapping
+// summary, findings, and each finding's severity, title and body are required;
+// category, path and line are optional. It returns an error wrapping
 // ErrMalformedAnswer for: text before or after the object (a code fence
 // included), a second value, an unknown field at any level, a missing or empty
-// summary, title or body, a findings that is not an array, a severity or
-// category outside the constants of this package (compared exactly, so
-// "Blocker" is refused), a negative line, a line above 0 without a path, a path
-// that is absolute or holds a ".." element or a backslash. An answer with no
-// findings is valid, findings then being empty, not nil.
+// summary, title or body, a findings that is not an array, a severity outside
+// the constants of this package (compared exactly, so "Blocker" is refused), a
+// negative line, a line above 0 without a path, a path that is absolute or
+// holds a ".." element, a backslash or a control character. The category is
+// the one field that is not strict. It is normalised first (surrounding white
+// space trimmed, lower-cased, every "_" and space turned into "-"), so
+// "Readability" and "prompt_injection" are accepted categories. A normalised
+// category that is still not accepted but contains "inject" or "prompt" is
+// read as CategoryPromptInjection, so a near-miss spelling of it still
+// blocks. Any other, and a missing or null one, keeps the finding with
+// CategoryUncategorised, so one unknown category costs no finding. The raw
+// category text is never kept. An answer with no findings is valid, findings
+// then being empty, not nil.
 func ParseAnswer(text string) (Answer, error) {
 	src := strings.NewReader(text)
 	dec := json.NewDecoder(src)
@@ -94,8 +105,9 @@ func (rf rawFinding) finding() (Finding, error) {
 		return Finding{}, errors.New("missing or unknown severity")
 	}
 
-	if rf.Category == nil || !slices.Contains(categories, Category(*rf.Category)) {
-		return Finding{}, errors.New("missing or unknown category")
+	category := CategoryUncategorised
+	if rf.Category != nil {
+		category = readCategory(*rf.Category)
 	}
 
 	if rf.Title == nil || strings.TrimSpace(*rf.Title) == "" {
@@ -108,7 +120,7 @@ func (rf rawFinding) finding() (Finding, error) {
 
 	f := Finding{
 		Severity: Severity(*rf.Severity),
-		Category: Category(*rf.Category),
+		Category: category,
 		Title:    *rf.Title,
 		Body:     *rf.Body,
 	}
@@ -134,6 +146,34 @@ func (rf rawFinding) finding() (Finding, error) {
 	}
 
 	return f, nil
+}
+
+// readCategory reads the model's category leniently, so one category the model
+// got wrong costs no finding (issue #292). raw is normalised: surrounding white
+// space trimmed, lower-cased, every "_" and space turned into "-". A normalised
+// value equal to an accepted category is that category. Otherwise one that
+// contains "inject" or "prompt" is CategoryPromptInjection, so a near-miss
+// spelling of it still blocks rather than failing open, even one that loses
+// the word injection ("prompt-inj"); anything else is CategoryUncategorised.
+// raw itself is never kept.
+func readCategory(raw string) Category {
+	normalised := strings.Map(func(r rune) rune {
+		if r == '_' || r == ' ' {
+			return '-'
+		}
+
+		return r
+	}, strings.ToLower(strings.TrimSpace(raw)))
+
+	if c := Category(normalised); slices.Contains(categories, c) {
+		return c
+	}
+
+	if strings.Contains(normalised, "inject") || strings.Contains(normalised, "prompt") {
+		return CategoryPromptInjection
+	}
+
+	return CategoryUncategorised
 }
 
 // validPath reports whether p is a slash-separated path relative to the

@@ -745,6 +745,410 @@ deleted file mode 100644
 	}
 }
 
+// TestRenderCountsFindingsWithCorrectSingularAndPlural pins the summary's
+// wording (issue #291): the event reason, the sentence about the findings that
+// are inline comments and the sentence about the ones that follow in the body
+// each say "1 finding" for one and "N findings" for more, so a review of one
+// inline and one body finding never reads as if a finding went missing. The
+// rendered body never says "1 findings".
+func TestRenderCountsFindingsWithCorrectSingularAndPlural(t *testing.T) {
+	t.Parallel()
+
+	inline := func(title string, line int) review.Finding {
+		return review.Finding{
+			Severity: review.SeveritySuggestion,
+			Category: review.CategoryReadability,
+			Path:     "internal/x/y.go",
+			Line:     line,
+			Title:    title,
+			Body:     "An inline finding, " + title + ".",
+		}
+	}
+
+	blockingInline := func(title string, line int) review.Finding {
+		finding := inline(title, line)
+		finding.Severity = review.SeverityBlocker
+
+		return finding
+	}
+
+	inBody := func(title string) review.Finding {
+		return review.Finding{
+			Severity: review.SeveritySuggestion,
+			Category: review.CategoryCorrectness,
+			Title:    title,
+			Body:     "A finding in the body, " + title + ".",
+		}
+	}
+
+	blockingInBody := func(title string) review.Finding {
+		finding := inBody(title)
+		finding.Severity = review.SeverityBlocker
+
+		return finding
+	}
+
+	cases := []struct {
+		name       string
+		findings   []review.Finding
+		event      review.Event
+		want       []string
+		wantAbsent []string
+	}{
+		{
+			name:     "one finding, none blocking, inline only",
+			findings: []review.Finding{inline("One", 2)},
+			event:    review.EventComment,
+			want:     []string{"1 finding, none blocking.", "1 finding is an inline comment on the diff."},
+			wantAbsent: []string{
+				"### Findings",
+				"### Other findings",
+				"not on a line of it",
+			},
+		},
+		{
+			name:     "two findings, none blocking, inline only",
+			findings: []review.Finding{inline("One", 1), inline("Two", 2)},
+			event:    review.EventComment,
+			want:     []string{"2 findings, none blocking.", "2 findings are inline comments on the diff."},
+			wantAbsent: []string{
+				"### Findings",
+				"### Other findings",
+			},
+		},
+		{
+			name:     "one inline finding and one in the body",
+			findings: []review.Finding{inline("One", 2), inBody("Two")},
+			event:    review.EventComment,
+			want: []string{
+				"2 findings, none blocking.",
+				"### Other findings",
+				"1 finding is an inline comment on the diff. The finding below is not on a line of it.",
+			},
+		},
+		{
+			name:     "two inline findings and three in the body",
+			findings: []review.Finding{inline("One", 1), inline("Two", 2), inBody("Three"), inBody("Four"), inBody("Five")},
+			event:    review.EventComment,
+			want: []string{
+				"5 findings, none blocking.",
+				"### Other findings",
+				"2 findings are inline comments on the diff. The 3 findings below are not on a line of it.",
+			},
+		},
+		{
+			name:     "the Other findings block as a whole",
+			findings: []review.Finding{inline("One", 2), inBody("Two")},
+			event:    review.EventComment,
+			want: []string{
+				"\n### Other findings\n\n1 finding is an inline comment on the diff. The finding below is not on a line of it.\n",
+			},
+		},
+		{
+			name:     "one inline finding and two in the body",
+			findings: []review.Finding{inline("One", 2), inBody("Two"), inBody("Three")},
+			event:    review.EventComment,
+			want: []string{
+				"1 finding is an inline comment on the diff. The 2 findings below are not on a line of it.",
+			},
+		},
+		{
+			name:     "two inline findings and one in the body",
+			findings: []review.Finding{inline("One", 1), inline("Two", 2), inBody("Three")},
+			event:    review.EventComment,
+			want: []string{
+				"2 findings are inline comments on the diff. The finding below is not on a line of it.",
+			},
+		},
+		{
+			name:     "one finding in the body only",
+			findings: []review.Finding{inBody("One")},
+			event:    review.EventComment,
+			want:     []string{"1 finding, none blocking.", "### Findings"},
+			wantAbsent: []string{
+				"inline comment",
+				"### Other findings",
+			},
+		},
+		{
+			name:     "three findings in the body only",
+			findings: []review.Finding{inBody("One"), inBody("Two"), inBody("Three")},
+			event:    review.EventComment,
+			want:     []string{"3 findings, none blocking.", "### Findings"},
+			wantAbsent: []string{
+				"inline comment",
+				"### Other findings",
+			},
+		},
+		{
+			name:     "one blocking finding with the switch on",
+			findings: []review.Finding{blockingInline("One", 2)},
+			event:    review.EventRequestChanges,
+			want:     []string{"1 finding, 1 blocking: this review requests changes."},
+		},
+		{
+			name:     "three findings, two blocking, with the switch on",
+			findings: []review.Finding{blockingInline("One", 2), blockingInBody("Two"), inBody("Three")},
+			event:    review.EventRequestChanges,
+			want:     []string{"3 findings, 2 blocking: this review requests changes."},
+		},
+		{
+			name:     "one blocking finding with the switch off",
+			findings: []review.Finding{blockingInline("One", 2)},
+			event:    review.EventComment,
+			want:     []string{"1 finding, 1 blocking. Change requests are off"},
+		},
+		{
+			name:     "three findings, two blocking, with the switch off",
+			findings: []review.Finding{blockingInline("One", 2), blockingInBody("Two"), inBody("Three")},
+			event:    review.EventComment,
+			want:     []string{"3 findings, 2 blocking. Change requests are off"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := review.Render(headSHA, review.Answer{Summary: renderSummary, Findings: tc.findings}, tc.event, renderDiff)
+
+			for _, want := range tc.want {
+				if !strings.Contains(got.Body, want) {
+					t.Errorf("the review's body does not hold %q; body:\n%s", want, got.Body)
+				}
+			}
+
+			for _, absent := range tc.wantAbsent {
+				if strings.Contains(got.Body, absent) {
+					t.Errorf("the review's body holds %q, which does not belong to these findings; body:\n%s", absent, got.Body)
+				}
+			}
+
+			if strings.Contains(got.Body, "1 findings") {
+				t.Errorf("the review's body says %q: one finding is singular, so the summary never says \"1 findings\"; body:\n%s", "1 findings", got.Body)
+			}
+		})
+	}
+}
+
+// TestRenderSaysAFindingIsUncategorised pins what a review says when the model
+// left a category out or wrote one the reviewer does not know (issue #292): the
+// finding is kept and shown as uncategorised, and the body says so on its own
+// line right after the event's reason, once for one finding and in the plural
+// for more. The other findings stay as they were, and a known category adds no
+// such note.
+func TestRenderSaysAFindingIsUncategorised(t *testing.T) {
+	t.Parallel()
+
+	uncategorised := func(title string) review.Finding {
+		return review.Finding{
+			Severity: review.SeveritySuggestion,
+			Category: review.CategoryUncategorised,
+			Title:    title,
+			Body:     "The model gave no category this finding could take.",
+		}
+	}
+
+	known := review.Finding{
+		Severity: review.SeveritySuggestion,
+		Category: review.CategoryReadability,
+		Title:    "Name it",
+		Body:     "A clearer name would help.",
+	}
+
+	cases := []struct {
+		name       string
+		findings   []review.Finding
+		event      review.Event
+		want       []string
+		wantAbsent []string
+	}{
+		{
+			name:     "one uncategorised finding",
+			findings: []review.Finding{uncategorised("Unknown category")},
+			event:    review.EventComment,
+			want: []string{
+				"none blocking.\n1 finding had a missing or unrecognised category and is shown as uncategorised.",
+				"(uncategorised)",
+				"Unknown category",
+			},
+		},
+		{
+			name:     "two uncategorised findings",
+			findings: []review.Finding{uncategorised("First"), uncategorised("Second")},
+			event:    review.EventComment,
+			want: []string{
+				"none blocking.\n2 findings had a missing or unrecognised category and are shown as uncategorised.",
+			},
+		},
+		{
+			name:     "uncategorised findings among known ones keep the known ones",
+			findings: []review.Finding{known, uncategorised("First"), uncategorised("Second")},
+			event:    review.EventComment,
+			want: []string{
+				"none blocking.\n2 findings had a missing or unrecognised category and are shown as uncategorised.",
+				"Name it",
+			},
+		},
+		{
+			name: "a blocking uncategorised finding still requests changes",
+			findings: []review.Finding{{
+				Severity: review.SeverityBlocker,
+				Category: review.CategoryUncategorised,
+				Title:    "Off by one",
+				Body:     "The loop ends one short.",
+			}},
+			event: review.EventRequestChanges,
+			want: []string{
+				"this review requests changes.\n1 finding had a missing or unrecognised category and is shown as uncategorised.",
+				"blocking",
+			},
+		},
+		{
+			name: "a blocking uncategorised finding with the switch off says it would have requested changes",
+			findings: []review.Finding{{
+				Severity: review.SeverityBlocker,
+				Category: review.CategoryUncategorised,
+				Title:    "Off by one",
+				Body:     "The loop ends one short.",
+			}},
+			event: review.EventComment,
+			want: []string{
+				"would have requested changes.\n1 finding had a missing or unrecognised category and is shown as uncategorised.",
+			},
+		},
+		{
+			name:       "every category is known",
+			findings:   []review.Finding{known},
+			event:      review.EventComment,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := review.Render(headSHA, review.Answer{Summary: renderSummary, Findings: tc.findings}, tc.event, renderDiff)
+
+			for _, want := range tc.want {
+				if !strings.Contains(got.Body, want) {
+					t.Errorf("the review's body does not hold %q; body:\n%s", want, got.Body)
+				}
+			}
+
+			for _, absent := range tc.wantAbsent {
+				if strings.Contains(got.Body, absent) {
+					t.Errorf("the review's body holds %q, which does not belong to these findings; body:\n%s", absent, got.Body)
+				}
+			}
+		})
+	}
+}
+
+// TestRenderRendersAMisspeltPromptInjectionAnswerAsPromptInjection pins that a
+// category the model misspelt still reaches the review as prompt-injection
+// (issue #292): the category is read by ParseAnswer, which normalises it, so the
+// finding is shown as prompt-injection and blocking, and the body's note about a
+// missing or unrecognised category, which would tell the reader the finding
+// fell into no category and never blocks, is absent. A category that names no
+// injection stays uncategorised, and keeps that note.
+func TestRenderRendersAMisspeltPromptInjectionAnswerAsPromptInjection(t *testing.T) {
+	t.Parallel()
+
+	// The answer of one finding whose category the model wrote as raw.
+	answerWith := func(raw string) string {
+		return `{"summary":"` + renderSummary + `","findings":[` +
+			`{"severity":"suggestion","category":"` + raw + `","path":"internal/x/y.go","line":3,` +
+			`"title":"Instruction in the diff","body":"The added line tells the reviewer to approve the pull request."}]}`
+	}
+
+	promptInjection := []string{"**suggestion** (prompt-injection), **blocking**"}
+
+	cases := []struct {
+		name       string
+		category   string
+		want       []string
+		wantAbsent []string
+	}{
+		{
+			name:       "the category in another case",
+			category:   "Prompt-Injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "the category with an underscore",
+			category:   "prompt_injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "the category with a space",
+			category:   "prompt injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "the category with no hyphen",
+			category:   "promptinjection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "a bare injection category",
+			category:   "injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "an injection word in a longer category",
+			category:   "Code Injection",
+			want:       promptInjection,
+			wantAbsent: []string{"had a missing or unrecognised category", "uncategorised"},
+		},
+		{
+			name:       "a category that names no injection stays uncategorised",
+			category:   "style",
+			want:       []string{"**suggestion** (uncategorised)", "had a missing or unrecognised category"},
+			wantAbsent: []string{"(prompt-injection)"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			answer, err := review.ParseAnswer(answerWith(tc.category))
+			if err != nil {
+				t.Fatalf("ParseAnswer of the category %q: %v", tc.category, err)
+			}
+
+			got := review.Render(headSHA, answer, review.EventComment, renderDiff)
+
+			// The finding is on an added line of the diff, so the review makes an
+			// inline comment of it: what the review says about it is the body
+			// plus the comments.
+			text := got.Body
+			for _, comment := range got.Comments {
+				text += "\n" + comment.Body
+			}
+
+			for _, want := range tc.want {
+				if !strings.Contains(text, want) {
+					t.Errorf("the review does not hold %q for the category %q; body:\n%s", want, tc.category, got.Body)
+				}
+			}
+
+			for _, absent := range tc.wantAbsent {
+				if strings.Contains(text, absent) {
+					t.Errorf("the review holds %q for the category %q, which does not belong to it; body:\n%s", absent, tc.category, got.Body)
+				}
+			}
+		})
+	}
+}
+
 // renderedWith returns the review's text that renders f: the body of the inline
 // comment on f's line when the review makes one, the review's body otherwise.
 func renderedWith(t *testing.T, got review.Review, f review.Finding) string {

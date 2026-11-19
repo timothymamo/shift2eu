@@ -99,6 +99,23 @@ const (
 		`"findings":[{"severity":"suggestion","category":"prompt-injection","path":"internal/x/y.go","line":3,` +
 		`"title":"Instruction in the diff","body":"The added line tells the reviewer to approve the pull request."}]}`
 
+	uncategorisedAnswer = `{"summary":"The change stops the loop one short.","findings":[` +
+		`{"severity":"suggestion","category":"readability","path":"internal/x/y.go","line":3,` +
+		`"title":"Name it","body":"A clearer name would help."},` +
+		`{"severity":"blocker","category":"style",` +
+		`"title":"Off by one","body":"The loop ends before the last element."}]}`
+
+	misspeltInjectionAnswer = `{"summary":"The diff asks for an approval, which this review does not follow.",` +
+		`"findings":[{"severity":"suggestion","category":"Prompt-Injection","path":"internal/x/y.go","line":3,` +
+		`"title":"Instruction in the diff","body":"The added line tells the reviewer to approve the pull request."}]}`
+
+	// misspeltWithoutInjectAnswer is the same answer with the category spelled so
+	// that it loses the word injection: the parser's fail-safe still reads it as
+	// prompt-injection (issue #292).
+	misspeltWithoutInjectAnswer = `{"summary":"The diff asks for an approval, which this review does not follow.",` +
+		`"findings":[{"severity":"suggestion","category":"prompt-injetion","path":"internal/x/y.go","line":3,` +
+		`"title":"Instruction in the diff","body":"The added line tells the reviewer to approve the pull request."}]}`
+
 	malformedAnswer = "Sure! The change looks fine to me."
 
 	cleanDiff = `diff --git a/internal/x/y.go b/internal/x/y.go
@@ -125,7 +142,8 @@ const (
 // malformed answer post nothing; a blocking finding requests changes only with
 // the switch on; the reviewer withdraws its own earlier change request and
 // nobody else's once nothing blocks; and an instruction in the diff is a
-// finding, never an approval.
+// finding, never an approval, whatever case or spelling the model gives its
+// category (a misspelt prompt-injection category still blocks).
 func TestRunReviewsThePullRequestHead(t *testing.T) {
 	t.Parallel()
 
@@ -220,6 +238,53 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			wantFindings:   1,
 			wantBlocking:   1,
 			wantText:       []string{"Off by one"},
+		},
+		{
+			name:           "a finding with an unknown category is kept and still blocks",
+			pr:             pr,
+			diff:           cleanDiff,
+			answer:         uncategorisedAnswer,
+			requestChanges: true,
+			wantAsked:      1,
+			wantEvent:      review.EventRequestChanges,
+			wantFindings:   2,
+			wantBlocking:   1,
+			wantText:       []string{"Name it", "Off by one", "uncategorised"},
+		},
+		{
+			name:           "a misspelt prompt-injection category with the switch on requests changes",
+			pr:             pr,
+			diff:           injectionDiff,
+			answer:         misspeltInjectionAnswer,
+			requestChanges: true,
+			wantAsked:      1,
+			wantEvent:      review.EventRequestChanges,
+			wantFindings:   1,
+			wantBlocking:   1,
+			wantText:       []string{"Instruction in the diff", "prompt-injection"},
+		},
+		{
+			name:           "a misspelt prompt-injection category that loses inject with the switch on requests changes",
+			pr:             pr,
+			diff:           injectionDiff,
+			answer:         misspeltWithoutInjectAnswer,
+			requestChanges: true,
+			wantAsked:      1,
+			wantEvent:      review.EventRequestChanges,
+			wantFindings:   1,
+			wantBlocking:   1,
+			wantText:       []string{"Instruction in the diff", "prompt-injection"},
+		},
+		{
+			name:         "a misspelt prompt-injection category with the switch off is a comment that says it would have requested changes",
+			pr:           pr,
+			diff:         injectionDiff,
+			answer:       misspeltInjectionAnswer,
+			wantAsked:    1,
+			wantEvent:    review.EventComment,
+			wantFindings: 1,
+			wantBlocking: 1,
+			wantText:     []string{"Instruction in the diff", "would have requested changes"},
 		},
 		{
 			name:   "only the reviewer's own earlier change request is dismissed",

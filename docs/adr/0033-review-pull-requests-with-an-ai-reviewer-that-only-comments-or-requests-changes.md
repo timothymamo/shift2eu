@@ -338,13 +338,20 @@ the trigger option below are the levers.
   repository's pull requests often change `CLAUDE.md`, the skills and this prompt, and a
   `prompt-injection` finding always blocks.
 - **The model has no tools**, so a tricked model can do nothing but write text. Its answer is one JSON
-  object, parsed strictly: unknown fields, a missing summary or title, a severity or category outside the
-  lists, a negative line, a line without a path, an absolute path or one with `..`, a backslash or a
+  object, parsed strictly: unknown fields, a missing summary or title, a severity outside the
+  list, a negative line, a line without a path, an absolute path or one with `..`, a backslash or a
   control character (below 0x20, or DEL: git quotes such a path in a diff, so no real one holds it, and a
   line break would put the rest of the path on a line of its own), or anything around the object fails
-  the run, and nothing is posted. The model never names the event: the program decides
-  it from the findings, so no answer can make it approve, and the poster refuses anything but `COMMENT`
-  and `REQUEST_CHANGES` even if the program asked.
+  the run, and nothing is posted. The category alone is not strict (issue #292). It is normalised first
+  (surrounding white space trimmed, lower-cased, `_` and spaces turned into `-`), so `Readability` is
+  `readability`. A normalised category still outside the list that contains `inject` or `prompt` is
+  read as `prompt-injection`: it is the one category that blocks whatever its severity, so a near-miss
+  spelling of it must not fail open, even one that loses `inject` (`prompt-inj`, `prompt-injetion`). A
+  missing one, or any other one outside the list, keeps the finding as
+  `uncategorised` (its raw text is never shown), and the review says how many findings it shows as
+  uncategorised; the severity still decides whether such a finding blocks. The model never names the
+  event: the program decides it from the findings, so no answer can make it approve, and the poster
+  refuses anything but `COMMENT` and `REQUEST_CHANGES` even if the program asked.
 - An inline comment goes only on a line the diff shows on its new side; a finding on any other line, or
   on no line, goes in the review's body, so a made-up position cannot fail the review.
 
