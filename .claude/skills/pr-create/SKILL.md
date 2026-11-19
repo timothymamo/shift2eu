@@ -27,10 +27,11 @@ maintainer has not approved: the maintainer's approval and merge are the single 
 
 ## Verify
 
-6. `gh pr checks <n> --watch --fail-fast` until every check completes.
-7. On failure: `gh run view <run-id> --log-failed`, report the failing job and the exact error, and stop.
-   Do not diagnose or fix; the orchestrator re-delegates. A failed `AI review` is no such failure: watch
-   the other checks to the end and report it as step 8 says.
+6. `gh pr checks <n> --watch --required --fail-fast` until every required check completes. `AI review`
+   is not required, so its failure does not stop the watch; then `gh pr checks <n>` for every check.
+7. On a failed required check: `gh run view <run-id> --log-failed`, report the failing job and the exact
+   error, and stop. Do not diagnose or fix; the orchestrator re-delegates. A failed `AI review` is no
+   such failure: report it as step 8 says.
 
 ## Report and stop
 
