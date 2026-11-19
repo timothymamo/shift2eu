@@ -29,12 +29,16 @@ func deps() httpapi.Deps {
 			"upcloud":  func() analysis.CatalogSource { return upcloud.New() },
 		},
 		JSON: httpapi.Format{
-			NewReporter:           func() analysis.Reporter { return jsonreport.New() },
-			NewComparisonReporter: func() analysis.ComparisonReporter { return jsonreport.New() },
+			NewReporter: func(schemaVersion int) analysis.Reporter {
+				return jsonreport.New(schemaVersion)
+			},
+			NewComparisonReporter: func(schemaVersion int) analysis.ComparisonReporter {
+				return jsonreport.New(schemaVersion)
+			},
 		},
 		Markdown: httpapi.Format{
-			NewReporter:           func() analysis.Reporter { return markdown.New() },
-			NewComparisonReporter: func() analysis.ComparisonReporter { return markdown.New() },
+			NewReporter:           func(int) analysis.Reporter { return markdown.New() },
+			NewComparisonReporter: func(int) analysis.ComparisonReporter { return markdown.New() },
 		},
 	}
 }
@@ -48,9 +52,10 @@ func decodeRequest(body []byte) (httpapi.Request, error) {
 	}
 
 	return httpapi.Request{
-		Inventory: req.Inventory,
-		Targets:   req.Targets,
-		Regions:   req.Regions,
-		Estimate:  req.Estimate,
+		Inventory:     req.Inventory,
+		Targets:       req.Targets,
+		Regions:       req.Regions,
+		Estimate:      req.Estimate,
+		SchemaVersion: req.SchemaVersion,
 	}, nil
 }

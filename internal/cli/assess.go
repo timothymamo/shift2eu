@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
@@ -34,6 +35,10 @@ type assessOptions struct {
 	// estimate turns plan matching and monthly estimates on: true unless
 	// --no-estimate was given (PRD #190).
 	estimate bool
+	// schemaVersion is the version of the JSON report --format json writes:
+	// --schema-version, or defaultSchemaVersion. It is 0 for a format that has
+	// no schemaVersion, whose reporters ignore it.
+	schemaVersion int
 }
 
 // runAssess runs the assess command with args, the arguments after "assess",
@@ -75,7 +80,7 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 	// prints nothing: its errors reach the user through printError.
 	flags.SetOutput(io.Discard)
 	flags.Usage = func() {}
-	var target, region string
+	var target, region, version string
 
 	noEstimate := false
 
@@ -85,6 +90,7 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 	flags.StringVar(&opts.format, "format", defaultFormat, "the report format")
 	flags.StringVar(&region, "region", "", "the region per target, <target>=<region>,...")
 	flags.BoolVar(&noEstimate, "no-estimate", false, "leave out plans and estimates")
+	flags.StringVar(&version, schemaVersionFlag, "", "the JSON report's schemaVersion")
 
 	if err := flags.Parse(args); err != nil {
 		return assessOptions{}, err
@@ -121,12 +127,76 @@ func parseAssess(args []string, deps Deps) (assessOptions, error) {
 			text.Quote(opts.format), strings.Join(formatKeys(deps), ", "))
 	}
 
+	versionGiven := false
+
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == schemaVersionFlag {
+			versionGiven = true
+		}
+	})
+
+	schemaVersion, err := parseSchemaVersion(opts.format, version, versionGiven)
+	if err != nil {
+		return assessOptions{}, err
+	}
+
+	opts.schemaVersion = schemaVersion
+
 	return opts, nil
 }
 
 // defaultFormat is the --format value of a run that names none: the Markdown
 // report every run wrote before --format existed.
 const defaultFormat = "markdown"
+
+// The JSON report's versions (docs/adr/0018, issue #307). The CLI imports no
+// adapter, so it names the one format that has a schemaVersion, the versions
+// its reporter writes and the one a run writes when it names none, here.
+const (
+	// schemaVersionFlag is the flag that selects the version.
+	schemaVersionFlag = "schema-version"
+	// versionedFormat is the --format value whose report has a schemaVersion.
+	versionedFormat = "json"
+	// defaultSchemaVersion is the version --format json writes without
+	// --schema-version.
+	defaultSchemaVersion = 3
+)
+
+// schemaVersions are the --schema-version values, in the order the usage
+// text and the errors list them.
+var schemaVersions = []string{"2", "3"}
+
+// parseSchemaVersion returns the schemaVersion a run of format writes: value,
+// which must be one of schemaVersions, when given, or defaultSchemaVersion;
+// 0 for a format that has no schemaVersion. --schema-version with such a
+// format is a usage error, so a run never quietly ignores it. Every error it
+// returns is a usage error.
+func parseSchemaVersion(format, value string, given bool) (int, error) {
+	if format != versionedFormat {
+		if given {
+			return 0, fmt.Errorf("--%s applies only to --format %s, not to --format %s",
+				schemaVersionFlag, versionedFormat, text.Quote(format))
+		}
+
+		return 0, nil
+	}
+
+	if !given {
+		return defaultSchemaVersion, nil
+	}
+
+	if !slices.Contains(schemaVersions, value) {
+		return 0, fmt.Errorf("--%s: unknown schema version %s; supported schema versions: %s",
+			schemaVersionFlag, text.Quote(value), strings.Join(schemaVersions, ", "))
+	}
+
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("--%s: %w", schemaVersionFlag, err)
+	}
+
+	return n, nil
+}
 
 // allTargets is the --target value that selects every supported target.
 const allTargets = "all"
@@ -247,7 +317,8 @@ func newRunner(opts assessOptions, deps Deps) (runFunc, error) {
 			return nil, errMissingAdapter
 		}
 
-		single, err := analysis.New(deps.NewInventorySource(opts.inventory), newCatalog(), format.NewReporter())
+		single, err := analysis.New(deps.NewInventorySource(opts.inventory), newCatalog(),
+			format.NewReporter(opts.schemaVersion))
 		if err != nil {
 			return nil, err
 		}
@@ -275,7 +346,7 @@ func newRunner(opts assessOptions, deps Deps) (runFunc, error) {
 	}
 
 	comparison, err := analysis.NewComparison(deps.NewInventorySource(opts.inventory), targets,
-		format.NewComparisonReporter())
+		format.NewComparisonReporter(opts.schemaVersion))
 	if err != nil {
 		return nil, err
 	}

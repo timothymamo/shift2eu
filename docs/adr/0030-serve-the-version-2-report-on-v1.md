@@ -1,6 +1,9 @@
 # 0030. Serve the version 2 report on /v1, with estimates, relations and workloads
 
-- Status: Accepted (amends [ADR 0019](0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md), Versioning and the no-echo rule for a region; builds on [ADR 0018](0018-version-the-json-report-format-for-the-cli-and-the-api.md))
+- Status: Accepted (amends [ADR 0019](0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md), Versioning and the no-echo rule for a region; builds on [ADR 0018](0018-version-the-json-report-format-for-the-cli-and-the-api.md));
+  amended 2026-11-19 by [issue #307](https://github.com/timothymamo/shift2eu/issues/307): `/v1` serves
+  `schemaVersion` 3 on request, version 2 by default, instead of a new route for the next version
+  (Decision, Consequences)
 - Date: 2026-11-14
 
 ## Context
@@ -30,6 +33,17 @@ that estimates are on by default. `api/openapi.json` refers to `assessment-v2.sc
 `comparison-v2.schema.json`. The version 1 schema files stay in the repository unchanged, for documents
 an earlier release wrote. ADR 0019's rule stands for every later version: the next report version is a
 new route.
+
+*Amended (2026-11-19, [issue #307](https://github.com/timothymamo/shift2eu/issues/307)):* the last
+sentence above no longer holds. The next report version, `schemaVersion` 3 (ADR 0018's amendment), is
+not a new route: `/v1/assessments` serves version 2 by default and version 3 when the request's
+optional `schemaVersion` is 3. The key is decoded strictly like `estimate`: the integer 2 or 3, 2 when
+absent; any other value or JSON type, `null` included, is 400 `invalid_request`, and the message never
+echoes the value. The opt-in changes nothing for a client that leaves the key out, so it is additive
+under ADR 0019's rules, and it spares the API a `/v2/` route that would differ only in the report's
+version, for the reasons this ADR gave against one. `api/openapi.json` refers to the version 2 and
+version 3 schemas for the response. A later `/v2/` route, or a maintainer decision, may change the
+default.
 
 The report itself:
 
@@ -118,4 +132,6 @@ The request options and their errors:
   `schemaVersion`; the CLI's `--format json` writes the same document. The release notes say so.
 - The tests that pinned "a version 2 inventory changes no report" (PRD #190 milestone 1) no longer
   hold: a version 2 inventory's relations and workloads now reach the report.
-- The next change of the report's version is a new route, as ADR 0019 says.
+- The next change of the report's version is a new route, as ADR 0019 says. *Amended (2026-11-19,
+  issue #307):* it was not: `schemaVersion` 3 is opt-in on `/v1` through the request's
+  `schemaVersion`, version 2 staying the default there (Decision).

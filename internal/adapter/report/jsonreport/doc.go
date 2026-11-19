@@ -1,25 +1,42 @@
 // Package jsonreport renders an assessment, or a comparison of several targets'
 // assessments, as a stable, versioned JSON document for other tools to consume:
-// the JSON report format, schemaVersion 2 (docs/adr/0018, docs/adr/0030). It implements the
-// analysis.Reporter and analysis.ComparisonReporter ports. The CLI writes it
-// with --format json, and the HTTP API (PRD #103) serves the same documents.
+// the JSON report format, schemaVersion 2 or 3 (docs/adr/0018, docs/adr/0030).
+// It implements the analysis.Reporter and analysis.ComparisonReporter ports.
+// The CLI writes it with --format json (version 3 unless --schema-version 2),
+// and the HTTP API (PRD #103) serves the same documents (version 2 unless the
+// request asks for 3).
+//
+// # Versions
+//
+// New(version) returns a Reporter that writes Version2 or Version3; any other
+// version is refused when it reports, with an error naming the versions it
+// writes, and nothing is written. The two versions differ in one rule (issue
+// #307): in version 3 a total that estimated nothing (estimated is 0) has no
+// amount key, where version 2 writes "0.00". That holds for the estimate
+// basis's total, each workload's estimate (the "No workload" group's included)
+// and each comparison target's total; their counts stay, and a total that
+// estimated something is written as in version 2. A version 2 document is byte
+// for byte what earlier releases wrote.
 //
 // # Documents
 //
-// Every document is one JSON object with "schemaVersion": 2 and a "kind":
+// Every document is one JSON object with its "schemaVersion" and a "kind":
 //
 //   - "assessment", from Report: the inventory name, the source, the target and
 //     its catalog snapshot, the summary, one resource per verdict, the
 //     blockers and the workloads, and, with estimates on, the estimate basis
-//     and total and the source cost. Schema: schema/assessment-v2.schema.json.
+//     and total and the source cost. Schema: schema/assessment-v3.schema.json
+//     (schema/assessment-v2.schema.json for version 2).
 //   - "comparison", from ReportComparison: the inventory name, the source, one
 //     entry per target in the comparison's order (its key and the single
 //     document's target, summary, resources, blockers, workloads, estimate and
 //     source cost), and the blockers every target shares. Schema:
-//     schema/comparison-v2.schema.json.
+//     schema/comparison-v3.schema.json (schema/comparison-v2.schema.json for
+//     version 2).
 //
 // The version 1 schema files stay beside them for documents an earlier release
-// wrote.
+// wrote. The version 1 and 2 files are frozen: a test pins their SHA-256
+// digests (issue #293).
 //
 // A resource carries its ID, raw type, category, region, fit, best offering,
 // the tied offerings and the required changes, the same ones the Markdown
@@ -65,7 +82,8 @@
 // string that holds nothing is "", an array that holds nothing is [], never
 // null. Order is the domain's: resources and blockers in the assessment's
 // order, targets in the comparison's, never map order. A document's bytes
-// depend only on the assessment, or the comparison, and the report metadata.
+// depend only on the version, the assessment, or the comparison, and the
+// report metadata.
 //
 // The whole document is encoded before it is written to the io.Writer in one
 // call; a write error is returned, wrapped. A comparison of no target is an

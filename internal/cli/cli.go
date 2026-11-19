@@ -43,14 +43,17 @@ type Deps struct {
 }
 
 // Format is one report format --format selects: the constructors of its
-// reporters. Run builds only the one the run needs.
+// reporters. Run builds only the one the run needs. Each takes the
+// schemaVersion the run writes: for --format json the --schema-version value or
+// the default 3, 0 for a format that has no schemaVersion, whose constructors
+// ignore it (docs/adr/0018, issue #307).
 type Format struct {
 	// NewReporter returns the reporter that renders the report of a run with one
 	// target.
-	NewReporter func() analysis.Reporter
+	NewReporter func(schemaVersion int) analysis.Reporter
 	// NewComparisonReporter returns the reporter that renders the comparison
 	// report of a run with several targets (docs/adr/0016).
-	NewComparisonReporter func() analysis.ComparisonReporter
+	NewComparisonReporter func(schemaVersion int) analysis.ComparisonReporter
 }
 
 // errMissingAdapter is returned when Deps lacks a constructor the command
@@ -119,7 +122,7 @@ func printError(w io.Writer, err error) {
 const usage = `Usage:
   shift2eu assess --inventory <file> --target <targets> [--format <format>]
                [--output <file>] [--region <target>=<region>,...]
-               [--no-estimate]
+               [--no-estimate] [--schema-version <version>]
   shift2eu version
   shift2eu help
 
@@ -157,6 +160,11 @@ Flags of assess:
   --no-estimate       Leave out plans and monthly estimates: the report holds
                       no price. Estimates are on by default: list prices on the
                       catalog's retrieval date, excluding VAT and discounts.
+  --schema-version <version>
+                      The schemaVersion of the json report, 2 or 3. The
+                      default is 3, which leaves the amount out of a total
+                      that estimated nothing; 2 is the previous document.
+                      Only with --format json.
 
 Exit codes:
   0  the assessment ran (blockers are a result, not a failure)

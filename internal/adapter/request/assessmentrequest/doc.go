@@ -23,6 +23,12 @@
 //     target lists is the caller's to check. The keys are data, so an error
 //     names a member by its index (regions[0]), never by its key.
 //   - estimate (optional, PRD #190): a boolean, true when absent.
+//   - schemaVersion (optional, issue #307): the JSON report version the
+//     client asks for, the integer 2 or 3 spelled as such, 2 when absent
+//     (docs/adr/0030). Any other value or JSON type (1, 4, 2.5, "3", null, ...)
+//     is refused, with an error that names the key, never the value. Whether
+//     the negotiated representation writes a version at all is the caller's
+//     to decide.
 //
 // inventory and targets are required. Malformed JSON, invalid UTF-8, a missing key, a value
 // of the wrong JSON type (null included), an unknown key, a key repeated

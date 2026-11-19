@@ -30,6 +30,11 @@ type Request struct {
 	Regions map[string]string
 	// Estimate turns plans and estimates on: true unless the body says false.
 	Estimate bool
+	// SchemaVersion is the JSON report version the body asks for, 2 or 3; the
+	// decoder makes it 2 when the body names none (docs/adr/0030). The API
+	// passes it to the selected representation's reporter constructor, which
+	// ignores it for a representation without a schemaVersion.
+	SchemaVersion int
 }
 
 // Deps are the adapters the API runs with. The composition root
@@ -54,13 +59,14 @@ type Deps struct {
 }
 
 // Format is one representation of a report: the constructors of its
-// reporters. A request builds only the one it needs.
+// reporters. A request builds only the one it needs, for the request's
+// SchemaVersion, which a representation without one (Markdown) ignores.
 type Format struct {
 	// NewReporter returns the reporter of an assessment against one target.
-	NewReporter func() analysis.Reporter
+	NewReporter func(schemaVersion int) analysis.Reporter
 	// NewComparisonReporter returns the reporter of a comparison of several
 	// targets.
-	NewComparisonReporter func() analysis.ComparisonReporter
+	NewComparisonReporter func(schemaVersion int) analysis.ComparisonReporter
 }
 
 // Option configures the handler New returns.

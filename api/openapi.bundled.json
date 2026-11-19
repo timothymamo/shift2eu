@@ -913,6 +913,14 @@
             },
             "type": "object"
           },
+          "schemaVersion": {
+            "description": "Optional (issue #307). The JSON report's schemaVersion: 2 (assessment-v2 and comparison-v2 schemas) or 3 (assessment-v3 and comparison-v3 schemas, where a total that estimated nothing has no amount). Absent means 2. Any other value or JSON type, null included, is 400 invalid_request, whose message never repeats the value. The Markdown report has no schemaVersion and ignores it.",
+            "enum": [
+              2,
+              3
+            ],
+            "type": "integer"
+          },
           "targets": {
             "description": "One or more target keys (see GET /v1/targets), or [\"all\"] alone. An unknown, repeated or empty key, or all with another key, is 400 invalid_targets.",
             "items": {
@@ -1897,7 +1905,7 @@
                 }
               }
             },
-            "description": "The report. The JSON report is schemaVersion 2 (docs/adr/0018, docs/adr/0030); a client reads schemaVersion to know which version it holds.",
+            "description": "The report. The JSON report is schemaVersion 2, or 3 when the request's schemaVersion is 3 (docs/adr/0018, docs/adr/0030); a client reads schemaVersion to know which version it holds. The schemas below are version 2's, the default; a version 3 document follows internal/adapter/report/jsonreport/schema/assessment-v3.schema.json or comparison-v3.schema.json, version 2 without the amount of a total that estimated nothing.",
             "headers": {
               "Cache-Control": {
                 "$ref": "#/components/headers/Cache-Control"

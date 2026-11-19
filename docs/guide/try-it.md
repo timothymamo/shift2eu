@@ -106,11 +106,13 @@ total over different resources says little.
 ## Get the report as JSON
 
 ```bash
-./bin/shift2eu assess --inventory examples/aws/inventory.json --target scaleway --format json
+./bin/shift2eu assess --inventory examples/aws/inventory.json --target scaleway --format json --schema-version 2
 ```
 
 `--format json` writes the same content as a versioned document for scripts and other tools
-([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md), schema version 2 from [ADR 0030](../adr/0030-serve-the-version-2-report-on-v1.md)). Each resource
+([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md), schema version 2 from [ADR 0030](../adr/0030-serve-the-version-2-report-on-v1.md)).
+Without `--schema-version` it writes schema version 3, which differs from version 2 in one rule: a
+total that estimated nothing (`"estimated": 0`) has no `amount` key instead of `"0.00"`. Each resource
 carries its fit, best offering, reasons with a stable `code`, required changes, relations, and its
 plan and estimate; the document ends with the workloads, the estimate's basis and total, and the
 source's cost ([`aws-scaleway-estimates.json.golden`](../../test/examples/testdata/aws-scaleway-estimates.json.golden)):

@@ -293,7 +293,7 @@ func (a *api) run(ctx context.Context, req Request, keys []string, format Format
 	var report bytes.Buffer
 
 	if len(keys) == 1 {
-		single, err := analysis.New(source, a.deps.Targets[keys[0]](), format.NewReporter())
+		single, err := analysis.New(source, a.deps.Targets[keys[0]](), format.NewReporter(req.SchemaVersion))
 		if err != nil {
 			return nil, err
 		}
@@ -311,7 +311,7 @@ func (a *api) run(ctx context.Context, req Request, keys []string, format Format
 		targets = append(targets, analysis.Target{Key: key, Catalog: a.deps.Targets[key](), Region: req.Regions[key]})
 	}
 
-	comparison, err := analysis.NewComparison(source, targets, format.NewComparisonReporter())
+	comparison, err := analysis.NewComparison(source, targets, format.NewComparisonReporter(req.SchemaVersion))
 	if err != nil {
 		return nil, err
 	}
