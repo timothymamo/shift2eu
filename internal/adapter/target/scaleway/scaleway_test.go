@@ -313,14 +313,14 @@ func TestCatalogFixedFees(t *testing.T) {
 	}
 }
 
-// TestKapsuleDedicatedInMilan pins issue #211: Scaleway's price page, read
-// 2026-11-13, lists the dedicated Kapsule control plane in Milan, so the offering
-// is available and billed there as it is in Paris. Its worker-node plans are the
-// mutualized offering's: the POP2 nodes, whose price applies to every region, are
-// priced in it-mil, while the PLAY2 and PRO2 nodes are not priced there at all.
-// The dedicated control plane is a fixed fee only (ADR 0026, pinned in
-// TestCatalogFixedFees), never a plan, so nothing in Milan can pick or price a
-// Dedicated-N size as if it were a worker node.
+// TestKapsuleDedicatedInMilan pins issue #211: Scaleway's Containers price page,
+// first read 2026-11-13 and re-checked in Milan on 2026-11-19, lists the dedicated
+// Kapsule control plane there, so the offering is available and billed in it-mil as
+// it is in Paris. Its worker-node plans are the mutualized offering's: the POP2
+// nodes, whose price applies to every region, are priced in it-mil, while the PLAY2
+// and PRO2 nodes are not priced there at all. The dedicated control plane is a fixed
+// fee only (ADR 0026, pinned in TestCatalogFixedFees), never a plan, so nothing in
+// Milan can pick or price a Dedicated-N size as if it were a worker node.
 func TestKapsuleDedicatedInMilan(t *testing.T) {
 	t.Parallel()
 
