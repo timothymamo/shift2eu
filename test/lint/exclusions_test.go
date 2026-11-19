@@ -20,7 +20,11 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, httpapiTestsNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, httpapiTestsNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag}
+
+// siteBuilderEnvTag is the tag of the site builder's environment group (PRD
+// #297 milestone 2).
+const siteBuilderEnvTag = "site-builder-env"
 
 // aiReviewerEnvTag is the tag of the AI reviewer's environment group (ADR 0033),
 // and aiReviewerLookupEnvMsg the msg of its one entry with an exception: the
@@ -159,6 +163,12 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		aiReviewerOneProcessTag: {
 			{"path": `^ci/aireview/internal/review/.*_test\.go$`, "text": groupText(aiReviewerOneProcessTag)},
 			{"path-except": `^ci/aireview/internal/review/`, "text": groupText(aiReviewerOneProcessTag)},
+		},
+		// The site's builder (PRD #297 milestone 2): one rule for every path
+		// outside ci/sitebuild/, so the group holds there and nowhere else,
+		// _test.go files included.
+		siteBuilderEnvTag: {
+			{"path-except": `^ci/sitebuild/`, "text": groupText(siteBuilderEnvTag)},
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {

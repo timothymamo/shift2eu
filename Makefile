@@ -57,6 +57,14 @@ WORKSPACE_REPO ?=
 override WORKSPACE_REPO := $(value WORKSPACE_REPO)
 export WORKSPACE_REPO
 
+# The release tag make site builds the site's pages for (PRD #297), empty for an untagged build. Read raw and
+# exported like the VM_* above, and for the same reason in this first block: the recipe reads it as
+# "$$SITE_VERSION", so neither make nor a shell parses the value, and the builder refuses any value that is no
+# vX.Y.Z tag.
+SITE_VERSION ?=
+override SITE_VERSION := $(value SITE_VERSION)
+export SITE_VERSION
+
 BINARY  := shift2eu
 # The HTTP API's binary (PRD #103, docs/adr/0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md).
 SERVER  := shift2eu-server
@@ -195,6 +203,17 @@ build: server ## Build the shift2eu and shift2eu-server binaries into ./bin
 .PHONY: server
 server: ## Build the shift2eu-server binary (the HTTP API) into ./bin
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(SERVER) ./cmd/$(SERVER)
+
+# The site's bundle (PRD #297): make site writes it into bin/site and its archive beside it,
+# bin/shift2eu-site_<version>.tar.gz, both git-ignored under /bin/. SITE_VERSION (read raw and exported in the
+# first block) is a release tag, vX.Y.Z, which the pages show and their links name, and which the builder
+# refuses in any other form; empty, the pages show internal/version's development value and link to main, as an
+# untagged build must, and the archive is named for dev. bin/site is removed first: the builder refuses a
+# directory that holds anything, so no stray file is ever bundled.
+.PHONY: site
+site: ## Build the site's bundle into bin/site and its archive into bin/shift2eu-site_<version>.tar.gz (SITE_VERSION=vX.Y.Z for a release's)
+	rm -rf bin/site
+	go run ./ci/sitebuild -out bin/site -archive "bin/shift2eu-site_$${SITE_VERSION:-dev}.tar.gz" $${SITE_VERSION:+-version "$$SITE_VERSION"}
 
 .PHONY: image
 image: ## Build the local container image shift2eu:<version>, shift2eu:dev and shift2eu:latest from git, as make build (docker or nerdctl; PLATFORMS=linux/amd64,linux/arm64 for both; tags are local, nothing is pushed)

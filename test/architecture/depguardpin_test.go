@@ -424,6 +424,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"!**/cmd/shift2eu/**",
 			"!**/cmd/shift2eu-server/**",
 			"!**/cmd/shift2eu-web/**",
+			"!**/ci/sitebuild/**",
 		},
 		Allow: []string{
 			"github.com/timothymamo/shift2eu/internal/adapter/internal/jsondoc$",
@@ -1183,6 +1184,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"**/test/examples/**",
 			"**/test/lint/**",
 			"**/test/openapibundle/**",
+			"**/test/site/**",
+			"!**/test/site/internal/**",
 			"!$test",
 		},
 		Allow: []string{},
@@ -1244,6 +1247,50 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"strconv$",
 			"strings$",
 			"time$",
+		},
+	},
+	{
+		// The site's builder (PRD #297 milestone 2): a main package no root can
+		// import, held to the standard packages it imports and the module's
+		// packages it reads, each exact: the three embedded-snapshot targets,
+		// whose snapshot dates and regions it writes into the pages, their
+		// catalog type and internal/version. os and os/exec are for the sources,
+		// the bundle and the go command; the forbidigo group site-builder-env
+		// refuses every read of the environment.
+		Name:     "site-builder",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/sitebuild/**",
+			"!$test",
+		},
+		Allow: []string{
+			"archive/tar$",
+			"bytes$",
+			"compress/gzip$",
+			"context$",
+			"crypto/sha256$",
+			"crypto/sha512$",
+			"encoding/base64$",
+			"encoding/hex$",
+			"encoding/json$",
+			"errors$",
+			"flag$",
+			"fmt$",
+			"html/template$",
+			"io$",
+			"io/fs$",
+			"os$",
+			"os/exec$",
+			"path/filepath$",
+			"regexp$",
+			"slices$",
+			"strings$",
+			"time$",
+			"github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud$",
+			"github.com/timothymamo/shift2eu/internal/adapter/target/scaleway$",
+			"github.com/timothymamo/shift2eu/internal/adapter/target/upcloud$",
+			"github.com/timothymamo/shift2eu/internal/domain/catalog$",
+			"github.com/timothymamo/shift2eu/internal/version$",
 		},
 	},
 }

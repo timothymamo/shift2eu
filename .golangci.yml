@@ -568,6 +568,13 @@ linters:
         # network through their SDK, so they share the strict allow list
         # cloud-adapters-reach-the-cloud-through-the-sdk (ADR 0014), which
         # names no helper under internal/adapter/internal/ at all.
+        #
+        # ci/sitebuild, the site's builder (PRD #297 milestone 2), is left out
+        # too: a main package nothing imports, it constructs the three
+        # embedded-snapshot targets to write their snapshot dates and regions
+        # into the pages, as the composition roots construct them. Its strict
+        # rule, site-builder, names exactly those three adapters, each ending
+        # in $, and no other adapter.
         adapters-are-built-in-cmd:
           list-mode: lax
           files:
@@ -576,6 +583,7 @@ linters:
             - "!**/cmd/shift2eu/**"
             - "!**/cmd/shift2eu-server/**"
             - "!**/cmd/shift2eu-web/**"
+            - "!**/ci/sitebuild/**"
           allow:
             - github.com/timothymamo/shift2eu/internal/adapter/internal/jsondoc$
             - github.com/timothymamo/shift2eu/internal/adapter/target/snapshot$
@@ -1699,6 +1707,10 @@ linters:
         # anywhere, testdata, _ and . directories included. The testdata, _ and . exemption of
         # ./... covers non-Go files only. A package under testdata or _x is still built when it
         # is imported by path, which that check does not cover (the follow-up to #194).
+        # test/site (PRD #297 milestone 2), the site's static checks, is held here too: its
+        # doc.go is its one production file and imports nothing, and its helper
+        # test/site/internal/jsscan, which Go's internal rule keeps out of reach of the roots, is
+        # taken out with a negated glob as test/architecture's internal tree is.
         test-docs-are-pure:
           list-mode: strict
           files:
@@ -1712,6 +1724,8 @@ linters:
             - "**/test/examples/**"
             - "**/test/lint/**"
             - "**/test/openapibundle/**"
+            - "**/test/site/**"
+            - "!**/test/site/internal/**"
             - "!$test"
           allow: []
           deny:
@@ -1774,6 +1788,53 @@ linters:
             - strconv$
             - strings$
             - time$
+        # The site's builder (PRD #297 milestone 2) is no part of the product:
+        # a main package, which Go refuses to import, run by make site, the
+        # site tests and the release. It is held all the same, to the standard
+        # packages it imports and the module's packages it reads, each ending
+        # in $: the three embedded-snapshot targets, whose snapshot dates and
+        # regions it writes into the pages (which is why
+        # adapters-are-built-in-cmd leaves it out), the catalog type they
+        # return, and internal/version for the development value an untagged
+        # build shows. os and os/exec are for the site's sources, the bundle and
+        # the go command it runs (go env, and go build of the module); the
+        # forbidigo group site-builder-env refuses every read of the
+        # environment and every lookup of a home, config, cache or temp
+        # directory, so the go command gets the environment the builder was
+        # given through exec.Cmd.Environ, with the build settings fixed.
+        site-builder:
+          list-mode: strict
+          files:
+            - "**/ci/sitebuild/**"
+            - "!$test"
+          allow:
+            - archive/tar$
+            - bytes$
+            - compress/gzip$
+            - context$
+            - crypto/sha256$
+            - crypto/sha512$
+            - encoding/base64$
+            - encoding/hex$
+            - encoding/json$
+            - errors$
+            - flag$
+            - fmt$
+            - html/template$
+            - io$
+            - io/fs$
+            - os$
+            - os/exec$
+            - path/filepath$
+            - regexp$
+            - slices$
+            - strings$
+            - time$
+            - github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud$
+            - github.com/timothymamo/shift2eu/internal/adapter/target/scaleway$
+            - github.com/timothymamo/shift2eu/internal/adapter/target/upcloud$
+            - github.com/timothymamo/shift2eu/internal/domain/catalog$
+            - github.com/timothymamo/shift2eu/internal/version$
     exhaustive:
       default-signifies-exhaustive: true
     # forbidigo refuses calls, which an import rule cannot see. Its entries
@@ -2349,6 +2410,20 @@ linters:
         - pattern: '^os\.(?:ReadFile|Open|OpenFile|ReadDir)$'
           pkg: '^os$'
           msg: 'ai-reviewer-one-process: the library of the AI reviewer reads no file; ci/aireview hands it the pull request and the instructions as strings (ADR 0033)'
+        # Group site-builder-env (PRD #297 milestone 2): the site's builder
+        # reads no environment variable, starts no process through os and
+        # locates no home, config, cache or temp directory: its scratch
+        # directory is made beside the bundle it was told to write. It runs the
+        # go command with os/exec in the environment it was given, through
+        # exec.Cmd.Environ, with GOOS, GOARCH, CGO_ENABLED, GOFLAGS and GOWORK
+        # fixed, as make runs it; it never reads, prints or keeps a value of
+        # that environment (CLAUDE.md rule 3). depguard keeps syscall and
+        # unsafe out of it (site-builder). Scope: every file under
+        # ci/sitebuild/, _test.go files included; its exclusion rule drops it
+        # everywhere else.
+        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+          pkg: '^os$'
+          msg: 'site-builder-env: the site builder reads no environment variable, locates no home, config, cache or temp directory and starts no process through os; it runs the go command with os/exec in the environment it was given (CLAUDE.md rule 3)'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -2520,6 +2595,12 @@ linters:
         linters:
           - forbidigo
         text: 'because "ai-reviewer-one-process: [^"]*"$'
+      # site-builder-env: the group holds for every file under ci/sitebuild/,
+      # _test.go files included, and nowhere else.
+      - path-except: ^ci/sitebuild/
+        linters:
+          - forbidigo
+        text: 'because "site-builder-env: [^"]*"$'
 
 formatters:
   enable:
