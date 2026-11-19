@@ -113,7 +113,8 @@ claude -p --model claude-opus-5-5 --output-format json --safe-mode --tools ""
 - **A timeout of ten minutes** kills the CLI and returns at once; Go's `WaitDelay` closes its pipes a
   second later, so a child it started cannot hold the run open. (Killing its whole process group would
   need `syscall`, which the library may not import; with every tool off the CLI starts no child of its
-  own, and the job's `timeout-minutes` ends anything left.)
+  own, and the job's `timeout-minutes` ends anything left.) The run's deadline of 15 minutes (issue
+  #316, below) caps it further when less than ten minutes of the run remain.
 - The output cap is the CLI's own: the program no longer sets `max_tokens`.
 - **The install is pinned and verified before any secret.** The workflow installs the CLI at an exact
   version (2.1.327) from the npm platform package `@anthropic-ai/claude-code-linux-x64` (the runner is
@@ -233,9 +234,24 @@ reference data, and every schema version bump would be refused the same way. The
 - A file's section is cut at a line starting `diff --git ` only; every line of a hunk starts with a
   space, `+`, `-` or `\`, so no file content can start a section of its own. Kept sections are byte for
   byte as GitHub sent them.
-- **The review names every left-out file** under "Not reviewed", each in a code span escaped as a
-  finding's path is (backticks made apostrophes, control characters spaces, mentions defused), so the
-  maintainer knows what the AI review did not read. A review that left nothing out has no such note.
+- **A symbolic link, a submodule or a mode change is always reviewed**, whatever its path: a section
+  whose extended header (its lines before the first `---`, `+++`, `@@` or `Binary files` line) holds
+  `new file mode` or `deleted file mode` 120000 or 160000, an `index` line ending in either mode, or
+  `old mode`/`new mode`, is kept. Only the extended header is read, never a hunk's content, which the
+  author writes. A left-out name says nothing about a link's target or a pinned commit.
+- **The review names the left-out files** under "Not reviewed", each in a code span escaped as a
+  finding's path is (backticks made apostrophes, control characters spaces, mentions defused, each path
+  cut to 300 UTF-16 code units), so the maintainer knows what the AI review did not read. The note
+  states the total, lists the first 50 paths (`MaxListedExcluded`) and says how many more it does not
+  list. Like the first line and the closing statement, it is outside the part cut at GitHub's limit:
+  its room is taken off the review's, so a truncated review still holds it whole, and its own bound
+  keeps it to a small part of that limit whatever the pull request changes. A review that left nothing
+  out has no such note.
+- **The model is told what was left out.** The untrusted JSON document lists the left-out paths in its
+  own field, `left_out_of_diff` (they are the pull request's data, never in the system prompt), and the
+  system prompt says that a file listed there was left out on purpose, so its absence is no missing or
+  incomplete diff to report, and that the model has none of its content and neither judges it nor
+  guesses at it.
 - Why these two and no more: `api/openapi.bundled.json` is generated from `api/`, and
   `test/openapibundle` (`TestBundleIsCommitted`, run by `make test` in CI) fails when it is not exactly
   what its generator makes of the reviewed sources, so a hand edit to it fails CI rather than hiding in
@@ -252,7 +268,17 @@ reference data, and every schema version bump would be refused the same way. The
   bounded exactly as before.
 - Residual risk: a left-out file is read by nobody but the maintainer. That is acceptable for these two
   kinds because CI pins each to reviewed sources, as above; a new kind of file needs the same argument
-  and an amendment here.
+  and an amendment here. What that pinning does not cover, said plainly:
+  - **A golden file that no test reads is not reviewed by the AI at all.** Nothing pins it to code, so
+    it could hold data, a secret or text aimed at the maintainer, and only the maintainer's own read of
+    the pull request would see it.
+  - **A reviewed file could embed a golden file** (`//go:embed testdata/x.golden`) and so ship text the
+    AI never read. None does today: the only `//go:embed` directives in the module embed the three
+    targets' `catalog.json` snapshots, which are reviewed. The `//go:embed` line itself is in reviewed
+    code, so adding one is visible to the AI.
+  - **A behaviour change shown by a golden file regenerated with `-update` is seen by the AI from the
+    code side only.** The changed output is not in the diff it reads; it has to infer the change from
+    the code.
 
 ### Cost
 
@@ -403,7 +429,7 @@ the trigger option below are the levers.
   refuses anything but `COMMENT` and `REQUEST_CHANGES` even if the program asked.
 - Amended by issue #316 (the release PR #300's check failed on an answer with no `findings` array, and a
   manual re-run passed): **an answer of the wrong shape is asked once more**, with the same prompt and
-  within the run's existing deadline. The wrong shape is anything the parser refuses before it validates
+  within the run's deadline (below). The wrong shape is anything the parser refuses before it validates
   any one finding: no single JSON object of the answer's form (not JSON, a top level that is no object, a
   `findings` that is no array, an unknown field or a field of the wrong type), text around the object, no
   summary or no `findings` array. A finding the parser refuses (a bad severity, an empty title, a bad
@@ -414,7 +440,15 @@ the trigger option below are the levers.
   finding is invented, there are no inline comments and it is never `REQUEST_CHANGES` (so it dismisses
   nothing either). The run still fails, so the check stays red and visible, and a re-run asks again. One
   retry, not more: a model that answers in the wrong shape twice in a row is more likely failing than
-  unlucky, and each retry spends the subscription and the run's deadline.
+  unlucky, and each retry spends the subscription and the run's deadline. That comment is the
+  maintainer's only sign of two spent model calls, so it is posted on a context detached from the run's
+  cancellation (`context.WithoutCancel`) with a timeout of its own of 30 seconds: it is posted even
+  when the run's deadline passes right after the second answer.
+- **The run has a deadline of 15 minutes** (`runDeadline`, set by `ci/aireview`'s `main`), so two model
+  calls cannot outlive the job's `timeout-minutes: 20`. Each call's ten-minute timeout is derived from
+  the run's context and so capped by what remains of the deadline: after a first call of ten minutes,
+  the retry has at most five. The run plus the detached post above takes at most 15.5 minutes, which
+  leaves 4.5 minutes of the job for building the reviewer, installing the CLI and minting the token.
 - An inline comment goes only on a line the diff shows on its new side; a finding on any other line, or
   on no line, goes in the review's body, so a made-up position cannot fail the review.
 
