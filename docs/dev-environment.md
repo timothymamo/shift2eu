@@ -269,6 +269,21 @@ letters, digits, `.`, `_` and `-`, starting with a letter or digit, as every tar
 check runs before the target runs anything, and make itself never expands the value, so a name that
 carries a `$(...)` is refused, not run. Targets that do not use it, such as `make check`, ignore it.
 
+Those checks cannot close the window between the status query and the start: the directory can still go
+in between, and no flag of Lima 2.x stops `limactl start shift2eu` from creating the VM then. So
+`make vm-up` never starts an existing instance with `limactl start`. It runs
+`limactl shell --start --workdir / shift2eu true` instead, which since Lima 2.0 starts a `Stopped`
+instance, only runs `true` in a `Running` one and fails with `does not exist` for one that is gone; it
+never creates a VM (issue #254). That failure fails `make vm-up`, and nothing runs after it.
+
+Do not let Lima start the VM for you with `limactl autostart enable shift2eu`: its launchd job (a
+LaunchAgent `io.lima-vm.autostart.shift2eu`, or with `--condition=boot` the LaunchDaemon
+`io.lima-vm.daemon.shift2eu`) runs `limactl start shift2eu --foreground`, the form that falls back to
+`template:default` (#237). If you enabled it, turn it off with `limactl autostart disable shift2eu` while
+the instance still has its `lima.yaml` (it reads that file first, and answers `instance not found` without
+it; unload such a job by hand as below). The agents App's refresh LaunchDaemon ([The refresh as a
+LaunchDaemon](#the-refresh-as-a-launchdaemon)) does not start the VM.
+
 Which fix applies depends on whether the directory still holds a `lima.yaml`:
 
 - **`lima.yaml` is missing.** `make vm-delete` cannot clean it up: `limactl delete --force` refuses a

@@ -241,7 +241,14 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # with a dot never matches a look-alike. A Broken instance with any entry named lima.yaml in place, even a
 # dangling symlink, is broken for another reason and may keep an intact disk: vm-up points at limactl list
 # and limactl start --debug, never at removing it by hand. A Stopped or Running instance whose lima.yaml is a
-# dangling symlink is not started either, and gets the same pointer. Like every target that reads
+# dangling symlink is not started either, and gets the same pointer. These checks cannot close the window
+# between the status query and the start: the directory can still go in between (a launchd job, a removal by
+# hand, a concurrent make), and no flag of Lima 2.x stops limactl start <name> from creating the VM then. So
+# an instance that passes them is started with limactl shell --start --workdir / <name> true, never with
+# limactl start <name> (issue #254): since Lima 2.0 it starts a Stopped instance, only runs true in a Running
+# one and fails with "does not exist" for one that is gone, never creating a VM. Its failure is the recipe's
+# last command, so it fails vm-up and no limactl call follows it. --workdir / runs true in a directory every VM
+# has, not in the host's current one. Like every target that reads
 # LIMA_INSTANCE, vm-up refuses an invalid one with $(LIMA_INSTANCE_CHECK) before its recipe runs (issue #252).
 # vm-up then checks VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT, then that the workspace holds nothing stray,
 # then the instance's status, all in one shell line with its limactl calls, so no make flag (-i, -k) can run
@@ -291,7 +298,7 @@ vm-up: git-hooks ## Create or start the Lima VM with only this repository's work
 				exit 1; \
 			fi; \
 			$(if $(VM_RESOURCES_SET),echo "vm-up: warning: $(VM_RESOURCES_SET) apply only when the VM is created; $$LIMA_INSTANCE exists and starts as it is: an existing VM is never resized (stop it and resize it with limactl edit, or rebuild it with make vm-delete and make vm-create)" >&2;) \
-			limactl start "$$LIMA_INSTANCE";; \
+			limactl shell --start --workdir / "$$LIMA_INSTANCE" true;; \
 		(Broken) \
 			if [ -e "$$dir/lima.yaml" ] || [ -L "$$dir/lima.yaml" ]; then \
 				echo "vm-up: the Lima instance $$LIMA_INSTANCE is Broken although $$dir/lima.yaml is there: it is broken for another reason, such as a lima.yaml Lima cannot load." >&2; \
