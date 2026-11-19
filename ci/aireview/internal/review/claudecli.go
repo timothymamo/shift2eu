@@ -140,18 +140,20 @@ func (c *ClaudeCLI) Ask(ctx context.Context, p Prompt) (string, error) {
 // decides it.
 type RunOutcome int
 
-// The outcomes of a run of the Claude Code CLI.
+// The outcomes of a run of the Claude Code CLI. The zero value is
+// OutcomeFailed, so an outcome nobody decided fails closed: it never reads as
+// an answer.
 const (
+	// OutcomeFailed is a run with no usable result that failed on its own:
+	// its error is reported as it is.
+	OutcomeFailed RunOutcome = iota
 	// OutcomeAnswer is a run whose result was read: its answer is used.
-	OutcomeAnswer RunOutcome = iota
+	OutcomeAnswer
 	// OutcomeCancelled is a run with no usable result whose caller cancelled.
 	OutcomeCancelled
 	// OutcomeTimedOut is a run with no usable result that reached its own
 	// deadline.
 	OutcomeTimedOut
-	// OutcomeFailed is a run with no usable result that failed on its own:
-	// its error is reported as it is.
-	OutcomeFailed
 )
 
 // DecideRunOutcome decides a run's outcome from plain values (issue #274):
