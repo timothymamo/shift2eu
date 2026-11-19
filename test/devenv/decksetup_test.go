@@ -68,6 +68,58 @@ func vmEnvInvalidTail(vmEnv string) string {
 	return ""
 }
 
+// fakePastedTokenEntry returns an entry of the shape a maintainer pastes into VM_ENV where a name was meant: a
+// GitHub token, whose lower-case prefix passes a check for a variable name. Its body is invented from label, so
+// no literal in this file is a credential (gosec G101, CLAUDE.md rule 3) and a test can look for its exact text.
+func fakePastedTokenEntry(label string) string {
+	return "ghp_FAKEFAKE" + strings.ToUpper(strings.ReplaceAll(label, "-", "")) + "NOTAREALTOKEN"
+}
+
+// fakeDigitFirstEntry returns a VM_ENV entry that is no variable name because it starts with a digit, built from a
+// label the same way, so it is obviously invented and no literal in this file pairs a name with a value (gosec
+// G101, CLAUDE.md rule 3).
+func fakeDigitFirstEntry(label string) string {
+	return "1FAKEFAKE" + strings.ToUpper(strings.ReplaceAll(label, "-", "")) + "NOTAREALTOKEN"
+}
+
+// entryNotShown is the wording a refusal must use in place of an entry of VM_ENV it may not print: the entry's
+// 1-based position in VM_ENV, and nothing of its text (issue #268 L1). Only an upper-case variable name is printed,
+// because that is the shape of every credential name; anything else may be the credential itself.
+func entryNotShown(at int) *regexp.Regexp {
+	return regexp.MustCompile(`(?i)entry\s+` + strconv.Itoa(at) + `\s+is\s+not\s+shown`)
+}
+
+// assertEntryPositionNotShown fails when a refusal does not say, by its 1-based position in VM_ENV, which entry it
+// would not print: an entry that is not an upper-case variable name may be a credential pasted into VM_ENV by
+// mistake, which the refusal must neither print nor hide without a word (issue #268 L1).
+func assertEntryPositionNotShown(t *testing.T, where, text string, at int, why string) {
+	t.Helper()
+
+	if entryNotShown(at).MatchString(text) {
+		return
+	}
+
+	t.Errorf("%s does not say that entry %d of VM_ENV is not shown: %s. An entry that is not an upper-case variable name may be a credential pasted into VM_ENV by mistake, so the refusal must give the entry's 1-based position in VM_ENV and never its text (issue #268 L1):\nstdout and stderr: %s",
+		where, at, why, text)
+}
+
+// blankLines counts the empty lines of a daemon.env, ignoring the empty string after the file's last newline.
+func blankLines(body string) int {
+	if body == "" {
+		return 0
+	}
+
+	count := 0
+
+	for _, line := range strings.Split(strings.TrimSuffix(body, "\n"), "\n") {
+		if strings.TrimSpace(line) == "" {
+			count++
+		}
+	}
+
+	return count
+}
+
 // seededDaemonEnv is what the VM's daemon.env holds before a case: the credentials a previous make vm-env
 // wrote. A refused run leaves exactly these bytes behind.
 const seededDaemonEnv = "CLAUDE_CODE_OAUTH_TOKEN=old-oauth\nDEEPSEEK_API_KEY=old-deepseek\n"
@@ -299,6 +351,12 @@ func TestMakeVMEnvRefusesMissingCredentials(t *testing.T) {
 // pasted into VM_ENV by mistake (issue #234 audit L1). A value that got past the character class and is
 // refused per name held nothing but names, commas and spaces, so naming the offending name back reveals no
 // credential and is what the maintainer needs to see.
+//
+// Issue #268's L1 narrowed that: only an upper-case variable name is a credential name, so the per-name refusal
+// prints an entry only when it matches ^[A-Z_][A-Z0-9_]*$ and otherwise its 1-based position in VM_ENV - "entry 1
+// is not shown". A dash or a dot never reaches this per-name check (the character class refuses VM_ENV first,
+// issue #234 audit L1), so the entry the per-name check sees is the one starting with a digit - which may be a
+// credential a maintainer pasted where a name goes.
 func TestMakeVMEnvRefusesANameThatIsNotAVariable(t *testing.T) {
 	t.Parallel()
 
@@ -306,15 +364,16 @@ func TestMakeVMEnvRefusesANameThatIsNotAVariable(t *testing.T) {
 		name   string
 		vmEnv  string // the invented name handed to VM_ENV; no variable of the test machine is ever named so
 		reason string
-		// echoesTheName is whether the refusal may show what VM_ENV held: only the per-name check names the
-		// name it refused back, the character-class refusal shows none of its value (issue #234 audit L1).
-		echoesTheName bool
+		// perName is whether the per-name check refuses this entry rather than the character class: the class
+		// refuses a dash or a dot before the name is looked at, showing none of VM_ENV, while the entry
+		// starting with a digit reaches the per-name check, which gives its position (issue #268 L1).
+		perName bool
 	}{
 		{
-			name:          "the name starts with a digit",
-			vmEnv:         "1INVENTED_TOKEN",
-			reason:        "a name may not start with a digit",
-			echoesTheName: true,
+			name:    "the name starts with a digit",
+			vmEnv:   "1INVENTED_TOKEN",
+			reason:  "a name may not start with a digit",
+			perName: true,
 		},
 		{
 			name:   "the name holds a dash",
@@ -346,29 +405,22 @@ func TestMakeVMEnvRefusesANameThatIsNotAVariable(t *testing.T) {
 
 			text := stdout + stderr
 
-			if tc.echoesTheName {
-				if !strings.Contains(text, tc.vmEnv) {
-					t.Errorf("the refusal does not name %s, so a maintainer cannot tell which VM_ENV name vm-env refused (%s):\nstdout: %s\nstderr: %s",
-						tc.vmEnv, tc.reason, stdout, stderr)
-				}
-			} else {
-				if !strings.Contains(text, "VM_ENV") {
-					t.Errorf("the refusal does not name VM_ENV, so a maintainer cannot tell that the VM_ENV they passed is what vm-env refused (%s):\nstdout: %s\nstderr: %s",
-						tc.reason, stdout, stderr)
-				}
-
-				if !strings.Contains(strings.ToLower(text), "not shown") {
-					t.Errorf("the refusal does not say that VM_ENV's value is not shown, so a maintainer cannot tell whether the value they handed vm-env was echoed (%s) (issue #234 audit L1):\nstdout: %s\nstderr: %s",
-						tc.reason, stdout, stderr)
-				}
-
-				// None of it: a character the character class refuses may be where a maintainer pasted a
-				// credential, so the refusal must not reproduce it (issue #234 audit L1).
-				if strings.Contains(text, tc.vmEnv) {
-					t.Errorf("the refusal echoes the value VM_ENV held: the character-class refusal must show none of it, because a maintainer may have pasted a credential there by mistake (%s) (issue #234 audit L1):\nstdout: %s\nstderr: %s",
-						tc.reason, stdout, stderr)
-				}
+			if !strings.Contains(text, "VM_ENV") {
+				t.Errorf("the refusal does not name VM_ENV, so a maintainer cannot tell that the VM_ENV they passed is what vm-env refused (%s):\nstdout: %s\nstderr: %s",
+					tc.reason, stdout, stderr)
 			}
+
+			if tc.perName {
+				// The entry's position, and nothing of its text: it may be where a maintainer pasted a credential.
+				assertEntryPositionNotShown(t, "make vm-env's refusal", text, 1, tc.reason)
+			} else if !strings.Contains(strings.ToLower(text), "not shown") {
+				t.Errorf("the refusal does not say that VM_ENV's value is not shown, so a maintainer cannot tell whether the value they handed vm-env was echoed (%s) (issue #234 audit L1):\nstdout: %s\nstderr: %s",
+					tc.reason, stdout, stderr)
+			}
+
+			assertNoSecrets(t, "make vm-env's refusal", text, []secret{
+				{kind: "VM_ENV entry it was given", value: tc.vmEnv},
+			})
 
 			got, readErr := os.ReadFile(sb.daemonEnvPath())
 			if readErr != nil {
@@ -385,6 +437,396 @@ func TestMakeVMEnvRefusesANameThatIsNotAVariable(t *testing.T) {
 			sb.assertNoLimaCalls(t, "a name that is not a variable is refused")
 
 			assertNoCredentialValues(t, "make vm-env's output", stdout+stderr)
+		})
+	}
+}
+
+// TestMakeVMEnvRefusalGivesOnlyThePositionOfAnEntryItMayNotPrint pins issue #268's L1 (security): make
+// vm-env-check, and so make vm-env and make vm-create, lists the VM_ENV entries it refuses. An entry that is not
+// an upper-case variable name - every credential name is upper case - may be the credential itself, pasted where
+// a name goes by mistake, so the refusal must print only its 1-based position in VM_ENV: "entry 2 is not shown".
+// Two entries reach a message that prints them today. A lower-case token spelling (ghp_...) is a valid variable
+// name, so it passes the per-name checks and is printed in the "not set or empty" list. One starting with a digit
+// is refused as no variable name, and the message prints it. Both are invented here, and the failure names neither
+// of them (CLAUDE.md rule 3).
+func TestMakeVMEnvRefusalGivesOnlyThePositionOfAnEntryItMayNotPrint(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		vmEnv string   // the VM_ENV handed to make on its command line
+		unset []string // names left out of make's environment, so they are the ones the refusal is about
+		at    int      // the 1-based position in VM_ENV of the entry the refusal may not print
+		entry string   // that entry, whose text no output may hold
+		named []string // real credential names the refusal must still print
+		// wantLower are substrings the refusal must hold, compared case-insensitively.
+		wantLower []string
+		reason    string
+	}{
+		{
+			name:      "a pasted token in the not set or empty list",
+			vmEnv:     "CLAUDE_CODE_OAUTH_TOKEN," + fakePastedTokenEntry("oauth"),
+			unset:     []string{fakePastedTokenEntry("oauth")},
+			at:        2,
+			entry:     fakePastedTokenEntry("oauth"),
+			wantLower: []string{"not set or empty"},
+			reason:    "a token pasted where a name goes is a valid variable name, so the missing-credential list prints it in full",
+		},
+		{
+			name:      "a pasted token next to a real name that is unset",
+			vmEnv:     fakePastedTokenEntry("deepseek") + ",DEEPSEEK_API_KEY",
+			unset:     []string{"DEEPSEEK_API_KEY", fakePastedTokenEntry("deepseek")},
+			at:        1,
+			entry:     fakePastedTokenEntry("deepseek"),
+			named:     []string{"DEEPSEEK_API_KEY"},
+			wantLower: []string{"not set or empty"},
+			reason:    "an entry that is not a credential name is hidden, while a real credential name that is unset is still named",
+		},
+		{
+			name:      "an entry that starts with a digit",
+			vmEnv:     "CLAUDE_CODE_OAUTH_TOKEN," + fakeDigitFirstEntry("api"),
+			unset:     []string{fakeDigitFirstEntry("api")},
+			at:        2,
+			entry:     fakeDigitFirstEntry("api"),
+			wantLower: []string{"not a variable name"},
+			reason:    "the not-a-variable-name message prints the entry it refuses, which may be a credential pasted where a name goes",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+
+			for _, name := range tc.unset {
+				delete(env, name)
+			}
+
+			seeded := sb.seedDaemonEnv(t)
+
+			stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=" + tc.vmEnv}, env)
+			if err == nil {
+				t.Fatalf("make vm-env exited 0 with an entry of VM_ENV that names no credential the environment holds: it must refuse, because %s (issue #268 L1)\nstdout: %s\nstderr: %s",
+					tc.reason, stdout, stderr)
+			}
+
+			text, lower := stdout+stderr, strings.ToLower(stdout+stderr)
+
+			// What the refusal says instead of the entry: its 1-based position in VM_ENV (issue #268 L1).
+			assertEntryPositionNotShown(t, "make vm-env's refusal", text, tc.at, tc.reason)
+
+			// And nothing of the entry itself. The failure names the entry's kind, never its text: the very
+			// thing that must not reach the output must not reach a test report either (CLAUDE.md rule 3).
+			assertNoSecrets(t, "make vm-env's refusal", text, []secret{
+				{kind: "VM_ENV entry at position " + strconv.Itoa(tc.at), value: tc.entry},
+			})
+
+			// A real credential name is still named: hiding an entry that may be a credential must not hide the
+			// one name a maintainer has to fix (issue #234, #256, #265).
+			for _, name := range tc.named {
+				if !strings.Contains(text, name) {
+					t.Errorf("the refusal does not name %s, so a maintainer cannot tell which real credential is missing: hiding an entry that may be a credential must hide only that entry (issue #268 L1):\nstdout: %s\nstderr: %s",
+						name, stdout, stderr)
+				}
+			}
+
+			for _, want := range tc.wantLower {
+				if !strings.Contains(lower, want) {
+					t.Errorf("the refusal does not say %q, so a maintainer cannot tell why it stopped (issue #268 L1):\nstdout: %s\nstderr: %s",
+						want, stdout, stderr)
+				}
+			}
+
+			got, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after a refused make vm-env: %v", readErr)
+			}
+
+			if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+				t.Errorf("make vm-env rewrote the VM's daemon.env although it refused an entry of VM_ENV: the file must be byte for byte what it was (-want +got):\n%s", diff)
+			}
+
+			// The refusal is made on the host: nothing handed limactl, so nothing written there.
+			sb.assertNoLimaCalls(t, "VM_ENV holds an entry that names no credential")
+
+			assertNoCredentialValues(t, "make vm-env's output", text)
+		})
+	}
+}
+
+// TestMakeVMEnvWritesNothingForAMissingCredentialUnderDashI pins issue #268's L2 (defence in depth): `make -i
+// vm-env` ignores the failed host-side check, so the write step runs on its own and used to write NAME= for a
+// credential the environment does not hold - replacing the value the VM already had with an empty one, which is
+// the wipe issue #234 closed for the plain run. The write step must refuse an empty value itself: the VM's
+// daemon.env stays byte for byte as it was, so no agent starts without the credential.
+func TestMakeVMEnvWritesNothingForAMissingCredentialUnderDashI(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		unset []string // names left out of make's environment entirely
+		empty []string // names make sees as the empty string
+	}{
+		{name: "one credential unset", unset: []string{"CLAUDE_CODE_OAUTH_TOKEN"}},
+		{name: "one credential set to an empty string", empty: []string{"DEEPSEEK_API_KEY"}},
+		{name: "every credential unset", unset: vmEnvCredentials},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+
+			for _, name := range tc.unset {
+				delete(env, name)
+			}
+
+			for _, name := range tc.empty {
+				env[name] = ""
+			}
+
+			seeded := sb.seedDaemonEnv(t)
+
+			// -i: make runs vm-env's recipe although vm-env-check failed, the way a maintainer whose login
+			// Keychain is locked in an SSH session can reach the write step at all.
+			stdout, stderr, err := runMake(t, []string{"-i", "vm-env"}, env)
+
+			got, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make -i vm-env: %v", readErr)
+			}
+
+			if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+				t.Errorf("make -i vm-env rewrote the VM's daemon.env although a credential it names is missing: the write step must refuse an empty value too, or the failed check is undone and the VM loses the value it had (issue #268 L2) (-want +got):\n%s\nmake's exit error: %v\nstdout: %s\nstderr: %s",
+					diff, err, stdout, stderr)
+			}
+
+			// The exact write the wipe was: a NAME= line for a credential the environment does not hold.
+			lines := sortedEnvLines(string(got))
+
+			for _, name := range append(slices.Clone(tc.unset), tc.empty...) {
+				if slices.Contains(lines, name+"=") {
+					t.Errorf("make -i vm-env wrote a %s line without a value into the VM's daemon.env, replacing the value the VM had: the write step must refuse an empty value, so a run that passed no credential writes nothing (issue #268 L2). The lines it wrote: %v",
+						name, lines)
+				}
+			}
+
+			assertNoCredentialValues(t, "make -i vm-env's output", stdout+stderr)
+		})
+	}
+}
+
+// TestMakeVMEnvRefusesADaemonEnvThatIsNotARegularFile pins issue #259's first item: vm-env writes the new
+// daemon.env to a temporary file beside it and moves it into place, so a daemon.env that is a directory receives
+// the temporary file *inside* itself and the run reports success - the VM then reads no credentials at all - and
+// a daemon.env that is a symlink is replaced by the move, writing where the maintainer did not point the VM.
+// vm-env must refuse such a file, in its own words and before it writes anything, in both modes: the default
+// VM_ENV replaces the whole file, a VM_ENV on the command line merges. The file the maintainer has stays exactly
+// as it is, so it can be fixed and the run repeated.
+func TestMakeVMEnvRefusesADaemonEnvThatIsNotARegularFile(t *testing.T) {
+	t.Parallel()
+
+	// The two shapes a daemon.env can take that are no regular file, and the words that tell a maintainer what
+	// is wrong with the file rather than that some command failed (issue #259; for a symlink "symlink, not a
+	// regular file" fits as well, which holds the same words).
+	const (
+		directory = "directory"
+		symlink   = "symlink"
+	)
+
+	cases := []struct {
+		name  string
+		shape string
+		args  []string // a VM_ENV on the command line merges; nothing is the default VM_ENV, which replaces
+		want  string   // a substring the refusal must hold, compared case-insensitively
+	}{
+		{name: "a directory, replacing", shape: directory, want: "not a regular file"},
+		{name: "a directory, merging", shape: directory, want: "not a regular file", args: []string{"VM_ENV=DEEPSEEK_API_KEY"}},
+		{name: "a symlink to a regular file, replacing", shape: symlink, want: "regular file"},
+		{name: "a symlink to a regular file, merging", shape: symlink, want: "regular file", args: []string{"VM_ENV=DEEPSEEK_API_KEY"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+
+			path := sb.daemonEnvPath()
+			dir := filepath.Dir(path)
+
+			// The regular file a symlink stands in for, holding a line an earlier run left: a refused run must
+			// leave it alone as well. Its name matches no leftover the sweep removes.
+			target := filepath.Join(dir, "daemon.env.symlinked-file")
+			targetBody := []byte("INVENTED_SETTING=" + inventedVMEnvValue("symlink-target") + "\n")
+
+			switch tc.shape {
+			case directory:
+				if err := os.MkdirAll(path, 0o700); err != nil {
+					t.Fatalf("make the VM's daemon.env a directory: %v", err)
+				}
+			case symlink:
+				writeFileMode(t, target, targetBody, 0o600)
+
+				if err := os.Symlink(target, path); err != nil {
+					t.Fatalf("make the VM's daemon.env a symlink: %v", err)
+				}
+			}
+
+			stdout, stderr, err := runMake(t, append([]string{"vm-env"}, tc.args...), env)
+			text, lower := stdout+stderr, strings.ToLower(stdout+stderr)
+
+			if err == nil {
+				t.Fatalf("make vm-env exited 0 although the VM's ~/.config/dot-agent-deck/daemon.env is a %s: the write moves a temporary file into place, so a %s is moved into or replaced instead of written, and the VM is left without the daemon.env its agents read (issue #259)\nstdout: %s\nstderr: %s",
+					tc.shape, tc.shape, stdout, stderr)
+			}
+
+			if !strings.Contains(text, "daemon.env") {
+				t.Errorf("make vm-env's refusal does not name daemon.env, so a maintainer cannot tell which file in the VM to look at (issue #259):\nstdout: %s\nstderr: %s", stdout, stderr)
+			}
+
+			if !strings.Contains(lower, tc.want) {
+				t.Errorf("make vm-env's refusal does not say %q, so a maintainer reads a failed command instead of a file that is not a regular file (issue #259):\nstdout: %s\nstderr: %s",
+					tc.want, stdout, stderr)
+			}
+
+			// Nothing was written: the file the maintainer has is byte for byte what it was, in its own shape.
+			switch tc.shape {
+			case directory:
+				info, statErr := os.Stat(path)
+				if statErr != nil {
+					t.Fatalf("stat the VM's daemon.env after a refused make vm-env: %v", statErr)
+				}
+
+				if !info.IsDir() {
+					t.Errorf("make vm-env replaced the VM's daemon.env directory with a regular file: a refused run must write nothing (issue #259)")
+				}
+
+				entries, readDirErr := os.ReadDir(path)
+				if readDirErr != nil {
+					t.Fatalf("read the VM's daemon.env directory after a refused make vm-env: %v", readDirErr)
+				}
+
+				if len(entries) != 0 {
+					t.Errorf("make vm-env moved %d file(s) into the VM's daemon.env directory: a directory called daemon.env receives the temporary file the write moves into place, so a refused run must write nothing at all (issue #259)", len(entries))
+				}
+			case symlink:
+				info, lstatErr := os.Lstat(path)
+				if lstatErr != nil {
+					t.Fatalf("lstat the VM's daemon.env after a refused make vm-env: %v", lstatErr)
+				}
+
+				if info.Mode()&fs.ModeSymlink == 0 {
+					t.Errorf("make vm-env replaced the VM's daemon.env symlink with a file of its own, so the run wrote where the maintainer did not point the VM: a refused run must write nothing (issue #259)")
+				} else if resolved, readlinkErr := os.Readlink(path); readlinkErr != nil || resolved != target {
+					t.Errorf("make vm-env repointed the VM's daemon.env symlink: a refused run must leave it as it was (issue #259), readlink error: %v", readlinkErr)
+				}
+
+				body, readErr := os.ReadFile(target)
+				if readErr != nil {
+					t.Fatalf("read the file the VM's daemon.env symlink stands in for: %v", readErr)
+				}
+
+				if diff := cmp.Diff(string(targetBody), string(body)); diff != "" {
+					t.Errorf("make vm-env rewrote the file the VM's daemon.env symlink points at although it refused: a refused run must write nothing (issue #259) (-want +got):\n%s", diff)
+				}
+			}
+
+			assertNoCredentialValues(t, "make vm-env's output", text)
+		})
+	}
+}
+
+// TestMakeVMEnvDoesNotCountBlankLinesOfAMerge pins the decision recorded on issue #259's fourth item: a merge
+// drops the blank lines of the VM's daemon.env and documents that it does, so they are not kept and they are not
+// counted either - the "dropped N line(s)" warning is about lines that held something a maintainer may miss (a
+// command, a comment, an assignment the shell would expand), and a blank line held nothing. A file whose blank
+// lines are the only thing dropped gets no warning at all, or a maintainer learns to ignore it.
+func TestMakeVMEnvDoesNotCountBlankLinesOfAMerge(t *testing.T) {
+	t.Parallel()
+
+	// One of the names VM_ENV still lists (PRD #161 milestone 3), so the merge has a line to replace and the
+	// others of the earlier file to count or keep.
+	const narrowed = "DEEPSEEK_API_KEY"
+
+	cases := []struct {
+		name string
+		body string // the daemon.env the VM already has, blank lines and all
+		// dropped is how many lines the merge must report dropping: the ones that were no blank line and no
+		// plain NAME=value assignment.
+		dropped int
+	}{
+		{
+			name: "blank lines are the only thing the merge drops",
+			body: "CLAUDE_CODE_OAUTH_TOKEN=old-oauth\n\nINVENTED_SETTING=old-value\n\n\n",
+		},
+		{
+			name:    "blank lines beside a line the merge drops",
+			body:    "CLAUDE_CODE_OAUTH_TOKEN=old-oauth\n\n# a note\n\nINVENTED_SETTING=old-value\n\n",
+			dropped: 1,
+		},
+	}
+
+	droppedWarning := regexp.MustCompile(`(?i)dropped\s+(\d+)\s+line`)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+
+			writeFileMode(t, sb.daemonEnvPath(), []byte(tc.body), 0o600)
+
+			stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=" + narrowed}, env)
+			if err != nil {
+				t.Fatalf("make vm-env VM_ENV=%s with every credential set: %v\nstdout: %s\nstderr: %s", narrowed, err, stdout, stderr)
+			}
+
+			text := stdout + stderr
+
+			match := droppedWarning.FindStringSubmatch(text)
+
+			switch {
+			case tc.dropped == 0 && match != nil:
+				t.Errorf("make vm-env VM_ENV=%s warns that it dropped %s line(s) although the earlier daemon.env held no line but blank ones to drop: blank lines are documented as not kept, and counting them tells a maintainer that a setting was lost when none was (issue #259)\nstdout: %s\nstderr: %s",
+					narrowed, match[1], stdout, stderr)
+			case tc.dropped > 0 && match == nil:
+				t.Errorf("make vm-env VM_ENV=%s dropped %d line(s) of the earlier daemon.env without saying how many: the count is the lines that held something, never the blank ones (issue #259)\nstdout: %s\nstderr: %s",
+					narrowed, tc.dropped, stdout, stderr)
+			case tc.dropped > 0 && match[1] != strconv.Itoa(tc.dropped):
+				t.Errorf("make vm-env VM_ENV=%s warns that it dropped %s line(s), want %d: the count is every line of the earlier daemon.env that held something and is no plain NAME=value assignment, and no blank line is one of them (issue #259)\nstdout: %s\nstderr: %s",
+					narrowed, match[1], tc.dropped, stdout, stderr)
+			}
+
+			body, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env: %v", readErr)
+			}
+
+			// Not kept: the file the login shell sources holds assignments and nothing else.
+			if blanks := blankLines(string(body)); blanks != 0 {
+				t.Errorf("make vm-env VM_ENV=%s kept %d blank line(s) of the earlier daemon.env: a merge keeps only plain NAME=value lines, and a blank line is not one (issue #259). The lines it wrote: %v",
+					narrowed, blanks, sortedEnvLines(string(body)))
+			}
+
+			want := []string{
+				"CLAUDE_CODE_OAUTH_TOKEN=old-oauth",
+				"INVENTED_SETTING=old-value",
+				narrowed + "=" + fakeEnvValue(narrowed),
+			}
+
+			if diff := cmp.Diff(sortedEnvLines(strings.Join(want, "\n")), sortedEnvLines(string(body))); diff != "" {
+				t.Errorf("make vm-env VM_ENV=%s wrote the wrong lines to the VM's daemon.env: a merge keeps every plain NAME=value line it does not name and replaces its own (issue #259) (-want +got):\n%s",
+					narrowed, diff)
+			}
+
+			assertNoCredentialValues(t, "make vm-env's output", text)
 		})
 	}
 }
@@ -1151,6 +1593,10 @@ func TestMakeVMEnvRefusesAnUnreadableDaemonEnv(t *testing.T) {
 // ones older than a minute. A temporary file written right now is a concurrent vm-env's: removing it makes
 // that run's final move fail or, worse, move a file the other run still writes, so the sweep leaves a fresh
 // one alone. A name the sweep does not match is never its business.
+//
+// Issue #259's second item narrowed the sweep further: it removes regular files only. A directory named like a
+// leftover - mktemp never writes one, so a maintainer or another tool made it - is left where it is, and the run
+// still succeeds: `rm -f` refuses a directory, and a sweep that stops there fails the whole vm-env.
 func TestMakeVMEnvSweepsOnlyOldLeftovers(t *testing.T) {
 	t.Parallel()
 
@@ -1159,18 +1605,23 @@ func TestMakeVMEnvSweepsOnlyOldLeftovers(t *testing.T) {
 	dir := sb.vmPath(".config/dot-agent-deck")
 
 	// The leftovers as mktemp names them: one from a run killed ten minutes ago, one a run that is writing it
-	// right now, and one name the sweep's pattern does not match.
+	// right now, one name the sweep's pattern does not match, and a directory an older sweep matched by name.
 	stale := filepath.Join(dir, ".daemon.env.abc123")
 	concurrent := filepath.Join(dir, ".daemon.env.def456")
 	unmatched := filepath.Join(dir, ".daemon.env.bak")
+	staleDir := filepath.Join(dir, ".daemon.env.ghi789")
 
 	for _, path := range []string{stale, concurrent, unmatched} {
 		writeFileMode(t, path, []byte("LEFT_OVER=\n"), 0o600)
 	}
 
+	if err := os.Mkdir(staleDir, 0o700); err != nil {
+		t.Fatalf("make a directory named like a leftover: %v", err)
+	}
+
 	tenMinutesAgo := time.Now().Add(-10 * time.Minute)
 
-	for _, path := range []string{stale, unmatched} {
+	for _, path := range []string{stale, unmatched, staleDir} {
 		if err := os.Chtimes(path, tenMinutesAgo, tenMinutesAgo); err != nil {
 			t.Fatalf("age the leftover %s: %v", filepath.Base(path), err)
 		}
@@ -1194,6 +1645,15 @@ func TestMakeVMEnvSweepsOnlyOldLeftovers(t *testing.T) {
 	if _, statErr := os.Stat(unmatched); statErr != nil {
 		t.Errorf("make vm-env removed %s, whose name the sweep's pattern does not match: the sweep removes only the temporary files mktemp writes beside daemon.env, never another file of that directory (issue #234): %v",
 			filepath.Base(unmatched), statErr)
+	}
+
+	// A directory the sweep's name and age match is no leftover of mktemp's: the sweep removes regular files
+	// only, so it stays where it is and the run above still succeeded (issue #259).
+	if info, statErr := os.Stat(staleDir); statErr != nil {
+		t.Errorf("make vm-env removed %s, a directory named like a leftover and older than a minute: mktemp writes files, so the sweep removes regular files only and leaves a directory alone (issue #259): %v",
+			filepath.Base(staleDir), statErr)
+	} else if !info.IsDir() {
+		t.Errorf("make vm-env replaced the directory %s with a regular file: the sweep removes leftovers and nothing else (issue #259)", filepath.Base(staleDir))
 	}
 
 	body, readErr := os.ReadFile(sb.daemonEnvPath())
