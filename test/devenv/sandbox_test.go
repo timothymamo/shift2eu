@@ -1082,7 +1082,14 @@ func (c *contendersOnAStaleLock) reached() string {
 func (c *contendersOnAStaleLock) release(t *testing.T, hold string) {
 	t.Helper()
 
-	path := filepath.Join(c.dir, hold)
+	letGoOf(t, filepath.Join(c.dir, hold), "no contender came to read it, so this run forced no interleaving of issue #288")
+}
+
+// letGoOf lets the process held at the fifo path go: the line written into it ends that process's read. It fails
+// the test instead of hanging it when no process ever came to read that fifo, which why says in the test's terms.
+func letGoOf(t *testing.T, path, why string) {
+	t.Helper()
+
 	done := make(chan error, 1)
 
 	go func() {
@@ -1104,10 +1111,10 @@ func (c *contendersOnAStaleLock) release(t *testing.T, hold string) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("release the contender held at %s: %v", hold, err)
+			t.Fatalf("let the process held at %s go: %v", path, err)
 		}
 	case <-time.After(30 * time.Second):
-		t.Fatalf("timed out after 30s releasing the contender held at %s: no contender came to read %s, so this run forced no interleaving of issue #288", hold, path)
+		t.Fatalf("timed out after 30s letting the process held at %s go: %s", path, why)
 	}
 }
 
@@ -1157,6 +1164,177 @@ func (sb *sandbox) useThreeContendersOnAStaleLock(t *testing.T, base map[string]
 			"rm": fmt.Sprintf(contenderRMShim, strconv.Quote(realTool(t, "rm"))),
 		}),
 	}
+}
+
+// goneLockClockShim stands in for date in the tests of issue #288's missing-lock path. A clock read is
+// `date +%s` (the script's now), and the shim holds one while the file hold-clock is there, so the test can take
+// the lock a refresher holds away at the last point before still_locked reads it. It also answers the clock with
+// the offset the test writes into clock-offset, the way a Mac that woke from a long sleep finds it moved on.
+// Every other call is the machine's own date, which reads the times the script shows.
+const goneLockClockShim = `#!/bin/sh
+dir="${SHIFT2EU_TEST_GONE_LOCK:?set SHIFT2EU_TEST_GONE_LOCK}"
+if [ "$1" = '+%%s' ]; then
+  if [ -e "${dir}/hold-clock" ]; then
+    %s -f "${dir}/hold-clock"
+    : > "${dir}/at-clock"
+    read -r go < "${dir}/await-clock" || exit 1
+  fi
+  offset=0
+  if [ -e "${dir}/clock-offset" ]; then
+    offset="$(cat "${dir}/clock-offset")"
+  fi
+  printf '%%s\n' "$(( $(%s +%%s) + offset ))"
+  exit 0
+fi
+exec %s "$@"
+`
+
+// goneLockSleepShim stands in for sleep in the same tests: it holds a wait while the file hold-wait is there, so
+// the test can put the lock back while still_locked is retrying it, and returns at once otherwise, so no retry
+// costs the suite a second.
+const goneLockSleepShim = `#!/bin/sh
+dir="${SHIFT2EU_TEST_GONE_LOCK:?set SHIFT2EU_TEST_GONE_LOCK}"
+if [ -e "${dir}/hold-wait" ]; then
+  %s -f "${dir}/hold-wait"
+  : > "${dir}/at-wait"
+  read -r go < "${dir}/await-wait" || exit 1
+fi
+exit 0
+`
+
+// The markers goneLock's shims touch when they hold the refresher, and the fifos they read until the test lets
+// them go.
+const (
+	heldAtTheClock = "at-clock"    // the refresher read the loop's clock, before still_locked
+	heldAtTheWait  = "at-wait"     // the refresher waited in still_locked for the lock it holds
+	theClockHold   = "await-clock" // the fifo the refresher held at its clock read reads
+	theWaitHold    = "await-wait"  // the fifo the refresher held at a wait reads
+)
+
+// goneLock is the staging of issue #288's missing-lock path: the lock a refresher holds, the shims that hold it at
+// its clock read and at a wait, and the holds the test arms and lets go. Every hold is a fifo, so no test waits on
+// a clock and the test alone decides when the lock goes missing and when it comes back.
+type goneLock struct {
+	dir   string
+	lock  string
+	aside string // where the test puts the lock while it is missing
+}
+
+// useGoneLockShims puts the date and the sleep shim of issue #288's missing-lock path first on PATH, for the lock
+// at lock, and returns the staging whose holds the test arms and lets go.
+func (sb *sandbox) useGoneLockShims(t *testing.T, env map[string]string, lock string) *goneLock {
+	t.Helper()
+
+	dir := filepath.Join(sb.root, "gone-lock")
+	binDir := filepath.Join(dir, "bin")
+
+	if err := os.MkdirAll(binDir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+
+	for _, hold := range []string{theClockHold, theWaitHold} {
+		makeFifo(t, filepath.Join(dir, hold))
+	}
+
+	dateTool := strconv.Quote(realTool(t, "date"))
+
+	writeFileMode(t, filepath.Join(binDir, "date"),
+		[]byte(fmt.Sprintf(goneLockClockShim, strconv.Quote(realTool(t, "rm")), dateTool, dateTool)), 0o700)
+	writeFileMode(t, filepath.Join(binDir, "sleep"),
+		[]byte(fmt.Sprintf(goneLockSleepShim, strconv.Quote(realTool(t, "rm")))), 0o700)
+
+	env["PATH"] = binDir + ":" + env["PATH"]
+	env["SHIFT2EU_TEST_GONE_LOCK"] = dir
+
+	return &goneLock{dir: dir, lock: lock, aside: filepath.Join(sb.root, "lock-in-transit")}
+}
+
+// holdTheNextClock arms the date shim to hold the refresher at its next clock read. The marker of an earlier
+// hold goes first, so the test waits for this hold and not for the one before it.
+func (g *goneLock) holdTheNextClock(t *testing.T) {
+	t.Helper()
+
+	clearMarker(t, filepath.Join(g.dir, heldAtTheClock))
+	writeFileMode(t, filepath.Join(g.dir, "hold-clock"), nil, 0o600)
+}
+
+// holdTheNextWait arms the sleep shim to hold the refresher at its next wait, with the marker of an earlier hold
+// gone for the same reason.
+func (g *goneLock) holdTheNextWait(t *testing.T) {
+	t.Helper()
+
+	clearMarker(t, filepath.Join(g.dir, heldAtTheWait))
+	writeFileMode(t, filepath.Join(g.dir, "hold-wait"), nil, 0o600)
+}
+
+// clearMarker removes a marker of an earlier hold, which need not be there.
+func clearMarker(t *testing.T, path string) {
+	t.Helper()
+
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("clear %s: %v", path, err)
+	}
+}
+
+// letTheClockGo lets the refresher held at its clock read go.
+func (g *goneLock) letTheClockGo(t *testing.T) {
+	t.Helper()
+
+	letGoOf(t, filepath.Join(g.dir, theClockHold), "no refresher came to read it, so this run forced no missing-lock retry of issue #288")
+}
+
+// letTheWaitGo lets the refresher held at a wait go.
+func (g *goneLock) letTheWaitGo(t *testing.T) {
+	t.Helper()
+
+	letGoOf(t, filepath.Join(g.dir, theWaitHold), "no refresher came to read it, so this run forced no missing-lock retry of issue #288")
+}
+
+// reached reports whether the refresher has come to the hold that touches marker.
+func (g *goneLock) reached(marker string) bool {
+	_, err := os.Stat(filepath.Join(g.dir, marker))
+
+	return err == nil
+}
+
+// moveTheLockAside moves the lock the refresher holds out of its place, the way a contender that read a stale
+// owner moves it aside (issues #240 and #288), and returns where the test put it.
+func (g *goneLock) moveTheLockAside(t *testing.T) {
+	t.Helper()
+
+	if err := os.Rename(g.lock, g.aside); err != nil {
+		t.Fatalf("move the lock %s aside: %v\n%s", g.lock, err, g.describe())
+	}
+}
+
+// putTheLockBack puts the lock the test moved aside back in its place, as that contender does for the lock it
+// finds no owner for.
+func (g *goneLock) putTheLockBack(t *testing.T) {
+	t.Helper()
+
+	if err := os.Rename(g.aside, g.lock); err != nil {
+		t.Fatalf("put the lock %s back: %v\n%s", g.lock, err, g.describe())
+	}
+}
+
+// describe is a failure message's view of the staging: the steps the refresher reached and what its state
+// directory, with whatever lock or half-taken lock it holds, holds.
+func (g *goneLock) describe() string {
+	state := filepath.Dir(g.lock)
+
+	return fmt.Sprintf("the refresher's steps: %s=%t %s=%t; the lock is %s and the lock in transit is %s; the state directory:\n%s",
+		heldAtTheClock, g.reached(heldAtTheClock), heldAtTheWait, g.reached(heldAtTheWait),
+		entriesOf(g.lock), entriesOf(g.aside), describeTree(state))
+}
+
+// entriesOf names the entries of dir, or says the directory is not there.
+func entriesOf(dir string) string {
+	names := dirNames(dir)
+	if names == nil {
+		return "not there"
+	}
+
+	return strings.Join(names, ",")
 }
 
 // makeFifo creates the fifo at path: the hold a shim blocks on, which a test lets go by opening it for writing.
