@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -1162,6 +1164,318 @@ func TestAgentsAppTokenRefreshNeverTakesItsOwnLockForAnotherRefresh(t *testing.T
 	}
 
 	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshThreeContendersOnAStaleLockLeaveOneHolder pins issue #288. The takeover of a stale
+// lock is atomic, but a refresher that has won it is not safe yet: a contender that read the stale owner first
+// can still move the winner's fresh lock aside, and when it puts that lock back while a third contender has a
+// lock of its own in place, mv puts it back inside that lock, as a nested copy. The winner then mints beside the
+// contender that holds the lock, two refreshers each believing they hold it, and the put-back left a copy of the
+// winner's lock inside the lock nobody will ever remove until the holder exits (issue #288).
+//
+// The interleaving is forced by shims, not by speed: each of the three refreshers is held at the step it needs
+// (useThreeContendersOnAStaleLock), so the lock is the winner's before the mover moves it aside, the taker's
+// before the mover puts it back, and the winner's own check runs after all of that. A refresh must find the lock
+// no longer its own and stop as a losing refresher does, and the mover must not leave the nested copy.
+//
+// The winner is held in its loop right after the clock read and before its mint, so the check it needs is the one
+// before the mint itself, not one at the top of the loop: between the two, the lock can turn over exactly as it
+// does here.
+func TestAgentsAppTokenRefreshThreeContendersOnAStaleLockLeaveOneHolder(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	lock := f.sb.refreshLockDir("shift2eu")
+
+	// The stale lock: a lock whose pid is alive but runs no refresh, which take_lock takes over as it does a
+	// lock a killed refresher left behind.
+	if err := os.MkdirAll(lock, 0o700); err != nil {
+		t.Fatalf("create the stale lock %s: %v", lock, err)
+	}
+
+	writeFileMode(t, filepath.Join(lock, "pid"), []byte(strconv.Itoa(liveNonRefreshPid(t))+"\n"), 0o600)
+
+	race := f.sb.useThreeContendersOnAStaleLock(t, f.refreshEnv(), lock)
+
+	// All three start against the stale lock before the test waits on any: the mover cannot touch the lock
+	// before it is released, the taker cannot before its own release, and the winner is the only one left to
+	// take the stale lock over.
+	mover := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, race.envMover)
+	taker := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, race.envTaker)
+	winner := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, race.envWinner)
+
+	// What a failure has to show: each refresher's pid, whether it runs and its output, and the state directory
+	// with the lock's pid and whatever the put-back left behind.
+	contest := func() string {
+		return fmt.Sprintf("the winner (pid %d, running %t) stderr:\n%s\nthe mover (pid %d, running %t) stderr:\n%s\nthe taker (pid %d, running %t) stderr:\n%s\nstate directory:\n%s",
+			winner.pid(), winner.running(), winner.errOut(), mover.pid(), mover.running(), mover.errOut(),
+			taker.pid(), taker.running(), taker.errOut(), describeTree(f.sb.stateDir()))
+	}
+
+	// Each of the three reaches its hold, and the winner holds the lock by then, before anything mints.
+	waitFor(t, 30*time.Second, "the three refreshers to reach their holds with the winner holding the stale lock", func() bool {
+		return race.held(contenderReadTheClock) && race.held(contenderAskedOwnership) &&
+			race.held(contenderReachedItsTake) && lockHoldsPid(lock, winner.pid())
+	})
+
+	if minted := len(f.api.minted()); minted != 0 {
+		t.Fatalf("%d token(s) were minted before the test released any refresher, so the holds staged no interleaving: the winner must wait in its loop before it mints (issue #288)\n%s", minted, contest())
+	}
+
+	// The mover takes its turn: the lock it finds is the winner's, and the pid it reads there is not the stale
+	// owner it read before, so what it moves aside is the winner's fresh lock and not the stale one.
+	race.release(t, holdTheMover)
+
+	waitFor(t, 30*time.Second, "the mover to move the winner's fresh lock aside", func() bool {
+		return race.held(contenderMovedTheLockAside)
+	})
+
+	if _, err := os.Stat(lock); err == nil {
+		t.Fatalf("the lock %s is still in place after the mover moved the winner's lock aside, so the mover took something else: this run forced no interleaving of issue #288\n%s", lock, contest())
+	}
+
+	// The taker takes the lock the mover freed, and mints with it.
+	race.release(t, holdTheTaker)
+
+	waitFor(t, 30*time.Second, "the taker to take the free lock over and mint with it", func() bool {
+		return lockHoldsPid(lock, taker.pid()) && len(f.api.minted()) == 1
+	})
+
+	// The mover puts back what it moved, which lands inside the taker's lock, and then finds that lock and stops
+	// as a losing refresher does.
+	race.release(t, holdThePutBack)
+
+	waitFor(t, 30*time.Second, "the mover to stop as a losing refresher", func() bool {
+		return !mover.running()
+	})
+
+	if strings.TrimSpace(mover.errOut()) == "" {
+		t.Errorf("the mover stopped without a word, so a maintainer cannot tell why it left the lock alone\n%s", contest())
+	}
+
+	// While the winner still holds its own belief and the taker holds the lock, the lock must hold nothing but
+	// the taker's pid: the copy the put-back nested inside it is what issue #288 names, and it belongs to a
+	// refresher that will never remove it.
+	if names := dirNames(lock); strings.Join(names, ",") != "pid" {
+		t.Errorf("the lock %s holds %v while the taker holds it, want only pid: the mover's put-back landed inside the taker's lock as a nested copy that only the taker's own exit removes (issue #288)\n%s",
+			lock, names, contest())
+	}
+
+	// The winner goes on: it must find the lock no longer its own and stop as a losing refresher does, not mint
+	// beside the taker.
+	race.release(t, holdTheWinner)
+
+	if !poll(30*time.Second, func() bool { return !winner.running() || len(f.api.minted()) > 1 }) {
+		t.Fatalf("the winner neither stopped nor minted 30s after the test let it go with the lock no longer its own\n%s", contest())
+	}
+
+	if winner.running() {
+		t.Errorf("the refresher that won the stale lock still runs after another refresher took the lock over: two refreshers each believe they hold the lock, so both refresh the VM's token file (issue #288)\n%s", contest())
+	}
+
+	if minted := len(f.api.minted()); minted != 1 {
+		t.Errorf("%d token(s) were minted, want one: exactly one refresher holds the lock and mints, and the winner minted beside the taker (issue #288)\n%s", minted, contest())
+	}
+
+	if !winner.running() && strings.TrimSpace(winner.errOut()) == "" {
+		t.Errorf("the winner stopped without a word, so a maintainer cannot tell why it left the lock to the taker\n%s", contest())
+	}
+
+	if !winner.running() {
+		t.Logf("the refresher that lost the lock exited with %d", winner.exitCode(t))
+	}
+
+	if !taker.running() {
+		t.Errorf("the taker exited after taking the lock over, so no refresher is left to refresh the VM's token\n%s", contest())
+	}
+
+	if !lockHoldsPid(lock, taker.pid()) {
+		t.Errorf("the lock %s does not hold the taker's pid %d: the only refresher left must be the one holding the lock\n%s", lock, taker.pid(), contest())
+	}
+
+	taker.signal(t, syscall.SIGTERM)
+
+	if !taker.waitExit(30 * time.Second) {
+		t.Fatalf("the taker did not stop on SIGTERM; stderr:\n%s", taker.errOut())
+	}
+
+	if _, err := os.Stat(lock); err == nil {
+		t.Errorf("the lock %s outlived the refresher that held it", lock)
+	}
+
+	for _, name := range dirNames(f.sb.stateDir()) {
+		if strings.Contains(name, ".lock") {
+			t.Errorf("the state directory still holds %s after every refresher stopped: an orphan lock outlives the refreshers it came from (issue #288)\n%s", name, contest())
+		}
+	}
+
+	f.assertNoLeaks(t, winner.out()+mover.out()+taker.out(), winner.errOut()+mover.errOut()+taker.errOut())
+}
+
+// TestAgentsAppTokenRefreshLeavesNoSleepWhenASignalArrivesInTheWindow pins issue #289. The refresh loop waits
+// with `sleep "${wait_seconds}" &` and then stores that sleep's pid in sleeper, and its TERM and INT traps kill
+// ${sleeper} only when it is set: a signal that arrives between those two lines leaves the sleep running after
+// the script has exited, for up to an hour, holding whatever it inherited. Under launchd the job's process group
+// hides that; a hand-started refresh leaves a stray process behind. The trap must kill the last background job as
+// well, or the sleep outlives the refresh.
+//
+// The window cannot be forced in the running loop from outside: a shell forks the sleep and stores $! long before
+// the forked sleep has even exec'd, so a sleep shim that signals the script from its first line always arrives
+// after the store (measured through dash, and PR #286 met the remaining sliver only under load), and no tool the
+// loop runs lies between the two lines to hold the shell there. So this test forces the window where it can: it
+// replays the window with the loop's own trap, taken from dev/agents-app-token.sh's text, one sleep started, and
+// no sleeper stored. The seam that would let the test use the loop instead is a hold between the two lines, which
+// the script does not have and no PATH shim can add.
+func TestAgentsAppTokenRefreshLeavesNoSleepWhenASignalArrivesInTheWindow(t *testing.T) {
+	t.Parallel()
+
+	script := readRepoFile(t, agentsMintScript)
+
+	for _, tc := range []struct {
+		name   string
+		signal syscall.Signal
+		trap   string
+		status int
+	}{
+		{name: "a TERM between the sleep and the store of its pid", signal: syscall.SIGTERM, trap: "TERM", status: 143},
+		{name: "an INT between the sleep and the store of its pid", signal: syscall.SIGINT, trap: "INT", status: 130},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			harness := filepath.Join(sb.root, "window.sh")
+			sleepPidFile := filepath.Join(sb.root, "sleep.pid")
+			hold := filepath.Join(sb.root, "hold.fifo")
+
+			makeFifo(t, hold)
+
+			// The loop's window, replayed: its own trap, its own `sleep ... &` with nothing stored after it, and
+			// then a hold. The hold is a fifo no one ever writes, so the sleep is running and sleeper is still
+			// empty when the signal arrives, the state a signal in the loop's window finds. stopped and
+			// release_lock stand in for the script's own, which need the mint's state and say only where the
+			// refresh stopped.
+			harnessText := fmt.Sprintf(`#!/bin/sh
+stopped() { :; }
+release_lock() { :; }
+sleeper=""
+%s
+sleep 300 &
+printf '%%s\n' "$!" > "${SHIFT2EU_TEST_SLEEP_PID:?}"
+read -r go < "${SHIFT2EU_TEST_HOLD_FIFO:?}"
+printf 'the signal arrived after the trap, so this run forced no window\n' >&2
+`, refreshTrap(t, script, tc.trap))
+			writeFileMode(t, harness, []byte(harnessText), 0o700)
+
+			env := sb.baseEnv()
+			env["SHIFT2EU_TEST_SLEEP_PID"] = sleepPidFile
+			env["SHIFT2EU_TEST_HOLD_FIFO"] = hold
+
+			// The harness runs like a script the test starts: in a process group of its own, with its output in
+			// files, so the sleep the trap may leave behind cannot block the wait (issue #267).
+			run := sb.start(t, harness, nil, env)
+
+			waitFor(t, 30*time.Second, "the replay to start its sleep and hold in the window", func() bool {
+				return sleepStarted(t, sleepPidFile)
+			})
+
+			sleepPid := sleepPidFrom(t, sleepPidFile)
+
+			// The signal goes in once the sleep is the sleep: a background child a shell has just forked can lose a
+			// signal to its own exec still being on the way (measured through dash), which is no behaviour of the
+			// refresh and would make this test flaky. The window itself, a running sleep and an empty sleeper, is
+			// in place either way.
+			waitFor(t, 30*time.Second, "the replay's sleep to be running before the signal goes in", func() bool {
+				comm, err := exec.Command(realTool(t, "ps"), "-p", strconv.Itoa(sleepPid), "-o", "comm=").Output()
+
+				return err == nil && strings.TrimSpace(string(comm)) == "sleep"
+			})
+
+			run.signal(t, tc.signal)
+
+			if !run.waitExit(30 * time.Second) {
+				t.Fatalf("the replay of issue #289's window did not stop 30s after the %s; stderr:\n%s", tc.trap, run.errOut())
+			}
+
+			if status := run.exitCode(t); status != tc.status {
+				t.Fatalf("the refresh's %s trap ended the script with status %d, want %d: the trap, not the signal's default action, must handle it; stderr:\n%s",
+					tc.trap, status, tc.status, run.errOut())
+			}
+
+			// A killed sleep is a zombie until the system reaps it, so the sleep stopping is what the test waits
+			// for; a sleep the trap never killed sleeps on until its own time is up.
+			if !poll(10*time.Second, func() bool { return sleepStopped(t, sleepPid) }) {
+				t.Errorf("the refresh's %s trap left the sleep it had just started running (pid %d) after the script had exited: a signal that arrives between `sleep ... &` and `sleeper=$!` must kill the last background job too, or the sleep outlives the refresh for up to an hour (issue #289)\nstderr:\n%s",
+					tc.trap, sleepPid, run.errOut())
+			}
+
+			if strings.Contains(run.errOut(), "forced no window") {
+				t.Errorf("the replay went on after its signal, so the trap never ran and this run proved nothing about issue #289; stderr:\n%s", run.errOut())
+			}
+		})
+	}
+}
+
+// sleepStarted reports whether the replay has started its sleep and come to hold in the window, and its pid is
+// there to read.
+func sleepStarted(t *testing.T, pidFile string) bool {
+	t.Helper()
+
+	body, err := os.ReadFile(pidFile)
+	if err != nil {
+		return false
+	}
+
+	_, err = strconv.Atoi(strings.TrimSpace(string(body)))
+
+	return err == nil
+}
+
+// sleepPidFrom is the pid the replay wrote of the sleep it started.
+func sleepPidFrom(t *testing.T, pidFile string) int {
+	t.Helper()
+
+	body, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("read the pid of the sleep the window started: %v: the replay never reached its sleep, so it forced no window", err)
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil {
+		t.Fatalf("%s holds %q, not the pid of the sleep the window started", pidFile, strings.TrimSpace(string(body)))
+	}
+
+	return pid
+}
+
+// refreshTrap returns the one-line `trap '<command>' NAME` the refresh loop sets for name, out of the script's
+// own text. The window of issue #289 cannot be forced in the running loop (see the test above), so that test
+// replays the window with the trap exactly as the script writes it: a trap a change words otherwise has to be
+// replayed otherwise, and this function's failure says so.
+func refreshTrap(t *testing.T, script, name string) string {
+	t.Helper()
+
+	line := regexp.MustCompile(`(?m)^[ \t]*(trap '.*' ` + regexp.QuoteMeta(name) + `[ \t]*)$`)
+	found := line.FindAllStringSubmatch(script, -1)
+
+	if len(found) == 0 {
+		t.Fatalf("dev/agents-app-token.sh sets no one-line `trap '<command>' %s` any more, so the replay of issue #289's window cannot take the refresh's %s trap from it: word the trap as one line again, or replay the command it now names", name, name)
+	}
+
+	return found[len(found)-1][1]
+}
+
+// sleepStopped reports whether the sleep of pid stopped: a sleep the trap killed is gone, or a zombie the system
+// has not reaped yet, and it sleeps on when no trap killed it.
+func sleepStopped(t *testing.T, pid int) bool {
+	t.Helper()
+
+	state, err := exec.Command(realTool(t, "ps"), "-p", strconv.Itoa(pid), "-o", "stat=").Output()
+	if err != nil {
+		return true // ps finds no such process any more: the sleep is gone
+	}
+
+	return strings.HasPrefix(strings.TrimSpace(string(state)), "Z")
 }
 
 // TestAgentsAppTokenRefreshNeverClaimsAPastExpiryWhenItStops pins the second review's item 9: the stop line must

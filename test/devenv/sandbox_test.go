@@ -23,6 +23,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -965,6 +966,256 @@ func (sb *sandbox) useLockRacedByAContender(t *testing.T, env map[string]string,
 	env["SHIFT2EU_TEST_LOCK_RACE"] = trace
 
 	return trace
+}
+
+// The steps of the three-contender interleaving of issue #288 a test waits for, each a file the shim of that
+// step touches just before it holds its contender there.
+const (
+	contenderReadTheClock      = "a-clock-read"  // the winner read the loop's clock, before it mints
+	contenderAskedOwnership    = "b-asked"       // the mover asked whether the lock's owner is a refresh
+	contenderReachedItsTake    = "c-at-its-lock" // the taker reached take_lock, before it touches the lock
+	contenderMovedTheLockAside = "b-moved-aside" // the mover moved the winner's fresh lock aside
+)
+
+// The holds of the same interleaving, each a fifo the held contender reads: the line release writes lets it go.
+const (
+	holdTheWinner  = "await-a-clock"
+	holdTheMover   = "await-b-takeover"
+	holdThePutBack = "await-b-put-back"
+	holdTheTaker   = "await-c"
+)
+
+// contenderClockShim holds the first contender, the one that wins the stale lock, in its refresh loop: on the
+// first clock read, which is the loop's `current="$(now)"` and so comes after take_lock and before any mint,
+// it touches its marker and reads a fifo, so the refresher stays there until the test lets it go.
+const contenderClockShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+if [ ! -e "${race}/` + contenderReadTheClock + `" ]; then
+  : > "${race}/` + contenderReadTheClock + `"
+  read -r go < "${race}/` + holdTheWinner + `" || exit 1
+fi
+exec %s "$@"
+`
+
+// contenderPSSHim holds the second contender, the one that read the stale lock's owner and then asked whether
+// that owner runs a refresh: take_lock asks ps only for a pid kill -0 found alive, so the hold lands after the
+// owner read and before the takeover, where the interleaving needs that contender.
+const contenderPSSHim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+if [ ! -e "${race}/` + contenderAskedOwnership + `" ]; then
+  : > "${race}/` + contenderAskedOwnership + `"
+  read -r go < "${race}/` + holdTheMover + `" || exit 1
+fi
+exec %s "$@"
+`
+
+// contenderMVShim holds the same contender once it has moved the winner's fresh lock aside, before it puts that
+// lock back: take_lock's own mv calls it with the lock as its first argument only for the takeover, so every
+// other move, the nested one of its own temporary directory included, is the machine's own.
+const contenderMVShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+lock="${SHIFT2EU_TEST_LOCK:?set SHIFT2EU_TEST_LOCK}"
+if [ "$#" -eq 2 ] && [ "$1" = "${lock}" ]; then
+  %s "$@" || exit $?
+  : > "${race}/` + contenderMovedTheLockAside + `"
+  read -r go < "${race}/` + holdThePutBack + `" || exit 1
+  exit 0
+fi
+exec %s "$@"
+`
+
+// contenderRMShim holds the third contender at the top of its take_lock, before it touches the lock at all: the
+// loop's first rm, the cleanup of its own temporary directory, is the first tool it runs there.
+const contenderRMShim = `#!/bin/sh
+race="${SHIFT2EU_TEST_LOCK_RACE:?set SHIFT2EU_TEST_LOCK_RACE}"
+if [ ! -e "${race}/` + contenderReachedItsTake + `" ]; then
+  : > "${race}/` + contenderReachedItsTake + `"
+  read -r go < "${race}/` + holdTheTaker + `" || exit 1
+fi
+exec %s "$@"
+`
+
+// contendersOnAStaleLock stages issue #288's three-contender interleaving: three refreshers against one stale
+// lock, each held at the step that interleaving needs, so which of them wins the lock and which loses it is the
+// test's doing and never the runner's speed.
+//
+//   - the winner takes the stale lock over and is held in its loop, after the clock read and before its mint;
+//   - the mover, which read the stale lock's owner while the lock was still there, is held before it asks ps
+//     whether that owner runs a refresh, then moves the winner's fresh lock aside and is held again before it
+//     puts that lock back;
+//   - the taker is held at the top of its take_lock, so it starts after the mover has freed the lock.
+//
+// Every hold is a fifo the contender blocks reading, so no shim waits on a clock: the test alone decides the
+// order. A shim's marker is touched before the read, so a test knows the contender has reached its hold.
+type contendersOnAStaleLock struct {
+	dir                           string
+	envWinner, envMover, envTaker map[string]string
+}
+
+// held reports whether the contender of step has reached its hold.
+func (c *contendersOnAStaleLock) held(step string) bool {
+	_, err := os.Stat(filepath.Join(c.dir, step))
+
+	return err == nil
+}
+
+// release lets the contender held of hold go. It fails the test instead of hanging it when no contender ever
+// came to read that fifo: the open of its write end waits for the reader the hold names.
+func (c *contendersOnAStaleLock) release(t *testing.T, hold string) {
+	t.Helper()
+
+	path := filepath.Join(c.dir, hold)
+	done := make(chan error, 1)
+
+	go func() {
+		file, err := os.OpenFile(path, os.O_WRONLY, 0)
+		if err != nil {
+			done <- err
+
+			return
+		}
+
+		_, err = file.WriteString("go\n")
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("release the contender held at %s: %v", hold, err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("timed out after 30s releasing the contender held at %s: no contender came to read %s, so this run forced no interleaving of issue #288", hold, path)
+	}
+}
+
+// useThreeContendersOnAStaleLock puts the shims of issue #288's three-contender interleaving first on each
+// contender's own PATH and returns the holds they read, the steps they reach, and the three environments: each
+// contender needs a PATH of its own, since each is held at a different step.
+func (sb *sandbox) useThreeContendersOnAStaleLock(t *testing.T, base map[string]string, lock string) *contendersOnAStaleLock {
+	t.Helper()
+
+	dir := filepath.Join(sb.root, "three-contenders")
+
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", dir, err)
+	}
+
+	for _, hold := range []string{holdTheWinner, holdTheMover, holdThePutBack, holdTheTaker} {
+		makeFifo(t, filepath.Join(dir, hold))
+	}
+
+	shims := func(contender string, tools map[string]string) map[string]string {
+		binDir := filepath.Join(dir, contender)
+
+		for tool, body := range tools {
+			writeFileMode(t, filepath.Join(binDir, tool), []byte(body), 0o700)
+		}
+
+		env := maps.Clone(base)
+		env["PATH"] = binDir + ":" + env["PATH"]
+		env["SHIFT2EU_TEST_LOCK"] = lock
+		env["SHIFT2EU_TEST_LOCK_RACE"] = dir
+
+		return env
+	}
+
+	mvTool := strconv.Quote(realTool(t, "mv"))
+
+	return &contendersOnAStaleLock{
+		dir: dir,
+		envWinner: shims("winner", map[string]string{
+			"date": fmt.Sprintf(contenderClockShim, strconv.Quote(realTool(t, "date"))),
+		}),
+		envMover: shims("mover", map[string]string{
+			"ps": fmt.Sprintf(contenderPSSHim, strconv.Quote(realTool(t, "ps"))),
+			"mv": fmt.Sprintf(contenderMVShim, mvTool, mvTool),
+		}),
+		envTaker: shims("taker", map[string]string{
+			"rm": fmt.Sprintf(contenderRMShim, strconv.Quote(realTool(t, "rm"))),
+		}),
+	}
+}
+
+// makeFifo creates the fifo at path: the hold a shim blocks on, which a test lets go by opening it for writing.
+func makeFifo(t *testing.T, path string) {
+	t.Helper()
+
+	cmd := exec.Command(realTool(t, "mkfifo"), path)
+
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("create the fifo %s a held process waits on: %v: %s", path, err, out)
+	}
+}
+
+// liveNonRefreshPid starts a process that is alive and is no refresh, and returns its pid: the owner a stale
+// lock names once the system reused the pid of a refresher that was killed without its trap. take_lock asks ps
+// whether the owner runs a refresh only for a pid kill -0 finds alive, and that question is where the mover of
+// the interleaving above is held, so a pid that is gone would never take that interleaving past the read.
+func liveNonRefreshPid(t *testing.T) int {
+	t.Helper()
+
+	stdin, release, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create the stdin of a process that is no refresher: %v", err)
+	}
+
+	cmd := exec.Command("cat")
+	cmd.Stdin = stdin
+
+	err = cmd.Start()
+
+	if closeErr := stdin.Close(); closeErr != nil {
+		t.Errorf("close the stdin of a process that is no refresher: %v", closeErr)
+	}
+
+	if err != nil {
+		_ = release.Close()
+
+		t.Fatalf("start a process that is no refresher: %v", err)
+	}
+
+	t.Cleanup(func() {
+		_ = release.Close()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+
+	return cmd.Process.Pid
+}
+
+// lockHoldsPid reports whether the refresh's lock at lock holds pid.
+func lockHoldsPid(lock string, pid int) bool {
+	body, err := os.ReadFile(filepath.Join(lock, "pid"))
+	if err != nil {
+		return false
+	}
+
+	owner, err := strconv.Atoi(strings.TrimSpace(string(body)))
+
+	return err == nil && owner == pid
+}
+
+// dirNames lists the names in dir, sorted, and nothing when dir is not there: a failure message's and an
+// assertion's view of what a lock directory or the state directory holds.
+func dirNames(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+
+	slices.Sort(names)
+
+	return names
 }
 
 func (sb *sandbox) writeRecordingShim(t *testing.T, name string) {
