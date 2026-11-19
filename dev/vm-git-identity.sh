@@ -54,17 +54,20 @@ for pair in "user.name=${git_name}" "user.email=${git_email}"; do
   key="${pair%%=*}"
   value="${pair#*=}"
   current="$(git config --global --get-all "${key}" || true)"
-  shown="$(printf '%s' "${current}" | tr '\n' ',')"
+  # Only what is printed is stripped of the bytes a terminal acts on (escapes, carriage returns, bells), the
+  # way the mint's printable does; the comparisons and the writes use the values as they are (issue #262).
+  shown="$(printf '%s' "${current}" | tr '\n' ',' | tr -cd '[:print:]')"
+  shown_value="$(printf '%s' "${value}" | tr -cd '[:print:]')"
   if [ -n "${current}" ] && [ "${current}" != "${value}" ] &&
     { [ "${bot_identity}" -eq 1 ] || [[ "${current}" == *"[bot]"* ]]; }; then
     git config --global --replace-all "${key}" "${value}"
-    say "replaced ${key} ${shown} with ${value}"
+    say "replaced ${key} ${shown} with ${shown_value}"
   elif [ -z "${current}" ]; then
     git config --global --replace-all "${key}" "${value}"
-    say "set ${key} to ${value}"
+    say "set ${key} to ${shown_value}"
   elif [ "${current}" = "${value}" ]; then
-    say "${key} already ${value}"
+    say "${key} already ${shown_value}"
   else
-    say "kept ${key} ${shown}, not ${value}; change it with git config --global ${key} in the VM"
+    say "kept ${key} ${shown}, not ${shown_value}; change it with git config --global ${key} in the VM"
   fi
 done

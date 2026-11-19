@@ -633,8 +633,8 @@ AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2e
 # and LIMA_INSTANCE, not WORKSPACE_REPO, but like every host target they refuse to run without it (the
 # host-clone refusal). The host clone does not put the key out of reach of code that runs as you: what
 # remains open is issue #227's part 2 (ADR 0031, Consequences).
-# Like every dev script the Makefile calls (dev/protect-main-check.sh, dev/shellcheck.sh), their scripts run by
-# path and shebang, with no explicit interpreter (issue #242): both are executable (100755) in git.
+# Like dev/protect-main-check.sh and dev/shellcheck.sh, their scripts run by path and shebang, with no
+# explicit interpreter (issue #242): both are executable (100755) in git.
 
 .PHONY: agents-token
 agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM (host clone)

@@ -545,7 +545,10 @@ git clone https://github.com/timothymamo/shift2eu.git ~/src/shift2eu-host   # on
 git -C ~/src/shift2eu-host pull --ff-only                                  # before each use: reviewed main from GitHub
 ```
 
-Update it only like that, never from the workspace, and never edit it. Keep it outside the workspace, and
+Update it only like that, never from the workspace, and never edit it. The `agents-token*` targets run
+`dev/agents-app-token.sh` and `dev/agents-token-launchd.sh` by path, so the clone must keep their executable
+bit: git stores them as 100755, but a clone with `core.fileMode=false` or a copied tree loses it, and the
+target then fails with `Permission denied`; `git -C ~/src/shift2eu-host checkout -- dev/` restores it. Keep it outside the workspace, and
 keep the workspace outside it. Give it its own direnv `.envrc` (`~/src/shift2eu-host/.envrc`, then
 `direnv allow` there), the only `.envrc` the host targets read:
 
@@ -651,8 +654,11 @@ the lock `agents-token-refresh-shift2eu.lock` in the same directory, with its pi
 is running and exits with status 0, and `make agents-token-refresh-start` names the pid in the lock and
 starts nothing. A lock left by a killed refresh is taken over, by one refresh only. Should a refresh that
 moved a lock aside during a takeover fail to put it back (a full disk, say), it keeps the moved-aside
-directory (`.agents-token-refresh-shift2eu.lock.stale.<pid>`), says so in the log and stops; move it back
-to the lock's name, or start a refresh again. Stop it with
+directory (`.agents-token-refresh-shift2eu.lock.stale.<pid>`), so no lock is lost while none exists, says
+so in the log and stops. The refresh whose lock that was finds no lock within seconds and exits too, and
+nothing removes the moved-aside directory: once no refresh runs, remove it
+(`rm -r ~/.local/state/shift2eu/.agents-token-refresh-shift2eu.lock.stale.<pid>`) and start a refresh again
+(`make agents-token-refresh-start` from the host clone). Stop it with
 `kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,
 the JWT or the key, and nothing writes them to a log or the workspace.
 

@@ -801,8 +801,9 @@ take_lock() {
         elif [ -e "${aside}" ] || [ -L "${aside}" ]; then
           # No lock, and the put-back failed: the aside is another refresher's lock, so it is kept, never
           # removed (removing it cost the only refresher its lock, issue #319), and this one stops. The next
-          # loop round would remove ${aside}, so it must not go on.
-          die "cannot put the lock moved aside to ${aside} back to ${lock}; it is kept, and this refresh stops: move it back by hand (mv ${aside} ${lock}) or start a refresh again from the host clone on the Mac with make agents-token-refresh-start"
+          # loop round would remove ${aside}, so it must not go on. Its owner's still_locked finds no lock within
+          # seconds and exits, so the aside is then a stale entry that nothing removes: the message says so.
+          die "cannot put the lock moved aside to ${aside} back to ${lock}; it is kept so no lock is lost while none exists at ${lock}, and this refresh stops. Once no refresh runs, remove it (rm -r ${aside}) and start a refresh again from the host clone on the Mac with make agents-token-refresh-start"
         else
           # Neither is left: nothing of the other refresher's lock remains to keep, so this one tries again.
           say "the lock ${lock} and the one moved aside to ${aside} are both gone: the moved-aside lock could not be put back; this refresh tries to take the lock again"
