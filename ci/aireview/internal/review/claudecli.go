@@ -131,7 +131,7 @@ func (c *ClaudeCLI) Ask(ctx context.Context, p Prompt) (string, error) {
 		// The parent context ends either by a cancel or by the run's own
 		// deadline (ci/aireview's runDeadline); a deadline is no cancellation,
 		// and saying so sends the maintainer looking for a caller that does
-		// not exist (issue #324).
+		// not exist (issue #316).
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return "", fmt.Errorf("%w: the Claude Code CLI was stopped: the run's deadline passed: %w", ErrModel, ctx.Err())
 		}
