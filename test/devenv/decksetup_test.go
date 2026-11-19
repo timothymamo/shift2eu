@@ -82,6 +82,59 @@ func fakeDigitFirstEntry(label string) string {
 	return "1FAKEFAKE" + strings.ToUpper(strings.ReplaceAll(label, "-", "")) + "NOTAREALTOKEN"
 }
 
+// fakeLowerCaseName returns an invented VM_ENV entry that is a valid variable name but not the shape of a
+// credential name, which is upper case: a message may give its 1-based position in VM_ENV, never its text (issue
+// #268 L1).
+func fakeLowerCaseName(label string) string {
+	return "fake_" + strings.ReplaceAll(label, "-", "_")
+}
+
+// mistakenEntrySentence is the sentence a message adds about an entry of VM_ENV whose text it does not show: where
+// a name was meant the maintainer may have pasted the credential itself (issue #268). It is lower case, so a
+// comparison against a lower-cased text matches it whatever the sentence's own capitalisation. The name says what
+// the sentence is for rather than what it mentions, so gosec's hardcoded-credential rule (G101) does not read it as
+// one.
+const mistakenEntrySentence = "may be a credential typed by mistake"
+
+// mistakenEntrySentenceCount returns how many times the sentence appears in text, ignoring case.
+func mistakenEntrySentenceCount(text string) int {
+	return strings.Count(strings.ToLower(text), mistakenEntrySentence)
+}
+
+// assertNoCredentialHint fails when a line of text that names one of names carries the sentence: the sentence
+// belongs to the message about the entry of VM_ENV that is not shown, and never to a message about a name that is
+// shown, where it would tell a maintainer that the credential they named is a credential typed by mistake (issue
+// #268).
+func assertNoCredentialHint(t *testing.T, where, text string, names []string, why string) {
+	t.Helper()
+
+	for _, line := range strings.Split(text, "\n") {
+		named := slices.ContainsFunc(names, func(name string) bool { return strings.Contains(line, name) })
+		if !named || !strings.Contains(strings.ToLower(line), mistakenEntrySentence) {
+			continue
+		}
+
+		t.Errorf("%s carries %q in a line that names %s although %s: the sentence belongs to the message about the entry of VM_ENV that is not shown, and a maintainer reading about a name that is shown must not be told that that name may be a credential typed by mistake (issue #268):\nstdout and stderr: %s",
+			where, mistakenEntrySentence, strings.Join(names, ", "), why, text)
+	}
+}
+
+// assertHiddenEntrySaysMayBeACredential fails unless the message that gives the 1-based position at of the hidden
+// entry of VM_ENV carries the sentence as well: that entry is where a maintainer may have pasted a credential, and
+// the sentence is what says so, so hiding it must not hide why it is hidden (issue #268).
+func assertHiddenEntrySaysMayBeACredential(t *testing.T, where, text string, at int, why string) {
+	t.Helper()
+
+	for _, line := range strings.Split(text, "\n") {
+		if entryNotShown(at).MatchString(line) && strings.Contains(strings.ToLower(line), mistakenEntrySentence) {
+			return
+		}
+	}
+
+	t.Errorf("%s does not say %q in the message that gives the position of VM_ENV entry %d although %s: a hidden entry is where a maintainer may have pasted a credential, so the message that hides it must say that it may be a credential typed by mistake (issue #268):\nstdout and stderr: %s",
+		where, mistakenEntrySentence, at, why, text)
+}
+
 // entryNotShown is the wording a refusal must use in place of an entry of VM_ENV it may not print: the entry's
 // 1-based position in VM_ENV, and nothing of its text (issue #268 L1). Only an upper-case variable name is printed,
 // because that is the shape of every credential name; anything else may be the credential itself.
@@ -777,6 +830,201 @@ func TestMakeVMEnvHidesAPastedTokenEntryUnderDashI(t *testing.T) {
 	assertNoDaemonEnvWrittenClaim(t, "make -i vm-env's output", text, "the entry it was given is refused, so nothing was written")
 
 	assertNoCredentialValues(t, "make -i vm-env's output", text)
+}
+
+// TestMakeVMEnvSaysMayBeACredentialOnlyOfAHiddenEntry pins the third-round review's and audit's finding on issue
+// #268: the sentence "It may be a credential typed by mistake." belongs to the message about the entry of VM_ENV
+// whose text vm-env does not show, and to that message only. The shell code sets its flag for any hidden entry and
+// never resets it, so a later message about a different entry that IS shown by name carried the sentence too:
+// reverting the App variable the message names, "refusing SHIFT2EU_AGENTS_APP_X: ... It may be a credential typed by
+// mistake." tells a maintainer that a name they typed on purpose may be a pasted credential, and the
+// not-set-or-empty list said it whenever a hidden entry came before the name it lists.
+//
+// A hidden entry's own message keeps the sentence, and a list that mixes a hidden entry with an unset name says it
+// once. The write step's refusal of a value holding a character a daemon.env line may not carry was written
+// without the sentence at all: it names the entry by its position, and must warn too, as the entry it refuses that
+// way may be the credential itself (issue #268 L1).
+func TestMakeVMEnvSaysMayBeACredentialOnlyOfAHiddenEntry(t *testing.T) {
+	t.Parallel()
+
+	const (
+		appName     = "SHIFT2EU_AGENTS_APP_X" // refused for what it is, and shown by name
+		unsetName   = "FAKE_UNSET_NAME"       // an upper-case name no credential of the tests has
+		pastedEntry = "pasted"
+		digitLabel  = "api"
+		mixedLabel  = "mixed"
+		unsupported = "unsupported-value"
+	)
+
+	// hidden is an entry of VM_ENV the tests may not print: a valid variable name that is not the upper-case shape
+	// of a credential name, so a message gives only its position.
+	hidden := fakeLowerCaseName("app-entry")
+
+	// The value of the entry the write step refuses for its characters: an invented value holding '@', which a
+	// daemon.env line may not hold, so the write step refuses it although every credential is set (CLAUDE.md rule
+	// 3: invented, and paired with no credential's name).
+	unsupportedName := fakeLowerCaseName(unsupported)
+	unsupportedValue := fakeEnvValue(unsupportedName) + "@"
+
+	cases := []struct {
+		name string
+		args []string // make's arguments: the target, and the VM_ENV it hands as a command-line argument
+		set  []string // names given an invented value in make's environment
+		// values overrides the invented value of a name, for a value the write step refuses
+		values map[string]string
+		unset  []string // names left out of make's environment entirely
+		// quiet are names the output shows: every line naming one of them must not carry the sentence
+		quiet []string
+		// hiddenAt are the 1-based positions in VM_ENV of the hidden entries whose own message must carry it
+		hiddenAt []int
+		// wantHints is how many times the sentence may appear in all of make's output
+		wantHints int
+		secrets   []secret // what no output may hold, and how a failure names it
+		// refused is whether make itself must exit non-zero: make -i ignores the failed recipe and exits 0
+		refused bool
+		why     string
+	}{
+		{
+			name:    "vm-env-check refuses an App name that comes after a hidden entry",
+			args:    []string{"vm-env-check", "VM_ENV=" + hidden + "," + appName},
+			set:     []string{hidden},
+			quiet:   []string{appName},
+			secrets: []secret{{kind: "entry 1 of VM_ENV", value: hidden}},
+			refused: true,
+			why:     "the entry it refuses is " + appName + ", which the refusal shows by name",
+		},
+		{
+			name:    "vm-env-check lists an unset name that comes after a hidden entry",
+			args:    []string{"vm-env-check", "VM_ENV=" + hidden + "," + unsetName},
+			set:     []string{hidden},
+			unset:   []string{unsetName},
+			quiet:   []string{unsetName},
+			secrets: []secret{{kind: "entry 1 of VM_ENV", value: hidden}},
+			refused: true,
+			why:     "the not-set-or-empty list names " + unsetName + ", an upper-case name that is shown",
+		},
+		{
+			name:    "the write step lists an unset name that comes after a hidden entry",
+			args:    []string{"-i", "vm-env", "VM_ENV=" + hidden + "," + unsetName},
+			set:     []string{hidden},
+			unset:   []string{unsetName},
+			quiet:   []string{unsetName},
+			secrets: []secret{{kind: "entry 1 of VM_ENV", value: hidden}},
+			why:     "under make -i the check and the write step both report the unset " + unsetName + ", which is shown by name",
+		},
+		{
+			name:      "a pasted token that is not set still says it may be a credential",
+			args:      []string{"vm-env-check", "VM_ENV=CLAUDE_CODE_OAUTH_TOKEN," + fakePastedTokenEntry(pastedEntry)},
+			unset:     []string{fakePastedTokenEntry(pastedEntry)},
+			hiddenAt:  []int{2},
+			wantHints: 1,
+			secrets:   []secret{{kind: "entry 2 of VM_ENV", value: fakePastedTokenEntry(pastedEntry)}},
+			refused:   true,
+			why:       "the entry is not shown, so its own message must warn that it may be a credential typed by mistake",
+		},
+		{
+			name:      "an entry that starts with a digit still says it may be a credential",
+			args:      []string{"vm-env-check", "VM_ENV=" + fakeDigitFirstEntry(digitLabel)},
+			hiddenAt:  []int{1},
+			wantHints: 1,
+			secrets:   []secret{{kind: "entry 1 of VM_ENV", value: fakeDigitFirstEntry(digitLabel)}},
+			refused:   true,
+			why:       "the per-name refusal hides the entry it refuses",
+		},
+		{
+			name:      "a not-set list mixing a hidden entry and an unset name says it once",
+			args:      []string{"vm-env-check", "VM_ENV=" + fakePastedTokenEntry(mixedLabel) + ",DEEPSEEK_API_KEY"},
+			unset:     []string{fakePastedTokenEntry(mixedLabel), "DEEPSEEK_API_KEY"},
+			hiddenAt:  []int{1},
+			wantHints: 1,
+			secrets:   []secret{{kind: "entry 1 of VM_ENV", value: fakePastedTokenEntry(mixedLabel)}},
+			refused:   true,
+			why:       "the list holds a hidden entry, so the sentence belongs on the list's one message, and once only",
+		},
+		{
+			name:      "the write step's unsupported characters message for a hidden entry says it too",
+			args:      []string{"-i", "vm-env", "VM_ENV=" + unsupportedName},
+			values:    map[string]string{unsupportedName: unsupportedValue},
+			hiddenAt:  []int{1},
+			wantHints: 1,
+			secrets: []secret{
+				{kind: "entry 1 of VM_ENV", value: unsupportedName},
+				{kind: "the value entry 1 holds", value: unsupportedValue},
+			},
+			why: "the write step refuses the value, and the entry it refuses to print may be the credential itself",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+
+			for _, name := range tc.unset {
+				delete(env, name)
+			}
+
+			for _, name := range tc.set {
+				env[name] = fakeEnvValue(name)
+			}
+
+			for name, value := range tc.values {
+				env[name] = value
+			}
+
+			seeded := sb.seedDaemonEnv(t)
+
+			stdout, stderr, err := runMake(t, tc.args, env)
+			text := stdout + stderr
+
+			if tc.refused && err == nil {
+				t.Fatalf("make %s exited 0 although %s: it must refuse (issue #268)\nstdout: %s\nstderr: %s",
+					strings.Join(tc.args, " "), tc.why, stdout, stderr)
+			}
+
+			// A name that is shown is named, so the case pins what it means to: the quiet check below is about
+			// the message that names it, and would hold vacuously if no message named it at all.
+			for _, name := range tc.quiet {
+				if !strings.Contains(text, name) {
+					t.Errorf("make's output does not name %s although %s, so nothing pins what its message may say (issue #268):\nstdout: %s\nstderr: %s",
+						name, tc.why, stdout, stderr)
+				}
+			}
+
+			// The sentence belongs to a hidden entry's own message, never to a message about a name that is shown.
+			assertNoCredentialHint(t, "make's output", text, tc.quiet, tc.why)
+
+			// A hidden entry's own message keeps it, or a maintainer cannot tell why the entry is hidden.
+			for _, at := range tc.hiddenAt {
+				assertHiddenEntrySaysMayBeACredential(t, "make's output", text, at, tc.why)
+			}
+
+			// Once per message, and never carried over into a later message about another entry.
+			if got := mistakenEntrySentenceCount(text); got != tc.wantHints {
+				t.Errorf("make's output holds the sentence %q %d time(s), want %d, although %s: a message about one entry of VM_ENV must not carry the sentence a message about another entry set (issue #268)\nstdout: %s\nstderr: %s",
+					mistakenEntrySentence, got, tc.wantHints, tc.why, stdout, stderr)
+			}
+
+			assertNoSecrets(t, "make's output", text, tc.secrets)
+
+			assertNoCredentialValues(t, "make's output", text)
+
+			got, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make %s: %v", strings.Join(tc.args, " "), readErr)
+			}
+
+			if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+				t.Errorf("make %s rewrote the VM's daemon.env although it refused: the file must be byte for byte what it was (issue #268) (-want +got):\n%s\nmake's exit error: %v\nstdout: %s\nstderr: %s",
+					strings.Join(tc.args, " "), diff, err, stdout, stderr)
+			}
+
+			// Every refusal here is made on the host, before anything is handed limactl.
+			sb.assertNoLimaCalls(t, tc.why)
+		})
+	}
 }
 
 // TestMakeVMEnvRefusesADaemonEnvThatIsNotARegularFile pins issue #259's first item: vm-env writes the new
