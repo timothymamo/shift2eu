@@ -1051,8 +1051,8 @@ func TestMakeVMEnvRefusesADaemonEnvThatIsNotARegularFile(t *testing.T) {
 		args  []string // a VM_ENV on the command line merges; nothing is the default VM_ENV, which replaces
 		want  string   // a substring the refusal must hold, compared case-insensitively
 	}{
-		{name: "a directory, replacing", shape: directory, want: "not a regular file"},
-		{name: "a directory, merging", shape: directory, want: "not a regular file", args: []string{"VM_ENV=DEEPSEEK_API_KEY"}},
+		{name: "a directory replacing", shape: directory, want: "not a regular file"},
+		{name: "a directory merging", shape: directory, want: "not a regular file", args: []string{"VM_ENV=DEEPSEEK_API_KEY"}},
 		{name: "a symlink to a regular file, replacing", shape: symlink, want: "regular file"},
 		{name: "a symlink to a regular file, merging", shape: symlink, want: "regular file", args: []string{"VM_ENV=DEEPSEEK_API_KEY"}},
 	}
@@ -1783,7 +1783,7 @@ func TestMakeVMEnvRefusalNeverEchoesTheVMEnv(t *testing.T) {
 	}{
 		{
 			// A value a mistyped command line could hold: a dash ends the name and the rest is a value.
-			name:  "a value holding a dash, on the command line",
+			name:  "a value holding a dash on the command line",
 			value: inventedVMEnvValue("oauth-value-with-dash"),
 		},
 		{

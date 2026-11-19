@@ -1950,7 +1950,7 @@ func TestMakeAgentsTokenRefreshInstallRefusesASymlinkedRefreshScript(t *testing.
 func TestMakeAgentsTokenRefreshUninstall(t *testing.T) {
 	t.Parallel()
 
-	t.Run("no launchctl: a refusal, before any sudo", func(t *testing.T) {
+	t.Run("no launchctl is a refusal before any sudo", func(t *testing.T) {
 		t.Parallel()
 
 		// The fake launchctl is not on this fixture's PATH, so make agents-token-refresh-uninstall runs on a

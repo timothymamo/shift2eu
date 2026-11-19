@@ -317,7 +317,7 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 			flags:  []string{"-n"},
 		},
 		{
-			name:        "make check vm-up, with another goal beside the host target",
+			name:        "make check vm-up with another goal beside the host target",
 			layout:      workspaceWithoutRepo,
 			args:        []string{"check", "vm-up"},
 			goal:        "vm-up",
