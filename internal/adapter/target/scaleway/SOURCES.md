@@ -7,8 +7,10 @@ records where each fact comes from, so the snapshot can be checked and refreshed
 
 - **Retrieved on:** 2026-11-13, the date the plans and prices were read (PRD #190 milestone 4, ADR 0024).
   The snapshot's `retrievedOn` and `sourceURL` now name the prices, the facts most likely to change. The
-  regions and capabilities were compiled and verified on 2026-11-10 and last re-verified on 2026-11-11
-  for PRD #14 (below); the prices changed no offering, capability or region.
+  regions and capabilities were compiled and verified on 2026-11-10 and re-verified on 2026-11-11 for
+  PRD #14 (below); the prices changed no offering, capability or region. *Kubernetes Kapsule
+  Dedicated*'s regions, and its plans' price regions, were last re-checked on 2026-11-19 for issue #211
+  (below), which added `it-mil`. `retrievedOn` stays 2026-11-13, for the reason that bullet gives.
 - **Compiled, then verified against the live pages.** The snapshot was first compiled from Scaleway's
   documentation source and Go SDK at the commits below, because `www.scaleway.com` then answered HTTP 403.
   On the same date every region and capability was checked against the live public pages cited below
@@ -516,7 +518,9 @@ Dedicated control plane, Dedicated 4, 8 or 16, which share the same availability
   (the same inference about which Instance types are nodes), with the same price regions: PLAY2 and PRO2
   are priced in Paris, Amsterdam and Warsaw only, so their prices list those three regions and an
   estimate in `it-mil` finds no price for them; POP2 has one price in every region, so an empty
-  `regions` list.
+  `regions` list. The *Containers* price page read on 2026-11-19 confirms these price regions: its
+  embedded node SKUs (`/instance/server/<type>/<zone>`) price PLAY2 and PRO2 only in zones of `fr-par`,
+  `nl-ams` and `pl-waw`, and every recorded POP2 type in those and in `it-mil-1` too.
 - **Fixed fee per cluster** (the control plane, ADR 0026; *Containers* price page
   <https://www.scaleway.com/en/pricing/containers/>, read 2026-11-13 and again on 2026-11-19 for
   `it-mil`): Dedicated-4 costs €0.11 an hour per cluster, × 730 = 80.30, recorded as `80.30` with an
