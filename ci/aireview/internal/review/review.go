@@ -71,6 +71,14 @@ const (
 	CategoryPromptInjection Category = "prompt-injection"
 )
 
+// CategoryUncategorised is the category ParseAnswer gives a finding whose
+// category is missing or not one of the accepted categories, so one category
+// the model got wrong costs no finding (issue #292). It is not an accepted
+// category itself, and the prompt never offers it: a model that writes
+// "uncategorised" gets the same fallback. It never blocks by itself; the
+// finding's severity decides.
+const CategoryUncategorised Category = "uncategorised"
+
 // Finding is one problem the model reports. Path and Line are optional: Line 0
 // means no line, and a Line above 0 needs a Path, relative to the repository
 // root.

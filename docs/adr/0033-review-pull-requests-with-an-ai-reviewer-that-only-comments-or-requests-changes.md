@@ -338,11 +338,13 @@ the trigger option below are the levers.
   repository's pull requests often change `CLAUDE.md`, the skills and this prompt, and a
   `prompt-injection` finding always blocks.
 - **The model has no tools**, so a tricked model can do nothing but write text. Its answer is one JSON
-  object, parsed strictly: unknown fields, a missing summary or title, a severity or category outside the
-  lists, a negative line, a line without a path, an absolute path or one with `..`, a backslash or a
+  object, parsed strictly: unknown fields, a missing summary or title, a severity outside the
+  list, a negative line, a line without a path, an absolute path or one with `..`, a backslash or a
   control character (below 0x20, or DEL: git quotes such a path in a diff, so no real one holds it, and a
   line break would put the rest of the path on a line of its own), or anything around the object fails
-  the run, and nothing is posted. The model never names the event: the program decides
+  the run, and nothing is posted. The category alone is not strict (issue #292): a missing one, or one
+  outside the list, keeps the finding as `uncategorised`, and the review says how many findings it shows
+  so; the severity still decides whether it blocks. The model never names the event: the program decides
   it from the findings, so no answer can make it approve, and the poster refuses anything but `COMMENT`
   and `REQUEST_CHANGES` even if the program asked.
 - An inline comment goes only on a line the diff shows on its new side; a finding on any other line, or

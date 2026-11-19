@@ -26,7 +26,9 @@ type InlineComment struct {
 // answer's summary, says the review is advice and never an approval, and
 // lists every finding with its severity and category, a blocking one marked
 // "blocking"; when a finding is blocking and event is EventComment it also says
-// that the review would have requested changes. A finding with a path and line
+// that the review would have requested changes, and when a finding is
+// CategoryUncategorised it says, after the event's reason, how many are. Counts
+// say "1 finding" and "N findings". A finding with a path and line
 // that diff shows on its new side (an added or a context line of a hunk of that
 // file) becomes an inline comment on that line, with its severity, and is not
 // repeated in the body; every other finding (no path, no line, a line or file
@@ -316,9 +318,19 @@ func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody [
 	body.WriteString(eventReason(answer.Findings, event))
 	body.WriteString("\n")
 
+	if n := countUncategorised(answer.Findings); n > 0 {
+		fmt.Fprintf(&body, "%s had a missing or unrecognised category and %s shown as uncategorised.\n",
+			findings(n), plural(n, "is", "are"))
+	}
+
 	if len(inBody) > 0 {
 		if len(comments) > 0 {
-			fmt.Fprintf(&body, "\n### Other findings\n\n%d findings are inline comments on the diff; these are not on a line of it.\n", len(comments))
+			below := "The finding below is"
+			if len(inBody) > 1 {
+				below = fmt.Sprintf("The %d findings below are", len(inBody))
+			}
+
+			fmt.Fprintf(&body, "\n### Other findings\n\n%s. %s not on a line of it.\n", inlineSentence(len(comments)), below)
 		} else {
 			body.WriteString("\n### Findings\n")
 		}
@@ -342,24 +354,61 @@ func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody [
 			body.WriteString("\n")
 		}
 	} else if len(comments) > 0 {
-		fmt.Fprintf(&body, "\n%d findings are inline comments on the diff.\n", len(comments))
+		fmt.Fprintf(&body, "\n%s.\n", inlineSentence(len(comments)))
 	}
 
 	return body.String()
 }
 
+// inlineSentence says that n findings are inline comments, without its full
+// stop.
+func inlineSentence(n int) string {
+	if n == 1 {
+		return "1 finding is an inline comment on the diff"
+	}
+
+	return fmt.Sprintf("%d findings are inline comments on the diff", n)
+}
+
+// findings returns "1 finding" or "N findings".
+func findings(n int) string {
+	return fmt.Sprintf("%d %s", n, plural(n, "finding", "findings"))
+}
+
+// plural returns one when n is 1 and many otherwise.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+
+	return many
+}
+
+// countUncategorised returns how many of fs have CategoryUncategorised.
+func countUncategorised(fs []Finding) int {
+	n := 0
+
+	for _, f := range fs {
+		if f.Category == CategoryUncategorised {
+			n++
+		}
+	}
+
+	return n
+}
+
 // eventReason says why the review has its event.
-func eventReason(findings []Finding, event Event) string {
-	blocking := countBlocking(findings)
+func eventReason(fs []Finding, event Event) string {
+	blocking := countBlocking(fs)
 
 	switch {
 	case blocking == 0:
-		return fmt.Sprintf("%d findings, none blocking.", len(findings))
+		return findings(len(fs)) + ", none blocking."
 	case event == EventRequestChanges:
-		return fmt.Sprintf("%d findings, %d blocking: this review requests changes.", len(findings), blocking)
+		return fmt.Sprintf("%s, %d blocking: this review requests changes.", findings(len(fs)), blocking)
 	default:
-		return fmt.Sprintf("%d findings, %d blocking. Change requests are off (AI_REVIEW_REQUEST_CHANGES), "+
-			"so this review is a comment; with them on, it would have requested changes.", len(findings), blocking)
+		return fmt.Sprintf("%s, %d blocking. Change requests are off (AI_REVIEW_REQUEST_CHANGES), "+
+			"so this review is a comment; with them on, it would have requested changes.", findings(len(fs)), blocking)
 	}
 }
 
