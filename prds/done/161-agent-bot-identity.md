@@ -135,13 +135,19 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
   and **never checks out or runs the pull request's code**: it reads the diff and changed files through
   the API as data. A pull request that edits the workflow, its prompt or the skills is reviewed by
   `main`'s versions of them. *The workflow (`.github/workflows/ai-review.yml`) and `ci/aireview`, ADR
-  0033; the environment's `main`-only policy is checked at runbook step 7.*
+  0033; the environment's `main`-only policy is checked at runbook step 7. Confirmed by the maintainer on
+  2026-11-19 with their admin token: the `ai-review` environment's deployment branch policy has
+  `custom_branch_policies` true and `protected_branches` false, and its only branch policy is `branch
+  main`.*
 - [x] The workflow's job token has `contents: read` and `pull-requests: read` only; the review is posted
   with a token minted for the reviewer App (Pull requests write, Contents read, nothing else), whose ID and
   key are secrets of the `ai-review` environment only. The model provider's key is a secret of that
   environment only. No repository-level secret or variable holds either; the `release-tag` check lists
   them as it lists the release Apps' keys. *That the secrets are the environment's only is checked at
-  runbook step 7.*
+  runbook step 7. Confirmed by the maintainer on 2026-11-19 with their admin token: the `ai-review`
+  environment's secrets are exactly `AI_REVIEWER_APP_CLIENT_ID`, `AI_REVIEWER_APP_PRIVATE_KEY` and
+  `CLAUDE_CODE_OAUTH_TOKEN`, with no `ANTHROPIC_API_KEY`; the repository's Actions secrets and variables
+  and its Dependabot secrets hold none of those names, nor `AI_REVIEW_REQUEST_CHANGES`.*
 - [x] The review uses `main`'s `review-change` and `security-audit` skills and CLAUDE.md. It posts one
   review: a summary, and inline comments on the lines it flags, each finding with a severity. A blocking
   finding (correctness, a broken architecture rule, a security issue) makes the review **request
@@ -166,7 +172,10 @@ to read; it never replaces them. Renovate's pull requests get no exception. The 
   beyond the GitHub and model APIs, no write to the repository other than the review).
 - [x] The review states the head commit it reviewed. A failed or skipped review (the provider down, the diff
   over a documented size limit) is a visible check, not a silent pass, and never blocks the merge on its own:
-  it is not a required check. *That it is not a required check is checked at runbook step 7.*
+  it is not a required check. *That it is not a required check is checked at runbook step 7. Confirmed by
+  the maintainer on 2026-11-19 with their admin token: the rulesets require exactly `Lint`, `Test`,
+  `govulncheck`, `CodeQL`, `Validate the Lima template`, `Verify the gh and cosign pins` and
+  `Release please dry run` on `main`, and `main`'s classic branch protection requires no `AI review`.*
 - [x] Release-please's and Renovate's pull requests are reviewed like any other.
 - [x] `docs/dev-environment.md` gives the maintainer the steps to create the reviewer App, the
   `ai-review` environment and its secrets, and the cost and model used.
