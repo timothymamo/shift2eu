@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"unicode/utf8"
+	"unicode/utf16"
 )
 
 // checkedDirs are the directories below the module root whose every file the
@@ -33,12 +33,6 @@ type allowListEntry struct {
 	value string
 	// why says why the value is legitimate there.
 	why string
-}
-
-// Equal reports whether e and other are the same entry, field by field. go-cmp
-// calls it to compare two entries, whose fields are unexported.
-func (e allowListEntry) Equal(other allowListEntry) bool {
-	return e == other
 }
 
 // realDataAllowList holds the values the real-data check reports in a checked
@@ -88,15 +82,22 @@ var realDataAllowList = []allowListEntry{
 	},
 }
 
-// checkedFiles returns every regular file the real-data check reads, sorted by
-// path: those under <root>/examples and <root>/docs/guide, and those under every
-// directory named testdata anywhere below root. A sample's name is its
-// slash-separated path relative to root. A missing directory yields no file and
-// no error. A file that is not valid UTF-8 (an image, an archive) holds no text
-// to copy a value out of and is left out.
+// checkedFiles returns every file the real-data check reads, sorted by path:
+// those under <root>/examples and <root>/docs/guide, and those under every
+// directory named exactly testdata anywhere below root. A directory of fixtures
+// under any other name (fixtures/, golden/) is not checked, so a new fixture
+// directory must be named testdata. A sample's name is its slash-separated path
+// relative to root; its source is empty, as a checked file need not be an
+// inventory. A missing directory yields no file and no error.
 //
-// The walk goes through an os.Root, so no read can follow a symbolic link out
-// of root.
+// The walk reads the directory tree on disk, not git's index, so an untracked
+// or git-ignored file under a checked directory is checked too: a real
+// inventory dropped there locally fails the check before it can be committed.
+//
+// A symbolic link in a checked path (or one that stands for a checked
+// directory) is listed as well but never followed: fixtureProblems reports it,
+// since a fixture must be a regular file. The walk goes through an os.Root, so
+// it cannot leave root.
 func checkedFiles(root string) ([]sample, error) {
 	dir, err := os.OpenRoot(root)
 	if err != nil {
@@ -130,16 +131,10 @@ func checkedFiles(root string) ([]sample, error) {
 			return nil
 		}
 
-		if !entry.Type().IsRegular() || !checkedPath(name) {
-			return nil
-		}
-
-		data, err := fs.ReadFile(fsys, name)
-		if err != nil {
-			return err
-		}
-
-		if !utf8.Valid(data) {
+		switch {
+		case entry.Type().IsRegular() && checkedPath(name):
+		case entry.Type()&fs.ModeSymlink != 0 && holdsCheckedPath(name):
+		default:
 			return nil
 		}
 
@@ -171,6 +166,21 @@ func checkedPath(name string) bool {
 	return slices.Contains(dirs[:len(dirs)-1], testdataDir)
 }
 
+// holdsCheckedPath reports whether name, a slash-separated path relative to the
+// module root, is or could stand for a checked path: a file in a checked
+// directory, a directory named testdata, or a checked directory or one of its
+// parents. A symbolic link at such a name would bring a file the check never
+// reads into a checked path.
+func holdsCheckedPath(name string) bool {
+	if checkedPath(name + "/") {
+		return true
+	}
+
+	return slices.ContainsFunc(checkedDirs, func(dir string) bool {
+		return strings.HasPrefix(dir+"/", name+"/")
+	})
+}
+
 // sanitisationProblems returns every value a checked file may not carry under
 // CLAUDE.md rule 2, rule by rule: account IDs, GUIDs, IPv4 addresses, IPv6
 // addresses and host names. The first four rules are the samples' own; the host
@@ -191,19 +201,34 @@ func sanitisationProblems(text string) []problem {
 // directories are full of dotted values that are no host at all (file names,
 // versions, jq and JSON paths, plan names, Go selectors), so a name counts as a
 // host only when its last label is one of these. The list is curated, not
-// complete: the generic TLDs a company runs a host under and the common
-// European and North American country codes. It deliberately leaves out the
-// TLDs that clash with a file extension a fixture or a guide page names (md,
-// sh, py, rs), so install.md or run.sh is never read as a host; json, yaml, go
-// and golden are no TLDs at all. Poland's pl is kept although it is Perl's
-// extension too: no fixture names a Perl script.
+// complete: the generic TLDs a company runs a host under, every EU, EEA and
+// EFTA country code but one, a few other common country codes, OVHcloud's own
+// ovh, and the private DNS suffixes an internal name is built from (internal,
+// the AWS and GCP private zone; corp; lan). Because it is an allow list, the
+// check fails open for a TLD it does not name: a host under an unlisted TLD
+// passes, so additions are expected whenever a likely one turns up.
+//
+// It deliberately leaves out the TLDs that clash with a file extension a
+// fixture or a guide page names (md, sh, py, rs), so install.md or run.sh is
+// never read as a host; json, yaml, go and golden are no TLDs at all. It leaves
+// out Iceland's is, which a Go selector such as errors.Is ends with, and the
+// private suffix local, which Go's time.Local ends with (the match ignores
+// case). Poland's pl is kept although it is Perl's extension too: no fixture
+// names a Perl script.
 var publicTLDs = []string{
 	// Generic.
 	"com", "net", "org", "io", "dev", "app", "cloud", "ai", "co",
-	"info", "biz", "tech", "online", "site", "xyz",
-	// The EU and common country codes.
-	"eu", "de", "fr", "nl", "uk", "ch", "at", "be", "se", "fi", "no", "dk",
-	"es", "it", "pl", "us",
+	"info", "biz", "tech", "online", "site", "xyz", "shop", "store",
+	// OVHcloud's own TLD: a customer of the target hosts a site under it.
+	"ovh",
+	// The EU, EEA and EFTA country codes, but is.
+	"eu", "at", "be", "bg", "ch", "cy", "cz", "de", "dk", "ee", "es", "fi",
+	"fr", "gr", "hr", "hu", "ie", "it", "li", "lt", "lu", "lv", "mt", "nl",
+	"no", "pl", "pt", "ro", "se", "si", "sk", "uk",
+	// Other common country codes.
+	"us", "ca", "au", "jp", "me", "tv", "ly",
+	// Private DNS suffixes: such a name identifies a customer's own network.
+	"internal", "corp", "lan",
 }
 
 // publicVendorHosts are the exact public hosts of the vendors and projects a
@@ -277,7 +302,10 @@ func lastLabel(name string) string {
 
 // fixtureProblems runs the sanitisation check over every checked file below
 // root, leaving out the values realDataAllowList excuses in that file. The
-// problems are keyed by the file's name; a clean file has no key.
+// problems are keyed by the file's name; a clean file has no key. Each file is
+// read once, through an os.Root, as text (fixtureText), so no encoding hides a
+// value. A symbolic link is not followed: it is a problem in itself, whose value
+// is the link's name.
 func fixtureProblems(root string) (map[string][]problem, error) {
 	files, err := checkedFiles(root)
 	if err != nil {
@@ -286,13 +314,38 @@ func fixtureProblems(root string) (map[string][]problem, error) {
 
 	problems := make(map[string][]problem)
 
+	if len(files) == 0 {
+		return problems, nil
+	}
+
+	dir, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func() { _ = dir.Close() }()
+
 	for _, file := range files {
-		data, err := os.ReadFile(file.path)
+		info, err := dir.Lstat(file.name)
 		if err != nil {
 			return nil, err
 		}
 
-		for _, p := range sanitisationProblems(string(data)) {
+		if info.Mode()&fs.ModeSymlink != 0 {
+			problems[file.name] = append(problems[file.name], problem{
+				value: file.name,
+				rule:  "is a symbolic link; fixtures must be regular files",
+			})
+
+			continue
+		}
+
+		data, err := dir.ReadFile(file.name)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, p := range sanitisationProblems(fixtureText(data)) {
 			if allowListed(file.name, p.value) {
 				continue
 			}
@@ -302,6 +355,37 @@ func fixtureProblems(root string) (map[string][]problem, error) {
 	}
 
 	return problems, nil
+}
+
+// fixtureText returns the text a checked file holds, whatever encoding the tool
+// that wrote it chose. A file that starts with a UTF-16 byte-order mark (the way
+// a Windows editor or PowerShell writes one) is decoded from UTF-16, little- or
+// big-endian; any other file is read as UTF-8 with every invalid byte (a stray
+// Latin-1 letter, a binary run) replaced by a space, so one bad byte cannot hide
+// the values in the rest of the file.
+func fixtureText(data []byte) string {
+	if len(data) >= 2 {
+		switch {
+		case data[0] == 0xff && data[1] == 0xfe:
+			return decodeUTF16(data[2:], func(b []byte) uint16 { return uint16(b[0]) | uint16(b[1])<<8 })
+		case data[0] == 0xfe && data[1] == 0xff:
+			return decodeUTF16(data[2:], func(b []byte) uint16 { return uint16(b[0])<<8 | uint16(b[1]) })
+		}
+	}
+
+	return strings.ToValidUTF8(string(data), " ")
+}
+
+// decodeUTF16 returns data, UTF-16 code units in the byte order unit reads,
+// as UTF-8. A trailing odd byte is dropped.
+func decodeUTF16(data []byte, unit func([]byte) uint16) string {
+	units := make([]uint16, 0, len(data)/2)
+
+	for i := 0; i+1 < len(data); i += 2 {
+		units = append(units, unit(data[i:i+2]))
+	}
+
+	return string(utf16.Decode(units))
 }
 
 // allowListed reports whether realDataAllowList excuses value in the file name.
