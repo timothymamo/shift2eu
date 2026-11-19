@@ -19,8 +19,9 @@ default, `--no-estimate` turns it off), groups resources by workload, notes bloc
 resources, and scopes a target to one region with `--region` (PRD #190, ADRs 0024 and 0026-0030, in
 `prds/done/`). A second binary,
 `shift2eu-server`, serves the same assessments over a versioned HTTP API (PRD #103, ADR 0019), released
-as a binary and as the image `ghcr.io/timothymamo/shift2eu-server` beside the CLI's. Live source adapters
-do not exist yet. Work is planned as PRDs in `prds/`.
+as a binary and as the image `ghcr.io/timothymamo/shift2eu-server` beside the CLI's. A WebAssembly module,
+`cmd/shift2eu-web` (PRD #297 milestone 1, ADR 0035), runs the same assessment in the browser and renders it
+as HTML; the site that serves it comes in the PRD's later milestones. Live source adapters do not exist yet. Work is planned as PRDs in `prds/`.
 
 ## Ubiquitous language
 
@@ -46,9 +47,9 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 |---|---|---|
 | Domain | `internal/domain/{taxonomy,inventory,catalog,mapping,estimate,assessment,text}` | Other domain packages and an allow list of pure standard packages (no `os`, `net/http`, `unsafe`, ...) |
 | Application | `internal/app/analysis` | Domain. Declares the ports (interfaces) it consumes |
-| Adapters | `internal/adapter/source/{inventoryfile,aws,azure,gcp}`, `internal/adapter/target/{ovhcloud,scaleway,upcloud}`, `internal/adapter/report/{markdown,jsonreport}`, `internal/adapter/request/assessmentrequest` (the HTTP API's request decoder), and `internal/adapter/internal/jsondoc`, the JSON decoder they share | Domain, the ports they implement, SDKs. Never `internal/cli`, `internal/httpapi` or `cmd/` |
-| Driving adapters | `internal/cli` (the CLI) and `internal/httpapi` (the HTTP API, ADR 0019) | Application, domain, `internal/version`; never each other, an adapter or `cmd/` |
-| Composition roots | `cmd/shift2eu` (the CLI, offline: never imports `internal/httpapi`) and `cmd/shift2eu-server` (the HTTP API, PRD #103 milestone 3; never imports `internal/cli`) | Everything but a cloud SDK; the only places adapters are constructed. Each one's imports are a strict allow list (`composition-root`, `server-composition-root`): the module's own packages and the standard packages it needs, no third-party package |
+| Adapters | `internal/adapter/source/{inventoryfile,aws,azure,gcp}`, `internal/adapter/target/{ovhcloud,scaleway,upcloud}`, `internal/adapter/report/{markdown,jsonreport,htmlreport}` (`htmlreport`: the site's HTML fragment, ADR 0035), `internal/adapter/request/assessmentrequest` (the HTTP API's request decoder), and `internal/adapter/internal/jsondoc`, the JSON decoder they share | Domain, the ports they implement, SDKs. Never `internal/cli`, `internal/httpapi`, `internal/web` or `cmd/` |
+| Driving adapters | `internal/cli` (the CLI), `internal/httpapi` (the HTTP API, ADR 0019) and `internal/web` (the site's WebAssembly adapter, ADR 0035) | Application, domain, `internal/version`; never each other, an adapter or `cmd/`. `internal/web` also never `os`, `net` or `syscall/js` |
+| Composition roots | `cmd/shift2eu` (the CLI, offline: never imports `internal/httpapi`), `cmd/shift2eu-server` (the HTTP API, PRD #103 milestone 3; never imports `internal/cli`) and `cmd/shift2eu-web` (the site's module, `js && wasm`, the only importer of `syscall/js`) with its untagged wiring package `cmd/shift2eu-web/internal/wire` (ADR 0035) | Everything but a cloud SDK; the only places adapters are constructed. Each one's imports are a strict allow list (`composition-root`, `server-composition-root`, `web-composition-root`, `web-composition-root-wire`): the module's own packages and the standard packages it needs, no third-party package. Only wire's test files import `internal/cli`, for the parity tests |
 | CI tooling (no part of the product) | `ci/aireview` (the AI reviewer's workflow program, ADR 0033) and its library `ci/aireview/internal/review` | Named standard packages only (`ai-reviewer-main`, `ai-reviewer-is-standard-library`); no release builds it and Go's internal rule keeps the product from importing it |
 
 - The dependency rule is **enforced by `golangci-lint` (depguard)** and, package by package for every
@@ -161,7 +162,12 @@ holds, decisions and the unit branches of waiting PRs). The skill refers to thes
 | Orchestration | `shift2eu` |
 | CLI | `~/.local/bin/dot-agent-deck` |
 | Unit limit | 3 running units (2 when the VM has 8 GiB or less): a unit is closed once its PR is verified and reported ready |
-| Review limit | 5 PRs waiting for the maintainer's review or merge, not counting Renovate's PRs (author `app/renovate`; their label `dependencies` alone excludes nothing) or release-please's release PR (author `app/shift2eu-release`, head branch `release-please--branches--*` and label `autorelease: pending`, never the label alone) |
+| Review limit | 5 PRs waiting for the maintainer's review or merge from 09:30 until 20:00, 10 from 20:00 until 09:30 (the local clock of the machine the deck runs on; counted as the sentence below the table says), not counting Renovate's PRs (author `app/renovate`; their label `dependencies` alone excludes nothing) or release-please's release PR (author `app/shift2eu-release`, head branch `release-please--branches--*` and label `autorelease: pending`, never the label alone) |
 | Checks on a merged scratch tree | `make check` and `make test-e2e` |
 | Maintainer notes directory | `.idea/` in the repository root (git-ignored) |
 | Release flow | The release-please PR, reviewed with the `release-tag` skill |
+
+The review limit that counts is the one in force when a unit is dispatched, against the waiting PRs plus
+the running units that will open a PR plus the new unit; after 09:30, units still running finish and their
+PRs count, nothing new is dispatched until that count, the new unit included, fits the day limit, and a
+finished PR is never held back or closed to get under it.

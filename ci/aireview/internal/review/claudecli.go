@@ -75,7 +75,7 @@ type cliResult struct {
 // PATH and the switches that turn its updater, telemetry and error reports off:
 // nothing of the runner's environment, an ANTHROPIC_API_KEY included, is
 // inherited. It returns an error wrapping ErrModel when the CLI cannot start,
-// runs past the timeout, is cancelled, prints no JSON result, reports an error,
+// runs past the timeout, is cancelled or stopped by the run's deadline, prints no JSON result, reports an error,
 // ends its turn other than with success, or prints an empty result; the error
 // quotes at most maxCLIExcerpt bytes of the CLI's text, with the token
 // redacted.
@@ -124,39 +124,63 @@ func (c *ClaudeCLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	// cancellation or the timeout it most likely is.
 	text, err := c.answer(runErr, stdout, stderr)
 
-	switch DecideRunOutcome(err, ctx.Err(), runCtx.Err()) {
-	case OutcomeAnswer:
+	switch decideRunOutcome(err, ctx.Err(), runCtx.Err()) {
+	case outcomeAnswer:
 		return text, nil
-	case OutcomeCancelled:
+	case outcomeCancelled:
+		// The parent context ends either by a cancel or by the run's own
+		// deadline (ci/aireview's runDeadline); a deadline is no cancellation,
+		// and saying so sends the maintainer looking for a caller that does
+		// not exist (issue #316).
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return "", fmt.Errorf("%w: the Claude Code CLI was stopped: the run's deadline passed: %w", ErrModel, ctx.Err())
+		}
+
 		return "", fmt.Errorf("%w: the Claude Code CLI was cancelled: %w", ErrModel, ctx.Err())
-	case OutcomeTimedOut:
+	case outcomeTimedOut:
 		return "", fmt.Errorf("%w: the Claude Code CLI timed out after %s", ErrModel, c.timeout)
 	default:
 		return "", err
 	}
 }
 
-// RunOutcome is how one run of the Claude Code CLI ended, as DecideRunOutcome
-// decides it.
-type RunOutcome int
+// runOutcome is how one run of the Claude Code CLI ended, as decideRunOutcome
+// decides it. The tests reach it through export_test.go (issue #302).
+type runOutcome int
 
 // The outcomes of a run of the Claude Code CLI. The zero value is
-// OutcomeFailed, so an outcome nobody decided fails closed: it never reads as
+// outcomeFailed, so an outcome nobody decided fails closed: it never reads as
 // an answer.
 const (
-	// OutcomeFailed is a run with no usable result that failed on its own:
+	// outcomeFailed is a run with no usable result that failed on its own:
 	// its error is reported as it is.
-	OutcomeFailed RunOutcome = iota
-	// OutcomeAnswer is a run whose result was read: its answer is used.
-	OutcomeAnswer
-	// OutcomeCancelled is a run with no usable result whose caller cancelled.
-	OutcomeCancelled
-	// OutcomeTimedOut is a run with no usable result that reached its own
+	outcomeFailed runOutcome = iota
+	// outcomeAnswer is a run whose result was read: its answer is used.
+	outcomeAnswer
+	// outcomeCancelled is a run with no usable result whose caller cancelled.
+	outcomeCancelled
+	// outcomeTimedOut is a run with no usable result that reached its own
 	// deadline.
-	OutcomeTimedOut
+	outcomeTimedOut
 )
 
-// DecideRunOutcome decides a run's outcome from plain values (issue #274):
+// String names the outcome, so a test failure says which one it got.
+func (o runOutcome) String() string {
+	switch o {
+	case outcomeFailed:
+		return "failed"
+	case outcomeAnswer:
+		return "answer"
+	case outcomeCancelled:
+		return "cancelled"
+	case outcomeTimedOut:
+		return "timed out"
+	default:
+		return fmt.Sprintf("runOutcome(%d)", int(o))
+	}
+}
+
+// decideRunOutcome decides a run's outcome from plain values (issue #274):
 // answerErr is the error reading the run's result, nil when it was read;
 // parentErr is the caller's context's error; runErr is the run's own context's
 // error (or an error wrapping it). The run's own result comes first: a CLI that
@@ -164,16 +188,16 @@ const (
 // cancelled has answered. A run with no usable result is a cancellation when
 // the caller's context is done, then a timeout when the run's deadline passed,
 // and otherwise a failure of its own.
-func DecideRunOutcome(answerErr, parentErr, runErr error) RunOutcome {
+func decideRunOutcome(answerErr, parentErr, runErr error) runOutcome {
 	switch {
 	case answerErr == nil:
-		return OutcomeAnswer
+		return outcomeAnswer
 	case parentErr != nil:
-		return OutcomeCancelled
+		return outcomeCancelled
 	case errors.Is(runErr, context.DeadlineExceeded):
-		return OutcomeTimedOut
+		return outcomeTimedOut
 	default:
-		return OutcomeFailed
+		return outcomeFailed
 	}
 }
 

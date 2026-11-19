@@ -30,6 +30,7 @@ jobs:
           - { goos: darwin, goarch: arm64, cgo: "0" }
           - { goos: windows, goarch: amd64, cgo: "0" }
           - { goos: windows, goarch: arm64, cgo: "0" }
+          - { goos: js, goarch: wasm, cgo: "0" }
           - { goos: linux, goarch: amd64, cgo: "1" }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,7 +62,7 @@ jobs:
           skip-cache: true
       # The rules in test/lint, and the probes that run the golangci-lint installed above to prove forbidigo's
       # groups fire. The step sets no platform, so test/lint runs natively in every entry: the per-target
-      # settings live in the golangci-lint step's own env: only. It runs once per matrix entry, seven times with
+      # settings live in the golangci-lint step's own env: only. It runs once per matrix entry, eight times with
       # the same inputs, because the architecture test (cilint_test.go) forbids if: on a lint-target step.
       - name: Source rules and lint probes
         run: go test -count=1 ./test/lint/

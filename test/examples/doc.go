@@ -10,6 +10,22 @@
 // reports the walkthrough quotes are golden files regenerated with -update so a
 // catalog snapshot change shows up in the diff.
 //
+// It also holds the real-data check of issue #249 (CLAUDE.md rule 2): every
+// text file under examples/, docs/guide/ and every testdata/ directory of the
+// module is scanned for account IDs, GUIDs, IP addresses and host names that are
+// not documentation values. Only directories named exactly testdata are checked
+// besides examples/ and docs/guide/, so a new fixture directory must be named
+// testdata. The walk reads the tree on disk, so an untracked or git-ignored file
+// under a checked directory is checked too: a real inventory dropped there
+// locally fails before it is committed. A file is read whatever its encoding
+// (UTF-16 with a byte-order mark is decoded, an invalid byte cannot hide the
+// rest), and a symbolic link in a checked path is reported, never followed.
+// Outside examples/ a dotted name is a host name only when its last label is a
+// listed public top-level domain or private DNS suffix (a list that fails open,
+// so additions are expected) and it is not an exact public vendor host, and the
+// few legitimate values left (loopback addresses, synthetic IDs) are excused one
+// file and one value at a time by a commented allow list.
+//
 // The package holds this file and _test.go files only, under the strict
 // test-docs-are-pure depguard rule, so it imports nothing. Its tests run in make
 // test, need no network, credentials or clock, and are table-driven and

@@ -45,6 +45,21 @@ type InlineComment struct {
 // its closing statement that the review is advice and never an approval
 // (ADR 0033).
 func Render(headSHA string, answer Answer, event Event, diff string) Review {
+	return RenderFiltered(headSHA, answer, event, diff, nil)
+}
+
+// RenderFiltered renders the review of headSHA as Render does, of the diff the
+// reviewer read, and ends the body's findings with a note that names each path
+// of excluded, the files FilterDiff left out, and says they were not reviewed
+// (issue #324). Each path is shown in a code span, escaped as a finding's path
+// in the body is: its backticks made apostrophes, its control characters
+// spaces, its mentions defused. The note states how many files were left out,
+// names the first MaxListedExcluded of them and says how many more it does not
+// name; it sits after the part cut at MaxTextUnits and its room is taken off
+// that part, so a truncated review still holds it whole (reviewer M1, auditor
+// L2). With no path excluded there is no note, and the review is Render's, byte
+// for byte.
+func RenderFiltered(headSHA string, answer Answer, event Event, diff string, excluded []string) Review {
 	shown := newSideLines(diff)
 
 	var (
@@ -68,13 +83,17 @@ func Render(headSHA string, answer Answer, event Event, diff string) Review {
 
 	head := fmt.Sprintf("**AI review** of %s\n\n", headSHA)
 	middle := renderMiddle(answer, event, comments, inBody)
+	note := notReviewedNote(excluded)
 
-	room := MaxTextUnits - utf16Len(head) - utf16Len(adviceFooter)
+	// The note, like the head and the footer, is never cut: its room comes off
+	// the review's, so a truncated review still names what it did not read
+	// (reviewer M1, auditor L2). notReviewedNote bounds its own length.
+	room := MaxTextUnits - utf16Len(head) - utf16Len(note) - utf16Len(adviceFooter)
 
 	return Review{
 		CommitID: headSHA,
 		Event:    event,
-		Body:     head + truncate(middle, room, truncatedBody) + adviceFooter,
+		Body:     head + truncate(middle, room, truncatedBody) + note + adviceFooter,
 		Comments: comments,
 	}
 }
@@ -320,7 +339,7 @@ func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody [
 
 	if n := countUncategorised(answer.Findings); n > 0 {
 		fmt.Fprintf(&body, "%s had a missing or unrecognised category and %s shown as uncategorised.\n",
-			findings(n), plural(n, "is", "are"))
+			findingsPhrase(n), plural(n, "is", "are"))
 	}
 
 	if len(inBody) > 0 {
@@ -347,7 +366,7 @@ func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody [
 				// ParseAnswer refuses a path with a control character, but
 				// Render refuses nothing: the path stays on its line and
 				// notifies nobody whatever reaches it.
-				fmt.Fprintf(&body, "`%s`\n\n", defuseMentions(oneLine(strings.ReplaceAll(where, "`", "'"))))
+				fmt.Fprintf(&body, "%s\n\n", pathSpan(where))
 			}
 
 			body.WriteString(findingText(f))
@@ -360,6 +379,82 @@ func renderMiddle(answer Answer, event Event, comments []InlineComment, inBody [
 	return body.String()
 }
 
+// pathSpan returns path as a Markdown code span on one line that notifies
+// nobody: its backticks made apostrophes, so none ends the span, its control
+// characters spaces and its mentions defused. A path is text a pull request or
+// the model chose.
+func pathSpan(path string) string {
+	return "`" + defuseMentions(oneLine(strings.ReplaceAll(path, "`", "'"))) + "`"
+}
+
+// shortPathSpan returns path as pathSpan does, its escaped text cut to
+// maxListedPathUnits and ended with "…" when longer. The cut comes after the
+// escaping, so it can only shorten a defused mention or reference (an @ left
+// without its handle, an "&am" no reference), never undo it.
+func shortPathSpan(path string) string {
+	span := pathSpan(path)
+	text := span[1 : len(span)-1]
+
+	if utf16Len(text) > maxListedPathUnits {
+		text = prefixUnits(text, maxListedPathUnits-1) + "…"
+	}
+
+	return "`" + text + "`"
+}
+
+// MaxListedExcluded is how many left-out paths the body's "Not reviewed" note
+// names; it counts the rest (reviewer M1, auditor L2).
+const MaxListedExcluded = 50
+
+// maxListedPathUnits caps each path the note names, in UTF-16 code units, so
+// that MaxListedExcluded paths stay a small part of MaxTextUnits whatever names
+// a pull request chooses.
+const maxListedPathUnits = 300
+
+// notReviewedNote returns the body's note that names the files the reviewer
+// left out of the diff it read, and "" when it left none out (issue #324). It
+// states the total, names the first MaxListedExcluded paths in the order given,
+// each cut to maxListedPathUnits, and says how many more it does not name, so
+// it stays under 16,000 UTF-16 code units whatever excluded holds.
+func notReviewedNote(excluded []string) string {
+	if len(excluded) == 0 {
+		return ""
+	}
+
+	var note strings.Builder
+
+	fmt.Fprintf(&note, "\n### Not reviewed\n\n%s left out of the diff the AI review read, "+
+		"as a generated or golden file (ADR 0033), and not reviewed:\n\n",
+		plural(len(excluded), "This file was", fmt.Sprintf("Each of these %d files was", len(excluded))))
+
+	listed := excluded[:min(len(excluded), MaxListedExcluded)]
+
+	for _, path := range listed {
+		note.WriteString("- " + shortPathSpan(path) + "\n")
+	}
+
+	if more := len(excluded) - len(listed); more > 0 {
+		fmt.Fprintf(&note, "\n%d more of the %d left-out files %s not listed here.\n",
+			more, len(excluded), plural(more, "is", "are"))
+	}
+
+	return note.String()
+}
+
+// unreadableReview returns the review a run posts when the model's answer
+// could not be read twice in turn (issue #316): a comment on headSHA that
+// says so, holds no finding and is never a change request.
+func unreadableReview(headSHA string) Review {
+	return Review{
+		CommitID: headSHA,
+		Event:    EventComment,
+		Body: fmt.Sprintf("**AI review** of %s\n\n", headSHA) +
+			"The AI review of this commit could not be read: the model answered twice, and neither answer " +
+			"had the form the reviewer reads, so this review holds no finding. The check fails so that this " +
+			"stays visible; re-run it to ask for a review again.\n" + adviceFooter,
+	}
+}
+
 // inlineSentence says that n findings are inline comments, without its full
 // stop.
 func inlineSentence(n int) string {
@@ -370,8 +465,8 @@ func inlineSentence(n int) string {
 	return fmt.Sprintf("%d findings are inline comments on the diff", n)
 }
 
-// findings returns "1 finding" or "N findings".
-func findings(n int) string {
+// findingsPhrase returns "1 finding" or "N findings".
+func findingsPhrase(n int) string {
 	return fmt.Sprintf("%d %s", n, plural(n, "finding", "findings"))
 }
 
@@ -403,12 +498,12 @@ func eventReason(fs []Finding, event Event) string {
 
 	switch {
 	case blocking == 0:
-		return findings(len(fs)) + ", none blocking."
+		return findingsPhrase(len(fs)) + ", none blocking."
 	case event == EventRequestChanges:
-		return fmt.Sprintf("%s, %d blocking: this review requests changes.", findings(len(fs)), blocking)
+		return fmt.Sprintf("%s, %d blocking: this review requests changes.", findingsPhrase(len(fs)), blocking)
 	default:
 		return fmt.Sprintf("%s, %d blocking. Change requests are off (AI_REVIEW_REQUEST_CHANGES), "+
-			"so this review is a comment; with them on, it would have requested changes.", findings(len(fs)), blocking)
+			"so this review is a comment; with them on, it would have requested changes.", findingsPhrase(len(fs)), blocking)
 	}
 }
 

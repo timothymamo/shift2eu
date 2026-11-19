@@ -6,10 +6,11 @@ The decision and its alternatives are in [ADR 0001](adr/0001-hexagonal-architect
 ## Layers and the dependency rule
 
 ```
-            ┌────────────── cmd/shift2eu, cmd/shift2eu-server (composition roots) ───────────────────────┐
+            ┌──── cmd/shift2eu, cmd/shift2eu-server, cmd/shift2eu-web (composition roots) ───────────────┐
             │                                                                                      │
             │   internal/cli ──────▶ internal/app/analysis ◀────── internal/adapter/...           │
-            │   internal/httpapi ──┘                                                               │
+            │   internal/httpapi ──┤                                                               │
+            │   internal/web ──────┘                                                               │
             │   (driving adapters)     (use case + ports)          (driven adapters: implement     │
             │                                 │                     the ports)                     │
             │                                 ▼                           │                        │
@@ -88,6 +89,29 @@ Arrows are imports. They point inwards only:
   as its own binary and its own image, `ghcr.io/timothymamo/shift2eu-server`, built from the
   `Dockerfile`'s `server` stage and signed and attested as the CLI's is (ADR 0013, ADR 0015);
   [Behind a reverse proxy](guide/reverse-proxy.md) documents running it behind a reverse proxy.
+- **Web adapter** (`internal/web`) is the third driving adapter, the logic the site's page calls
+  ([ADR 0035](adr/0035-run-the-assessment-in-the-browser-as-a-webassembly-driving-adapter.md), PRD #297):
+  it takes an inventory document and the options the user chose and returns the Markdown report and the
+  JSON report the page offers as downloads, byte for byte what `shift2eu assess` writes, and the HTML
+  fragment the page shows, rendered by the reporter `adapter/report/htmlreport` (held by
+  `reporters-stay-offline`). It runs in the browser, compiled to WebAssembly, so no inventory leaves it.
+  It checks its options by the same application rules as the CLI (`analysis.SelectTargets` and its
+  siblings, which moved out of `internal/cli`; each driving adapter keeps its own parsing), runs the use
+  case once with one reporter that renders every format, and gets every adapter through `web.Deps`. Its
+  imports are a strict allow list (`web-gets-adapters-from-cmd`): the application, two domain packages,
+  `internal/version` and a named list of pure standard packages, never `os`, `net`, `syscall/js`, an
+  adapter, the CLI or the HTTP API. Only the site's composition root and its wiring import it or the HTML
+  reporter (`web-imported-only-by-the-web-root`).
+- **`cmd/shift2eu-web`** is the site's composition root, in two parts. The package itself (`js && wasm`)
+  is the thin `syscall/js` glue: it registers one JavaScript function that calls `internal/web`, and it is
+  the only package that imports `syscall/js` (`web-composition-root`, `syscall-js-only-in-the-web-root`).
+  Its untagged package `cmd/shift2eu-web/internal/wire` builds the adapters `cmd/shift2eu`'s offline path
+  builds, the inventory reader in its in-memory mode and the HTML reporter, into `web.Deps`
+  (`web-composition-root-wire`). It builds and is tested natively. Its tests, alone allowed to import
+  `internal/cli` (`web-composition-root-wire-tests`), hold the option parity and the download parity with
+  the CLI. `make lint` and CI's lint matrix lint `js/wasm` as an extra target beside the release platforms,
+  and `test/architecture` holds the module's dependency tree to no `net`, `net/http`, `os/exec` or cloud
+  SDK and the gzip-compressed module script to 3 MiB.
 - **`cmd/shift2eu`** and **`cmd/shift2eu-server`** are the composition roots, the only places that construct
   adapters and inject them: `cmd/shift2eu` into the CLI, `cmd/shift2eu-server` into the HTTP API. `cmd/shift2eu`'s
   imports are a strict allow list (`composition-root`, issue #101): the module's own packages and the
