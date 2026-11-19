@@ -21,7 +21,8 @@
 > host target runs from the host clone**, not only the token targets. The host targets are every target
 > that runs on the Mac as the maintainer: the `vm-*` targets, `deck`, `deck-restart`, `gate-check` and the
 > `agents-token*` targets (the Makefile's `HOST_TARGETS`; `test/devenv` keeps the list complete against
-> every recipe that calls `limactl`, `launchctl` or `sudo`).
+> every recipe that calls `limactl`, `launchctl`, `sudo`, `gh`, `curl`, `openssl` or `plutil`, runs a script of
+> `dev/` that works on the Mac, or runs a host target as a sub-make).
 >
 > - **`WORKSPACE_REPO`.** A new make variable, the absolute path of the repository's checkout inside the
 >   workspace, set in the host clone's `.envrc` (or on the command line). The host targets reach the
@@ -30,22 +31,33 @@
 >   parent, and `vm-up` mounts its parent, the workspace, and checks that for stray entries. The VM_ENV
 >   credentials now come from the host clone's `.envrc` too, so no `.envrc` in or above the workspace
 >   holds a credential any more.
-> - **The refusal.** make refuses a host target while it reads the Makefile, keyed on `MAKECMDGOALS`
->   (GNU make 3.81's `$(error)`, so before any prerequisite, sub-make or recipe line, even under `-i` or
->   `-k`), when `WORKSPACE_REPO` is unset, holds whitespace or a character a shell or make pattern reads,
->   or is not absolute, or when the checkout make runs in is the workspace, lies inside it or holds it. Its
->   message names the target, the host clone and `docs/dev-environment.md`. The targets the agents run in
->   the VM never read `WORKSPACE_REPO` and are not refused.
+> - **The refusal.** make refuses a host target while it reads the Makefile, keyed on `MAKECMDGOALS` and
+>   on a `.DEFAULT_GOAL` set on the command line (GNU make 3.81's `$(error)`, so before any prerequisite,
+>   sub-make or recipe line, even under `-i`, `-k` or `-n`), when `WORKSPACE_REPO` is unset, holds a
+>   character other than letters, digits and `. _ - / + @ , ~ # =` (an allow list: no whitespace, quote,
+>   `$`, `\`, `%`, and no `:`, which Lima splits a `--mount-only` value on; the message describes the list
+>   and never shows the value), or is not absolute, or when the checkout make runs in is the workspace,
+>   lies inside it or holds it. It refuses any run with `MAKECMDGOALS` set on the command line, which
+>   would hide the real goals. Its message names the target, the host clone and `docs/dev-environment.md`.
+>   The targets the agents run in the VM never read `WORKSPACE_REPO` and are not refused. `vm-up` also
+>   refuses, before any `limactl` call, a `WORKSPACE_REPO` that is no directory holding `.git` and a
+>   workspace it cannot list, and matches the repository's name in the listing literally.
+> - **Only the credentials a process needs.** The host targets that open a shell in the VM run `limactl`
+>   without the App's three variables (`env -u`), and the background refresher runs without the two
+>   `VM_ENV` credentials.
 > - **A guard, not a boundary.** The refusal protects the maintainer from a mistake (a `make deck` typed
 >   in the wrong directory). It is no security boundary: the workspace's `Makefile` is agent-editable, so
 >   a make run there runs whatever that file says. The protection is that the maintainer never runs
 >   `make` or `git` in the workspace on the Mac (`docs/dev-environment.md`, The host clone).
 > - **`vm-up` no longer sets git hooks.** Its `git-hooks` prerequisite would set the host clone's hooks
->   from there, and running git in the workspace from the Mac is what this forbids. The workspace's hooks
->   are turned on once in the VM (`make git-hooks` there); the setting lives in the mounted `.git/config`.
+>   from there, and running git in the workspace from the Mac is what this forbids. `make vm-init` turns
+>   the workspace checkout's hooks on inside the VM (`git -C <WORKSPACE_REPO> config core.hooksPath
+>   .githooks`); the setting lives in the mounted `.git/config`.
 > - `make gate-check` is a host target, so the release-tag skill runs `dev/protect-main-check.sh` in the
->   VM and asks the maintainer for `make gate-check` from the host clone. `make deck`'s warning about the
->   App variables in "the workspace's shell" became a note that it ignores them.
+>   VM and asks the maintainer for `make gate-check` from the host clone; a trusted fresh clone of `main`
+>   on a machine with no workspace runs `dev/protect-main-check.sh` directly. `make deck`'s warning about
+>   the App variables in "the workspace's shell" is gone: from the host clone they are the normal case,
+>   and `make deck` hands them to no process in the VM.
 >
 > **What part 2 leaves open.** The App's key is still a file the maintainer's uid can read, so code that
 > runs as the maintainer anywhere (agent-editable code run on the Mac by mistake, a git-aware prompt or an

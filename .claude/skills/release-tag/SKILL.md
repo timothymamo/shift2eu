@@ -136,7 +136,9 @@ moves or deletes a tag.
      unexpected answer): report its stderr and stop;
    - **3**: no gap, but a check is unverified with this token: stop, and ask the maintainer to run
      `make gate-check` from their host clone with their own admin token (`gh auth login` on the Mac) and
-     confirm it exits 0.
+     confirm it exits 0. On a machine with no workspace (a trusted fresh clone of `main`, where
+     `WORKSPACE_REPO` is unset and make refuses `make gate-check`), they run `dev/protect-main-check.sh`
+     there directly instead.
      Do not go on to step 5's merge until they have.
 3. Find the open release PR:
    `gh pr list --state open --label "autorelease: pending" --json number,title,headRefName,url`.

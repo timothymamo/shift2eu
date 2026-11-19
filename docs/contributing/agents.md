@@ -38,7 +38,8 @@ make deck         # open the deck; detach and the agents keep running in the VM
 ```
 
 The host clone's direnv `.envrc` sets `WORKSPACE_REPO` to the workspace's checkout and holds the
-credentials ([The host clone](../dev-environment.md#the-host-clone)). Claude Code runs on your Claude subscription, through a token from `claude setup-token`.
+credentials ([The host clone](../dev-environment.md#the-host-clone)). Claude Code runs on your Claude
+subscription, through a token from `claude setup-token`.
 The agents' GitHub credential is the agents App's installation token, which a job on the Mac mints and
 writes into the VM (PRD #161, ADR 0031).
 

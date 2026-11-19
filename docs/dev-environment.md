@@ -87,17 +87,12 @@ edit everything there, and `make` and `git` run what its files say.
    ([The agents App](#the-agents-app)), run `make agents-token-refresh-start` from the host clone, then
    run `make vm-init` again.
 
-6. Turn on the workspace's git hooks, which refuse commits and pushes to `main`, inside the VM.
-   `make vm-up` no longer does it (issue #227): from the host clone it would set the host clone's hooks.
-   The setting is kept in the workspace's `.git/config`, which the VM mounts, so this is once per checkout:
+   Note: `make vm-init` also turns on the workspace checkout's git hooks, which refuse commits and pushes
+   to `main` (its `git` step runs `git -C <WORKSPACE_REPO> config core.hooksPath .githooks` inside the VM).
+   `make vm-up` no longer does (issue #227): it runs on the Mac, from the host clone, and runs no `git` in
+   the workspace. The setting is kept in the workspace's `.git/config`, which the VM mounts.
 
-   ```bash
-   make vm-shell              # from the host clone: a shell in the VM at WORKSPACE_REPO
-   make git-hooks             # in the VM
-   exit
-   ```
-
-7. Open the deck, from the host clone:
+6. Open the deck, from the host clone:
 
    ```bash
    make deck                  # limactl shell --workdir "$WORKSPACE_REPO" shift2eu dot-agent-deck
@@ -114,7 +109,7 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 |---|---|
 | `theme` | Sets `theme` in Claude Code's `~/.claude/settings.json` to `CLAUDE_THEME` (default `dark`; `make vm-init CLAUDE_THEME=light`) |
 | `claude` | Marks Claude Code's onboarding done and trusts the workspace and the repository, in `~/.claude.json`, so the Claude Code roles start without first-run screens (see below) |
-| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run |
+| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept. With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run. Then it turns on the main checkout's git hooks (`git -C <main checkout> config core.hooksPath .githooks`), which refuse commits and pushes to `main`: `make vm-up` runs on the Mac and sets none (issue #227) |
 | `claude auth` | Checks that Claude Code uses the OAuth token (your subscription), not an API key |
 | `pi` | `pi auth check --provider deepseek` |
 | `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository with the agents App's token; without the token file the gh wrapper refuses to run gh at all. Not `gh auth status`, which an installation token may fail (ADR 0031) |
@@ -366,15 +361,16 @@ start work on an issue or PRD.
 A checkout made before ADR 0008 sits directly in a shared directory, and its VM mounts only the
 repository. Move it, then point the existing VM at the workspace; the VM keeps its tools, login and
 configuration. Run everything from the host clone ([The host clone](#the-host-clone)), and the `git`
-command in the VM, never in the moved checkout on the Mac:
+command in the VM, never in the moved checkout on the Mac. Set `WORKSPACE_REPO` first: every host target,
+`make vm-stop` included, refuses to run without it:
 
 ```bash
 cd ~/src/shift2eu-host                                         # the host clone
+# set WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu" in the host clone's .envrc, then:
+direnv allow
 make vm-stop
 mkdir ~/src/shift2eu-ws && mv ~/src/shift2eu ~/src/shift2eu-ws/
 limactl edit --tty=false --mount-only "$HOME/src/shift2eu-ws:w" shift2eu
-# set WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu" in the host clone's .envrc, then:
-direnv allow
 make vm-up
 make vm-shell                                                  # in the VM, at the moved checkout:
 git worktree repair .worktrees/*                               # only if .worktrees/ holds any
@@ -569,14 +565,25 @@ directory, the workspace, and checks that it holds nothing but the checkout and 
 
 Never put any of these in a `.envrc` in or above the workspace, so a shell in the workspace holds none of
 them. Never add the App's three to `VM_ENV`: `make vm-env` refuses any `SHIFT2EU_AGENTS_APP_*` name, so
-neither the key nor its path enters the VM. `make deck` notes that it ignores them (it still opens the deck).
+neither the key nor its path enters the VM. The host targets that open a shell in the VM (`make deck`,
+`make deck-restart`, `make vm-claude-settings`, `make vm-init`, `make vm-shell`) run `limactl` without the
+App's three variables (`env -u`), and the background refresh `make agents-token-refresh-start` starts runs
+without `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEEK_API_KEY`: each process gets only what its work needs.
 
 **The refusal.** A host target refuses to run, before it runs anything (no prerequisite, no sub-make, no
 `limactl`, no `git config`), and names itself, the host clone and this section, when `WORKSPACE_REPO` is
-unset, holds whitespace or one of `` $ ` " ' \ % ``, or is not an absolute path, or when the checkout
-`make` runs in is the workspace, lies inside it or holds it. make checks this while it reads the Makefile,
-keyed on the targets named on its command line. Targets the agents run in the VM (`make check`,
-`make test`, `make worktree`, `make git-hooks`, ...) never read `WORKSPACE_REPO` and are not refused.
+unset, holds a character other than letters, digits and `. _ - / + @ , ~ # =` (no whitespace, no quote, no
+`$`, no `\`, no `%`, and no `:`, which Lima splits a `--mount-only` value on; the message never shows the
+value), or is not an absolute path, or when the checkout `make` runs in is the workspace, lies inside it
+or holds it. make checks this while it reads the Makefile, keyed on the targets named on its command line
+and on a `.DEFAULT_GOAL` set there (`make .DEFAULT_GOAL=vm-up`); it refuses any run with `MAKECMDGOALS` set
+on the command line (`make MAKECMDGOALS= vm-up`), which hides the real goals. `make -k`, `-i` and `-n` do
+not get past it. Targets the agents run in the VM (`make check`, `make test`, `make worktree`,
+`make git-hooks`, ...) never read `WORKSPACE_REPO` and are not refused.
+
+`make vm-up` also checks, before any `limactl` call and with nothing but `test` and `ls`, that
+`WORKSPACE_REPO` is a directory holding `.git` and that the workspace can be listed, and it matches the
+repository's name in that listing literally, so a repository `a.b` never takes a stray `axb` for its own.
 
 The refusal is a guard against your mistakes, **not a security boundary**: the workspace's `Makefile` is
 one the agents can edit, so a `make` run in the workspace runs whatever that file says, refusal or not.
@@ -879,7 +886,9 @@ check therefore reads the repository's `permissions.admin` first, and on a token
 admin it prints `unverified: bypass_actors cannot be verified with this token (not a repository admin):
 run make gate-check as the maintainer` instead of a verdict. That part is yours: run `make gate-check` from
 the host clone, logged in to `gh` as yourself with an admin token (`gh auth login` on the Mac), as runbook
-step 5 does. A fine-grained personal token reports your role on the repository in `permissions.admin`, not
+step 5 does. On a machine with no workspace, such as a trusted fresh clone of `main` on another machine,
+run `dev/protect-main-check.sh` there directly instead of `make gate-check`: `make gate-check` is a host
+target, and with `WORKSPACE_REPO` unset there make refuses it. A fine-grained personal token reports your role on the repository in `permissions.admin`, not
 what the token itself may do: without Administration on the token, GitHub leaves the bypass list out and
 the check reports `gap: bypass_actors is missing although this token is a repository admin`. A token that
 returned `[]` without being able to see the bypass actors would make the check pass falsely, so run the

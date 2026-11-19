@@ -1,6 +1,7 @@
 # dot-agent-deck orchestration for shift2eu.
 #
-# Run it inside the Lima VM (`make vm-up && make deck`), so every agent is
+# Run it inside the Lima VM (`make vm-up && make deck`, run on the Mac from the
+# host clone: docs/dev-environment.md, The host clone), so every agent is
 # confined to this repository. Validate edits with `dot-agent-deck validate`.
 #
 # Every role runs Claude Code except the tester, which runs pi on DeepSeek V4.1 Flash
