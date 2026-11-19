@@ -645,12 +645,149 @@ func TestClaudeCLIAskReportsACancellationAfterTheCLIStarted(t *testing.T) {
 		if !errors.Is(got.err, context.Canceled) {
 			t.Errorf("Ask = %v after the cancellation, want an error wrapping context.Canceled: the caller cancelled and the CLI is not at fault", got.err)
 		}
+
+		if !strings.Contains(strings.ToLower(got.err.Error()), "cancelled") {
+			t.Errorf("Ask = %v after the cancellation, want the error to say the CLI was cancelled: a cancellation the caller made still reads as the cancellation it is (issue #324)", got.err)
+		}
 	case <-time.After(10 * time.Second):
 		cancel()
 		t.Fatal("Ask did not return within 10s of the cancellation: a cancelled run is killed and reported at once")
 	}
 
 	// The CLI ran: the recordings of the run that reached the cancellation are
+	// there, so the arm was reached by a CLI that started and not by one Ask
+	// refused to start.
+	if args := rec.args(t); !slices.Contains(args, "-p") {
+		t.Errorf("the fake CLI recorded the arguments %q, want the ones Ask passes: the arm is reached by a CLI that started", args)
+	}
+}
+
+// runDeadlineReached is the parent context of a run whose deadline passes
+// while the CLI is mid-turn: this test closes done once the fake CLI has
+// started, and Err then reports context.DeadlineExceeded, as a context made
+// with context.WithDeadline does once its deadline is past. Nothing of a clock
+// or a sleep decides when it passes: the fake's start signal does (issue #324).
+type runDeadlineReached struct {
+	context.Context
+	done chan struct{}
+}
+
+// Done returns the channel this test closes when the run's deadline passes.
+func (c *runDeadlineReached) Done() <-chan struct{} { return c.done }
+
+// Err reports context.DeadlineExceeded once the deadline has passed, and nil
+// before, as a context with a deadline does.
+func (c *runDeadlineReached) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+// Deadline reports no deadline: this context's deadline is not one it knows in
+// advance, only that it has passed once Done is closed.
+func (c *runDeadlineReached) Deadline() (time.Time, bool) { return time.Time{}, false }
+
+// TestClaudeCLIAskReportsTheRunDeadlineAfterTheCLIStarted pins what a run says
+// when its overall deadline passes, not when someone cancels it (issue #324):
+// ci/aireview gives the run a deadline of 15 minutes, and a run that reaches it
+// has not been cancelled by anybody. Ask therefore answers with an error saying
+// the deadline passed and never with the cancelled wording, which would send
+// the maintainer looking for a cancellation that never happened. The state is
+// reached the way the cancelled arm's test reaches its own (issue #303): on a
+// FIFO the fake writes one line to as it starts, so no sleep and no poll
+// decides that the CLI ran first.
+func TestClaudeCLIAskReportsTheRunDeadlineAfterTheCLIStarted(t *testing.T) {
+	t.Parallel()
+
+	fifo := newStartFIFO(t)
+
+	cli, rec := newFakeClaudeCLI(t, claudeFake{started: fifo, stdout: cliSuccess})
+
+	ctx := &runDeadlineReached{Context: t.Context(), done: make(chan struct{})}
+
+	type askResult struct {
+		text string
+		err  error
+	}
+
+	done := make(chan askResult, 1)
+
+	go func() {
+		text, err := review.NewClaudeCLI(cli, fakeOAuthToken, 30*time.Second).Ask(ctx, review.Prompt{System: "s", User: "u"})
+		done <- askResult{text: text, err: err}
+	}()
+
+	// The read is bounded, so a run that never starts the CLI fails the test
+	// instead of blocking it for ever. The bound is no synchronisation: the
+	// FIFO's one line is.
+	started := make(chan error, 1)
+
+	go func() {
+		f, err := os.Open(fifo)
+		if err != nil {
+			started <- fmt.Errorf("open the fake CLI's start signal: %w", err)
+
+			return
+		}
+		defer f.Close()
+
+		line, err := bufio.NewReader(f).ReadString('\n')
+		if err != nil {
+			started <- fmt.Errorf("read the fake CLI's start signal: %w", err)
+
+			return
+		}
+
+		if got := strings.TrimSpace(line); got != "started" {
+			started <- fmt.Errorf("the fake CLI signalled %q, want %q", got, "started")
+
+			return
+		}
+
+		started <- nil
+	}()
+
+	select {
+	case err := <-started:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the fake CLI never started: Ask did not run the CLI at its path")
+	}
+
+	// The CLI is running and blocked now, as a real one is mid-turn: the run's
+	// deadline passes while it is.
+	close(ctx.done)
+
+	select {
+	case got := <-done:
+		if got.text != "" {
+			t.Errorf("Ask = %q once the run's deadline passed, want no answer: a run that reached its deadline has none", got.text)
+		}
+
+		if !errors.Is(got.err, review.ErrModel) {
+			t.Fatalf("Ask = %v once the run's deadline passed, want an error wrapping ErrModel, so the check fails and posts nothing", got.err)
+		}
+
+		message := strings.ToLower(got.err.Error())
+
+		if !strings.Contains(message, "deadline") {
+			t.Errorf("Ask = %v once the run's deadline passed, want the error to name the deadline: the run stopped because its 15 minutes ran out, and the maintainer has to read that (issue #324)", got.err)
+		}
+
+		if strings.Contains(message, "was cancelled") {
+			t.Errorf("Ask = %v once the run's deadline passed, want no cancelled wording: nobody cancelled this run, its deadline passed, and a cancellation sends the maintainer looking for a caller that does not exist (issue #324)", got.err)
+		}
+	case <-time.After(10 * time.Second):
+		close(ctx.done)
+		t.Fatal("Ask did not return within 10s of the run's deadline passing: a run whose deadline passed is killed and reported at once")
+	}
+
+	// The CLI ran: the recordings of the run that reached the deadline are
 	// there, so the arm was reached by a CLI that started and not by one Ask
 	// refused to start.
 	if args := rec.args(t); !slices.Contains(args, "-p") {
