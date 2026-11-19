@@ -215,6 +215,10 @@ type sandbox struct {
 	vmHome   string // HOME of the fake VM user; the token and identity files must land here
 	binDir   string // first on PATH: the fake limactl and the recording curl and openssl
 	argvLog  string // one tool=<name> line and one arg=<arg> line per shimmed call
+	// sshRecord is the directory the fake ssh records its standard input in, and empty when no fake ssh is in
+	// use. Like vmHome it stands for the VM, so a leak scan skips it: the token has to reach the VM's standard
+	// input (issue #227 part 2).
+	sshRecord string
 }
 
 // newSandbox builds a sandbox with the fake limactl and the recording curl and openssl, and removes it with
@@ -560,6 +564,7 @@ func (sb *sandbox) useFakeSSH(t *testing.T, env map[string]string) *sshRecorder 
 		dir:        filepath.Join(sb.root, "ssh-calls"),
 		statusFile: filepath.Join(sb.root, "ssh-status"),
 	}
+	sb.sshRecord = recorder.dir
 
 	writeFileMode(t, recorder.statusFile, []byte("0\n"), 0o600)
 

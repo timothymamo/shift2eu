@@ -73,7 +73,9 @@ func (f *mintFixture) secrets() []secret {
 }
 
 // assertNoLeaks fails when a secret reached a command line, a log line, an output, or a file of the host
-// machine. The VM's home holds the token on purpose, and the invented key and the shims hold what they are.
+// machine. The VM's home holds the token on purpose, and the invented key and the shims hold what they are. The
+// fake ssh's record of its standard input is the VM's side of the write, like the VM's home, so it is skipped
+// too: the token must arrive there, and the argv log above still pins that it never reaches a command line.
 func (f *mintFixture) assertNoLeaks(t *testing.T, stdout, stderr string) {
 	t.Helper()
 
@@ -81,12 +83,18 @@ func (f *mintFixture) assertNoLeaks(t *testing.T, stdout, stderr string) {
 	assertNoSecrets(t, "the script's stdout", stdout, secrets)
 	assertNoSecrets(t, "the script's stderr", stderr, secrets)
 	assertNoSecrets(t, "the argv of the commands the script ran", f.sb.argvLogText(t), secrets)
-	assertNoSecretsInTree(t, f.sb.root, []string{
+
+	skip := []string{
 		f.sb.vmHome,
 		filepath.Dir(f.key.path),
 		f.sb.binDir,
 		f.sb.argvLog,
-	}, secrets)
+	}
+	if f.sb.sshRecord != "" {
+		skip = append(skip, f.sb.sshRecord)
+	}
+
+	assertNoSecretsInTree(t, f.sb.root, skip, secrets)
 }
 
 // vmGit runs git in the fake VM user's home, the way the VM's own git sees it: HOME is that home, so the global

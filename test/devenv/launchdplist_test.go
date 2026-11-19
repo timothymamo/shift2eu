@@ -12,6 +12,7 @@ package devenv_test
 import (
 	"bytes"
 	"encoding/xml"
+	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
@@ -115,6 +116,22 @@ func (f *launchdFixture) assertNoLeaks(t *testing.T, streams ...string) {
 	}
 
 	assertNoSecrets(t, "the argv of the commands the script ran", f.sb.argvLogText(t), secrets)
+}
+
+// accountHome creates the account's home directory for a test, as /Users/<account> is on the Mac: the generator
+// derives the clone from $0 and HOME from the environment the install hands it, so a home of the test's own
+// stands in for the real one, which no test may create. It is 0700 from a root of its own, because t.TempDir is
+// 0777 minus the umask: under this VM's umask that is group-writable, and the trusted path rule refuses the
+// script's path inside it, rightly and not because of what the test pins (issue #227).
+func accountHome(t *testing.T) string {
+	t.Helper()
+
+	home := filepath.Join(newSandboxRoot(t), "Users", agentsAccount)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("create the account's home %s: %v", home, err)
+	}
+
+	return home
 }
 
 // launchdRepoRoot is the absolute path of the repository these tests run in, with symlinks resolved the way
@@ -626,10 +643,7 @@ func TestAgentsTokenLaunchdPlistRefusesToRunAsRoot(t *testing.T) {
 func TestAgentsTokenLaunchdPlistAccountMode(t *testing.T) {
 	t.Parallel()
 
-	// The account's home, as /Users/<account> is on the Mac: the generator derives the clone from $0 and HOME
-	// from the environment the install hands it, so a home of the test's own stands in for the real one, which no
-	// test may create.
-	home := t.TempDir()
+	home := accountHome(t)
 	clone := filepath.Join(home, "shift2eu-host")
 	script := filepath.Join(clone, launchdScript)
 	writeFileMode(t, script, []byte(readRepoFile(t, launchdScript)), 0o755)
