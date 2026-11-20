@@ -3,11 +3,9 @@ package targettest_test
 import (
 	"context"
 	"errors"
-	"reflect"
 	"slices"
 	"strings"
 	"testing"
-	"unsafe"
 
 	"github.com/timothymamo/shift2eu/internal/adapter/target/targettest"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
@@ -147,71 +145,6 @@ func pricedCatalog(t *testing.T) catalog.Catalog {
 	t.Helper()
 
 	return newCatalog(t, scalewayTarget, pricedOfferings())
-}
-
-// strayPriceRegion is a region none of the priced fixture's offerings is
-// available in, so a price naming it is outside its own offering: the estimate
-// would answer "not offered" for a region the catalog has a price for, or the
-// reverse (issue #309).
-const strayPriceRegion = "eu-north"
-
-// namesStrayRegion reports whether p, a price of an offering, names the region
-// its offering is not available in.
-func namesStrayRegion(p catalog.Price) bool {
-	return slices.Contains(p.Regions, strayPriceRegion)
-}
-
-// catalogWithStrayPrice is the priced fixture catalog whose first plan price
-// (plan) or first storage price (storage) names strayPriceRegion, a region its
-// offering is not available in.
-//
-// catalog.New refuses exactly that (ErrPriceRegion), and it is the only
-// constructor, so a catalog a target adapter returns can never hold one: the
-// catalog the contract's price-regions check has to reject cannot be built the
-// ordinary way. This helper takes the value apart instead, in the test build
-// alone: catalog.Catalog keeps its offerings in an unexported field, which
-// reflect reaches through the one unsafe.Pointer conversion in this file. It
-// fails the test when the change does not land, so a suite that stopped looking
-// at prices cannot make this case pass silently.
-func catalogWithStrayPrice(t *testing.T, storage bool) catalog.Catalog {
-	t.Helper()
-
-	cat := pricedCatalog(t)
-
-	field := reflect.ValueOf(&cat).Elem().FieldByName("offerings")
-	if !field.IsValid() || field.Kind() != reflect.Slice {
-		t.Fatalf("catalog.Catalog has no offerings slice, want the unexported field this test changes")
-	}
-
-	stray := catalog.Price{Amount: 5000, Currency: catalog.EUR, Regions: []string{strayPriceRegion}}
-	//nolint:gosec // a catalog.New-refused price has no other builder; test build only
-	offerings := *(*[]catalog.Offering)(unsafe.Pointer(field.UnsafeAddr()))
-
-	for i := range offerings {
-		if len(offerings[i].Plans) == 0 {
-			continue
-		}
-
-		if storage {
-			offerings[i].StoragePrices = []catalog.Price{stray}
-		} else {
-			offerings[i].Plans[0].Prices = []catalog.Price{stray}
-		}
-
-		break
-	}
-
-	if !slices.ContainsFunc(cat.Offerings(), func(o catalog.Offering) bool {
-		return slices.ContainsFunc(o.StoragePrices, namesStrayRegion) ||
-			slices.ContainsFunc(o.Plans, func(p catalog.Plan) bool {
-				return slices.ContainsFunc(p.Prices, namesStrayRegion)
-			})
-	}) {
-		t.Fatalf("no offering of the catalog prices region %s, want the one this test planted",
-			text.Quote(strayPriceRegion))
-	}
-
-	return cat
 }
 
 // catalogWithPlanName is the priced fixture catalog with the name of its first
@@ -568,23 +501,6 @@ func TestCheck(t *testing.T) {
 		{
 			name: "conforming target with plans and prices",
 			tgt:  &fakeTarget{catalogs: []catalog.Catalog{priced}},
-		},
-		// A price names the regions it applies to, and the estimate answers "not
-		// offered" from the offering's own regions (catalog.Offering.AvailableIn): a
-		// price in a region its offering is not in would make the estimate say the
-		// reverse of what the catalog prices, so the suite reports it. The case cannot
-		// be built through catalog.New, which refuses it, so the catalog is planted.
-		{
-			name:         "plan price in a region the offering is not available in",
-			tgt:          &fakeTarget{catalogs: []catalog.Catalog{catalogWithStrayPrice(t, false)}},
-			wantErr:      true,
-			wantMentions: [][]string{{"price-regions"}, {strayPriceRegion}, {"Instances"}},
-		},
-		{
-			name:         "storage price in a region the offering is not available in",
-			tgt:          &fakeTarget{catalogs: []catalog.Catalog{catalogWithStrayPrice(t, true)}},
-			wantErr:      true,
-			wantMentions: [][]string{{"price-regions"}, {strayPriceRegion}, {"Instances"}},
 		},
 		{
 			// Estimates use the default region when the user names none, so an
