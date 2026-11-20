@@ -945,6 +945,37 @@ show_pid() {
   fi
 }
 
+# clear_stale_asides removes what take_lock's put-back left behind (issue #335): a contender that moved a
+# lock aside to .agents-token-refresh-<instance>.lock.stale.<its pid> and could not put it back keeps that
+# directory and stops, and the refresher whose lock it was stops too, so the aside outlives both. It is
+# stale once neither the mover (the pid in its name) nor the owner it records runs a refresh, each checked
+# with is_refresh, as the lock's own pid is: a mover that runs a refresh may still put it back, and an owner
+# that runs one is a live refresher whose lock it is. A stale one is first renamed to this shell's own
+# .reap.<pid> name, which only one of two starts that found it can do, and only then removed, so the removal
+# is idempotent. Only a path built from the fixed prefix and a pid of digits is ever renamed or removed: the
+# glob only finds candidates, and a name whose suffix is no number is skipped. The live lock is never
+# touched here; take_lock goes on as before. Accepted residue: a dead mover's pid reused by a new refresh in
+# the instant between the check and the rename; that refresh's own take_lock clears its aside path first.
+clear_stale_asides() {
+  prefix="${state}/.agents-token-refresh-${instance}.lock.stale."
+  reap="${state}/.agents-token-refresh-${instance}.lock.reap.$$"
+  rm -rf "${reap}"
+  for found in "${prefix}"*; do
+    mover="${found#"${prefix}"}"
+    is_number "${mover}" || continue
+    [ "${mover}" != "$$" ] || continue
+    stale="${prefix}${mover}"
+    [ -d "${stale}" ] && [ ! -L "${stale}" ] || continue
+    recorded="$(cat "${stale}/pid" 2>/dev/null || true)"
+    if is_refresh "${mover}" || is_refresh "${recorded}"; then
+      continue
+    fi
+    mv "${stale}" "${reap}" 2>/dev/null || continue # another start took it first
+    rm -rf "${reap}"
+    say "removed the moved-aside lock ${stale##*/}: neither its mover (pid ${mover}) nor its owner (pid $(show_pid "${recorded}")) runs a refresh"
+  done
+}
+
 # take_lock makes this the only refresher of the VM instance: the lock is a directory under the state
 # directory on the Mac holding the owner's pid. It is created whole: a temporary directory with this shell's
 # pid already inside is renamed to the lock, so no reader ever sees a lock without its pid. When the lock
@@ -966,6 +997,7 @@ take_lock() {
   new="${state}/.agents-token-refresh-${instance}.lock.new.$$"
   aside="${state}/.agents-token-refresh-${instance}.lock.stale.$$"
   (umask 077 && mkdir -p "${state}") || die "cannot create ${state} for the refresh's lock"
+  clear_stale_asides
   attempts=0
   while :; do
     rm -rf "${new}" "${aside}"
@@ -1013,8 +1045,10 @@ take_lock() {
           # No lock, and the put-back failed: the aside is another refresher's lock, so it is kept, never
           # removed (removing it cost the only refresher its lock, issue #319), and this one stops. The next
           # loop round would remove ${aside}, so it must not go on. Its owner's still_locked finds no lock within
-          # seconds and exits, so the aside is then a stale entry that nothing removes: the message says so.
-          die "cannot put the lock moved aside to ${aside} back to ${lock}; it is kept so no lock is lost while none exists at ${lock}, and this refresh stops. Once no refresh runs, remove it (rm -r ${aside}) and start a refresh again from the host clone on the Mac with make agents-token-refresh-start"
+          # seconds and exits, so both stop; the next refresh start finds the aside with neither pid running a
+          # refresh and removes it (clear_stale_asides, issue #335). This one does not create the lock itself
+          # before it stops: that would open a second window in which two refreshers hold or race for it.
+          die "cannot put the lock moved aside to ${aside} back to ${lock}; it is kept so no lock is lost while none exists at ${lock}, and this refresh stops. The refresh whose lock it is stops too; the next refresh start removes the moved-aside lock once neither pid runs a refresh and refreshes again (as the account's LaunchDaemon within 5 minutes; otherwise start one from the host clone on the Mac with make agents-token-refresh-start)"
         else
           # Neither is left: nothing of the other refresher's lock remains to keep, so this one tries again.
           say "the lock ${lock} and the one moved aside to ${aside} are both gone: the moved-aside lock could not be put back; this refresh tries to take the lock again"
