@@ -513,14 +513,15 @@ func TestReportCostTotalItem(t *testing.T) {
 	}
 }
 
-// TestReportListsKeepTheirListRole pins that the two lists the stylesheet strips
-// of markers announce their role (PR #379 review, issue #373): the `<ul>` a
-// Blockers heading leads and the one a Cost estimate heading leads, at h3 and h4
-// level alike, carry the constant attribute `role="list"`, and no other element
-// of the fragment carries a role. Safari and VoiceOver drop the list role and the
-// item count of a list whose markers are gone, so the report says it is a list
-// rather than relying on the marker; the report's other lists keep their markers
-// and need no attribute.
+// TestReportListsKeepTheirListRole pins that the three lists the stylesheet
+// strips of markers announce their role (PR #379 review, issue #373): the `<ul>`
+// a Blockers heading leads, the one a Cost estimate heading leads, at h3 and h4
+// level alike, and the title list the fragment's own `<h2>` leads -- the
+// metadata list of inventory file, source and catalogs -- carry the constant
+// attribute `role="list"`, and no other element of the fragment carries a role.
+// Safari and VoiceOver drop the list role and the item count of a list whose
+// markers are gone, so the report says it is a list rather than relying on the
+// marker; the report's other lists keep their markers and need no attribute.
 func TestReportListsKeepTheirListRole(t *testing.T) {
 	t.Parallel()
 
@@ -542,11 +543,23 @@ func TestReportListsKeepTheirListRole(t *testing.T) {
 				}
 			}
 
+			titles := titleLists(t, fragment)
+			if len(titles) == 0 {
+				t.Fatalf("the fragment holds no <ul> directly after its <h2>, so the check read nothing: every fragment begins with the title list")
+			}
+
+			for _, title := range titles {
+				if role, ok := roleOf(title); !ok || role != "list" {
+					t.Errorf("the title list the <h2> leads carries %s, want %s: the stylesheet strips its markers with `#report .shift2eu-report > h2 + ul { list-style: none }`, and Safari and VoiceOver drop the list role and its item count once the markers are gone (PR #379 review, issue #373, Accessibility)",
+						orNone(title), `role="list"`)
+				}
+			}
+
 			carriers := roleCarriers(fragment)
 
-			if len(carriers) != len(lists) {
-				t.Fatalf("the fragment holds %d elements stating a role (%s), want exactly %d: the <ul> under each Blockers and Cost estimate heading is the only element that states one",
-					len(carriers), describeRoles(carriers), len(lists))
+			if count := len(lists) + len(titles); len(carriers) != count {
+				t.Fatalf("the fragment holds %d elements stating a role (%s), want exactly %d: the <ul> under each Blockers and Cost estimate heading and the title list under the <h2> are the only elements that state one",
+					len(carriers), describeRoles(carriers), count)
 			}
 
 			for _, carrier := range carriers {
@@ -640,6 +653,9 @@ var (
 	// headedListPattern matches the list a Blockers or a Cost estimate heading
 	// leads: the heading and the `<ul>` start tag directly after it.
 	headedListPattern = regexp.MustCompile(`(?s)<h([345])>(Blockers|Cost estimate)</h[345]>\s*<ul([^>]*)>`)
+	// titleListPattern matches the title list: the `<ul>` start tag directly
+	// after the fragment's own <h2>, the report's metadata list.
+	titleListPattern = regexp.MustCompile(`(?s)<h2>.*?</h2>\s*<ul([^>]*)>`)
 )
 
 // fragmentTable is one <table> of a fragment: the cells of its header row and its
@@ -920,6 +936,23 @@ func headedLists(t *testing.T, fragment string) []headedList {
 
 	for _, match := range matches {
 		lists = append(lists, headedList{heading: match[2], attrs: strings.TrimSpace(match[3])})
+	}
+
+	return lists
+}
+
+// titleLists returns the start tag's attributes of each list the fragment's own
+// <h2> leads, in document order: the title list, whose markers the stylesheet
+// strips with `#report .shift2eu-report > h2 + ul { list-style: none }`.
+func titleLists(t *testing.T, fragment string) []string {
+	t.Helper()
+
+	matches := titleListPattern.FindAllStringSubmatch(fragment, -1)
+
+	lists := make([]string, 0, len(matches))
+
+	for _, match := range matches {
+		lists = append(lists, strings.TrimSpace(match[1]))
 	}
 
 	return lists
