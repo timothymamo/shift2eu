@@ -258,12 +258,12 @@ reference data, and every schema version bump would be refused the same way. The
   before the last does not start upper case, and the last is spelt as an exported identifier, an
   upper-case letter with a lower-case one right after it (`slog.Info`, `r.cfg.App`). What follows the
   name plays no part, so `db01.corp.info(primary)`, `Shop.Acme.Com` and `db01.corp.Info` are host
-  names. A host in lower case with only its top-level domain in title case (`db.corp.Info`,
-  `mail.contoso.Com`) is an accepted false negative: spelt like a selector, it cannot be told from
-  `cfg.Info`, and the spelling is rare, as hosts are written all lower or all upper case (both found).
-  A false positive, or a false negative that hides real data, is fixed in the scan's rules, never
-  with an allow list of paths. The left-out paths themselves are shown as they are, escaped and cut,
-  and are not scanned: the pull request's own file list already shows them. The note lists
+  names. A host in lower case with only its top-level domain in title case (`contoso.Com`,
+  `db.corp.Info`, `mail.contoso.Com`) is an accepted false negative: spelt like a selector, it cannot
+  be told from `cfg.Info`, and the spelling is rare, as hosts are written all lower or all upper case
+  (both found). A false positive, or a false negative that hides real data, is fixed in the scan's
+  rules, never with an allow list of paths. The left-out paths themselves are shown as they are,
+  escaped and cut, and are not scanned: the pull request's own file list already shows them. The note lists
   the scan's first 20 findings (`MaxScanFindings`) as the file and line in a code span and the kind
   found, never the value, and counts the rest. The scan is no part of the prompt, adds no finding to
   the model's and changes no event. Like the first line and the closing statement, the note is outside

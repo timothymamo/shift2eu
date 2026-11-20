@@ -250,9 +250,9 @@ func scanSection(section, path string) (int, []ScanFinding) {
 //     letter with a lower-case one right after it (slog.Info, r.cfg.App); what
 //     follows the name plays no part, so db01.corp.info(primary),
 //     Shop.Acme.Com, db01.corp.Info and DB01.CORP.INFO are host names, and a
-//     lower-case host with a title-case top-level domain (db.corp.Info) is an
-//     accepted miss: it cannot be told from cfg.Info, and hosts are rarely
-//     spelt so;
+//     lower-case host with a title-case top-level domain (db.corp.Info,
+//     contoso.Com) is an accepted miss: it cannot be told from cfg.Info, and
+//     hosts are rarely spelt so;
 //   - a key is a run of letters and digits that is an access key ID (twenty
 //     upper-case letters and digits starting AKIA or ASIA) or is at least 32
 //     long with an upper-case letter, a lower-case letter and a digit (a
@@ -509,11 +509,11 @@ func hasHostname(line string) bool {
 // accepts. Shop.Acme.Com, db01.corp.Info and DB01.CORP.INFO are host names.
 //
 // A host in lower case with only its top-level domain in title case, such as
-// db.corp.Info or mail.contoso.Com, is a false negative the scan accepts:
-// spelt like a selector, it cannot be told from cfg.Info, and the spelling is
-// rare, as hosts are written all lower case or all upper case (both found).
-// If it ever hides real data, the fix goes in the scan's rules, never in an
-// allow list of paths.
+// contoso.Com, db.corp.Info or mail.contoso.Com, is a false negative the scan
+// accepts: spelt like a selector, it cannot be told from cfg.Info, and the
+// spelling is rare, as hosts are written all lower case or all upper case
+// (both found). If it ever hides real data, the fix goes in the scan's rules,
+// never in an allow list of paths.
 func isCodeName(labels []string) bool {
 	if len(labels) < 2 {
 		return false
