@@ -179,6 +179,19 @@ func (f *vmBootInstallFixture) runWithTheDirectoryInTheEnvironment(t *testing.T,
 	return runMakeIn(t, f.dir, []string{target}, env)
 }
 
+// runWithLimaDirectory runs one target with LIMA_LAUNCHDAEMONS_DIR on make's command line set to dir, the one
+// place that test hook is read from: a value the check of the hook must refuse before anything is installed
+// (issues #315, #398).
+func (f *vmBootInstallFixture) runWithLimaDirectory(t *testing.T, dir, target string) (string, string, error) {
+	t.Helper()
+
+	return runMakeIn(t, f.dir, []string{
+		vmBootLaunchdDir + "=" + f.launchdDir,
+		limaLaunchDaemonsDirVar + "=" + dir,
+		target,
+	}, f.env)
+}
+
 // runWithTheLimaDirectoryInTheEnvironment runs one target with LIMA_LAUNCHDAEMONS_DIR exported in the environment
 // and not on make's command line, the way a stale export in a maintainer's shell would reach it: the hook is
 // read from make's command line or the Makefile alone (issues #315, #398).
@@ -240,8 +253,9 @@ func (f *vmBootInstallFixture) installCalls(t *testing.T) [][]string {
 // domain (io.lima-vm.daemon.<instance>), for a job launchd has loaded and for one whose plist is only installed -
 // launchd loads that file at the next login or boot, so the VM is started twice from then on although nothing runs
 // at this moment. It names the job, the command that removes it the supported way
-// (`limactl autostart disable <instance>`) and the removal by hand: the bootout of a loaded job, and the `rm -f`
-// of the plist, with sudo in the system domain, where root owns it.
+// (`limactl autostart disable <instance>`) and the removal by hand, as a maintainer pastes it: the bootout of a
+// loaded job, and `rm -f <plist>` - with sudo in the system domain, where root owns the plist, and never in the
+// user's, where the plist is the maintainer's own.
 func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 	t.Parallel()
 
@@ -331,26 +345,39 @@ func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 
 			wants := []string{label, "limactl autostart disable " + f.instance}
 
-			// The removal by hand: a loaded job is booted out of its domain and its plist removed, and a plist
-			// launchd has not loaded yet only removed - with sudo in the system domain, where root owns it.
-			rm := "rm -f " + plist
+			// The removal by hand, whole and as a maintainer pastes it: a loaded job is booted out of its domain
+			// and its plist removed, and a plist launchd has not loaded yet only removed - with sudo in the system
+			// domain, where root owns the file, and never in the user's, where the plist is the maintainer's own.
+			removal := "rm -f " + plist
 			if tc.domain == systemDomain {
-				rm = "sudo " + rm
+				removal = "sudo " + removal
 			}
 
-			switch {
-			case tc.loaded && tc.domain == systemDomain:
-				wants = append(wants, "sudo launchctl bootout system/"+label, "rm -f")
-			case tc.loaded:
-				wants = append(wants, "launchctl bootout gui/"+strconv.Itoa(os.Getuid())+"/"+label, "rm -f")
-			default:
-				wants = append(wants, plist, rm)
+			if tc.loaded {
+				if tc.domain == systemDomain {
+					wants = append(wants, "sudo launchctl bootout system/"+label)
+				} else {
+					wants = append(wants, "launchctl bootout gui/"+strconv.Itoa(os.Getuid())+"/"+label)
+				}
+			} else {
+				wants = append(wants, plist)
 			}
+
+			wants = append(wants, removal)
 
 			for _, want := range wants {
 				if !strings.Contains(combined, want) {
 					t.Errorf("make vm-boot-install does not say %q although Lima's autostart job %s is %s and starts this instance: the refusal must name the job, its plist and how to remove it, or a maintainer cannot install the boot job at all (issues #315, #398)\nstdout: %s\nstderr: %s",
 						want, label, state, stdout, stderr)
+				}
+			}
+
+			// The user's plist belongs to the maintainer, so no advice may put sudo in front of removing it: the
+			// system domain's plist is root's (issue #398).
+			if tc.domain == userDomain {
+				if sudoRemoval := "sudo " + removal; strings.Contains(combined, sudoRemoval) {
+					t.Errorf("make vm-boot-install suggests `%s` for Lima's autostart job %s although its plist is the maintainer's own: only the system domain's plist is root's, and sudo would run a maintainer's removal as root (issue #398)\nstdout: %s\nstderr: %s",
+						sudoRemoval, label, stdout, stderr)
 				}
 			}
 
@@ -420,6 +447,117 @@ func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 					t.Errorf("make vm-boot-install removed Lima's own plist %s although it only refuses to install beside it: removing Lima's job is the maintainer's decision, with limactl autostart disable or by hand (issues #315, #398): %v",
 						plist, statErr)
 				}
+			}
+		})
+	}
+}
+
+// TestMakeVMBootInstallDoesNotRepeatAnUnsafeLimaPlistPath pins the security audit's L1 finding on #398. The
+// removal by hand prints `rm -f <plist>` for Lima's user-domain job, whose plist lives under $HOME: a maintainer's
+// home may hold a space (/Users/John Doe) or a shell metacharacter, and pasted as it stands, the plist's path
+// splits the command into another one, expands a variable or names another file.
+//
+// The repository's rule for paths in pasteable advice is the one dev/agents-token-launchd.sh follows for a foreign
+// job's plist and TestAgentsTokenLaunchdForeignJobsDoesNotRepeatAnUnsafePlistPath pins (auditor nit, issue #396):
+// only an absolute path of / and [A-Za-z0-9._-], without a .. segment, is repeated. An unsafe path is never
+// printed - not after `rm -f` and not anywhere else, so no ready-made command can name it - and the refusal says
+// where its path can be seen instead. Naming the job, its domain and `limactl autostart disable <instance>` stays.
+func TestMakeVMBootInstallDoesNotRepeatAnUnsafeLimaPlistPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// home is the last component of the fixture's HOME: the sandbox's own directory, so the case adds the
+		// character no path in this test is expected to hold and nothing else about the run changes.
+		home string
+	}{
+		{
+			// A space splits `rm -f /Users/John Doe/...` into two commands: rm removes /Users/John, and Doe is
+			// run as a command of its own.
+			name: "a HOME with a space",
+			home: "host home",
+		},
+		{
+			// A ; ends the command: what follows it runs as another one.
+			name: "a HOME with a semicolon",
+			home: "host;home",
+		},
+		{
+			// A $ expands when the advice is pasted, so the command names another file than the plist.
+			name: "a HOME with a dollar sign",
+			home: "host$home",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMBootInstallFixture(t, hostTargetInstance)
+			f.env["HOME"] = filepath.Join(f.sb.root, tc.home)
+
+			label := vmBootLimaAutostartLabelPrefix + f.instance
+			plist := f.limaPlistPath(userDomain, label)
+
+			// Lima's job's plist as `limactl autostart enable` writes it, into the home the case chose.
+			writeFileMode(t, plist, []byte("Lima's own autostart job of "+f.instance+"\n"), 0o600)
+
+			stdout, stderr, err := f.run(t, "vm-boot-install")
+			if err == nil {
+				t.Fatalf("make vm-boot-install exited 0 although Lima's autostart job %s is installed at a plist under the home %q and starts %s: the refusal is what tells a maintainer to remove it (issue #398)\nstdout: %s\nstderr: %s",
+					label, f.env["HOME"], f.instance, stdout, stderr)
+			}
+
+			combined := stdout + stderr
+
+			// The plist's path is no path the repository repeats in advice: it is not absolute with only
+			// /[A-Za-z0-9._-], so no command it prints may name it (security audit L1, auditor nit #396).
+			if strings.Contains(combined, "rm -f "+plist) {
+				t.Errorf("the refusal prints the ready-made command `rm -f %s` although that path is no absolute path of / and [A-Za-z0-9._-]: pasted by a maintainer, it removes another file or runs another command (security audit L1, auditor nit #396)\nstdout: %s\nstderr: %s",
+					plist, stdout, stderr)
+			}
+
+			if strings.Contains(combined, plist) {
+				t.Errorf("the refusal prints the plist's path %q although it is no absolute path of / and [A-Za-z0-9._-] without a .. segment: the repository's rule (dev/agents-token-launchd.sh, foreign_jobs; auditor nit #396) repeats no such path to the terminal or into a command, and says where to see it instead (security audit L1)\nstdout: %s\nstderr: %s",
+					plist, stdout, stderr)
+			}
+
+			// Holding the path back must not hold back the refusal: it still names the job and how to remove it
+			// the supported way, still reports the job as installed, and still offers the removal by hand -
+			// as a pointer to the plist, never as a command that names it.
+			for _, want := range []string{
+				label,
+				"is installed",
+				"limactl autostart disable " + f.instance,
+				"not shown",
+				"remove its plist",
+			} {
+				if !strings.Contains(combined, want) {
+					t.Errorf("the refusal does not say %q although it holds the plist's path back: a maintainer still has to find the job, see that it starts the VM at every boot and remove it (security audit L1)\nstdout: %s\nstderr: %s",
+						want, stdout, stderr)
+				}
+			}
+
+			// Refusing means installing nothing: no plist of the boot job, and no command as root.
+			if calls := f.sudoCommands(t); len(calls) != 0 {
+				t.Errorf("make vm-boot-install ran sudo although it refuses to install beside %s: the check of Lima's job comes before anything is installed (issue #398): %v\nstdout: %s\nstderr: %s",
+					label, calls, stdout, stderr)
+			}
+
+			entries, readErr := os.ReadDir(f.launchdDir)
+			if readErr != nil {
+				t.Fatalf("read %s: %v", f.launchdDir, readErr)
+			}
+
+			if len(entries) != 0 {
+				t.Errorf("make vm-boot-install left %d file(s) in %s although it refuses to install beside %s: a refused run still leaves a job launchd loads at the next boot (issue #398): %v",
+					len(entries), f.launchdDir, label, entries)
+			}
+
+			// Lima's own plist stays where it is: removing Lima's job is the maintainer's decision.
+			if _, statErr := os.Stat(plist); statErr != nil {
+				t.Errorf("make vm-boot-install removed Lima's own plist %s although it only refuses to install beside it (issues #315, #398): %v",
+					plist, statErr)
 			}
 		})
 	}
@@ -758,6 +896,89 @@ func TestMakeVMBootIgnoresLIMAsLaunchDaemonsDirFromTheEnvironment(t *testing.T) 
 	if err != nil && !strings.Contains(combined, limaLabel) {
 		t.Fatalf("make vm-boot-install failed before it looked at Lima's job %s: %v\nstdout: %s\nstderr: %s",
 			limaLabel, err, stdout, stderr)
+	}
+}
+
+// TestMakeVMBootInstallRefusesAnUnsafeLIMAsLaunchDaemonsDir pins the check of the test hook the autostart check
+// reads (issues #315, #398, audit S1). LIMA_LAUNCHDAEMONS_DIR is the directory Lima's own LaunchDaemon plist sits
+// in, and it comes from make's command line or the Makefile alone. A value that is no absolute path, or that holds
+// a character or a .. component no LaunchDaemons path has, is refused before anything is installed or loaded: the
+// check would look in a directory launchd never reads, so Lima's job - which starts the VM at every boot - would
+// go unreported and the boot job would be installed beside it.
+func TestMakeVMBootInstallRefusesAnUnsafeLIMAsLaunchDaemonsDir(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		dir  string // the value on make's command line
+		// want is the part of the refusal that says which form the value was refused for.
+		want string
+	}{
+		{
+			// A relative path names a directory of whatever directory make runs in, which is not where
+			// launchd reads Lima's job from.
+			name: "a relative path",
+			dir:  "LimaLaunchDaemons",
+			want: "must be an absolute path",
+		},
+		{
+			// An absolute path that walks out of itself names no directory launchd reads either.
+			name: "a path with a .. component",
+			dir:  "/a/../b",
+			want: "no .. component",
+		},
+		{
+			// A ; would end the path if any recipe ever expanded it unquoted, and no LaunchDaemons path holds
+			// one: this one is refused for the character itself.
+			name: "a path with a shell metacharacter",
+			dir:  "/a;b",
+			want: "may hold only letters, digits, /, ., _ and -",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMBootInstallFixture(t, hostTargetInstance)
+
+			stdout, stderr, err := f.runWithLimaDirectory(t, tc.dir, "vm-boot-install")
+			if err == nil {
+				t.Fatalf("make vm-boot-install exited 0 with LIMA_LAUNCHDAEMONS_DIR=%q on its command line: a directory launchd never reads hides Lima's own autostart job, so the boot job would be installed beside the job that already starts the VM (issues #315, #398)\nstdout: %s\nstderr: %s",
+					tc.dir, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, limaLaunchDaemonsDirVar) {
+				t.Errorf("the refusal does not name %s with the value %q, so a maintainer cannot tell which variable to fix:\nstdout: %s\nstderr: %s",
+					limaLaunchDaemonsDirVar, tc.dir, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, tc.want) {
+				t.Errorf("the refusal does not say %q for LIMA_LAUNCHDAEMONS_DIR=%q, so a maintainer cannot tell what is wrong with the value (issues #315, #398)\nstdout: %s\nstderr: %s",
+					tc.want, tc.dir, stdout, stderr)
+			}
+
+			// Refusing means installing nothing and running nothing as root: the check comes first.
+			if calls := f.sudoCommands(t); len(calls) != 0 {
+				t.Errorf("make vm-boot-install ran sudo with LIMA_LAUNCHDAEMONS_DIR=%q although that check comes before anything is installed (issues #315, #398): %v\nstdout: %s\nstderr: %s",
+					tc.dir, calls, stdout, stderr)
+			}
+
+			if calls := f.bootstrapCalls(t); len(calls) != 0 {
+				t.Errorf("make vm-boot-install ran `sudo launchctl bootstrap` with LIMA_LAUNCHDAEMONS_DIR=%q (issues #315, #398): %v\nstdout: %s\nstderr: %s",
+					tc.dir, calls, stdout, stderr)
+			}
+
+			entries, readErr := os.ReadDir(f.launchdDir)
+			if readErr != nil {
+				t.Fatalf("read %s: %v", f.launchdDir, readErr)
+			}
+
+			if len(entries) != 0 {
+				t.Errorf("make vm-boot-install left %d file(s) in %s with LIMA_LAUNCHDAEMONS_DIR=%q, so a refused run still leaves a job launchd loads at the next boot (issue #398): %v",
+					len(entries), f.launchdDir, tc.dir, entries)
+			}
+		})
 	}
 }
 
