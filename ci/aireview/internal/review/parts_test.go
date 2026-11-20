@@ -715,21 +715,38 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 	const (
 		firstPath  = "internal/x/one.go"
 		secondPath = "internal/x/two.go"
+		thirdPath  = "internal/x/three.go"
 	)
 
 	pr := splitPR()
-	files := []review.ChangedFile{
+
+	twoParts := []review.ChangedFile{
 		{Path: firstPath, Status: "modified", Additions: 1},
 		{Path: secondPath, Status: "modified", Additions: 1},
 	}
 
-	diff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, secondPath, 150_001)
+	twoPartDiff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, secondPath, 150_001)
+
+	threeParts := []review.ChangedFile{
+		{Path: firstPath, Status: "modified", Additions: 1},
+		{Path: secondPath, Status: "modified", Additions: 1},
+		{Path: thirdPath, Status: "modified", Additions: 1},
+	}
+
+	// 200,000 bytes a section: no two sections fit in one part of
+	// MaxDiffBytes, and three parts are within MaxDiffParts, so the review asks
+	// one model call per part.
+	threePartDiff := diffSectionOfSize(t, firstPath, 200_000) +
+		diffSectionOfSize(t, secondPath, 200_000) +
+		diffSectionOfSize(t, thirdPath, 200_000)
 
 	// The model error a real failure is: what askOnce wraps with ErrModel.
 	realFailure := fmt.Errorf("ask the model to review pull request 7: %w", review.ErrModel)
 
 	cases := []struct {
-		name string
+		name  string
+		diff  string
+		files []review.ChangedFile
 		// answers are the answers each file's call gives.
 		answers map[string][]string
 		// errs are the files whose call fails.
@@ -739,18 +756,52 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 		// wantSkip is the cause the run skips with, when it skips.
 		wantSkip *review.SkipReason
 		// wantBody are the phrases the skipped review's body must also hold,
-		// beyond the words of the skip itself: a part the run did review says
-		// so, and that its findings are not shown (issue #367).
+		// beyond the words of the skip itself: how many other parts the run did
+		// review, that their findings are not shown, and the cue to review
+		// those parts by hand (issue #367).
 		wantBody []string
+		// wantParagraph is a text the skipped review's body must hold as it is
+		// written here: the count of the parts the review leaves out starts a
+		// paragraph of its own, a cue to act rather than a tail of the skip's
+		// sentence (issue #367).
+		wantParagraph string
+		// wantAbsent are phrases the skipped review's body must not hold.
+		wantAbsent []string
 	}{
 		{
-			name:     "a part unusable twice skips the whole review",
-			answers:  map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusableAnswer}},
-			wantSkip: skipReason(review.SkipNoUsableAnswer),
-			wantBody: []string{"findings are not shown", "1 other part"},
+			name:          "a part unusable twice skips the whole review",
+			diff:          twoPartDiff,
+			files:         twoParts,
+			answers:       map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusableAnswer}},
+			wantSkip:      skipReason(review.SkipNoUsableAnswer),
+			wantBody:      []string{"findings are not shown", "1 other part of the diff was reviewed with a usable answer", "so review that part by hand"},
+			wantParagraph: "\n\n1 other part of the diff was reviewed",
+			wantAbsent:    []string{"would read as a full review", "2 other parts"},
+		},
+		{
+			name:          "one unusable part of three leaves two parts' findings out",
+			diff:          threePartDiff,
+			files:         threeParts,
+			answers:       map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusableAnswer}, thirdPath: {cleanAnswer}},
+			wantSkip:      skipReason(review.SkipNoUsableAnswer),
+			wantBody:      []string{"findings are not shown", "2 other parts of the diff were reviewed with a usable answer", "so review those parts by hand"},
+			wantParagraph: "\n\n2 other parts of the diff were reviewed",
+			wantAbsent:    []string{"would read as a full review", "1 other part"},
+		},
+		{
+			name:          "two unusable parts of three leave one part's findings out",
+			diff:          threePartDiff,
+			files:         threeParts,
+			answers:       map[string][]string{firstPath: {unusableAnswer}, secondPath: {unusableAnswer}, thirdPath: {cleanAnswer}},
+			wantSkip:      skipReason(review.SkipNoUsableAnswer),
+			wantBody:      []string{"findings are not shown", "1 other part of the diff was reviewed with a usable answer", "so review that part by hand"},
+			wantParagraph: "\n\n1 other part of the diff was reviewed",
+			wantAbsent:    []string{"would read as a full review", "2 other parts"},
 		},
 		{
 			name:    "a part's model error fails the run",
+			diff:    twoPartDiff,
+			files:   twoParts,
 			answers: map[string][]string{firstPath: {cleanAnswer}, secondPath: {cleanAnswer}},
 			errs:    map[string]error{secondPath: realFailure},
 			wantErr: review.ErrModel,
@@ -759,6 +810,8 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 			// A real failure beats a skip: the run that failed posts nothing,
 			// so no skip of a part that could not be read hides it.
 			name:    "a part's model error fails the run even when another part is unusable twice",
+			diff:    twoPartDiff,
+			files:   twoParts,
 			answers: map[string][]string{secondPath: {unusableAnswer}},
 			errs:    map[string]error{firstPath: realFailure},
 			wantErr: review.ErrModel,
@@ -769,9 +822,15 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			gh := &fakeGitHub{pr: pr, diff: diff, files: files}
+			gh := &fakeGitHub{pr: pr, diff: tc.diff, files: tc.files}
 
-			model := newPartModel(firstPath, secondPath)
+			paths := make([]string, 0, len(tc.files))
+
+			for _, file := range tc.files {
+				paths = append(paths, file.Path)
+			}
+
+			model := newPartModel(paths...)
 			model.answers = tc.answers
 			model.errs = tc.errs
 
@@ -813,6 +872,15 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 				t.Error("Result.Skip.Message is empty: the skip says why the review was skipped")
 			}
 
+			// The message feeds the job's log and its ::warning annotation: what
+			// the review leaves out is said in the review's body alone (issue
+			// #367).
+			for _, unwanted := range []string{"findings are not shown", "other part"} {
+				if strings.Contains(strings.ToLower(result.Skip.Message), unwanted) {
+					t.Errorf("Result.Skip.Message = %q, which says %q, want neither: the message reaches the log and the ::warning annotation, so the cue to review the parts by hand stays in the review's body (issue #367)", result.Skip.Message, unwanted)
+				}
+			}
+
 			if len(gh.posts) != 1 {
 				t.Fatalf("the run posted %d reviews, want 1: a skipped review says so on the pull request (issue #367)", len(gh.posts))
 			}
@@ -835,13 +903,25 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 				}
 			}
 
-			// The review that left a part's finding out says how many parts it
-			// did review, in the package's own words: a review that left part of
-			// the change out without saying so would read as a full review
+			// The review that left a part's finding out says how many other parts
+			// it did review, that their findings are not shown, and that the
+			// maintainer reviews those parts by hand, in the package's own words
 			// (issue #367).
 			for _, want := range tc.wantBody {
 				if !strings.Contains(text, strings.ToLower(want)) {
 					t.Errorf("the skipped review does not say %q about the parts it did review; body:\n%s", want, post.review.Body)
+				}
+			}
+
+			// That sentence is a cue to act, not a tail of the skip's: it starts
+			// a paragraph of its own (issue #367).
+			if tc.wantParagraph != "" && !strings.Contains(post.review.Body, tc.wantParagraph) {
+				t.Errorf("the skipped review does not start a paragraph with %q: the count of the parts the review leaves out is a cue to review them by hand, in a paragraph of its own (issue #367); body:\n%s", tc.wantParagraph, post.review.Body)
+			}
+
+			for _, unwanted := range tc.wantAbsent {
+				if strings.Contains(text, strings.ToLower(unwanted)) {
+					t.Errorf("the skipped review still says %q, want the wording that cues the maintainer to review those parts by hand (issue #367); body:\n%s", unwanted, post.review.Body)
 				}
 			}
 
