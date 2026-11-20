@@ -68,9 +68,12 @@ const armIDProvidersSegment = "providers/microsoft.storage/"
 
 // armIDAccount reports whether the storageAccounts segment at text[start:]
 // sits in an ARM ID: whether the providers segment and the Microsoft.Storage
-// namespace (armIDProvidersSegment) come right before it, in any case.
+// namespace (armIDProvidersSegment) come right before it, in any case. Only
+// the bytes just before start are compared, so a long text holding many
+// storageAccounts segments is not copied once per match.
 func armIDAccount(text string, start int) bool {
-	return strings.HasSuffix(strings.ToLower(text[:start]), armIDProvidersSegment)
+	n := len(armIDProvidersSegment)
+	return start >= n && strings.EqualFold(text[start-n:start], armIDProvidersSegment)
 }
 
 // s3ResourceARNPattern finds the access point or the bucket an S3 ARN names

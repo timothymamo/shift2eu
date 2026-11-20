@@ -22,10 +22,9 @@
 // provider resource path carries (a GCP project ID in projects/acme-prod, a
 // bucket in projects/_/buckets/acme-bucket, an Azure storage account in an ARM
 // ID's storageAccounts/acmeprod, an S3 access point (Object Lambda included),
-// S3 Express or Outposts bucket in an ARN) that are not documentation values. Only directories named exactly
-// testdata are checked
-// besides examples/ and docs/guide/, so a new fixture directory must be named
-// testdata. The walk reads the tree on disk, so an untracked or git-ignored file
+// S3 Express or Outposts bucket in an ARN) that are not documentation values.
+// Only directories named exactly testdata are checked besides examples/ and
+// docs/guide/, so a new fixture directory must be named testdata. The walk reads the tree on disk, so an untracked or git-ignored file
 // under a checked directory is checked too: a real inventory dropped there
 // locally fails before it is committed. A file is read whatever its encoding
 // (UTF-16 with a byte-order mark is decoded, an invalid byte cannot hide the
