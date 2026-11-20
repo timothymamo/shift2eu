@@ -84,8 +84,9 @@ make test-browser      # make site, then the headless-browser smoke test in a pi
 ```
 
 Every make target runs exactly go.mod's go line (`GOTOOLCHAIN`, issue #347, ADR 0035). When the local Go is
-another release, the go command fetches the pinned toolchain once (checksum-verified via `sum.golang.org`):
-the one network access make may make outside `make test-integration`. The VM installs the pinned Go, so
+another release, the go command fetches the pinned toolchain once (checksum-verified via `sum.golang.org`)
+before anything runs: the only network access the pin adds, and the tests themselves still never touch the
+network. The VM installs the pinned Go, so
 normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a mismatch then fails
 `TestGoModPinsTheBuildingToolchain` instead.
 
@@ -97,8 +98,9 @@ normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a mis
   `internal/adapter/target/targettest`. Every provider adapter runs them.
 - Renderers and CLI output use golden files under `testdata/`, updated with `-update`.
 - Integration tests use `//go:build integration`; e2e tests use `//go:build e2e` and live in `test/e2e`.
-- Default tests never touch the network, never need credentials, never depend on time or map order. (Only
-  the go command may, to fetch the pinned toolchain once; see Commands.)
+- Default tests never touch the network, never need credentials, never depend on time or map order. The
+  tests never do; only the go command that runs them may fetch the pinned toolchain, once, before any test
+  starts (see Commands).
 
 ## Rules
 
