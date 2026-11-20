@@ -480,8 +480,9 @@ linters:
         # which the rule excludes. No other production package, adapters
         # included, imports an adapter: one adapter never builds or calls
         # another, and internal/config, the CLI or the web adapter get
-        # adapters only through what their composition root passes in. An adapter's
-        # tests may import its contract suite (contract-suites-only-in-tests).
+        # adapters only through what their composition root passes in. An
+        # adapter's tests may import its contract suite
+        # (contract-suites-only-in-tests).
         # Helpers shared by adapters live in internal/adapter/internal/ (the
         # JSON decoder jsondoc, ADR 0009): they build no adapter, so adapters may
         # import them. Each helper under internal/adapter/internal/ is named by
@@ -747,8 +748,9 @@ linters:
         # module may import (syscall-js-only-in-the-web-root), and the
         # standard packages the glue needs. Unlike the other roots it names no
         # module prefix: it constructs no adapter itself, so it imports no
-        # adapter, no internal/cli and no cloud SDK. Its files build for js/wasm only, which make lint
-        # and CI's lint matrix lint as an explicit extra target (ADR 0012).
+        # adapter, no internal/cli and no cloud SDK. Its files build for
+        # js/wasm only, which make lint and CI's lint matrix lint as an
+        # explicit extra target (ADR 0012).
         #
         # The allow list already refuses every package below; these entries
         # only say why.
@@ -1467,9 +1469,9 @@ linters:
         # where the environment's variables and credential files point.
         #
         # Since issue #152 the rule also holds the _test.go files of the
-        # driving adapter internal/cli: a root hands
-        # it the work, and its tests run in the same process as the code
-        # under test. This import rule is half of the roots' limits; the call
+        # driving adapters, internal/cli and (PRD #297, below) internal/web:
+        # a root hands them the work, and their tests run in the same process
+        # as the code under test. This import rule is half of the roots' limits; the call
         # half is forbidigo's: composition-root-no-exec and composition-root-env
         # hold under cmd/ only, and cli-no-env-or-process holds every file of
         # internal/cli, its tests included. The CLI's tests import syscall for
@@ -2040,8 +2042,8 @@ linters:
         # Group composition-root-env: the composition root reads no named
         # variable either, and the group has no exception: the one it had,
         # the HTTP API's token (ADR 0019), went with the API (ADR 0037).
-        # Since issue #152 the group also refuses os.UserHomeDir, os.UserConfigDir,
-        # os.UserCacheDir and os.TempDir, which read $HOME, $XDG_CONFIG_HOME,
+        # Since issue #152 the group also refuses os.UserHomeDir,
+        # os.UserConfigDir, os.UserCacheDir and os.TempDir, which read $HOME, $XDG_CONFIG_HOME,
         # $XDG_CACHE_HOME and $TMPDIR without naming them, in an entry of
         # their own, so every package allowed os is held to the same nine
         # reads, and since issue #167 every package allowed syscall to the
@@ -2053,8 +2055,8 @@ linters:
         #
         # Scope of both: every file under cmd/shift2eu/, _test.go files
         # included. A test of a composition root is compiled into the same
-        # package and runs with the same environment. Elsewhere the depguard rules keep os/exec out
-        # by layer; these groups only add the call-level rule depguard cannot
+        # package and runs with the same environment. Elsewhere the depguard
+        # rules keep os/exec out by layer; these groups only add the call-level rule depguard cannot
         # state for the roots. A root cannot delegate a read to the driving
         # adapter it hands the work to either: internal/cli's strict allow
         # list leaves syscall, unsafe and os/exec out and the group

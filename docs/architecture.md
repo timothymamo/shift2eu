@@ -69,7 +69,7 @@ Arrows are imports. They point inwards only:
   imports today, `os` among them for the files the user names; the forbidigo group
   `cli-no-env-or-process` keeps it from reaching the environment through `os` (Composition-root
   process and environment rule below).
-- **Web adapter** (`internal/web`) is the second driving adapter, beside the CLI, the logic the site's page calls
+- **Web adapter** (`internal/web`) is the second driving adapter, beside the CLI: the logic the site's page calls
   ([ADR 0035](adr/0035-run-the-assessment-in-the-browser-as-a-webassembly-driving-adapter.md), PRD #297):
   it takes an inventory document and the options the user chose and returns the Markdown report and the
   JSON report the page offers as downloads, byte for byte what `shift2eu assess` writes, and the HTML

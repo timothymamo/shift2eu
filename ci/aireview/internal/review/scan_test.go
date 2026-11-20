@@ -60,12 +60,13 @@ func hasScanFinding(body string, f review.ScanFinding) bool {
 }
 
 // TestScanLeftOutFindsRealDataInTheFilesLeftOut pins the model-free scan of
-// issue #342: since the golden files of testdata directories are left out of the diff the model reads, a real account ID, IP
-// address, host name or key-like string committed in one of them would be
-// reviewed by nobody. The scan reads the added lines of the left-out sections
-// alone (a removed or a context line is not new data, and a reviewed file is the
-// model's to read) and reports the file, the line of its new side and what it
-// found, never the matched text: the review is public.
+// issue #342: since the golden files of testdata directories are left out of
+// the diff the model reads, a real account ID, IP address, host name or
+// key-like string committed in one of them would be reviewed by nobody. The
+// scan reads the added lines of the left-out sections alone (a removed or a
+// context line is not new data, and a reviewed file is the model's to read) and
+// reports the file, the line of its new side and what it found, never the
+// matched text: the review is public.
 //
 // A finding is a class, not a value, so the cases are the sanitised values
 // CLAUDE.md rule 2 requires, which are no finding, beside real-looking ones,

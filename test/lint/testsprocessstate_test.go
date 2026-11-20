@@ -151,8 +151,7 @@ var testsNoProcessStateAllowed = []rootName{
 // and os.CreateTemp("", ...); the root's and the driving adapter's _test.go files
 // (cmd/shift2eu, internal/cli) hold the two calls on a *testing.T, because the
 // limits the root's tests are held to are the ones its driving adapter's tests
-// are held to as well, and so are
-// internal/adapter/source/aws's and internal/domain/taxonomy's and test/e2e's,
+// are held to as well, and so are internal/adapter/source/aws's and internal/domain/taxonomy's and test/e2e's,
 // which the group reaches since the audit's finding S2: its scope is the module
 // except test/lint and test/architecture.
 //
