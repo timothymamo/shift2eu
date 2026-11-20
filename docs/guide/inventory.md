@@ -122,6 +122,12 @@ A field a category does not take is an error that names it. A resource without t
 is priced by shows "not estimated: size unknown", never €0. The programs fill in the sizes the
 read-only calls give (each source's *Sizes* table below) and leave out any they do not, never guessing.
 
+A high-availability database (an RDS Multi-AZ instance, a `REGIONAL` Cloud SQL instance, an Azure
+flexible server with `ZoneRedundant` or `SameZone` high availability) gets no `count`, and its estimate
+says "(count assumed 1)" until you set one. Before you count its standby as a second node, check whether
+the target's plan already includes the standby (for example a "Multi-node" plan): if it does, a `count`
+of 2 doubles the estimate.
+
 ### What you add by hand
 
 No read-only call says what a resource is for, so the programs never write these; add them to the
@@ -139,8 +145,10 @@ inventory yourself, with an editor or `jq`:
   night. Only compute (`compute.vm`, `compute.baremetal`), Kubernetes (`kubernetes.managed`) and
   database (`database.postgresql`, `database.mysql`) resources take it; on any other category the
   inventory is refused.
-- any size the calls do not give, such as an RDS or Cloud SQL instance's vCPU and memory (its
-  instance class or tier), or an Auto Scaling group's instance count.
+- any size the calls do not give, such as an RDS instance's vCPU and memory (its instance class), a
+  Cloud SQL instance's unless its tier is `db-custom-*`, the `count` of a high-availability database
+  (Multi-AZ, `REGIONAL`, `ZoneRedundant` or `SameZone`; see [Sizes](#sizes)), or an Auto Scaling
+  group's instance count.
 
 For example, with `jq`:
 
@@ -342,12 +350,12 @@ Review `inventories/aws.inventory.json`, then delete the raw output: `rm -r inve
 Not filled in: an RDS instance's vCPU and memory (from its `DBInstanceClass`, such as `db.m5.large`), the
 storage of an instance in a DB cluster (Aurora, or an RDS Multi-AZ DB cluster), whose storage belongs to
 the cluster (`AllocatedStorage` does not describe an instance with a `DBClusterIdentifier`), the count of
-a Multi-AZ instance, an EKS
-cluster's per-node vCPU and memory (from its node groups' `instanceTypes`), an Auto Scaling group's instance size and count, and an S3 bucket's stored GiB
-(the `BucketSizeBytes` metric in CloudWatch).
-Add them by hand where you want an estimate. A Multi-AZ instance has a standby, and how many nodes a
-standby counts as depends on how a target prices high availability: the program does not guess, so the
-estimate says "(count assumed 1)" until you set the `count`.
+a Multi-AZ instance, an EKS cluster's per-node vCPU and memory (from its node groups' `instanceTypes`),
+an Auto Scaling group's instance size and count, and an S3 bucket's stored GiB (the `BucketSizeBytes`
+metric in CloudWatch). Add them by hand where you want an estimate. A Multi-AZ instance has a standby,
+and how many nodes a standby counts as depends on how a target prices high availability: the program
+does not guess, so the estimate says "(count assumed 1)" until you set the `count` (see
+[Sizes](#sizes) for the value).
 
 ### AWS classification
 
@@ -524,8 +532,9 @@ Not filled in: the vCPU and memory of a Cloud SQL instance whose tier is not a c
 node count and machine type, a managed instance group's size and instance template, and a bucket's
 stored GiB. Add them by hand where you want an estimate. A `REGIONAL` instance has a standby, and how
 many nodes a standby counts as depends on how a target prices high availability: the program does not
-guess, so the estimate says "(count assumed 1)" until you set the `count`. A custom machine type (`custom-4-16384`) is not in
-`machine-types list`; its vCPU and memory are in its name.
+guess, so the estimate says "(count assumed 1)" until you set the `count` (see [Sizes](#sizes) for the
+value). A custom machine type (`custom-4-16384`) is not in `machine-types list`; its vCPU and memory are
+in its name.
 
 ### GCP classification
 
@@ -705,7 +714,7 @@ count of a flexible server with high availability (`ZoneRedundant` or `SameZone`
 per-node vCPU and memory (its pools' `vmSize`), and a storage account's stored GiB. Add them by hand
 where you want an estimate. A server with high availability has a standby, and how many nodes a standby
 counts as depends on how a target prices high availability: the program does not guess, so the estimate
-says "(count assumed 1)" until you set the `count`.
+says "(count assumed 1)" until you set the `count` (see [Sizes](#sizes) for the value).
 
 ### Azure classification
 

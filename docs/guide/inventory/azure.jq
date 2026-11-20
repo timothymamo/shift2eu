@@ -35,9 +35,10 @@
 # (properties.storage.storageSizeGB), a single-node flexible server's count of 1
 # (properties.highAvailability.mode Disabled or unset; a server with a standby
 # gets no count, how many nodes a target bills for a standby is the target's to
-# say) and an AKS cluster's node count (the counts of its agent pools). A number no call gives is left out, never guessed. The
-# workload, relations and monthlyCost fields are the user's to add by hand; this
-# program never writes them.
+# say) and an AKS cluster's node count (the counts of its agent pools). A number
+# no call gives is left out, never guessed. The workload, relations and
+# monthlyCost fields are the user's to add by hand; this program never writes
+# them.
 
 # The Resource Manager type of a resource ID, in the casing of the ID (Resource
 # Graph writes types in lower case):

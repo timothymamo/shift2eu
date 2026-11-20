@@ -33,7 +33,7 @@
 #
 # The size comes from the calls too: an instance's vCPU and memory from its
 # machine type (compute machine-types list, the instance's machineType URL
-# matched to the type's selfLink, zone included) and a disk's GiB (compute
+# matched to the type's selfLink, zone included), a disk's GiB (compute
 # disks list, sizeGb, which the Compute API writes as a string; a regional disk
 # is matched by its region), and a Cloud SQL instance's storage
 # (settings.dataDiskSizeGb, a string too), its vCPU and memory when its tier is
