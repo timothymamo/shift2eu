@@ -26,8 +26,9 @@ var countingRule = []string{
 // limit in the paragraph right below its values table, or states its parts in
 // another order (issue #348). The table's row only says the limit is "counted
 // as the sentence below the table says", so this test pins that sentence where
-// the row sends the reader: removing it, rewording it, moving it elsewhere, or
-// splitting it into two paragraphs fails.
+// the row sends the reader: removing it, rewording it, moving it elsewhere,
+// splitting it into two paragraphs, or leaving no blank line between the table
+// and it (which GFM reads as one more table row) fails.
 func TestCLAUDEDispatcherStatesTheCountingRule(t *testing.T) {
 	t.Parallel()
 
@@ -49,14 +50,29 @@ func TestCLAUDEDispatcherStatesTheCountingRule(t *testing.T) {
 	// The rule is the paragraph the table's review-limit row points below the
 	// table: the subsection's lines after the table's last row (body line i is
 	// file line start+i+1), leading blank lines skipped, up to the next blank
-	// line.
-	var lines []string
-	for _, line := range body[lastRow-start:] {
+	// line. One of those leading blank lines is required: GFM reads a text line
+	// directly below the table's last row as another row of the table, so a
+	// paragraph written there is no paragraph at all.
+	var (
+		lines []string
+		first int  // the file line of the paragraph's first line
+		gap   bool // a blank line separates the table from the paragraph
+	)
+	for idx, line := range body[lastRow-start:] {
 		if strings.TrimSpace(line) == "" {
 			if len(lines) == 0 {
-				continue // the blank line right below the table
+				gap = true
+				continue // a blank line below the table, before the paragraph
 			}
 			break // the paragraph ends at the next blank line
+		}
+		if len(lines) == 0 {
+			// idx counts from the slice's first line, the one below the table.
+			first = lastRow + idx + 1
+			if !gap {
+				t.Fatalf("%s:%d: no blank line between the %q table's last row (%s:%d) and the counting rule's paragraph: GFM reads a text line directly below a table row as another row of the table, so the paragraph must follow a blank line (issue #348)",
+					claudeMD, first, heading, claudeMD, lastRow)
+			}
 		}
 		lines = append(lines, line)
 	}
@@ -74,10 +90,10 @@ func TestCLAUDEDispatcherStatesTheCountingRule(t *testing.T) {
 		if i < 0 {
 			if strings.Contains(rule, fragment) {
 				t.Fatalf("%s:%d: the counting rule of the review limit states %q out of order, after the fragment before it: the rule reads %s (issue #348)",
-					claudeMD, lastRow, fragment, strings.Join(countingRule, " -> "))
+					claudeMD, first, fragment, strings.Join(countingRule, " -> "))
 			}
 			t.Fatalf("%s:%d: the counting rule of the review limit is missing %q, which the paragraph right below the %q table must state (issue #348)",
-				claudeMD, lastRow, fragment, heading)
+				claudeMD, first, fragment, heading)
 		}
 		at += i + len(fragment)
 	}
