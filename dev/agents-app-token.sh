@@ -972,7 +972,9 @@ read_pid() {
 # live lock is never read or touched here. take_lock calls it once at the start, and refresh once a round,
 # so an aside kept at the start because its owner still ran is removed once neither pid runs a refresh.
 # Accepted residue: a dead mover's pid reused by a new refresh in the instant between the check and the
-# rename; that refresh's own take_lock clears its aside path first.
+# rename; that refresh's own take_lock clears its aside path first. An entry whose rename failed is tried
+# again every round, but said once per refresher: reap_entry keeps its name in unremovable, and the
+# "removing" line is not said again for a name kept there (issue #335, the audit's LOW-B).
 clear_stale_asides() {
   reap="${state}/.agents-token-refresh-${instance}.lock.reap.$$"
   rm -rf "${reap}"
@@ -989,7 +991,8 @@ clear_stale_asides() {
     fi
     # Said before the rename, so the log names the aside before it is gone. Two starts that both found it may
     # both say so; only the one whose rename succeeds removes it.
-    say "removing the moved-aside lock ${stale##*/}: neither its mover (pid ${mover}) nor its owner (pid $(show_pid "${recorded}")) runs a refresh"
+    is_unremovable "${stale}" ||
+      say "removing the moved-aside lock ${stale##*/}: neither its mover (pid ${mover}) nor its owner (pid $(show_pid "${recorded}")) runs a refresh"
     reap_entry "${stale}"
   done
   prefix="${state}/.agents-token-refresh-${instance}.lock.reap."
@@ -1000,19 +1003,46 @@ clear_stale_asides() {
     stale="${prefix}${mover}"
     [ -d "${stale}" ] && [ ! -L "${stale}" ] || continue
     ! is_refresh "${mover}" || continue
-    say "removing the leftover ${stale##*/} of a start (pid ${mover}) that stopped while it removed a moved-aside lock and runs no refresh any more"
+    is_unremovable "${stale}" ||
+      say "removing the leftover ${stale##*/} of a start (pid ${mover}) that stopped while it removed a moved-aside lock and runs no refresh any more"
     reap_entry "${stale}"
   done
+}
+
+# unremovable holds the names, separated by spaces, of the entries whose rename reap_entry saw fail with the
+# entry still in place. A name is built from a fixed prefix and a pid of digits, so it holds no space.
+unremovable=''
+
+# is_unremovable <path> returns when the name of path is one reap_entry could not rename before.
+is_unremovable() {
+  case " ${unremovable} " in
+    *" ${1##*/} "*) return 0 ;;
+  esac
+  return 1
 }
 
 # reap_entry <path> removes a stale entry clear_stale_asides found: renamed to this shell's own .reap.<pid>
 # first, which only one of two starts can do, then removed. A rename that fails because another start took
 # the entry first is a lost race and says nothing more; one that fails with the entry still in place says it
-# could not be removed, so the log does not end on a "removing" line for a directory that stays.
+# could not be removed, so the log does not end on a "removing" line for a directory that stays. That is
+# said the first time only: the entry stays, every round tries it again, and a line per round would bury
+# the log (issue #335, the audit's LOW-B). A removal that fails after the rename is said too; the next
+# round or start removes the .reap.<pid> name first.
 reap_entry() {
   if mv "$1" "${reap}" 2>/dev/null; then
-    rm -rf "${reap}"
+    # Renamed after all: the name is free again for a later entry, which is said like any other.
+    if is_unremovable "$1"; then
+      kept=''
+      for name in ${unremovable}; do
+        [ "${name}" = "${1##*/}" ] || kept="${kept} ${name}"
+      done
+      unremovable="${kept# }"
+    fi
+    rm -rf "${reap}" 2>/dev/null ||
+      say "could not remove ${reap##*/}, to which ${1##*/} was renamed; it is tried again at the next round or start"
   elif [ -e "$1" ] || [ -L "$1" ]; then
+    is_unremovable "$1" && return 0
+    unremovable="${unremovable:+${unremovable} }${1##*/}"
     say "could not remove ${1##*/}: renaming it to ${reap##*/} failed; it is tried again at the next round or start"
   fi
 }
@@ -1109,8 +1139,8 @@ take_lock() {
 # still_locked returns when the lock holds this refresher's pid, and otherwise exits 0 without minting: a
 # contender that read a stale owner can move this refresher's fresh lock aside after take_lock returned and,
 # finding a third contender's lock in place, drop it (issue #288). A lock whose pid reads empty (missing,
-# without its pid, or with a pid entry that is no regular file, see read_pid) may only be in transit, moved aside by such a contender to be put back (issue #240): it
-# is read again once a second, at most five times. When it waited, it reads the clock into current again,
+# without its pid, or with a pid entry that is no regular file, see read_pid) may only be in transit, moved
+# aside by such a contender to be put back (issue #240): it is read again once a second, at most five times. When it waited, it reads the clock into current again,
 # so the margin check of the same round uses the time of after the wait. A lock that holds another pid has
 # been taken over: this one says so and leaves it. A lock still empty after the five tries is gone: no
 # refresher holds it, so this one says that a refresh must be started again. Either way release_lock, which

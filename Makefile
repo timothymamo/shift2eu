@@ -729,6 +729,12 @@ vm-create: ## Create and set up the VM, ready for make deck: vm-env-check, vm-up
 # refresh its lock, one set per VM instance: on the Mac, outside the workspace (ADR 0031).
 AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2eu
 
+# $(call AGENTS_TOKEN_READ_PID,"$$path") prints what a pid entry of that state directory holds, or nothing,
+# the way read_pid in dev/agents-app-token.sh reads one: only a regular file that is no symlink, and at most
+# 32 bytes of it. The directory is on the Mac and anything may have been put in it, and a cat of a FIFO
+# nobody writes to blocks for ever (issue #335). An entry that is no regular file reads as empty.
+AGENTS_TOKEN_READ_PID = { [ -f $(1) ] && [ ! -L $(1) ] && head -c 32 $(1) 2>/dev/null || true; }
+
 # The token targets run on the Mac with the App's key in reach. Like every host target they run only from the
 # host clone, whose own direnv .envrc holds the three SHIFT2EU_AGENTS_APP_* variables, and make refuses them
 # elsewhere (HOST_TARGETS above; docs/dev-environment.md, The host clone). Their recipes use only limactl
@@ -857,7 +863,8 @@ agents-token-refresh: ## Mint the agents App token now and again before each one
 # name with $(LIMA_INSTANCE_CHECK) before it runs: the name becomes part of its file names and of the job's label.
 # The refresher runs without the default VM_ENV credentials, CLAUDE_CODE_OAUTH_TOKEN and DEEPSEEK_API_KEY
 # (env -u), which it never needs and which a shell with the host clone's .envrc loaded may hold (issue #227).
-# A name a custom VM_ENV adds is not stripped.
+# A name a custom VM_ENV adds is not stripped. It reads both pids with $(AGENTS_TOKEN_READ_PID), and removes a
+# pid file that is no regular file before it writes the new pid, since writing into a FIFO blocks (issue #335).
 .PHONY: agents-token-refresh-start
 agents-token-refresh-start: ## Start the agents App token refresh in the background, one per VM instance, and print where its log is (host clone)
 	$(LIMA_INSTANCE_CHECK)
@@ -881,8 +888,8 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 	fi; \
 	lock_pid="$$state/agents-token-refresh-$$LIMA_INSTANCE.lock/pid"; \
 	(umask 077 && mkdir -p "$$state" && : >>"$$log") || exit 1; \
-	started="$$(cat "$$pid_file" 2>/dev/null || true)"; \
-	for pid in "$$(cat "$$lock_pid" 2>/dev/null || true)" "$$started"; do \
+	started="$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))"; \
+	for pid in "$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))" "$$started"; do \
 		case "$$pid" in ''|*[!0-9]*) continue ;; esac; \
 		if kill -0 "$$pid" 2>/dev/null && ps -p "$$pid" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
 			echo "agents-token-refresh-start: the agents App token refresh of $$LIMA_INSTANCE is already running (pid $$pid); its log is $$log"; \
@@ -896,6 +903,7 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 	fi; \
 	env -u CLAUDE_CODE_OAUTH_TOKEN -u DEEPSEEK_API_KEY nohup dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
 	pid="$$!"; \
+	if [ -L "$$pid_file" ] || { [ -e "$$pid_file" ] && [ ! -f "$$pid_file" ]; }; then rm -f "$$pid_file" || exit 1; fi; \
 	(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
 	echo "agents-token-refresh-start: started the agents App token refresh of $$LIMA_INSTANCE (pid $$pid); its log is $$log"
 
@@ -1076,7 +1084,7 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 		fi; \
 	fi; \
 	held=''; \
-	if [ -z "$$account" ]; then held="$$(cat "$$lock_pid" 2>/dev/null || true)"; fi; \
+	if [ -z "$$account" ]; then held="$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))"; fi; \
 	case "$$held" in ''|*[!0-9]*) held='' ;; *) \
 		kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh' || held='' ;; \
 	esac; \
@@ -1112,7 +1120,7 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 		fi; \
 	fi; \
 	echo "agents-token-refresh-install: loaded $$label: it runs now, at every boot, and again whenever it exits"; \
-	if [ -n "$$held" ] && [ "$$(cat "$$lock_pid" 2>/dev/null || true)" = "$$held" ] && kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
+	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))" = "$$held" ] && kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
 		job_pid="$$(launchctl print "system/$$label" 2>/dev/null | awk '/^[[:space:]]*pid = [0-9]+[[:space:]]*$$/ { print $$3; exit }')"; \
 		if [ "$$held" != "$$job_pid" ]; then \
 			echo "agents-token-refresh-install: warning: a refresh you started by hand (pid $$held) holds the lock of $$LIMA_INSTANCE, so the job waits, trying again every 5 minutes; stop it (kill $$held) and the job takes over" >&2; \
