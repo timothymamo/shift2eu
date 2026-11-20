@@ -44,36 +44,6 @@ type allowListEntry struct {
 // needs.
 var realDataAllowList = []allowListEntry{
 	{
-		file:  "docs/guide/http-api.md",
-		value: "127.0.0.1",
-		why:   "the loopback address the server listens on by default; it names no host of anyone's",
-	},
-	{
-		file:  "docs/guide/http-api.md",
-		value: "0.0.0.0",
-		why:   "the wildcard listen address that exposes the server beyond the machine; it names no host",
-	},
-	{
-		file:  "docs/guide/reverse-proxy.md",
-		value: "127.0.0.1",
-		why:   "the loopback address the server listens on behind the proxy; it names no host of anyone's",
-	},
-	{
-		file:  "docs/guide/reverse-proxy.md",
-		value: "0.0.0.0",
-		why:   "the wildcard listen address the page warns against; it names no host",
-	},
-	{
-		file:  "docs/guide/try-it.md",
-		value: "127.0.0.1",
-		why:   "the loopback address the local server answers on; it names no host of anyone's",
-	},
-	{
-		file:  "test/architecture/testdata/cmdprobe/cmd/shift2eu-server/main.go",
-		value: "127.0.0.1",
-		why:   "the probe's default listen flag, loopback on an ephemeral port; it names no host of anyone's",
-	},
-	{
 		file:  "test/e2e/testdata/inventory-guide/aws/eu-central-1/autoscaling-groups.json",
 		value: "00000000-0000-0000-0000-000000000001",
 		why:   "a synthetic Auto Scaling group ID in an ARN, all zero but its last digit so the two groups differ",

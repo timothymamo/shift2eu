@@ -200,19 +200,19 @@ const (
 func TestRunReviewsThePullRequestHead(t *testing.T) {
 	t.Parallel()
 
-	// A diff of more than MaxDiffBytes that a generated file alone makes up: once
+	// A diff of more than MaxDiffBytes that a golden file alone makes up: once
 	// it is left out nothing is over the limit, so the run reviews the pull
-	// request rather than failing it (issue #324). A golden or generated file's
+	// request rather than failing it (issue #324). A golden file's
 	// content is in the prompt only when the reviewer did not leave its section
 	// out, so each marker is the text of its own case's left-out section: a
 	// marker no kept section holds is what makes the hides assertion able to
 	// fail.
 	const (
-		excludedGoldenMarker    = "EXCLUDED-GOLDEN-CONTENT"
-		excludedGeneratedMarker = "EXCLUDED-GENERATED-CONTENT"
+		excludedGoldenMarker      = "EXCLUDED-GOLDEN-CONTENT"
+		excludedLargeGoldenMarker = "EXCLUDED-LARGE-GOLDEN-CONTENT"
 	)
 
-	generatedOnlyDiff := diffFile("api/openapi.bundled.json", excludedGeneratedMarker+strings.Repeat("x", review.MaxDiffBytes))
+	largeGoldenOnlyDiff := diffFile("internal/x/testdata/large.golden", excludedLargeGoldenMarker+strings.Repeat("x", review.MaxDiffBytes))
 	mixedDiff := cleanDiff + diffFile("testdata/report-v3.golden", excludedGoldenMarker)
 	oversizedDiff := diffFile("internal/x/y.go", strings.Repeat("x", review.MaxDiffBytes))
 
@@ -427,15 +427,15 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			wantAsked:              1,
 		},
 		{
-			name:            "a diff over the limit only because of a generated file is reviewed",
+			name:            "a diff over the limit only because of a golden file is reviewed",
 			pr:              pr,
-			diff:            generatedOnlyDiff,
+			diff:            largeGoldenOnlyDiff,
 			answer:          cleanAnswer,
 			wantAsked:       1,
 			wantEvent:       review.EventComment,
 			wantFindings:    1,
-			wantText:        []string{"Name it", "api/openapi.bundled.json", "not reviewed"},
-			wantPromptHides: []string{excludedGeneratedMarker},
+			wantText:        []string{"Name it", "internal/x/testdata/large.golden", "not reviewed"},
+			wantPromptHides: []string{excludedLargeGoldenMarker},
 		},
 		{
 			// A single file whose own section is over MaxDiffBytes is over the

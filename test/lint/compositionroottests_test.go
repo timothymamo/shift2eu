@@ -4,18 +4,18 @@ import "testing"
 
 // TestCompositionRootTestsReachNoForeignCodeProbe runs depguard with the
 // repository's .golangci.yml on a probe module laid out like the repository
-// (testdata/compositionroottests/mod), whose two composition roots each hold a
+// (testdata/compositionroottests/mod), whose composition root holds a
 // _test.go file that imports the packages the composition-root-tests rule must
 // refuse: go/build, net/http/cgi, os/exec, os/user, plugin, runtime/cgo and
-// unsafe. Since issue #152 the driving adapters' _test.go files (internal/cli and
-// internal/httpapi) hold the same imports, each with a want that names no rule,
-// because a test of the CLI or of the HTTP API runs in the same process as the
-// code the composition root hands the work to.
+// unsafe. Since issue #152 the driving adapter's _test.go file (internal/cli)
+// holds the same imports, each with a want that names no rule, because a test
+// of the CLI runs in the same process as the code the composition root hands
+// the work to.
 //
 // The rule is lax, so its deny list alone decides, and it is the one depguard
 // rule that holds the roots' _test.go files: composition-root and
-// server-composition-root exclude them (!$test), and a test runs in the same
-// process as the server. A _test.go file can start a program (os/exec), hand a
+// web-composition-root exclude them (!$test), and a test runs in the same
+// process as the code under test. A _test.go file can start a program (os/exec), hand a
 // path to a CGI handler (net/http/cgi), load a plugin (plugin), read a tree
 // (go/build), call C (runtime/cgo), look a user up in the OS database (os/user,
 // issue #152) or reach any package's symbol through unsafe and //go:linkname,

@@ -13,7 +13,7 @@ preinstalled in the project's Lima VM ([Working with agents](agents.md)). action
 ```bash
 make help     # list targets
 make check    # lint (incl. architecture rules) + tests + vulnerability scan
-make build    # ./bin/shift2eu and ./bin/shift2eu-server
+make build    # ./bin/shift2eu
 ```
 
 ## Contributing

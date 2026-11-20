@@ -47,8 +47,8 @@ const (
 	// assessmentSchemaName is the JSON report schema a sample's document must
 	// match, from this package's directory, with the document's schemaVersion in
 	// its name: the single-target schema of that version (docs/adr/0018,
-	// docs/adr/0030). Version 2 is the format the HTTP API serves on /v1, version
-	// 3 the one the CLI writes by default.
+	// docs/adr/0030). Version 2 is the frozen format the CLI writes with
+	// --schema-version 2, version 3 the one it writes by default.
 	assessmentSchemaName = repoRoot + "/internal/adapter/report/jsonreport/schema/assessment-v%d.schema.json"
 )
 

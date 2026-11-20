@@ -8,10 +8,9 @@ how to build the binaries and the images yourself.
 project's old names: see [Releases before the rename](verify-releases.md#releases-before-the-rename-v010-and-v010-rc1).
 
 > **The HTTP API is retired** ([ADR 0037](../adr/0037-retire-the-http-api-and-release-the-cli-alone.md)).
-> Releases no longer ship a `shift2eu-server` archive, image or OpenAPI document; the
-> [release notes](https://github.com/timothymamo/shift2eu/releases) name the first release without them. The images
-> `ghcr.io/timothymamo/shift2eu-server` up to the last release that shipped them stay available but get
-> no updates. Run assessments with the CLI, or in the browser on the site.
+> `shift2eu-server` was retired in 0.11.0: releases no longer ship its archive, image or OpenAPI
+> document. The existing images `ghcr.io/timothymamo/shift2eu-server` stay available but get no
+> updates, security fixes included. Run assessments with the CLI, or in the browser on the site.
 
 ## The release archives
 
@@ -49,7 +48,7 @@ docker pull ghcr.io/timothymamo/shift2eu:v0.2.0
 ## Build from source
 
 From a clone, with the tools [Development](../contributing/development.md) lists, `make build` builds
-`./bin/shift2eu` and `./bin/shift2eu-server`.
+`./bin/shift2eu`.
 
 To build the image yourself from a clone instead, `make image` tags `shift2eu:<version>`, `shift2eu:dev` and
 `shift2eu:latest`, stamped from git (`docker build -t shift2eu .` builds it without the version stamp); use

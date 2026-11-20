@@ -15,11 +15,11 @@ import (
 // This file holds the check that pins which packages' test files import the
 // CLI (issue #345). The depguard rule cli-only-in-named-tests refuses
 // internal/cli and the packages below it in every _test.go file but those of
-// internal/cli, cmd/shift2eu-web/internal/wire and test/apiparity. depguard
+// internal/cli and cmd/shift2eu-web/internal/wire. depguard
 // matches its files: globs against absolute paths and has no anchor at the
 // module root, and ** crosses /, so each exemption also matches a directory
 // whose path merely ends in the same segments: a test file in
-// internal/web/test/apiparity would be exempt. This check holds the exact set
+// internal/web/internal/cli would be exempt. This check holds the exact set
 // on what go list reports, by import path, which no such directory can spell.
 
 // cliPackage is the CLI's import path: the import the check looks for, and the
@@ -27,13 +27,12 @@ import (
 const cliPackage = modulePath + "/internal/cli"
 
 // cliTestImporters are the packages whose test files may import the CLI, and
-// must: internal/cli's black-box cli_test, the CLI/web parity tests in
-// cmd/shift2eu-web/internal/wire (ADR 0035) and the CLI/HTTP API parity test in
-// test/apiparity (PRD #103). The list is sorted, as the check's result is.
+// must: internal/cli's black-box cli_test and the CLI/web parity tests in
+// cmd/shift2eu-web/internal/wire (ADR 0035). The list is sorted, as the
+// check's result is.
 var cliTestImporters = []string{
 	modulePath + "/cmd/shift2eu-web/internal/wire",
 	modulePath + "/internal/cli",
-	modulePath + "/test/apiparity",
 }
 
 // cliTestImportersBuild is one build the check lists the module in: a
@@ -192,7 +191,7 @@ func TestCLITestImportersOf(t *testing.T) {
 
 	pkgs := []check.Package{
 		pkg(modulePath+"/internal/web", nil, []string{cliPackage}, nil),
-		pkg(modulePath+"/internal/httpapi", nil, nil, []string{cliPackage + "/sub"}),
+		pkg(modulePath+"/internal/app/analysis", nil, nil, []string{cliPackage + "/sub"}),
 		pkg(modulePath+"/cmd/shift2eu", []string{cliPackage}, nil, nil),
 		pkg(modulePath+"/internal/version", nil, []string{cliPackage + "x"}, nil),
 		pkg("example.com/other", nil, []string{cliPackage}, nil),
@@ -200,7 +199,7 @@ func TestCLITestImportersOf(t *testing.T) {
 	}
 
 	want := []string{
-		modulePath + "/internal/httpapi",
+		modulePath + "/internal/app/analysis",
 		modulePath + "/internal/web",
 	}
 

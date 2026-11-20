@@ -25,7 +25,7 @@ const (
 )
 
 // testDocsRule is the strict depguard rule that holds the test trees' own
-// documentation packages, test/apiparity, test/architecture, test/container,
+// documentation packages, test/architecture, test/container,
 // test/devenv, test/docs and test/lint (issue #152, the auditor's finding H-1):
 // each is a non-test package a composition root can import, and Go's internal
 // rule keeps only the nested internal trees out of reach. It is skipped below,
@@ -40,10 +40,9 @@ const testDocsRule = "test-docs-are-pure"
 // cli-gets-adapters-from-cmd nor version-is-build-metadata is skipped: both are
 // strict allow lists of exact entries, which the check reads package by package.
 var skippedStrictRules = map[string]string{
-	"e2e-is-black-box":        "its allow list names $gostd, which check.AllowList refuses as it is no import path, so the package check cannot read the rule's imports; its production files are test/e2e/doc.go alone, which test-docs-are-pure holds since issue #152 (the reviewer's B1, the auditor's L-1): doc.go carries no build tag, so test/e2e is a package go list lists, and the e2e test files, which import go-cmp and internal/testutil, are the rule's own business",
-	testDocsRule:              "the doc.go-only test packages import nothing, so there is no import of theirs to hold, and the pattern that would list them, ./test/architecture/..., also reaches test/architecture/internal/check, which reads os, os/exec and test/internal/releasetarget: a rule's files: list holds a directory, not a package, so holding ./test/architecture/... to this allow list would flag that package and the test/internal/... packages it imports, which Go's internal rule keeps out of reach of the roots and no depguard rule holds. The property that does hold these packages, TestEveryModulePackageIsHeldByAStrictRule, reads .golangci.yml directly rather than through go list",
-	compositionRootRule:       "go list -deps ./cmd/shift2eu/... lists the composition root's whole dependency tree, which the shared layer listing does not read: the adapters, internal/cli, internal/version and the standard library stand in no rule directory the listing holds, so listing the root beside the layers would flag them. TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget holds cmd/shift2eu to this rule's allow list instead, on every release target. What it reaches is held too, but not by this listing: TestEveryModulePackageIsHeldByAStrictRule holds every non-test module package a composition root can import to a strict rule of its own, so a package the root reaches cannot fall through unheld (issue #152)",
-	serverCompositionRootRule: "go list -deps ./cmd/shift2eu-server/... lists the server's whole dependency tree, which the shared layer listing does not read: the adapters, internal/httpapi, internal/version and the standard library stand in no rule directory the listing holds, and the lax rule adapters-are-built-in-cmd holds the adapters, which the check does not read. TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget holds cmd/shift2eu-server to this rule's allow list instead, on every release target, and TestEveryModulePackageIsHeldByAStrictRule holds every non-test module package it reaches to a strict rule of its own (issue #152)",
+	"e2e-is-black-box":  "its allow list names $gostd, which check.AllowList refuses as it is no import path, so the package check cannot read the rule's imports; its production files are test/e2e/doc.go alone, which test-docs-are-pure holds since issue #152 (the reviewer's B1, the auditor's L-1): doc.go carries no build tag, so test/e2e is a package go list lists, and the e2e test files, which import go-cmp and internal/testutil, are the rule's own business",
+	testDocsRule:        "the doc.go-only test packages import nothing, so there is no import of theirs to hold, and the pattern that would list them, ./test/architecture/..., also reaches test/architecture/internal/check, which reads os, os/exec and test/internal/releasetarget: a rule's files: list holds a directory, not a package, so holding ./test/architecture/... to this allow list would flag that package and the test/internal/... packages it imports, which Go's internal rule keeps out of reach of the roots and no depguard rule holds. The property that does hold these packages, TestEveryModulePackageIsHeldByAStrictRule, reads .golangci.yml directly rather than through go list",
+	compositionRootRule: "go list -deps ./cmd/shift2eu/... lists the composition root's whole dependency tree, which the shared layer listing does not read: the adapters, internal/cli, internal/version and the standard library stand in no rule directory the listing holds, so listing the root beside the layers would flag them. TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget holds cmd/shift2eu to this rule's allow list instead, on every release target. What it reaches is held too, but not by this listing: TestEveryModulePackageIsHeldByAStrictRule holds every non-test module package a composition root can import to a strict rule of its own, so a package the root reaches cannot fall through unheld (issue #152)",
 }
 
 // sdkRule is the strict depguard rule that holds every cloud source adapter, and
@@ -57,8 +56,8 @@ const sdkRule = "cloud-adapters-reach-the-cloud-through-the-sdk"
 // root, cmd/shift2eu, and nothing beside it (issue #101): main wires every adapter
 // into the application, so it may import every package of the module, and no
 // third-party package, the lax cloud SDK and go-cmp denies aside. Its files:
-// list names cmd/shift2eu alone, so a sibling such as the cmd/shift2eu-server PRD #103
-// may add gets a rule of its own, written the same way, and not a wider glob.
+// list names cmd/shift2eu alone, so a sibling composition root gets a rule of
+// its own, written the same way, and not a wider glob.
 const compositionRootRule = "composition-root"
 
 // compositionRootDir is the directory the composition-root rule holds: the one
@@ -72,49 +71,6 @@ const compositionRootDir = "cmd/shift2eu"
 // to import needs an entry in .golangci.yml, in the pin and here.
 var compositionRootStds = []string{"context", "os", "os/signal", "syscall"}
 
-// serverCompositionRootRule is the strict depguard rule that holds the second
-// composition root, cmd/shift2eu-server, and nothing beside it (PRD #103, milestone
-// 3): it is written the way composition-root is, with a files: list naming its
-// own directory and its own allow list, so the two roots cannot widen each
-// other's imports.
-const serverCompositionRootRule = "server-composition-root"
-
-// serverCompositionRootDir is the directory the server-composition-root rule
-// holds.
-const serverCompositionRootDir = "cmd/shift2eu-server"
-
-// serverCompositionRootStds are the standard packages the server imports: context
-// for the run and its shutdown, flag for the flags, fmt and io for the stderr a
-// run writes its errors and its access log to, log for the access log and the
-// server's own error log, math for the memory limit debug.SetMemoryLimit reports
-// when GOMEMLIMIT is unset (math.MaxInt64), net and net/http for the listener and
-// the server, os for os.Args, os.Exit and the token file, os/signal and syscall
-// for SIGTERM and SIGINT, runtime and runtime/debug for the CPU count and the
-// memory limit, slices, strconv, strings and sync for the flags, the token and
-// the allowed hosts, and time for the server's timeouts. A standard package the
-// server starts to import needs an entry in .golangci.yml, in the pin and here.
-var serverCompositionRootStds = []string{
-	"context",
-	"errors",
-	"flag",
-	"fmt",
-	"io",
-	"log",
-	"math",
-	"net",
-	"net/http",
-	"os",
-	"os/signal",
-	"runtime",
-	"runtime/debug",
-	"slices",
-	"strconv",
-	"strings",
-	"sync",
-	"syscall",
-	"time",
-}
-
 // compositionRoot is one composition root of the module: the strict depguard rule
 // that holds it, the directory the rule holds, and the standard packages the
 // binary imports, each allowed exactly as its rule writes it.
@@ -125,25 +81,25 @@ type compositionRoot struct {
 }
 
 // compositionRoots returns the composition roots, in the order .golangci.yml
-// holds their rules: cmd/shift2eu (issue #101) and cmd/shift2eu-server (PRD #103,
-// milestone 3). Each is held by a rule of its own, written the same way, so a
-// third-party import in either is refused by a strict allow list rather than by
-// review alone. A third root gets a row here and a rule beside the other two.
+// holds their rules: cmd/shift2eu (issue #101), the one root whose allow list
+// names the module path as a prefix (cmd/shift2eu-web's rules name each package
+// and are read as layers). Its strict allow list refuses a third-party import
+// rather than review alone. Another such root gets a row here and a rule beside
+// composition-root, written the same way.
 func compositionRoots() []compositionRoot {
 	return []compositionRoot{
 		{rule: compositionRootRule, dir: compositionRootDir, stds: compositionRootStds},
-		{rule: serverCompositionRootRule, dir: serverCompositionRootDir, stds: serverCompositionRootStds},
 	}
 }
 
 // prefixEntryRules are the strict rules whose allow list may hold a prefix
 // entry, each named on purpose: the SDK-only rule names the roots of the cloud
-// SDKs, whose every package an adapter may reach its cloud through, and the two
-// composition-root rules name the module path, whose every package main may
-// import (issue #101, PRD #103). Every other strict rule names the packages it
+// SDKs, whose every package an adapter may reach its cloud through, and the
+// composition-root rule names the module path, whose every package main may
+// import (issue #101). Every other strict rule names the packages it
 // allows one by one, where an entry that lost its trailing $ is a widening the
 // reviewer must see (os$ -> os allows os/exec) rather than a prefix.
-var prefixEntryRules = []string{sdkRule, compositionRootRule, serverCompositionRootRule}
+var prefixEntryRules = []string{sdkRule, compositionRootRule}
 
 // sdkRuleExcludes are the directories the SDK-only rule's files: list takes out
 // of it with negated globs: the inventory-file reader holds a rule of its own,
@@ -222,7 +178,7 @@ func TestRepositoryHasNoLineDirectives(t *testing.T) {
 // every platform .goreleaser.yaml builds, with cgo off and on and with the e2e
 // and integration files off and on, the domain, the application layer and the
 // shared readers import nothing the depguard rules refuse, and the release
-// binaries, the CLI and the server, are built from packages of the main module
+// binary, the CLI, is built from packages of the main module
 // alone, each in the directory its import path names and holding no source but
 // Go files.
 func TestReleaseTargetDependencies(t *testing.T) {
@@ -417,12 +373,10 @@ func checkLayers(
 // releaseBinaries are the binaries the release ships, each with the packages
 // its listing must hold: without them the listing would pass over a binary
 // that carries none of the packages the check exists for. The CLI, Main, is
-// built from internal/cli and the server, ServerMain (PRD #103), from
-// internal/httpapi, and both carry the three target adapters. The CLI carries
-// the build metadata too, internal/version, which only it imports today, and
-// which the strict rule version-is-build-metadata holds (issue #152); the
-// server reaches no package of its own there, and its listing must not be asked
-// for one.
+// built from internal/cli and carries the three target adapters and the build
+// metadata, internal/version, which the strict rule version-is-build-metadata
+// holds (issue #152). It is the one release binary since the HTTP API was
+// retired (issue #393, ADR 0037).
 var releaseBinaries = []struct {
 	main     string
 	required []string
@@ -435,15 +389,6 @@ var releaseBinaries = []struct {
 			modulePath + "/internal/adapter/target/upcloud",
 			modulePath + "/internal/cli",
 			modulePath + "/internal/version",
-		},
-	},
-	{
-		main: releasetarget.ServerMain,
-		required: []string{
-			modulePath + "/internal/adapter/target/ovhcloud",
-			modulePath + "/internal/adapter/target/scaleway",
-			modulePath + "/internal/adapter/target/upcloud",
-			modulePath + "/internal/httpapi",
 		},
 	},
 }
@@ -787,8 +732,8 @@ func TestCloudAdapterSDKRuleHoldsItsSDKProbeForEveryReleaseTarget(t *testing.T) 
 // in. Before cmd/shift2eu's rule, a new dependency of main was refused by no rule but
 // the lax cloud-sdks-only-in-provider-adapters and go-cmp-only-in-tests denies, so
 // it was held by review of the import and of go.mod alone: the gap issue #79 left,
-// and ADR 0012 records. cmd/shift2eu-server (PRD #103, milestone 3) gets the same
-// rule, written the same way, when the server binary arrives.
+// and ADR 0012 records. A sibling root with a module-prefix allow list would get
+// the same rule, written the same way.
 //
 // Each rule is a reasoned skip of the shared layer listing (skippedStrictRules):
 // go list -deps on a composition root lists its whole dependency tree, packages
@@ -975,8 +920,8 @@ func TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget(t *testing.
 	}
 }
 
-// compositionRootProbe is one probe of the composition-root rules (issue #101,
-// PRD #103): the rule the probe is held to, the fixture package that rule holds,
+// compositionRootProbe is one probe of the composition-root rules (issue #101):
+// the rule the probe is held to, the fixture package that rule holds,
 // the sibling fixture package it must not hold, and the imports it must refuse for
 // the package it holds.
 type compositionRootProbe struct {
@@ -1005,11 +950,9 @@ type compositionRootProbe struct {
 // The fixture's cmd/shift2eu also imports the standard packages cmd/shift2eu imports today
 // and a nested module, example.com/cmdprobe/nested, whose path is under the probe's
 // module path: the listing must report it as a package that is not the main module.
-// The fixture's cmd/shift2eu-server imports the standard packages the server needs, the
-// same third-party library and the same cloud SDK, so an allow list that lost a
-// package or a deny list that lost a cloud SDK fails here as well. Each rule holds
-// its own root and no sibling: the paths in this table are the ones each rule must
-// hold.
+// The fixture's cmd/shift2eu-web stands in for a sibling root and imports
+// nothing: the rule holds its own root and no sibling, so a files: list widened
+// to **/cmd/** fails here.
 //
 // The fixture's stand-in modules are local directories its go.mod replaces, so the
 // listing needs no network and no go.sum entry, as sdkprobe's do.
@@ -1023,28 +966,22 @@ func TestCompositionRootRulesHoldTheirProbesForEveryReleaseTarget(t *testing.T) 
 		sdkPkg      = "github.com/aws/aws-sdk-go-v2/service/ec2"
 		nestedPkg   = probeModule + "/nested"
 		cliPkg      = probeModule + "/cmd/shift2eu"
-		serverPkg   = probeModule + "/cmd/shift2eu-server"
+		siblingPkg  = probeModule + "/cmd/shift2eu-web"
 	)
 
 	roots := compositionRoots()
 
-	if len(roots) != 2 {
-		t.Fatalf("compositionRoots() = %v, want the two roots the cmdprobe fixture stands in for", roots)
+	if len(roots) != 1 {
+		t.Fatalf("compositionRoots() = %v, want the one root the cmdprobe fixture stands in for", roots)
 	}
 
 	probes := []compositionRootProbe{
 		{
 			root:                   roots[0],
 			probePkg:               cliPkg,
-			siblingPkg:             serverPkg,
+			siblingPkg:             siblingPkg,
 			wantRefused:            []string{loggingPkg, nestedPkg, sdkPkg},
 			wantMainModuleMessages: true,
-		},
-		{
-			root:        roots[1],
-			probePkg:    serverPkg,
-			siblingPkg:  cliPkg,
-			wantRefused: []string{loggingPkg, sdkPkg},
 		},
 	}
 
@@ -1421,8 +1358,8 @@ func TestWorkflowPrivilegesAreClosed(t *testing.T) {
 
 // TestCIImageJobIsTheReleaseDryRun pins the review's finding of issue #72:
 // ci.yml's image job is the dry run of release.yml's image and sbom jobs, for
-// both images (the HTTP API's from PRD #103), and of the container run each
-// image gets in the verify job (issue #99), so a
+// the CLI's image, the one the release publishes (issue #393), and of the
+// container run it gets in the verify job (issue #99), so a
 // pull request fails when the release's platforms, annotations, provenance and
 // SBOM settings, tag rules, syft version, action pins, BuildKit image or
 // container run drift from what the dry run builds and checks

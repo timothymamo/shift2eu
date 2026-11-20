@@ -25,7 +25,7 @@
 // each key, and Walker.Members, Walker.Array, Walker.String, Walker.Bool,
 // Walker.Null, Walker.Raw and Walker.Version read the values a callback finds.
 // Walker.Members reads an object whose keys are data, not names the format
-// lists (a map such as the HTTP API's regions): its errors never quote such a
+// lists (a map keyed by a target's name, say): its errors never quote such a
 // key, and name a member's value by its index (regions[0]). As it reads, the walker
 // refuses:
 //

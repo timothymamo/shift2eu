@@ -19,8 +19,8 @@
 // it httptest servers as base URLs and a fake CLI, so no test reaches the
 // network.
 //
-// The model reads the pull request's diff without the generated and golden
-// files of a list fixed in this package (FilterDiff, issue #324), and the size
+// The model reads the pull request's diff without the golden files of
+// testdata directories, a rule fixed in this package (FilterDiff, issue #324), and the size
 // limit measures what remains; a symbolic link, a submodule or a mode change is
 // never left out. The prompt lists the left-out paths as untrusted data, and
 // the review names them, each with the lines it adds (a binary file as not

@@ -2,7 +2,7 @@
 
 A walkthrough that takes `shift2eu` from install to a report on a sample inventory, with no cloud
 account: the CLI against one target, against every target and as JSON, in a region you choose and
-with the estimates off, the container image offline, and the HTTP API with `curl`. It ends with how to
+with the estimates off, and the container image offline. It ends with how to
 read the report: fits, plans and monthly estimates, required changes, blockers, workloads, the cost
 summary and the comparison table.
 
@@ -25,14 +25,13 @@ tools):
 ```bash
 git clone https://github.com/timothymamo/shift2eu.git
 cd shift2eu
-make build   # ./bin/shift2eu and ./bin/shift2eu-server
+make build   # ./bin/shift2eu
 ```
 
-Or download the `shift2eu` and `shift2eu-server` archives of a release for your platform
-([Install](install.md#the-release-archives)) and unpack them into one directory. Each archive holds the
+Or download the `shift2eu` archive of a release for your platform
+([Install](install.md#the-release-archives)) and unpack it into a directory. The archive holds the
 samples too, in `examples/` beside `docs/`, so the commands below work from that directory as from the
-clone's root: run `./shift2eu` and `./shift2eu-server` in place of `./bin/shift2eu` and
-`./bin/shift2eu-server` (`shift2eu.exe` and `shift2eu-server.exe` from the Windows zip). The archives do
+clone's root: run `./shift2eu` in place of `./bin/shift2eu` (`shift2eu.exe` from the Windows zip). The archives do
 not hold the repository's tests, so the links below to golden files under `test/` work only in a clone.
 
 ## Assess against one target
@@ -111,7 +110,7 @@ total over different resources says little.
 
 `--format json` writes the same content as a versioned document for scripts and other tools
 ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md)): schema version 3
-by default. `--schema-version 2` writes the older document, the one the HTTP API serves by default
+by default. `--schema-version 2` writes the older document
 ([ADR 0030](../adr/0030-serve-the-version-2-report-on-v1.md)). The two differ in one rule: in
 version 3 a total that estimated nothing (`"estimated": 0`) has no `amount` key instead of `"0.00"`.
 Each resource carries its fit, best offering, reasons with a stable `code`, required changes,
@@ -222,56 +221,6 @@ instead, `make image` and use `shift2eu` in place of `ghcr.io/timothymamo/shift2
 A tag can be moved to another image. To verify the image first, see
 [Verify releases](verify-releases.md): it resolves the tag to a digest and verifies that digest; run
 `ghcr.io/timothymamo/shift2eu@<digest>` in place of the tag.
-
-## Ask the HTTP API
-
-`shift2eu-server` answers the same assessments over HTTP, byte for byte what `assess` prints for the
-same inventory and targets ([Run the HTTP API](http-api.md)). Start it on its default loopback address
-with a token, which the requests read from the same variable and hand curl on standard input, so it
-stays out of your shell history and the process list:
-
-```bash
-export SHIFT2EU_SERVER_TOKEN="$(openssl rand -hex 32)"
-./bin/shift2eu-server &   # listening on 127.0.0.1:8080
-curl -sS http://127.0.0.1:8080/readyz   # {"status":"ready"} once the catalogs have loaded
-```
-
-A request holds the inventory document and the target keys; `jq` wraps the sample in one. The
-request body goes to a temporary file, outside the clone, so a request made from a real inventory
-cannot end up in a commit:
-
-```bash
-req="$(mktemp)"
-
-# The JSON report against Scaleway, the same as --format json above.
-jq '{inventory: ., targets: ["scaleway"]}' examples/aws/inventory.json > "$req"
-printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" |
-  curl -sS -X POST http://127.0.0.1:8080/v1/assessments -H @- \
-    -H 'Content-Type: application/json' \
-    --data-binary @"$req"
-
-# The same in a chosen region, with the estimates off: --region and --no-estimate.
-jq '{inventory: ., targets: ["scaleway"], regions: {scaleway: "nl-ams"}, estimate: false}' \
-  examples/aws/inventory.json > "$req"
-printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" |
-  curl -sS -X POST http://127.0.0.1:8080/v1/assessments -H @- \
-    -H 'Content-Type: application/json' \
-    --data-binary @"$req"
-
-# The Markdown comparison of every target, the same as --target all above.
-jq '{inventory: ., targets: ["all"]}' examples/aws/inventory.json > "$req"
-printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" |
-  curl -sS -X POST http://127.0.0.1:8080/v1/assessments -H @- \
-    -H 'Content-Type: application/json' -H 'Accept: text/markdown' \
-    --data-binary @"$req"
-
-# The targets and their catalog snapshots.
-printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" | curl -sS -H @- http://127.0.0.1:8080/v1/targets
-
-rm -f "$req"
-```
-
-Stop the server with `kill %1` (or `kill` and its process ID) when you are done.
 
 ## Read the report
 
@@ -422,4 +371,3 @@ whichever target you choose.
 - [ADR 0006](../adr/0006-json-inventory-file-format-v1.md) and
   [ADR 0025](../adr/0025-json-inventory-file-format-v2.md): the inventory format in full, version 1 and
   version 2 (sizes, usage, workloads, relations and the source's cost).
-- [Run the HTTP API](http-api.md) and [Behind a reverse proxy](reverse-proxy.md): deploying the server.

@@ -82,7 +82,7 @@ var e2eNoEnvRefused = []rootName{
 }
 
 // e2eNoEnvAllowed are names no e2e-no-env entry may refuse: what the e2e tests
-// build and run the binary with (os/exec, a signal to stop the server, a golden
+// build and run the binary with (os/exec, a signal to stop the binary, a golden
 // file read), the writes, whose group is tests-no-process-state, the names that
 // only extend a refused one and catch a pattern that lost its $, and a package
 // named os or syscall elsewhere.

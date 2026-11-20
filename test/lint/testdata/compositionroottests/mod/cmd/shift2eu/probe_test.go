@@ -1,7 +1,7 @@
 // The CLI composition root's _test.go file, for
 // TestCompositionRootTestsReachNoForeignCodeProbe: every import that ends in a
 // want comment is one the composition-root-tests rule refuses, and each stands
-// for a way a test can run code the server never runs: start a program (os/exec),
+// for a way a test can run code the CLI never runs: start a program (os/exec),
 // hand a path to a CGI handler (net/http/cgi), load a plugin (plugin), read a tree
 // (go/build), call C (runtime/cgo), look a user up in the OS database (os/user,
 // issue #152), or reach any package's symbol through unsafe. The imports are

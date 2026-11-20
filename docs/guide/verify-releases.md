@@ -5,11 +5,6 @@ carries build provenance. This page shows how to check all three for an image be
 the project's Lima VM too, how to check a release archive against its checksums and its provenance, and
 how to verify the releases published before the project's rename.
 
-> The HTTP API is retired ([ADR 0037](../adr/0037-retire-the-http-api-and-release-the-cli-alone.md)):
-> releases no longer publish `shift2eu-server` archives, its image or its OpenAPI document. Its images
-> up to the last release that shipped them stay on `ghcr.io` but get no updates. Use the CLI, or the
-> site in your browser.
-
 ## Verify the image
 
 Every published image is signed with [cosign](https://github.com/sigstore/cosign), keyless, by the
@@ -129,9 +124,8 @@ Expand-Archive $Archive
 ```
 
 Each archive holds only the `shift2eu` binary (`shift2eu.exe` on Windows), with `README.md`,
-`LICENSE` and the Markdown pages under `docs/`. Releases that still shipped the HTTP API's
-`shift2eu-server_*` archives and `shift2eu-server_openapi.json` list them in the same `checksums.txt`:
-check them the same way, by their names (the OpenAPI document is not extracted). The archives'
+`LICENSE` and the Markdown pages under `docs/`. Older releases list the retired HTTP API's assets
+([Install](install.md)) in the same `checksums.txt`: check them the same way, by their names. The archives'
 attestations start with the first release after `v0.3.0`: for `v0.3.0` and earlier, only the digest
 check applies, and `checksums.txt` comes from the same release as the archive, so it cannot tell a
 compromised release from a sound one; run the signed image instead where that matters.

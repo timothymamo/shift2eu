@@ -15,7 +15,7 @@ import (
 // name among them (CLAUDE.md rule 3) — and t.Chdir changes the directory the
 // process runs in, which a t.Parallel test shares. A test that needs a value
 // passes the case it wants to the code under test, through a fake or a parameter,
-// and the CLI and the HTTP API take their inputs from flags and the request.
+// and the CLI takes its inputs from flags.
 //
 // The group holds for every test of the module and for every other file a test
 // could hand the change to, and is dropped in three places only, each with its own
@@ -148,10 +148,10 @@ var testsNoProcessStateAllowed = []rootName{
 // see them — a call through an interface literal and one through a type
 // parameter, which the source check refuses instead. internal/testutil holds the
 // same on a *testing.T and a testing.TB and temp.go holds os.MkdirTemp("", ...)
-// and os.CreateTemp("", ...); the roots' and the driving adapters' _test.go files
-// (cmd/shift2eu, cmd/shift2eu-server, internal/cli, internal/httpapi) hold the two
-// calls on a *testing.T, because the limits the roots' tests are held to are the
-// ones their driving adapters' tests are held to as well, and so are
+// and os.CreateTemp("", ...); the root's and the driving adapter's _test.go files
+// (cmd/shift2eu, internal/cli) hold the two calls on a *testing.T, because the
+// limits the root's tests are held to are the ones its driving adapter's tests
+// are held to as well, and so are
 // internal/adapter/source/aws's and internal/domain/taxonomy's and test/e2e's,
 // which the group reaches since the audit's finding S2: its scope is the module
 // except test/lint and test/architecture.

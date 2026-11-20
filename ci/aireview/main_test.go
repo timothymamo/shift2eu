@@ -1,6 +1,6 @@
 // White-box tests of the reviewer's entry point: ci/aireview is a main package,
 // so its tests are package main, the only way a test file reaches the package at
-// all (Go refuses an import of a main package), as cmd/shift2eu-server's are.
+// all (Go refuses an import of a main package).
 //
 // run reads its command line from os.Args and writes its one workflow error
 // annotation to the process's stderr (fail), and main.go gives neither as a

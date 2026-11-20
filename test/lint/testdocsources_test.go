@@ -14,9 +14,9 @@ import (
 )
 
 // docRule is the strict depguard rule .golangci.yml holds the test trees' own
-// documentation packages under (issue #152): test/apiparity, test/architecture,
-// test/container, test/devenv, test/docs, test/e2e, test/examples, test/lint and
-// test/openapibundle, each a package a composition root may import. Its allow
+// documentation packages under (issue #152): test/architecture,
+// test/container, test/devenv, test/docs, test/e2e, test/examples, test/lint
+// and test/site, each a package a composition root may import. Its allow
 // list is empty, so no import of theirs lints. That closes os/exec, unsafe,
 // os/user and every other package there, but it has nothing to say about a file
 // that needs no import at all: an assembly file beside a bodyless Go func can
