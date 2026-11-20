@@ -45,21 +45,24 @@ type InlineComment struct {
 // its closing statement that the review is advice and never an approval
 // (ADR 0033).
 func Render(headSHA string, answer Answer, event Event, diff string) Review {
-	return RenderFiltered(headSHA, answer, event, diff, nil)
+	return RenderFiltered(headSHA, answer, event, diff, LeftOut{})
 }
 
 // RenderFiltered renders the review of headSHA as Render does, of the diff the
-// reviewer read, and ends the body's findings with a note that names each path
-// of excluded, the files FilterDiff left out, and says they were not reviewed
-// (issue #324). Each path is shown in a code span, escaped as a finding's path
-// in the body is: its backticks made apostrophes, its control characters
-// spaces, its mentions defused. The note states how many files were left out,
-// names the first MaxListedExcluded of them and says how many more it does not
-// name; it sits after the part cut at MaxTextUnits and its room is taken off
-// that part, so a truncated review still holds it whole (reviewer M1, auditor
-// L2). With no path excluded there is no note, and the review is Render's, byte
-// for byte.
-func RenderFiltered(headSHA string, answer Answer, event Event, diff string, excluded []string) Review {
+// reviewer read, and ends the body's findings with a note that names each file
+// of leftOut, the files FilterDiff left out, with the lines it adds, and says
+// they were not reviewed (issues #324, #342). Each path is shown in a code
+// span, escaped as a finding's path in the body is: its backticks made
+// apostrophes, its control characters spaces, its mentions defused. The note
+// states how many files were left out, names the first MaxListedExcluded of
+// them and says how many more it does not name. It then lists the first
+// MaxScanFindings findings of the model-free scan (ScanLeftOut), each as the
+// file and line in a code span and the kind found, never the value, and counts
+// the rest; they are no finding of the model's and change no event. The note
+// sits after the part cut at MaxTextUnits and its room is taken off that part,
+// so a truncated review still holds it whole (reviewer M1, auditor L2). With
+// nothing left out there is no note, and the review is Render's, byte for byte.
+func RenderFiltered(headSHA string, answer Answer, event Event, diff string, leftOut LeftOut) Review {
 	shown := newSideLines(diff)
 
 	var (
@@ -83,7 +86,7 @@ func RenderFiltered(headSHA string, answer Answer, event Event, diff string, exc
 
 	head := fmt.Sprintf("**AI review** of %s\n\n", headSHA)
 	middle := renderMiddle(answer, event, comments, inBody)
-	note := notReviewedNote(excluded)
+	note := notReviewedNote(leftOut)
 
 	// The note, like the head and the footer, is never cut: its room comes off
 	// the review's, so a truncated review still names what it did not read
@@ -413,29 +416,55 @@ const maxListedPathUnits = 300
 
 // notReviewedNote returns the body's note that names the files the reviewer
 // left out of the diff it read, and "" when it left none out (issue #324). It
-// states the total, names the first MaxListedExcluded paths in the order given,
-// each cut to maxListedPathUnits, and says how many more it does not name, so
-// it stays under 16,000 UTF-16 code units whatever excluded holds.
-func notReviewedNote(excluded []string) string {
-	if len(excluded) == 0 {
+// states the total, names the first MaxListedExcluded files in the order given,
+// each path cut to maxListedPathUnits and followed by the lines it adds, and
+// says how many more it does not name; then it lists the first MaxScanFindings
+// findings of the scan the same way and counts the rest (issue #342). So it
+// stays under 25,000 UTF-16 code units whatever leftOut holds.
+func notReviewedNote(leftOut LeftOut) string {
+	files, findings := leftOut.Files, leftOut.Findings
+	if len(files) == 0 && len(findings) == 0 {
 		return ""
 	}
 
 	var note strings.Builder
 
-	fmt.Fprintf(&note, "\n### Not reviewed\n\n%s left out of the diff the AI review read, "+
-		"as a generated or golden file (ADR 0033), and not reviewed:\n\n",
-		plural(len(excluded), "This file was", fmt.Sprintf("Each of these %d files was", len(excluded))))
+	if len(files) > 0 {
+		fmt.Fprintf(&note, "\n### Not reviewed\n\n%s left out of the diff the AI review read, "+
+			"as a generated or golden file (ADR 0033), and not reviewed:\n\n",
+			plural(len(files), "This file was", fmt.Sprintf("Each of these %d files was", len(files))))
 
-	listed := excluded[:min(len(excluded), MaxListedExcluded)]
+		listed := files[:min(len(files), MaxListedExcluded)]
 
-	for _, path := range listed {
-		note.WriteString("- " + shortPathSpan(path) + "\n")
+		for _, file := range listed {
+			fmt.Fprintf(&note, "- %s (+%d %s)\n", shortPathSpan(file.Path), file.Added, plural(file.Added, "line", "lines"))
+		}
+
+		if more := len(files) - len(listed); more > 0 {
+			fmt.Fprintf(&note, "\n%d more of the %d left-out files %s not listed here.\n",
+				more, len(files), plural(more, "is", "are"))
+		}
 	}
 
-	if more := len(excluded) - len(listed); more > 0 {
-		fmt.Fprintf(&note, "\n%d more of the %d left-out files %s not listed here.\n",
-			more, len(excluded), plural(more, "is", "are"))
+	if len(findings) > 0 {
+		note.WriteString("\n### Found in the files not reviewed\n\n" +
+			"A scan of the lines these files add, by fixed rules and no model, found what may be real data, " +
+			"which CLAUDE.md rule 2 keeps out of the repository. Each finding names the file, the line and " +
+			"what was found, never the value:\n\n")
+
+		listed := findings[:min(len(findings), MaxScanFindings)]
+
+		for _, finding := range listed {
+			// The path is cut as the note's are, and the line follows it
+			// inside the span, so a cut never drops the line.
+			span := shortPathSpan(finding.Path)
+			fmt.Fprintf(&note, "- %s:%d` — %s\n", span[:len(span)-1], finding.Line, finding.Kind)
+		}
+
+		if more := len(findings) - len(listed); more > 0 {
+			fmt.Fprintf(&note, "\n%d more of the scan's %d findings %s not listed here.\n",
+				more, len(findings), plural(more, "is", "are"))
+		}
 	}
 
 	return note.String()

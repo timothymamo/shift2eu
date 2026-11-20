@@ -73,6 +73,8 @@ func run() int {
 		BotLogin:       settings.BotLogin,
 		RequestChanges: settings.RequestChanges,
 		Instructions:   instructions,
+		// The job's log reads workflow commands from standard output (#343).
+		Notices: os.Stdout,
 	})
 	if err != nil {
 		return fail(err)

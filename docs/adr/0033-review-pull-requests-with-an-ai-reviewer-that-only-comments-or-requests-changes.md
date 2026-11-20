@@ -244,8 +244,14 @@ reference data, and every schema version bump would be refused the same way. The
 - **The review names the left-out files** under "Not reviewed", each in a code span escaped as a
   finding's path is (backticks made apostrophes, control characters spaces, mentions defused, each path
   cut to 300 UTF-16 code units), so the maintainer knows what the AI review did not read. The note
-  states the total, lists the first 50 paths (`MaxListedExcluded`) and says how many more it does not
-  list. Like the first line and the closing statement, it is outside the part cut at GitHub's limit:
+  states the total, lists the first 50 paths (`MaxListedExcluded`), each with the lines it adds
+  (`(+3 lines)`, issue #342), and says how many more it does not list. Amended by issue #342: **a
+  model-free scan reads the lines the left-out sections add** (`ScanLeftOut`; never a removed or context
+  line, never a reviewed file) for a twelve-digit account ID, an IPv4 address, a host name and a
+  key-like string, by fixed rules that know the sanitised values of CLAUDE.md rule 2, the example
+  domains and the providers' domains. The note lists its first 20 findings (`MaxScanFindings`) as the
+  file and line in a code span and the kind found, never the value, and counts the rest. The scan is
+  no part of the prompt, adds no finding to the model's and changes no event. Like the first line and the closing statement, it is outside the part cut at GitHub's limit:
   its room is taken off the review's, so a truncated review still holds it whole, and its own bound
   keeps it to a small part of that limit whatever the pull request changes. A review that left nothing
   out has no such note.
@@ -437,7 +443,9 @@ the trigger option below are the levers.
   `findings` that is no array, an unknown field or a field of the wrong type), text around the object, no
   summary or no `findings` array. A finding the parser refuses (a bad severity, an empty title, a bad
   path or line) is not asked again: it stays as strict as above, fails the run and posts nothing. An
-  empty `findings` array is a valid answer. When the run's context is done after the first wrong answer,
+  empty `findings` array is a valid answer. Amended by issue #343: the retry writes one `::notice::`
+  line to the job's log naming the pull request and the shape check that failed, never any text of the
+  answer. When the run's context is done after the first wrong answer,
   there is no second call and nothing is posted. **When the second answer has the wrong shape too**, the
   program posts one short `COMMENT` review on the head it read saying the review could not be read: no
   finding is invented, there are no inline comments and it is never `REQUEST_CHANGES` (so it dismisses
