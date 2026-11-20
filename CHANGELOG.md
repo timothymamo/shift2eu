@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.11.0](https://github.com/timothymamo/shift2eu/compare/v0.10.1...v0.11.0) (2026-11-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* shift2eu-server, the HTTP API, is retired and no longer released. Its images up to the last release stay on ghcr.io but get no updates. Run assessments with the CLI or in the browser on the site.
+
+### Bug Fixes
+
+* **aireview:** name CLI and answer errors by constant classes and summarise answered parts in a skip ([#374](https://github.com/timothymamo/shift2eu/issues/374), [#375](https://github.com/timothymamo/shift2eu/issues/375), [#388](https://github.com/timothymamo/shift2eu/issues/388)) ([#400](https://github.com/timothymamo/shift2eu/issues/400)) ([55be1fb](https://github.com/timothymamo/shift2eu/commit/55be1fb7e7e8f96a4e86a6a65e6ba6e7da96a975))
+* **devenv:** remove a stale moved-aside refresh lock automatically, and run dev scripts by path ([#394](https://github.com/timothymamo/shift2eu/issues/394)) ([ef514be](https://github.com/timothymamo/shift2eu/commit/ef514beb6e6ac21bfaff598ee7e5c618304b87db))
+
+
+### Miscellaneous Chores
+
+* stop publishing shift2eu-server, the HTTP API ([#393](https://github.com/timothymamo/shift2eu/issues/393)) ([#401](https://github.com/timothymamo/shift2eu/issues/401)) ([87ea59b](https://github.com/timothymamo/shift2eu/commit/87ea59bb9733b9d1db9a86d62d6d4cbc01619e3f))
+
 ## [0.10.1](https://github.com/timothymamo/shift2eu/compare/v0.10.0...v0.10.1) (2026-11-20)
 
 
