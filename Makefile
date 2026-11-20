@@ -416,7 +416,7 @@ gate-check: ## Check that Protect main and CODEOWNERS on main require the mainta
 
 .PHONY: worktree
 worktree: ## Create or resume the worktree for a PR: make worktree BRANCH=feat/12-short-name
-	@./dev/worktree.sh "$(BRANCH)"
+	@dev/worktree.sh "$(BRANCH)"
 
 .PHONY: git-hooks
 git-hooks: ## Enable .githooks, which refuse commits and pushes to main
@@ -1183,7 +1183,7 @@ VM_OUTPUT = if [ "$$status" -ne 0 ]; then \
 .PHONY: vm-gh-wrapper
 vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it (instead of make vm-delete vm-create)
 	$(LIMA_INSTANCE_CHECK)
-	@script="$$(sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh)" || exit 1; \
+	@script="$$(dev/vm-gh-wrapper.sh dev/gh-app-token.sh)" || exit 1; \
 	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_gh_wrapper ]; then \
 		echo "vm-gh-wrapper: dev/vm-gh-wrapper.sh printed no whole script (its last line is not vm_gh_wrapper); nothing sent to the VM" >&2; \
 		exit 1; \
@@ -1235,7 +1235,7 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 		echo "vm-agents-token-ssh: cannot read the account's public key $$secrets/agents-vm-ssh-key.pub: generate it as the account (docs/dev-environment.md, The agents App)" >&2; \
 		exit 1; \
 	}; \
-	script="$$(sh dev/vm-agents-token-ssh.sh "$$writer" "$$pub" "$$vm_user")" || exit 1; \
+	script="$$(dev/vm-agents-token-ssh.sh "$$writer" "$$pub" "$$vm_user")" || exit 1; \
 	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_agents_token_ssh ]; then \
 		echo "vm-agents-token-ssh: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh); nothing sent to the VM" >&2; \
 		exit 1; \
@@ -1268,7 +1268,7 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 vm-agents-token-ssh-uninstall: ## Remove the agents App account's writer, keys file and sshd drop-in from the VM (host clone)
 	$(LIMA_INSTANCE_CHECK)
 	@$(AGENTS_SSH_CONFIG_USER); \
-	script="$$(sh dev/vm-agents-token-ssh.sh --uninstall "$$vm_user")" || exit 1; \
+	script="$$(dev/vm-agents-token-ssh.sh --uninstall "$$vm_user")" || exit 1; \
 	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_agents_token_ssh_uninstall ]; then \
 		echo "vm-agents-token-ssh-uninstall: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh_uninstall); nothing sent to the VM" >&2; \
 		exit 1; \
