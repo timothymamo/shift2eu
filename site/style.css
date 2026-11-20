@@ -897,7 +897,7 @@ button.secondary:disabled {
 
 /* Each blocker item carries the same svg-free cross as its heading. */
 #report .part-blockers > ul > li::marker {
-  content: "\2715\00a0";
+  content: "\2715\00a0" / "";
   color: var(--none-ink);
   background-color: var(--surface);
 }
