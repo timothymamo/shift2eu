@@ -22,17 +22,24 @@ import (
 // cloud, ai, co, plus the generic info, biz, tech, online, site, xyz; every
 // EU/EEA country code, so de, fr, nl, uk, ch, at, be, se, fi, no, dk, es, it, pl,
 // us, ie, lu, cz, pt and the rest; and OVHcloud's own ovh - deliberately not md,
-// sh, py, rs or another file-extension clash, and deliberately not is, which a
-// Go selector reads as errors.Is and a name ends with), or if it ends in one of
-// the private DNS suffixes an internal name is built from (.internal, the AWS
+// sh, py, rs or another file-extension clash), or if it ends in one of the
+// private DNS suffixes an internal name is built from (.internal, the AWS
 // and GCP private zone; .corp; .lan), and it is not one of the exact public
 // vendor hosts a page may link to (github.com, www.scaleway.com, ... ). The
 // vendor list is exact, never a suffix match: the subdomain of a listed vendor
 // host is a customer's name and is reported.
 //
+// Two suffixes are country code and private zone and Go selector at once:
+// Iceland's is (errors.Is) and local (time.Local). They are read as hosts only
+// when the name's last label is written in exactly that lower case, so
+// db01.corp.local, db01.Corp.local and shop.example.is are reported and the
+// selectors, whose last label a capital opens, are not (lowercaseOnlyTLDs).
+//
 // The account-ID, GUID, IPv4 and IPv6 rules are unchanged, and the names the
 // examples/ allow list already accepts (example.com and its subdomains, the
-// reserved .example, .test and .invalid names) stay accepted.
+// reserved .example, .test and .invalid names) stay accepted. An IPv4 address
+// written into a name with hyphens (ip-10-0-1-23) is reported beside the name
+// that holds it (hyphenatedIPv4Problems).
 func TestSanitisationProblemsHostNameRule(t *testing.T) {
 	t.Parallel()
 
@@ -83,6 +90,45 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			want: []string{"evil.ghcr.io.acme-corp.com"},
 		},
 		{
+			// The same exactness, pinned where a suffix match would still flag
+			// the lookalike above: the listed host itself sits beside the true
+			// subdomain, so a rule that let any name ending in github.com pass
+			// would report nothing at all here.
+			name: "true subdomain of a listed vendor host beside the listed host",
+			text: "cloned from github.com/timothymamo/shift2eu, and evil.github.com/u/x serves the assets",
+			want: []string{"evil.github.com"},
+		},
+		{
+			// .local is the suffix of a customer's own internal zone (and of
+			// mDNS), and a Go selector reads as time.Local ends with it too, so
+			// only a name whose last label is the lower-case suffix itself is
+			// read as a host.
+			name: "private name under the local suffix",
+			text: "the file server is db01.corp.local",
+			want: []string{"db01.corp.local"},
+		},
+		{
+			// Only the last label has to be the exact lower-case suffix: a
+			// customer's own internal name capitalises the labels before it all
+			// the time (a Windows domain, a department), and none of them is a
+			// Go selector.
+			name: "mixed-case private name under the local suffix",
+			text: "the file server is db01.Corp.local",
+			want: []string{"db01.Corp.local"},
+		},
+		{
+			// Iceland's is is a real country code and errors.Is ends with it just
+			// as time.Local ends with local, so the match is the same one.
+			name: "customer host in the Icelandic TLD",
+			text: "the shop answers at shop.example.is",
+			want: []string{"shop.example.is"},
+		},
+		{
+			name: "mixed-case customer host in the Icelandic TLD",
+			text: "the shop answers at Shop.Example.is",
+			want: []string{"Shop.Example.is"},
+		},
+		{
 			name: "customer host in the Luxembourg TLD",
 			text: "the database is at db.acme.lu",
 			want: []string{"db.acme.lu"},
@@ -111,10 +157,11 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 		},
 		{
 			// An AWS private DNS name: .internal is no public TLD, but the name
-			// still identifies a customer's own network.
+			// still identifies a customer's own network. The address inside it is
+			// reported on its own as well (hyphenatedIPv4Problems).
 			name: "AWS private DNS name",
 			text: `"hostname": "ip-10-0-1-23.eu-central-1.compute.internal"`,
-			want: []string{"ip-10-0-1-23.eu-central-1.compute.internal"},
+			want: []string{"10-0-1-23", "ip-10-0-1-23.eu-central-1.compute.internal"},
 		},
 		{
 			name: "GCP internal DNS name",
@@ -214,6 +261,14 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 		{
 			name: "Go time.Local value",
 			text: "the deadline is measured in time.Local",
+			want: nil,
+		},
+		{
+			// A method expression ends with the same suffix as the exported
+			// field it names, and the capital in its last label is what keeps it
+			// out of the host rule.
+			name: "Go method expression ending with the local suffix",
+			text: "the code reads time.Time.Local from the struct",
 			want: nil,
 		},
 		{

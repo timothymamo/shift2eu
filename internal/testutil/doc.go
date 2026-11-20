@@ -1,7 +1,9 @@
 // Package testutil holds helpers shared by tests: golden-file comparison
 // (with an -update flag), fixture loading from testdata, small builders for
-// domain values and a JSON Schema validator for the tests that hold a document
-// to a schema. It must only be imported from _test.go files.
+// domain values, a JSON Schema validator for the tests that hold a document
+// to a schema, and a reader of the estimate reasons the domain declares, which
+// the report guards hold a report's phrases and order to (issue #308). It must
+// only be imported from _test.go files.
 //
 // The application layer's tests may import it, so what it can do through os
 // (file access, the golden files), fmt, time and flag is, beside what testing

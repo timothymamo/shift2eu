@@ -2,9 +2,12 @@ package examples_test
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"unicode/utf16"
@@ -182,15 +185,18 @@ func holdsCheckedPath(name string) bool {
 }
 
 // sanitisationProblems returns every value a checked file may not carry under
-// CLAUDE.md rule 2, rule by rule: account IDs, GUIDs, IPv4 addresses, IPv6
-// addresses and host names. The first four rules are the samples' own; the host
-// name rule is the narrower fixture one (fixtureHostnameProblems), so the strict
-// rule TestSamplesAreSanitised applies over examples/ is unchanged.
+// CLAUDE.md rule 2, rule by rule: account IDs, GUIDs, IPv4 addresses (written
+// with dots or, into a name, with hyphens), IPv6 addresses and host names. The
+// first four rules are the samples' own; the host name rule is the narrower
+// fixture one (fixtureHostnameProblems) and the hyphenated-address rule covers a
+// form only a fixture holds (hyphenatedIPv4Problems), so the strict rule
+// TestSamplesAreSanitised applies over examples/ is unchanged.
 func sanitisationProblems(text string) []problem {
 	return slices.Concat(
 		accountIDProblems(text),
 		guidProblems(text),
 		ipv4Problems(text),
+		hyphenatedIPv4Problems(text),
 		ipv6Problems(text),
 		fixtureHostnameProblems(text),
 	)
@@ -202,26 +208,43 @@ func sanitisationProblems(text string) []problem {
 // versions, jq and JSON paths, plan names, Go selectors), so a name counts as a
 // host only when its last label is one of these. The list is curated, not
 // complete: the generic TLDs a company runs a host under, every EU, EEA and
-// EFTA country code but one, a few other common country codes, OVHcloud's own
-// ovh, and the private DNS suffixes an internal name is built from (internal,
-// the AWS and GCP private zone; corp; lan). Because it is an allow list, the
-// check fails open for a TLD it does not name: a host under an unlisted TLD
-// passes, so additions are expected whenever a likely one turns up.
+// EFTA country code but the two below, a few other common country codes,
+// OVHcloud's own ovh, and the private DNS suffixes an internal name is built
+// from (internal, the AWS and GCP private zone; corp; lan).
+//
+// It fails open, knowingly: because it is an allow list, a host under a TLD it
+// does not name passes, so this is a filter for the likely value, never a
+// guarantee. The known gaps are the sponsored and restricted TLDs (gov, edu,
+// int, mil, aero, coop, jobs, museum, travel), the country codes left out below
+// (in, br, cn, ru, tr, mx, ar, za, sg, hk, kr, tw, il, ae, nz, th, vn, id, my,
+// ph, pk, sa, ua, ...), the newer generic ones and the internationalised ones.
+// Additions are expected whenever a likely one turns up in a guide page or a
+// fixture.
+//
+// The two suffixes a Go selector ends with would be a worse gap than that, since
+// every Go-source fixture that imports the package carries one of them (Iceland's
+// is in errors.Is, the private suffix local in time.Local), so both are matched
+// as hosts too, but only when the name's last label is written in exactly this
+// lower case (lowercaseOnlyTLDs): db01.corp.local, db01.Corp.local and
+// shop.example.is are reported, the selectors, whose last label a capital opens,
+// are not. The gaps there are a name whose last label is capitals
+// (DB01.CORP.LOCAL passes) and a lower-case unexported Go selector in a
+// Go-source fixture (cfg.local, s.is), which would be reported; nothing in the
+// tree trips that one, and reporting a selector is the safe direction.
 //
 // It deliberately leaves out the TLDs that clash with a file extension a
 // fixture or a guide page names (md, sh, py, rs), so install.md or run.sh is
-// never read as a host; json, yaml, go and golden are no TLDs at all. It leaves
-// out Iceland's is, which a Go selector such as errors.Is ends with, and the
-// private suffix local, which Go's time.Local ends with (the match ignores
-// case). Poland's pl is kept although it is Perl's extension too: no fixture
-// names a Perl script.
+// never read as a host; json, yaml, go and golden are no TLDs at all. Poland's
+// pl is kept although it is Perl's extension too: no fixture names a Perl
+// script.
 var publicTLDs = []string{
 	// Generic.
 	"com", "net", "org", "io", "dev", "app", "cloud", "ai", "co",
 	"info", "biz", "tech", "online", "site", "xyz", "shop", "store",
 	// OVHcloud's own TLD: a customer of the target hosts a site under it.
 	"ovh",
-	// The EU, EEA and EFTA country codes, but is.
+	// The EU, EEA and EFTA country codes, but is, which lowercaseOnlyTLDs
+	// matches only in lower case.
 	"eu", "at", "be", "bg", "ch", "cy", "cz", "de", "dk", "ee", "es", "fi",
 	"fr", "gr", "hr", "hu", "ie", "it", "li", "lt", "lu", "lv", "mt", "nl",
 	"no", "pl", "pt", "ro", "se", "si", "sk", "uk",
@@ -230,6 +253,18 @@ var publicTLDs = []string{
 	// Private DNS suffixes: such a name identifies a customer's own network.
 	"internal", "corp", "lan",
 }
+
+// lowercaseOnlyTLDs are the public suffixes under which the fixture check reads
+// a name as a host only when the name's last label is written in exactly this
+// lower case: a Go selector ends with one of them and capitalises that label
+// (errors.Is, time.Local), and a Go-source fixture is full of those, while a
+// host under them - the country code of Iceland, or the .local zone mDNS and a
+// customer's own internal DNS use - is written in lower case, whatever the
+// labels before it are (db01.Corp.local). An all-caps name (DB01.CORP.LOCAL)
+// passes, a gap of the same kind as the curated TLD list above, and a lower-case
+// unexported selector in a Go-source fixture (cfg.local, s.is) would be
+// reported, which fails closed.
+var lowercaseOnlyTLDs = []string{"local", "is"}
 
 // publicVendorHosts are the exact public hosts of the vendors and projects a
 // guide page or a fixture links to or names: they identify the vendor, never a
@@ -271,10 +306,11 @@ var publicVendorHosts = []string{
 
 // fixtureHostnameProblems returns the problems hostnameProblems reports that
 // are host names in the fixture sense: names whose last label is a public TLD
-// (publicTLDs) and that are not an exact public vendor host
-// (publicVendorHosts). Every name hostnameProblems already accepts (example.com
-// and its subdomains, the reserved .example name, the provider API hosts, the
-// taxonomy vocabulary) stays accepted.
+// (publicTLDs) or, written in lower case exactly, one of the two suffixes a Go
+// selector ends with (lowercaseOnlyTLDs), and that are not an exact public
+// vendor host (publicVendorHosts). Every name hostnameProblems already accepts
+// (example.com and its subdomains, the reserved .example name, the provider API
+// hosts, the taxonomy vocabulary) stays accepted.
 func fixtureHostnameProblems(text string) []problem {
 	var problems []problem
 
@@ -285,7 +321,20 @@ func fixtureHostnameProblems(text string) []problem {
 			continue
 		}
 
-		if !slices.Contains(publicTLDs, lastLabel(lower)) {
+		label := lastLabel(lower)
+
+		switch {
+		case slices.Contains(lowercaseOnlyTLDs, label):
+			// An exported Go selector ends with one of these suffixes and
+			// writes its last label with a capital (errors.Is, time.Local,
+			// time.Time.Local), while a host under them writes that label in
+			// lower case, whatever the labels before it look like
+			// (db01.Corp.local): only a last label that is exactly the
+			// lower-case suffix is a host.
+			if lastLabel(p.value) != label {
+				continue
+			}
+		case !slices.Contains(publicTLDs, label):
 			continue
 		}
 
@@ -298,6 +347,139 @@ func fixtureHostnameProblems(text string) []problem {
 // lastLabel returns the label after the last dot of name.
 func lastLabel(name string) string {
 	return name[strings.LastIndex(name, ".")+1:]
+}
+
+// hyphenatedIPv4Pattern finds an IPv4 address written with hyphens rather than
+// dots: four runs of one to three digits, the way AWS and Azure write an address
+// into a machine's name (ip-10-1-2-3, ip-10-1-2-3.eu-central-1.compute.internal).
+// A run of four digits cannot match, so the year of a date (2026-11-20) never
+// starts one, and a date has three groups rather than four; the shape alone is
+// still no proof, so a candidate must be an address written into a name
+// (hyphenatedIPv4InName) whose groups are octets (parseHyphenatedIPv4).
+var hyphenatedIPv4Pattern = regexp.MustCompile(`\b[0-9]{1,3}(?:-[0-9]{1,3}){3}\b`)
+
+// hyphenatedIPv4Problems returns a problem for every IPv4 address the fixture
+// check reads in a name written with hyphens, when the address is outside the
+// documentation range every sample address is in (documentationPrefix), the same
+// one range the dotted rule holds a sample to. It reports the address the way
+// ipv4Problems reports a dotted one. The .internal suffix already catches a full
+// AWS host name (ip-10-1-2-3.eu-central-1.compute.internal) through the host name
+// rule, but a bare ip-10-1-2-3 carries no dot at all, so without this rule a
+// customer's private address written that way would pass.
+//
+// It knowingly leaves these forms to a follow-up issue rather than report a value
+// it cannot tell from prose:
+//
+//   - an address with no ip- prefix in no dotted name, bare (10-1-2-3) or inside
+//     a single label (node-10-1-2-3): the run alone is a run of numbers, and the
+//     rule reports only what a name marks as an address;
+//   - an address written with underscores (ip_10_1_2_3), which no source writes
+//     into a name;
+//   - a zero-padded octet (ip-10-01-2-3) and a hexadecimal address (ip-0a010203),
+//     which parseHyphenatedIPv4 rejects: a name holding one passes;
+//   - a run a leftmost match swallows: in x-5-10-1-2-3 the pattern matches
+//     5-10-1-2-3 from the leftmost digit, which is no address, and the address
+//     inside it is never looked at again;
+//   - a run whose ip- is glued to the end of a word (myip-10-1-2-3,
+//     eip-10-1-2-3, hostip-172-16-0-5) unless a dotted label follows: the ip-
+//     inside such a word is no prefix that stands on its own, which is the
+//     price of keeping ship- and zip- clean (hyphenatedIPv4AfterIPPrefix);
+//   - a run that ends a sentence (node-10-1-2-3.), where the full stop opens no
+//     label.
+//
+// Issue #361 tracks these gaps.
+func hyphenatedIPv4Problems(text string) []problem {
+	var problems []problem
+
+	for _, match := range hyphenatedIPv4Pattern.FindAllStringIndex(text, -1) {
+		if !hyphenatedIPv4InName(text, match[0], match[1]) {
+			continue
+		}
+
+		candidate := text[match[0]:match[1]]
+
+		addr, ok := parseHyphenatedIPv4(candidate)
+		if !ok {
+			continue
+		}
+
+		if documentationPrefixNet.Contains(addr) {
+			continue
+		}
+
+		problems = append(problems, problem{
+			line:  lineOf(text, match[0]),
+			value: candidate,
+			rule:  "is an IPv4 address written into a name, outside the documentation range " + documentationPrefix + " (CLAUDE.md rule 2)",
+		})
+	}
+
+	return problems
+}
+
+// hyphenatedIPv4InName reports whether the four-group run text[start:end] is an
+// address written into a name rather than a run of numbers that merely has its
+// shape: the run either follows an ip- that stands on its own, the prefix AWS and
+// Azure give an address in a machine's name (ip-10-1-2-3), or it ends a label
+// that another label follows after a dot (10-1-2-3.eu-central-1.compute.internal,
+// and so vm-10-1-2-3.acme.corp and a.10-1-2-3.b too). A documentation domain
+// name can hold one as well: 10-1-2-3.example.com names a private address
+// although its domain identifies nobody, so the address alone is reported. A run
+// of four numbers in prose
+// (1-2-3-4) or at the end of a version-like token (build-1-2-3-4) is neither: the
+// ip- inside ship- or zip- is no prefix (hyphenatedIPv4AfterIPPrefix), and the
+// full stop that ends a sentence opens no label, so the rule stays off values that
+// only look like an address; parseHyphenatedIPv4 then keeps out every run whose
+// groups are not octets and every run of digits with a leading zero.
+//
+// Version-like tokens are clean only while they end the label. The same token
+// with a dotted extension (build-1-2-3-4.tar.gz, release-1-2-3-4.md) ends a
+// label that a dotted one follows, so it is read as the address 1.2.3.4 and
+// reported: the rule cannot tell such a version from an address in a name, and
+// it fails closed, so TestHyphenatedIPv4Problems pins the report.
+func hyphenatedIPv4InName(text string, start, end int) bool {
+	if hyphenatedIPv4AfterIPPrefix(text, start) {
+		return true
+	}
+
+	return strings.HasPrefix(text[end:], ".") && end+1 < len(text) && labelByte(text[end+1])
+}
+
+// hyphenatedIPv4AfterIPPrefix reports whether text[:start] ends with an ip-
+// prefix that stands on its own: one that starts the text, or one whose byte
+// before is no letter or digit, so the ip- inside ship- or zip- is no prefix. The
+// match is case-insensitive, since a name is written in capitals as often as
+// not.
+func hyphenatedIPv4AfterIPPrefix(text string, start int) bool {
+	prefix := start - len("ip-")
+	if prefix < 0 || !strings.EqualFold(text[prefix:start], "ip-") {
+		return false
+	}
+
+	if prefix == 0 {
+		return true
+	}
+
+	return !labelByte(text[prefix-1])
+}
+
+// labelByte reports whether b is a byte a dotted name's label is built from: an
+// ASCII letter or digit, the characters hostnamePattern builds a label from.
+func labelByte(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
+}
+
+// parseHyphenatedIPv4 parses candidate, four groups of one to three digits
+// separated by hyphens, as an IPv4 address: the groups are the octets, so a
+// group above 255 makes the candidate no address at all, and it is then not
+// reported.
+func parseHyphenatedIPv4(candidate string) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(strings.ReplaceAll(candidate, "-", "."))
+	if err != nil || !addr.Is4() {
+		return netip.Addr{}, false
+	}
+
+	return addr, true
 }
 
 // fixtureProblems runs the sanitisation check over every checked file below
@@ -393,4 +575,54 @@ func allowListed(name, value string) bool {
 	return slices.ContainsFunc(realDataAllowList, func(entry allowListEntry) bool {
 		return entry.file == name && entry.value == value
 	})
+}
+
+// staleAllowListEntry is an allow-list entry the check no longer needs, with the
+// values the check does report in its file: the entry excuses none of them.
+type staleAllowListEntry struct {
+	// entry is the entry as the allow list holds it.
+	entry allowListEntry
+	// reported are the values sanitisationProblems reports in the entry's file.
+	reported []string
+}
+
+// staleAllowListEntries returns every entry of list that the fixture check in
+// root no longer needs: the entries whose file holds no value
+// sanitisationProblems reports. root is the directory the entries' paths are
+// relative to, so a test tree is judged the way the module is, and each result
+// carries the values the check does report in that file, so a failure says what
+// the entry no longer covers. The file is decoded as the check decodes it
+// (fixtureText), so an encoding cannot make an entry that is still in use look
+// stale.
+//
+// An entry whose file cannot be read is not judged, and it does not end the
+// pass: its read error is collected and the entries after it are judged too, so
+// one broken entry cannot hide a stale one. The returned error names every such
+// entry, one error each (errors.Join), and a pass whose files all read returns
+// none. A missing or non-regular file is what the allow list's structural checks
+// report already, so the caller reports this error beside them rather than
+// stopping at it.
+func staleAllowListEntries(root string, list []allowListEntry) ([]staleAllowListEntry, error) {
+	var (
+		stale []staleAllowListEntry
+		read  []error
+	)
+
+	for _, entry := range list {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(entry.file)))
+		if err != nil {
+			read = append(read, fmt.Errorf("read %s for its allow-list entry: %w", entry.file, err))
+
+			continue
+		}
+
+		reported := problemValues(sanitisationProblems(fixtureText(data)))
+		if slices.Contains(reported, entry.value) {
+			continue
+		}
+
+		stale = append(stale, staleAllowListEntry{entry: entry, reported: reported})
+	}
+
+	return stale, errors.Join(read...)
 }

@@ -244,11 +244,23 @@ reference data, and every schema version bump would be refused the same way. The
 - **The review names the left-out files** under "Not reviewed", each in a code span escaped as a
   finding's path is (backticks made apostrophes, control characters spaces, mentions defused, each path
   cut to 300 UTF-16 code units), so the maintainer knows what the AI review did not read. The note
-  states the total, lists the first 50 paths (`MaxListedExcluded`) and says how many more it does not
-  list. Like the first line and the closing statement, it is outside the part cut at GitHub's limit:
-  its room is taken off the review's, so a truncated review still holds it whole, and its own bound
-  keeps it to a small part of that limit whatever the pull request changes. A review that left nothing
-  out has no such note.
+  states the total, lists the first 50 paths (`MaxListedExcluded`), each with the lines it adds
+  (`(+3 lines)`, issue #342), a binary file as `(binary, not scanned)`, a rename's old path as
+  `(renamed)` and a copy's source path as `(copied)`, and says how many more it does not list. Amended by issue #342: **a model-free scan
+  reads the lines the left-out sections add** (`ScanLeftOut`; never a removed or context line, never a
+  reviewed file) for a twelve-digit account ID, an IPv4 address, a host name and a key-like string
+  (an access key ID, a long token, or a secret access key: a run holding `+` or `/` is one only at
+  exactly 40 characters, so a path or URL is none), by fixed rules that know the
+  sanitised values of CLAUDE.md rule 2. An example domain is no finding at any depth; a provider's
+  domain only as its apex, exactly one label below it, or for `amazonaws.com` `<service>.<region>`:
+  a deeper name is one a customer chose. The left-out paths themselves are shown as they are, escaped
+  and cut, and are not scanned: the pull request's own file list already shows them. The note lists
+  the scan's first 20 findings (`MaxScanFindings`) as the file and line in a code span and the kind
+  found, never the value, and counts the rest. The scan is no part of the prompt, adds no finding to
+  the model's and changes no event. Like the first line and the closing statement, the note is outside
+  the part cut at GitHub's limit: its room is taken off the review's, so a truncated review still
+  holds it whole, and its own bound keeps it to a small part of that limit whatever the pull request
+  changes. A review that left nothing out has no such note.
 - **The model is told what was left out.** The untrusted JSON document lists the left-out paths in its
   own field, `left_out_of_diff` (they are the pull request's data, never in the system prompt), and the
   system prompt says that a file listed there was left out on purpose, so its absence is no missing or
@@ -437,7 +449,9 @@ the trigger option below are the levers.
   `findings` that is no array, an unknown field or a field of the wrong type), text around the object, no
   summary or no `findings` array. A finding the parser refuses (a bad severity, an empty title, a bad
   path or line) is not asked again: it stays as strict as above, fails the run and posts nothing. An
-  empty `findings` array is a valid answer. When the run's context is done after the first wrong answer,
+  empty `findings` array is a valid answer. Amended by issue #343: the retry writes one `::notice::`
+  line to the job's log naming the pull request and the shape check that failed, never any text of the
+  answer. When the run's context is done after the first wrong answer,
   there is no second call and nothing is posted. **When the second answer has the wrong shape too**, the
   program posts one short `COMMENT` review on the head it read saying the review could not be read: no
   finding is invented, there are no inline comments and it is never `REQUEST_CHANGES` (so it dismisses
@@ -450,8 +464,11 @@ the trigger option below are the levers.
 - **The run has a deadline of 15 minutes** (`runDeadline`, set by `ci/aireview`'s `main`), so two model
   calls cannot outlive the job's `timeout-minutes: 20`. Each call's ten-minute timeout is derived from
   the run's context and so capped by what remains of the deadline: after a first call of ten minutes,
-  the retry has at most five. The run plus the detached post above takes at most 15.5 minutes, which
-  leaves 4.5 minutes of the job for building the reviewer, installing the CLI and minting the token.
+  the retry has at most five. The run plus the detached post above takes at most 15.5 minutes. The
+  steps before it (building the reviewer, installing the CLI and minting the token) are given 3
+  minutes, more than they take, and the last 1.5 minutes of the job are margin for its post steps,
+  such as the revocation of the App's token, which run inside `timeout-minutes` too
+  (`ci/aireview/deadline_test.go` pins the sum).
   A CLI stopped because the run's deadline passed says so ("the run's deadline passed"), not that it was
   cancelled, which stays the wording for a cancelled run.
 - An inline comment goes only on a line the diff shows on its new side; a finding on any other line, or

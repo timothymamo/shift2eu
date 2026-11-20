@@ -70,21 +70,21 @@ func ParseAnswer(text string) (Answer, error) {
 
 	var raw rawAnswer
 	if err := dec.Decode(&raw); err != nil {
-		return Answer{}, shapeError{fmt.Errorf("%w: not one JSON object of the answer's form: %w", ErrMalformedAnswer, err)}
+		return Answer{}, newShapeError(checkNotOneObject, err)
 	}
 
 	// What the decoder buffered but did not use, then what it never read.
 	rest, err := io.ReadAll(io.MultiReader(dec.Buffered(), src))
 	if err != nil || len(bytes.TrimSpace(rest)) != 0 {
-		return Answer{}, shapeError{fmt.Errorf("%w: text after the JSON object", ErrMalformedAnswer)}
+		return Answer{}, newShapeError(checkTextAfter, nil)
 	}
 
 	if raw.Summary == nil || strings.TrimSpace(*raw.Summary) == "" {
-		return Answer{}, shapeError{fmt.Errorf("%w: no summary", ErrMalformedAnswer)}
+		return Answer{}, newShapeError(checkNoSummary, nil)
 	}
 
 	if raw.Findings == nil {
-		return Answer{}, shapeError{fmt.Errorf("%w: no findings array", ErrMalformedAnswer)}
+		return Answer{}, newShapeError(checkNoFindings, nil)
 	}
 
 	answer := Answer{Summary: *raw.Summary, Findings: make([]Finding, 0, len(*raw.Findings))}
@@ -108,8 +108,32 @@ func ParseAnswer(text string) (Answer, error) {
 // findings array. Run asks the model once more for such an answer (issue
 // #316); a finding ParseAnswer refuses is no shapeError and is not asked again.
 // It wraps ErrMalformedAnswer as every malformed answer's error does, and its
-// text is the error's own.
-type shapeError struct{ err error }
+// text is the error's own. check is the phrase of the shape check that failed,
+// one of this package's constants and never text of the answer, which Run's
+// retry notice names (issue #343).
+type shapeError struct {
+	check string
+	err   error
+}
+
+// The shape checks ParseAnswer makes, as its errors and the retry notice name
+// them.
+const (
+	checkNotOneObject = "not one JSON object of the answer's form"
+	checkTextAfter    = "text after the JSON object"
+	checkNoSummary    = "no summary"
+	checkNoFindings   = "no findings array"
+)
+
+// newShapeError returns the shapeError of check, wrapping ErrMalformedAnswer
+// and cause when there is one.
+func newShapeError(check string, cause error) shapeError {
+	if cause != nil {
+		return shapeError{check: check, err: fmt.Errorf("%w: %s: %w", ErrMalformedAnswer, check, cause)}
+	}
+
+	return shapeError{check: check, err: fmt.Errorf("%w: %s", ErrMalformedAnswer, check)}
+}
 
 func (e shapeError) Error() string { return e.err.Error() }
 
@@ -117,9 +141,20 @@ func (e shapeError) Unwrap() error { return e.err }
 
 // isShapeError reports whether err is, or wraps, a shapeError.
 func isShapeError(err error) bool {
-	var shape shapeError
+	_, ok := shapeCheck(err)
 
-	return errors.As(err, &shape)
+	return ok
+}
+
+// shapeCheck returns the phrase of the shape check err failed, and false when
+// err is no shapeError and wraps none.
+func shapeCheck(err error) (string, bool) {
+	var shape shapeError
+	if !errors.As(err, &shape) {
+		return "", false
+	}
+
+	return shape.check, true
 }
 
 // finding validates rf and returns it as a Finding.
