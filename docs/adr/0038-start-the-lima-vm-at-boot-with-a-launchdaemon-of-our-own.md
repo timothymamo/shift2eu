@@ -60,7 +60,9 @@ is only read, from make's command line or the Makefile), installed but not loade
 `launchctl`: an SSH-only session has no `gui/<uid>` domain to ask, and a job booted out by hand but left on
 disk loads again at the next boot or login. It names each job it finds, its domain or file,
 `limactl autostart disable <instance>`, and the removal by hand: `launchctl bootout` and `rm -f` of the
-plist (`sudo` only for the LaunchDaemon). It does not detect a bare enable override (`=> enabled` in
+plist (`sudo` only for the LaunchDaemon). A plist path with anything but letters, digits, `/`, `.`, `_` and
+`-` (as under a `HOME` with a space) is not repeated: the advice says the path is not shown and points at it
+with an `ls` of `~/Library/LaunchAgents/<label>.plist` (or the LaunchDaemons one) instead. It does not detect a bare enable override (`=> enabled` in
 `launchctl print-disabled`) with no job or plist behind it: that is inert alone, and
 `docs/dev-environment.md` (Do not let Lima start the VM) turns it into a disable once per Mac.
 `make vm-boot-install` refuses with it, before any `sudo`: Lima's job and ours would race for the same VM,

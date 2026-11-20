@@ -254,7 +254,8 @@ until the VM is up. In account mode too this job runs as you, from your host clo
 
 The install refuses, before any `sudo`: a run as root, a Lima autostart job of the instance, loaded or only
 its plist on disk (it names it, `limactl autostart disable <instance>`, and the bootout and `rm -f` of the
-plist that remove it by hand), and an instance `limactl list` does not list. It lints the plist, prints it
+plist that remove it by hand; a plist path with anything but letters, digits, `/`, `.`, `_` and `-`, as
+under a `HOME` with a space, is not repeated, and the advice points at it with an `ls` instead), and an instance `limactl list` does not list. It lints the plist, prints it
 with its SHA-256, prints every `sudo` before it runs, boots a loaded job out first, reads the installed plist
 back and loads it. Loading it runs it once, so a stopped VM starts. Both targets put the plist in
 `VM_BOOT_LAUNCHD_DIR` (`/Library/LaunchDaemons`), a hook for the tests only: never set it on the Mac.
