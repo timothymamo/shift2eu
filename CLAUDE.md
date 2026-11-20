@@ -21,7 +21,10 @@ resources, and scopes a target to one region with `--region` (PRD #190, ADRs 002
 `shift2eu-server`, serves the same assessments over a versioned HTTP API (PRD #103, ADR 0019), released
 as a binary and as the image `ghcr.io/timothymamo/shift2eu-server` beside the CLI's. A WebAssembly module,
 `cmd/shift2eu-web` (PRD #297 milestone 1, ADR 0035), runs the same assessment in the browser and renders it
-as HTML; the site that serves it comes in the PRD's later milestones. Live source adapters do not exist yet. Work is planned as PRDs in `prds/`.
+as HTML. The site's pages (`site/`) load it under a strict Content Security Policy, and `make site`
+(`ci/sitebuild`) assembles them into a reproducible bundle that a headless-browser smoke test
+(`test/browser`, `make test-browser`) drives (PRD #297 milestone 2, ADR 0036); its release and deploy come
+in the PRD's later milestones. Live source adapters do not exist yet. Work is planned as PRDs in `prds/`.
 
 ## Ubiquitous language
 
@@ -50,7 +53,9 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 | Adapters | `internal/adapter/source/{inventoryfile,aws,azure,gcp}`, `internal/adapter/target/{ovhcloud,scaleway,upcloud}`, `internal/adapter/report/{markdown,jsonreport,htmlreport}` (`htmlreport`: the site's HTML fragment, ADR 0035), `internal/adapter/request/assessmentrequest` (the HTTP API's request decoder), and `internal/adapter/internal/jsondoc`, the JSON decoder they share | Domain, the ports they implement, SDKs. Never `internal/cli`, `internal/httpapi`, `internal/web` or `cmd/` |
 | Driving adapters | `internal/cli` (the CLI), `internal/httpapi` (the HTTP API, ADR 0019) and `internal/web` (the site's WebAssembly adapter, ADR 0035) | Application, domain, `internal/version`; never each other, an adapter or `cmd/`. `internal/web` also never `os`, `net` or `syscall/js` |
 | Composition roots | `cmd/shift2eu` (the CLI, offline: never imports `internal/httpapi`), `cmd/shift2eu-server` (the HTTP API, PRD #103 milestone 3; never imports `internal/cli`) and `cmd/shift2eu-web` (the site's module, `js && wasm`, the only importer of `syscall/js`) with its untagged wiring package `cmd/shift2eu-web/internal/wire` (ADR 0035) | Everything but a cloud SDK; the only places adapters are constructed. Each one's imports are a strict allow list (`composition-root`, `server-composition-root`, `web-composition-root`, `web-composition-root-wire`): the module's own packages and the standard packages it needs, no third-party package. Only wire's test files import `internal/cli`, for the parity tests |
-| CI tooling (no part of the product) | `ci/aireview` (the AI reviewer's workflow program, ADR 0033) and its library `ci/aireview/internal/review` | Named standard packages only (`ai-reviewer-main`, `ai-reviewer-is-standard-library`); no release builds it and Go's internal rule keeps the product from importing it |
+| CI tooling (no part of the product) | `ci/aireview` (the AI reviewer's workflow program, ADR 0033) and its library `ci/aireview/internal/review`; `ci/sitebuild`, the program `make site` runs to assemble the site's bundle (PRD #297) | Named standard packages only (`ai-reviewer-main`, `ai-reviewer-is-standard-library`, `site-builder`); no release builds them and Go's internal rule keeps the product from importing them |
+| Site (no Go) | `site/`: the site's pages, stylesheet and one page script (ADR 0036); `site/records/` is never bundled | Nothing: the page script is held by `test/site`'s banned-API scan, and every page by its Content Security Policy |
+| Browser smoke test | `test/browser` (`browser && !js`), run by `make test-browser` against a pinned headless Chromium | Exactly its listed standard and `chromedp` packages (`browser-smoke-test`), no package of the module; only it imports `chromedp` (`chromedp-only-in-the-browser-test`) |
 
 - The dependency rule is **enforced by `golangci-lint` (depguard)** and, package by package for every
   release target, by `test/architecture` (ADR 0012). Do not add `//nolint:depguard`; fix the design.
@@ -74,6 +79,8 @@ make lint              # golangci-lint natively and for every release target, th
 make fmt               # gofumpt + goimports
 make build             # ./bin/shift2eu and ./bin/shift2eu-server (the HTTP API)
 make server            # ./bin/shift2eu-server only
+make site              # the site's bundle into bin/site and its archive bin/shift2eu-site_<version>.tar.gz
+make test-browser      # make site, then the headless-browser smoke test in a pinned Chromium container
 ```
 
 ## Testing

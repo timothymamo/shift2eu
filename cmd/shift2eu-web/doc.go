@@ -21,7 +21,12 @@
 // hold entries of the wrong type, and any mistyped option. The bound only
 // stops a hostile length before any entry is read; any realistic list reaches
 // the option rules, whose message is the CLI's usage error. A panic during an assessment is recovered and returned as an
-// internal failure with a constant message, so the page stays usable.
+// internal failure with a constant message, so the page stays usable. A
+// JavaScript exception is not a panic: a getter in the options object that
+// throws while the glue reads it unwinds through Value.Get, which syscall/js
+// cannot catch, so shift2euAssess throws to its caller instead of returning
+// an internal failure. The page's own call catches it and shows a constant
+// message (ADR 0036).
 //
 // The trust boundary of the returned object: error and kind are plain text,
 // which the page shows with textContent and never as markup; markdown and json
