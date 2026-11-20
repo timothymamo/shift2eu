@@ -209,6 +209,12 @@ func holdsCheckedPath(name string) bool {
 // (hyphenatedIPv4Problems) and the vendor-path rule (vendorPathProblems) cover
 // forms a fixture holds, so the strict rule TestSamplesAreSanitised applies over
 // examples/ is unchanged.
+//
+// No rule reads the provider resource paths that hold a globally unique
+// customer name: a GCP project ID (projects/acme-corp-prod/...), an Azure
+// storage account in an ARM ID (.../storageAccounts/acmeprod) or a Cloud Storage
+// bucket in a resource name (projects/_/buckets/acme-prod-data) passes. The gap
+// predates the rules of issues #361 to #363 and is left for a follow-up issue.
 func sanitisationProblems(text string) []problem {
 	return slices.Concat(
 		accountIDProblems(text),
@@ -414,24 +420,36 @@ var bucketPattern = regexp.MustCompile(`(?i)\b(?:s3[an]?|gs|az)://[a-z0-9][a-z0-
 // out.
 var bucketARNPattern = regexp.MustCompile(`(?i)\barn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9_.-]*`)
 
-// cloudStorageHost is the Cloud Storage service host, which the host name rule
-// accepts as a provider API host (compute.googleapis.com and its siblings).
-const cloudStorageHost = "storage.googleapis.com"
-
 // cloudStoragePathPattern finds the bucket a Cloud Storage path names after the
-// service host, in a URL (https://storage.googleapis.com/acme-prod-data/key) or
-// in a Cloud Asset name (//storage.googleapis.com/acme-prod-data): the host,
-// matched case-insensitively, a slash and the bucket. A bucket's name is lower
-// case, so the bucket is matched in lower case only, and the asset type
-// (storage.googleapis.com/Bucket), whose segment a capital opens, is not read.
-var cloudStoragePathPattern = regexp.MustCompile(`(?i:storage\.googleapis\.com)/[a-z0-9][a-z0-9_.-]*`)
+// service host (storage.googleapis.com, which the host name rule accepts as a
+// provider API host like compute.googleapis.com and its siblings), in one of two
+// forms, the first tried first at each position:
+//
+//   - a JSON API path, on www.googleapis.com or the service host, whose
+//     storage/v1/b segment an upload or a download path may open
+//     (https://www.googleapis.com/upload/storage/v1/b/acme-prod-data/o, the
+//     asset name //storage.googleapis.com/storage/v1/b/acme-prod-data): the
+//     host, the path and the bucket after b/;
+//   - a URL (https://storage.googleapis.com/acme-prod-data/key) or a Cloud
+//     Asset name (//storage.googleapis.com/acme-prod-data): the service host, a
+//     slash and the bucket.
+//
+// The hosts and the JSON API's segments are matched case-insensitively. A
+// bucket's name is lower case, so the bucket is matched in lower case only, and
+// the asset type (storage.googleapis.com/Bucket), whose segment a capital opens,
+// is not read. The bucket is the path's last segment in either form.
+var cloudStoragePathPattern = regexp.MustCompile(
+	`(?i:(?:www|storage)\.googleapis\.com/(?:upload/|download/)?storage/v1/b)/[a-z0-9][a-z0-9_.-]*` +
+		`|(?i:storage\.googleapis\.com)/[a-z0-9][a-z0-9_.-]*`)
 
 // sampleBucketPattern matches a sample's bucket name, lowercased: example, or
 // example- and generic words joined by hyphens (example-bucket,
-// example-logs-backup), each optionally ending in a group of digits
-// (example-logs-2). A name after the prefix (example-acme-prod) is the
-// customer's and does not match.
-var sampleBucketPattern = regexp.MustCompile(`^example(?:-(?:bucket|logs|data|backup|assets|archive|media))*(?:-[0-9]+)?$`)
+// example-logs-backup), each optionally ending in a group of one to three digits
+// (example-logs-2), the count a sample numbers its buckets with. A name after
+// the prefix (example-acme-prod) or a longer run of digits
+// (example-logs-210987654321, an account ID or a customer's own suffix) does not
+// match.
+var sampleBucketPattern = regexp.MustCompile(`^example(?:-(?:bucket|logs|data|backup|assets|archive|media))*(?:-[0-9]{1,3})?$`)
 
 // sampleBucket reports whether bucket, as written, is a sample's bucket name
 // (sampleBucketPattern), matched case-insensitively.
@@ -477,8 +495,9 @@ var publicOpenSourceOwners = []string{
 // customer just as a host would, so the value reported is the host and the
 // owner (github.com/acme, from git@github.com:acme/x.git too), the scheme and
 // the bucket (s3://acme-prod-bucket), the ARN (arn:aws:s3:::acme-prod-bucket)
-// or the service host and the bucket (storage.googleapis.com/acme-prod-data),
-// as written.
+// or the host and the Cloud Storage path up to the bucket
+// (storage.googleapis.com/acme-prod-data,
+// www.googleapis.com/upload/storage/v1/b/acme-prod-data), in lower case.
 //
 // It knowingly leaves these gaps:
 //
@@ -486,12 +505,24 @@ var publicOpenSourceOwners = []string{
 //     owner, so api.github.com/repos/acme/x passes;
 //   - an endpoint segment after github.com itself: github.com/orgs/acme
 //     reports github.com/orgs, which fails closed but names the wrong value;
+//   - a port in an SSH URL (ssh://git@github.com:22/acme/x), whose colon is no
+//     SSH clone form: it reports github.com/22, which fails closed but names
+//     the wrong value;
 //   - contrived paths the owner pattern does not read past (github.com//acme,
-//     a .. segment, an encoded slash %2F), which pass;
+//     a .. segment, an encoded slash %2F), which pass, and JSON-escaped slashes
+//     (gs:\/\/acme-prod-data, storage.googleapis.com\/acme-prod-data), which no
+//     pattern reads, so they pass;
 //   - the bucket schemes other than s3, s3a, s3n, gs and az
-//     (abfs://container@account..., wasbs://, oci://), which pass, and a Cloud
-//     Storage JSON API path (//storage.googleapis.com/storage/v1/b/acme),
-//     which reports storage.googleapis.com/storage;
+//     (abfs://container@account..., wasbs://, oci://), which pass;
+//   - the S3 ARNs of an access point, an Outposts bucket or an Object Lambda
+//     access point (arn:aws:s3:eu-central-1:123456789012:accesspoint/acme-prod-ap),
+//     whose region and account the bucket ARN's ::: never matches, so the
+//     customer's name passes;
+//   - an object key after a sample bucket (s3://example-bucket/customers/acme-corp/x):
+//     only the bucket is judged, so a customer's name in the key passes;
+//   - a Cloud Storage bucket written with capitals: Cloud Storage names are
+//     lower case, so the path pattern stops before the first capital
+//     (storage.googleapis.com/Acme-prod passes, the asset type Bucket with it);
 //   - the paths of every other vendor host publicVendorHosts lists
 //     (golang.org/x/..., www.ovhcloud.com/en/...), whose segments are
 //     the vendor's own.
@@ -557,19 +588,20 @@ func vendorPathProblems(text string) []problem {
 		start := match[0]
 
 		if start > 0 && (labelByte(text[start-1]) || text[start-1] == '.' || text[start-1] == '-') {
-			// A name below the service host (acme.storage.googleapis.com) is
-			// the host name rule's value.
+			// A name below the service host (acme.storage.googleapis.com) or
+			// below www.googleapis.com is the host name rule's value.
 			continue
 		}
 
-		value := strings.TrimRight(text[start:match[1]], ".")
-		bucket := value[len(cloudStorageHost+"/"):]
+		// The host and the JSON API's segments are reported in lower case, the
+		// bucket's own letters are lower case already.
+		value := strings.ToLower(strings.TrimRight(text[start:match[1]], "."))
 
-		if sampleBucket(bucket) {
+		if sampleBucket(value[strings.LastIndex(value, "/")+1:]) {
 			continue
 		}
 
-		problems = append(problems, problem{line: lineOf(text, match[0]), value: cloudStorageHost + "/" + bucket, rule: bucketRule})
+		problems = append(problems, problem{line: lineOf(text, match[0]), value: value, rule: bucketRule})
 	}
 
 	return problems
@@ -631,9 +663,12 @@ var englishWordsEndingInIP = []string{
 // 1-2-3-4) is a sequence of numbers as often as an address. A private run is
 // reported in a CIDR written into a name too (vpc-10-0-0-0-16,
 // subnet_10_0_0_0_24): a fifth group after it, with the same separator, of 0 to
-// 32 and with nothing further, is a prefix length (cidrSuffix), while any other
-// fifth group (10-1-2-3-45, 10-1-2-3-4-5) or one after a public-looking run
-// (build-1-2-3-4-5) leaves the run clean. An English word ending in ip before a
+// 32 and with nothing further, is a prefix length (cidrSuffix), and so is one a
+// further digit group follows when a label stands before the run
+// (subnet-10-0-1-0-24-2, vpc_10_0_0_0_16_1, which fails closed), while any other
+// fifth group (10-1-2-3-45, vpc-10-0-0-0-33, vpc-10-0-0-0-016, the bare
+// 10-1-2-3-4-5) or one after a public-looking run (build-1-2-3-4-5) leaves the
+// run clean. An English word ending in ip before a
 // private run excuses it only when the word stands on its own (zip-10-1-2-3);
 // inside a compound name (edge-strip-10-0-0-5, node_tip_10_1_2_3) it marks the
 // address like any other label.
@@ -646,7 +681,8 @@ var englishWordsEndingInIP = []string{
 //   - a private address after one of the English words of
 //     englishWordsEndingInIP standing on its own (zip-10-1-2-3), or after a
 //     hyphen a digit opens (eu-central-1-10-1-2-3), unless a dotted label
-//     follows;
+//     follows; the English word counts as standing on its own after a . or a /
+//     too, so x.zip-10-1-2-3 and a/zip-10-1-2-3 stay clean;
 //   - a run a letter or digit is glued to (node10-1-2-3, ip-10-1-2-3a), which
 //     hyphenatedIPv4Bounded keeps out;
 //   - a hexadecimal address (ip-0a010203), which the pattern never matches;
@@ -710,7 +746,8 @@ func hyphenatedIPv4Bounded(text string, start, end int) bool {
 // sentence (10-1-2-3.). The run must end there, with no further group after a
 // separator but a CIDR prefix length (cidrSuffix: vpc-10-0-0-0-16, and so
 // 10-1-2-3-4 is read as 10.1.2.3/4, failing closed, while 10-1-2-3-45 and
-// 10-1-2-3-4-5 are no address), and a label before it must be no word of
+// 10-1-2-3-4-5 are no address) and, behind a label, one more digit group after
+// that prefix length (subnet-10-0-1-0-24-2, failing closed), and a label before it must be no word of
 // englishWordsEndingInIP that stands on its own (zip-10-1-2-3, but not the strip
 // of edge-strip-10-0-0-5) and no group of digits (eu-central-1-10-1-2-3).
 func hyphenatedIPv4StandsAlone(text string, start, end int, addr netip.Addr) bool {
@@ -719,12 +756,13 @@ func hyphenatedIPv4StandsAlone(text string, start, end int, addr netip.Addr) boo
 	}
 
 	sep := text[start+strings.IndexAny(text[start:end], "-_")]
+	labelled := start > 0 && (text[start-1] == '-' || text[start-1] == '_')
 
-	if end+1 < len(text) && text[end] == sep && isDigit(text[end+1]) && !cidrSuffix(text, end, sep) {
+	if end+1 < len(text) && text[end] == sep && isDigit(text[end+1]) && !cidrSuffix(text, end, sep, labelled) {
 		return false
 	}
 
-	if start == 0 || (text[start-1] != '-' && text[start-1] != '_') {
+	if !labelled {
 		return true
 	}
 
@@ -753,8 +791,13 @@ func hyphenatedIPv4StandsAlone(text string, start, end int, addr netip.Addr) boo
 // written into a name after a run (vpc-10-0-0-0-16, subnet_10_0_0_0_24): the
 // run's separator sep, one group of one or two digits from 0 to 32, and nothing
 // further, that is the end of the text or a byte that is neither a letter or
-// digit nor sep before another digit.
-func cidrSuffix(text string, end int, sep byte) bool {
+// digit nor sep before another digit. When a label precedes the run (labelled),
+// a further digit group after the prefix length is accepted as well
+// (subnet-10-0-1-0-24-2, vpc_10_0_0_0_16_1): it may be a node's index after a
+// subnet's CIDR as well as a sequence of numbers, and the rule fails closed. A
+// bare run (10-1-2-3-4-5) has no label that marks it as a name, so there the
+// further group still makes it no CIDR.
+func cidrSuffix(text string, end int, sep byte, labelled bool) bool {
 	group := end + 1
 	for group < len(text) && isDigit(text[group]) {
 		group++
@@ -776,7 +819,7 @@ func cidrSuffix(text string, end int, sep byte) bool {
 		return false
 	}
 
-	return text[group] != sep || group+1 == len(text) || !isDigit(text[group+1])
+	return labelled || text[group] != sep || group+1 == len(text) || !isDigit(text[group+1])
 }
 
 // isDigit reports whether b is an ASCII digit.
