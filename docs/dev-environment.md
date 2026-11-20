@@ -267,6 +267,43 @@ Host shift2eu-vm
   IdentityFile /Users/example/.lima/_config/user
 ```
 
+### Swap
+
+The VM has a swap file, `/swapfile`, so that a memory spike (`go test -race`, or builds in several worktrees
+at once) slows the agents down instead of sending the OOM killer after one of them mid-task: the VM ran
+with no swap and died with two units running (issue #294). It is a safety net, not extra memory: the
+provisioning sets `vm.swappiness = 10` in `/etc/sysctl.d/99-shift2eu-swap.conf`, so the kernel swaps only
+under real memory pressure and leaves the agents' working set in RAM.
+
+Its size is the `swapSize` param in `dev/lima.yaml`, `4GiB` by default: a whole number of GiB, or `0GiB`
+for no swap file. The file takes that much of the VM's disk, counted against `VM_DISK` (40 GiB by default).
+When the disk has less than twice the size free, provisioning skips the swap file with a warning in
+`/var/log/cloud-init-output.log` and the VM comes up without it; a value that is no whole number of GiB
+stops provisioning with a message naming `swapSize`.
+
+The step runs at every boot, like the rest of the system provisioning: it leaves an active file of the
+right size alone, switches on one that is off, and recreates one of another size. Check it in the VM:
+
+```bash
+swapon --show                      # /swapfile, with its size
+free -h                            # the Swap: line
+cat /proc/sys/vm/swappiness        # 10
+```
+
+A VM keeps the template it was created with, so a VM created before the swap step has none: recreate it as
+after a version bump ([Every day](#every-day)), with `make vm-delete vm-create`. To change the size of a VM
+that has the step, set the param in its copy of the template and restart it, which stops every agent in it
+and runs the provisioning again (sizes in GiB, as `swapSize` takes them):
+
+```bash
+make vm-stop
+limactl edit --tty=false --set '.param.swapSize = "8GiB"' shift2eu
+make vm-up
+```
+
+Setting `0GiB` provisions no swap file but does not remove one already there: switch it off and delete it
+in the VM with `sudo swapoff /swapfile && sudo rm /swapfile`.
+
 ### Troubleshooting: a Broken instance
 
 `limactl list` shows an instance as `Broken` when Lima cannot load it, for example when its directory (such

@@ -81,8 +81,92 @@ param:
   # crane resolves a tag to its digest without pulling the image (docs/guide/verify-releases.md).
   # renovate: datasource=go depName=github.com/google/go-containerregistry
   craneVersion: "v0.22.1"
+  # Size of the guest's swap file, /swapfile, in whole GiB; "0GiB" provisions none (issue #294). It absorbs
+  # the memory spikes of go test -race and of builds in several worktrees at once, so the OOM killer does not
+  # kill an agent mid-task: the VM ran with no swap and died on 2026-11-19 with two units running. The file
+  # takes this much of the guest's disk, counted against VM_DISK (40GiB by default); the step skips it when
+  # the disk has less than twice the size free. Change it on an existing VM with limactl edit and a restart
+  # (docs/dev-environment.md, Swap). Not a tool version: no Renovate comment.
+  swapSize: "4GiB"
 
 provision:
+  # The swap file, before the installs below, so they already run with it. Its own step, so the swap's
+  # reasons stay together; system mode, as root, at every boot and every re-provision.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      # Idempotent, as Lima runs it at every boot and re-provision: an active file of the right size is left
+      # alone, an inactive one is only switched on, and one of another size (after a change of the param) is
+      # switched off and recreated. swapon here, at every boot, is what turns it on again: no /etc/fstab entry.
+      # SHIFT2EU_SWAP_ROOT is empty in the guest; the tests (test/devenv/limaswap_test.go) point it at a fake
+      # root, as SHIFT2EU_VM_BIN_GH does for dev/vm-gh-wrapper.sh. Kept to bash 3.2, which the tests may run.
+      root="${SHIFT2EU_SWAP_ROOT:-}"
+      swapfile="${root}/swapfile"
+      size="${PARAM_swapSize:?Lima passes the swapSize param of dev/lima.yaml}"
+
+      # Whole GiB only, checked before anything changes: the value reaches the commands below only as a number.
+      gib="${size%GiB}"
+      case "${size}" in
+        *GiB) ;;
+        *) gib="" ;;
+      esac
+      case "${gib}" in
+        '' | *[!0-9]* | 0?* | ?????*)
+          echo >&2 "swapSize ${size} in dev/lima.yaml is not a whole number of GiB below 10000GiB (such as 4GiB, or 0GiB for no swap file). No swap file provisioned."
+          exit 1
+          ;;
+      esac
+      if [ "${gib}" -eq 0 ]; then
+        echo >&2 "swapSize is 0GiB: no swap file provisioned, nothing changed."
+        exit 0
+      fi
+      bytes=$((gib * 1073741824))
+
+      # Read whole, not piped into grep -q, which under pipefail could fail swapon with SIGPIPE.
+      swaps="$(swapon --show=NAME --noheadings)"
+      active=0
+      if printf '%s\n' "${swaps}" | grep -qxF "${swapfile}"; then
+        active=1
+      fi
+      current=0
+      if [ -f "${swapfile}" ]; then
+        current="$(wc -c <"${swapfile}" | tr -d ' ')"
+      fi
+
+      if [ "${current}" -ne "${bytes}" ]; then
+        # 4GiB fits the template's 40GiB disk with room to spare, but VM_DISK may be as small as 1GiB: with
+        # less than twice the size free (the old file counted as free, as it goes), the guest keeps no swap
+        # rather than a full disk. A warning, not a failure, so the VM still comes up.
+        avail="$(df --output=avail -B1 "$(dirname "${swapfile}")" | tail -n1 | tr -d ' ')"
+        case "${avail}" in
+          '' | *[!0-9]*) avail=0 ;;
+        esac
+        if [ $((avail + current)) -lt $((2 * bytes)) ]; then
+          echo >&2 "swapSize ${size}: ${swapfile} needs twice its size free and the disk has ${avail} bytes; no swap file provisioned. Grow VM_DISK or lower swapSize (docs/dev-environment.md, Swap)."
+          exit 0
+        fi
+        if [ "${active}" -eq 1 ]; then
+          swapoff "${swapfile}"
+          active=0
+        fi
+        # Removed first: fallocate never shrinks a file.
+        rm -f "${swapfile}"
+        fallocate -l "${bytes}" "${swapfile}"
+        chmod 0600 "${swapfile}"
+        mkswap "${swapfile}"
+      fi
+      if [ "${active}" -eq 0 ]; then
+        swapon "${swapfile}"
+      fi
+
+      # A low swappiness: the swap is a safety net against the OOM killer, not a place to page out the
+      # agents' working set while memory is merely busy. A drop-in of its own, so nothing else changes.
+      mkdir -p "${root}/etc/sysctl.d"
+      dropin="${root}/etc/sysctl.d/99-shift2eu-swap.conf"
+      printf '# dev/lima.yaml, issue #294: swap only under real memory pressure.\nvm.swappiness = 10\n' >"${dropin}"
+      sysctl -p "${dropin}"
+
   - mode: system
     script: |
       #!/bin/bash

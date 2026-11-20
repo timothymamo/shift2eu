@@ -1,7 +1,13 @@
 // Package devenv holds the checks of the development environment's files under
-// dev/ that need no tool beyond Go: today, the broken Lima templates the
-// validate-template job of .github/workflows/vm-tools.yml must see Lima refuse
-// (issue #137).
+// dev/ and of the Makefile's VM targets that need no tool beyond Go and the
+// shell: among them the broken Lima templates the validate-template job of
+// .github/workflows/vm-tools.yml must see Lima refuse (issue #137), and the
+// swap file dev/lima.yaml provisions (issue #294).
+//
+// The swap tests (limaswap_test.go) pin the template's swapSize param and run
+// its one system provision step that names PARAM_swapSize under bash, against
+// a fake guest root (SHIFT2EU_SWAP_ROOT) with fakes of fallocate, chmod,
+// mkswap, swapon, swapoff, sysctl and df first on PATH, unprivileged.
 //
 // Each template in dev/testdata/lima-invalid is dev/lima.yaml with one known
 // breakage, and beside it a .expect holds the text Lima's refusal of it must
