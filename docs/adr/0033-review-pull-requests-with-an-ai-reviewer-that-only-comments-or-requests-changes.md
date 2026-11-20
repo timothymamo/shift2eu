@@ -685,10 +685,14 @@ never shown.
 
 **What a skipped split review shows of the parts that answered (#388).** When one part of a split diff
 answers unusably twice, the skipped review now summarises every other part that gave a usable answer, in
-plain Markdown after the "other parts were reviewed" paragraph and before the prompt-injection sentence:
+plain Markdown after the "other parts were reviewed" paragraph and before the prompt-injection sentence.
+That paragraph's sentence changes to match the summary below it: "N other parts of the diff were
+reviewed with a usable answer; their findings' text is not shown, only the summary below, so review
+those parts by hand." (for one part: "1 other part of the diff was reviewed with a usable answer; its
+findings' text is not shown, only the summary below, so review that part by hand."). The summary:
 
 ```
-**Blocking findings in the parts that answered:**
+**Findings in the parts that answered:**
 
 - Part 2 of 2: 1 blocking, 1 non-blocking.
   - blocking: category security at `internal/x/two.go`:3
@@ -699,7 +703,10 @@ category, one of the package's constants (an uncategorised finding reads `other`
 path, when it is a file named by a header of that part's own diff, in a code span as the "Not reviewed"
 note shows a path (backticks made apostrophes, control characters made spaces, mentions defused, cut at
 300 UTF-16 units with `…`), followed outside the span by `:<line>` when the finding has a line;
-otherwise `a file outside the part`. At most 50 blocking findings (`MaxListedExcluded`) are listed across
+`blocking: category <category>, no file` when the finding has no path; otherwise
+`a file outside the part`. The heading names findings, not blocking findings, since a part whose
+findings are all non-blocking is counted under it too. At most 50 blocking findings
+(`MaxListedBlocking`, its own constant, not the "Not reviewed" note's `MaxListedExcluded`) are listed across
 all parts; when there are more, one constant top-level list item after the parts counts the rest,
 `- And <K> more blocking findings across the parts, not listed.` (`finding` when K is 1), and the
 per-part counts stay exact. The review's body
