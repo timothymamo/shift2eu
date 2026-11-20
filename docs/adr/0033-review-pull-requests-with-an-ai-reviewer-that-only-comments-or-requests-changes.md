@@ -617,7 +617,8 @@ decided over both parts' findings; five files that pack into more than four part
 300,000 bytes, and a raw diff over 1,200,000 bytes each end in the skipped outcome with no model call;
 a model that answers twice with no `findings` array ends in the skipped outcome, as does one part of a
 split diff doing so; a part's model error fails the run and posts nothing; and the answer format says
-`"findings": []`.
+`"findings": []`. The size cases are tested both through the in-memory model fake and through the fake
+Claude Code CLI wired into a run.
 
 **As implemented.** The details the design above left open:
 
@@ -630,12 +631,24 @@ split diff doing so; a part's model error fails the run and posts nothing; and t
   warning already say the review was skipped, and a log line is no reason to turn the skip into a
   failing check. An unset or empty `GITHUB_STEP_SUMMARY` writes no summary; a relative one is a bad
   setting and fails the run before anything is read.
-- **Concurrency.** Each part writes its notices to a buffer of its own, which `Run` copies to the log as
-  the part ends, from its own goroutine alone, so the log needs no lock and a part's notice is never
-  interleaved with another's. The channel is buffered for every part, so no goroutine is left blocked
+- **Concurrency.** Each part writes its notices to a buffer of its own, which `askParts` copies to the
+  log from its own goroutine alone, so the log needs no lock and a part's notice is never interleaved
+  with another's. The notices are written in the parts' order, part 1's first, whatever order the parts
+  end in, so the log reads the same from run to run. The channel is buffered for every part, so no goroutine is left blocked
   once `Run` returns. The first real failure cancels the other parts' context and is the error returned
   once every part has ended; with none, the skip names the first part, in the parts' order, whose two
   answers were unusable.
+- **Residual risk (auditor L1).** The author of a pull request from this repository can force the
+  skipped outcome: by size (padding the diff past four parts, or one file over 300,000 bytes), or by
+  prompt injection in the diff that makes the model answer unusably twice. In a split diff one unusable
+  part also discards the other parts' findings. Before this amendment two unusable answers were a red
+  check; now they are a green check with a warning. Accepted because the check is never required and the
+  maintainer's approval is the gate; a skip always posts a visible review (a failed post fails the run);
+  a skip dismisses nothing, so an earlier change request stays; and pull requests from forks do not run
+  the review. Mitigation: the skipped review for two unusable answers carries a fixed sentence telling
+  the maintainer that content in the diff can cause this and to read the diff with prompt injection in
+  mind. Follow-up proposed, not in this change: when a split diff skips because one part was unusable,
+  still surface the other parts' blocking findings.
 
 ## Alternatives considered
 

@@ -1410,9 +1410,12 @@ GitHub API as data (never checking out or running its code), asks the model for 
 `CLAUDE.md` and the `review-change` and `security-audit` skills, and posts one review as the reviewer
 App: a summary naming the head commit, and inline comments on the lines it flags. It posts `COMMENT` or
 `REQUEST_CHANGES`, never an approval, and stays at `COMMENT` until you turn change requests on. A failed
-run (the diff over 300,000 bytes, GitHub or the model failing, your subscription's usage limit reached,
-an expired token, a malformed answer) is a failing check, never a required one: your approval stays the
-only gate.
+run (GitHub or the model failing, your subscription's usage limit reached, an expired token) is a
+failing check, never a required one: your approval stays the only gate. A diff too large to review or
+two unusable answers from the model end in the skipped outcome: a `COMMENT` review saying so, an
+`AI review skipped` warning annotation and a job summary line, with a passing check (ADR 0033, issues
+#367 and #376). So a green AI review check can be a skip: look for the `AI review skipped` warning or the
+review saying so.
 
 It asks the model through the **Claude Code CLI on your Claude subscription**, not with an API key: the
 workflow installs the CLI at a pinned version and checks the download against a pinned checksum before
