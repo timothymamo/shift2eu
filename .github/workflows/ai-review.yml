@@ -35,7 +35,8 @@ jobs:
     # spend the maintainer's subscription usage. Either shows as a skipped check.
     if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
-    # The model's answer can take minutes (the program gives it ten); nothing else here is slow.
+    # The model's answer can take minutes (the program gives each call at most ten minutes and the whole
+    # run fifteen); nothing else here is slow.
     timeout-minutes: 20
     # Holds the reviewer App's client ID and key, the maintainer's Claude subscription token
     # (CLAUDE_CODE_OAUTH_TOKEN) and the AI_REVIEW_REQUEST_CHANGES switch, and is limited to main, so only

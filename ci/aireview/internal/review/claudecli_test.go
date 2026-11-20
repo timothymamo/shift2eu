@@ -657,7 +657,7 @@ func TestClaudeCLIAskReportsACancellationAfterTheCLIStarted(t *testing.T) {
 		}
 
 		if !strings.Contains(strings.ToLower(got.err.Error()), "cancelled") {
-			t.Errorf("Ask = %v after the cancellation, want the error to say the CLI was cancelled: a cancellation the caller made still reads as the cancellation it is (issue #324)", got.err)
+			t.Errorf("Ask = %v after the cancellation, want the error to say the CLI was cancelled: a cancellation the caller made still reads as the cancellation it is (issue #316)", got.err)
 		}
 	case <-time.After(10 * time.Second):
 		cancel()
@@ -676,7 +676,7 @@ func TestClaudeCLIAskReportsACancellationAfterTheCLIStarted(t *testing.T) {
 // while the CLI is mid-turn: this test closes done once the fake CLI has
 // started, and Err then reports context.DeadlineExceeded, as a context made
 // with context.WithDeadline does once its deadline is past. Nothing of a clock
-// or a sleep decides when it passes: the fake's start signal does (issue #324).
+// or a sleep decides when it passes: the fake's start signal does (issue #316).
 type runDeadlineReached struct {
 	context.Context
 	done chan struct{}
@@ -710,7 +710,7 @@ func (c *runDeadlineReached) Err() error {
 func (c *runDeadlineReached) Deadline() (time.Time, bool) { return time.Time{}, false }
 
 // TestClaudeCLIAskReportsTheRunDeadlineAfterTheCLIStarted pins what a run says
-// when its overall deadline passes, not when someone cancels it (issue #324):
+// when its overall deadline passes, not when someone cancels it (issue #316):
 // ci/aireview gives the run a deadline of 15 minutes, and a run that reaches it
 // has not been cancelled by anybody. Ask therefore answers with an error saying
 // the deadline passed and never with the cancelled wording, which would send
@@ -758,11 +758,11 @@ func TestClaudeCLIAskReportsTheRunDeadlineAfterTheCLIStarted(t *testing.T) {
 		message := strings.ToLower(got.err.Error())
 
 		if !strings.Contains(message, "deadline") {
-			t.Errorf("Ask = %v once the run's deadline passed, want the error to name the deadline: the run stopped because its 15 minutes ran out, and the maintainer has to read that (issue #324)", got.err)
+			t.Errorf("Ask = %v once the run's deadline passed, want the error to name the deadline: the run stopped because its 15 minutes ran out, and the maintainer has to read that (issue #316)", got.err)
 		}
 
 		if strings.Contains(message, "was cancelled") {
-			t.Errorf("Ask = %v once the run's deadline passed, want no cancelled wording: nobody cancelled this run, its deadline passed, and a cancellation sends the maintainer looking for a caller that does not exist (issue #324)", got.err)
+			t.Errorf("Ask = %v once the run's deadline passed, want no cancelled wording: nobody cancelled this run, its deadline passed, and a cancellation sends the maintainer looking for a caller that does not exist (issue #316)", got.err)
 		}
 	case <-time.After(10 * time.Second):
 		ctx.pass()

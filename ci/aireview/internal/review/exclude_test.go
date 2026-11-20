@@ -296,7 +296,7 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 		// commit, and a left-out name says nothing about either. The extended
 		// header between the diff --git line and the file headers is what tells
 		// them apart from the regular file of the same name, so a section that
-		// carries one of the materials below is always kept (reviewer #301).
+		// carries one of the materials below is always kept (issue #324).
 		{
 			name:     "an added symbolic link at a golden file's path is kept",
 			diff:     symlinkAddedFile("internal/x/testdata/report.golden"),
@@ -332,7 +332,7 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 			diff:         addedFile("testdata/a.golden", "GOLDEN"),
 			wantExcluded: []string{"testdata/a.golden"},
 		},
-		// Header edge cases of untrusted input (reviewer #301): a header the
+		// Header edge cases of untrusted input (issue #324): a header the
 		// filter cannot read with certainty keeps its section, and a marker line
 		// of a hunk never ends one.
 		{
