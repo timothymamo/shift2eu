@@ -54,6 +54,16 @@ func isAbsoluteURL(ref string) bool {
 	return err == nil && parsed.IsAbs()
 }
 
+// isWebURL reports whether u is a URL of the web, which a page loads or
+// navigates to over http: http and https, and a protocol-relative reference,
+// whose scheme the document's own gives it. A URL of another scheme, such as the
+// contact points' `mailto:info@shift2eu.com` (issue #373), names an address or a
+// client, never a file of the site: following it loads nothing, so the CSP does
+// not govern it and no bundle check resolves it as one.
+func isWebURL(u *url.URL) bool {
+	return u.Scheme == "" || u.Scheme == "http" || u.Scheme == "https"
+}
+
 // bundleFile resolves a same-origin relative reference to the bundle file it
 // names, failing the test when the reference is absolute, leaves the bundle or
 // names a file the bundle does not hold.
@@ -273,10 +283,58 @@ func TestVerificationPageLinksItsGuide(t *testing.T) {
 	}
 }
 
+// TestLinkChecksAcceptAMailtoLink pins what this file's two checks do with the
+// page's contact points, both `mailto:info@shift2eu.com` (issue #373): the
+// reference is absolute, so TestRelativeLinksResolve never resolves it as a file
+// of the bundle, and it is no URL of the web, so TestNoAbsoluteURLToASiteFile
+// leaves it alone rather than reading the address as a path inside the bundle.
+// Neither check refuses it.
+func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	tests := []struct {
+		name string
+		ref  string
+	}{
+		{name: "the contact address", ref: contactHref},
+		{name: "the contact address with a subject", ref: contactHref + "?subject=Assessment"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if !isAbsoluteURL(tc.ref) {
+				t.Errorf("isAbsoluteURL(%q) = false, want true: a mailto: reference is no path of the bundle, so no check resolves it as one", tc.ref)
+			}
+
+			if _, err := resolveBundleFile(bundle, tc.ref); err == nil {
+				t.Errorf("resolveBundleFile(%q) resolved the reference to a bundle file, want it left alone: the link loads nothing", tc.ref)
+			}
+
+			parsed, err := url.Parse(tc.ref)
+			if err != nil {
+				t.Fatalf("url.Parse(%q): %v", tc.ref, err)
+			}
+
+			if isWebURL(parsed) {
+				t.Errorf("isWebURL(%q) = true, want false: a mailto: reference names no file of the site, so the site-file check must not read its address as a path", tc.ref)
+			}
+
+			if path := strings.TrimPrefix(parsed.Path, "/"); path != "" && slices.Contains(bundle.files, path) {
+				t.Errorf("the address of %q reads as the bundle file %q, so the site-file check would refuse it: such a reference names no file", tc.ref, path)
+			}
+		})
+	}
+}
+
 // TestNoAbsoluteURLToASiteFile pins that no page addresses a file of its own
 // bundle at an absolute URL: the bundle runs unchanged on any origin, a local
 // static file server included (PRD #297, Layer 2 and Layer 3). A link to another
-// site is no site file and stays allowed.
+// site is no site file and stays allowed, and so does a reference of a scheme
+// that names no path at all, such as a `mailto:` link.
 func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 	t.Parallel()
 
@@ -297,6 +355,10 @@ func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 					if err != nil {
 						t.Errorf("%s holds %s=%q on <%s>, which is no URL: %v", page, attribute, ref, el.tag, err)
 
+						continue
+					}
+
+					if !isWebURL(parsed) {
 						continue
 					}
 
