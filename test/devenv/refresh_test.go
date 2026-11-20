@@ -3450,17 +3450,59 @@ func countLinesHolding(text string, wants ...string) int {
 	return count
 }
 
-// refusingMvShim is the mv the refresher runs in the test below: it refuses the one rename the test names and
-// hands every other call to the real mv, so the entry it names can never be reaped.
+// firstLineHolding is the index of the first line of text that holds every one of wants, and -1 when no line does.
+// A test that compares two of them reads the order the refresher said them in.
+func firstLineHolding(text string, wants ...string) int {
+	for i, line := range strings.Split(text, "\n") {
+		holds := true
+
+		for _, want := range wants {
+			if !strings.Contains(line, want) {
+				holds = false
+
+				break
+			}
+		}
+
+		if holds {
+			return i
+		}
+	}
+
+	return -1
+}
+
+// refusingMvShim is the mv the refresher runs in the tests below: it refuses the renames of the entry the test
+// names while its count file holds fewer than limit refusals - every one of them when limit is not a count the
+// entry can reach, refusingAlways - and hands every other call to the real mv. The three paths are shQuote's
+// single-quoted words, never Go-quoted strings: sh expands a $(...) or a backtick in a double-quoted path
+// (issue #228 review, item D; issue #335, the audit's nit).
 const refusingMvShim = `#!/bin/sh
+entry=%s
+count=%s
+limit=%d
+refuse() {
+  n=0
+  if [ -f "${count}" ]; then
+    n="$(cat "${count}")"
+  fi
+  case "${n}" in ''|*[!0-9]*) n=0 ;; esac
+  [ "${limit}" -ge 0 ] || return 0
+  [ "${n}" -lt "${limit}" ] || return 1
+  printf '%%s\n' "$((n + 1))" >"${count}"
+  return 0
+}
 for a in "$@"; do
-  if [ "$a" = %s ]; then
+  if [ "$a" = "${entry}" ] && refuse; then
     printf 'mv: the test refuses to rename %%s\n' "$a" >&2
     exit 1
   fi
 done
 exec %s "$@"
 `
+
+// refusingAlways is the refusal count the mv shim's entry can never reach: every rename of it fails.
+const refusingAlways = -1
 
 // refuseRenaming puts an mv at the front of the sandbox's PATH that refuses to rename entry and runs the real mv
 // for every other call: one entry the refresher can never reap, on every host and without a root. A rename fails
@@ -3470,7 +3512,17 @@ exec %s "$@"
 func (sb *sandbox) refuseRenaming(t *testing.T, entry string) {
 	t.Helper()
 
-	shim := fmt.Sprintf(refusingMvShim, strconv.Quote(entry), strconv.Quote(realTool(t, "mv")))
+	sb.refuseRenamingTimes(t, entry, refusingAlways)
+}
+
+// refuseRenamingTimes is refuseRenaming for a filesystem that stops refusing after times renames of entry: every
+// rename of it fails while the shim has refused fewer than times of them, and the one after that is the real mv's,
+// so the entry is reaped at a later round of the loop. A negative times refuses every one.
+func (sb *sandbox) refuseRenamingTimes(t *testing.T, entry string, times int) {
+	t.Helper()
+
+	shim := fmt.Sprintf(refusingMvShim, shQuote(entry), shQuote(filepath.Join(sb.root, "mv-refusals")), times,
+		shQuote(realTool(t, "mv")))
 	writeFileMode(t, filepath.Join(sb.binDir, "mv"), []byte(shim), 0o700)
 }
 
@@ -3533,6 +3585,87 @@ func TestAgentsAppTokenRefreshSaysOnceThatItCannotRemoveAStaleAside(t *testing.T
 	if couldNot > 1 {
 		t.Errorf("the refresher says it could not remove the moved-aside lock %s %d times in %d rounds of its loop, want at most once: nothing about the entry changed between the rounds, so the second line and every one after it says what the maintainer already read (issue #335, the audit's LOW-B)\nlog:\n%s",
 			name, couldNot, rounds, log)
+	}
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh did not stop on SIGTERM; stderr:\n%s", refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
+}
+
+// TestAgentsAppTokenRefreshSaysItRemovedTheAsideOnceTheRenameWorks pins the second half of review S1 (and the
+// auditor's LOW-5) for issue #335: an aside whose rename failed is said once, and after that the log says nothing
+// more about it. A rename is retried at every round, and a filesystem that refuses one rarely refuses all of them
+// - a full disk frees space, a permission is repaired - so the round whose rename succeeds removes the entry, and
+// a maintainer who read "could not remove" and later finds the directory gone has no line saying when or why.
+func TestAgentsAppTokenRefreshSaysItRemovedTheAsideOnceTheRenameWorks(t *testing.T) {
+	t.Parallel()
+
+	// The test's mv refuses the first two renames - the start's own cleanup and the loop's first round - and hands
+	// the third to the real mv, so the entry is reaped at a later round of the loop.
+	const refusals = 2
+
+	f := newMintFixture(t)
+	// The margin is longer than a token lives, so the loop mints at every round and rounds come fast.
+	env := f.refreshEagerEnv()
+
+	// The aside a mover that is gone leaves: neither the pid in its name nor the owner it records runs a refresh.
+	aside := f.sb.movedAsideLock("shift2eu", deadPid(t))
+	writeMovedAsideLock(t, aside, deadPid(t))
+	f.sb.refuseRenamingTimes(t, aside, refusals)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	name := filepath.Base(aside)
+
+	// The test waits for the line, not for the directory: reap_entry may say it removed the entry before or after
+	// the rm, and either order leaves the directory gone by the time the line is written.
+	removedInTime := poll(60*time.Second, func() bool {
+		return countLinesHolding(refresh.errOut()+refresh.out(), name, "removed") >= 1
+	})
+
+	if !removedInTime {
+		where := "still in the state directory"
+
+		if _, err := os.Lstat(aside); err != nil {
+			where = "gone from the state directory"
+		}
+
+		t.Fatalf("the refresher never says it removed %s, although the test's mv refused only the first %d renames and the entry is %s: the round whose rename succeeded removed it without a line, so a maintainer who read that it could not be removed and later finds it gone is told nothing about when or why (issue #335, the review's S1 and the audit's LOW-5)\nlog:\n%s",
+			name, refusals, where, refresh.errOut()+refresh.out())
+	}
+
+	if _, err := os.Lstat(aside); err != nil {
+		t.Fatalf("the refresher says it removed %s, but the entry is still there: %v\nstate directory:\n%s",
+			aside, err, describeTree(f.sb.stateDir()))
+	}
+
+	if !refresh.running() {
+		t.Fatalf("the refresh exited after it reaped %s, although nothing about the state directory stops it from refreshing the VM's token (issue #335)\nstderr:\n%s",
+			aside, refresh.errOut())
+	}
+
+	log := refresh.errOut() + refresh.out()
+
+	couldNot := firstLineHolding(log, name, "could not remove")
+	removed := firstLineHolding(log, name, "removed")
+
+	if couldNot < 0 {
+		t.Errorf("the refresher never says it could not remove %s, although the test's mv refused its rename twice: that first failure is what a maintainer reads before a retry gets past it (issue #335, the review's S1)\nlog:\n%s",
+			name, log)
+	}
+
+	if removed < couldNot {
+		t.Errorf("the refresher says it removed %s before the line that says it could not, so the log reads as a removal that never failed (issue #335, the review's S1)\nlog:\n%s",
+			name, log)
+	}
+
+	if lines := countLinesHolding(log, name, "removed"); lines != 1 {
+		t.Errorf("the refresher says it removed the moved-aside lock %s %d times, want once: the entry is gone after the first, so a second line says nothing new about a directory that is not there (issue #335, the review's S1 and the audit's LOW-5)\nlog:\n%s",
+			name, lines, log)
 	}
 
 	refresh.signal(t, syscall.SIGTERM)

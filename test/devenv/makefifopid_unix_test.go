@@ -16,6 +16,10 @@ import (
 	"time"
 )
 
+// makeTimeout is the bound one run of make gets in these tests: make starts its recipe and the fake tools within
+// seconds, and an entry a case plants here never answers at all.
+const makeTimeout = 30 * time.Second
+
 // runMakeWithin runs make in the repository root with args and env alone, never the test process's own
 // environment, and gives up on it after timeout: a recipe that reads a FIFO nobody writes to waits for a writer
 // that never comes, and a test must fail on that instead of blocking the package. The whole process group goes on
@@ -75,9 +79,6 @@ func runMakeWithin(t *testing.T, args []string, env map[string]string, timeout t
 // never does, so the start goes on and leaves a refresher running.
 func TestMakeAgentsTokenRefreshStartDoesNotHangOnAFifoPid(t *testing.T) {
 	t.Parallel()
-
-	// The bound: make starts its recipe and the fake tools within seconds, and the FIFO never answers at all.
-	const makeTimeout = 30 * time.Second
 
 	cases := []struct {
 		name string
@@ -158,5 +159,72 @@ func TestMakeAgentsTokenRefreshStartDoesNotHangOnAFifoPid(t *testing.T) {
 					pid, planted, stdout, stderr)
 			}
 		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshStartDoesNotWriteThroughAPidFileSymlink pins the auditor's test note for issue #335:
+// the start writes its pid into the pid file of a state directory on the Mac that anything may have been put in,
+// and a symlink there is followed by a plain redirection, so the write lands in whatever file the link names. The
+// entry is removed and written again as a regular file of the state directory, and the file the link named keeps
+// every byte it held.
+func TestMakeAgentsTokenRefreshStartDoesNotWriteThroughAPidFileSymlink(t *testing.T) {
+	t.Parallel()
+
+	f := newTokenFixture(t, "shift2eu")
+
+	if err := os.MkdirAll(f.state, 0o700); err != nil {
+		t.Fatalf("create the state directory %s: %v", f.state, err)
+	}
+
+	// A file outside the state directory, holding what it must still hold after the start: a maintainer's own file
+	// that a link planted at the pid file's path turns into the redirect's target.
+	const marker = "a file the state directory links to, which no start may write\n"
+
+	target := filepath.Join(f.sb.root, "outside", "marker")
+	writeFileMode(t, target, []byte(marker), 0o600)
+
+	pidFile := f.statePath("agents-token-refresh-shift2eu.pid")
+
+	if err := os.Symlink(target, pidFile); err != nil {
+		t.Fatalf("plant the symlink %s: %v", pidFile, err)
+	}
+
+	stdout, stderr, status, hung := runMakeWithin(t, []string{"agents-token-refresh-start"}, f.env, makeTimeout)
+
+	if hung {
+		t.Fatalf("make agents-token-refresh-start was still running %s after it started, with the pid file %s a symlink: the start reads that entry before it decides whether a refresher runs, and a read must not wait for a writer (issue #335)\nstdout:\n%s\nstderr:\n%s",
+			makeTimeout, pidFile, stdout, stderr)
+	}
+
+	if status != nil {
+		t.Fatalf("make agents-token-refresh-start failed with the pid file %s a symlink, where nothing but that entry stood in its way: the start removes that entry and writes its own pid, as it does for any entry that is no regular file (issue #335)%v\nstdout:\n%s\nstderr:\n%s",
+			pidFile, status, stdout, stderr)
+	}
+
+	body, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read %s, the file the pid file's symlink named: %v", target, err)
+	}
+
+	if string(body) != marker {
+		t.Errorf("the file %s holds %q after make agents-token-refresh-start, want the %q it held before: the start's echo of the refresher's pid must never reach the target of a symlink planted at the pid file's path (issue #335, the audit's test note)\nstdout:\n%s\nstderr:\n%s",
+			target, body, marker, stdout, stderr)
+	}
+
+	info, err := os.Lstat(pidFile)
+	if err != nil {
+		t.Fatalf("the start left no pid file at %s: %v\nstate directory:\n%s", pidFile, err, describeTree(f.state))
+	}
+
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		t.Fatalf("the start left %s with the mode %s, want a regular file: the entry is removed and written again, never written through (issue #335)\nstate directory:\n%s",
+			pidFile, info.Mode(), describeTree(f.state))
+	}
+
+	pid := readPid(t, pidFile)
+
+	if !pidAlive(pid) {
+		t.Errorf("the pid file holds %d after make agents-token-refresh-start removed the symlink and wrote its own pid, but no such process runs: the start must leave a refresher running (issue #335)\nstdout:\n%s\nstderr:\n%s",
+			pid, stdout, stderr)
 	}
 }
