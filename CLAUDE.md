@@ -83,6 +83,12 @@ make site              # the site's bundle into bin/site and its archive bin/shi
 make test-browser      # make site, then the headless-browser smoke test in a pinned Chromium container
 ```
 
+Every make target runs exactly go.mod's go line (`GOTOOLCHAIN`, issue #347, ADR 0035). When the local Go is
+another release, the go command fetches the pinned toolchain once (checksum-verified via `sum.golang.org`):
+the one network access make may make outside `make test-integration`. The VM installs the pinned Go, so
+normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a mismatch then fails
+`TestGoModPinsTheBuildingToolchain` instead.
+
 ## Testing
 
 - Test first. Behaviour changes start with a failing test (skill: `go-tdd`).
@@ -91,7 +97,8 @@ make test-browser      # make site, then the headless-browser smoke test in a pi
   `internal/adapter/target/targettest`. Every provider adapter runs them.
 - Renderers and CLI output use golden files under `testdata/`, updated with `-update`.
 - Integration tests use `//go:build integration`; e2e tests use `//go:build e2e` and live in `test/e2e`.
-- Default tests never touch the network, never need credentials, never depend on time or map order.
+- Default tests never touch the network, never need credentials, never depend on time or map order. (Only
+  the go command may, to fetch the pinned toolchain once; see Commands.)
 
 ## Rules
 
