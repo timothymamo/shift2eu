@@ -20,6 +20,12 @@
 //     is the number of free bytes, as `df --output=avail -B1 <path> | tail -n1` prints it. The fake prints
 //     that whatever its arguments, so the step must pass whatever -B/--output it likes but take the last
 //     line as bytes. Free space is not read from mountpoint, findmnt or lsblk: they are not faked.
+//   - A leftover temporary file of a creation a crash cut short between fallocate and the rename lies in the
+//     swap file's directory and takes space of that filesystem; deleting it gives that space back, as a real
+//     df sees. The fake df therefore prints $SHIFT2EU_TEST_FREE_BYTES plus the size of every leftover the case
+//     lists in $SHIFT2EU_TEST_LEFTOVERS that is gone by the time it runs, so the step reads the same free
+//     space whether it removes the leftover before it asks df or counts the leftover's size itself: the cases
+//     below pin the outcome, not which of the two the step does.
 //   - The step creates the file with `fallocate -l <size> <file>` and sets its mode with `chmod`; the test
 //     fakes both. The faked fallocate succeeds, so a `dd` fallback is never reached.
 //   - Creation is atomic: `fallocate`, `chmod` and `mkswap` all name one temporary file in the swap file's own
@@ -28,6 +34,12 @@
 //     final path's; how the temporary one is spelled is the implementation's. A crash between `fallocate` and
 //     `mkswap` then leaves nothing of the right size at the path swapon reads, instead of a headerless file
 //     every later boot would skip recreating.
+//   - A leftover temporary file is never a swap file: the step reclaims its space for the file it builds, and
+//     removes it when it declines for disk space. Otherwise a boot that crashed after fallocate but before the
+//     rename (so /swapfile is gone and only the leftover is there) counts the leftover's space as taken,
+//     declines with the too-little-disk warning at every boot on a tight disk, keeps the orphan and leaves
+//     the guest with no swap for ever. The temp path the cases leave a leftover at is `<swap file>.new`, the
+//     one the step builds at today; the contract pins its directory, not its spelling.
 //   - The file is created under `umask 077`, so no other account of the guest can read its memory while the
 //     header is written, and `chmod 0600` sets the mode explicitly as well.
 //   - A `swapon` that fails on a file of the right size is a file without a swap header (an interrupted
@@ -50,7 +62,7 @@
 // swapon and swapoff keep the active swap in $SHIFT2EU_TEST_SWAP_STATE, one path per line, which a case
 // pre-fills to stand for a later boot; the faked swapon fails its first $SHIFT2EU_TEST_SWAPON_FAILS activation
 // attempts (silently, as a file without a swap header does; queries keep answering) and the faked df prints
-// $SHIFT2EU_TEST_FREE_BYTES as the free space.
+// $SHIFT2EU_TEST_FREE_BYTES as the free space, plus the space of a leftover the step has already removed.
 //
 // The step's path in the guest is pinned by swapFilePath below alone: change it there if the implementation
 // picks another.
@@ -62,6 +74,7 @@ package devenv_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -85,6 +98,9 @@ const (
 	swapDefaultSize = "4GiB"
 	// swapFilePath is the swap file's path inside the guest, relative to the root SHIFT2EU_SWAP_ROOT names.
 	swapFilePath = "/swapfile"
+	// swapLeftoverSuffix, on the swap file's path, is where the cases leave the temporary file a creation a
+	// crash cut short leaves behind: the temp path the step builds at today.
+	swapLeftoverSuffix = ".new"
 	// swapRootEnv prefixes every path the step writes, read in the guest (dev/vm-gh-wrapper.sh's
 	// SHIFT2EU_VM_BIN_GH is the pattern); the tests point it at a temporary directory.
 	swapRootEnv = "SHIFT2EU_SWAP_ROOT"
@@ -96,6 +112,9 @@ const (
 	swapStateEnv     = "SHIFT2EU_TEST_SWAP_STATE"   // the active swap, one path per line
 	swapFreeBytesEnv = "SHIFT2EU_TEST_FREE_BYTES"   // what the fake df prints as free space
 	swapFailsEnv     = "SHIFT2EU_TEST_SWAPON_FAILS" // how many of the fake swapon's activations fail
+	// swapLeftoversEnv names the file listing the leftovers a case made, "<bytes> <path>" per line: the fake
+	// df adds the size of each one that is gone by then, as a real df sees a deleted file's space.
+	swapLeftoversEnv = "SHIFT2EU_TEST_LEFTOVERS"
 
 	// swapCreatedModeNote is the note the fake fallocate writes into the argv log: the octal mode the file it
 	// created has before any chmod, so a case can pin the umask the step creates it under.
@@ -230,8 +249,22 @@ grep -vxF "${file}" "${state}" > "${state}.tmp" || true
 mv "${state}.tmp" "${state}"
 `
 	// fakeDfBody prints the free space a case gives it as `df --output=avail -B1 <path>` prints it: a header
-	// line, then the number of bytes on the last line, whatever the arguments.
-	fakeDfBody = `printf 'Avail\n%s\n' "${SHIFT2EU_TEST_FREE_BYTES:?set SHIFT2EU_TEST_FREE_BYTES}"
+	// line, then the number of bytes on the last line, whatever the arguments. A leftover temporary file of a
+	// crashed creation takes real space, and a real df reports that space again once the file is deleted: so the
+	// size of every leftover of $SHIFT2EU_TEST_LEFTOVERS that is gone by now is added to the free space the
+	// case gives. A step that removes the leftover before it asks, and one that counts its size, read the same
+	// free space, so the cases pin what the step leaves, not which fix it is.
+	fakeDfBody = `free="${SHIFT2EU_TEST_FREE_BYTES:?set SHIFT2EU_TEST_FREE_BYTES}"
+leftovers="${SHIFT2EU_TEST_LEFTOVERS:-}"
+if [ -n "${leftovers}" ] && [ -e "${leftovers}" ]; then
+  while read -r size path; do
+    [ -n "${path}" ] || continue
+    if [ ! -e "${path}" ]; then
+      free=$((free + size))
+    fi
+  done < "${leftovers}"
+fi
+printf 'Avail\n%s\n' "${free}"
 `
 )
 
@@ -417,6 +450,10 @@ type swapCase struct {
 	freeBytes int64
 	// existingSize is the size of a swap file the guest has before the run, in bytes; 0 has none.
 	existingSize int64
+	// leftoverSize is the size of a temporary file a creation a crash cut short left in the swap file's
+	// directory before the run, in bytes; 0 has none. Its space is free for the swap file the step builds,
+	// and the file is never a swap file itself, so a case with one wants it gone afterwards.
+	leftoverSize int64
 	// active says the existing file is already active swap, as it is at a later boot.
 	active bool
 	// swaponFails is how many of the step's activations the faked swapon fails: 1 for a file of the right
@@ -561,6 +598,35 @@ var swapCases = []swapCase{
 		dropin:       dropinAny,
 	},
 	{
+		// A creation a crash cut short between fallocate and the rename leaves a temporary file in the swap
+		// file's directory and no /swapfile at all, so the file the step compares is of size 0. The space the
+		// leftover holds is free for the file the step builds: with it counted the disk holds the swap
+		// (2 x 4GiB) with a little to spare, without it 4.25GiB reads as less than twice the size, and every
+		// later boot would decline for disk space, keep the orphan and leave the guest with no swap.
+		name:         "leftover-temp-file-is-reclaimed",
+		size:         swapDefaultSize,
+		freeBytes:    4*swapGiB + swapGiB/4,
+		leftoverSize: 4 * swapGiB,
+		wantCalls:    []string{"fallocate", "chmod", "mkswap", "swapon"},
+		wantCreation: true,
+		wantFileSize: 4 * swapGiB,
+		wantFileMode: 0o600,
+		dropin:       dropinPresent,
+	},
+	{
+		// Too tight even with the leftover's space counted: the step declines for disk space as it does on a
+		// small disk, and the leftover goes with it, as a temporary file is never a swap file and nothing of
+		// this run is built.
+		name:         "leftover-temp-file-with-too-little-disk",
+		size:         swapDefaultSize,
+		freeBytes:    swapGiB,
+		leftoverSize: 4 * swapGiB,
+		wantCalls:    []string{},
+		wantMessage:  true,
+		wantFileSize: 0,
+		dropin:       dropinAny,
+	},
+	{
 		name:         "invalid-4G",
 		size:         "4G",
 		freeBytes:    100 * swapGiB,
@@ -612,6 +678,10 @@ type swapGuest struct {
 	statePath  string // the active swap, one path per line, which the fake swapon and swapoff keep
 	scriptPath string // the step's script, written out for bash
 	swapFile   string // the swap file's path inside the fake root
+	// leftoverFile is the temporary file a case has the guest start with, beside the swap file.
+	leftoverFile string
+	// leftoversPath names the file the fake df reads the case's leftovers from, "<bytes> <path>" per line.
+	leftoversPath string
 }
 
 // newSwapGuest builds a guest as a case needs it: the fakes, a swap file of the case's size if it has one, and
@@ -628,6 +698,8 @@ func newSwapGuest(t *testing.T, tc swapCase) *swapGuest {
 		scriptPath: filepath.Join(base, "swap-step.sh"),
 	}
 	guest.swapFile = filepath.Join(guest.root, swapFilePath)
+	guest.leftoverFile = guest.swapFile + swapLeftoverSuffix
+	guest.leftoversPath = filepath.Join(base, "leftovers")
 
 	if err := os.MkdirAll(guest.root, 0o700); err != nil {
 		t.Fatalf("create the fake guest %s: %v", guest.root, err)
@@ -643,6 +715,21 @@ func newSwapGuest(t *testing.T, tc swapCase) *swapGuest {
 			t.Fatalf("grow the swap file %s: %v", guest.swapFile, err)
 		}
 	}
+
+	leftovers := ""
+
+	if tc.leftoverSize > 0 {
+		// Mode 0600, as a file created under umask 077 has: what a crashed creation leaves.
+		writeFileMode(t, guest.leftoverFile, nil, 0o600)
+
+		if err := os.Truncate(guest.leftoverFile, tc.leftoverSize); err != nil {
+			t.Fatalf("grow the leftover temporary swap file %s: %v", guest.leftoverFile, err)
+		}
+
+		leftovers = fmt.Sprintf("%d %s\n", tc.leftoverSize, guest.leftoverFile)
+	}
+
+	writeFileMode(t, guest.leftoversPath, []byte(leftovers), 0o600)
 
 	active := ""
 	if tc.active {
@@ -668,6 +755,7 @@ func (g *swapGuest) run(t *testing.T, tc swapCase) (stdout, stderr string, err e
 		swapStateEnv:     g.statePath,
 		swapFreeBytesEnv: strconv.FormatInt(tc.freeBytes, 10),
 		swapFailsEnv:     strconv.Itoa(tc.swaponFails),
+		swapLeftoversEnv: g.leftoversPath,
 	})
 
 	var out, errOut bytes.Buffer
@@ -980,6 +1068,37 @@ func assertSwapFile(t *testing.T, g *swapGuest, tc swapCase) {
 	}
 }
 
+// assertNoLeftover pins that the temporary file a crashed creation left beside the swap file is gone after the
+// run, whatever the run did with it: the step reclaims its space for the file it builds, and removes it when it
+// declines for disk space, as a temporary file is never a swap file. No other regular file may lie beside the
+// swap file either, so a leftover the step renamed aside instead of removing is caught too.
+func assertNoLeftover(t *testing.T, g *swapGuest, tc swapCase) {
+	t.Helper()
+
+	if info, err := os.Stat(g.leftoverFile); err == nil {
+		t.Errorf("%s: the step left the temporary swap file %s (%d bytes) beside %s, want it gone: its space is what the new swap file needs, and it is never itself a swap file, so a guest that keeps it never gets its swap back",
+			tc.name, g.leftoverFile, info.Size(), g.swapFile)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stat %s: %v", g.leftoverFile, err)
+	}
+
+	dir := filepath.Dir(g.swapFile)
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == filepath.Base(g.swapFile) {
+			continue
+		}
+
+		t.Errorf("%s: the step left %s in %s beside the swap file, want only the swap file there: the leftover of a crashed creation is removed, never kept under another name",
+			tc.name, entry.Name(), dir)
+	}
+}
+
 // swapStepScript returns the template's swap step as the text bash runs it.
 func swapStepScript(t *testing.T) string {
 	t.Helper()
@@ -1037,6 +1156,10 @@ func runSwapCase(t *testing.T, script string, tc swapCase) {
 	}
 
 	assertSwapFile(t, guest, tc)
+
+	if tc.leftoverSize > 0 {
+		assertNoLeftover(t, guest, tc)
+	}
 
 	if tc.wantCreation {
 		assertAtomicCreation(t, tc, guest, swapToolCalls(log), log)
