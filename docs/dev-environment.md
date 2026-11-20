@@ -907,11 +907,10 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 #   this clone, outside the workspace; each sudo command is printed before it asks for your password
 # PASS, after make agents-token-refresh-start: "stopped pid <pid>, the refresh make agents-token-refresh-start started"
 # FAIL "refused: run it as the maintainer, not as root": run it without sudo
-# FAIL "<label> is loaded in <domain> and runs the agents App token refresh ...": run the bootout, disable and rm it names, install again
-#   ("plist not shown": remove the plist launchctl print <domain>/<label> names, by hand)
+# FAIL "<label> is loaded in <domain> and runs the agents App token refresh ...": run the bootout, disable and rm it names, install again; if it says "plist not shown", rm the path launchctl print <domain>/<label> names
 # FAIL "foreign-jobs check failed (status <n>): nothing was installed ...": fix what the line above it says, install again
-# FAIL "warning: could not list the system domain ...": installed, but a foreign LaunchDaemon would go unnoticed; check sudo launchctl print system
-# FAIL "warning: <n> job(s) with unusual labels not checked": installed; look for them in launchctl print system and gui/<uid>
+# WARN "warning: could not list the system domain ...": installed, but a foreign LaunchDaemon would go unnoticed; check sudo launchctl print system
+# WARN "warning: <n> job(s) with unusual labels not checked": installed; look for them in launchctl print system and gui/<uid>
 # FAIL "warning: the pid file ... no longer names pid <pid> ...": nothing was stopped; if the log says another refresh runs, stop it, install again
 # FAIL "refused: a refresh that make agents-token-refresh-start did not start holds the lock ... (pid <pid> ...)": kill <pid>, install again
 # FAIL "refused: <clone> is inside <location>, which the VM shift2eu mounts ..." or "refused: the VM shift2eu mounts
@@ -922,8 +921,7 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 #   dev/agents-app-token.sh as git checked them out
 # FAIL "the old job <label> is still loaded ...": sudo launchctl print system/<label>, wait or make agents-token-refresh-uninstall, install again
 # FAIL "... is not the plist printed above ...": no job is loaded; look for what changed the file, install again
-# FAIL "launchctl bootstrap failed twice: NO token refresh job ...": install again, or make agents-token-refresh-start
-#   (it says "the hand-started refresh was stopped" when none runs at all now)
+# FAIL "launchctl bootstrap failed twice: NO token refresh job ...": install again, or make agents-token-refresh-start (if it says "the hand-started refresh was stopped", none runs at all now)
 # FAIL "warning: pid <pid> still runs ... after TERM": once ps -p <pid> shows nothing, the job takes over within 5 minutes
 ```
 
@@ -1072,9 +1070,8 @@ make vm-init
 ```bash
 # Seen on the maintainer's Mac on 2026-11-20 (kickstart, with or without -k, printed nothing until Ctrl+C); cause not known (issue #396)
 sudo launchctl print system/<label> | grep -E 'state|pid'      # Mac Mini, after Ctrl+C on the kickstart
-# state = spawn scheduled: the job runs no process; nothing to do, launchd starts it within its ThrottleInterval (5 minutes)
-# state = running: stop only this job's process (any mode, account mode too); launchd starts it again with the script on disk now
-sudo launchctl kill TERM system/<label>
+# PASS "state = spawn scheduled": nothing to do, the job runs no process; launchd starts it within its ThrottleInterval (5 minutes)
+sudo launchctl kill TERM system/<label>   # only for state = running: stops this job's process alone (account mode too); launchd restarts it with the script on disk
 # PASS, within 5 minutes: sudo launchctl print system/<label> shows state = running, a new pid, and its log a new start
 # FAIL still spawn scheduled after 5 minutes: a foreign job or another refresh holds the lock; install again (step 1), it names it
 # FAIL launchctl kill does not stop it, last resort only: pkill -f 'agents-app-token.sh refresh' (sudo pkill -u _shift2euagents ... in account mode) stops every instance's refresh and every process whose command line holds that string
