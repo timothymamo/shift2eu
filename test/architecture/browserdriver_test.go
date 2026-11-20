@@ -286,7 +286,7 @@ func goListProbeEnv() []string {
 		"GOWORK":      true,
 	}
 
-	env := make([]string, 0, len(os.Environ())+6)
+	env := make([]string, 0, len(os.Environ())+5)
 
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")

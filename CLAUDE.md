@@ -72,7 +72,7 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 ```bash
 make worktree BRANCH=feat/12-short-name   # create or resume the worktree for a PR (prints its path)
 make check             # lint + test + govulncheck: must pass before every commit
-make test              # unit + contract tests, race detector, no network but module fetches (see Testing)
+make test              # unit + contract tests, race detector, no network of its own (module fetches: see Testing)
 make test-integration  # real cloud APIs, read-only credentials (never in default CI)
 make test-e2e          # build the binary and run it against testdata fixtures
 make lint              # golangci-lint natively and for every release target, then test/lint, incl. architecture rules
@@ -85,9 +85,9 @@ make test-browser      # make site, then the headless-browser smoke test in a pi
 
 Every make target runs exactly go.mod's go line (`GOTOOLCHAIN`, issue #347, ADR 0035). When the local Go is
 another release, the go command fetches the pinned toolchain once (checksum-verified via `sum.golang.org`)
-before anything runs: the only network access the pin adds (the tests' own is under Testing). The VM installs the pinned Go, so
-normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a mismatch then fails
-`TestGoModPinsTheBuildingToolchain` instead.
+before anything runs: the only network access the pin adds (the tests' own is under Testing). The VM
+installs the pinned Go, so normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a
+mismatch then fails `TestGoModPinsTheBuildingToolchain` instead.
 
 ## Testing
 
