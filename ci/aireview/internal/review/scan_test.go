@@ -357,6 +357,36 @@ func TestTheScanFindingsAreCapped(t *testing.T) {
 			listed, total, review.MaxScanFindings, tail(got.Body, 4_000))
 	}
 
+	// The cap cuts the end of the scan's list: the review lists the first
+	// MaxScanFindings findings the diff wrote, in that order, and none after
+	// them, so a reader knows which findings the count of the rest covers.
+	first, rest := paths[:review.MaxScanFindings], paths[review.MaxScanFindings:]
+
+	previous := -1
+
+	for _, path := range first {
+		finding := review.ScanFinding{Path: path, Line: 1, Kind: review.ScanIPv4}
+
+		if !hasScanFinding(got.Body, finding) {
+			t.Errorf("the review lists no %s:%d of the scan's findings, of the %d it lists first: the cap keeps the scan's order (issue #342); body:\n%s",
+				path, finding.Line, review.MaxScanFindings, tail(got.Body, 4_000))
+		}
+
+		if at := strings.Index(got.Body, "`"+path+":1`"); at < previous {
+			t.Errorf("the review lists %s:%d before a finding the scan found earlier: the cap keeps the scan's order (issue #342); body:\n%s",
+				path, finding.Line, tail(got.Body, 4_000))
+		} else {
+			previous = at
+		}
+	}
+
+	for _, path := range rest {
+		if hasScanFinding(got.Body, review.ScanFinding{Path: path, Line: 1, Kind: review.ScanIPv4}) {
+			t.Errorf("the review lists the scan's finding in %q, which comes after the first %d: the cap drops the findings after them and counts them (issue #342); body:\n%s",
+				path, review.MaxScanFindings, tail(got.Body, 4_000))
+		}
+	}
+
 	// The review says how many findings it does not list, so its list never
 	// reads as all of them.
 	more := regexp.MustCompile(`(?m)^.*\bmore\b.*$`)
