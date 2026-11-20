@@ -684,15 +684,17 @@ var englishWordsEndingInIP = []string{
 //     like the sequence of numbers it cannot be told from;
 //   - a private address after one of the English words of
 //     englishWordsEndingInIP standing on its own (zip-10-1-2-3), or after a
-//     hyphen a digit opens (eu-central-1-10-1-2-3), unless a dotted label
-//     follows; the English word counts as standing on its own after a . or a /
-//     too, so x.zip-10-1-2-3 and a/zip-10-1-2-3 stay clean;
+//     label that is a group of digits (eu-central-1_10-1-2-3, where the
+//     underscore keeps the leftmost match from starting at the 1), unless a
+//     dotted label follows; the English word counts as standing on its own
+//     after a . or a / too, so x.zip-10-1-2-3 and a/zip-10-1-2-3 stay clean;
 //   - a run a letter or digit is glued to (node10-1-2-3, ip-10-1-2-3a), which
 //     hyphenatedIPv4Bounded keeps out;
 //   - a hexadecimal address (ip-0a010203), which the pattern never matches;
 //   - a run a leftmost match swallows: in x-5-10-1-2-3 the pattern matches
 //     5-10-1-2 from the leftmost digit, and the address 10.1.2.3 inside the
-//     five groups is never looked at again;
+//     five groups is never looked at again; so too in eu-central-1-10-1-2-3,
+//     where the public-looking 1-10-1-2 is read and dropped;
 //   - a run with mixed separators (ip-10_1-2-3), which the pattern never
 //     matches.
 func hyphenatedIPv4Problems(text string) []problem {
@@ -754,7 +756,9 @@ func hyphenatedIPv4Bounded(text string, start, end int) bool {
 // that prefix length (subnet-10-0-1-0-24-2, failing closed, and so prose such
 // as steps-10-1-2-3-4-5 too), and a label before it must be no word of
 // englishWordsEndingInIP that stands on its own (zip-10-1-2-3, but not the
-// strip of edge-strip-10-0-0-5) and no group of digits (eu-central-1-10-1-2-3).
+// strip of edge-strip-10-0-0-5) and no group of digits (the 1 of
+// eu-central-1_10-1-2-3; in eu-central-1-10-1-2-3 the leftmost match is
+// 1-10-1-2, so this run is never read).
 func hyphenatedIPv4StandsAlone(text string, start, end int, addr netip.Addr) bool {
 	if !addr.IsPrivate() && !sharedAddressNet.Contains(addr) && !addr.IsLinkLocalUnicast() {
 		return false
