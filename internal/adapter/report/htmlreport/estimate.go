@@ -1,6 +1,7 @@
 package htmlreport
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -236,7 +237,7 @@ func notEstimatedReasons(estimates []estimate.Estimate) rich {
 
 	add := func(e estimate.Estimate) {
 		p := renderNotEstimated(e)
-		if key := plain(p); !contains(seen, key) {
+		if key := plain(p); !slices.Contains(seen, key) {
 			seen = append(seen, key)
 			phrases = append(phrases, p)
 		}
@@ -251,7 +252,7 @@ func notEstimatedReasons(estimates []estimate.Estimate) rich {
 	}
 
 	for _, e := range estimates {
-		if !e.Estimated && !contains(reasonOrder, e.Reason) {
+		if !e.Estimated && !slices.Contains(reasonOrder, e.Reason) {
 			add(e)
 		}
 	}
@@ -275,17 +276,6 @@ func plain(r rich) string {
 	}
 
 	return b.String()
-}
-
-// contains reports whether list holds v.
-func contains[T comparable](list []T, v T) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-
-	return false
 }
 
 // estimatesOf returns the estimates of verdicts, in their order, leaving out a

@@ -220,17 +220,22 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// internal/testutil (issue #144, the auditor's finding M-1 and the
 		// reviewer's S1): the application layer's tests may import it, and it
 		// reads and writes golden files, so it imports os and path/filepath
-		// today. Nothing held those imports to anything: a helper that reached
-		// the network (net/http), started a program (os/exec) or read the
-		// environment (os.Getenv) would have given an application test I/O with
-		// lint green, since the test's own rule allows internal/testutil
-		// whatever it imports. So testutil has a strict rule of its own, and
-		// its allow list is exactly the imports its files make today, each
-		// exact: the standard packages, the two domain packages it builds
-		// values of, and internal/testutil itself, which its external test
-		// package imports. A new import needs an entry here, in .golangci.yml
-		// and in this pin, in the same commit, and a reviewer reads it as a
-		// widening of the helpers every test shares.
+		// today, and it parses the estimate domain's source for the report
+		// guards (issue #308), so it imports go/ast, go/parser, go/token and
+		// that domain. os is both: the golden files, and os.Getwd up to the
+		// directory holding go.mod, which is how the reader finds the domain
+		// under go test -trimpath too, so it needs no runtime (runtime.Caller
+		// records a module-relative path there). Nothing held those imports to anything: a
+		// helper that reached the network (net/http), started a program
+		// (os/exec) or read the environment (os.Getenv) would have given an
+		// application test I/O with lint green, since the test's own rule
+		// allows internal/testutil whatever it imports. So testutil has a strict
+		// rule of its own, and its allow list is exactly the imports its files
+		// make today, each exact: the standard packages, the domain packages it
+		// builds values of or reads, and internal/testutil itself, which its
+		// external test package imports. A new import needs an entry here, in
+		// .golangci.yml and in this pin, in the same commit, and a reviewer
+		// reads it as a widening of the helpers every test shares.
 		//
 		// The files: list names the directory whole and no !$test, so the rule
 		// holds the helpers' _test.go files too: a test of testutil runs with
@@ -252,8 +257,12 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"flag$",
 			"fmt$",
 			"github.com/timothymamo/shift2eu/internal/domain/catalog$",
+			"github.com/timothymamo/shift2eu/internal/domain/estimate$",
 			"github.com/timothymamo/shift2eu/internal/domain/taxonomy$",
 			"github.com/timothymamo/shift2eu/internal/testutil$",
+			"go/ast$",
+			"go/parser$",
+			"go/token$",
 			"maps$",
 			"math$",
 			"os$",
@@ -950,6 +959,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"context$",
 			"fmt$",
 			"io$",
+			"slices$",
 			"strconv$",
 			"strings$",
 			"encoding/json$",
