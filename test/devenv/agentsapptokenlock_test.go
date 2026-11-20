@@ -610,12 +610,12 @@ func unscopedAssignments(trace string, names []string) []string {
 }
 
 // TestAgentsAppTokenRefreshCleanupHelpersLeaveTheirCallersVariablesAlone pins issue #396's item 1: clear_stale_asides
-// and the helpers it calls are pieces of one shell, whose variables are all global unless a function declares them
-// local. Their working names - reap, prefix, the loop's found and mover, stale, recorded, the unremovable bookkeeping
-// of one name - are therefore the caller's too: a caller that keeps anything under one of those names, or a future
-// edit that does, reads the helper's value afterwards. The cleanup must keep its own names to itself, which `sh -x`
-// shows: every assignment to one of them inside a function is a declaration that scopes it, or the name is a new
-// one no caller of the script has.
+// and the helpers it calls are pieces of one shell, whose variables are all global, POSIX sh knowing no `local`. Their
+// working names - reap, prefix, the loop's found and mover, stale, recorded, the unremovable bookkeeping of one name -
+// are therefore the caller's too: a caller that keeps anything under one of those names, or a future edit that does,
+// reads the helper's value afterwards. The cleanup must keep its own names to itself, which `sh -x` shows: every
+// assignment to one of them inside a function gives it its function's prefix (sweep_, reap_, forget_), or the name is
+// a new one no caller of the script has.
 func TestAgentsAppTokenRefreshCleanupHelpersLeaveTheirCallersVariablesAlone(t *testing.T) {
 	t.Parallel()
 
@@ -645,7 +645,7 @@ func TestAgentsAppTokenRefreshCleanupHelpersLeaveTheirCallersVariablesAlone(t *t
 	}
 
 	if offenders := unscopedAssignments(refresh.errOut(), cleanupHelperNames); len(offenders) != 0 {
-		t.Errorf("the refresher's cleanup assigns %v without scoping %s, so the cleanup overwrites those variables of whoever called it: a caller of clear_stale_asides, reap_entry or forget_unremovable that keeps its own reap, prefix, found, mover, stale, recorded, list or was_unremovable reads the helper's value afterwards, and the next edit that gives the caller such a name breaks it silently. Declare them local in the function that assigns them (issue #396, item 1)\nstate directory:\n%s",
+		t.Errorf("the refresher's cleanup assigns %v without scoping %s, so the cleanup overwrites those variables of whoever called it: a caller of clear_stale_asides, reap_entry or forget_unremovable that keeps its own reap, prefix, found, mover, stale, recorded, list or was_unremovable reads the helper's value afterwards, and the next edit that gives the caller such a name breaks it silently. Give each one its function's prefix (sweep_, reap_, forget_) or another name the caller does not use (issue #396, item 1)\nstate directory:\n%s",
 			offenders, strings.Join(cleanupHelperNames, ", "), describeTree(f.sb.stateDir()))
 	}
 }
