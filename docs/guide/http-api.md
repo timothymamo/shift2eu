@@ -1,5 +1,10 @@
 # Run the HTTP API
 
+> **Retired** ([ADR 0037](../adr/0037-retire-the-http-api-and-release-the-cli-alone.md)): releases no
+> longer ship `shift2eu-server`, its image or its OpenAPI document, and `make server-image` is gone. Its
+> images up to the last release that shipped them stay on `ghcr.io` but get no updates, security fixes
+> included. Run assessments with the CLI or in the browser on the site.
+
 `shift2eu-server` serves the same assessments over a small, versioned HTTP API, for a website or any
 other client that cannot run the CLI ([ADR 0019](../adr/0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md)).
 It is a second binary, so `shift2eu` itself still opens no network connection. It takes an inventory

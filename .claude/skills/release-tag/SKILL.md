@@ -1,6 +1,6 @@
 ---
 name: release-tag
-description: Review the release PR that release-please keeps open on main, and after it is merged verify the vX.Y.Z tag, the GoReleaser release run and the signed images it publishes. Use when asked to release, publish a version, review the release PR or check a release.
+description: Review the release PR that release-please keeps open on main, and after it is merged verify the vX.Y.Z tag, the GoReleaser release run and the signed image it publishes. Use when asked to release, publish a version, review the release PR or check a release.
 ---
 
 # Cut a release
@@ -13,10 +13,10 @@ then creates the `vX.Y.Z` tag on the merge commit with the **release-tag App**'s
 own, and relabels the PR `autorelease: tagged` with the **release-please App**'s token, the App that
 opened it (issue #157: two Apps, so the token the third-party release-please action holds can create no
 release tag). The tag starts `.github/workflows/release.yml`: GoReleaser publishes the
-binaries, then the image, sbom and sign jobs the signed images `ghcr.io/timothymamo/shift2eu` and
-`ghcr.io/timothymamo/shift2eu-server`, and the `verify` job checks them (ADR 0015). This skill reviews
-the release PR and reports on it, and after the merge verifies the tag, the release run and the
-published images. It never chooses a version itself, never edits the release PR, and never creates,
+binaries, then the image, sbom and sign jobs the signed image `ghcr.io/timothymamo/shift2eu`, and the
+`verify` job checks it (ADR 0015). The release ships the CLI alone: the HTTP API's image and the
+OpenAPI document are no longer published (ADR 0037). This skill reviews the release PR and reports on
+it, and after the merge verifies the tag, the release run and the published image. It never chooses a version itself, never edits the release PR, and never creates,
 moves or deletes a tag.
 
 1. In the repository root, which always stays on `main` (check
@@ -221,22 +221,22 @@ moves or deletes a tag.
    archives artifact's retention), "Re-run failed jobs" (`gh run rerun <id> --failed`) re-runs
    `attest-archives` or `publish` on the same draft and archives; after that, or when the draft itself
    is wrong, a full re-run (`gh run rerun <id>`) rebuilds the draft (`replace_existing_draft`) with new
-   archives and a new attestation, and rebuilds and re-pushes the images under the same tags. A
+   archives and a new attestation, and rebuilds and re-pushes the image under the same tags. A
    `--failed` re-run does not re-run the successful `latest` job, so it reuses the first attempt's
    `latest` decision (issue #173). `publish` refuses a stale `true` when a higher release is already
    GitHub's "Latest" (`GitHub's latest release is <tag>, higher than <this tag>: the latest decision
    is stale, ...`) and leaves the draft. When that "Latest" is a pre-release tag (`vX.Y.Z-rc.N`, which
    `sort -V` ranks above `vX.Y.Z`), someone un-flagged its release by hand: tell the maintainer to mark
-   it a pre-release again (or set the correct "Latest") and re-run the release run. The images'
+   it a pre-release again (or set the correct "Latest") and re-run the release run. The image's
    `latest` tag has no such guard. So when a higher release tag has been merged into `main` since the
    first attempt, always tell the maintainer to re-run the whole run (`gh run rerun <id>`, without
-   `--failed`), which runs `latest` again. Until it is published, the images of the draft release are
+   `--failed`), which runs `latest` again. Until it is published, the image of the draft release is
    public already (ADR 0015). Then check the release again from the top of this step.
    Report the result of the run's `verify-archives` job, "Verify the published archives", the
    independent check of every published archive and `checksums.txt` against their digests and their
    build provenance, and of GitHub's "Latest" release, which must follow the same highest-release rule
-   as the images' `latest` tag (issue #173, ADR 0015). The run's `latest` job decides it once, and
-   both the images and `publish` follow that one output; `verify-archives` reads the highest release
+   as the image's `latest` tag (issue #173, ADR 0015). The run's `latest` job decides it once, and
+   both the image and `publish` follow that one output; `verify-archives` reads the highest release
    tag again on its own, as an independent check, and fails a pre-release that is GitHub's "Latest"
    without any condition:
    `gh run view <id> --json jobs --jq '.jobs[] | select(.name == "Verify the published archives") | .conclusion'`.
@@ -247,10 +247,10 @@ moves or deletes a tag.
    published archives"), and act on each the same way. Confirm GitHub's "Latest" yourself too:
    `gh api repos/timothymamo/shift2eu/releases/latest --jq '.tag_name'` must be the highest `vX.Y.Z`
    tag merged into `main` once its release is published, never an older line's patch.
-   Report the result of the run's `verify` job too, the independent check of both published images
+   Report the result of the run's `verify` job too, the independent check of the published image
    on a fresh GitHub-hosted runner (issue #99, ADR 0015). Find it by its name, "Verify the published
-   images", which `check.ReleaseWorkflow` pins:
-   `gh run view <id> --json jobs --jq '.jobs[] | select(.name == "Verify the published images") | .conclusion'`.
+   image", which `check.ReleaseWorkflow` pins:
+   `gh run view <id> --json jobs --jq '.jobs[] | select(.name == "Verify the published image") | .conclusion'`.
    It must be `success`. When a higher release tag merged into `main` has no published image, `verify`
    skips the `latest` check and passes with a notice instead (ADR 0015). Read it from the job's
    annotations, never by searching the job's log for `::notice::`: the log echoes the step's script,
@@ -258,7 +258,7 @@ moves or deletes a tag.
    id, so list the job's notices with
    `gh api repos/timothymamo/shift2eu/check-runs/<verify job id>/annotations --jq '.[] | select(.annotation_level == "notice") | .message'`
    (the job id is
-   `gh run view <id> --json jobs --jq '.jobs[] | select(.name == "Verify the published images") | .databaseId'`).
+   `gh run view <id> --json jobs --jq '.jobs[] | select(.name == "Verify the published image") | .databaseId'`).
    Empty output means `verify` raised no notice. A notice must be acted on, not only reported.
    For each `<image>:<higher tag> is not published yet` it names, check that the higher tag has a
    release run queued or in progress:
@@ -266,7 +266,7 @@ moves or deletes a tag.
    If it has one, report the notice and that run. If it has none, or only a failed or cancelled one,
    report the higher tag as stray or unpublished, with that output, and stop: while it stays
    unpublished, `verify` checks `latest` for no older release, and the `latest` job decides
-   `latest=false` for every later release, so it holds back both the images' `latest` tag and
+   `latest=false` for every later release, so it holds back both the image's `latest` tag and
    GitHub's "Latest" release (an accepted consequence, ADR 0015). Give the maintainer the two
    recoveries and let them decide which: re-run the higher tag's failed release run
    (`gh run rerun <its run id>`, or, for a run that was replaced in the concurrency group and never
@@ -276,34 +276,18 @@ moves or deletes a tag.
    tag> is not published yet, ...`, is handled the same way. Removing the tag or re-running its
    release is the maintainer's decision; never delete or move a pushed tag yourself, and do not
    re-run its release unasked. `verify` runs after the
-   images are published, so it detects a bad release, it does not prevent one. A failed `verify` job is
+   image is published, so it detects a bad release, it does not prevent one. A failed `verify` job is
    a failed release: report it with the failed step's log (`gh run view <id> --log-failed`) and stop. Do
    not re-run it to get past the failure, and do not count the VM check below as a substitute for it.
    In the report, give the maintainer the recovery ADR 0015 states, which only they carry out: mark the
    GitHub release as bad, point `latest` (and `X.Y` if wrong) back at the last good release's digest or
    delete the bad image tag, and fix forward with a new patch release.
 
-   Then confirm the release publishes the bundled OpenAPI document (issue #139). CI's snapshot dry run
-   (`.github/scripts/verify-archives.sh`) never exercises `release.extra_files`, because GoReleaser
-   skips the release pipe under `--snapshot`, but the release itself already holds the asset to account
-   (#172): the `publish` job refuses a draft whose assets are not exactly the names `checksums.txt`
-   lists plus `checksums.txt`, which lists the document, and `verify-archives` checks its digest and
-   attestation. This step is an independent cross-check that the published bytes are the tag's
-   committed `api/openapi.bundled.json`. The release must list the asset `shift2eu-server_openapi.json`:
-   `gh release view vX.Y.Z --json assets --jq '.assets[].name'`. Its `checksums.txt` must hold exactly
-   one line for it, with the sha256 of `api/openapi.bundled.json` at the tag:
-
-   ```bash
-   TAG=vX.Y.Z
-   gh release download "$TAG" --pattern checksums.txt --output - | grep -E '  shift2eu-server_openapi\.json$'
-   git -C <repository root> show "$TAG:api/openapi.bundled.json" | sha256sum
-   ```
-
-   The two sums must be equal. A missing asset, a missing or repeated line or a different sum is a
-   failed release: report what you found and stop, as for a failed `verify` job. The asset's digest
-   and build provenance need no check of their own: `attest-archives` attests it with the archives,
-   and `verify-archives`, whose result is reported above, verifies every asset `checksums.txt` lists,
-   this one included.
+   Then confirm the release publishes the CLI alone (ADR 0037): no asset may be named
+   `shift2eu-server_*`, and none may be an OpenAPI document:
+   `gh release view vX.Y.Z --json assets --jq '.assets[].name'` lists only `shift2eu_*` archives and
+   `checksums.txt`. Any other asset is a failed release: report it and stop, as for a failed `verify`
+   job.
 8. Check the published image yourself; do not hand this to the user. The Lima VM has cosign, a `gh`
    with `gh attestation`, `crane` and rootless `nerdctl` (ADR 0017); this is "Verify the image" in
    `docs/guide/verify-releases.md`, in its VM form, for the new tag. Run it from the repository root,

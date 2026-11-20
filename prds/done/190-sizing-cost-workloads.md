@@ -96,7 +96,9 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   *Open:* plans, prices, dates, source URLs, default regions and citations are in place and pinned
   (`TestCatalogPlansAndPrices`, `TestPriceCitations`), but OVHcloud's *Block Storage LUKS* and *Block
   Storage LUKS Zonal* have no per-GiB price (their `SOURCES.md` says why), so encrypted block storage is
-  never estimated on OVHcloud.
+  never estimated on OVHcloud. The reason was re-checked on 2026-11-20 (issue #244). The box cannot be
+  ticked: OVHcloud publishes no price for encrypted (LUKS) volumes and no statement that they cost what
+  their unencrypted class costs.
 - [x] *Review:* an ADR records the snapshot format version that adds plans and prices (amends ADR 0007),
   including the rounding. Prices are stated as monthly prices only; a target that publishes hourly
   prices has them converted at 730 hours, and `SOURCES.md` says so:

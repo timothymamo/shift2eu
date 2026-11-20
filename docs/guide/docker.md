@@ -5,6 +5,10 @@ read-only. This page shows the commands and why each flag is there, and how cred
 container once live sources exist. [Install](install.md#the-images) says which image to pull or how to
 build it.
 
+> The HTTP API's image, `ghcr.io/timothymamo/shift2eu-server`, is retired
+> ([ADR 0037](../adr/0037-retire-the-http-api-and-release-the-cli-alone.md)): its tags up to the last release
+> that shipped it stay, but get no updates. Use this image, the CLI, or the site in your browser.
+
 The entrypoint is `shift2eu` and the working directory `/work`, so relative paths such as
 `--inventory inventory.json` resolve there. Mount only the inventory file, read-only, and since
 `assess` is offline, give the container no network:

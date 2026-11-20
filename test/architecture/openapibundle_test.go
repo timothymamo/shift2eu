@@ -2,50 +2,62 @@ package architecture_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 	"github.com/timothymamo/shift2eu/test/internal/openapibundle"
 )
 
-// TestReleasePublishesTheBundledDocument pins one source for the bundle's path
-// (the review of issue #139). test/openapibundle writes the document
-// openapibundle.Path names, and the release publishes exactly that file, so
-// check.BundleGlob must be "./" + openapibundle.Path, .goreleaser.yaml must
-// hold that glob wherever it names the bundle, and both GitHubRelease and
-// GoReleaserArchives must refuse a document whose glob is anything else.
-//
-// Before this test the bundler's path (test/openapibundle's own constant) and
-// the release's glob (check.BundleGlob) were two copies of the same string,
-// held together by convention alone: a release that published a file the
-// bundler never writes would ship a stale document, and no test noticed.
-func TestReleasePublishesTheBundledDocument(t *testing.T) {
+// TestTheReleasePublishesNoBundledDocument pins what issue #393 leaves of
+// issue #139: the bundled OpenAPI document, api/openapi.bundled.json, is still
+// built and pinned (test/openapibundle does that), but the release no longer
+// publishes it. The release ships the CLI's archives and their checksums.txt
+// alone, so .goreleaser.yaml names neither the bundle's path nor the asset name
+// it used to be published as, and both release checks refuse a document that
+// carries the extra_files entry again.
+func TestTheReleasePublishesNoBundledDocument(t *testing.T) {
 	t.Parallel()
 
-	// The one glob the release may name: the bundler's path, as .goreleaser
-	// writes a repository-relative file, "./" first.
-	glob := "./" + openapibundle.Path
+	goreleaser := string(readRepositoryFile(t, ".goreleaser.yaml"))
 
-	if check.BundleGlob != glob {
-		t.Errorf("check.BundleGlob is %q, want %q: the glob the release requires is the path the bundler writes", check.BundleGlob, glob)
+	for _, retired := range []string{openapibundle.Path, "openapi"} {
+		if bytes.Contains([]byte(goreleaser), []byte(retired)) {
+			t.Errorf(".goreleaser.yaml names %q, want no mention of the bundled OpenAPI document: the release publishes the CLI's archives and checksums.txt alone (issue #393)", retired)
+		}
 	}
 
-	goreleaser := readRepositoryFile(t, ".goreleaser.yaml")
-
-	if !bytes.Contains(goreleaser, []byte(glob)) {
-		t.Fatalf(".goreleaser.yaml holds no %q, want the release to publish %s, the document the bundler writes", glob, openapibundle.Path)
+	if err := check.GitHubRelease([]byte(goreleaser)); err != nil {
+		t.Errorf("GitHubRelease(.goreleaser.yaml): %v", err)
 	}
 
-	// Both checks require exactly that glob: the same document with another
-	// one is refused, so neither can be satisfied by a path the bundler never
-	// writes.
-	mutated := bytes.ReplaceAll(goreleaser, []byte(glob), []byte(glob+".old"))
-
-	if err := check.GitHubRelease(mutated); err == nil {
-		t.Errorf("GitHubRelease() of .goreleaser.yaml with the glob %q = nil, want an error: the release publishes the bundle as %q", glob+".old", glob)
+	if messages := check.GoReleaserArchives([]byte(goreleaser)); len(messages) != 0 {
+		t.Errorf("GoReleaserArchives(.goreleaser.yaml) = %q, want no message", messages)
 	}
 
-	if messages := check.GoReleaserArchives(mutated); len(messages) == 0 {
-		t.Errorf("GoReleaserArchives() of .goreleaser.yaml with the glob %q = no messages, want one: checksums.txt covers the bundle at %q", glob+".old", glob)
+	// The entry issue #139 added is refused wherever a case adds it back: the
+	// release: section and the checksum section both carried it.
+	bundleEntry := "  extra_files:\n    - glob: ./" + openapibundle.Path + "\n      name_template: shift2eu-server_openapi.json\n"
+
+	releaseSection := "  replace_existing_draft: true\n"
+	if !strings.Contains(goreleaser, releaseSection) {
+		t.Fatalf(".goreleaser.yaml holds no release: section ending in %q, so this test cannot add the bundle's extra file back", strings.TrimSpace(releaseSection))
+	}
+
+	withBundle := strings.Replace(goreleaser, releaseSection, releaseSection+bundleEntry, 1)
+
+	if err := check.GitHubRelease([]byte(withBundle)); err == nil {
+		t.Errorf("GitHubRelease() of .goreleaser.yaml with the bundle's extra_files = nil, want an error: the release publishes no file beside the CLI's archives (issue #393)")
+	}
+
+	checksumSection := "checksum:\n  name_template: checksums.txt\n"
+	if !strings.Contains(goreleaser, checksumSection) {
+		t.Fatalf(".goreleaser.yaml holds no %q section, so this test cannot add the bundle's extra file back", "checksum")
+	}
+
+	withChecksumBundle := strings.Replace(goreleaser, checksumSection, checksumSection+bundleEntry, 1)
+
+	if messages := check.GoReleaserArchives([]byte(withChecksumBundle)); len(messages) == 0 {
+		t.Errorf("GoReleaserArchives() of .goreleaser.yaml with the bundle's extra_files = no messages, want one: checksums.txt covers the CLI's archives alone (issue #393)")
 	}
 }

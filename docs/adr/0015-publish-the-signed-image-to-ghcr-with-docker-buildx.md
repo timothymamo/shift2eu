@@ -10,6 +10,8 @@
   Amended by issues #156 and #163: GoReleaser uploads to a draft that a job of its own publishes last,
   after the archives and `checksums.txt` are attested, and a `verify-archives` job verifies them
   (Consequences).
+  Amended 2026-11-20 by [ADR 0037](0037-retire-the-http-api-and-release-the-cli-alone.md) (issue #393):
+  the release ships the CLI alone; the `shift2eu-server` image and its jobs are gone (Consequences).
 - Date: 2026-11-11
 
 ## Context
@@ -219,6 +221,10 @@ attestations, pushed to the registry beside the image.
   the two changes, so `v0.2.0` and earlier ship the CLI alone and the first release with
   `shift2eu-server` ships it in archives of its own. The GHCR package `shift2eu-server` must be made public by hand after its first push, as
   `shift2eu`'s was.
+- Amended (2026-11-20) by [ADR 0037](0037-retire-the-http-api-and-release-the-cli-alone.md) (issue #393):
+  the HTTP API is retired and the release ships the CLI alone. The `server-image`, `server-sbom` and
+  `server-sign` jobs are gone, and no new `shift2eu-server` image is published; the images already
+  published stay on GHCR without updates. The paragraph above describes the state before that change.
 - Amended by issue #99: a ninth job, `verify`, checks what every release published, independently of
   the agents. Until then the published images were checked by hand, or by the `release-tag` skill inside
   the agents' Lima VM ([ADR 0017](0017-run-a-rootless-container-runtime-in-the-lima-vm.md)); audit

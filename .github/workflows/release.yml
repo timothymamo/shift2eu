@@ -17,14 +17,12 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-# The steps of all thirteen jobs are a closed list that test/architecture holds
+# The steps of all ten jobs are a closed list that test/architecture holds
 # (check.ReleaseWorkflow): add no step, run: or env: here without changing it.
-# The server-image, server-sbom and server-sign jobs publish the HTTP API's
-# image, ghcr.io/timothymamo/shift2eu-server (PRD #103), exactly as image, sbom
-# and sign publish the CLI's: jobs of their own rather than a matrix, as a
-# matrix job's outputs keep one leg's digest only, and each job keeps its own
-# least privilege. latest alone decides, once per run, whether the tag is the
-# highest release tag on main, so the images' latest tag and GitHub's "Latest"
+# The release ships the CLI alone: the HTTP API's image, archive and API
+# document are gone (issue #393). latest alone decides, once
+# per run, whether the tag is the
+# highest release tag on main, so the image's latest tag and GitHub's "Latest"
 # release cannot disagree. goreleaser hands the archives on, attest-archives
 # attests them, publish alone publishes the draft release, and verify-archives
 # checks what it published (issues #156, #163, #173).
@@ -60,7 +58,7 @@ jobs:
         run: make test
 
   # Decides, once per run, whether the tag is the highest release tag on main:
-  # the one decision the images' latest tag and GitHub's "Latest" release both
+  # the one decision the image's latest tag and GitHub's "Latest" release both
   # follow, so a tag pushed while the run is in flight cannot leave them
   # disagreeing (issue #173). Git, sed and sort alone, and read-only: no
   # repository code runs, the whole history brings origin/main, and the token
@@ -81,7 +79,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       # The release tags merged into main, pre-releases left out, by version
-      # order: only the highest of them moves the images' latest tag and
+      # order: only the highest of them moves the image's latest tag and
       # GitHub's "Latest" release, so a patch on an older line moves neither,
       # and a stray tag off main (one the guard refused and nobody deleted)
       # cannot hold them back. The step refuses a checkout without origin/main:
@@ -127,16 +125,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # GoReleaser copies the release's extra files into neither dist/ nor the
-      # workflow artifact, so the bundled OpenAPI document is put beside the
-      # archives here, under the name the release publishes it as, before the
-      # artifact below hands dist/ on and attest-archives attests every file of
-      # it (issue #139).
-      - name: Put the OpenAPI document beside the archives
-        run: cp api/openapi.bundled.json dist/shift2eu-server_openapi.json
-      # The archives, their checksums and the OpenAPI document leave the job as
+      # The archives and their checksums leave the job as
       # a workflow artifact, for the attest job to attest on a runner of its
-      # own (issues #139, #163). What is handed on is what this run wrote in
+      # own (issue #163). What is handed on is what this run wrote in
       # dist/ and nothing else. The archives are named by their extension, not
       # by their name alone: dist/shift2eu_* also matches GoReleaser's build
       # directories (dist/shift2eu_linux_amd64_v1/ ...), and would hand on 12
@@ -148,9 +139,6 @@ jobs:
           path: |
             dist/shift2eu_*.tar.gz
             dist/shift2eu_*.zip
-            dist/shift2eu-server_*.tar.gz
-            dist/shift2eu-server_*.zip
-            dist/shift2eu-server_openapi.json
             dist/checksums.txt
           if-no-files-found: error
           retention-days: 7
@@ -176,20 +164,17 @@ jobs:
       # through the workflow artifact fails here, before anything is signed.
       - name: Check the archives against checksums.txt
         run: sha256sum -c checksums.txt
-      # One attestation covers every archive, their checksums and the bundled
-      # OpenAPI document, so a release whose files were replaced fails
-      # verification (issues #139, #163). The archives are subjects named by
-      # their extension: a bare shift2eu_* also matches GoReleaser's build
-      # directories, and would attest the 12 bare binaries beside the archives.
+      # One attestation covers every archive and their checksums, so a release
+      # whose files were replaced fails verification (issue #163). The archives
+      # are subjects named by their extension: a bare shift2eu_* also matches
+      # GoReleaser's build directories, and would attest the 12 bare binaries
+      # beside the archives.
       - name: Attest the archives
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
             shift2eu_*.tar.gz
             shift2eu_*.zip
-            shift2eu-server_*.tar.gz
-            shift2eu-server_*.zip
-            shift2eu-server_openapi.json
             checksums.txt
 
   # The release is published last (issue #156): GoReleaser uploads every asset
@@ -199,7 +184,7 @@ jobs:
   # nothing else: nothing in it can sign, push or attest. It checks nothing out
   # and runs no repository code: whether the tag is the highest release tag on
   # main is the latest job's one decision, by which it moves GitHub's "Latest"
-  # release, as the images' latest tag follows it (issue #173).
+  # release, as the image's latest tag follows it (issue #173).
   publish:
     name: Publish the release
     needs: [test, goreleaser, attest-archives, latest]
@@ -235,7 +220,7 @@ jobs:
         run: |
           set -euo pipefail
           # Whether this tag is the highest release tag on main is the latest
-          # job's decision, made once for both images and for this release: the
+          # job's decision, made once for this release: the
           # step refuses anything but the two values it can hold, rather than
           # publish a release with a make_latest nobody decided (issue #173).
           case "$LATEST" in
@@ -488,154 +473,19 @@ jobs:
           push-to-registry: true
           create-storage-record: false
 
-  # The image job for the HTTP API's image: the Dockerfile's server stage
-  # (--target server), with the same stamp, tags and build settings, and latest
-  # from the latest job's one decision as the CLI image has it.
-  server-image:
-    name: Container image (shift2eu-server)
-    needs: [test, goreleaser, latest]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read # check out the repository
-      packages: write # push the image to ghcr.io
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      # The image job's stamp, line for line.
-      - name: Build arguments, as GoReleaser stamps them
-        id: stamp
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          {
-            echo "version=${TAG#v}"
-            echo "commit=$(git rev-parse --short HEAD)"
-            echo "date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
-          } >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          # renovate: datasource=docker depName=moby/buildkit versioning=semver
-          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
-      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Image tags
-        id: tags
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/timothymamo/shift2eu-server
-          flavor: latest=${{ needs.latest.outputs.latest }}
-          tags: |
-            type=semver,pattern={{raw}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
-      - name: Build and push linux/amd64 and linux/arm64
-        id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: server
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          annotations: index:org.opencontainers.image.source=https://github.com/timothymamo/shift2eu
-          provenance: false
-          sbom: false
-          build-args: |
-            VERSION=${{ steps.stamp.outputs.version }}
-            COMMIT=${{ steps.stamp.outputs.commit }}
-            DATE=${{ steps.stamp.outputs.date }}
-
-  # The sbom job for the HTTP API's image: read-only, by digest.
-  server-sbom:
-    name: SBOM (shift2eu-server)
-    needs: server-image
-    runs-on: ubuntu-latest
-    permissions:
-      packages: read # pull the image from ghcr.io, private until made public
-    steps:
-      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: registry:ghcr.io/timothymamo/shift2eu-server@${{ needs.server-image.outputs.digest }}
-          format: spdx-json
-          output-file: shift2eu-server.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
-          # renovate: datasource=github-releases depName=anchore/syft
-          syft-version: v1.57.1
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: server-sbom
-          path: shift2eu-server.spdx.json
-          if-no-files-found: error
-          retention-days: 1
-
-  # The sign job for the HTTP API's image: the signing identity, sigstore's
-  # and GitHub's actions only, everything by digest.
-  server-sign:
-    name: Sign and attest (shift2eu-server)
-    needs: [server-image, server-sbom]
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write # push the signatures and attestations to ghcr.io
-      id-token: write # GitHub OIDC token for keyless cosign and attestation signing
-      attestations: write # store the provenance and SBOM attestations in the repository
-    steps:
-      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
-        with:
-          # renovate: datasource=github-releases depName=sigstore/cosign
-          cosign-release: v3.1.4
-      - name: Log in to ghcr.io
-        env:
-          ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: printf '%s' "$GITHUB_TOKEN" | cosign login ghcr.io --username "$ACTOR" --password-stdin
-      - name: Sign the image
-        env:
-          DIGEST: ${{ needs.server-image.outputs.digest }}
-        run: cosign sign --yes --recursive "ghcr.io/timothymamo/shift2eu-server@${DIGEST}"
-      - name: Attest the build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ghcr.io/timothymamo/shift2eu-server
-          subject-digest: ${{ needs.server-image.outputs.digest }}
-          push-to-registry: true
-          create-storage-record: false # an organisation API; needs artifact-metadata: write
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: server-sbom
-      - name: Attest the SBOM
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ghcr.io/timothymamo/shift2eu-server
-          subject-digest: ${{ needs.server-image.outputs.digest }}
-          sbom-path: shift2eu-server.spdx.json
-          push-to-registry: true
-          create-storage-record: false
-
   # The independent check of what the release published (issue #99): a fresh
-  # runner, after both images are signed and attested, with read-only access to
+  # runner, after the image is signed and attested, with read-only access to
   # the registry and no OIDC token, so nothing in it can sign or push. It needs
-  # the image jobs too: each verify step compares the digest the tag resolves to
+  # the image job too: its verify step compares the digest the tag resolves to
   # with the digest this run built, so a tag moved between the build and the
   # check fails here. A tag can be moved and a digest cannot, so every check
   # below reads a digest, never a tag.
   verify:
-    name: Verify the published images
-    needs: [image, sign, server-image, server-sign]
+    name: Verify the published image
+    needs: [image, sign]
     runs-on: ubuntu-latest
     permissions:
-      packages: read # both images and their signatures
+      packages: read # the image and its signature
       attestations: read # gh attestation verify reads them through the repository's API
     steps:
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
@@ -681,38 +531,9 @@ jobs:
             --predicate-type https://spdx.dev/Document/v2.3
           docker run --rm --read-only --network none "$IMAGE" version | tee version.txt
           grep -qF "shift2eu ${TAG#v} (" version.txt
-      # The HTTP API's image, checked as the CLI's is, from the digest its own
-      # image job built. It has no version subcommand, so --help exiting 0 is
-      # its smoke test.
-      - name: Verify the HTTP API's image
-        env:
-          TAG: ${{ github.ref_name }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUILT: ${{ needs.server-image.outputs.digest }}
-        run: |
-          set -euo pipefail
-          DIGEST="$(docker buildx imagetools inspect "ghcr.io/timothymamo/shift2eu-server:$TAG" --format '{{.Manifest.Digest}}')"
-          if [ "$DIGEST" != "$BUILT" ]; then
-            echo "ghcr.io/timothymamo/shift2eu-server:$TAG resolves to $DIGEST, not the digest this run built, $BUILT" >&2
-            exit 1
-          fi
-          IMAGE="ghcr.io/timothymamo/shift2eu-server@$DIGEST"
-          cosign verify "$IMAGE" \
-            --certificate-identity "https://github.com/timothymamo/shift2eu/.github/workflows/release.yml@refs/tags/$TAG" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-github-workflow-trigger push \
-            --certificate-github-workflow-sha "$GITHUB_SHA"
-          gh attestation verify "oci://$IMAGE" --repo timothymamo/shift2eu \
-            --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
-            --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners
-          gh attestation verify "oci://$IMAGE" --repo timothymamo/shift2eu \
-            --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
-            --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners \
-            --predicate-type https://spdx.dev/Document/v2.3
-          docker run --rm --read-only --network none "$IMAGE" --help > /dev/null
       # The tag rule ADR 0015 states: vX.Y.Z always, X.Y for every release,
       # latest for the highest release tag alone, and a pre-release, which
-      # moves neither X.Y nor latest. The highest is the tag the image jobs'
+      # moves neither X.Y nor latest. The highest is the tag the image job's
       # stamp read: the release tags merged into main. They are read by
       # ancestry here too, from the public repository into a bare repository of
       # this job's own, so no checkout runs and no repository code runs. Only a
@@ -724,7 +545,6 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
           CLI_BUILT: ${{ needs.image.outputs.digest }}
-          SERVER_BUILT: ${{ needs.server-image.outputs.digest }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
@@ -813,7 +633,6 @@ jobs:
             esac
           }
           check ghcr.io/timothymamo/shift2eu "$CLI_BUILT"
-          check ghcr.io/timothymamo/shift2eu-server "$SERVER_BUILT"
 
   # A fresh runner that verifies what the published release carries (issue
   # #163): it downloads every asset of the release, checks that the release is

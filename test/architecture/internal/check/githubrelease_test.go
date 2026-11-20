@@ -9,29 +9,27 @@ import (
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 )
 
-// bundleExtraFile is the one extra file the release publishes beside the
-// archives (issue #139): the bundled OpenAPI document, under the name its
-// release asset has. The checksum section holds the same entry, so
-// checksums.txt covers it (TestGoReleaserArchives).
-const bundleExtraFile = `  extra_files:
+// retiredBundle is the extra file the release used to publish beside the
+// archives (issue #139): the bundled OpenAPI document under the name its
+// release asset had. The release publishes the CLI's archives alone now, so a
+// release: section that carries it is refused (issue #393).
+const retiredBundle = `  extra_files:
     - glob: ./api/openapi.bundled.json
       name_template: shift2eu-server_openapi.json
 `
 
 // releaseSection returns the release: section of .goreleaser.yaml for the
-// given prerelease value, with draft: true, replace_existing_draft: true and
-// the bundle's extra file.
+// given prerelease value, with draft: true and replace_existing_draft: true.
 func releaseSection(prerelease string) string {
-	return "release:\n  draft: true\n  prerelease: " + prerelease + "\n  replace_existing_draft: true\n" + bundleExtraFile
+	return "release:\n  draft: true\n  prerelease: " + prerelease + "\n  replace_existing_draft: true\n"
 }
 
 // TestGitHubRelease pins how the GitHub release is published: release holds
 // exactly draft: true, prerelease: auto and replace_existing_draft: true, in
-// that order, and exactly the one extra file the release publishes beside the
-// archives, the bundled OpenAPI document api/openapi.bundled.json as
-// shift2eu-server_openapi.json (issue #139). Every asset GoReleaser uploads
-// goes to a draft release, which locks its assets when it is published (issue
-// #156, ADR 0015), so a job of release.yml publishes it last;
+// that order, and nothing beside them: the release ships the CLI's archives and
+// their checksums.txt, and no extra file (issue #393). Every asset GoReleaser
+// uploads goes to a draft release, which locks its assets when it is published
+// (issue #156, ADR 0015), so a job of release.yml publishes it last;
 // replace_existing_draft: true makes a re-run of a failed goreleaser job
 // replace the draft that job left, rather than add a second one for the tag
 // (GoReleaser finds a draft release by neither GetReleaseByTag nor a tag
@@ -51,23 +49,23 @@ func TestGitHubRelease(t *testing.T) {
 	}{
 		{
 			name:       "draft, prerelease auto and replace_existing_draft are accepted",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: true\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\n" + releaseSection("auto"),
 		},
 		{
 			name:       "a quoted auto is accepted",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: \"auto\"\n  replace_existing_draft: true\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\n" + releaseSection(`"auto"`),
 		},
 		{
 			name:       "the real document with its release section is accepted",
-			goreleaser: buildReal + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: true\n" + bundleExtraFile,
+			goreleaser: buildReal + "\n" + releaseSection("auto"),
 		},
 		{
 			name:       "CRLF line ends are accepted",
-			goreleaser: "version: 2\r\n\r\nrelease:\r\n  draft: true\r\n  prerelease: auto\r\n  replace_existing_draft: true\r\n" + strings.ReplaceAll(bundleExtraFile, "\n", "\r\n"),
+			goreleaser: strings.ReplaceAll("version: 2\n\n"+releaseSection("auto"), "\n", "\r\n"),
 		},
 		{
 			name:       "a comment after the value is accepted",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto # rc tags\n  replace_existing_draft: true # a failed run's draft is replaced\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto # rc tags\n  replace_existing_draft: true # a failed run's draft is replaced\n",
 		},
 		{
 			// A re-run of a failed goreleaser job leaves the draft the failed
@@ -75,22 +73,22 @@ func TestGitHubRelease(t *testing.T) {
 			// GetReleaseByTag, which skips drafts, so without this key it
 			// creates a second draft for the tag instead of replacing the first.
 			name:       "a release section without replace_existing_draft is refused: a re-run would leave two drafts for the tag",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n",
 			wantErr:    true,
 		},
 		{
 			name:       "replace_existing_draft false is refused",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: false\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: false\n",
 			wantErr:    true,
 		},
 		{
 			name:       "a quoted replace_existing_draft is refused",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: \"true\"\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: \"true\"\n",
 			wantErr:    true,
 		},
 		{
 			name:       "replace_existing_draft before prerelease is refused",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  replace_existing_draft: true\n  prerelease: auto\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  replace_existing_draft: true\n  prerelease: auto\n",
 			wantErr:    true,
 		},
 		{
@@ -98,27 +96,27 @@ func TestGitHubRelease(t *testing.T) {
 			// must upload them to a draft and publish it last (issue #156). Its
 			// default publishes the release, assets and all, at once.
 			name:       "a release section without draft is refused: goreleaser's default publishes the assets it uploads",
-			goreleaser: buildFlow + "\nrelease:\n  prerelease: auto\n  replace_existing_draft: true\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  prerelease: auto\n  replace_existing_draft: true\n",
 			wantErr:    true,
 		},
 		{
 			name:       "draft false is refused",
-			goreleaser: buildFlow + "\nrelease:\n  draft: false\n  prerelease: auto\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  draft: false\n  prerelease: auto\n",
 			wantErr:    true,
 		},
 		{
 			name:       "an upper-case True draft is refused",
-			goreleaser: buildFlow + "\nrelease:\n  draft: True\n  prerelease: auto\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  draft: True\n  prerelease: auto\n",
 			wantErr:    true,
 		},
 		{
 			name:       "an empty draft is refused",
-			goreleaser: buildFlow + "\nrelease:\n  draft:\n  prerelease: auto\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  draft:\n  prerelease: auto\n",
 			wantErr:    true,
 		},
 		{
 			name:       "a draft from an expression is refused",
-			goreleaser: buildFlow + "\nrelease:\n  draft: '{{ .Env.DRAFT }}'\n  prerelease: auto\n" + bundleExtraFile,
+			goreleaser: buildFlow + "\nrelease:\n  draft: '{{ .Env.DRAFT }}'\n  prerelease: auto\n",
 			wantErr:    true,
 		},
 		{
@@ -197,50 +195,41 @@ func TestGitHubRelease(t *testing.T) {
 			wantErr:    true,
 		},
 
-		// The bundle the release publishes beside the archives (issue #139):
-		// release: holds exactly one extra file, the bundled OpenAPI document
-		// under the name its asset has, so the release ships it. The
-		// checksum section's copy of the entry is TestGoReleaserArchives's.
+		// The extra file the release published beside the archives (issue
+		// #139) is gone (issue #393): the release ships the CLI's archives and
+		// their checksums.txt alone, so release: may hold no extra_files, and
+		// no line, a comment included, may name the bundle or shift2eu-server.
 		{
-			name:       "a release with no extra file is refused",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: true\n",
+			name:       "a release section with the bundled OpenAPI document is refused",
+			goreleaser: buildFlow + "\n" + releaseSection("auto") + retiredBundle,
 			wantErr:    true,
 		},
 		{
-			name:       "an empty extra_files is refused",
-			goreleaser: buildFlow + "\nrelease:\n  draft: true\n  prerelease: auto\n  replace_existing_draft: true\n  extra_files:\n",
+			name:       "a release section with an empty extra_files is refused",
+			goreleaser: buildFlow + "\n" + releaseSection("auto") + "  extra_files:\n",
 			wantErr:    true,
 		},
 		{
-			name: "an extra file with another glob is refused",
-			goreleaser: buildFlow + "\n" +
-				mutate(t, releaseSection("auto"), "./api/openapi.bundled.json", "./api/openapi.json"),
-			wantErr: true,
-		},
-		{
-			name: "an extra file with another name_template is refused",
-			goreleaser: buildFlow + "\n" +
-				mutate(t, releaseSection("auto"), "shift2eu-server_openapi.json", "openapi.json"),
-			wantErr: true,
-		},
-		{
-			// Two extra files: the release publishes one, and the second is one
-			// nothing pins.
-			name:       "two extra files are refused",
-			goreleaser: buildFlow + "\n" + releaseSection("auto") + "    - glob: ./api/openapi.json\n      name_template: openapi.json\n",
+			name:       "a comment naming the bundled OpenAPI document is refused",
+			goreleaser: buildFlow + "\n# extra_files: ./api/openapi.bundled.json\n" + releaseSection("auto"),
 			wantErr:    true,
 		},
 		{
-			name: "an extra file with a key the check never lists is refused",
-			goreleaser: buildFlow + "\n" +
-				mutate(t, releaseSection("auto"), "      name_template: shift2eu-server_openapi.json\n", "      name_template: shift2eu-server_openapi.json\n      strip_parent: true\n"),
-			wantErr: true,
+			name:       "a comment naming the HTTP API's binary is refused",
+			goreleaser: buildFlow + "\n# the shift2eu-server archive is gone\n" + releaseSection("auto"),
+			wantErr:    true,
+		},
+		// The name is retired in any case it is written in: a comment that
+		// capitalises it names the same bundle or binary, and is refused too.
+		{
+			name:       "a comment naming the bundled API document in another case is refused",
+			goreleaser: buildFlow + "\n# The OpenAPI document is gone\n" + releaseSection("auto"),
+			wantErr:    true,
 		},
 		{
-			name: "an extra file that is no mapping is refused",
-			goreleaser: buildFlow + "\n" +
-				mutate(t, releaseSection("auto"), "  extra_files:\n    - glob: ./api/openapi.bundled.json\n      name_template: shift2eu-server_openapi.json\n", "  extra_files: [./api/openapi.bundled.json]\n"),
-			wantErr: true,
+			name:       "a comment naming the HTTP API's binary in another case is refused",
+			goreleaser: buildFlow + "\n# Shift2eu-Server is gone\n" + releaseSection("auto"),
+			wantErr:    true,
 		},
 	}
 
