@@ -13,3 +13,8 @@ var ReasonOrder = reasonOrder
 // RenderNotEstimated is renderNotEstimated, for the tests: the phrase a report
 // gives an estimate that is not estimated.
 var RenderNotEstimated = renderNotEstimated
+
+// EscapeText is escapeText, for the tests: what renderNotEstimated's default
+// branch shows an unknown reason as, so the phrase guard compares a phrase with
+// the real fallback and not with the raw code (issue #308).
+var EscapeText = escapeText

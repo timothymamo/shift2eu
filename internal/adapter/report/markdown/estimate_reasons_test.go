@@ -35,8 +35,8 @@ var reasonPhrases = map[estimate.Reason]struct {
 // reasonsPhrasedAsTheirCode are the reasons whose phrase is their own code, so
 // the text renderNotEstimated's default gives an unknown reason is the same as
 // the one its case gives them. A reason in this list is the only one whose
-// phrase may equal its code, which keeps that default from satisfying the
-// phrase check by accident.
+// phrase may be that default, which keeps the phrase check from passing by
+// accident.
 var reasonsPhrasedAsTheirCode = []estimate.Reason{
 	estimate.UsagePriced,
 }
@@ -79,12 +79,37 @@ func TestEveryReasonHasAPhraseAndAPlaceInTheOrder(t *testing.T) {
 				t.Errorf("renderNotEstimated(%q) = %q, want %q", string(reason), got, phrase.want)
 			}
 
-			if got == string(reason) && !slices.Contains(reasonsPhrasedAsTheirCode, reason) {
-				t.Errorf("renderNotEstimated(%q) = %q, which is what its default gives a reason it has no case for, "+
-					"so the phrase could be that fallback rather than the report's own words; want a case in "+
-					"renderNotEstimated, or the reason in reasonsPhrasedAsTheirCode", string(reason), got)
+			if got == markdown.EscapeText(string(reason)) && !slices.Contains(reasonsPhrasedAsTheirCode, reason) {
+				t.Errorf("renderNotEstimated(%q) = %q, which is what its default gives a reason it has no case for "+
+					"(the escaped code), so the phrase could be that fallback rather than the report's own words; "+
+					"want a case in renderNotEstimated, or the reason in reasonsPhrasedAsTheirCode",
+					string(reason), got)
 			}
 		})
+	}
+}
+
+// TestFallbackPhraseIsTheEscapedCode pins the premise the phrase check above
+// stands on: renderNotEstimated's default branch shows a reason it has not case
+// for as its code escaped for the cell (escapeText), so a phrase is compared
+// with that escape and not with the code itself. A code holding a character the
+// escaper replaces makes the two tell apart; without it, the guard would take
+// such a fallback for the report's own words.
+func TestFallbackPhraseIsTheEscapedCode(t *testing.T) {
+	t.Parallel()
+
+	unknown := estimate.Reason("no-fit|unknown|reason")
+
+	got := markdown.RenderNotEstimated(estimate.Estimate{Reason: unknown}, true)
+	want := markdown.EscapeText(string(unknown))
+
+	if got != want {
+		t.Fatalf("renderNotEstimated(%q) = %q, want its default branch's %q", string(unknown), got, want)
+	}
+
+	if want == string(unknown) {
+		t.Fatalf("escapeText(%q) = %q, want the code escaped, so a comparison tells the fallback from a phrase",
+			string(unknown), want)
 	}
 }
 

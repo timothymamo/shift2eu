@@ -34,10 +34,9 @@ var reasonPhrases = map[estimate.Reason]struct {
 }
 
 // reasonsPhrasedAsTheirCode are the reasons whose phrase is their own code, so
-// the text renderNotEstimated's default gives an unknown reason is the same as
-// the one its case gives them. A reason in this list is the only one whose
-// phrase may equal its code, which keeps that default from satisfying the
-// phrase check by accident.
+// renderNotEstimated's default gives an unknown reason the same phrase as the
+// one its case gives them. A reason in this list is the only one whose phrase
+// may be that default, which keeps the phrase check from passing by accident.
 var reasonsPhrasedAsTheirCode = []estimate.Reason{
 	estimate.UsagePriced,
 }
@@ -78,12 +77,33 @@ func TestEveryReasonHasAPhraseAndAPlaceInTheOrder(t *testing.T) {
 				t.Errorf("renderNotEstimated(%q) = %q, want %q", string(reason), got, phrase.want)
 			}
 
+			// The default branch writes the code itself, and the fragment escapes it
+			// only when it writes the cell, so the fallback a test reads here is
+			// the code as it is (TestFallbackPhraseIsTheCode).
 			if got == string(reason) && !slices.Contains(reasonsPhrasedAsTheirCode, reason) {
-				t.Errorf("renderNotEstimated(%q) = %q, which is what its default gives a reason it has no case for, "+
-					"so the phrase could be that fallback rather than the report's own words; want a case in "+
+				t.Errorf("renderNotEstimated(%q) = %q, which is what its default gives a reason it has no case "+
+					"for, so the phrase could be that fallback rather than the report's own words; want a case in "+
 					"renderNotEstimated, or the reason in reasonsPhrasedAsTheirCode", string(reason), got)
 			}
 		})
+	}
+}
+
+// TestFallbackPhraseIsTheCode pins the premise the phrase check above stands on:
+// renderNotEstimated's default branch shows a reason it has no case for as its
+// code, as it is, and the fragment escapes it only when it writes the cell
+// (fragment.go, textEscaper), so the phrase a test reads here is compared with
+// the code itself and not with an escaped form.
+func TestFallbackPhraseIsTheCode(t *testing.T) {
+	t.Parallel()
+
+	unknown := estimate.Reason("no-fit|unknown|reason")
+
+	got := htmlreport.NotEstimatedPhrase(estimate.Estimate{Reason: unknown})
+
+	if got != string(unknown) {
+		t.Fatalf("NotEstimatedPhrase(%q) = %q, want the code as it is: the default branch writes it unescaped",
+			string(unknown), got)
 	}
 }
 
