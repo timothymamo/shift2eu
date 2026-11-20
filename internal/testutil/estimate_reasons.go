@@ -95,7 +95,7 @@ func estimateReasonsInDir(tb testing.TB, dir string) []estimate.Reason {
 //
 // A constant is an estimate.Reason when its spec spells the type out, or when
 // its value is a conversion to Reason, or when it repeats the spec above it
-// (see estimateReasons). A spec with values and no type is untyped, even below
+// (see constantReasons). A spec with values and no type is untyped, even below
 // a typed spec: Go gives each of its expressions its default type, so a string
 // literal there is a string and not a reason. A spec the test reads as a reason
 // whose value is not a string literal is an error naming the constant: skipping
