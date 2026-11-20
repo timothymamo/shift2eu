@@ -33,8 +33,9 @@ import (
 // The pin alone is not enough: Go's own rule is that a go line admits any
 // toolchain of that release or newer, so a newer local Go still builds the
 // module. So the check reads the Go that compiled it, runtime.Version(), rather
-// than trusting the line to decide. make exports GOTOOLCHAIN and the workflows
-// pin it, so every `make` target builds with exactly the pinned release.
+// than trusting the line to decide. make exports GOTOOLCHAIN, and in CI
+// actions/setup-go installs the go line's release from go-version-file and sets
+// GOTOOLCHAIN=local itself, so every build uses exactly the pinned release.
 //
 // tools/go.mod needs no check here: test/architecture's
 // TestToolsModuleFollowsTheRootModulesGo requires its go line - and its
@@ -129,7 +130,7 @@ func toolchainPinProblems(path, content, goVersion string) []string {
 		problems = append(problems, fmt.Sprintf(
 			"%s holds the toolchain line `toolchain %s`: the go line alone is the pin (ADR 0035). "+
 				"`go mod tidy` removes a toolchain line equal to the go line, so it cannot be kept through CI's `go mod tidy -diff`, `make tidy` or Renovate's tidy, and one that differs would survive tidy and split what the module states as its minimum Go from the toolchain it is built with. "+
-				"Delete the line; `make` targets set GOTOOLCHAIN and the workflows pin it",
+				"Delete the line; `make` targets set GOTOOLCHAIN, and in CI actions/setup-go installs the go line's release and sets GOTOOLCHAIN=local",
 			path, pin.Toolchain))
 	}
 
@@ -155,7 +156,7 @@ func toolchainPinProblems(path, content, goVersion string) []string {
 // case also pins isExactPatchVersion, over the go lines a pin must and must not
 // accept: an exact patch release, a minor release that would leave the
 // toolchain to the machine, and a prerelease no release reproduces. A reader
-// that missed a pointer would let a module without one through; one that
+// that missed a directive would let a module without one through; one that
 // invented a pin would fail an innocent go.mod; and a pin check that accepted
 // `go 1.27` would leave the toolchain the machine's choice.
 func TestParseToolchainPin(t *testing.T) {
