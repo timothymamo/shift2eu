@@ -110,9 +110,9 @@ total over different resources says little.
 
 `--format json` writes the same content as a versioned document for scripts and other tools
 ([ADR 0018](../adr/0018-version-the-json-report-format-for-the-cli-and-the-api.md)): schema version 3
-by default. `--schema-version 2` writes the older document
-([ADR 0030](../adr/0030-serve-the-version-2-report-on-v1.md)). The two differ in one rule: in
-version 3 a total that estimated nothing (`"estimated": 0`) has no `amount` key instead of `"0.00"`.
+by default. `--schema-version 2` writes the older document, byte for byte. The two differ in one
+rule: in version 3 a total that estimated nothing (`"estimated": 0`) has no `amount` key instead of
+`"0.00"`.
 Each resource carries its fit, best offering, reasons with a stable `code`, required changes,
 relations, and its plan and estimate; the document ends with the workloads, the estimate's basis and
 total, and the source's cost. The excerpt is the version 3 document, the command's default output

@@ -6,10 +6,10 @@
 // comment names the group's tag, which starts the msg of every entry in it:
 // composition-root-no-exec for a process, a raw system call and the whole
 // environment, and composition-root-env for one named variable. There is a line
-// for every function the design forbids, and the same calls in internal/cli must pass, as the groups hold for the
-// composition roots only. The file is for the host's platform: the windows
-// entry points of syscall are in probe_windows.go, which the probe's windows run
-// lints.
+// for every function the design forbids, and the same calls in internal/cli
+// must pass, as the groups hold for the composition roots only. The file is for
+// the host's platform: the windows entry points of syscall are in
+// probe_windows.go, which the probe's windows run lints.
 package main
 
 import (
