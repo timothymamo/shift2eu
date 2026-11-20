@@ -98,7 +98,8 @@ provision:
       set -eux -o pipefail
       # Idempotent, as Lima runs it at every boot and re-provision: an active file of the right size is left
       # alone, an inactive one is only switched on, and one of another size (after a change of the param) is
-      # switched off and recreated. swapon here, at every boot, is what turns it on again: no /etc/fstab entry.
+      # switched off and recreated; one that swapon refuses (no swap header) is recreated once. swapon here, at
+      # every boot, is what turns it on again: no /etc/fstab entry.
       # SHIFT2EU_SWAP_ROOT is empty in the guest; the tests (test/devenv/limaswap_test.go) point it at a fake
       # root, as SHIFT2EU_VM_BIN_GH does for dev/vm-gh-wrapper.sh. Kept to bash 3.2, which the tests may run.
       root="${SHIFT2EU_SWAP_ROOT:-}"
@@ -122,6 +123,23 @@ provision:
         exit 0
       fi
       bytes=$((gib * 1073741824))
+
+      # Builds the file atomically: fallocate, chmod and mkswap on a temporary file in the swap file's own
+      # directory, renamed into place only once it has a swap header, so a crash midway never leaves a
+      # headerless file at the path swapon reads. Created under umask 077, so no other account of the guest
+      # can read it before chmod. The old file goes first, inactive by now, so its space is reused (and
+      # fallocate never shrinks a file).
+      tmpfile="${swapfile}.new"
+      build_swapfile() {
+        rm -f "${swapfile}" "${tmpfile}"
+        (
+          umask 077
+          fallocate -l "${bytes}" "${tmpfile}"
+        )
+        chmod 0600 "${tmpfile}"
+        mkswap "${tmpfile}"
+        mv -f "${tmpfile}" "${swapfile}"
+      }
 
       # Read whole, not piped into grep -q, which under pipefail could fail swapon with SIGPIPE.
       swaps="$(swapon --show=NAME --noheadings)"
@@ -150,14 +168,18 @@ provision:
           swapoff "${swapfile}"
           active=0
         fi
-        # Removed first: fallocate never shrinks a file.
-        rm -f "${swapfile}"
-        fallocate -l "${bytes}" "${swapfile}"
-        chmod 0600 "${swapfile}"
-        mkswap "${swapfile}"
+        build_swapfile
       fi
-      if [ "${active}" -eq 0 ]; then
-        swapon "${swapfile}"
+      if [ "${active}" -eq 0 ] && ! swapon "${swapfile}"; then
+        # A file of the right size that swapon refuses has no swap header: a creation a crash cut short before
+        # this step built the file atomically. Rebuilt once, in the old file's space; a second failure stops
+        # the step rather than recreating the file at every boot.
+        echo >&2 "swap: swapon ${swapfile} failed; recreating the swap file once."
+        build_swapfile
+        if ! swapon "${swapfile}"; then
+          echo >&2 "swap: swapon ${swapfile} failed again after recreating it; the guest runs without swap (docs/dev-environment.md, Swap)."
+          exit 1
+        fi
       fi
 
       # A low swappiness: the swap is a safety net against the OOM killer, not a place to page out the
