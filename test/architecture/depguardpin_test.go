@@ -1016,7 +1016,11 @@ var pinnedDepguardRules = []check.DepguardRule{
 	{
 		// The browser driver is confined to the site's smoke test (PRD #297
 		// milestone 2, decision 7); TestNoProductBinaryReachesChromedp holds the
-		// product binaries' dependency trees to the same.
+		// product binaries' dependency trees to the same. go-json-experiment is
+		// denied beside the driver's own prefix: cdproto, the protocol library
+		// chromedp drives the browser through, encodes with it under its
+		// cdproto_jsoncompat build tag, so the package no product binary may
+		// reach is not one the driver's prefix names.
 		Name:     "chromedp-only-in-the-browser-test",
 		ListMode: "lax",
 		Files: []string{
@@ -1026,6 +1030,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Allow: nil,
 		Deny: []string{
 			"github.com/chromedp/",
+			"github.com/go-json-experiment/",
 		},
 	},
 	{
