@@ -1,6 +1,6 @@
 <section class="shift2eu-report">
 <h2>Migration assessment: <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code>, <code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code></h2>
-<ul>
+<ul role="list">
 <li>Inventory file: <code>inv &#34;report&#34; &lt;script&gt;alert(&#39;name&#39;)&lt;/script&gt;.json</code></li>
 <li>Source: <code>aws</code></li>
 <li>Catalog: <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> snapshot from <code>https://www.ovhcloud.com/en/public-cloud/prices/</code>, retrieved 2026-11-08</li>

@@ -1,6 +1,6 @@
 <section class="shift2eu-report">
 <h2>Migration assessment: <code>OVHcloud</code>, <code>Scaleway</code>, <code>UpCloud</code></h2>
-<ul>
+<ul role="list">
 <li>Inventory file: <code>inventory.json</code></li>
 <li>Source: <code>aws</code></li>
 <li>Catalog: <code>OVHcloud</code> snapshot from <code>https://www.ovhcloud.com/en/public-cloud/prices/</code>, retrieved 2026-11-08</li>

@@ -148,7 +148,8 @@ type listKind int
 const (
 	listPlain listKind = iota
 	// listMarkerless is a list the site's stylesheet strips of its markers
-	// (the Blockers and the Cost estimate lists): it states role="list",
+	// (the title list, the Blockers and the Cost estimate lists): it states
+	// role="list",
 	// because Safari and VoiceOver drop the list role and the item count of a
 	// list drawn without markers (issue #373).
 	listMarkerless
@@ -248,7 +249,13 @@ func (f *fragment) list(items []item) {
 }
 
 // markerlessList adds a list the site's stylesheet strips of its markers,
-// which states role="list" (listMarkerless); an empty list adds nothing.
+// which states role="list" (listMarkerless). An empty list adds nothing, as
+// list does, so the two differ only by the attribute. No caller passes an
+// empty list: a title list always holds the Source and Catalog items
+// (writeHeader, writeComparisonHeader), the Blockers list is written only
+// when there is a blocker, one item each (writeBlockers, "None." otherwise),
+// and the Cost estimate list always holds its four fixed items
+// (writeCostEstimate).
 func (f *fragment) markerlessList(items []item) {
 	if len(items) == 0 {
 		return

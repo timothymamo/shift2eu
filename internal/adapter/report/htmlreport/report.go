@@ -142,7 +142,7 @@ func writeHeader(f *fragment, a assessment.Assessment, meta analysis.ReportMeta)
 		items = append(items, item{Text: text("Region: ").then(region)})
 	}
 
-	f.list(items)
+	f.markerlessList(items)
 }
 
 // catalogLine is the header's catalog item for the target named name.
@@ -389,7 +389,7 @@ func writeComparisonHeader(f *fragment, targets []assessment.TargetAssessment, m
 		}
 	}
 
-	f.list(items)
+	f.markerlessList(items)
 }
 
 // writeComparisonSummary writes one row per fit, and a total, with one column

@@ -44,10 +44,12 @@
 //
 // # List role
 //
-// The site's stylesheet strips the markers of the Blockers and the Cost
-// estimate lists (at h3 and h4 level alike), and Safari and VoiceOver drop the
-// list role and the item count of a list drawn without markers. So those two
-// lists carry the constant attribute role="list" (docs/adr/0035, amendment for
+// The site's stylesheet strips the markers of three lists: the title list
+// below the h2 (what was assessed against what, in a report and a comparison
+// alike), and the Blockers and the Cost estimate lists (at h3 and h4 level
+// alike). Safari and VoiceOver drop the list role and the item count of a list
+// drawn without markers, so those three lists, and only they, carry the
+// constant attribute role="list" (docs/adr/0035, amendment for
 // issue #373), from a fixed table of list start tags keyed by an unexported
 // enum, like the classes; no other element carries a role, and "list" is the
 // only role value.

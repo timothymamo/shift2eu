@@ -1,6 +1,6 @@
 <section class="shift2eu-report">
 <h2>Migration assessment: <code>Scaleway</code></h2>
-<ul>
+<ul role="list">
 <li>Inventory file: <code>inventory.json</code></li>
 <li>Source: <code>aws</code></li>
 <li>Catalog: <code>Scaleway</code> snapshot from <code>https://www.scaleway.com/en/pricing/</code>, retrieved 2026-11-01</li>

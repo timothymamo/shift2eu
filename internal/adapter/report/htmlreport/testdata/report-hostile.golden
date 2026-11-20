@@ -1,6 +1,6 @@
 <section class="shift2eu-report">
 <h2>Migration assessment: <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code></h2>
-<ul>
+<ul role="list">
 <li>Inventory file: <code>inv &#34;report&#34; &lt;script&gt;alert(&#39;name&#39;)&lt;/script&gt;.json</code></li>
 <li>Source: <code>aws</code></li>
 <li>Catalog: <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> snapshot from <code>https://www.scaleway.com/en/pricing/</code>, retrieved 2026-11-01</li>

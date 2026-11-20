@@ -226,13 +226,19 @@ set, over the hostile fixtures too.
 A class tied to a value's content, such as one for an estimate that could not be made, or a number in an
 attribute (`<meter value>`), stays ruled out.
 
-The fragment also carries one constant attribute beside the classes: `role="list"` on the `ul` of each
-Blockers and each Cost estimate section, at h3 and h4 level alike. The stylesheet strips those lists of
-their markers (`list-style: none`), and Safari with VoiceOver then drops the list role and the item count,
-so the list is read as plain text; stating the role keeps it announced as a list (PR #379 review). The
-start tag comes from a fixed table in `htmlreport` (`listStartTags`, keyed by an unexported enum), like the
-classes, so it is never derived from a value; no other element carries a role, and `classes_test.go`
-refuses any role value other than `list`. The goldens differ from the earlier ones by that attribute alone.
+The fragment also carries one constant attribute beside the classes: `role="list"` on the `ul` of the
+title list (the list after the `h2` that names the inventory file, the source, the catalogs and the
+regions, in a report and a comparison alike) and of each Blockers and each Cost estimate section, at h3
+and h4 level alike. These are exactly the lists the stylesheet strips of their markers
+(`list-style: none`), and Safari with VoiceOver then drops the list role and the item count, so the list
+is read as plain text; stating the role keeps it announced as a list (PR #379 review). Every other list
+keeps its markers and needs no role; `test/site` sweeps the goldens against the stylesheet so a list it
+strips without the role fails. The start tag comes from a fixed table in `htmlreport` (`listStartTags`,
+keyed by an unexported enum), like the classes, so it is never derived from a value; no other element
+carries a role, and `classes_test.go` refuses any role value other than `list`. None of these lists can
+be empty (the title list always names the source and a catalog, the Blockers list is written only when
+there is a blocker, the Cost estimate list has fixed items), and an empty list would be left out as any
+other is, so the goldens differ from the earlier ones by that attribute alone.
 
 The stylesheet's fit and heading glyphs are decoration: the word in the cell or heading carries the fit,
 so a browser that drops the glyph's `content: "…" / ""` declaration loses nothing.
