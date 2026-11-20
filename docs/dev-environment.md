@@ -911,7 +911,7 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 # FAIL "foreign-jobs check failed (status <n>): nothing was installed ...": fix what the line above it says, install again
 # WARN "warning: could not list the system domain ...": installed, but a foreign LaunchDaemon would go unnoticed; check sudo launchctl print system
 # WARN "warning: <n> job(s) with unusual labels not checked": installed; look for them in launchctl print system and gui/<uid>
-# FAIL "warning: the pid file ... no longer names pid <pid> ...": nothing was stopped; if the log says another refresh runs, stop it, install again
+# WARN "warning: the pid file ... no longer names pid <pid> ...": nothing was stopped; if the log says another refresh runs, stop it, install again
 # FAIL "refused: a refresh that make agents-token-refresh-start did not start holds the lock ... (pid <pid> ...)": kill <pid>, install again
 # FAIL "refused: <clone> is inside <location>, which the VM shift2eu mounts ..." or "refused: the VM shift2eu mounts
 #   <location>, which is inside <clone> ...": install from the host clone, outside every mount of the VM (What install does)

@@ -368,7 +368,7 @@ foreign_jobs() {
   instance="${LIMA_INSTANCE-shift2eu}"
   case "${instance}" in
   '' | [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
-    die "LIMA_INSTANCE must be letters, digits, ., _ and -, beginning with a letter or digit"
+    die "invalid LIMA_INSTANCE (its value is not shown): a Lima instance name is letters, digits, '.', '_' and '-', starting with a letter or digit"
     ;;
   esac
   uid="$(id -u)" || die "cannot tell which account runs this (id -u failed)"

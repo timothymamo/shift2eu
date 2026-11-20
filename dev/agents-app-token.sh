@@ -49,7 +49,7 @@
 # limactl), SHIFT2EU_AGENTS_SSH (the ssh SSH mode runs, default ssh), LIMA_INSTANCE (default shift2eu when
 # unset; letters, digits, ., _ and -, starting with a letter or digit, the Makefile's rule, and every command
 # refuses any other value, the empty one included, before it runs anything; in SSH
-# mode it names only the host key alias, the lock, the log and the messages),SHIFT2EU_VM_REAL_GH_PATH (where the VM keeps the real gh once
+# mode it names only the host key alias, the lock, the log and the messages), SHIFT2EU_VM_REAL_GH_PATH (where the VM keeps the real gh once
 # it has the gh wrapper, default /usr/local/libexec/shift2eu/gh; mint warns when it is missing) and
 # XDG_STATE_HOME (refresh keeps its lock in ${XDG_STATE_HOME:-$HOME/.local/state}/shift2eu).
 #
