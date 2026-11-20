@@ -945,6 +945,19 @@ show_pid() {
   fi
 }
 
+# read_pid <path> prints what a lock's pid entry holds, or nothing. It reads the entry only when it is a
+# regular file and no symlink, and at most 32 bytes of it: the state directory is a directory on the Mac
+# that anything may have been put in, and a cat of a fifo nobody writes to blocks for ever, which would hang
+# a start before it mints, or a stop in its trap (issue #335, the audit's LOW-1). An entry that is no
+# regular file reads as empty, as a missing one always has: a lock holding it is taken over as one whose pid
+# is unknown, never one a live refresh holds, since a refresh only ever writes its pid into a regular file.
+# Accepted residue: an entry replaced by a fifo between the test and the read.
+read_pid() {
+  if [ -f "$1" ] && [ ! -L "$1" ]; then
+    head -c 32 "$1" 2>/dev/null || true
+  fi
+}
+
 # clear_stale_asides removes what take_lock's put-back left behind (issue #335): a contender that moved a
 # lock aside to .agents-token-refresh-<instance>.lock.stale.<its pid> and could not put it back keeps that
 # directory and stops, and the refresher whose lock it was stops too, so the aside outlives both. It is
@@ -952,30 +965,56 @@ show_pid() {
 # with is_refresh, as the lock's own pid is: a mover that runs a refresh may still put it back, and an owner
 # that runs one is a live refresher whose lock it is. A stale one is first renamed to this shell's own
 # .reap.<pid> name, which only one of two starts that found it can do, and only then removed, so the removal
-# is idempotent. Only a path built from the fixed prefix and a pid of digits is ever renamed or removed: the
-# glob only finds candidates, and a name whose suffix is no number is skipped. The live lock is never
-# touched here; take_lock goes on as before. Accepted residue: a dead mover's pid reused by a new refresh in
-# the instant between the check and the rename; that refresh's own take_lock clears its aside path first.
+# is idempotent. A start killed between that rename and the removal leaves its .reap.<pid> behind: it is
+# removed the same way once the pid in its name runs no refresh (one that does may still be removing it).
+# Only a path built from the fixed prefix and a pid of digits is ever renamed or removed: the glob only finds
+# candidates, a name whose suffix is no number is skipped, and a symlink is never followed or renamed. The
+# live lock is never read or touched here. take_lock calls it once at the start, and refresh once a round,
+# so an aside kept at the start because its owner still ran is removed once neither pid runs a refresh.
+# Accepted residue: a dead mover's pid reused by a new refresh in the instant between the check and the
+# rename; that refresh's own take_lock clears its aside path first.
 clear_stale_asides() {
-  prefix="${state}/.agents-token-refresh-${instance}.lock.stale."
   reap="${state}/.agents-token-refresh-${instance}.lock.reap.$$"
   rm -rf "${reap}"
+  prefix="${state}/.agents-token-refresh-${instance}.lock.stale."
   for found in "${prefix}"*; do
     mover="${found#"${prefix}"}"
     is_number "${mover}" || continue
     [ "${mover}" != "$$" ] || continue
     stale="${prefix}${mover}"
     [ -d "${stale}" ] && [ ! -L "${stale}" ] || continue
-    recorded="$(cat "${stale}/pid" 2>/dev/null || true)"
+    recorded="$(read_pid "${stale}/pid")"
     if is_refresh "${mover}" || is_refresh "${recorded}"; then
       continue
     fi
     # Said before the rename, so the log names the aside before it is gone. Two starts that both found it may
     # both say so; only the one whose rename succeeds removes it.
     say "removing the moved-aside lock ${stale##*/}: neither its mover (pid ${mover}) nor its owner (pid $(show_pid "${recorded}")) runs a refresh"
-    mv "${stale}" "${reap}" 2>/dev/null || continue # another start took it first
-    rm -rf "${reap}"
+    reap_entry "${stale}"
   done
+  prefix="${state}/.agents-token-refresh-${instance}.lock.reap."
+  for found in "${prefix}"*; do
+    mover="${found#"${prefix}"}"
+    is_number "${mover}" || continue
+    [ "${mover}" != "$$" ] || continue
+    stale="${prefix}${mover}"
+    [ -d "${stale}" ] && [ ! -L "${stale}" ] || continue
+    ! is_refresh "${mover}" || continue
+    say "removing the leftover ${stale##*/} of a start (pid ${mover}) that stopped while it removed a moved-aside lock and runs no refresh any more"
+    reap_entry "${stale}"
+  done
+}
+
+# reap_entry <path> removes a stale entry clear_stale_asides found: renamed to this shell's own .reap.<pid>
+# first, which only one of two starts can do, then removed. A rename that fails because another start took
+# the entry first is a lost race and says nothing more; one that fails with the entry still in place says it
+# could not be removed, so the log does not end on a "removing" line for a directory that stays.
+reap_entry() {
+  if mv "$1" "${reap}" 2>/dev/null; then
+    rm -rf "${reap}"
+  elif [ -e "$1" ] || [ -L "$1" ]; then
+    say "could not remove ${1##*/}: renaming it to ${reap##*/} failed; it is tried again at the next round or start"
+  fi
 }
 
 # take_lock makes this the only refresher of the VM instance: the lock is a directory under the state
@@ -1005,12 +1044,12 @@ take_lock() {
     rm -rf "${new}" "${aside}"
     (umask 077 && mkdir "${new}" && printf '%s\n' "$$" >"${new}/pid") ||
       die "cannot create ${new} for the refresh's lock"
-    if mv "${new}" "${lock}" 2>/dev/null && [ "$(cat "${lock}/pid" 2>/dev/null || true)" = "$$" ]; then
+    if mv "${new}" "${lock}" 2>/dev/null && [ "$(read_pid "${lock}/pid")" = "$$" ]; then
       break
     fi
     # Lost: the temporary directory is still there, or inside the other refresher's lock.
     rm -rf "${new}" "${lock:?}/${new##*/}"
-    owner="$(cat "${lock}/pid" 2>/dev/null || true)"
+    owner="$(read_pid "${lock}/pid")"
     # A lock holding this shell's pid is this one's: only this shell writes its pid, so the lock it had won was
     # moved aside by a contender and put back between the mv and the read above (issue #240).
     [ "${owner}" != "$$" ] || break
@@ -1023,7 +1062,7 @@ take_lock() {
     [ -d "${lock}" ] || continue # released or moved aside meanwhile: try again
     say "taking over the lock ${lock} of a refresh that is no longer running (pid $(show_pid "${owner}"))"
     if mv "${lock}" "${aside}" 2>/dev/null; then
-      if [ "$(cat "${aside}/pid" 2>/dev/null || true)" = "${owner}" ]; then
+      if [ "$(read_pid "${aside}/pid")" = "${owner}" ]; then
         rm -rf "${aside}"
       else
         # Another contender took the stale lock over first and this moved its new one: put it back, but never
@@ -1047,17 +1086,18 @@ take_lock() {
           # No lock, and the put-back failed: the aside is another refresher's lock, so it is kept, never
           # removed (removing it cost the only refresher its lock, issue #319), and this one stops. The next
           # loop round would remove ${aside}, so it must not go on. Its owner's still_locked finds no lock within
-          # seconds and exits, so both stop; the next refresh start finds the aside with neither pid running a
-          # refresh and removes it (clear_stale_asides, issue #335). This one does not create the lock itself
-          # before it stops: that would open a second window in which two refreshers hold or race for it.
-          die "cannot put the lock moved aside to ${aside} back to ${lock}; it is kept so no lock is lost while none exists at ${lock}, and this refresh stops. The refresh whose lock it is stops too; the next refresh start removes the moved-aside lock once neither pid runs a refresh and refreshes again (as the account's LaunchDaemon within 5 minutes; otherwise start one from the host clone on the Mac with make agents-token-refresh-start)"
+          # seconds and exits, so both stop; the next refresh start, or the next round of a refresher that runs,
+          # finds the aside with neither pid running a refresh and removes it (clear_stale_asides, issue #335).
+          # This one does not create the lock itself before it stops: that would open a second window in which
+          # two refreshers hold or race for it.
+          die "cannot put the lock moved aside to ${aside} back to ${lock}; it is kept so no lock is lost while none exists at ${lock}, and this refresh stops. The refresh whose lock it is stops too; the next refresh start, or the next round of a refresh that runs, removes the moved-aside lock once neither pid runs a refresh, and a refresh start refreshes again (as the account's LaunchDaemon within 5 minutes; otherwise start one from the host clone on the Mac with make agents-token-refresh-start)"
         else
           # Neither is left: nothing of the other refresher's lock remains to keep, so this one tries again.
           say "the lock ${lock} and the one moved aside to ${aside} are both gone: the moved-aside lock could not be put back; this refresh tries to take the lock again"
           continue
         fi
-        if [ -e "${lock}" ] && [ "$(cat "${lock}/pid" 2>/dev/null || true)" != "$$" ]; then
-          say "another agents App token refresh for the VM ${instance} took the lock ${lock} over first (pid $(show_pid "$(cat "${lock}/pid" 2>/dev/null || true)")); this one exits and leaves it to that one"
+        if [ -e "${lock}" ] && [ "$(read_pid "${lock}/pid")" != "$$" ]; then
+          say "another agents App token refresh for the VM ${instance} took the lock ${lock} over first (pid $(show_pid "$(read_pid "${lock}/pid")")); this one exits and leaves it to that one"
           exit 0
         fi
       fi
@@ -1068,15 +1108,15 @@ take_lock() {
 
 # still_locked returns when the lock holds this refresher's pid, and otherwise exits 0 without minting: a
 # contender that read a stale owner can move this refresher's fresh lock aside after take_lock returned and,
-# finding a third contender's lock in place, drop it (issue #288). A lock whose pid reads empty (missing, or
-# without its pid) may only be in transit, moved aside by such a contender to be put back (issue #240): it
+# finding a third contender's lock in place, drop it (issue #288). A lock whose pid reads empty (missing,
+# without its pid, or with a pid entry that is no regular file, see read_pid) may only be in transit, moved aside by such a contender to be put back (issue #240): it
 # is read again once a second, at most five times. When it waited, it reads the clock into current again,
 # so the margin check of the same round uses the time of after the wait. A lock that holds another pid has
 # been taken over: this one says so and leaves it. A lock still empty after the five tries is gone: no
 # refresher holds it, so this one says that a refresh must be started again. Either way release_lock, which
 # removes only a lock holding this one's pid, leaves the lock alone.
 still_locked() {
-  holder="$(cat "${lock}/pid" 2>/dev/null || true)"
+  holder="$(read_pid "${lock}/pid")"
   tries=0
   while [ -z "${holder}" ] && [ "${tries}" -lt 5 ]; do
     # The loop's background sleep, so the TERM and INT traps kill it and run at once, rather than up to a
@@ -1086,7 +1126,7 @@ still_locked() {
     sleeper=$!
     wait "${sleeper}" || true
     sleeper=none
-    holder="$(cat "${lock}/pid" 2>/dev/null || true)"
+    holder="$(read_pid "${lock}/pid")"
     tries=$((tries + 1))
   done
   [ "${tries}" -eq 0 ] || current="$(now)"
@@ -1102,7 +1142,7 @@ still_locked() {
 
 # release_lock removes the lock, if this refresher holds it.
 release_lock() {
-  if [ "${locked:-0}" -eq 1 ] && [ "$(cat "${lock}/pid" 2>/dev/null || true)" = "$$" ]; then
+  if [ "${locked:-0}" -eq 1 ] && [ "$(read_pid "${lock}/pid")" = "$$" ]; then
     rm -rf "${lock}"
   fi
   locked=0
@@ -1139,6 +1179,9 @@ refresh() {
     # After the clock read and right before any mint: the lock can have turned over since take_lock or the
     # last check (issue #288), and a refresher that no longer holds it must not mint beside the one that does.
     still_locked
+    # Once a round, an aside the start kept because its owner still ran a refresh goes once neither of its
+    # pids does (issue #335); the live lock is not touched.
+    clear_stale_asides
     ok=1
     why="no token could be minted, and trying again cannot fix it"
     if [ -z "${expiry}" ] || [ "$((expiry - current))" -lt "${margin_seconds}" ]; then

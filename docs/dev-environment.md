@@ -793,9 +793,11 @@ starts nothing. A lock left by a killed refresh is taken over, by one refresh on
 moved a lock aside during a takeover fail to put it back (a full disk, say), it keeps the moved-aside
 directory (`.agents-token-refresh-shift2eu.lock.stale.<pid>`), so no lock is lost while none exists, says
 so in the log and stops. The refresh whose lock that was finds no lock within seconds and exits too: both
-refreshers stop, and nothing refreshes the token until the next refresh starts. That start removes the
-moved-aside directory once neither the pid in its name nor the pid inside it runs a refresh, says
-`removing the moved-aside lock ...` in the log, takes the lock and refreshes. As the account's LaunchDaemon
+refreshers stop, and nothing refreshes the token until the next refresh starts. That start, or the next
+round of a refresher that already runs, removes the moved-aside directory once neither the pid in its name
+nor the pid inside it runs a refresh and says `removing the moved-aside lock ...` in the log; a start then
+takes the lock and refreshes. A `.agents-token-refresh-shift2eu.lock.reap.<pid>` left by a start stopped
+while it removed one goes the same way once that pid runs no refresh. As the account's LaunchDaemon
 (below), launchd starts it again on its own within 5 minutes (`KeepAlive`, `ThrottleInterval` 300); in
 single-account mode, start it again with `make agents-token-refresh-start` from the host clone. Stop it with
 `kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,
