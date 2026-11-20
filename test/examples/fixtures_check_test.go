@@ -2,6 +2,7 @@ package examples_test
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/netip"
 	"os"
@@ -587,13 +588,26 @@ type staleAllowListEntry struct {
 // the entry no longer covers. The file is decoded as the check decodes it
 // (fixtureText), so an encoding cannot make an entry that is still in use look
 // stale.
+//
+// An entry whose file cannot be read is not judged, and it does not end the
+// pass: its read error is collected and the entries after it are judged too, so
+// one broken entry cannot hide a stale one. The returned error names every such
+// entry, one error each (errors.Join), and a pass whose files all read returns
+// none. A missing or non-regular file is what the allow list's structural checks
+// report already, so the caller reports this error beside them rather than
+// stopping at it.
 func staleAllowListEntries(root string, list []allowListEntry) ([]staleAllowListEntry, error) {
-	var stale []staleAllowListEntry
+	var (
+		stale []staleAllowListEntry
+		read  []error
+	)
 
 	for _, entry := range list {
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(entry.file)))
 		if err != nil {
-			return nil, err
+			read = append(read, fmt.Errorf("read %s for its allow-list entry: %w", entry.file, err))
+
+			continue
 		}
 
 		reported := problemValues(sanitisationProblems(fixtureText(data)))
@@ -604,5 +618,5 @@ func staleAllowListEntries(root string, list []allowListEntry) ([]staleAllowList
 		stale = append(stale, staleAllowListEntry{entry: entry, reported: reported})
 	}
 
-	return stale, nil
+	return stale, errors.Join(read...)
 }

@@ -486,10 +486,12 @@ func TestAllowListEntriesAreNarrowAndUsed(t *testing.T) {
 
 	// The staleness judgement reads every allow-listed file once, the way the
 	// check itself reads it, so the entries the module still needs are the ones
-	// it keeps.
+	// it keeps. An entry whose file cannot be read is reported and the pass goes
+	// on: stopping here would hide every stale entry behind it, and the
+	// duplicate-pair check below too, exactly when the allow list is broken.
 	stale, err := staleAllowListEntries(moduleRoot, realDataAllowList)
 	if err != nil {
-		t.Fatalf("staleAllowListEntries(%q): %v", moduleRoot, err)
+		t.Errorf("staleAllowListEntries(%q): %v", moduleRoot, err)
 	}
 
 	for _, s := range stale {
