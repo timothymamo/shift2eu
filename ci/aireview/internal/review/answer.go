@@ -172,7 +172,9 @@ const (
 )
 
 // unknownFieldPrefix starts the text of encoding/json's error for an unknown
-// field under DisallowUnknownFields, which has no type of its own.
+// field under DisallowUnknownFields, which has no type of its own. Should
+// encoding/json change that text, TestParseAnswerClassifiesAMalformedAnswer
+// is the tripwire that fails.
 const unknownFieldPrefix = "json: unknown field "
 
 // decodeCheck returns the shape class of err, the decoder's error for the

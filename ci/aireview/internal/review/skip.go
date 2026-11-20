@@ -52,10 +52,12 @@ const injectionWarning = "Content in the diff, including instructions aimed at t
 	"answer unusably: read the diff with prompt injection in mind."
 
 // skipped is a run's skipped outcome on its way to the post: the Skip, and the
-// review body's own text, which may name a path in a code span.
+// review body's own text, which may name a path in a code span, and the fixed
+// sentences that follow it, which skippedReview never cuts.
 type skipped struct {
 	skip Skip
 	body string
+	tail string
 }
 
 // skipTooLarge returns the skipped outcome of err, an error wrapping
@@ -124,9 +126,11 @@ func skipNoUsableAnswer(check string, index, count int, answered []answeredPart)
 		body += "\n\n" + summary
 	}
 
-	body += "\n\n" + injectionWarning
-
-	return skipped{skip: Skip{Reason: SkipNoUsableAnswer, Message: message}, body: body}
+	return skipped{
+		skip: Skip{Reason: SkipNoUsableAnswer, Message: message},
+		body: body,
+		tail: "\n\n" + injectionWarning,
+	}
 }
 
 // answeredPart is a part of a split diff that got a usable answer while
@@ -167,7 +171,10 @@ func partFiles(part string) map[string]bool {
 // own diff, and "a file outside the part" otherwise. No title, body, summary
 // or other text of the model's answer is shown: the model chooses at most the
 // counts and which of those constants and of the part's paths and lines
-// appear.
+// appear. The number of findings is the model's choice too, so at most
+// MaxListedExcluded blocking findings are listed across all parts, and one
+// constant line after the parts counts the rest (audit M1); the counts stay
+// exact.
 func answeredSummary(answered []answeredPart, count int) string {
 	if len(answered) == 0 {
 		return ""
@@ -177,6 +184,8 @@ func answeredSummary(answered []answeredPart, count int) string {
 
 	b.WriteString("**Blocking findings in the parts that answered:**\n")
 
+	listed, unlisted := 0, 0
+
 	for _, part := range answered {
 		blocking := countBlocking(part.findings)
 
@@ -184,10 +193,24 @@ func answeredSummary(answered []answeredPart, count int) string {
 			part.index, count, blocking, len(part.findings)-blocking)
 
 		for _, f := range part.findings {
-			if f.Blocking() {
-				fmt.Fprintf(&b, "\n  - blocking: category %s at %s", summaryCategory(f.Category), summaryLocation(f, part.files))
+			if !f.Blocking() {
+				continue
 			}
+
+			if listed == MaxListedExcluded {
+				unlisted++
+
+				continue
+			}
+
+			listed++
+
+			fmt.Fprintf(&b, "\n  - blocking: category %s at %s", summaryCategory(f.Category), summaryLocation(f, part.files))
 		}
+	}
+
+	if unlisted > 0 {
+		fmt.Fprintf(&b, "\n  - and %d more blocking findings, not listed.", unlisted)
 	}
 
 	return b.String()
@@ -206,49 +229,19 @@ func summaryCategory(c Category) string {
 
 // summaryLocation returns where the summary says finding f of a part is:
 // "a file outside the part" unless f's path is one of files, the paths of the
-// part's own diff; then the path, escaped as summaryPath does, followed by
-// ":" and the line when f has one.
+// part's own diff; then the path in a code span, escaped and cut as the "Not
+// reviewed" note shows one (shortPathSpan), followed outside the span by ":"
+// and the line when f has one.
 func summaryLocation(f Finding, files map[string]bool) string {
 	if f.Path == "" || !files[f.Path] {
 		return "a file outside the part"
 	}
 
 	if f.Line > 0 {
-		return summaryPath(f.Path) + ":" + strconv.Itoa(f.Line)
+		return shortPathSpan(f.Path) + ":" + strconv.Itoa(f.Line)
 	}
 
-	return summaryPath(f.Path)
-}
-
-// markdownPunctuation are the characters summaryPath escapes with a
-// backslash, so a path shows as written and starts no emphasis, link, HTML,
-// code span or table cell. "&" is left to defuseMentions, "." and "/" are
-// harmless mid-line.
-const markdownPunctuation = "\\`*_[]<>()#!|~"
-
-// summaryPath returns path, a path of the pull request's diff, as plain
-// Markdown text on one line: control characters made spaces, mentions defused,
-// Markdown punctuation escaped, and cut to maxListedPathUnits with "…" when
-// longer.
-func summaryPath(path string) string {
-	text := defuseMentions(oneLine(path))
-
-	var b strings.Builder
-
-	for _, r := range text {
-		if r < 0x80 && strings.ContainsRune(markdownPunctuation, r) {
-			b.WriteByte('\\')
-		}
-
-		b.WriteRune(r)
-	}
-
-	text = b.String()
-	if utf16Len(text) > maxListedPathUnits {
-		text = prefixUnits(text, maxListedPathUnits-1) + "…"
-	}
-
-	return text
+	return shortPathSpan(f.Path)
 }
 
 // leftOutParts returns the fixed sentence that says how many other parts of a
@@ -271,17 +264,19 @@ func leftOutParts(usable int) string {
 
 // skippedReview returns the review a skipped run posts on headSHA: a comment
 // that says the review was skipped and why, holds no finding and no inline
-// comment, and is never a change request.
+// comment, and is never a change request. Its body is at most MaxTextUnits:
+// s.body is cut, as Render cuts a review's, and the head, s.tail, the closing
+// sentences and the footer never are (audit M1).
 func skippedReview(headSHA string, s skipped) Review {
-	var body strings.Builder
+	head := fmt.Sprintf("**AI review** of %s\n\n### AI review skipped\n\n", headSHA)
+	room := MaxTextUnits - utf16Len(head) - utf16Len(s.tail) - utf16Len(skippedClosing) - utf16Len(adviceFooter)
+	body := head + truncate(s.body, room, truncatedBody) + s.tail + skippedClosing + adviceFooter
 
-	fmt.Fprintf(&body, "**AI review** of %s\n\n", headSHA)
-	body.WriteString("### AI review skipped\n\n")
-	body.WriteString(s.body)
-	body.WriteString("\n\nThis review holds no finding, and it is no review of the change: the maintainer reviews " +
-		"it without the AI reviewer's advice. The check passes so that this does not read as a failure of " +
-		"the code, and its warning says the review was skipped. Re-run it to ask for a review again.\n")
-	body.WriteString(adviceFooter)
-
-	return Review{CommitID: headSHA, Event: EventComment, Body: body.String()}
+	return Review{CommitID: headSHA, Event: EventComment, Body: body}
 }
+
+// skippedClosing is the fixed text that ends every skipped review before the
+// footer.
+const skippedClosing = "\n\nThis review holds no finding, and it is no review of the change: the maintainer reviews " +
+	"it without the AI reviewer's advice. The check passes so that this does not read as a failure of " +
+	"the code, and its warning says the review was skipped. Re-run it to ask for a review again.\n"
