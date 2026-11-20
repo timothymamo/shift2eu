@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -664,6 +665,71 @@ func chmodDir(t *testing.T, path string, mode os.FileMode) {
 	if err := os.Chmod(path, mode); err != nil {
 		t.Fatalf("chmod %s to %v: %v", path, mode, err)
 	}
+}
+
+// TestAgentsAppTokenTrustedRuleIsOneRuleInTwoScripts pins review item 1 of issue #355: the trusted path rule is
+// written twice, in dev/agents-app-token.sh, whose refusals go through refuse (say, plus the stop line under
+// refresh), and in dev/agents-token-launchd.sh, whose refusals go through die (say and exit 1). Only a "keep the two
+// alike" comment guarded the copies, so a fix to one - the ACL read of an audit, say - could leave the other
+// accepting a path the first refuses. The rule itself must be the same text in both, so the two bodies are compared
+// as the scripts write them, with the refresh's refuse read as the plist generator's die.
+func TestAgentsAppTokenTrustedRuleIsOneRuleInTwoScripts(t *testing.T) {
+	t.Parallel()
+
+	mint := readRepoFile(t, agentsMintScript)
+	launchd := readRepoFile(t, launchdScript)
+
+	for _, name := range []string{"trusted_entry", "trusted_path"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			fromMint := regexp.MustCompile(`\brefuse\b`).ReplaceAllString(functionBody(t, mint, agentsMintScript, name), "die")
+			fromLaunchd := functionBody(t, launchd, launchdScript, name)
+
+			if diff := cmp.Diff(fromLaunchd, fromMint); diff != "" {
+				t.Errorf("the %s of %s and of %s differ, once the refresh's refuse is read as the plist generator's die (-launchd +mint): the trusted path rule is one rule in two scripts, so a fix to one copy must reach the other (issue #355)\n%s",
+					name, launchdScript, agentsMintScript, diff)
+			}
+		})
+	}
+}
+
+// functionBody returns the body of the POSIX sh function name in script, from its `name() {` line through the
+// closing brace at the same depth: the rule as the script writes it, not a copy of it in the test. Braces are
+// counted as the shell writes them, ${...} balanced, so a body that stops being brace-balanced fails here instead of
+// comparing a truncated copy.
+func functionBody(t *testing.T, script, path, name string) string {
+	t.Helper()
+
+	lines := strings.Split(script, "\n")
+
+	start := -1
+
+	for i, line := range lines {
+		if strings.TrimRight(line, " \t") == name+"() {" {
+			start = i
+
+			break
+		}
+	}
+
+	if start < 0 {
+		t.Fatalf("%s sets no %s() function any more, so this test cannot compare the two copies of the trusted path rule (issue #355)", path, name)
+	}
+
+	depth := 0
+
+	for i := start; i < len(lines); i++ {
+		depth += strings.Count(lines[i], "{") - strings.Count(lines[i], "}")
+
+		if depth == 0 {
+			return strings.Join(lines[start:i+1], "\n")
+		}
+	}
+
+	t.Fatalf("the %s() function of %s never closes its brace, so this test reads no body (issue #355)", name, path)
+
+	return ""
 }
 
 // TestAgentsAppTokenTrustedPathChecksACLs pins audit 3 and review 11 of issue #227 part 2: a Mac's ls marks a mode
