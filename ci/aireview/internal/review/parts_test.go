@@ -944,9 +944,9 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 // blocking findings, the constant category and the `path:line` — and nothing
 // else of the finding: no title, no body, no summary, no category the model
 // invented and no path that is not a file of that part's own diff. A category
-// outside this package's constants reads "other", and a path outside the part
-// reads "a file outside the part". The markers of the answer's text reach
-// neither the review, nor the log, nor the skip's message.
+// outside this package's constants reads "other", and a path outside the part,
+// or no path at all, reads "a file outside the part". The markers of the
+// answer's text reach neither the review, nor the log, nor the skip's message.
 func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 	t.Parallel()
 
@@ -1034,6 +1034,19 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 				"blocking: category security at a file outside the part",
 			},
 			wantAbsent: []string{outsidePath, "MRK388-ELSEWHERE", "two.go:7"},
+		},
+		{
+			// A finding may name no path at all: it is nowhere the part shows, so
+			// the summary says so rather than leave the location off (issue #388).
+			name: "a blocking finding without a path",
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				`{"severity":"blocker","category":"correctness","title":"` + titleMarker +
+				`","body":"` + bodyMarker + `"}]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category correctness at a file outside the part",
+			},
+			wantAbsent: []string{secondPath, "blocking: category correctness at ."},
 		},
 		{
 			name: "a part whose findings are all non-blocking shows the counts alone",

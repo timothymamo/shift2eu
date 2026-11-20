@@ -350,8 +350,9 @@ func TestParseAnswerNamesTheFindingsCheckThatFailed(t *testing.T) {
 // TestParseAnswerClassifiesAMalformedAnswer pins issue #375: an answer ParseAnswer
 // refuses for its shape is classified by a constant class, never by text of the
 // answer, so the failure the job's public ::error line reports can be diagnosed
-// — broken JSON, an unknown field, a field of the wrong type, no findings field
-// — without the decoder's message, which quotes what it could not read (a field
+// — broken JSON, with the byte offset it names; an answer cut short, whose end
+// it names; an unknown field; a field of the wrong type; no findings field —
+// without the decoder's message, which quotes what it could not read (a field
 // name the model chose, a character of its answer, issue #366). A broken JSON
 // answer's class carries the byte offset *json.SyntaxError names, the answer's
 // own byte position, so a maintainer can see where the answer went wrong; the
@@ -376,6 +377,14 @@ func TestParseAnswerClassifiesAMalformedAnswer(t *testing.T) {
 			// The "o" of [oops] is the answer's byte 50.
 			text: `{"summary":"` + answerMarker375 + `", "findings":[oops]}`,
 			want: "syntax at byte 50",
+		},
+		{
+			// An answer that stops before its object closes has no byte to point
+			// at: the decoder reports the end of the input, and the class says so
+			// rather than quote the offsetless error (issue #375).
+			name: "an answer cut short names the end of the answer, not a byte offset",
+			text: `{"summary":"` + answerMarker375 + `", "findings":[{"severity":"nit"`,
+			want: "syntax at the end of the answer",
 		},
 		{
 			// The unknown field's own name is the marker: the strict decoder names

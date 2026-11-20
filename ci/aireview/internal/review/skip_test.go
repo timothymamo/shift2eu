@@ -305,8 +305,9 @@ func TestRunSkipsNoUsableAnswerTwiceThroughTheCLI(t *testing.T) {
 // TestRunClassifiesAMalformedAnswerThroughTheCLI pins issue #375 through the
 // Claude Code CLI a whole run asks: an answer the reviewer cannot read is
 // refused with a constant class — broken JSON, with the byte offset
-// *json.SyntaxError names; an unknown field; a field of the wrong type; no
-// findings field — which the retry notice names and the skipped outcome repeats,
+// *json.SyntaxError names; an answer cut short, whose end it names; an unknown
+// field; a field of the wrong type; no findings field — which the retry notice
+// names and the skipped outcome repeats,
 // so the failure can be diagnosed. No text of the answer reaches the log, the
 // review or the skip's message: the class is a constant of this package, planted
 // marker included and never repeated, whatever the answer holds.
@@ -340,6 +341,13 @@ func TestRunClassifiesAMalformedAnswerThroughTheCLI(t *testing.T) {
 			name:      "an unknown field",
 			answer:    `{"summary":"s","findings":[],"` + answerMarker375 + `":1}`,
 			wantClass: "unknown field",
+		},
+		{
+			// A cut-short answer, the model's words last in it: the class names the
+			// end of the answer and repeats none of them (issue #375).
+			name:      "an answer cut short",
+			answer:    `{"summary":"` + answerMarker375 + `", "findings":[{"severity":"nit"`,
+			wantClass: "syntax at the end of the answer",
 		},
 		{
 			name:      "a field of the wrong type",
