@@ -77,7 +77,7 @@ claude setup-token        # opens the browser, then prints a token valid for a y
 **4. The host clone's `.envrc`**, `~/src/shift2eu-host/.envrc`; then `direnv allow` there:
 
 ```bash
-# Mac, host clone: the lines of ~/src/shift2eu-host/.envrc
+# Mac, host clone: the lines of ~/src/shift2eu-host/.envrc (edit the file; do not run them)
 export WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu"   # absolute: the workspace's checkout
 export CLAUDE_CODE_OAUTH_TOKEN=...                       # the token from step 3
 export DEEPSEEK_API_KEY=...                              # the tester (pi)
@@ -619,6 +619,7 @@ outside the workspace, and keep the workspace outside it. Give it its own direnv
 (`~/src/shift2eu-host/.envrc`, then `direnv allow` there), the only `.envrc` the host targets read:
 
 ```bash
+# Mac, host clone: the lines of ~/src/shift2eu-host/.envrc (edit the file; do not run them)
 export WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu"   # absolute path of the workspace's checkout
 export CLAUDE_CODE_OAUTH_TOKEN=...                       # VM_ENV: make vm-env copies these into the VM
 export DEEPSEEK_API_KEY=...
@@ -1481,13 +1482,21 @@ gh pr view <n> --json commits --jq '.commits[].authors[].email'
 # PASS: only <bot user id>+shift2eu-agents[bot]@users.noreply.github.com, with the bot user's id, not the App ID:
 gh api users/shift2eu-agents%5Bbot%5D --jq .id
 gh api repos/timothymamo/shift2eu/commits/main --jq .commit.verification.verified   # PASS: true
-# PASS: no ruleset holds a required_signatures rule
+```
+
+```bash
+# GitHub, the repository's settings page, Rules, Rulesets: by hand, open each ruleset
+# PASS: no ruleset holds a required_signatures rule ("Require signed commits" off)
+```
+
+```bash
+# VM, by hand: each call in the table of decision (d) of ADR 0031 (docs/adr/0031-...)
+# PASS: each call of ADR 0031 (d)'s table works with the App token
 ```
 
 ```bash
 # VM
 git -C <repo> var GIT_AUTHOR_IDENT  # in a workspace repository; PASS: the bot's noreply address
-# PASS: each call of ADR 0031 (d)'s table works with the App token
 gh api repos/timothymamo/shift2eu/rulesets/<id> --jq '.bypass_actors'   # PASS: null or []: the App cannot read the bypass lists
 ```
 
@@ -1544,6 +1553,10 @@ make deck-restart                   # between tasks
 # revoke the personal token GITHUB_TOKEN held, at https://github.com/settings/personal-access-tokens
 make vm-init                        # PASS: the gh step passes, on the App token
 make gate-check                     # as yourself with an admin token; PASS: exits 0 (no transition flag any more: a gap always fails it)
+```
+
+```bash
+# GitHub, https://github.com/settings/personal-access-tokens: by hand
 # PASS: the token no longer appears on GitHub's list of your personal access tokens
 ```
 
