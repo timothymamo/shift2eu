@@ -39,6 +39,22 @@ func renamedFile(oldPath, newPath, added string) string {
 		"+" + added + "\n"
 }
 
+// copiedFile returns the section git writes for a copy from oldPath to
+// newPath: the header names both paths, and so do the copy lines and the two
+// file headers. Unlike a rename's, the source path still exists after it.
+func copiedFile(oldPath, newPath, added string) string {
+	return "diff --git a/" + oldPath + " b/" + newPath + "\n" +
+		"similarity index 90%\n" +
+		"copy from " + oldPath + "\n" +
+		"copy to " + newPath + "\n" +
+		"--- a/" + oldPath + "\n" +
+		"+++ b/" + newPath + "\n" +
+		"@@ -1,2 +1,3 @@\n" +
+		" package y\n" +
+		" \n" +
+		"+" + added + "\n"
+}
+
 // addedFile returns the section git writes for a file the pull request adds:
 // the old side of its file header is /dev/null.
 func addedFile(path, added string) string {

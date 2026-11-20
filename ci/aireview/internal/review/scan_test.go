@@ -205,6 +205,39 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 2}},
 		},
 		{
+			// Issue #342, round 4 S-A: a relative path, a documentation URL and
+			// an import path are runs of the key's own alphabet, over 32 long
+			// and holding an upper-case letter, a lower-case letter and a digit,
+			// so the rule that begins and ends with a letter or a digit reported
+			// them as secret access keys. A key is exactly forty characters
+			// long; a longer or a shorter run is no key, whatever it holds. The
+			// two hosts of these paths are a tool's own domain, so the host-name
+			// rule stays quiet about them too (api.github.com is one label below
+			// github.com).
+			name: "a relative path, a repository URL and an import path are no key-like string",
+			diff: goldenAdds(golden,
+				`"note": "internal/adapter/report/markdown/testdata/Report1"`,
+				`"doc": "https://github.com/timothymamo/shift2eu/blob/main/docs/ADR0033x"`,
+				`"import": "golang.org/x/tools/gopls/internal/LongName1Here"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 3}},
+		},
+		{
+			// A real secret access key may begin with '/' or end with '+', and
+			// the rule that a run beginning or ending with '/' is a path missed
+			// both (S-A). Each of these is exactly the forty characters of the
+			// AWS documentation's example key, with a letter replaced by the
+			// separator: the one begins with '/', the other ends with '+'.
+			name: "a secret access key that begins with a slash or ends with a plus is found",
+			diff: goldenAdds(golden,
+				`"secret_access_key": "/wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKE"`,
+				`"secret_access_key_plus": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKE+"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanKey},
+				{Path: golden, Line: 2, Kind: review.ScanKey},
+			},
+		},
+		{
 			// The scan reads what the change adds: a value a line removes, or
 			// one a context line keeps, is not new data in the repository.
 			name: "a value on a removed or a context line is no finding",
@@ -263,6 +296,31 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			name:      "a twelve-digit group inside a decimal number is no account ID",
 			diff:      goldenAdds(golden, `"ratio": 1.210987654321`, `"fraction": 210987654321.5`),
 			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+		},
+		{
+			// Issue #342, round 4 N-A: only a '.' joins a run of digits into a
+			// longer number, because a decimal number is the one thing the
+			// separator hides. A '/' beside the run is no hiding place: beside a
+			// year in an object's path, or beside another number, the run is an
+			// account ID, and the digit on the far side made the scan skip it.
+			name: "an account ID beside a slash and another digit is found",
+			diff: goldenAdds(golden,
+				`"uri": "s3://logs/2024/210987654321/x"`,
+				`"v": "1/210987654321"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanAccountID},
+				{Path: golden, Line: 2, Kind: review.ScanAccountID},
+			},
+		},
+		{
+			// The one run of digits beside a '/' that is no account ID is a
+			// JSON pointer's, which references the document rather than naming a
+			// value (N-A, S2). Its element here follows a year, so a digit is on
+			// the far side of the '/' too, as in the case above.
+			name:      "a twelve-digit run behind a slash and a digit inside a JSON pointer is no account ID",
+			diff:      goldenAdds(bundle, `"$ref": "#/components/schemas/2024/210987654321"`),
+			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 1}},
 		},
 		{
 			// A JSON pointer starting #/ is a reference into the bundle, not a

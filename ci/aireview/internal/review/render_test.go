@@ -1469,6 +1469,39 @@ func TestTheNoteSaysWhenAFileWasNotScanned(t *testing.T) {
 
 		assertBodyWithinLimit(t, got.Body)
 	})
+
+	t.Run("a copy's source path is marked copied, not renamed", func(t *testing.T) {
+		t.Parallel()
+
+		// Issue #342, round 4 N-C: a copy's source is not a rename's old path,
+		// because it is still there. Marking it renamed told the maintainer the
+		// file had gone, and a count beside it would read as nothing added.
+		got := review.RenderFiltered(headSHA, answer, review.EventComment, "",
+			review.ScanLeftOut(copiedFile("testdata/old.golden", "testdata/new.golden", `"a": "b"`)))
+
+		// The copy's target is the file the change writes, and it shows its lines.
+		if want := "- `testdata/new.golden` (+1 line)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a copy's new path is the file the change adds its lines to (issue #342, round 4 N-C); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		if want := "- `testdata/old.golden` (copied)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a copy's source path still exists, so the note marks it copied, and neither renamed nor with a count of lines it does not add (issue #342, round 4 N-C); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		for _, bad := range []string{
+			"- `testdata/old.golden` (renamed)",
+			"- `testdata/old.golden` (+0 lines)",
+		} {
+			if strings.Contains(got.Body, bad) {
+				t.Errorf("the note holds %q for a copy's source path: the source still exists, and its lines are counted at the copy's target (issue #342, round 4 N-C); body:\n%s",
+					bad, tail(got.Body, 2_000))
+			}
+		}
+
+		assertBodyWithinLimit(t, got.Body)
+	})
 }
 
 // TestTheNotReviewedNoteStaysBounded pins the bound render.go claims for the
