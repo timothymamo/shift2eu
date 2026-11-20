@@ -174,6 +174,30 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"10-1-2-3", "ip-10-1-2-3.eu-central-1.compute.internal"},
 		},
 		{
+			// An address is reported wherever a name carries it, not only
+			// behind an ip-: AWS and Azure write it behind a label of the
+			// machine's own as well.
+			name:    "private address after a letter-hyphen prefix",
+			path:    "docs/guide/planted-node.md",
+			content: "the node node-10-1-2-3 answers on port 8080",
+			want:    []string{"10-1-2-3"},
+		},
+		{
+			name:    "customer host under the government TLD",
+			path:    "docs/guide/planted-gov.md",
+			content: "the database is db.acme.gov",
+			want:    []string{"db.acme.gov"},
+		},
+		{
+			// The vendor host is exempt and the path after it is not: the
+			// owner names the customer, so the check reports the host and the
+			// owner together.
+			name:    "customer owner path after a listed vendor host",
+			path:    "testdata/planted-owner.json",
+			content: "the module is github.com/acme/private-repo",
+			want:    []string{"github.com/acme"},
+		},
+		{
 			// Every sample address is in 192.0.2.0/24, and the hyphenated rule
 			// holds an address written into a name to that range just as the
 			// dotted rule does: ip-192-0-2-10 is clean, the other two RFC 5737

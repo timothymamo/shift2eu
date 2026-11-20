@@ -178,6 +178,61 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			text: "the NAS is nas.home.lan",
 			want: []string{"nas.home.lan"},
 		},
+		{
+			// The curated list of TLDs names its own gaps, and these are the
+			// ones the audit found: a government, education or international
+			// name, and the two common country codes it left out.
+			name: "customer host under the government TLD",
+			text: "the database is db.acme.gov",
+			want: []string{"db.acme.gov"},
+		},
+		{
+			name: "customer host under the education TLD",
+			text: "the portal is lms.acme.edu",
+			want: []string{"lms.acme.edu"},
+		},
+		{
+			name: "customer host under the international-organisation TLD",
+			text: "the fund answers at portal.acme.int",
+			want: []string{"portal.acme.int"},
+		},
+		{
+			name: "customer host under the Indian TLD",
+			text: "the shop answers at web.acme.in",
+			want: []string{"web.acme.in"},
+		},
+		{
+			name: "customer host under the Brazilian TLD",
+			text: "the shop is shop.acme.br",
+			want: []string{"shop.acme.br"},
+		},
+		{
+			// us is already on the list, so this row pins that it stays there.
+			name: "customer host under the US TLD",
+			text: "the shop is shop.acme.us",
+			want: []string{"shop.acme.us"},
+		},
+		{
+			// The vendor allow list excuses the host, and the path after it
+			// names the customer just as the host would: only the vendor's own
+			// owners are exempt. The reported value is the host and the owner it
+			// carries, up to the repository's name.
+			name: "customer owner path after a listed vendor host",
+			text: "the module is github.com/acme/private-repo",
+			want: []string{"github.com/acme"},
+		},
+		{
+			// A bucket scheme names the customer's storage account, so the
+			// bucket is reported with the scheme that gives it its shape.
+			name: "customer bucket in an s3 URL",
+			text: "the objects are in s3://acme-prod-bucket/key",
+			want: []string{"s3://acme-prod-bucket"},
+		},
+		{
+			name: "customer bucket in a gs URL",
+			text: "the objects are in gs://acme-prod-bucket/key",
+			want: []string{"gs://acme-prod-bucket"},
+		},
 
 		// Not reported: a dotted value with another meaning, or a public host
 		// that identifies no customer.
@@ -274,6 +329,37 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 		{
 			name: "public project host beside its path",
 			text: "cloned from github.com/timothymamo/shift2eu",
+			want: nil,
+		},
+		{
+			// A sample's bucket is named the way its domain is: a documentation
+			// value that identifies nobody.
+			name: "public bucket in an s3 URL",
+			text: "the sample objects are in s3://example-bucket/key",
+			want: nil,
+		},
+		{
+			name: "public bucket in a gs URL",
+			text: "the sample objects are in gs://example-bucket/x",
+			want: nil,
+		},
+		{
+			// go is a file extension before it is a TLD, in a fixture as often
+			// as in a guide page.
+			name: "Go source file name",
+			text: "the entry point is main.go",
+			want: nil,
+		},
+		{
+			name: "README file name",
+			text: "see README.md for the steps",
+			want: nil,
+		},
+		{
+			// in and int are real TLDs and Go selector suffixes at once, so a
+			// selector whose last label a capital opens stays clean.
+			name: "Go selectors ending in the plain TLDs",
+			text: "the probe calls flag.Int and now.In",
 			want: nil,
 		},
 		{
