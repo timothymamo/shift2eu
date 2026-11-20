@@ -83,6 +83,13 @@ SERVER_IMAGE ?= shift2eu-server
 # The container CLI make image runs: docker where it is installed, otherwise nerdctl, the rootless runtime
 # of the Lima VM (docs/adr/0017-run-a-rootless-container-runtime-in-the-lima-vm.md).
 DOCKER  ?= $(if $(shell command -v docker 2>/dev/null),docker,nerdctl)
+# The headless Chromium make test-browser runs the site's smoke test in (PRD #297 milestone 2, docs/adr/0036),
+# pinned by tag and digest; Renovate updates both through the comment above it. CI's browser job runs make
+# test-browser too, so this is the one copy of the pin.
+# renovate: datasource=docker depName=chromedp/headless-shell
+HEADLESS_SHELL := chromedp/headless-shell:159.0.8154.13@sha256:381353d3530ab9d579d2fe8b9c0f4519c995617f5a71daf6bb649e2d12005bd9
+# The DevTools port the headless Chromium listens on, on 127.0.0.1 only.
+DEVTOOLS_PORT := 9222
 # The platforms make image builds, comma separated (linux/amd64,linux/arm64). Empty builds the host's own.
 PLATFORMS ?=
 
@@ -312,6 +319,35 @@ test-integration: ## Integration tests against real cloud APIs (read-only creden
 .PHONY: test-e2e
 test-e2e: ## Build and run the binary end to end against testdata fixtures
 	go test -count=1 -tags=e2e ./test/e2e/...
+
+# The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). make site builds the bundle; the
+# recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network and its own entrypoint
+# replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface through
+# socat), waits until Chromium logs that DevTools listens on 127.0.0.1 (so a port another process holds fails
+# the wait rather than handing the test a browser it did not start), and runs test/browser against it. The
+# container is removed on every exit, failure and interrupt included.
+.PHONY: test-browser
+test-browser: site ## Build the site's bundle and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
+	@set -eu; \
+	devtools=http://127.0.0.1:$(DEVTOOLS_PORT); \
+	name=shift2eu-test-browser-$$$$; \
+	trap '$(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
+	trap 'exit 130' INT TERM; \
+	$(DOCKER) run -d --name "$$name" --network host --entrypoint /headless-shell/headless-shell \
+		$(HEADLESS_SHELL) --no-sandbox --use-gl=angle --use-angle=swiftshader \
+		--remote-debugging-address=127.0.0.1 --remote-debugging-port=$(DEVTOOLS_PORT) >/dev/null; \
+	tries=0; \
+	until $(DOCKER) logs "$$name" 2>&1 | grep -qF "DevTools listening on ws://127.0.0.1:$(DEVTOOLS_PORT)/"; do \
+		tries=$$((tries + 1)); \
+		if [ "$$tries" -ge 60 ]; then \
+			echo "test-browser: DevTools did not listen on $$devtools within 60 seconds" >&2; \
+			$(DOCKER) logs "$$name" >&2 || true; \
+			exit 1; \
+		fi; \
+		sleep 1; \
+	done; \
+	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$(CURDIR)/bin/site" \
+		go test -count=1 -timeout 20m -tags browser ./test/browser/
 
 .PHONY: cover
 cover: ## Unit tests with a coverage report in coverage.out
