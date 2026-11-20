@@ -52,20 +52,20 @@ that is missing or broken makes the job exit non-zero with `limactl`'s message i
 run it again until the next boot.
 
 **One detection of Lima's autostart jobs, shared.** The Makefile macro `LIMA_AUTOSTART_JOBS` asks
-`launchctl print gui/<uid>/io.lima-vm.autostart.<instance>` and `launchctl print system/io.lima-vm.daemon.<instance>`
-(no `sudo`; skipped where there is no `launchctl`), and looks for Lima's plist files on disk,
-`~/Library/LaunchAgents/io.lima-vm.autostart.<instance>.plist` and
-`/Library/LaunchDaemons/io.lima-vm.daemon.<instance>.plist` (`LIMA_LAUNCHDAEMONS_DIR`, a test hook that is
-only read, from make's command line or the Makefile), installed but not loaded, whether or not there is a `launchctl`: an SSH-only session has
-no `gui/<uid>` domain to ask, and a job booted out by hand but left on disk loads again at the next boot or
-login. It names each job it finds, its domain or file, `limactl autostart disable <instance>`, and the removal
-by hand: `launchctl bootout` and `rm -f` of the plist (`sudo` only for the LaunchDaemon). It does not detect a
-bare enable override (`=> enabled` in `launchctl print-disabled`) with no job or plist behind it: that is inert
-alone, and `docs/dev-environment.md` (Do not let Lima start the VM) turns it into a disable once per Mac.
-`make vm-boot-install` refuses
-with it, before any `sudo`: Lima's job and ours would race for the same VM, and Lima's can create
-`template:default`. `make vm-up` only warns with it (issue #315). It lives in the Makefile, not in a `dev/`
-script, because `make vm-up` needs nothing else of the clone.
+`launchctl print gui/<uid>/io.lima-vm.autostart.<instance>` and
+`launchctl print system/io.lima-vm.daemon.<instance>` (no `sudo`; skipped where there is no `launchctl`),
+and looks for Lima's plist files on disk, `~/Library/LaunchAgents/io.lima-vm.autostart.<instance>.plist`
+and `/Library/LaunchDaemons/io.lima-vm.daemon.<instance>.plist` (`LIMA_LAUNCHDAEMONS_DIR`, a test hook that
+is only read, from make's command line or the Makefile), installed but not loaded, whether or not there is a
+`launchctl`: an SSH-only session has no `gui/<uid>` domain to ask, and a job booted out by hand but left on
+disk loads again at the next boot or login. It names each job it finds, its domain or file,
+`limactl autostart disable <instance>`, and the removal by hand: `launchctl bootout` and `rm -f` of the
+plist (`sudo` only for the LaunchDaemon). It does not detect a bare enable override (`=> enabled` in
+`launchctl print-disabled`) with no job or plist behind it: that is inert alone, and
+`docs/dev-environment.md` (Do not let Lima start the VM) turns it into a disable once per Mac.
+`make vm-boot-install` refuses with it, before any `sudo`: Lima's job and ours would race for the same VM,
+and Lima's can create `template:default`. `make vm-up` only warns with it (issue #315). It lives in the
+Makefile, not in a `dev/` script, because `make vm-up` needs nothing else of the clone.
 
 The open points of issue #398:
 

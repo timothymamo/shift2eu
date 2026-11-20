@@ -443,8 +443,10 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 #
 # LIMA_LAUNCHDAEMONS_DIR is a test hook like VM_BOOT_LAUNCHD_DIR (see there), but only read, never written: the
 # directory Lima's LaunchDaemon plist sits in, /Library/LaunchDaemons. Never set it on a real Mac; it comes only
-# from the make command line or this file, and a value from the environment is ignored. The macro refuses one
-# that is not absolute or holds anything but letters, digits, /, ., _ and -.
+# from the make command line or this file, and a value from the environment is silently replaced by
+# /Library/LaunchDaemons: the check only reads there, so a stale export can at worst miss a plist, unlike
+# LAUNCHD_DIR_CHECK, which refuses one for the directories root writes to. The macro refuses a value that is
+# not absolute or holds anything but letters, digits, /, ., _ and -.
 ifeq ($(origin LIMA_LAUNCHDAEMONS_DIR),environment)
 override LIMA_LAUNCHDAEMONS_DIR := /Library/LaunchDaemons
 endif

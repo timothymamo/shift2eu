@@ -252,13 +252,15 @@ exit non-zero, with Lima's message in the log; it does not run again until the n
 LaunchDaemon ([The refresh as a LaunchDaemon](#the-refresh-as-a-launchdaemon)) needs no change: it retries
 until the VM is up. In account mode too this job runs as you, from your host clone: the VM is yours.
 
-The install refuses, before any `sudo`: a run as root, a Lima autostart job of the instance, loaded or only its plist on disk (it names it,
-`limactl autostart disable <instance>`, and the bootout and `rm -f` of the plist that remove it by hand), and an instance
-`limactl list` does not list. It lints the plist, prints it with its SHA-256, prints every `sudo` before it
-runs, boots a loaded job out first, reads the installed plist back and loads it. Loading it runs it once, so a
-stopped VM starts. Both targets put the plist in `VM_BOOT_LAUNCHD_DIR` (`/Library/LaunchDaemons`), a hook for
-the tests only: never set it on the Mac. `LIMA_LAUNCHDAEMONS_DIR` (`/Library/LaunchDaemons`), where the check
-looks for Lima's LaunchDaemon plist and which it only reads, is a hook for the tests only as well. For a second VM, pass `LIMA_INSTANCE=<name>` to each `make`.
+The install refuses, before any `sudo`: a run as root, a Lima autostart job of the instance, loaded or only
+its plist on disk (it names it, `limactl autostart disable <instance>`, and the bootout and `rm -f` of the
+plist that remove it by hand), and an instance `limactl list` does not list. It lints the plist, prints it
+with its SHA-256, prints every `sudo` before it runs, boots a loaded job out first, reads the installed plist
+back and loads it. Loading it runs it once, so a stopped VM starts. Both targets put the plist in
+`VM_BOOT_LAUNCHD_DIR` (`/Library/LaunchDaemons`), a hook for the tests only: never set it on the Mac.
+`LIMA_LAUNCHDAEMONS_DIR` (`/Library/LaunchDaemons`), where the check looks for Lima's LaunchDaemon plist and
+which it only reads, is a hook for the tests only as well. For a second VM, pass `LIMA_INSTANCE=<name>` to
+each `make`.
 
 Over SSH on the Mac Mini, for the instance `shift2eu`. Stop at the first `PASS` that does not hold.
 
@@ -498,6 +500,8 @@ Remove Lima's jobs by hand, and neutralise a leftover enable override (`=> enabl
 # Mac, only if limactl autostart disable shift2eu cannot run (no lima.yaml)
 launchctl bootout gui/$(id -u)/io.lima-vm.autostart.shift2eu; rm -f ~/Library/LaunchAgents/io.lima-vm.autostart.shift2eu.plist
 sudo launchctl bootout system/io.lima-vm.daemon.shift2eu; sudo rm -f /Library/LaunchDaemons/io.lima-vm.daemon.shift2eu.plist
+ls ~/Library/LaunchAgents/io.lima-vm.autostart.shift2eu.plist /Library/LaunchDaemons/io.lima-vm.daemon.shift2eu.plist
+# PASS: No such file or directory (both)
 # Mac, always: turn a leftover enable override into a disable
 sudo launchctl disable system/io.lima-vm.daemon.shift2eu
 launchctl disable gui/$(id -u)/io.lima-vm.autostart.shift2eu   # if it fails over SSH (no GUI domain), run it once after a GUI login
@@ -509,7 +513,9 @@ launchctl print-disabled gui/$(id -u) | grep io.lima-vm
 ```
 
 The checks of `make vm-up` and `make vm-boot-install` do not detect an enable override with no job behind
-it: it is inert alone, and the disable above keeps a job Lima installs later from loading.
+it: it is inert alone, and the disable above keeps a plist left behind, or copied in later, from loading.
+`limactl autostart enable` may enable the label again; `make vm-up` and `make vm-boot-install` then detect
+its job or plist.
 
 Which fix applies depends on whether the directory still holds a `lima.yaml`:
 
