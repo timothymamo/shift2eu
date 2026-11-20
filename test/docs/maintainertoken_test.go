@@ -108,7 +108,7 @@ func tokenMentions(file string, lines []string) ([]tokenMention, error) {
 
 		allowed, unclosedAt = runbookSectionLines(lines)
 		if unclosedAt > 0 {
-			return nil, fmt.Errorf("unclosed code fence in %s opened on line %d: a fence left open inside the switch-over runbook leaves no way to say where the section ends, so no line is allowed to name GITHUB_TOKEN until it is closed (issue #360)", file, unclosedAt)
+			return nil, fmt.Errorf("unclosed code fence in %s opened on line %d: a fence left open in this page leaves no way to say where the switch-over runbook section ends, so no line is allowed to name GITHUB_TOKEN until it is closed (issue #360)", file, unclosedAt)
 		}
 	}
 
@@ -286,23 +286,17 @@ func TestTheDocsDoNotWidenTheRunbookOnAnUnclosedFence(t *testing.T) {
 		"GITHUB_TOKEN is no credential of the agents.",
 	}, "\n"), "\n")
 
-	var got []int
-
 	mentions, err := tokenMentions(devEnvironmentPage, lines)
 	if err == nil {
-		t.Fatalf("tokenMentions(%s) accepted a page whose code fence is never closed: a fence left open inside the switch-over runbook must be reported, not followed to the end of the page (issue #360)", devEnvironmentPage)
+		t.Fatalf("tokenMentions(%s) accepted a page whose code fence is never closed: a fence left open in this page must be reported, not followed to the end of the page (issue #360)", devEnvironmentPage)
 	}
 
 	if !strings.Contains(err.Error(), "unclosed code fence in "+devEnvironmentPage) {
 		t.Errorf("tokenMentions(%s) reported %q, want a message naming the unclosed code fence in that page", devEnvironmentPage, err)
 	}
 
-	for _, mention := range mentions {
-		got = append(got, mention.line)
-	}
-
-	if len(got) != 0 {
-		t.Errorf("tokenMentions(%s) still allowed the lines %v, want none: a page whose runbook section cannot be delimited names no allowed line (issue #360)", devEnvironmentPage, got)
+	if mentions != nil {
+		t.Errorf("tokenMentions(%s) returned mentions alongside the error: %v, want none: a page whose runbook section cannot be delimited names no allowed line (issue #360)", devEnvironmentPage, mentions)
 	}
 }
 
