@@ -443,6 +443,32 @@ var swapCases = []swapCase{
 		dropin:       dropinAbsent,
 	},
 	{
+		// 0GiB provisions no swap file but leaves one already there alone (docs/dev-environment.md, Swap):
+		// a later boot of a VM whose param was set to 0GiB keeps the swap it has, rather than losing it
+		// before anyone removed it by hand.
+		name:         "zero-keeps-an-existing-swap-file",
+		size:         "0GiB",
+		freeBytes:    100 * swapGiB,
+		existingSize: 4 * swapGiB,
+		active:       true,
+		wantCalls:    []string{},
+		wantFileSize: 4 * swapGiB,
+		dropin:       dropinAbsent,
+	},
+	{
+		// Declining for disk space must not cost the guest the swap it already has: it refuses before
+		// swapoff, so a VM that cannot hold the new file keeps the old one active.
+		name:         "too-little-disk-keeps-the-active-swap",
+		size:         swapDefaultSize,
+		freeBytes:    swapGiB,
+		existingSize: 2 * swapGiB,
+		active:       true,
+		wantCalls:    []string{},
+		wantMessage:  true,
+		wantFileSize: 2 * swapGiB,
+		dropin:       dropinAny,
+	},
+	{
 		name:         "invalid-4G",
 		size:         "4G",
 		freeBytes:    100 * swapGiB,
