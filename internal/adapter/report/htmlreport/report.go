@@ -88,14 +88,18 @@ func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment
 	var f fragment
 
 	writeComparisonHeader(&f, c.Targets, meta)
-	f.heading(sectionLevel, text("Comparison"))
-	writeComparisonSummary(&f, c.Targets)
-	writeComparisonResources(&f, c.Targets)
-	writeSharedBlockers(&f, c)
+	f.part(partComparison, func() {
+		f.heading(sectionLevel, text("Comparison"))
+		writeComparisonSummary(&f, c.Targets)
+		writeComparisonResources(&f, c.Targets)
+		writeSharedBlockers(&f, c)
+	})
 
 	for _, t := range c.Targets {
-		f.heading(sectionLevel, code(t.Assessment.Target))
-		writeBody(&f, t.Assessment, sectionLevel+1)
+		f.part(partTarget, func() {
+			f.heading(sectionLevel, code(t.Assessment.Target))
+			writeBody(&f, t.Assessment, sectionLevel+1)
+		})
 	}
 
 	return write(w, &f, "html comparison report")
@@ -147,33 +151,54 @@ func catalogLine(name rich, a assessment.Assessment) rich {
 		words(", retrieved " + a.Snapshot.RetrievedOn.UTC().Format(dateLayout))
 }
 
-// writeBody writes the sections of the report of a, each headed at level:
-// its summary, resources, required changes and blockers, then the workloads
-// when a.ShowWorkloads and the cost estimate when a has estimates.
+// writeBody writes the sections of the report of a, each headed at level and
+// each in its part section: its summary, resources, required changes and
+// blockers, then the workloads when a.ShowWorkloads and the cost estimate
+// when a has estimates.
 func writeBody(f *fragment, a assessment.Assessment, level int) {
-	writeSummary(f, a.Summary, level)
-	writeResources(f, a, level)
-	writeRequiredChanges(f, a.Verdicts, level)
-	writeBlockers(f, a.Blockers, a.Verdicts, level)
+	f.part(partSummary, func() { writeSummary(f, a.Summary, level) })
+	f.part(partResources, func() { writeResources(f, a, level) })
+	f.part(partChanges, func() { writeRequiredChanges(f, a.Verdicts, level) })
+	f.part(partBlockers, func() { writeBlockers(f, a.Blockers, a.Verdicts, level) })
 
 	if a.ShowWorkloads() {
-		writeWorkloads(f, a, level)
+		f.part(partWorkloads, func() { writeWorkloads(f, a, level) })
 	}
 
 	if hasEstimates(a) {
-		writeCostEstimate(f, a, level)
+		f.part(partCost, func() { writeCostEstimate(f, a, level) })
 	}
 }
 
 // writeSummary writes the number of resources per fit, and in total.
 func writeSummary(f *fragment, s assessment.Summary, level int) {
 	f.heading(level, text("Summary"))
-	f.table([]rich{text("Fit"), text("Resources")}, [][]rich{
-		{text(string(mapping.Direct)), text(strconv.Itoa(s.Direct))},
-		{text(string(mapping.Partial)), text(strconv.Itoa(s.Partial))},
-		{text(string(mapping.None)), text(strconv.Itoa(s.None))},
-		{text("total"), text(strconv.Itoa(s.Total))},
+	f.table([]rich{text("Fit"), text("Resources")}, []row{
+		{Class: classRowDirect, Cells: cells(text(string(mapping.Direct)), text(strconv.Itoa(s.Direct)))},
+		{Class: classRowPartial, Cells: cells(text(string(mapping.Partial)), text(strconv.Itoa(s.Partial)))},
+		{Class: classRowNone, Cells: cells(text(string(mapping.None)), text(strconv.Itoa(s.None)))},
+		{Class: classRowTotal, Cells: cells(text("total"), text(strconv.Itoa(s.Total)))},
 	})
+}
+
+// fitCell is the Fit cell of a verdict whose fit is fit: the fit's word, with
+// the badge class of that fit, chosen from the mapping's closed set of fits.
+// A fit the report does not know gets the badge class alone, never a class
+// made from its text.
+func fitCell(fit mapping.Fit) cell {
+	c := classFit
+
+	switch fit {
+	case mapping.Direct:
+		c = classFitDirect
+	case mapping.Partial:
+		c = classFitPartial
+	case mapping.None:
+		c = classFitNone
+	default:
+	}
+
+	return cell{Text: text(string(fit)), Class: c}
 }
 
 // writeResources writes one table row per verdict of a, in its order, with
@@ -194,28 +219,24 @@ func writeResources(f *fragment, a assessment.Assessment, level int) {
 
 	header = append(header, text("Reasons"))
 
-	rows := make([][]rich, 0, len(a.Verdicts))
+	rows := make([]row, 0, len(a.Verdicts))
 
 	for _, v := range a.Verdicts {
-		row := []rich{
-			code(v.Resource.ID),
-			code(v.Resource.RawType),
-			code(string(v.Resource.Category)),
-			code(v.Resource.Region),
-			text(string(v.Fit)),
-			renderBestOffering(v),
-		}
+		r := cells(code(v.Resource.ID), code(v.Resource.RawType), code(string(v.Resource.Category)),
+			code(v.Resource.Region))
+		r = append(r, fitCell(v.Fit))
+		r = append(r, cells(renderBestOffering(v))...)
 
 		if estimates {
-			row = append(row, renderPlan(v.Estimate), renderEstimate(v.Estimate))
+			r = append(r, cells(renderPlan(v.Estimate), renderEstimate(v.Estimate))...)
 		}
 
 		if relations {
-			row = append(row, renderRelations(v))
+			r = append(r, cells(renderRelations(v))...)
 		}
 
-		row = append(row, renderReasons(v.Reasons))
-		rows = append(rows, row)
+		r = append(r, cells(renderReasons(v.Reasons))...)
+		rows = append(rows, row{Cells: r})
 	}
 
 	f.heading(level, text("Resources"))
@@ -377,21 +398,21 @@ func writeComparisonHeader(f *fragment, targets []assessment.TargetAssessment, m
 // the totals are given on. It ranks no target.
 func writeComparisonSummary(f *fragment, targets []assessment.TargetAssessment) {
 	header := []rich{text("Fit")}
-	direct := []rich{text(string(mapping.Direct))}
-	partial := []rich{text(string(mapping.Partial))}
-	none := []rich{text(string(mapping.None))}
-	total := []rich{text("total")}
+	direct := row{Class: classRowDirect, Cells: cells(text(string(mapping.Direct)))}
+	partial := row{Class: classRowPartial, Cells: cells(text(string(mapping.Partial)))}
+	none := row{Class: classRowNone, Cells: cells(text(string(mapping.None)))}
+	total := row{Class: classRowTotal, Cells: cells(text("total"))}
 
 	for _, t := range targets {
 		s := t.Assessment.Summary
 		header = append(header, code(t.Assessment.Target))
-		direct = append(direct, text(strconv.Itoa(s.Direct)))
-		partial = append(partial, text(strconv.Itoa(s.Partial)))
-		none = append(none, text(strconv.Itoa(s.None)))
-		total = append(total, text(strconv.Itoa(s.Total)))
+		direct.Cells = append(direct.Cells, cells(text(strconv.Itoa(s.Direct)))...)
+		partial.Cells = append(partial.Cells, cells(text(strconv.Itoa(s.Partial)))...)
+		none.Cells = append(none.Cells, cells(text(strconv.Itoa(s.None)))...)
+		total.Cells = append(total.Cells, cells(text(strconv.Itoa(s.Total)))...)
 	}
 
-	rows := [][]rich{direct, partial, none, total}
+	rows := []row{direct, partial, none, total}
 	estimated := false
 
 	for i, t := range targets {
@@ -400,10 +421,10 @@ func writeComparisonSummary(f *fragment, targets []assessment.TargetAssessment) 
 		}
 
 		estimated = true
-		row := make([]rich, len(targets)+1)
-		row[0] = code(t.Assessment.Target).words(" estimate")
-		row[i+1] = renderTotal(*t.Assessment.Total, estimatesOf(t.Assessment.Verdicts))
-		rows = append(rows, row)
+		r := make([]cell, len(targets)+1)
+		r[0] = cell{Text: code(t.Assessment.Target).words(" estimate")}
+		r[i+1] = cell{Text: renderTotal(*t.Assessment.Total, estimatesOf(t.Assessment.Verdicts))}
+		rows = append(rows, row{Cells: r})
 	}
 
 	f.heading(sectionLevel+1, text("Summary"))
@@ -431,21 +452,22 @@ func writeComparisonResources(f *fragment, targets []assessment.TargetAssessment
 		}
 	}
 
-	rows := make([][]rich, 0, len(targets[0].Assessment.Verdicts))
+	rows := make([]row, 0, len(targets[0].Assessment.Verdicts))
 
 	for i, first := range targets[0].Assessment.Verdicts {
-		row := []rich{code(first.Resource.ID), code(string(first.Resource.Category)), code(first.Resource.Region)}
+		r := cells(code(first.Resource.ID), code(string(first.Resource.Category)), code(first.Resource.Region))
 
 		for _, t := range targets {
 			v := t.Assessment.Verdicts[i]
-			row = append(row, text(string(v.Fit)), code(v.BestOffering))
+			r = append(r, fitCell(v.Fit))
+			r = append(r, cells(code(v.BestOffering))...)
 
 			if hasEstimates(t.Assessment) {
-				row = append(row, renderEstimate(v.Estimate))
+				r = append(r, cells(renderEstimate(v.Estimate))...)
 			}
 		}
 
-		rows = append(rows, row)
+		rows = append(rows, row{Cells: r})
 	}
 
 	f.heading(sectionLevel+1, text("Resources"))

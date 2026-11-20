@@ -425,7 +425,7 @@ func writeCostEstimate(f *fragment, a assessment.Assessment, level int) {
 	f.heading(level, text("Cost estimate"))
 
 	items := []item{
-		{Text: text("Total: ").then(renderTotal(*a.Total, estimatesOf(a.Verdicts)))},
+		{Text: text("Total: ").then(renderTotal(*a.Total, estimatesOf(a.Verdicts))), Class: classTotal},
 		{Text: text("Estimate: " + basisNote(a) + "; " + fixedFeeNote)},
 		{Text: text("Prices in ").code(a.EstimateRegion)},
 		{Text: text("Hours: " + hoursLine(a))},

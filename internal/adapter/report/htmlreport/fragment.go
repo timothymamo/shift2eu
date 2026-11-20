@@ -73,20 +73,111 @@ func text(s string) rich { return rich{}.words(s) }
 // code returns rich with the value s.
 func code(s string) rich { return rich{}.code(s) }
 
+// class is the class attribute of a cell, a row or a list item: one of a
+// closed set of constants (classNames), chosen from the fit enum or the
+// element's role, never from a value. The zero class writes no attribute.
+type class int
+
+// The classes a cell, a row or a list item may carry.
+const (
+	classNone class = iota
+	// classFitDirect, classFitPartial and classFitNone are a Fit cell's
+	// badge; classFit is the badge of a fit the report does not know, which
+	// names no fit.
+	classFitDirect
+	classFitPartial
+	classFitNone
+	classFit
+	// classRowDirect, classRowPartial, classRowNone and classRowTotal are the
+	// rows of a Summary table.
+	classRowDirect
+	classRowPartial
+	classRowNone
+	classRowTotal
+	// classTotal is the Cost estimate's total item.
+	classTotal
+)
+
+// classNames are the attribute values of the classes, a fixed table.
+var classNames = map[class]string{
+	classFitDirect:  "fit fit-direct",
+	classFitPartial: "fit fit-partial",
+	classFitNone:    "fit fit-none",
+	classFit:        "fit",
+	classRowDirect:  "fit-direct",
+	classRowPartial: "fit-partial",
+	classRowNone:    "fit-none",
+	classRowTotal:   "fit-total",
+	classTotal:      "total",
+}
+
+// part is the kind of a report section a part section wraps: one of a closed
+// set of constants (partNames).
+type part int
+
+// The kinds of part.
+const (
+	partSummary part = iota + 1
+	partResources
+	partChanges
+	partBlockers
+	partWorkloads
+	partCost
+	partComparison
+	partTarget
+)
+
+// partNames are the class attribute values of the parts, a fixed table.
+var partNames = map[part]string{
+	partSummary:    "part part-summary",
+	partResources:  "part part-resources",
+	partChanges:    "part part-changes",
+	partBlockers:   "part part-blockers",
+	partWorkloads:  "part part-workloads",
+	partCost:       "part part-cost",
+	partComparison: "part part-comparison",
+	partTarget:     "part part-target",
+}
+
 // item is one list item, with the items of a nested list.
 type item struct {
 	Text     rich
 	Children []rich
+	// Class is the item's class.
+	Class class
+}
+
+// cell is one body cell of a table.
+type cell struct {
+	Text  rich
+	Class class
+}
+
+// row is one body row of a table.
+type row struct {
+	Cells []cell
+	Class class
+}
+
+// cells returns a cell without a class for each of rs.
+func cells(rs ...rich) []cell {
+	out := make([]cell, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, cell{Text: r})
+	}
+
+	return out
 }
 
 // table is a table: one header row of column headings, and its body rows.
 type table struct {
 	Header []rich
-	Rows   [][]rich
+	Rows   []row
 }
 
 // block is one block of a report: exactly one of a heading (Heading set to
-// its level, 2 to 5), a paragraph, a list or a table.
+// its level, 2 to 5), a paragraph, a list, a table, the start of a part
+// section (Open set to its kind) or the end of one (Close).
 type block struct {
 	// Heading is the level of a heading, h2 to h5, or 0.
 	Heading int
@@ -96,11 +187,22 @@ type block struct {
 	List []item
 	// Table is a table.
 	Table *table
+	// Open starts a part section of this kind.
+	Open part
+	// Close ends the part section opened last.
+	Close bool
 }
 
 // fragment collects the blocks of one report.
 type fragment struct {
 	blocks []block
+}
+
+// part writes the blocks body adds inside a part section of kind.
+func (f *fragment) part(kind part, body func()) {
+	f.blocks = append(f.blocks, block{Open: kind})
+	body()
+	f.blocks = append(f.blocks, block{Close: true})
 }
 
 // heading adds a heading of level.
@@ -123,7 +225,7 @@ func (f *fragment) list(items []item) {
 }
 
 // table adds a table.
-func (f *fragment) table(header []rich, rows [][]rich) {
+func (f *fragment) table(header []rich, rows []row) {
 	f.blocks = append(f.blocks, block{Table: &table{Header: header, Rows: rows}})
 }
 
@@ -137,15 +239,36 @@ var headingTags = map[int][2]string{
 }
 
 // render writes the fragment of the blocks to b: one section of semantic HTML,
-// headings, paragraphs, lists and tables with header cells, every element
-// and attribute a constant of this function, and every segment escaped as
-// text (writeRich). A heading level outside h2 to h5 is a mistake in this
+// part sections holding headings, paragraphs, lists and tables with header
+// cells, every element and attribute a constant of this package (a class
+// from classNames or partNames), and every segment escaped as text
+// (writeRich). A heading level outside h2 to h5, a part or a class outside
+// those tables, or part sections that do not nest are mistakes in this
 // package and an error.
 func (f *fragment) render(b *strings.Builder) error {
 	b.WriteString("<section class=\"shift2eu-report\">\n")
 
+	open := 0
+
 	for _, blk := range f.blocks {
 		switch {
+		case blk.Open != 0:
+			name, ok := partNames[blk.Open]
+			if !ok {
+				return fmt.Errorf("part %d is not one of the report's parts", blk.Open)
+			}
+
+			b.WriteString("<section class=\"" + name + "\">\n")
+
+			open++
+		case blk.Close:
+			if open == 0 {
+				return fmt.Errorf("a part section is closed that was never opened")
+			}
+
+			b.WriteString("</section>\n")
+
+			open--
 		case blk.Heading != 0:
 			tags, ok := headingTags[blk.Heading]
 			if !ok {
@@ -156,9 +279,13 @@ func (f *fragment) render(b *strings.Builder) error {
 			writeRich(b, blk.Text)
 			b.WriteString(tags[1])
 		case blk.Table != nil:
-			writeTable(b, blk.Table)
+			if err := writeTable(b, blk.Table); err != nil {
+				return err
+			}
 		case len(blk.List) > 0:
-			writeList(b, blk.List)
+			if err := writeList(b, blk.List); err != nil {
+				return err
+			}
 		default:
 			b.WriteString("<p>")
 			writeRich(b, blk.Text)
@@ -166,13 +293,36 @@ func (f *fragment) render(b *strings.Builder) error {
 		}
 	}
 
+	if open != 0 {
+		return fmt.Errorf("%d part sections are left open", open)
+	}
+
 	b.WriteString("</section>\n")
 
 	return nil
 }
 
+// writeStart writes the start tag of the element tag with the class c, which
+// is a constant of classNames, or none for classNone.
+func writeStart(b *strings.Builder, tag string, c class) error {
+	if c == classNone {
+		b.WriteString("<" + tag + ">")
+
+		return nil
+	}
+
+	name, ok := classNames[c]
+	if !ok {
+		return fmt.Errorf("class %d is not one of the report's classes", c)
+	}
+
+	b.WriteString("<" + tag + " class=\"" + name + "\">")
+
+	return nil
+}
+
 // writeTable writes t: its header row of column headings, then its body rows.
-func writeTable(b *strings.Builder, t *table) {
+func writeTable(b *strings.Builder, t *table) error {
 	b.WriteString("<table>\n<thead>\n<tr>")
 
 	for _, cell := range t.Header {
@@ -183,12 +333,17 @@ func writeTable(b *strings.Builder, t *table) {
 
 	b.WriteString("</tr>\n</thead>\n<tbody>\n")
 
-	for _, row := range t.Rows {
-		b.WriteString("<tr>")
+	for _, r := range t.Rows {
+		if err := writeStart(b, "tr", r.Class); err != nil {
+			return err
+		}
 
-		for _, cell := range row {
-			b.WriteString("<td>")
-			writeRich(b, cell)
+		for _, c := range r.Cells {
+			if err := writeStart(b, "td", c.Class); err != nil {
+				return err
+			}
+
+			writeRich(b, c.Text)
 			b.WriteString("</td>")
 		}
 
@@ -196,14 +351,19 @@ func writeTable(b *strings.Builder, t *table) {
 	}
 
 	b.WriteString("</tbody>\n</table>\n")
+
+	return nil
 }
 
 // writeList writes items as a list, each item's children as a nested list.
-func writeList(b *strings.Builder, items []item) {
+func writeList(b *strings.Builder, items []item) error {
 	b.WriteString("<ul>\n")
 
 	for _, it := range items {
-		b.WriteString("<li>")
+		if err := writeStart(b, "li", it.Class); err != nil {
+			return err
+		}
+
 		writeRich(b, it.Text)
 
 		if len(it.Children) > 0 {
@@ -222,6 +382,8 @@ func writeList(b *strings.Builder, items []item) {
 	}
 
 	b.WriteString("</ul>\n")
+
+	return nil
 }
 
 // writeRich writes the segments of r, each escaped as text, a value inside a
