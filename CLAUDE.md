@@ -51,8 +51,8 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 | Domain | `internal/domain/{taxonomy,inventory,catalog,mapping,estimate,assessment,text}` | Other domain packages and an allow list of pure standard packages (no `os`, `net/http`, `unsafe`, ...) |
 | Application | `internal/app/analysis` | Domain. Declares the ports (interfaces) it consumes |
 | Adapters | `internal/adapter/source/{inventoryfile,aws,azure,gcp}`, `internal/adapter/target/{ovhcloud,scaleway,upcloud}`, `internal/adapter/report/{markdown,jsonreport,htmlreport}` (`htmlreport`: the site's HTML fragment, ADR 0035), `internal/adapter/request/assessmentrequest` (the HTTP API's request decoder), and `internal/adapter/internal/jsondoc`, the JSON decoder they share | Domain, the ports they implement, SDKs. Never `internal/cli`, `internal/httpapi`, `internal/web` or `cmd/` |
-| Driving adapters | `internal/cli` (the CLI), `internal/httpapi` (the HTTP API, ADR 0019) and `internal/web` (the site's WebAssembly adapter, ADR 0035) | Application, domain, `internal/version`; never each other, an adapter or `cmd/`. `internal/web` also never `os`, `net` or `syscall/js` |
-| Composition roots | `cmd/shift2eu` (the CLI, offline: never imports `internal/httpapi`), `cmd/shift2eu-server` (the HTTP API, PRD #103 milestone 3; never imports `internal/cli`) and `cmd/shift2eu-web` (the site's module, `js && wasm`, the only importer of `syscall/js`) with its untagged wiring package `cmd/shift2eu-web/internal/wire` (ADR 0035) | Everything but a cloud SDK; the only places adapters are constructed, besides `ci/sitebuild` (below). Each one's imports are a strict allow list (`composition-root`, `server-composition-root`, `web-composition-root`, `web-composition-root-wire`): the module's own packages and the standard packages it needs, no third-party package. Only wire's test files import `internal/cli`, for the parity tests |
+| Driving adapters | `internal/cli` (the CLI), `internal/httpapi` (the HTTP API, ADR 0019) and `internal/web` (the site's WebAssembly adapter, ADR 0035) | Application, domain, `internal/version`; never each other, an adapter or `cmd/`. `internal/web` also never `os`, `net` or `syscall/js`. Repository-wide, only the test files of `internal/cli`, `cmd/shift2eu-web/internal/wire` and `test/apiparity` may import `internal/cli` (`cli-only-in-named-tests`, held exactly by `test/architecture`'s `TestOnlyNamedPackagesTestTheCLI`) |
+| Composition roots | `cmd/shift2eu` (the CLI, offline: never imports `internal/httpapi`), `cmd/shift2eu-server` (the HTTP API, PRD #103 milestone 3; never imports `internal/cli`) and `cmd/shift2eu-web` (the site's module, `js && wasm`, the only importer of `syscall/js`) with its untagged wiring package `cmd/shift2eu-web/internal/wire` (ADR 0035) | Everything but a cloud SDK; the only places adapters are constructed, besides `ci/sitebuild` (below). Each one's imports are a strict allow list (`composition-root`, `server-composition-root`, `web-composition-root`, `web-composition-root-wire`): the module's own packages and the standard packages it needs, no third-party package. Among the composition roots, only wire's test files import `internal/cli`, for the parity tests |
 | CI tooling (no part of the product) | `ci/aireview` (the AI reviewer's workflow program, ADR 0033) and its library `ci/aireview/internal/review`; `ci/sitebuild`, the program `make site` runs to assemble the site's bundle (PRD #297) | Named standard packages only (`ai-reviewer-main`, `ai-reviewer-is-standard-library`); no release builds them and Go's internal rule keeps the product from importing them. The exception is `ci/sitebuild` (`site-builder`, ADR 0036): it also imports and constructs the three embedded-snapshot targets, `internal/domain/catalog` and `internal/version` to write the snapshot dates, regions and version into the pages, the one place outside `cmd/` that constructs adapters. A main package nothing imports; the release runs it from milestone 3 |
 | Site (no Go) | `site/`: the site's pages, stylesheet and one page script (ADR 0036); `site/records/` is never bundled | Nothing: the page script is held by `test/site`'s banned-API scan, and every page by its Content Security Policy |
 | Browser smoke test | `test/browser` (`browser && !js`), run by `make test-browser` against a pinned headless Chromium | Exactly its listed standard and `chromedp` packages (`browser-smoke-test`), no package of the module; only it imports `chromedp` (`chromedp-only-in-the-browser-test`) |
@@ -83,6 +83,13 @@ make site              # the site's bundle into bin/site and its archive bin/shi
 make test-browser      # make site, then the headless-browser smoke test in a pinned Chromium container
 ```
 
+Every make target runs exactly go.mod's go line (`GOTOOLCHAIN`, issue #347, ADR 0035). When the local Go is
+another release, the go command fetches the pinned toolchain once (checksum-verified via `sum.golang.org`)
+before anything runs: the only network access the pin adds, and the tests themselves still never touch the
+network. The VM installs the pinned Go, so
+normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a mismatch then fails
+`TestGoModPinsTheBuildingToolchain` instead.
+
 ## Testing
 
 - Test first. Behaviour changes start with a failing test (skill: `go-tdd`).
@@ -91,7 +98,9 @@ make test-browser      # make site, then the headless-browser smoke test in a pi
   `internal/adapter/target/targettest`. Every provider adapter runs them.
 - Renderers and CLI output use golden files under `testdata/`, updated with `-update`.
 - Integration tests use `//go:build integration`; e2e tests use `//go:build e2e` and live in `test/e2e`.
-- Default tests never touch the network, never need credentials, never depend on time or map order.
+- Default tests never touch the network, never need credentials, never depend on time or map order. The
+  tests never do; only the go command that runs them may fetch the pinned toolchain, once, before any test
+  starts (see Commands).
 
 ## Rules
 

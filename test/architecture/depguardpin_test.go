@@ -485,6 +485,21 @@ var pinnedDepguardRules = []check.DepguardRule{
 		},
 	},
 	{
+		Name:     "cli-only-in-named-tests",
+		ListMode: "lax",
+		Files: []string{
+			"$test",
+			"!**/internal/cli/*_test.go",
+			"!**/cmd/shift2eu-web/internal/wire/*_test.go",
+			"!**/test/apiparity/*_test.go",
+		},
+		Allow: nil,
+		Deny: []string{
+			"github.com/timothymamo/shift2eu/internal/cli$",
+			"github.com/timothymamo/shift2eu/internal/cli/",
+		},
+	},
+	{
 		Name:     "httpapi-gets-adapters-from-cmd",
 		ListMode: "strict",
 		Files: []string{
