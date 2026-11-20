@@ -10,7 +10,8 @@
 // (site/ of the module by default); style.<h>.css and page.<h>.js, site/style.css
 // and site/page.js byte for byte; wasm_exec.<h>.js, the building toolchain's
 // $(go env GOROOT)/lib/wasm/wasm_exec.js byte for byte; module.<h>.js, the
-// module built with -trimpath, GOOS=js, GOARCH=wasm and CGO_ENABLED=0 and
+// module built with -trimpath, -buildvcs=false, GOOS=js, GOARCH=wasm and
+// CGO_ENABLED=0 and
 // embedded, base64-encoded, in the one fixed template
 // globalThis.__shift2euModule="<base64>"; and one newline; and manifest.json,
 // the version and every other file's path and SHA-256, sorted by path. <h> is
@@ -29,8 +30,8 @@
 // record site/records/hsts.json says waived (a missing record is not waived).
 //
 // The build is reproducible: no clock, no map order and no path reaches a
-// file, the module is built with -trimpath and the go command's own VCS stamp,
-// which a commit fixes, and the archive's entries are sorted, of one fixed
+// file, the module is built with -trimpath and no VCS stamp (-buildvcs=false),
+// so it depends on the sources alone, and the archive's entries are sorted, of one fixed
 // time, owner and mode, gzip-compressed at a fixed level with no modification
 // time. The test/site tests build it twice and compare.
 //

@@ -327,7 +327,9 @@ func buildModule(ctx context.Context, root, scratch string) ([]byte, error) {
 
 	// Every argument is a constant but the output path, a file of the
 	// directory the builder just made.
-	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", output, "./cmd/shift2eu-web") //nolint:gosec // G204: constant arguments and an output path in the builder's own temporary directory
+	// -buildvcs=false: no VCS stamp, so the module depends on the sources
+	// alone, not on the commit or on whether the tree is dirty.
+	cmd := exec.CommandContext(ctx, "go", "build", "-trimpath", "-buildvcs=false", "-o", output, "./cmd/shift2eu-web") //nolint:gosec // G204: constant arguments and an output path in the builder's own temporary directory
 	cmd.Dir = root
 	cmd.Env = append(goCommandEnv(cmd), "GOOS=js", "GOARCH=wasm", "CGO_ENABLED=0")
 
