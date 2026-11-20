@@ -437,7 +437,12 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # ask, and a plist nothing has loaded yet loads at the next login or boot. For each job found, once, it prints on
 # stderr "$@: <its argument>:", the job, its domain (loaded) or its plist (installed), `limactl autostart disable
 # <instance>` and the removal by hand (the bootout and `rm -f` of the plist of a loaded job, the `rm -f` of an
-# installed one; sudo only in the system domain), and sets lima_autostart=1 (empty when there is none). It
+# installed one; sudo only in the system domain), and sets lima_autostart=1 (empty when there is none). The
+# plist's path is repeated only when it is absolute and holds only / and [A-Za-z0-9._-] with no .. segment, the
+# rule of dev/agents-token-launchd.sh's foreign_jobs (auditor nit #396): the user domain's path is built from
+# $HOME, which may hold a space, a ; or a $ (security audit L1). Otherwise it is never printed, and the advice
+# says "remove its plist, whose path is not shown" with an ls of the literal ~/Library/LaunchAgents/<label>.plist
+# (or $(LIMA_LAUNCHDAEMONS_DIR)/<label>.plist) that names it. It
 # removes nothing itself. vm-up warns with it; vm-boot-install refuses with it. Only labels and files of Lima's
 # own naming are asked about, so it reads no job of anyone else.
 #
@@ -471,12 +476,22 @@ LIMA_AUTOSTART_JOBS = lima_autostart=''; \
 		(*) lima_label="$(LIMA_AUTOSTART_SYSTEM_LABEL_PREFIX)$$LIMA_INSTANCE"; lima_target="system/$$lima_label"; \
 			lima_plist="$${LIMA_LAUNCHDAEMONS_DIR%/}/$$lima_label.plist"; lima_sudo='sudo ' ;; \
 		esac; \
+		lima_at=" at $$lima_plist"; lima_remove="$${lima_sudo}rm -f $$lima_plist"; \
+		case "$$lima_plist" in \
+		([!/]* | */../* | */.. | *[!/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) \
+			case "$$lima_domain" in \
+			(user) lima_where="~/Library/LaunchAgents/$$lima_label.plist" ;; \
+			(*) lima_where="$${LIMA_LAUNCHDAEMONS_DIR%/}/$$lima_label.plist" ;; \
+			esac; \
+			lima_at=' (its plist'"'"'s path is not shown)'; \
+			lima_remove="remove its plist, whose path is not shown: ls $$lima_where names it" ;; \
+		esac; \
 		if [ -n "$$lima_launchctl" ] && [ -n "$$lima_target" ] && launchctl print "$$lima_target" </dev/null >/dev/null 2>&1; then \
 			lima_autostart=1; \
-			echo "$@: $(1): Lima's autostart job $$lima_label is loaded in $${lima_target%/*}: it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $${lima_sudo}launchctl bootout $$lima_target && $${lima_sudo}rm -f $$lima_plist) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
+			echo "$@: $(1): Lima's autostart job $$lima_label is loaded in $${lima_target%/*}: it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $${lima_sudo}launchctl bootout $$lima_target && $$lima_remove) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
 		elif [ -e "$$lima_plist" ] || [ -L "$$lima_plist" ]; then \
 			lima_autostart=1; \
-			echo "$@: $(1): Lima's autostart job $$lima_label is installed at $$lima_plist, not loaded now: launchd loads it at the next login or boot, and it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $${lima_sudo}rm -f $$lima_plist) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
+			echo "$@: $(1): Lima's autostart job $$lima_label is installed$$lima_at, not loaded now: launchd loads it at the next login or boot, and it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $$lima_remove) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
 		fi; \
 	done
 
