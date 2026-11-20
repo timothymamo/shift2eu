@@ -795,7 +795,7 @@ directory (`.agents-token-refresh-shift2eu.lock.stale.<pid>`), so no lock is los
 so in the log and stops. The refresh whose lock that was finds no lock within seconds and exits too: both
 refreshers stop, and nothing refreshes the token until the next refresh starts. That start removes the
 moved-aside directory once neither the pid in its name nor the pid inside it runs a refresh, says
-`removed the moved-aside lock ...` in the log, takes the lock and refreshes. As the account's LaunchDaemon
+`removing the moved-aside lock ...` in the log, takes the lock and refreshes. As the account's LaunchDaemon
 (below), launchd starts it again on its own within 5 minutes (`KeepAlive`, `ThrottleInterval` 300); in
 single-account mode, start it again with `make agents-token-refresh-start` from the host clone. Stop it with
 `kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,

@@ -970,9 +970,11 @@ clear_stale_asides() {
     if is_refresh "${mover}" || is_refresh "${recorded}"; then
       continue
     fi
+    # Said before the rename, so the log names the aside before it is gone. Two starts that both found it may
+    # both say so; only the one whose rename succeeds removes it.
+    say "removing the moved-aside lock ${stale##*/}: neither its mover (pid ${mover}) nor its owner (pid $(show_pid "${recorded}")) runs a refresh"
     mv "${stale}" "${reap}" 2>/dev/null || continue # another start took it first
     rm -rf "${reap}"
-    say "removed the moved-aside lock ${stale##*/}: neither its mover (pid ${mover}) nor its owner (pid $(show_pid "${recorded}")) runs a refresh"
   done
 }
 
