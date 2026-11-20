@@ -890,11 +890,17 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 // SHIFT2EU_TEST_LAUNCHCTL_JOBS_DIR names a directory whose jobs launchd has loaded, for the tests that pin what a
 // target does about a job other than its own (issue #396): <dir>/system/<label> is a job of the system domain and
 // <dir>/gui/<uid>/<label> one of the user's, and each file holds the job's pid on its first line (`-` when launchd
-// runs no process for it), the path of the plist it was loaded from on its second, and one program argument per
-// line after that, as `launchctl print` prints them. `launchctl list` prints the user domain's jobs, `launchctl
-// list <domain>` and `launchctl print <domain>` the services of the domain named, and `launchctl print
-// <domain>/<label>` the job with its `arguments = { ... }` block; a label the directory does not hold answers 113.
-// `bootout` also removes the job's file, as the real command unloads the job.
+// runs no process for it), the path of the plist it was loaded from on its second, then one program argument per
+// line, and optionally one `env KEY=VALUE` line per variable of the job's environment, which `print_job` prints
+// as launchd's `environment = { ... }` block, as `launchctl print` does. `launchctl print <domain>` prints the
+// services of the domain named, and `launchctl print <domain>/<label>` the job with its `arguments = { ... }`
+// block; a label the directory does not hold answers 113. `bootout` also removes the job's file, as the real
+// command unloads the job.
+//
+// A domain whose `launchctl print <domain>` fails without listing anything names itself in
+// SHIFT2EU_TEST_LAUNCHCTL_UNLISTABLE_DOMAIN (an exact `system` or `gui/<uid>`), which answers 113 as a domain
+// launchd cannot print does, and one whose print succeeds without a `services = { ... }` block names itself in
+// SHIFT2EU_TEST_LAUNCHCTL_NO_SERVICES_DOMAIN, so a test can pin what a check says when it cannot list a domain.
 const fakeLaunchctl = `#!/bin/sh
 {
   printf 'tool=launchctl\n'
@@ -903,6 +909,8 @@ const fakeLaunchctl = `#!/bin/sh
 status=113
 verb="${1:-}"
 jobs="${SHIFT2EU_TEST_LAUNCHCTL_JOBS_DIR:-}"
+unlistable="${SHIFT2EU_TEST_LAUNCHCTL_UNLISTABLE_DOMAIN:-}"
+no_services="${SHIFT2EU_TEST_LAUNCHCTL_NO_SERVICES_DOMAIN:-}"
 # job_dir <domain> prints the fixture's directory of one domain's jobs.
 job_dir() {
   [ -n "${jobs}" ] || return 1
@@ -912,7 +920,9 @@ job_dir() {
   *) return 1 ;;
   esac
 }
-# print_job <file> <domain> <label> prints a loaded job the way launchctl print does.
+# print_job <file> <domain> <label> prints a loaded job the way launchctl print does: the plist path on the file's
+# second line, its program arguments on the lines after it (a line beginning 'env ' is no argument: it names one
+# environment variable, KEY=VALUE), and its environment block.
 print_job() {
   printf '%s/%s = {\n' "$2" "$3"
   printf '\tactive count = 1\n'
@@ -924,8 +934,21 @@ print_job() {
   printf '\tstate = running\n'
   printf '\tprogram = %s\n' "$(sed -n 3p "$1")"
   printf '\targuments = {\n'
-  sed -n '3,$p' "$1" | while IFS= read -r argument; do printf '\t\t%s\n' "${argument}"; done
+  sed -n '3,$p' "$1" | while IFS= read -r argument; do
+    case "${argument}" in 'env '*) continue ;; esac
+    printf '\t\t%s\n' "${argument}"
+  done
   printf '\t}\n'
+  environment="$(sed -n '3,$p' "$1" | while IFS= read -r entry; do
+    case "${entry}" in 'env '*) printf '%s\n' "${entry#env }" ;; esac
+  done)"
+  if [ -n "${environment}" ]; then
+    printf '\tenvironment = {\n'
+    printf '%s\n' "${environment}" | while IFS= read -r entry; do
+      printf '\t\t%s => %s\n' "${entry%%=*}" "${entry#*=}"
+    done
+    printf '\t}\n'
+  fi
   case "$(sed -n 1p "$1")" in
   '' | -) ;;
   *) printf '\tpid = %s\n' "$(sed -n 1p "$1")" ;;
@@ -947,18 +970,6 @@ print_domain() {
   printf '}\n'
 }
 case "${verb}" in
-list)
-  domain="gui/$(id -u)"
-  [ "$#" -lt 2 ] || domain="$2"
-  printf 'PID\tStatus\tLabel\n'
-  if dir="$(job_dir "${domain}")" && [ -d "${dir}" ]; then
-    for file in "${dir}"/*; do
-      [ -f "${file}" ] || continue
-      printf '%s\t0\t%s\n' "$(sed -n 1p "${file}")" "${file##*/}"
-    done
-  fi
-  exit 0
-  ;;
 print)
   target="${2:-}"
   domain=''
@@ -975,6 +986,14 @@ print)
     ;;
   esac
   if [ -n "${domain}" ] && [ -z "${label}" ]; then
+    if [ -n "${unlistable}" ] && [ "${domain}" = "${unlistable}" ]; then
+      exit 113
+    fi
+    if [ -n "${no_services}" ] && [ "${domain}" = "${no_services}" ]; then
+      printf '%s = {\n' "${domain}"
+      printf '\ttype = %s\n' "${domain}"
+      exit 0
+    fi
     print_domain "${domain}"
     exit 0
   fi
@@ -1141,7 +1160,9 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 //     SHIFT2EU_TEST_SUDO_INSTALL changes what lands there: `different` writes other bytes (a file that changed
 //     between the hash check and the install), `nothing` writes no file at all, `unreadable` copies the plist and
 //     then takes every permission away, so the file is there and the maintainer's own read-back cannot open it.
-//     A destination outside SHIFT2EU_TEST_SUDO_ROOT is refused.
+//     A destination outside SHIFT2EU_TEST_SUDO_ROOT is refused. SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE, with
+//     the pid in SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID, makes it write that file with that pid: state that
+//     changes inside the sudo window, between the install's pre-sudo check and its TERM (auditor L4).
 //   - `rm -f <path>` really removes a sandbox path, and refuses any path outside it.
 //   - `sudo -k` alone forgets the timestamp and runs nothing, so a recipe that ends with it records one
 //     argv and no command; it is not the empty command the fake reports as a bug.
@@ -1222,6 +1243,9 @@ install)
     exit 64
     ;;
   esac
+  if [ -n "${SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE:-}" ]; then
+    printf '%s\n' "${SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID:?set SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID}" > "${SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE}" || exit 1
+  fi
   exit 0
   ;;
 rm)
@@ -1515,6 +1539,25 @@ func (sb *sandbox) useFakeIDName(t *testing.T, env map[string]string, name strin
 	writeFileMode(t, filepath.Join(sb.binDir, "id"), []byte(fmt.Sprintf(fakeIDName, strconv.Quote(realTool(t, "id")))), 0o700)
 
 	env["SHIFT2EU_TEST_ID_NAME"] = name
+}
+
+// fakeIDFailing stands in for id in a test that makes a script's own account lookup fail: it records its argv and
+// exits non-zero, as id does when it cannot look up the account it runs as.
+const fakeIDFailing = `#!/bin/sh
+{
+  printf 'tool=id\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+echo 'id: cannot look up the running account' >&2
+exit 1
+`
+
+// useFakeIDThatFails puts an id first on PATH that fails every call, so a test can pin what a target does when a
+// script it runs cannot tell which account it runs as: a failure of the check, not a verdict about launchd.
+func (sb *sandbox) useFakeIDThatFails(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "id"), []byte(fakeIDFailing), 0o700)
 }
 
 // fakePlutil stands in for plutil: it records its argv and answers SHIFT2EU_TEST_PLUTIL_STATUS, so a test can

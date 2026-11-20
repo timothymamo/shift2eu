@@ -1123,6 +1123,9 @@ func TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand(t *test
 		// recorded says the start target's pid file names that refresher, which is how the install knows it may
 		// stop it.
 		recorded bool
+		// ignoresTERM says the recorded refresher leaves TERM ignored, as a process in a stop it does not expect
+		// can: the install must wait, warn and load the job anyway.
+		ignoresTERM bool
 		// wantRefused says the install must refuse and install nothing.
 		wantRefused bool
 	}{
@@ -1141,6 +1144,14 @@ func TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand(t *test
 			lockHeld:    true,
 			wantRefused: true,
 		},
+		{
+			// TERM ignored: the install cannot stop the recorded refresher, so it warns and loads the job, which
+			// takes the lock as soon as that refresher exits (reviewer's test nit).
+			name:        "the recorded refresher ignores TERM",
+			lockHeld:    true,
+			recorded:    true,
+			ignoresTERM: true,
+		},
 		{name: "no refresher holds the lock"},
 	}
 
@@ -1155,14 +1166,21 @@ func TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand(t *test
 			pid := ""
 
 			if tc.lockHeld {
-				refresh = standInForARefresh(t, f.sb)
+				if tc.ignoresTERM {
+					refresh = standInForARefreshIgnoringTERM(t, f.sb)
+				} else {
+					refresh = standInForARefresh(t, f.sb)
+				}
+
 				pid = strconv.Itoa(refresh.pid())
 
 				writeFileMode(t, filepath.Join(f.sb.refreshLockDir(f.instance), "pid"), []byte(pid+"\n"), 0o600)
 			}
 
+			pidFile := filepath.Join(f.sb.stateDir(), "agents-token-refresh-"+f.instance+".pid")
+
 			if tc.recorded {
-				writeFileMode(t, filepath.Join(f.sb.stateDir(), "agents-token-refresh-"+f.instance+".pid"), []byte(pid+"\n"), 0o600)
+				writeFileMode(t, pidFile, []byte(pid+"\n"), 0o600)
 			}
 
 			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
@@ -1230,6 +1248,30 @@ func TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand(t *test
 				return
 			}
 
+			if tc.ignoresTERM {
+				// TERM did nothing, so the install cannot have stopped it: it warns with the pid and goes on to
+				// load the job, which takes the lock once that refresh exits.
+				var warned bool
+
+				for _, line := range strings.Split(combined, "\n") {
+					if strings.Contains(line, pid) && strings.Contains(line, "still runs") && strings.Contains(strings.ToLower(line), "warning") {
+						warned = true
+					}
+				}
+
+				if !warned {
+					t.Errorf("the install does not warn that pid %s still runs after TERM, the recorded refresher that ignores it: a maintainer never learns that the job waits for a process that may never exit (reviewer's test nit)\nstdout: %s\nstderr: %s",
+						pid, stdout, stderr)
+				}
+
+				if !refresh.running() {
+					t.Errorf("the install stopped pid %s even though it ignores TERM: nothing the install sends ends it, so this case no longer stands for a refresher that outlives its TERM (reviewer's test nit)\nstdout: %s\nstderr: %s",
+						pid, stdout, stderr)
+				}
+
+				return
+			}
+
 			// The recorded refresher is stopped, named by its pid, before the job is loaded.
 			var named bool
 
@@ -1250,11 +1292,161 @@ func TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand(t *test
 				}
 			}
 
+			// The pid file named the refresher the install stopped, and that refresher is gone: the file must not
+			// outlive it, or the next start warns about a pid that no longer runs.
+			if _, statErr := os.Stat(pidFile); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("the install left the pid file %s after it stopped pid %s, the refresher that file named: the next make agents-token-refresh-start warns that a refresh that does not run had stopped (issue #396) (stat: %v)",
+					pidFile, pid, statErr)
+			}
+
 			if !poll(10*time.Second, func() bool { return !refresh.running() }) {
 				t.Errorf("pid %s, the refresher the start target recorded, still runs after the install loaded the job: the install must wait for it to exit, or the job finds the lock taken and exits at every ThrottleInterval (issue #396)\nstdout: %s\nstderr: %s",
 					pid, stdout, stderr)
 			}
 		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshDistinguishesAFailedForeignJobsCheck pins the security audit's second finding: every
+// non-zero status of dev/agents-token-launchd.sh foreign-jobs used to read as "a foreign job was found, named
+// above", so a check that could not run told the maintainer to remove a job that does not exist - and taught them
+// that the check is noise. Only status 3, the one the script gives a job it named, is that refusal; any other
+// failure says the check itself failed and names its status, and nothing is installed or started. The failure here
+// is the check's own account lookup (id -u), which its script's `uid="$(id -u)"` turns into status 1.
+func TestMakeAgentsTokenRefreshDistinguishesAFailedForeignJobsCheck(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		target  string
+		fixture func(t *testing.T) *refreshRunningJob
+	}{
+		{name: "the install", target: "agents-token-refresh-install", fixture: newInstallJobFixture},
+		{name: "the start", target: "agents-token-refresh-start", fixture: newStartJobFixture},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := tc.fixture(t)
+
+			// The check cannot tell which account runs it, so it fails before it has any verdict about launchd.
+			f.sb.useFakeIDThatFails(t)
+
+			stdout, stderr, err := f.run(t, tc.target)
+			if err == nil {
+				t.Fatalf("make %s exited 0 although dev/agents-token-launchd.sh foreign-jobs could not tell which account runs it (id -u failed): the check did not run, and nothing may be installed or started on its word (security audit L2)\nstdout: %s\nstderr: %s",
+					tc.target, stdout, stderr)
+			}
+
+			combined := stdout + stderr
+
+			if strings.Contains(combined, "another launchd job runs") {
+				t.Errorf("make %s prints the refusal for a foreign job although the check itself failed: a maintainer then looks for a job that is not there and runs the removal commands on nothing (security audit L2)\nstdout: %s\nstderr: %s",
+					tc.target, stdout, stderr)
+			}
+
+			for _, want := range []string{"foreign-jobs check failed", "status 1", "nothing was"} {
+				if !strings.Contains(combined, want) {
+					t.Errorf("make %s does not say %q when dev/agents-token-launchd.sh foreign-jobs fails on its own account lookup (id -u, status 1): the maintainer must be able to tell a failed check from a foreign job, and must know that nothing was installed or started (security audit L2)\nstdout: %s\nstderr: %s",
+						tc.target, want, stdout, stderr)
+				}
+			}
+
+			// A failed check installs, loads and starts nothing.
+			if calls := f.installedWithSudo(t); len(calls) != 0 {
+				t.Errorf("make %s ran `sudo install` although the foreign-jobs check failed: a plist left where launchd reads it is a job at the next boot whatever the check said (security audit L2): %v",
+					tc.target, calls)
+			}
+
+			if calls := f.bootstrapCalls(t); len(calls) != 0 {
+				t.Errorf("make %s ran `sudo launchctl bootstrap` although the foreign-jobs check failed: %v (security audit L2)", tc.target, calls)
+			}
+
+			if pids := f.pidFiles(t); len(pids) != 0 {
+				t.Errorf("make %s started a refresher although the foreign-jobs check failed: %v (security audit L2)", tc.target, pids)
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallDoesNotStopARefresherThePidFileNoLongerNames pins the security audit's fourth
+// finding: the install re-reads the lock and the process right before the TERM, but not the pid file, and the sudo
+// prompt plus the plist install can be long. In that window the recorded refresh can exit and another refresh can
+// take the lock with a reused pid, and the install would stop a refresh the start target never recorded - the very
+// rule its refusal keeps. The fake sudo rewrites the pid file during `sudo install`, the window the audit names:
+// the install may then refuse or warn, but it must not stop the holder and must not say it did.
+func TestMakeAgentsTokenRefreshInstallDoesNotStopARefresherThePidFileNoLongerNames(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	refresh := standInForARefresh(t, f.sb)
+	pid := strconv.Itoa(refresh.pid())
+
+	writeFileMode(t, filepath.Join(f.sb.refreshLockDir(f.instance), "pid"), []byte(pid+"\n"), 0o600)
+
+	pidFile := filepath.Join(f.sb.stateDir(), "agents-token-refresh-"+f.instance+".pid")
+	writeFileMode(t, pidFile, []byte(pid+"\n"), 0o600)
+
+	// The sudo window: by the time the TERM is due, the pid file names another process, as it does when the
+	// recorded refresh exited and another one took the lock first.
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE"] = pidFile
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID"] = strconv.Itoa(os.Getpid())
+
+	stdout, stderr, _ := f.run(t, "agents-token-refresh-install")
+	combined := stdout + stderr
+
+	// The premise: the window the audit describes really opened, so the case does not pass for want of a rewrite.
+	f.subCommand(t, "install")
+
+	if !refresh.running() {
+		t.Errorf("the install stopped pid %s although the pid file no longer named it when the TERM was due (it named another process after `sudo install`): only the refresher the start target recorded is the install's to stop, and the file is how it knows (security audit L4)\nstdout: %s\nstderr: %s",
+			pid, stdout, stderr)
+	}
+
+	for _, line := range strings.Split(combined, "\n") {
+		if strings.Contains(line, "stopped pid "+pid) {
+			t.Errorf("the install says it stopped pid %s although the pid file no longer named it when the TERM was due: the message sends the maintainer away from the refresh that does hold the lock (security audit L4)\nline: %s",
+				pid, line)
+		}
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallSaysWhenTheTakeoverStoppedTheRefreshAndTheJobDidNotLoad pins the reviewer's
+// fifth finding: when the hand-started refresh was stopped and launchctl then refuses both bootstraps, the
+// instance is left with no refresher at all. The error must say that the takeover stopped it and send the
+// maintainer to make agents-token-refresh-start, not only to install again.
+func TestMakeAgentsTokenRefreshInstallSaysWhenTheTakeoverStoppedTheRefreshAndTheJobDidNotLoad(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	refresh := standInForARefresh(t, f.sb)
+	pid := strconv.Itoa(refresh.pid())
+
+	writeFileMode(t, filepath.Join(f.sb.refreshLockDir(f.instance), "pid"), []byte(pid+"\n"), 0o600)
+	writeFileMode(t, filepath.Join(f.sb.stateDir(), "agents-token-refresh-"+f.instance+".pid"), []byte(pid+"\n"), 0o600)
+
+	// Both bootstraps fail, so after the takeover stopped the recorded refresh no refresher runs at all.
+	f.env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS"] = "1"
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err == nil {
+		t.Fatalf("make agents-token-refresh-install exited 0 although both launchctl bootstraps failed: no token refresh job of %s is loaded (reviewer finding 5)\nstdout: %s\nstderr: %s",
+			f.instance, stdout, stderr)
+	}
+
+	combined := stdout + stderr
+
+	for _, want := range []string{"the hand-started refresh was stopped", "make agents-token-refresh-start"} {
+		if !strings.Contains(combined, want) {
+			t.Errorf("the error after the failed bootstrap does not say %q although the takeover stopped the hand-started refresh and no other runs: a maintainer does not learn that the instance has no refresher until the next boot (reviewer finding 5)\nstdout: %s\nstderr: %s",
+				want, stdout, stderr)
+		}
+	}
+
+	if refresh.running() {
+		t.Errorf("pid %s, the refresher the start target recorded, still runs after the install stopped it: the failed bootstrap must come after the takeover, or this case pins no stopped refresher (reviewer finding 5)", pid)
 	}
 }
 
@@ -1435,6 +1627,24 @@ func standInForARefresh(t *testing.T, sb *sandbox) *runningScript {
 	return r
 }
 
+// standInForARefreshIgnoringTERM is standInForARefresh with TERM ignored (trap ” TERM), as a process that does
+// not expect to be stopped leaves it: the install's wait runs out, so a test can pin the warning the takeover
+// gives instead of "stopped pid N" (reviewer's test nit).
+func standInForARefreshIgnoringTERM(t *testing.T, sb *sandbox) *runningScript {
+	t.Helper()
+
+	path := filepath.Join(sb.root, "a-copy", "dev", "agents-app-token.sh")
+	writeFileMode(t, path, []byte("#!/bin/sh\n# A stand-in for the refresh the job runs: it runs, ignores TERM, and does nothing else.\ntrap '' TERM\nwhile :; do sleep 1; done\n"), 0o755)
+
+	r := sb.start(t, path, []string{"refresh"}, sb.baseEnv())
+
+	if !r.running() {
+		t.Fatalf("the stand-in refresh %s exited at once; stderr:\n%s", path, r.errOut())
+	}
+
+	return r
+}
+
 // TestMakefileHasTheAgentsTokenLaunchDaemonTargets pins the install target's shape only: it renders the
 // instance's plist through dev/agents-token-launchd.sh, which launchdplist_test.go pins in full. Installing
 // and uninstalling need sudo and a real launchctl, so neither runs here.
@@ -1476,10 +1686,9 @@ type launchdInstallFixture struct {
 	key        inventedKey
 	env        map[string]string
 	instance   string
-	repo       string   // the clone make runs in, symlinks resolved: what the plist names and the mount check reads
-	dir        string   // where make runs: the repository, or a clone a test grew inside its sandbox
-	launchdDir string   // where launchd reads LaunchDaemons from: the make command line's AGENTS_TOKEN_LAUNCHD_DIR
-	extraArgs  []string // further make command-line assignments a test needs, such as the launchd plist directories
+	repo       string // the clone make runs in, symlinks resolved: what the plist names and the mount check reads
+	dir        string // where make runs: the repository, or a clone a test grew inside its sandbox
+	launchdDir string // where launchd reads LaunchDaemons from: the make command line's AGENTS_TOKEN_LAUNCHD_DIR
 }
 
 // launchdInstallOption changes the environment an install fixture runs make with, before the test uses it.
@@ -1604,9 +1813,7 @@ func (f *launchdInstallFixture) dest() string {
 func (f *launchdInstallFixture) run(t *testing.T, target string) (string, string, error) {
 	t.Helper()
 
-	args := append([]string{"AGENTS_TOKEN_LAUNCHD_DIR=" + f.launchdDir}, f.extraArgs...)
-
-	return runMakeIn(t, f.dir, append(args, target), f.env)
+	return runMakeIn(t, f.dir, []string{"AGENTS_TOKEN_LAUNCHD_DIR=" + f.launchdDir, target}, f.env)
 }
 
 // runWithTheDirectoryInTheEnvironment runs one target with AGENTS_TOKEN_LAUNCHD_DIR exported in the environment
