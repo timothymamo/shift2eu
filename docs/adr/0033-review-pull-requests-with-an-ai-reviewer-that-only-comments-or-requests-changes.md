@@ -700,8 +700,9 @@ path, when it is a file named by a header of that part's own diff, in a code spa
 note shows a path (backticks made apostrophes, control characters made spaces, mentions defused, cut at
 300 UTF-16 units with `…`), followed outside the span by `:<line>` when the finding has a line;
 otherwise `a file outside the part`. At most 50 blocking findings (`MaxListedExcluded`) are listed across
-all parts; when there are more, one constant line after the parts counts the rest,
-`  - and <K> more blocking findings, not listed.`, and the per-part counts stay exact. The review's body
+all parts; when there are more, one constant top-level list item after the parts counts the rest,
+`- And <K> more blocking findings across the parts, not listed.` (`finding` when K is 1), and the
+per-part counts stay exact. The review's body
 is held to `MaxTextUnits` (65,000 UTF-16 units) as `Render` holds a review's: only the text before the
 prompt-injection sentence can be cut, never that sentence, the skip's closing sentences or the footer
 (auditor M1: without the cap, thousands of findings made a body GitHub refuses with a 422, failing the

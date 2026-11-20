@@ -210,7 +210,8 @@ func answeredSummary(answered []answeredPart, count int) string {
 	}
 
 	if unlisted > 0 {
-		fmt.Fprintf(&b, "\n  - and %d more blocking findings, not listed.", unlisted)
+		fmt.Fprintf(&b, "\n- And %d more blocking %s across the parts, not listed.",
+			unlisted, plural(unlisted, "finding", "findings"))
 	}
 
 	return b.String()
@@ -269,6 +270,9 @@ func leftOutParts(usable int) string {
 // sentences and the footer never are (audit M1).
 func skippedReview(headSHA string, s skipped) Review {
 	head := fmt.Sprintf("**AI review** of %s\n\n### AI review skipped\n\n", headSHA)
+	// The truncate is a backstop: answeredSummary's cap keeps s.body far below
+	// room today, so this branch is not reached; it holds the limit should the
+	// body ever grow.
 	room := MaxTextUnits - utf16Len(head) - utf16Len(s.tail) - utf16Len(skippedClosing) - utf16Len(adviceFooter)
 	body := head + truncate(s.body, room, truncatedBody) + s.tail + skippedClosing + adviceFooter
 
