@@ -19,15 +19,21 @@ import (
 // projects/<id>, buckets/<name>, storageAccounts/<name>, accesspoint/<name>,
 // bucket/<name> - and holds each to its provider's sample value: a GCP project
 // ID that is example or example- and words, a bucket or an access point a sample
-// bucket names, a storage account whose name starts with example, while a
-// project number, a child-resource segment (storageAccounts/blobServices) or an
-// elided segment (projects/...) names nobody.
+// bucket names, a storage account that is example and generic words
+// (examplestorage, exampledata01), while a project number, a child-resource
+// segment in a resource type (Microsoft.Storage/storageAccounts/blobServices),
+// an RBAC action string's operation (Microsoft.Storage/storageAccounts/read) or
+// an elided segment (projects/...) names nobody.
 //
 // The value is reported as the file writes it, since ARM IDs are
 // case-insensitive and a lower-case resource type names the same account
-// (microsoft.storage/storageaccounts/acmeprodcustomers). An S3 ARN is read in
-// every partition (arn:aws:, arn:aws-us-gov:), and an Outposts or Object Lambda
-// ARN names its access point or bucket in a path of its own, after the outpost.
+// (microsoft.storage/storageaccounts/acmeprodcustomers), and so does a name
+// written with capitals (projects/Acme-Corp-Prod). An S3 ARN is read in every
+// partition (arn:aws:, arn:aws-us-gov:), in the S3 Express service's own
+// spelling (arn:aws:s3express:...) and with either delimiter the ARN may use
+// (accesspoint/acme-prod-ap, accesspoint:acme-prod-ap), and an Outposts or
+// Object Lambda ARN names its access point or bucket in a path of its own, after
+// the outpost.
 func TestResourcePathProblems(t *testing.T) {
 	t.Parallel()
 
@@ -117,6 +123,56 @@ func TestResourcePathProblems(t *testing.T) {
 			text: `"accessPoint": "arn:aws-us-gov:s3:us-gov-west-1:` + dummyAccountID + `:accesspoint/acme-ap"`,
 			want: []string{"accesspoint/acme-ap"},
 		},
+		{
+			// A sample's storage account keeps the example- prefix a sample's
+			// bucket does and then names generic words (examplestorage), so the
+			// prefix alone is no sample: a name that follows it without a generic
+			// word between (exampleacmeprod) is the customer's own, the way the
+			// bucket example-acme-prod is.
+			name: "customer storage account behind an example- prefix",
+			text: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/exampleacmeprod",
+			want: []string{"storageAccounts/exampleacmeprod"},
+		},
+		{
+			name: "customer storage account behind an example- prefix and a customer word",
+			text: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/exampleacmecustomers",
+			want: []string{"storageAccounts/exampleacmecustomers"},
+		},
+		{
+			// In an ARM ID the segment after storageAccounts/ is the account's
+			// own name, whatever it spells: an account named after a child
+			// resource's word (blobservices) is no child resource, and the child
+			// type the ID writes after it (blobServices/default) is the one that
+			// names a child.
+			name: "customer storage account named like a child resource",
+			text: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/blobservices/blobServices/default",
+			want: []string{"storageAccounts/blobservices"},
+		},
+		{
+			// A directory bucket's ARN is the S3 Express service's (s3express),
+			// and the bucket it names carries the zone and the suffix the service
+			// appends (...--euc1-az1--x-s3) after the customer's own words, which
+			// are reported with it.
+			name: "customer bucket in an S3 Express ARN",
+			text: `"bucket": "arn:aws:s3express:eu-central-1:` + dummyAccountID + `:bucket/acme-prod--euc1-az1--x-s3"`,
+			want: []string{"bucket/acme-prod--euc1-az1--x-s3"},
+		},
+		{
+			// An ARN that delimits the segment with a colon rather than a slash
+			// names the same access point, and the value is reported as the file
+			// writes it, the way an ARM ID's account is.
+			name: "customer access point in an S3 ARN written with a colon",
+			text: `"accessPoint": "arn:aws:s3:eu-central-1:` + dummyAccountID + `:accesspoint:acme-prod-ap"`,
+			want: []string{"accesspoint:acme-prod-ap"},
+		},
+		{
+			// A GCP project ID is written in lower case, and a name written with
+			// capitals (Acme-Corp-Prod) is the customer's all the same, so it is
+			// reported as written rather than passed over.
+			name: "customer project ID in capitals",
+			text: `"name": "//compute.googleapis.com/projects/Acme-Corp-Prod/zones/z/instances/vm-1"`,
+			want: []string{"projects/Acme-Corp-Prod"},
+		},
 
 		// Not reported: a sample value, a segment that names no customer, or a
 		// projects/ segment that is no project ID.
@@ -199,6 +255,74 @@ func TestResourcePathProblems(t *testing.T) {
 			// path: it is no name of anyone's.
 			name: "GitHub project URL",
 			text: "the board is at https://github.com/orgs/acme/projects/1",
+			want: nil,
+		},
+		{
+			// containers is blobServices' own child type, and the two name a
+			// resource type in a guide rather than a resource in an ID: no
+			// segment of it is an account's name.
+			name: "container child-resource type after a storage account",
+			text: `{"type": "Microsoft.Storage/storageAccounts/blobServices/containers"}`,
+			want: nil,
+		},
+		{
+			// An ARM RBAC action string names a resource type and the operation
+			// to allow on it (Microsoft.Storage/storageAccounts/read), so the
+			// operation sits where an account's name sits in an ARM ID and names
+			// nobody. The type before it carries no /providers/ segment, and that
+			// segment is what makes the one after storageAccounts/ an account.
+			name: "ARM RBAC read action string",
+			text: `"actions": ["Microsoft.Storage/storageAccounts/read"]`,
+			want: nil,
+		},
+		{
+			name: "ARM RBAC write action string",
+			text: `"actions": ["Microsoft.Storage/storageAccounts/write"]`,
+			want: nil,
+		},
+		{
+			name: "ARM RBAC delete action string",
+			text: `"actions": ["Microsoft.Storage/storageAccounts/delete"]`,
+			want: nil,
+		},
+		{
+			// A data-plane action writes the operation and an /action suffix
+			// after the type (listKeys/action), and neither is an account's name.
+			name: "ARM RBAC list-keys action string",
+			text: `"actions": ["Microsoft.Storage/storageAccounts/listKeys/action"]`,
+			want: nil,
+		},
+		{
+			name: "ARM RBAC regenerate-key action string",
+			text: `"actions": ["Microsoft.Storage/storageAccounts/regenerateKey/action"]`,
+			want: nil,
+		},
+		{
+			name: "ARM RBAC list-account-SAS action string",
+			text: `"actions": ["Microsoft.Storage/storageAccounts/listAccountSas/action"]`,
+			want: nil,
+		},
+		{
+			// The generic word after the prefix is what names a sample's account:
+			// example and storage, the way a storage account is named.
+			name: "sample storage account named after its service",
+			text: `"name": "storageAccounts/examplestorage"`,
+			want: nil,
+		},
+		{
+			// The digits after a generic word are a count (example-logs-2), so
+			// generic words and a count of up to three stay clean.
+			name: "sample storage account with a generic word and a count",
+			text: `"name": "storageAccounts/exampledata01"`,
+			want: nil,
+		},
+		{
+			// An S3 Express bucket's name appends the zone and the suffix the
+			// service writes (...--euc1-az1--x-s3) to the bucket's own words, so
+			// the part before the suffix is what is held to the sample rule, and
+			// a sample's words there keep the name clean.
+			name: "sample directory bucket in an S3 Express ARN",
+			text: `"bucket": "arn:aws:s3express:eu-central-1:` + dummyAccountID + `:bucket/example-bucket--euc1-az1--x-s3"`,
 			want: nil,
 		},
 	}

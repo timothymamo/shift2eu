@@ -437,14 +437,19 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 // github.com, api.github.com, raw.githubusercontent.com or ghcr.io is reported as
 // the host and the owner (github.com/acme), in a URL and in the SSH clone form a
 // reader copies
-// (git@github.com:acme/private-repo.git) alike. Only this project's own account
+// (git@github.com:acme/private-repo.git) alike, with the GitHub API's endpoint
+// segment (repos, users, orgs, enterprises) left out. Only this project's own
+// account
 // and the listed public open-source owners pass, so github.com/timothymamo/shift2eu
 // and github.com/sigstore/cosign are clean and the same host written in another
 // case (GitHub.com/TimothyMamo/shift2eu) is clean too.
 //
 // A bucket is reported with the scheme that gives it its shape (s3://,
 // s3a://, s3n://, gs://, az://, abfss://, wasbs://, oci://) or, in an ARN, whole
-// (arn:aws:s3:::acme-prod-bucket). A Cloud Storage path is read by this rule,
+// (arn:aws:s3:::acme-prod-bucket). An oci:// reference names a registry host
+// with a dot in its first segment (ghcr.io, registry.example.com) rather than a
+// bucket, so it is read only when that segment is a bucket's name, as it is in
+// oci://acme-prod-bucket@acmetenancy. A Cloud Storage path is read by this rule,
 // not the owner one, and it names the bucket after the service host
 // (storage.googleapis.com), in a URL (storage.googleapis.com/acme-prod-data), in a
 // Cloud Asset name (//storage.googleapis.com/acme-prod-data) and in a JSON API path,
@@ -617,6 +622,15 @@ func TestVendorPathProblems(t *testing.T) {
 			want: []string{"api.github.com/acme-corp"},
 		},
 		{
+			// The API has more endpoints than the repository one, and the
+			// enterprise endpoint names the customer's own account just as the
+			// repository endpoint does: reported with the endpoint left out, the
+			// way the repos, users and orgs rows are.
+			name: "customer owner path after the GitHub API's enterprise endpoint",
+			text: "the account is at https://api.github.com/enterprises/acme-corp",
+			want: []string{"api.github.com/acme-corp"},
+		},
+		{
 			// abfss names the container before an @ and the customer's storage
 			// account in the host after it. The host is the host name rule's
 			// value and the account is this rule's, so both are reported: the
@@ -717,6 +731,23 @@ func TestVendorPathProblems(t *testing.T) {
 		{
 			name: "sample bucket in an oci URL",
 			text: "the sample objects are in oci://example-bucket@example/x",
+			want: nil,
+		},
+		{
+			// An OCI artifact reference names a registry host rather than a
+			// bucket, and the segment after oci:// holds a dot (ghcr.io), which a
+			// bucket's name never does. The owner path after the host is a listed
+			// public open-source one.
+			name: "public open-source OCI registry reference",
+			text: "helm install x oci://ghcr.io/sigstore/charts/x",
+			want: nil,
+		},
+		{
+			// The same shape on a customer's own registry: the dotted segment is
+			// a host, not a bucket, so this rule reports nothing. The host is a
+			// documentation name, so the host name rule reports nothing either.
+			name: "OCI registry reference on a dotted host rather than a bucket",
+			text: "helm install x oci://registry.example.com/acme/chart",
 			want: nil,
 		},
 		{
