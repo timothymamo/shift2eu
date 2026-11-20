@@ -31,14 +31,14 @@ internal/
 test/e2e/                     Black-box tests of the built binary
 test/lint/                    Source rules golangci-lint cannot express
 test/architecture/            Layer dependencies checked package by package, per release target
-test/container/               The Dockerfile's two images pinned to go.mod and .goreleaser.yaml
+test/container/               The Dockerfile's image pinned to go.mod and .goreleaser.yaml
 test/docs/                    Every relative link and anchor in the Markdown resolves (no network)
 test/examples/                The sample inventories stay valid, sanitised and complete; their report goldens
 testdata/                     Shared, sanitised fixtures
 examples/                     Dummy sample inventories, one per source, to try shift2eu (docs/guide/try-it.md)
 docs/                         User and contributor guides, architecture, ADRs (index: docs/README.md)
 prds/                         Product requirements, one per feature
-Dockerfile, .dockerignore     The container images (make image, make server-image)
+Dockerfile, .dockerignore     The container image (make image)
 dev/lima.yaml                 Isolated VM for running the agents
 dev/worktree.sh               Creates the worktree for a branch (make worktree)
 .githooks/                    Refuse commits and pushes to main (make git-hooks)

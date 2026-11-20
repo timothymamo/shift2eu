@@ -4,8 +4,16 @@
   the quantity rule (Encoding) records how the report already writes numbers, changing no document;
   amended 2026-11-19 by [issue #307](https://github.com/timothymamo/shift2eu/issues/307):
   `schemaVersion` 3 leaves the amount out of a total that estimated nothing, the CLI writes it by
-  default, and the version 1 and 2 schema files are frozen (Versioning)
+  default, and the version 1 and 2 schema files are frozen (Versioning);
+  amended 2026-11-20 by [ADR 0037](0037-retire-the-http-api-and-release-the-cli-alone.md) (issue #393): the
+  HTTP API is retired, and the JSON report stays the versioned format of the CLI and the site (below)
 - Date: 2026-11-11
+
+*Amended (2026-11-20, [ADR 0037](0037-retire-the-http-api-and-release-the-cli-alone.md), issue #393):* the
+HTTP API this ADR names as the format's second producer is retired; the release no longer ships it. The
+format, its versions and its schemas are unchanged: `shift2eu assess --format json` writes it, and the site
+(ADR 0035) offers the same bytes as a download. Where this ADR says "the CLI and the API", read "the CLI and
+the site" from here on.
 
 ## Context
 

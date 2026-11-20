@@ -1,7 +1,9 @@
 # 0013. Ship shift2eu as a distroless container image, built but not yet published
 
 - Status: Accepted. Amended by PRD #103: the `Dockerfile` builds a second image, the HTTP API
-  (Consequences).
+  (Consequences). Amended 2026-11-20 by
+  [ADR 0037](0037-retire-the-http-api-and-release-the-cli-alone.md) (issue #393): the release no longer
+  publishes the HTTP API's image (Consequences).
 - Date: 2026-11-11
 
 ## Context
@@ -104,3 +106,7 @@ and smoke-tests it on every pull request; publishing it to a registry is a follo
   distroless `nonroot` base, with `ENTRYPOINT ["/shift2eu-server"]` and `EXPOSE 8080`. The CLI stays the
   last stage, so `docker build .` and `make image` are unchanged; `--target server` and
   `make server-image` build the server's image. `test/container` holds both stages to the same rules.
+- Amended (2026-11-20) by [ADR 0037](0037-retire-the-http-api-and-release-the-cli-alone.md) (issue #393):
+  the HTTP API is retired and the release ships the CLI alone. The `server` stage, `make server-image`
+  and the server's image are no longer built or published; the paragraph above describes the state
+  before that change.

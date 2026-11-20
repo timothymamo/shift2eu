@@ -7,30 +7,25 @@ how to build the binaries and the images yourself.
 `shift2eu` images and binaries start at `v0.2.0`. `v0.1.0` and `v0.1.0-rc.1` were published under the
 project's old names: see [Releases before the rename](verify-releases.md#releases-before-the-rename-v010-and-v010-rc1).
 
+> **The HTTP API is retired** ([ADR 0037](../adr/0037-retire-the-http-api-and-release-the-cli-alone.md)).
+> Releases no longer ship a `shift2eu-server` archive, image or OpenAPI document; the
+> [release notes](https://github.com/timothymamo/shift2eu/releases) name the first release without them. The images
+> `ghcr.io/timothymamo/shift2eu-server` up to the last release that shipped them stay available but get
+> no updates. Run assessments with the CLI, or in the browser on the site.
+
 ## The release archives
 
-Each [release](https://github.com/timothymamo/shift2eu/releases) publishes two archives per
-platform, for `linux`, `darwin` and `windows` on `amd64` and `arm64` (`.tar.gz`, or `.zip` for
-Windows), one per binary, and one `checksums.txt` covering all of them. Both binaries share the
-release's tag and version:
+Each [release](https://github.com/timothymamo/shift2eu/releases) publishes one archive per platform,
+`shift2eu_<version>_<os>_<arch>`, for `linux`, `darwin` and `windows` on `amd64` and `arm64`
+(`.tar.gz`, or `.zip` for Windows), and one `checksums.txt` covering all of them.
 
-| Archive | Holds |
-|---|---|
-| `shift2eu_<version>_<os>_<arch>` | the CLI, `shift2eu` |
-| `shift2eu-server_<version>_<os>_<arch>` | the HTTP API, `shift2eu-server` |
-
-`<version>` is the tag without its `v` (`shift2eu-server_X.Y.Z_linux_amd64.tar.gz` for `vX.Y.Z`). Each
-archive holds its one binary with `README.md`, `LICENSE`, the documentation under `docs/` and the
-sample inventories under `examples/` that [Try it](try-it.md) runs on; fetch only the one you need.
-The `shift2eu-server_*` archives start with the first release after `v0.2.0`: `v0.2.0` and earlier
-shipped the CLI only. The binaries are static and need nothing else:
-[Assess an inventory](assess.md) shows how to run `shift2eu`, and [Run the HTTP API](http-api.md)
-`shift2eu-server`. [Verify a release](verify-releases.md#verify-an-archive) shows how to check an
-archive against `checksums.txt`, which detects a corrupted download, and against the build provenance
-the release workflow attests for it, which detects a tampered release (from the first release after
-`v0.3.0`). Beside the archives, each release from the first after `v0.3.0` publishes
-`shift2eu-server_openapi.json`, the HTTP API's self-contained OpenAPI document
-([Run the HTTP API](http-api.md)), also listed in `checksums.txt` and attested like the archives.
+`<version>` is the tag without its `v` (`shift2eu_X.Y.Z_linux_amd64.tar.gz` for `vX.Y.Z`). Each
+archive holds the `shift2eu` binary with `README.md`, `LICENSE`, the documentation under `docs/` and
+the sample inventories under `examples/` that [Try it](try-it.md) runs on. The binary is static and
+needs nothing else: [Assess an inventory](assess.md) shows how to run it.
+[Verify a release](verify-releases.md#verify-an-archive) shows how to check an archive against
+`checksums.txt`, which detects a corrupted download, and against the build provenance the release
+workflow attests for it, which detects a tampered release (from the first release after `v0.3.0`).
 
 ## The images
 
@@ -49,8 +44,7 @@ own image tag and is a pre-release on GitHub too, never the latest release. Pin 
 docker pull ghcr.io/timothymamo/shift2eu:v0.2.0
 ```
 
-[Run with Docker](docker.md) shows how to run it. The HTTP API has its own image,
-`ghcr.io/timothymamo/shift2eu-server` ([Run the HTTP API](http-api.md#get-it)).
+[Run with Docker](docker.md) shows how to run it.
 
 ## Build from source
 
