@@ -1095,8 +1095,7 @@ on the App's page).
 # the downloading machine
 ls ~/Downloads ~/.Trash | grep private-key.pem      # PASS: nothing
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
-sudo tmutil deletelocalsnapshots <date>             # for each one that is
-sudo -k
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
 # FAIL a Time Machine backup ran since the download: rotate the key, as above
 ```
 
@@ -1105,8 +1104,7 @@ sudo -k
 ls ~/Downloads ~/.Trash | grep private-key.pem      # PASS: nothing
 ls ~/agents-app.pem.tmp                             # PASS: No such file or directory
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
-sudo tmutil deletelocalsnapshots <date>             # for each one that is
-sudo -k
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
 # FAIL a Time Machine backup ran since the download: rotate the key, as above
 ```
 
@@ -1164,13 +1162,18 @@ about it.
 # Mac Mini, host clone: first, the VM user
 limactl shell --workdir / shift2eu id -un   # when it is not what id -un prints on the Mac, set SHIFT2EU_AGENTS_VM_SSH_USER to it below
 id -un
+```
 
-# Mac Mini, host clone: lines to add to .envrc
+```bash
+# Mac Mini, host clone: the lines to add to the host clone's .envrc (edit the file; do not run them)
 export SHIFT2EU_AGENTS_ACCOUNT=_shift2euagents
 export SHIFT2EU_AGENTS_VM_SSH_PORT=48022
 # export SHIFT2EU_AGENTS_VM_SSH_USER=...   # only when the VM user is not your Mac user name (id -un)
+```
 
+```bash
 # Mac Mini, host clone: then
+grep -E '^export SHIFT2EU_AGENTS_(ACCOUNT|VM_SSH_)' .envrc   # PASS: the lines above (no secret among them)
 direnv allow
 direnv exec . make agents-token
 # PASS: refuses with the refresh runs as _shift2euagents, which holds the App's key, and runs nothing
