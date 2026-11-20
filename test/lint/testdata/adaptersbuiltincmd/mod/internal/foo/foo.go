@@ -12,12 +12,12 @@
 package foo
 
 import (
-	"github.com/timothymamo/shift2eu/internal/adapter/report"               // want "import 'github.com/timothymamo/shift2eu/internal/adapter/report' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web"
-	"github.com/timothymamo/shift2eu/internal/adapter/report/markdown"      // want "import 'github.com/timothymamo/shift2eu/internal/adapter/report/markdown' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web"
-	"github.com/timothymamo/shift2eu/internal/adapter/source"               // want "import 'github.com/timothymamo/shift2eu/internal/adapter/source' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web"
-	"github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile" // want "import 'github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web"
-	"github.com/timothymamo/shift2eu/internal/adapter/target"               // want "import 'github.com/timothymamo/shift2eu/internal/adapter/target' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web"
-	"github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud"      // want "import 'github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web"
+	"github.com/timothymamo/shift2eu/internal/adapter/report"               // want "import 'github.com/timothymamo/shift2eu/internal/adapter/report' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild"
+	"github.com/timothymamo/shift2eu/internal/adapter/report/markdown"      // want "import 'github.com/timothymamo/shift2eu/internal/adapter/report/markdown' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild"
+	"github.com/timothymamo/shift2eu/internal/adapter/source"               // want "import 'github.com/timothymamo/shift2eu/internal/adapter/source' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild"
+	"github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile" // want "import 'github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild"
+	"github.com/timothymamo/shift2eu/internal/adapter/target"               // want "import 'github.com/timothymamo/shift2eu/internal/adapter/target' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild"
+	"github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud"      // want "import 'github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud' is not allowed from list 'adapters-are-built-in-cmd': adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild"
 )
 
 // Names names the adapters a package outside the composition roots must not

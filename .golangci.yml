@@ -558,17 +558,17 @@ linters:
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/internal/
               desc: an adapter imports only the shared helpers named in adapters-are-built-in-cmd; name a new helper there first (a helper under a testdata or _ directory is never linted) (ADR 0009)
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report$
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/source/
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/source$
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/target/
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/target$
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-web
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
         # Dependencies point inwards only: the composition root imports the
         # driving adapter, and nothing imports the composition root. So no
         # production package other than cmd/shift2eu and the CLI's own packages

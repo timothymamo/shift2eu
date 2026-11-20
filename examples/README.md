@@ -53,5 +53,5 @@ From an unpacked release archive, which holds `examples/` too, run `./shift2eu` 
 suffix on Windows) from the unpacked directory in place of `./bin/shift2eu`. The archives do not hold the
 repository's tests, so links to `test/` from these pages work only in a clone.
 
-[Try it](../docs/guide/try-it.md) walks through the CLI, the container image and the HTTP API with
-these samples, and explains how to read the report.
+[Try it](../docs/guide/try-it.md) walks through the CLI and the container image with these
+samples, and explains how to read the report.
