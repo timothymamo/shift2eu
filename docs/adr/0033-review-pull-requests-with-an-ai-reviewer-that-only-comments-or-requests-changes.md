@@ -3,7 +3,9 @@
 - Status: Accepted. Amended by issue #292 (the lenient category), and by issues #301, #316 and #324 (the
   prompt-injection rule, the retry of an unreadable answer, and the generated and golden files left out
   of the diff), 2026-11-19. Amended by issues #367 and #376 (a diff over the limit reviewed in parts,
-  the skipped outcome, and the answer format's empty `findings`), 2026-11-20
+  the skipped outcome, and the answer format's empty `findings`), 2026-11-20. Amended by issues #374,
+  #375 and #388 (constant error classes, and the skipped split review's summary of the parts that
+  answered), 2026-11-20
 - Date: 2026-11-18
 
 ## Context
@@ -111,6 +113,8 @@ claude -p --model claude-opus-5-5 --output-format json --safe-mode --tools ""
   and a non-empty `result`; anything else (a usage limit, an authentication error, a turn that did not
   end, output that is not JSON, a non-zero exit, a missing CLI) fails the run with `ErrModel` and its
   reason, quoting at most 500 bytes of the CLI's text with the token redacted, and posts nothing.
+  (Amended by issue #374: an `is_error` result is named by a constant class and its subtype, never its
+  text; below.)
 - **A timeout of ten minutes** kills the CLI and returns at once; Go's `WaitDelay` closes its pipes a
   second later, so a child it started cannot hold the run open. (Killing its whole process group would
   need `syscall`, which the library may not import; with every tool off the CLI starts no child of its
@@ -653,7 +657,55 @@ Claude Code CLI wired into a run.
   part: "1 other part of the diff was reviewed with a usable answer; its findings are not shown, so
   review that part by hand."; no such sentence when there are none). Follow-up proposed, not in this
   change: when a split diff skips because one part was unusable, still surface the other parts'
-  blocking findings.
+  blocking findings (done by issue #388, below).
+
+### Amended by issues #374, #375 and #388: constant error classes, and what a skip shows of the parts that answered
+
+**The CLI's error result (#374).** An `is_error` result's `result` text can be model output a pull
+request's author steers, and the run's error is the job's public `::error` line. On `is_error` the error
+names only the pull request, the constant class `claude cli error` and the CLI's `subtype` (capped and
+token-redacted as before); it quotes no `result` text. The capped, redacted excerpt stays, unchanged by
+this issue, for the other failures: a failure to start, the stderr of an output that is no JSON result,
+and an element that is no result.
+
+**The shape classes (#375).** Since #366 a malformed answer named only a constant check phrase, which
+could not say what went wrong. `shapeError` now classifies the decoder's error by its type, never by its
+text: `syntax at byte <offset>` (`*json.SyntaxError`'s offset, the answer's bytes counted from 1),
+`syntax at the end of the answer` (an empty or cut-short answer), `wrong type`
+(`*json.UnmarshalTypeError`, also a top level that is no object and a `findings` that is no array) and
+`unknown field`; "no findings field" becomes `missing findings`, and `findings is null`, `no summary` and
+`text after the JSON object` stay. The error's text is `malformed model answer: <class>`, and the class
+reaches the `::error` line, the retry notice, the skipped review and `Skip.Message`. A byte offset is a
+number, so it adds no text of the answer; the decoder's message, the field name and the type names are
+never shown.
+
+**What a skipped split review shows of the parts that answered (#388).** When one part of a split diff
+answers unusably twice, the skipped review now summarises every other part that gave a usable answer, in
+plain Markdown after the "other parts were reviewed" paragraph and before the prompt-injection sentence:
+
+```
+**Blocking findings in the parts that answered:**
+
+- Part 2 of 2: 1 blocking, 1 non-blocking.
+  - blocking: category security at internal/x/two.go:3
+```
+
+Per answered part, the counts of its blocking and non-blocking findings; per blocking finding, only its
+category, one of the package's constants (an uncategorised finding reads `other`), and its location: the
+path, when it is a file named by a header of that part's own diff, escaped as plain text (control
+characters made spaces, mentions defused, Markdown punctuation escaped, cut at 300 UTF-16 units),
+followed by `:<line>` when the finding has a line; otherwise `a file outside the part`. No title, body,
+summary, invented category or other path is shown, and nothing of the summary reaches `Skip.Message`,
+the `::warning` line or the job summary. The reasoning: the path is checked against the diff's own
+headers and the category against a closed set, so a pull request's author who steers the model can choose
+at most which of those constants appear, and the integers beside them; no model text reaches the review.
+
+**Residual risk.** A steered model can still choose the counts, the categories and which of the part's
+files and lines it names, so the summary can understate or misplace a blocker; it can also hide every
+blocker by making another part, or the one that found it, answer unusably. The diff's paths are the pull
+request's own text, shown escaped as the "Not reviewed" note shows them. The mitigation stays the skip
+itself: the review still says the AI review was skipped, holds no finding, and asks for the parts to be
+reviewed by hand with prompt injection in mind; the maintainer's approval stays the gate.
 
 ## Alternatives considered
 
