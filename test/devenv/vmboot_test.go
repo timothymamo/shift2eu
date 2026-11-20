@@ -10,13 +10,16 @@
 // `limactl start <name> --foreground`, the form that can fall back to template:default, a VM that mounts the home
 // directory (issue #237). The job is found either loaded, through `launchctl print`, or as the plist file alone -
 // launchd loads that at the next login or boot (LIMA_LAUNCHDAEMONS_DIR, /Library/LaunchDaemons on the Mac, is the
-// test hook for the system directory). The refusal names the job, its plist, `limactl autostart disable
+// test hook for the system directory). A job launchd has both loaded and a plist for is reported once, as loaded.
+// The refusal names the job, its plist, `limactl autostart disable
 // <instance>` and the removal by hand - the bootout of a loaded job and the `rm -f` of the plist, with sudo in the
 // system domain - and installs nothing.
 //
 // The targets are host targets: they run from the host clone, never as root (they run sudo themselves), and
 // VM_BOOT_LAUNCHD_DIR may come from make's command line or from the Makefile, never from the environment - a
-// stale export would have root write the plist where launchd never looks at boot.
+// stale export would have root write the plist where launchd never looks at boot. LIMA_LAUNCHDAEMONS_DIR is only
+// read, and only from make's command line or the Makefile too: a value from the environment is put back to the
+// directory launchd really reads Lima's system job from.
 //
 // Every run goes through the sandbox's fakes (sandbox_test.go): the log-only sudo copies and removes files inside
 // the sandbox and runs the fake launchctl, and no test reaches the machine's sudo, launchd, plutil or limactl.
@@ -176,6 +179,22 @@ func (f *vmBootInstallFixture) runWithTheDirectoryInTheEnvironment(t *testing.T,
 	return runMakeIn(t, f.dir, []string{target}, env)
 }
 
+// runWithTheLimaDirectoryInTheEnvironment runs one target with LIMA_LAUNCHDAEMONS_DIR exported in the environment
+// and not on make's command line, the way a stale export in a maintainer's shell would reach it: the hook is
+// read from make's command line or the Makefile alone (issues #315, #398).
+func (f *vmBootInstallFixture) runWithTheLimaDirectoryInTheEnvironment(t *testing.T, target string) (string, string, error) {
+	t.Helper()
+
+	env := make(map[string]string, len(f.env)+1)
+	for name, value := range f.env {
+		env[name] = value
+	}
+
+	env[limaLaunchDaemonsDirVar] = f.limaLaunchDaemonsDir
+
+	return runMakeIn(t, f.dir, []string{vmBootLaunchdDir + "=" + f.launchdDir, target}, env)
+}
+
 // sudoCommands returns the argv of every command the recipe ran through sudo, in call order.
 func (f *vmBootInstallFixture) sudoCommands(t *testing.T) [][]string {
 	t.Helper()
@@ -259,6 +278,20 @@ func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 			prefix:    vmBootLimaDaemonLabelPrefix,
 			installed: true,
 		},
+		{
+			name:      "the user domain's io.lima-vm.autostart job, both loaded and installed",
+			domain:    userDomain,
+			prefix:    vmBootLimaAutostartLabelPrefix,
+			loaded:    true,
+			installed: true,
+		},
+		{
+			name:      "the system domain's io.lima-vm.daemon job, both loaded and installed",
+			domain:    systemDomain,
+			prefix:    vmBootLimaDaemonLabelPrefix,
+			loaded:    true,
+			installed: true,
+		},
 	}
 
 	for _, tc := range cases {
@@ -273,11 +306,18 @@ func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 
 			if tc.loaded {
 				state = "loaded in the " + f.jobs.domainName(tc.domain) + " domain"
+				if tc.installed {
+					state += " and installed at " + plist
+				}
+
 				// Lima's job as `limactl autostart enable` loads it: limactl start <instance> --foreground.
 				f.jobs.add(t, tc.domain, label, loadedJob{args: []string{"/opt/homebrew/bin/limactl", "start", f.instance, "--foreground"}})
-			} else {
+			}
+
+			if tc.installed {
 				// Lima's job's plist as `limactl autostart enable` writes it, which launchd loads at the next
-				// login or boot: nothing runs now, and the VM is started twice from the next boot on.
+				// login or boot: nothing runs now, and the VM is started twice from the next boot on. A loaded
+				// job keeps the plist launchd loaded it from, which is this file, so both can hold at once.
 				writeFileMode(t, plist, []byte("Lima's own autostart job of "+f.instance+"\n"), 0o600)
 			}
 
@@ -312,6 +352,45 @@ func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 					t.Errorf("make vm-boot-install does not say %q although Lima's autostart job %s is %s and starts this instance: the refusal must name the job, its plist and how to remove it, or a maintainer cannot install the boot job at all (issues #315, #398)\nstdout: %s\nstderr: %s",
 						want, label, state, stdout, stderr)
 				}
+			}
+
+			// One job, one report: a job launchd has both loaded and a plist for is said to be loaded only,
+			// since that is what runs now. A second report of the same label sends a maintainer to remove a
+			// job that is not the one it names, and the commands differ between the two (issue #398).
+			if n := strings.Count(combined, "Lima's autostart job "+label+" is "); n != 1 {
+				t.Errorf("make vm-boot-install reports Lima's autostart job %s %d time(s) although it is %s, want exactly one report (issue #398)\nstdout: %s\nstderr: %s",
+					label, n, state, stdout, stderr)
+			}
+
+			// Where launchctl exists - the fixture's fake is on PATH, as it is on the Mac - the check asks it
+			// about the job's domain, so a plist on disk is reported as installed only because launchctl did
+			// not show the job as loaded, not because launchctl was missing.
+			printTarget := "system/" + label
+			if tc.domain == userDomain {
+				printTarget = "gui/" + strconv.Itoa(os.Getuid()) + "/" + label
+			}
+
+			asked := false
+
+			for _, args := range invocations(f.sb.argvLogText(t), "launchctl") {
+				if slices.Equal(args, []string{"print", printTarget}) {
+					asked = true
+				}
+			}
+
+			if !asked {
+				t.Errorf("make vm-boot-install ran no `launchctl print %s` although launchctl is on PATH, so it cannot tell a loaded job from a plist launchd only loads at the next boot (issue #398)",
+					printTarget)
+			}
+
+			if tc.loaded && strings.Contains(combined, "is installed at ") {
+				t.Errorf("make vm-boot-install reports Lima's autostart job %s as installed although launchd has it loaded: a loaded job is reported as loaded, and one report alone (issue #398)\nstdout: %s\nstderr: %s",
+					label, stdout, stderr)
+			}
+
+			if !tc.loaded && strings.Contains(combined, "is loaded in ") {
+				t.Errorf("make vm-boot-install reports Lima's autostart job %s as loaded although launchctl does not list it: the plist alone must be reported as installed, not as loaded (issue #398)\nstdout: %s\nstderr: %s",
+					label, stdout, stderr)
 			}
 
 			// Refusing means installing nothing: no plist for launchd to load at the next boot, and no sudo.
@@ -643,6 +722,42 @@ func TestMakeVMBootLaunchdDirComesOnlyFromTheCommandLine(t *testing.T) {
 				t.Errorf("the refusal does not say that the value came from the environment, so a maintainer would keep looking for it in the Makefile or on the command line:\nstderr: %s", stderr)
 			}
 		})
+	}
+}
+
+// TestMakeVMBootIgnoresLIMAsLaunchDaemonsDirFromTheEnvironment pins that LIMA_LAUNCHDAEMONS_DIR is a test hook of
+// make's command line and of the Makefile alone (issues #315, #398): a value exported in the environment is put
+// back to /Library/LaunchDaemons, where launchd really reads Lima's system job from. A stale export would have
+// the check look in a directory launchd never reads, so Lima's job - which starts the VM at every boot - would go
+// unreported, and the install would go on beside it. The environment's directory holds that plist, and no report
+// names it.
+func TestMakeVMBootIgnoresLIMAsLaunchDaemonsDirFromTheEnvironment(t *testing.T) {
+	t.Parallel()
+
+	f := newVMBootInstallFixture(t, hostTargetInstance)
+
+	limaLabel := vmBootLimaDaemonLabelPrefix + f.instance
+
+	// Lima's system job's plist where the environment points: what the check must not look at.
+	writeFileMode(t, f.limaPlistPath(systemDomain, limaLabel), []byte("Lima's own autostart job of "+f.instance+"\n"), 0o600)
+
+	stdout, stderr, err := f.runWithTheLimaDirectoryInTheEnvironment(t, "vm-boot-install")
+
+	combined := stdout + stderr
+
+	if strings.Contains(combined, f.limaLaunchDaemonsDir) {
+		t.Errorf("make vm-boot-install read LIMA_LAUNCHDAEMONS_DIR from the environment (%s, which holds Lima's job %s): the hook is a test hook of make's command line and the Makefile alone, so the environment's value goes back to the directory launchd really reads, like VM_BOOT_LAUNCHD_DIR (issues #315, #398)\nstdout: %s\nstderr: %s",
+			f.limaLaunchDaemonsDir, limaLabel, stdout, stderr)
+	}
+
+	if strings.Contains(combined, limaLaunchDaemonsDirVar) {
+		t.Errorf("make vm-boot-install names %s although it came from the environment, so a maintainer would look for a value to fix on the command line or in the Makefile instead of in the shell that exported it (issues #315, #398)\nstdout: %s\nstderr: %s",
+			limaLaunchDaemonsDirVar, stdout, stderr)
+	}
+
+	if err != nil && !strings.Contains(combined, limaLabel) {
+		t.Fatalf("make vm-boot-install failed before it looked at Lima's job %s: %v\nstdout: %s\nstderr: %s",
+			limaLabel, err, stdout, stderr)
 	}
 }
 
