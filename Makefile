@@ -973,10 +973,17 @@ AGENTS_TOKEN_LAUNCHD_SCRIPT_OF = awk '/^[[:space:]]*arguments = \{/ { a = 1; nex
 # whose arguments run agents-app-token.sh refresh or make agents-token-refresh. It holds the instance's lock
 # again seconds after every kill (KeepAlive), so the project's job would never take over. dev/agents-token-launchd.sh
 # foreign-jobs finds it with launchctl alone, no sudo, and names each job, its domain, its plist and the
-# commands that remove it. install and start run it before they install, load or start anything.
-AGENTS_TOKEN_FOREIGN_JOBS_CHECK = if command -v launchctl >/dev/null 2>&1 && ! dev/agents-token-launchd.sh foreign-jobs; then \
-		echo "$@: refused: another launchd job runs the agents App token refresh of $$LIMA_INSTANCE (named above), so nothing was installed, loaded or started: remove it with the commands above, then run make $@ again" >&2; \
-		exit 1; \
+# commands that remove it. install and start run it before they install, load or start anything. Only its status
+# 3 means a job was found and named; any other non-zero status is the check's own failure, and stops them too.
+AGENTS_TOKEN_FOREIGN_JOBS_CHECK = if command -v launchctl >/dev/null 2>&1; then \
+		foreign_status=0; dev/agents-token-launchd.sh foreign-jobs || foreign_status=$$?; \
+		if [ "$$foreign_status" = 3 ]; then \
+			echo "$@: refused: another launchd job runs the agents App token refresh of $$LIMA_INSTANCE (named above), so nothing was installed, loaded or started: remove it with the commands above, then run make $@ again" >&2; \
+			exit 1; \
+		elif [ "$$foreign_status" != 0 ]; then \
+			echo "$@: foreign-jobs check failed (status $$foreign_status): nothing was installed, loaded or started; see the message above, then run make $@ again" >&2; \
+			exit 1; \
+		fi; \
 	fi
 # The check of AGENTS_TOKEN_LAUNCHD_DIR, the directory root writes the plist into and removes it from.
 AGENTS_TOKEN_LAUNCHD_DIR_CHECK = case "$(AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN)" in \
@@ -1134,6 +1141,11 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 		exit 1; \
 	fi; \
 	echo "agents-token-refresh-install: $$dest has the SHA-256 printed above"; \
+	stopped=''; \
+	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" != "$$held" ]; then \
+		echo "agents-token-refresh-install: warning: the pid file of make agents-token-refresh-start no longer names pid $$held, which held the lock of $$LIMA_INSTANCE before sudo, so it is not stopped: if a refresh still holds the lock, the job exits at every ThrottleInterval until it ends (stop it, then run make agents-token-refresh-install again)" >&2; \
+		held=''; \
+	fi; \
 	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))" = "$$held" ] && kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
 		echo "agents-token-refresh-install: stopping the refresh make agents-token-refresh-start started (pid $$held), which holds the lock of $$LIMA_INSTANCE, so the job takes over from it"; \
 		kill -TERM "$$held" 2>/dev/null || true; \
@@ -1143,6 +1155,7 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 			echo "agents-token-refresh-install: warning: pid $$held still runs $$tries second(s) after TERM; the job takes the lock once it has exited" >&2; \
 		else \
 			if [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" = "$$held" ]; then rm -f "$$pid_file"; fi; \
+			stopped=' (the hand-started refresh was stopped above, so none runs: start one with make agents-token-refresh-start)'; \
 			echo "agents-token-refresh-install: stopped pid $$held, the refresh make agents-token-refresh-start started; the job loaded next is the instance's refresher now"; \
 		fi; \
 	fi; \
@@ -1154,7 +1167,7 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 			if launchctl print "system/$$label" >/dev/null 2>&1; then \
 				echo "agents-token-refresh-install: launchctl bootstrap exited non-zero twice, but launchctl print finds $$label loaded: the job is loaded" >&2; \
 			else \
-				echo "agents-token-refresh-install: ERROR: launchctl bootstrap failed twice: NO token refresh job of $$LIMA_INSTANCE is loaded now, and the VM's token expires within the hour. The checked plist stays at $$dest, so launchd loads it at the next boot. Run make agents-token-refresh-install again, or start a refresh by hand with make agents-token-refresh-start" >&2; \
+				echo "agents-token-refresh-install: ERROR: launchctl bootstrap failed twice: NO token refresh job of $$LIMA_INSTANCE is loaded now$$stopped, and the VM's token expires within the hour. The checked plist stays at $$dest, so launchd loads it at the next boot. Run make agents-token-refresh-install again, or start a refresh by hand with make agents-token-refresh-start" >&2; \
 				exit 1; \
 			fi; \
 		fi; \
