@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // devEnvironmentPage is the page the VM is set up from, and the one whose switch-over runbook tells the
@@ -109,14 +111,33 @@ func tokenMentions(file string, lines []string) []tokenMention {
 }
 
 // runbookSectionLines reports, line by line, which lines of page fall inside its "The switch-over runbook"
-// section: from that heading to the next heading of the same or a higher level.
+// section: from that heading to the next heading of the same or a higher level. The lines of a fenced code
+// block are no Markdown, so a runbook's `# Mac, host clone` comment neither ends the section nor, before it,
+// opens one (issue #360).
 func runbookSectionLines(lines []string) []bool {
 	const heading = "The switch-over runbook"
 
 	inside := make([]bool, len(lines))
 	level := 0
+	var marker byte
+	var width int
+	inFence := false
 
 	for i, line := range lines {
+		if inFence {
+			inFence = !closesFence(line, marker, width)
+			inside[i] = level > 0
+
+			continue
+		}
+
+		if m, w, _, ok := openingFence(line); ok {
+			inFence, marker, width = true, m, w
+			inside[i] = level > 0
+
+			continue
+		}
+
 		if n, title, ok := markdownHeading(line); ok {
 			switch {
 			case level == 0 && strings.Contains(title, heading):
@@ -132,6 +153,81 @@ func runbookSectionLines(lines []string) []bool {
 	}
 
 	return inside
+}
+
+// TestTheRunbookSectionSkipsFencedCodeBlocks pins how the section scan finds the end of the switch-over
+// runbook (issue #360): the runbooks quote shell comment lines that start with "#", and a fenced code
+// block's body is no Markdown, so such a line neither ends the section nor opens one, while a real heading
+// after the block still does.
+func TestTheRunbookSectionSkipsFencedCodeBlocks(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		page []string
+		want []int
+	}{
+		{
+			name: "a shell comment in a fenced block does not end the section, and the heading after it does",
+			page: []string{
+				"# Development environment",
+				"## Credentials",
+				"### The switch-over runbook",
+				"Delete the GITHUB_TOKEN line from the `.envrc`.",
+				"```bash",
+				"# Mac, host clone",
+				"make vm-env",
+				"```",
+				"Then revoke the token on GitHub.",
+				"## Agent permissions",
+				"GITHUB_TOKEN is no credential of the agents.",
+			},
+			want: []int{3, 4, 5, 6, 7, 8, 9},
+		},
+		{
+			name: "a shell comment in a tilde-fenced block does not end the section, and the heading after it does",
+			page: []string{
+				"# Development environment",
+				"### The switch-over runbook",
+				"~~~bash",
+				"# VM",
+				"journalctl -u shift2eu",
+				"~~~",
+				"### The gate",
+				"GITHUB_TOKEN is not the gate check's token.",
+			},
+			want: []int{2, 3, 4, 5, 6},
+		},
+		{
+			name: "a heading inside a fenced block before the section does not open it",
+			page: []string{
+				"# Development environment",
+				"```bash",
+				"# The switch-over runbook",
+				"```",
+				"GITHUB_TOKEN is no credential of the agents.",
+			},
+			want: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var got []int
+
+			for i, inside := range runbookSectionLines(strings.Split(strings.Join(tc.page, "\n"), "\n")) {
+				if inside {
+					got = append(got, i+1)
+				}
+			}
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("runbookSectionLines() marked the lines inside the switch-over runbook (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 // markdownHeading returns the level and title of an ATX heading line such as "## Credentials" or "### The
