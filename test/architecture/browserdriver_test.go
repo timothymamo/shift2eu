@@ -263,10 +263,66 @@ func goListImportPaths(t *testing.T, dir string, args ...string) []string {
 	return strings.Fields(string(out))
 }
 
-// goListProbeEnv returns the environment the probe's go list runs in: this
-// test's own but for the variables that would decide what it lists, which
-// check.ListPackages drops too, plus the settings the check's listings fix, so
-// the probe reads the same files the product listings read.
+// probeInheritedEnv are the only variables the probe's go list takes from the
+// environment this test runs in (issue #395). Every other one is left out, so
+// none the probe does not know can change the listing or how it fetches: not
+// GOOS or GOARCH, which would list for another platform, not GOEXPERIMENT, and
+// not GOSUMDB, GONOSUMDB, GOPRIVATE, GONOPROXY or GOINSECURE, which would let a
+// fetch go around GOPROXY or the checksum checks. go.sum pins every module the
+// listing may fetch, so it needs no checksum database either.
+//
+// The first group is check's inheritedEnv (internal/check/packages.go) but for
+// GOTOOLCHAIN, which the probe fixes to local instead: what the go command
+// needs to find its toolchain, its caches and a temporary directory. It is a
+// copy rather than a reference to check's list on purpose: TestGoListProbeEnv
+// pins this list exactly, and a name added to check's for its own offline
+// listing should not widen what a networked one inherits without that test
+// saying so. A name added there belongs here only after a look at both.
+var probeInheritedEnv = []string{
+	// The toolchain: go test puts the one it runs under first on PATH, and sets
+	// GOROOT to it.
+	"PATH",
+	"GOROOT",
+	// The defaults of GOPATH, the module cache and the build cache, under the
+	// home directory or a platform's cache directory.
+	"HOME",
+	"USERPROFILE",
+	"XDG_CACHE_HOME",
+	"LOCALAPPDATA",
+	// Where a developer or CI put the caches instead of the defaults.
+	"GOPATH",
+	"GOMODCACHE",
+	"GOCACHE",
+	// The temporary directory on Linux and macOS, and on Windows.
+	"TMPDIR",
+	"TEMP",
+	"TMP",
+
+	// The proxy the listing fetches through on an empty module cache (issue
+	// #391), as the go test build fetches its own modules: passed through, never
+	// fixed, so the listing fetches from where the build does.
+	"GOPROXY",
+
+	// What a fetch through that proxy reads: an HTTP proxy in front of it, in
+	// both spellings Go's net/http honours, and the certificates that verify
+	// it, where a machine keeps them outside the system's defaults.
+	"HTTP_PROXY",
+	"HTTPS_PROXY",
+	"NO_PROXY",
+	"http_proxy",
+	"https_proxy",
+	"no_proxy",
+	"SSL_CERT_FILE",
+	"SSL_CERT_DIR",
+}
+
+// goListProbeEnv returns the environment the probe's go list runs in: the
+// variables of probeInheritedEnv that are set in this test's environment, and
+// the settings the check's listings fix, so the probe reads the files the
+// product listings read. Everything else is left out (issue #395), as
+// check.ListPackages leaves it out of its own listings. PWD is not set: os/exec
+// sets it only when Env is nil, and the go command then finds its directory
+// itself.
 //
 // Unlike check.ListPackages it leaves GOPROXY as it is (issue #391). Only the
 // browser-tagged test/browser imports chromedp, and go test ./... never builds
@@ -277,26 +333,16 @@ func goListImportPaths(t *testing.T, dir string, args ...string) []string {
 // and -mod=readonly keeps go.mod as it is while go.sum pins and verifies every
 // module it fetches. GOTOOLCHAIN=local keeps this networked listing from
 // switching to, and downloading, another toolchain: go test puts the running,
-// pinned one first on PATH.
+// pinned one first on PATH. CGO_ENABLED=0 lists as the release builds, and
+// GOWORK=off reads no workspace.
 func goListProbeEnv() []string {
-	drop := map[string]bool{
-		"GOOS":        true,
-		"GOARCH":      true,
-		"CGO_ENABLED": true,
-		"GOFLAGS":     true,
-		"GOTOOLCHAIN": true,
-		"GOWORK":      true,
-	}
+	env := make([]string, 0, len(probeInheritedEnv)+5)
 
-	env := make([]string, 0, len(os.Environ())+5)
-
-	for _, entry := range os.Environ() {
-		name, _, _ := strings.Cut(entry, "=")
-		if drop[name] {
-			continue
+	// os.LookupEnv ignores case on Windows, where PATH is often spelt Path.
+	for _, name := range probeInheritedEnv {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
 		}
-
-		env = append(env, entry)
 	}
 
 	return append(env, "CGO_ENABLED=0", "GOENV=off", "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOWORK=off")
