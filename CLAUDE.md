@@ -18,8 +18,9 @@ monthly list price per resource, per workload and in total from the snapshots' d
 default, `--no-estimate` turns it off), groups resources by workload, notes blockers on related
 resources, and scopes a target to one region with `--region` (PRD #190, ADRs 0024 and 0026-0030, in
 `prds/done/`). A second binary,
-`shift2eu-server`, serves the same assessments over a versioned HTTP API (PRD #103, ADR 0019), released
-as a binary and as the image `ghcr.io/timothymamo/shift2eu-server` beside the CLI's. A WebAssembly module,
+`shift2eu-server`, serves the same assessments over a versioned HTTP API (PRD #103, ADR 0019); it is no
+longer released (ADR 0037, issue #393): its code stays until a follow-up PR removes it, and the existing
+images get no updates. A WebAssembly module,
 `cmd/shift2eu-web` (PRD #297 milestone 1, ADR 0035), runs the same assessment in the browser and renders it
 as HTML. The site's pages (`site/`) load it under a strict Content Security Policy, and `make site`
 (`ci/sitebuild`) assembles them into a reproducible bundle that a headless-browser smoke test

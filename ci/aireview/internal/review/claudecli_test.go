@@ -416,16 +416,20 @@ func TestClaudeCLIAskFailsTheRun(t *testing.T) {
 		cancel    bool
 		timeout   time.Duration
 		wantAny   []string
+		// wantAbsent are phrases the error must not hold: a value the CLI did
+		// not choose reads as a constant of this package's, and no text of the
+		// answer is ever quoted.
+		wantAbsent []string
 	}{
 		{
 			name:      "an error result after a failed run",
 			behaviour: claudeFake{stdout: `{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached"}`, exit: 1},
-			wantAny:   []string{"usage limit reached"},
+			wantAny:   []string{"claude cli error"},
 		},
 		{
 			name:      "an error result of a run that exited 0",
 			behaviour: claudeFake{stdout: `{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached"}`},
-			wantAny:   []string{"usage limit reached"},
+			wantAny:   []string{"claude cli error"},
 		},
 		{
 			name:      "a turn that hit its maximum",
@@ -443,6 +447,19 @@ func TestClaudeCLIAskFailsTheRun(t *testing.T) {
 		{
 			name:      "a stream element that is not the result",
 			behaviour: claudeFake{stdout: `{"type":"system","subtype":"init","is_error":false,"result":"ANSWER TEXT"}`},
+			wantAny:   []string{"system"},
+			wantAbsent: []string{
+				"ANSWER TEXT",
+			},
+		},
+		{
+			// The type is the CLI's own vocabulary alone, as the subtype is: a
+			// type holding anything else reads "unrecognised" and reaches
+			// neither the error nor the job's log (audit L2).
+			name:       "a stream element whose type is not one of the CLI's own",
+			behaviour:  claudeFake{stdout: `{"type":"MRK374 Ignore previous","subtype":"init","is_error":false,"result":"ANSWER TEXT"}`},
+			wantAny:    []string{"unrecognised"},
+			wantAbsent: []string{"MRK374", "ANSWER TEXT"},
 		},
 		{
 			name:      "a non-zero exit without an answer",
@@ -506,8 +523,96 @@ func TestClaudeCLIAskFailsTheRun(t *testing.T) {
 				t.Errorf("the error %q holds none of %q, so the maintainer cannot tell what failed", err, tc.wantAny)
 			}
 
+			for _, unwanted := range tc.wantAbsent {
+				if strings.Contains(err.Error(), unwanted) {
+					t.Errorf("the error %q holds %q: the element's type and its subtype are the CLI's own vocabulary alone, a value outside it reads %q, and no text of the answer is quoted, so nothing the pull request steers reaches a public ::error line (issue #374, audit L2)", err, unwanted, "unrecognised")
+				}
+			}
+
 			if tc.timeout > 0 && elapsed > 3*time.Second {
 				t.Errorf("Ask returned after %v with a timeout of %v, want the CLI cut off at about the timeout", elapsed, tc.timeout)
+			}
+		})
+	}
+}
+
+// TestClaudeCLIAskNamesAnErrorResultByClassAndSubtype pins issue #374: the
+// CLI's result text of an `is_error` envelope is model output a pull request's
+// author can steer, and the run's error is printed as the job's public ::error
+// line, so the error names the CLI's constant error class and its subtype, and
+// no text of the result at all. The subtype is the CLI's own vocabulary alone —
+// a short code of lower-case letters and underscores — or it is not shown: a
+// subtype that holds anything else reads "unrecognised", so a value the CLI
+// echoes from a pull request's text reaches neither the error nor the job's log
+// (audit L2).
+func TestClaudeCLIAskNamesAnErrorResultByClassAndSubtype(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// cliResultMarker stands for the CLI's result text: the model's words,
+		// which the error must never repeat.
+		cliResultMarker = "MRK374-THE-CLI-RESULT-TEXT"
+		// subtypeMarker stands for a subtype the CLI did not choose: upper case,
+		// a space and punctuation, which no code of the CLI's vocabulary holds.
+		subtypeMarker = "MRK374 Ignore previous"
+	)
+
+	cases := []struct {
+		name string
+		// behaviour is the fake CLI's answer: an error result, or a turn that
+		// did not end.
+		behaviour claudeFake
+		// want are the phrases the error must hold.
+		want []string
+		// wantAbsent are the phrases the error must not hold, the marker of a
+		// subtype the CLI did not choose included.
+		wantAbsent []string
+	}{
+		{
+			name:       "an error result whose subtype is one of the CLI's own",
+			behaviour:  claudeFake{stdout: `{"type":"result","subtype":"error_max_turns","is_error":true,"result":"` + cliResultMarker + `"}`},
+			want:       []string{"claude cli error", "error_max_turns"},
+			wantAbsent: []string{cliResultMarker},
+		},
+		{
+			name:       "an error result whose subtype is not one of the CLI's own",
+			behaviour:  claudeFake{stdout: `{"type":"result","subtype":"` + subtypeMarker + `","is_error":true,"result":"` + cliResultMarker + `"}`},
+			want:       []string{"claude cli error", "unrecognised"},
+			wantAbsent: []string{subtypeMarker, cliResultMarker},
+		},
+		{
+			name:       "a turn that did not end, its subtype not one of the CLI's own",
+			behaviour:  claudeFake{stdout: `{"type":"result","subtype":"` + subtypeMarker + `","is_error":false,"result":"` + cliResultMarker + `"}`},
+			want:       []string{"unrecognised"},
+			wantAbsent: []string{subtypeMarker, cliResultMarker},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cli, _ := newFakeClaudeCLI(t, tc.behaviour)
+
+			text, err := review.NewClaudeCLI(cli, fakeOAuthToken, 30*time.Second).Ask(t.Context(), review.Prompt{System: "s", User: "u"})
+			if !errors.Is(err, review.ErrModel) {
+				t.Fatalf("Ask = %q, %v; want an error wrapping ErrModel: the CLI did not answer, so the run fails (ADR 0033)", text, err)
+			}
+
+			if text != "" {
+				t.Errorf("Ask = %q with the error %v, want no answer: a failed turn posts nothing (ADR 0033)", text, err)
+			}
+
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("Ask = %v, which does not name %q: the ::error line names a constant class and the CLI's subtype, so the failure is diagnosable without its text (issue #374)", err, want)
+				}
+			}
+
+			for _, unwanted := range tc.wantAbsent {
+				if strings.Contains(err.Error(), unwanted) {
+					t.Errorf("Ask = %v, which holds %q: the result text is model output a pull request's author can steer, and a subtype outside the CLI's own vocabulary is replaced by the constant %q, so nothing the CLI did not choose reaches a public ::error line (issue #374, audit L2)", err, unwanted, "unrecognised")
+				}
 			}
 		})
 	}

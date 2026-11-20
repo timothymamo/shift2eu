@@ -317,7 +317,7 @@ func TestParseAnswerNamesTheFindingsCheckThatFailed(t *testing.T) {
 		// failed, never text of the answer.
 		wantEnd string
 	}{
-		{name: "an answer with no findings field", text: `{"summary":"s"}`, wantEnd: "no findings field"},
+		{name: "an answer with no findings field", text: `{"summary":"s"}`, wantEnd: "missing findings"},
 		{name: "an answer whose findings is null", text: `{"summary":"s","findings":null}`, wantEnd: "findings is null"},
 	}
 
@@ -344,6 +344,102 @@ func TestParseAnswerNamesTheFindingsCheckThatFailed(t *testing.T) {
 
 	if len(answer.Findings) != 0 {
 		t.Errorf("the answer with an empty findings array holds %d finding(s), want 0", len(answer.Findings))
+	}
+}
+
+// TestParseAnswerClassifiesAMalformedAnswer pins issue #375: an answer ParseAnswer
+// refuses for its shape is classified by a constant class, never by text of the
+// answer, so the failure the job's public ::error line reports can be diagnosed
+// — broken JSON, with the byte offset it names; an answer cut short, whose end
+// it names; an unknown field; a field of the wrong type; no findings field —
+// without the decoder's message, which quotes what it could not read (a field
+// name the model chose, a character of its answer, issue #366). A broken JSON
+// answer's class carries the byte offset *json.SyntaxError names, the answer's
+// own byte position, so a maintainer can see where the answer went wrong; the
+// class is the phrase alone otherwise, whatever the answer holds.
+func TestParseAnswerClassifiesAMalformedAnswer(t *testing.T) {
+	t.Parallel()
+
+	// answerMarker375 stands for the model's own words. Each case plants it where
+	// the decoder's message would quote it, so a class built from that message
+	// fails the case rather than passing it.
+	const answerMarker375 = "MRK375-THE-ANSWER-TEXT"
+
+	cases := []struct {
+		name string
+		text string
+		// want is the class the error's text must hold: a constant phrase, and
+		// for broken JSON the answer's byte offset, counting from 1.
+		want string
+	}{
+		{
+			name: "broken JSON names the byte offset of the first byte it cannot read",
+			// The "o" of [oops] is the answer's byte 50.
+			text: `{"summary":"` + answerMarker375 + `", "findings":[oops]}`,
+			want: "syntax at byte 50",
+		},
+		{
+			// An answer that stops before its object closes has no byte to point
+			// at: the decoder reports the end of the input, and the class says so
+			// rather than quote the offsetless error (issue #375).
+			name: "an answer cut short names the end of the answer, not a byte offset",
+			text: `{"summary":"` + answerMarker375 + `", "findings":[{"severity":"nit"`,
+			want: "syntax at the end of the answer",
+		},
+		{
+			// The unknown field's own name is the marker: the strict decoder names
+			// it in full, which is exactly what the class must not do.
+			name: "an unknown field",
+			text: `{"summary":"s","findings":[],"` + answerMarker375 + `":1}`,
+			want: "unknown field",
+		},
+		{
+			name: "a field of the wrong type",
+			text: `{"summary":["` + answerMarker375 + `"],"findings":[]}`,
+			want: "wrong type",
+		},
+		{
+			// A findings that is an object is no array of findings: the decoder
+			// refuses what it cannot read into one, and the class says its type is
+			// wrong rather than repeat the type's name or the object itself
+			// (issue #375).
+			name: "findings that is an object",
+			text: `{"summary":"` + answerMarker375 + `","findings":{}}`,
+			want: "wrong type",
+		},
+		{
+			name: "findings that is a string",
+			text: `{"summary":"` + answerMarker375 + `","findings":"x"}`,
+			want: "wrong type",
+		},
+		{
+			name: "no findings field",
+			text: `{"summary":"` + answerMarker375 + `"}`,
+			want: "missing findings",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			answer, err := review.ParseAnswer(tc.text)
+			if !errors.Is(err, review.ErrMalformedAnswer) {
+				t.Fatalf("ParseAnswer(%q) = %+v, %v; want an error wrapping ErrMalformedAnswer", tc.text, answer, err)
+			}
+
+			// The text of this error is the data of the job's ::error line
+			// (ci/aireview's fail), so it holds the class and nothing of the answer.
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("ParseAnswer(%q) = %v, want an error whose text holds the class %q: a failure is diagnosed by its class, never by the decoder's message (issue #375)", tc.text, err, tc.want)
+			}
+
+			for _, unwanted := range []string{answerMarker375, "json:", "Go struct field"} {
+				if strings.Contains(err.Error(), unwanted) {
+					t.Errorf("ParseAnswer(%q) = %v, which holds %q: the class is a constant of this package and the error quotes neither the answer nor the decoder's message (issues #366, #375)", tc.text, err, unwanted)
+				}
+			}
+		})
 	}
 }
 

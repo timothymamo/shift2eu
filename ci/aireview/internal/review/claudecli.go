@@ -36,6 +36,36 @@ const cliWaitDelay = time.Second
 // would show it.
 const redacted = "[redacted]"
 
+// cliErrorClass is the constant class the error of an is_error result names,
+// with the CLI's subtype and never its result text (issue #374).
+const cliErrorClass = "claude cli error"
+
+// unrecognisedCode stands in for a type or subtype of the CLI's result that
+// is not shaped like one of the CLI's codes (cliCode).
+const unrecognisedCode = "unrecognised"
+
+// maxCLICodeLen is the longest type or subtype cliCode shows.
+const maxCLICodeLen = 40
+
+// cliCode returns code, a type or subtype the CLI printed, when it reads as
+// one of the CLI's own codes: 1 to maxCLICodeLen bytes, each a lower-case
+// ASCII letter or "_" (such as "result" or "error_max_turns"). Any other
+// value, which could carry text of a pull request or of the model, reads
+// unrecognisedCode (issue #374, audit L2).
+func cliCode(code string) string {
+	if code == "" || len(code) > maxCLICodeLen {
+		return unrecognisedCode
+	}
+
+	for i := range len(code) {
+		if b := code[i]; (b < 'a' || b > 'z') && b != '_' {
+			return unrecognisedCode
+		}
+	}
+
+	return code
+}
+
 // ClaudeCLI asks the model through one run of the Claude Code CLI, `claude -p`,
 // on the maintainer's Claude subscription (ADR 0033). It never puts the token
 // in an error.
@@ -78,7 +108,9 @@ type cliResult struct {
 // runs past the timeout, is cancelled or stopped by the run's deadline, prints no JSON result, reports an error,
 // ends its turn other than with success, or prints an empty result; the error
 // quotes at most maxCLIExcerpt bytes of the CLI's text, with the token
-// redacted.
+// redacted. An error result (is_error) is named by the constant class
+// cliErrorClass and the CLI's subtype alone: its result text is never quoted
+// (issue #374). The CLI's type and subtype are shown only as cliCode allows.
 func (c *ClaudeCLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	if !strings.HasPrefix(c.path, "/") {
 		return "", fmt.Errorf("%w: the Claude Code CLI's path %q is not absolute", ErrModel, c.path)
@@ -249,14 +281,20 @@ func (c *ClaudeCLI) answer(runErr error, stdout, stderr *cappedBuffer) (string, 
 		return "", fmt.Errorf("%w: the Claude Code CLI's output is not a JSON result%s", ErrModel, c.stderrNote(stderr))
 	}
 
+	// The type and the subtype are the CLI's words, but a CLI that echoes what
+	// it was given could carry a pull request's text in them, and these errors
+	// are the job's public ::error line: each is shown only when it reads as
+	// one of the CLI's codes (cliCode, issue #374, audit L2).
 	switch {
 	case result.Type != "result":
-		return "", fmt.Errorf("%w: the Claude Code CLI printed a %q element, not the result", ErrModel, c.excerpt(result.Type))
+		return "", fmt.Errorf("%w: the Claude Code CLI printed a %q element, not the result", ErrModel, cliCode(result.Type))
 	case result.IsError:
-		return "", fmt.Errorf("%w: the Claude Code CLI reported an error (subtype %q%s): %s",
-			ErrModel, c.excerpt(result.Subtype), exitNote(runErr), c.excerpt(result.Result))
+		// The result text is the model's or the CLI's own words, which a pull
+		// request's author can steer: the error names the constant class and
+		// the subtype alone (issue #374).
+		return "", fmt.Errorf("%w: %s (subtype %q%s)", ErrModel, cliErrorClass, cliCode(result.Subtype), exitNote(runErr))
 	case result.Subtype != "success":
-		return "", fmt.Errorf("%w: the model did not end its turn (subtype %q%s)", ErrModel, c.excerpt(result.Subtype), exitNote(runErr))
+		return "", fmt.Errorf("%w: the model did not end its turn (subtype %q%s)", ErrModel, cliCode(result.Subtype), exitNote(runErr))
 	case runErr != nil:
 		return "", fmt.Errorf("%w: the Claude Code CLI failed (%w) after a successful result", ErrModel, runErr)
 	case result.Result == "":

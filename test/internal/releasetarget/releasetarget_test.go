@@ -346,7 +346,9 @@ builds:
 
 // serverBuild returns a build entry of the HTTP API, ./cmd/shift2eu-server
 // (PRD #103), with the main and the goos and goarch lines given, each already
-// indented under the build's dash, and the environment Read requires.
+// indented under the build's dash, and the environment Read requires. Every
+// case that adds it to a document is refused: the release stopped building the
+// server (issue #393).
 func serverBuild(main, goos, goarch string) string {
 	return "  - id: shift2eu-server\n    main: " + main + "\n" + envDoc + goos + "\n" + goarch + "\n"
 }
@@ -394,7 +396,9 @@ func buildWithComment(comment string) string {
 
 // TestRead pins the platform list the release builds: every goos x
 // goarch pair of this repository's one build, sorted by GOOS then GOARCH, and
-// an error for every document the check cannot read the whole list from.
+// an error for every document the check cannot read the whole list from. The
+// release builds the CLI alone, so a second build of any other main package,
+// the HTTP API's included, is refused (issue #393).
 func TestRead(t *testing.T) {
 	t.Parallel()
 
@@ -466,18 +470,13 @@ func TestRead(t *testing.T) {
 			wantErr:    true,
 		},
 		{
-			name:       "the CLI and the server built for the same platforms give every pair once",
+			name:       "the CLI and the server built for the same platforms are refused: the release ships the CLI alone",
 			goreleaser: withBuilds(serverBuild("./cmd/shift2eu-server", "    goos: [linux, darwin, windows]", "    goarch: [amd64, arm64]")),
-			want:       allSix,
+			wantErr:    true,
 		},
 		{
-			name:       "the server built for the same platforms in another order gives every pair once",
+			name:       "the server built for the same platforms in another order is refused too",
 			goreleaser: withBuilds(serverBuild("./cmd/shift2eu-server", "    goos: [windows, linux, darwin]", "    goarch: [arm64, amd64]")),
-			want:       allSix,
-		},
-		{
-			name:       "the server built for fewer platforms than the CLI is refused",
-			goreleaser: withBuilds(serverBuild("./cmd/shift2eu-server", "    goos: [linux]", "    goarch: [amd64, arm64]")),
 			wantErr:    true,
 		},
 		{

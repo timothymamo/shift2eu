@@ -7,7 +7,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/timothymamo/shift2eu/test/internal/openapibundle"
 	"github.com/timothymamo/shift2eu/test/internal/yamlread"
 )
 
@@ -92,20 +91,16 @@ func (img releaseImage) digest() string {
 	return "${{ needs." + img.imageJob + ".outputs.digest }}"
 }
 
-// The images the release publishes: the CLI, from the Dockerfile's last stage
-// (ADR 0013, ADR 0015), and the HTTP API, from its server stage (PRD #103, ADR
-// 0019).
+// The image the release publishes: the CLI's, from the Dockerfile's last stage
+// (ADR 0013, ADR 0015). It is the only one: the HTTP API's image, sbom and
+// sign jobs are gone with the server (issue #393), and a release document that
+// still names them is refused (retiredNames).
 var (
 	cliImage = releaseImage{
 		name: "ghcr.io/timothymamo/shift2eu", imageJob: "image", sbomJob: "sbom", signJob: "sign",
 		sbomFile: "shift2eu.spdx.json", sbomArtifact: "sbom", ciVar: "IMAGE",
 	}
-	serverImage = releaseImage{
-		name: "ghcr.io/timothymamo/shift2eu-server", target: "server",
-		imageJob: "server-image", sbomJob: "server-sbom", signJob: "server-sign", suffix: " (shift2eu-server)",
-		sbomFile: "shift2eu-server.spdx.json", sbomArtifact: "server-sbom", ciVar: "SERVER_IMAGE",
-	}
-	releaseImages = []releaseImage{cliImage, serverImage}
+	releaseImages = []releaseImage{cliImage}
 )
 
 // The expression of the digest an image job builds and gives as its output,
@@ -163,14 +158,12 @@ var (
 	}
 
 	// goreleaserSteps are the goreleaser job's steps: no repository code runs
-	// before goreleaser, which is asked for exactly release --clean; the job
-	// then copies the bundled OpenAPI document into dist/ under the name the
-	// release publishes it as, since GoReleaser copies neither
-	// release.extra_files nor checksum.extra_files there (issue #139); and the
-	// archives, the document and checksums.txt leave the job as a workflow
-	// artifact for the attest-archives and publish jobs, kept a week so a
-	// failed attestation or publication is recovered by re-running the failed
-	// jobs (issue #163).
+	// before goreleaser, which is asked for exactly release --clean; and the
+	// archives and checksums.txt leave the job as a workflow artifact for the
+	// attest-archives and publish jobs, kept a week so a failed attestation or
+	// publication is recovered by re-running the failed jobs (issue #163).
+	// Nothing is copied into dist/ beside them: the release publishes the CLI's
+	// archives alone, not the HTTP API's OpenAPI document (issue #393).
 	goreleaserSteps = []releaseStep{
 		fullCheckoutStep,
 		setupGoStep,
@@ -184,11 +177,6 @@ var (
 			env: []string{"GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}"},
 		},
 		{
-			what: "the copy of the OpenAPI document beside the archives",
-			name: "Put the OpenAPI document beside the archives",
-			run:  "cp " + openapibundle.Path + " dist/" + bundleName,
-		},
-		{
 			what: "actions/upload-artifact (the archives)", uses: uploadArtifactAction,
 			with: map[string]*regexp.Regexp{
 				"name":              exactly(archivesArtifact),
@@ -200,30 +188,27 @@ var (
 	}
 )
 
-// The release's archives, the bundled OpenAPI document and checksums.txt: the
-// workflow artifact that hands them from the goreleaser job to the
-// attest-archives and publish jobs, and the patterns of the files that job
-// attests, which verify-archives verifies on the published release (issues
-// #139, #163).
+// The release's archives and checksums.txt: the workflow artifact that hands
+// them from the goreleaser job to the attest-archives and publish jobs, and the
+// patterns of the files that job attests, which verify-archives verifies on the
+// published release (issues #139, #163).
 const archivesArtifact = "archives"
 
 // attestedArchives are the files handed on and attested, each archive named by
 // its extension: a bare shift2eu_* in dist/ also matches GoReleaser's build
 // directories (dist/shift2eu_linux_amd64_v1/ ...), and would hand on and
-// attest the bare binaries beside the archives. The bundled OpenAPI document
-// is named exactly, bundleName, the name the release publishes it as.
+// attest the bare binaries beside the archives. The release ships the CLI's
+// archives alone: the HTTP API's archive and its OpenAPI document are gone
+// (issue #393).
 var attestedArchives = []string{
 	"shift2eu_*.tar.gz", "shift2eu_*.zip",
-	"shift2eu-server_*.tar.gz", "shift2eu-server_*.zip",
-	bundleName,
 	"checksums.txt",
 }
 
 // attestArchivesSteps are the attest-archives job's steps: GitHub's own
 // download of the archives' workflow artifact, the check of the archives
-// against checksums.txt, and one build provenance attestation of every
-// archive, of the bundled OpenAPI document and of checksums.txt itself, by
-// path, so each file is a subject.
+// against checksums.txt, and one build provenance attestation of every archive
+// and of checksums.txt itself, by path, so each file is a subject.
 var attestArchivesSteps = []releaseStep{
 	{
 		what: "actions/download-artifact (the archives)", uses: downloadArtifactAction,
@@ -272,7 +257,7 @@ var publishSteps = []releaseStep{
 		run: strings.Join([]string{
 			strictShell,
 			`# Whether this tag is the highest release tag on main is the latest`,
-			`# job's decision, made once for both images and for this release: the`,
+			`# job's decision, made once for this release: the`,
 			`# step refuses anything but the two values it can hold, rather than`,
 			`# publish a release with a make_latest nobody decided (issue #173).`,
 			`case "$LATEST" in`,
@@ -379,7 +364,7 @@ var publishSteps = []releaseStep{
 // the latest job's decision, and must not be when the highest release tag's
 // release is published; while that release is not published yet (only the
 // API's 404), a ::notice:: says so and the check is skipped, as the verify job
-// skips the images' latest check. A pre-release must never be it, checked
+// skips the image's latest check. A pre-release must never be it, checked
 // before and whatever the highest is, so that skip cannot let one through.
 var verifyArchivesSteps = []releaseStep{
 	{
@@ -677,7 +662,7 @@ const (
 	spdxPredicate   = "https://spdx.dev/Document/v2.3"
 	tagEnv          = "TAG: ${{ github.ref_name }}"
 	verifyJob       = "verify"
-	verifyJobName   = "Verify the published images"
+	verifyJobName   = "Verify the published image"
 	tagRuleStepName = "The tags follow the release rule"
 )
 
@@ -727,7 +712,7 @@ func verifyImageStep(img releaseImage, what, name string, smoke ...string) relea
 // merged into main, read by git, the command given: git in a checkout, git -C
 // tags in the repository mainTagsInit makes. Release tags only (vX.Y.Z, no
 // pre-release), by version order. The latest job decides by it, once per
-// run, whether the tag is the latest release, and both images' latest tag and
+// run, whether the tag is the latest release, and the image's latest tag and
 // GitHub's "Latest" release follow that one decision (ADR 0015, issue #173);
 // the verify and verify-archives jobs read it again on their own to check
 // them.
@@ -744,7 +729,7 @@ const (
 	mainTagsFetch = `git -C tags fetch -q --filter=tree:0 --no-tags https://github.com/` + releaseRepo + `.git '+refs/heads/main:refs/remotes/origin/main' '+refs/tags/v*:refs/tags/v*'`
 )
 
-// latestFlavorOutput is the flavor of both images' metadata-action: latest
+// latestFlavorOutput is the flavor of the image's metadata-action: latest
 // from the latest job's one decision (issue #173).
 const latestFlavorOutput = "latest=${{ needs.latest.outputs.latest }}"
 
@@ -778,9 +763,9 @@ var latestSteps = []releaseStep{
 const strictShell = "set -euo pipefail"
 
 // verifySteps are the verify job's steps: cosign by exact release, a cosign
-// login, the checks of each image this run built, by digest, and the tag
-// rule, whose highest release tag is read by ancestry from main in a bare
-// repository of the job's own. No checkout: the job runs no repository code.
+// login, the check of the image this run built, by digest, and the tag rule,
+// whose highest release tag is read by ancestry from main in a bare repository
+// of the job's own. No checkout: the job runs no repository code.
 var verifySteps = []releaseStep{
 	cosignInstallerStep,
 	cosignLoginStep,
@@ -788,13 +773,9 @@ var verifySteps = []releaseStep{
 		`docker run --rm --read-only --network none "$IMAGE" version | tee version.txt`,
 		`grep -qF "shift2eu ${TAG#v} (" version.txt`,
 	),
-	// The server has no version subcommand: --help exiting 0 is its smoke test.
-	verifyImageStep(serverImage, "the HTTP API's image verification", "Verify the HTTP API's image",
-		`docker run --rm --read-only --network none "$IMAGE" --help > /dev/null`,
-	),
 	{
 		what: "the tag rule", name: tagRuleStepName,
-		env: []string{tagEnv, "CLI_BUILT: " + cliImage.digest(), "SERVER_BUILT: " + serverImage.digest()},
+		env: []string{tagEnv, "CLI_BUILT: " + cliImage.digest()},
 		run: strings.Join([]string{
 			strictShell,
 			`version="${TAG#v}"`,
@@ -883,7 +864,6 @@ var verifySteps = []releaseStep{
 			`  esac`,
 			`}`,
 			`check ` + cliImage.name + ` "$CLI_BUILT"`,
-			`check ` + serverImage.name + ` "$SERVER_BUILT"`,
 		}, "\n"),
 	},
 }
@@ -902,8 +882,9 @@ type releaseJob struct {
 }
 
 // releaseJobs are the release workflow's jobs, in the order a message lists
-// them: test, goreleaser, attest-archives and publish, then three per image,
-// then verify and verify-archives. The write permissions stay split: the
+// them: test, latest, goreleaser, attest-archives and publish, then the
+// image's three jobs, then verify and verify-archives. The write permissions
+// stay split: the
 // goreleaser job writes the repository's contents to upload to a draft
 // release, and publish alone publishes it, holding nothing else; an image job
 // pushes and nothing more; an sbom job, which runs syft, can only read the
@@ -957,7 +938,7 @@ var releaseJobs = func() []releaseJob {
 	return append(jobs,
 		releaseJob{
 			key: verifyJob, name: verifyJobName,
-			needs:       []string{cliImage.imageJob, cliImage.signJob, serverImage.imageJob, serverImage.signJob},
+			needs:       []string{cliImage.imageJob, cliImage.signJob},
 			permissions: map[string]string{"packages": "read", "attestations": "read"},
 			steps:       verifySteps,
 		},
@@ -980,23 +961,23 @@ var releaseJobs = func() []releaseJob {
 //     tag and a run in progress is never cancelled half published; a waiting
 //     run may be replaced by a newer tag's and must then be re-run by hand,
 //     ADR 0015) and jobs, so no workflow-level env: or defaults:;
-//   - jobs holds exactly test, latest, goreleaser, attest-archives, publish, an
-//     image, an sbom and a sign job for each image the release publishes
-//     (image, sbom and sign for the CLI's, ghcr.io/timothymamo/shift2eu;
-//     server-image, server-sbom and server-sign for the HTTP API's,
-//     ghcr.io/timothymamo/shift2eu-server, PRD #103, whose job names end
-//     " (shift2eu-server)"), verify, the independent check of the images
-//     the release published (issue #99), and verify-archives, that of its
-//     archives (issue #163). Each holds exactly name, runs-on
+//   - jobs holds exactly test, latest, goreleaser, attest-archives, publish, the
+//     image, sbom and sign jobs of the one image the release publishes (the
+//     CLI's, ghcr.io/timothymamo/shift2eu), verify, the independent check of
+//     that image (issue #99), and verify-archives, that of its archives (issue
+//     #163). Each holds exactly name, runs-on
 //     (ubuntu-latest), permissions and steps, and needs for all but test
 //     (latest needs test; goreleaser test; attest-archives goreleaser;
 //     publish [test, goreleaser, attest-archives, latest]; an image job
 //     [test, goreleaser, latest]; an sbom job its image job; a sign job [its
-//     image job, its sbom job], in that order; verify [image, sign,
-//     server-image, server-sign]; verify-archives publish), latest an
+//     image job, its sbom job], in that order; verify [image, sign];
+//     verify-archives publish), latest an
 //     outputs: of exactly its decide step's latest, and an image job an
 //     outputs: of exactly its build's digest, so no job-level env:,
 //     container:, if: or other key;
+//   - no line, comments included, names shift2eu-server or openapi: the release
+//     ships the CLI alone, so the HTTP API's jobs, its archive and its OpenAPI
+//     asset are gone rather than merely unreferenced (issue #393);
 //   - the permissions are exactly contents: read for test and for latest;
 //     contents: write for goreleaser and for publish; id-token: write,
 //     attestations: write and contents: read for attest-archives; contents:
@@ -1008,12 +989,9 @@ var releaseJobs = func() []releaseJob {
 //   - the test job's steps are exactly actions/checkout of the whole history,
 //     the guard that the tagged commit is on main (an exact run: script),
 //     actions/setup-go and make test; the goreleaser job's exactly
-//     actions/checkout, actions/setup-go, goreleaser/goreleaser-action, the
-//     copy of the bundled OpenAPI document into dist/ under the name the
-//     release publishes it as (exactly cp api/openapi.bundled.json
-//     dist/shift2eu-server_openapi.json, issue #139) and
+//     actions/checkout, actions/setup-go, goreleaser/goreleaser-action and
 //     actions/upload-artifact of the archives, each named by its extension,
-//     that document and checksums.txt (archives, kept seven days so a failed
+//     and checksums.txt (archives, kept seven days so a failed
 //     attestation or publication can be re-run); setup-go with cache: false in both jobs,
 //     goreleaser asked for exactly release --clean at an exact version, with
 //     an env: of exactly GITHUB_TOKEN from secrets.GITHUB_TOKEN;
@@ -1023,12 +1001,12 @@ var releaseJobs = func() []releaseJob {
 //     has no pipefail), reads the release tags merged into origin/main,
 //     pre-releases left out, and writes latest=true to GITHUB_OUTPUT only
 //     when the tag is the highest of them, latest=false otherwise: the one
-//     decision, made once per run, that both images' latest tag and GitHub's
+//     decision, made once per run, that the image's latest tag and GitHub's
 //     "Latest" release follow, so they cannot disagree (issue #173);
 //   - the attest-archives job's steps are exactly actions/download-artifact
 //     of that artifact, sha256sum -c checksums.txt and
 //     actions/attest-build-provenance with a subject-path of every archive,
-//     by its extension, the bundled OpenAPI document and checksums.txt;
+//     by its extension, and checksums.txt;
 //   - the publish job's steps are exactly actions/download-artifact of that
 //     artifact, with no checkout, and one step that refuses a LATEST other
 //     than exactly true or false and checks the draft release (an exact run:
@@ -1046,15 +1024,15 @@ var releaseJobs = func() []releaseJob {
 //     build arguments (version, commit and date, a run: script with the tag
 //     through env:),
 //     docker/setup-buildx-action (BuildKit by exact release and index
-//     digest), docker/login-action, docker/metadata-action (its image's name,
-//     latest from the latest job's output alone) and docker/build-push-action
-//     (linux/amd64 and linux/arm64, pushed, no cache, no BuildKit provenance
-//     or SBOM; the HTTP API's with target: server, the CLI's with no target,
-//     so the Dockerfile's last stage);
+//     digest), docker/login-action, docker/metadata-action (the CLI's image
+//     name, latest from the latest job's output alone) and
+//     docker/build-push-action (linux/amd64 and linux/arm64, pushed, no cache,
+//     no BuildKit provenance or SBOM, and no target:, so the Dockerfile's last
+//     stage);
 //   - an sbom job's steps are exactly docker/login-action, anchore/sbom-action
 //     (its pushed index by its image job's digest, an exact syft, uploading
 //     nothing) and actions/upload-artifact of its SPDX document
-//     (shift2eu.spdx.json as sbom, shift2eu-server.spdx.json as server-sbom);
+//     (shift2eu.spdx.json as sbom);
 //   - a sign job's steps are exactly sigstore/cosign-installer (an exact
 //     release), a cosign login with the actor and token through env:, cosign
 //     sign --recursive of its image by its image job's digest,
@@ -1062,15 +1040,15 @@ var releaseJobs = func() []releaseJob {
 //     its SPDX document and actions/attest of the SBOM, both by that digest,
 //     pushed to the registry;
 //   - the verify job's steps are exactly sigstore/cosign-installer, the cosign
-//     login, one step per image that, under set -euo pipefail, resolves its
+//     login, one step that, under set -euo pipefail, resolves its
 //     tag to a digest, fails unless it is the digest its image job built
 //     (BUILT through env:), and, by that digest, runs cosign verify with the
 //     release identity and this commit (--certificate-github-workflow-sha),
 //     gh attestation verify of the provenance and of the SBOM, both bound to
 //     this commit (--source-digest), and the image with --rm --read-only
-//     --network none (version, compared to the tag, for the CLI; --help for
-//     the server), and the tag rule, whose highest release tag is the release
-//     tags merged into main, read by ancestry from a treeless fetch into a
+//     --network none (version, compared to the tag), and the tag rule, whose
+//     highest release tag is the
+//     release tags merged into main, read by ancestry from a treeless fetch into a
 //     repository of the job's own, with no checkout;
 //   - the verify-archives job's steps are exactly gh release download, with
 //     --repo, of every asset of the published release, and, under set -euo
@@ -1105,7 +1083,9 @@ var releaseJobs = func() []releaseJob {
 // As a backstop, no line, comments included, may name github.env or
 // github.path in any case, nor GITHUB_ENV, GITHUB_PATH or a variable of the
 // go command or of cgo (a word starting GO or CGO in upper case: GOFLAGS,
-// GOEXPERIMENT, GOAMD64, CGO_ENABLED, ...).
+// GOEXPERIMENT, GOAMD64, CGO_ENABLED, ...); and no line may name
+// shift2eu-server or openapi, in any case, since the release publishes the CLI
+// alone (issue #393).
 func ReleaseWorkflow(src []byte) []string {
 	var messages []string
 
@@ -1113,6 +1093,7 @@ func ReleaseWorkflow(src []byte) []string {
 	for i := range raw {
 		raw[i] = strings.TrimSuffix(raw[i], "\r")
 		messages = append(messages, forbiddenNames(strings.TrimSpace(raw[i]))...)
+		messages = append(messages, retiredNameMessages(strings.TrimSpace(raw[i]))...)
 	}
 
 	lines, err := yamlread.SplitLines(src)

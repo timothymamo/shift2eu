@@ -1266,16 +1266,17 @@ func underDir(rel, dir string) bool {
 }
 
 // TestReleaseWorkflowIsClosed pins that the release is closed to what the
-// check lists: the workflow holds exactly the twelve jobs the check knows, test,
-// goreleaser, attest-archives and publish (issues #156, #163), image, sbom, sign
-// and verify for the two images (server-image, server-sbom and server-sign for
-// the HTTP API's, PRD #103), and verify-archives, with exactly their steps, so
-// goreleaser
+// check lists: the workflow holds exactly the ten jobs the check knows, test,
+// latest, goreleaser, attest-archives and publish (issues #156, #163), image,
+// sbom and sign for the CLI's image, verify and verify-archives, with exactly
+// their steps, so goreleaser
 // runs with exactly release --clean after no repository code and with no
 // environment of its own for the go command, only a commit on main is released,
 // and the publishing privileges stay split: the image job publishes what it
 // builds, the SBOM job only reads the registry and signs nothing, and the sign
-// job runs sigstore's and GitHub's actions alone (check.ReleaseWorkflow). Nor
+// job runs sigstore's and GitHub's actions alone (check.ReleaseWorkflow). The
+// release ships the CLI alone, so no line may name the HTTP API's binary or its
+// OpenAPI document, which are gone (issue #393). Nor
 // may any other goreleaser document, go.work, go.work.sum or vendor sit at the
 // root that git could commit (check.StrayReleaseFiles).
 func TestReleaseWorkflowIsClosed(t *testing.T) {
@@ -1295,17 +1296,19 @@ func TestReleaseWorkflowIsClosed(t *testing.T) {
 	}
 }
 
-// TestReleaseArchivesHoldOneBinary pins issue #147: the release ships the CLI
-// and the HTTP API as two archives of their own, under one tag and version.
-// .goreleaser.yaml holds two archive entries, each limited by ids: to one build,
-// the CLI's archive keeping the name it has always had and the server's its own
-// (check.GoReleaserArchives), both with the same formats and the same files and
-// one checksums.txt covering every archive; and ci.yml's test job, the dry run
+// TestReleaseArchivesHoldOneBinary pins issue #147 as issue #393 leaves it:
+// the release ships the CLI's binary in one archive of its own.
+// .goreleaser.yaml holds one archive entry, limited by ids: to the CLI's build,
+// keeping the name it has always had (check.GoReleaserArchives), with tar.gz
+// everywhere, zip on Windows, and one checksums.txt covering it; and ci.yml's
+// test job, the dry run
 // that runs on every pull request, installs the GoReleaser that release.yml
-// runs and builds those archives with it, failing unless each holds exactly its
-// own binary (check.DryRunVerifiesArchives). The files each archive ships are
+// runs and builds that archive with it, failing unless it holds exactly its
+// own binary (check.DryRunVerifiesArchives). The files the archive ships are
 // LICENSE, README.md, the pages under docs/ (issue #149) and the sample
-// inventories under examples/ the walkthrough runs (issue #188).
+// inventories under examples/ the walkthrough runs (issue #188). No second
+// archive, the HTTP API's, is published any more, and neither is the bundled
+// OpenAPI document (issue #393).
 func TestReleaseArchivesHoldOneBinary(t *testing.T) {
 	t.Parallel()
 
@@ -1326,9 +1329,8 @@ func TestReleaseArchivesHoldOneBinary(t *testing.T) {
 // release.yml (issue #156), and release.prerelease: auto, so a tag with a
 // pre-release suffix (v0.1.0-rc.2) is a GitHub pre-release and never the
 // latest release, as it gets no X.Y and no latest image tag (issue #92, ADR
-// 0015), and release holds the one extra file the release publishes beside
-// the archives, the bundled OpenAPI document api/openapi.bundled.json as
-// shift2eu-server_openapi.json (issue #139).
+// 0015). It holds nothing else: the bundled OpenAPI document the release used
+// to publish beside the archives is gone (issue #393).
 func TestRCTagsArePreReleases(t *testing.T) {
 	t.Parallel()
 
