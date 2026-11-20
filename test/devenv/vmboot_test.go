@@ -88,8 +88,10 @@ type vmBootInstallFixture struct {
 	instance   string
 	dir        string // where make runs: the repository, whose Makefile is what this test pins
 	launchdDir string // where launchd reads LaunchDaemons from: the make command line's VM_BOOT_LAUNCHD_DIR
-	// limaLaunchDaemonsDir is where Lima's own LaunchDaemon plist sits: the make command line's
-	// LIMA_LAUNCHDAEMONS_DIR, a directory of the sandbox's own, never the boot job's (issues #315, #398).
+	// limaLaunchDaemonsDir is where Lima's own LaunchDaemon plist sits, in a directory of the sandbox's own and
+	// never the boot job's: what most runs pass as LIMA_LAUNCHDAEMONS_DIR on make's command line, and what
+	// TestMakeVMBootIgnoresLIMAsLaunchDaemonsDirFromTheEnvironment exports in make's environment alone
+	// (issues #315, #398).
 	limaLaunchDaemonsDir string
 }
 
@@ -192,10 +194,13 @@ func (f *vmBootInstallFixture) runWithLimaDirectory(t *testing.T, dir, target st
 	}, f.env)
 }
 
-// runWithTheLimaDirectoryInTheEnvironment runs one target with LIMA_LAUNCHDAEMONS_DIR exported in the environment
-// as envDir, the way a stale export in a maintainer's shell would reach it, and on make's command line as
-// commandLineDir, the one place the hook is read from (issues #315, #398).
-func (f *vmBootInstallFixture) runWithTheLimaDirectoryInTheEnvironment(t *testing.T, envDir, commandLineDir, target string) (string, string, error) {
+// runWithTheLimaDirectoryExported runs one target with LIMA_LAUNCHDAEMONS_DIR exported in the environment and
+// nowhere else: no value on make's command line, so the environment is the variable's origin for make, the one the
+// Makefile puts back to /Library/LaunchDaemons (issues #315, #398). overrideTheMakefile adds make's -e, which lets
+// the environment override the Makefile's own assignments too: the origin is then `environment override`, which
+// the Makefile's `ifeq ($(origin LIMA_LAUNCHDAEMONS_DIR),environment)` does not match. VM_BOOT_LAUNCHD_DIR still
+// travels on the command line, since it is why these runs write inside the sandbox.
+func (f *vmBootInstallFixture) runWithTheLimaDirectoryExported(t *testing.T, dir string, overrideTheMakefile bool, target string) (string, string, error) {
 	t.Helper()
 
 	env := make(map[string]string, len(f.env)+1)
@@ -203,13 +208,16 @@ func (f *vmBootInstallFixture) runWithTheLimaDirectoryInTheEnvironment(t *testin
 		env[name] = value
 	}
 
-	env[limaLaunchDaemonsDirVar] = envDir
+	env[limaLaunchDaemonsDirVar] = dir
 
-	return runMakeIn(t, f.dir, []string{
-		vmBootLaunchdDir + "=" + f.launchdDir,
-		limaLaunchDaemonsDirVar + "=" + commandLineDir,
-		target,
-	}, env)
+	args := make([]string, 0, 3)
+	if overrideTheMakefile {
+		args = append(args, "-e")
+	}
+
+	args = append(args, vmBootLaunchdDir+"="+f.launchdDir, target)
+
+	return runMakeIn(t, f.dir, args, env)
 }
 
 // sudoCommands returns the argv of every command the recipe ran through sudo, in call order.
@@ -895,68 +903,95 @@ func TestMakeVMBootLaunchdDirComesOnlyFromTheCommandLine(t *testing.T) {
 	}
 }
 
+// limaEnvProbeInstance is the instance this test's runs work on: a name no host can hold (issues #315, #398). The
+// value LIMA_LAUNCHDAEMONS_DIR takes from the environment is put back to /Library/LaunchDaemons, which the check
+// then reads - never writes - for Lima's system job of this instance, so only one plist can ever sit there, and a
+// name of a real instance would make a run's outcome depend on that host instead of on the hook.
+const limaEnvProbeInstance = "vmboot-envprobe-398"
+
 // TestMakeVMBootIgnoresLIMAsLaunchDaemonsDirFromTheEnvironment pins that LIMA_LAUNCHDAEMONS_DIR is a test hook of
 // make's command line and of the Makefile alone (issues #315, #398): a value exported in the environment is put
 // back to /Library/LaunchDaemons, where launchd really reads Lima's system job from. A stale export would have
 // the check look in a directory launchd never reads, so Lima's job - which starts the VM at every boot - would go
 // unreported, and the install would go on beside it.
 //
-// Both directories are the sandbox's own, so the test reads nothing of the host it runs on: the directory the
-// environment exports and the different one on make's command line each hold Lima's system job's plist. The
-// command line's directory is the one make reads, so the refusal names its plist, and the exported directory's
-// path appears nowhere - which is what an export that make honoured would print - and the install goes on beside
-// the job the way a stale export lets it.
+// The environment carries the value and make's command line carries none, so the variable's origin is the
+// environment - and, under make -e, the environment override, which the second case pins: make -e is a
+// maintainer's habit, and it must not put the check on a directory of the environment's own either. The exported
+// directory is a sandbox one holding Lima's system job's plist of limaEnvProbeInstance: were it read, the install
+// would refuse for that job, and its path would be printed. So neither the directory nor its plist may appear
+// anywhere in the output, and the install must go on into the install the happy path pins.
 func TestMakeVMBootIgnoresLIMAsLaunchDaemonsDirFromTheEnvironment(t *testing.T) {
 	t.Parallel()
 
-	f := newVMBootInstallFixture(t, hostTargetInstance)
+	// Lima's system job's plist where the check looks once the environment's value is put back: no host holds it,
+	// and the one that did would read this run's outcome as that file's rather than as the hook's (issues #315,
+	// #398).
+	systemPlist := filepath.Join("/Library/LaunchDaemons", vmBootLimaDaemonLabelPrefix+limaEnvProbeInstance+".plist")
 
-	limaLabel := vmBootLimaDaemonLabelPrefix + f.instance
-
-	// Lima's system job's plist where the environment points: what the check must not look at.
-	exportedDir := filepath.Join(f.sb.root, "ExportedLimaLaunchDaemons")
-	exportedPlist := filepath.Join(exportedDir, limaLabel+".plist")
-	writeFileMode(t, exportedPlist, []byte("Lima's own autostart job of "+f.instance+", where the environment points\n"), 0o600)
-
-	// Lima's system job's plist where make's command line points, in a directory of its own: the one the check
-	// reads, so the refusal names it.
-	commandLineDir := filepath.Join(f.sb.root, "CommandLineLimaLaunchDaemons")
-	commandLinePlist := filepath.Join(commandLineDir, limaLabel+".plist")
-	writeFileMode(t, commandLinePlist, []byte("Lima's own autostart job of "+f.instance+", where the command line points\n"), 0o600)
-
-	stdout, stderr, err := f.runWithTheLimaDirectoryInTheEnvironment(t, exportedDir, commandLineDir, "vm-boot-install")
-
-	combined := stdout + stderr
-
-	if err == nil {
-		t.Fatalf("make vm-boot-install exited 0 although Lima's job %s is installed in %s, the directory on its command line: the install must refuse it and install nothing, or the two jobs race for the VM at every boot (issues #315, #398)\nstdout: %s\nstderr: %s",
-			limaLabel, commandLineDir, stdout, stderr)
+	if _, err := os.Stat(systemPlist); err == nil {
+		t.Skipf("%s exists on this host: the exported value is put back to /Library/LaunchDaemons, so the check would find Lima's job there whatever the hook does (issues #315, #398)", systemPlist)
 	}
 
-	if !strings.Contains(stderr, commandLinePlist) {
-		t.Errorf("the refusal does not name Lima's job's plist %s, the directory on make's command line, so a maintainer cannot find the job the install refused to run beside (issues #315, #398)\nstdout: %s\nstderr: %s",
-			commandLinePlist, stdout, stderr)
+	cases := []struct {
+		name string
+		// overrideTheMakefile runs make with -e, which lets the environment override the Makefile's own
+		// assignments: the variable's origin is then `environment override`, not the `environment` the
+		// Makefile's ifeq matches, and the environment's directory must still be ignored (issues #315, #398).
+		overrideTheMakefile bool
+	}{
+		{name: "the value exported in the environment"},
+		{name: "the value exported in the environment under make -e", overrideTheMakefile: true},
 	}
 
-	if strings.Contains(combined, exportedDir) || strings.Contains(combined, exportedPlist) {
-		t.Errorf("make vm-boot-install names %s, the directory LIMA_LAUNCHDAEMONS_DIR is exported as in the environment: the hook is a test hook of make's command line and the Makefile alone, so the environment's value goes back to the directory launchd really reads, like VM_BOOT_LAUNCHD_DIR (issues #315, #398)\nstdout: %s\nstderr: %s",
-			exportedDir, stdout, stderr)
-	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Refusing means installing nothing: the job launchd would load at the next boot must not be left behind.
-	if calls := f.bootstrapCalls(t); len(calls) != 0 {
-		t.Errorf("make vm-boot-install ran `sudo launchctl bootstrap` although Lima's job %s is installed in %s, so the refusal comes too late (issues #315, #398): %v\nstdout: %s\nstderr: %s",
-			limaLabel, commandLineDir, calls, stdout, stderr)
-	}
+			f := newVMBootInstallFixture(t, limaEnvProbeInstance)
 
-	entries, readErr := os.ReadDir(f.launchdDir)
-	if readErr != nil {
-		t.Fatalf("read %s: %v", f.launchdDir, readErr)
-	}
+			limaLabel := vmBootLimaDaemonLabelPrefix + f.instance
+			// Lima's system job's plist where the environment points: what the check must never read, since the
+			// value the environment carries goes back to /Library/LaunchDaemons (issues #315, #398).
+			exportedDir := f.limaLaunchDaemonsDir
+			exportedPlist := f.limaPlistPath(systemDomain, limaLabel)
+			writeFileMode(t, exportedPlist, []byte("Lima's own autostart job of "+f.instance+", where the environment points\n"), 0o600)
 
-	if len(entries) != 0 {
-		t.Errorf("make vm-boot-install left %d file(s) in %s although Lima's job %s is installed in %s, so a refused run still leaves a job launchd loads at the next boot (issue #398): %v",
-			len(entries), f.launchdDir, limaLabel, commandLineDir, entries)
+			stdout, stderr, err := f.runWithTheLimaDirectoryExported(t, exportedDir, tc.overrideTheMakefile, "vm-boot-install")
+
+			combined := stdout + stderr
+
+			if err != nil {
+				t.Fatalf("make vm-boot-install exited non-zero with LIMA_LAUNCHDAEMONS_DIR exported as %s: the hook is a test hook of make's command line and the Makefile alone, so the environment's value is put back to /Library/LaunchDaemons, where launchd really reads Lima's system job from, and the install may not refuse for a job of the directory the environment names - nor may make -e change that (issues #315, #398)\nstdout: %s\nstderr: %s",
+					exportedDir, stdout, stderr)
+			}
+
+			if strings.Contains(combined, exportedDir) || strings.Contains(combined, exportedPlist) {
+				t.Errorf("make vm-boot-install names %q, the directory LIMA_LAUNCHDAEMONS_DIR is exported as in the environment: the environment's value goes back to the directory launchd really reads, so the check neither reads nor prints that directory or Lima's job's plist %q there, like VM_BOOT_LAUNCHD_DIR (issues #315, #398)\nstdout: %s\nstderr: %s",
+					exportedDir, exportedPlist, stdout, stderr)
+			}
+
+			// The export is no reason to refuse: the boot job is installed and loaded as the happy path pins it.
+			installed, readErr := os.ReadFile(f.dest())
+			if readErr != nil {
+				t.Fatalf("make vm-boot-install did not write the plist %s although only the environment exports LIMA_LAUNCHDAEMONS_DIR: the hook's value from the environment must change nothing about the install (issues #315, #398): %v\nstdout: %s\nstderr: %s",
+					f.dest(), readErr, stdout, stderr)
+			}
+
+			if !strings.Contains(string(installed), "<string>"+f.label()+"</string>") {
+				t.Errorf("the installed plist %s does not hold the boot job's label %q: launchd reads the job's Label from this file (issue #398):\n%s", f.dest(), f.label(), installed)
+			}
+
+			wantBootstrap := []string{"launchctl", "bootstrap", "system", f.dest()}
+
+			calls := f.bootstrapCalls(t)
+			if len(calls) != 1 {
+				t.Errorf("make vm-boot-install ran launchctl bootstrap %d time(s) although only the environment exports LIMA_LAUNCHDAEMONS_DIR, want one as the happy path's: the export must not stop the install short (issues #315, #398): %v\nstdout: %s\nstderr: %s",
+					len(calls), calls, stdout, stderr)
+			} else if diff := cmp.Diff(wantBootstrap, calls[0]); diff != "" {
+				t.Errorf("make vm-boot-install loaded the job with the wrong command (-want +got):\n%s\nthe install loads this instance's plist in the system domain, where a LaunchDaemon runs at boot with nobody logged in (issue #398)", diff)
+			}
+		})
 	}
 }
 
