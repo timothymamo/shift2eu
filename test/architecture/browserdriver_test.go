@@ -270,19 +270,23 @@ func goListImportPaths(t *testing.T, dir string, args ...string) []string {
 // browser-tagged test/browser imports chromedp, and go test ./... never builds
 // it, so on an empty module cache, as in a release run, chromedp and cdproto
 // are in no cache until this listing loads them: with GOPROXY=off it would
-// fail. The listing fetches them through the proxy exactly as the surrounding
-// go test build fetches its own modules, and -mod=readonly keeps go.mod as it
-// is while go.sum pins and verifies every module it fetches.
+// fail. The listing fetches them through GOPROXY as set in the environment
+// (GOENV=off ignores go env -w), as the go test build fetches its own modules,
+// and -mod=readonly keeps go.mod as it is while go.sum pins and verifies every
+// module it fetches. GOTOOLCHAIN=local keeps this networked listing from
+// switching to, and downloading, another toolchain: go test puts the running,
+// pinned one first on PATH.
 func goListProbeEnv() []string {
 	drop := map[string]bool{
 		"GOOS":        true,
 		"GOARCH":      true,
 		"CGO_ENABLED": true,
 		"GOFLAGS":     true,
+		"GOTOOLCHAIN": true,
 		"GOWORK":      true,
 	}
 
-	env := make([]string, 0, len(os.Environ())+5)
+	env := make([]string, 0, len(os.Environ())+6)
 
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
@@ -293,5 +297,5 @@ func goListProbeEnv() []string {
 		env = append(env, entry)
 	}
 
-	return append(env, "CGO_ENABLED=0", "GOENV=off", "GOFLAGS=-mod=readonly", "GOWORK=off")
+	return append(env, "CGO_ENABLED=0", "GOENV=off", "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOWORK=off")
 }
