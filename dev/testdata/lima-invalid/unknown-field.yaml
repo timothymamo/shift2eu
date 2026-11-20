@@ -98,8 +98,8 @@ provision:
       set -eux -o pipefail
       # Idempotent, as Lima runs it at every boot and re-provision: an active file of the right size is left
       # alone, an inactive one is only switched on, and one of another size (after a change of the param) is
-      # switched off and recreated; one that swapon refuses (no swap header) is recreated once. swapon here, at
-      # every boot, is what turns it on again: no /etc/fstab entry.
+      # switched off and recreated; one that swapon refuses (most likely no swap header) is recreated once.
+      # swapon here, at every boot, is what turns it on again: no /etc/fstab entry.
       # SHIFT2EU_SWAP_ROOT is empty in the guest; the tests (test/devenv/limaswap_test.go) point it at a fake
       # root, as SHIFT2EU_VM_BIN_GH does for dev/vm-gh-wrapper.sh. Kept to bash 3.2, which the tests may run.
       root="${SHIFT2EU_SWAP_ROOT:-}"
@@ -151,6 +151,10 @@ provision:
       if [ -f "${swapfile}" ]; then
         current="$(wc -c <"${swapfile}" | tr -d ' ')"
       fi
+      # A leftover temporary file, from a crash between fallocate and the rename, is never active swap: removed
+      # before df reads the free space, so its space counts as free. Kept, it would make a tight disk decline
+      # at every boot, keep the orphan and leave the guest with no swap for ever.
+      rm -f "${tmpfile}"
 
       if [ "${current}" -ne "${bytes}" ]; then
         # 4GiB fits the template's 40GiB disk with room to spare, but VM_DISK may be as small as 1GiB: with
@@ -171,8 +175,8 @@ provision:
         build_swapfile
       fi
       if [ "${active}" -eq 0 ] && ! swapon "${swapfile}"; then
-        # A file of the right size that swapon refuses has no swap header: a creation a crash cut short before
-        # this step built the file atomically. Rebuilt once, in the old file's space; a second failure stops
+        # A file of the right size that swapon refuses most likely has no swap header (an interrupted creation,
+        # one a crash cut short before this step built the file atomically). Rebuilt once, in the old file's space; a second failure stops
         # the step rather than recreating the file at every boot.
         echo >&2 "swap: swapon ${swapfile} failed; recreating the swap file once."
         build_swapfile

@@ -275,6 +275,11 @@ with no swap and died with two units running (issue #294). It is a safety net, n
 provisioning sets `vm.swappiness = 10` in `/etc/sysctl.d/99-shift2eu-swap.conf`, so the kernel swaps only
 under real memory pressure and leaves the agents' working set in RAM.
 
+Under memory pressure the kernel can write pages of the agents' processes, their tokens included, to
+`/swapfile` unencrypted. The file is root-only (`0600`) in the guest and lives on the VM's disk image on the
+host, so the host's disk encryption (FileVault on the Mac) covers it; the low swappiness keeps such writes
+rare.
+
 Its size is the `swapSize` param in `dev/lima.yaml`, `4GiB` by default: a whole number of GiB, or `0GiB`
 for no swap file. The file takes that much of the VM's disk, counted against `VM_DISK` (40 GiB by default).
 When the disk has less than twice the size free, provisioning skips the swap file with a warning in
@@ -286,8 +291,9 @@ The step runs at every boot, like the rest of the system provisioning: it leaves
 right size alone, switches on one that is off, and recreates one of another size. It builds a new file under
 a temporary name and renames it into place only once it is ready, and when `swapon` refuses a file of the
 right size (one a crash cut short while it was created) it rebuilds it once, so an interrupted creation is
-repaired at the next boot; a file that still cannot be switched on fails the step with a message. Check it in
-the VM:
+repaired at the next boot; a file that still cannot be switched on fails the step with a message. A
+temporary `/swapfile.new` that a crash left behind is never swap: the next boot removes it before it checks
+the free space. Check it in the VM:
 
 ```bash
 swapon --show                      # /swapfile, with its size
