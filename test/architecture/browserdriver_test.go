@@ -278,6 +278,8 @@ func goListImportPaths(t *testing.T, dir string, args ...string) []string {
 // pins this list exactly, and a name added to check's for its own offline
 // listing should not widen what a networked one inherits without that test
 // saying so. A name added there belongs here only after a look at both.
+// SystemRoot, which Windows programs need, is not listed: os/exec adds it on
+// Windows when it is missing.
 var probeInheritedEnv = []string{
 	// The toolchain: go test puts the one it runs under first on PATH, and sets
 	// GOROOT to it.
@@ -305,7 +307,9 @@ var probeInheritedEnv = []string{
 
 	// What a fetch through that proxy reads: an HTTP proxy in front of it, in
 	// both spellings Go's net/http honours, and the certificates that verify
-	// it, where a machine keeps them outside the system's defaults.
+	// it, where a machine keeps them outside the system's defaults. On Windows,
+	// where os.LookupEnv ignores case, both spellings find the same variable and
+	// pass it twice with the same value, which is harmless.
 	"HTTP_PROXY",
 	"HTTPS_PROXY",
 	"NO_PROXY",
