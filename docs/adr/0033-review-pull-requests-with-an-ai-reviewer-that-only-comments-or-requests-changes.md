@@ -2,7 +2,8 @@
 
 - Status: Accepted. Amended by issue #292 (the lenient category), and by issues #301, #316 and #324 (the
   prompt-injection rule, the retry of an unreadable answer, and the generated and golden files left out
-  of the diff), 2026-11-19
+  of the diff), 2026-11-19. Amended by issues #367 and #376 (a diff over the limit reviewed in parts,
+  the skipped outcome, and the answer format's empty `findings`), 2026-11-20
 - Date: 2026-11-18
 
 ## Context
@@ -196,7 +197,8 @@ claude -p --model claude-opus-5-5 --output-format json --safe-mode --tools ""
 ### The diff size limit (open question (4))
 
 **300,000 bytes of unified diff.** Over it the program fails the check with a message naming the size and
-the limit, and posts no review.
+the limit, and posts no review. (Amended by issues #367 and #376, below: a diff over it is reviewed in up
+to four parts of at most 300,000 bytes each, and one that cannot be split so ends in the skipped outcome.)
 
 - At about three bytes per token (the diffs of this repository are Go, Markdown and YAML), 300,000 bytes
   are about 100,000 tokens. With the fixed instructions (`CLAUDE.md` and the two skills are 18,444 bytes
@@ -397,7 +399,9 @@ the trigger option below are the levers.
   (the diff over the limit, GitHub or the model failing, the subscription's usage limit reached, an
   expired token, a malformed answer, a bad setting) exits non-zero
   and shows as a failing check with the reason; a draft or a fork shows as a skipped one; a cancelled run
-  shows as cancelled. None is a silent pass, and none blocks the merge on its own.
+  shows as cancelled. None is a silent pass, and none blocks the merge on its own. (Amended by issues
+  #367 and #376, below: a diff too large to review and two unusable answers no longer fail the check;
+  they end in the skipped outcome, which is no silent pass either.)
 - The program prints no token, key or header, and no text of the pull request or of the model's answer
   unescaped: a line it prints cannot become a workflow command. Every error it prints as an annotation
   goes through `review.AnnotationData`, GitHub's escaping of a workflow command's data (`%` as `%25`
@@ -464,7 +468,8 @@ the trigger option below are the levers.
   there is no second call and nothing is posted. **When the second answer has the wrong shape too**, the
   program posts one short `COMMENT` review on the head it read saying the review could not be read: no
   finding is invented, there are no inline comments and it is never `REQUEST_CHANGES` (so it dismisses
-  nothing either). The run still fails, so the check stays red and visible, and a re-run asks again. One
+  nothing either). The run still fails, so the check stays red and visible, and a re-run asks again
+  (amended by issues #367 and #376, below: this is now the skipped outcome, a check that does not fail). One
   retry, not more: a model that answers in the wrong shape twice in a row is more likely failing than
   unlucky, and each retry spends the subscription and the run's deadline. That comment is the
   maintainer's only sign of two spent model calls, so it is posted on a context detached from the run's
@@ -510,6 +515,109 @@ the trigger option below are the levers.
   the dismissed review requested changes on and the head the new review read.
 - **Release-please's and Renovate's pull requests are reviewed like any other**: same trigger, same
   prompt, same limit, no exception by author.
+
+### Amended by issues #367 and #376: review in parts, and the skipped outcome
+
+On 2026-11-20 two pull requests got no AI review. PR #359 (PRD #297 milestone 2, the largest and most
+security-relevant of the PRD) was over the 300,000-byte limit once generated and golden files were left
+out, and failed with `ErrDiffTooLarge` (#367). PR #372, a small docs and test change, failed because the
+model answered twice with no `findings` array (#376, run 44739179943, attempt 1); a re-run, attempt 2,
+reviewed it. Both showed as a failing check, which reads like a failure of the code.
+
+**#376's cause, as far as the evidence goes.** The parser's checks run in order (`ParseAnswer`), so "no
+`findings` array" means each answer was exactly one JSON object, with nothing before or after it (no
+code fence, no prose), no field but the two known ones, and a non-empty summary, whose `findings` was
+either missing or `null`. Both attempts built the reviewer from the same `main` commit (54f121f) and
+read the same diff (13 KB once the two golden files were left out, with no `summary` or `findings` key in
+it), so the prompt, the parser and the pull request were the same: the model's answer differed. Each
+unusable answer took about 12 seconds, against about 21 for attempt 2's answer with three findings, which
+fits an answer that reported nothing. Release PR #300 failed the same check before (issue #316, above).
+The likely cause is the answer format: it says `findings` is "an array, empty when there is nothing to
+report", and its one example shows an array with a finding, so a model with nothing to report sometimes
+writes `null` or leaves the field out. The fix in this repository:
+
+- The answer format (`systemAnswerFormat`) says that with nothing to report the answer is
+  `"findings": []`, never `null` and never left out, and shows that answer as a second example.
+- The parser stays strict: `null` and a missing `findings` stay shape errors, retried once (#316),
+  since the program cannot tell an answer that found nothing from one that lost its findings. The
+  check is split in two, "findings is null" and "no findings field", so the notice and the skipped
+  outcome of a recurrence name which one it was, still never quoting the answer.
+
+**Review in parts (#367).** Raising the limit was not taken: the limit bounds one call's context and cost,
+and the deadline does not grow with it. Instead:
+
+- After `FilterDiff`, a diff over `MaxDiffBytes` (300,000) is split into parts at file boundaries, the
+  `diff --git ` headers `FilterDiff` already cuts at, so no file's section is ever split: sections are
+  taken in the diff's order (git's path order, so a directory's files stay together) and a new part
+  starts when the next section would take the current one over 300,000 bytes. The parts joined are
+  byte for byte the filtered diff. A diff at or under the limit is one part, and its prompt is byte
+  for byte today's.
+- **At most four parts** (`MaxDiffParts`). The client reads at most `MaxRawDiffBytes`, 1,200,000 bytes,
+  four times the limit (issue #324), so the filtered diff is never larger and four full parts would
+  hold it; four parts bound the run's subscription use at four reviews (plus a retry each) and its
+  prompts at about 1.2 MB in memory. Packing at file boundaries can still need more than four parts for
+  a diff under 1.2 MB; that diff ends in the skipped outcome. **A single file whose own section is over
+  300,000 bytes** cannot be reviewed either, since a section is never split (a hunk cut short is no
+  diff): the skipped outcome, naming the file as the "Not reviewed" note names a path (escaped and cut).
+  A raw diff over `MaxRawDiffBytes` takes the skipped outcome too.
+- **Each part is its own model call**, with the whole trusted system prompt, the pull request's title,
+  body and whole file list, the left-out list, and that part's diff. The system prompt says, with the
+  program's own numbers only, that this is part i of n, that the other parts are reviewed by separate
+  calls, and that a changed file whose diff is not in this part is not missing. Each part keeps its
+  own retry of an unreadable answer (#316) and its own notice, which names the part.
+- **The parts run concurrently**, each a goroutine reporting to one channel (the library's import list
+  has no `sync`, and needs none). The run's deadline and the model's timeout do not change: each call
+  is capped at ten minutes and by what remains of the run's fifteen, so a part's retry still fits as
+  before, and the run takes as long as its slowest part. The cost: up to four concurrent calls on the
+  subscription, where a rate limit is likelier; that limit stays a failing check.
+- **One combined review.** The findings of every part are posted as one review on the head read, with
+  one summary per part ("Part i of n: ..."), one event decided over all the findings (`Decide`), the
+  renderer's limits and the "Not reviewed" note as before, and the dismissal of earlier change requests
+  only when no finding of any part blocks.
+- **When a part fails.** A part's failure that is not "two unusable answers" (a model error, a usage
+  limit, an authentication error, a deadline, a cancellation) cancels the other parts, posts nothing and
+  fails the run, as one call's failure does. A part whose two answers are unusable lets the others end;
+  then, unless another part failed for real, the whole run takes the skipped outcome and posts no part's
+  findings: a review that left part of the change out without saying so would read as a full review.
+
+**The skipped outcome (#367 and #376).** Exactly two causes take it: the diff is too large to review
+(more than four parts, a single file over 300,000 bytes, or a raw diff over `MaxRawDiffBytes`), or the
+model gave no usable answer twice in a row for the run or one of its parts. Then the program:
+
+- posts one `COMMENT` review on the head read, with no finding and no inline comment, saying the AI
+  review was skipped and why: the size and the limit (or the file over it), or that the model gave no
+  usable answer twice. It never holds text of the model's answer. A `COMMENT` review is what the reviewer
+  App's token may already post (pull requests write); no permission and no setting of the workflow or
+  its environment changes. It replaces the #316 review that said the answer could not be read, and is
+  posted the same way: for two unusable answers on a context detached from the run's cancellation,
+  bounded by `UnreadablePostTimeout`;
+- prints one `::warning title=AI review skipped::` line naming the cause, and appends one line to the
+  job summary (`$GITHUB_STEP_SUMMARY`, read by `main` through the `os.LookupEnv` it already has and
+  written by `main`, since the library opens no file);
+- exits 0.
+
+**The check's conclusion is success.** GitHub Actions gives a job only success, failure, cancelled or
+skipped; a "neutral" conclusion exists only for a check run made through the Checks API, which would need
+`checks: write`, out of scope here. A job cannot mark itself skipped once it runs. So the skipped outcome is
+a green check that the maintainer tells apart from a review by the warning annotation on the run and on
+the pull request's checks, the job summary line, and the review saying "skipped". A failed post of that
+review is a GitHub failure and fails the run.
+
+**Everything else still fails the check**: an authentication error, a usage limit, any other model or CLI
+error, a GitHub API failure (GitHub's own refusal of a very large diff included), a deadline that passes
+(also between an unusable first answer and its retry, which then is not asked), a cancellation, a bad
+setting, a draft, and a finding the parser refuses (#295). The skipped outcome is decided from the two
+causes' own errors (`ErrDiffTooLarge` from the size checks, and the error of two unusable answers), never
+from a failure's text, so it cannot hide a real failure.
+
+**What the tests pin** (`ci/aireview/internal/review`, with the in-memory GitHub and model fakes of its
+run tests, and the fake Claude Code CLI wired into a run): a diff of exactly 300,000 bytes is one call
+and a normal review; one byte over, in two files, is two calls and one combined review whose event is
+decided over both parts' findings; five files that pack into more than four parts, a single file over
+300,000 bytes, and a raw diff over 1,200,000 bytes each end in the skipped outcome with no model call;
+a model that answers twice with no `findings` array ends in the skipped outcome, as does one part of a
+split diff doing so; a part's model error fails the run and posts nothing; and the answer format says
+`"findings": []`.
 
 ## Alternatives considered
 
