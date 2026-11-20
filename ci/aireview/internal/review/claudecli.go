@@ -36,6 +36,10 @@ const cliWaitDelay = time.Second
 // would show it.
 const redacted = "[redacted]"
 
+// cliErrorClass is the constant class the error of an is_error result names,
+// with the CLI's subtype and never its result text (issue #374).
+const cliErrorClass = "claude cli error"
+
 // ClaudeCLI asks the model through one run of the Claude Code CLI, `claude -p`,
 // on the maintainer's Claude subscription (ADR 0033). It never puts the token
 // in an error.
@@ -78,7 +82,9 @@ type cliResult struct {
 // runs past the timeout, is cancelled or stopped by the run's deadline, prints no JSON result, reports an error,
 // ends its turn other than with success, or prints an empty result; the error
 // quotes at most maxCLIExcerpt bytes of the CLI's text, with the token
-// redacted.
+// redacted. An error result (is_error) is named by the constant class
+// cliErrorClass and the CLI's subtype alone: its result text is never quoted
+// (issue #374).
 func (c *ClaudeCLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	if !strings.HasPrefix(c.path, "/") {
 		return "", fmt.Errorf("%w: the Claude Code CLI's path %q is not absolute", ErrModel, c.path)
@@ -253,8 +259,11 @@ func (c *ClaudeCLI) answer(runErr error, stdout, stderr *cappedBuffer) (string, 
 	case result.Type != "result":
 		return "", fmt.Errorf("%w: the Claude Code CLI printed a %q element, not the result", ErrModel, c.excerpt(result.Type))
 	case result.IsError:
-		return "", fmt.Errorf("%w: the Claude Code CLI reported an error (subtype %q%s): %s",
-			ErrModel, c.excerpt(result.Subtype), exitNote(runErr), c.excerpt(result.Result))
+		// The result text is the model's or the CLI's own words, which a pull
+		// request's author can steer, and this error is the job's public
+		// ::error line: it names the constant class and the subtype alone
+		// (issue #374).
+		return "", fmt.Errorf("%w: %s (subtype %q%s)", ErrModel, cliErrorClass, c.excerpt(result.Subtype), exitNote(runErr))
 	case result.Subtype != "success":
 		return "", fmt.Errorf("%w: the model did not end its turn (subtype %q%s)", ErrModel, c.excerpt(result.Subtype), exitNote(runErr))
 	case runErr != nil:

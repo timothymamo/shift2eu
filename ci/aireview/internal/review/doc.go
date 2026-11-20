@@ -40,15 +40,20 @@
 // one review whose event is decided over every part's findings. An answer of
 // the wrong shape is asked once more, announced by a workflow notice that names
 // the pull request, the part and the failed shape check (Config.Notices, issue
-// #343), never the decoder's message (issue #366). Run takes its deadline from
-// its context.
+// #343), a constant class with at most a byte offset, never the decoder's
+// message (issues #366, #375). An error result of the CLI is named by a
+// constant class and its subtype, never its text (issue #374). Run takes its
+// deadline from its context.
 //
 // A diff too large to review and a model that gives no usable answer twice end
 // in the skipped outcome (issues #367, #376): one COMMENT review that says the
 // review was skipped and why, no error, and Result.Skip, which ci/aireview's
 // main prints as a warning (SkipAnnotation) and appends to the job summary
 // (SkipSummaryLine), since this package writes no file but the CLI's prompt.
-// Every other failure still fails the run.
+// A split diff skipped for one unusable part summarises the parts that
+// answered in that review: counts, and each blocking finding's constant
+// category and a path of that part's diff with its line, never model text
+// (issue #388). Every other failure still fails the run.
 //
 // The poster supports exactly two events, COMMENT and REQUEST_CHANGES, and
 // refuses any other before it makes an HTTP call: the reviewer never

@@ -96,10 +96,10 @@ func ParseAnswer(text string) (Answer, error) {
 	dec.DisallowUnknownFields()
 
 	var raw rawAnswer
-	// The decoder's error is dropped: it quotes text of the answer, a field
-	// name or a few characters (shapeError).
-	if dec.Decode(&raw) != nil {
-		return Answer{}, newShapeError(checkNotOneObject)
+	// The decoder's error is classified, then dropped: it quotes text of the
+	// answer, a field name or a few characters (shapeError, issue #375).
+	if err := dec.Decode(&raw); err != nil {
+		return Answer{}, newShapeError(decodeCheck(err))
 	}
 
 	// What the decoder buffered but did not use, then what it never read.
@@ -116,7 +116,7 @@ func ParseAnswer(text string) (Answer, error) {
 	// from one that lost its findings. They are named apart so that a notice
 	// and a skip say which one the model wrote (issue #376).
 	if !raw.Findings.present {
-		return Answer{}, newShapeError(checkNoFindingsField)
+		return Answer{}, newShapeError(checkMissingFindings)
 	}
 
 	if raw.Findings.null {
@@ -138,31 +138,67 @@ func ParseAnswer(text string) (Answer, error) {
 }
 
 // shapeError is a malformed answer refused for its shape, before any one
-// finding is validated: no single JSON object of the answer's form (not JSON, a
-// top level that is no object, a findings that is no array, an unknown field or
-// a field of the wrong type), text around the object, no summary, no findings
-// field or a findings that is null (issue #376). Run asks the model once more for such an answer (issue
-// #316); a finding ParseAnswer refuses is no shapeError and is not asked again.
-// It wraps ErrMalformedAnswer as every malformed answer's error does. check is
-// the phrase of the shape check that failed, one of this package's constants
-// and never text of the answer, which Run's retry notice names (issue #343).
-// The error's text is ErrMalformedAnswer's and check's alone, and it wraps
-// nothing else: the decoder's own error quotes what it could not read (a field
-// name the model chose, a character of its answer), and the error reaches the
-// job's public ::error line, so it is dropped rather than wrapped (issue #366).
+// finding is validated: no single JSON object of the answer's form (broken
+// JSON, an unknown field, a field of the wrong type, a top level that is no
+// object or a findings that is no array), text around the object, no summary,
+// no findings field or a findings that is null (issue #376). Run asks the
+// model once more for such an answer (issue #316); a finding ParseAnswer
+// refuses is no shapeError and is not asked again. It wraps ErrMalformedAnswer
+// as every malformed answer's error does. check is the class of the shape
+// check that failed: one of this package's constant phrases, the syntax class
+// with nothing but a byte offset added (issue #375), and never text of the
+// answer; Run's retry notice names it (issue #343). The error's text is
+// ErrMalformedAnswer's and check's alone, and it wraps nothing else: the
+// decoder's own error quotes what it could not read (a field name the model
+// chose, a character of its answer), and the error reaches the job's public
+// ::error line, so it is classified and dropped rather than wrapped (issue
+// #366).
 type shapeError struct {
 	check string
 }
 
 // The shape checks ParseAnswer makes, as its errors and the retry notice name
-// them.
+// them. checkSyntax is followed by the byte offset (decodeCheck).
 const (
+	checkSyntax          = "syntax at byte"
+	checkSyntaxEnd       = "syntax at the end of the answer"
+	checkUnknownField    = "unknown field"
+	checkWrongType       = "wrong type"
 	checkNotOneObject    = "not one JSON object of the answer's form"
 	checkTextAfter       = "text after the JSON object"
 	checkNoSummary       = "no summary"
-	checkNoFindingsField = "no findings field"
+	checkMissingFindings = "missing findings"
 	checkFindingsNull    = "findings is null"
 )
+
+// unknownFieldPrefix starts the text of encoding/json's error for an unknown
+// field under DisallowUnknownFields, which has no type of its own.
+const unknownFieldPrefix = "json: unknown field "
+
+// decodeCheck returns the shape class of err, the decoder's error for the
+// answer, built from this package's constants and, for broken JSON, the
+// offset *json.SyntaxError names, never from the error's text (issue #375).
+// The offset counts the answer's bytes from 1 to the first one the decoder
+// could not read.
+func decodeCheck(err error) string {
+	var (
+		syntaxErr *json.SyntaxError
+		typeErr   *json.UnmarshalTypeError
+	)
+
+	switch {
+	case errors.As(err, &syntaxErr):
+		return fmt.Sprintf("%s %d", checkSyntax, syntaxErr.Offset)
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return checkSyntaxEnd
+	case errors.As(err, &typeErr):
+		return checkWrongType
+	case strings.HasPrefix(err.Error(), unknownFieldPrefix):
+		return checkUnknownField
+	default:
+		return checkNotOneObject
+	}
+}
 
 // newShapeError returns the shapeError of check.
 func newShapeError(check string) shapeError {

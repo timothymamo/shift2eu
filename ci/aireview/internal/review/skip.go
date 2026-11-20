@@ -3,6 +3,8 @@ package review
 import (
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -99,9 +101,10 @@ func skipTooLarge(err error) (skipped, bool) {
 // skipNoUsableAnswer returns the skipped outcome of a model that gave no usable
 // answer twice, for part index of count (count 1 for a diff of one part), whose
 // second answer failed the shape check check, one of this package's constants,
-// while usable other parts got a usable answer, whose findings the review
-// leaves out.
-func skipNoUsableAnswer(check string, index, count, usable int) skipped {
+// while the answered parts got a usable answer, whose findings the review
+// leaves out and summarises (answeredSummary, issue #388). The summary goes in
+// the review's body alone, never in the message, which reaches the job's log.
+func skipNoUsableAnswer(check string, index, count int, answered []answeredPart) skipped {
 	where := ""
 	if count > 1 {
 		where = fmt.Sprintf(" for part %d of %d of the diff", index, count)
@@ -113,13 +116,139 @@ func skipNoUsableAnswer(check string, index, count, usable int) skipped {
 	// Program text, never the model's: the one cause of this skip a pull
 	// request can bring about itself (issue #376, ADR 0033).
 	body := message
-	if left := leftOutParts(usable); left != "" {
+	if left := leftOutParts(len(answered)); left != "" {
 		body += "\n\n" + left
+	}
+
+	if summary := answeredSummary(answered, count); summary != "" {
+		body += "\n\n" + summary
 	}
 
 	body += "\n\n" + injectionWarning
 
 	return skipped{skip: Skip{Reason: SkipNoUsableAnswer, Message: message}, body: body}
+}
+
+// answeredPart is a part of a split diff that got a usable answer while
+// another part did not: its number (from 1), its findings, and the paths its
+// own diff's file headers name, which decide whether a finding's path is
+// shown (issue #388).
+type answeredPart struct {
+	index    int
+	findings []Finding
+	files    map[string]bool
+}
+
+// partFiles returns the paths, old and new, that the file headers of part, a
+// part of a split diff, name and sectionPaths can read with certainty. A path
+// it cannot read is in no part, so a finding naming it reads as outside its
+// part, which is safe.
+func partFiles(part string) map[string]bool {
+	files := map[string]bool{}
+
+	for _, section := range diffSections(part) {
+		if paths, ok := sectionPaths(section); ok {
+			for _, p := range paths {
+				files[p] = true
+			}
+		}
+	}
+
+	return files
+}
+
+// answeredSummary returns the skipped review's summary of the parts of count
+// that answered usably, and "" when none did: a fixed heading, then per part,
+// in the parts' order, how many of its findings block and how many do not,
+// and beneath it one line per blocking finding with its category and its
+// location (issue #388, ADR 0033). The category is this package's constant,
+// CategoryUncategorised reading "other"; the location is the finding's path,
+// and its line when it has one, only when the path is a file of that part's
+// own diff, and "a file outside the part" otherwise. No title, body, summary
+// or other text of the model's answer is shown: the model chooses at most the
+// counts and which of those constants and of the part's paths and lines
+// appear.
+func answeredSummary(answered []answeredPart, count int) string {
+	if len(answered) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+
+	b.WriteString("**Blocking findings in the parts that answered:**\n")
+
+	for _, part := range answered {
+		blocking := countBlocking(part.findings)
+
+		fmt.Fprintf(&b, "\n- Part %d of %d: %d blocking, %d non-blocking.",
+			part.index, count, blocking, len(part.findings)-blocking)
+
+		for _, f := range part.findings {
+			if f.Blocking() {
+				fmt.Fprintf(&b, "\n  - blocking: category %s at %s", summaryCategory(f.Category), summaryLocation(f, part.files))
+			}
+		}
+	}
+
+	return b.String()
+}
+
+// summaryCategory returns c as the summary names it: CategoryUncategorised as
+// "other", any other category, always one of this package's constants, as it
+// is.
+func summaryCategory(c Category) string {
+	if c == CategoryUncategorised || !slices.Contains(categories, c) {
+		return "other"
+	}
+
+	return string(c)
+}
+
+// summaryLocation returns where the summary says finding f of a part is:
+// "a file outside the part" unless f's path is one of files, the paths of the
+// part's own diff; then the path, escaped as summaryPath does, followed by
+// ":" and the line when f has one.
+func summaryLocation(f Finding, files map[string]bool) string {
+	if f.Path == "" || !files[f.Path] {
+		return "a file outside the part"
+	}
+
+	if f.Line > 0 {
+		return summaryPath(f.Path) + ":" + strconv.Itoa(f.Line)
+	}
+
+	return summaryPath(f.Path)
+}
+
+// markdownPunctuation are the characters summaryPath escapes with a
+// backslash, so a path shows as written and starts no emphasis, link, HTML,
+// code span or table cell. "&" is left to defuseMentions, "." and "/" are
+// harmless mid-line.
+const markdownPunctuation = "\\`*_[]<>()#!|~"
+
+// summaryPath returns path, a path of the pull request's diff, as plain
+// Markdown text on one line: control characters made spaces, mentions defused,
+// Markdown punctuation escaped, and cut to maxListedPathUnits with "…" when
+// longer.
+func summaryPath(path string) string {
+	text := defuseMentions(oneLine(path))
+
+	var b strings.Builder
+
+	for _, r := range text {
+		if r < 0x80 && strings.ContainsRune(markdownPunctuation, r) {
+			b.WriteByte('\\')
+		}
+
+		b.WriteRune(r)
+	}
+
+	text = b.String()
+	if utf16Len(text) > maxListedPathUnits {
+		text = prefixUnits(text, maxListedPathUnits-1) + "…"
+	}
+
+	return text
 }
 
 // leftOutParts returns the fixed sentence that says how many other parts of a
