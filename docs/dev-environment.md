@@ -912,6 +912,7 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 # WARN "warning: could not list the system domain ...": installed, but a foreign LaunchDaemon would go unnoticed; check sudo launchctl print system
 # WARN "warning: <n> job(s) with unusual labels not checked": installed; look for them in launchctl print system and gui/<uid>
 # WARN "warning: the pid file ... no longer names pid <pid> ...": nothing was stopped; if the log says another refresh runs, stop it, install again
+# WARN "warning: ... could not read the job's pid ... pid <pid> ...": installed; if ps -p <pid> shows a refresh after the bootout, stop it, install again
 # FAIL "refused: a refresh that make agents-token-refresh-start did not start holds the lock ... (pid <pid> ...)": kill <pid>, install again
 # FAIL "refused: <clone> is inside <location>, which the VM shift2eu mounts ..." or "refused: the VM shift2eu mounts
 #   <location>, which is inside <clone> ...": install from the host clone, outside every mount of the VM (What install does)
@@ -922,7 +923,7 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 # FAIL "the old job <label> is still loaded ...": sudo launchctl print system/<label>, wait or make agents-token-refresh-uninstall, install again
 # FAIL "... is not the plist printed above ...": no job is loaded; look for what changed the file, install again
 # FAIL "launchctl bootstrap failed twice: NO token refresh job ...": install again, or make agents-token-refresh-start (if it says "the hand-started refresh was stopped", none runs at all now)
-# FAIL "warning: pid <pid> still runs ... after TERM": once ps -p <pid> shows nothing, the job takes over within 5 minutes
+# WARN "warning: pid <pid> still runs ... after TERM": installed; once ps -p <pid> shows nothing, the job takes over within 5 minutes
 ```
 
 **2. Check that it is loaded and minting:**

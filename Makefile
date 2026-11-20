@@ -1073,10 +1073,17 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 		kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh' || held='' ;; \
 	esac; \
 	if [ -n "$$held" ]; then \
-		job_pid="$$(launchctl print "system/$$label" 2>/dev/null | awk '/^[[:space:]]*pid = [0-9]+[[:space:]]*$$/ { print $$3; exit }')"; \
+		job_loaded=''; \
+		job_print="$$(launchctl print "system/$$label" 2>/dev/null)" && job_loaded=1; \
+		job_pid="$$(printf '%s\n' "$$job_print" | awk '/^[[:space:]]*pid = [0-9]+[[:space:]]*$$/ { print $$3; exit }')"; \
 		if [ "$$held" = "$$job_pid" ]; then \
 			held=''; \
-		elif [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" != "$$held" ]; then \
+		elif [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" = "$$held" ]; then \
+			:; \
+		elif [ -n "$$job_loaded" ] && [ -z "$$job_pid" ]; then \
+			echo "agents-token-refresh-install: warning: $$label is loaded, but launchctl print names no pid for it, so the install could not read the job's pid to tell whether pid $$held, which holds the lock of $$LIMA_INSTANCE, is the job's own refresh. It is not stopped: if it is the job's, the bootout below ends it and the new job takes over; if it is not (a make agents-token-refresh in a terminal, or another clone's), the job exits at every ThrottleInterval until it ends: stop that refresh, then run make agents-token-refresh-install again" >&2; \
+			held=''; \
+		else \
 			echo "agents-token-refresh-install: refused: a refresh that make agents-token-refresh-start did not start holds the lock of $$LIMA_INSTANCE (pid $$held; a make agents-token-refresh in a terminal, or another clone's), so the job would find the lock taken and exit at every ThrottleInterval. Nothing was installed: stop it (kill $$held), then run make agents-token-refresh-install again" >&2; \
 			exit 1; \
 		fi; \
@@ -1142,6 +1149,11 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 	fi; \
 	echo "agents-token-refresh-install: $$dest has the SHA-256 printed above"; \
 	stopped=''; \
+	# The pid files are read again after sudo, which can wait for a password: \
+	# the start target's pid file, so a refresh it no longer names is not stopped; \
+	# the lock's pid file, so only the refresh that still holds the lock is; \
+	# and the start target's pid file once more, so only its own pid is removed. \
+	# The pid could be reused between ps -p and kill -TERM: that window is accepted. \
 	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" != "$$held" ]; then \
 		lock_holder="$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))"; \
 		if [ -n "$$lock_holder" ] && kill -0 "$$lock_holder" 2>/dev/null; then \
