@@ -91,7 +91,11 @@
 >    never a login shell, with `HOME` set to its home (`-H`; macOS's sudoers keeps the caller's `HOME`
 >    otherwise), none of the maintainer's environment (`env -i`: no `PATH`, `GIT_*`, pager or `DYLD_*` of
 >    the maintainer's reaches it) and no tool the maintainer's uid owns (the full path; Homebrew's `git`
->    is the maintainer's). The make targets' own `sudo -u <account>` calls take the same form. Created once by
+>    is the maintainer's). The make targets' own `sudo -u <account>` calls keep `-H`, `/usr/bin/env -i` and
+>    tools by full path but run from make's working directory, not `/`: `make agents-token-refresh-install`
+>    passes this `HOME` and `PATH` and the job's variables (5 below) to `/bin/sh
+>    <clone>/dev/agents-token-launchd.sh plist`, and `make vm-agents-token-ssh` (4 below) passes only
+>    `PATH=/usr/bin:/bin`, no `HOME`, to `/bin/cat` and `/bin/sh`. Created once by
 >    the maintainer with `sudo` (`docs/dev-environment.md` carries the runbook; no agent ever runs it,
 >    and no make target creates or deletes an account): a group and a user of the same name and id, the
 >    first free id from 450 to 499 (`dscl . -list /Users UniqueID`, `dscl . -list /Groups
@@ -229,8 +233,8 @@
 >    again (after `make vm-delete vm-create`, after a new SSH key). It needs `SHIFT2EU_AGENTS_ACCOUNT` and
 >    `SHIFT2EU_AGENTS_VM_SSH_PORT`, and in this order, stopping at the first failure:
 >    1. checks the port (3 above);
->    2. reads the account's public key with `sudo -u <account> -H /bin/cat
->       /Users/<account>/.config/shift2eu/agents-vm-ssh-key.pub` (printed with a `+ ` before it, like
+>    2. reads the account's public key with `sudo -u <account> -H /usr/bin/env -i PATH=/usr/bin:/bin
+>       /bin/cat /Users/<account>/.config/shift2eu/agents-vm-ssh-key.pub` (printed with a `+ ` before it, like
 >       every `sudo` the targets run) and refuses anything but one line `ssh-ed25519 <base64>` with an
 >       optional comment of letters, digits and `@ . _ -`: no options, quotes, commas or second line can
 >       reach the keys file. The comment is replaced with `shift2eu-agents-token`;
@@ -251,11 +255,12 @@
 >       `/etc/ssh/ssh_host_ed25519_key.pub` as `host-key=ssh-ed25519 <base64>`;
 >    4. pins the host key: writes `shift2eu-vm-<instance> ssh-ed25519 <base64>` to
 >       `/Users/<account>/.config/shift2eu/known-hosts-<instance>` as the account, through `sudo -u
->       <account> -H /bin/sh -c 'umask 077 && cat >"$1.new" && mv -f "$1.new" "$1"' pin <path>`, the line
->       on standard input. The host key is read through `limactl shell`, which reaches the real VM, so the
+>       <account> -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c 'umask 077 && /bin/cat >"$1.new" &&
+>       /bin/mv -f "$1.new" "$1"' pin <path>` (printed the same way), the line on standard input. The host key is read through `limactl shell`, which reaches the real VM, so the
 >       pin needs no trust on first use;
 >    5. prints the keys line, the pin, and the next step (`make agents-token-refresh-install`, or
->       `sudo launchctl kickstart -k system/<label>` when the job is loaded).
+>       `sudo launchctl kickstart -k system/<label>`, then `sudo -k`, when the job is loaded), and ends
+>       with `sudo -k`, on success and on failure.
 >
 >    **`make vm-agents-token-ssh-uninstall`** removes the drop-in, the keys file and the writer (with
 >    `sudo`, in the VM, over `limactl shell`'s standard input, the same whole-script check and a
