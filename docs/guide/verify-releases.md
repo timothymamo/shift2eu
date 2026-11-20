@@ -131,9 +131,10 @@ Expand-Archive $Archive
 Each archive holds only the `shift2eu` binary (`shift2eu.exe` on Windows), with `README.md`,
 `LICENSE` and the Markdown pages under `docs/`. Releases that still shipped the HTTP API's
 `shift2eu-server_*` archives and `shift2eu-server_openapi.json` list them in the same `checksums.txt`:
-check them the same way, by their names. The archives' attestations start with the first release after `v0.3.0`: for `v0.3.0` and earlier,
-only the digest check applies, and `checksums.txt` comes from the same release as the archive, so it
-cannot tell a compromised release from a sound one; run the signed image instead where that matters.
+check them the same way, by their names (the OpenAPI document is not extracted). The archives'
+attestations start with the first release after `v0.3.0`: for `v0.3.0` and earlier, only the digest
+check applies, and `checksums.txt` comes from the same release as the archive, so it cannot tell a
+compromised release from a sound one; run the signed image instead where that matters.
 
 ## Releases before the rename: v0.1.0 and v0.1.0-rc.1
 

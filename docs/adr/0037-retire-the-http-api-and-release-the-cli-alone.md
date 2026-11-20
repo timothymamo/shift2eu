@@ -58,7 +58,8 @@ reader uses it.
 
 ## Consequences
 
-- 0.10.1 and the pending 0.10.2 still ship `shift2eu-server`. The first release after this change does not:
+- Every release before the one that contains this change still ships `shift2eu-server` (0.10.1 at the
+  time of writing; the pending 0.10.2 too if it is released first). The release that contains it does not:
   no server archives, no `shift2eu-server_openapi.json` and no new server image. Its release notes say so
   (the change is a breaking `chore!` commit) and point to the site and the CLI.
 - The images `ghcr.io/timothymamo/shift2eu-server` up to the last release that shipped them stay available,

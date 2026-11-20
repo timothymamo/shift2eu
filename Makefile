@@ -330,7 +330,7 @@ tidy: ## Tidy go.mod and go.sum, and the lint tools' tools/go.mod and tools/go.s
 	go -C tools mod tidy
 
 .PHONY: openapi
-openapi: ## Regenerate api/openapi.bundled.json, the self-contained OpenAPI document each release publishes (issue #139)
+openapi: ## Regenerate api/openapi.bundled.json, the API's self-contained OpenAPI document (no longer released, ADR 0037)
 	go test -count=1 ./test/openapibundle -update
 
 ##@ Testing

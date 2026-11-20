@@ -19,8 +19,8 @@ concurrency:
 
 # The steps of all ten jobs are a closed list that test/architecture holds
 # (check.ReleaseWorkflow): add no step, run: or env: here without changing it.
-# The release ships the CLI alone: the HTTP API's image and archive, and the
-# bundled OpenAPI document, are gone (issue #393). latest alone decides, once
+# The release ships the CLI alone: the HTTP API's image, archive and API
+# document are gone (issue #393). latest alone decides, once
 # per run, whether the tag is the
 # highest release tag on main, so the image's latest tag and GitHub's "Latest"
 # release cannot disagree. goreleaser hands the archives on, attest-archives
