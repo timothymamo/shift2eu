@@ -16,6 +16,10 @@ const (
 	EnvGitHubToken    = "AI_REVIEWER_TOKEN"
 	EnvModelToken     = "CLAUDE_CODE_OAUTH_TOKEN" //nolint:gosec // the variable's name, not a credential
 	EnvRequestChanges = "AI_REVIEW_REQUEST_CHANGES"
+	// EnvStepSummary is the file GitHub Actions appends a job's summary to,
+	// which the runner sets on every step: the skipped outcome adds one line to
+	// it (issue #367).
+	EnvStepSummary = "GITHUB_STEP_SUMMARY"
 )
 
 // envAnthropicAPIKey is the variable SettingsFromEnv refuses when it is set:
@@ -26,6 +30,8 @@ const envAnthropicAPIKey = "ANTHROPIC_API_KEY" //nolint:gosec // the variable's 
 
 // Settings is a run's settings from the environment. GitHubToken and
 // ModelToken are credentials: String leaves them out, and nothing prints them.
+// StepSummary is the absolute path of the job summary's file, "" outside
+// GitHub Actions.
 type Settings struct {
 	Repository     string
 	Number         int
@@ -33,6 +39,7 @@ type Settings struct {
 	GitHubToken    string
 	ModelToken     string
 	RequestChanges bool
+	StepSummary    string
 }
 
 // SettingsFromEnv reads the settings through lookup (os.LookupEnv in
@@ -44,8 +51,10 @@ type Settings struct {
 // EnvAppSlug is not a GitHub App slug (lower-case letters, digits and '-',
 // starting with a letter or digit); EnvGitHubToken or EnvModelToken is unset
 // or empty; ANTHROPIC_API_KEY is set to anything but ""; or EnvRequestChanges
-// is set to anything but "", "false" or "true". BotLogin is the slug followed
-// by "[bot]"; RequestChanges is true for "true" alone.
+// is set to anything but "", "false" or "true"; or EnvStepSummary is set to a
+// value that is not an absolute path. BotLogin is the slug followed by "[bot]";
+// RequestChanges is true for "true" alone; StepSummary is "" when EnvStepSummary
+// is unset or empty, since a run outside GitHub Actions has no job summary.
 func SettingsFromEnv(lookup func(string) (string, bool)) (Settings, error) {
 	var s Settings
 
@@ -90,6 +99,12 @@ func SettingsFromEnv(lookup func(string) (string, bool)) (Settings, error) {
 		s.RequestChanges = true
 	default:
 		return Settings{}, fmt.Errorf("%w: %s is neither true nor false (unset or empty is false)", ErrSettings, EnvRequestChanges)
+	}
+
+	// A relative path would be appended to a file of the working directory,
+	// main's checkout, and a typo would lose the line without a word.
+	if s.StepSummary = lookupValue(lookup, EnvStepSummary); s.StepSummary != "" && !strings.HasPrefix(s.StepSummary, "/") {
+		return Settings{}, fmt.Errorf("%w: %s is not an absolute path", ErrSettings, EnvStepSummary)
 	}
 
 	return s, nil

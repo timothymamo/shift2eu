@@ -492,20 +492,6 @@ func leftOutFileNote(file LeftOutFile) string {
 	}
 }
 
-// unreadableReview returns the review a run posts when the model's answer
-// could not be read twice in turn (issue #316): a comment on headSHA that
-// says so, holds no finding and is never a change request.
-func unreadableReview(headSHA string) Review {
-	return Review{
-		CommitID: headSHA,
-		Event:    EventComment,
-		Body: fmt.Sprintf("**AI review** of %s\n\n", headSHA) +
-			"The AI review of this commit could not be read: the model answered twice, and neither answer " +
-			"had the form the reviewer reads, so this review holds no finding. The check fails so that this " +
-			"stays visible; re-run it to ask for a review again.\n" + adviceFooter,
-	}
-}
-
 // inlineSentence says that n findings are inline comments, without its full
 // stop.
 func inlineSentence(n int) string {

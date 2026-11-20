@@ -243,6 +243,33 @@ func TestBuildPromptCapsTheLeftOutList(t *testing.T) {
 	}
 }
 
+// TestBuildPromptAsksForAnEmptyFindingsArray pins issue #376's fix of the answer
+// format: a pull request that reports nothing failed twice with an answer that
+// had no findings array, so the format now shows the empty array itself as the
+// answer of nothing to report, and says the field is never null and never left
+// out. The parser stays strict (TestParseAnswerNamesTheFindingsCheckThatFailed):
+// the program cannot tell an answer that found nothing from one that lost its
+// findings, so the format is what has to be unambiguous.
+func TestBuildPromptAsksForAnEmptyFindingsArray(t *testing.T) {
+	t.Parallel()
+
+	pr := review.PullRequest{Number: 7, Title: "Add x", Author: "agent[bot]", HeadSHA: headSHA, BaseSHA: baseSHA}
+
+	system := review.BuildPrompt(splitInstructions, pr, nil, cleanDiff, nil).System
+
+	if !strings.Contains(system, `"findings": []`) {
+		t.Errorf("the answer format does not show the empty findings array `\"findings\": []`, which is the answer of nothing to report (issue #376); system prompt:\n%s", system)
+	}
+
+	lower := strings.ToLower(system)
+
+	for _, want := range []string{"never null", "never leave it out"} {
+		if !strings.Contains(lower, want) {
+			t.Errorf("the answer format does not say %q: an answer with nothing to report writes an empty findings array, never null and never without the field (issue #376)", want)
+		}
+	}
+}
+
 // untrustedPart returns the pull request's data of a user message: the text
 // between the untrusted tags.
 func untrustedPart(t *testing.T, user string) string {

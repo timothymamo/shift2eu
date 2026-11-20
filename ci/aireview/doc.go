@@ -15,6 +15,12 @@
 // request, the model or an API can become a workflow command. It prints no
 // credential.
 //
+// A run that ends in the skipped outcome (a diff too large to review, or no
+// usable answer from the model twice; issues #367, #376) has posted a review
+// saying so: the program prints one ::warning annotation, appends one line to
+// the job summary ($GITHUB_STEP_SUMMARY, when set) and exits 0. A job summary
+// it cannot write is one more warning, never a failure.
+//
 // It is no part of the product: a main package, which nothing can import, built
 // by no release (.goreleaser.yaml and the Dockerfile build cmd/ only).
 package main

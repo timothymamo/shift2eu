@@ -23,10 +23,37 @@ var (
 )
 
 // rawAnswer and rawFinding are the answer's JSON. Pointers tell a missing field
-// from an empty one.
+// from an empty one; rawFindings tells a missing findings from a null one.
 type rawAnswer struct {
-	Summary  *string       `json:"summary"`
-	Findings *[]rawFinding `json:"findings"`
+	Summary  *string     `json:"summary"`
+	Findings rawFindings `json:"findings"`
+}
+
+// rawFindings is the answer's findings field: whether the answer has the field
+// at all, whether it is null, and its findings otherwise (issue #376).
+type rawFindings struct {
+	present bool
+	null    bool
+	items   []rawFinding
+}
+
+// UnmarshalJSON reads the findings field. encoding/json calls it for the field
+// alone, null included, and never for a missing field. The findings are decoded
+// with unknown fields refused, as the outer decoder refuses them, since its
+// setting does not reach a decoder of its own.
+func (r *rawFindings) UnmarshalJSON(data []byte) error {
+	r.present = true
+
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		r.null = true
+
+		return nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+
+	return dec.Decode(&r.items)
 }
 
 type rawFinding struct {
@@ -85,13 +112,20 @@ func ParseAnswer(text string) (Answer, error) {
 		return Answer{}, newShapeError(checkNoSummary)
 	}
 
-	if raw.Findings == nil {
-		return Answer{}, newShapeError(checkNoFindings)
+	// Both stay refused: the program cannot tell an answer that found nothing
+	// from one that lost its findings. They are named apart so that a notice
+	// and a skip say which one the model wrote (issue #376).
+	if !raw.Findings.present {
+		return Answer{}, newShapeError(checkNoFindingsField)
 	}
 
-	answer := Answer{Summary: *raw.Summary, Findings: make([]Finding, 0, len(*raw.Findings))}
+	if raw.Findings.null {
+		return Answer{}, newShapeError(checkFindingsNull)
+	}
 
-	for i, rf := range *raw.Findings {
+	answer := Answer{Summary: *raw.Summary, Findings: make([]Finding, 0, len(raw.Findings.items))}
+
+	for i, rf := range raw.Findings.items {
 		f, err := rf.finding()
 		if err != nil {
 			return Answer{}, fmt.Errorf("%w: finding %d: %w", ErrMalformedAnswer, i+1, err)
@@ -106,8 +140,8 @@ func ParseAnswer(text string) (Answer, error) {
 // shapeError is a malformed answer refused for its shape, before any one
 // finding is validated: no single JSON object of the answer's form (not JSON, a
 // top level that is no object, a findings that is no array, an unknown field or
-// a field of the wrong type), text around the object, no summary or no
-// findings array. Run asks the model once more for such an answer (issue
+// a field of the wrong type), text around the object, no summary, no findings
+// field or a findings that is null (issue #376). Run asks the model once more for such an answer (issue
 // #316); a finding ParseAnswer refuses is no shapeError and is not asked again.
 // It wraps ErrMalformedAnswer as every malformed answer's error does. check is
 // the phrase of the shape check that failed, one of this package's constants
@@ -123,10 +157,11 @@ type shapeError struct {
 // The shape checks ParseAnswer makes, as its errors and the retry notice name
 // them.
 const (
-	checkNotOneObject = "not one JSON object of the answer's form"
-	checkTextAfter    = "text after the JSON object"
-	checkNoSummary    = "no summary"
-	checkNoFindings   = "no findings array"
+	checkNotOneObject    = "not one JSON object of the answer's form"
+	checkTextAfter       = "text after the JSON object"
+	checkNoSummary       = "no summary"
+	checkNoFindingsField = "no findings field"
+	checkFindingsNull    = "findings is null"
 )
 
 // newShapeError returns the shapeError of check.

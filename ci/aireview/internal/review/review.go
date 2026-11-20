@@ -8,28 +8,32 @@ const Model = "claude-opus-5-5"
 
 // MaxDiffBytes is the largest unified diff, in bytes, the reviewer sends to the
 // model (ADR 0033): the pull request's diff once FilterDiff has left the
-// generated and golden files out (issue #324). A larger one fails the run with
-// ErrDiffTooLarge and posts no review.
+// generated and golden files out (issue #324), in one model call. A larger one
+// is split into at most MaxDiffParts parts of at most this size (SplitDiff,
+// issue #367), and one that cannot be split so ends in the skipped outcome.
 const MaxDiffBytes = 300_000
 
 // MaxRawDiffBytes is the largest diff, in bytes, the GitHub client reads before
 // anything is left out (issue #324, ADR 0033). It is four times MaxDiffBytes,
 // room for a schema version bump whose golden files and generated bundle are
 // most of its diff, while a diff the client reads still costs little memory. A
-// larger diff fails the run with ErrDiffTooLarge: it is never filtered in part,
-// since a diff cut short is no diff.
+// larger diff is refused with ErrDiffTooLarge, and the run ends in the skipped
+// outcome (issue #367): it is never filtered in part, since a diff cut short is
+// no diff.
 const MaxRawDiffBytes = 4 * MaxDiffBytes
 
 // The errors a run fails with. Each one means nothing was posted, except a
-// failed dismissal, which comes after the review, and two answers in turn
-// whose shape ParseAnswer refuses, which post a review saying the review could
-// not be read (issue #316).
+// failed dismissal, which comes after the review. ErrDiffTooLarge and two
+// answers in turn whose shape ParseAnswer refuses do not fail a run: Run ends
+// those in the skipped outcome (Result.Skip, issues #367, #376).
 var (
 	// ErrEventRefused is returned by the poster for any event but
 	// EventComment and EventRequestChanges, before any HTTP call.
 	ErrEventRefused = errors.New("review event refused: only COMMENT and REQUEST_CHANGES are posted")
 	// ErrDiffTooLarge is returned when the pull request's diff is over
-	// MaxRawDiffBytes, or what FilterDiff keeps of it is over MaxDiffBytes.
+	// MaxRawDiffBytes, or SplitDiff cannot split what FilterDiff keeps of it
+	// into at most MaxDiffParts parts of at most MaxDiffBytes. Run takes the
+	// skipped outcome for it.
 	ErrDiffTooLarge = errors.New("diff over the AI review's size limit")
 	// ErrDraft is returned for a draft pull request, which is not reviewed.
 	ErrDraft = errors.New("pull request is a draft")

@@ -2,6 +2,7 @@ package review_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -300,6 +301,52 @@ func TestParseAnswerReadsTheModelsAnswer(t *testing.T) {
 	}
 }
 
+// TestParseAnswerNamesTheFindingsCheckThatFailed pins issue #376: an answer with
+// no findings field and one whose findings is null are both refused — the
+// program cannot tell an answer that found nothing from one that lost its
+// findings — but the two checks are named apart, so the retry notice and the
+// skipped outcome of a recurrence say which one the model wrote. An empty array
+// is the answer that found nothing, and is valid.
+func TestParseAnswerNamesTheFindingsCheckThatFailed(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		text string
+		// wantEnd is the phrase the error's text must end with: the check that
+		// failed, never text of the answer.
+		wantEnd string
+	}{
+		{name: "an answer with no findings field", text: `{"summary":"s"}`, wantEnd: "no findings field"},
+		{name: "an answer whose findings is null", text: `{"summary":"s","findings":null}`, wantEnd: "findings is null"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			answer, err := review.ParseAnswer(tc.text)
+			if !errors.Is(err, review.ErrMalformedAnswer) {
+				t.Fatalf("ParseAnswer(%q) = %+v, %v; want an error wrapping ErrMalformedAnswer", tc.text, answer, err)
+			}
+
+			if !strings.HasSuffix(err.Error(), tc.wantEnd) {
+				t.Errorf("ParseAnswer(%q) = %v, want an error whose text ends %q: the two findings checks are named apart, so the notice and the skipped outcome say which one it was (issue #376)", tc.text, err, tc.wantEnd)
+			}
+		})
+	}
+
+	// The answer of nothing to report is the one #376's prompt now shows.
+	answer, err := review.ParseAnswer(`{"summary":"s","findings":[]}`)
+	if err != nil {
+		t.Fatalf("ParseAnswer of an answer with an empty findings array: %v; want it accepted, with no finding", err)
+	}
+
+	if len(answer.Findings) != 0 {
+		t.Errorf("the answer with an empty findings array holds %d finding(s), want 0", len(answer.Findings))
+	}
+}
+
 // TestParseAnswerRefusesWhatItCannotTrust pins the answers ParseAnswer refuses
 // with ErrMalformedAnswer: anything around the object, a second value, an
 // unknown field at any level, a missing or empty required text, a severity
@@ -337,6 +384,7 @@ func TestParseAnswerRefusesWhatItCannotTrust(t *testing.T) {
 		{name: "no summary", text: `{"findings":[]}`},
 		{name: "an empty summary", text: `{"summary":"","findings":[]}`},
 		{name: "no findings", text: `{"summary":"s"}`},
+		{name: "findings that are null", text: `{"summary":"s","findings":null}`},
 		{name: "findings that are not an array", text: `{"summary":"s","findings":{}}`},
 		{name: "a finding without a title", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","body":"b"}]}`},
 		{name: "an empty title", text: `{"summary":"s","findings":[{"severity":"nit","category":"readability","title":"","body":"b"}]}`},
