@@ -6,8 +6,9 @@ package examples_test
 // the whole closed vocabulary, and the source's monthly cost on some resources
 // only, so the reports show a partial coverage. It also pins the reports the
 // walkthrough and the guide quote beside the default ones: one sample with the
-// estimates off, one with a region chosen, and the JSON report checked against
-// the schema jsonreport publishes.
+// estimates off, one with a region chosen, and the JSON report in schema
+// versions 2 and 3, each checked against the schema jsonreport publishes for
+// it.
 
 import (
 	"encoding/json"
@@ -633,10 +634,15 @@ func TestSampleReportVariants(t *testing.T) {
 				t.Helper()
 
 				// The version the CLI writes when --schema-version names none:
-				// the application selects it, so the test does not import
-				// internal/cli (issue #330).
+				// the application selects it, exactly as the CLI asks it to, so
+				// the test does not import internal/cli (issue #330).
+				version, err := analysis.SelectSchemaVersion(analysis.JSONFormat, "", false)
+				if err != nil {
+					t.Fatalf("selecting the default schema version of %q: %v", analysis.JSONFormat, err)
+				}
+
 				return runSingleWith(t, inventoryPath, scaleway.New(),
-					jsonreport.New(analysis.DefaultSchemaVersion), analysis.Options{Estimate: true}, meta)
+					jsonreport.New(version), analysis.Options{Estimate: true}, meta)
 			},
 			check: func(t *testing.T, report []byte) {
 				t.Helper()
