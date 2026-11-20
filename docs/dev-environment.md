@@ -250,7 +250,12 @@ To resize an existing VM without recreating it, keeping its tools, login and con
 edit it with `limactl edit` (sizes in GiB; Lima can grow a disk but not shrink it):
 
 ```bash
+# Mac
 make vm-stop
+```
+
+```bash
+# Mac, once make vm-stop has returned and the VM is stopped
 limactl edit --tty=false --cpus=5 --memory=7 --disk=58 shift2eu
 limactl edit --tty=false --set '.ssh.localPort = 60022' shift2eu   # only to change the SSH port
 make vm-up
@@ -260,7 +265,13 @@ The alternative is to rebuild it, which loses everything inside it (its login, t
 `make vm-create` sets it up again:
 
 ```bash
-make vm-delete && make vm-create VM_CPUS=5 VM_MEMORY=7GiB VM_DISK=58GiB VM_SSH_PORT=60022
+# Mac
+make vm-delete
+```
+
+```bash
+# Mac, once make vm-delete has succeeded (on a failure, stop here)
+make vm-create VM_CPUS=5 VM_MEMORY=7GiB VM_DISK=58GiB VM_SSH_PORT=60022
 ```
 
 A client that reaches the VM through the host, with `ProxyJump` to `127.0.0.1:<port>` in its
@@ -316,7 +327,12 @@ and runs the provisioning again (sizes in GiB, as `swapSize` takes them). The in
 `LIMA_INSTANCE` names another, as for the make targets:
 
 ```bash
+# Mac
 make vm-stop
+```
+
+```bash
+# Mac, once make vm-stop has returned and the VM is stopped
 limactl edit --tty=false --set '.param.swapSize = "8GiB"' "${LIMA_INSTANCE:-shift2eu}"
 make vm-up
 ```
@@ -432,6 +448,10 @@ cd ~/src/shift2eu-host                                         # the host clone
 # set WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu" in the host clone's .envrc, then:
 direnv allow
 make vm-stop
+```
+
+```bash
+# Mac, host clone, once make vm-stop has returned and the VM is stopped
 mkdir ~/src/shift2eu-ws && mv ~/src/shift2eu ~/src/shift2eu-ws/
 limactl edit --tty=false --mount-only "$HOME/src/shift2eu-ws:w" shift2eu
 make vm-up
@@ -864,7 +884,10 @@ waits at the unlock screen after a reboot and runs nothing, the VM included: reb
 ```bash
 # Mac Mini
 sudo shutdown -r now      # or sudo fdesetup authrestart
-# a few minutes after the VM is back, SSH in again:
+```
+
+```bash
+# Mac Mini, a few minutes after the VM is back: SSH in again, then
 tail ~/.local/state/shift2eu/agents-token-refresh-shift2eu.log
 # PASS: a mint after the boot
 limactl shell --workdir / shift2eu sh -c 'sed -n 2p "$HOME/.config/shift2eu/agents-app-token"'; date +%s
@@ -1272,7 +1295,10 @@ switch done: report it, so the follow-up issue can remove the single-account mod
 ```bash
 # Mac Mini
 sudo shutdown -r now      # with FileVault on: sudo fdesetup authrestart
-# after the VM is back:
+```
+
+```bash
+# Mac Mini, a few minutes after the VM is back: SSH in again, then
 limactl list --format '{{.SSHLocalPort}}' shift2eu   # PASS: 48022 again
 sudo tail -n 50 /Users/_shift2euagents/.local/state/shift2eu/agents-token-refresh-shift2eu.log
 # PASS: a mint after the boot
