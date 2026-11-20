@@ -186,6 +186,36 @@ const Joined Reason = "no-" + "fit"
 		wantErr: "Joined",
 	},
 	{
+		name: "an untyped constant built from a Reason cannot be read",
+		src: `package estimate
+
+type Reason string
+
+const (
+	NoFit Reason = "no-fit"
+	// Aliased repeats NoFit without a type of its own, so Go gives it the type
+	// of the expression, which is Reason: it declares a reason too.
+	Aliased = NoFit
+)
+`,
+		wantErr: "Aliased",
+	},
+	{
+		name: "an untyped constant built from a Reason and a string cannot be read",
+		src: `package estimate
+
+type Reason string
+
+const (
+	NoFit    Reason = "no-fit"
+	// NoRegion is a Reason and a string added together, whose type is the
+	// Reason, so it declares a reason the source does not spell out.
+	NoRegion = NoFit + "-region"
+)
+`,
+		wantErr: "NoRegion",
+	},
+	{
 		name: "another constant cannot be read",
 		src: `package estimate
 
