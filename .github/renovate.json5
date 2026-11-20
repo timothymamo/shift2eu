@@ -8,7 +8,7 @@
   ],
   // Run every night, between 22:00 and 05:59 Amsterdam time. The hosted Renovate app runs every few
   // hours, not on the clock, so a one-hour window was rarely hit and updates sat in "Awaiting Schedule";
-  // a window this wide catches at least one hosted run each night.
+  // a window this wide should catch at least one hosted run each night.
   timezone: 'Europe/Amsterdam',
   schedule: ['* 22-23,0-5 * * *'],
   labels: ['dependencies'],
