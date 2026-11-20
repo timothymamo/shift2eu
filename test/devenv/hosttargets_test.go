@@ -30,9 +30,10 @@ import (
 )
 
 // hostTargets are the make targets that run on the maintainer's Mac: every target whose recipe calls limactl,
-// launchctl or sudo, gate-check, which reads GitHub as the maintainer through a script of dev/, and the three
+// launchctl or sudo, gate-check, which reads GitHub as the maintainer through a script of dev/, the three
 // targets that run the agents App's token script with the App's key in reach (docs/dev-environment.md, The host
-// clone). Each must refuse to run from anywhere in the workspace (issue #227).
+// clone), and the two that install and remove the account's SSH access to the VM (issue #227 part 2). Each must
+// refuse to run from anywhere in the workspace (issue #227).
 // TestHostTargetsAreEveryTargetThatRunsOnTheMac keeps the list from falling behind the Makefile.
 var hostTargets = []string{
 	"agents-token",
@@ -43,6 +44,8 @@ var hostTargets = []string{
 	"deck",
 	"deck-restart",
 	"gate-check",
+	"vm-agents-token-ssh",
+	"vm-agents-token-ssh-uninstall",
 	"vm-claude-settings",
 	"vm-create",
 	"vm-delete",

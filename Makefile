@@ -98,8 +98,8 @@ REPO_ROOT := $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --
 # (docs/adr/0008-mount-a-workspace-directory-for-dispatcher-mode.md). Every other target (check, test, lint,
 # worktree, git-hooks, ...) is the agents', runs in the workspace inside the VM and never reads these.
 HOST_TARGETS := agents-token agents-token-refresh agents-token-refresh-start agents-token-refresh-install \
-	agents-token-refresh-uninstall deck deck-restart gate-check vm-claude-settings vm-create vm-delete vm-env \
-	vm-env-check vm-gh-wrapper vm-init vm-shell vm-stop vm-up
+	agents-token-refresh-uninstall deck deck-restart gate-check vm-agents-token-ssh vm-agents-token-ssh-uninstall \
+	vm-claude-settings vm-create vm-delete vm-env vm-env-check vm-gh-wrapper vm-init vm-shell vm-stop vm-up
 HOST_WORKSPACE_REPO := $(abspath $(WORKSPACE_REPO))
 HOST_WORKSPACE      := $(patsubst %/,%,$(dir $(HOST_WORKSPACE_REPO)))
 HOST_REPO_NAME      := $(notdir $(HOST_WORKSPACE_REPO))
@@ -640,16 +640,116 @@ AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2e
 # remains open is issue #227's part 2 (ADR 0031, Consequences).
 # Like dev/protect-main-check.sh and dev/shellcheck.sh, their scripts run by path and shebang, with no
 # explicit interpreter (issue #242): both are executable (100755) in git.
+#
+# Account mode (issue #227 part 2, ADR 0031's and ADR 0034's updates of 2026-11-19): with SHIFT2EU_AGENTS_ACCOUNT
+# set in the host clone's .envrc, the App's key is the separate account's (/Users/<account>/.config/shift2eu),
+# out of the maintainer's reach, and the refresh runs as that account's LaunchDaemon, from the account's own clone
+# (/Users/<account>/shift2eu-host), writing the token into the VM over its pinned SSH port
+# (SHIFT2EU_AGENTS_VM_SSH_PORT; SHIFT2EU_AGENTS_VM_SSH_USER, default id -un). Then agents-token,
+# agents-token-refresh and agents-token-refresh-start refuse before they run anything (the maintainer cannot
+# mint), agents-token-refresh-install renders the plist as the account with the account's generator, and every
+# account-mode target that runs sudo ends with sudo -k, on success and on failure. Without it, the
+# single-account mode below is unchanged: the fallback until the maintainer has switched.
+
+# AGENTS_ACCOUNT_CHECK sets account to SHIFT2EU_AGENTS_ACCOUNT (empty: single-account mode) and refuses a name that
+# does not begin with a letter or _ (so no -, ., .. or digit first), holds anything but letters, digits, ., _ and
+# -, or is root or the maintainer's own (id -un): it becomes part of root's commands and the job's paths. It never
+# shows the value it refuses. Before any sudo it checks the account's kind (issue #227 part 2, the security audit's
+# second pass): dscl must read a UniqueID from 1 to 499 (a hidden role account; macOS gives a login account 500 and
+# above), and dseditgroup must answer its explicit negative, a non-zero status with an answer that begins "no ":
+# the admin check fails closed, so an exit 0, a yes, an error without an answer or a missing dseditgroup refuses
+# the account. A refusal names the check, never the value. In account mode a SHIFT2EU_AGENTS_APP_KEY_FILE still
+# set gets a warning: the account's key is the derived path.
+#
+# Its parts: AGENTS_ACCOUNT_NAME_CHECK refuses a bad name, AGENTS_ACCOUNT_KIND sets kind to what is wrong with the
+# account's kind (empty: a hidden role account, or single-account mode) and AGENTS_ACCOUNT_KEY_FILE_WARNING warns
+# about the key file. agents-token-refresh-uninstall, the kill switch, runs them with AGENTS_ACCOUNT_KIND_WARNING in
+# place of the refusal: a job loaded for an account that is no role account must still be removable.
+AGENTS_ACCOUNT_CHECK = $(AGENTS_ACCOUNT_NAME_CHECK); $(AGENTS_ACCOUNT_KIND); \
+	if [ -n "$$kind" ]; then echo "$@: $$kind" >&2; exit 1; fi; \
+	$(AGENTS_ACCOUNT_KEY_FILE_WARNING)
+AGENTS_ACCOUNT_KIND_WARNING = if [ -n "$$kind" ]; then \
+		echo "$@: warning: $$kind; booting the job out anyway, so it stops whatever the account is" >&2; \
+	fi
+AGENTS_ACCOUNT_NAME_CHECK = account="$${SHIFT2EU_AGENTS_ACCOUNT:-}"; \
+	if [ -n "$$account" ]; then \
+		case "$$account" in \
+		[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) \
+			echo "$@: SHIFT2EU_AGENTS_ACCOUNT must be letters, digits, ., _ and -, beginning with a letter or _: it becomes part of root's commands and the job's paths (its value is not shown; docs/dev-environment.md, The agents App)" >&2; exit 1 ;; \
+		esac; \
+		if [ "$$account" = root ] || [ "$$account" = "$$(id -un)" ]; then \
+			echo "$@: SHIFT2EU_AGENTS_ACCOUNT must name the separate account that holds the App's key, never root or your own account (docs/dev-environment.md, The agents App)" >&2; exit 1; \
+		fi; \
+	fi
+AGENTS_ACCOUNT_KIND = kind=""; \
+	if [ -n "$$account" ]; then \
+		if ! account_uid="$$(dscl . -read "/Users/$$account" UniqueID 2>/dev/null)"; then \
+			kind="dscl cannot read the UniqueID of the account SHIFT2EU_AGENTS_ACCOUNT names: create the hidden role account first (docs/dev-environment.md, The agents App)"; \
+		else \
+			account_uid="$$(printf '%s\n' "$$account_uid" | sed -n 's/^UniqueID:[[:space:]]*\([0123456789][0123456789]*\)[[:space:]]*$$/\1/p' | head -n 1)"; \
+			case "$$account_uid" in \
+			'' | 0* | ????*) \
+				kind="the account SHIFT2EU_AGENTS_ACCOUNT names has no UniqueID from 1 to 499 (dscl), so it is no hidden role account: a login account's key is in the maintainer's reach (docs/dev-environment.md, The agents App)" ;; \
+			*) \
+				if [ "$$account_uid" -ge 500 ]; then \
+					kind="the account SHIFT2EU_AGENTS_ACCOUNT names has a UniqueID of 500 or above (dscl), a login account, not a hidden role account below 500 (docs/dev-environment.md, The agents App)"; \
+				fi ;; \
+			esac; \
+		fi; \
+		if [ -z "$$kind" ]; then \
+			account_admin="$$(dseditgroup -o checkmember -m "$$account" admin 2>/dev/null)"; account_admin_status=$$?; \
+			account_admin_kind=refuse; \
+			if [ "$$account_admin_status" -eq 0 ]; then \
+				account_admin_kind=admin; \
+			else \
+				case "$$account_admin" in \
+				yes*) account_admin_kind=admin ;; \
+				"no "*) account_admin_kind=pass ;; \
+				esac; \
+			fi; \
+			case "$$account_admin_kind" in \
+			admin) \
+				kind="the account SHIFT2EU_AGENTS_ACCOUNT names is a member of the admin group (dseditgroup), so it is no hidden role account: remove it from admin (docs/dev-environment.md, The agents App)" ;; \
+			pass) ;; \
+			*) \
+				kind="the admin check (dseditgroup -o checkmember) gave no explicit no for the account SHIFT2EU_AGENTS_ACCOUNT names (status $$account_admin_status), so it cannot tell that the account is no admin: the check fails closed (docs/dev-environment.md, The agents App)" ;; \
+			esac; \
+		fi; \
+	fi
+AGENTS_ACCOUNT_KEY_FILE_WARNING = if [ -n "$$account" ] && [ -n "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
+		echo "$@: warning: SHIFT2EU_AGENTS_APP_KEY_FILE is set, but in account mode the App's key is the account's, /Users/$$account/.config/shift2eu/agents-app.pem: remove the variable from the host clone's .envrc, delete the file it names, and delete that key on the App's page (docs/dev-environment.md, The agents App)" >&2; \
+	fi
+# AGENTS_ACCOUNT_NO_MINT refuses a minting target in account mode: only the account can read the key.
+AGENTS_ACCOUNT_NO_MINT = if [ -n "$$account" ]; then \
+		echo "$@: the refresh runs as $$account, which holds the App's key; the maintainer cannot mint: run sudo launchctl kickstart -k system/$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE to mint now (docs/dev-environment.md, The agents App)" >&2; \
+		exit 1; \
+	fi
+# AGENTS_SSH_CONFIG sets port to SHIFT2EU_AGENTS_VM_SSH_PORT and vm_user to SHIFT2EU_AGENTS_VM_SSH_USER (default
+# id -un, Lima's default VM user) and refuses either malformed, for the account-mode targets.
+AGENTS_SSH_CONFIG = port="$${SHIFT2EU_AGENTS_VM_SSH_PORT:-}"; \
+	case "$$port" in \
+	'') echo "$@: set SHIFT2EU_AGENTS_VM_SSH_PORT, the VM's pinned SSH port, in the host clone's .envrc beside SHIFT2EU_AGENTS_ACCOUNT (docs/dev-environment.md, The agents App)" >&2; exit 1 ;; \
+	*[!0123456789]* | ??????* | 0*) echo "$@: SHIFT2EU_AGENTS_VM_SSH_PORT must be a port, 1 to 65535 in digits" >&2; exit 1 ;; \
+	esac; \
+	if [ "$$port" -gt 65535 ]; then echo "$@: SHIFT2EU_AGENTS_VM_SSH_PORT must be a port, 1 to 65535 in digits" >&2; exit 1; fi; \
+	$(AGENTS_SSH_CONFIG_USER)
+AGENTS_SSH_CONFIG_USER = vm_user="$${SHIFT2EU_AGENTS_VM_SSH_USER:-$$(id -un)}"; \
+	case "$$vm_user" in \
+	[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) \
+		echo "$@: SHIFT2EU_AGENTS_VM_SSH_USER must be letters, digits, ., _ and -, beginning with a letter, digit or _ (its value is not shown)" >&2; exit 1 ;; \
+	esac
 
 .PHONY: agents-token
 agents-token: ## Mint one agents App installation token on the Mac and write it, and the bot identity, into the VM (host clone)
 	$(LIMA_INSTANCE_CHECK)
-	@dev/agents-app-token.sh mint
+	@$(AGENTS_ACCOUNT_CHECK); $(AGENTS_ACCOUNT_NO_MINT); \
+	exec dev/agents-app-token.sh mint
 
 .PHONY: agents-token-refresh
 agents-token-refresh: ## Mint the agents App token now and again before each one expires, in the foreground, until stopped (host clone)
 	$(LIMA_INSTANCE_CHECK)
-	@dev/agents-app-token.sh refresh
+	@$(AGENTS_ACCOUNT_CHECK); $(AGENTS_ACCOUNT_NO_MINT); \
+	exec dev/agents-app-token.sh refresh
 
 # Starts the refresh of this VM instance in the background unless one already runs: the one whose pid the
 # instance's lock holds (a refresh started by hand with make agents-token-refresh holds it too), or the one
@@ -664,7 +764,8 @@ agents-token-refresh: ## Mint the agents App token now and again before each one
 .PHONY: agents-token-refresh-start
 agents-token-refresh-start: ## Start the agents App token refresh in the background, one per VM instance, and print where its log is (host clone)
 	$(LIMA_INSTANCE_CHECK)
-	@if [ -z "$${SHIFT2EU_AGENTS_APP_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
+	@$(AGENTS_ACCOUNT_CHECK); $(AGENTS_ACCOUNT_NO_MINT); \
+	if [ -z "$${SHIFT2EU_AGENTS_APP_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
 		echo "agents-token-refresh-start: set SHIFT2EU_AGENTS_APP_ID, SHIFT2EU_AGENTS_APP_INSTALLATION_ID and SHIFT2EU_AGENTS_APP_KEY_FILE in the host clone's .envrc (docs/dev-environment.md, The host clone)" >&2; \
 		exit 1; \
 	fi; \
@@ -749,6 +850,8 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # parse time, since the target-specific export below would change it inside the recipes.
 AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN := $(origin AGENTS_TOKEN_LAUNCHD_DIR)
 AGENTS_TOKEN_LAUNCHD_DIR ?= /Library/LaunchDaemons
+# Also spelled out in dev/agents-token-launchd.sh (label_prefix) and dev/agents-app-token.sh (stopped): keep the
+# three alike.
 AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX = io.github.timothymamo.shift2eu.agents-token-refresh.
 # The script a loaded job runs, read from `launchctl print system/<label>`: the first line of its arguments
 # block that ends in /dev/agents-app-token.sh, with the indentation removed (empty when there is none).
@@ -776,20 +879,39 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 		echo "agents-token-refresh-install: refused: run it as the maintainer, not as root (no sudo make); it runs sudo itself. The job runs as the account that installs it, and as root it would run the host clone's script, which the maintainer can edit, at every boot" >&2; \
 		exit 1; \
 	fi; \
-	if [ -z "$${SHIFT2EU_AGENTS_APP_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
+	$(AGENTS_ACCOUNT_CHECK); \
+	if [ -n "$$account" ]; then \
+		case "$${SHIFT2EU_AGENTS_APP_ID:-}" in \
+		'' | *[!0123456789]*) \
+			echo "agents-token-refresh-install: set SHIFT2EU_AGENTS_APP_ID, a number, in the host clone's .envrc (docs/dev-environment.md, The agents App)" >&2; \
+			exit 1 ;; \
+		esac; \
+		case "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" in \
+		'' | *[!0123456789]*) \
+			echo "agents-token-refresh-install: set SHIFT2EU_AGENTS_APP_INSTALLATION_ID, a number, in the host clone's .envrc (docs/dev-environment.md, The agents App)" >&2; \
+			exit 1 ;; \
+		esac; \
+		$(AGENTS_SSH_CONFIG); \
+	elif [ -z "$${SHIFT2EU_AGENTS_APP_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_INSTALLATION_ID:-}" ] || [ -z "$${SHIFT2EU_AGENTS_APP_KEY_FILE:-}" ]; then \
 		echo "agents-token-refresh-install: set SHIFT2EU_AGENTS_APP_ID, SHIFT2EU_AGENTS_APP_INSTALLATION_ID and SHIFT2EU_AGENTS_APP_KEY_FILE in the host clone's .envrc (docs/dev-environment.md, The host clone)" >&2; \
 		exit 1; \
 	fi; \
 	command -v launchctl >/dev/null 2>&1 || { echo "agents-token-refresh-install: no launchctl: the LaunchDaemon is for the Mac; elsewhere use make agents-token-refresh-start" >&2; exit 1; }; \
 	$(AGENTS_TOKEN_LAUNCHD_DIR_CHECK); \
 	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${AGENTS_TOKEN_LAUNCHD_DIR%/}/$$label.plist"; \
-	clone="$$(pwd -P)" || exit 1; script="$$clone/dev/agents-app-token.sh"; \
-	for link in "$$clone/dev" "$$script"; do \
-		if [ -L "$$link" ]; then \
-			echo "agents-token-refresh-install: refused: $$link is a symlink, so the job would run, at every boot, as you, with the App's key in reach, a file outside the clone $$clone that this install never looked at. Run the install from the host clone, with dev/ and dev/agents-app-token.sh as git checked them out (docs/dev-environment.md, The host clone)" >&2; \
-			exit 1; \
-		fi; \
-	done; \
+	if [ -n "$$account" ]; then \
+		home="/Users/$$account"; secrets="$$home/.config/shift2eu"; clone="$$home/shift2eu-host"; owner="$$account"; \
+		state="$$home/.local/state/shift2eu"; \
+	else \
+		clone="$$(pwd -P)" || exit 1; owner="$$(id -un)"; state="$(AGENTS_TOKEN_STATE)"; \
+		for link in "$$clone/dev" "$$clone/dev/agents-app-token.sh"; do \
+			if [ -L "$$link" ]; then \
+				echo "agents-token-refresh-install: refused: $$link is a symlink, so the job would run, at every boot, as you, with the App's key in reach, a file outside the clone $$clone that this install never looked at. Run the install from the host clone, with dev/ and dev/agents-app-token.sh as git checked them out (docs/dev-environment.md, The host clone)" >&2; \
+				exit 1; \
+			fi; \
+		done; \
+	fi; \
+	script="$$clone/dev/agents-app-token.sh"; \
 	listed="$$(limactl list --format '{{.Name}}{{"\n"}}{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}' "$$LIMA_INSTANCE")" || { \
 		echo "agents-token-refresh-install: limactl list could not read the mounts of the VM $$LIMA_INSTANCE, so it cannot check that $$clone is outside them: create the VM first (make vm-create), check that limactl list prints $$LIMA_INSTANCE, and run the install again from the host clone" >&2; \
 		exit 1; \
@@ -812,19 +934,39 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 			exit 1 ;; \
 		esac; \
 	done || exit 1; \
-	state="$(AGENTS_TOKEN_STATE)"; log="$$state/agents-token-refresh-$$LIMA_INSTANCE.log"; \
+	log="$$state/agents-token-refresh-$$LIMA_INSTANCE.log"; \
 	lock_pid="$$state/agents-token-refresh-$$LIMA_INSTANCE.lock/pid"; \
 	tmp="$$(mktemp "$${TMPDIR:-/tmp}/agents-token-refresh-plist.XXXXXX")" || exit 1; \
-	trap 'rm -f "$$tmp"' EXIT; \
-	dev/agents-token-launchd.sh plist >"$$tmp" || exit 1; \
+	if [ -n "$$account" ]; then \
+		trap 'rm -f "$$tmp"; sudo -k' EXIT; \
+		echo "+ sudo -u $$account -H /usr/bin/env -i HOME=$$home PATH=/usr/bin:/bin:/usr/sbin:/sbin LIMA_INSTANCE=$$LIMA_INSTANCE SHIFT2EU_AGENTS_APP_ID=$$SHIFT2EU_AGENTS_APP_ID SHIFT2EU_AGENTS_APP_INSTALLATION_ID=$$SHIFT2EU_AGENTS_APP_INSTALLATION_ID SHIFT2EU_AGENTS_APP_KEY_FILE=$$secrets/agents-app.pem SHIFT2EU_AGENTS_VM_SSH_PORT=$$port SHIFT2EU_AGENTS_VM_SSH_USER=$$vm_user SHIFT2EU_AGENTS_VM_SSH_KEY=$$secrets/agents-vm-ssh-key SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS=$$secrets/known-hosts-$$LIMA_INSTANCE /bin/sh $$clone/dev/agents-token-launchd.sh plist"; \
+		sudo -u "$$account" -H /usr/bin/env -i "HOME=$$home" PATH=/usr/bin:/bin:/usr/sbin:/sbin \
+			"LIMA_INSTANCE=$$LIMA_INSTANCE" "SHIFT2EU_AGENTS_APP_ID=$$SHIFT2EU_AGENTS_APP_ID" \
+			"SHIFT2EU_AGENTS_APP_INSTALLATION_ID=$$SHIFT2EU_AGENTS_APP_INSTALLATION_ID" \
+			"SHIFT2EU_AGENTS_APP_KEY_FILE=$$secrets/agents-app.pem" \
+			"SHIFT2EU_AGENTS_VM_SSH_PORT=$$port" "SHIFT2EU_AGENTS_VM_SSH_USER=$$vm_user" \
+			"SHIFT2EU_AGENTS_VM_SSH_KEY=$$secrets/agents-vm-ssh-key" \
+			"SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS=$$secrets/known-hosts-$$LIMA_INSTANCE" \
+			/bin/sh "$$clone/dev/agents-token-launchd.sh" plist >"$$tmp" || { \
+			echo "agents-token-refresh-install: $$account could not render the plist with its clone's dev/agents-token-launchd.sh (see above), so nothing was installed: check the account's clone $$clone and its files (docs/dev-environment.md, The agents App)" >&2; \
+			exit 1; \
+		}; \
+	else \
+		trap 'rm -f "$$tmp"' EXIT; \
+		dev/agents-token-launchd.sh plist >"$$tmp" || exit 1; \
+	fi; \
 	plutil -lint "$$tmp" || { echo "agents-token-refresh-install: plutil refused the rendered plist, so launchd would load no job: nothing was installed" >&2; exit 1; }; \
 	sum="$$(shasum -a 256 <"$$tmp" | cut -d ' ' -f 1)" || exit 1; \
 	echo "agents-token-refresh-install: installing this plist as $$dest (it holds the App ID, the installation ID and the key's path, never the key):"; \
 	cat "$$tmp"; \
 	echo "agents-token-refresh-install: its SHA-256 is $$sum"; \
-	echo "agents-token-refresh-install: the job runs $$script at every boot as $$(id -un): it must be the host clone's, outside the workspace and every mount of the VM"; \
-	echo "agents-token-refresh-install: creating $$state and the log $$log (mode 0600) as $$(id -un)"; \
-	(umask 077 && mkdir -p "$$state" && : >>"$$log") || exit 1; \
+	if [ -n "$$account" ]; then \
+		echo "agents-token-refresh-install: the job runs $$script at every boot as $$account: it must be $$home/shift2eu-host/dev/agents-app-token.sh, the account's own clone"; \
+	else \
+		echo "agents-token-refresh-install: the job runs $$script at every boot as $$owner: it must be the host clone's, outside the workspace and every mount of the VM"; \
+		echo "agents-token-refresh-install: creating $$state and the log $$log (mode 0600) as $$owner"; \
+		(umask 077 && mkdir -p "$$state" && : >>"$$log") || exit 1; \
+	fi; \
 	if launchctl print "system/$$label" >/dev/null 2>&1; then \
 		echo "agents-token-refresh-install: $$label is loaded already: unloading it to load the new plist"; \
 		echo "+ sudo launchctl bootout system/$$label"; \
@@ -836,7 +978,8 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 			exit 1; \
 		fi; \
 	fi; \
-	held="$$(cat "$$lock_pid" 2>/dev/null || true)"; \
+	held=''; \
+	if [ -z "$$account" ]; then held="$$(cat "$$lock_pid" 2>/dev/null || true)"; fi; \
 	case "$$held" in ''|*[!0-9]*) held='' ;; *) \
 		kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh' || held='' ;; \
 	esac; \
@@ -878,14 +1021,21 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 			echo "agents-token-refresh-install: warning: a refresh you started by hand (pid $$held) holds the lock of $$LIMA_INSTANCE, so the job waits, trying again every 5 minutes; stop it (kill $$held) and the job takes over" >&2; \
 		fi; \
 	fi; \
-	echo "agents-token-refresh-install: check it with: sudo launchctl print system/$$label (state = running, and $$script in its arguments), and its log: tail $$log"
+	if [ -n "$$account" ]; then \
+		echo "agents-token-refresh-install: check it with: sudo launchctl print system/$$label (state = running, and $$script in its arguments), and its log: sudo tail -n 50 $$log; then run sudo -k"; \
+	else \
+		echo "agents-token-refresh-install: check it with: sudo launchctl print system/$$label (state = running, and $$script in its arguments), and its log: tail $$log"; \
+	fi
 
 .PHONY: agents-token-refresh-uninstall
 agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh's LaunchDaemon of this VM instance; needs sudo (host clone, macOS)
 	$(LIMA_INSTANCE_CHECK)
 	@command -v launchctl >/dev/null 2>&1 || { echo "agents-token-refresh-uninstall: no launchctl: the LaunchDaemon is for the Mac, and there is none to remove here" >&2; exit 1; }; \
+	$(AGENTS_ACCOUNT_NAME_CHECK); $(AGENTS_ACCOUNT_KIND); $(AGENTS_ACCOUNT_KIND_WARNING); \
+	$(AGENTS_ACCOUNT_KEY_FILE_WARNING); \
 	$(AGENTS_TOKEN_LAUNCHD_DIR_CHECK); \
 	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${AGENTS_TOKEN_LAUNCHD_DIR%/}/$$label.plist"; \
+	if [ -n "$$account" ]; then trap 'sudo -k' EXIT; fi; \
 	echo "+ sudo launchctl bootout system/$$label"; \
 	if sudo launchctl bootout "system/$$label"; then booted=1; else booted=0; fi; \
 	tries=0; \
@@ -900,16 +1050,37 @@ agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh'
 	fi; \
 	echo "+ sudo rm -f $$dest"; \
 	sudo rm -f "$$dest" || exit 1; \
-	echo "agents-token-refresh-uninstall: removed $$dest; the log stays. The VM's token stays valid until it expires, within the hour: start a refresh by hand with make agents-token-refresh-start"; \
+	if [ -n "$$account" ]; then \
+		echo "agents-token-refresh-uninstall: removed $$dest; the log stays. The VM's token stays valid until it expires, within the hour: install the job again with make agents-token-refresh-install, or go back to single-account mode (docs/dev-environment.md, The agents App)"; \
+	else \
+		echo "agents-token-refresh-uninstall: removed $$dest; the log stays. The VM's token stays valid until it expires, within the hour: start a refresh by hand with make agents-token-refresh-start"; \
+	fi; \
 	if [ "$$stuck" = 1 ]; then \
 		echo "agents-token-refresh-uninstall: warning: $$label is still loaded: unload it with sudo launchctl bootout system/$$label" >&2; \
 	fi
+
+# STRIP_CONTROL keeps only tab, newline and printable ASCII of what the VM printed, on stdout and stderr (the
+# recipes capture both, 2>&1), before make echoes it: the scripts in the VM are code the agents can write, and an
+# escape sequence or a C1 control (the byte 0x9B, or its UTF-8 form) could drive the maintainer's terminal (issue
+# #227 part 2, the security audit's second and third pass).
+STRIP_CONTROL = LC_ALL=C tr -cd '\011\012\040-\176'
+
+# VM_OUTPUT prints what the VM printed ($$out, its two streams together) through $(STRIP_CONTROL) and, when
+# limactl's $$status is non-zero, sends it to make's stderr and the recipe exits with that status: a failure the maintainer
+# pipes away with make's stdout would be a failure they never see. A run that succeeds prints it on stdout (issue
+# #227 part 2, the closing review).
+VM_OUTPUT = if [ "$$status" -ne 0 ]; then \
+		if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL) >&2; fi; \
+		exit "$$status"; \
+	fi; \
+	if [ -n "$$out" ]; then printf '%s\n' "$$out" | $(STRIP_CONTROL); fi
 
 # For a VM created before dev/lima.yaml installed the gh wrapper: moves the real gh off the PATH, installs the
 # wrapper with the real gh's path pinned and points the git credential helper at it, all over limactl's
 # standard input (dev/vm-gh-wrapper.sh). The script is generated first and sent only when it is whole (its
 # last line is the call that runs it), so a generator that fails fails make before the VM is touched. The VM's
-# output is captured and printed, and make fails unless it holds the line "vm-gh-wrapper: done", so a
+# output, stdout and stderr together, is captured and printed through $(VM_OUTPUT) (filtered, and on make's stderr
+# when limactl fails, the recipe exiting with its status), and make fails unless it holds the line "vm-gh-wrapper: done", so a
 # connection that drops after the stream arrived (sh -s exits 0 having run nothing) is no success. Safe to
 # run again.
 .PHONY: vm-gh-wrapper
@@ -920,11 +1091,95 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 		echo "vm-gh-wrapper: dev/vm-gh-wrapper.sh printed no whole script (its last line is not vm_gh_wrapper); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s)"; status=$$?; \
-	if [ -n "$$out" ]; then printf '%s\n' "$$out"; fi; \
-	if [ "$$status" -ne 0 ]; then exit "$$status"; fi; \
+	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
+	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-gh-wrapper: done'; then \
 		echo "vm-gh-wrapper: the VM never printed vm-gh-wrapper: done, so the installation may not have finished; run make vm-gh-wrapper again" >&2; \
+		exit 1; \
+	fi
+
+# The VM side of the account mode (ADR 0031, update of 2026-11-19, 4): make vm-agents-token-ssh lets the
+# account's SSH key run one root-owned writer in the VM and nothing else, and pins the VM's host key for the
+# account. Run by the maintainer from the host clone, with SHIFT2EU_AGENTS_ACCOUNT and SHIFT2EU_AGENTS_VM_SSH_PORT
+# set; safe to run again (after make vm-delete vm-create, after a new SSH key). In order, stopping at the first
+# failure: it refuses unless limactl reports exactly SHIFT2EU_AGENTS_VM_SSH_PORT as the instance's SSH port (Lima
+# picks a random one unless ssh.localPort pins it); reads the account's public key as the account, with a printed
+# sudo (every command run as the account goes through /usr/bin/env -i with PATH=/usr/bin:/bin and tools by full
+# path, so nothing of the maintainer's environment reaches it); generates the VM's script with dev/vm-agents-token-ssh.sh, which refuses anything but one line
+# `ssh-ed25519 <base64>` with an optional plain comment, and sends it only when it is whole over limactl shell's
+# standard input, as vm-gh-wrapper does, failing unless the VM prints "vm-agents-token-ssh: done"; pins the
+# VM's host key, read through limactl shell (no trust on first use), into the account's known-hosts file as the
+# account, the line on standard input; and prints the next step. It ends with sudo -k, on success and on failure.
+# make vm-agents-token-ssh-uninstall removes the writer, the keys file and the sshd drop-in from the VM and
+# reloads sshd; it leaves the account's files alone and runs no sudo on the Mac.
+.PHONY: vm-agents-token-ssh
+vm-agents-token-ssh: ## Let the agents App account's SSH key write the token into the VM, and pin the VM's host key for it (host clone, account mode)
+	$(LIMA_INSTANCE_CHECK)
+	@$(AGENTS_ACCOUNT_CHECK); \
+	if [ -z "$$account" ]; then \
+		echo "vm-agents-token-ssh: set SHIFT2EU_AGENTS_ACCOUNT, the account that holds the App's key, in the host clone's .envrc (docs/dev-environment.md, The agents App)" >&2; \
+		exit 1; \
+	fi; \
+	$(AGENTS_SSH_CONFIG); \
+	listed="$$(limactl list --format '{{.SSHLocalPort}}' "$$LIMA_INSTANCE")" || { \
+		echo "vm-agents-token-ssh: limactl list could not read the SSH port of the VM $$LIMA_INSTANCE: create it first (make vm-create)" >&2; \
+		exit 1; \
+	}; \
+	if [ "$$listed" != "$$port" ]; then \
+		echo "vm-agents-token-ssh: refused: limactl reports the VM $$LIMA_INSTANCE's SSH port as $${listed:-nothing}, not SHIFT2EU_AGENTS_VM_SSH_PORT $$port, so the account's job would write nowhere: pin the port while the VM is stopped (limactl stop $$LIMA_INSTANCE, limactl edit --set '.ssh.localPort = $$port' $$LIMA_INSTANCE, limactl start $$LIMA_INSTANCE) and run make vm-agents-token-ssh again (docs/dev-environment.md, The agents App)" >&2; \
+		exit 1; \
+	fi; \
+	secrets="/Users/$$account/.config/shift2eu"; known="$$secrets/known-hosts-$$LIMA_INSTANCE"; \
+	writer="$$(mktemp "$${TMPDIR:-/tmp}/agents-token-write.XXXXXX")" || exit 1; \
+	trap 'rm -f "$$writer"; sudo -k' EXIT; \
+	dev/agents-app-token.sh vm-writer >"$$writer" || exit 1; \
+	echo "+ sudo -u $$account -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/cat $$secrets/agents-vm-ssh-key.pub"; \
+	pub="$$(sudo -u "$$account" -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/cat "$$secrets/agents-vm-ssh-key.pub")" || { \
+		echo "vm-agents-token-ssh: cannot read the account's public key $$secrets/agents-vm-ssh-key.pub: generate it as the account (docs/dev-environment.md, The agents App)" >&2; \
+		exit 1; \
+	}; \
+	script="$$(sh dev/vm-agents-token-ssh.sh "$$writer" "$$pub" "$$vm_user")" || exit 1; \
+	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_agents_token_ssh ]; then \
+		echo "vm-agents-token-ssh: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh); nothing sent to the VM" >&2; \
+		exit 1; \
+	fi; \
+	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
+	$(VM_OUTPUT); \
+	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-agents-token-ssh: done'; then \
+		echo "vm-agents-token-ssh: the VM never printed vm-agents-token-ssh: done, so the installation may not have finished; run make vm-agents-token-ssh again" >&2; \
+		exit 1; \
+	fi; \
+	host_key="$$(printf '%s\n' "$$out" | sed -n 's|^host-key=\(ssh-ed25519 [ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/][ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/]*=*\)$$|\1|p' | head -n 1)"; \
+	if [ -z "$$host_key" ]; then \
+		echo "vm-agents-token-ssh: the VM printed no host-key=ssh-ed25519 <base64> line, so its host key cannot be pinned for the account; run make vm-agents-token-ssh again" >&2; \
+		exit 1; \
+	fi; \
+	echo "+ sudo -u $$account -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c 'umask 077 && /bin/cat >\"\$$1.new\" && /bin/mv -f \"\$$1.new\" \"\$$1\"' pin $$known"; \
+	printf 'shift2eu-vm-%s %s\n' "$$LIMA_INSTANCE" "$$host_key" | \
+		sudo -u "$$account" -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c 'umask 077 && /bin/cat >"$$1.new" && /bin/mv -f "$$1.new" "$$1"' pin "$$known" || { \
+		echo "vm-agents-token-ssh: could not pin the VM's host key in $$known as $$account" >&2; \
+		exit 1; \
+	}; \
+	echo "vm-agents-token-ssh: pinned shift2eu-vm-$$LIMA_INSTANCE $$host_key in $$known"; \
+	if launchctl print "system/$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE" >/dev/null 2>&1; then \
+		echo "vm-agents-token-ssh: next: the job is loaded and writes at its next try; to mint now, run sudo launchctl kickstart -k system/$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE, then sudo -k"; \
+	else \
+		echo "vm-agents-token-ssh: next: make agents-token-refresh-install"; \
+	fi
+
+.PHONY: vm-agents-token-ssh-uninstall
+vm-agents-token-ssh-uninstall: ## Remove the agents App account's writer, keys file and sshd drop-in from the VM (host clone)
+	$(LIMA_INSTANCE_CHECK)
+	@$(AGENTS_SSH_CONFIG_USER); \
+	script="$$(sh dev/vm-agents-token-ssh.sh --uninstall "$$vm_user")" || exit 1; \
+	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_agents_token_ssh_uninstall ]; then \
+		echo "vm-agents-token-ssh-uninstall: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh_uninstall); nothing sent to the VM" >&2; \
+		exit 1; \
+	fi; \
+	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
+	$(VM_OUTPUT); \
+	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-agents-token-ssh-uninstall: done'; then \
+		echo "vm-agents-token-ssh-uninstall: the VM never printed vm-agents-token-ssh-uninstall: done, so the removal may not have finished; run make vm-agents-token-ssh-uninstall again" >&2; \
 		exit 1; \
 	fi
 

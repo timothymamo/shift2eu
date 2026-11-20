@@ -51,11 +51,12 @@ const (
 // milestone 1, VM side). They are vars, not consts: a const whose name says what it is and whose value is a
 // string literal trips gosec's hardcoded-credential rule, and these are paths, not credentials.
 var (
-	agentsMintScript   = filepath.Join("dev", "agents-app-token.sh")
-	ghWrapperScript    = filepath.Join("dev", "gh-app-token.sh")
-	vmGHWrapperScript  = filepath.Join("dev", "vm-gh-wrapper.sh")
-	agentsTokenFile    = filepath.Join(".config", "shift2eu", "agents-app-token")
-	agentsIdentityFile = filepath.Join(".config", "shift2eu", "agents-app-identity")
+	agentsMintScript       = filepath.Join("dev", "agents-app-token.sh")
+	ghWrapperScript        = filepath.Join("dev", "gh-app-token.sh")
+	vmGHWrapperScript      = filepath.Join("dev", "vm-gh-wrapper.sh")
+	vmAgentsTokenSSHScript = filepath.Join("dev", "vm-agents-token-ssh.sh")
+	agentsTokenFile        = filepath.Join(".config", "shift2eu", "agents-app-token")
+	agentsIdentityFile     = filepath.Join(".config", "shift2eu", "agents-app-identity")
 )
 
 // readRepoFile reads a file of the repository, failing when it is not there.
@@ -215,6 +216,10 @@ type sandbox struct {
 	vmHome   string // HOME of the fake VM user; the token and identity files must land here
 	binDir   string // first on PATH: the fake limactl and the recording curl and openssl
 	argvLog  string // one tool=<name> line and one arg=<arg> line per shimmed call
+	// sshRecord is the directory the fake ssh records its standard input in, and empty when no fake ssh is in
+	// use. Like vmHome it stands for the VM, so a leak scan skips it: the token has to reach the VM's standard
+	// input (issue #227 part 2).
+	sshRecord string
 }
 
 // newSandbox builds a sandbox with the fake limactl and the recording curl and openssl, and removes it with
@@ -242,6 +247,7 @@ func newSandbox(t *testing.T) *sandbox {
 
 	sb.writeFakeLimactl(t)
 	sb.writeTripwireGH(t)
+	sb.writeFakeDirectoryTools(t)
 	for _, tool := range []string{"curl", "openssl"} {
 		sb.writeRecordingShim(t, tool)
 	}
@@ -422,11 +428,43 @@ const fakeLimactl = `#!/bin/sh
   # vm-gh-wrapper) records it and runs nothing on this machine. What it answers is what the VM would
   # answer: the vm-gh-wrapper stream ends with the call to the function that prints the done line, so a
   # whole stream gets that line back. SHIFT2EU_TEST_LIMA_SILENT stands for a connection that dropped after
-  # the stream arrived: sh -s exits 0 and says nothing.
+  # the stream arrived: sh -s exits 0 and says nothing. SHIFT2EU_TEST_LIMA_ESCAPE_STREAM (stdout or stderr) makes
+  # the VM print a terminal escape sequence there, as code in the VM can (issue #227 part 2, the security audit's
+  # second pass): stdout reaches make's output through the recipe, stderr reaches it beside the recipe.
+  # SHIFT2EU_TEST_LIMA_CONTROL_STREAM (stdout or stderr) makes it print a C1 control there instead, as the raw
+  # byte 0x9B and as its UTF-8 form C2 9B, with a tab beside it (issue #227 part 2, the security audit's third
+  # pass): a terminal reads the byte as the start of a control sequence.
+  # SHIFT2EU_TEST_LIMA_FAIL makes the VM print that line on stderr and exit with SHIFT2EU_TEST_LIMA_STATUS (1 when
+  # unset) instead of answering, the way a script in the VM reports a step it could not do (issue #227 part 2, the
+  # closing review): the recipe captures the VM's two streams together, and what it echoes must not read as a
+  # success.
   stdin_copy="$(mktemp "${TMPDIR:-/tmp}/lima-stdin.XXXXXX")" || exit 1
   cat > "${stdin_copy}" || exit 1
   cat "${stdin_copy}" >> "${SHIFT2EU_TEST_LIMA_CAPTURE}" || exit 1
   printf '\n--- end of call ---\n' >> "${SHIFT2EU_TEST_LIMA_CAPTURE}"
+  case "${SHIFT2EU_TEST_LIMA_ESCAPE_STREAM:-}" in
+  stdout) printf '\033[2J\n' ;;
+  stderr) printf '\033[2J\n' >&2 ;;
+  '') ;;
+  *)
+    echo "fake limactl: unknown SHIFT2EU_TEST_LIMA_ESCAPE_STREAM: ${SHIFT2EU_TEST_LIMA_ESCAPE_STREAM}" >&2
+    exit 64
+    ;;
+  esac
+  case "${SHIFT2EU_TEST_LIMA_CONTROL_STREAM:-}" in
+  stdout) printf 'vm: before\tafter\233mid\302\233end\n' ;;
+  stderr) printf 'vm: before\tafter\233mid\302\233end\n' >&2 ;;
+  '') ;;
+  *)
+    echo "fake limactl: unknown SHIFT2EU_TEST_LIMA_CONTROL_STREAM: ${SHIFT2EU_TEST_LIMA_CONTROL_STREAM}" >&2
+    exit 64
+    ;;
+  esac
+  if [ -n "${SHIFT2EU_TEST_LIMA_FAIL:-}" ]; then
+    printf '%s\n' "${SHIFT2EU_TEST_LIMA_FAIL}" >&2
+    rm -f "${stdin_copy}"
+    exit "${SHIFT2EU_TEST_LIMA_STATUS:-1}"
+  fi
   if [ -z "${SHIFT2EU_TEST_LIMA_SILENT:-}" ] && [ "$(tail -n 1 "${stdin_copy}")" = vm_gh_wrapper ]; then
     printf 'vm-gh-wrapper: done\n'
   fi
@@ -506,6 +544,69 @@ func (sb *sandbox) blockCurl(t *testing.T) {
 	path := filepath.Join(sb.binDir, "curl")
 
 	writeFileMode(t, path, []byte(blockedCurlShim), 0o700)
+}
+
+// fakeSSH stands in for the account's ssh in the tests of SSH mode (issue #227 part 2): it records its argv in
+// the sandbox log, records its standard input in a numbered file of SHIFT2EU_TEST_SSH_RECORD, writes
+// SHIFT2EU_TEST_SSH_STDERR to stderr when it is set, and exits with the status its status file holds (0 when the
+// file is missing, so a test can let the VM "come back" in the middle of a run). No test needs a key, a VM or the
+// network.
+const fakeSSH = `#!/bin/sh
+{
+  printf 'tool=ssh\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+record="${SHIFT2EU_TEST_SSH_RECORD:?set SHIFT2EU_TEST_SSH_RECORD}"
+mkdir -p "${record}" || exit 1
+n=0
+while [ -e "${record}/stdin-${n}" ]; do n=$((n + 1)); done
+cat > "${record}/stdin-${n}" || exit 1
+[ -z "${SHIFT2EU_TEST_SSH_STDERR:-}" ] || printf '%s\n' "${SHIFT2EU_TEST_SSH_STDERR}" >&2
+status="$(cat "${SHIFT2EU_TEST_SSH_STATUS_FILE:?set SHIFT2EU_TEST_SSH_STATUS_FILE}" 2>/dev/null || printf '0')"
+case "${status}" in
+'' | *[!0-9]*) status=0 ;;
+esac
+exit "${status}"
+`
+
+// sshOnPathTrap is the ssh a test leaves first on PATH while SHIFT2EU_AGENTS_SSH names the recording fake: a run
+// that calls it is recorded as the wrong binary's call and fails, so a test proves the script runs the binary the
+// hook names, never the one PATH offers (issue #227 part 2).
+const sshOnPathTrap = `#!/bin/sh
+{
+  printf 'tool=ssh\n'
+  printf 'arg=the-ssh-on-PATH\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+echo 'the script ran the ssh on PATH, not the one SHIFT2EU_AGENTS_SSH names' >&2
+exit 97
+`
+
+// useFakeSSH puts the recording ssh where SHIFT2EU_AGENTS_SSH points, a tripwire first on PATH where a plain ssh
+// would be found, and a status file that starts at 0. It returns the recorder, so a test can read the argv of
+// every write and its standard input, and let the VM come back by setting the status (issue #227 part 2).
+func (sb *sandbox) useFakeSSH(t *testing.T, env map[string]string) *sshRecorder {
+	t.Helper()
+
+	path := filepath.Join(sb.root, "account", "bin", "ssh")
+
+	writeFileMode(t, path, []byte(fakeSSH), 0o700)
+	writeFileMode(t, filepath.Join(sb.binDir, "ssh"), []byte(sshOnPathTrap), 0o700)
+
+	recorder := &sshRecorder{
+		sb:         sb,
+		dir:        filepath.Join(sb.root, "ssh-calls"),
+		statusFile: filepath.Join(sb.root, "ssh-status"),
+	}
+	sb.sshRecord = recorder.dir
+
+	writeFileMode(t, recorder.statusFile, []byte("0\n"), 0o600)
+
+	env["SHIFT2EU_AGENTS_SSH"] = path
+	env["SHIFT2EU_TEST_SSH_RECORD"] = recorder.dir
+	env["SHIFT2EU_TEST_SSH_STATUS_FILE"] = recorder.statusFile
+
+	return recorder
 }
 
 // fakeSudo stands in for sudo in the devenv tests: it records its argv and then runs the command as the user
@@ -591,6 +692,160 @@ func (sb *sandbox) useFakeSudo(t *testing.T) {
 	path := filepath.Join(sb.binDir, "sudo")
 
 	writeFileMode(t, path, []byte(fakeSudo), 0o700)
+}
+
+// fakeDSCl stands in for dscl, which the Makefile reads the agents account's kind with before any sudo call
+// (issue #227 part 2, the security audit's second pass): it records its argv and answers a `-read` with the
+// account's UniqueID. SHIFT2EU_TEST_DS_UNIQUEID is what it prints (401, the hidden role account of
+// docs/dev-environment.md, when the variable is unset; an empty value prints an empty UniqueID), and
+// SHIFT2EU_TEST_DS_STATUS exits non-zero instead, the way dscl answers an account that is not there. No test may
+// reach the machine's own directory services or create a real account.
+const fakeDSCl = `#!/bin/sh
+{
+  printf 'tool=dscl\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+if [ "${SHIFT2EU_TEST_DS_STATUS:-0}" -ne 0 ]; then
+  echo 'DS Error: -14136 (eDSRecordNotFound)' >&2
+  exit "${SHIFT2EU_TEST_DS_STATUS}"
+fi
+case "${2:-}" in
+-read) ;;
+*)
+  echo "fake dscl: the tests answer a -read only, not $*" >&2
+  exit 64
+  ;;
+esac
+printf 'UniqueID: %s\n' "${SHIFT2EU_TEST_DS_UNIQUEID-401}"
+`
+
+// fakeDSEditGroup stands in for dseditgroup, which the Makefile reads whether the agents account is an admin
+// with (issue #227 part 2, the security audit's second pass): it records its argv and answers -m <account> the
+// way dseditgroup answers checkmember - yes, exit 0, when SHIFT2EU_TEST_DS_ADMIN is 1, and dseditgroup's no,
+// exit 67, for the role account that is no admin. SHIFT2EU_TEST_DS_ADMIN=error exits 64 and answers nothing, and
+// SHIFT2EU_TEST_DS_ADMIN=missing exits 127 and answers nothing the way a shell reports a tool that is not there
+// (issue #227 part 2, the review and the audit of the account check): an admin check that cannot answer must not
+// read as "not an admin". SHIFT2EU_TEST_DS_ADMIN_ANSWER says exactly what it answers instead, with
+// SHIFT2EU_TEST_DS_ADMIN_STATUS as its exit status (67 when unset), so a test can pin that only an answer that
+// begins "no " passes (issue #227 part 2, the closing review).
+const fakeDSEditGroup = `#!/bin/sh
+{
+  printf 'tool=dseditgroup\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+account=""
+group=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -m)
+    account="${2:-}"
+    shift
+    [ "$#" -gt 0 ] && shift
+    ;;
+  -o)
+    shift
+    [ "$#" -gt 0 ] && shift
+    ;;
+  *)
+    group="$1"
+    shift
+    ;;
+  esac
+done
+[ -n "${account}" ] || {
+  echo 'fake dseditgroup: the tests answer -m <account> only' >&2
+  exit 64
+}
+[ -n "${group}" ] || group=admin
+if [ "${SHIFT2EU_TEST_DS_ADMIN:-0}" = 1 ]; then
+  printf 'yes %s is a member of %s\n' "${account}" "${group}"
+  exit 0
+fi
+case "${SHIFT2EU_TEST_DS_ADMIN:-0}" in
+error) exit 64 ;;
+missing) exit 127 ;;
+esac
+if [ -n "${SHIFT2EU_TEST_DS_ADMIN_ANSWER+set}" ]; then
+  printf '%s\n' "${SHIFT2EU_TEST_DS_ADMIN_ANSWER}"
+  exit "${SHIFT2EU_TEST_DS_ADMIN_STATUS:-67}"
+fi
+printf 'no %s is NOT a member of %s\n' "${account}" "${group}"
+# dseditgroup exits 67 for a user that is not a member of the group.
+exit 67
+`
+
+// writeFakeDirectoryTools puts the stand-ins for dscl and dseditgroup first on PATH, so a test of the account
+// check reads an invented account's kind and never the directory services of the machine the tests run on. The
+// defaults are the hidden role account of docs/dev-environment.md: UniqueID 401, and no admin membership.
+func (sb *sandbox) writeFakeDirectoryTools(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "dscl"), []byte(fakeDSCl), 0o700)
+	writeFileMode(t, filepath.Join(sb.binDir, "dseditgroup"), []byte(fakeDSEditGroup), 0o700)
+}
+
+// assertNoEscape fails unless what make printed holds no terminal escape byte: the scripts that run in the VM
+// are code the agents can write, so a line they print may carry an escape sequence that drives the maintainer's
+// terminal, and make must strip it before it echoes the VM's output (issue #227 part 2, the security audit's
+// second pass). What is left of the VM's line may be printed: only the ESC byte is pinned.
+func assertNoEscape(t *testing.T, run, stdout, stderr string) {
+	t.Helper()
+
+	for _, stream := range []struct{ name, text string }{{"stdout", stdout}, {"stderr", stderr}} {
+		if strings.ContainsRune(stream.text, '\x1b') {
+			t.Errorf("%s echoed a terminal escape byte that came from the VM, so code in the VM can drive the maintainer's terminal: strip the ESC before printing the VM's output (issue #227 part 2, the security audit's second pass)\n%s:\n%q",
+				run, stream.name, stream.text)
+		}
+	}
+}
+
+// vmControlLine is the line the fake VM prints when a test asks for a C1 control: a tab, the C1 control U+009B as
+// the raw byte 0x9B and again as its UTF-8 form C2 9B, and printable text around them, which must survive. A
+// terminal reads 0x9B as CSI, the start of a control sequence, so only printable ASCII may reach make's output
+// (issue #227 part 2, the security audit's third pass). The fakes of the VM print the same line.
+const vmControlLine = "vm: before\tafter\233mid\302\233end"
+
+// assertNoC1Control fails unless neither stream holds a C1 control byte: the scripts that run in the VM are code
+// the agents can write, so a line they print may carry 0x9B - CSI, which a terminal takes as the start of a control
+// sequence - and a control byte is no printable ASCII. Both forms are pinned, the raw byte and its UTF-8 encoding
+// C2 9B, since deleting one leaves the other (issue #227 part 2, the security audit's third pass).
+func assertNoC1Control(t *testing.T, run, stdout, stderr string) {
+	t.Helper()
+
+	for _, stream := range []struct{ name, text string }{{"stdout", stdout}, {"stderr", stderr}} {
+		for _, form := range []struct{ name, bytes string }{
+			{"the raw C1 byte 0x9B", "\x9b"},
+			{"the UTF-8 form C2 9B", "\xc2\x9b"},
+		} {
+			if strings.Contains(stream.text, form.bytes) {
+				t.Errorf("%s let %s from the VM reach %s, so code in the VM can drive the maintainer's terminal: only printable ASCII may be printed of what the VM wrote, so strip every control character, the C1 controls among them, before echoing it (issue #227 part 2, the security audit's third pass)\n%s:\n%q",
+					run, form.name, stream.name, stream.name, stream.text)
+			}
+		}
+	}
+}
+
+// assertTabAndNewlineSurvive fails unless the run's output still holds a tab and a line break of the VM's line: only
+// control characters are stripped, so the line the VM wrote stays readable (issue #227 part 2, the security audit's
+// third pass). It reads both streams together, since a recipe may print the VM's standard error beside its output.
+func assertTabAndNewlineSurvive(t *testing.T, run, stdout, stderr string) {
+	t.Helper()
+
+	combined := stdout + stderr
+
+	if !strings.Contains(combined, "\t") {
+		t.Errorf("%s dropped the tab of the VM's line together with the control bytes: a tab and a line break are the only control characters that may stay (issue #227 part 2, the security audit's third pass)\nstdout: %q\nstderr: %q", run, stdout, stderr)
+	}
+
+	if !strings.Contains(combined, "\n") {
+		t.Errorf("%s dropped the line breaks of the VM's output together with the control bytes: a tab and a line break are the only control characters that may stay (issue #227 part 2, the security audit's third pass)\nstdout: %q\nstderr: %q", run, stdout, stderr)
+	}
+
+	printable, _, _ := strings.Cut(vmControlLine, "\t")
+
+	if !strings.Contains(combined, printable) {
+		t.Errorf("%s dropped the printable text %q of the VM's line together with its control bytes: strip only the control characters, so nothing the maintainer needs is lost (issue #227 part 2, the security audit's third pass)\nstdout: %q\nstderr: %q", run, printable, stdout, stderr)
+	}
 }
 
 // fakeSystemctl stands in for systemctl in the devenv tests: it records its argv and exits 0. A test that pins
@@ -781,6 +1036,17 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 //     then takes every permission away, so the file is there and the maintainer's own read-back cannot open it.
 //     A destination outside SHIFT2EU_TEST_SUDO_ROOT is refused.
 //   - `rm -f <path>` really removes a sandbox path, and refuses any path outside it.
+//   - `sudo -k` alone forgets the timestamp and runs nothing, so a recipe that ends with it records one
+//     argv and no command; it is not the empty command the fake reports as a bug.
+//   - `sudo -u <account> -H /bin/cat .../agents-vm-ssh-key.pub` prints the line
+//     SHIFT2EU_TEST_ACCOUNT_PUBKEY_FILE holds, standing in for the account's key file under a
+//     SHIFT2EU_TEST_ACCOUNT_HOME no test can create. The command may also arrive through
+//     `/usr/bin/env -i PATH=...`, which the fake resolves first (security audit 1).
+//   - `sudo -u <account> -H /bin/sh -c ... pin <path>` records its standard input in
+//     SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE instead of writing the account's known-hosts file.
+//   - `sudo -u <account> -H /usr/bin/env -i ... /bin/sh <script> plist` prints what
+//     SHIFT2EU_TEST_ACCOUNT_PLIST_FILE holds, standing in for the plist the account's own generator would render
+//     from a clone under a /Users/<account> no test machine has (issue #227 part 2, review 2).
 //   - `launchctl` runs the fake launchctl first on PATH, so a test can pin the load and unload commands and
 //     see launchd's state change between them.
 //   - every other command runs with the fake tools first on PATH, as it would under the real sudo.
@@ -789,12 +1055,30 @@ const logOnlySudo = `#!/bin/sh
   printf 'tool=sudo\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+# sudo -k forgets the timestamp and runs nothing: a recipe that ends with it runs no command at all.
+case "$*" in
+'-k') exit 0 ;;
+esac
 while [ "$#" -gt 0 ]; do
   case "$1" in
   -n | -E | -H | -S | -k | --) shift ;;
   -u | -g | -p | -C | -T) shift 2 ;;
   *) break ;;
   esac
+done
+# A sudo that must not pass the caller's PATH on hands its command over through /usr/bin/env -i PATH=... <command>
+# (issue #227 part 2, security audit 1): the fake resolves env first, so it answers for the command the way it
+# would without it, and a test can pin the env form as the argv it records.
+while [ "${1:-}" = /usr/bin/env ] || [ "${1:-}" = /bin/env ]; do
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+    -i | -0 | -v) shift ;;
+    -u | -C | -S) shift 2 ;;
+    *=*) shift ;;
+    *) break ;;
+    esac
+  done
 done
 command="${1:-}"
 [ -n "${command}" ] || {
@@ -844,6 +1128,31 @@ rm)
   done
   exit 0
   ;;
+/bin/cat)
+  # The account's public key, read as the account: the sandbox answers with the line the test wrote, since no
+  # /Users/<account> exists here (issue #227 part 2).
+  if [ -n "${SHIFT2EU_TEST_ACCOUNT_PUBKEY_FILE:-}" ] &&
+    [ "${1:-}" = "${SHIFT2EU_TEST_ACCOUNT_HOME:-}/.config/shift2eu/agents-vm-ssh-key.pub" ]; then
+    cat "${SHIFT2EU_TEST_ACCOUNT_PUBKEY_FILE}" || exit 1
+    exit 0
+  fi
+  exec "${command}" "$@"
+  ;;
+/bin/sh)
+  # The known-hosts pin: the recipe writes the line on standard input, so the fake records it instead of
+  # writing into an account home the sandbox does not have (issue #227 part 2).
+  if [ -n "${SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE:-}" ] && [ "${3:-}" = pin ]; then
+    cat > "${SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE}" || exit 1
+    exit 0
+  fi
+  # The render as the account: the plist the account's generator prints, which no test can run, since
+  # /Users/<account>/shift2eu-host is on no test machine (issue #227 part 2, review 2).
+  if [ -n "${SHIFT2EU_TEST_ACCOUNT_PLIST_FILE:-}" ] && [ "${2:-}" = plist ]; then
+    /bin/cat "${SHIFT2EU_TEST_ACCOUNT_PLIST_FILE}" || exit 1
+    exit 0
+  fi
+  exec "${command}" "$@"
+  ;;
 *)
   exec "${command}" "$@"
   ;;
@@ -858,6 +1167,174 @@ func (sb *sandbox) useLogOnlySudo(t *testing.T) {
 	path := filepath.Join(sb.binDir, "sudo")
 
 	writeFileMode(t, path, []byte(logOnlySudo), 0o700)
+}
+
+// recordingCat is the machine's own cat behind a recorder: a recipe reads files a test wants to know about, the
+// refresh's lock among them, with cat, and the argv log keeps which paths it read (issue #227 part 2, review 2).
+const recordingCat = `#!/bin/sh
+{
+  printf 'tool=cat\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+exec /bin/cat "$@"
+`
+
+// useRecordingCat puts a cat that records its arguments first on PATH, so a test can pin which files a recipe read
+// through cat - or that it read none of them (issue #227 part 2, review 2).
+func (sb *sandbox) useRecordingCat(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "cat"), []byte(recordingCat), 0o700)
+}
+
+// fakeVMSudo stands in for the VM user's sudo when the script `make vm-agents-token-ssh` sends is run as that
+// user in the sandbox (issue #227 part 2, review 2): it records its argv, runs its command as the user who runs
+// the tests, and redirects the root paths the script hard-codes (/etc/..., /usr/local/...) into
+// SHIFT2EU_TEST_SUDO_ROOT, so nothing of the machine's own /etc or /usr/local is touched. `install` loses the
+// -o and -g options only root can use and reaches the machine's own install, as fakeSudo does; mv, rm and
+// rmdir see the redirected paths; every other command, sshd and systemctl included, runs as it is, with the
+// fakes first on PATH.
+const fakeVMSudo = `#!/bin/sh
+{
+  printf 'tool=sudo\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+case "$*" in
+'-k') exit 0 ;;
+esac
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+  -n | -E | -H | -S | -k | --) shift ;;
+  -u | -g | -p | -C | -T) shift 2 ;;
+  *) break ;;
+  esac
+done
+command="${1:-}"
+[ -n "${command}" ] || {
+  echo 'fake sudo: nothing to run' >&2
+  exit 64
+}
+shift
+root="${SHIFT2EU_TEST_SUDO_ROOT:?set SHIFT2EU_TEST_SUDO_ROOT}"
+map() {
+  case "$1" in
+  /etc/* | /usr/local/*) printf '%s%s' "${root}" "$1" ;;
+  *) printf '%s' "$1" ;;
+  esac
+}
+case "${command}" in
+install)
+  kept="$#"
+  while [ "${kept}" -gt 0 ]; do
+    case "$1" in
+    -o | -g) shift 2; kept="$((kept - 2))" ;;
+    *)
+      a="$1"
+      shift
+      kept="$((kept - 1))"
+      set -- "$@" "$(map "${a}")"
+      ;;
+    esac
+  done
+  exec install "$@"
+  ;;
+mv | rm | rmdir)
+  kept="$#"
+  while [ "${kept}" -gt 0 ]; do
+    a="$1"
+    shift
+    kept="$((kept - 1))"
+    set -- "$@" "$(map "${a}")"
+  done
+  exec "${command}" "$@"
+  ;;
+*)
+  exec "${command}" "$@"
+  ;;
+esac
+`
+
+// useFakeVMSudo puts the redirecting fake sudo first on PATH, for a test that runs the VM's script as the VM user
+// in the sandbox.
+func (sb *sandbox) useFakeVMSudo(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "sudo"), []byte(fakeVMSudo), 0o700)
+}
+
+// fakeSSHD stands in for the VM's sshd in a test that runs the script `make vm-agents-token-ssh` sends (issue
+// #227 part 2, review 2): it records its argv, answers `-t` with SHIFT2EU_TEST_SSHD_CONFIG_STATUS (0 when
+// unset), and answers `-T` with the effective configuration the test wrote, as sshd -T prints it.
+const fakeSSHD = `#!/bin/sh
+{
+  printf 'tool=sshd\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+case "${1:-}" in
+-t) exit "${SHIFT2EU_TEST_SSHD_CONFIG_STATUS:-0}" ;;
+-T) cat "${SHIFT2EU_TEST_SSHD_EFFECTIVE_FILE:?set SHIFT2EU_TEST_SSHD_EFFECTIVE_FILE}" ;;
+*)
+  echo "fake sshd: the tests answer -t and -T only, not $*" >&2
+  exit 64
+  ;;
+esac
+`
+
+// useFakeSSHD puts the recording sshd first on PATH and makes it answer `-T` with an effective configuration, so
+// a test can pin what the VM's script does with what sshd reads of the drop-in, without a real sshd.
+func (sb *sandbox) useFakeSSHD(t *testing.T, env map[string]string, effective string) {
+	t.Helper()
+
+	path := filepath.Join(sb.root, "sshd-T.txt")
+	writeFileMode(t, path, []byte(effective), 0o600)
+	writeFileMode(t, filepath.Join(sb.binDir, "sshd"), []byte(fakeSSHD), 0o700)
+
+	env["SHIFT2EU_TEST_SSHD_EFFECTIVE_FILE"] = path
+}
+
+// fakeLSWithACL answers `ls -ldn <one path>` and `ls -lde <it>` from two files, the way a Mac's ls reports a mode
+// with an ACL: a trailing + on the mode, and the entries a line each; every other call reaches the machine's own
+// ls (issue #227 part 2, audit 3, review 11). It stands in for ACLs, which Linux has none of.
+const fakeLSWithACL = `#!/bin/sh
+if [ "${2:-}" = "${SHIFT2EU_TEST_ACL_PATH:?set SHIFT2EU_TEST_ACL_PATH}" ]; then
+  case "${1:-}" in
+  -ldn | -dln) cat "${SHIFT2EU_TEST_ACL_LDN:?set SHIFT2EU_TEST_ACL_LDN}"; exit $? ;;
+  -lde | -led) cat "${SHIFT2EU_TEST_ACL_LDE:?set SHIFT2EU_TEST_ACL_LDE}"; exit $? ;;
+  esac
+fi
+exec %s "$@"
+`
+
+// useFakeLSWithACL puts an ls first on PATH that reports path as long and, with the -e that asks for the ACL
+// entries, as long plus acl, and hands every other call to the machine's own ls.
+func (sb *sandbox) useFakeLSWithACL(t *testing.T, env map[string]string, path, long, acl string) {
+	t.Helper()
+
+	longFile := filepath.Join(sb.root, "ls-ldn.txt")
+	aclFile := filepath.Join(sb.root, "ls-lde.txt")
+
+	writeFileMode(t, longFile, []byte(long), 0o600)
+	writeFileMode(t, aclFile, []byte(acl), 0o600)
+	writeFileMode(t, filepath.Join(sb.binDir, "ls"), []byte(fmt.Sprintf(fakeLSWithACL, strconv.Quote(realTool(t, "ls")))), 0o700)
+
+	env["SHIFT2EU_TEST_ACL_PATH"] = path
+	env["SHIFT2EU_TEST_ACL_LDN"] = longFile
+	env["SHIFT2EU_TEST_ACL_LDE"] = aclFile
+}
+
+// aclProbe makes the sandbox's ls report path the way a Mac reports an entry that carries an ACL: the mode with
+// the trailer a Mac prints for it, then the entries of entries, which are either one that allows an account (an
+// allow entry) or the deny-only ACL macOS gives a home (group:everyone deny delete). The trailer is + when the
+// entry carries an ACL and nothing else, and @ when it carries extended attributes too: a Mac's ls prints @
+// then, so a rule that reads the ACL only after a + misses the entry's allow entries (issue #227 part 2, audit
+// 3, review 11, and the audit's second pass).
+func aclProbe(t *testing.T, sb *sandbox, env map[string]string, path, mode, entries string) {
+	t.Helper()
+
+	uid := strconv.Itoa(os.Getuid())
+	long := fmt.Sprintf("-rw-------%s 1 %s %s 1874 Nov 19 10:00 %s\n", mode, uid, uid, path)
+
+	sb.useFakeLSWithACL(t, env, path, long, long+entries)
 }
 
 // fakeSleep stands in for sleep in a test that reaches a wait loop or a retry: it records its argv and returns
@@ -906,6 +1383,31 @@ func (sb *sandbox) useFakeIDAsRoot(t *testing.T) {
 	path := filepath.Join(sb.binDir, "id")
 
 	writeFileMode(t, path, []byte(shim), 0o700)
+}
+
+// fakeIDName stands in for id in a test that pins what a generator renders for the account a job runs as
+// (issue #227 part 2): it answers SHIFT2EU_TEST_ID_NAME for `id -un`, and hands every other call, `id -u`
+// included, to the machine's own id, so the uid the trusted path rule checks is the one the test's own files
+// have, and the generator does not refuse a run that is not root.
+const fakeIDName = `#!/bin/sh
+{
+  printf 'tool=id\n'
+  for a in "$@"; do printf 'arg=%%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+case "$*" in
+'-un' | '-nu' | '-urn' | '-nur') printf '%%s\n' "${SHIFT2EU_TEST_ID_NAME:?set SHIFT2EU_TEST_ID_NAME}"; exit 0 ;;
+esac
+exec %s "$@"
+`
+
+// useFakeIDName makes id answer name for `id -un`, the account the job runs as, and everything else as the
+// machine's own id does: a test can render the plist as an account of its own without creating one.
+func (sb *sandbox) useFakeIDName(t *testing.T, env map[string]string, name string) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "id"), []byte(fmt.Sprintf(fakeIDName, strconv.Quote(realTool(t, "id")))), 0o700)
+
+	env["SHIFT2EU_TEST_ID_NAME"] = name
 }
 
 // fakePlutil stands in for plutil: it records its argv and answers SHIFT2EU_TEST_PLUTIL_STATUS, so a test can
@@ -1639,6 +2141,14 @@ func invocations(log, tool string) [][]string {
 	}
 
 	return calls
+}
+
+// lastLine returns the last line of text that holds anything, without its line break: the line a whole-script
+// check reads.
+func lastLine(text string) string {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+
+	return lines[len(lines)-1]
 }
 
 // nonEmptyLines counts the lines of text that hold anything.
