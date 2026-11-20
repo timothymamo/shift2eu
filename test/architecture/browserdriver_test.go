@@ -24,14 +24,21 @@ import (
 // transitive import no rule of the importing file names would otherwise carry
 // it in.
 
-// chromedpPrefix is the import path prefix of the browser driver: chromedp and
-// everything under it, cdproto, sysutil, its json and easierjson packages. A
-// product binary that reached one of them could start a browser.
-const chromedpPrefix = "github.com/chromedp/"
-
 // chromedpDriver is the driver package itself, the one the smoke test imports
 // and the one the check below must find to prove it can fire.
 const chromedpDriver = "github.com/chromedp/chromedp"
+
+// driverOnlyJSON is a package no product binary may reach although chromedp's
+// own prefix does not name it: cdproto, the protocol library chromedp drives the
+// browser through, encodes and decodes with go-json-experiment/json. On this
+// toolchain it reaches the package only under the cdproto_jsoncompat build tag
+// (cdproto's cdp/jsonv2/json_compat.go), and the derived set below reads the
+// browser tag alone, so the package is refused explicitly: a product built with
+// the compat tag and a driver import would otherwise carry it unseen.
+const (
+	driverOnlyJSON       = "github.com/go-json-experiment/json"
+	driverOnlyJSONPrefix = "github.com/go-json-experiment/"
+)
 
 // siteBuilderMain is the site's builder, ci/sitebuild (PRD #297 milestone 2):
 // no product binary and no release build, but a program the release and make run
@@ -44,10 +51,20 @@ const siteBuilderMain = "./ci/sitebuild"
 const browserDriverProbe = "./test/browser"
 
 // TestNoProductBinaryReachesChromedp lists the dependencies of every program
-// the repository builds for a user or a release, and fails when one reaches
-// github.com/chromedp/: the release platforms .goreleaser.yaml builds for each
-// of cmd/shift2eu, cmd/shift2eu-server and ci/sitebuild, and js/wasm for
-// cmd/shift2eu-web, the site's module.
+// the repository builds for a user or a release, and fails when one reaches a
+// package the browser driver brings into the module: the release platforms
+// .goreleaser.yaml builds for each of cmd/shift2eu, cmd/shift2eu-server and
+// ci/sitebuild, and js/wasm for cmd/shift2eu-web, the site's module.
+//
+// The refused set is derived, not a list of prefixes: go list -deps -test with
+// the browser tag over test/browser, the one importer of the driver, names every
+// package the driver needs, chromedp's own and the third-party packages only its
+// tree uses, and the check takes from that set what is neither the module's own
+// code nor the standard library. So a package the driver adds, or one of its
+// dependencies moves it to, is refused in every product tree without an edit
+// here, while a dependency a product shares with the rest of the module stays
+// allowed. github.com/go-json-experiment/ is refused beside the set: cdproto
+// reaches it only under a build tag the listing does not compile.
 //
 // The listing carries the browser build tag, so a file of a product package
 // behind that tag, which no release compiles, is read as well: a product file
@@ -55,10 +72,11 @@ const browserDriverProbe = "./test/browser"
 // check fails when go list fails too, so a dependency tree it could not read is
 // no pass.
 //
-// The last subtest proves the check can fire: go list -deps with the browser tag
-// on test/browser, the one package that imports the driver, must list
-// github.com/chromedp/chromedp. Without it a prefix that matched nothing, or a
-// listing that came back empty, would pass every subtest above.
+// The last subtest proves the check can fire: the refused set must hold
+// github.com/chromedp/chromedp, the package the smoke test imports, and
+// github.com/go-json-experiment/json, which cdproto reaches under its compat
+// build tag. Without it a set that matched nothing, or a listing that came back
+// empty, would pass every subtest above.
 func TestNoProductBinaryReachesChromedp(t *testing.T) {
 	t.Parallel()
 
@@ -74,6 +92,10 @@ func TestNoProductBinaryReachesChromedp(t *testing.T) {
 	if len(targets) == 0 {
 		t.Fatal("releasetarget.Read(.goreleaser.yaml) returned no target, so this check would run on nothing")
 	}
+
+	// The refused set, read once: the packages the driver's tree brings into the
+	// module.
+	driver := driverOnlyPackages(t, root)
 
 	// program is one main package built for one platform: what the check below
 	// lists the dependencies of.
@@ -113,13 +135,13 @@ func TestNoProductBinaryReachesChromedp(t *testing.T) {
 				listed = append(listed, pkg.ImportPath)
 			}
 
-			reached := chromedpReaches(listed)
+			reached := driverReaches(listed, driver)
 			if len(reached) != 0 {
 				// One message per program, naming the reached packages that no
 				// reached package holds: the driver's tree is hundreds of
 				// packages, and the roots are what a reader has to look at.
-				t.Errorf("%s built for %s/%s reaches %s, a package of the browser driver: only test/browser may drive a browser, and a product binary that carried the driver could start one",
-					p.main, p.target.GOOS, p.target.GOARCH, strings.Join(chromedpRoots(reached), ", "))
+				t.Errorf("%s built for %s/%s reaches %s, a package of the browser driver: only test/browser may drive a browser, and a product binary that carried the driver or one of its dependencies could start one",
+					p.main, p.target.GOOS, p.target.GOARCH, strings.Join(driverRoots(reached), ", "))
 			}
 		})
 	}
@@ -127,27 +149,68 @@ func TestNoProductBinaryReachesChromedp(t *testing.T) {
 	t.Run("the-check-can-fire", func(t *testing.T) {
 		t.Parallel()
 
-		// -test is what makes this listing show the driver: the only imports of
-		// chromedp in the repository are in test/browser's _test.go files, and
-		// go list -deps lists the imports of a package's own files alone. The
-		// browser tag compiles the files that carry them.
-		paths := goListImportPaths(t, root, "list", "-deps", "-test", "-tags=browser", "--", browserDriverProbe)
-
-		if !slices.Contains(chromedpReaches(paths), chromedpDriver) {
-			t.Errorf("go list -deps -test -tags=browser %s lists no %s, so the check above cannot fire: a prefix that matches nothing, or a listing that comes back empty, would pass every subtest",
-				browserDriverProbe, chromedpDriver)
+		for _, want := range []string{chromedpDriver, driverOnlyJSON} {
+			if !driverBrought(want, driver) {
+				t.Errorf("the refused set holds no %s, so the check above cannot refuse a product tree that reached it: the set is go list -deps -test -tags=browser %s less the module's own packages and the standard library, and the packages cdproto reaches under its compat tag",
+					want, browserDriverProbe)
+			}
 		}
 	})
 }
 
-// chromedpReaches returns those of the import paths that belong to the browser
-// driver, sorted: the entry to report, and what makes the check above and its
-// proof read one prefix.
-func chromedpReaches(paths []string) []string {
+// driverOnlyPackages returns the import paths the browser driver brings into the
+// module, sorted: the dependencies of test/browser, the one importer of the
+// driver, less the module's own packages and the standard library's.
+//
+// The listing carries -test and the browser tag for the reason the subtest above
+// does: the only imports of chromedp in the repository are in test/browser's
+// _test.go files, so go list -deps lists them only with -test, and the browser
+// tag compiles the files that carry them.
+func driverOnlyPackages(t *testing.T, root string) []string {
+	t.Helper()
+
+	probe := goListImportPaths(t, root, "list", "-deps", "-test", "-tags=browser", "--", browserDriverProbe)
+	if len(probe) == 0 {
+		t.Fatalf("go list -deps -test -tags=browser %s listed no package, so this check would hold nothing", browserDriverProbe)
+	}
+
+	module := modulePath
+
+	var driver []string
+
+	for _, path := range probe {
+		if path == module || strings.HasPrefix(path, module+"/") || isStandardLibrary(path) {
+			continue
+		}
+
+		driver = append(driver, path)
+	}
+
+	if len(driver) == 0 {
+		t.Fatalf("%s reaches no package outside the module and the standard library, so the driver is not in the listing this check reads", browserDriverProbe)
+	}
+
+	slices.Sort(driver)
+
+	return driver
+}
+
+// isStandardLibrary reports whether the import path is a standard package's: a
+// standard package's first element holds no dot, so internal/abi is the
+// toolchain's and github.com/... is not.
+func isStandardLibrary(path string) bool {
+	first, _, _ := strings.Cut(path, "/")
+
+	return !strings.Contains(first, ".")
+}
+
+// driverReaches returns those of the import paths that the refused set holds,
+// sorted: the entry to report.
+func driverReaches(paths, driver []string) []string {
 	var reached []string
 
 	for _, path := range paths {
-		if strings.HasPrefix(path, chromedpPrefix) {
+		if driverBrought(path, driver) {
 			reached = append(reached, path)
 		}
 	}
@@ -157,20 +220,23 @@ func chromedpReaches(paths []string) []string {
 	return reached
 }
 
-// chromedpRoots returns the roots of the reached subtrees, sorted: the reached
-// paths whose parent is not reached itself. One import of the driver reaches
-// hundreds of chromedp packages, and the roots are the ones a reader has to
-// look at; every other reached path sits under one of them.
-func chromedpRoots(reached []string) []string {
-	isReached := make(map[string]bool, len(reached))
-	for _, path := range reached {
-		isReached[path] = true
-	}
+// driverBrought reports whether the import path is one a product tree may not
+// reach: one the derived set names, or one under the prefix cdproto's compat
+// build tag reaches.
+func driverBrought(path string, driver []string) bool {
+	return slices.Contains(driver, path) || strings.HasPrefix(path, driverOnlyJSONPrefix)
+}
 
+// driverRoots returns the roots of the reached subtrees, sorted: the reached
+// paths whose parent is not reached itself. One import of the driver reaches
+// hundreds of packages, and the roots are the ones a reader has to look at; every
+// other reached path sits under one of them.
+func driverRoots(reached []string) []string {
 	var roots []string
 
 	for _, path := range reached {
-		if !isReached[path[:strings.LastIndex(path, "/")]] {
+		slash := strings.LastIndex(path, "/")
+		if slash < 0 || !slices.Contains(reached, path[:slash]) {
 			roots = append(roots, path)
 		}
 	}
