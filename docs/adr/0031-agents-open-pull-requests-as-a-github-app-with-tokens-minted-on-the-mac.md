@@ -162,9 +162,8 @@
 >    in with `sudo install -o _shift2euagents -g _shift2euagents -m 0600 <download>
 >    /Users/_shift2euagents/.config/shift2eu/agents-app.pem`, the download then removed, and **every
 >    older key deleted on the App's page**: a key the maintainer's uid ever held must be revoked, or
->    moving it gains nothing. The download sits in the maintainer's `~/Downloads` for that moment; that
->    window is accepted. For that moment the download is in the maintainer's reach, usually on another
->    machine too, carried to the Mini as a 0600 temporary file and removed on both (local Time Machine
+>    moving it gains nothing. For that moment the download sits in the maintainer's `~/Downloads`, in
+>    the maintainer's reach, usually on another machine too, and that window is accepted: it is carried to the Mini as a 0600 temporary file and removed on both (local Time Machine
 >    snapshots taken in the window deleted; rotating the key closes it for good).
 > 3. **Transport: SSH, not limactl.** The account cannot run `limactl` against the maintainer's
 >    `~/.lima`, so it connects to the VM's forwarded SSH port on `127.0.0.1` itself. Four variables choose
@@ -238,7 +237,7 @@
 >       every `sudo` the targets run) and refuses anything but one line `ssh-ed25519 <base64>` with an
 >       optional comment of letters, digits and `@ . _ -`: no options, quotes, commas or second line can
 >       reach the keys file. The comment is replaced with `shift2eu-agents-token`;
->    3. generates, with `sh dev/vm-agents-token-ssh.sh <writer file> <key line> <vm user>` (the writer
+>    3. generates, with `dev/vm-agents-token-ssh.sh <writer file> <key line> <vm user>` (the writer
 >       from `dev/agents-app-token.sh vm-writer`, in a temporary file), a script whose last line is the
 >       call `vm_agents_token_ssh`, sends it only when it is whole, over `limactl shell --workdir /
 >       <instance> sh -s`'s standard input, exactly as `make vm-gh-wrapper` does, and fails unless the
@@ -264,7 +263,7 @@
 >
 >    **`make vm-agents-token-ssh-uninstall`** removes the drop-in, the keys file and the writer (with
 >    `sudo`, in the VM, over `limactl shell`'s standard input, the same whole-script check and a
->    `vm-agents-token-ssh-uninstall: done` line; its script comes from `sh dev/vm-agents-token-ssh.sh
+>    `vm-agents-token-ssh-uninstall: done` line; its script comes from `dev/vm-agents-token-ssh.sh
 >    --uninstall <vm user>`), reloads sshd, and leaves the account's files alone.
 >    Residual: the agents run as the VM user, who has passwordless `sudo` (ADR 0017), so they can change
 >    the writer, the keys file or sshd. That gains them nothing they lack: the token lands in their own
