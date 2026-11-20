@@ -169,6 +169,23 @@ func TestResourcePathProblems(t *testing.T) {
 			want: []string{"bucket/example--acme-prod--euc1-az1--x-s3"},
 		},
 		{
+			// Only a zone's own ID sits in the zone slot of a directory
+			// bucket's suffix, and a customer's words there
+			// (example--acme-prod--x-s3) are no zone: they are stripped from
+			// the end of no name, so the whole name is reported.
+			name: "customer words in a directory bucket's zone slot",
+			text: `"bucket": "arn:aws:s3express:eu-central-1:` + dummyAccountID + `:bucket/example--acme-prod--x-s3"`,
+			want: []string{"bucket/example--acme-prod--x-s3"},
+		},
+		{
+			// A single customer word in the zone slot (example--acme--x-s3) is
+			// no availability or local zone's ID either, so nothing is stripped
+			// and the name behind no sample's words is reported.
+			name: "customer word in a directory bucket's zone slot",
+			text: `"bucket": "arn:aws:s3express:eu-central-1:` + dummyAccountID + `:bucket/example--acme--x-s3"`,
+			want: []string{"bucket/example--acme--x-s3"},
+		},
+		{
 			// The zone suffix belongs to the s3express service's directory
 			// buckets, never to an access point's name, which is the
 			// customer's own in full even when it ends in the same letters
