@@ -176,8 +176,8 @@ provision:
       fi
       if [ "${active}" -eq 0 ] && ! swapon "${swapfile}"; then
         # A file of the right size that swapon refuses most likely has no swap header (an interrupted creation,
-        # one a crash cut short before this step built the file atomically). Rebuilt once, in the old file's space; a second failure stops
-        # the step rather than recreating the file at every boot.
+        # one a crash cut short before this step built the file atomically). Rebuilt once, in the old file's
+        # space; a second failure stops the step rather than recreating the file at every boot.
         echo >&2 "swap: swapon ${swapfile} failed; recreating the swap file once."
         build_swapfile
         if ! swapon "${swapfile}"; then

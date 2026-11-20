@@ -292,8 +292,8 @@ right size alone, switches on one that is off, and recreates one of another size
 a temporary name and renames it into place only once it is ready, and when `swapon` refuses a file of the
 right size (one a crash cut short while it was created) it rebuilds it once, so an interrupted creation is
 repaired at the next boot; a file that still cannot be switched on fails the step with a message. A
-temporary `/swapfile.new` that a crash left behind is never swap: the next boot removes it before it checks
-the free space. Check it in the VM:
+temporary `/swapfile.new` that a crash left behind is never swap: the next boot that sets up swap removes it
+before it checks the free space. Check it in the VM:
 
 ```bash
 swapon --show                      # /swapfile, with its size
