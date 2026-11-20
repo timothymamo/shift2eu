@@ -677,6 +677,34 @@ linters:
               desc: only the wire package's parity tests run the CLI; the site's module runs internal/web
             - pkg: github.com/timothymamo/shift2eu/internal/cli/
               desc: only the wire package's parity tests run the CLI; the site's module runs internal/web
+        # The test files of the whole module (issue #345): the rules above leave
+        # test files out (!$test), so before this rule a test in internal/web or
+        # internal/httpapi could import internal/cli, coupling two driving
+        # adapters that never import each other (CLAUDE.md's layer table), with
+        # lint green. Only three packages' test files may import it, each named
+        # by its own directory's files alone (*_test.go, no /**/), so a package
+        # added below one of them is refused too:
+        #   - internal/cli, whose black-box package cli_test imports the
+        #     package under test;
+        #   - cmd/shift2eu-web/internal/wire, the CLI/web parity tests (ADR 0035);
+        #   - test/apiparity, the CLI/HTTP API parity test (PRD #103).
+        # Production files are no part of this rule: cmd/shift2eu imports the
+        # CLI, and cli-and-cmd-imported-only-by-cmd holds the rest. The test
+        # files of the site's root are refused by web-root-tests-never-run-the-cli
+        # as well, which is kept for its message and because ADR 0035 names it.
+        # A new test importer is named here, in its desc and in the pin.
+        cli-only-in-named-tests:
+          list-mode: lax
+          files:
+            - "$test"
+            - "!**/internal/cli/*_test.go"
+            - "!**/cmd/shift2eu-web/internal/wire/*_test.go"
+            - "!**/test/apiparity/*_test.go"
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/internal/cli$
+              desc: "only the test files of internal/cli, cmd/shift2eu-web/internal/wire and test/apiparity import the CLI; name a new importer in cli-only-in-named-tests (issue #345)"
+            - pkg: github.com/timothymamo/shift2eu/internal/cli/
+              desc: "only the test files of internal/cli, cmd/shift2eu-web/internal/wire and test/apiparity import the CLI; name a new importer in cli-only-in-named-tests (issue #345)"
         # The HTTP API (ADR 0019) is a driving adapter like internal/cli: it gets
         # its adapters from its composition root, cmd/shift2eu-server, through
         # httpapi.Deps and never constructs one, so it imports only the

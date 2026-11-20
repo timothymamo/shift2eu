@@ -107,9 +107,10 @@ Arrows are imports. They point inwards only:
   the only package that imports `syscall/js` (`web-composition-root`, `syscall-js-only-in-the-web-root`).
   Its untagged package `cmd/shift2eu-web/internal/wire` builds the adapters `cmd/shift2eu`'s offline path
   builds, the inventory reader in its in-memory mode and the HTML reporter, into `web.Deps`
-  (`web-composition-root-wire`). It builds and is tested natively. Its tests, alone allowed to import
+  (`web-composition-root-wire`). It builds and is tested natively. Its tests, allowed to import
   `internal/cli` (`web-composition-root-wire-tests`), hold the option parity and the download parity with
-  the CLI. `make lint` and CI's lint matrix lint `js/wasm` as an extra target beside the release platforms,
+  the CLI. Beside them only `internal/cli`'s own tests and `test/apiparity`'s import it; every other test
+  file is refused it (`cli-only-in-named-tests`, issue #345). `make lint` and CI's lint matrix lint `js/wasm` as an extra target beside the release platforms,
   and `test/architecture` holds the module's dependency tree to no `net`, `net/http`, `os/exec` or cloud
   SDK and the gzip-compressed module script to 3 MiB.
 - **The site** (PRD #297 milestone 2, ADR 0036) is outside the Go layers. `site/` holds its pages, its
