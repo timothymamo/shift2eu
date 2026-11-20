@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/timothymamo/shift2eu/test/site/internal/jsscan"
 )
 
 // This file holds the other half of PRD #297's Layer 1, the check of the
@@ -21,33 +23,23 @@ import (
 // that list would hand a page's data out or write markup, whatever the page
 // script's scan says.
 
-// bannedJSNames are the names the glue's allow list may never hold: the
-// messaging APIs that reach another window or browsing context, the message
-// listener, and the HTML sinks and dynamic-code calls through which a value
-// becomes code or markup. The CSP governs none of the first group, which is why
-// Layer 1 refuses them by name (PRD #297, Layer 1).
-var bannedJSNames = []string{
-	// Messaging to another window or browsing context.
-	"postMessage",
-	"opener",
-	"parent",
-	"top",
-	"BroadcastChannel",
-	"MessageChannel",
-	"name",
-	"onmessage",
-	"addEventListener",
-	// The HTML sinks and the calls that run a string as code.
-	"innerHTML",
-	"outerHTML",
-	"insertAdjacentHTML",
-	"write",
-	"writeln",
-	"srcdoc",
-	"setHTMLUnsafe",
-	"createPolicy",
-	"eval",
-	"Function",
+// glueOnlyBannedJSNames are the names the glue's allow list may never hold
+// although jsscan's set does not carry them: the window's name, the message
+// listener's handler, and registering a listener at all. The page script needs
+// addEventListener and refuses an assignment to name by a rule of its own, which
+// a name list cannot express; the glue needs neither, and a listener it
+// registered would read an event the module never asked for.
+var glueOnlyBannedJSNames = []string{"addEventListener", "name", "onmessage"}
+
+// bannedJSNames returns the names the glue's allow list may never hold, sorted
+// and without a duplicate: the page-script scan's own set (jsscan.BannedJSNames),
+// so the two checks cannot drift, and the three the glue adds.
+func bannedJSNames() []string {
+	names := slices.Clone(jsscan.BannedJSNames())
+	names = append(names, glueOnlyBannedJSNames...)
+	slices.Sort(names)
+
+	return slices.Compact(names)
 }
 
 // jsNameConstants returns the string value of every constant of type jsName
@@ -105,26 +97,31 @@ func jsNameConstants(t *testing.T, name string, src []byte) []string {
 	return names
 }
 
-// bannedNamesIn returns the entries of names that are in bannedJSNames, in the
-// order names holds them.
-func bannedNamesIn(names []string) []string {
-	var banned []string
+// bannedNamesIn returns the entries of names that are in banned, in the order
+// names holds them.
+func bannedNamesIn(names, banned []string) []string {
+	var refused []string
 
 	for _, name := range names {
-		if slices.Contains(bannedJSNames, name) {
-			banned = append(banned, name)
+		if slices.Contains(banned, name) {
+			refused = append(refused, name)
 		}
 	}
 
-	return banned
+	return refused
 }
 
-// TestGlueAllowListHoldsNoSendingName pins that the syscall/js glue's allow list
-// of jsName constants holds none of bannedJSNames (PRD #297, Layer 1): the glue
-// reads, sets and calls JavaScript only through get, set and call, which take a
-// jsName, and it never computes one, so this list is every name it can touch.
-func TestGlueAllowListHoldsNoSendingName(t *testing.T) {
-	t.Parallel()
+// glueSource is one non-test Go file of the glue: its name, for a failure
+// message, and its source.
+type glueSource struct {
+	name string
+	src  []byte
+}
+
+// glueSources returns the glue's non-test Go files, in file-name order: the files
+// that ship in the site's module.
+func glueSources(t *testing.T) []glueSource {
+	t.Helper()
 
 	glueDir := filepath.Join(theRepositoryRoot(t), "cmd", "shift2eu-web")
 
@@ -133,7 +130,7 @@ func TestGlueAllowListHoldsNoSendingName(t *testing.T) {
 		t.Fatalf("read the glue's directory %s: %v", glueDir, err)
 	}
 
-	var names []string
+	var sources []glueSource
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
@@ -145,18 +142,82 @@ func TestGlueAllowListHoldsNoSendingName(t *testing.T) {
 			t.Fatalf("read %s: %v", entry.Name(), err)
 		}
 
-		names = append(names, jsNameConstants(t, entry.Name(), src)...)
+		sources = append(sources, glueSource{name: entry.Name(), src: src})
+	}
+
+	if len(sources) == 0 {
+		t.Fatal("the glue's directory holds no non-test Go file, so this check read nothing")
+	}
+
+	return sources
+}
+
+// glueJsNames returns the string value of every jsName constant the glue declares,
+// in file and declaration order.
+func glueJsNames(t *testing.T) []string {
+	t.Helper()
+
+	var names []string
+
+	for _, source := range glueSources(t) {
+		names = append(names, jsNameConstants(t, source.name, source.src)...)
 	}
 
 	if len(names) == 0 {
 		t.Fatal("the glue declares no jsName constant, so this check read nothing: it registers one function through a named allow list of JavaScript names")
 	}
 
+	return names
+}
+
+// wantGlueJsNames is the glue's allow list exactly: every JavaScript name it may
+// read, set or call, sorted. A name here is a JavaScript API the module can
+// reach from the page's data, so the list changes only when a reviewer has read
+// the new name and said why the glue needs it (PRD #297, Layer 1).
+var wantGlueJsNames = []string{
+	"Array",
+	"estimate",
+	"inventoryName",
+	"isArray",
+	"region",
+	"regions",
+	"schemaVersion",
+	"shift2euAssess",
+	"target",
+	"targets",
+}
+
+// TestGlueAllowListIsExact pins the glue's allow list whole: the exact set of
+// JavaScript names it may read, set or call, so a new name is a reviewed change
+// and never a quiet one. The count and the set both matter: the scan below reads
+// the list for banned names, and a name the glue does not need widens what a
+// mistake in the glue can reach.
+func TestGlueAllowListIsExact(t *testing.T) {
+	t.Parallel()
+
+	names := slices.Sorted(slices.Values(glueJsNames(t)))
+	want := slices.Sorted(slices.Values(wantGlueJsNames))
+
+	if !slices.Equal(names, want) {
+		t.Errorf("the glue's jsName allow list is\n%v\nwant exactly\n%v\nPRD #297, Layer 1: a new JavaScript name is a new API the glue can reach, so a reviewer adds it here and says why; a removed one leaves this list wider than the glue",
+			names, want)
+	}
+}
+
+// TestGlueAllowListHoldsNoSendingName pins that the syscall/js glue's allow list
+// of jsName constants holds none of bannedJSNames (PRD #297, Layer 1): the glue
+// reads, sets and calls JavaScript only through get, set and call, which take a
+// jsName, and it never computes one, so this list is every name it can touch.
+func TestGlueAllowListHoldsNoSendingName(t *testing.T) {
+	t.Parallel()
+
+	names := glueJsNames(t)
+
 	if !slices.Contains(names, "shift2euAssess") {
 		t.Errorf("the glue's jsName constants are %v, which do not hold shift2euAssess, the one function main registers: the check would be reading another list", names)
 	}
 
-	for _, banned := range bannedNamesIn(names) {
+	for _, banned := range bannedNamesIn(names, bannedJSNames()) {
 		t.Errorf("the glue's allow list holds %q: the glue reads, sets and calls only names from that list, so a messaging or HTML sink name there reaches another window or writes markup (PRD #297, Layer 1)", banned)
 	}
 }
@@ -340,6 +401,180 @@ func importedPackageNames(file *ast.File) map[string]bool {
 	return names
 }
 
+// jsNameParamNames returns the names of the jsName-typed parameters of a function
+// type: the names a call site may pass, because they are the enclosing
+// function's own entry of the allow list.
+func jsNameParamNames(fnType *ast.FuncType) map[string]bool {
+	names := make(map[string]bool)
+
+	if fnType == nil || fnType.Params == nil {
+		return names
+	}
+
+	for _, field := range fnType.Params.List {
+		ident, ok := field.Type.(*ast.Ident)
+		if !ok || ident.Name != "jsName" {
+			continue
+		}
+
+		for _, name := range field.Names {
+			names[name.Name] = true
+		}
+	}
+
+	return names
+}
+
+// jsNameCallees returns, for every function the file declares that takes a jsName
+// parameter, the position of its first such parameter: the argument a call site
+// fills from the allow list. The list comes from the signatures, so a new helper
+// that takes a name is checked without this file naming it.
+func jsNameCallees(file *ast.File) map[string]int {
+	callees := make(map[string]int)
+
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Type.Params == nil {
+			continue
+		}
+
+		position := 0
+
+		for _, field := range fn.Type.Params.List {
+			if ident, isIdent := field.Type.(*ast.Ident); isIdent && ident.Name == "jsName" {
+				callees[fn.Name.Name] = position
+
+				break
+			}
+
+			if len(field.Names) == 0 {
+				position++
+
+				continue
+			}
+
+			position += len(field.Names)
+		}
+	}
+
+	return callees
+}
+
+// jsNameConstantNames returns the identifiers of the file's package-level jsName
+// constants: the allow list's names, which alone a call site may pass.
+func jsNameConstantNames(file *ast.File) map[string]bool {
+	names := make(map[string]bool)
+
+	ast.Inspect(file, func(node ast.Node) bool {
+		declaration, ok := node.(*ast.GenDecl)
+		if !ok || declaration.Tok != token.CONST {
+			return true
+		}
+
+		for _, spec := range declaration.Specs {
+			value, isValue := spec.(*ast.ValueSpec)
+			if !isValue {
+				continue
+			}
+
+			ident, isIdent := value.Type.(*ast.Ident)
+			if !isIdent || ident.Name != "jsName" {
+				continue
+			}
+
+			for _, name := range value.Names {
+				names[name.Name] = true
+			}
+		}
+
+		return true
+	})
+
+	return names
+}
+
+// expressionText names an expression for a failure message.
+func expressionText(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return e.Value
+	case *ast.Ident:
+		return e.Name
+	case *ast.CallExpr:
+		return "a call's result"
+	case *ast.BinaryExpr:
+		return "a computed value"
+	default:
+		return "a value"
+	}
+}
+
+// callNameWalker walks one function body and reports every call of the glue's own
+// functions whose jsName argument is no allow-listed identifier: the name at a
+// call site is a constant of the allow list or the enclosing function's jsName
+// parameter, never a literal, a conversion or anything computed. A func literal
+// extends the parameters in scope, since the glue's registration is one.
+type callNameWalker struct {
+	// source is the parsed file's name, for a failure message.
+	source string
+	// callees maps a function that takes a jsName to its position.
+	callees map[string]int
+	// constants holds the names of the allow list's constants.
+	constants map[string]bool
+	// params holds the jsName parameters in scope.
+	params map[string]bool
+	// findings collects the findings, shared with the walkers of nested func
+	// literals.
+	findings *[]string
+}
+
+// Visit implements ast.Visitor.
+func (w *callNameWalker) Visit(node ast.Node) ast.Visitor {
+	if node == nil {
+		return nil
+	}
+
+	switch n := node.(type) {
+	case *ast.FuncLit:
+		params := make(map[string]bool, len(w.params))
+
+		for name := range w.params {
+			params[name] = true
+		}
+
+		for name := range jsNameParamNames(n.Type) {
+			params[name] = true
+		}
+
+		return &callNameWalker{source: w.source, callees: w.callees, constants: w.constants, params: params, findings: w.findings}
+	case *ast.CallExpr:
+		w.check(n)
+	}
+
+	return w
+}
+
+// check reports a call of one of the glue's own functions whose name argument is
+// no identifier of the allow list and no jsName parameter in scope.
+func (w *callNameWalker) check(call *ast.CallExpr) {
+	called, ok := call.Fun.(*ast.Ident)
+	if !ok {
+		return
+	}
+
+	position, ok := w.callees[called.Name]
+	if !ok || position >= len(call.Args) {
+		return
+	}
+
+	if ident, isIdent := call.Args[position].(*ast.Ident); isIdent && (w.constants[ident.Name] || w.params[ident.Name]) {
+		return
+	}
+
+	*w.findings = append(*w.findings, fmt.Sprintf("%s: %s is called with %s as its name, want an identifier of the jsName allow list or a jsName parameter of the enclosing function: the glue never passes a literal, a conversion or a computed name (PRD #297, Layer 1)",
+		w.source, called.Name, expressionText(call.Args[position])))
+}
+
 // glueNameFindings returns every way src breaks the glue's naming rule, and how
 // many allowed calls each helper holds, so a check that read no call is caught.
 func glueNameFindings(t *testing.T, name string, src []byte) ([]string, map[string]int) {
@@ -351,6 +586,8 @@ func glueNameFindings(t *testing.T, name string, src []byte) ([]string, map[stri
 	}
 
 	packages := importedPackageNames(file)
+	callees := jsNameCallees(file)
+	constants := jsNameConstantNames(file)
 
 	var findings []string
 
@@ -364,6 +601,9 @@ func glueNameFindings(t *testing.T, name string, src []byte) ([]string, map[stri
 
 		helper := slices.Contains(glueHelpers, fn.Name.Name)
 		fromGet := bindingsFromGet(fn.Body)
+
+		walker := &callNameWalker{source: name, callees: callees, constants: constants, params: jsNameParamNames(fn.Type), findings: &findings}
+		ast.Walk(walker, fn.Body)
 
 		ast.Inspect(fn.Body, func(node ast.Node) bool {
 			call, ok := node.(*ast.CallExpr)
@@ -413,33 +653,19 @@ func glueNameFindings(t *testing.T, name string, src []byte) ([]string, map[stri
 // calls them only inside get, set and call, with string(name) for a name from its
 // jsName allow list, so no name is computed and no literal name bypasses the
 // list. New and Invoke take no name and act as the value they are called on, so
-// the glue calls them only on a value get returned.
+// the glue calls them only on a value get returned. The same rule holds one call
+// out: jsName is a defined string type, so a literal or a jsName(x) conversion at
+// a call of the glue's own get, set, call, property, stringProperty or array
+// would type-check and bypass the allow list, so every call of a function that
+// takes a jsName must pass an identifier of the allow list, or a jsName
+// parameter of the enclosing function.
 func TestGlueCallsOnlyAllowListedNames(t *testing.T) {
 	t.Parallel()
 
-	glueDir := filepath.Join(theRepositoryRoot(t), "cmd", "shift2eu-web")
-
-	entries, err := os.ReadDir(glueDir)
-	if err != nil {
-		t.Fatalf("read the glue's directory %s: %v", glueDir, err)
-	}
-
 	uses := make(map[string]int)
-	read := 0
 
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-			continue
-		}
-
-		src, err := os.ReadFile(filepath.Join(glueDir, entry.Name()))
-		if err != nil {
-			t.Fatalf("read %s: %v", entry.Name(), err)
-		}
-
-		read++
-
-		findings, fileUses := glueNameFindings(t, entry.Name(), src)
+	for _, source := range glueSources(t) {
+		findings, fileUses := glueNameFindings(t, source.name, source.src)
 
 		for _, finding := range findings {
 			t.Errorf("%s\nPRD #297, Layer 1: the glue calls js.Value's Get, Set, Delete and Call only with string(name) from its jsName allow list, inside get, set and call, and New and Invoke only on a value get returned", finding)
@@ -450,10 +676,6 @@ func TestGlueCallsOnlyAllowListedNames(t *testing.T) {
 		}
 	}
 
-	if read == 0 {
-		t.Fatal("the glue's directory holds no non-test Go file, so this check read nothing")
-	}
-
 	for _, helper := range glueHelpers {
 		if uses[helper] == 0 {
 			t.Errorf("the glue's %s helper makes no call this check reads (%v), so the check would pass whatever %s does", helper, uses, helper)
@@ -462,10 +684,12 @@ func TestGlueCallsOnlyAllowListedNames(t *testing.T) {
 }
 
 // TestGlueNameCheckFires pins that the check above fires, and what it accepts:
-// a named method outside the helpers, a literal or computed name inside one, and
-// New or Invoke on a value get did not return must each be reported, while the
-// helpers' own form and New on a value get returned must pass. Without this, a
-// check that walked no call would pass silently.
+// a named method outside the helpers, a literal or computed name inside one, a
+// literal or converted name at a call of a helper, and New or Invoke on a value
+// get did not return must each be reported, while the helpers' own form, a call
+// with an allow-listed identifier or with the enclosing function's jsName
+// parameter, and New on a value get returned must pass. Without this, a check
+// that walked no call would pass silently.
 func TestGlueNameCheckFires(t *testing.T) {
 	t.Parallel()
 
@@ -535,6 +759,16 @@ func call(v js.Value, name jsName, args ...any) js.Value {
 			src:  `package main` + "\n\nfunc invokeAll(v any) {\n\tv.Invoke(\"run\")\n}\n",
 			want: "value get did not return",
 		},
+		{
+			name: "a literal name at a call of a helper",
+			src:  helpers + "\nfunc start(v js.Value) js.Value {\n\treturn get(v, \"shift2euAssess\")\n}\n",
+			want: "want an identifier of the jsName allow list",
+		},
+		{
+			name: "a converted name at a call of a helper",
+			src:  helpers + "\nfunc start(v js.Value, other string) js.Value {\n\treturn get(v, jsName(other))\n}\n",
+			want: "want an identifier of the jsName allow list",
+		},
 	}
 
 	for _, tc := range tests {
@@ -570,6 +804,38 @@ func start(v any, name jsName) {
 		}
 	})
 
+	t.Run("a call with the allow list's name and with the enclosing function's jsName parameter", func(t *testing.T) {
+		t.Parallel()
+
+		const src = `package main
+
+type jsName string
+
+const (
+	nameAssess jsName = "shift2euAssess"
+	nameTargets jsName = "targets"
+)
+
+func get(v any, name jsName) any {
+	return v.Get(string(name))
+}
+
+func forward(v any, name jsName) any {
+	return get(v, name)
+}
+
+func start(v any) any {
+	get(v, nameAssess)
+
+	return get(v, nameTargets)
+}
+`
+
+		if got, _ := glueNameFindings(t, "fixture.go", []byte(src)); len(got) != 0 {
+			t.Errorf("the check reported %v for a call with an allow-listed identifier and for one with the enclosing function's jsName parameter, want no finding: they are the two forms the glue uses", got)
+		}
+	})
+
 	t.Run("a package's New", func(t *testing.T) {
 		t.Parallel()
 
@@ -589,7 +855,8 @@ func start(deps web.Deps) (*web.Assessor, error) {
 }
 
 // TestGlueAllowListCheckFires pins that the check above fires: a fixture glue
-// that adds one banned name to its allow list must be reported. Without this, a
+// that adds a banned name to its allow list must be reported, from the names the
+// page-script scan shares with it as well as the glue's own. Without this, a
 // check that read no constant or compared nothing would pass silently.
 func TestGlueAllowListCheckFires(t *testing.T) {
 	t.Parallel()
@@ -602,16 +869,20 @@ const (
 	nameAssess jsName = "shift2euAssess"
 	nameTargets jsName = "targets"
 	nameBad jsName = "postMessage"
+	nameFetch jsName = "fetch"
+	nameLocation jsName = "location"
 )
 `
 
 	names := jsNameConstants(t, "fixture.go", []byte(fixture))
 
-	if want := []string{"shift2euAssess", "targets", "postMessage"}; !slices.Equal(names, want) {
+	if want := []string{"shift2euAssess", "targets", "postMessage", "fetch", "location"}; !slices.Equal(names, want) {
 		t.Fatalf("jsNameConstants read %v from the fixture, want %v", names, want)
 	}
 
-	if banned := bannedNamesIn(names); !slices.Equal(banned, []string{"postMessage"}) {
-		t.Errorf("bannedNamesIn(%v) = %v, want [postMessage]", names, banned)
+	want := []string{"postMessage", "fetch", "location"}
+
+	if banned := bannedNamesIn(names, bannedJSNames()); !slices.Equal(banned, want) {
+		t.Errorf("bannedNamesIn(%v) = %v, want %v: a sending name, and a navigation property the page script's scan refuses, must each be refused here too", names, banned, want)
 	}
 }
