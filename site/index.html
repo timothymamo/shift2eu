@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; manifest-src 'none'; require-trusted-types-for 'script'; trusted-types shift2eu-report">
+<meta charset="utf-8">
+<meta http-equiv="x-dns-prefetch-control" content="off">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shift2eu: assess a move to an EU cloud</title>
+<link rel="stylesheet" {{.StyleAttrs}}>
+<script {{.WasmExecAttrs}} defer></script>
+<script {{.ModuleAttrs}} defer></script>
+<script {{.PageAttrs}} defer></script>
+</head>
+<body data-page="assessment">
+<header class="site-header">
+<p class="brand"><a href="index.html">shift2eu</a></p>
+<nav aria-label="Site">
+<ul class="nav">
+<li><a href="index.html" aria-current="page">Assessment</a></li>
+<li><a href="privacy.html">Privacy</a></li>
+<li><a href="verify.html">Verify this site</a></li>
+<li><a href="https://github.com/timothymamo/shift2eu">Repository</a></li>
+</ul>
+</nav>
+</header>
+<main>
+<h1>Assess a move to an EU cloud</h1>
+<p class="lead">Paste an inventory of your AWS, Azure or GCP resources, choose one or more EU cloud providers, and see what moves directly, what moves with changes and what blocks the move. The assessment runs in this browser: the page sends nothing anywhere. <a href="privacy.html">How the site keeps that promise</a>.</p>
+<noscript>
+<p class="notice">This assessment needs JavaScript and WebAssembly, and they are off or missing in this browser. Run the same assessment with the shift2eu CLI instead: see the <a href="https://github.com/timothymamo/shift2eu">repository</a>.</p>
+</noscript>
+<p id="loading-notice" class="notice" role="status">Loading the assessment module. It is part of this page and runs in this browser; nothing is sent while it loads.</p>
+
+<fieldset>
+<legend>Inventory</legend>
+<div class="field">
+<label for="inventory">Paste an inventory document (JSON, schema version 1 or 2)</label>
+<textarea id="inventory" rows="12" spellcheck="false" autocomplete="off"></textarea>
+</div>
+<div class="field">
+<label for="inventory-file">Or read one from a file</label>
+<input type="file" id="inventory-file" accept=".json,application/json">
+</div>
+<div class="field">
+<label for="example">Or start from an example</label>
+<select id="example">
+{{- range .Examples}}
+<option value="{{.Key}}">{{.Name}} example</option>
+{{- end}}
+</select>
+<button type="button" id="load-example">Load the example</button>
+</div>
+<p class="muted">The <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">inventory guide</a> shows how to make an inventory from read-only CLI output.</p>
+</fieldset>
+
+<fieldset>
+<legend>Targets</legend>
+<p class="muted">Choose one target for an assessment, or several for a comparison. Each target's estimates use the list prices of its catalog snapshot, dated below; they are list prices on that date, not a quote.</p>
+{{- range .Targets}}
+<div class="target">
+<label><input type="checkbox" class="target-choice" id="target-{{.Key}}" value="{{.Key}}" checked> {{.Name}}</label>
+<label for="region-{{.Key}}">Region for {{.Name}}</label>
+<select id="region-{{.Key}}">
+<option value="">Any region</option>
+{{- range .Regions}}
+<option value="{{.}}">{{.}}</option>
+{{- end}}
+</select>
+<span class="muted">Catalog snapshot of {{.Snapshot}}</span>
+</div>
+{{- end}}
+</fieldset>
+
+<fieldset>
+<legend>Options</legend>
+<label><input type="checkbox" id="estimate" checked> Estimate monthly list prices</label>
+</fieldset>
+
+<div class="actions">
+<button type="button" id="run" disabled>Run the assessment</button>
+<button type="button" id="download-markdown" disabled>Download the Markdown report</button>
+<button type="button" id="download-json" disabled>Download the JSON report</button>
+</div>
+<div id="status" class="alert" role="alert"></div>
+<section id="report" tabindex="-1" aria-label="Report"></section>
+</main>
+<footer>
+<p>shift2eu {{.Version}}, its assessment module built with Go <span id="go-version">{{.GoVersion}}</span>.</p>
+<p><a href="privacy.html">Privacy</a> · <a href="verify.html">Verify this site</a> · <a href="https://github.com/timothymamo/shift2eu">Repository</a> · <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">Inventory guide</a></p>
+</footer>
+{{- range .Examples}}
+<template id="example-{{.Key}}">{{.Text}}</template>
+{{- end}}
+</body>
+</html>

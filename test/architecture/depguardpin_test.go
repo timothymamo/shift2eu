@@ -433,6 +433,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"!**/cmd/shift2eu/**",
 			"!**/cmd/shift2eu-server/**",
 			"!**/cmd/shift2eu-web/**",
+			"!**/ci/sitebuild/**",
 		},
 		Allow: []string{
 			"github.com/timothymamo/shift2eu/internal/adapter/internal/jsondoc$",
@@ -1023,6 +1024,75 @@ var pinnedDepguardRules = []check.DepguardRule{
 		},
 	},
 	{
+		// The browser driver is confined to the site's smoke test (PRD #297
+		// milestone 2, decision 7); TestNoProductBinaryReachesChromedp holds the
+		// product binaries' dependency trees to the same. go-json-experiment is
+		// denied beside the driver's own prefix: cdproto, the protocol library
+		// chromedp drives the browser through, encodes with it under its
+		// cdproto_jsoncompat build tag, so the package no product binary may
+		// reach is not one the driver's prefix names.
+		Name:     "chromedp-only-in-the-browser-test",
+		ListMode: "lax",
+		Files: []string{
+			"$all",
+			"!**/test/browser/**",
+		},
+		Allow: nil,
+		Deny: []string{
+			"github.com/chromedp/",
+			"github.com/go-json-experiment/",
+		},
+	},
+	{
+		// The site's smoke test's files, behind the browser tag (PRD #297
+		// milestone 2): exactly what they import, each exact, and no package of
+		// the module. Its doc.go is held by browser-smoke-test-doc.
+		Name:     "browser-smoke-test",
+		ListMode: "strict",
+		Files: []string{
+			"**/test/browser/**/*_test.go",
+			"**/test/browser/*_test.go",
+		},
+		Allow: []string{
+			"context$",
+			"encoding/json$",
+			"fmt$",
+			"net/http$",
+			"net/http/httptest$",
+			"os$",
+			"os/exec$",
+			"path/filepath$",
+			"regexp$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"sync$",
+			"testing$",
+			"time$",
+			"github.com/chromedp/cdproto/accessibility$",
+			"github.com/chromedp/cdproto/browser$",
+			"github.com/chromedp/cdproto/network$",
+			"github.com/chromedp/cdproto/page$",
+			"github.com/chromedp/chromedp$",
+			"github.com/chromedp/chromedp/kb$",
+			"github.com/chromedp/chromedp/remote$",
+		},
+		Deny: []string{
+			"github.com/timothymamo/shift2eu/",
+		},
+	},
+	{
+		// test/browser's untagged doc.go imports nothing.
+		Name:     "browser-smoke-test-doc",
+		ListMode: "strict",
+		Files: []string{
+			"**/test/browser/**",
+			"!$test",
+		},
+		Allow: []string{},
+		Deny:  []string{"os"},
+	},
+	{
 		Name:     "e2e-is-black-box",
 		ListMode: "strict",
 		Files: []string{
@@ -1193,6 +1263,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"**/test/examples/**",
 			"**/test/lint/**",
 			"**/test/openapibundle/**",
+			"**/test/site/**",
+			"!**/test/site/internal/**",
 			"!$test",
 		},
 		Allow: []string{},
@@ -1254,6 +1326,50 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"strconv$",
 			"strings$",
 			"time$",
+		},
+	},
+	{
+		// The site's builder (PRD #297 milestone 2): a main package no root can
+		// import, held to the standard packages it imports and the module's
+		// packages it reads, each exact: the three embedded-snapshot targets,
+		// whose snapshot dates and regions it writes into the pages, their
+		// catalog type and internal/version. os and os/exec are for the sources,
+		// the bundle and the go command; the forbidigo group site-builder-env
+		// refuses every read of the environment.
+		Name:     "site-builder",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/sitebuild/**",
+			"!$test",
+		},
+		Allow: []string{
+			"archive/tar$",
+			"bytes$",
+			"compress/gzip$",
+			"context$",
+			"crypto/sha256$",
+			"crypto/sha512$",
+			"encoding/base64$",
+			"encoding/hex$",
+			"encoding/json$",
+			"errors$",
+			"flag$",
+			"fmt$",
+			"html/template$",
+			"io$",
+			"io/fs$",
+			"os$",
+			"os/exec$",
+			"path/filepath$",
+			"regexp$",
+			"slices$",
+			"strings$",
+			"time$",
+			"github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud$",
+			"github.com/timothymamo/shift2eu/internal/adapter/target/scaleway$",
+			"github.com/timothymamo/shift2eu/internal/adapter/target/upcloud$",
+			"github.com/timothymamo/shift2eu/internal/domain/catalog$",
+			"github.com/timothymamo/shift2eu/internal/version$",
 		},
 	},
 }

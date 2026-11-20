@@ -69,30 +69,30 @@ release), *live* (checked against the live site) or *review*.
 
 ### Assessment in the browser
 
-- [ ] *Browser:* given a bundled example inventory (`examples/aws`, `examples/azure`, `examples/gcp`), when
+- [x] *Browser:* given a bundled example inventory (`examples/aws`, `examples/azure`, `examples/gcp`), when
   the user picks it and runs the assessment with one target, then the page shows the assessment: the
   summary, every resource with its fit, best offering, blockers and required changes, the workloads, and
   the estimates.
-- [ ] *Browser:* given an inventory pasted into the text field or chosen with the file input (schema
+- [x] *Browser:* given an inventory pasted into the text field or chosen with the file input (schema
   version 1 or 2), when the user selects several targets or all of them, then the page shows the
   comparison, as `shift2eu assess --target all` reports it.
-- [ ] *Browser:* given a region for a target, the report is scoped to that region as `--region
+- [x] *Browser:* given a region for a target, the report is scoped to that region as `--region
   <target>=<region>` scopes it; given the estimate switch turned off, the report has no estimates, as
   with `--no-estimate`.
-- [ ] Given the same inventory and options, the Markdown and JSON downloads are byte-identical to the
+- [x] Given the same inventory and options, the Markdown and JSON downloads are byte-identical to the
   output of `shift2eu assess --format markdown` and `--format json` of the same commit. Pinned natively by
   a parity test over every example inventory and the hostile fixtures, for one target, several and `all`,
   with and without a region and estimates; and in the browser by the smoke test for one example
   (*browser*). Any difference fails the test.
-- [ ] An inventory the reader refuses (malformed JSON, an unknown schema version, an unknown field, a
+- [x] An inventory the reader refuses (malformed JSON, an unknown schema version, an unknown field, a
   document over the reader's size cap) shows one error message in the page, by the rule the HTTP API
   applies: it names a position and field and never echoes a value from the inventory (the in-memory mode
   of `inventoryfile.FromBytes`, PRD #103). A bad target or region choice shows the CLI's usage error. The
   page stays usable after an error.
-- [ ] The option rules (target keys, `all`, duplicates, regions per target, the estimate switch) are the
+- [x] The option rules (target keys, `all`, duplicates, regions per target, the estimate switch) are the
   CLI's: a test runs one table of option sets through the CLI and the web adapter and expects the same
   accepted options and the same errors.
-- [ ] Every string the page shows from an inventory or a catalog is escaped: a hostile inventory (quotes,
+- [x] Every string the page shows from an inventory or a catalog is escaped: a hostile inventory (quotes,
   angle brackets, `<script>`, control characters, invalid UTF-8) renders as text, pinned by a hostile
   golden of the HTML reporter and, in the browser, by the smoke test finding no element, attribute or
   script the inventory tried to inject.
@@ -101,7 +101,7 @@ release), *live* (checked against the live site) or *review*.
 
 **Layer 1, the code.**
 
-- [ ] A static test fails when the page's script or the `syscall/js` glue names a browser API that can
+- [x] A static test fails when the page's script or the `syscall/js` glue names a browser API that can
   send data or load a resource: `fetch` (with no exception: the module is not fetched, *Layer 2*),
   `XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`, `RTCPeerConnection`, `Worker`, `SharedWorker`,
   `importScripts`, `open`, `location` (assignment or navigation methods), assignment to `href`, `src`,
@@ -138,21 +138,21 @@ release), *live* (checked against the live site) or *review*.
   `Value.Call` only with constant names from a named allow list, and `Value.New` and `Value.Invoke`,
   which take no name, only on a value it obtained through such a constant name; a forbidigo or test
   rule refuses a computed name and a `New` or `Invoke` on any other value.
-- [ ] The glue is the only Go code that can reach the browser: the dependency test (`go list -deps` with
+- [x] The glue is the only Go code that can reach the browser: the dependency test (`go list -deps` with
   `GOOS=js GOARCH=wasm` on `./cmd/shift2eu-web`, *Architecture*) also fails when any package in the
   module's dependency tree other than `cmd/shift2eu-web` imports `syscall/js`, except the standard
   library's own runtime and syscall internals, which the test names in an explicit list (a new standard
   package that imports it fails the test until it is reviewed and added). So no domain or adapter package,
   and no third-party dependency, can call `fetch` or any other sending API through `js.Global()`, and
   `net/http`'s fetch transport stays out of the tree (the same test refuses `net/http`).
-- [ ] Go's `wasm_exec.js` is trusted as toolchain code, not scanned: the banned-API scan covers the page's
+- [x] Go's `wasm_exec.js` is trusted as toolchain code, not scanned: the banned-API scan covers the page's
   script and the glue only, and `wasm_exec.js` is pinned instead by the toolchain test (*`wasm_exec.js`*
   below: byte-identical to the building toolchain's, which `go.mod` pins). The module script is not
   scanned either: it is pinned to its fixed template (*Layer 2*), so it carries no code of its own.
   Milestone 1's ADR and the privacy page's technical note say so.
-- [ ] Every page has `<meta http-equiv="x-dns-prefetch-control" content="off">` and no `<link rel>` of
+- [x] Every page has `<meta http-equiv="x-dns-prefetch-control" content="off">` and no `<link rel>` of
   `dns-prefetch`, `preconnect`, `prefetch` or `prerender` (static test).
-- [ ] The page script, which every page loads (*Layer 2*, the scripts per page), stops, and shows why,
+- [x] The page script, which every page loads (*Layer 2*, the scripts per page), stops, and shows why,
   when the page is framed (`window.top !== window.self`), since a `<meta>` CSP cannot carry
   `frame-ancestors`, and sets `window.opener = null` on load as defence in depth behind the `opener`
   and `postMessage` ban (static test of the script and *browser*: opened by another page with
@@ -184,7 +184,10 @@ release), *live* (checked against the live site) or *review*.
   the CSP governs only the fetch of a worker's script.
   Where the host can also send the policy as a header (Hosting decision 2), the header adds
   `frame-ancestors 'none'`.
-- [ ] The site loads no image (*Decided by the orchestrator in review*). `img-src 'none'`, not `'self'`:
+  - [x] Milestone 2: the `<meta>` policy of every built page and its static test
+    (`test/site`'s `TestContentSecurityPolicyIsExact` and `TestContentSecurityPolicyCheckRejects`).
+  - [ ] Milestone 3: the policy as a header with `frame-ancestors 'none'`, where the host can send it.
+- [x] The site loads no image (*Decided by the orchestrator in review*). `img-src 'none'`, not `'self'`:
   an own-origin image GET carries data in its path or query to the host's logs, the same channel for
   which `connect-src 'self'` is rejected, and a CSP host-source that pins exact paths needs a host,
   which breaks the run-anywhere bundle. Any icon or logo is inline SVG markup in the HTML, which loads
@@ -200,19 +203,19 @@ release), *live* (checked against the live site) or *review*.
   stylesheet fails on either. The site ships no favicon. A browser may request `/favicon.ico` on its own,
   outside the page's CSP; that request is a fixed URL sent by the browser, not the page, and carries no
   data from the page, and since the bundle has no such file the host answers it with an error.
-- [ ] The module is never fetched (*Decided by the orchestrator in review*). `make site` emits the
+- [x] The module is never fetched (*Decided by the orchestrator in review*). `make site` emits the
   module's bytes, base64-encoded, in a content-addressed script (`module.<sha>.js`), which the page loads
   with `<script src integrity="sha384-...">` under `script-src 'self'`; the page script decodes the bytes
   and calls `WebAssembly.instantiate` (allowed by `'wasm-unsafe-eval'`), never `instantiateStreaming` or
   `compileStreaming`. Every reference in the built files is a same-origin relative path, so the bundle
   runs unchanged on any origin, a local static file server included (*Layer 3*); the static test fails
   on an absolute URL to a site file.
-- [ ] The module script's content is constrained, not only its digest. A static test fails unless
+- [x] The module script's content is constrained, not only its digest. A static test fails unless
   `module.<sha>.js` is exactly one fixed template, `globalThis.__shift2euModule="<base64>";` followed by
   one newline, with nothing but the standard base64 alphabet (`A-Z`, `a-z`, `0-9`, `+`, `/`, trailing
   `=`) between the quotes, and unless that base64 decodes to the built module byte for byte. So the
   module script can carry no code, only the module.
-- [ ] The assessment page loads exactly three scripts, all classic scripts with `defer`, never `async`
+- [x] The assessment page loads exactly three scripts, all classic scripts with `defer`, never `async`
   or `type="module"`, in this order: `wasm_exec.js`, the module script, the page script. `defer` runs
   them in document order after parsing, so the global is set before the page script reads it. The
   privacy page and the verification page load exactly one script, the page script (classic, `defer`),
@@ -223,7 +226,7 @@ release), *live* (checked against the live site) or *review*.
   the page script alone on the privacy and verification pages. The `<noscript>` message, and the static
   loading notice the HTML shows, are in the HTML itself, so no script delays them; the no-WebAssembly
   message is shown by the page script before it reads the module.
-- [ ] The page script reads `globalThis.__shift2euModule` once, before any report fragment is inserted,
+- [x] The page script reads `globalThis.__shift2euModule` once, before any report fragment is inserted,
   checks that `typeof` it is `"string"` (and otherwise stops with an error), and deletes the global; a
   static test of the script and the *browser* smoke test (the global is gone after load) pin it. The HTML
   reporter never emits an `id` or `name` attribute derived from an inventory or catalog value
@@ -231,14 +234,14 @@ release), *live* (checked against the live site) or *review*.
   element can shadow that global or any name the glue reads through `js.Global().Get` (DOM named
   access). The hostile golden carries an inventory whose names equal those globals and the glue's
   allow-listed names, and shows no `id` or `name` with them.
-- [ ] `require-trusted-types-for` is not enforced in every browser (browsers without Trusted Types ignore
+- [x] `require-trusted-types-for` is not enforced in every browser (browsers without Trusted Types ignore
   it). Milestone 2's ADR and the privacy page's technical note say so, and say that in such a browser the
   one insertion of the report rests on the HTML reporter's escaping (a closed set of constant elements,
   values only as element content, escaped with `html/template`'s text-context replacements, pinned by a
   differential test against `html/template` and by the reporter's hostile golden; ADR 0035, pending the
   maintainer's confirmation, *Decided by the orchestrator in review*) and on the CSP's ban on inline
   script, not on Trusted Types. No statement claims Trusted Types protect every user.
-- [ ] *Browser:* after loading, the smoke test attempts, from the page, a `fetch` and an
+- [x] *Browser:* after loading, the smoke test attempts, from the page, a `fetch` and an
   `XMLHttpRequest` to another origin, to an own-origin path, and to the module script's own URL, and
   records every request made while the page is open, on the `httptest` server that serves the bundle
   and in the page's DevTools Network events. Every attempt must be blocked by `connect-src 'none'`, and
@@ -267,7 +270,7 @@ release), *live* (checked against the live site) or *review*.
   The smoke test serves the bundle from an `httptest` origin and passes there unchanged, which shows the
   bundle runs on an origin other than `www.shift2eu.com`; the release's smoke test does the same with the
   attested bundle.
-- [ ] *Browser:* the smoke test records that a navigation or an `RTCPeerConnection` started from the page
+- [x] *Browser:* the smoke test records that a navigation or an `RTCPeerConnection` started from the page
   is **not** blocked by the CSP, and the ADR documents both as gaps that layer 1 closes, so no criterion
   or statement claims the CSP covers them. The same holds for messaging to another window or browsing
   context (`postMessage`, `opener`, `parent`, `top`, `BroadcastChannel`, `MessageChannel`, `window.name`):
@@ -277,14 +280,14 @@ release), *live* (checked against the live site) or *review*.
   that the opener keeps a handle to the page (no COOP): it can navigate the tab or post messages in,
   read nothing. The smoke test records that the page's own `window.opener` reference is `null` after
   load when another page opened it.
-- [ ] Every script, the module script included, and the stylesheet are loaded with Subresource
+- [x] Every script, the module script included, and the stylesheet are loaded with Subresource
   Integrity, SHA-384: the `<script>` and `<link rel="stylesheet">` elements carry `integrity`. A static
   test computes the SHA-384 of every built file and fails when an `integrity` value is missing or does
   not match.
-- [ ] The page has no inline script, no inline `style` attribute or `<style>` element (with `style-src
+- [x] The page has no inline script, no inline `style` attribute or `<style>` element (with `style-src
   'self'` the CSP refuses every one), and no inline event handler: a static test of every built page,
   and the HTML reporter's goldens, hostile golden included, contain none.
-- [ ] No page, stylesheet or script references another origin as a loaded resource (no fonts, images,
+- [x] No page, stylesheet or script references another origin as a loaded resource (no fonts, images,
   scripts or styles from a third party); links to other sites are plain `<a href>` navigations. A static
   test lists every URL in the built files and fails on a loaded resource that is not the site's own.
 - [ ] *Live:* no response from the site carries `Set-Cookie`.
@@ -322,6 +325,9 @@ release), *live* (checked against the live site) or *review*.
   `checkVisibility()` returns `true` and its bounding box has a non-zero width and height. Only a change
   made after preload is live in shipping browsers may remove it, and that change retires the static test
   in the same commit; the live check (*Layer 3* and milestone 4) refuses the removal before then.
+  - [x] Milestone 2: the statement, its static test (`test/site`'s `TestDowngradeRiskIsShown`) and the
+    browser test (`test/browser`'s `TestPrivacyAndVerificationPages`).
+  - [ ] Milestone 4: the live check that refuses the statement's removal before preload is live.
 - [ ] If milestone 4's HSTS outcome is recorded as `waived` (*Layer 3*, the HSTS record
   `site/records/hsts.json`), the privacy page and the site's verification page also carry a statement
   with the marker `id="hsts-waived"`, shown by default, saying that without HSTS the downgrade risk also
@@ -332,6 +338,10 @@ release), *live* (checked against the live site) or *review*.
   milestone 4: the static and browser tests treat a missing record as "not waived" (and require
   `downgrade-risk` regardless, as above), while the release's live check and the scheduled one fail
   safe on a missing record (*Layer 3*).
+  - [x] Milestone 2: the static test (`test/site`'s `TestHSTSStatementFollowsTheRecord`) and the browser
+    test (`test/browser`'s `TestPrivacyAndVerificationPages`), a missing record read as not waived.
+  - [ ] Milestones 3 and 4: the live check that enforces the marker on the deployed pages and fails safe
+    on a missing record, and the record itself.
 - [ ] The privacy page names the apex redirect's provider (chosen in milestone 4), says what it sees of a
   visitor who enters through `shift2eu.com` (IP address, user agent, the requested path and the
   `Referer`), and that it only serves the redirect and never the site or the inventory. *Review* at
@@ -339,7 +349,7 @@ release), *live* (checked against the live site) or *review*.
 
 **`wasm_exec.js`.**
 
-- [ ] Go's `wasm_exec.js` is taken at build time from the Go toolchain that builds the module
+- [x] Go's `wasm_exec.js` is taken at build time from the Go toolchain that builds the module
   (`$(go env GOROOT)/lib/wasm/wasm_exec.js`), never committed and never fetched. The page shows the Go
   version the module reports (`runtime.Version()`), and a test fails when the bundled `wasm_exec.js`
   differs from the building toolchain's. The toolchain is pinned by `go.mod`, which Renovate updates, and
@@ -351,7 +361,7 @@ release), *live* (checked against the live site) or *review*.
   `shift2eu-site_<version>.tar.gz`, listed in the release's checksums file and carrying build provenance
   attested by `release.yml` like the archives (ADR 0015), with a manifest (`manifest.json` in the bundle)
   of every file's path and SHA-256.
-- [ ] The bundle is reproducible: building the site twice from the same commit with the pinned toolchain
+- [x] The bundle is reproducible: building the site twice from the same commit with the pinned toolchain
   gives byte-identical files and archive (a test builds it twice and compares). The build uses
   `-trimpath`, a fixed or no VCS stamp, sorted archive entries with fixed times, owners and modes, and
   compressed files with zero mtime and a fixed level.
@@ -514,21 +524,21 @@ release), *live* (checked against the live site) or *review*.
 
 ### Page content
 
-- [ ] Every estimate shown carries the catalog snapshot's date and the caveat that prices are list prices
+- [x] Every estimate shown carries the catalog snapshot's date and the caveat that prices are list prices
   from that date, not a quote, as the Markdown report words it.
-- [ ] Every page shows the shift2eu version that built it, and links to the repository and to the
+- [x] Every page shows the shift2eu version that built it, and links to the repository and to the
   inventory guide (`docs/guide/inventory.md` on GitHub at that release's tag). Built from an untagged
   commit (pull request CI, `make site`), the page shows `internal/version`'s development value, as
   `shift2eu version` does, and the guide link points to `main`.
-- [ ] Without JavaScript, a `<noscript>` message says the assessment needs JavaScript and WebAssembly and
+- [x] Without JavaScript, a `<noscript>` message says the assessment needs JavaScript and WebAssembly and
   points to the CLI (static test); without WebAssembly support, the script shows the same message
   (*browser*, with WebAssembly disabled). The privacy page, the verification page and the links work
   without either: those two pages load neither `wasm_exec.js` nor the module script (*Layer 2*).
 
 ### Size and speed
 
-- [ ] The module is built with Go's standard toolchain (`GOOS=js GOARCH=wasm`), not TinyGo.
-- [ ] A test fails when the gzip-compressed module script (the transferred file: base64 is about 4/3 of
+- [x] The module is built with Go's standard toolchain (`GOOS=js GOARCH=wasm`), not TinyGo.
+- [x] A test fails when the gzip-compressed module script (the transferred file: base64 is about 4/3 of
   the raw module, and gzip recovers part of that) exceeds the budget: **3 MiB**, recorded with the
   measured sizes of the raw module and of the compressed module script in milestone 1's ADR. Above it,
   TinyGo is reconsidered (Decisions). The module is compiled from bytes, not streamed (*Layer 2*), so
@@ -546,14 +556,14 @@ release), *live* (checked against the live site) or *review*.
 - [ ] *Live:* the module script is served with `Content-Type: text/javascript` and, if Scaleway serves
   it so (Hosting decision 4), `Content-Encoding: gzip`. If it cannot, a second test also holds the
   uncompressed module script to a budget set in milestone 3's ADR.
-- [ ] *Browser:* once loaded, the page runs an assessment with the network disabled.
+- [x] *Browser:* once loaded, the page runs an assessment with the network disabled.
 
 ### Accessibility
 
-- [ ] Every control has a label; the whole flow (choose an input, choose targets and region, run, read,
+- [x] Every control has a label; the whole flow (choose an input, choose targets and region, run, read,
   download) works with the keyboard alone; focus is visible; text and controls meet WCAG 2.2 AA contrast
   (a test checks the stylesheet's colour pairs).
-- [ ] The report is semantic HTML (headings, tables with header cells, lists) rendered in Go by the HTML
+- [x] The report is semantic HTML (headings, tables with header cells, lists) rendered in Go by the HTML
   reporter, not tables assembled in JavaScript: a closed set of constant elements, values only as element
   content, escaped with `html/template`'s text-context replacements, pinned by a differential test
   against `html/template` (ADR 0035; pending the maintainer's confirmation, *Decided by the orchestrator
@@ -563,7 +573,7 @@ release), *live* (checked against the live site) or *review*.
 
 ### Architecture
 
-- [ ] The report in the page is rendered by a new reporter adapter, `internal/adapter/report/htmlreport`,
+- [x] The report in the page is rendered by a new reporter adapter, `internal/adapter/report/htmlreport`,
   which writes an HTML fragment for an assessment and a comparison through the same reporter ports as
   `markdown` and `jsonreport`: a closed set of constant elements, values only as element content,
   escaped with `html/template`'s text-context replacements, pinned by a differential test against
@@ -571,12 +581,12 @@ release), *live* (checked against the live site) or *review*.
   review*). It is held by
   `reporters-stay-offline` and named in CLAUDE.md's adapters row; its goldens, hostile golden included,
   are in its own `testdata/`.
-- [ ] The logic the browser calls is a new driving adapter, `internal/web`, beside `internal/cli` and
+- [x] The logic the browser calls is a new driving adapter, `internal/web`, beside `internal/cli` and
   `internal/httpapi`. It takes the inventory bytes and the options, runs the use cases and returns the
   report bytes for each download and the HTML fragment, or an error. It imports only the application, the
   domain, `internal/version` and a named list of standard packages (no `os`, no `net`, no `syscall/js`),
   and gets every adapter through its `Deps`.
-- [ ] The adapters are wired in `cmd/shift2eu-web/internal/wire`, an untagged package that builds and
+- [x] The adapters are wired in `cmd/shift2eu-web/internal/wire`, an untagged package that builds and
   tests natively: it constructs what `cmd/shift2eu`'s offline path constructs (the inventory file reader,
   the three target catalogs, the Markdown, JSON and HTML reporters) into `internal/web`'s `Deps`. Its
   black-box tests, run by `make test`, hold the option-parity table and the download parity test: they run
@@ -584,7 +594,7 @@ release), *live* (checked against the live site) or *review*.
   constraint `js && wasm`) holds only the `syscall/js` glue and imports `wire`, `internal/web`,
   `syscall/js` and a named list of standard packages; never `internal/cli`, `internal/httpapi`, a request
   decoder or a cloud SDK.
-- [ ] New depguard rules, written like their siblings and added to the depguard pin
+- [x] New depguard rules, written like their siblings and added to the depguard pin
   (`TestDepguardRulesArePinned`): `web-gets-adapters-from-cmd` (the strict allow list of `internal/web`),
   `web-imported-only-by-the-web-root` (only `cmd/shift2eu-web` and its `wire` package import it),
   `web-composition-root` (the strict allow list of the glue, `cmd/shift2eu-web`),
@@ -594,13 +604,13 @@ release), *live* (checked against the live site) or *review*.
   `internal/cli`, so only `wire`'s test files import it) and `syscall-js-only-in-the-web-root` (no package
   outside `cmd/shift2eu-web` imports `syscall/js`, tests included). The existing rules are extended so that neither `internal/cli`, `internal/httpapi`, `cmd/shift2eu` nor `cmd/shift2eu-server`
   imports `internal/web`, `htmlreport` aside from the composition roots that wire it.
-- [ ] `make lint` and CI's lint matrix also run golangci-lint with `GOOS=js GOARCH=wasm`, and
+- [x] `make lint` and CI's lint matrix also run golangci-lint with `GOOS=js GOARCH=wasm`, and
   `test/architecture` checks `js/wasm` as an explicit extra target beside those it reads from
   `.goreleaser.yaml` (ADR 0012); a test fails when `js/wasm` drops out of either list. Without this, the
   `js && wasm` files would never be linted or checked.
-- [ ] A test under `make test` runs `go list -deps` with `GOOS=js GOARCH=wasm` on `./cmd/shift2eu-web` and
+- [x] A test under `make test` runs `go list -deps` with `GOOS=js GOARCH=wasm` on `./cmd/shift2eu-web` and
   fails on `net`, `net/http`, `os/exec` or a cloud SDK in its dependency tree.
-- [ ] CLAUDE.md's layer table names `internal/web` among the driving adapters, `cmd/shift2eu-web` among
+- [x] CLAUDE.md's layer table names `internal/web` among the driving adapters, `cmd/shift2eu-web` among
   the composition roots and `htmlreport` among the adapters, and `docs/architecture.md` describes them.
 - [ ] *Review:* the use cases, the target adapters, the inventory reader and the Markdown and JSON
   reporters are reused unchanged; the CLI's and the HTTP API's output do not change. Option parsing that
@@ -609,17 +619,20 @@ release), *live* (checked against the live site) or *review*.
 
 ### Testing and tooling
 
-- [ ] `make test` runs every native test of this PRD with no network and no browser.
-- [ ] `make site` builds the bundle into a git-ignored directory. `make test-browser` runs the smoke test,
+- [x] `make test` runs every native test of this PRD with no network and no browser.
+- [x] `make site` builds the bundle into a git-ignored directory. `make test-browser` runs the smoke test,
   written in Go with `chromedp` (no npm, no Playwright or Puppeteer) against the headless Chromium of a
   container image pinned by digest with a `# renovate:` comment, whose DevTools port is published on
   `127.0.0.1` only; it serves the built bundle from a local `httptest` server.
-- [ ] `chromedp` and its dependencies are confined by depguard to the smoke test's package, and a test
+- [x] `chromedp` and its dependencies are confined by depguard to the smoke test's package, and a test
   pins that no product binary's dependency tree (`cmd/shift2eu`, `cmd/shift2eu-server`,
   `cmd/shift2eu-web`) reaches `chromedp` or any package only it brings in.
 - [ ] CI runs the smoke test as its own job on every pull request and on `main`, with `contents: read`
   only. The release runs it on the bundle it attests, before the deploy, in a job that holds neither the
   attestation's `id-token` nor the Scaleway key.
+  - [x] Milestone 2: CI's `browser` job (`Browser smoke test` in `ci.yml`), on every pull request and push
+    to `main`, with `contents: read` only.
+  - [ ] Milestone 3: the release's run on the bundle it attests, before the deploy.
 
 ### Runbook
 
@@ -710,11 +723,13 @@ security audit (`security-audit` skill), since every one of them touches the tru
    composition root and wiring package, the HTML reporter, the standard toolchain over TinyGo, the size
    budget and the measured size, how `wasm_exec.js` is tied to the toolchain and trusted as toolchain code
    rather than scanned, and that only `cmd/shift2eu-web` may import `syscall/js`.
-2. [ ] **The pages, their tests and the CSP.** The static pages under a new directory, `site/` (HTML,
+2. [x] **The pages, their tests and the CSP.** The static pages under a new directory, `site/` (HTML,
    CSS, one small page script; `site/records/`, which milestone 4 fills, is never bundled), the privacy
    page and the verification page, `make site` (a Go program, standard library
    only, that assembles the bundle: content-addressed names, the module embedded in its script, SRI
-   values, the version, the snapshot dates), the static tests (CSP, no image in any built page or HTML
+   values, the version, the snapshot dates; as built, it also imports the three embedded-snapshot
+   targets, `internal/domain/catalog` and `internal/version`, to take the snapshot dates, regions and
+   version from where the CLI does rather than a copy that could drift, ADR 0036), the static tests (CSP, no image in any built page or HTML
    reporter golden, the hostile golden included (no `<img>`, `<picture>`, `<input type="image">`,
    `<link rel="icon">`, SVG `<image>`, `<use>` or `<feImage>` with an external `href` or `xlink:href`, or `data:` URL),
    no stylesheet `url()` or `@import`, SRI, banned APIs (cross-origin messaging included) and computed
@@ -724,7 +739,7 @@ security audit (`security-audit` skill), since every one of them touches the tru
    HSTS record read as not waived) and `loading-notice` markers, links resolve, the verification
    page's link to the guide's path, no third-party resource, contrast), the reproducibility test, and
    the `chromedp` smoke test with `make test-browser` and its CI job. `chromedp` is a new dependency with its reason in the commit
-   message (CLAUDE.md rule 6). An ADR records the site's trust model (its three layers and how each of
+   message (CLAUDE.md rule 6). An ADR ([0036](../docs/adr/0036-hold-the-site-to-three-trust-layers-and-test-them-in-a-headless-browser.md)) records the site's trust model (its three layers and how each of
    the three scripts is held, the CSP with `connect-src 'none'` and `img-src 'none'` (no image, no CSS
    `url()`, icons as inline SVG, no favicon, and the browser's own `/favicon.ico` request as a fixed URL
    that carries no page data), `worker-src 'none'` and why the fallback matters (without it CSP Level 3
