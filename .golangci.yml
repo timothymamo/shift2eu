@@ -12,13 +12,19 @@ version: "2"
 #     test elsewhere gets no depguard rule.
 #   - forbidigo's cloud-read-only group checks them like any other file,
 #     which matters most here, where the credentials are real.
-# e2e and integration are the only custom build tags. Never negate them: lint
-# always sets both, so a file behind !e2e or !integration would never be
-# linted, and test/lint refuses such a build constraint.
+#   - the site's headless-browser smoke test, test/browser (PRD #297
+#     milestone 2), is behind the browser tag; its test files have the strict
+#     rule browser-smoke-test, and chromedp-only-in-the-browser-test keeps the
+#     browser driver out of every other file.
+# e2e, integration and browser are the only custom build tags. Never negate
+# them: lint always sets all three, so a file behind !e2e, !integration or
+# !browser would never be linted, and test/lint refuses such a build
+# constraint.
 run:
   build-tags:
     - e2e
     - integration
+    - browser
 
 linters:
   default: standard
@@ -1519,6 +1525,76 @@ linters:
           deny:
             - pkg: github.com/google/go-cmp
               desc: go-cmp is a test-only dependency
+        # The browser driver (PRD #297 milestone 2, decision 7): chromedp and
+        # cdproto drive a headless Chromium over the DevTools protocol, which
+        # only the site's smoke test, test/browser, may do. Every other file of
+        # the module, tests included, is refused them, and
+        # test/architecture's TestNoProductBinaryReachesChromedp holds the
+        # product binaries' dependency trees to the same.
+        chromedp-only-in-the-browser-test:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!**/test/browser/**"
+          deny:
+            - pkg: github.com/chromedp/
+              desc: only the site's browser smoke test, test/browser, drives a browser (PRD #297)
+        # The site's headless-browser smoke test (PRD #297 milestone 2). Its
+        # test files, behind the browser tag, are held to exactly what they
+        # import: the standard packages for the local httptest origins, the
+        # CLI and go commands they compare the downloads with, and the two
+        # variables make test-browser sets (SHIFT2EU_DEVTOOLS_URL and
+        # SHIFT2EU_SITE_BUNDLE), and the browser driver's packages, each
+        # ending in $. Its one production file, doc.go, imports nothing and is
+        # held by browser-smoke-test-doc. The tests run in their own test
+        # binary, which no composition root links.
+        browser-smoke-test:
+          list-mode: strict
+          files:
+            - "**/test/browser/**/*_test.go"
+            - "**/test/browser/*_test.go"
+          allow:
+            - context$
+            - encoding/json$
+            - fmt$
+            - net/http$
+            - net/http/httptest$
+            - os$
+            - os/exec$
+            - path/filepath$
+            - regexp$
+            - slices$
+            - strconv$
+            - strings$
+            - sync$
+            - testing$
+            - time$
+            - github.com/chromedp/cdproto/accessibility$
+            - github.com/chromedp/cdproto/browser$
+            - github.com/chromedp/cdproto/network$
+            - github.com/chromedp/cdproto/page$
+            - github.com/chromedp/chromedp$
+            - github.com/chromedp/chromedp/kb$
+            - github.com/chromedp/chromedp/remote$
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/
+              desc: the smoke test drives the built bundle and the CLI as black boxes; it imports no package of the module
+        # test/browser's one production file, doc.go, which carries no build
+        # tag so that go test ./... accepts the package: it imports nothing, so
+        # the rule allows nothing (allow: [] and the one deny entry, os, as
+        # config-is-pure). It is a rule of its own rather than an entry of
+        # test-docs-are-pure, which the package check skips, because
+        # browser-smoke-test holds the test files alone and the package check
+        # must read a rule that holds the package's own imports.
+        browser-smoke-test-doc:
+          list-mode: strict
+          files:
+            - "**/test/browser/**"
+            - "!$test"
+          allow: []
+          deny:
+            - pkg: os
+              desc: test/browser's doc.go imports nothing; its tests, behind the browser tag, are held by browser-smoke-test
         # The composition roots' _test.go files (issue #111). The strict
         # rules composition-root and server-composition-root skip test files
         # (!$test), yet a test is compiled into the root's package and runs in

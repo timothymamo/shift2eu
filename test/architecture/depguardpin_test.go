@@ -1014,6 +1014,70 @@ var pinnedDepguardRules = []check.DepguardRule{
 		},
 	},
 	{
+		// The browser driver is confined to the site's smoke test (PRD #297
+		// milestone 2, decision 7); TestNoProductBinaryReachesChromedp holds the
+		// product binaries' dependency trees to the same.
+		Name:     "chromedp-only-in-the-browser-test",
+		ListMode: "lax",
+		Files: []string{
+			"$all",
+			"!**/test/browser/**",
+		},
+		Allow: nil,
+		Deny: []string{
+			"github.com/chromedp/",
+		},
+	},
+	{
+		// The site's smoke test's files, behind the browser tag (PRD #297
+		// milestone 2): exactly what they import, each exact, and no package of
+		// the module. Its doc.go is held by browser-smoke-test-doc.
+		Name:     "browser-smoke-test",
+		ListMode: "strict",
+		Files: []string{
+			"**/test/browser/**/*_test.go",
+			"**/test/browser/*_test.go",
+		},
+		Allow: []string{
+			"context$",
+			"encoding/json$",
+			"fmt$",
+			"net/http$",
+			"net/http/httptest$",
+			"os$",
+			"os/exec$",
+			"path/filepath$",
+			"regexp$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"sync$",
+			"testing$",
+			"time$",
+			"github.com/chromedp/cdproto/accessibility$",
+			"github.com/chromedp/cdproto/browser$",
+			"github.com/chromedp/cdproto/network$",
+			"github.com/chromedp/cdproto/page$",
+			"github.com/chromedp/chromedp$",
+			"github.com/chromedp/chromedp/kb$",
+			"github.com/chromedp/chromedp/remote$",
+		},
+		Deny: []string{
+			"github.com/timothymamo/shift2eu/",
+		},
+	},
+	{
+		// test/browser's untagged doc.go imports nothing.
+		Name:     "browser-smoke-test-doc",
+		ListMode: "strict",
+		Files: []string{
+			"**/test/browser/**",
+			"!$test",
+		},
+		Allow: []string{},
+		Deny:  []string{"os"},
+	},
+	{
 		Name:     "e2e-is-black-box",
 		ListMode: "strict",
 		Files: []string{
