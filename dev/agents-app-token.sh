@@ -7,7 +7,33 @@
 # Usage: dev/agents-app-token.sh mint      mint one token (make agents-token)
 #        dev/agents-app-token.sh refresh   mint now, then again before each token expires, until stopped
 #                                          (make agents-token-refresh; in the background,
-#                                          make agents-token-refresh-start)
+#                                          make agents-token-refresh-start; at boot, the LaunchDaemon)
+#        dev/agents-app-token.sh vm-writer print the VM's writer, the script the VM runs to write the token:
+#                                          #!/bin/sh, one comment line, then vm_write below byte for byte.
+#                                          make vm-agents-token-ssh installs it in the VM as
+#                                          /usr/local/libexec/shift2eu/agents-token-write. It needs no input,
+#                                          mints nothing and runs no tool.
+#
+# Two modes write the token into the VM (issue #227 part 2, ADR 0031's update of 2026-11-19, 3 to 6):
+#   - limactl mode, the single-account mode: the refresh runs as the maintainer, from the maintainer's host
+#     clone, and runs vm_write in the VM through `limactl shell`. It is on when none of the four
+#     SHIFT2EU_AGENTS_VM_SSH_* variables below is set.
+#   - SSH mode, the account mode: the refresh runs as the separate macOS account that holds the App's key
+#     (_shift2euagents), which cannot reach the maintainer's ~/.lima, so it connects to the VM's pinned SSH
+#     port on 127.0.0.1 with a key of its own, which the VM authorises only to run the writer above (its
+#     forced command). It is on when all four are set and not empty:
+#       SHIFT2EU_AGENTS_VM_SSH_PORT         the VM's pinned SSH port on 127.0.0.1, 1 to 65535
+#       SHIFT2EU_AGENTS_VM_SSH_USER         the VM user (letters, digits, ., _ and -, beginning with a
+#                                           letter, digit or _)
+#       SHIFT2EU_AGENTS_VM_SSH_KEY          the account's SSH key to the VM (absolute, a regular file the
+#                                           running uid owns, no group or other bit)
+#       SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS  the VM's pinned host key, under the alias shift2eu-vm-<instance>
+#                                           (absolute, a regular file the running uid owns)
+#     A set between none and all four is refused before anything is minted (status 1). SSH mode runs no
+#     limactl at all, and refuses, before it mints, any of the App's key, the SSH key, the known-hosts file and
+#     this script itself that fails the trusted path rule: the file and every directory above it, up to /,
+#     owned by the running uid or root, with no group or other write bit, except a root-owned directory with
+#     the sticky bit (/tmp), and no ACL with an allow entry (a deny-only ACL is accepted). The refusal names the path and why, never a file's content.
 #
 # Inputs, from the direnv .envrc of the maintainer's host clone (outside the workspace, where the VM cannot
 # reach), never from the workspace or the .envrc above it (docs/dev-environment.md, The host clone):
@@ -20,7 +46,8 @@
 #   SHIFT2EU_AGENTS_TOKEN_MARGIN_SECONDS mint again when fewer seconds than this remain (default 1200)
 # Hooks the tests use: SHIFT2EU_AGENTS_GITHUB_API_URL (default https://api.github.com; plain http only for
 # 127.0.0.1 and localhost, and never with an @, a quote, a backslash or whitespace), LIMACTL (default
-# limactl), LIMA_INSTANCE (default shift2eu), SHIFT2EU_VM_REAL_GH_PATH (where the VM keeps the real gh once
+# limactl), SHIFT2EU_AGENTS_SSH (the ssh SSH mode runs, default ssh), LIMA_INSTANCE (default shift2eu; in SSH
+# mode it names only the host key alias, the lock, the log and the messages), SHIFT2EU_VM_REAL_GH_PATH (where the VM keeps the real gh once
 # it has the gh wrapper, default /usr/local/libexec/shift2eu/gh; mint warns when it is missing) and
 # XDG_STATE_HOME (refresh keeps its lock in ${XDG_STATE_HOME:-$HOME/.local/state}/shift2eu).
 #
@@ -46,12 +73,14 @@
 # it holds, without minting another one. The identity is kept for the life of the process.
 #
 # Secrets: the JWT and the token live only in shell variables. They reach curl through its standard input
-# (--config -) and the VM through limactl's standard input, never a command line, a file on the Mac, or
-# this script's output. Errors name what failed, never a value.
+# (--config -) and the VM through limactl's or ssh's standard input, never a command line, a file on the Mac,
+# or this script's output. Errors name what failed, never a value.
 set -eu
 
 api="${SHIFT2EU_AGENTS_GITHUB_API_URL:-https://api.github.com}"
 limactl="${LIMACTL:-limactl}"
+ssh="${SHIFT2EU_AGENTS_SSH:-ssh}"
+mode=limactl
 instance="${LIMA_INSTANCE:-shift2eu}"
 vm_real_gh="${SHIFT2EU_VM_REAL_GH_PATH:-/usr/local/libexec/shift2eu/gh}"
 
@@ -119,12 +148,158 @@ check_inputs() {
   [ -n "$(find "${key_path}" -prune -user "$(id -u)" -print)" ] ||
     die "SHIFT2EU_AGENTS_APP_KEY_FILE names a key another account owns"
 
+  check_ssh
   check_api_url
   is_number "${check_seconds}" && [ "${check_seconds}" -gt 0 ] ||
     die "SHIFT2EU_AGENTS_TOKEN_CHECK_SECONDS must be a positive number of seconds"
   is_number "${margin_seconds}" || die "SHIFT2EU_AGENTS_TOKEN_MARGIN_SECONDS must be a number of seconds"
   check_seconds="$(decimal "${check_seconds}")"
   margin_seconds="$(decimal "${margin_seconds}")"
+}
+
+# refuse <why> refuses the configuration before anything is minted, as a permanent failure: status 1, and under
+# refresh the stop line too, so the log says the refresh stopped and where to start it again.
+refuse() {
+  say "$*"
+  if [ "${command}" = refresh ]; then
+    stopped "the configuration is refused"
+  fi
+  exit 1
+}
+
+# trusted_entry <what> <path> refuses one entry that fails the trusted path rule (ADR 0031, update of
+# 2026-11-19, 2): owned by the running uid or root, and no group or other write bit, unless it is a root-owned
+# directory with the sticky bit, where no one else can rename an entry (/tmp); and no ACL with an allow entry
+# (issue #227 part 2, audit 3), while a deny-only ACL is accepted. A symlink's own mode means
+# nothing, so only its owner is checked; trusted_path checks where it leads. ls -ldn, not stat: a stock Mac has
+# no GNU stat, and the two print the same first and third fields.
+trusted_entry() {
+  listing="$(ls -ldn "$2" 2>/dev/null)" || refuse "$1: cannot read the owner and mode of $2 (the trusted path rule)"
+  perms="$(printf '%s\n' "${listing}" | awk '{ print $1; exit }')"
+  owner="$(printf '%s\n' "${listing}" | awk '{ print $3; exit }')"
+  if [ "${owner}" != "${uid}" ] && [ "${owner}" != 0 ]; then
+    refuse "$1: $2 is owned by uid ${owner}, neither this account (uid ${uid}) nor root, so another account controls what runs with the App's key (the trusted path rule, docs/dev-environment.md)"
+  fi
+  case "${perms}" in
+  l*) return 0 ;;
+  esac
+  # A Mac's ls ends the mode with + when the entry carries an ACL, and with @ when it carries extended attributes,
+  # ACL or not (issue #227 part 2, the security audit's second pass), so the ACL is read under either; ls -lde
+  # lists its entries, a line each after the long line. An allow entry can grant another account what the mode
+  # bits deny, so it is refused; a deny-only ACL (every macOS home carries group:everyone deny delete) grants
+  # nothing and is accepted, as is no ACL at all.
+  case "${perms}" in
+  *+ | *@)
+    acl="$(ls -lde "$2" 2>/dev/null)" || refuse "$1: cannot read the ACL of $2 (the trusted path rule)"
+    if printf '%s\n' "${acl}" | sed 1d | grep -Eq '[[:space:]]allow([[:space:]]|$)'; then
+      refuse "$1: $2 carries an ACL with an allow entry, which can let another account replace what runs with the App's key: remove it (chmod -N, or chmod -a for the entry; ls -lde shows it) (the trusted path rule, docs/dev-environment.md)"
+    fi
+    ;;
+  esac
+  case "${perms}" in
+  ?????????[tT]*) [ "${owner}" != 0 ] || return 0 ;;
+  esac
+  case "${perms}" in
+  ?????w*) refuse "$1: $2 is group-writable, so another account can replace what runs with the App's key: chmod g-w it (the trusted path rule, docs/dev-environment.md)" ;;
+  esac
+  case "${perms}" in
+  ????????w*) refuse "$1: $2 is other-writable, so any account can replace what runs with the App's key: chmod o-w it (the trusted path rule, docs/dev-environment.md)" ;;
+  esac
+}
+
+# trusted_path <what> <absolute path> applies the trusted path rule to the path and every directory above it, up
+# to /, as written, then to the directory it is in with its symlinks resolved (pwd -P), so a symlink on the way
+# (macOS's /tmp, /var) is followed to where it leads, and that is checked too.
+trusted_path() {
+  set -- "$1" "$2" "$2"
+  while :; do
+    trusted_entry "$1" "$3"
+    [ "$3" != / ] || break
+    set -- "$1" "$2" "${3%/*}"
+    [ -n "$3" ] || set -- "$1" "$2" /
+  done
+  real="$(cd "${2%/*}/" && pwd -P)" || refuse "$1: cannot resolve the directory of $2 (the trusted path rule)"
+  if [ "${real}" != "${2%/*}" ] && [ -n "${real}" ]; then
+    set -- "$1" "$2" "${real}"
+    while :; do
+      trusted_entry "$1" "$3"
+      [ "$3" != / ] || break
+      set -- "$1" "$2" "${3%/*}"
+      [ -n "$3" ] || set -- "$1" "$2" /
+    done
+  fi
+}
+
+# own_file <variable> <path> refuses a path SSH mode reads as anything but an absolute path to a regular file,
+# not a symlink, that the running uid owns.
+own_file() {
+  case "$2" in
+  /*) ;;
+  *) refuse "$1 must be an absolute path" ;;
+  esac
+  [ ! -L "$2" ] || refuse "$1 names a symlink ($2): name the file itself"
+  [ -f "$2" ] || refuse "$1 does not name a regular file ($2)"
+  [ -n "$(find "$2" -prune -user "${uid}" -print)" ] || refuse "$1 names a file another account owns ($2)"
+}
+
+# no_access <variable> <path> refuses a key any other account can read, write or run: chmod 600 it.
+no_access() {
+  [ -z "$(find "$2" -prune \( -perm -0040 -o -perm -0020 -o -perm -0010 -o -perm -0004 -o -perm -0002 -o -perm -0001 \) -print)" ] ||
+    refuse "$1 names a key with a group or other permission bit ($2), which other accounts can read: chmod 600 it"
+}
+
+# check_ssh chooses the mode (ADR 0031, update of 2026-11-19, 5): SSH mode when all four SHIFT2EU_AGENTS_VM_SSH_*
+# are set and not empty, limactl mode when none is, and a refusal for anything between, naming those not set.
+# In SSH mode it checks each value, naming the variable and never its value, and applies the trusted path rule
+# to the App's key, the SSH key, the known-hosts file and this script.
+check_ssh() {
+  missing=""
+  unset_count=0
+  # The names are this script's own, so the eval reads a variable and never runs a value.
+  for name in SHIFT2EU_AGENTS_VM_SSH_PORT SHIFT2EU_AGENTS_VM_SSH_USER SHIFT2EU_AGENTS_VM_SSH_KEY SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS; do
+    eval "value=\${${name}:-}"
+    if [ -z "${value}" ]; then
+      missing="${missing:+${missing}, }${name}"
+      unset_count=$((unset_count + 1))
+    fi
+  done
+  value=""
+  if [ "${unset_count}" -eq 4 ]; then
+    mode=limactl
+    return 0
+  fi
+  [ -z "${missing}" ] ||
+    refuse "SSH mode needs all of SHIFT2EU_AGENTS_VM_SSH_PORT, SHIFT2EU_AGENTS_VM_SSH_USER, SHIFT2EU_AGENTS_VM_SSH_KEY and SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS; not set: ${missing}"
+  mode=ssh
+  ssh_port="${SHIFT2EU_AGENTS_VM_SSH_PORT}"
+  is_number "${ssh_port}" && [ "${#ssh_port}" -le 5 ] && ssh_port="$(decimal "${ssh_port}")" &&
+    [ "${ssh_port}" -ge 1 ] && [ "${ssh_port}" -le 65535 ] ||
+    refuse "SHIFT2EU_AGENTS_VM_SSH_PORT must be a port, 1 to 65535 in digits"
+  ssh_user="${SHIFT2EU_AGENTS_VM_SSH_USER}"
+  case "${ssh_user}" in
+  [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
+    refuse "SHIFT2EU_AGENTS_VM_SSH_USER must be letters, digits, ., _ and -, beginning with a letter, digit or _"
+    ;;
+  esac
+  ssh_key="${SHIFT2EU_AGENTS_VM_SSH_KEY}"
+  ssh_known_hosts="${SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS}"
+  uid="$(id -u)" || refuse "cannot tell which account runs this (id -u failed)"
+  own_file SHIFT2EU_AGENTS_VM_SSH_KEY "${ssh_key}"
+  own_file SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS "${ssh_known_hosts}"
+  no_access SHIFT2EU_AGENTS_VM_SSH_KEY "${ssh_key}"
+  case "${key}" in
+  /*) ;;
+  *) refuse "SHIFT2EU_AGENTS_APP_KEY_FILE must be an absolute path in SSH mode" ;;
+  esac
+  case "$0" in
+  /*) self="$0" ;;
+  *) self="$(pwd -P)/$0" ;;
+  esac
+  [ ! -L "${self}" ] || refuse "this script is a symlink (${self}): run the account's clone's dev/agents-app-token.sh itself"
+  trusted_path "this script" "${self}"
+  trusted_path SHIFT2EU_AGENTS_APP_KEY_FILE "${key}"
+  trusted_path SHIFT2EU_AGENTS_VM_SSH_KEY "${ssh_key}"
+  trusted_path SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS "${ssh_known_hosts}"
 }
 
 # check_api_url refuses an API URL that could send the JWT anywhere but GitHub: an @ (curl reads what comes
@@ -577,20 +752,48 @@ said_git_identity() {
   esac
 }
 
+# vm_ssh runs the VM's writer over SSH (ADR 0031, update of 2026-11-19, 3): the ssh SHIFT2EU_AGENTS_SSH names,
+# with exactly these options and nothing else on its command line. -F /dev/null reads no ssh_config; the host
+# key is checked strictly against the account's pinned file under the instance's alias, so a port change needs
+# no new pin; no agent, no forwarding, no multiplexing. agents-token-write is a placeholder: the VM's forced
+# command runs the writer instead, whatever the client asks for. The four lines arrive on standard input.
+vm_ssh() {
+  "${ssh}" -F /dev/null -T -p "${ssh_port}" -l "${ssh_user}" -i "${ssh_key}" \
+    -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+    -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=${ssh_known_hosts}" -o GlobalKnownHostsFile=/dev/null \
+    -o "HostKeyAlias=shift2eu-vm-${instance}" -o CheckHostIP=no -o UpdateHostKeys=no \
+    -o ControlMaster=no -o ControlPath=none -o ForwardAgent=no -o ForwardX11=no \
+    -o ClearAllForwardings=yes -o PermitLocalCommand=no \
+    -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o LogLevel=ERROR \
+    127.0.0.1 agents-token-write
+}
+
 # vm_send <token> <expiry> <name> <email> runs vm_write in the VM, which writes each file whose first field is
-# not empty, and sets written to what it printed. On failure it says why, never a secret, and sets failure:
-# permanent when the VM refused the write (status 3), transient otherwise (status 4 is another git writer's
-# lock on ~/.gitconfig).
+# not empty, and sets written to what it printed: through limactl in limactl mode, through ssh in SSH mode. On
+# failure it says why, never a secret, and sets failure: permanent when the VM refused the write (status 3),
+# transient otherwise (status 4 is another git writer's lock on ~/.gitconfig, 255 is ssh's own failure).
 vm_send() {
-  written="$(printf '%s\n%s\n%s\n%s\n' "$1" "$2" "$3" "$4" |
-    "${limactl}" shell --workdir / "${instance}" sh -c "${vm_write}" vm-write "${vm_real_gh}")" || {
-    written=$?
+  sent=0
+  if [ "${mode}" = ssh ]; then
+    written="$(printf '%s\n%s\n%s\n%s\n' "$1" "$2" "$3" "$4" | vm_ssh)" || sent=$?
+  else
+    written="$(printf '%s\n%s\n%s\n%s\n' "$1" "$2" "$3" "$4" |
+      "${limactl}" shell --workdir / "${instance}" sh -c "${vm_write}" vm-write "${vm_real_gh}")" || sent=$?
+  fi
+  [ "${sent}" -eq 0 ] || {
+    written="${sent}"
     if [ "${written}" -eq 3 ]; then
       failure=permanent
       say "the VM ${instance} refused to write the ${5} (see above)"
     elif [ "${written}" -eq 4 ]; then
       failure=transient
       say "the VM ${instance} did not write the ${5} now: another git writer holds the lock on ~/.gitconfig (see above); if no git is running in the VM, remove ~/.gitconfig.lock there (a crashed git leaves it behind)"
+    elif [ "${mode}" = ssh ] && [ "${written}" -eq 255 ]; then
+      failure=transient
+      say "could not write the ${5} into the VM ${instance} over SSH (127.0.0.1:${ssh_port}, ssh exit 255): is it running (make vm-up)? If ssh said \`Host key verification failed\` above, the VM's host key changed (a recreated VM): pin it again with make vm-agents-token-ssh; if it said \`Permission denied\`, the VM does not authorise the account's key: run make vm-agents-token-ssh"
+    elif [ "${mode}" = ssh ]; then
+      failure=transient
+      say "could not write the ${5} into the VM ${instance} over SSH (127.0.0.1:${ssh_port}, ssh exit ${written}): is it running (make vm-up), and is ssh installed?"
     else
       failure=transient
       say "could not write the ${5} into the VM ${instance}: is it running (make vm-up)?"
@@ -710,7 +913,15 @@ stopped() {
   else
     left="the VM holds no token from this refresh"
   fi
-  say "agents App token refresh stopped at $(show_time "$(now)") ($1); ${left}; start it again from the host clone on the Mac with make agents-token-refresh-start"
+  if [ "${mode}" = ssh ]; then
+    # SSH mode is the account's LaunchDaemon: launchd starts it again within its ThrottleInterval. The label is
+    # spelled out here and in two other places, the Makefile's AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX and
+    # dev/agents-token-launchd.sh's label_prefix: keep the three alike.
+    restart="as the account's LaunchDaemon it starts again within 5 minutes, or now with sudo launchctl kickstart -k system/io.github.timothymamo.shift2eu.agents-token-refresh.${instance}; in single-account mode start it again from the host clone on the Mac with make agents-token-refresh-start"
+  else
+    restart="start it again from the host clone on the Mac with make agents-token-refresh-start"
+  fi
+  say "agents App token refresh stopped at $(show_time "$(now)") ($1); ${left}; ${restart}"
 }
 
 # is_refresh <pid> tells whether pid is a running refresh. is_number and kill -0 must stay ahead of ps -p:
@@ -960,7 +1171,8 @@ token=""
 held=""
 identity_written=0
 
-case "${1:-}" in
+command="${1:-}"
+case "${command}" in
 mint)
   check_inputs
   mint_once
@@ -970,8 +1182,16 @@ refresh)
   check_inputs
   refresh
   ;;
+vm-writer)
+  # The writer make vm-agents-token-ssh installs in the VM: vm_write as a script of its own, whose $1 is the
+  # real gh's path, as the forced command passes it (ADR 0031, update of 2026-11-19, 4).
+  # shellcheck disable=SC2016 # a comment line of the printed script, not expanded here
+  printf '#!/bin/sh\n%s\n%s\n' \
+    '# agents-token-write: generated by dev/agents-app-token.sh vm-writer (ADR 0031); $1 is the real gh' \
+    "${vm_write}"
+  ;;
 *)
-  echo "usage: $0 mint|refresh" >&2
+  echo "usage: $0 mint|refresh|vm-writer" >&2
   exit 2
   ;;
 esac

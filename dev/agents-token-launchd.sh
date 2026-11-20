@@ -34,6 +34,17 @@
 #
 # It refuses to run as root (uid 0, as under sudo make) before it prints anything: the job would run as root.
 #
+# Account mode (issue #227 part 2, ADR 0034's update of 2026-11-19, c): make agents-token-refresh-install runs
+# this script as the separate account that holds the App's key (sudo -u <account> -H /usr/bin/env -i ...), from
+# that account's own clone, so UserName, HOME and the clone are the account's. With all four
+# SHIFT2EU_AGENTS_VM_SSH_* variables set it renders the SSH mode's job (dev/agents-app-token.sh): it puts the four
+# in EnvironmentVariables, sets PATH to exactly /usr/bin:/bin:/usr/sbin:/sbin (no /opt/homebrew/bin, which the
+# maintainer's uid owns: a planted openssl, curl or ssh there would run as the account with the key), refuses
+# the clone's dev/ or dev/agents-app-token.sh being a symlink, and applies the trusted path rule (ADR 0031,
+# update of 2026-11-19, 2) to this script, dev/agents-app-token.sh, the App's key, the SSH key and the
+# known-hosts file, naming the path and why. A partial set of the four is refused, naming the missing ones.
+# With none of them it renders exactly what the single-account mode renders.
+#
 # Inputs, from the host clone's .envrc (docs/dev-environment.md, The host clone): LIMA_INSTANCE (letters,
 # digits, ., _ and -, beginning with a letter or digit), SHIFT2EU_AGENTS_APP_ID and
 # SHIFT2EU_AGENTS_APP_INSTALLATION_ID (digits), SHIFT2EU_AGENTS_APP_KEY_FILE (an absolute path naming a
@@ -45,6 +56,7 @@
 # curl, gh or git.
 set -eu
 
+# Also in the Makefile (AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX) and dev/agents-app-token.sh (stopped): keep the three alike.
 label_prefix=io.github.timothymamo.shift2eu.agents-token-refresh.
 throttle_seconds=300
 
@@ -125,6 +137,126 @@ check_inputs() {
   # The host clone is the repository holding this script, symlinks resolved.
   clone="$(cd "$(dirname "$0")/.." && pwd -P)" || die "cannot resolve the repository this script is in"
   plain "the host clone's path" "${clone}"
+  check_ssh
+}
+
+# trusted_entry <what> <path> and trusted_path <what> <absolute path>: the trusted path rule, as
+# dev/agents-app-token.sh applies it at every start of the refresh (keep the two alike): the path and every
+# directory above it, up to /, owned by the running uid or root, with no group or other write bit, except a
+# root-owned directory with the sticky bit, and no ACL with an allow entry (a deny-only ACL is accepted); a
+# symlink's own mode is not checked, and the path's directory is checked again with its symlinks resolved.
+trusted_entry() {
+  listing="$(ls -ldn "$2" 2>/dev/null)" || die "$1: cannot read the owner and mode of $2 (the trusted path rule)"
+  perms="$(printf '%s\n' "${listing}" | awk '{ print $1; exit }')"
+  owner="$(printf '%s\n' "${listing}" | awk '{ print $3; exit }')"
+  if [ "${owner}" != "${uid}" ] && [ "${owner}" != 0 ]; then
+    die "$1: $2 is owned by uid ${owner}, neither this account (uid ${uid}) nor root, so another account controls what runs with the App's key (the trusted path rule, docs/dev-environment.md)"
+  fi
+  case "${perms}" in
+  l*) return 0 ;;
+  esac
+  # A Mac's ls ends the mode with + when the entry carries an ACL, and with @ when it carries extended attributes,
+  # ACL or not (issue #227 part 2, the security audit's second pass), so the ACL is read under either; ls -lde
+  # lists its entries, a line each after the long line. An allow entry can grant another account what the mode
+  # bits deny, so it is refused; a deny-only ACL (every macOS home carries group:everyone deny delete) grants
+  # nothing and is accepted, as is no ACL at all.
+  case "${perms}" in
+  *+ | *@)
+    acl="$(ls -lde "$2" 2>/dev/null)" || die "$1: cannot read the ACL of $2 (the trusted path rule)"
+    if printf '%s\n' "${acl}" | sed 1d | grep -Eq '[[:space:]]allow([[:space:]]|$)'; then
+      die "$1: $2 carries an ACL with an allow entry, which can let another account replace what runs with the App's key: remove it (chmod -N, or chmod -a for the entry; ls -lde shows it) (the trusted path rule, docs/dev-environment.md)"
+    fi
+    ;;
+  esac
+  case "${perms}" in
+  ?????????[tT]*) [ "${owner}" != 0 ] || return 0 ;;
+  esac
+  case "${perms}" in
+  ?????w*) die "$1: $2 is group-writable, so another account can replace what runs with the App's key: chmod g-w it (the trusted path rule, docs/dev-environment.md)" ;;
+  esac
+  case "${perms}" in
+  ????????w*) die "$1: $2 is other-writable, so any account can replace what runs with the App's key: chmod o-w it (the trusted path rule, docs/dev-environment.md)" ;;
+  esac
+}
+
+trusted_path() {
+  set -- "$1" "$2" "$2"
+  while :; do
+    trusted_entry "$1" "$3"
+    [ "$3" != / ] || break
+    set -- "$1" "$2" "${3%/*}"
+    [ -n "$3" ] || set -- "$1" "$2" /
+  done
+  real="$(cd "${2%/*}/" && pwd -P)" || die "$1: cannot resolve the directory of $2 (the trusted path rule)"
+  if [ "${real}" != "${2%/*}" ] && [ -n "${real}" ]; then
+    set -- "$1" "$2" "${real}"
+    while :; do
+      trusted_entry "$1" "$3"
+      [ "$3" != / ] || break
+      set -- "$1" "$2" "${3%/*}"
+      [ -n "$3" ] || set -- "$1" "$2" /
+    done
+  fi
+}
+
+# check_ssh chooses the job's mode as dev/agents-app-token.sh does: SSH mode with all four
+# SHIFT2EU_AGENTS_VM_SSH_* set and not empty, the single-account mode with none, a refusal naming the missing
+# ones for anything between. In SSH mode it checks each value and applies the trusted path rule.
+check_ssh() {
+  ssh_mode=0
+  missing=""
+  unset_count=0
+  # The names are this script's own, so the eval reads a variable and never runs a value.
+  for name in SHIFT2EU_AGENTS_VM_SSH_PORT SHIFT2EU_AGENTS_VM_SSH_USER SHIFT2EU_AGENTS_VM_SSH_KEY SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS; do
+    eval "value=\${${name}:-}"
+    if [ -z "${value}" ]; then
+      missing="${missing:+${missing}, }${name}"
+      unset_count=$((unset_count + 1))
+    fi
+  done
+  value=""
+  [ "${unset_count}" -ne 4 ] || return 0
+  [ -z "${missing}" ] ||
+    die "SSH mode needs all of SHIFT2EU_AGENTS_VM_SSH_PORT, SHIFT2EU_AGENTS_VM_SSH_USER, SHIFT2EU_AGENTS_VM_SSH_KEY and SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS; not set: ${missing}"
+  ssh_mode=1
+  ssh_port="${SHIFT2EU_AGENTS_VM_SSH_PORT}"
+  digits SHIFT2EU_AGENTS_VM_SSH_PORT "${ssh_port}"
+  [ "${#ssh_port}" -le 5 ] && [ "${ssh_port}" -ge 1 ] && [ "${ssh_port}" -le 65535 ] ||
+    die "SHIFT2EU_AGENTS_VM_SSH_PORT must be a port, 1 to 65535"
+  ssh_user="${SHIFT2EU_AGENTS_VM_SSH_USER}"
+  case "${ssh_user}" in
+  [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
+    die "SHIFT2EU_AGENTS_VM_SSH_USER must be letters, digits, ., _ and -, beginning with a letter, digit or _"
+    ;;
+  esac
+  ssh_key="${SHIFT2EU_AGENTS_VM_SSH_KEY}"
+  ssh_known_hosts="${SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS}"
+  for pair in "SHIFT2EU_AGENTS_VM_SSH_KEY=${ssh_key}" "SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS=${ssh_known_hosts}"; do
+    absolute "${pair%%=*}" "${pair#*=}"
+    [ ! -L "${pair#*=}" ] && [ -f "${pair#*=}" ] ||
+      die "${pair%%=*} does not name a regular file (a symlink is refused): name the file itself"
+  done
+  # The key and the SSH key: no group or other bit at all (POSIX find tests, the same on macOS and Linux).
+  for pair in "SHIFT2EU_AGENTS_APP_KEY_FILE=${key}" "SHIFT2EU_AGENTS_VM_SSH_KEY=${ssh_key}"; do
+    [ -z "$(find "${pair#*=}" -prune \( -perm -0040 -o -perm -0020 -o -perm -0010 -o -perm -0004 -o -perm -0002 -o -perm -0001 \) -print)" ] ||
+      die "${pair%%=*} names a key with a group or other permission bit (${pair#*=}): chmod 600 it"
+  done
+  # The install's old symlink check, made as the account: the maintainer's uid cannot look into its home.
+  for link in "${clone}/dev" "${clone}/dev/agents-app-token.sh"; do
+    [ ! -L "${link}" ] ||
+      die "refused: ${link} is a symlink, so the job would run a file outside the clone ${clone}: clone it again (docs/dev-environment.md, The agents App)"
+  done
+  case "$0" in
+  /*) self="$0" ;;
+  *) self="$(pwd -P)/$0" ;;
+  esac
+  trusted_path "this script" "${self}"
+  if [ -e "${clone}/dev/agents-app-token.sh" ]; then
+    trusted_path "the job's script" "${clone}/dev/agents-app-token.sh"
+  fi
+  trusted_path SHIFT2EU_AGENTS_APP_KEY_FILE "${key}"
+  trusted_path SHIFT2EU_AGENTS_VM_SSH_KEY "${ssh_key}"
+  trusted_path SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS "${ssh_known_hosts}"
 }
 
 plist() {
@@ -133,6 +265,17 @@ plist() {
   xdg_entry=''
   if [ -n "${xdg_state_home}" ]; then
     xdg_entry="$(printf '\t\t<key>XDG_STATE_HOME</key>\n\t\t<string>%s</string>' "${xdg_state_home}")"
+  fi
+  # SSH mode needs no limactl, so no Homebrew on the job's PATH (ADR 0034, update of 2026-11-19, c).
+  job_path=/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+  ssh_entries=''
+  if [ "${ssh_mode}" -eq 1 ]; then
+    job_path=/usr/bin:/bin:/usr/sbin:/sbin
+    ssh_entries="$(printf '\t\t<key>%s</key>\n\t\t<string>%s</string>\n' \
+      SHIFT2EU_AGENTS_VM_SSH_PORT "${ssh_port}" \
+      SHIFT2EU_AGENTS_VM_SSH_USER "${ssh_user}" \
+      SHIFT2EU_AGENTS_VM_SSH_KEY "${ssh_key}" \
+      SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS "${ssh_known_hosts}")"
   fi
   # The shell line the job runs, XML-escaped: it opens the log ($1) for appending as the job's UserName and
   # execs the script ($0). Both reach it as arguments of their own, never spliced into the shell text. It
@@ -174,9 +317,12 @@ plist() {
     '		<key>HOME</key>' \
     "		<string>${home}</string>" \
     '		<key>PATH</key>' \
-    '		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>'
+    "		<string>${job_path}</string>"
     if [ -n "${xdg_entry}" ]; then
       printf '%s\n' "${xdg_entry}"
+    fi
+    if [ -n "${ssh_entries}" ]; then
+      printf '%s\n' "${ssh_entries}"
     fi
     printf '%s\n' \
       '	</dict>' \
