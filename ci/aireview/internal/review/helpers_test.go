@@ -6,6 +6,8 @@ import (
 	"os"
 	"syscall"
 	"testing"
+
+	"github.com/timothymamo/shift2eu/ci/aireview/internal/review"
 )
 
 // The commits, logins and credentials the tests use: 40 hex characters, as
@@ -20,6 +22,12 @@ const (
 	testAPIKey     = "test-anthropic-api-key"
 	testBotLogin   = "shift2eu-reviewer[bot]"
 )
+
+// skipReason returns a pointer to reason, for a test case that expects the run
+// to end in the skipped outcome for that cause, or nil for none (issue #367).
+func skipReason(reason review.SkipReason) *review.SkipReason {
+	return &reason
+}
 
 // server starts an httptest server for handle and closes it when the test ends.
 func server(t *testing.T, handle http.HandlerFunc) *httptest.Server {
