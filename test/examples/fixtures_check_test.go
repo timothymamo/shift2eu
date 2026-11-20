@@ -85,6 +85,16 @@ var realDataAllowList = []allowListEntry{
 		why:   "the second synthetic Auto Scaling group ID, all zero but its last digit",
 	},
 	{
+		file:  "test/e2e/testdata/inventory-guide/gcp/assets.json",
+		value: "storage.googleapis.com/shop-assets-example",
+		why:   "the Cloud Asset name of the guide's synthetic shop bucket, marked -example; it names no one's bucket",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/gcp/assets.json",
+		value: "storage.googleapis.com/shop-backups-example",
+		why:   "the Cloud Asset name of the guide's synthetic backup bucket, marked -example; it names no one's bucket",
+	},
+	{
 		file:  "test/lint/testdata/cloudreadonly/mod/internal/adapter/source/gcp/cgo.go",
 		value: "C.int",
 		why:   "cgo's C.int type in a Go-source probe, a selector that names no domain although int is a TLD",
@@ -192,7 +202,7 @@ func holdsCheckedPath(name string) bool {
 
 // sanitisationProblems returns every value a checked file may not carry under
 // CLAUDE.md rule 2, rule by rule: account IDs, GUIDs, IPv4 addresses (written
-// with dots or, with hyphens or underscores, into a name), IPv6 addresses, host
+// with dots or with hyphens or underscores), IPv6 addresses, host
 // names and the owners and buckets a vendor path or a bucket URL names. The
 // first four rules are the samples' own; the host name rule is the narrower
 // fixture one (fixtureHostnameProblems), and the hyphenated-address rule
@@ -220,7 +230,10 @@ func sanitisationProblems(text string) []problem {
 // restricted ones (gov, edu, mil, aero, coop, jobs, museum, travel), every EU,
 // EEA and EFTA country code but Iceland's, the commonest other country codes,
 // OVHcloud's own ovh, and the private DNS suffixes an internal name is built
-// from (internal, the AWS and GCP private zone; corp; lan).
+// from (internal, the AWS and GCP private zone; corp; lan; localdomain;
+// intranet; private; priv; home; consul, HashiCorp Consul's service zone). The
+// home network zone of RFC 8375, home.arpa, is read through
+// privateTwoLabelSuffixes, as its last label alone is the reverse-DNS one.
 //
 // It fails open, knowingly: because it is an allow list, a host under a TLD it
 // does not name passes, so this is a filter for the likely value, never a
@@ -269,8 +282,16 @@ var publicTLDs = []string{
 	"br", "cn", "ru", "tr", "mx", "ar", "za", "sg", "hk", "kr", "tw",
 	"il", "ae", "nz", "th", "vn", "my", "ph", "pk", "sa", "ua",
 	// Private DNS suffixes: such a name identifies a customer's own network.
-	"internal", "corp", "lan",
+	"internal", "corp", "lan", "localdomain", "intranet", "private", "priv",
+	"home", "consul",
 }
+
+// privateTwoLabelSuffixes are the private DNS suffixes of two labels under which
+// the fixture check reads a name as a host: home.arpa, the zone RFC 8375 reserves
+// for a home network. Its last label, arpa, is no TLD of publicTLDs, since a
+// reverse name (3.2.1.10.in-addr.arpa) ends with it too and the dotted-quad rule
+// already reports the address it spells.
+var privateTwoLabelSuffixes = []string{"home.arpa"}
 
 // lowercaseOnlyTLDs are the public suffixes under which the fixture check reads
 // a name as a host only when the name's last label is written in exactly this
@@ -343,6 +364,8 @@ func fixtureHostnameProblems(text string) []problem {
 		label := lastLabel(lower)
 
 		switch {
+		case slices.ContainsFunc(privateTwoLabelSuffixes, func(suffix string) bool { return strings.HasSuffix(lower, "."+suffix) }):
+			// A name in a private zone of two labels (db01.home.arpa).
 		case slices.Contains(lowercaseOnlyTLDs, label):
 			// An exported Go selector ends with one of these suffixes and
 			// writes its last label with a capital (errors.Is, time.Local,
@@ -366,16 +389,55 @@ func fixtureHostnameProblems(text string) []problem {
 // ownerPathPattern finds the owner a path names after a vendor host whose
 // first path segment is an account (github.com/acme/repo,
 // raw.githubusercontent.com/acme/repo/..., ghcr.io/acme/image): the host,
-// matched case-insensitively, a slash and the owner's name. The host must stand
-// on its own (vendorPathProblems), so a name below it (evil.github.com) and
-// api.github.com, whose first segment is repos rather than an owner, are left
-// to the host name rule.
-var ownerPathPattern = regexp.MustCompile(`(?i)(?:github\.com|raw\.githubusercontent\.com|ghcr\.io)/[a-z0-9][a-z0-9_.-]*`)
+// matched case-insensitively, a slash and the owner's name, or a colon and the
+// owner's name in the SSH clone form (git@github.com:acme/repo.git), which
+// vendorPathProblems accepts only for github.com right after an @, so a port
+// (ghcr.io:443) or a colon in prose is no owner. The host must stand on its own
+// (vendorPathProblems), so a name below it (evil.github.com) and api.github.com,
+// whose first segment is repos rather than an owner, are left to the host name
+// rule.
+var ownerPathPattern = regexp.MustCompile(`(?i)(?:github\.com|raw\.githubusercontent\.com|ghcr\.io)[/:][a-z0-9][a-z0-9_.-]*`)
+
+// sshCloneHost is the one vendor host whose owner ownerPathPattern reads after
+// a colon, in the SSH clone form user@host:owner/repo.
+const sshCloneHost = "github.com"
 
 // bucketPattern finds the bucket a bucket URL names (s3://acme-prod-bucket/key,
+// s3a:// and s3n://, the Hadoop clients' spellings of the same bucket,
 // gs://acme-prod-bucket/x, az://container/blob): the scheme and the bucket,
 // the first segment after it.
-var bucketPattern = regexp.MustCompile(`(?i)\b(?:s3|gs|az)://[a-z0-9][a-z0-9_.-]*`)
+var bucketPattern = regexp.MustCompile(`(?i)\b(?:s3[an]?|gs|az)://[a-z0-9][a-z0-9_.-]*`)
+
+// bucketARNPattern finds the bucket an S3 ARN names, in any AWS partition
+// (arn:aws:s3:::acme-prod-bucket, arn:aws-cn:s3:::..., arn:aws-us-gov:s3:::...):
+// the ARN up to the end of the bucket's name, an object key after a slash left
+// out.
+var bucketARNPattern = regexp.MustCompile(`(?i)\barn:aws[a-z-]*:s3:::[a-z0-9][a-z0-9_.-]*`)
+
+// cloudStorageHost is the Cloud Storage service host, which the host name rule
+// accepts as a provider API host (compute.googleapis.com and its siblings).
+const cloudStorageHost = "storage.googleapis.com"
+
+// cloudStoragePathPattern finds the bucket a Cloud Storage path names after the
+// service host, in a URL (https://storage.googleapis.com/acme-prod-data/key) or
+// in a Cloud Asset name (//storage.googleapis.com/acme-prod-data): the host,
+// matched case-insensitively, a slash and the bucket. A bucket's name is lower
+// case, so the bucket is matched in lower case only, and the asset type
+// (storage.googleapis.com/Bucket), whose segment a capital opens, is not read.
+var cloudStoragePathPattern = regexp.MustCompile(`(?i:storage\.googleapis\.com)/[a-z0-9][a-z0-9_.-]*`)
+
+// sampleBucketPattern matches a sample's bucket name, lowercased: example, or
+// example- and generic words joined by hyphens (example-bucket,
+// example-logs-backup), each optionally ending in a group of digits
+// (example-logs-2). A name after the prefix (example-acme-prod) is the
+// customer's and does not match.
+var sampleBucketPattern = regexp.MustCompile(`^example(?:-(?:bucket|logs|data|backup|assets|archive|media))*(?:-[0-9]+)?$`)
+
+// sampleBucket reports whether bucket, as written, is a sample's bucket name
+// (sampleBucketPattern), matched case-insensitively.
+func sampleBucket(bucket string) bool {
+	return sampleBucketPattern.MatchString(strings.ToLower(bucket))
+}
 
 // sampleOwner is the owner of this project's own repository and images, the
 // one account a path after a vendor host names that is no customer's.
@@ -406,20 +468,33 @@ var publicOpenSourceOwners = []string{
 
 // vendorPathProblems returns a problem for every owner a path names after a
 // vendor host whose first segment is an account (ownerPathPattern), and for
-// every bucket a bucket URL names (bucketPattern), when it is no sample value:
-// an owner must be sampleOwner or one of publicOpenSourceOwners, and a bucket
-// must be example or start with example-, the way a sample's domain is
-// example.com. The host name rule exempts the vendor host itself, yet the owner
-// or the bucket after it names the customer just as a host would, so the value
-// reported is the host and the owner (github.com/acme) or the scheme and the
-// bucket (s3://acme-prod-bucket), as written.
+// every bucket a bucket URL (bucketPattern), an S3 ARN (bucketARNPattern) or a
+// Cloud Storage path (cloudStoragePathPattern) names, when it is no sample
+// value: an owner must be sampleOwner or one of publicOpenSourceOwners, and a
+// bucket must be a sample's (sampleBucket: example, or example- and generic
+// words), the way a sample's domain is example.com. The host name rule exempts
+// the vendor host itself, yet the owner or the bucket after it names the
+// customer just as a host would, so the value reported is the host and the
+// owner (github.com/acme, from git@github.com:acme/x.git too), the scheme and
+// the bucket (s3://acme-prod-bucket), the ARN (arn:aws:s3:::acme-prod-bucket)
+// or the service host and the bucket (storage.googleapis.com/acme-prod-data),
+// as written.
 //
-// It knowingly leaves out the paths of every other vendor host: api.github.com,
-// whose first segment is an endpoint (repos, orgs), not an owner, so
-// api.github.com/repos/acme/x passes; the module and site paths of the other
-// hosts publicVendorHosts lists (golang.org/x/..., www.ovhcloud.com/en/...),
-// whose segments are the vendor's own; and the bucket schemes other than s3, gs
-// and az (abfs://container@account..., wasbs://, oci://), which pass.
+// It knowingly leaves these gaps:
+//
+//   - api.github.com, whose first segment is an endpoint (repos, orgs), not an
+//     owner, so api.github.com/repos/acme/x passes;
+//   - an endpoint segment after github.com itself: github.com/orgs/acme
+//     reports github.com/orgs, which fails closed but names the wrong value;
+//   - contrived paths the owner pattern does not read past (github.com//acme,
+//     a .. segment, an encoded slash %2F), which pass;
+//   - the bucket schemes other than s3, s3a, s3n, gs and az
+//     (abfs://container@account..., wasbs://, oci://), which pass, and a Cloud
+//     Storage JSON API path (//storage.googleapis.com/storage/v1/b/acme),
+//     which reports storage.googleapis.com/storage;
+//   - the paths of every other vendor host publicVendorHosts lists
+//     (golang.org/x/..., www.ovhcloud.com/en/...), whose segments are
+//     the vendor's own.
 func vendorPathProblems(text string) []problem {
 	var problems []problem
 
@@ -433,7 +508,16 @@ func vendorPathProblems(text string) []problem {
 		}
 
 		value := text[start:end]
-		owner := strings.TrimRight(value[strings.Index(value, "/")+1:], ".")
+		sep := strings.IndexAny(value, "/:")
+		host := value[:sep]
+
+		if value[sep] == ':' && (!strings.EqualFold(host, sshCloneHost) || start == 0 || text[start-1] != '@') {
+			// A colon after the host is the SSH clone form only right after
+			// the user's @; anywhere else it is a port or prose.
+			continue
+		}
+
+		owner := strings.TrimRight(value[sep+1:], ".")
 
 		if strings.EqualFold(owner, sampleOwner) ||
 			slices.ContainsFunc(publicOpenSourceOwners, func(public string) bool { return strings.EqualFold(owner, public) }) {
@@ -442,24 +526,50 @@ func vendorPathProblems(text string) []problem {
 
 		problems = append(problems, problem{
 			line:  lineOf(text, start),
-			value: value[:strings.Index(value, "/")+1] + owner,
+			value: host + "/" + owner,
 			rule:  "names an owner after a vendor host that is neither " + sampleOwner + " nor a listed public open-source owner (CLAUDE.md rule 2)",
 		})
 	}
 
+	const bucketRule = "names a bucket that is not example or example- and generic words (CLAUDE.md rule 2)"
+
 	for _, match := range bucketPattern.FindAllStringIndex(text, -1) {
 		value := strings.TrimRight(text[match[0]:match[1]], ".")
-		bucket := strings.ToLower(value[strings.Index(value, "://")+len("://"):])
 
-		if bucket == "example" || strings.HasPrefix(bucket, "example-") {
+		if sampleBucket(value[strings.Index(value, "://")+len("://"):]) {
 			continue
 		}
 
-		problems = append(problems, problem{
-			line:  lineOf(text, match[0]),
-			value: value,
-			rule:  "names a bucket that is not example or example-... (CLAUDE.md rule 2)",
-		})
+		problems = append(problems, problem{line: lineOf(text, match[0]), value: value, rule: bucketRule})
+	}
+
+	for _, match := range bucketARNPattern.FindAllStringIndex(text, -1) {
+		value := strings.TrimRight(text[match[0]:match[1]], ".")
+
+		if sampleBucket(value[strings.Index(value, ":::")+len(":::"):]) {
+			continue
+		}
+
+		problems = append(problems, problem{line: lineOf(text, match[0]), value: value, rule: bucketRule})
+	}
+
+	for _, match := range cloudStoragePathPattern.FindAllStringIndex(text, -1) {
+		start := match[0]
+
+		if start > 0 && (labelByte(text[start-1]) || text[start-1] == '.' || text[start-1] == '-') {
+			// A name below the service host (acme.storage.googleapis.com) is
+			// the host name rule's value.
+			continue
+		}
+
+		value := strings.TrimRight(text[start:match[1]], ".")
+		bucket := value[len(cloudStorageHost+"/"):]
+
+		if sampleBucket(bucket) {
+			continue
+		}
+
+		problems = append(problems, problem{line: lineOf(text, match[0]), value: cloudStorageHost + "/" + bucket, rule: bucketRule})
 	}
 
 	return problems
@@ -491,7 +601,8 @@ var sharedAddressNet = netip.MustParsePrefix("100.64.0.0/10")
 // englishWordsEndingInIP are the English words a hyphen and a number may follow
 // in prose (ship-1-2-3-4, zip-10-1-2-3): a word ending in ip is no ip prefix,
 // and before a private-looking run it is no label that marks an address either,
-// so hyphenatedIPv4StandsAlone leaves the run after one of them clean. Any other
+// so hyphenatedIPv4StandsAlone leaves the run after one of them clean, when the
+// word stands on its own (no - or _ before it: edge-strip- is a name). Any other
 // word a hyphen follows (node-, vm-, eip-, hostip-, nat-) marks the run as the
 // address of the thing it names. The list fails open for exactly these words.
 var englishWordsEndingInIP = []string{
@@ -517,7 +628,15 @@ var englishWordsEndingInIP = []string{
 // sentence (10-1-2-3.) - only a private (10/8, 172.16/12, 192.168/16), shared
 // (100.64/10) or link-local (169.254/16) address is reported
 // (hyphenatedIPv4StandsAlone): a public-looking run in prose (5-10-20-30,
-// 1-2-3-4) is a sequence of numbers as often as an address.
+// 1-2-3-4) is a sequence of numbers as often as an address. A private run is
+// reported in a CIDR written into a name too (vpc-10-0-0-0-16,
+// subnet_10_0_0_0_24): a fifth group after it, with the same separator, of 0 to
+// 32 and with nothing further, is a prefix length (cidrSuffix), while any other
+// fifth group (10-1-2-3-45, 10-1-2-3-4-5) or one after a public-looking run
+// (build-1-2-3-4-5) leaves the run clean. An English word ending in ip before a
+// private run excuses it only when the word stands on its own (zip-10-1-2-3);
+// inside a compound name (edge-strip-10-0-0-5, node_tip_10_1_2_3) it marks the
+// address like any other label.
 //
 // It knowingly leaves these forms to a follow-up issue rather than report a value
 // it cannot tell from prose:
@@ -525,8 +644,11 @@ var englishWordsEndingInIP = []string{
 //   - a public address in no name (vm-5-10-20-30, 8-8-8-8 in prose): it passes,
 //     like the sequence of numbers it cannot be told from;
 //   - a private address after one of the English words of
-//     englishWordsEndingInIP (zip-10-1-2-3), or after a hyphen a digit opens
-//     (eu-central-1-10-1-2-3), unless a dotted label follows;
+//     englishWordsEndingInIP standing on its own (zip-10-1-2-3), or after a
+//     hyphen a digit opens (eu-central-1-10-1-2-3), unless a dotted label
+//     follows;
+//   - a run a letter or digit is glued to (node10-1-2-3, ip-10-1-2-3a), which
+//     hyphenatedIPv4Bounded keeps out;
 //   - a hexadecimal address (ip-0a010203), which the pattern never matches;
 //   - a run a leftmost match swallows: in x-5-10-1-2-3 the pattern matches
 //     5-10-1-2 from the leftmost digit, and the address 10.1.2.3 inside the
@@ -561,7 +683,7 @@ func hyphenatedIPv4Problems(text string) []problem {
 		problems = append(problems, problem{
 			line:  lineOf(text, match[0]),
 			value: candidate,
-			rule:  "is an IPv4 address written into a name, outside the documentation range " + documentationPrefix + " (CLAUDE.md rule 2)",
+			rule:  "is an IPv4 address written with hyphens or underscores, outside the documentation range " + documentationPrefix + " (CLAUDE.md rule 2)",
 		})
 	}
 
@@ -586,9 +708,11 @@ func hyphenatedIPv4Bounded(text string, start, end int) bool {
 // it as a name: bare (10-1-2-3), behind a label of its own that letters spell
 // (node-10-1-2-3, eip-10-1-2-3, hostip-172-16-0-5, nat-100-64-1-2) or ending a
 // sentence (10-1-2-3.). The run must end there, with no further group after a
-// separator (10-1-2-3-4 is no address), and a label before it must be no word of
-// englishWordsEndingInIP (zip-10-1-2-3) and no group of digits
-// (eu-central-1-10-1-2-3).
+// separator but a CIDR prefix length (cidrSuffix: vpc-10-0-0-0-16, and so
+// 10-1-2-3-4 is read as 10.1.2.3/4, failing closed, while 10-1-2-3-45 and
+// 10-1-2-3-4-5 are no address), and a label before it must be no word of
+// englishWordsEndingInIP that stands on its own (zip-10-1-2-3, but not the strip
+// of edge-strip-10-0-0-5) and no group of digits (eu-central-1-10-1-2-3).
 func hyphenatedIPv4StandsAlone(text string, start, end int, addr netip.Addr) bool {
 	if !addr.IsPrivate() && !sharedAddressNet.Contains(addr) && !addr.IsLinkLocalUnicast() {
 		return false
@@ -596,7 +720,7 @@ func hyphenatedIPv4StandsAlone(text string, start, end int, addr netip.Addr) boo
 
 	sep := text[start+strings.IndexAny(text[start:end], "-_")]
 
-	if end+1 < len(text) && text[end] == sep && text[end+1] >= '0' && text[end+1] <= '9' {
+	if end+1 < len(text) && text[end] == sep && isDigit(text[end+1]) && !cidrSuffix(text, end, sep) {
 		return false
 	}
 
@@ -616,7 +740,48 @@ func hyphenatedIPv4StandsAlone(text string, start, end int, addr netip.Addr) boo
 		return false
 	}
 
+	if word > 0 && (text[word-1] == '-' || text[word-1] == '_') {
+		// The word is part of a compound name (edge-strip-, node_tip_), no
+		// English word of its own: the name marks the address.
+		return true
+	}
+
 	return !slices.Contains(englishWordsEndingInIP, label)
+}
+
+// cidrSuffix reports whether text[end:] opens with the prefix length of a CIDR
+// written into a name after a run (vpc-10-0-0-0-16, subnet_10_0_0_0_24): the
+// run's separator sep, one group of one or two digits from 0 to 32, and nothing
+// further, that is the end of the text or a byte that is neither a letter or
+// digit nor sep before another digit.
+func cidrSuffix(text string, end int, sep byte) bool {
+	group := end + 1
+	for group < len(text) && isDigit(text[group]) {
+		group++
+	}
+
+	if group-(end+1) > 2 {
+		return false
+	}
+
+	if n, err := strconv.Atoi(text[end+1 : group]); err != nil || n > 32 {
+		return false
+	}
+
+	if group == len(text) {
+		return true
+	}
+
+	if labelByte(text[group]) {
+		return false
+	}
+
+	return text[group] != sep || group+1 == len(text) || !isDigit(text[group+1])
+}
+
+// isDigit reports whether b is an ASCII digit.
+func isDigit(b byte) bool {
+	return b >= '0' && b <= '9'
 }
 
 // hyphenatedIPv4InName reports whether the four-group run text[start:end] is an
