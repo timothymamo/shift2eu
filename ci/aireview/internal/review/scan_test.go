@@ -404,9 +404,12 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			// from cfg.Info. Such a spelling is rare (configurations write
 			// hosts all lower case or all upper case, and both are found),
 			// and if it ever hides real data, the fix goes in the scan's
-			// rules, never in a path allow list.
-			name:      "a host name in lower case with only its TLD in title case is an accepted miss",
-			diff:      goldenAdds(golden, `"db": "db.corp.Info" "mail": "mail.contoso.Com"`),
+			// rules, never in a path allow list. The miss is broader than
+			// that spelling: a two-label name such as contoso.Com or
+			// acme.Dev reads as code too.
+			name: "a host name in lower case with only its TLD in title case is an accepted miss",
+			diff: goldenAdds(golden, `"db": "db.corp.Info" "mail": "mail.contoso.Com" `+
+				`"site": "contoso.Com"`),
 			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
 		},
 		{
