@@ -331,6 +331,32 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 1}},
 		},
 		{
+			// Issue #365: the scan's public TLDs hold info, app, dev, co, io
+			// and ai, so a dotted identifier of Go code read as a host name. No
+			// code is a host, and a golden that quotes code would have failed
+			// the scan for no reason.
+			name: "a dotted code name is no host name",
+			diff: goldenAdds(golden,
+				`slog.Info("the scan found nothing") cfg.App r.Dev errors.Is(err, errLeftOut)`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
+			// The TLDs a code name ends in carry real hosts too: narrowing the
+			// rules for the code names must not quiet the scan about a name a
+			// customer chose (issue #365).
+			name: "a host name in a TLD a code name also uses is still found",
+			diff: goldenAdds(golden,
+				`"db": "db01.corp.info"`,
+				`"shop": "shop.example.io"`,
+				`"account_id": "210987654321"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 3}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+				{Path: golden, Line: 3, Kind: review.ScanAccountID},
+			},
+		},
+		{
 			// A report's taxonomy categories read like host names, and the
 			// committed goldens are full of them.
 			name: "a taxonomy category is no host name",
@@ -610,6 +636,13 @@ func TestTheScanFindingsAreCapped(t *testing.T) {
 // below the repository root, and the rule for which of them is left out is the
 // reviewer's own (issue #324), restated here so the test names the files it
 // scans itself rather than trusting the code it checks.
+//
+// A failure here is a false positive of the scan or real data. A false positive
+// is fixed in the scan's rules (scanLine and the rules it reads), never with an
+// allow list of paths: a list of paths would have to grow with every fixture
+// this repository commits, and a file moved onto it would hide real data as the
+// scan went quiet about it (issue #365). Real data is removed from the fixture,
+// as CLAUDE.md rule 2 asks.
 func TestTheScanFindsNothingInTheCommittedGoldens(t *testing.T) {
 	t.Parallel()
 
