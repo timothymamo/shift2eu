@@ -1163,17 +1163,20 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 
 	mention := regexp.MustCompile(`@[A-Za-z0-9]`)
 
-	excluded := []string{
-		"api/openapi.bundled.json",
-		"testdata/comparison-v3.golden",
-		"testdata/`code`.golden",
-		"testdata/@octocat.golden",
-		"testdata/<img src=x>.golden",
-	}
+	// Each left-out file with the lines it adds (issue #342): the note shows the
+	// count beside the path, so the maintainer knows how much of the change the
+	// AI review did not read, not only that it did not read it.
+	leftOut := review.LeftOut{Files: []review.LeftOutFile{
+		{Path: "api/openapi.bundled.json", Added: 12},
+		{Path: "testdata/comparison-v3.golden", Added: 3},
+		{Path: "testdata/`code`.golden", Added: 1},
+		{Path: "testdata/@octocat.golden", Added: 0},
+		{Path: "testdata/<img src=x>.golden", Added: 2},
+	}}
 
 	answer := review.Answer{Summary: renderSummary, Findings: []review.Finding{renderAddedLine}}
 
-	got := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, excluded)
+	got := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, leftOut)
 
 	t.Run("every left-out file is named, escaped as the review escapes a path", func(t *testing.T) {
 		t.Parallel()
@@ -1188,6 +1191,21 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 		} {
 			if !strings.Contains(got.Body, want) {
 				t.Errorf("the review does not name %q among the files it did not read; body:\n%s", want, got.Body)
+			}
+		}
+
+		// Every left-out file shows how many lines it adds (issue #342), the
+		// count beside the path it belongs to, in the singular when it is one
+		// and with no lines at all for a file the change only deletes.
+		for _, want := range []string{
+			"`api/openapi.bundled.json` (+12 lines)",
+			"`testdata/comparison-v3.golden` (+3 lines)",
+			"`testdata/'code'.golden` (+1 line)",
+			"`testdata/<img src=x>.golden` (+2 lines)",
+			"`testdata/@\u200boctocat.golden` (+0 lines)",
+		} {
+			if !strings.Contains(got.Body, want) {
+				t.Errorf("the note does not show %q: every left-out file's added-line count sits beside its path, singular for one line (issue #342); body:\n%s", want, got.Body)
 			}
 		}
 
@@ -1217,7 +1235,7 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 	t.Run("a review that left nothing out has no note", func(t *testing.T) {
 		t.Parallel()
 
-		plain := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, nil)
+		plain := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, review.LeftOut{})
 
 		if strings.Contains(strings.ToLower(plain.Body), "not reviewed") {
 			t.Errorf("the review of a diff it read whole says a file was not reviewed; body:\n%s", plain.Body)
@@ -1225,6 +1243,60 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 
 		if diff := cmp.Diff(review.Render(headSHA, answer, review.EventComment, renderDiff), plain); diff != "" {
 			t.Errorf("the review of a diff it read whole differs from Render's (-Render +RenderFiltered):\n%s", diff)
+		}
+	})
+
+	// A left-out path is a name a pull request chose, so it is escaped as every
+	// other text of a review is (ADR 0033), and the cut of issue #341 must not
+	// undo that: wherever the cut lands relative to an @ and its handle, the
+	// note holds no live @name. The cut comes after the escaping, so it can only
+	// shorten a defused mention or reference, never revive one.
+	t.Run("a cut path holds no live mention", func(t *testing.T) {
+		t.Parallel()
+
+		for _, tc := range []struct {
+			name string
+			path string
+		}{
+			{
+				name: "a mention inside a path the note does not cut",
+				path: "testdata/@octocat.golden",
+			},
+			{
+				name: "a mention right after the cut point, which the cut drops whole",
+				path: strings.Repeat("a", listedPathUnits) + "@octocat.golden",
+			},
+			{
+				name: "a mention that just fits before the ellipsis",
+				path: strings.Repeat("a", 290) + "@octocat" + strings.Repeat("b", 20),
+			},
+			{
+				name: "a cut right after an @, leaving no handle to notify",
+				path: strings.Repeat("a", 291) + "@octocat" + strings.Repeat("b", 20),
+			},
+			{
+				name: "an HTML character reference to an @ that fits before the ellipsis",
+				path: strings.Repeat("a", 290) + "&#64;octocat" + strings.Repeat("b", 20),
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				cut := review.RenderFiltered(headSHA, answer, review.EventComment, "",
+					review.LeftOut{Files: []review.LeftOutFile{{Path: tc.path, Added: 1}}})
+
+				if found := mention.FindString(cut.Body); found != "" {
+					t.Errorf("the note holds the live mention %q for the path %q: a path notifies nobody, and the cut does not undo the escaping (ADR 0033, issue #341); body:\n%s", found, tc.path, cut.Body)
+				}
+
+				if strings.Contains(cut.Body, "&#64;") {
+					t.Errorf("the note holds the HTML character reference &#64; for the path %q, which GitHub renders as a live @: the & of the reference is escaped, and the cut does not undo it (issue #341); body:\n%s", tc.path, cut.Body)
+				}
+
+				if !utf8.ValidString(cut.Body) {
+					t.Errorf("the note is not valid UTF-8 for the path %q: GitHub sends invalid input on as U+FFFD; body:\n%q", tc.path, cut.Body)
+				}
+			})
 		}
 	})
 
@@ -1244,10 +1316,15 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 			})
 		}
 
-		leftOut := []string{"api/openapi.bundled.json", "internal/x/testdata/a.golden", "testdata/b.golden"}
+		notRead := []review.LeftOutFile{
+			{Path: "api/openapi.bundled.json", Added: 1_000},
+			{Path: "internal/x/testdata/a.golden", Added: 300},
+			{Path: "testdata/b.golden", Added: 0},
+		}
 
 		got := review.RenderFiltered(headSHA,
-			review.Answer{Summary: renderSummary, Findings: findings}, review.EventComment, "", leftOut)
+			review.Answer{Summary: renderSummary, Findings: findings}, review.EventComment, "",
+			review.LeftOut{Files: notRead})
 
 		if !strings.Contains(strings.ToLower(got.Body), "truncated") {
 			t.Fatalf("the review's body says nothing of truncation, so nothing was cut and the test pins nothing: findings of %d characters each are over the limit; body length %d",
@@ -1258,9 +1335,9 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 			t.Errorf("a review cut at GitHub's limit drops the note that names the files it did not read: the note is rendered outside the cut; body:\n%s", tail(got.Body, 2_000))
 		}
 
-		for _, path := range leftOut {
-			if !strings.Contains(got.Body, "`"+path+"`") {
-				t.Errorf("a review cut at GitHub's limit does not name the left-out file %q: the note is rendered outside the cut; body:\n%s", path, tail(got.Body, 2_000))
+		for _, file := range notRead {
+			if !strings.Contains(got.Body, "`"+file.Path+"`") {
+				t.Errorf("a review cut at GitHub's limit does not name the left-out file %q: the note is rendered outside the cut; body:\n%s", file.Path, tail(got.Body, 2_000))
 			}
 		}
 
@@ -1280,12 +1357,12 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 			total  = 5_000
 		)
 
-		many := make([]string, 0, total)
+		many := make([]review.LeftOutFile, 0, total)
 		for i := range total {
-			many = append(many, fmt.Sprintf("testdata/file-%04d.golden", i))
+			many = append(many, review.LeftOutFile{Path: fmt.Sprintf("testdata/file-%04d.golden", i), Added: 1})
 		}
 
-		got := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, many)
+		got := review.RenderFiltered(headSHA, answer, review.EventComment, renderDiff, review.LeftOut{Files: many})
 
 		assertBodyWithinLimit(t, got.Body)
 
@@ -1335,6 +1412,294 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 			t.Errorf("the review's body drops its summary: a capped note is no reason to cut the review; body:\n%s", tail(got.Body, 2_000))
 		}
 	})
+}
+
+// TestTheNoteSaysWhenAFileWasNotScanned pins that the note never reads as
+// "nothing added" for a file the review neither read nor scanned (issue #342,
+// round 4 S4): a binary file adds no line of text, so the count of the note said
+// "(+0 lines)", and a pure rename's old path adds nothing either, so it said
+// the same. Both are shown for what they are instead.
+func TestTheNoteSaysWhenAFileWasNotScanned(t *testing.T) {
+	t.Parallel()
+
+	answer := review.Answer{Summary: renderSummary}
+
+	t.Run("a binary left-out file is marked binary, not with a line count", func(t *testing.T) {
+		t.Parallel()
+
+		got := review.RenderFiltered(headSHA, answer, review.EventComment, "",
+			review.ScanLeftOut(binaryFile("testdata/logo.golden")))
+
+		if want := "- `testdata/logo.golden` (binary, not scanned)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a binary file no line of text is added by, so its count reads as nothing added, though the review neither read nor scanned it (issue #342, round 4 S4); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		if bad := "- `testdata/logo.golden` (+0 lines)"; strings.Contains(got.Body, bad) {
+			t.Errorf("the note holds %q for a binary file: the count reads as nothing added, though the file was neither reviewed nor scanned (issue #342, round 4 S4); body:\n%s",
+				bad, tail(got.Body, 2_000))
+		}
+
+		assertBodyWithinLimit(t, got.Body)
+	})
+
+	t.Run("a pure rename's old path is marked renamed, not with a line count", func(t *testing.T) {
+		t.Parallel()
+
+		got := review.RenderFiltered(headSHA, answer, review.EventComment, "",
+			review.ScanLeftOut(renamedFile("testdata/old.golden", "testdata/new.golden", `"a": "b"`)))
+
+		// The new path is the file the change writes, and it shows its lines.
+		if want := "- `testdata/new.golden` (+1 line)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a rename's new path is the file the change adds its lines to (issue #342); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		// The old path is the same file under its old name: it adds nothing of
+		// its own, so a count beside it reads as a file nothing was added to.
+		if want := "- `testdata/old.golden` (renamed)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a rename's old path is the same file as the new one, so the note marks it renamed instead of counting lines it does not add (issue #342, round 4 S4); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		if bad := "- `testdata/old.golden` (+0 lines)"; strings.Contains(got.Body, bad) {
+			t.Errorf("the note holds %q for a rename's old path: the count reads as nothing added, and the old path is the same file as the new one (issue #342, round 4 S4); body:\n%s",
+				bad, tail(got.Body, 2_000))
+		}
+
+		assertBodyWithinLimit(t, got.Body)
+	})
+
+	t.Run("a copy's source path is marked copied, not renamed", func(t *testing.T) {
+		t.Parallel()
+
+		// Issue #342, round 4 N-C: a copy's source is not a rename's old path,
+		// because it is still there. Marking it renamed told the maintainer the
+		// file had gone, and a count beside it would read as nothing added.
+		got := review.RenderFiltered(headSHA, answer, review.EventComment, "",
+			review.ScanLeftOut(copiedFile("testdata/old.golden", "testdata/new.golden", `"a": "b"`)))
+
+		// The copy's target is the file the change writes, and it shows its lines.
+		if want := "- `testdata/new.golden` (+1 line)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a copy's new path is the file the change adds its lines to (issue #342, round 4 N-C); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		if want := "- `testdata/old.golden` (copied)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a copy's source path still exists, so the note marks it copied, and neither renamed nor with a count of lines it does not add (issue #342, round 4 N-C); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		for _, bad := range []string{
+			"- `testdata/old.golden` (renamed)",
+			"- `testdata/old.golden` (+0 lines)",
+		} {
+			if strings.Contains(got.Body, bad) {
+				t.Errorf("the note holds %q for a copy's source path: the source still exists, and its lines are counted at the copy's target (issue #342, round 4 N-C); body:\n%s",
+					bad, tail(got.Body, 2_000))
+			}
+		}
+
+		assertBodyWithinLimit(t, got.Body)
+	})
+}
+
+// TestTheNotReviewedNoteStaysBounded pins the bound render.go claims for the
+// note (issue #342, round 4 N1): "it stays under 25,000 UTF-16 code units
+// whatever leftOut holds". The note is rendered outside the part of the review
+// Render cuts, so a note that outgrew that bound would eat the review's own
+// room at GitHub's limit and push the body over it. The worst case is a full
+// list of paths and a full list of the scan's findings, each path at its own
+// cap and each line the longest a finding can name.
+func TestTheNotReviewedNoteStaysBounded(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// noteLimit is the bound render.go claims for the note.
+		noteLimit = 25_000
+		// line is the longest line number a finding can name in practice, so
+		// the note carries the widest line a finding prints.
+		line = 9_999_999
+	)
+
+	// One more than each cap, each path four hundred characters long: the note
+	// lists MaxListedExcluded files and MaxScanFindings findings and counts the
+	// rest, so this is the most it can ever write.
+	files := make([]review.LeftOutFile, 0, review.MaxListedExcluded+1)
+	findings := make([]review.ScanFinding, 0, review.MaxScanFindings+1)
+
+	for i := range review.MaxListedExcluded + 1 {
+		files = append(files, review.LeftOutFile{
+			Path:  fmt.Sprintf("testdata/%02d-%s.golden", i, strings.Repeat("a", 400)),
+			Added: 1,
+		})
+	}
+
+	for i := range review.MaxScanFindings + 1 {
+		findings = append(findings, review.ScanFinding{
+			Path: fmt.Sprintf("testdata/%02d-%s.golden", i, strings.Repeat("b", 400)),
+			Line: line,
+			Kind: review.ScanKey,
+		})
+	}
+
+	got := review.RenderFiltered(headSHA, review.Answer{Summary: renderSummary}, review.EventComment, "",
+		review.LeftOut{Files: files, Findings: findings})
+
+	assertBodyWithinLimit(t, got.Body)
+
+	// The note runs from its heading to the footer every review ends with.
+	const (
+		head   = "### Not reviewed"
+		footer = "\n---\n\n_This review is advice"
+	)
+
+	start, end := strings.Index(got.Body, head), strings.Index(got.Body, footer)
+	if start < 0 || end < start {
+		t.Fatalf("the review's body holds no note between %q and %q, so the test pins nothing: body length %d",
+			head, footer, utf16Units(got.Body))
+	}
+
+	if n := utf16Units(got.Body[start:end]); n >= noteLimit {
+		t.Errorf("the note is %d UTF-16 code units, want fewer than %d: the note is rendered outside the part Render cuts, so a longer one would take the review's room and push the body past GitHub's limit (issue #342)",
+			n, noteLimit)
+	}
+}
+
+// listedPathUnits is the cap ADR 0033 puts on each left-out path the "Not
+// reviewed" note and the prompt's left_out_of_diff list write, in UTF-16 code
+// units (issue #324): two for a character outside the BMP, one for any byte
+// that is no valid UTF-8, which is sent as U+FFFD.
+const listedPathUnits = 300
+
+// TestTheListedPathsAreCutTo300Units pins the cut of issue #341 in both places a
+// left-out path is written: the review's "Not reviewed" note and the prompt's
+// left_out_of_diff list. A path of exactly the limit stays whole, and a longer
+// one is cut to 300 UTF-16 code units and ends with an ellipsis, on a character
+// boundary: a cut that counted bytes would let a multi-byte character pass the
+// limit, one that cut inside a surrogate pair would send half a character (a
+// lone surrogate, or U+FFFD) or split a rune, and one that counted a character
+// outside the BMP as one unit would let 600 bytes through. A path may hold any
+// byte, and an invalid one is sent as U+FFFD, as GitHub reads it and as
+// utf16Len counts it, so the cut neither keeps invalid UTF-8 nor panics on it.
+func TestTheListedPathsAreCutTo300Units(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// ellipsis ends a path the cut shortens.
+		ellipsis = "…"
+		// replacement is what an invalid byte is sent as.
+		replacement = "\uFFFD"
+	)
+
+	cases := []struct {
+		name string
+		path string
+		// want is the path as both places write it.
+		want string
+		// wantReplacement says the cut's output holds U+FFFD for an invalid
+		// byte of the path, and no case without one may introduce it: a U+FFFD
+		// in a case that has no invalid byte is the mark of a cut that split a
+		// surrogate pair or a rune.
+		wantReplacement bool
+	}{
+		{
+			name: "a path below the limit is not cut",
+			path: strings.Repeat("a", listedPathUnits-1),
+			want: strings.Repeat("a", listedPathUnits-1),
+		},
+		{
+			name: "a path of exactly the limit is not cut",
+			path: strings.Repeat("a", listedPathUnits),
+			want: strings.Repeat("a", listedPathUnits),
+		},
+		{
+			name: "an ASCII path longer than the limit is cut and ends with an ellipsis",
+			path: strings.Repeat("a", listedPathUnits+1),
+			want: strings.Repeat("a", listedPathUnits-1) + ellipsis,
+		},
+		{
+			// U+1F600 is a surrogate pair: two UTF-16 code units. The cut keeps
+			// what fits under the limit with room for the ellipsis, so the pair
+			// is dropped whole, never cut in half.
+			name: "an astral character at the boundary is never split",
+			path: strings.Repeat("a", 298) + "😀" + strings.Repeat("b", 10),
+			want: strings.Repeat("a", 298) + ellipsis,
+		},
+		{
+			// "é" is two bytes and "€" three, each one UTF-16 code unit: a cut
+			// that counted bytes would stop inside the € and send invalid UTF-8.
+			name: "multi-byte runes at the boundary are cut on a character boundary",
+			path: strings.Repeat("a", 297) + "é" + "€" + strings.Repeat("b", 10),
+			want: strings.Repeat("a", 297) + "é" + "€" + ellipsis,
+		},
+		{
+			name: "a multi-byte path of exactly the limit is not cut",
+			path: strings.Repeat("a", 298) + "é" + "€",
+			want: strings.Repeat("a", 298) + "é" + "€",
+		},
+		{
+			name:            "invalid UTF-8 at the boundary is sent as U+FFFD",
+			path:            strings.Repeat("a", 290) + "\xff" + strings.Repeat("b", 20),
+			want:            strings.Repeat("a", 290) + replacement + strings.Repeat("b", 8) + ellipsis,
+			wantReplacement: true,
+		},
+		{
+			name:            "a path of invalid UTF-8 only is cut and stays valid UTF-8",
+			path:            strings.Repeat("\xff", listedPathUnits+1),
+			want:            strings.Repeat(replacement, listedPathUnits-1) + ellipsis,
+			wantReplacement: true,
+		},
+	}
+
+	answer := review.Answer{Summary: renderSummary}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The note of the review the program posts: the path in a code span,
+			// then the lines it adds.
+			note := review.RenderFiltered(headSHA, answer, review.EventComment, "",
+				review.LeftOut{Files: []review.LeftOutFile{{Path: tc.path, Added: 1}}})
+
+			want := "- `" + tc.want + "` (+1 line)"
+			if !strings.Contains(note.Body, want) {
+				t.Errorf("the note holds no %q for the path %q: each left-out path is cut to %d UTF-16 code units and ends with an ellipsis when longer (issue #341); body:\n%q",
+					want, tc.path, listedPathUnits, note.Body)
+			}
+
+			if !utf8.ValidString(note.Body) {
+				t.Errorf("the note is not valid UTF-8 for the path %q: invalid input is sent as U+FFFD, and no cut splits a rune (issue #341); body:\n%q", tc.path, note.Body)
+			}
+
+			if !tc.wantReplacement && strings.Contains(note.Body, replacement) {
+				t.Errorf("the note holds U+FFFD for the path %q, which holds no invalid byte: the cut split a surrogate pair or a rune (issue #341); body:\n%q", tc.path, note.Body)
+			}
+
+			if units := utf16Units(tc.want); units > listedPathUnits {
+				t.Errorf("the test's own expectation for the path %q is %d UTF-16 code units, over the %d of ADR 0033", tc.path, units, listedPathUnits)
+			}
+
+			// The prompt's list of left-out paths: the same cut, as the model
+			// reads it in the untrusted document.
+			prompt := review.BuildPrompt(review.Instructions{}, review.PullRequest{Number: 7}, nil, "", []string{tc.path})
+
+			if !utf8.ValidString(prompt.User) {
+				t.Errorf("the prompt is not valid UTF-8 for the path %q: the untrusted document is JSON, which sends invalid input as U+FFFD (issue #341); user message:\n%q", tc.path, prompt.User)
+			}
+
+			if diff := cmp.Diff([]string{tc.want}, leftOutOfPrompt(t, prompt.User)); diff != "" {
+				t.Errorf("the prompt's left_out_of_diff holds another path than the note does for %q (-want +got):\n%s", tc.path, diff)
+			}
+		})
+	}
+}
+
+// utf16Units is n in UTF-16 code units, as GitHub counts a text: two for a
+// character outside the BMP, one for any other.
+func utf16Units(s string) int {
+	return len(utf16.Encode([]rune(s)))
 }
 
 // assertBodyWithinLimit fails when body is over MaxTextUnits UTF-16 code units,

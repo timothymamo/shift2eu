@@ -38,8 +38,7 @@ func FilterDiff(diff string) (kept string, excluded []string) {
 	)
 
 	flush := func() {
-		if paths, ok := sectionPaths(section.String()); ok && !slices.ContainsFunc(paths, isReviewed) &&
-			isRegularContentChange(section.String()) {
+		if paths, ok := leftOutPaths(section.String()); ok {
 			excluded = append(excluded, paths...)
 		} else {
 			out.WriteString(section.String())
@@ -61,6 +60,20 @@ func FilterDiff(diff string) (kept string, excluded []string) {
 	slices.Sort(excluded)
 
 	return out.String(), slices.Compact(excluded)
+}
+
+// leftOutPaths returns the two paths of a file section's header, old then new,
+// and true when the reviewer leaves the section out: every path it names is
+// left out and it changes a regular file's content alone (FilterDiff).
+// ScanLeftOut decides by it too, so the scan reads exactly the sections the
+// review does not.
+func leftOutPaths(section string) ([]string, bool) {
+	paths, ok := sectionPaths(section)
+	if !ok || slices.ContainsFunc(paths, isReviewed) || !isRegularContentChange(section) {
+		return nil, false
+	}
+
+	return paths, true
 }
 
 // sectionPaths returns the two paths of a file section's "diff --git a/<old>

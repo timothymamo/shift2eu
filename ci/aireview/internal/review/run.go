@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -30,12 +31,15 @@ var (
 )
 
 // Config is one run's input: the pull request, the reviewer's own login
-// (<slug>[bot]), the AI_REVIEW_REQUEST_CHANGES switch and main's instructions.
+// (<slug>[bot]), the AI_REVIEW_REQUEST_CHANGES switch, main's instructions and
+// where the run writes its GitHub workflow notices (nil discards them;
+// ci/aireview's main passes its standard output, issue #343).
 type Config struct {
 	Number         int
 	BotLogin       string
 	RequestChanges bool
 	Instructions   Instructions
+	Notices        io.Writer
 }
 
 // Result is what a run did: the head it reviewed, the event it posted, how many
@@ -56,11 +60,14 @@ type Result struct {
 // naming the files it left out (BuildPrompt), asks the model, parses the
 // answer (ParseAnswer), decides the
 // event (Decide), renders the review of the head SHA it read, naming the files
-// it left out (RenderFiltered), and posts it. Then, only when no finding is
+// it left out with the lines each adds and what the model-free scan of those
+// lines found (ScanLeftOut, RenderFiltered; never part of the prompt, the
+// findings or the event), and posts it. Then, only when no finding is
 // blocking, it dismisses the reviews DismissalsFor picks. Any error before the
 // post returns with nothing posted and nothing dismissed, with one exception
 // (issue #316): an answer of the wrong shape is asked once more with the same
-// prompt while ctx is not done, and when the second answer has the wrong shape
+// prompt while ctx is not done, announced by a notice to cfg.Notices (issue
+// #343), and when the second answer has the wrong shape
 // too Run posts a COMMENT review with no finding that says the review could not
 // be read, and still fails with an error wrapping ErrMalformedAnswer. That post
 // is made on a context detached from ctx's cancellation, bounded by
@@ -94,7 +101,12 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 		return Result{}, err
 	}
 
-	answer, err := askForAnswer(ctx, model, BuildPrompt(cfg.Instructions, pr, files, diff, excluded), cfg.Number)
+	notices := cfg.Notices
+	if notices == nil {
+		notices = io.Discard
+	}
+
+	answer, err := askForAnswer(ctx, model, BuildPrompt(cfg.Instructions, pr, files, diff, excluded), cfg.Number, notices)
 	if err != nil {
 		if errors.Is(err, errUnreadableTwice) {
 			// Two answers of the wrong shape: say so on the pull request, and
@@ -118,7 +130,11 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 
 	event := Decide(answer.Findings, cfg.RequestChanges)
 
-	if err := gh.PostReview(ctx, cfg.Number, RenderFiltered(pr.HeadSHA, answer, event, diff, excluded)); err != nil {
+	// The scan of the left-out files reaches the review's note alone: never
+	// the prompt, the findings or the event (issue #342).
+	posted := RenderFiltered(pr.HeadSHA, answer, event, diff, ScanLeftOut(raw))
+
+	if err := gh.PostReview(ctx, cfg.Number, posted); err != nil {
 		return Result{}, err
 	}
 
@@ -172,16 +188,25 @@ var errUnreadableTwice = errors.New("the model was asked twice and neither answe
 // caps the retry's own model timeout. A second
 // answer of the wrong shape gives an error wrapping errUnreadableTwice and
 // ErrMalformedAnswer. A finding ParseAnswer refuses is not asked again (#295
-// keeps those fields strict), and neither is a failed model call.
-func askForAnswer(ctx context.Context, model Asker, prompt Prompt, number int) (Answer, error) {
+// keeps those fields strict), and neither is a failed model call. Before the
+// retry it writes one GitHub notice to notices that names the pull request and
+// the shape check that failed, never any text of the answer (issue #343).
+func askForAnswer(ctx context.Context, model Asker, prompt Prompt, number int, notices io.Writer) (Answer, error) {
 	answer, err := askOnce(ctx, model, prompt, number)
-	if err == nil || !isShapeError(err) {
+
+	check, isShape := shapeCheck(err)
+	if err == nil || !isShape {
 		return answer, err
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return Answer{}, fmt.Errorf("%w; not asked again: %w", err, ctxErr)
 	}
+
+	// The notice is best effort: a log that cannot be written costs no review.
+	_, _ = fmt.Fprintf(notices, "::notice title=AI review retried::%s\n", AnnotationData(fmt.Sprintf(
+		"The model's answer for pull request #%d failed the shape check (%s), so it was asked once more (issue #316).",
+		number, check)))
 
 	answer, err = askOnce(ctx, model, prompt, number)
 	if err != nil && isShapeError(err) {

@@ -1,9 +1,11 @@
 package review_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -240,6 +242,10 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 		wantBlocking   int
 		wantDismissed  []int64
 		wantText       []string
+		// wantAbsent are texts the posted review must not hold: a value the
+		// model-free scan matched in a left-out file never reaches the comment
+		// (issue #342).
+		wantAbsent []string
 		// wantDismissalText are the texts every dismissal message holds, when
 		// the run dismisses a review.
 		wantDismissalText []string
@@ -259,6 +265,23 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 		// answer and the review that says the answer could not be read does.
 		cancelAfterSecondAnswer bool
 	}{
+		{
+			// A left-out golden is read by no model, so a real-looking account
+			// ID in it is reviewed by the scan alone: the comment names the
+			// file, the line and the class, and holds no part of the value
+			// (issue #342). The model's own finding count is unchanged: the
+			// scan reports beside the review, it adds no finding to it.
+			name:            "real data in a left-out golden is reported by the scan",
+			pr:              pr,
+			diff:            cleanDiff + goldenAdds("testdata/report-v4.golden", `"account_id": "987654321098"`),
+			answer:          cleanAnswer,
+			wantAsked:       1,
+			wantEvent:       review.EventComment,
+			wantFindings:    1,
+			wantText:        []string{"Name it", "testdata/report-v4.golden", string(review.ScanAccountID)},
+			wantAbsent:      []string{"987654321098"},
+			wantPromptHides: []string{"987654321098"},
+		},
 		{
 			name:      "a draft is not reviewed",
 			pr:        draftPR,
@@ -689,6 +712,12 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 						t.Errorf("the posted review does not hold %q; body:\n%s", want, post.review.Body)
 					}
 				}
+
+				for _, absent := range tc.wantAbsent {
+					if strings.Contains(strings.ToLower(text), strings.ToLower(absent)) {
+						t.Errorf("the posted review holds %q, a value the scan matched in a file it left out: the comment names the file, the line and the class, never the value (issue #342); body:\n%s", absent, post.review.Body)
+					}
+				}
 			}
 
 			if tc.wantErr != nil {
@@ -717,6 +746,179 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 
 			if tc.wantAsked > 0 && !strings.Contains(model.prompts[0].System, instructions.ClaudeMD) {
 				t.Error("the prompt the model was asked does not hold main's CLAUDE.md, which the review runs with")
+			}
+		})
+	}
+}
+
+// TestRunAsksTheModelTheSamePromptWhateverALeftOutFileHolds pins that the
+// model-free scan of issue #342 reads the files the review left out for the
+// review's own comment alone: the prompt the model is asked is byte for byte
+// the same whether a left-out golden holds a real-looking account ID or nothing
+// of the kind. The scan widens what the maintainer sees, never what the model
+// does.
+func TestRunAsksTheModelTheSamePromptWhateverALeftOutFileHolds(t *testing.T) {
+	t.Parallel()
+
+	const golden = "testdata/report-v3.golden"
+
+	// promptOf returns the prompt the model was asked in one run whose
+	// left-out golden adds the line added.
+	promptOf := func(t *testing.T, added string) review.Prompt {
+		t.Helper()
+
+		model := &fakeModel{answer: cleanAnswer}
+
+		gh := &fakeGitHub{
+			pr:    review.PullRequest{Number: 7, Title: "Add x", Author: "agent[bot]", HeadSHA: headSHA, BaseSHA: baseSHA},
+			diff:  cleanDiff + goldenAdds(golden, added),
+			files: []review.ChangedFile{{Path: "internal/x/y.go", Status: "modified", Additions: 1}},
+		}
+
+		if _, err := review.Run(t.Context(), gh, model, review.Config{Number: 7, BotLogin: testBotLogin}); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+
+		if len(model.prompts) != 1 {
+			t.Fatalf("the model was asked %d times, want 1", len(model.prompts))
+		}
+
+		return model.prompts[0]
+	}
+
+	quiet := promptOf(t, `"note": "nothing of the kind"`)
+	planted := promptOf(t, `"account_id": "987654321098"`)
+
+	if diff := cmp.Diff(quiet, planted); diff != "" {
+		t.Errorf("the prompt differs with a real-looking account ID in a left-out golden (-quiet +planted); the model reads the diff without those files either way, and the scan is no part of the prompt (issue #342):\n%s", diff)
+	}
+}
+
+// TestRunAnnouncesTheRetryOfAnAnswerItCannotRead pins issue #343: since #316 the
+// run asks the model once more when its answer has the wrong shape, and a pull
+// request whose content keeps forcing retries doubles the model's work with
+// nothing at job level to show it. The run writes one GitHub notice, naming the
+// pull request and the shape check that failed, so the retry is visible in the
+// workflow's log. No text of the malformed answer reaches it: the notice names a
+// check, never what the model wrote.
+func TestRunAnnouncesTheRetryOfAnAnswerItCannotRead(t *testing.T) {
+	t.Parallel()
+
+	// answerMarker is the malformed answer's own text, which the notice must not
+	// hold: the answer is model output, and the review's log is public.
+	const answerMarker = "MRK343-THE-ANSWER-TEXT"
+
+	cases := []struct {
+		name string
+		// answers are what the model answers in turn.
+		answers []string
+		// wantNotice are the texts the notice must hold: the pull request's
+		// number and a phrase naming the shape check that failed.
+		wantNotice []string
+		// wantNotices is how many notices the run writes: one for a retried
+		// run, none when the first answer is good.
+		wantNotices int
+	}{
+		{
+			name:        "an answer that is not JSON is announced, and the good second answer is posted",
+			answers:     []string{"Sure! " + answerMarker + " the change looks fine.", cleanAnswer},
+			wantNotice:  []string{"7", "not one JSON object"},
+			wantNotices: 1,
+		},
+		{
+			name:        "an answer with no findings array is announced with the check that failed",
+			answers:     []string{`{"summary":"` + answerMarker + `"}`, cleanAnswer},
+			wantNotice:  []string{"7", "no findings array"},
+			wantNotices: 1,
+		},
+		{
+			name:        "a good first answer is not announced",
+			answers:     []string{cleanAnswer},
+			wantNotices: 0,
+		},
+	}
+
+	pr := review.PullRequest{Number: 7, Title: "Add x", Author: "agent[bot]", HeadSHA: headSHA, BaseSHA: baseSHA}
+
+	// A notice is one GitHub workflow command line: ::notice followed by an
+	// optional title, then the text, all on one line (AnnotationData escapes what
+	// would end it).
+	notice := regexp.MustCompile(`^::notice(?: [^:\n]*)?::.*$`)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gh := &fakeGitHub{
+				pr:    pr,
+				diff:  cleanDiff,
+				files: []review.ChangedFile{{Path: "internal/x/y.go", Status: "modified", Additions: 1}},
+			}
+
+			var log bytes.Buffer
+
+			result, err := review.Run(t.Context(), gh, &fakeModel{answers: tc.answers}, review.Config{
+				Number:   pr.Number,
+				BotLogin: testBotLogin,
+				Notices:  &log,
+			})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			lines := []string(nil)
+
+			if written := log.String(); written != "" {
+				if !strings.HasSuffix(written, "\n") {
+					t.Errorf("the run's log is %q, which does not end its line with a line break: a workflow command is one line", written)
+				}
+
+				lines = strings.Split(strings.TrimSuffix(written, "\n"), "\n")
+			}
+
+			if len(lines) != tc.wantNotices {
+				t.Fatalf("the run wrote %d log lines (%q), want %d: one notice for a retried run and none when the first answer is good (issue #343)",
+					len(lines), log.String(), tc.wantNotices)
+			}
+
+			for _, line := range lines {
+				if !notice.MatchString(line) {
+					t.Errorf("the run's log holds %q, which is no ::notice:: workflow command: the retry has to be visible in the workflow's log (issue #343)", line)
+				}
+
+				for _, want := range tc.wantNotice {
+					if !strings.Contains(line, want) {
+						t.Errorf("the notice %q does not hold %q: it names the pull request and the shape check that failed (issue #343)", line, want)
+					}
+				}
+			}
+
+			if strings.Contains(log.String(), answerMarker) {
+				t.Errorf("the run's log holds %q, the text of the malformed answer: no text of the model's answer reaches the log, escaped or not (issue #343); log: %q",
+					answerMarker, log.String())
+			}
+
+			// A retried run still reviews the pull request: the notice is beside
+			// a normal review, not instead of it.
+			if len(gh.posts) != 1 {
+				t.Fatalf("the run posted %d reviews, want 1: a retried run posts the second answer's review", len(gh.posts))
+			}
+
+			if got := gh.posts[0].review.Event; got != review.EventComment {
+				t.Errorf("the posted review's Event = %q, want %q", got, review.EventComment)
+			}
+
+			text := gh.posts[0].review.Body
+			for _, comment := range gh.posts[0].review.Comments {
+				text += "\n" + comment.Body
+			}
+
+			if !strings.Contains(text, "Name it") {
+				t.Errorf("the posted review does not hold the model's finding %q, so it is no normal review; body:\n%s", "Name it", gh.posts[0].review.Body)
+			}
+
+			if result.Findings != 1 {
+				t.Errorf("Result.Findings = %d, want 1", result.Findings)
 			}
 		})
 	}
