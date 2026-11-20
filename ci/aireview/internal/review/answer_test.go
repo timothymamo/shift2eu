@@ -399,6 +399,20 @@ func TestParseAnswerClassifiesAMalformedAnswer(t *testing.T) {
 			want: "wrong type",
 		},
 		{
+			// A findings that is an object is no array of findings: the decoder
+			// refuses what it cannot read into one, and the class says its type is
+			// wrong rather than repeat the type's name or the object itself
+			// (issue #375).
+			name: "findings that is an object",
+			text: `{"summary":"` + answerMarker375 + `","findings":{}}`,
+			want: "wrong type",
+		},
+		{
+			name: "findings that is a string",
+			text: `{"summary":"` + answerMarker375 + `","findings":"x"}`,
+			want: "wrong type",
+		},
+		{
 			name: "no findings field",
 			text: `{"summary":"` + answerMarker375 + `"}`,
 			want: "missing findings",

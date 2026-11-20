@@ -757,8 +757,9 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 		wantSkip *review.SkipReason
 		// wantBody are the phrases the skipped review's body must also hold,
 		// beyond the words of the skip itself: how many other parts the run did
-		// review, that their findings are not shown, and the cue to review
-		// those parts by hand (issue #367).
+		// review, that their findings' text is not shown and only the summary
+		// below theirs is, and the cue to review those parts by hand (issues
+		// #367, #388).
 		wantBody []string
 		// wantParagraph is a text the skipped review's body must hold as it is
 		// written here: the count of the parts the review leaves out starts a
@@ -769,34 +770,37 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 		wantAbsent []string
 	}{
 		{
-			name:          "a part unusable twice skips the whole review",
-			diff:          twoPartDiff,
-			files:         twoParts,
-			answers:       map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusableAnswer}},
-			wantSkip:      skipReason(review.SkipNoUsableAnswer),
-			wantBody:      []string{"findings are not shown", "1 other part of the diff was reviewed with a usable answer", "so review that part by hand"},
+			name:     "a part unusable twice skips the whole review",
+			diff:     twoPartDiff,
+			files:    twoParts,
+			answers:  map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusableAnswer}},
+			wantSkip: skipReason(review.SkipNoUsableAnswer),
+			wantBody: []string{"1 other part of the diff was reviewed with a usable answer; its findings' text is not shown, " +
+				"only the summary below, so review that part by hand."},
 			wantParagraph: "\n\n1 other part of the diff was reviewed",
-			wantAbsent:    []string{"would read as a full review", "2 other parts"},
+			wantAbsent:    []string{"would read as a full review", "2 other parts", "its findings are not shown"},
 		},
 		{
-			name:          "one unusable part of three leaves two parts' findings out",
-			diff:          threePartDiff,
-			files:         threeParts,
-			answers:       map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusableAnswer}, thirdPath: {cleanAnswer}},
-			wantSkip:      skipReason(review.SkipNoUsableAnswer),
-			wantBody:      []string{"findings are not shown", "2 other parts of the diff were reviewed with a usable answer", "so review those parts by hand"},
+			name:     "one unusable part of three leaves two parts' findings out",
+			diff:     threePartDiff,
+			files:    threeParts,
+			answers:  map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusableAnswer}, thirdPath: {cleanAnswer}},
+			wantSkip: skipReason(review.SkipNoUsableAnswer),
+			wantBody: []string{"2 other parts of the diff were reviewed with a usable answer; their findings' text is not shown, " +
+				"only the summary below, so review those parts by hand."},
 			wantParagraph: "\n\n2 other parts of the diff were reviewed",
-			wantAbsent:    []string{"would read as a full review", "1 other part"},
+			wantAbsent:    []string{"would read as a full review", "1 other part", "their findings are not shown"},
 		},
 		{
-			name:          "two unusable parts of three leave one part's findings out",
-			diff:          threePartDiff,
-			files:         threeParts,
-			answers:       map[string][]string{firstPath: {unusableAnswer}, secondPath: {unusableAnswer}, thirdPath: {cleanAnswer}},
-			wantSkip:      skipReason(review.SkipNoUsableAnswer),
-			wantBody:      []string{"findings are not shown", "1 other part of the diff was reviewed with a usable answer", "so review that part by hand"},
+			name:     "two unusable parts of three leave one part's findings out",
+			diff:     threePartDiff,
+			files:    threeParts,
+			answers:  map[string][]string{firstPath: {unusableAnswer}, secondPath: {unusableAnswer}, thirdPath: {cleanAnswer}},
+			wantSkip: skipReason(review.SkipNoUsableAnswer),
+			wantBody: []string{"1 other part of the diff was reviewed with a usable answer; its findings' text is not shown, " +
+				"only the summary below, so review that part by hand."},
 			wantParagraph: "\n\n1 other part of the diff was reviewed",
-			wantAbsent:    []string{"would read as a full review", "2 other parts"},
+			wantAbsent:    []string{"would read as a full review", "2 other parts", "its findings are not shown"},
 		},
 		{
 			name:    "a part's model error fails the run",
@@ -904,9 +908,10 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 			}
 
 			// The review that left a part's finding out says how many other parts
-			// it did review, that their findings are not shown, and that the
-			// maintainer reviews those parts by hand, in the package's own words
-			// (issue #367).
+			// it did review, and that the findings of those parts are shown as the
+			// summary below alone and never as their text, which the review's
+			// summary of them would contradict, and that the maintainer reviews
+			// those parts by hand, in the package's own words (issues #367, #388).
 			for _, want := range tc.wantBody {
 				if !strings.Contains(text, strings.ToLower(want)) {
 					t.Errorf("the skipped review does not say %q about the parts it did review; body:\n%s", want, post.review.Body)
@@ -946,8 +951,12 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 // line after the span — and nothing else of the finding: no title, no body, no
 // summary, no category the model invented and no path that is not a file of
 // that part's own diff. A category outside this package's constants reads
-// "other", and a path outside the part, or no path at all, reads "a file
-// outside the part". A path is a name the pull request chose, so the summary
+// "other"; a path outside the part reads "a file outside the part", and a
+// finding with no path at all reads "<category>, no file", a location of its
+// own rather than one the review could not see (issue #388). The heading names
+// the findings, not the blocking ones alone: a part whose findings are all
+// non-blocking shows its counts under it too (issue #388). A path is a name the
+// pull request chose, so the summary
 // shows it inside a code span and nowhere as plain text, whatever Markdown
 // punctuation, table pipe, HTML tag, backtick, mention or HTML character
 // reference to an @ it holds, and it is cut with "…" as the note cuts a path
@@ -1032,7 +1041,7 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 				finding("blocker", "security", secondPath, blockerOnLine3) + `,` +
 				finding("suggestion", "readability", secondPath, suggestionOnLine5) + `]}`,
 			want: []string{
-				"**Blocking findings in the parts that answered:**",
+				"**Findings in the parts that answered:**",
 				"- Part 2 of 2: 1 blocking, 1 non-blocking.",
 				"blocking: category security at `internal/x/two.go`:3",
 			},
@@ -1058,20 +1067,21 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
 				"blocking: category security at a file outside the part",
 			},
-			wantAbsent: []string{outsidePath, "MRK388-ELSEWHERE", "two.go:7"},
+			wantAbsent: []string{outsidePath, "MRK388-ELSEWHERE", "two.go:7", "no file"},
 		},
 		{
-			// A finding may name no path at all: it is nowhere the part shows, so
-			// the summary says so rather than leave the location off (issue #388).
+			// A finding may name no path at all: it is not a file of the part, and
+			// its location is its own, "no file", never the location of a finding
+			// whose path the review cannot show (issue #388).
 			name: "a blocking finding without a path",
 			answer: `{"summary":"` + summaryMarker + `","findings":[` +
 				`{"severity":"blocker","category":"correctness","title":"` + titleMarker +
 				`","body":"` + bodyMarker + `"}]}`,
 			want: []string{
 				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
-				"blocking: category correctness at a file outside the part",
+				"blocking: category correctness, no file",
 			},
-			wantAbsent: []string{secondPath, "blocking: category correctness at ."},
+			wantAbsent: []string{secondPath, "blocking: category correctness at", "a file outside the part"},
 		},
 		{
 			name: "a part whose findings are all non-blocking shows the counts alone",
@@ -1270,6 +1280,13 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 				if strings.Contains(body, unwanted) {
 					t.Errorf("the skipped review holds %q, which the summary must not show: it names no finding text, no invented category and no path outside the part that finding belongs to (issue #388); body:\n%s", unwanted, body)
 				}
+			}
+
+			// The heading names the findings the summary shows, and a part whose
+			// findings are all non-blocking shows its counts under it, so it is
+			// no heading of blocking findings alone (issue #388).
+			if strings.Contains(body, "**Blocking findings in the parts that answered:**") {
+				t.Errorf("the skipped review heads its summary %q, want %q: a part whose findings are all non-blocking counts its findings under the heading too, so it names every finding (issue #388); body:\n%s", "**Blocking findings in the parts that answered:**", "**Findings in the parts that answered:**", body)
 			}
 
 			// A path is the pull request's own text, so it shows in a code span
