@@ -61,9 +61,9 @@ headless-browser smoke test runs under `make test-browser` and in CI.
   such a getter. Even so, the page wraps the call in `try`/`catch` and shows a constant message, never the
   exception. The smoke test observed that the module answers the next call normally after such a throw.
 - **`wasm_exec.js` is trusted as toolchain code** and is not scanned (ADR 0035). The bundled file is byte
-  for byte the building toolchain's, which `test/site` checks, and `go.mod`'s exact go line pins that toolchain (ADR 0035, issue #347). The module
-  script is not scanned either: `test/site` holds it to its fixed template, so it carries only the encoded
-  module.
+  for byte the building toolchain's, which `test/site` checks, and `go.mod`'s exact go line pins that
+  toolchain (ADR 0035, issue #347). The module script is not scanned either: `test/site` holds it to its
+  fixed template, so it carries only the encoded module.
 - **The report carries no inventory-derived `id` or `name`.** The HTML reporter emits no `id` or `name`
   from a value (ADR 0035), so no report element can shadow, through DOM named access, the module global or
   a name the glue reads. The page reads `globalThis.__shift2euModule` once, before any report is inserted,

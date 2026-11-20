@@ -139,16 +139,22 @@ decision is unchanged; this states how the pin holds.
   `wasm_exec.js`. The pin is therefore enforced where Go runs:
   - The Makefile exports `GOTOOLCHAIN=go<go line>`, read from `go.mod` in one place. Every go command it
     runs (sub-makes, `go -C tools`, `dev/` scripts, `ci/sitebuild`'s `go env GOROOT` and builds) runs
-    exactly that release, the local one when it matches, otherwise a downloaded one. It keeps only the
-    value `local`, which never downloads and lets the test below fail on a mismatch; every other value is
-    replaced.
+    exactly that release, the local one when it matches. Otherwise the go command fetches the pin as the
+    module `golang.org/toolchain` through `GOPROXY`, verified against the checksum database
+    (`sum.golang.org`), so `make` can then touch the network, and the fetch is only as trustworthy as the
+    user's `GOSUMDB` settings: `GOSUMDB=off`, or a `GONOSUMDB` or `GOPRIVATE` pattern matching
+    `golang.org`, turns the check off. Normally nothing is fetched: the VM installs the pinned Go from its
+    checksum-verified tarball (`dev/lima.yaml`), and CI and the release (below) never download. The
+    Makefile keeps only the value `local`, which never downloads and lets the test below fail on a
+    mismatch; every other value is replaced.
   - CI and the release run with `GOTOOLCHAIN=local`. `actions/setup-go` installs the go line's release
     (`go-version-file: go.mod`) and exports `GOTOOLCHAIN=local` for the job's later steps, so no job
     downloads another Go. The workflows set nothing of their own: the checks on `ci.yml` and `release.yml`
     allow no workflow-level `env:`, and the release check refuses any go-command variable in
-    `release.yml`. The Dockerfile's builder image is tagged with the go line (`test/container`) and sets
-    `GOTOOLCHAIN=local` itself. Renovate's "Go toolchain" group bumps the go lines, `dev/lima.yaml`'s
-    `goVersion` and that image in one PR.
+    `release.yml`. The Dockerfile's builder image is tagged with the go line (`test/container`); the
+    official golang image sets `GOTOOLCHAIN=local` in its own `ENV`, and the Dockerfile sets nothing of
+    its own. Renovate's "Go toolchain" group bumps the go lines, `dev/lima.yaml`'s `goVersion` and that
+    image in one PR.
 - **Two tests catch a mismatch.** `TestGoModPinsTheBuildingToolchain` (`test/site`) fails unless the go line
   is an exact patch release, `go.mod` has no `toolchain` line and the Go that compiled the test is the go
   line's (`runtime.Version()`). `TestWasmExecIsTheToolchains` fails unless the bundled `wasm_exec.js` is the

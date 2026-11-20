@@ -67,8 +67,13 @@ export SITE_VERSION
 
 # The Go toolchain every go command make runs builds with (issue #347, docs/adr/0035): go.mod's exact go line
 # is the pin, and GOTOOLCHAIN=go<go line> makes the go command run exactly that release, the one on PATH when
-# it is that release, otherwise downloaded once into the module cache, never a newer local Go (a go line alone
-# admits any newer one). Exported, so it reaches every recipe, sub-make, go -C tools, the scripts under dev/
+# it is that release, never a newer local Go (a go line alone admits any newer one). When the local Go is not
+# the pin, the go command fetches it once as the module golang.org/toolchain through GOPROXY into the module
+# cache, so make can then touch the network. That fetch is verified against the checksum database
+# (sum.golang.org) and is only as trustworthy as your GOSUMDB settings: GOSUMDB=off, or a GONOSUMDB or
+# GOPRIVATE pattern matching golang.org, turns the check off. Normally nothing is fetched: the VM installs the
+# pinned Go from its checksum-verified tarball (dev/lima.yaml), and CI and the release run with
+# GOTOOLCHAIN=local, which never downloads. Exported, so it reaches every recipe, sub-make, go -C tools, the scripts under dev/
 # and the go commands ci/sitebuild runs, whose go env GOROOT then names the pinned toolchain, the one
 # wasm_exec.js is copied from. It is read from go.mod in this one place, so a Renovate bump of the go line
 # needs no change here. The one value of yours that is kept is local, as CI sets it (actions/setup-go exports
@@ -88,8 +93,9 @@ export GOTOOLCHAIN
 
 BINARY  := shift2eu
 # go.mod's go line, the version GOTOOLCHAIN above pins: the second field of the first line that starts with
-# the go directive, as the go command writes it.
-GO_LINE := $(shell awk '/^go[ \t]/ { print $$2; exit }' go.mod 2>/dev/null)
+# the go directive, as the go command writes it, less a trailing carriage return (a go.mod with CRLF line
+# endings would otherwise make GOTOOLCHAIN invalid and fail every go command).
+GO_LINE := $(shell awk '/^go[ \t]/ { sub(/\r$$/, "", $$2); print $$2; exit }' go.mod 2>/dev/null)
 ifneq ($(GOTOOLCHAIN),local)
 override GOTOOLCHAIN := $(if $(GO_LINE),go$(GO_LINE))
 endif
