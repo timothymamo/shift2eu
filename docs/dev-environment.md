@@ -1074,21 +1074,40 @@ move it in at once. Downloaded on the Mini itself, install it from `~/Downloads`
 
 ```bash
 # the downloading machine
+# keep the older key on the App's page until step 10 (your way back)
 ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
 rm ~/Downloads/<app>.<date>.private-key.pem
+```
 
+```bash
 # Mac Mini
 sudo install -o _shift2euagents -g _shift2euagents -m 0600 ~/agents-app.pem.tmp /Users/_shift2euagents/.config/shift2eu/agents-app.pem
 rm ~/agents-app.pem.tmp
 sudo ls -ln /Users/_shift2euagents/.config/shift2eu/agents-app.pem   # PASS: -rw------- owned by <ID>
 sudo -k
+```
 
-# both machines (empty the Trash first if the file went there)
-ls ~/Downloads ~/.Trash | grep private-key.pem      # PASS: nothing (and no ~/agents-app.pem.tmp either)
+Then check both machines (empty the Trash first if the file went there). A Time Machine backup that ran
+since the download keeps the key: then rotate it (generate another key, repeat this step, delete this one
+on the App's page).
+
+```bash
+# the downloading machine
+ls ~/Downloads ~/.Trash | grep private-key.pem      # PASS: nothing
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
 sudo tmutil deletelocalsnapshots <date>             # for each one that is
-# FAIL a Time Machine backup ran since the download: it keeps the key; rotate it (generate another key,
-#   repeat this step, delete this one on the App's page)
+sudo -k
+# FAIL a Time Machine backup ran since the download: rotate the key, as above
+```
+
+```bash
+# Mac Mini
+ls ~/Downloads ~/.Trash | grep private-key.pem      # PASS: nothing
+ls ~/agents-app.pem.tmp                             # PASS: No such file or directory
+tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
+sudo tmutil deletelocalsnapshots <date>             # for each one that is
+sudo -k
+# FAIL a Time Machine backup ran since the download: rotate the key, as above
 ```
 
 **5. The account's SSH key to the VM:**
@@ -1142,6 +1161,10 @@ Leave `SHIFT2EU_AGENTS_APP_KEY_FILE` for now (step 10 removes it); until then ea
 about it.
 
 ```bash
+# Mac Mini, host clone: first, the VM user
+limactl shell --workdir / shift2eu id -un   # when it is not what id -un prints on the Mac, set SHIFT2EU_AGENTS_VM_SSH_USER to it below
+id -un
+
 # Mac Mini, host clone: lines to add to .envrc
 export SHIFT2EU_AGENTS_ACCOUNT=_shift2euagents
 export SHIFT2EU_AGENTS_VM_SSH_PORT=48022
@@ -1149,7 +1172,6 @@ export SHIFT2EU_AGENTS_VM_SSH_PORT=48022
 
 # Mac Mini, host clone: then
 direnv allow
-limactl shell --workdir / shift2eu id -un   # the VM user: when it is not what id -un prints on the Mac, set SHIFT2EU_AGENTS_VM_SSH_USER to it
 direnv exec . make agents-token
 # PASS: refuses with the refresh runs as _shift2euagents, which holds the App's key, and runs nothing
 ```
@@ -1314,7 +1336,8 @@ the new one works.
 direnv allow
 ```
 
-**5. Start the refresh:**
+**5. Start the refresh**, and check its log as in
+[The refresh as a LaunchDaemon](#the-refresh-as-a-launchdaemon):
 
 ```bash
 # Mac Mini, host clone
@@ -1428,13 +1451,16 @@ pull request `<n>`, then open milestone 2's, the first the App opens, and approv
 make vm-gh-wrapper                  # only a VM created before milestone 1 (or make vm-delete vm-create)
 make agents-token                   # the mint also sets the bot as the VM's git identity
 make agents-token-refresh-start
+# restart the deck between tasks; have an agent open a test pull request <n>, then:
 gh pr view <n> --json author --jq '.author.is_bot, .author.login'   # PASS: true and app/shift2eu-agents
 gh pr view <n> --json commits --jq '.commits[].authors[].email'
 # PASS: only <bot user id>+shift2eu-agents[bot]@users.noreply.github.com, with the bot user's id, not the App ID:
 gh api users/shift2eu-agents%5Bbot%5D --jq .id
 gh api repos/timothymamo/shift2eu/commits/main --jq .commit.verification.verified   # PASS: true
 # PASS: no ruleset holds a required_signatures rule
+```
 
+```bash
 # VM
 git -C <repo> var GIT_AUTHOR_IDENT  # in a workspace repository; PASS: the bot's noreply address
 # PASS: each call of ADR 0031 (d)'s table works with the App token
@@ -1479,18 +1505,19 @@ is no longer `REVIEW_REQUIRED`.
 
 **6. Remove your token from the VM** (milestone 3, approved and merged by you: the first change through
 the gate). Once it is merged, the default `VM_ENV` no longer names `GITHUB_TOKEN`, your personal GitHub
-token, and the gh wrapper has no fallback to it. On the Mac, delete the `GITHUB_TOKEN` line from the
-`.envrc` that holds it (above the workspace before issue #227, the host clone's since), and `GITHUB_TOKEN`
-from any `VM_ENV` override you keep (a `VM_ENV` exported in a `.envrc`, or a habit of
-`make vm-env VM_ENV=...`). Then revoke the personal token that `GITHUB_TOKEN` held on GitHub
-([personal access tokens](https://github.com/settings/personal-access-tokens)).
+token, and the gh wrapper has no fallback to it. The `.envrc` that holds `GITHUB_TOKEN` was above the
+workspace before issue #227, the host clone's since.
 
 ```bash
-# Mac, host clone
-direnv allow                        # in the directory whose .envrc you changed
+# Mac, in the directory of the .envrc that holds GITHUB_TOKEN
+# delete the GITHUB_TOKEN line from that .envrc, and GITHUB_TOKEN from any VM_ENV override you keep
+#   (a VM_ENV exported in a .envrc, or a habit of make vm-env VM_ENV=...); then:
+direnv allow
+cd ~/src/shift2eu-host              # the host clone
 make vm-env                         # the default VM_ENV: it replaces the VM's whole daemon.env
 # PASS: vm-env: warning: removed GITHUB_TOKEN ... (the old line is gone)
 make deck-restart                   # between tasks
+# revoke the personal token GITHUB_TOKEN held, at https://github.com/settings/personal-access-tokens
 make vm-init                        # PASS: the gh step passes, on the App token
 make gate-check                     # as yourself with an admin token; PASS: exits 0 (no transition flag any more: a gap always fails it)
 # PASS: the token no longer appears on GitHub's list of your personal access tokens
@@ -1581,12 +1608,14 @@ ID** (General, About). Install it (Install App) on **Only select repositories**:
 
 ```bash
 # Mac, as yourself with an admin token
-# or, instead of the page, set it with gh:
+# optional, instead of the page:
 gh api --method PUT repos/timothymamo/shift2eu/environments/ai-review \
   -F 'deployment_branch_policy[protected_branches]=false' \
   -F 'deployment_branch_policy[custom_branch_policies]=true'
 gh api --method POST repos/timothymamo/shift2eu/environments/ai-review/deployment-branch-policies \
   -f name=main -f type=branch
+
+# check, either way:
 gh api repos/timothymamo/shift2eu/environments/ai-review/deployment-branch-policies --jq '.branch_policies[] | .type + " " + .name'
 # PASS: only branch main
 ```
