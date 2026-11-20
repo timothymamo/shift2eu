@@ -55,7 +55,8 @@ run it again until the next boot.
 `launchctl print gui/<uid>/io.lima-vm.autostart.<instance>` and `launchctl print system/io.lima-vm.daemon.<instance>`
 (no `sudo`; skipped where there is no `launchctl`), and looks for Lima's plist files on disk,
 `~/Library/LaunchAgents/io.lima-vm.autostart.<instance>.plist` and
-`/Library/LaunchDaemons/io.lima-vm.daemon.<instance>.plist`, installed but not loaded: an SSH-only session has
+`/Library/LaunchDaemons/io.lima-vm.daemon.<instance>.plist` (`LIMA_LAUNCHDAEMONS_DIR`, a test hook that is
+only read, from make's command line or the Makefile), installed but not loaded, whether or not there is a `launchctl`: an SSH-only session has
 no `gui/<uid>` domain to ask, and a job booted out by hand but left on disk loads again at the next boot or
 login. It names each job it finds, its domain or file, `limactl autostart disable <instance>`, and the removal
 by hand: `launchctl bootout` and `rm -f` of the plist (`sudo` only for the LaunchDaemon). It does not detect a

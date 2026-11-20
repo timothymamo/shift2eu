@@ -19,6 +19,8 @@
 #     any kind. The VM needs none to boot; the agents App's refresh job delivers the token (ADR 0034);
 #   - runs once at load, that is at boot and at the install's bootstrap (RunAtLoad, no KeepAlive), and exits with
 #     limactl's status, so an instance that is missing or broken leaves a non-zero exit and its message in the log;
+#   - leaves the processes it started alone when it exits (AbandonProcessGroup): launchd otherwise kills what is
+#     left in the job's process group, the VM's hostagent included, as soon as limactl shell returns;
 #   - opens its own log, as the maintainer, through a shell line (`/bin/sh -c '<line>' <log> <limactl command>`,
 #     the log and every word of the command arguments of their own, spliced into no shell text): umask 077,
 #     mkdir -p of the log's directory, one dated line, then exec of the command with both streams appended to
@@ -149,6 +151,8 @@ plist() {
       '	<key>WorkingDirectory</key>' \
       '	<string>/</string>' \
       '	<key>RunAtLoad</key>' \
+      '	<true/>' \
+      '	<key>AbandonProcessGroup</key>' \
       '	<true/>' \
       '	<key>StandardOutPath</key>' \
       '	<string>/dev/null</string>' \

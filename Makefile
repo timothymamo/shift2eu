@@ -427,27 +427,58 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # Before it lists the instances it warns, and only warns, about a Lima autostart job of the instance,
 # $(call LIMA_AUTOSTART_JOBS,warning) below (issue #315): the VM starts as it always does.
 #
-# LIMA_AUTOSTART_JOBS finds, where launchctl exists, Lima's own autostart job of LIMA_INSTANCE (issues #315,
-# #398): `limactl autostart enable` loads io.lima-vm.autostart.<instance> in the user's domain (gui/<uid>) and,
-# with --condition=boot, io.lima-vm.daemon.<instance> as a LaunchDaemon in the system domain. Both run
+# LIMA_AUTOSTART_JOBS finds Lima's own autostart job of LIMA_INSTANCE (issues #315, #398): `limactl autostart
+# enable` writes and loads io.lima-vm.autostart.<instance> in the user's domain (gui/<uid>,
+# ~/Library/LaunchAgents/<label>.plist) and, with --condition=boot, io.lima-vm.daemon.<instance> as a
+# LaunchDaemon in the system domain ($(LIMA_LAUNCHDAEMONS_DIR)/<label>.plist). Both run
 # `limactl start <name> --foreground`, the form that can fall back to template:default, a VM that mounts the home
-# directory (issue #237). It asks `launchctl print <domain>/<label>` for each, never sudo, and for each one loaded
-# prints on stderr "$@: <its argument>:", the job, its domain, `limactl autostart disable <instance>` and the
-# bootout that removes it by hand, and sets lima_autostart=1 (empty when there is none). Without launchctl
-# (Linux) it does nothing. vm-up warns with it; vm-boot-install refuses with it. Only labels of Lima's own
-# naming are asked about, so it reads no job of anyone else.
+# directory (issue #237). For each it asks, where launchctl exists, `launchctl print <domain>/<label>`, never
+# sudo, and else, launchctl or not, looks for the plist on disk: an SSH-only session has no gui/<uid> domain to
+# ask, and a plist nothing has loaded yet loads at the next login or boot. For each job found, once, it prints on
+# stderr "$@: <its argument>:", the job, its domain (loaded) or its plist (installed), `limactl autostart disable
+# <instance>` and the removal by hand (the bootout and `rm -f` of the plist of a loaded job, the `rm -f` of an
+# installed one; sudo only in the system domain), and sets lima_autostart=1 (empty when there is none). It
+# removes nothing itself. vm-up warns with it; vm-boot-install refuses with it. Only labels and files of Lima's
+# own naming are asked about, so it reads no job of anyone else.
+#
+# LIMA_LAUNCHDAEMONS_DIR is a test hook like VM_BOOT_LAUNCHD_DIR (see there), but only read, never written: the
+# directory Lima's LaunchDaemon plist sits in, /Library/LaunchDaemons. Never set it on a real Mac; it comes only
+# from the make command line or this file, and a value from the environment is ignored. The macro refuses one
+# that is not absolute or holds anything but letters, digits, /, ., _ and -.
+ifeq ($(origin LIMA_LAUNCHDAEMONS_DIR),environment)
+override LIMA_LAUNCHDAEMONS_DIR := /Library/LaunchDaemons
+endif
+LIMA_LAUNCHDAEMONS_DIR ?= /Library/LaunchDaemons
 LIMA_AUTOSTART_USER_LABEL_PREFIX = io.lima-vm.autostart.
 LIMA_AUTOSTART_SYSTEM_LABEL_PREFIX = io.lima-vm.daemon.
 LIMA_AUTOSTART_JOBS = lima_autostart=''; \
-	if command -v launchctl >/dev/null 2>&1; then \
-		lima_uid="$$(id -u)" || lima_uid=''; \
-		for lima_job in $${lima_uid:+"gui/$$lima_uid/$(LIMA_AUTOSTART_USER_LABEL_PREFIX)$$LIMA_INSTANCE"} "system/$(LIMA_AUTOSTART_SYSTEM_LABEL_PREFIX)$$LIMA_INSTANCE"; do \
-			launchctl print "$$lima_job" </dev/null >/dev/null 2>&1 || continue; \
+	case "$${LIMA_LAUNCHDAEMONS_DIR:-}" in \
+	(/*) ;; \
+	(*) echo "$@: LIMA_LAUNCHDAEMONS_DIR must be an absolute path (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
+	esac; \
+	case "$$LIMA_LAUNCHDAEMONS_DIR" in \
+	(*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-]* | */../* | */..) \
+		echo "$@: LIMA_LAUNCHDAEMONS_DIR may hold only letters, digits, /, ., _ and -, and no .. component (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
+	esac; \
+	lima_launchctl=''; command -v launchctl >/dev/null 2>&1 && lima_launchctl=1; \
+	lima_uid="$$(id -u)" || lima_uid=''; \
+	for lima_domain in user system; do \
+		case "$$lima_domain" in \
+		(user) lima_label="$(LIMA_AUTOSTART_USER_LABEL_PREFIX)$$LIMA_INSTANCE"; lima_target="$${lima_uid:+gui/$$lima_uid/$$lima_label}"; \
+			lima_plist="$$HOME/Library/LaunchAgents/$$lima_label.plist"; lima_sudo='' ;; \
+		(*) lima_label="$(LIMA_AUTOSTART_SYSTEM_LABEL_PREFIX)$$LIMA_INSTANCE"; lima_target="system/$$lima_label"; \
+			lima_plist="$${LIMA_LAUNCHDAEMONS_DIR%/}/$$lima_label.plist"; lima_sudo='sudo ' ;; \
+		esac; \
+		if [ -n "$$lima_launchctl" ] && [ -n "$$lima_target" ] && launchctl print "$$lima_target" </dev/null >/dev/null 2>&1; then \
 			lima_autostart=1; \
-			case "$$lima_job" in (system/*) lima_bootout="sudo launchctl bootout $$lima_job";; (*) lima_bootout="launchctl bootout $$lima_job";; esac; \
-			echo "$@: $(1): Lima's autostart job $${lima_job\#\#*/} is loaded in $${lima_job%/*}: it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $$lima_bootout) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
-		done; \
-	fi
+			echo "$@: $(1): Lima's autostart job $$lima_label is loaded in $${lima_target%/*}: it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $${lima_sudo}launchctl bootout $$lima_target && $${lima_sudo}rm -f $$lima_plist) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
+		elif [ -e "$$lima_plist" ] || [ -L "$$lima_plist" ]; then \
+			lima_autostart=1; \
+			echo "$@: $(1): Lima's autostart job $$lima_label is installed at $$lima_plist, not loaded now: launchd loads it at the next login or boot, and it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $${lima_sudo}rm -f $$lima_plist) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
+		fi; \
+	done
+
+vm-up vm-boot-install: export LIMA_LAUNCHDAEMONS_DIR := $(LIMA_LAUNCHDAEMONS_DIR)
 .PHONY: vm-up
 vm-up: ## Create or start the Lima VM with only this repository's workspace mounted (VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT on creation)
 	$(LIMA_INSTANCE_CHECK)
@@ -1288,7 +1319,7 @@ vm-boot-install: ## Install (or update) the LaunchDaemon that starts this VM ins
 	$(call LAUNCHD_DIR_CHECK,VM_BOOT_LAUNCHD_DIR); \
 	$(call LIMA_AUTOSTART_JOBS,refused); \
 	if [ -n "$$lima_autostart" ]; then \
-		echo "vm-boot-install: refused: Lima's own autostart job of $$LIMA_INSTANCE (named above) is loaded, so nothing was installed: remove it with the commands above, then run make vm-boot-install again" >&2; \
+		echo "vm-boot-install: refused: Lima's own autostart job of $$LIMA_INSTANCE (named above) is loaded or installed, so nothing was installed: remove it with the commands above, then run make vm-boot-install again" >&2; \
 		exit 1; \
 	fi; \
 	list="$$(limactl list --quiet)" || { \

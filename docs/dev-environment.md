@@ -257,7 +257,8 @@ The install refuses, before any `sudo`: a run as root, a Lima autostart job of t
 `limactl list` does not list. It lints the plist, prints it with its SHA-256, prints every `sudo` before it
 runs, boots a loaded job out first, reads the installed plist back and loads it. Loading it runs it once, so a
 stopped VM starts. Both targets put the plist in `VM_BOOT_LAUNCHD_DIR` (`/Library/LaunchDaemons`), a hook for
-the tests only: never set it on the Mac. For a second VM, pass `LIMA_INSTANCE=<name>` to each `make`.
+the tests only: never set it on the Mac. `LIMA_LAUNCHDAEMONS_DIR` (`/Library/LaunchDaemons`), where the check
+looks for Lima's LaunchDaemon plist and which it only reads, is a hook for the tests only as well. For a second VM, pass `LIMA_INSTANCE=<name>` to each `make`.
 
 Over SSH on the Mac Mini, for the instance `shift2eu`. Stop at the first `PASS` that does not hold.
 
@@ -271,7 +272,7 @@ direnv exec . make vm-boot-install
 # PASS: plutil -lint passes; the plist and its SHA-256 are printed; each sudo command is printed before it asks for your password
 # PASS: "loaded io.github.timothymamo.shift2eu.vm-boot.shift2eu"
 # FAIL "refused: run it as the maintainer, not as root": run it without sudo
-# FAIL "refused: Lima's autostart job io.lima-vm.<...>.shift2eu is loaded in <domain> ...": run limactl autostart disable shift2eu (or the bootout and rm -f of the plist it names), install again
+# FAIL "refused: Lima's autostart job io.lima-vm.<...>.shift2eu is loaded in <domain> ..." or "... is installed at <plist> ...": run limactl autostart disable shift2eu (or the bootout and rm -f, or the rm -f, it names), install again
 # FAIL "refused: Lima lists no instance shift2eu ...": create the VM first (make vm-create), install again
 # FAIL "the old job <label> is still loaded ...": sudo launchctl print system/<label>, wait or make vm-boot-uninstall, install again
 # FAIL "... is not the plist printed above ...": no job is loaded; look for what changed the file, install again
