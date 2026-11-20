@@ -906,7 +906,8 @@ button.secondary:disabled {
 /* Each blocker item carries the same svg-free cross as its heading, drawn
    with ::before because ::marker ignores a background and Safari ignores its
    content. The glyph hangs just left of the text, where the marker stood, so
-   the text keeps its indent; the list stays a ul and is announced as one. */
+   the text keeps its indent. The fragment gives the list role="list", as
+   Safari and VoiceOver drop the role of a list without markers. */
 #report .part-blockers > ul > li {
   position: relative;
   list-style: none;
@@ -1032,7 +1033,8 @@ button.secondary:disabled {
   background-color: var(--mast);
 }
 
-/* Privacy: the three layers as numbered cards, in an <ol> that stays one. */
+/* Privacy: the three layers as numbered cards, in an <ol> with role="list",
+   which Safari and VoiceOver otherwise drop once its markers are gone. */
 
 ol.layers {
   display: grid;
@@ -1085,12 +1087,21 @@ ul.technical {
   padding: 1.25rem 1.25rem 1.25rem 2.5rem;
 }
 
+/* Each caveat hangs a small triangle where its marker stood, drawn with
+   ::before so it can carry an empty alternative text: a quoted list-style-type
+   would be read aloud. The list carries role="list", as Safari and VoiceOver
+   drop the role of a list without markers. */
 ul.caveats > li {
-  list-style-type: "\25B8\00a0\00a0";
+  position: relative;
+  list-style: none;
 }
 
-ul.caveats > li::marker {
+ul.caveats > li::before {
+  content: "\25B8\00a0" / "";
+  position: absolute;
+  right: 100%;
   color: var(--muted);
+  background-color: var(--surface);
 }
 
 ul.caveats > li + li,
