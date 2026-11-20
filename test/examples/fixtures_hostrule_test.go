@@ -652,6 +652,21 @@ func TestVendorPathProblems(t *testing.T) {
 			text: "the objects are in oci://acme-prod-bucket@acmetenancy/x",
 			want: []string{"oci://acme-prod-bucket"},
 		},
+		{
+			// An OCI Object Storage bucket's name may hold dots, and the @
+			// that carries the namespace after it marks a bucket rather than a
+			// registry host, whose path carries no @ at all: the dotted name
+			// before it is the customer's bucket and is reported with the
+			// scheme that gives it its shape.
+			name: "customer bucket with dots in an oci URL",
+			text: "the objects are in oci://acme.prod.backups@acmetenancy/x",
+			want: []string{"oci://acme.prod.backups"},
+		},
+		{
+			name: "customer bucket with a dotted word in an oci URL",
+			text: "the objects are in oci://acme-prod.backup@ns/obj",
+			want: []string{"oci://acme-prod.backup"},
+		},
 
 		// Not reported: the project's own account, a listed public open-source
 		// owner, and a sample's bucket.

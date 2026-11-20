@@ -158,6 +158,26 @@ func TestResourcePathProblems(t *testing.T) {
 			want: []string{"bucket/acme-prod--euc1-az1--x-s3"},
 		},
 		{
+			// The zone suffix (...--euc1-az1--x-s3) is stripped from the end
+			// of a directory bucket's name, and a customer's own words may
+			// hold a double hyphen of their own before it
+			// (example--acme-prod--euc1-az1--x-s3): the whole name is
+			// reported, since only the one suffix at the end belongs to the
+			// service and the words before it are no sample's.
+			name: "customer directory bucket whose words hold a double hyphen",
+			text: `"bucket": "arn:aws:s3express:eu-central-1:` + dummyAccountID + `:bucket/example--acme-prod--euc1-az1--x-s3"`,
+			want: []string{"bucket/example--acme-prod--euc1-az1--x-s3"},
+		},
+		{
+			// The zone suffix belongs to the s3express service's directory
+			// buckets, never to an access point's name, which is the
+			// customer's own in full even when it ends in the same letters
+			// (example-ap--euc1-az1--x-s3): nothing is stripped from it.
+			name: "access point whose name ends in the directory bucket suffix",
+			text: `"accessPoint": "arn:aws:s3:eu-central-1:` + dummyAccountID + `:accesspoint/example-ap--euc1-az1--x-s3"`,
+			want: []string{"accesspoint/example-ap--euc1-az1--x-s3"},
+		},
+		{
 			// An ARN that delimits the segment with a colon rather than a slash
 			// names the same access point, and the value is reported as the file
 			// writes it, the way an ARM ID's account is.
@@ -323,6 +343,15 @@ func TestResourcePathProblems(t *testing.T) {
 			// a sample's words there keep the name clean.
 			name: "sample directory bucket in an S3 Express ARN",
 			text: `"bucket": "arn:aws:s3express:eu-central-1:` + dummyAccountID + `:bucket/example-bucket--euc1-az1--x-s3"`,
+			want: nil,
+		},
+		{
+			// A local zone's ID is longer than an availability zone's
+			// (usw2-lax1-az1), and the suffix the service appends to it ends
+			// the same way: a sample's bucket's words before it keep the name
+			// clean.
+			name: "sample directory bucket in a local zone",
+			text: `"bucket": "arn:aws:s3express:eu-central-1:` + dummyAccountID + `:bucket/example-bucket--usw2-lax1-az1--x-s3"`,
 			want: nil,
 		},
 	}
