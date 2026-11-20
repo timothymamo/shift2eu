@@ -105,6 +105,20 @@ func isExactPatchVersion(version string) bool {
 	return true
 }
 
+// goVersionRelease returns the release name out of what runtime.Version()
+// reports. A Go built with a non-default GOEXPERIMENT appends the experiments
+// after the release name, separated by a space (`go1.27.4 X:boringcrypto`), so
+// the first field is the release the pin names; a devel Go's first field is
+// `devel`, which names no release at all, and an empty string has no field.
+func goVersionRelease(goVersion string) string {
+	fields := strings.Fields(goVersion)
+	if len(fields) == 0 {
+		return ""
+	}
+
+	return fields[0]
+}
+
 // toolchainPinProblems reports every way the content of the go.mod at path
 // fails to pin the toolchain that the Go version goVersion (runtime.Version())
 // names, one line per problem, in the order the checks run. An empty result is
@@ -137,7 +151,9 @@ func toolchainPinProblems(path, content, goVersion string) []string {
 	// Comparing against a go line that names no one release would only repeat
 	// the problem reported above.
 	if isExactPatchVersion(pin.Go) {
-		if want := "go" + pin.Go; goVersion != want {
+		if want := "go" + pin.Go; goVersionRelease(goVersion) != want {
+			// The message names the whole runtime.Version(), experiments and
+			// all, so that the Go that built the test is recognisable in it.
 			problems = append(problems, fmt.Sprintf(
 				"this test was built by %s, but %s pins the toolchain with `go %s`, which is %s: wasm_exec.js is trusted as the building toolchain's own copy (TestWasmExecIsTheToolchains) and must come from the toolchain the module is built with. "+
 					"`make` targets set GOTOOLCHAIN to the go line, so build and test through make; otherwise install %s and run the tests with it, or run them with GOTOOLCHAIN=%s",
