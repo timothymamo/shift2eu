@@ -1413,6 +1413,75 @@ func TestMakeAgentsTokenRefreshInstallDoesNotStopARefresherThePidFileNoLongerNam
 	}
 }
 
+// TestMakeAgentsTokenRefreshInstallDoesNotWarnWhenTheHandStartedRefreshJustExited pins the reviewer's nit: the
+// re-read of the pid file before the TERM (the audit's fix) treats a pid file that no longer names the recorded
+// refresh as a foreign process taking over, and warns that the recorded refresh is not the holder. But when that
+// refresher itself exits inside the sudo window, its trap removes the pid file and the lock's pid, so the lock is
+// free and nothing took over: warning that "the pid file no longer names pid N" sends the maintainer looking for
+// a refresh that runs nowhere. Then the installation stops nothing and loads the job as usual, exit 0. The fake
+// sudo makes the stand-in exit and removes both files during `sudo install`, as the real refresher's trap does;
+// the lock still naming a live pid is TestMakeAgentsTokenRefreshInstallDoesNotStopARefresherThePidFileNoLongerNames.
+func TestMakeAgentsTokenRefreshInstallDoesNotWarnWhenTheHandStartedRefreshJustExited(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	refresh := standInForARefresh(t, f.sb)
+	pid := strconv.Itoa(refresh.pid())
+
+	lockPidFile := filepath.Join(f.sb.refreshLockDir(f.instance), "pid")
+	writeFileMode(t, lockPidFile, []byte(pid+"\n"), 0o600)
+
+	pidFile := filepath.Join(f.sb.stateDir(), "agents-token-refresh-"+f.instance+".pid")
+	writeFileMode(t, pidFile, []byte(pid+"\n"), 0o600)
+
+	// The sudo window: the recorded refresh exits and its trap removes the pid file of the start target and the
+	// lock's pid, so the lock is free by the time the install re-reads either.
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID"] = pid
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_PID_FILE"] = pidFile
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_LOCK_PID_FILE"] = lockPidFile
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	combined := stdout + stderr
+
+	// The premise: the window the reviewer names really opened, so the case does not pass for want of a hook.
+	f.subCommand(t, "install")
+
+	if !refresh.waitExit(10 * time.Second) {
+		t.Fatalf("the stand-in refresh %s did not exit inside the sudo window, so this case pins no hand-started refresh that just exited (reviewer nit, issue #396)", pid)
+	}
+
+	for _, gone := range []string{pidFile, lockPidFile} {
+		if _, statErr := os.Stat(gone); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("%s is still there after the sudo window, although the refresher's trap removes it: this case needs the exited refresher's state (reviewer nit, issue #396): %v", gone, statErr)
+		}
+	}
+
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install: %v although the recorded refresh exited inside the sudo window and its trap freed the lock: nothing holds the lock, so the install loads the job as usual (reviewer nit, issue #396)\nstdout: %s\nstderr: %s",
+			err, stdout, stderr)
+	}
+
+	// The warning the install gives when the recorded refresh is not the holder any more: with the lock free it
+	// would send the maintainer looking for a refresh that has already exited.
+	for _, line := range strings.Split(combined, "\n") {
+		if strings.Contains(line, "no longer names pid") {
+			t.Errorf("the install warns that the pid file no longer names pid %s although that refresher exited itself and its trap removed the pid file and the lock's pid, so nothing holds the lock: the warning names a holder that is not there (reviewer nit, issue #396)\nline: %s",
+				pid, line)
+		}
+
+		if strings.Contains(line, "stopping the refresh") || strings.Contains(line, "stopped pid "+pid) {
+			t.Errorf("the install says it stopped a refresh although pid %s had already exited inside the sudo window: only the refresher the start target recorded and that still holds the lock is the install's to stop (reviewer nit, issue #396)\nline: %s",
+				pid, line)
+		}
+	}
+
+	// Nothing else changes: the job is loaded as any install loads it.
+	if calls := f.bootstrapCalls(t); len(calls) != 1 {
+		t.Errorf("the install ran launchctl bootstrap %d time(s), want one, although the hand-started refresh had just exited and freed the lock: the job still loads as usual (reviewer nit, issue #396): %v",
+			len(calls), calls)
+	}
+}
+
 // TestMakeAgentsTokenRefreshInstallSaysWhenTheTakeoverStoppedTheRefreshAndTheJobDidNotLoad pins the reviewer's
 // fifth finding: when the hand-started refresh was stopped and launchctl then refuses both bootstraps, the
 // instance is left with no refresher at all. The error must say that the takeover stopped it and send the

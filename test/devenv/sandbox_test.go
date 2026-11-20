@@ -1163,6 +1163,10 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 //     A destination outside SHIFT2EU_TEST_SUDO_ROOT is refused. SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE, with
 //     the pid in SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID, makes it write that file with that pid: state that
 //     changes inside the sudo window, between the install's pre-sudo check and its TERM (auditor L4).
+//     SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID makes it stop that process and wait for it, and then remove
+//     SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_PID_FILE and SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_LOCK_PID_FILE: the
+//     hand-started refresher exiting inside the sudo window, whose trap removes both files (reviewer nit, issue
+//     #396).
 //   - `rm -f <path>` really removes a sandbox path, and refuses any path outside it.
 //   - `sudo -k` alone forgets the timestamp and runs nothing, so a recipe that ends with it records one
 //     argv and no command; it is not the empty command the fake reports as a bug.
@@ -1245,6 +1249,24 @@ install)
   esac
   if [ -n "${SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE:-}" ]; then
     printf '%s\n' "${SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID:?set SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID}" > "${SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE}" || exit 1
+  fi
+  if [ -n "${SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID:-}" ]; then
+    # The hand-started refresher exits inside the sudo window and its trap removes the files it wrote. The
+    # fake waits for the exit, so the case pins the install's next read and no race with the trap.
+    kill -TERM "${SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID}" 2>/dev/null || true
+    tries=0
+    while [ "${tries}" -lt 100 ] && kill -0 "${SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID}" 2>/dev/null; do
+      sleep 0.1
+      tries=$((tries + 1))
+    done
+    for gone in "${SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_PID_FILE:-}" "${SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_LOCK_PID_FILE:-}"; do
+      [ -n "${gone}" ] || continue
+      inside "${gone}" || {
+        echo "fake sudo: refusing to remove a path outside the sandbox: ${gone}" >&2
+        exit 1
+      }
+      rm -f "${gone}" || exit 1
+    done
   fi
   exit 0
   ;;

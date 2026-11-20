@@ -437,6 +437,11 @@ func TestMakeAgentsTokenRefreshAcceptsOnlyItsOwnLaunchdJob(t *testing.T) {
 // and [A-Za-z0-9._-] is never repeated: the refusal says to remove the plist and where to see its path instead
 // (`launchctl print <domain>/<label>`), and still names the job and the commands that unload it. A safe path
 // keeps the `rm <path>` line the refusal always printed.
+//
+// A path of safe characters is only repeated when it is absolute too (auditor nit, issue #396): a relative one
+// names a file of whatever directory the maintainer stands in, and one that starts with a dash is an option of
+// the rm the refusal suggests, while a `..` segment walks out of the directory the refusal means. Neither names
+// the plist launchd loaded, so both are refused like a path with a space.
 func TestAgentsTokenLaunchdForeignJobsDoesNotRepeatAnUnsafePlistPath(t *testing.T) {
 	t.Parallel()
 
@@ -446,7 +451,8 @@ func TestAgentsTokenLaunchdForeignJobsDoesNotRepeatAnUnsafePlistPath(t *testing.
 		domain jobDomain
 		// plist is what `launchctl print <domain>/<label>` names as the job's plist.
 		plist string
-		// wantSafe says the path holds only the characters a command may name as it is.
+		// wantSafe says the path is one a command may name as it is: absolute, only characters of
+		// /[A-Za-z0-9._-], and no .. segment.
 		wantSafe bool
 	}{
 		{
@@ -460,6 +466,27 @@ func TestAgentsTokenLaunchdForeignJobsDoesNotRepeatAnUnsafePlistPath(t *testing.
 			name:   "a path with an escape byte",
 			domain: userDomain,
 			plist:  "/Users/example/Library/LaunchAgents/\x1b[31mred.plist",
+		},
+		{
+			// No leading /: `rm x.plist` removes a file of the directory the maintainer runs it from, which
+			// is not the job's plist.
+			name:   "a relative path of safe characters",
+			domain: systemDomain,
+			plist:  "x.plist",
+		},
+		{
+			// A leading dash makes the path an option of the suggested `rm`: `rm -rf` empties the directory
+			// the maintainer runs it in instead of removing the job's plist.
+			name:   "a path that starts with a dash",
+			domain: systemDomain,
+			plist:  "-rf",
+		},
+		{
+			// A .. segment walks out of the directory the refusal means: the path is absolute, holds only
+			// safe characters and still names no plist launchd loaded.
+			name:   "a path with a .. segment",
+			domain: systemDomain,
+			plist:  "/Library/LaunchDaemons/../" + foreignJobLabel + ".plist",
 		},
 		{
 			name:     "a path of safe characters",
@@ -493,7 +520,12 @@ func TestAgentsTokenLaunchdForeignJobsDoesNotRepeatAnUnsafePlistPath(t *testing.
 			// The unsafe path must not reach the terminal at all, so no `rm` can name it and no byte of it can
 			// drive the terminal.
 			if strings.Contains(stderr, plist) {
-				t.Errorf("the refusal repeats the path launchctl named, %q, although it holds a character outside / and [A-Za-z0-9._-]: pasted into the `rm` a maintainer runs, that path names another file or another command (security audit L1)\nstderr: %s",
+				t.Errorf("the refusal repeats the path launchctl named, %q, although it is no absolute path of / and [A-Za-z0-9._-] without a .. segment: pasted into the `rm` a maintainer runs, that path names another file or another command (security audit L1, auditor nit)\nstderr: %s",
+					plist, stderr)
+			}
+
+			if strings.Contains(stderr, "rm "+plist) {
+				t.Errorf("the refusal suggests `rm %s` although that path is no absolute path of safe characters: run as it stands, the command removes another file or takes the path as an option (auditor nit, issue #396)\nstderr: %s",
 					plist, stderr)
 			}
 
