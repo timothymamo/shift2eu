@@ -152,7 +152,7 @@ REPO_ROOT := $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --
 # worktree, git-hooks, ...) is the agents', runs in the workspace inside the VM and never reads these.
 HOST_TARGETS := agents-token agents-token-refresh agents-token-refresh-start agents-token-refresh-install \
 	agents-token-refresh-uninstall deck deck-restart gate-check vm-agents-token-ssh vm-agents-token-ssh-uninstall \
-	vm-claude-settings vm-create vm-delete vm-env vm-env-check vm-gh-wrapper vm-init vm-shell vm-stop vm-up
+	vm-boot-install vm-boot-uninstall vm-claude-settings vm-create vm-delete vm-env vm-env-check vm-gh-wrapper vm-init vm-shell vm-stop vm-up
 HOST_WORKSPACE_REPO := $(abspath $(WORKSPACE_REPO))
 HOST_WORKSPACE      := $(patsubst %/,%,$(dir $(HOST_WORKSPACE_REPO)))
 HOST_REPO_NAME      := $(notdir $(HOST_WORKSPACE_REPO))
@@ -424,6 +424,30 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # (a case pattern with the name quoted), so a repository a.b never takes a stray axb for its own - then the
 # instance's status, all in one shell line with its limactl calls, so no make flag (-i, -k) can run limactl
 # after any of these checks failed. It runs neither git nor anything else in the workspace: test and ls only.
+# Before it lists the instances it warns, and only warns, about a Lima autostart job of the instance,
+# $(call LIMA_AUTOSTART_JOBS,warning) below (issue #315): the VM starts as it always does.
+#
+# LIMA_AUTOSTART_JOBS finds, where launchctl exists, Lima's own autostart job of LIMA_INSTANCE (issues #315,
+# #398): `limactl autostart enable` loads io.lima-vm.autostart.<instance> in the user's domain (gui/<uid>) and,
+# with --condition=boot, io.lima-vm.daemon.<instance> as a LaunchDaemon in the system domain. Both run
+# `limactl start <name> --foreground`, the form that can fall back to template:default, a VM that mounts the home
+# directory (issue #237). It asks `launchctl print <domain>/<label>` for each, never sudo, and for each one loaded
+# prints on stderr "$@: <its argument>:", the job, its domain, `limactl autostart disable <instance>` and the
+# bootout that removes it by hand, and sets lima_autostart=1 (empty when there is none). Without launchctl
+# (Linux) it does nothing. vm-up warns with it; vm-boot-install refuses with it. Only labels of Lima's own
+# naming are asked about, so it reads no job of anyone else.
+LIMA_AUTOSTART_USER_LABEL_PREFIX = io.lima-vm.autostart.
+LIMA_AUTOSTART_SYSTEM_LABEL_PREFIX = io.lima-vm.daemon.
+LIMA_AUTOSTART_JOBS = lima_autostart=''; \
+	if command -v launchctl >/dev/null 2>&1; then \
+		lima_uid="$$(id -u)" || lima_uid=''; \
+		for lima_job in $${lima_uid:+"gui/$$lima_uid/$(LIMA_AUTOSTART_USER_LABEL_PREFIX)$$LIMA_INSTANCE"} "system/$(LIMA_AUTOSTART_SYSTEM_LABEL_PREFIX)$$LIMA_INSTANCE"; do \
+			launchctl print "$$lima_job" </dev/null >/dev/null 2>&1 || continue; \
+			lima_autostart=1; \
+			case "$$lima_job" in (system/*) lima_bootout="sudo launchctl bootout $$lima_job";; (*) lima_bootout="launchctl bootout $$lima_job";; esac; \
+			echo "$@: $(1): Lima's autostart job $${lima_job\#\#*/} is loaded in $${lima_job%/*}: it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $$lima_bootout) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
+		done; \
+	fi
 .PHONY: vm-up
 vm-up: ## Create or start the Lima VM with only this repository's workspace mounted (VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT on creation)
 	$(LIMA_INSTANCE_CHECK)
@@ -455,6 +479,7 @@ vm-up: ## Create or start the Lima VM with only this repository's workspace moun
 		echo "$$stray" | sed 's/^/  /' >&2; \
 		exit 1; \
 	fi; \
+	$(call LIMA_AUTOSTART_JOBS,warning); \
 	list="$$(limactl list --quiet)" || { \
 		echo "vm-up: could not list the Lima instances, so it cannot tell whether $$LIMA_INSTANCE exists" >&2; \
 		exit 1; \
@@ -975,19 +1000,23 @@ AGENTS_TOKEN_FOREIGN_JOBS_CHECK = if command -v launchctl >/dev/null 2>&1; then 
 			exit 1; \
 		fi; \
 	fi
-# The check of AGENTS_TOKEN_LAUNCHD_DIR, the directory root writes the plist into and removes it from.
-AGENTS_TOKEN_LAUNCHD_DIR_CHECK = case "$(AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN)" in \
+# $(call LAUNCHD_DIR_CHECK,<variable>) checks a LaunchDaemons directory variable, the directory root writes a
+# plist into and removes it from: AGENTS_TOKEN_LAUNCHD_DIR here, VM_BOOT_LAUNCHD_DIR for the boot job (issue
+# #398). It reads the variable's origin from <variable>_ORIGIN, recorded at parse time, and the value from the
+# recipe's environment, where the target-specific export puts it.
+LAUNCHD_DIR_CHECK = case "$($(1)_ORIGIN)" in \
 	environment*) \
-		echo "$@: refused: AGENTS_TOKEN_LAUNCHD_DIR comes from the environment, where a stale export would have root install the plist where launchd never looks at boot: unset it (it is a test hook: leave it at /Library/LaunchDaemons, or pass it on the make command line)" >&2; exit 1 ;; \
+		echo "$@: refused: $(1) comes from the environment, where a stale export would have root install the plist where launchd never looks at boot: unset it (it is a test hook: leave it at /Library/LaunchDaemons, or pass it on the make command line)" >&2; exit 1 ;; \
 	esac; \
-	case "$${AGENTS_TOKEN_LAUNCHD_DIR:-}" in \
+	case "$${$(1):-}" in \
 	/*) ;; \
-	*) echo "$@: AGENTS_TOKEN_LAUNCHD_DIR must be an absolute path (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
+	*) echo "$@: $(1) must be an absolute path (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
 	esac; \
-	case "$$AGENTS_TOKEN_LAUNCHD_DIR" in \
+	case "$$$(1)" in \
 	*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-]* | */../* | */..) \
-		echo "$@: AGENTS_TOKEN_LAUNCHD_DIR may hold only letters, digits, /, ., _ and -, and no .. component, since root writes there (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
+		echo "$@: $(1) may hold only letters, digits, /, ., _ and -, and no .. component, since root writes there (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
 	esac
+AGENTS_TOKEN_LAUNCHD_DIR_CHECK = $(call LAUNCHD_DIR_CHECK,AGENTS_TOKEN_LAUNCHD_DIR)
 
 agents-token-refresh-install agents-token-refresh-uninstall: export AGENTS_TOKEN_LAUNCHD_DIR := $(AGENTS_TOKEN_LAUNCHD_DIR)
 
@@ -1215,6 +1244,131 @@ agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh'
 	if [ "$$stuck" = 1 ]; then \
 		echo "agents-token-refresh-uninstall: warning: $$label is still loaded: unload it with sudo launchctl bootout system/$$label" >&2; \
 	fi
+
+# The LaunchDaemon that starts the Lima VM of LIMA_INSTANCE at boot, with nobody logged in, as the maintainer
+# (issue #398, docs/adr/0038-start-the-lima-vm-at-boot-with-a-launchdaemon-of-our-own.md). dev/vm-boot-launchd.sh
+# renders its plist: it runs `limactl shell --start --workdir / <instance> true` once at load, never
+# `limactl start`, so it starts an existing instance and never creates one. One job per instance.
+#
+# install refuses, before any sudo: a run as root (the job runs as the account that installs it, and the VM is that
+# account's); a host without launchctl; a VM_BOOT_LAUNCHD_DIR from the environment or of an unsafe form
+# ($(call LAUNCHD_DIR_CHECK,VM_BOOT_LAUNCHD_DIR)); Lima's own autostart job of the instance,
+# $(call LIMA_AUTOSTART_JOBS,refused) (the two would race for the VM, and Lima's can create template:default);
+# and an instance `limactl list --quiet` does not list (or a listing that fails), since the job could only fail.
+# It then renders the plist, lints it with plutil and prints it with its SHA-256, creates the log's directory as
+# the maintainer, boots a loaded job of the same label out (waiting at most 10 seconds until launchctl print stops
+# finding it), installs the plist with `sudo install`, reads it back as the maintainer and compares its SHA-256
+# (removing it again on a mismatch), and loads it with `sudo launchctl bootstrap system <plist>`, tried twice,
+# launchctl print deciding when both fail, as agents-token-refresh-install does. Loading it runs it once now
+# (RunAtLoad): a Stopped VM starts. Every sudo command is printed before it runs, and the target ends with sudo -k.
+#
+# uninstall boots the job out, waits (at most 10 seconds) until launchctl print stops finding it, and removes
+# exactly its plist either way; the VM keeps running, and the log stays.
+#
+# VM_BOOT_LAUNCHD_DIR is the same test hook AGENTS_TOKEN_LAUNCHD_DIR is (see there): never change it on a real
+# Mac, and it comes only from the make command line or this file, never from the environment.
+VM_BOOT_LAUNCHD_DIR_ORIGIN := $(origin VM_BOOT_LAUNCHD_DIR)
+VM_BOOT_LAUNCHD_DIR ?= /Library/LaunchDaemons
+# Also spelled out in dev/vm-boot-launchd.sh (label_prefix): keep the two alike.
+VM_BOOT_LAUNCHD_LABEL_PREFIX = io.github.timothymamo.shift2eu.vm-boot.
+VM_BOOT_STATE = $${XDG_STATE_HOME:-$$HOME/.local/state}/shift2eu
+# The refusal of a run as root, shared by install and uninstall.
+VM_BOOT_ROOT_CHECK = if [ "$$(id -u)" = 0 ]; then \
+		echo "$@: refused: run it as the maintainer, not as root (no sudo make); it runs sudo itself. The job runs as the account that installs it, and the VM it starts is that account's" >&2; \
+		exit 1; \
+	fi; \
+	command -v launchctl >/dev/null 2>&1 || { echo "$@: no launchctl: the LaunchDaemon is for the Mac" >&2; exit 1; }
+
+vm-boot-install vm-boot-uninstall: export VM_BOOT_LAUNCHD_DIR := $(VM_BOOT_LAUNCHD_DIR)
+
+.PHONY: vm-boot-install
+vm-boot-install: ## Install (or update) the LaunchDaemon that starts this VM instance at boot, with nobody logged in; needs sudo (host clone, macOS)
+	$(LIMA_INSTANCE_CHECK)
+	@$(VM_BOOT_ROOT_CHECK); \
+	$(call LAUNCHD_DIR_CHECK,VM_BOOT_LAUNCHD_DIR); \
+	$(call LIMA_AUTOSTART_JOBS,refused); \
+	if [ -n "$$lima_autostart" ]; then \
+		echo "vm-boot-install: refused: Lima's own autostart job of $$LIMA_INSTANCE (named above) is loaded, so nothing was installed: remove it with the commands above, then run make vm-boot-install again" >&2; \
+		exit 1; \
+	fi; \
+	list="$$(limactl list --quiet)" || { \
+		echo "vm-boot-install: refused: could not list the Lima instances, so it cannot tell whether $$LIMA_INSTANCE exists: nothing was installed" >&2; \
+		exit 1; \
+	}; \
+	printf '%s\n' "$$list" | grep -qxF -- "$$LIMA_INSTANCE" || { \
+		echo "vm-boot-install: refused: Lima lists no instance $$LIMA_INSTANCE, and the job starts an existing instance only: create the VM first (make vm-create), then run make vm-boot-install again" >&2; \
+		exit 1; \
+	}; \
+	label="$(VM_BOOT_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${VM_BOOT_LAUNCHD_DIR%/}/$$label.plist"; \
+	state="$(VM_BOOT_STATE)"; log="$$state/vm-boot-$$LIMA_INSTANCE.log"; \
+	tmp="$$(mktemp "$${TMPDIR:-/tmp}/vm-boot-plist.XXXXXX")" || exit 1; \
+	trap 'rm -f "$$tmp"; sudo -k' EXIT; \
+	dev/vm-boot-launchd.sh plist >"$$tmp" || exit 1; \
+	plutil -lint "$$tmp" || { echo "vm-boot-install: plutil refused the rendered plist, so launchd would load no job: nothing was installed" >&2; exit 1; }; \
+	sum="$$(shasum -a 256 <"$$tmp" | cut -d ' ' -f 1)" || exit 1; \
+	echo "vm-boot-install: installing this plist as $$dest (it holds no credential):"; \
+	cat "$$tmp"; \
+	echo "vm-boot-install: its SHA-256 is $$sum"; \
+	echo "vm-boot-install: creating $$state as $$(id -un); the job logs to $$log"; \
+	(umask 077 && mkdir -p "$$state") || exit 1; \
+	if launchctl print "system/$$label" >/dev/null 2>&1; then \
+		echo "vm-boot-install: $$label is loaded already: unloading it to load the new plist"; \
+		echo "+ sudo launchctl bootout system/$$label"; \
+		sudo launchctl bootout "system/$$label" || echo "vm-boot-install: launchctl bootout exited non-zero; checking whether $$label unloaded anyway"; \
+		tries=0; \
+		while [ "$$tries" -lt 10 ] && launchctl print "system/$$label" >/dev/null 2>&1; do sleep 1; tries=$$((tries + 1)); done; \
+		if launchctl print "system/$$label" >/dev/null 2>&1; then \
+			echo "vm-boot-install: ERROR: the old job $$label is still loaded $$tries second(s) after launchctl bootout, so nothing was installed. Check it with sudo launchctl print system/$$label, wait for it to unload or run make vm-boot-uninstall, then run make vm-boot-install again" >&2; \
+			exit 1; \
+		fi; \
+	fi; \
+	echo "+ sudo install -m 0644 -o root -g wheel $$tmp $$dest"; \
+	sudo install -m 0644 -o root -g wheel "$$tmp" "$$dest" || exit 1; \
+	installed="$$( { shasum -a 256 | cut -d ' ' -f 1; } 2>/dev/null <"$$dest")" || installed=''; \
+	if [ "$$installed" != "$$sum" ]; then \
+		echo "+ sudo rm -f $$dest"; \
+		sudo rm -f "$$dest" || { echo "vm-boot-install: ERROR: $$dest is not the plist printed above, and sudo rm -f could not remove it: remove it by hand before the next boot loads it" >&2; exit 1; }; \
+		echo "vm-boot-install: ERROR: $$dest is not the plist printed above (its SHA-256 is $${installed:-unreadable}, not $$sum), so it was removed again and not loaded: look for what changed the file, then run make vm-boot-install again" >&2; \
+		exit 1; \
+	fi; \
+	echo "vm-boot-install: $$dest has the SHA-256 printed above"; \
+	echo "+ sudo launchctl bootstrap system $$dest"; \
+	if ! sudo launchctl bootstrap system "$$dest"; then \
+		sleep 1; \
+		echo "+ sudo launchctl bootstrap system $$dest"; \
+		if ! sudo launchctl bootstrap system "$$dest"; then \
+			if launchctl print "system/$$label" >/dev/null 2>&1; then \
+				echo "vm-boot-install: launchctl bootstrap exited non-zero twice, but launchctl print finds $$label loaded: the job is loaded" >&2; \
+			else \
+				echo "vm-boot-install: ERROR: launchctl bootstrap failed twice: the job is not loaded now. The checked plist stays at $$dest, so launchd loads it at the next boot; run make vm-boot-install again" >&2; \
+				exit 1; \
+			fi; \
+		fi; \
+	fi; \
+	echo "vm-boot-install: loaded $$label: it ran once now (a Stopped VM starts) and runs again at every boot"; \
+	echo "vm-boot-install: check it with: limactl list $$LIMA_INSTANCE (Running) and its log: tail $$log"
+
+.PHONY: vm-boot-uninstall
+vm-boot-uninstall: ## Remove the LaunchDaemon that starts this VM instance at boot (the VM keeps running); needs sudo (host clone, macOS)
+	$(LIMA_INSTANCE_CHECK)
+	@$(VM_BOOT_ROOT_CHECK); \
+	$(call LAUNCHD_DIR_CHECK,VM_BOOT_LAUNCHD_DIR); \
+	label="$(VM_BOOT_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${VM_BOOT_LAUNCHD_DIR%/}/$$label.plist"; \
+	trap 'sudo -k' EXIT; \
+	echo "+ sudo launchctl bootout system/$$label"; \
+	if sudo launchctl bootout "system/$$label"; then booted=1; else booted=0; fi; \
+	tries=0; \
+	while [ "$$tries" -lt 10 ] && launchctl print "system/$$label" >/dev/null 2>&1; do sleep 1; tries=$$((tries + 1)); done; \
+	if launchctl print "system/$$label" >/dev/null 2>&1; then \
+		echo "vm-boot-uninstall: warning: $$label is still loaded $$tries second(s) after launchctl bootout: unload it with sudo launchctl bootout system/$$label; removing its plist anyway, so the next boot does not load it" >&2; \
+	elif [ "$$booted" = 1 ]; then \
+		echo "vm-boot-uninstall: unloaded $$label"; \
+	else \
+		echo "vm-boot-uninstall: $$label was not loaded (launchctl bootout failed); removing its plist anyway"; \
+	fi; \
+	echo "+ sudo rm -f $$dest"; \
+	sudo rm -f "$$dest" || exit 1; \
+	echo "vm-boot-uninstall: removed $$dest; the VM keeps running and the log stays. After a reboot, start the VM with make vm-up"
 
 # STRIP_CONTROL keeps only tab, newline and printable ASCII of what the VM printed, on stdout and stderr (the
 # recipes capture both, 2>&1), before make echoes it: the scripts in the VM are code the agents can write, and an
