@@ -222,7 +222,7 @@ func TestRunSkipsNoUsableAnswerTwiceThroughTheCLI(t *testing.T) {
 		{
 			name:      "an answer with no findings field",
 			answer:    `{"summary":"` + answerMarker376 + `"}`,
-			wantCheck: "no findings field",
+			wantCheck: "missing findings",
 		},
 		{
 			name:      "an answer whose findings is null",
@@ -296,6 +296,127 @@ func TestRunSkipsNoUsableAnswerTwiceThroughTheCLI(t *testing.T) {
 				if strings.Contains(text, answerMarker376) {
 					t.Errorf("the skipped outcome repeats %q, text of the model's answer: neither the review, nor the log, nor the skip's message holds any of it (issues #366, #376); text: %q",
 						answerMarker376, text)
+				}
+			}
+		})
+	}
+}
+
+// TestRunClassifiesAMalformedAnswerThroughTheCLI pins issue #375 through the
+// Claude Code CLI a whole run asks: an answer the reviewer cannot read is
+// refused with a constant class — broken JSON, with the byte offset
+// *json.SyntaxError names; an unknown field; a field of the wrong type; no
+// findings field — which the retry notice names and the skipped outcome repeats,
+// so the failure can be diagnosed. No text of the answer reaches the log, the
+// review or the skip's message: the class is a constant of this package, planted
+// marker included and never repeated, whatever the answer holds.
+func TestRunClassifiesAMalformedAnswerThroughTheCLI(t *testing.T) {
+	t.Parallel()
+
+	// answerMarker375 stands for the model's own words. Each case plants it where
+	// the decoder would quote it: a class built from the decoder's message fails
+	// the case rather than passing it (issue #366).
+	const answerMarker375 = "MRK375-THE-ANSWER-TEXT"
+
+	pr := splitPR()
+
+	cases := []struct {
+		name string
+		// answer is the answer the CLI gives every time.
+		answer string
+		// wantClass is the class the retry notice and the skipped outcome name:
+		// a constant phrase, and for broken JSON the answer's byte offset.
+		wantClass string
+	}{
+		{
+			name: "broken JSON",
+			// The "o" of [oops] is the answer's byte 50.
+			answer:    `{"summary":"` + answerMarker375 + `", "findings":[oops]}`,
+			wantClass: "syntax at byte 50",
+		},
+		{
+			// The unknown field's own name is the marker: the strict decoder names
+			// it in full, which is exactly what the class must not do.
+			name:      "an unknown field",
+			answer:    `{"summary":"s","findings":[],"` + answerMarker375 + `":1}`,
+			wantClass: "unknown field",
+		},
+		{
+			name:      "a field of the wrong type",
+			answer:    `{"summary":["` + answerMarker375 + `"],"findings":[]}`,
+			wantClass: "wrong type",
+		},
+		{
+			name:      "no findings field",
+			answer:    `{"summary":"` + answerMarker375 + `"}`,
+			wantClass: "missing findings",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cli, _ := newFakeClaudeCLI(t, claudeFake{stdout: cliAnswer(t, tc.answer)})
+
+			gh := &fakeGitHub{
+				pr:    pr,
+				diff:  cleanDiff,
+				files: []review.ChangedFile{{Path: "internal/x/y.go", Status: "modified", Additions: 1}},
+			}
+
+			var log bytes.Buffer
+
+			result, err := review.Run(t.Context(), gh, review.NewClaudeCLI(cli, testModelToken, time.Minute), review.Config{
+				Number:       pr.Number,
+				BotLogin:     testBotLogin,
+				Instructions: splitInstructions,
+				Notices:      &log,
+			})
+			if err != nil {
+				t.Fatalf("Run: %v; want no error: two unusable answers skip the review, they do not fail the check (issue #376)", err)
+			}
+
+			if result.Skip == nil {
+				t.Fatalf("Result.Skip = nil, want a skip: the CLI answered twice with an answer the reviewer cannot read (issue #376)")
+			}
+
+			if result.Skip.Reason != review.SkipNoUsableAnswer {
+				t.Errorf("Result.Skip.Reason = %q, want %q", result.Skip.Reason, review.SkipNoUsableAnswer)
+			}
+
+			written := log.String()
+			lines := strings.Split(strings.TrimSuffix(written, "\n"), "\n")
+			if len(lines) != 1 || !noticeLine.MatchString(lines[0]) {
+				t.Fatalf("the run wrote %d log line(s) (%q), want one ::notice line: the retry names the class of the answer it could not read (issues #343, #375)", len(lines), written)
+			}
+
+			if !strings.Contains(lines[0], tc.wantClass) {
+				t.Errorf("the retry notice %q does not name the class %q: the notice says which constant check failed, so a failure is diagnosable without the decoder's message (issues #366, #375)", lines[0], tc.wantClass)
+			}
+
+			if len(gh.posts) != 1 {
+				t.Fatalf("the run posted %d reviews, want 1: a skipped review says so on the pull request (issue #376)", len(gh.posts))
+			}
+
+			post := gh.posts[0]
+
+			if post.review.Event != review.EventComment {
+				t.Errorf("the skipped review's Event = %q, want %q", post.review.Event, review.EventComment)
+			}
+
+			if !strings.Contains(post.review.Body, tc.wantClass) {
+				t.Errorf("the skipped review does not name the class %q; body:\n%s", tc.wantClass, post.review.Body)
+			}
+
+			if !strings.Contains(result.Skip.Message, tc.wantClass) {
+				t.Errorf("Result.Skip.Message = %q, which does not name the class %q: the message says which class of malformed answer the model wrote (issue #375)", result.Skip.Message, tc.wantClass)
+			}
+
+			for _, text := range []string{post.review.Body, written, result.Skip.Message} {
+				if strings.Contains(text, answerMarker375) {
+					t.Errorf("the skipped outcome repeats %q, text of the model's answer: the class is a constant, so neither the review, nor the log, nor the skip's message carries any of the answer (issues #366, #375); text: %q",
+						answerMarker375, text)
 				}
 			}
 		})

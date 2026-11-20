@@ -420,12 +420,12 @@ func TestClaudeCLIAskFailsTheRun(t *testing.T) {
 		{
 			name:      "an error result after a failed run",
 			behaviour: claudeFake{stdout: `{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached"}`, exit: 1},
-			wantAny:   []string{"usage limit reached"},
+			wantAny:   []string{"claude cli error"},
 		},
 		{
 			name:      "an error result of a run that exited 0",
 			behaviour: claudeFake{stdout: `{"type":"result","subtype":"success","is_error":true,"result":"Claude AI usage limit reached"}`},
-			wantAny:   []string{"usage limit reached"},
+			wantAny:   []string{"claude cli error"},
 		},
 		{
 			name:      "a turn that hit its maximum",
@@ -510,6 +510,38 @@ func TestClaudeCLIAskFailsTheRun(t *testing.T) {
 				t.Errorf("Ask returned after %v with a timeout of %v, want the CLI cut off at about the timeout", elapsed, tc.timeout)
 			}
 		})
+	}
+}
+
+// TestClaudeCLIAskNamesAnErrorResultByClassAndSubtype pins issue #374: the
+// CLI's result text of an `is_error` envelope is model output a pull request's
+// author can steer, and the run's error is printed as the job's public ::error
+// line, so the error names the CLI's constant error class and its subtype, and
+// no text of the result at all.
+func TestClaudeCLIAskNamesAnErrorResultByClassAndSubtype(t *testing.T) {
+	t.Parallel()
+
+	// cliResultMarker stands for the CLI's result text: the model's words, which
+	// the error must never repeat.
+	const cliResultMarker = "MRK374-THE-CLI-RESULT-TEXT"
+
+	cli, _ := newFakeClaudeCLI(t, claudeFake{
+		stdout: `{"type":"result","subtype":"error_max_turns","is_error":true,"result":"` + cliResultMarker + `"}`,
+	})
+
+	text, err := review.NewClaudeCLI(cli, fakeOAuthToken, 30*time.Second).Ask(t.Context(), review.Prompt{System: "s", User: "u"})
+	if !errors.Is(err, review.ErrModel) {
+		t.Fatalf("Ask = %q, %v; want an error wrapping ErrModel: the CLI reported an error, so the run fails (ADR 0033)", text, err)
+	}
+
+	for _, want := range []string{"claude cli error", "error_max_turns"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Ask = %v, which does not name %q: the ::error line names a constant class and the CLI's subtype, so the failure is diagnosable without its text (issue #374)", err, want)
+		}
+	}
+
+	if strings.Contains(err.Error(), cliResultMarker) {
+		t.Errorf("Ask = %v, which holds %q, text of the CLI's result: the CLI's text is model output a pull request's author can steer, and the error is a public ::error line (issue #374)", err, cliResultMarker)
 	}
 }
 

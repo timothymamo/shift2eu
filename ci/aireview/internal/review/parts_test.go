@@ -936,6 +936,208 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 	}
 }
 
+// TestRunShowsTheBlockingFindingsOfThePartsThatAnswered pins issue #388: when
+// one part of a split diff answers unusably twice the whole review is skipped,
+// and that one COMMENT review is the maintainer's only report of the parts that
+// did answer. It therefore shows, per part that gave a usable answer, how many
+// blocking and non-blocking findings that part had, and, for each of its
+// blocking findings, the constant category and the `path:line` — and nothing
+// else of the finding: no title, no body, no summary, no category the model
+// invented and no path that is not a file of that part's own diff. A category
+// outside this package's constants reads "other", and a path outside the part
+// reads "a file outside the part". The markers of the answer's text reach
+// neither the review, nor the log, nor the skip's message.
+func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
+	t.Parallel()
+
+	const (
+		firstPath  = "internal/x/one.go"
+		secondPath = "internal/x/two.go"
+		// outsidePath is a path the second part's diff does not hold: a finding
+		// may name any path the repository could have, or none at all.
+		outsidePath = "internal/x/MRK388-ELSEWHERE.go"
+	)
+
+	pr := splitPR()
+
+	files := []review.ChangedFile{
+		{Path: firstPath, Status: "modified", Additions: 1},
+		{Path: secondPath, Status: "modified", Additions: 1},
+	}
+
+	// Two parts of one file each: the first part's answers are unusable twice,
+	// so the run skips, and the second part's answer is the one each case plants.
+	diff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, secondPath, 150_001)
+
+	// The markers stand for the model's words in every text field of a finding.
+	const (
+		titleMarker   = "MRK388-THE-FINDING-TITLE"
+		bodyMarker    = "MRK388-THE-FINDING-BODY"
+		summaryMarker = "MRK388-THE-ANSWER-SUMMARY"
+	)
+
+	finding := func(severity, category, path, line string) string {
+		return `{"severity":"` + severity + `","category":"` + category + `","path":"` + path + `"` + line +
+			`,"title":"` + titleMarker + `","body":"` + bodyMarker + `"}`
+	}
+
+	const (
+		blockerOnLine3    = `,"line":3`
+		suggestionOnLine5 = `,"line":5`
+		blockerOnLine7    = `,"line":7`
+		noLine            = ""
+	)
+
+	cases := []struct {
+		name string
+		// answer is the second part's answer: the part whose findings the
+		// skipped review summarises.
+		answer string
+		// want are the phrases the skipped review must hold: the counts of the
+		// part that answered, and each blocking finding's constant category and
+		// location.
+		want []string
+		// wantAbsent are phrases the skipped review must not hold: a category the
+		// model invented, a non-blocking finding, or a path it should not show.
+		wantAbsent []string
+	}{
+		{
+			name: "a blocking finding of a known category, beside a non-blocking one",
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", secondPath, blockerOnLine3) + `,` +
+				finding("suggestion", "readability", secondPath, suggestionOnLine5) + `]}`,
+			want: []string{
+				"**Blocking findings in the parts that answered:**",
+				"- Part 2 of 2: 1 blocking, 1 non-blocking.",
+				"blocking: category security at " + secondPath + ":3",
+			},
+			// A non-blocking finding is a count alone: its category and its line
+			// are no part of the summary.
+			wantAbsent: []string{"readability", secondPath + ":5"},
+		},
+		{
+			name: "a blocking finding whose category is not one of the package's constants reads other",
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "style", secondPath, blockerOnLine3) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category other at " + secondPath + ":3",
+			},
+			wantAbsent: []string{"style"},
+		},
+		{
+			name: "a blocking finding whose path is not a file of its part",
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", outsidePath, blockerOnLine7) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category security at a file outside the part",
+			},
+			wantAbsent: []string{outsidePath, "MRK388-ELSEWHERE", "two.go:7"},
+		},
+		{
+			name: "a part whose findings are all non-blocking shows the counts alone",
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("nit", "readability", secondPath, suggestionOnLine5) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 0 blocking, 1 non-blocking.",
+			},
+			wantAbsent: []string{"blocking: category"},
+		},
+		{
+			name: "a blocking finding without a line shows its path alone",
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "tests", secondPath, noLine) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category tests at " + secondPath,
+			},
+			wantAbsent: []string{secondPath + ":0"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gh := &fakeGitHub{pr: pr, diff: diff, files: files}
+
+			model := newPartModel(firstPath, secondPath)
+			model.answers = map[string][]string{
+				firstPath:  {unusableAnswer},
+				secondPath: {tc.answer},
+			}
+
+			var log bytes.Buffer
+
+			result, err := review.Run(t.Context(), gh, model, review.Config{
+				Number:       pr.Number,
+				BotLogin:     testBotLogin,
+				Instructions: splitInstructions,
+				Notices:      &log,
+			})
+			if err != nil {
+				t.Fatalf("Run: %v; want the skipped outcome, which is no failure (issue #367)", err)
+			}
+
+			if result.Skip == nil {
+				t.Fatalf("Result.Skip = nil, want a skip: one part answered unusably twice (issue #367)")
+			}
+
+			if result.Skip.Reason != review.SkipNoUsableAnswer {
+				t.Errorf("Result.Skip.Reason = %q, want %q", result.Skip.Reason, review.SkipNoUsableAnswer)
+			}
+
+			if len(gh.posts) != 1 {
+				t.Fatalf("the run posted %d reviews, want 1: a skipped review says so on the pull request (issue #367)", len(gh.posts))
+			}
+
+			post := gh.posts[0]
+
+			if post.review.Event != review.EventComment {
+				t.Errorf("the skipped review's Event = %q, want %q: a skip is never a change request", post.review.Event, review.EventComment)
+			}
+
+			if len(post.review.Comments) != 0 {
+				t.Errorf("the skipped review holds %d inline comments, want none: the summary is the review body's, no part's finding is posted (issue #388)", len(post.review.Comments))
+			}
+
+			body := post.review.Body
+
+			for _, want := range tc.want {
+				if !strings.Contains(body, want) {
+					t.Errorf("the skipped review does not hold %q: the parts that answered are summarised by their counts and their blocking findings, so the maintainer sees the blocker a skipped review would otherwise hide (issue #388); body:\n%s", want, body)
+				}
+			}
+
+			for _, unwanted := range tc.wantAbsent {
+				if strings.Contains(body, unwanted) {
+					t.Errorf("the skipped review holds %q, which the summary must not show: it names no finding text, no invented category and no path outside the part that finding belongs to (issue #388); body:\n%s", unwanted, body)
+				}
+			}
+
+			// Only the part that answered gets a line: the part that did not
+			// answer has no findings to count (issue #388).
+			if strings.Contains(body, "- Part 1 of 2") {
+				t.Errorf("the skipped review sums up part 1 of 2, which answered unusably twice, so it has no finding to count; body:\n%s", body)
+			}
+
+			for _, text := range []string{body, log.String(), result.Skip.Message} {
+				for _, marker := range []string{titleMarker, bodyMarker, summaryMarker} {
+					if strings.Contains(text, marker) {
+						t.Errorf("the skipped outcome repeats %q, text of the model's answer: neither the review, nor the log, nor the skip's message carries any of it (issues #366, #388); text: %q",
+							marker, text)
+					}
+				}
+			}
+
+			if len(gh.dismissals) != 0 {
+				t.Errorf("the skipped run dismissed %d review(s), want none: a skip is no finding, so nothing is withdrawn (issue #367)", len(gh.dismissals))
+			}
+		})
+	}
+}
+
 // TestRunSkipsADiffItCannotReview pins the size causes of the skipped outcome
 // (issue #367, ADR 0033): a diff that packs into more than MaxDiffParts parts, a
 // single file whose own section is over MaxDiffBytes, and a raw diff over
