@@ -40,5 +40,10 @@
 // CGO_ENABLED, GOFLAGS (-mod=readonly) and GOWORK (off) fixed, so a
 // developer's settings cannot change what is built. It is CI tooling, no part
 // of the product: a main package, which nothing imports, held by the strict
-// depguard rule site-builder and the forbidigo group site-builder-env.
+// depguard rule site-builder and the forbidigo group site-builder-env. Unlike
+// the other CI tooling it is not standard library only: it constructs the
+// three embedded-snapshot targets (ovhcloud, scaleway, upcloud) to read their
+// catalogs (internal/domain/catalog) and takes the development version from
+// internal/version, the one place outside cmd/ that constructs adapters
+// (ADR 0036). The targets read only their embedded snapshots.
 package main

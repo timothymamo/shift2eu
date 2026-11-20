@@ -142,6 +142,18 @@ is built with `-trimpath` and `-buildvcs=false`, so it depends on the sources al
 `manifest.json` lists every file's SHA-256. The verification page says how to check the live files against
 an attested bundle's manifest, and how to run that bundle locally. Its attestation, the deploy and the live checks are milestone 3's.
 
+### The builder reads the catalogs and the version
+
+`ci/sitebuild` is CI tooling, but not standard library only, as the PRD first said. The assessment page
+names each target's snapshot date and regions, and every page the version. The builder takes them from
+where the CLI does: it imports `internal/adapter/target/{ovhcloud,scaleway,upcloud}`, constructs the three
+targets and reads their embedded catalogs (`internal/domain/catalog`), and takes the development value an
+untagged build shows from `internal/version`. A copy of those values in the builder would drift from the
+snapshots. This makes it the one place outside `cmd/` that constructs adapters: `adapters-are-built-in-cmd`
+leaves `ci/sitebuild` out, and its strict rule `site-builder` names exactly those five packages, each
+ending in `$`, beside its standard packages. It is a main package that nothing imports, the three targets
+read only embedded snapshots and never the network, and the release runs it from milestone 3.
+
 ### The headless-browser smoke test
 
 - **`test/browser`**, behind the build tag `browser && !js`, drives the built bundle with `chromedp`.

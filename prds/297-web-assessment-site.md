@@ -184,6 +184,9 @@ release), *live* (checked against the live site) or *review*.
   the CSP governs only the fetch of a worker's script.
   Where the host can also send the policy as a header (Hosting decision 2), the header adds
   `frame-ancestors 'none'`.
+  - [x] Milestone 2: the `<meta>` policy of every built page and its static test
+    (`test/site`'s `TestContentSecurityPolicyIsExact` and `TestContentSecurityPolicyCheckRejects`).
+  - [ ] Milestone 3: the policy as a header with `frame-ancestors 'none'`, where the host can send it.
 - [x] The site loads no image (*Decided by the orchestrator in review*). `img-src 'none'`, not `'self'`:
   an own-origin image GET carries data in its path or query to the host's logs, the same channel for
   which `connect-src 'self'` is rejected, and a CSP host-source that pins exact paths needs a host,
@@ -322,6 +325,9 @@ release), *live* (checked against the live site) or *review*.
   `checkVisibility()` returns `true` and its bounding box has a non-zero width and height. Only a change
   made after preload is live in shipping browsers may remove it, and that change retires the static test
   in the same commit; the live check (*Layer 3* and milestone 4) refuses the removal before then.
+  - [x] Milestone 2: the statement, its static test (`test/site`'s `TestDowngradeRiskIsShown`) and the
+    browser test (`test/browser`'s `TestPrivacyAndVerificationPages`).
+  - [ ] Milestone 4: the live check that refuses the statement's removal before preload is live.
 - [ ] If milestone 4's HSTS outcome is recorded as `waived` (*Layer 3*, the HSTS record
   `site/records/hsts.json`), the privacy page and the site's verification page also carry a statement
   with the marker `id="hsts-waived"`, shown by default, saying that without HSTS the downgrade risk also
@@ -332,6 +338,10 @@ release), *live* (checked against the live site) or *review*.
   milestone 4: the static and browser tests treat a missing record as "not waived" (and require
   `downgrade-risk` regardless, as above), while the release's live check and the scheduled one fail
   safe on a missing record (*Layer 3*).
+  - [x] Milestone 2: the static test (`test/site`'s `TestHSTSStatementFollowsTheRecord`) and the browser
+    test (`test/browser`'s `TestPrivacyAndVerificationPages`), a missing record read as not waived.
+  - [ ] Milestones 3 and 4: the live check that enforces the marker on the deployed pages and fails safe
+    on a missing record, and the record itself.
 - [ ] The privacy page names the apex redirect's provider (chosen in milestone 4), says what it sees of a
   visitor who enters through `shift2eu.com` (IP address, user agent, the requested path and the
   `Referer`), and that it only serves the redirect and never the site or the inventory. *Review* at
@@ -620,6 +630,9 @@ release), *live* (checked against the live site) or *review*.
 - [ ] CI runs the smoke test as its own job on every pull request and on `main`, with `contents: read`
   only. The release runs it on the bundle it attests, before the deploy, in a job that holds neither the
   attestation's `id-token` nor the Scaleway key.
+  - [x] Milestone 2: CI's `browser` job (`Browser smoke test` in `ci.yml`), on every pull request and push
+    to `main`, with `contents: read` only.
+  - [ ] Milestone 3: the release's run on the bundle it attests, before the deploy.
 
 ### Runbook
 
@@ -714,7 +727,9 @@ security audit (`security-audit` skill), since every one of them touches the tru
    CSS, one small page script; `site/records/`, which milestone 4 fills, is never bundled), the privacy
    page and the verification page, `make site` (a Go program, standard library
    only, that assembles the bundle: content-addressed names, the module embedded in its script, SRI
-   values, the version, the snapshot dates), the static tests (CSP, no image in any built page or HTML
+   values, the version, the snapshot dates; as built, it also imports the three embedded-snapshot
+   targets, `internal/domain/catalog` and `internal/version`, to take the snapshot dates, regions and
+   version from where the CLI does rather than a copy that could drift, ADR 0036), the static tests (CSP, no image in any built page or HTML
    reporter golden, the hostile golden included (no `<img>`, `<picture>`, `<input type="image">`,
    `<link rel="icon">`, SVG `<image>`, `<use>` or `<feImage>` with an external `href` or `xlink:href`, or `data:` URL),
    no stylesheet `url()` or `@import`, SRI, banned APIs (cross-origin messaging included) and computed
