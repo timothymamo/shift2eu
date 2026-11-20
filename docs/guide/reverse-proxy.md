@@ -1,5 +1,9 @@
 # Behind a reverse proxy
 
+> **Retired** ([ADR 0037](../adr/0037-retire-the-http-api-and-release-the-cli-alone.md)): releases no
+> longer ship `shift2eu-server`. Its images up to the last release that shipped them stay on `ghcr.io`
+> but get no updates, security fixes included. Run assessments with the CLI or in the browser on the site.
+
 How to deploy `shift2eu-server`: behind a reverse proxy that terminates TLS, authenticates each user
 and limits the rate of requests, with the server's own defences as a second line. This page lists the
 server's flags and variables, a hardened `docker run` and a minimal nginx configuration.

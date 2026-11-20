@@ -120,8 +120,6 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.date=$(DATE)
 # The container image make image builds (docs/adr/0013-ship-shift2eu-as-a-distroless-container-image.md).
 IMAGE   ?= shift2eu
-# The HTTP API's container image make server-image builds, the Dockerfile's server stage (PRD #103).
-SERVER_IMAGE ?= shift2eu-server
 # The container CLI make image runs: docker where it is installed, otherwise nerdctl, the rootless runtime
 # of the Lima VM (docs/adr/0017-run-a-rootless-container-runtime-in-the-lima-vm.md).
 DOCKER  ?= $(if $(shell command -v docker 2>/dev/null),docker,nerdctl)
@@ -274,19 +272,6 @@ image: ## Build the local container image shift2eu:<version>, shift2eu:dev and s
 		--tag "$(IMAGE):$(VERSION)" \
 		--tag "$(IMAGE):dev" \
 		--tag "$(IMAGE):latest" \
-		.
-
-.PHONY: server-image
-server-image: ## Build the local container image shift2eu-server:<version>, :dev and :latest, the Dockerfile's server stage, as make image does
-	$(DOCKER) build \
-		$(if $(PLATFORMS),--platform "$(PLATFORMS)") \
-		--target server \
-		--build-arg VERSION="$(VERSION)" \
-		--build-arg COMMIT="$(COMMIT)" \
-		--build-arg DATE="$(DATE)" \
-		--tag "$(SERVER_IMAGE):$(VERSION)" \
-		--tag "$(SERVER_IMAGE):dev" \
-		--tag "$(SERVER_IMAGE):latest" \
 		.
 
 .PHONY: fmt
