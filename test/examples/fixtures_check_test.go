@@ -494,10 +494,10 @@ var publicOpenSourceOwners = []string{
 // the vendor host itself, yet the owner or the bucket after it names the
 // customer just as a host would, so the value reported is the host and the
 // owner (github.com/acme, from git@github.com:acme/x.git too), the scheme and
-// the bucket (s3://acme-prod-bucket), the ARN (arn:aws:s3:::acme-prod-bucket)
-// or the host and the Cloud Storage path up to the bucket
-// (storage.googleapis.com/acme-prod-data,
-// www.googleapis.com/upload/storage/v1/b/acme-prod-data), in lower case.
+// the bucket (s3://acme-prod-bucket) or the ARN (arn:aws:s3:::acme-prod-bucket),
+// each as written, or the host and the Cloud Storage path up to the bucket in
+// lower case (storage.googleapis.com/acme-prod-data,
+// www.googleapis.com/upload/storage/v1/b/acme-prod-data).
 //
 // It knowingly leaves these gaps:
 //
@@ -522,7 +522,11 @@ var publicOpenSourceOwners = []string{
 //     only the bucket is judged, so a customer's name in the key passes;
 //   - a Cloud Storage bucket written with capitals: Cloud Storage names are
 //     lower case, so the path pattern stops before the first capital
-//     (storage.googleapis.com/Acme-prod passes, the asset type Bucket with it);
+//     (storage.googleapis.com/Acme-prod passes, the asset type Bucket with it).
+//     In a JSON API path the bucket passes after www.googleapis.com
+//     (www.googleapis.com/storage/v1/b/Acme-prod), while after
+//     storage.googleapis.com it reports storage.googleapis.com/storage, which
+//     fails closed but names the wrong value;
 //   - the paths of every other vendor host publicVendorHosts lists
 //     (golang.org/x/..., www.ovhcloud.com/en/...), whose segments are
 //     the vendor's own.
@@ -665,13 +669,13 @@ var englishWordsEndingInIP = []string{
 // subnet_10_0_0_0_24): a fifth group after it, with the same separator, of 0 to
 // 32 and with nothing further, is a prefix length (cidrSuffix), and so is one a
 // further digit group follows when a label stands before the run
-// (subnet-10-0-1-0-24-2, vpc_10_0_0_0_16_1, which fails closed), while any other
-// fifth group (10-1-2-3-45, vpc-10-0-0-0-33, vpc-10-0-0-0-016, the bare
-// 10-1-2-3-4-5) or one after a public-looking run (build-1-2-3-4-5) leaves the
-// run clean. An English word ending in ip before a
-// private run excuses it only when the word stands on its own (zip-10-1-2-3);
-// inside a compound name (edge-strip-10-0-0-5, node_tip_10_1_2_3) it marks the
-// address like any other label.
+// (subnet-10-0-1-0-24-2, vpc_10_0_0_0_16_1, which fails closed, as does prose
+// such as steps-10-1-2-3-4-5, which reports 10-1-2-3), while any other fifth
+// group (10-1-2-3-45, vpc-10-0-0-0-33, vpc-10-0-0-0-016, the bare 10-1-2-3-4-5)
+// or one after a public-looking run (build-1-2-3-4-5) leaves the run clean. An
+// English word ending in ip before a private run excuses it only when the word
+// stands on its own (zip-10-1-2-3); inside a compound name (edge-strip-10-0-0-5,
+// node_tip_10_1_2_3) it marks the address like any other label.
 //
 // It knowingly leaves these forms to a follow-up issue rather than report a value
 // it cannot tell from prose:
@@ -747,9 +751,10 @@ func hyphenatedIPv4Bounded(text string, start, end int) bool {
 // separator but a CIDR prefix length (cidrSuffix: vpc-10-0-0-0-16, and so
 // 10-1-2-3-4 is read as 10.1.2.3/4, failing closed, while 10-1-2-3-45 and
 // 10-1-2-3-4-5 are no address) and, behind a label, one more digit group after
-// that prefix length (subnet-10-0-1-0-24-2, failing closed), and a label before it must be no word of
-// englishWordsEndingInIP that stands on its own (zip-10-1-2-3, but not the strip
-// of edge-strip-10-0-0-5) and no group of digits (eu-central-1-10-1-2-3).
+// that prefix length (subnet-10-0-1-0-24-2, failing closed, and so prose such
+// as steps-10-1-2-3-4-5 too), and a label before it must be no word of
+// englishWordsEndingInIP that stands on its own (zip-10-1-2-3, but not the
+// strip of edge-strip-10-0-0-5) and no group of digits (eu-central-1-10-1-2-3).
 func hyphenatedIPv4StandsAlone(text string, start, end int, addr netip.Addr) bool {
 	if !addr.IsPrivate() && !sharedAddressNet.Contains(addr) && !addr.IsLinkLocalUnicast() {
 		return false
