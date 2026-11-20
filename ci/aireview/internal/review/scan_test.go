@@ -218,7 +218,7 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			diff: goldenAdds(golden,
 				`"note": "internal/adapter/report/markdown/testdata/Report1"`,
 				`"doc": "https://github.com/timothymamo/shift2eu/blob/main/docs/ADR0033x"`,
-				`"import": "golang.org/x/tools/gopls/internal/LongName1Here"`),
+				`"import": "golang.org/x/tools/gopls/internal/LongName12Here"`),
 			wantFiles: []review.LeftOutFile{{Path: golden, Added: 3}},
 		},
 		{
