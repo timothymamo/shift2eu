@@ -941,12 +941,18 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 // and that one COMMENT review is the maintainer's only report of the parts that
 // did answer. It therefore shows, per part that gave a usable answer, how many
 // blocking and non-blocking findings that part had, and, for each of its
-// blocking findings, the constant category and the `path:line` — and nothing
-// else of the finding: no title, no body, no summary, no category the model
-// invented and no path that is not a file of that part's own diff. A category
-// outside this package's constants reads "other", and a path outside the part,
-// or no path at all, reads "a file outside the part". The markers of the
-// answer's text reach neither the review, nor the log, nor the skip's message.
+// blocking findings, the constant category and the location — a path of that
+// part's own diff in a code span, as the "Not reviewed" note shows a path, its
+// line after the span — and nothing else of the finding: no title, no body, no
+// summary, no category the model invented and no path that is not a file of
+// that part's own diff. A category outside this package's constants reads
+// "other", and a path outside the part, or no path at all, reads "a file
+// outside the part". A path is a name the pull request chose, so the summary
+// shows it inside a code span and nowhere as plain text, whatever Markdown
+// punctuation, table pipe, HTML tag, backtick, mention or HTML character
+// reference to an @ it holds, and it is cut with "…" as the note cuts a path
+// (audit L1, L3). The markers of the answer's text reach neither the review,
+// nor the log, nor the skip's message.
 func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 	t.Parallel()
 
@@ -956,18 +962,33 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 		// outsidePath is a path the second part's diff does not hold: a finding
 		// may name any path the repository could have, or none at all.
 		outsidePath = "internal/x/MRK388-ELSEWHERE.go"
+		// hostPath is a path whose host would read as a bare host outside a code
+		// span.
+		hostPath = "www.evil.example/login.go"
+		// markdownPath holds the Markdown punctuation a path shown as plain text
+		// would start emphasis, a link or a code span with.
+		markdownPath = "a*b_[c](d).go"
+		// tablePath holds the "|" that ends a table's cell.
+		tablePath = "x|y.go"
+		// htmlPath holds an HTML tag a path shown as plain text would open.
+		htmlPath = "<img src=x>.go"
+		// backtickPath holds a backtick, which would close the code span it is
+		// shown in.
+		backtickPath = "internal/x/ti`ck.go"
+		// mentionPath holds a handle that would notify a team.
+		mentionPath = "@team/x.go"
+		// referencePath holds an HTML character reference to an @, which GitHub
+		// renders as the mention it names.
+		referencePath = "&#64;user.go"
 	)
 
+	// cutPath is longer than the 300 UTF-16 code units a path the review lists
+	// may take, so it is shown cut, ended with "…", as the "Not reviewed" note
+	// cuts a path; cutText is how it then reads.
+	cutPath := "internal/x/" + strings.Repeat("d", 290) + "/long.go"
+	cutText := cutPath[:299] + "…"
+
 	pr := splitPR()
-
-	files := []review.ChangedFile{
-		{Path: firstPath, Status: "modified", Additions: 1},
-		{Path: secondPath, Status: "modified", Additions: 1},
-	}
-
-	// Two parts of one file each: the first part's answers are unusable twice,
-	// so the run skips, and the second part's answer is the one each case plants.
-	diff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, secondPath, 150_001)
 
 	// The markers stand for the model's words in every text field of a finding.
 	const (
@@ -990,6 +1011,10 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 
 	cases := []struct {
 		name string
+		// path is the file of the second part's diff the case names, in the
+		// diff's own header and in the finding's path, so that the summary may
+		// show it; secondPath when empty.
+		path string
 		// answer is the second part's answer: the part whose findings the
 		// skipped review summarises.
 		answer string
@@ -1009,11 +1034,11 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 			want: []string{
 				"**Blocking findings in the parts that answered:**",
 				"- Part 2 of 2: 1 blocking, 1 non-blocking.",
-				"blocking: category security at " + secondPath + ":3",
+				"blocking: category security at `internal/x/two.go`:3",
 			},
 			// A non-blocking finding is a count alone: its category and its line
 			// are no part of the summary.
-			wantAbsent: []string{"readability", secondPath + ":5"},
+			wantAbsent: []string{"readability", secondPath + ":5", "at internal/x/two.go:3"},
 		},
 		{
 			name: "a blocking finding whose category is not one of the package's constants reads other",
@@ -1021,7 +1046,7 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 				finding("blocker", "style", secondPath, blockerOnLine3) + `]}`,
 			want: []string{
 				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
-				"blocking: category other at " + secondPath + ":3",
+				"blocking: category other at `internal/x/two.go`:3",
 			},
 			wantAbsent: []string{"style"},
 		},
@@ -1063,9 +1088,108 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 				finding("blocker", "tests", secondPath, noLine) + `]}`,
 			want: []string{
 				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
-				"blocking: category tests at " + secondPath,
+				"blocking: category tests at `internal/x/two.go`",
 			},
-			wantAbsent: []string{secondPath + ":0"},
+			// The line sits outside the span, and a finding without one has no
+			// ":0" and no colon to read as a cut location.
+			wantAbsent: []string{secondPath + ":0", "`internal/x/two.go`:"},
+		},
+		{
+			// The path is a code span, so its host starts no link and reads as
+			// the file name it is (review 1, audit L1).
+			name: "a blocking finding whose path holds a host",
+			path: hostPath,
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", hostPath, blockerOnLine3) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category security at `www.evil.example/login.go`:3",
+			},
+			wantAbsent: []string{"at www.evil.example"},
+		},
+		{
+			name: "a blocking finding whose path holds Markdown punctuation",
+			path: markdownPath,
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", markdownPath, blockerOnLine3) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category security at `a*b_[c](d).go`:3",
+			},
+			// No unfenced form, and no backslash escaping either: inside the
+			// code span the punctuation is literal, and outside it there is no
+			// path.
+			wantAbsent: []string{"at a*b_[c](d).go", `a\*b\_\[c\]\(d\).go`},
+		},
+		{
+			name: "a blocking finding whose path holds a table's pipe",
+			path: tablePath,
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", tablePath, blockerOnLine3) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category security at `x|y.go`:3",
+			},
+			wantAbsent: []string{"at x|y.go"},
+		},
+		{
+			name: "a blocking finding whose path holds an HTML tag",
+			path: htmlPath,
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", htmlPath, blockerOnLine3) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category security at `<img src=x>.go`:3",
+			},
+			wantAbsent: []string{"at <img", "<img src=x>.go:"},
+		},
+		{
+			name: "a blocking finding whose path holds a backtick",
+			path: backtickPath,
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", backtickPath, blockerOnLine3) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category security at `internal/x/ti'ck.go`:3",
+			},
+			// A backtick inside the span would close it: the review turns it into
+			// an apostrophe, as the "Not reviewed" note does.
+			wantAbsent: []string{"ti`ck.go"},
+		},
+		{
+			name: "a blocking finding whose path holds a mention",
+			path: mentionPath,
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", mentionPath, blockerOnLine3) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category security at `@\u200bteam/x.go`:3",
+			},
+			// The handle stays readable, only its @ is defused, and outside the
+			// span nothing notifies the team at all.
+			wantAbsent: []string{"@team/x.go"},
+		},
+		{
+			name: "a blocking finding whose path holds an HTML character reference to an @",
+			path: referencePath,
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", referencePath, blockerOnLine3) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category security at `&amp;#64;user.go`:3",
+			},
+			wantAbsent: []string{"&#64;user.go"},
+		},
+		{
+			name: "a blocking finding whose path is longer than a listed path may be",
+			path: cutPath,
+			answer: `{"summary":"` + summaryMarker + `","findings":[` +
+				finding("blocker", "security", cutPath, blockerOnLine3) + `]}`,
+			want: []string{
+				"- Part 2 of 2: 1 blocking, 0 non-blocking.",
+				"blocking: category security at `" + cutText + "`:3",
+			},
+			wantAbsent: []string{cutPath},
 		},
 	}
 
@@ -1073,12 +1197,31 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			gh := &fakeGitHub{pr: pr, diff: diff, files: files}
+			// The case's path is a file of the second part's own diff, so a
+			// finding naming it is a location the summary may show.
+			path := tc.path
+			if path == "" {
+				path = secondPath
+			}
 
-			model := newPartModel(firstPath, secondPath)
+			// Two parts of one file each: the first part's answers are unusable
+			// twice, so the run skips, and the second part's answer is the one
+			// each case plants.
+			diff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, path, 150_001)
+
+			gh := &fakeGitHub{pr: pr, diff: diff, files: []review.ChangedFile{
+				{Path: firstPath, Status: "modified", Additions: 1},
+				{Path: path, Status: "modified", Additions: 1},
+			}}
+
+			// The prompt is one JSON document whose encoding escapes <, > and &,
+			// so a path holding one is found there in that form.
+			inPrompt := asThePromptShows(path)
+
+			model := newPartModel(firstPath, inPrompt)
 			model.answers = map[string][]string{
-				firstPath:  {unusableAnswer},
-				secondPath: {tc.answer},
+				firstPath: {unusableAnswer},
+				inPrompt:  {tc.answer},
 			}
 
 			var log bytes.Buffer
@@ -1129,6 +1272,12 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 				}
 			}
 
+			// A path is the pull request's own text, so it shows in a code span
+			// and nowhere as plain Markdown (audit L1, L3).
+			if tc.path != "" {
+				assertShownInACodeSpanOnly(t, body, tc.path)
+			}
+
 			// Only the part that answered gets a line: the part that did not
 			// answer has no findings to count (issue #388).
 			if strings.Contains(body, "- Part 1 of 2") {
@@ -1148,6 +1297,144 @@ func TestRunShowsTheBlockingFindingsOfThePartsThatAnswered(t *testing.T) {
 				t.Errorf("the skipped run dismissed %d review(s), want none: a skip is no finding, so nothing is withdrawn (issue #367)", len(gh.dismissals))
 			}
 		})
+	}
+}
+
+// asThePromptShows returns path as a part's prompt holds it: the pull request's
+// data is one JSON document whose encoding escapes <, > and &, so that no text
+// of the pull request closes the untrusted tag.
+func asThePromptShows(path string) string {
+	return strings.NewReplacer("<", `\u003c`, ">", `\u003e`, "&", `\u0026`).Replace(path)
+}
+
+// assertShownInACodeSpanOnly fails when path appears in body outside a code
+// span. The summary shows a blocking finding's path as the "Not reviewed" note
+// shows one, so the path's own Markdown punctuation starts no emphasis, link,
+// table cell or HTML tag, its @ notifies nobody and its backticks close no span
+// (audit L1, L3, issue #388). A path the review cut appears in no span whole,
+// so the case that pins the cut asserts the cut form instead.
+func assertShownInACodeSpanOnly(t *testing.T, body, path string) {
+	t.Helper()
+
+	for at := 0; at < len(body); {
+		i := strings.Index(body[at:], path)
+		if i < 0 {
+			return
+		}
+
+		i += at
+
+		if i == 0 || body[i-1] != '`' || i+len(path) >= len(body) || body[i+len(path)] != '`' {
+			t.Errorf("the skipped review shows the path %q outside a code span: a path is a name the pull request chose, so the summary shows it in a code span alone, where it starts no emphasis, link, table cell or HTML tag and its @ notifies nobody (audit L1, L3, issue #388); body:\n%s", path, body)
+
+			return
+		}
+
+		at = i + len(path)
+	}
+}
+
+// TestRunCapsTheSummaryOfThePartsThatAnswered pins the other half of issue #388
+// (audit M1): the skipped review of a split diff whose answering part reported
+// thousands of blocking findings is still a text GitHub accepts. It lists at
+// most MaxListedExcluded blocking findings in all, ends that list with one
+// constant line that counts the rest, keeps each answered part's counts exact,
+// and still holds the sentences after the list — the prompt-injection warning
+// and the advice footer. The cap costs the findings it cannot list, never the
+// skip: the review is posted and the run passes.
+func TestRunCapsTheSummaryOfThePartsThatAnswered(t *testing.T) {
+	t.Parallel()
+
+	const (
+		firstPath = "internal/x/one.go"
+		// total is how many blocking findings the part that answered reports: a
+		// line each, far more than a review of MaxTextUnits UTF-16 code units
+		// can hold.
+		total = 5000
+	)
+
+	// manyPath is a real file of the second part, near the 300 UTF-16 code
+	// units a listed path may take, so a line per finding adds up past GitHub's
+	// limit many times over.
+	manyPath := "internal/x/" + strings.Repeat("d", 280) + "/many.go"
+
+	pr := splitPR()
+
+	diff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, manyPath, 150_001)
+
+	gh := &fakeGitHub{pr: pr, diff: diff, files: []review.ChangedFile{
+		{Path: firstPath, Status: "modified", Additions: 1},
+		{Path: manyPath, Status: "modified", Additions: 1},
+	}}
+
+	var answer strings.Builder
+
+	answer.WriteString(`{"summary":"A summary.","findings":[`)
+
+	for i := range total {
+		if i > 0 {
+			answer.WriteString(",")
+		}
+
+		fmt.Fprintf(&answer, `{"severity":"blocker","category":"security","path":%q,"line":3,"title":"t","body":"b"}`, manyPath)
+	}
+
+	answer.WriteString("]}")
+
+	model := newPartModel(firstPath, manyPath)
+	model.answers = map[string][]string{
+		firstPath: {unusableAnswer},
+		manyPath:  {answer.String()},
+	}
+
+	result, err := review.Run(t.Context(), gh, model, review.Config{
+		Number:       pr.Number,
+		BotLogin:     testBotLogin,
+		Instructions: splitInstructions,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v; want the skipped outcome, which is no failure (issue #367)", err)
+	}
+
+	if result.Skip == nil {
+		t.Fatalf("Result.Skip = nil, want a skip: one part answered unusably twice (issue #367)")
+	}
+
+	if len(gh.posts) != 1 {
+		t.Fatalf("the run posted %d reviews, want 1: a capped summary is no reason to drop the review that says the AI review was skipped (issue #367, audit M1)", len(gh.posts))
+	}
+
+	body := gh.posts[0].review.Body
+
+	if n := utf16Units(body); n > review.MaxTextUnits {
+		t.Errorf("the skipped review's body is %d UTF-16 code units, over the %d GitHub accepts and answers with a 422: the summary of the %d blocking findings of a part that answered is capped (audit M1, issue #388)", n, review.MaxTextUnits, total)
+	}
+
+	const counts = "- Part 2 of 2: 5000 blocking, 0 non-blocking."
+	if !strings.Contains(body, counts) {
+		t.Errorf("the skipped review does not hold %q: a capped summary keeps every answered part's counts exact (issue #388); body:\n%s", counts, body)
+	}
+
+	if got := strings.Count(body, "\n  - blocking: category "); got > review.MaxListedExcluded {
+		t.Errorf("the skipped review lists %d blocking findings, want at most MaxListedExcluded = %d: the list is capped, so the review stays under GitHub's limit whatever the model reports (audit M1)", got, review.MaxListedExcluded)
+	}
+
+	const more = "\n  - and 4950 more blocking findings, not listed."
+	if !strings.Contains(body, more) {
+		t.Errorf("the skipped review does not hold %q, the line that ends a capped list: without it the list reads as the whole %d blocking findings the part reported (audit M1, issue #388); body:\n%s", more, total, body)
+	}
+
+	if atMore, last := strings.Index(body, more), strings.LastIndex(body, "\n  - blocking: category "); atMore >= 0 && last > atMore {
+		t.Errorf("a blocking finding is listed after the line %q that counts the rest: that line ends the list (audit M1)", more)
+	}
+
+	// The cap takes the room of the blocking findings, never of the sentences
+	// after them: the maintainer still reads that content in the diff can cause
+	// this skip, and that the review is advice.
+	for _, want := range []string{"prompt injection in mind", "this review is advice"} {
+		if !strings.Contains(strings.ToLower(body), want) {
+			t.Errorf("the skipped review does not hold %q after its capped list: the cap costs the findings it cannot list, never the skip's own sentences (audit M1)", want)
+		}
 	}
 }
 
