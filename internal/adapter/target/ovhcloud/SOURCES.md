@@ -59,8 +59,9 @@ in taxonomy terms. This file records where each fact comes from, so the snapshot
 - **Re-checked on 2026-11-20 for issue #244.** The prices page, the Block Storage product page, the
   storage class page, the encryption page and the migration page were read again for a price of encrypted
   (LUKS) volumes. None was found, and no page states that an encrypted volume costs what its unencrypted
-  class costs (*Block Storage LUKS*). No offering, capability, region or price changed, and `retrievedOn`
-  stays 2026-11-14.
+  class costs (*Block Storage LUKS*). Only those pages and the volume prices were read again: no offering,
+  capability or region changed, and the volume prices on the prices page are unchanged. Nothing in
+  `catalog.json` changed, and `retrievedOn` stays 2026-11-14.
 
 ## Prices
 
@@ -340,7 +341,7 @@ every 1-AZ region. Pages: <https://docs.ovhcloud.com/en/guides/public-cloud/comp
   offering of their own, *Block Storage LUKS Zonal*.
 
 - **No storage price.** Re-examined on 2026-11-14 (issue #219): the prices page's *Block Storage* table and the price data behind it list the Classic, High Speed and High Speed Gen2 volumes (`volume.classic`, `volume.high-speed`, `volume.high-speed-gen2`) and no encrypted (`-luks`) volume type. The storage class page (<https://docs.ovhcloud.com/en/guides/storage-and-backup/block-storage/block-storage-the-right-storage-class>) says each class "is also available in an encrypted version (LUKS), depending on the region", "leveraging the same performance and features as standard volumes", but gives no price, and the encryption page (<https://docs.ovhcloud.com/en/guides/public-cloud/compute/encrypting-a-block-storage-volume-with-luks>) says nothing about billing. No page read states that an encrypted volume costs what its unencrypted class costs, so no price is recorded rather than the unencrypted class's (*Left out on purpose*).
-  Re-checked on 2026-11-20 (issue #244), with the same result: the price data's volume plan codes are exactly `volume.classic`, `volume.high-speed`, `volume.high-speed-gen2` and `volume.snapshot`, and "luks" appears nowhere on the prices page. The Block Storage product page (<https://www.ovhcloud.com/en-ie/public-cloud/block-storage/>) does not mention LUKS; its only price statement is "Full price transparency, with no extra costs, and optimal performance from the first gigabyte". The storage class page's billing text is general ("standard volume usage is billed per GB/month"). Neither the encryption page nor the migration page (<https://docs.ovhcloud.com/en/guides/public-cloud/compute/migrating-non-encrypted-to-encrypted-volume>) mentions a price, cost, billing or charge. OVHcloud's US support site (support.us.ovhcloud.com) was not used: it serves the US market, which bills in USD.
+  Re-checked on 2026-11-20 (issue #244), with the same result: the price data's volume plan codes are exactly `volume.classic`, `volume.high-speed`, `volume.high-speed-gen2` and `volume.snapshot`, and "luks" appears nowhere on the prices page. The Block Storage product page, read in its Ireland edition as the prices page is (<https://www.ovhcloud.com/en-ie/public-cloud/block-storage/>, the same page as the `/en/` link above), does not mention LUKS; its only price statement is "Full price transparency, with no extra costs, and optimal performance from the first gigabyte". The storage class page's billing text is general ("standard volume usage is billed per GB/month"). Neither the encryption page nor the migration page (<https://docs.ovhcloud.com/en/guides/public-cloud/compute/migrating-non-encrypted-to-encrypted-volume>) mentions a price, cost, billing or charge. OVHcloud's US support site (support.us.ovhcloud.com) was not used: it serves the US market, which bills in USD.
 
 ### Block Storage LUKS Zonal
 
