@@ -101,7 +101,7 @@ release), *live* (checked against the live site) or *review*.
 
 **Layer 1, the code.**
 
-- [ ] A static test fails when the page's script or the `syscall/js` glue names a browser API that can
+- [x] A static test fails when the page's script or the `syscall/js` glue names a browser API that can
   send data or load a resource: `fetch` (with no exception: the module is not fetched, *Layer 2*),
   `XMLHttpRequest`, `WebSocket`, `EventSource`, `sendBeacon`, `RTCPeerConnection`, `Worker`, `SharedWorker`,
   `importScripts`, `open`, `location` (assignment or navigation methods), assignment to `href`, `src`,
