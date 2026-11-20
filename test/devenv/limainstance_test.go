@@ -175,6 +175,118 @@ func TestMakeRunsLimactlForAValidLimaInstance(t *testing.T) {
 	}
 }
 
+// TestAgentsAppTokenScriptRefusesAnInvalidLimaInstance pins issue #396's third follow-up: dev/agents-app-token.sh
+// is run directly too - the LaunchDaemon's plist runs it, and docs/dev-environment.md shows it - and LIMA_INSTANCE
+// becomes part of the state directory's lock, pid and log names and of every message. The Makefile's targets refuse
+// a name the LIMA_INSTANCE_RULE does not allow before they run anything; the script the targets exec must refuse
+// the same values, with the same wording and naming the variable, before it mints, writes the VM or touches the
+// state directory, or a maintainer who runs the script itself gets a lock and a token file named after a value no
+// target would have accepted. A name of the rule's own shape still runs as it does today.
+func TestAgentsAppTokenScriptRefusesAnInvalidLimaInstance(t *testing.T) {
+	t.Parallel()
+
+	for _, bad := range invalidLimaInstances {
+		t.Run(bad.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			f.env["LIMA_INSTANCE"] = bad.value
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+			if err == nil {
+				t.Fatalf("dev/agents-app-token.sh mint exited 0 with LIMA_INSTANCE set to %s (%q): the value names the lock, pid and log files of the refresh and reaches every message, and make refuses it before the script runs, so the script itself must refuse it too, before it mints anything (issue #396)\nstdout: %s\nstderr: %s",
+					bad.name, bad.value, stdout, stderr)
+			}
+
+			for _, want := range []string{"invalid LIMA_INSTANCE", limaInstanceRule} {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("dev/agents-app-token.sh mint with LIMA_INSTANCE set to %s (%q) does not say %q on stderr, so a maintainer who runs the script itself cannot tell which variable to fix nor what a Lima instance name may hold: the refusal must carry the wording make's LIMA_INSTANCE_CHECK uses (issue #396)\nstdout: %s\nstderr: %s",
+						bad.name, bad.value, want, stdout, stderr)
+				}
+			}
+
+			if minted := f.api.minted(); len(minted) != 0 {
+				t.Errorf("dev/agents-app-token.sh mint with LIMA_INSTANCE set to %s (%q) minted %d token(s): the refusal must come before the script does anything (issue #396)", bad.name, bad.value, len(minted))
+			}
+
+			if calls := invocations(f.sb.argvLogText(t), "limactl"); len(calls) != 0 {
+				t.Errorf("dev/agents-app-token.sh mint with LIMA_INSTANCE set to %s (%q) ran limactl, so the value reached the VM: %v (issue #396)", bad.name, bad.value, calls)
+			}
+
+			if _, statErr := os.Stat(f.sb.vmPath(agentsTokenFile)); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("dev/agents-app-token.sh mint with LIMA_INSTANCE set to %s (%q) wrote %s into the VM: a refused run writes nothing anywhere (issue #396) (stat: %v)",
+					bad.name, bad.value, agentsTokenFile, statErr)
+			}
+
+			if _, statErr := os.Stat(filepath.Join(f.sb.hostHome, limaInstanceMarker)); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("dev/agents-app-token.sh mint with LIMA_INSTANCE set to %s (%q) created %s in its working directory: the value reached a shell, so a name that carries a command runs it (issue #396) (stat: %v)",
+					bad.name, bad.value, limaInstanceMarker, statErr)
+			}
+		})
+	}
+}
+
+// TestAgentsAppTokenScriptRefusesAnInvalidLimaInstanceForTheRefresh pins the same refusal for the command the
+// LaunchDaemon and make agents-token-refresh run, dev/agents-app-token.sh refresh: the refresh holds the lock and
+// writes the pid and log files the instance names, so a name the rule does not allow must stop it before it takes
+// any of them. The fixture's fake GitHub refuses every mint, so a run that is not refused first stops by itself
+// instead of refreshing until the test ends.
+func TestAgentsAppTokenScriptRefusesAnInvalidLimaInstanceForTheRefresh(t *testing.T) {
+	t.Parallel()
+
+	f := newMintFixture(t)
+	f.api.refuseMintsWith(http.StatusUnauthorized)
+	f.env["LIMA_INSTANCE"] = "a b"
+	f.env["SHIFT2EU_AGENTS_TOKEN_CHECK_SECONDS"] = "1"
+
+	stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"refresh"}, f.env, "")
+	if err == nil {
+		t.Fatalf("dev/agents-app-token.sh refresh exited 0 with LIMA_INSTANCE set to %q: the refresh names its lock, pid and log files after the instance, so it must refuse a name the rule does not allow before it takes any of them (issue #396)\nstdout: %s\nstderr: %s",
+			f.env["LIMA_INSTANCE"], stdout, stderr)
+	}
+
+	for _, want := range []string{"invalid LIMA_INSTANCE", limaInstanceRule} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("dev/agents-app-token.sh refresh with LIMA_INSTANCE set to %q does not say %q on stderr, so a maintainer whose LaunchDaemon stopped on it cannot tell which variable to fix (issue #396)\nstdout: %s\nstderr: %s",
+				f.env["LIMA_INSTANCE"], want, stdout, stderr)
+		}
+	}
+
+	if minted := f.api.minted(); len(minted) != 0 {
+		t.Errorf("dev/agents-app-token.sh refresh with LIMA_INSTANCE set to %q minted %d token(s) before it refused the name: the check must come before the refresh takes the lock or mints (issue #396)", f.env["LIMA_INSTANCE"], len(minted))
+	}
+}
+
+// TestAgentsAppTokenScriptRunsAValidLimaInstance pins the other half: a name of the rule's own shape, which the
+// Makefile's check accepts, must still mint. '.' and '_' are part of a name, and the check must refuse the values
+// no instance can carry, not the ones it can (issue #396).
+func TestAgentsAppTokenScriptRunsAValidLimaInstance(t *testing.T) {
+	t.Parallel()
+
+	for _, instance := range []string{"shift2eu", "shift2eu-test_1.2", "9"} {
+		t.Run(instance, func(t *testing.T) {
+			t.Parallel()
+
+			f := newMintFixture(t)
+			f.env["LIMA_INSTANCE"] = instance
+
+			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
+			if err != nil {
+				t.Fatalf("dev/agents-app-token.sh mint with LIMA_INSTANCE=%q: %v\nstdout: %s\nstderr: %s", instance, err, stdout, stderr)
+			}
+
+			if minted := f.api.minted(); len(minted) != 1 {
+				t.Errorf("dev/agents-app-token.sh mint with LIMA_INSTANCE=%q minted %d token(s), want one: a name the rule allows must run as before (issue #396)", instance, len(minted))
+			}
+
+			line, ok := tokenLine(f.sb.vmPath(agentsTokenFile))
+			if !ok || line == "" {
+				t.Errorf("dev/agents-app-token.sh mint with LIMA_INSTANCE=%q wrote no token into the VM: a name the rule allows must run as before (issue #396)\nstderr: %s", instance, stderr)
+			}
+		})
+	}
+}
+
 // limaInstanceDelivery is how a test hands an instance to make: as a command-line assignment, which is how a
 // maintainer types it, or in make's environment alone, which is how direnv exports it on the host. Both paths
 // must reach the same check, so both are pinned.
