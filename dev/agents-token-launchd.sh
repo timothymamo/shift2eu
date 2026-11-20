@@ -428,9 +428,10 @@ foreign_jobs() {
       -)
         remove="remove its plist (launchctl print ${domain}/${job} names none)"
         ;;
-      *[!/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
-        # The path comes from the job's plist: one with a space, a ; or a control byte is never repeated, neither
-        # to the terminal nor into an rm the maintainer pastes.
+      [!/]* | */../* | */.. | *[!/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
+        # The path comes from the job's plist: only an absolute path of / and [A-Za-z0-9._-] without a ..
+        # segment is repeated. A relative one (-rf), one with a .. segment, a space, a ; or a control byte is
+        # never repeated, neither to the terminal nor into an rm the maintainer pastes.
         shown='not shown: its path holds unusual characters'
         remove="remove its plist (its path: launchctl print ${domain}/${job})"
         ;;

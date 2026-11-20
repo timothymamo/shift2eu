@@ -1143,7 +1143,10 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 	echo "agents-token-refresh-install: $$dest has the SHA-256 printed above"; \
 	stopped=''; \
 	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" != "$$held" ]; then \
-		echo "agents-token-refresh-install: warning: the pid file of make agents-token-refresh-start no longer names pid $$held, which held the lock of $$LIMA_INSTANCE before sudo, so it is not stopped: if a refresh still holds the lock, the job exits at every ThrottleInterval until it ends (stop it, then run make agents-token-refresh-install again)" >&2; \
+		lock_holder="$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))"; \
+		if [ -n "$$lock_holder" ] && kill -0 "$$lock_holder" 2>/dev/null; then \
+			echo "agents-token-refresh-install: warning: the pid file of make agents-token-refresh-start no longer names pid $$held, which held the lock of $$LIMA_INSTANCE before sudo, so it is not stopped: if a refresh still holds the lock, the job exits at every ThrottleInterval until it ends (stop it, then run make agents-token-refresh-install again)" >&2; \
+		fi; \
 		held=''; \
 	fi; \
 	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))" = "$$held" ] && kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
