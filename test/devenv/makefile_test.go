@@ -36,7 +36,11 @@ const agentsAppPrefix = "SHIFT2EU_AGENTS_APP_"
 
 // A script of dev/ is run by its path and shebang, never through an explicit `sh` or a leading `./`, which ignore
 // the shebang and need no executable bit (issues #242 and #337). Both matches are at a word boundary, so another
-// command's `foo.sh dev/x.sh` argument is no run of a dev script.
+// command's `foo.sh dev/x.sh` argument is no run of a dev script. The convention has one exception, and the matcher
+// is why it is not flagged: the vm-init recipe runs the script inside the VM as `bash -l dev/vm-init.sh`, because
+// only a login shell loads the credentials vm-env wrote to /etc/profile.d/shift2eu.sh (Makefile, make vm-init), and
+// the script's own #!/bin/sh would not load them. So the matcher covers `sh` and `./` and deliberately not `bash`:
+// a `bash dev/x.sh` anywhere else would not be caught here either, which is the price of that one allowed line.
 var (
 	devScriptThroughShell    = regexp.MustCompile(`(^|[^[:alnum:]_.-])sh +dev/`)
 	devScriptThroughDotSlash = regexp.MustCompile(`(^|[^[:alnum:]_.-])\./dev/`)
@@ -271,7 +275,7 @@ func TestEveryDevScriptARecipeRunsIsExecutableInGit(t *testing.T) {
 			}
 
 			if mode != "100755" {
-				t.Errorf("the recipe of make %s runs %s, which git holds as mode %s, not 100755: the recipe runs it by its path and shebang, so git must check it out executable (issues #242 and #337)",
+				t.Errorf("the recipe of make %s names %s, which git holds as mode %s, not 100755: the recipe runs it by its path and shebang, so git must check it out executable (issues #242 and #337)",
 					name, script, mode)
 			}
 		}
