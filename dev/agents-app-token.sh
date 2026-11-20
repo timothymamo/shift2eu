@@ -46,8 +46,10 @@
 #   SHIFT2EU_AGENTS_TOKEN_MARGIN_SECONDS mint again when fewer seconds than this remain (default 1200)
 # Hooks the tests use: SHIFT2EU_AGENTS_GITHUB_API_URL (default https://api.github.com; plain http only for
 # 127.0.0.1 and localhost, and never with an @, a quote, a backslash or whitespace), LIMACTL (default
-# limactl), SHIFT2EU_AGENTS_SSH (the ssh SSH mode runs, default ssh), LIMA_INSTANCE (default shift2eu; in SSH
-# mode it names only the host key alias, the lock, the log and the messages), SHIFT2EU_VM_REAL_GH_PATH (where the VM keeps the real gh once
+# limactl), SHIFT2EU_AGENTS_SSH (the ssh SSH mode runs, default ssh), LIMA_INSTANCE (default shift2eu when
+# unset; letters, digits, ., _ and -, starting with a letter or digit, the Makefile's rule, and every command
+# refuses any other value, the empty one included, before it runs anything; in SSH
+# mode it names only the host key alias, the lock, the log and the messages),SHIFT2EU_VM_REAL_GH_PATH (where the VM keeps the real gh once
 # it has the gh wrapper, default /usr/local/libexec/shift2eu/gh; mint warns when it is missing) and
 # XDG_STATE_HOME (refresh keeps its lock in ${XDG_STATE_HOME:-$HOME/.local/state}/shift2eu).
 #
@@ -81,7 +83,8 @@ api="${SHIFT2EU_AGENTS_GITHUB_API_URL:-https://api.github.com}"
 limactl="${LIMACTL:-limactl}"
 ssh="${SHIFT2EU_AGENTS_SSH:-ssh}"
 mode=limactl
-instance="${LIMA_INSTANCE:-shift2eu}"
+# Unset, not empty, falls back to shift2eu: an empty LIMA_INSTANCE is refused below, as make refuses it.
+instance="${LIMA_INSTANCE-shift2eu}"
 vm_real_gh="${SHIFT2EU_VM_REAL_GH_PATH:-/usr/local/libexec/shift2eu/gh}"
 
 # nl is a newline, for the parameter expansions that split curl's answer and the URL check.
@@ -93,6 +96,17 @@ die() {
   say "$*"
   exit 1
 }
+
+# The instance names the refresh's lock, pid and log files and the VM limactl writes to, and reaches every
+# message, so it is checked, for every command and before anything runs, with the rule of the Makefile's
+# LIMA_INSTANCE_CHECK (issue #396): a direct run, the LaunchDaemon's among them, accepts no name make refuses.
+# The empty name is refused too. The value is not shown: it may hold anything, a terminal escape included. The
+# set is spelled out, not written as ranges, for the reason given at the token check below.
+case "${instance}" in
+'' | [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
+  die "invalid LIMA_INSTANCE (its value is not shown): a Lima instance name is letters, digits, '.', '_' and '-', starting with a letter or digit"
+  ;;
+esac
 
 # now prints the wall clock as Unix seconds.
 now() { date +%s; }
@@ -975,58 +989,78 @@ read_pid() {
 # rename; that refresh's own take_lock clears its aside path first. An entry whose rename failed is tried
 # again every round, but said once per refresher: reap_entry keeps its name in unremovable, and the
 # "removing" line is not said again for a name kept there (issue #335, the audit's LOW-B).
+#
+# The round starts by removing this shell's own .reap.<pid>, which a killed earlier start of this pid or a
+# failed removal may have left. When that removal fails, the round reaps nothing (issue #396): a rename to a
+# directory still in place would move the entry into it, where no start removes it by name. It says so once,
+# and once more when a later round's removal works again; set -e does not stop the refresh for it.
+#
+# Its variables, and those of reap_entry and forget_unremovable, carry their function's prefix (sweep_, reap_,
+# forget_), so a caller's variables of the same plain names are never overwritten (issue #396): POSIX sh has
+# no local, and the script's other functions keep to names of their own the same way. unremovable is the
+# helpers' bookkeeping, kept from call to call, and stays global on purpose; sweep_reap is the path
+# reap_entry renames to, set by clear_stale_asides before every call.
 clear_stale_asides() {
-  reap="${state}/.agents-token-refresh-${instance}.lock.reap.$$"
-  rm -rf "${reap}"
-  prefix="${state}/.agents-token-refresh-${instance}.lock.stale."
-  for found in "${prefix}"*; do
-    mover="${found#"${prefix}"}"
-    is_number "${mover}" || continue
-    [ "${mover}" != "$$" ] || continue
-    stale="${prefix}${mover}"
-    [ -d "${stale}" ] && [ ! -L "${stale}" ] || continue
-    recorded="$(read_pid "${stale}/pid")"
-    if is_refresh "${mover}" || is_refresh "${recorded}"; then
+  sweep_reap="${state}/.agents-token-refresh-${instance}.lock.reap.$$"
+  if ! rm -rf "${sweep_reap}" 2>/dev/null; then
+    is_unremovable "${sweep_reap}" && return 0
+    unremovable="${unremovable:+${unremovable} }${sweep_reap##*/}"
+    say "skipped reaping this round: could not remove ${sweep_reap##*/}, so no stale entry is renamed to it; it is tried again at the next round or start"
+    return 0
+  fi
+  if is_unremovable "${sweep_reap}"; then
+    forget_unremovable "${sweep_reap##*/}"
+    say "removed ${sweep_reap##*/} after all: reaping goes on from this round"
+  fi
+  sweep_prefix="${state}/.agents-token-refresh-${instance}.lock.stale."
+  for sweep_found in "${sweep_prefix}"*; do
+    sweep_mover="${sweep_found#"${sweep_prefix}"}"
+    is_number "${sweep_mover}" || continue
+    [ "${sweep_mover}" != "$$" ] || continue
+    sweep_stale="${sweep_prefix}${sweep_mover}"
+    [ -d "${sweep_stale}" ] && [ ! -L "${sweep_stale}" ] || continue
+    sweep_recorded="$(read_pid "${sweep_stale}/pid")"
+    if is_refresh "${sweep_mover}" || is_refresh "${sweep_recorded}"; then
       continue
     fi
     # Said before the rename, so the log names the aside before it is gone. Two starts that both found it may
     # both say so; only the one whose rename succeeds removes it.
-    is_unremovable "${stale}" ||
-      say "removing the moved-aside lock ${stale##*/}: neither its mover (pid ${mover}) nor its owner (pid $(show_pid "${recorded}")) runs a refresh"
-    reap_entry "${stale}"
+    is_unremovable "${sweep_stale}" ||
+      say "removing the moved-aside lock ${sweep_stale##*/}: neither its mover (pid ${sweep_mover}) nor its owner (pid $(show_pid "${sweep_recorded}")) runs a refresh"
+    reap_entry "${sweep_stale}" || return 0
   done
-  prefix="${state}/.agents-token-refresh-${instance}.lock.reap."
-  for found in "${prefix}"*; do
-    mover="${found#"${prefix}"}"
-    is_number "${mover}" || continue
-    [ "${mover}" != "$$" ] || continue
-    stale="${prefix}${mover}"
-    [ -d "${stale}" ] && [ ! -L "${stale}" ] || continue
-    ! is_refresh "${mover}" || continue
-    is_unremovable "${stale}" ||
-      say "removing the leftover ${stale##*/} of a start (pid ${mover}) that stopped while it removed a moved-aside lock and runs no refresh any more"
-    reap_entry "${stale}"
+  sweep_prefix="${state}/.agents-token-refresh-${instance}.lock.reap."
+  for sweep_found in "${sweep_prefix}"*; do
+    sweep_mover="${sweep_found#"${sweep_prefix}"}"
+    is_number "${sweep_mover}" || continue
+    [ "${sweep_mover}" != "$$" ] || continue
+    sweep_stale="${sweep_prefix}${sweep_mover}"
+    [ -d "${sweep_stale}" ] && [ ! -L "${sweep_stale}" ] || continue
+    ! is_refresh "${sweep_mover}" || continue
+    is_unremovable "${sweep_stale}" ||
+      say "removing the leftover ${sweep_stale##*/} of a start (pid ${sweep_mover}) that stopped while it removed a moved-aside lock and runs no refresh any more"
+    reap_entry "${sweep_stale}" || return 0
   done
 }
 
 # unremovable holds the names, separated by spaces, of the entries whose rename reap_entry saw fail with the
-# entry still in place. A name is built from a fixed prefix, the instance and a pid of digits; the script does
-# not validate the instance, so a name is only ever matched or removed as a quoted string, never split or
-# globbed.
+# entry still in place, and of this shell's own .reap.<pid> while clear_stale_asides cannot remove it. A name
+# is built from a fixed prefix, the instance and a pid of digits; it is still only ever matched or removed as
+# a quoted string, never split or globbed.
 unremovable=''
 
 # forget_unremovable <name> drops name from unremovable, if it is there, by cutting it out of the list padded
 # with a space on each side: the quoted name is matched literally, so a name holding a space or a glob
 # character never splits into words or expands to files.
 forget_unremovable() {
-  list=" ${unremovable} "
-  case "${list}" in
+  forget_list=" ${unremovable} "
+  case "${forget_list}" in
     *" $1 "*) ;;
     *) return 0 ;;
   esac
-  list="${list%%" $1 "*} ${list#*" $1 "}"
-  list="${list# }"
-  unremovable="${list% }"
+  forget_list="${forget_list%%" $1 "*} ${forget_list#*" $1 "}"
+  forget_list="${forget_list# }"
+  unremovable="${forget_list% }"
 }
 
 # is_unremovable <path> returns when the name of path is one reap_entry could not rename before.
@@ -1044,27 +1078,29 @@ is_unremovable() {
 # said the first time only: the entry stays, every round tries it again, and a line per round would bury
 # the log (issue #335, the audit's LOW-B). When a later round's rename of such an entry succeeds, its
 # removal is said once, so the log does not end on "could not remove" for a directory that is gone (the
-# review's S1). A removal that fails after the rename is said too; the next round or start removes the
-# .reap.<pid> name first. An entry that has vanished (another start renamed it, or a maintainer removed it)
+# review's S1). A removal that fails after the rename is said too, and returns 1: clear_stale_asides then
+# reaps nothing more this round, since a later rename would move its entry into the directory still there
+# (issue #396). The next round or start removes the .reap.<pid> name first. An entry that has vanished (another start renamed it, or a maintainer removed it)
 # is dropped from unremovable as well, so a later entry of that name is said like any other.
 reap_entry() {
-  if mv "$1" "${reap}" 2>/dev/null; then
+  if mv "$1" "${sweep_reap}" 2>/dev/null; then
     # Renamed after all: the name is free again for a later entry, which is said like any other.
-    was_unremovable=''
+    reap_was_unremovable=''
     if is_unremovable "$1"; then
-      was_unremovable='yes'
+      reap_was_unremovable='yes'
       forget_unremovable "${1##*/}"
     fi
-    if rm -rf "${reap}" 2>/dev/null; then
-      [ -z "${was_unremovable}" ] ||
-        say "removed ${1##*/}: a later round renamed it to ${reap##*/} after all"
+    if rm -rf "${sweep_reap}" 2>/dev/null; then
+      [ -z "${reap_was_unremovable}" ] ||
+        say "removed ${1##*/}: a later round renamed it to ${sweep_reap##*/} after all"
     else
-      say "could not remove ${reap##*/}, to which ${1##*/} was renamed; it is tried again at the next round or start"
+      say "could not remove ${sweep_reap##*/}, to which ${1##*/} was renamed, so reaping is skipped for the rest of this round; it is tried again at the next round or start"
+      return 1
     fi
   elif [ -e "$1" ] || [ -L "$1" ]; then
     is_unremovable "$1" && return 0
     unremovable="${unremovable:+${unremovable} }${1##*/}"
-    say "could not remove ${1##*/}: renaming it to ${reap##*/} failed; it is tried again at the next round or start"
+    say "could not remove ${1##*/}: renaming it to ${sweep_reap##*/} failed; it is tried again at the next round or start"
   else
     forget_unremovable "${1##*/}"
   fi
