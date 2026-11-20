@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.10.0](https://github.com/timothymamo/shift2eu/compare/v0.9.0...v0.10.0) (2026-11-20)
+
+
+### Features
+
+* **site:** the site's pages, CSP, Trusted Types and a browser smoke test (PRD [#297](https://github.com/timothymamo/shift2eu/issues/297) M2) ([#359](https://github.com/timothymamo/shift2eu/issues/359)) ([54f121f](https://github.com/timothymamo/shift2eu/commit/54f121f9dd5dd444226d61ad73cc9c8e8831b4e7))
+* **web:** run the assessment in WebAssembly, with an HTML report (PRD [#297](https://github.com/timothymamo/shift2eu/issues/297) M1) ([#339](https://github.com/timothymamo/shift2eu/issues/339)) ([41243e2](https://github.com/timothymamo/shift2eu/commit/41243e26fa8c24117adaa2e81e20b29b3fccb377))
+
+
+### Bug Fixes
+
+* **aireview:** keep code names and the decoder's message out of the AI reviewer's findings and log ([#371](https://github.com/timothymamo/shift2eu/issues/371)) ([afc3b9d](https://github.com/timothymamo/shift2eu/commit/afc3b9def62d3e255909ad3367e3a0ecf3e604c4))
+* **aireview:** round 3 of the AI reviewer's fixes ([#301](https://github.com/timothymamo/shift2eu/issues/301), [#302](https://github.com/timothymamo/shift2eu/issues/302), [#303](https://github.com/timothymamo/shift2eu/issues/303), [#316](https://github.com/timothymamo/shift2eu/issues/316), [#324](https://github.com/timothymamo/shift2eu/issues/324)) ([#338](https://github.com/timothymamo/shift2eu/issues/338)) ([5c69c78](https://github.com/timothymamo/shift2eu/commit/5c69c78857e15a69552bee65027369ae86bf85fe))
+* **aireview:** round 4 of the AI reviewer's fixes ([#341](https://github.com/timothymamo/shift2eu/issues/341), [#342](https://github.com/timothymamo/shift2eu/issues/342), [#343](https://github.com/timothymamo/shift2eu/issues/343), [#344](https://github.com/timothymamo/shift2eu/issues/344)) ([#358](https://github.com/timothymamo/shift2eu/issues/358)) ([0fa2a56](https://github.com/timothymamo/shift2eu/commit/0fa2a56a949e77a7722cc32ea672f8db02956976))
+* **devenv:** the agents App key under a separate macOS account ([#227](https://github.com/timothymamo/shift2eu/issues/227)) ([#353](https://github.com/timothymamo/shift2eu/issues/353)) ([edf8d00](https://github.com/timothymamo/shift2eu/commit/edf8d004c43394aa01441e4d340bd16ac497641b))
+* **devenv:** token mint part 2 ([#262](https://github.com/timothymamo/shift2eu/issues/262), [#263](https://github.com/timothymamo/shift2eu/issues/263), [#264](https://github.com/timothymamo/shift2eu/issues/264), [#242](https://github.com/timothymamo/shift2eu/issues/242), [#319](https://github.com/timothymamo/shift2eu/issues/319), [#320](https://github.com/timothymamo/shift2eu/issues/320)) ([#333](https://github.com/timothymamo/shift2eu/issues/333)) ([81e6dd5](https://github.com/timothymamo/shift2eu/commit/81e6dd572032b2a29dbfd5c27e734b04477de469))
+
 ## [0.9.0](https://github.com/timothymamo/shift2eu/compare/v0.8.1...v0.9.0) (2026-11-19)
 
 
