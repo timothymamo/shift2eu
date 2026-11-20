@@ -46,7 +46,9 @@ var (
 )
 
 // TestMain fails, and never skips, when the harness is not configured: a smoke
-// test that skips reports the same green as one that passed.
+// test that skips reports the same green as one that passed. It also removes the
+// directory the CLI was built into, which outlives the test that built it (see
+// cliBinary).
 func TestMain(m *testing.M) {
 	devtoolsURL = os.Getenv(devtoolsEnv)
 	bundleDir = os.Getenv(bundleEnv)
@@ -56,7 +58,15 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+
+	if cliDir != "" {
+		if err := os.RemoveAll(cliDir); err != nil {
+			fmt.Fprintf(os.Stderr, "remove the CLI's build directory %s: %v\n", cliDir, err)
+		}
+	}
+
+	os.Exit(code)
 }
 
 // missingHarness reports why the harness cannot run, if it cannot: the two
@@ -661,6 +671,9 @@ var (
 	cliOnce sync.Once
 	// cliPath is the CLI the parity test runs, empty until cliOnce ran.
 	cliPath string
+	// cliDir is the temporary directory cliPath sits in, empty until cliOnce
+	// ran and removed by TestMain when the suite has run.
+	cliDir string
 	// cliFailure is why the CLI could not be built.
 	cliFailure error
 )
@@ -673,14 +686,16 @@ func cliBinary(t *testing.T) string {
 
 	cliOnce.Do(func() {
 		// The CLI is built once for the whole test binary, so its directory
-		// outlives the first test that asked for it.
-		dir, err := os.MkdirTemp("", "shift2eu-browser-cli-") //nolint:usetesting // the directory outlives the test that builds the CLI
+		// outlives the first test that asked for it: TestMain removes it when the
+		// suite has run, so a run leaves no binary in the temporary directory.
+		dir, err := os.MkdirTemp("", "shift2eu-browser-cli-") //nolint:usetesting // the directory outlives the test that builds the CLI, and TestMain removes it
 		if err != nil {
 			cliFailure = fmt.Errorf("create a directory for the CLI: %w", err)
 
 			return
 		}
 
+		cliDir = dir
 		cliPath = filepath.Join(dir, "shift2eu")
 		cliFailure = buildCLI(repositoryRoot(t), cliPath)
 	})
