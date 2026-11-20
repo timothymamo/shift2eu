@@ -23,6 +23,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // vmBootScript is the plist generator issue #398 adds, next to the Makefile targets that install and remove the
@@ -200,6 +202,149 @@ func TestVMBootLaunchdPlistDescribesTheJob(t *testing.T) {
 				if calls := invocations(f.sb.argvLogText(t), tool); len(calls) != 0 {
 					t.Errorf("rendering the plist ran %s (%v): printing a plist starts no VM and loads no job (issue #398)", tool, calls)
 				}
+			}
+		})
+	}
+}
+
+// TestVMBootLaunchdPlistOpensTheLogTheJobWrites pins how the job opens its own log (issue #398, ADR 0034): launchd
+// may open StandardOutPath and StandardErrorPath as root, before UserName applies, in a directory the maintainer
+// writes, so both name /dev/null and the job opens ${XDG_STATE_HOME:-$HOME/.local/state}/shift2eu/vm-boot-
+// <instance>.log itself, as the maintainer, through a shell line. The log and every word of the limactl command
+// line are arguments of /bin/sh -c of their own - $0 is the log, "$@" the command - so no path ever becomes shell
+// text, and the line appends both streams to $0 and execs the command, so the job's exit status is limactl's and
+// every line limactl writes, stderr included, lands in the log. limactl itself is named by the absolute path the
+// generator found: a launchd job starts from no directory of its own, so no relative name can be resolved.
+func TestVMBootLaunchdPlistOpensTheLogTheJobWrites(t *testing.T) {
+	t.Parallel()
+
+	f := newVMBootPlistFixture(t, "shift2eu")
+
+	stdout, stderr, err := f.plist(t)
+	if err != nil {
+		t.Fatalf("sh %s plist exited %d\nstdout: %s\nstderr: %s", vmBootScript, exitStatusOf(t, err), stdout, stderr)
+	}
+
+	dict := parsePlist(t, stdout)
+	args := plistStrings(t, plistList(t, dict, "ProgramArguments"))
+
+	// The shell line is the argument after /bin/sh -c, and the arguments after it are $0 and the command.
+	line, at := "", -1
+
+	for i, arg := range args {
+		if arg == "/bin/sh" && i+1 < len(args) && args[i+1] == "-c" {
+			if i+2 >= len(args) {
+				t.Fatalf("the plist runs /bin/sh -c with no line to run (issue #398)\nstdout:\n%s", stdout)
+			}
+
+			line, at = args[i+2], i+2
+		}
+	}
+
+	if at < 0 {
+		t.Fatalf("the plist runs no /bin/sh -c line, so the job cannot open its own log as the maintainer (issue #398, ADR 0034)\nstdout:\n%s", stdout)
+	}
+
+	// Both streams are appended to the log, and exec hands the job's exit status over to limactl.
+	if want := `exec "$@" >>"$0" 2>&1`; !strings.Contains(line, want) {
+		t.Errorf("the job's shell line holds no %q: launchd's own StandardOutPath and StandardErrorPath are /dev/null, so a line that does not append both streams of the command to $0 leaves what limactl printed - a failed boot's message included - nowhere to read (issue #398, ADR 0034)\nline: %q", want, line)
+	}
+
+	// The log and the command are arguments, never spliced into the shell text.
+	if strings.Contains(line, f.logPath()) {
+		t.Errorf("the job's shell line holds the log path %q itself: the log is an argument of the line ($0), so a path with a character the shell reads stays a path (issue #398)\nline: %q", f.logPath(), line)
+	}
+
+	if at+1 >= len(args) || args[at+1] != f.logPath() {
+		got := ""
+		if at+1 < len(args) {
+			got = args[at+1]
+		}
+
+		t.Errorf("the argument after the job's shell line is %q, want the log %q: it is $0 of the line, the file the job appends both streams to (issue #398)\nstdout:\n%s",
+			got, f.logPath(), stdout)
+
+		return
+	}
+
+	wantLimactl := f.env["LIMACTL"]
+
+	switch {
+	case at+2 >= len(args):
+		t.Errorf("the job's shell line has no command after the log: \"$@\" is empty, so the job exits 0 without starting anything (issue #398)\nstdout:\n%s", stdout)
+	case args[at+2] != wantLimactl:
+		t.Errorf("the job runs %q, want limactl by its absolute path %q: launchd starts the job from no directory of its own, and the PATH it gets is the plist's (issue #398)\nstdout:\n%s", args[at+2], wantLimactl, stdout)
+	case !filepath.IsAbs(args[at+2]):
+		t.Errorf("the job runs limactl as %q, which is no absolute path (issue #398)\nstdout:\n%s", args[at+2], stdout)
+	case at+3 >= len(args) || args[at+3] != "shell":
+		t.Errorf("the job runs %q after limactl, want the shell subcommand: \"$@\" must be the command line that starts an existing instance (issue #254, #398)\nstdout:\n%s", args[at+3:], stdout)
+	}
+
+	// launchd may open these as root, before UserName applies, in a directory the maintainer writes (ADR 0034).
+	for _, key := range []string{"StandardOutPath", "StandardErrorPath"} {
+		if got := plistString(t, dict, key); got != "/dev/null" {
+			t.Errorf("the plist's %s is %q, want /dev/null: launchd may open it as root, before UserName applies, in a directory the maintainer writes, and the job opens its own log as the maintainer instead (ADR 0034, issue #398)\nstdout:\n%s", key, got, stdout)
+		}
+	}
+}
+
+// TestVMBootLaunchdPlistCarriesLimaHomeOnlyWhenSet pins that the job's fixed environment holds LIMA_HOME exactly
+// when the maintainer set it (issue #398): Lima keeps an instance under LIMA_HOME when it is set and under ~/.lima
+// otherwise, so a job that carried an empty or an unset-but-present LIMA_HOME would look for the VM in the wrong
+// directory, and one that dropped a set LIMA_HOME would not find it at all.
+func TestVMBootLaunchdPlistCarriesLimaHomeOnlyWhenSet(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// set says the case puts LIMA_HOME in the generator's environment.
+		set bool
+	}{
+		{name: "LIMA_HOME is unset"},
+		{name: "LIMA_HOME names the directory the instance lives in", set: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMBootPlistFixture(t, "shift2eu")
+
+			limaHome := filepath.Join(f.sb.root, "lima-home")
+			delete(f.env, "LIMA_HOME")
+
+			if tc.set {
+				f.env["LIMA_HOME"] = limaHome
+			}
+
+			stdout, stderr, err := f.plist(t)
+			if err != nil {
+				t.Fatalf("sh %s plist exited %d with %s\nstdout: %s\nstderr: %s",
+					vmBootScript, exitStatusOf(t, err), tc.name, stdout, stderr)
+			}
+
+			args := plistStrings(t, plistList(t, parsePlist(t, stdout), "ProgramArguments"))
+
+			var limaHomeArgs []string
+
+			for _, arg := range args {
+				if strings.HasPrefix(arg, "LIMA_HOME=") {
+					limaHomeArgs = append(limaHomeArgs, arg)
+				}
+			}
+
+			if !tc.set {
+				if len(limaHomeArgs) != 0 {
+					t.Errorf("the plist gives the job %v although LIMA_HOME is unset: Lima keeps the instance under $HOME/.lima then, and /usr/bin/env -i hands the job exactly the variables the plist names (issue #398)\nstdout:\n%s",
+						limaHomeArgs, stdout)
+				}
+
+				return
+			}
+
+			want := "LIMA_HOME=" + limaHome
+			if diff := cmp.Diff([]string{want}, limaHomeArgs); diff != "" {
+				t.Errorf("the plist gives the job the wrong LIMA_HOME arguments (-want +got):\n%s\nthe instance lives under LIMA_HOME when it is set, so the job must be told it, once (issue #398)\nstdout:\n%s", diff, stdout)
 			}
 		})
 	}

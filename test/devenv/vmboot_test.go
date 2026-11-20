@@ -20,6 +20,8 @@
 package devenv_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,12 +39,19 @@ const vmBootLaunchdDir = "VM_BOOT_LAUNCHD_DIR"
 // vmBootLimactl stands in for limactl in the vm-boot tests: it records its argv and exits 0, answering every
 // listing with the instance's name. Nothing here needs a VM, an instance directory or Lima itself, and an install
 // that asks limactl whether the instance exists must not fail for an answer the fake never gave.
+// SHIFT2EU_TEST_LIMA_LIST_STATUS makes the listing fail instead, as a limactl that cannot read the instances does.
 const vmBootLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
-if [ "${1:-}" = list ]; then printf '%s\n' "${SHIFT2EU_TEST_LIMA_INSTANCE:-}"; fi
+if [ "${1:-}" = list ]; then
+  if [ "${SHIFT2EU_TEST_LIMA_LIST_STATUS:-0}" -ne 0 ]; then
+    echo "fake limactl: cannot list the instances" >&2
+    exit "${SHIFT2EU_TEST_LIMA_LIST_STATUS}"
+  fi
+  printf '%s\n' "${SHIFT2EU_TEST_LIMA_INSTANCE:-}"
+fi
 exit 0
 `
 
@@ -287,6 +296,186 @@ func TestMakeVMBootInstallLoadsTheJob(t *testing.T) {
 			t.Errorf("make vm-boot-install ran `%s` without printing it: a maintainer runs the install from the host clone and must see every command that becomes root (issue #398)\nstdout:\n%s", line, stdout)
 		}
 	}
+}
+
+// TestMakeVMBootInstallRefusesAnInstanceLimaDoesNotList pins the last check before anything is installed (issue
+// #398): the job only ever starts an existing instance - `limactl shell --start <instance> true` never creates
+// one - so an instance `limactl list --quiet` does not name makes the install refuse before any sudo. A listing
+// that fails is not an empty one: a limactl the install cannot read says nothing about whether the VM is there, so
+// the install refuses it too instead of installing a job that could only fail at every boot.
+func TestMakeVMBootInstallRefusesAnInstanceLimaDoesNotList(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// mutate the fixture so its limactl does not list the instance, or cannot list at all.
+		mutate func(f *vmBootInstallFixture)
+		// want is what the refusal must say beyond naming the target: the answer the listing gave.
+		want []string
+	}{
+		{
+			name:   "the listing names no instance",
+			mutate: func(f *vmBootInstallFixture) { f.env["SHIFT2EU_TEST_LIMA_INSTANCE"] = "" },
+			want:   []string{"Lima lists no instance " + hostTargetInstance, "make vm-create"},
+		},
+		{
+			name:   "the listing names another instance",
+			mutate: func(f *vmBootInstallFixture) { f.env["SHIFT2EU_TEST_LIMA_INSTANCE"] = "another-instance" },
+			want:   []string{"Lima lists no instance " + hostTargetInstance},
+		},
+		{
+			name:   "the listing fails",
+			mutate: func(f *vmBootInstallFixture) { f.env["SHIFT2EU_TEST_LIMA_LIST_STATUS"] = "1" },
+			want:   []string{"could not list the Lima instances"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newVMBootInstallFixture(t, hostTargetInstance)
+			tc.mutate(f)
+
+			stdout, stderr, err := f.run(t, "vm-boot-install")
+			if err == nil {
+				t.Fatalf("make vm-boot-install exited 0 although %s: the job starts an existing instance only, so a plist installed for a VM that is not there can only fail at every boot (issue #398)\nstdout: %s\nstderr: %s",
+					tc.name, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "vm-boot-install: refused") {
+				t.Errorf("the refusal is not the install recipe's own, which starts with %q, so this case pins another check than the one it is named for:\nstdout: %s\nstderr: %s",
+					"vm-boot-install: refused", stdout, stderr)
+			}
+
+			for _, want := range tc.want {
+				if !strings.Contains(stderr, want) {
+					t.Errorf("make vm-boot-install's refusal says nothing about %q when %s, so a maintainer cannot tell what limactl answered or what to do about it (issue #398)\nstdout: %s\nstderr: %s",
+						want, tc.name, stdout, stderr)
+				}
+			}
+
+			// Refusing means installing nothing: the check comes before the plist is installed or loaded, and
+			// before any command runs as root.
+			if calls := f.sudoCommands(t); len(calls) != 0 {
+				t.Errorf("make vm-boot-install ran sudo although %s: the check of the instance comes before anything is installed, so root is never asked for a job the VM cannot use (issue #398): %v\nstdout: %s\nstderr: %s",
+					tc.name, calls, stdout, stderr)
+			}
+
+			if calls := f.installCalls(t); len(calls) != 0 {
+				t.Errorf("make vm-boot-install ran `sudo install` although %s (issue #398): %v\nstdout: %s\nstderr: %s",
+					tc.name, calls, stdout, stderr)
+			}
+
+			if calls := f.bootstrapCalls(t); len(calls) != 0 {
+				t.Errorf("make vm-boot-install ran `sudo launchctl bootstrap` although %s (issue #398): %v\nstdout: %s\nstderr: %s",
+					tc.name, calls, stdout, stderr)
+			}
+
+			entries, readErr := os.ReadDir(f.launchdDir)
+			if readErr != nil {
+				t.Fatalf("read %s: %v", f.launchdDir, readErr)
+			}
+
+			if len(entries) != 0 {
+				t.Errorf("make vm-boot-install left %d file(s) in %s although %s, so a refused run still leaves a job for launchd to load at the next boot (issue #398): %v",
+					len(entries), f.launchdDir, tc.name, entries)
+			}
+		})
+	}
+}
+
+// TestMakeVMBootInstallLintsAndPrintsThePlist pins what the install does with the rendered plist before root sees
+// it (issue #398): it lints it with `plutil -lint`, so a plist launchd cannot load is refused while it is still
+// nobody's job, and it prints the plist with its SHA-256, so a maintainer can tell the file that ends up in the
+// LaunchDaemons directory from the one that was printed. The hash the install prints is the hash of the plist it
+// installed, which is what its own read-back compares against.
+func TestMakeVMBootInstallLintsAndPrintsThePlist(t *testing.T) {
+	t.Parallel()
+
+	t.Run("plutil lints the plist and the install prints its SHA-256", func(t *testing.T) {
+		t.Parallel()
+
+		f := newVMBootInstallFixture(t, hostTargetInstance)
+
+		stdout, stderr, err := f.run(t, "vm-boot-install")
+		if err != nil {
+			t.Fatalf("make vm-boot-install exited non-zero: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+		}
+
+		installed, err := os.ReadFile(f.dest())
+		if err != nil {
+			t.Fatalf("read the installed plist %s: %v\nstdout: %s\nstderr: %s", f.dest(), err, stdout, stderr)
+		}
+
+		lint := invocations(f.sb.argvLogText(t), "plutil")
+
+		switch {
+		case len(lint) != 1:
+			t.Errorf("make vm-boot-install ran plutil %d time(s), want one -lint of the rendered plist: launchd loads a plist it cannot parse and fails at the next boot, so the install lints it before root writes it (issue #398): %v\nstdout: %s\nstderr: %s",
+				len(lint), lint, stdout, stderr)
+		case len(lint[0]) != 2 || lint[0][0] != "-lint":
+			t.Errorf("make vm-boot-install ran `plutil %s`, want `plutil -lint <plist>`: only the lint parses the plist the install is about to put in place (issue #398)\nstdout: %s\nstderr: %s",
+				strings.Join(lint[0], " "), stdout, stderr)
+		case !filepath.IsAbs(lint[0][1]):
+			t.Errorf("make vm-boot-install linted %q, which is no absolute path (issue #398)\nstdout: %s\nstderr: %s", lint[0][1], stdout, stderr)
+		}
+
+		// The hash the install prints is the hash of the plist it installed: that is the value its own read-back
+		// compares with the printed one, so a maintainer comparing the two reads the same file root wrote.
+		sum := sha256.Sum256(installed)
+		wantSum := hex.EncodeToString(sum[:])
+
+		if !strings.Contains(stdout, wantSum) {
+			t.Errorf("make vm-boot-install does not print the SHA-256 %s of the plist it installed, so a maintainer cannot tell the file in %s from the one that was printed (issue #398)\nstdout:\n%s\nstderr: %s",
+				wantSum, f.launchdDir, stdout, stderr)
+		}
+
+		// The plist itself is printed too, so what root writes is what the maintainer read.
+		if !strings.Contains(stdout, string(installed)) {
+			t.Errorf("make vm-boot-install does not print the plist it installed into %s, so a maintainer runs a file root writes without having seen it (issue #398)\nstdout:\n%s\nstderr: %s",
+				f.dest(), stdout, stderr)
+		}
+
+		// plutil runs before any sudo: root is never handed a plist no lint has read.
+		log := f.sb.argvLogText(t)
+		linted, sudoed := strings.Index(log, "tool=plutil"), strings.Index(log, "tool=sudo")
+
+		if linted < 0 || sudoed < 0 || linted > sudoed {
+			t.Errorf("make vm-boot-install ran sudo before plutil linted the plist (their records begin at %d and %d of the argv log): the lint must come first, or root installs a plist launchd cannot load (issue #398)\nstdout: %s\nstderr: %s",
+				sudoed, linted, stdout, stderr)
+		}
+	})
+
+	t.Run("a plist plutil refuses installs nothing", func(t *testing.T) {
+		t.Parallel()
+
+		f := newVMBootInstallFixture(t, hostTargetInstance)
+		f.env["SHIFT2EU_TEST_PLUTIL_STATUS"] = "1"
+
+		stdout, stderr, err := f.run(t, "vm-boot-install")
+		if err == nil {
+			t.Fatalf("make vm-boot-install exited 0 although plutil refused the rendered plist: launchd loads no plist it cannot parse, so the job would never start the VM (issue #398)\nstdout: %s\nstderr: %s", stdout, stderr)
+		}
+
+		if !strings.Contains(stderr, "plutil") {
+			t.Errorf("the refusal does not name plutil, so a maintainer cannot tell why the plist was refused (issue #398)\nstdout: %s\nstderr: %s", stdout, stderr)
+		}
+
+		// The recipe's EXIT trap runs `sudo -k` to forget the timestamp; it runs no command as root.
+		for _, args := range f.sudoCommands(t) {
+			if slices.Equal(args, []string{"-k"}) {
+				continue
+			}
+
+			t.Errorf("make vm-boot-install ran `sudo %s` although plutil refused the plist, so root was asked to install a file launchd cannot load (issue #398)\nstdout: %s\nstderr: %s",
+				strings.Join(args, " "), stdout, stderr)
+		}
+
+		if _, statErr := os.Stat(f.dest()); statErr == nil {
+			t.Errorf("make vm-boot-install wrote %s although plutil refused the plist: launchd loads it at the next boot whatever this run decided (issue #398)", f.dest())
+		}
+	})
 }
 
 // TestMakeVMBootRefusesToRunAsRoot pins that the install refuses a run under `sudo -E make vm-boot-install`: the
