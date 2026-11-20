@@ -810,7 +810,7 @@ can wait for ever, and kills it only when it runs a refresh, as `make agents-tok
 l=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
 pid=; [ -f "$l/pid" ] && [ ! -L "$l/pid" ] && pid="$(head -c 32 "$l/pid")"
 if [ ! -e "$l" ]; then echo "no lock: no refresh runs"
-elif case "$pid" in ''|0|*[!0-9]*) true ;; *) false ;; esac; then echo "the lock holds no pid"
+elif ! expr "x$pid" : 'x[1-9][0-9]*$' >/dev/null; then echo "the lock holds no pid"
 elif ps -p "$pid" -o command= | grep -q 'agents-app-token.sh refresh'; then kill "$pid" && echo "stopped the refresh, pid $pid"
 else echo "pid $pid runs no refresh"; fi
 # PASS: stopped the refresh, pid <pid>; or no lock: no refresh runs (nothing to stop: go on)
@@ -1026,7 +1026,7 @@ direnv exec . make agents-token-refresh-uninstall
 l=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
 pid=; [ -f "$l/pid" ] && [ ! -L "$l/pid" ] && pid="$(head -c 32 "$l/pid")"
 if [ ! -e "$l" ]; then echo "no lock: no refresh runs"
-elif case "$pid" in ''|0|*[!0-9]*) true ;; *) false ;; esac; then echo "the lock holds no pid"
+elif ! expr "x$pid" : 'x[1-9][0-9]*$' >/dev/null; then echo "the lock holds no pid"
 elif ps -p "$pid" -o command= | grep -q 'agents-app-token.sh refresh'; then kill "$pid" && echo "stopped the refresh, pid $pid"
 else echo "pid $pid runs no refresh"; fi
 # PASS: stopped the refresh, pid <pid>; or no lock: no refresh runs (nothing to stop: go on)
@@ -1117,7 +1117,7 @@ direnv exec . make agents-token-refresh-uninstall
 l=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
 pid=; [ -f "$l/pid" ] && [ ! -L "$l/pid" ] && pid="$(head -c 32 "$l/pid")"
 if [ ! -e "$l" ]; then echo "no lock: no refresh runs"
-elif case "$pid" in ''|0|*[!0-9]*) true ;; *) false ;; esac; then echo "the lock holds no pid"
+elif ! expr "x$pid" : 'x[1-9][0-9]*$' >/dev/null; then echo "the lock holds no pid"
 elif ps -p "$pid" -o command= | grep -q 'agents-app-token.sh refresh'; then kill "$pid" && echo "stopped the refresh, pid $pid"
 else echo "pid $pid runs no refresh"; fi
 # PASS: stopped the refresh, pid <pid>; or no lock: no refresh runs (nothing to stop: go on)

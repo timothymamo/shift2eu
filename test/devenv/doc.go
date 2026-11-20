@@ -2,7 +2,9 @@
 // dev/ and of the Makefile's VM targets that need no tool beyond Go and the
 // shell: among them the broken Lima templates the validate-template job of
 // .github/workflows/vm-tools.yml must see Lima refuse (issue #137), and the
-// swap file dev/lima.yaml provisions (issue #294).
+// swap file dev/lima.yaml provisions (issue #294). It also pins that the shell
+// blocks of docs/dev-environment.md hold no `!` interactive zsh would expand
+// as a history event (zshhistory_test.go, issue #335).
 //
 // The swap tests (limaswap_test.go) pin the template's swapSize param and run
 // its one system provision step that names PARAM_swapSize under bash, against
