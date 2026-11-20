@@ -251,9 +251,12 @@ once collided: the second one's wait failed (the audit of PR #359, finding 2).
 host network. The kernel picks a free port for each run. The recipe reads the browser's address from the
 log line `DevTools listening on ws://127.0.0.1:<port>/devtools/browser/<id>`, accepting it only on
 127.0.0.1, and passes it as it is in `SHIFT2EU_DEVTOOLS_URL`. Because the address carries the browser's
-id, the test attaches to the browser this run started and to no other. The 60-second wait on the log line
-stays, with its diagnostics, and so does the removal of the container on every exit. The container's name
-carries the recipe shell's PID, so parallel runs never share one. The Makefile's `DEVTOOLS_PORT` is gone.
+id, the test attaches to the browser this run started and to no other. That is a correctness guarantee,
+not access control: any local process that finds the port can read the id from `/json/version` on it.
+The 60-second wait on the log line stays, with its diagnostics, and so does the removal of the container
+on every exit. The container's name carries the recipe shell's PID, so the DevTools ports and containers
+of parallel runs never collide. Two runs in the same worktree still share `bin/site`, which `make site`
+removes and rebuilds; that is tracked as a follow-up. The Makefile's `DEVTOOLS_PORT` is gone.
 
 A port the kernel picks is still a listening port, which a local process can find and attach to. It is
 open only while a run lasts and is no longer a fixed, well-known one. That residual risk is accepted.

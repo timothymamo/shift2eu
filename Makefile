@@ -339,11 +339,13 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network and its own entrypoint
 # replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface through
 # socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is open to
-# guess and two runs at once do not collide. It waits until Chromium logs the browser's DevTools address on
-# 127.0.0.1, reads that address back from the log line (port and browser id, so the test attaches to the
-# browser this run started and no other), and runs test/browser against it. The container's name carries the
-# recipe shell's PID, so parallel runs have their own; it is removed on every exit, failure and interrupt
-# included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but it hands the
+# guess and the DevTools ports and containers of two runs at once do not collide. Two runs in the same worktree
+# still share bin/site, which make site removes and rebuilds (a follow-up). It waits until Chromium logs the
+# browser's DevTools address on 127.0.0.1, reads that address back from the log line (port and browser id, so
+# the test attaches to the browser this run started and no other: a correctness guarantee, not access control,
+# since any local process that finds the port can read the id from /json/version on it), and runs test/browser
+# against it. The container's name carries the recipe shell's PID, so parallel runs have their own; it is
+# removed on every exit, failure and interrupt included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but it hands the
 # browser fds 3 and 4 of a process it starts itself, and docker run and nerdctl run pass no such fds into a
 # container (docs/adr/0036, amendment for issue #368).
 .PHONY: test-browser
