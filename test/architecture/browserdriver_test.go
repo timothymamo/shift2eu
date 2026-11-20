@@ -430,8 +430,8 @@ func checkAllowedProbeEnv(t *testing.T, env, allowed []string) {
 
 // TestGoListProbeEnv pins the environment the browser-driver probe's go list runs
 // in (issue #391, issue #395): the settings goListProbeEnv fixes whatever it
-// inherits, the variables it leaves out, and the few allow-listed ones it passes
-// through, GOPROXY among them.
+// inherits, the variables it leaves out, and every allow-listed variable it
+// passes through, GOPROXY among them.
 //
 // The assertions are on the effective value of each variable, the one the go
 // command reads from the environment slice: an entry appended by the probe wins,
@@ -445,11 +445,14 @@ func checkAllowedProbeEnv(t *testing.T, env, allowed []string) {
 // URL and no GOPROXY at all are the cases that catch an appended one, and a
 // dropped pass-through is what the effective value of the inherited URL checks.
 //
-// The cases also hold the allow list itself: every hostile setting that is not
-// one of the names the probe may hand the listing must be gone from its
-// environment, and no entry of that environment may name anything else. A probe
-// that inherited the whole environment would pass every hostile setting below
-// straight through.
+// The cases also hold the allow list itself, in both directions: every hostile
+// setting that is not one of the names the probe may hand the listing must be
+// gone from its environment, no entry of that environment may name anything
+// else, and every name the probe may inherit arrives with the value this test
+// gave it. A probe that inherited the whole environment would pass every hostile
+// setting below straight through; a probe that stopped inheriting one
+// allow-listed name, SSL_CERT_FILE or TMP, say, would fail the value check for
+// it rather than go unnoticed.
 //
 // No case runs a child process or touches the network: goListProbeEnv only builds
 // a slice of strings, and t.Setenv forbids t.Parallel, the whole test's as well.
@@ -553,11 +556,37 @@ func TestGoListProbeEnv(t *testing.T) {
 
 	allowed = append(allowed, "PWD")
 
-	// passedThrough are allow-listed variables a case hands the probe with a value
-	// of its own, so the case checks the value travels unchanged.
-	passedThrough := map[string]probeEnvSetting{
-		"GOMODCACHE":  {value: "/some/modcache", set: true},
-		"HTTPS_PROXY": {value: "http://proxy.example.com:3128", set: true},
+	// passedThrough are the allow-listed variables a case hands the probe with a
+	// sentinel value of its own, so the case checks each one arrives unchanged:
+	// every name the probe may inherit but PWD, the settings it fixes (checked
+	// above) and GOPROXY (its own cases below). A slice, not a map, so a failure
+	// reports in this order every run. The proxy and certificate settings come in
+	// two spellings, and os.LookupEnv ignores case on Windows, where HTTP_PROXY and
+	// http_proxy name one variable: a pair carries one sentinel value between its
+	// spellings, so whichever one Windows reads or writes, the effective value the
+	// case asserts is the same. Overriding PATH is safe: no case runs a child
+	// process, and t.Setenv restores every one of them.
+	passedThrough := []probeEnvWant{
+		{name: "PATH", setting: probeEnvSetting{value: "/some/PATH", set: true}},
+		{name: "GOROOT", setting: probeEnvSetting{value: "/some/GOROOT", set: true}},
+		{name: "HOME", setting: probeEnvSetting{value: "/some/HOME", set: true}},
+		{name: "USERPROFILE", setting: probeEnvSetting{value: "/some/USERPROFILE", set: true}},
+		{name: "XDG_CACHE_HOME", setting: probeEnvSetting{value: "/some/XDG_CACHE_HOME", set: true}},
+		{name: "LOCALAPPDATA", setting: probeEnvSetting{value: "/some/LOCALAPPDATA", set: true}},
+		{name: "GOPATH", setting: probeEnvSetting{value: "/some/GOPATH", set: true}},
+		{name: "GOMODCACHE", setting: probeEnvSetting{value: "/some/GOMODCACHE", set: true}},
+		{name: "GOCACHE", setting: probeEnvSetting{value: "/some/GOCACHE", set: true}},
+		{name: "TMPDIR", setting: probeEnvSetting{value: "/some/TMPDIR", set: true}},
+		{name: "TEMP", setting: probeEnvSetting{value: "/some/TEMP", set: true}},
+		{name: "TMP", setting: probeEnvSetting{value: "/some/TMP", set: true}},
+		{name: "HTTP_PROXY", setting: probeEnvSetting{value: "/some/http_proxy", set: true}},
+		{name: "http_proxy", setting: probeEnvSetting{value: "/some/http_proxy", set: true}},
+		{name: "HTTPS_PROXY", setting: probeEnvSetting{value: "/some/https_proxy", set: true}},
+		{name: "https_proxy", setting: probeEnvSetting{value: "/some/https_proxy", set: true}},
+		{name: "NO_PROXY", setting: probeEnvSetting{value: "/some/no_proxy", set: true}},
+		{name: "no_proxy", setting: probeEnvSetting{value: "/some/no_proxy", set: true}},
+		{name: "SSL_CERT_FILE", setting: probeEnvSetting{value: "/some/SSL_CERT_FILE", set: true}},
+		{name: "SSL_CERT_DIR", setting: probeEnvSetting{value: "/some/SSL_CERT_DIR", set: true}},
 	}
 
 	for _, tc := range []struct {
@@ -586,8 +615,8 @@ func TestGoListProbeEnv(t *testing.T) {
 				t.Setenv(name, value)
 			}
 
-			for name, setting := range passedThrough {
-				inheritProbeEnv(t, name, setting)
+			for _, want := range passedThrough {
+				inheritProbeEnv(t, want.name, want.setting)
 			}
 
 			inheritProbeEnv(t, "GOPROXY", tc.goproxy)
@@ -595,10 +624,7 @@ func TestGoListProbeEnv(t *testing.T) {
 			env := goListProbeEnv()
 
 			wants := append([]probeEnvWant{{name: "GOPROXY", setting: tc.wantGOPROXY}}, fixed...)
-
-			for name, setting := range passedThrough {
-				wants = append(wants, probeEnvWant{name: name, setting: setting})
-			}
+			wants = append(wants, passedThrough...)
 
 			for _, want := range wants {
 				got := effectiveProbeEnvSetting(env, want.name)
