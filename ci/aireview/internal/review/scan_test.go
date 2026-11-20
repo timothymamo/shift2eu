@@ -399,6 +399,17 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanHostname}},
 		},
 		{
+			// This is a known and accepted false negative of the code-name
+			// rule (issue #365): spelt like a Go selector, it cannot be told
+			// from cfg.Info. Such a spelling is rare (configurations write
+			// hosts all lower case or all upper case, and both are found),
+			// and if it ever hides real data, the fix goes in the scan's
+			// rules, never in a path allow list.
+			name:      "a host name in lower case with only its TLD in title case is an accepted miss",
+			diff:      goldenAdds(golden, `"db": "db.corp.Info" "mail": "mail.contoso.Com"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
 			// A report's taxonomy categories read like host names, and the
 			// committed goldens are full of them.
 			name: "a taxonomy category is no host name",
