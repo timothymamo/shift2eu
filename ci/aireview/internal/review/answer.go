@@ -69,7 +69,8 @@ func ParseAnswer(text string) (Answer, error) {
 	dec.DisallowUnknownFields()
 
 	var raw rawAnswer
-	// The decoder's error is dropped: it quotes the answer (shapeError).
+	// The decoder's error is dropped: it quotes text of the answer, a field
+	// name or a few characters (shapeError).
 	if dec.Decode(&raw) != nil {
 		return Answer{}, newShapeError(checkNotOneObject)
 	}

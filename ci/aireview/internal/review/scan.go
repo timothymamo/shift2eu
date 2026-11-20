@@ -243,12 +243,13 @@ func scanSection(section, path string) (int, []ScanFinding) {
 //     that is neither an example domain at any depth (exampleDomains) nor a
 //     provider's domain (providerDomains) as the apex, with exactly one label
 //     below it, or for amazonaws.com <service>.<region> with a region of the
-//     AWS shape: anything deeper is a name a customer chose. A dotted name of
-//     code is none (issue #365): one followed by "(" is a call (x.dev()), and
-//     one whose last label is written as an exported identifier, an upper-case
-//     letter then a lower-case one, is a selector (slog.Info, cfg.App), as no
-//     host's top-level domain is spelt; db01.corp.info and DB01.CORP.INFO are
-//     still host names;
+//     AWS shape: anything deeper is a name a customer chose. A selector of Go
+//     code is none (isCodeName, issue #365): its first label starts lower case
+//     with no digit or hyphen, the label before the last does not start upper
+//     case, and the last is spelt as an exported identifier, an upper-case
+//     letter with a lower-case one right after it (slog.Info, r.cfg.App); what
+//     follows the name plays no part, so db01.corp.info(primary),
+//     Shop.Acme.Com, db01.corp.Info and DB01.CORP.INFO are host names;
 //   - a key is a run of letters and digits that is an access key ID (twenty
 //     upper-case letters and digits starting AKIA or ASIA) or is at least 32
 //     long with an upper-case letter, a lower-case letter and a digit (a
@@ -466,9 +467,9 @@ func isAWSRegion(label string) bool {
 // hasHostname reports whether line holds a host name (scanLine).
 func hasHostname(line string) bool {
 	return anyRun(line, func(c byte) bool { return isASCIIAlnum(c) || c == '.' || c == '-' },
-		func(run string, _, after byte) bool {
+		func(run string, _, _ byte) bool {
 			written := strings.Trim(run, ".-")
-			if after == '(' || isCodeName(written[strings.LastIndexByte(written, '.')+1:]) {
+			if isCodeName(strings.Split(written, ".")) {
 				return false
 			}
 
@@ -489,16 +490,38 @@ func hasHostname(line string) bool {
 		})
 }
 
-// isCodeName reports whether label, the last of a dotted name as written, is
-// spelt as code spells a name and no host is: an upper-case letter followed by
-// a lower-case one (Info, App, Dev). A host's top-level domain is written all
-// lower case, or all upper case in an old configuration file, never in the
-// mixed case of an exported Go identifier, so slog.Info and cfg.App are code
-// (issue #365).
-func isCodeName(label string) bool {
-	return len(label) > 1 && label[0] >= 'A' && label[0] <= 'Z' &&
-		strings.ContainsFunc(label, func(r rune) bool { return r >= 'a' && r <= 'z' })
+// isCodeName reports whether labels, the labels of a dotted name as written,
+// spell a selector of Go code rather than a host name (issue #365): all of
+//   - the first label starts with a lower-case letter and holds no digit or
+//     hyphen (a package or a variable: slog, cfg, r), as a host's first label
+//     often does not (db01, Shop, web-1);
+//   - the label before the last does not start upper case (r.cfg.App, never
+//     Corp.Example.Info);
+//   - the last label is spelt as an exported Go identifier, an upper-case
+//     letter with a lower-case letter right after it (Info, App, Dev; never
+//     INFO, COm or INfo).
+//
+// Whatever follows the name plays no part: db01.corp.info(primary) is a host
+// name, and so is a lower-case call such as x.dev(), a false positive the scan
+// accepts. Shop.Acme.Com, db01.corp.Info and DB01.CORP.INFO are host names.
+func isCodeName(labels []string) bool {
+	if len(labels) < 2 {
+		return false
+	}
+
+	first, beforeLast, last := labels[0], labels[len(labels)-2], labels[len(labels)-1]
+
+	return first != "" && isLower(first[0]) &&
+		!strings.ContainsFunc(first, func(r rune) bool { return r == '-' || (r >= '0' && r <= '9') }) &&
+		(beforeLast == "" || !isUpper(beforeLast[0])) &&
+		len(last) > 1 && isUpper(last[0]) && isLower(last[1])
 }
+
+// isLower reports whether c is an ASCII lower-case letter.
+func isLower(c byte) bool { return c >= 'a' && c <= 'z' }
+
+// isUpper reports whether c is an ASCII upper-case letter.
+func isUpper(c byte) bool { return c >= 'A' && c <= 'Z' }
 
 // minTokenLength is the shortest run of letters and digits the scan takes for
 // a token, given an upper-case letter, a lower-case letter and a digit.

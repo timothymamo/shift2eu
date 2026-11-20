@@ -253,9 +253,12 @@ reference data, and every schema version bump would be refused the same way. The
   access key: a run holding `+` or `/` is one only at exactly 40 characters, so a path or URL is none),
   by fixed rules that know the sanitised values of CLAUDE.md rule 2. An example domain is no finding
   at any depth; a provider's domain only as its apex, exactly one label below it, or for
-  `amazonaws.com` `<service>.<region>`: a deeper name is one a customer chose. A dotted name of code is
-  no host name (issue #365): one followed by `(`, or one whose last label is spelt as an exported
-  identifier (`slog.Info`, `cfg.App`). A false positive is fixed in the scan's rules, never with an
+  `amazonaws.com` `<service>.<region>`: a deeper name is one a customer chose. A selector of Go code
+  is no host name (issue #365): its first label starts lower case with no digit or hyphen, the label
+  before the last does not start upper case, and the last is spelt as an exported identifier, an
+  upper-case letter with a lower-case one right after it (`slog.Info`, `r.cfg.App`). What follows the
+  name plays no part, so `db01.corp.info(primary)`, `Shop.Acme.Com` and `db01.corp.Info` are host
+  names. A false positive is fixed in the scan's rules, never with an
   allow list of paths. The left-out paths themselves are shown as they are, escaped
   and cut, and are not scanned: the pull request's own file list already shows them. The note lists
   the scan's first 20 findings (`MaxScanFindings`) as the file and line in a code span and the kind
