@@ -2991,7 +2991,8 @@ func (sb *sandbox) reapedAsideLock(instance string, reaper int) string {
 // forever. clear_stale_asides reads the aside's recorded owner and take_lock reads the lock's own, so a planted fifo
 // would hang the start before it takes the lock or mints at all: nothing refreshes the VM's token, and no message
 // says why. Neither read may block. Whether the script removes such an aside or keeps it is its choice, so the test
-// pins only that the start goes on.
+// pins only that the start goes on: an entry that holds no pid is one the start takes over, so it gets past both and
+// holds the lock itself.
 func TestAgentsAppTokenRefreshDoesNotHangOnAFifoPidFile(t *testing.T) {
 	t.Parallel()
 
@@ -2999,9 +3000,6 @@ func TestAgentsAppTokenRefreshDoesNotHangOnAFifoPidFile(t *testing.T) {
 		name string
 		// plant writes the entry whose pid file is a fifo and returns its path.
 		plant func(t *testing.T, f *mintFixture) string
-		// goesOn is true when the start must get past the fifo, take the lock and mint, rather than being free
-		// to refuse the entry and exit.
-		goesOn bool
 	}{
 		{
 			// Nothing holds the lock in this case, so a start that is not blocked has no reason to stop.
@@ -3019,7 +3017,6 @@ func TestAgentsAppTokenRefreshDoesNotHangOnAFifoPidFile(t *testing.T) {
 
 				return aside
 			},
-			goesOn: true,
 		},
 		{
 			// The lock's own pid file: a refresher killed without its trap cannot leave a fifo there, but the state
@@ -3058,38 +3055,31 @@ func TestAgentsAppTokenRefreshDoesNotHangOnAFifoPidFile(t *testing.T) {
 				return ok && line != ""
 			}
 
-			// A refresh that is not blocked either got past the fifo - it took the lock and wrote the token, or it
-			// refused the entry and said so - or it is stuck in a read of a fifo nobody writes to.
+			// A refresh that is not blocked gets past the fifo, takes the lock and writes the token - or it is stuck in a
+			// read of a fifo nobody writes to.
 			if !poll(30*time.Second, func() bool { return minted() || !refresh.running() }) {
 				t.Fatalf("the refresh neither wrote the VM's token nor exited within 30s of %s: the fifo %s blocks a read of the pid the start takes from it, so nothing refreshes the VM's token and no line says why (issues #335 and the audit's LOW-1)\nstate directory:\n%s\nstderr:\n%s",
 					tc.name, filepath.Join(planted, "pid"), describeTree(f.sb.stateDir()), refresh.errOut())
 			}
 
-			if tc.goesOn {
-				waitFor(t, 30*time.Second, "the refresh that got past the fifo to take the lock and write the VM's token", minted)
+			waitFor(t, 30*time.Second, "the refresh that got past the fifo to take the lock and write the VM's token", minted)
 
-				if !refresh.running() {
-					t.Fatalf("the refresh exited although nothing but the fifo %s stood in its way, so no refresh holds the VM's token now\nstderr:\n%s",
-						filepath.Join(planted, "pid"), refresh.errOut())
-				}
-
-				if lock := f.sb.refreshLockDir("shift2eu"); !lockHoldsPid(lock, refresh.pid()) {
-					t.Errorf("the lock %s does not hold the pid %d of the refresh that got past the fifo %s, although that refresh wrote the VM's token\nstate directory:\n%s",
-						lock, refresh.pid(), filepath.Join(planted, "pid"), describeTree(f.sb.stateDir()))
-				}
-			} else if !refresh.running() && strings.TrimSpace(refresh.errOut()) == "" {
-				t.Errorf("the refresh exited silently instead of going on; a start that cannot use the fifo %s must say what it found, or a maintainer sees no refresh and no reason for it (issue #335)",
-					filepath.Join(planted, "pid"))
+			if !refresh.running() {
+				t.Fatalf("the refresh exited although nothing but the fifo %s stood in its way, so no refresh holds the VM's token now\nstderr:\n%s",
+					filepath.Join(planted, "pid"), refresh.errOut())
 			}
 
-			// The lock's own pid file is a fifo in the second case, so releasing it would block: only the case that
-			// reports a regular lock has a refresher to stop.
-			if tc.goesOn {
-				refresh.signal(t, syscall.SIGTERM)
+			if lock := f.sb.refreshLockDir("shift2eu"); !lockHoldsPid(lock, refresh.pid()) {
+				t.Errorf("the lock %s does not hold the pid %d of the refresh that got past the fifo %s, although that refresh wrote the VM's token\nstate directory:\n%s",
+					lock, refresh.pid(), filepath.Join(planted, "pid"), describeTree(f.sb.stateDir()))
+			}
 
-				if !refresh.waitExit(30 * time.Second) {
-					t.Fatalf("the refresh did not stop on SIGTERM; stderr:\n%s", refresh.errOut())
-				}
+			// Both entries are taken over, so both cases hold the lock with a regular pid file of their own: the
+			// refresher that holds it is the one to stop, and releasing the lock cannot block.
+			refresh.signal(t, syscall.SIGTERM)
+
+			if !refresh.waitExit(30 * time.Second) {
+				t.Fatalf("the refresh did not stop on SIGTERM; stderr:\n%s", refresh.errOut())
 			}
 
 			f.assertNoLeaks(t, refresh.out(), refresh.errOut())
@@ -3435,4 +3425,121 @@ func TestAgentsAppTokenRefreshOnlyRemovesAnAsideItMayRemove(t *testing.T) {
 			f.assertNoLeaks(t, refresh.out(), refresh.errOut())
 		})
 	}
+}
+
+// countLinesHolding counts the lines of text that hold every one of wants.
+func countLinesHolding(text string, wants ...string) int {
+	count := 0
+
+	for _, line := range strings.Split(text, "\n") {
+		holds := true
+
+		for _, want := range wants {
+			if !strings.Contains(line, want) {
+				holds = false
+
+				break
+			}
+		}
+
+		if holds {
+			count++
+		}
+	}
+
+	return count
+}
+
+// refusingMvShim is the mv the refresher runs in the test below: it refuses the one rename the test names and
+// hands every other call to the real mv, so the entry it names can never be reaped.
+const refusingMvShim = `#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = %s ]; then
+    printf 'mv: the test refuses to rename %%s\n' "$a" >&2
+    exit 1
+  fi
+done
+exec %s "$@"
+`
+
+// refuseRenaming puts an mv at the front of the sandbox's PATH that refuses to rename entry and runs the real mv
+// for every other call: one entry the refresher can never reap, on every host and without a root. A rename fails
+// the same way for reap_entry when the filesystem refuses it - a permission, a full disk - and no chmod of the
+// state directory can make one rename fail alone there: the refresh keeps its lock and its log in it, so it must
+// be able to write it, and a permission changed under a running loop races with the rounds that are counted here.
+func (sb *sandbox) refuseRenaming(t *testing.T, entry string) {
+	t.Helper()
+
+	shim := fmt.Sprintf(refusingMvShim, strconv.Quote(entry), strconv.Quote(realTool(t, "mv")))
+	writeFileMode(t, filepath.Join(sb.binDir, "mv"), []byte(shim), 0o700)
+}
+
+// TestAgentsAppTokenRefreshSaysOnceThatItCannotRemoveAStaleAside pins the auditor's LOW-B for issue #335: a
+// moved-aside lock whose rename fails stays in the state directory, so every round finds it again, and the start
+// says it is removing the entry and then that it could not. A refresher runs for hours, so both lines came back at
+// every check: the VM's token log filled with one directory that nothing changed about, and a maintainer reading it
+// saw no other line. Each says it once, and the failure is still said, so the log does not end on a line about
+// removing an entry that is still there.
+func TestAgentsAppTokenRefreshSaysOnceThatItCannotRemoveAStaleAside(t *testing.T) {
+	t.Parallel()
+
+	// The rounds the test waits for before it counts: the start's own cleanup is the first attempt at the rename,
+	// and every round after it tries the same one again.
+	const rounds = 4
+
+	f := newMintFixture(t)
+	// The margin is longer than a token lives, so the loop mints at every round: the requests the fake API
+	// answered count the rounds the refresher ran, and the test reads no wall clock to know that it went on.
+	env := f.refreshEagerEnv()
+
+	// The aside a mover that is gone leaves: neither the pid in its name nor the owner it records runs a refresh,
+	// so it is stale, and it is one the refresher can never rename.
+	aside := f.sb.movedAsideLock("shift2eu", deadPid(t))
+	writeMovedAsideLock(t, aside, deadPid(t))
+	f.sb.refuseRenaming(t, aside)
+
+	refresh := f.sb.start(t, scriptPath(t, agentsMintScript), []string{"refresh"}, env)
+
+	waitFor(t, 60*time.Second, fmt.Sprintf("the refresh to reach its round %d", rounds), func() bool {
+		return len(f.api.postTimes()) >= rounds
+	})
+
+	if _, err := os.Lstat(aside); err != nil {
+		t.Fatalf("the refresher removed %s although the test's mv refuses to rename it: that mv is not the one the refresh runs, so this run never reached a rename that fails and the lines counted below would say nothing about a stale entry that cannot be removed (issue #335, the audit's LOW-B): %v\nstate directory:\n%s",
+			aside, err, describeTree(f.sb.stateDir()))
+	}
+
+	if !refresh.running() {
+		t.Fatalf("the refresh exited after it could not rename %s, although nothing about the state directory stops it from refreshing the VM's token (issue #335)\nstderr:\n%s",
+			aside, refresh.errOut())
+	}
+
+	name := filepath.Base(aside)
+	log := refresh.errOut() + refresh.out()
+
+	removing := countLinesHolding(log, name, "removing")
+	couldNot := countLinesHolding(log, name, "could not remove")
+
+	if couldNot < 1 {
+		t.Errorf("the refresher never says it could not remove %s, although the entry is still in the state directory: a log that ends on a line about removing it, beside a directory that stays, tells a maintainer nothing (issue #335, the audit's LOW-B)\nlog:\n%s",
+			name, log)
+	}
+
+	if removing > 1 {
+		t.Errorf("the refresher says it is removing the moved-aside lock %s %d times in %d rounds of its loop, want at most once: the entry stays because the rename fails, so every round finds it again, and a line per check buries every other line of the VM's token log (issue #335, the audit's LOW-B)\nlog:\n%s",
+			name, removing, rounds, log)
+	}
+
+	if couldNot > 1 {
+		t.Errorf("the refresher says it could not remove the moved-aside lock %s %d times in %d rounds of its loop, want at most once: nothing about the entry changed between the rounds, so the second line and every one after it says what the maintainer already read (issue #335, the audit's LOW-B)\nlog:\n%s",
+			name, couldNot, rounds, log)
+	}
+
+	refresh.signal(t, syscall.SIGTERM)
+
+	if !refresh.waitExit(30 * time.Second) {
+		t.Fatalf("the refresh did not stop on SIGTERM; stderr:\n%s", refresh.errOut())
+	}
+
+	f.assertNoLeaks(t, refresh.out(), refresh.errOut())
 }
