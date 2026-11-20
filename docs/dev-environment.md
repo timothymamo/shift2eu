@@ -908,6 +908,11 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 # PASS, after make agents-token-refresh-start: "stopped pid <pid>, the refresh make agents-token-refresh-start started"
 # FAIL "refused: run it as the maintainer, not as root": run it without sudo
 # FAIL "<label> is loaded in <domain> and runs the agents App token refresh ...": run the bootout, disable and rm it names, install again
+#   ("plist not shown": remove the plist launchctl print <domain>/<label> names, by hand)
+# FAIL "foreign-jobs check failed (status <n>): nothing was installed ...": fix what the line above it says, install again
+# FAIL "warning: could not list the system domain ...": installed, but a foreign LaunchDaemon would go unnoticed; check sudo launchctl print system
+# FAIL "warning: <n> job(s) with unusual labels not checked": installed; look for them in launchctl print system and gui/<uid>
+# FAIL "warning: the pid file ... no longer names pid <pid> ...": nothing was stopped; if the log says another refresh runs, stop it, install again
 # FAIL "refused: a refresh that make agents-token-refresh-start did not start holds the lock ... (pid <pid> ...)": kill <pid>, install again
 # FAIL "refused: <clone> is inside <location>, which the VM shift2eu mounts ..." or "refused: the VM shift2eu mounts
 #   <location>, which is inside <clone> ...": install from the host clone, outside every mount of the VM (What install does)
@@ -918,6 +923,7 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 # FAIL "the old job <label> is still loaded ...": sudo launchctl print system/<label>, wait or make agents-token-refresh-uninstall, install again
 # FAIL "... is not the plist printed above ...": no job is loaded; look for what changed the file, install again
 # FAIL "launchctl bootstrap failed twice: NO token refresh job ...": install again, or make agents-token-refresh-start
+#   (it says "the hand-started refresh was stopped" when none runs at all now)
 # FAIL "warning: pid <pid> still runs ... after TERM": once ps -p <pid> shows nothing, the job takes over within 5 minutes
 ```
 
@@ -929,7 +935,7 @@ sudo launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.
 # PASS: state = running, a pid, and the arguments name ~/agents/shift2eu/host/shift2eu/dev/agents-app-token.sh (never one in the workspace)
 tail ~/.local/state/shift2eu/agents-token-refresh-shift2eu.log
 # PASS: the last lines say wrote a token ... into the VM shift2eu
-# FAIL "another agents App token refresh ... is running (pid <pid> ...)" every 5 minutes: another refresh holds the lock; install again (step 1), which stops or names it, or a foreign job
+# FAIL "another agents App token refresh ... is running (pid <pid> ...)" every 5 minutes: install again (step 1); it stops that refresh, or names it or the foreign job
 # FAIL no new log lines: in sudo launchctl print system/<label>, a growing runs with a non-zero last exit code means the job
 #   exits at once (launchd's own output goes to /dev/null); check HOME and XDG_STATE_HOME in the plist and that the script exists
 launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu >/dev/null && echo found   # without sudo
@@ -1063,17 +1069,15 @@ make vm-init
 
 ##### When kickstart does not return
 
-Seen on the Mac Mini on 2026-11-20: `sudo launchctl kickstart -k system/<label>`, and the same without
-`-k`, printed nothing and did not return until Ctrl+C, while `sudo launchctl print system/<label>` showed
-`state = spawn scheduled`. The cause is not known yet (issue #396). Stop the job's refresh instead: launchd
-starts the job again within its ThrottleInterval (5 minutes), and that start runs the script as it is on
-disk now. The pattern matches every instance's refresh, and a refresh started by hand too, which stays
-stopped.
-
 ```bash
-# Mac Mini, after Ctrl+C on the kickstart; in account mode: sudo pkill -u _shift2euagents -f 'agents-app-token.sh refresh'
-pkill -f 'agents-app-token.sh refresh'
-# PASS, within 5 minutes: sudo launchctl print system/<label> shows state = running, and its log a new start
+# Seen on the maintainer's Mac on 2026-11-20 (kickstart, with or without -k, printed nothing until Ctrl+C); cause not known (issue #396)
+sudo launchctl print system/<label> | grep -E 'state|pid'      # Mac Mini, after Ctrl+C on the kickstart
+# state = spawn scheduled: the job runs no process; nothing to do, launchd starts it within its ThrottleInterval (5 minutes)
+# state = running: stop only this job's process (any mode, account mode too); launchd starts it again with the script on disk now
+sudo launchctl kill TERM system/<label>
+# PASS, within 5 minutes: sudo launchctl print system/<label> shows state = running, a new pid, and its log a new start
+# FAIL still spawn scheduled after 5 minutes: a foreign job or another refresh holds the lock; install again (step 1), it names it
+# FAIL launchctl kill does not stop it, last resort only: pkill -f 'agents-app-token.sh refresh' (sudo pkill -u _shift2euagents ... in account mode) stops every instance's refresh and every process whose command line holds that string
 ```
 
 #### The key under a separate account
@@ -1442,7 +1446,7 @@ sudo -k
 cd /
 sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat -C /Users/_shift2euagents/shift2eu-host pull --ff-only
 sudo launchctl kickstart -k system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu   # runs the pulled code now
-# FAIL no output and no return until Ctrl+C: When kickstart does not return (the account-mode pkill there)
+# FAIL no output and no return until Ctrl+C: When kickstart does not return (its launchctl kill works in account mode too)
 sudo -k
 ```
 
@@ -1451,7 +1455,7 @@ sudo -k
 ```bash
 # Mac Mini
 sudo launchctl kickstart -k system/<label>                                                  # mint now
-# FAIL no output and no return until Ctrl+C: When kickstart does not return (the account-mode pkill there)
+# FAIL no output and no return until Ctrl+C: When kickstart does not return (its launchctl kill works in account mode too)
 sudo tail -n 50 /Users/_shift2euagents/.local/state/shift2eu/agents-token-refresh-<instance>.log   # the job's log
 sudo -k
 ```
