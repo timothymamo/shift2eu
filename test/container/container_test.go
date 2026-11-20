@@ -179,6 +179,20 @@ COPY --from=build /out/shift2eu /shift2eu
 			dockerfile: strings.Replace(fixture, pin+modDownload, modDownload+"ENV GOTOOLCHAIN=auto\n", 1),
 			want:       []string{"after the RUN instruction", "GOTOOLCHAIN=auto"},
 		},
+		{
+			// A pin before the first go command is not enough: Docker applies
+			// an ENV to the instructions that follow it, so a later ENV puts
+			// another toolchain back in force for `go build` and the build runs
+			// with one the repository was never reviewed against.
+			name:       "a non-local value after the module download",
+			dockerfile: strings.Replace(fixture, modDownload, modDownload+"ENV GOTOOLCHAIN=auto\n", 1),
+			// The later ENV is on line 4 of the fixture, the go build on line 5.
+			want: []string{"a non-local value after the module download:4: ", "GOTOOLCHAIN=auto"},
+		},
+		{
+			name:       "a second local value after the module download",
+			dockerfile: strings.Replace(fixture, modDownload, modDownload+pin, 1),
+		},
 	}
 
 	for _, tc := range tests {
