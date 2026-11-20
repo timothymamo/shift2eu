@@ -673,8 +673,8 @@ the table with the App token, and that `bypass_actors` is absent or empty for th
   (`make vm-delete vm-create`); until then it keeps the real gh at `/usr/local/bin/gh` and `GITHUB_TOKEN`,
   which is the fallback anyway, and `make agents-token` warns about it.
 - `make agents-token-refresh-start` leaves a background process on the Mac; it is stopped with
-  `kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"` (the instance's name in
-  the path). `make deck` is unchanged but for a warning when an App variable reaches it.
+  the stop block of `docs/dev-environment.md` (The host clone), which kills the lock's pid only when it
+  runs a refresh (issue #335). `make deck` is unchanged but for a warning when an App variable reaches it.
 - The maintainer's App gets one permission beyond the PRD's list (Attestations read); `gh run rerun` and
   the rulesets' bypass checks become maintainer steps after the switch (milestone 2).
 - Questions only the real App can answer are checks at the runbook's step 3: the pull request's author,

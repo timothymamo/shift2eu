@@ -802,14 +802,19 @@ while it removed one goes the same way once that pid runs no refresh. As the acc
 single-account mode, start it again with `make agents-token-refresh-start` from the host clone. No command
 prints a token, the JWT or the key, and nothing writes them to a log or the workspace. Stop it with the
 block below: it reads the lock's pid only from a regular file, since a `cat` of anything else, a FIFO say,
-can wait for ever (issue #335).
+can wait for ever, and kills it only when it runs a refresh, as `make agents-token-refresh-start` checks
+(issue #335).
 
 ```bash
-# Mac, host clone: stop the refresh
-p=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid
-[ -f "$p" ] && [ ! -L "$p" ] && kill "$(head -c 32 "$p")"
-# PASS: exits 0
-# FAIL: exits non-zero: no refresh holds the lock, or its pid entry is no regular file
+# Mac, host clone: stop the refresh, only when the lock's pid runs one
+l=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
+pid=; [ -f "$l/pid" ] && [ ! -L "$l/pid" ] && pid="$(head -c 32 "$l/pid")"
+if [ ! -e "$l" ]; then echo "no lock: no refresh runs"
+elif case "$pid" in ''|0|*[!0-9]*) true ;; *) false ;; esac; then echo "the lock holds no pid"
+elif ps -p "$pid" -o command= | grep -q 'agents-app-token.sh refresh'; then kill "$pid" && echo "stopped the refresh, pid $pid"
+else echo "pid $pid runs no refresh"; fi
+# PASS: stopped the refresh, pid <pid>; or no lock: no refresh runs (nothing to stop: go on)
+# FAIL: the lock holds no pid, or pid <pid> runs no refresh: check with ps -axo pid,command | grep 'agents-app-token.sh refresh'; once none runs, remove the lock by hand: rm -r ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
 ```
 
 #### The refresh as a LaunchDaemon
@@ -1011,11 +1016,21 @@ Since milestone 3 the agents have no other GitHub credential, so without the tok
 `git push` fail in the VM (and `make vm-init`'s `gh` step with them) until a token file is back:
 
 ```bash
-# Mac, host clone, first: stop the refresh
-p=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid
-[ -f "$p" ] && [ ! -L "$p" ] && kill "$(head -c 32 "$p")"
+# Mac, host clone, first, only if the refresh's LaunchDaemon is installed: launchd would start it again within 5 minutes
+direnv exec . make agents-token-refresh-uninstall
 # PASS: exits 0
-# FAIL: exits non-zero: stop here; no refresh holds the lock, or its pid entry is no regular file
+```
+
+```bash
+# Mac, host clone, then: stop a refresh started by hand, only when the lock's pid runs one
+l=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
+pid=; [ -f "$l/pid" ] && [ ! -L "$l/pid" ] && pid="$(head -c 32 "$l/pid")"
+if [ ! -e "$l" ]; then echo "no lock: no refresh runs"
+elif case "$pid" in ''|0|*[!0-9]*) true ;; *) false ;; esac; then echo "the lock holds no pid"
+elif ps -p "$pid" -o command= | grep -q 'agents-app-token.sh refresh'; then kill "$pid" && echo "stopped the refresh, pid $pid"
+else echo "pid $pid runs no refresh"; fi
+# PASS: stopped the refresh, pid <pid>; or no lock: no refresh runs (nothing to stop: go on)
+# FAIL: the lock holds no pid, or pid <pid> runs no refresh: check with ps -axo pid,command | grep 'agents-app-token.sh refresh', and delete nothing in the VM while one runs; once none runs, remove the lock by hand: rm -r ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
 ```
 
 ```bash
@@ -1098,11 +1113,15 @@ direnv exec . make agents-token-refresh-uninstall
 ```
 
 ```bash
-# Mac Mini, host clone, only if you started one by hand:
-p=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid
-[ -f "$p" ] && [ ! -L "$p" ] && kill "$(head -c 32 "$p")"
-# PASS: exits 0
-# FAIL: exits non-zero: no refresh holds the lock, or its pid entry is no regular file
+# Mac Mini, host clone, only if you started one by hand: stop it, only when the lock's pid runs one
+l=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
+pid=; [ -f "$l/pid" ] && [ ! -L "$l/pid" ] && pid="$(head -c 32 "$l/pid")"
+if [ ! -e "$l" ]; then echo "no lock: no refresh runs"
+elif case "$pid" in ''|0|*[!0-9]*) true ;; *) false ;; esac; then echo "the lock holds no pid"
+elif ps -p "$pid" -o command= | grep -q 'agents-app-token.sh refresh'; then kill "$pid" && echo "stopped the refresh, pid $pid"
+else echo "pid $pid runs no refresh"; fi
+# PASS: stopped the refresh, pid <pid>; or no lock: no refresh runs (nothing to stop: go on)
+# FAIL: the lock holds no pid, or pid <pid> runs no refresh: check with ps -axo pid,command | grep 'agents-app-token.sh refresh'; once none runs, remove the lock by hand: rm -r ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
 ```
 
 ```bash
