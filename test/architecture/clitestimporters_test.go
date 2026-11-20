@@ -1,7 +1,6 @@
 package architecture_test
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 	"github.com/timothymamo/shift2eu/test/internal/releasetarget"
+	"github.com/timothymamo/shift2eu/test/internal/yamlread"
 )
 
 // This file holds the check that pins which packages' test files import the
@@ -36,20 +36,77 @@ var cliTestImporters = []string{
 	modulePath + "/test/apiparity",
 }
 
-// cliTestImportersBuilds are the builds the check lists the module in: the
-// platform the tests run on with no tag, and with every custom tag a test file
-// carries (e2e, integration, browser); windows, for the !unix files; and
-// js/wasm, for the site's glue and any js file, with and without the tags. cgo
-// is off, as the release builds; no test file of the module uses cgo.
-var cliTestImportersBuilds = []struct {
+// cliTestImportersBuild is one build the check lists the module in: a
+// platform and a tag set, named as tagSets name theirs.
+type cliTestImportersBuild struct {
 	target releasetarget.Target
-	tags   []string
-}{
-	{target: releasetarget.Target{GOOS: "linux", GOARCH: "amd64"}},
-	{target: releasetarget.Target{GOOS: "linux", GOARCH: "amd64"}, tags: []string{"e2e", "integration", "browser"}},
-	{target: releasetarget.Target{GOOS: "windows", GOARCH: "amd64"}, tags: []string{"e2e", "integration", "browser"}},
-	{target: jsWasm},
-	{target: jsWasm, tags: []string{"e2e", "integration", "browser"}},
+	tags   tagSet
+}
+
+// cliTestImportersBuilds returns the builds the check lists the module in: the
+// platform the tests run on with no tag, and with every custom tag; windows,
+// for the !unix files; and js/wasm, for the site's glue and any js file, with
+// and without the tags. The custom tags are run.build-tags in .golangci.yml,
+// read here rather than copied: test/lint's TestLintLoadsEveryGoFile fails on
+// a file behind a tag that list leaves out, so a test file behind a new tag
+// cannot hide from this check either. cgo is off, as the release builds; no
+// test file of the module uses cgo.
+func cliTestImportersBuilds(t *testing.T) []cliTestImportersBuild {
+	t.Helper()
+
+	tags := golangciBuildTags(t)
+	none := tagSet{name: "tags=none"}
+	all := tagSet{name: "tags=" + strings.Join(tags, "+"), tags: tags}
+	linux := releasetarget.Target{GOOS: "linux", GOARCH: "amd64"}
+
+	return []cliTestImportersBuild{
+		{target: linux, tags: none},
+		{target: linux, tags: all},
+		{target: releasetarget.Target{GOOS: "windows", GOARCH: "amd64"}, tags: all},
+		{target: jsWasm, tags: none},
+		{target: jsWasm, tags: all},
+	}
+}
+
+// golangciBuildTags returns, sorted, the entries of run.build-tags in
+// .golangci.yml, the custom build tags every lint run sets. It fails the test
+// on a file it cannot read or on an empty list, which would leave every tagged
+// file out of the check.
+func golangciBuildTags(t *testing.T) []string {
+	t.Helper()
+
+	lines, err := yamlread.SplitLines(readRepositoryFile(t, ".golangci.yml"))
+	if err != nil {
+		t.Fatalf(".golangci.yml: %v", err)
+	}
+
+	run, err := yamlread.Walk(lines, "run")
+	if err != nil {
+		t.Fatalf(".golangci.yml: %v", err)
+	}
+
+	entries, err := yamlread.Mapping(run)
+	if err != nil {
+		t.Fatalf(".golangci.yml: run: %v", err)
+	}
+
+	i := slices.IndexFunc(entries, func(e yamlread.Entry) bool { return e.Key == "build-tags" })
+	if i < 0 {
+		t.Fatal(".golangci.yml: no run.build-tags, so the check would list no tagged file")
+	}
+
+	tags, err := yamlread.List(entries[i])
+	if err != nil {
+		t.Fatalf(".golangci.yml: run: %v", err)
+	}
+
+	if len(tags) == 0 {
+		t.Fatal(".golangci.yml: run.build-tags is empty, so the check would list no tagged file")
+	}
+
+	slices.Sort(tags)
+
+	return tags
 }
 
 // TestOnlyNamedPackagesTestTheCLI lists every package of the module, with the
@@ -64,18 +121,13 @@ func TestOnlyNamedPackagesTestTheCLI(t *testing.T) {
 
 	root := repositoryRoot(t)
 
-	for _, build := range cliTestImportersBuilds {
-		name := fmt.Sprintf("%s/%s/tags=%s", build.target.GOOS, build.target.GOARCH, strings.Join(build.tags, "+"))
-		if len(build.tags) == 0 {
-			name = fmt.Sprintf("%s/%s/tags=none", build.target.GOOS, build.target.GOARCH)
-		}
-
-		t.Run(name, func(t *testing.T) {
+	for _, build := range cliTestImportersBuilds(t) {
+		t.Run(build.target.GOOS+"/"+build.target.GOARCH+"/"+build.tags.name, func(t *testing.T) {
 			t.Parallel()
 
-			pkgs, err := check.ListPackages(t.Context(), root, build.target, false, build.tags, "./...")
+			pkgs, err := check.ListPackages(t.Context(), root, build.target, false, build.tags.tags, "./...")
 			if err != nil {
-				t.Fatalf("ListPackages(./..., %v, tags=%v): %v", build.target, build.tags, err)
+				t.Fatalf("ListPackages(./..., %v, %s): %v", build.target, build.tags.name, err)
 			}
 
 			got := cliTestImportersOf(pkgs)
