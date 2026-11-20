@@ -252,8 +252,8 @@ exit non-zero, with Lima's message in the log; it does not run again until the n
 LaunchDaemon ([The refresh as a LaunchDaemon](#the-refresh-as-a-launchdaemon)) needs no change: it retries
 until the VM is up. In account mode too this job runs as you, from your host clone: the VM is yours.
 
-The install refuses, before any `sudo`: a run as root, a Lima autostart job of the instance (it names it,
-`limactl autostart disable <instance>` and the bootout that removes it by hand), and an instance
+The install refuses, before any `sudo`: a run as root, a Lima autostart job of the instance, loaded or only its plist on disk (it names it,
+`limactl autostart disable <instance>`, and the bootout and `rm -f` of the plist that remove it by hand), and an instance
 `limactl list` does not list. It lints the plist, prints it with its SHA-256, prints every `sudo` before it
 runs, boots a loaded job out first, reads the installed plist back and loads it. Loading it runs it once, so a
 stopped VM starts. Both targets put the plist in `VM_BOOT_LAUNCHD_DIR` (`/Library/LaunchDaemons`), a hook for
@@ -271,7 +271,7 @@ direnv exec . make vm-boot-install
 # PASS: plutil -lint passes; the plist and its SHA-256 are printed; each sudo command is printed before it asks for your password
 # PASS: "loaded io.github.timothymamo.shift2eu.vm-boot.shift2eu"
 # FAIL "refused: run it as the maintainer, not as root": run it without sudo
-# FAIL "refused: Lima's autostart job io.lima-vm.<...>.shift2eu is loaded in <domain> ...": run limactl autostart disable shift2eu (or the bootout it names), install again
+# FAIL "refused: Lima's autostart job io.lima-vm.<...>.shift2eu is loaded in <domain> ...": run limactl autostart disable shift2eu (or the bootout and rm -f of the plist it names), install again
 # FAIL "refused: Lima lists no instance shift2eu ...": create the VM first (make vm-create), install again
 # FAIL "the old job <label> is still loaded ...": sudo launchctl print system/<label>, wait or make vm-boot-uninstall, install again
 # FAIL "... is not the plist printed above ...": no job is loaded; look for what changed the file, install again
@@ -315,8 +315,8 @@ tail ~/.local/state/shift2eu/agents-token-refresh-shift2eu.log   # in account mo
 reboot, start the VM with `make vm-up` again.
 
 ```bash
-# Mac Mini, host clone
-make vm-boot-uninstall
+# Mac Mini, host clone (direnv exec: LIMA_INSTANCE comes from its .envrc, which SSH does not load)
+direnv exec . make vm-boot-uninstall
 # FAIL "... is still loaded ...": run the sudo launchctl bootout system/<label> it names
 sudo launchctl print system/io.github.timothymamo.shift2eu.vm-boot.shift2eu   # PASS: fails now
 ls /Library/LaunchDaemons/io.github.timothymamo.shift2eu.vm-boot.shift2eu.plist   # PASS: gone
@@ -481,11 +481,34 @@ LaunchAgent `io.lima-vm.autostart.shift2eu`, or with `--condition=boot` the Laun
 `io.lima-vm.daemon.shift2eu`) runs `limactl start shift2eu --foreground`, the form that falls back to
 `template:default` (#237). If you enabled it, turn it off with `limactl autostart disable shift2eu` while
 the instance still has its `lima.yaml` (it reads that file first, and answers `instance not found` without
-it; unload such a job by hand as below). `make vm-up` warns when such a job is loaded for the instance,
-naming it and that command, and starts the VM anyway; `make vm-boot-install` refuses beside one. To start
+it; then remove such a job by hand: boot it out and delete its plist, as `make vm-up` names them).
+`make vm-up` warns when such a job is loaded for the instance, or its plist is on disk
+(`~/Library/LaunchAgents/io.lima-vm.autostart.shift2eu.plist`,
+`/Library/LaunchDaemons/io.lima-vm.daemon.shift2eu.plist`), naming it, that command and the removal by hand,
+and starts the VM anyway; `make vm-boot-install` refuses beside one. To start
 the VM at boot, use the project's own job instead ([The VM at boot as a
 LaunchDaemon](#the-vm-at-boot-as-a-launchdaemon)), which runs `limactl shell --start`. The agents App's
 refresh LaunchDaemon ([The refresh as a LaunchDaemon](#the-refresh-as-a-launchdaemon)) does not start the VM.
+
+Remove Lima's jobs by hand, and neutralise a leftover enable override (`=> enabled` in
+`launchctl print-disabled`), once per Mac:
+
+```bash
+# Mac, only if limactl autostart disable shift2eu cannot run (no lima.yaml)
+launchctl bootout gui/$(id -u)/io.lima-vm.autostart.shift2eu; rm -f ~/Library/LaunchAgents/io.lima-vm.autostart.shift2eu.plist
+sudo launchctl bootout system/io.lima-vm.daemon.shift2eu; sudo rm -f /Library/LaunchDaemons/io.lima-vm.daemon.shift2eu.plist
+# Mac, always: turn a leftover enable override into a disable
+sudo launchctl disable system/io.lima-vm.daemon.shift2eu
+launchctl disable gui/$(id -u)/io.lima-vm.autostart.shift2eu   # if it fails over SSH (no GUI domain), run it once after a GUI login
+sudo launchctl print-disabled system | grep io.lima-vm
+# PASS: "io.lima-vm.daemon.shift2eu" => disabled
+launchctl print-disabled gui/$(id -u) | grep io.lima-vm
+# PASS: no line, or "io.lima-vm.autostart.shift2eu" => disabled
+# FAIL "=> enabled": run that domain's disable again (sudo for system, as yourself for gui)
+```
+
+The checks of `make vm-up` and `make vm-boot-install` do not detect an enable override with no job behind
+it: it is inert alone, and the disable above keeps a job Lima installs later from loading.
 
 Which fix applies depends on whether the directory still holds a `lima.yaml`:
 
@@ -502,8 +525,8 @@ If the directory comes back after `rm -rf`, even across a reboot, a launchd job 
 LaunchAgent running `limactl start shift2eu`, for example one that starts the VM at boot) is recreating
 it: launchd creates the job's `StandardOutPath` and `StandardErrorPath` log files, which sit in the
 instance directory, every time it runs the job. Find it with `launchctl print system | grep -i lima` and
-in `~/Library/LaunchAgents` and `/Library/LaunchDaemons`, unload it (`launchctl bootout`), then remove the
-directory and run `make vm-up` to create the VM from `dev/lima.yaml`.
+in `~/Library/LaunchAgents` and `/Library/LaunchDaemons`, unload it (`launchctl bootout`) and delete its
+plist (`rm -f`, with `sudo` for a LaunchDaemon), then remove the directory and run `make vm-up` to create the VM from `dev/lima.yaml`.
 
 ## Dispatcher mode
 
@@ -1057,8 +1080,8 @@ limactl shell --workdir / shift2eu sh -c 'sed -n 2p "$HOME/.config/shift2eu/agen
 valid until it expires.
 
 ```bash
-# Mac Mini, host clone
-make agents-token-refresh-uninstall
+# Mac Mini, host clone (direnv exec: LIMA_INSTANCE comes from its .envrc, which SSH does not load)
+direnv exec . make agents-token-refresh-uninstall
 # FAIL "... is still loaded ...": run the sudo launchctl bootout system/<label> it names
 sudo launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu   # PASS: fails now
 ls /Library/LaunchDaemons/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu.plist   # PASS: gone
