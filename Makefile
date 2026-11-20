@@ -65,7 +65,34 @@ SITE_VERSION ?=
 override SITE_VERSION := $(value SITE_VERSION)
 export SITE_VERSION
 
+# The Go toolchain every go command make runs builds with (issue #347, docs/adr/0035): go.mod's exact go line
+# is the pin, and GOTOOLCHAIN=go<go line> makes the go command run exactly that release, the one on PATH when
+# it is that release, otherwise downloaded once into the module cache, never a newer local Go (a go line alone
+# admits any newer one). Exported, so it reaches every recipe, sub-make, go -C tools, the scripts under dev/
+# and the go commands ci/sitebuild runs, whose go env GOROOT then names the pinned toolchain, the one
+# wasm_exec.js is copied from. It is read from go.mod in this one place, so a Renovate bump of the go line
+# needs no change here. The one value of yours that is kept is local, as CI sets it (actions/setup-go exports
+# it, after installing the go line's release): it runs the Go on PATH and never downloads one, and a Go other
+# than the go line's then fails TestGoModPinsTheBuildingToolchain in make test rather than building with it.
+# Any other value, from the environment or the command line (auto, path, another release, <name>+auto), is
+# replaced, since every one of them can run a Go other than the pinned one. The value is read raw, so make
+# expands nothing in it, and fixed in this first block, before any $(shell ...) is handed it; the go line is
+# set below, once $(shell ...) may run. Without a go.mod (a test's copy of the Makefile) nothing is pinned
+# and GOTOOLCHAIN is exported empty, which the go command reads as unset.
+ifeq ($(value GOTOOLCHAIN),local)
+override GOTOOLCHAIN := local
+else
+override GOTOOLCHAIN :=
+endif
+export GOTOOLCHAIN
+
 BINARY  := shift2eu
+# go.mod's go line, the version GOTOOLCHAIN above pins: the second field of the first line that starts with
+# the go directive, as the go command writes it.
+GO_LINE := $(shell awk '/^go[ \t]/ { print $$2; exit }' go.mod 2>/dev/null)
+ifneq ($(GOTOOLCHAIN),local)
+override GOTOOLCHAIN := $(if $(GO_LINE),go$(GO_LINE))
+endif
 # The HTTP API's binary (PRD #103, docs/adr/0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md).
 SERVER  := shift2eu-server
 PKG     := github.com/timothymamo/shift2eu

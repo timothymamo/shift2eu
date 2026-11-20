@@ -126,6 +126,34 @@ composition root, built with Go's standard toolchain for `GOOS=js GOARCH=wasm`:
   site's own script and the glue. Milestone 2 bundles it and adds the test that fails when the bundled file
   differs from the building toolchain's.
 
+**Note of 2026-11-20, issue #347: the exact go line is the pin, and every build runs that release.** The
+decision is unchanged; this states how the pin holds.
+
+- **The pin is `go.mod`'s go line, one exact patch release (`go 1.27.4`), and nothing beside it.** It ties
+  the module and the bundled `wasm_exec.js` to one toolchain. A `toolchain` line equal to the go line does
+  not last: `go mod tidy` drops it, and CI (`go mod tidy -diff`), `make tidy` and Renovate's `gomodTidy` all
+  run tidy. A `toolchain` line that differs would split the pin, the module's minimum Go from the Go it is
+  built with. `tools/go.mod` has the same go line (test/architecture, `TestToolsModuleFollowsTheRootModulesGo`).
+- **A line in `go.mod` never stops a newer local Go.** Go only switches up: a go or toolchain line older
+  than the local Go is satisfied by it, so the newer Go builds the module and its `GOROOT` provides
+  `wasm_exec.js`. The pin is therefore enforced where Go runs:
+  - The Makefile exports `GOTOOLCHAIN=go<go line>`, read from `go.mod` in one place. Every go command it
+    runs (sub-makes, `go -C tools`, `dev/` scripts, `ci/sitebuild`'s `go env GOROOT` and builds) runs
+    exactly that release, the local one when it matches, otherwise a downloaded one. It keeps only the
+    value `local`, which never downloads and lets the test below fail on a mismatch; every other value is
+    replaced.
+  - CI and the release run with `GOTOOLCHAIN=local`. `actions/setup-go` installs the go line's release
+    (`go-version-file: go.mod`) and exports `GOTOOLCHAIN=local` for the job's later steps, so no job
+    downloads another Go. The workflows set nothing of their own: the checks on `ci.yml` and `release.yml`
+    allow no workflow-level `env:`, and the release check refuses any go-command variable in
+    `release.yml`. The Dockerfile's builder image is tagged with the go line (`test/container`) and sets
+    `GOTOOLCHAIN=local` itself. Renovate's "Go toolchain" group bumps the go lines, `dev/lima.yaml`'s
+    `goVersion` and that image in one PR.
+- **Two tests catch a mismatch.** `TestGoModPinsTheBuildingToolchain` (`test/site`) fails unless the go line
+  is an exact patch release, `go.mod` has no `toolchain` line and the Go that compiled the test is the go
+  line's (`runtime.Version()`). `TestWasmExecIsTheToolchains` fails unless the bundled `wasm_exec.js` is the
+  building toolchain's, byte for byte.
+
 ## Alternatives considered
 
 - **Render the fragment with `html/template`**, as the PRD first said. It was built that way first and its
