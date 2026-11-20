@@ -82,17 +82,22 @@ func armIDAccount(text string, start int) bool {
 // .../outpost/op-0123.../bucket/acme-op-bucket) and s3express (a directory
 // bucket, bucket/acme-prod--euc1-az1--x-s3). The segment and the name are
 // delimited with a slash or a colon (accesspoint:acme-prod-ap), as an ARN may
-// write either. The submatch is the accesspoint or bucket segment and the name,
-// the value reported as written; the outpost's identifier names no customer and
-// is not reported.
+// write either. The first submatch is the service's suffix after s3 (express
+// for a directory bucket, empty for s3 itself); the second is the accesspoint
+// or bucket segment and the name, the value reported as written. The outpost's
+// identifier names no customer and is not reported.
 var s3ResourceARNPattern = regexp.MustCompile(
-	`(?i)\barn:aws[a-z-]*:s3(?:-object-lambda|-outposts|express)?:[a-z0-9-]*:[0-9]*:(?:outpost/[a-z0-9-]+/)?((?:accesspoint|bucket)[/:][a-z0-9][a-z0-9_.-]*)`)
+	`(?i)\barn:aws[a-z-]*:s3(-object-lambda|-outposts|express)?:[a-z0-9-]*:[0-9]*:(?:outpost/[a-z0-9-]+/)?((?:accesspoint|bucket)[/:][a-z0-9][a-z0-9_.-]*)`)
 
 // directoryBucketSuffixPattern matches the suffix S3 Express appends to a
-// directory bucket's own words (acme-prod--euc1-az1--x-s3): the availability
-// zone's ID between double hyphens and the --x-s3 marker, lowercased. The words
-// before it are what is held to the sample rule.
-var directoryBucketSuffixPattern = regexp.MustCompile(`--[a-z0-9-]+--x-s3$`)
+// directory bucket's own words (acme-prod--euc1-az1--x-s3): the availability or
+// local zone's ID (euc1-az1, usw2-lax1-az1) between double hyphens and the
+// --x-s3 marker, lowercased. A zone ID never holds a double hyphen, so the
+// pattern takes only the one suffix at the end and leaves a double hyphen in
+// the bucket's own words (example--acme-prod--euc1-az1--x-s3) to them. The
+// words before it are what is held to the sample rule. It applies only to an
+// s3express ARN's bucket, never to an access point's name.
+var directoryBucketSuffixPattern = regexp.MustCompile(`--[a-z0-9]+(?:-[a-z0-9]+)*--x-s3$`)
 
 // sampleResourcePattern matches the sample names a resource path holds that a
 // sample's bucket name (sampleBucketPattern) does not cover, lowercased: the
@@ -234,15 +239,22 @@ func resourcePathProblems(text string) []problem {
 	}
 
 	for _, match := range s3ResourceARNPattern.FindAllStringSubmatchIndex(text, -1) {
-		value := strings.TrimRight(text[match[2]:match[3]], ".")
-		name := directoryBucketSuffixPattern.ReplaceAllString(strings.ToLower(value[strings.IndexAny(value, "/:")+1:]), "")
+		value := strings.TrimRight(text[match[4]:match[5]], ".")
+		sep := strings.IndexAny(value, "/:")
+		name := strings.ToLower(value[sep+1:])
+
+		directoryBucket := match[2] >= 0 && strings.EqualFold(text[match[2]:match[3]], "express") &&
+			strings.EqualFold(value[:sep], "bucket")
+		if directoryBucket {
+			name = directoryBucketSuffixPattern.ReplaceAllString(name, "")
+		}
 
 		if sampleResourceName(name) {
 			continue
 		}
 
 		problems = append(problems, problem{
-			line:  lineOf(text, match[2]),
+			line:  lineOf(text, match[4]),
 			value: value,
 			rule:  "names an S3 access point, Outposts bucket or directory bucket that is not example or example- and generic words (CLAUDE.md rule 2)",
 		})

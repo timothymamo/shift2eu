@@ -426,9 +426,11 @@ const sshCloneHost = "github.com"
 // gs://acme-prod-bucket/x, az://container/blob, and oci://acme-prod-bucket@tenancy/x,
 // whose bucket comes before the @ and its namespace): the scheme and the
 // bucket, the first segment after it. An oci:// reference whose first segment
-// holds a dot names a registry host (oci://ghcr.io/sigstore/charts/x), which a
-// bucket's name never does, so vendorPathProblems passes it over and leaves the
-// host and its owner path to the host name and owner rules.
+// holds a dot and is not followed by an @ names a registry host
+// (oci://ghcr.io/sigstore/charts/x), so vendorPathProblems passes it over and
+// leaves the host and its owner path to the host name and owner rules. An OCI
+// Object Storage bucket's name may hold dots too, but the @ and the namespace
+// after it mark a bucket (oci://acme.prod.backups@tenancy/x), which is read.
 var bucketPattern = regexp.MustCompile(`(?i)\b(?:s3[an]?|gs|az|oci)://[a-z0-9][a-z0-9_.-]*`)
 
 // storageAccountURLPattern finds the Azure storage account an abfs, abfss, wasb
@@ -616,8 +618,10 @@ func vendorPathProblems(text string) []problem {
 		sep := strings.Index(value, "://")
 		bucket := value[sep+len("://"):]
 
-		if strings.EqualFold(value[:sep], "oci") && strings.Contains(bucket, ".") {
-			// A registry host, not a bucket.
+		if strings.EqualFold(value[:sep], "oci") && strings.Contains(bucket, ".") &&
+			(match[1] == len(text) || text[match[1]] != '@') {
+			// A registry host, not a bucket: a bucket's dotted name is
+			// followed by the @ of its namespace.
 			continue
 		}
 
