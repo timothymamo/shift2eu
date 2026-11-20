@@ -6,11 +6,13 @@ package examples_test
 // the whole closed vocabulary, and the source's monthly cost on some resources
 // only, so the reports show a partial coverage. It also pins the reports the
 // walkthrough and the guide quote beside the default ones: one sample with the
-// estimates off, one with a region chosen, and the JSON report checked against
-// the schema jsonreport publishes.
+// estimates off, one with a region chosen, and the JSON report in schema
+// versions 2 and 3, each checked against the schema jsonreport publishes for
+// it.
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -42,10 +44,12 @@ const (
 	// fr-par, it-mil, nl-ams and pl-waw.
 	regionChoice = "nl-ams"
 
-	// assessmentSchema is the JSON report schema the sample's document must
-	// match, from this package's directory: the single-target schema version 2
-	// (docs/adr/0018, docs/adr/0030).
-	assessmentSchema = repoRoot + "/internal/adapter/report/jsonreport/schema/assessment-v2.schema.json"
+	// assessmentSchemaName is the JSON report schema a sample's document must
+	// match, from this package's directory, with the document's schemaVersion in
+	// its name: the single-target schema of that version (docs/adr/0018,
+	// docs/adr/0030). Version 2 is the format the HTTP API serves on /v1, version
+	// 3 the one the CLI writes by default.
+	assessmentSchemaName = repoRoot + "/internal/adapter/report/jsonreport/schema/assessment-v%d.schema.json"
 )
 
 // pricedSize says which size fields the estimate prices a category by (PRD
@@ -550,10 +554,11 @@ type sampleReportDocument struct {
 
 // TestSampleReportVariants pins the reports the walkthrough and the guide quote
 // beside the default one: the AWS sample against Scaleway with the estimates
-// off, the same sample with a region chosen, and its JSON document. Each is
-// rendered through the path the CLI's assess command uses and kept as a golden
-// file, regenerated with `go test ./test/examples -update`, so a catalog
-// snapshot or a sample change shows up in the diff of testdata/.
+// off, the same sample with a region chosen, and its JSON document in schema
+// version 2 and in the default version 3 (issue #330). Each is rendered through
+// the path the CLI's assess command uses and kept as a golden file, regenerated
+// with `go test ./test/examples -update`, so a catalog snapshot or a sample
+// change shows up in the diff of testdata/.
 func TestSampleReportVariants(t *testing.T) {
 	t.Parallel()
 
@@ -616,7 +621,37 @@ func TestSampleReportVariants(t *testing.T) {
 				return runSingleWith(t, inventoryPath, scaleway.New(), jsonreport.New(jsonreport.Version2),
 					analysis.Options{Estimate: true}, meta)
 			},
-			check: checkSampleReportDocument,
+			check: func(t *testing.T, report []byte) {
+				t.Helper()
+
+				checkSampleReportDocument(t, report, jsonreport.Version2)
+			},
+		},
+		{
+			name:   "json report against scaleway with estimates in the default schema version",
+			golden: "testdata/aws-scaleway-estimates.v3.json.golden",
+			render: func(t *testing.T) []byte {
+				t.Helper()
+
+				// The version the CLI writes when --schema-version names none:
+				// the application selects it, exactly as the CLI asks it to, so
+				// the test does not import internal/cli (issue #330).
+				version, err := analysis.SelectSchemaVersion(analysis.JSONFormat, "", false)
+				if err != nil {
+					t.Fatalf("selecting the default schema version of %q: %v", analysis.JSONFormat, err)
+				}
+
+				return runSingleWith(t, inventoryPath, scaleway.New(),
+					jsonreport.New(version), analysis.Options{Estimate: true}, meta)
+			},
+			check: func(t *testing.T, report []byte) {
+				t.Helper()
+
+				// The default is version 3 (issue #307): a default moved to
+				// another version fails here, in the schemaVersion the document
+				// carries, not only in the golden file.
+				checkSampleReportDocument(t, report, jsonreport.Version3)
+			},
 		},
 	}
 
@@ -652,15 +687,16 @@ func TestSampleReportVariants(t *testing.T) {
 	}
 }
 
-// checkSampleReportDocument fails unless the document is a schema version 2
-// assessment of the sized sample: it carries workloads and estimates, each
-// priced category the sample holds has an estimated resource, and the document
-// matches the schema the jsonreport package publishes for it.
+// checkSampleReportDocument fails unless the document is a schema version
+// wantVersion assessment of the sized sample: it carries workloads and
+// estimates, each priced category the sample holds has an estimated resource,
+// and the document matches the schema the jsonreport package publishes for that
+// version.
 //
 // The document is decoded here, into structs of this package, rather than read
 // from the golden file: -update rewrites the golden, so only an assertion of
 // its own keeps the sample from losing what milestone 9 documents.
-func checkSampleReportDocument(t *testing.T, report []byte) {
+func checkSampleReportDocument(t *testing.T, report []byte, wantVersion int) {
 	t.Helper()
 
 	var doc sampleReportDocument
@@ -668,8 +704,9 @@ func checkSampleReportDocument(t *testing.T, report []byte) {
 		t.Fatalf("the report is not a JSON document: %v", err)
 	}
 
-	if doc.SchemaVersion != 2 {
-		t.Errorf("schemaVersion = %d, want 2 (docs/adr/0030)", doc.SchemaVersion)
+	if doc.SchemaVersion != wantVersion {
+		t.Errorf("schemaVersion = %d, want %d (docs/adr/0018, docs/adr/0030)",
+			doc.SchemaVersion, wantVersion)
 	}
 
 	if doc.Kind != "assessment" {
@@ -719,24 +756,26 @@ func checkSampleReportDocument(t *testing.T, report []byte) {
 		}
 	}
 
-	validateSampleReportSchema(t, report)
+	validateSampleReportSchema(t, report, wantVersion)
 }
 
 // validateSampleReportSchema fails unless the document matches the JSON report
-// schema the jsonreport package publishes for a single target, schema version 2.
-// The validator is the one the repository shares (internal/testutil), so no
-// third-party dependency is added.
-func validateSampleReportSchema(t *testing.T, report []byte) {
+// schema the jsonreport package publishes for a single target in schema version
+// version. The validator is the one the repository shares (internal/testutil),
+// so no third-party dependency is added.
+func validateSampleReportSchema(t *testing.T, report []byte, version int) {
 	t.Helper()
 
-	data, err := os.ReadFile(assessmentSchema)
+	path := fmt.Sprintf(assessmentSchemaName, version)
+
+	data, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("read the report schema %s: %v", assessmentSchema, err)
+		t.Fatalf("read the report schema %s: %v", path, err)
 	}
 
 	_, schema, err := testutil.ParseSchema(data)
 	if err != nil {
-		t.Fatalf("parse the report schema %s: %v", assessmentSchema, err)
+		t.Fatalf("parse the report schema %s: %v", path, err)
 	}
 
 	schema.ValidateJSON(t, report)

@@ -116,14 +116,15 @@ by default. `--schema-version 2` writes the older document, the one the HTTP API
 version 3 a total that estimated nothing (`"estimated": 0`) has no `amount` key instead of `"0.00"`.
 Each resource carries its fit, best offering, reasons with a stable `code`, required changes,
 relations, and its plan and estimate; the document ends with the workloads, the estimate's basis and
-total, and the source's cost. The excerpt is the version 2 document
-([`aws-scaleway-estimates.json.golden`](../../test/examples/testdata/aws-scaleway-estimates.json.golden)):
-every total in it estimated something, so the command above writes the same document but for
-`"schemaVersion": 3`.
+total, and the source's cost. The excerpt is the version 3 document, the command's default output
+([`aws-scaleway-estimates.v3.json.golden`](../../test/examples/testdata/aws-scaleway-estimates.v3.json.golden)).
+Every total in it estimated something, so `--schema-version 2` writes the same document but for
+`"schemaVersion": 2`
+([`aws-scaleway-estimates.json.golden`](../../test/examples/testdata/aws-scaleway-estimates.json.golden)).
 
 ```json
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "kind": "assessment",
   "inventoryName": "inventory.json",
   "source": "aws",
