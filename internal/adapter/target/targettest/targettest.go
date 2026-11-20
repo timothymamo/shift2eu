@@ -56,7 +56,7 @@ type Expectations struct {
 // The contract has no check of its own that every plan is priced in EUR at an
 // amount of at least 0, or that a price applies only to its offering's regions:
 // a catalog.Catalog is built only by catalog.New, which already refuses both
-// (ADR 0024).
+// (catalog.ErrInvalidPrice and catalog.ErrPriceRegion, ADR 0024).
 //
 // An error from src is shown through text.Quote and stays in the violation's
 // chain.
