@@ -799,9 +799,18 @@ nor the pid inside it runs a refresh and says `removing the moved-aside lock ...
 takes the lock and refreshes. A `.agents-token-refresh-shift2eu.lock.reap.<pid>` left by a start stopped
 while it removed one goes the same way once that pid runs no refresh. As the account's LaunchDaemon
 (below), launchd starts it again on its own within 5 minutes (`KeepAlive`, `ThrottleInterval` 300); in
-single-account mode, start it again with `make agents-token-refresh-start` from the host clone. Stop it with
-`kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,
-the JWT or the key, and nothing writes them to a log or the workspace.
+single-account mode, start it again with `make agents-token-refresh-start` from the host clone. No command
+prints a token, the JWT or the key, and nothing writes them to a log or the workspace. Stop it with the
+block below: it reads the lock's pid only from a regular file, since a `cat` of anything else, a FIFO say,
+can wait for ever (issue #335).
+
+```bash
+# Mac, host clone: stop the refresh
+p=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid
+[ -f "$p" ] && [ ! -L "$p" ] && kill "$(head -c 32 "$p")"
+# PASS: exits 0
+# FAIL: exits non-zero: no refresh holds the lock, or its pid entry is no regular file
+```
 
 #### The refresh as a LaunchDaemon
 
@@ -1002,8 +1011,15 @@ Since milestone 3 the agents have no other GitHub credential, so without the tok
 `git push` fail in the VM (and `make vm-init`'s `gh` step with them) until a token file is back:
 
 ```bash
+# Mac, host clone, first: stop the refresh
+p=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid
+[ -f "$p" ] && [ ! -L "$p" ] && kill "$(head -c 32 "$p")"
+# PASS: exits 0
+# FAIL: exits non-zero: stop here; no refresh holds the lock, or its pid entry is no regular file
+```
+
+```bash
 # Mac, host clone
-kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"   # first: stop the refresh
 limactl shell --workdir / shift2eu sh -c 'rm -f "$HOME/.config/shift2eu/agents-app-token" "$HOME/.config/shift2eu/agents-app-identity"'
 make vm-init
 ```
@@ -1083,7 +1099,10 @@ direnv exec . make agents-token-refresh-uninstall
 
 ```bash
 # Mac Mini, host clone, only if you started one by hand:
-kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"
+p=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid
+[ -f "$p" ] && [ ! -L "$p" ] && kill "$(head -c 32 "$p")"
+# PASS: exits 0
+# FAIL: exits non-zero: no refresh holds the lock, or its pid entry is no regular file
 ```
 
 ```bash
