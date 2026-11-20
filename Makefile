@@ -1,3 +1,10 @@
+# This Makefile's own directory, with a trailing slash (issue #347): the last word of MAKEFILE_LIST before any
+# include is this file, however make found it (make, make -C <dir>, make -f <dir>/Makefile from elsewhere, or
+# with MAKEFILES set). Keep it the first line, ahead of any include. It is make code, no $(shell ...), so it
+# may come before the block below. Make splits words on spaces, so a path with a space in it yields a wrong
+# directory: its go.mod is then not found and GO_LINE below is empty, as without a go.mod.
+MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
+
 # The VM's size and SSH port, for a host that runs several VMs (issue #228, docs/dev-environment.md, Several
 # VMs on one host). Empty keeps dev/lima.yaml's value and the port Lima picks. They apply only when make vm-up
 # creates the VM: an existing VM is never resized, and vm-up warns that they were ignored. VM_CPUS is a CPU
@@ -65,7 +72,42 @@ SITE_VERSION ?=
 override SITE_VERSION := $(value SITE_VERSION)
 export SITE_VERSION
 
+# The Go toolchain every go command make runs builds with (issue #347, docs/adr/0035): go.mod's exact go line
+# is the pin, and GOTOOLCHAIN=go<go line> makes the go command run exactly that release, the one on PATH when
+# it is that release, never a newer local Go (a go line alone admits any newer one). When the local Go is not
+# the pin, the go command fetches it once as the module golang.org/toolchain through GOPROXY into the module
+# cache, so make can then touch the network. That fetch is verified against the checksum database
+# (sum.golang.org) and is only as trustworthy as your GOSUMDB settings: GOSUMDB=off, or a GONOSUMDB or
+# GOPRIVATE pattern matching golang.org, turns the check off. Normally nothing is fetched: the VM installs the
+# pinned Go from its checksum-verified tarball (dev/lima.yaml), and CI and the release run with
+# GOTOOLCHAIN=local, which never downloads. Exported, so it reaches every recipe, sub-make, go -C tools, the scripts under dev/
+# and the go commands ci/sitebuild runs, whose go env GOROOT then names the pinned toolchain, the one
+# wasm_exec.js is copied from. It is read from go.mod in this one place, so a Renovate bump of the go line
+# needs no change here. The one value of yours that is kept is local, as CI sets it (actions/setup-go exports
+# it, after installing the go line's release): it runs the Go on PATH and never downloads one, and a Go other
+# than the go line's then fails TestGoModPinsTheBuildingToolchain in make test rather than building with it.
+# Any other value, from the environment or the command line (auto, path, another release, <name>+auto), is
+# replaced, since every one of them can run a Go other than the pinned one. The value is read raw, so make
+# expands nothing in it, and fixed in this first block, before any $(shell ...) is handed it; the go line is
+# set below, once $(shell ...) may run. Without a go.mod (a test's copy of the Makefile) nothing is pinned
+# and GOTOOLCHAIN is exported empty, which the go command reads as unset.
+ifeq ($(value GOTOOLCHAIN),local)
+override GOTOOLCHAIN := local
+else
+override GOTOOLCHAIN :=
+endif
+export GOTOOLCHAIN
+
 BINARY  := shift2eu
+# go.mod's go line, the version GOTOOLCHAIN above pins: the second field of the first line that starts with
+# the go directive, as the go command writes it, less a trailing carriage return (a go.mod with CRLF line
+# endings would otherwise make GOTOOLCHAIN invalid and fail every go command). It is the go.mod beside this
+# Makefile (MAKEFILE_DIR, at the top), not one in make's working directory, so make -f <root>/Makefile run
+# from elsewhere pins the same release; the path is single-quoted for the shell.
+GO_LINE := $(shell awk '/^go[ \t]/ { sub(/\r$$/, "", $$2); print $$2; exit }' '$(MAKEFILE_DIR)go.mod' 2>/dev/null)
+ifneq ($(GOTOOLCHAIN),local)
+override GOTOOLCHAIN := $(if $(GO_LINE),go$(GO_LINE))
+endif
 # The HTTP API's binary (PRD #103, docs/adr/0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md).
 SERVER  := shift2eu-server
 PKG     := github.com/timothymamo/shift2eu
