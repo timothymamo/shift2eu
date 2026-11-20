@@ -136,6 +136,49 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			content: "the shop runs on " + realHost,
 			want:    []string{realHost},
 		},
+		{
+			// A name under the mDNS and private-zone suffix .local or under
+			// Iceland's .is identifies a customer's own host just as one under
+			// any other TLD does, and a Go selector in the same file is no host:
+			// the row plants all four, so the check must report the two hosts and
+			// nothing else.
+			name:    "private and Icelandic hosts beside Go selectors",
+			path:    "docs/guide/planted-local.md",
+			content: "the file server is db01.corp.local and the shop is shop.example.is, which the code checks with errors.Is and time.Local",
+			want:    []string{"db01.corp.local", "shop.example.is"},
+		},
+		{
+			// A Go-source fixture under a testdata directory is a checked file
+			// too, and the selectors it names are no host: a rule that matched
+			// them by suffix would report every Go file in the module.
+			name:    "Go selectors in a Go-source fixture",
+			path:    "testdata/planted.go",
+			content: "package fixture\n\nimport (\n\t\"errors\"\n\t\"time\"\n)\n\nvar (\n\tzone     = time.Local\n\tsentinel = errors.Is\n)\n",
+			want:    nil,
+		},
+		{
+			// AWS writes an address into a host name with hyphens rather than
+			// dots, so the dotted-quad rule cannot see it; the bare form has no
+			// dot at all, so only the hyphenated rule finds it.
+			name:    "private address written into a name",
+			path:    "docs/guide/planted-ip.md",
+			content: "the instance ip-10-1-2-3 answers on port 8080",
+			want:    []string{"10-1-2-3"},
+		},
+		{
+			name:    "private address in an AWS host name",
+			path:    "testdata/planted-host.json",
+			content: `"hostname": "ip-10-1-2-3.eu-central-1.compute.internal"`,
+			want:    []string{"10-1-2-3", "ip-10-1-2-3.eu-central-1.compute.internal"},
+		},
+		{
+			// A documentation address written the same way is no real data,
+			// whichever of the three RFC 5737 ranges a page names.
+			name:    "documentation addresses written into names",
+			path:    "docs/guide/planted-ip-doc.md",
+			content: "ip-192-0-2-10, ip-198-51-100-7 and ip-203-0-113-9 are documentation names",
+			want:    nil,
+		},
 	}
 
 	for _, tc := range tests {
@@ -290,6 +333,41 @@ func TestFilesOutsideTheCheckedPathsAreIgnored(t *testing.T) {
 	}
 }
 
+// TestAllowListStalenessReadsFilesLikeTheCheck pins that the staleness
+// judgement reads an allow-listed file the way the check itself reads it
+// (fixtureText): a file a Windows editor wrote as UTF-16 still holds the value
+// its entry covers, so the entry is not stale. Read as raw bytes, the value is
+// invisible and an entry that is still needed would be reported as stale,
+// which pushes whoever reads the failure to delete the entry and lets the
+// value back into the check's report.
+func TestAllowListStalenessReadsFilesLikeTheCheck(t *testing.T) {
+	t.Parallel()
+
+	const (
+		file  = "docs/guide/planted-utf16.md"
+		value = "127.0.0.1"
+	)
+
+	dir := t.TempDir()
+	plantFixture(t, dir, file, utf16LEBOM("the server listens on "+value+" by default\n"))
+
+	list := []allowListEntry{{
+		file:  file,
+		value: value,
+		why:   "the loopback address the planted page names; it names no host of anyone's",
+	}}
+
+	stale, err := staleAllowListEntries(dir, list)
+	if err != nil {
+		t.Fatalf("staleAllowListEntries(%q): %v", dir, err)
+	}
+
+	if len(stale) != 0 {
+		t.Errorf("%s holds %q as UTF-16, which the check decodes before it looks, but staleAllowListEntries judges the entry stale (it reports %v for the entry that covers %q)",
+			file, value, stale[0].reported, stale[0].entry.value)
+	}
+}
+
 // TestAllowListEntriesAreNarrowAndUsed pins that the allow list stays an
 // exception list rather than a blanket exception: each entry names one regular
 // file of the module and one exact value, gives a reason, and still describes a
@@ -346,18 +424,19 @@ func TestAllowListEntriesAreNarrowAndUsed(t *testing.T) {
 
 			continue
 		}
+	}
 
-		data, err := os.ReadFile(path)
-		if err != nil {
-			t.Errorf("read the allow-listed file %s: %v", entry.file, err)
+	// The staleness judgement reads every allow-listed file once, the way the
+	// check itself reads it, so the entries the module still needs are the ones
+	// it keeps.
+	stale, err := staleAllowListEntries(moduleRoot, realDataAllowList)
+	if err != nil {
+		t.Fatalf("staleAllowListEntries(%q): %v", moduleRoot, err)
+	}
 
-			continue
-		}
-
-		if got := problemValues(sanitisationProblems(string(data))); !slices.Contains(got, entry.value) {
-			t.Errorf("realDataAllowList[%d]: %s no longer reports %q, so the entry is stale (it reports %v)",
-				i, entry.file, entry.value, got)
-		}
+	for _, s := range stale {
+		t.Errorf("realDataAllowList[%d]: %s no longer reports %q, so the entry is stale (it reports %v)",
+			slices.Index(realDataAllowList, s.entry), s.entry.file, s.entry.value, s.reported)
 	}
 
 	// The allow list is keyed on a (file, value) pair, so two entries that name

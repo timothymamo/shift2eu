@@ -394,3 +394,38 @@ func allowListed(name, value string) bool {
 		return entry.file == name && entry.value == value
 	})
 }
+
+// staleAllowListEntry is an allow-list entry the check no longer needs, with the
+// values the check does report in its file: the entry excuses none of them.
+type staleAllowListEntry struct {
+	// entry is the entry as the allow list holds it.
+	entry allowListEntry
+	// reported are the values sanitisationProblems reports in the entry's file.
+	reported []string
+}
+
+// staleAllowListEntries returns every entry of list that the fixture check in
+// root no longer needs: the entries whose file holds no value
+// sanitisationProblems reports. root is the directory the entries' paths are
+// relative to, so a test tree is judged the way the module is, and each result
+// carries the values the check does report in that file, so a failure says what
+// the entry no longer covers.
+func staleAllowListEntries(root string, list []allowListEntry) ([]staleAllowListEntry, error) {
+	var stale []staleAllowListEntry
+
+	for _, entry := range list {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(entry.file)))
+		if err != nil {
+			return nil, err
+		}
+
+		reported := problemValues(sanitisationProblems(string(data)))
+		if slices.Contains(reported, entry.value) {
+			continue
+		}
+
+		stale = append(stale, staleAllowListEntry{entry: entry, reported: reported})
+	}
+
+	return stale, nil
+}

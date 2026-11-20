@@ -83,6 +83,30 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			want: []string{"evil.ghcr.io.acme-corp.com"},
 		},
 		{
+			// The same exactness, pinned where a suffix match would still flag
+			// the lookalike above: the listed host itself sits beside the true
+			// subdomain, so a rule that let any name ending in github.com pass
+			// would report nothing at all here.
+			name: "true subdomain of a listed vendor host beside the listed host",
+			text: "cloned from github.com/timothymamo/shift2eu, and evil.github.com/u/x serves the assets",
+			want: []string{"evil.github.com"},
+		},
+		{
+			// .local is the suffix of a customer's own internal zone (and of
+			// mDNS), and a Go selector reads as time.Local ends with it too, so
+			// only a name the file writes in lower case is read as a host.
+			name: "private name under the local suffix",
+			text: "the file server is db01.corp.local",
+			want: []string{"db01.corp.local"},
+		},
+		{
+			// Iceland's is is a real country code and errors.Is ends with it just
+			// as time.Local ends with local, so the match is the same one.
+			name: "customer host in the Icelandic TLD",
+			text: "the shop answers at shop.example.is",
+			want: []string{"shop.example.is"},
+		},
+		{
 			name: "customer host in the Luxembourg TLD",
 			text: "the database is at db.acme.lu",
 			want: []string{"db.acme.lu"},
