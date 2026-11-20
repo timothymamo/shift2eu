@@ -378,7 +378,15 @@ var hyphenatedIPv4Pattern = regexp.MustCompile(`\b[0-9]{1,3}(?:-[0-9]{1,3}){3}\b
 //     which parseHyphenatedIPv4 rejects: a name holding one passes;
 //   - a run a leftmost match swallows: in x-5-10-1-2-3 the pattern matches
 //     5-10-1-2-3 from the leftmost digit, which is no address, and the address
-//     inside it is never looked at again.
+//     inside it is never looked at again;
+//   - a run whose ip- is glued to the end of a word (myip-10-1-2-3,
+//     eip-10-1-2-3, hostip-172-16-0-5) unless a dotted label follows: the ip-
+//     inside such a word is no prefix that stands on its own, which is the
+//     price of keeping ship- and zip- clean (hyphenatedIPv4AfterIPPrefix);
+//   - a run that ends a sentence (node-10-1-2-3.), where the full stop opens no
+//     label.
+//
+// Issue #361 tracks these gaps.
 func hyphenatedIPv4Problems(text string) []problem {
 	var problems []problem
 
@@ -411,11 +419,12 @@ func hyphenatedIPv4Problems(text string) []problem {
 // hyphenatedIPv4InName reports whether the four-group run text[start:end] is an
 // address written into a name rather than a run of numbers that merely has its
 // shape: the run either follows an ip- that stands on its own, the prefix AWS and
-// Azure give an address in a machine's name (ip-10-1-2-3), or it is the first
-// label of a dotted name (10-1-2-3.eu-central-1.compute.internal, and so
-// vm-10-1-2-3.acme.corp too). A documentation domain name can hold one as well:
-// 10-1-2-3.example.com names a private address although its domain identifies
-// nobody, so the address alone is reported. A run of four numbers in prose
+// Azure give an address in a machine's name (ip-10-1-2-3), or it ends a label
+// that another label follows after a dot (10-1-2-3.eu-central-1.compute.internal,
+// and so vm-10-1-2-3.acme.corp and a.10-1-2-3.b too). A documentation domain
+// name can hold one as well: 10-1-2-3.example.com names a private address
+// although its domain identifies nobody, so the address alone is reported. A run
+// of four numbers in prose
 // (1-2-3-4) or at the end of a version-like token (build-1-2-3-4) is neither: the
 // ip- inside ship- or zip- is no prefix (hyphenatedIPv4AfterIPPrefix), and the
 // full stop that ends a sentence opens no label, so the rule stays off values that
