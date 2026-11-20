@@ -19,6 +19,14 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
 
 ## First-time setup
 
+The shell blocks on this page are made to be pasted into a terminal. In zsh, the Mac's default shell, first
+turn on comments, once per terminal; without it each `# ...` line of a block runs as a command (bash needs
+nothing):
+
+```bash
+setopt interactive_comments
+```
+
 ### On the Mac
 
 You keep two clones of the repository: the **workspace's checkout**, which the VM mounts and the agents
@@ -91,7 +99,8 @@ brew install lima          # the LIMA_VERSION in .github/workflows/vm-tools.yml 
 cd ~/src/shift2eu-host
 make vm-create             # several minutes the first time
 # FAIL "vm-init: gh: cannot read ..." on a new VM: no App token in the VM yet; set up the App (The agents App),
-#   make agents-token-refresh-start in the host clone, then make vm-init again
+#   make agents-token-refresh-start in the host clone, then make vm-init again (a LaunchDaemon installed
+#   after that takes over from this refresh: The refresh as a LaunchDaemon)
 ```
 
 **6. Open the deck:**
@@ -835,7 +844,7 @@ installation ID, the key's path and your `XDG_STATE_HOME` when it is set, copied
 `.envrc` when you install it, never the key or a token: **install again after changing `.envrc`**. The job
 runs the host clone's `dev/agents-app-token.sh` as it is when the job starts, so after a
 `git pull --ff-only` of the host clone run `sudo launchctl kickstart -k system/<label>` to run the pulled
-code now. Installing it from the wrong clone, such as the workspace the VM mounts, would turn a one-off
+code now; if it does not return, see [When kickstart does not return](#when-kickstart-does-not-return). Installing it from the wrong clone, such as the workspace the VM mounts, would turn a one-off
 run of the agents' code into a job that runs it at every boot: install refuses a clone inside any of the
 VM's mounts, or one that holds a mount (through it the agents could edit the clone's `dev/`), and a clone
 whose `dev/` or `dev/agents-app-token.sh` is a symlink. It asks `limactl list` for the VM's name and mounts
@@ -860,9 +869,19 @@ before running it, and asks for your password. Over a loaded job it first runs `
 and waits up to 10 seconds for the job to unload; still loaded, it installs nothing and the old job keeps
 running. After installing it reads the plist back and checks the SHA-256 it printed: a mismatch or an
 unreadable plist is removed again (`sudo rm -f`, so the next boot cannot load it), nothing is loaded and
-it fails. A failing `launchctl bootstrap` is tried once more. A refresh you started by hand keeps the VM's
-lock: install names its pid, and the job waits, trying every 5 minutes, until you stop that one; it never
-names the job's own refresh, which takes the lock as the job loads. Both targets put the plist in
+it fails. A failing `launchctl bootstrap` is tried once more. A refresh outside the job keeps the VM's
+lock, and the job would only find it taken, every 5 minutes, for as long as that one runs (issue #396). So
+the setup order, `make agents-token-refresh-start` for `make vm-init` and then the install, needs no step
+in between: the install takes over from the refresh `make agents-token-refresh-start` recorded, stopping it
+(`TERM`, waiting up to 10 seconds for it to exit) right before it loads the job, and says so with its pid.
+Any other refresh holding the lock, such as a `make agents-token-refresh` in a terminal or another clone's,
+is not the install's to stop: it refuses before any `sudo`, naming the pid and `kill <pid>`. The job's own
+refresh is neither: the install boots it out as it always has. Before any of this, install and
+`make agents-token-refresh-start` refuse **another launchd job** that runs the VM's refresh, in the system
+domain or in yours (`gui/<uid>`): one whose label is not the project's and whose arguments run
+`agents-app-token.sh refresh` or `make agents-token-refresh`, such as a hand-made LaunchDaemon from before
+ADR 0034. Its `KeepAlive` takes the lock again seconds after every `kill`. The refusal names its label, its
+domain, its plist and the three commands that remove it (step 1). Both targets put the plist in
 `AGENTS_TOKEN_LAUNCHD_DIR` (`/Library/LaunchDaemons`), a hook for the tests only: never set it on the Mac.
 Both refuse it from the environment, since a stale export would install the plist where launchd never
 looks at boot.
@@ -886,7 +905,15 @@ git pull --ff-only
 direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, even where no direnv hook runs
 # PASS: plutil -lint passes; the plist's SHA-256 is printed; the script line is <host clone>/dev/agents-app-token.sh,
 #   this clone, outside the workspace; each sudo command is printed before it asks for your password
+# PASS, after make agents-token-refresh-start: "stopped pid <pid>, the refresh make agents-token-refresh-start started"
 # FAIL "refused: run it as the maintainer, not as root": run it without sudo
+# FAIL "<label> is loaded in <domain> and runs the agents App token refresh ...": run the bootout, disable and rm it names, install again; if it says "plist not shown", rm the path launchctl print <domain>/<label> names
+# FAIL "foreign-jobs check failed (status <n>): nothing was installed ...": fix what the line above it says, install again
+# WARN "warning: could not list the system domain ...": installed, but a foreign LaunchDaemon would go unnoticed; check sudo launchctl print system
+# WARN "warning: <n> job(s) with unusual labels not checked": installed; look for them in launchctl print system and gui/<uid>
+# WARN "warning: the pid file ... no longer names pid <pid> ...": nothing was stopped; if the log says another refresh runs, stop it, install again
+# WARN "warning: ... could not read the job's pid ... pid <pid> ...": installed; if ps -p <pid> shows a refresh after the bootout, stop it, install again
+# FAIL "refused: a refresh that make agents-token-refresh-start did not start holds the lock ... (pid <pid> ...)": kill <pid>, install again
 # FAIL "refused: <clone> is inside <location>, which the VM shift2eu mounts ..." or "refused: the VM shift2eu mounts
 #   <location>, which is inside <clone> ...": install from the host clone, outside every mount of the VM (What install does)
 # FAIL "limactl list could not read the mounts of the VM shift2eu ..." or "limactl list answered about <name>, not the
@@ -895,8 +922,8 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 #   dev/agents-app-token.sh as git checked them out
 # FAIL "the old job <label> is still loaded ...": sudo launchctl print system/<label>, wait or make agents-token-refresh-uninstall, install again
 # FAIL "... is not the plist printed above ...": no job is loaded; look for what changed the file, install again
-# FAIL "launchctl bootstrap failed twice: NO token refresh job ...": install again, or make agents-token-refresh-start
-# FAIL install names a hand-started refresh's pid: kill <pid>
+# FAIL "launchctl bootstrap failed twice: NO token refresh job ...": install again, or make agents-token-refresh-start (if it says "the hand-started refresh was stopped", none runs at all now)
+# WARN "warning: pid <pid> still runs ... after TERM": installed; once ps -p <pid> shows nothing, the job takes over within 5 minutes
 ```
 
 **2. Check that it is loaded and minting:**
@@ -907,7 +934,7 @@ sudo launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.
 # PASS: state = running, a pid, and the arguments name ~/agents/shift2eu/host/shift2eu/dev/agents-app-token.sh (never one in the workspace)
 tail ~/.local/state/shift2eu/agents-token-refresh-shift2eu.log
 # PASS: the last lines say wrote a token ... into the VM shift2eu
-# FAIL "another agents App token refresh ... is running" every 5 minutes: a hand-started refresh holds the lock; kill it (step 1)
+# FAIL "another agents App token refresh ... is running (pid <pid> ...)" every 5 minutes: install again (step 1); it stops that refresh, or names it or the foreign job
 # FAIL no new log lines: in sudo launchctl print system/<label>, a growing runs with a non-zero last exit code means the job
 #   exits at once (launchd's own output goes to /dev/null); check HOME and XDG_STATE_HOME in the plist and that the script exists
 launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu >/dev/null && echo found   # without sudo
@@ -1037,6 +1064,18 @@ else echo "pid $pid runs no refresh"; fi
 # Mac, host clone
 limactl shell --workdir / shift2eu sh -c 'rm -f "$HOME/.config/shift2eu/agents-app-token" "$HOME/.config/shift2eu/agents-app-identity"'
 make vm-init
+```
+
+##### When kickstart does not return
+
+```bash
+# Seen on the maintainer's Mac on 2026-11-20 (kickstart, with or without -k, printed nothing until Ctrl+C); cause not known (issue #396)
+sudo launchctl print system/<label> | grep -E 'state|pid'      # Mac Mini, after Ctrl+C on the kickstart
+# PASS "state = spawn scheduled": nothing to do, the job runs no process; launchd starts it within its ThrottleInterval (5 minutes)
+sudo launchctl kill TERM system/<label>   # only for state = running: stops this job's process alone (account mode too); launchd restarts it with the script on disk
+# PASS, within 5 minutes: sudo launchctl print system/<label> shows state = running, a new pid, and its log a new start
+# FAIL still spawn scheduled after 5 minutes: a foreign job or another refresh holds the lock; install again (step 1), it names it
+# FAIL launchctl kill does not stop it, last resort only: pkill -f 'agents-app-token.sh refresh' (sudo pkill -u _shift2euagents ... in account mode) stops every instance's refresh and every process whose command line holds that string
 ```
 
 #### The key under a separate account
@@ -1405,6 +1444,7 @@ sudo -k
 cd /
 sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat -C /Users/_shift2euagents/shift2eu-host pull --ff-only
 sudo launchctl kickstart -k system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu   # runs the pulled code now
+# FAIL no output and no return until Ctrl+C: When kickstart does not return (its launchctl kill works in account mode too)
 sudo -k
 ```
 
@@ -1413,6 +1453,7 @@ sudo -k
 ```bash
 # Mac Mini
 sudo launchctl kickstart -k system/<label>                                                  # mint now
+# FAIL no output and no return until Ctrl+C: When kickstart does not return (its launchctl kill works in account mode too)
 sudo tail -n 50 /Users/_shift2euagents/.local/state/shift2eu/agents-token-refresh-<instance>.log   # the job's log
 sudo -k
 ```

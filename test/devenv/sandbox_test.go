@@ -886,6 +886,21 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 // SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE, with the pid in SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID, makes
 // `bootstrap` write that file with that pid: a job whose refresh takes the instance's lock as launchd starts it,
 // which is what the install finds in the lock right after the bootstrap (issue #229, fifth review).
+//
+// SHIFT2EU_TEST_LAUNCHCTL_JOBS_DIR names a directory whose jobs launchd has loaded, for the tests that pin what a
+// target does about a job other than its own (issue #396): <dir>/system/<label> is a job of the system domain and
+// <dir>/gui/<uid>/<label> one of the user's, and each file holds the job's pid on its first line (`-` when launchd
+// runs no process for it), the path of the plist it was loaded from on its second, then one program argument per
+// line, and optionally one `env KEY=VALUE` line per variable of the job's environment, which `print_job` prints
+// as launchd's `environment = { ... }` block, as `launchctl print` does. `launchctl print <domain>` prints the
+// services of the domain named, and `launchctl print <domain>/<label>` the job with its `arguments = { ... }`
+// block; a label the directory does not hold answers 113. `bootout` also removes the job's file, as the real
+// command unloads the job.
+//
+// A domain whose `launchctl print <domain>` fails without listing anything names itself in
+// SHIFT2EU_TEST_LAUNCHCTL_UNLISTABLE_DOMAIN (an exact `system` or `gui/<uid>`), which answers 113 as a domain
+// launchd cannot print does, and one whose print succeeds without a `services = { ... }` block names itself in
+// SHIFT2EU_TEST_LAUNCHCTL_NO_SERVICES_DOMAIN, so a test can pin what a check says when it cannot list a domain.
 const fakeLaunchctl = `#!/bin/sh
 {
   printf 'tool=launchctl\n'
@@ -893,8 +908,102 @@ const fakeLaunchctl = `#!/bin/sh
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
 status=113
 verb="${1:-}"
+jobs="${SHIFT2EU_TEST_LAUNCHCTL_JOBS_DIR:-}"
+unlistable="${SHIFT2EU_TEST_LAUNCHCTL_UNLISTABLE_DOMAIN:-}"
+no_services="${SHIFT2EU_TEST_LAUNCHCTL_NO_SERVICES_DOMAIN:-}"
+# job_dir <domain> prints the fixture's directory of one domain's jobs.
+job_dir() {
+  [ -n "${jobs}" ] || return 1
+  case "$1" in
+  system) printf '%s/system' "${jobs}" ;;
+  gui/* | user/*) printf '%s/gui/%s' "${jobs}" "${1#*/}" ;;
+  *) return 1 ;;
+  esac
+}
+# print_job <file> <domain> <label> prints a loaded job the way launchctl print does: the plist path on the file's
+# second line, its program arguments on the lines after it (a line beginning 'env ' is no argument: it names one
+# environment variable, KEY=VALUE), and its environment block.
+print_job() {
+  printf '%s/%s = {\n' "$2" "$3"
+  printf '\tactive count = 1\n'
+  printf '\tpath = %s\n' "$(sed -n 2p "$1")"
+  case "$2" in
+  system) printf '\ttype = LaunchDaemon\n' ;;
+  *) printf '\ttype = LaunchAgent\n' ;;
+  esac
+  printf '\tstate = running\n'
+  printf '\tprogram = %s\n' "$(sed -n 3p "$1")"
+  printf '\targuments = {\n'
+  sed -n '3,$p' "$1" | while IFS= read -r argument; do
+    case "${argument}" in 'env '*) continue ;; esac
+    printf '\t\t%s\n' "${argument}"
+  done
+  printf '\t}\n'
+  environment="$(sed -n '3,$p' "$1" | while IFS= read -r entry; do
+    case "${entry}" in 'env '*) printf '%s\n' "${entry#env }" ;; esac
+  done)"
+  if [ -n "${environment}" ]; then
+    printf '\tenvironment = {\n'
+    printf '%s\n' "${environment}" | while IFS= read -r entry; do
+      printf '\t\t%s => %s\n' "${entry%%=*}" "${entry#*=}"
+    done
+    printf '\t}\n'
+  fi
+  case "$(sed -n 1p "$1")" in
+  '' | -) ;;
+  *) printf '\tpid = %s\n' "$(sed -n 1p "$1")" ;;
+  esac
+  printf '}\n'
+}
+# print_domain <domain> prints a domain's services the way launchctl print prints them.
+print_domain() {
+  printf '%s = {\n' "$1"
+  printf '\ttype = %s\n' "$1"
+  printf '\tservices = {\n'
+  if dir="$(job_dir "$1")" && [ -d "${dir}" ]; then
+    for file in "${dir}"/*; do
+      [ -f "${file}" ] || continue
+      printf '\t\t%s\t0\t%s\n' "$(sed -n 1p "${file}")" "${file##*/}"
+    done
+  fi
+  printf '\t}\n'
+  printf '}\n'
+}
 case "${verb}" in
 print)
+  target="${2:-}"
+  domain=''
+  label=''
+  case "${target}" in
+  system) domain=system ;;
+  system/?*) domain=system label="${target#system/}" ;;
+  gui/* | user/*)
+    rest="${target#*/}"
+    domain="${target%%/*}/${rest%%/*}"
+    case "${rest}" in
+    */*) label="${rest#*/}" ;;
+    esac
+    ;;
+  esac
+  if [ -n "${domain}" ] && [ -z "${label}" ]; then
+    if [ -n "${unlistable}" ] && [ "${domain}" = "${unlistable}" ]; then
+      exit 113
+    fi
+    if [ -n "${no_services}" ] && [ "${domain}" = "${no_services}" ]; then
+      printf '%s = {\n' "${domain}"
+      printf '\ttype = %s\n' "${domain}"
+      exit 0
+    fi
+    print_domain "${domain}"
+    exit 0
+  fi
+  if [ -n "${label}" ] && [ -n "${jobs}" ]; then
+    if dir="$(job_dir "${domain}")" && [ -f "${dir}/${label}" ]; then
+      print_job "${dir}/${label}" "${domain}" "${label}"
+      exit 0
+    fi
+    exit 113
+  fi
   status="${SHIFT2EU_TEST_LAUNCHCTL_STATUS:-0}"
   if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ]; then
     if [ -e "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}" ]; then status=0; else status=113; fi
@@ -907,8 +1016,25 @@ bootout)
   if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ] && [ "${SHIFT2EU_TEST_LAUNCHCTL_STUCK:-0}" != 1 ]; then
     rm -f "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}"
   fi
+  target="${2:-}"
+  domain=''
+  label=''
+  case "${target}" in
+  system/?*) domain=system label="${target#system/}" ;;
+  gui/* | user/*)
+    rest="${target#*/}"
+    domain="${target%%/*}/${rest%%/*}"
+    case "${rest}" in
+    */*) label="${rest#*/}" ;;
+    esac
+    ;;
+  esac
+  if [ -n "${label}" ] && [ -n "${jobs}" ] && dir="$(job_dir "${domain}")"; then
+    rm -f "${dir}/${label}"
+  fi
   status="${SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS:-0}"
   ;;
+
 bootstrap)
   if [ "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS:-0}" = 1 ] && [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ]; then
     : > "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}"
@@ -1034,7 +1160,13 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 //     SHIFT2EU_TEST_SUDO_INSTALL changes what lands there: `different` writes other bytes (a file that changed
 //     between the hash check and the install), `nothing` writes no file at all, `unreadable` copies the plist and
 //     then takes every permission away, so the file is there and the maintainer's own read-back cannot open it.
-//     A destination outside SHIFT2EU_TEST_SUDO_ROOT is refused.
+//     A destination outside SHIFT2EU_TEST_SUDO_ROOT is refused. SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE, with
+//     the pid in SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID, makes it write that file with that pid: state that
+//     changes inside the sudo window, between the install's pre-sudo check and its TERM (auditor L4).
+//     SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID makes it stop that process and wait for it, and then remove
+//     SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_PID_FILE and SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_LOCK_PID_FILE: the
+//     hand-started refresher exiting inside the sudo window, whose trap removes both files (reviewer nit, issue
+//     #396).
 //   - `rm -f <path>` really removes a sandbox path, and refuses any path outside it.
 //   - `sudo -k` alone forgets the timestamp and runs nothing, so a recipe that ends with it records one
 //     argv and no command; it is not the empty command the fake reports as a bug.
@@ -1115,6 +1247,27 @@ install)
     exit 64
     ;;
   esac
+  if [ -n "${SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE:-}" ]; then
+    printf '%s\n' "${SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID:?set SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID}" > "${SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE}" || exit 1
+  fi
+  if [ -n "${SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID:-}" ]; then
+    # The hand-started refresher exits inside the sudo window and its trap removes the files it wrote. The
+    # fake waits for the exit, so the case pins the install's next read and no race with the trap.
+    kill -TERM "${SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID}" 2>/dev/null || true
+    tries=0
+    while [ "${tries}" -lt 100 ] && kill -0 "${SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID}" 2>/dev/null; do
+      sleep 0.1
+      tries=$((tries + 1))
+    done
+    for gone in "${SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_PID_FILE:-}" "${SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_LOCK_PID_FILE:-}"; do
+      [ -n "${gone}" ] || continue
+      inside "${gone}" || {
+        echo "fake sudo: refusing to remove a path outside the sandbox: ${gone}" >&2
+        exit 1
+      }
+      rm -f "${gone}" || exit 1
+    done
+  fi
   exit 0
   ;;
 rm)
@@ -1408,6 +1561,25 @@ func (sb *sandbox) useFakeIDName(t *testing.T, env map[string]string, name strin
 	writeFileMode(t, filepath.Join(sb.binDir, "id"), []byte(fmt.Sprintf(fakeIDName, strconv.Quote(realTool(t, "id")))), 0o700)
 
 	env["SHIFT2EU_TEST_ID_NAME"] = name
+}
+
+// fakeIDFailing stands in for id in a test that makes a script's own account lookup fail: it records its argv and
+// exits non-zero, as id does when it cannot look up the account it runs as.
+const fakeIDFailing = `#!/bin/sh
+{
+  printf 'tool=id\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+echo 'id: cannot look up the running account' >&2
+exit 1
+`
+
+// useFakeIDThatFails puts an id first on PATH that fails every call, so a test can pin what a target does when a
+// script it runs cannot tell which account it runs as: a failure of the check, not a verdict about launchd.
+func (sb *sandbox) useFakeIDThatFails(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "id"), []byte(fakeIDFailing), 0o700)
 }
 
 // fakePlutil stands in for plutil: it records its argv and answers SHIFT2EU_TEST_PLUTIL_STATUS, so a test can

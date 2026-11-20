@@ -6,10 +6,11 @@
     'helpers:pinGitHubActionDigests',
     ':semanticCommits',
   ],
-  // Run every night. Renovate schedules by the hour, not the minute, so PRs open on its first run
-  // between 00:00 and 00:59 Amsterdam time.
+  // Run every night, between 22:00 and 05:59 Amsterdam time. The hosted Renovate app runs every few
+  // hours, not on the clock, so a one-hour window was rarely hit and updates sat in "Awaiting Schedule";
+  // a window this wide should catch at least one hosted run each night.
   timezone: 'Europe/Amsterdam',
-  schedule: ['* 0 * * *'],
+  schedule: ['* 22-23,0-5 * * *'],
   labels: ['dependencies'],
   // Never automerge: Renovate's pull requests need the maintainer's approval like any other, and get no
   // bypass of Protect main (PRD #161).
