@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -866,13 +867,13 @@ func TestRunAnnouncesTheRetryOfAnAnswerItCannotRead(t *testing.T) {
 		{
 			name:        "an answer that is not JSON is announced, and the good second answer is posted",
 			answers:     []string{"Sure! " + answerMarker + " the change looks fine.", cleanAnswer},
-			wantNotice:  []string{"7", "not one JSON object"},
+			wantNotice:  []string{"7", "syntax"},
 			wantNotices: 1,
 		},
 		{
 			name:        "an answer with no findings field is announced with the check that failed",
 			answers:     []string{`{"summary":"` + answerMarker + `"}`, cleanAnswer},
-			wantNotice:  []string{"7", "no findings field"},
+			wantNotice:  []string{"7", "missing findings"},
 			wantNotices: 1,
 		},
 		{
@@ -1013,7 +1014,7 @@ func TestRunKeepsTheDecoderMessageOutOfTheSkippedOutcome(t *testing.T) {
 				`{"MRK366SECOND": 1, "summary": "s", "findings": [{"severity": "nit", "title": "t", "body": "b", "MRK366SECOND": 1}]}`,
 			},
 			markers:   []string{"MRK366FIRST", "MRK366SECOND"},
-			wantCheck: "not one JSON object",
+			wantCheck: "unknown field",
 		},
 		{
 			name: "an invalid escape sequence, which the decoder quotes",
@@ -1022,7 +1023,7 @@ func TestRunKeepsTheDecoderMessageOutOfTheSkippedOutcome(t *testing.T) {
 				`{"findings": [], "summary": "s\uMRKB"}`,
 			},
 			markers:   []string{"MRKA", "MRKB"},
-			wantCheck: "not one JSON object",
+			wantCheck: "syntax",
 		},
 	}
 
@@ -1092,5 +1093,71 @@ func TestRunKeepsTheDecoderMessageOutOfTheSkippedOutcome(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestRunKeepsTheCLIErrorResultsOutOfTheError pins issue #374 through the Claude
+// Code CLI a whole run asks: the result text of the CLI's `is_error` envelope is
+// model output a pull request's author can steer, and the run's error is printed
+// as the job's public ::error line (ci/aireview's fail). The error therefore
+// names the pull request, the CLI's constant error class and its subtype, and no
+// text of the result; the run fails with nothing posted. The log holds nothing
+// of it either.
+func TestRunKeepsTheCLIErrorResultsOutOfTheError(t *testing.T) {
+	t.Parallel()
+
+	// cliResultMarker stands for the CLI's result text: the model's words, which
+	// the error and the log must never repeat.
+	const cliResultMarker = "MRK374-THE-CLI-RESULT-TEXT"
+
+	pr := review.PullRequest{Number: 7, Title: "Add x", Author: "agent[bot]", HeadSHA: headSHA, BaseSHA: baseSHA}
+
+	cli, _ := newFakeClaudeCLI(t, claudeFake{
+		stdout: `{"type":"result","subtype":"error_max_turns","is_error":true,"result":"` + cliResultMarker + `"}`,
+	})
+
+	gh := &fakeGitHub{
+		pr:    pr,
+		diff:  cleanDiff,
+		files: []review.ChangedFile{{Path: "internal/x/y.go", Status: "modified", Additions: 1}},
+	}
+
+	var log bytes.Buffer
+
+	result, err := review.Run(t.Context(), gh, review.NewClaudeCLI(cli, testModelToken, time.Minute), review.Config{
+		Number:   pr.Number,
+		BotLogin: testBotLogin,
+		Notices:  &log,
+	})
+	if err == nil {
+		t.Fatal("Run = nil, want an error: the CLI reported an error, so the run fails rather than review the pull request (ADR 0033)")
+	}
+
+	if !errors.Is(err, review.ErrModel) {
+		t.Errorf("Run = %v, want an error wrapping ErrModel", err)
+	}
+
+	// The error is the data of the job's ::error line: it names the pull
+	// request, the constant class of the CLI's error and the CLI's subtype, and
+	// no text of the result.
+	for _, want := range []string{"pull request 7", "claude cli error", "error_max_turns"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Run = %v, which does not name %q: the ::error line names the pull request, a constant class and the CLI's subtype, so a failure is diagnosable without its text (issue #374)", err, want)
+		}
+	}
+
+	for _, text := range []string{err.Error(), log.String()} {
+		if strings.Contains(text, cliResultMarker) {
+			t.Errorf("the run's outcome holds %q, text of the CLI's result: neither the error, which is the public ::error line, nor the log repeats the CLI's own text (issue #374); text: %q",
+				cliResultMarker, text)
+		}
+	}
+
+	if result.Skip != nil {
+		t.Errorf("Result.Skip = %+v, want nil: a CLI that reports an error is no skipped outcome, the run fails (ADR 0033)", *result.Skip)
+	}
+
+	if len(gh.posts) != 0 {
+		t.Errorf("the run posted %d reviews, want none: a failed model call posts nothing (ADR 0033)", len(gh.posts))
 	}
 }
