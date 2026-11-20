@@ -1140,11 +1140,12 @@ take_lock() {
 # contender that read a stale owner can move this refresher's fresh lock aside after take_lock returned and,
 # finding a third contender's lock in place, drop it (issue #288). A lock whose pid reads empty (missing,
 # without its pid, or with a pid entry that is no regular file, see read_pid) may only be in transit, moved
-# aside by such a contender to be put back (issue #240): it is read again once a second, at most five times. When it waited, it reads the clock into current again,
-# so the margin check of the same round uses the time of after the wait. A lock that holds another pid has
-# been taken over: this one says so and leaves it. A lock still empty after the five tries is gone: no
-# refresher holds it, so this one says that a refresh must be started again. Either way release_lock, which
-# removes only a lock holding this one's pid, leaves the lock alone.
+# aside by such a contender to be put back (issue #240): it is read again once a second, at most five
+# times. When it waited, it reads the clock into current again, so the margin check of the same round uses
+# the time of after the wait. A lock that holds another pid has been taken over: this one says so and leaves
+# it. A lock still empty after the five tries is gone: no refresher holds it, so this one says that a
+# refresh must be started again. Either way release_lock, which removes only a lock holding this one's pid,
+# leaves the lock alone.
 still_locked() {
   holder="$(read_pid "${lock}/pid")"
   tries=0
