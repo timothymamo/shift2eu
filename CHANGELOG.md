@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.1](https://github.com/timothymamo/shift2eu/compare/v0.10.0...v0.10.1) (2026-11-20)
+
+
+### Bug Fixes
+
+* **aireview:** review a diff over the limit in parts and skip, not fail, what cannot be reviewed ([#367](https://github.com/timothymamo/shift2eu/issues/367), [#376](https://github.com/timothymamo/shift2eu/issues/376)) ([#380](https://github.com/timothymamo/shift2eu/issues/380)) ([47e7951](https://github.com/timothymamo/shift2eu/commit/47e79510ba9aca6bb2aa06fc711297ab7c35ab50))
+* **test:** let the chromedp import check run on an empty module cache ([#391](https://github.com/timothymamo/shift2eu/issues/391)) ([#392](https://github.com/timothymamo/shift2eu/issues/392)) ([7b85582](https://github.com/timothymamo/shift2eu/commit/7b8558213257d2cd8b6868754b6c1eedf03747bb))
+
 ## [0.10.0](https://github.com/timothymamo/shift2eu/compare/v0.9.0...v0.10.0) (2026-11-20)
 
 
