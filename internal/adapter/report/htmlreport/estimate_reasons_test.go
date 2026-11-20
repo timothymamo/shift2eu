@@ -2,6 +2,7 @@ package htmlreport_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport"
@@ -93,11 +94,18 @@ func TestEveryReasonHasAPhraseAndAPlaceInTheOrder(t *testing.T) {
 // renderNotEstimated's default branch shows a reason it has no case for as its
 // code, as it is, and the fragment escapes it only when it writes the cell
 // (fragment.go, textEscaper), so the phrase a test reads here is compared with
-// the code itself and not with an escaped form.
+// the code itself and not with an escaped form. A code holding a character the
+// text escaper replaces makes the two tell apart; without it, a default branch
+// that escaped the code would pass for one that did not.
 func TestFallbackPhraseIsTheCode(t *testing.T) {
 	t.Parallel()
 
-	unknown := estimate.Reason("no-fit|unknown|reason")
+	unknown := estimate.Reason("no-fit<unknown>&reason")
+
+	if !strings.Contains(string(unknown), "<") || !strings.Contains(string(unknown), "&") {
+		t.Fatalf("estimate.Reason %q holds no markup character, want one the text escaper replaces, "+
+			"so the comparison below tells an escaped code from a code written as it is", string(unknown))
+	}
 
 	got := htmlreport.NotEstimatedPhrase(estimate.Estimate{Reason: unknown})
 

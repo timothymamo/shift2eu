@@ -90,7 +90,7 @@ func TestEveryReasonHasAPhraseAndAPlaceInTheOrder(t *testing.T) {
 }
 
 // TestFallbackPhraseIsTheEscapedCode pins the premise the phrase check above
-// stands on: renderNotEstimated's default branch shows a reason it has not case
+// stands on: renderNotEstimated's default branch shows a reason it has no case
 // for as its code escaped for the cell (escapeText), so a phrase is compared
 // with that escape and not with the code itself. A code holding a character the
 // escaper replaces makes the two tell apart; without it, the guard would take
