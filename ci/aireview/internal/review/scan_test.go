@@ -357,6 +357,39 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			},
 		},
 		{
+			// Issue #365: the code-name rule hides a real host when it reads a
+			// "(" after the name as a call, and when it reads a mixed-case last
+			// label alone as an exported Go identifier. A host name ends in a
+			// public TLD whatever follows it, and only the whole run of code
+			// decides whether it is a code name, so every one of these is a
+			// host name (a golden that names a database, a customer's domain, a
+			// capitalised host or a URL would otherwise pass the scan).
+			name: "a host name a parenthesis or a mixed-case last label would have hidden is still found",
+			diff: goldenAdds(golden,
+				`"db01": "db01.corp.info(primary)"`,
+				`"shop": "Shop.Acme.Com"`,
+				`"corp": "Corp.Example.Info"`,
+				`"db": "db01.corp.Info"`,
+				`"mail": "https://Mail.Contoso.Net/x"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 5}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+				{Path: golden, Line: 3, Kind: review.ScanHostname},
+				{Path: golden, Line: 4, Kind: review.ScanHostname},
+				{Path: golden, Line: 5, Kind: review.ScanHostname},
+			},
+		},
+		{
+			// The narrowing the case above asks for must keep the code names
+			// quiet: a selector on a receiver, and a call of one whose
+			// parenthesis used to be the whole reason it was no host name
+			// (issue #365).
+			name:      "a chained selector and a call of one are no host name",
+			diff:      goldenAdds(golden, `slog.Info("nothing") r.cfg.App x.cfg.Info("y")`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
 			// An old configuration file writes its host names all upper case,
 			// which is no spelling of an exported Go identifier, so the
 			// code-name rule must not quiet the scan about it (issue #365).
