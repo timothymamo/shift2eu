@@ -168,6 +168,34 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"10-1-2-3"},
 		},
 		{
+			// The same address written with underscores rather than hyphens,
+			// the way a page that copies one out of a name may write it.
+			name:    "private address with underscore separators",
+			path:    "docs/guide/planted-ip-underscore.md",
+			content: "the peer ip_10_1_2_3 answers on port 8080",
+			want:    []string{"10_1_2_3"},
+		},
+		{
+			// A zero-padded octet is no octet to netip.ParseAddr, so the run is
+			// read as the address it spells and reported as it is written.
+			name:    "private address with a zero-padded octet",
+			path:    "testdata/planted-ip-padded.json",
+			content: `"peer": "ip-10-01-2-3"`,
+			want:    []string{"10-01-2-3"},
+		},
+		{
+			name:    "customer host under the Indian TLD",
+			path:    "docs/guide/planted-in.md",
+			content: "the shop answers at web.acme.in",
+			want:    []string{"web.acme.in"},
+		},
+		{
+			name:    "customer bucket in an s3 URL",
+			path:    "testdata/planted-bucket.json",
+			content: "the objects are in s3://acme-prod-bucket/key",
+			want:    []string{"s3://acme-prod-bucket"},
+		},
+		{
 			name:    "private address in an AWS host name",
 			path:    "testdata/planted-host.json",
 			content: `"hostname": "ip-10-1-2-3.eu-central-1.compute.internal"`,

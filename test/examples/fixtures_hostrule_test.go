@@ -179,6 +179,53 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			want: []string{"nas.home.lan"},
 		},
 		{
+			// The private zones a company builds its internal naming from, and
+			// the one RFC 8375 reserves for a home network: none is a public
+			// TLD, and each names a host of the customer's own.
+			name: "private name under the RFC 8375 home suffix",
+			text: "the file server is db01.home.arpa",
+			want: []string{"db01.home.arpa"},
+		},
+		{
+			name: "private name under the localdomain suffix",
+			text: "the file server is db01.acme.localdomain",
+			want: []string{"db01.acme.localdomain"},
+		},
+		{
+			name: "private name under the intranet suffix",
+			text: "the portal is db01.acme.intranet",
+			want: []string{"db01.acme.intranet"},
+		},
+		{
+			name: "private name under the private suffix",
+			text: "the database is db01.acme.private",
+			want: []string{"db01.acme.private"},
+		},
+		{
+			name: "private name under the priv suffix",
+			text: "the database is db01.acme.priv",
+			want: []string{"db01.acme.priv"},
+		},
+		{
+			name: "private name under the home suffix",
+			text: "the file server is db01.acme.home",
+			want: []string{"db01.acme.home"},
+		},
+		{
+			name: "private name under the consul suffix",
+			text: "the service is db01.service.consul",
+			want: []string{"db01.service.consul"},
+		},
+		{
+			// arpa is the reverse-DNS suffix, and only home.arpa above is a
+			// customer's own zone: a reverse name is left to the dotted-quad
+			// rule, which reports the address it spells and not the name, so the
+			// host rule never reads the name itself.
+			name: "reverse DNS name",
+			text: "the zone is 3.2.1.10.in-addr.arpa",
+			want: []string{"3.2.1.10"},
+		},
+		{
 			// The curated list of TLDs names its own gaps, and these are the
 			// ones the audit found: a government, education or international
 			// name, and the two common country codes it left out.
@@ -212,28 +259,6 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			text: "the shop is shop.acme.us",
 			want: []string{"shop.acme.us"},
 		},
-		{
-			// The vendor allow list excuses the host, and the path after it
-			// names the customer just as the host would: only the vendor's own
-			// owners are exempt. The reported value is the host and the owner it
-			// carries, up to the repository's name.
-			name: "customer owner path after a listed vendor host",
-			text: "the module is github.com/acme/private-repo",
-			want: []string{"github.com/acme"},
-		},
-		{
-			// A bucket scheme names the customer's storage account, so the
-			// bucket is reported with the scheme that gives it its shape.
-			name: "customer bucket in an s3 URL",
-			text: "the objects are in s3://acme-prod-bucket/key",
-			want: []string{"s3://acme-prod-bucket"},
-		},
-		{
-			name: "customer bucket in a gs URL",
-			text: "the objects are in gs://acme-prod-bucket/key",
-			want: []string{"gs://acme-prod-bucket"},
-		},
-
 		// Not reported: a dotted value with another meaning, or a public host
 		// that identifies no customer.
 		{
@@ -327,23 +352,6 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			want: nil,
 		},
 		{
-			name: "public project host beside its path",
-			text: "cloned from github.com/timothymamo/shift2eu",
-			want: nil,
-		},
-		{
-			// A sample's bucket is named the way its domain is: a documentation
-			// value that identifies nobody.
-			name: "public bucket in an s3 URL",
-			text: "the sample objects are in s3://example-bucket/key",
-			want: nil,
-		},
-		{
-			name: "public bucket in a gs URL",
-			text: "the sample objects are in gs://example-bucket/x",
-			want: nil,
-		},
-		{
 			// go is a file extension before it is a TLD, in a fixture as often
 			// as in a guide page.
 			name: "Go source file name",
@@ -381,6 +389,187 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			name: "legitimate dotted values side by side",
 			text: "the inventory.json sample pins v0.2.0 and clones github.com/timothymamo/shift2eu",
 			want: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, values(sanitisationProblems(tc.text))); diff != "" {
+				t.Errorf("sanitisationProblems(%q) mismatch (-want +got):\n%s", tc.text, diff)
+			}
+		})
+	}
+}
+
+// TestVendorPathProblems pins which owner and which bucket the fixture check
+// reads after a vendor host or a bucket scheme. The host name rule exempts the
+// public vendor hosts a page links to (publicVendorHosts), yet the path after one
+// names the customer just as a host would, so an owner a path names after
+// github.com, raw.githubusercontent.com, ghcr.io or storage.googleapis.com is
+// reported as the host and the owner (github.com/acme), in a URL and in the SSH
+// clone form a reader copies (git@github.com:acme/private-repo.git) alike. Only
+// this project's own account and the listed public open-source owners pass, so
+// github.com/timothymamo/shift2eu and github.com/sigstore/cosign are clean while
+// the same host written in another case (GitHub.com/TimothyMamo/shift2eu) is
+// clean too.
+//
+// A bucket is reported with the scheme that gives it its shape (s3://,
+// s3a://, s3n://, gs://, az://) or, in an ARN, whole
+// (arn:aws:s3:::acme-prod-bucket). A bucket is a sample value only when it is
+// example or starts with example- and generic words follow (example-bucket,
+// example-logs-2, example), never when a name follows the prefix
+// (example-acme-prod).
+//
+// A name below a listed vendor host is no path of that host: evil.github.com is
+// the host name rule's value, not this rule's.
+func TestVendorPathProblems(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want []string
+	}{
+		{
+			// The vendor allow list excuses the host, and the path after it
+			// names the customer just as the host would: only the vendor's own
+			// owners are exempt. The reported value is the host and the owner it
+			// carries, up to the repository's name.
+			name: "customer owner path after a listed vendor host",
+			text: "the module is github.com/acme/private-repo",
+			want: []string{"github.com/acme"},
+		},
+		{
+			// The form a reader copies out of a clone command names the owner
+			// after a colon rather than a slash, and it is the same account.
+			name: "customer owner in an SSH clone URL",
+			text: "the module is git@github.com:acme/private-repo.git",
+			want: []string{"github.com/acme"},
+		},
+		{
+			// ghcr.io is a listed vendor host, and the image path names the
+			// customer's own registry account.
+			name: "customer owner path after the container registry",
+			text: "the image is ghcr.io/acme/app",
+			want: []string{"ghcr.io/acme"},
+		},
+		{
+			name: "customer owner path after the raw-file host",
+			text: "the script is raw.githubusercontent.com/acme/repo/main/x",
+			want: []string{"raw.githubusercontent.com/acme"},
+		},
+		{
+			// A Cloud Storage URL names the customer's bucket after the
+			// service host, which the host rule accepts as a provider host.
+			name: "customer bucket after the Cloud Storage host",
+			text: "the objects are at https://storage.googleapis.com/acme-prod-data/key",
+			want: []string{"storage.googleapis.com/acme-prod-data"},
+		},
+		{
+			// A bucket scheme names the customer's storage account, so the
+			// bucket is reported with the scheme that gives it its shape.
+			name: "customer bucket in an s3 URL",
+			text: "the objects are in s3://acme-prod-bucket/key",
+			want: []string{"s3://acme-prod-bucket"},
+		},
+		{
+			name: "customer bucket in a gs URL",
+			text: "the objects are in gs://acme-prod-bucket/key",
+			want: []string{"gs://acme-prod-bucket"},
+		},
+		{
+			// The Hadoop and legacy S3 clients spell the scheme s3a and s3n,
+			// and the bucket after them is the same customer's.
+			name: "customer bucket in an s3a URL",
+			text: "the objects are in s3a://acme-prod-data/key",
+			want: []string{"s3a://acme-prod-data"},
+		},
+		{
+			name: "customer bucket in an s3n URL",
+			text: "the objects are in s3n://acme-prod-data/key",
+			want: []string{"s3n://acme-prod-data"},
+		},
+		{
+			name: "customer container in an az URL",
+			text: "the blobs are in az://acme-container/x",
+			want: []string{"az://acme-container"},
+		},
+		{
+			// An ARN names a bucket with no scheme, and it carries the account's
+			// own name: the ARN is reported whole, so the failure says which
+			// value to change.
+			name: "customer bucket in an ARN",
+			text: `"bucket": "arn:aws:s3:::acme-prod-bucket"`,
+			want: []string{"arn:aws:s3:::acme-prod-bucket"},
+		},
+		{
+			// An example- prefix excuses a sample's bucket only when the words
+			// after it are generic: a name after it is the customer's.
+			name: "customer bucket behind an example- prefix",
+			text: "the objects are in s3://example-acme-prod/key",
+			want: []string{"s3://example-acme-prod"},
+		},
+
+		// Not reported: the project's own account, a listed public open-source
+		// owner, and a sample's bucket.
+		{
+			name: "public project host beside its path",
+			text: "cloned from github.com/timothymamo/shift2eu",
+			want: nil,
+		},
+		{
+			name: "project host with the owner in another case",
+			text: "cloned from GitHub.com/TimothyMamo/shift2eu",
+			want: nil,
+		},
+		{
+			name: "public open-source owner path",
+			text: "the images are verified with github.com/sigstore/cosign",
+			want: nil,
+		},
+		{
+			// A sample's bucket is named the way its domain is: a documentation
+			// value that identifies nobody.
+			name: "public bucket in an s3 URL",
+			text: "the sample objects are in s3://example-bucket/key",
+			want: nil,
+		},
+		{
+			name: "public bucket in a gs URL",
+			text: "the sample objects are in gs://example-bucket/x",
+			want: nil,
+		},
+		{
+			// Generic words and optional digits follow example-, so the bucket
+			// is a sample's own.
+			name: "public bucket with digits behind the example- prefix",
+			text: "the sample objects are in s3://example-logs-2/key",
+			want: nil,
+		},
+		{
+			name: "public bucket named example itself",
+			text: "the sample objects are in s3://example/key",
+			want: nil,
+		},
+		{
+			name: "public bucket in a Cloud Storage URL",
+			text: "the sample objects are at https://storage.googleapis.com/example-bucket/key",
+			want: nil,
+		},
+		{
+			name: "public bucket in an ARN",
+			text: `"bucket": "arn:aws:s3:::example-bucket"`,
+			want: nil,
+		},
+		{
+			// A name below a listed vendor host is the host name rule's value,
+			// not a path of the vendor's: this rule reports nothing for it, and
+			// the host it is below is the one that names the customer.
+			name: "name below a listed vendor host",
+			text: "the assets come from evil.github.com/acme/x",
+			want: []string{"evil.github.com"},
 		},
 	}
 

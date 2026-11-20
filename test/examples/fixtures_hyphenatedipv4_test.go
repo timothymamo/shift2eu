@@ -7,14 +7,32 @@ import (
 )
 
 // TestHyphenatedIPv4Problems pins which hyphenated numbers the fixture check
-// reads as an address: one written into a name - after an ip- that stands on its
-// own, or ending a label that another label follows after a dot, a documentation
-// domain included - whose groups are octets and whose address is outside the
-// sample range 192.0.2.0/24 is reported, while a sample address, a date, a
-// version-like token, a sequence of numbers ending a sentence and a group that is
-// no octet are not. A version-like token that a dotted extension follows
-// (build-1-2-3-4.tar.gz) is the price of the dotted-label rule and is reported:
-// the rule fails closed rather than let an address in a name through.
+// reads as an address. A run is four groups of one to three digits joined by
+// hyphens or underscores throughout, each group an octet read as a decimal
+// number, so a zero-padded octet spells the address it looks like (ip-10-01-2-3
+// is 10.1.2.3) and a group above 255 makes no address at all. The address must
+// be outside the sample range 192.0.2.0/24, which every sample address is in:
+//
+//   - written into a name - after an ip- or ip_ that stands on its own, or
+//     ending a label that another label follows after a dot, a documentation
+//     domain included - any address outside that range is reported;
+//   - otherwise - bare, after a label of its own, or ending a sentence - only a
+//     private (10/8, 172.16/12, 192.168/16), shared (100.64/10) or link-local
+//     (169.254/16) address is, because a public-looking run in prose
+//     (5-10-20-30, 1-2-3-4) is a sequence of numbers as often as an address.
+//
+// A private address is reported in a CIDR suffix written into a name
+// (vpc-10-0-0-0-16, subnet_10_0_0_0_24), and a fifth group after a
+// public-looking run (build-1-2-3-4-5) leaves that run clean. The label before
+// a bare private run excuses it only when the label is an English word ending in
+// ip that stands on its own (zip-10-1-2-3, ship-1-2-3-4): the same word inside a
+// compound name (edge-strip-10-0-0-5, node_tip_10_1_2_3) marks the address, as
+// does any other word (node-, vm-, eip-, hostip-, nat-), a digit group
+// (eu-central-1-10-1-2-3) excepted. A date, a version-like token, a sequence of
+// numbers and a group that is no octet are not an address. A version-like token
+// that a dotted extension follows (build-1-2-3-4.tar.gz) is the price of the
+// dotted-label rule and is reported: the rule fails closed rather than let an
+// address in a name through.
 func TestHyphenatedIPv4Problems(t *testing.T) {
 	t.Parallel()
 
@@ -191,6 +209,39 @@ func TestHyphenatedIPv4Problems(t *testing.T) {
 			want: []string{"10-1-2-3"},
 		},
 		{name: "group that is no octet", text: "ip-10-1-2-300 is no address", want: nil},
+		{
+			// A VPC and a subnet are named after the CIDR they carry, so the
+			// four-group run is the address and the group after it the prefix
+			// length: the fifth group is no reason to pass a private address.
+			name: "private CIDR in a VPC name",
+			text: "the vpc vpc-10-0-0-0-16 holds it",
+			want: []string{"10-0-0-0"},
+		},
+		{
+			name: "private CIDR in a subnet name",
+			text: "the subnet subnet_10_0_0_0_24 holds it",
+			want: []string{"10_0_0_0"},
+		},
+		{
+			// The same fifth group after a public-looking run: no address the
+			// rule reports, so the run stays as clean as 1-2-3-4 in prose.
+			name: "public run followed by a fifth group",
+			text: "the build build-1-2-3-4-5 is pinned",
+			want: nil,
+		},
+		{
+			// strip is an English word ending in ip, but here it is part of a
+			// compound name rather than a word of its own, so the word no longer
+			// marks prose and the address after it is reported.
+			name: "private address after an English word inside a compound name",
+			text: "the edge edge-strip-10-0-0-5 answers",
+			want: []string{"10-0-0-5"},
+		},
+		{
+			name: "private address after an English word inside an underscored compound name",
+			text: "the node node_tip_10_1_2_3 answers",
+			want: []string{"10_1_2_3"},
+		},
 	}
 
 	for _, tc := range tests {
