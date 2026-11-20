@@ -33,6 +33,21 @@ func goldenAdds(path string, lines ...string) string {
 	return section.String()
 }
 
+// gitBinaryPatchFile returns the section git writes for a binary file when it
+// patches it instead of naming it, as "git diff --binary" does: no "---",
+// "+++", hunk or "Binary files" line, and the patch's own base85 lines.
+func gitBinaryPatchFile(path string) string {
+	return "diff --git a/" + path + " b/" + path + "\n" +
+		"index 1111111..2222222 100644\n" +
+		"GIT binary patch\n" +
+		"literal 12\n" +
+		"TcmZ?wbhEHbRA=!R0RR91\n" +
+		"\n" +
+		"literal 0\n" +
+		"HcmV?d00001\n" +
+		"\n"
+}
+
 // hasScanFinding reports whether body lists f as the review lists a finding of
 // the model-free scan (issue #342): the file and the line of its new side in a
 // code span, as the review shows a finding's path, and what was found on the
@@ -111,6 +126,46 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanHostname}},
 		},
 		{
+			// A provider's domain is no hiding place (issue #342, round 4 S1):
+			// left out whole, it hid the value most likely to be real, a
+			// customer's own bucket, database or account host. Each of these has
+			// more than one label below the provider's domain, so the part the
+			// provider owns is not the whole of it.
+			name: "a host name more than one label below a provider's domain is found",
+			diff: goldenAdds(golden,
+				`"db": "prod-db.c9akciq32.eu-west-1.rds.amazonaws.com"`,
+				`"blob": "mycorp.blob.core.windows.net"`,
+				`"registry": "123456789012.dkr.ecr.eu-west-1.amazonaws.com"`,
+				`"bucket": "myproject-prod.storage.googleapis.com"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 4}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+				{Path: golden, Line: 3, Kind: review.ScanHostname},
+				{Path: golden, Line: 4, Kind: review.ScanHostname},
+			},
+		},
+		{
+			// A provider's own endpoint is no customer's data: the apex, exactly
+			// one label below it (the service), and for amazonaws.com also
+			// <service>.<region>, a region of the AWS shape. Anything deeper is
+			// a name a customer chose (S1).
+			name: "a provider's apex, one label below it and an amazonaws region service are no finding",
+			diff: goldenAdds(golden, `"hosts": "compute.googleapis.com storage.googleapis.com `+
+				`sqladmin.googleapis.com www.scaleway.com www.ovhcloud.com aws.amazon.com amazonaws.com `+
+				`s3.eu-west-1.amazonaws.com ec2.us-east-2.amazonaws.com upcloud.com api.upcloud.com `+
+				`github.com api.github.com"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
+			// RFC 2606's example domains are the sanitised values CLAUDE.md
+			// rule 2 asks the fixtures for, so they stay no finding at any depth
+			// (S1).
+			name:      "an example domain is no finding at any depth",
+			diff:      goldenAdds(golden, `"hosts": "shop.example.com a.b.example.com deep.a.b.example.org www.example.net"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
 			name:         "an access key ID is found",
 			diff:         goldenAdds(golden, `"access_key_id": "`+awsLikeID+`"`),
 			wantFiles:    []review.LeftOutFile{{Path: golden, Added: 1}},
@@ -121,6 +176,33 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			diff:         goldenAdds(golden, `"token": "`+token+`"`),
 			wantFiles:    []review.LeftOutFile{{Path: golden, Added: 1}},
 			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanKey}},
+		},
+		{
+			// Issue #342, round 4 S3: a secret access key's alphabet holds '/'
+			// and '+', so a run of letters and digits alone split the key into
+			// three short pieces and reported none of them. Both forms are the
+			// AWS documentation's example key, whose '/'-less neighbour splits.
+			name: "an AWS secret access key with a slash or a plus is found",
+			diff: goldenAdds(golden,
+				`"secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"`,
+				`"secret_access_key_plus": "wJalrXUtnFEMI+K7MDENG+bPxRfiCYEXAMPLEKEY"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanKey},
+				{Path: golden, Line: 2, Kind: review.ScanKey},
+			},
+		},
+		{
+			// Widening the key's alphabet must not turn a path into a secret:
+			// a run that begins or ends with '/' is a path or a JSON pointer,
+			// not a key, however long it is and whatever it holds (S3). The
+			// bundle's schema references are over 32 characters long and hold
+			// an upper-case letter, a lower-case letter and a digit.
+			name: "a long JSON pointer or a repository path is no key-like string",
+			diff: goldenAdds(bundle,
+				`"$ref": "#/components/schemas/AssessmentReportV2"`,
+				`"note": "internal/adapter/target/scaleway/testdata"`),
+			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 2}},
 		},
 		{
 			// The scan reads what the change adds: a value a line removes, or
@@ -158,6 +240,39 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
 		},
 		{
+			// Issue #342, round 4 S2: a '.' or a '/' only joins a run of digits
+			// into a longer number when a digit is on the far side of the
+			// separator, as in a decimal number. Beside a host name or a bucket
+			// path the run is a value of its own, and hiding it was the likeliest
+			// way to miss a real account ID. The documentation ID of the second
+			// host names no account, so its line is the host's finding alone.
+			name: "an account ID beside a dot or a slash is found",
+			diff: goldenAdds(golden,
+				`"registry": "210987654321.dkr.ecr.eu-west-1.amazonaws.com"`,
+				`"uri": "s3://bucket/210987654321/x"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanAccountID},
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanAccountID},
+			},
+		},
+		{
+			// A digit on the far side of the '.' makes the run part of a
+			// decimal number, which is no account ID (S2).
+			name:      "a twelve-digit group inside a decimal number is no account ID",
+			diff:      goldenAdds(golden, `"ratio": 1.210987654321`, `"fraction": 210987654321.5`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 2}},
+		},
+		{
+			// A JSON pointer starting #/ is a reference into the bundle, not a
+			// value: its elements are schema names and array indices of any
+			// length, so a run of twelve digits there is no account ID (S2).
+			name:      "a twelve-digit run inside a JSON pointer is no account ID",
+			diff:      goldenAdds(bundle, `"$ref": "#/components/schemas/210987654321"`),
+			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 1}},
+		},
+		{
 			// A report's taxonomy categories read like host names, and the
 			// committed goldens are full of them.
 			name: "a taxonomy category is no host name",
@@ -184,15 +299,26 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			},
 		},
 		{
-			name: "each left-out file is counted, a deleted or binary one with no added line",
+			// Issue #342, round 4 S4: a binary file has no line of text, so the
+			// note's count said "(+0 lines)", which reads as nothing added,
+			// though the file was neither reviewed nor scanned. The section git
+			// writes for it is marked binary, so the scan says so.
+			name: "each left-out file is counted, a binary one marked binary and a deleted one with no added line",
 			diff: goldenAdds("testdata/a.golden", "one", "two", "three") +
 				deletedFile("testdata/old.golden", "gone") +
 				binaryFile("testdata/image.golden"),
 			wantFiles: []review.LeftOutFile{
 				{Path: "testdata/a.golden", Added: 3},
-				{Path: "testdata/image.golden", Added: 0},
+				{Path: "testdata/image.golden", Added: 0, Binary: true},
 				{Path: "testdata/old.golden", Added: 0},
 			},
+		},
+		{
+			// git names a binary file in one line, or patches it as base85
+			// when asked with --binary: both mark it binary (S4).
+			name:      "a binary file git writes as a GIT binary patch is marked binary",
+			diff:      gitBinaryPatchFile("testdata/logo.golden"),
+			wantFiles: []review.LeftOutFile{{Path: "testdata/logo.golden", Added: 0, Binary: true}},
 		},
 	}
 
@@ -251,6 +377,7 @@ func TestTheReviewReportsWhatTheScanFoundInTheFilesLeftOut(t *testing.T) {
 		`"host": "db.acme-corp.io"`,
 		`"endpoint": "8.8.4.4"`,
 		`"access_key_id": "AKIAIOSFODNN7EXAMPLE"`,
+		`"secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"`,
 	}
 
 	raw := goldenAdds(golden, planted...)
@@ -264,6 +391,7 @@ func TestTheReviewReportsWhatTheScanFoundInTheFilesLeftOut(t *testing.T) {
 		{Path: golden, Line: 2, Kind: review.ScanHostname},
 		{Path: golden, Line: 3, Kind: review.ScanIPv4},
 		{Path: golden, Line: 4, Kind: review.ScanKey},
+		{Path: golden, Line: 5, Kind: review.ScanKey},
 	}
 
 	previous := -1
@@ -286,8 +414,13 @@ func TestTheReviewReportsWhatTheScanFoundInTheFilesLeftOut(t *testing.T) {
 	}
 
 	// The comment is public: the matched value never reaches it, in whole or in
-	// part, so a review can never publish the data it warns about.
-	for _, value := range []string{"987654321098", "db.acme-corp.io", "8.8.4.4", "AKIAIOSFODNN7EXAMPLE"} {
+	// part, so a review can never publish the data it warns about. The secret
+	// access key of issue #342 round 4 S3 is the value the scan could not see
+	// before, so it is the one to watch here.
+	for _, value := range []string{
+		"987654321098", "db.acme-corp.io", "8.8.4.4", "AKIAIOSFODNN7EXAMPLE",
+		"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+	} {
 		if strings.Contains(got.Body, value) {
 			t.Errorf("the review's body holds %q, the value a scan finding matched: a finding names the file, the line and the class, never the text (issue #342); body:\n%s",
 				value, tail(got.Body, 4_000))
@@ -295,7 +428,7 @@ func TestTheReviewReportsWhatTheScanFoundInTheFilesLeftOut(t *testing.T) {
 	}
 
 	// The note still names the file, now with the lines it adds.
-	if want := "- `" + golden + "` (+4 lines)"; !strings.Contains(got.Body, want) {
+	if want := "- `" + golden + "` (+5 lines)"; !strings.Contains(got.Body, want) {
 		t.Errorf("the note holds no %q: every left-out file shows the lines it adds (issue #342); body:\n%s",
 			want, tail(got.Body, 4_000))
 	}
@@ -466,8 +599,18 @@ func committedLeftOutFiles(t *testing.T, root string) []string {
 		}
 
 		if entry.IsDir() {
-			if entry.Name() == ".git" {
+			// A nested worktree (this repository keeps them under .worktrees/,
+			// and the repository root holds one) has a .git entry of its own and
+			// its own copy of every golden file: walking into it would scan
+			// another branch's files and count them twice.
+			if entry.Name() == ".git" || entry.Name() == ".worktrees" {
 				return fs.SkipDir
+			}
+
+			if path != root {
+				if _, err := os.Lstat(filepath.Join(path, ".git")); err == nil {
+					return fs.SkipDir
+				}
 			}
 
 			return nil

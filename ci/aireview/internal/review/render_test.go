@@ -1414,6 +1414,125 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 	})
 }
 
+// TestTheNoteSaysWhenAFileWasNotScanned pins that the note never reads as
+// "nothing added" for a file the review neither read nor scanned (issue #342,
+// round 4 S4): a binary file adds no line of text, so the count of the note said
+// "(+0 lines)", and a pure rename's old path adds nothing either, so it said
+// the same. Both are shown for what they are instead.
+func TestTheNoteSaysWhenAFileWasNotScanned(t *testing.T) {
+	t.Parallel()
+
+	answer := review.Answer{Summary: renderSummary}
+
+	t.Run("a binary left-out file is marked binary, not with a line count", func(t *testing.T) {
+		t.Parallel()
+
+		got := review.RenderFiltered(headSHA, answer, review.EventComment, "",
+			review.ScanLeftOut(binaryFile("testdata/logo.golden")))
+
+		if want := "- `testdata/logo.golden` (binary, not scanned)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a binary file no line of text is added by, so its count reads as nothing added, though the review neither read nor scanned it (issue #342, round 4 S4); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		if bad := "- `testdata/logo.golden` (+0 lines)"; strings.Contains(got.Body, bad) {
+			t.Errorf("the note holds %q for a binary file: the count reads as nothing added, though the file was neither reviewed nor scanned (issue #342, round 4 S4); body:\n%s",
+				bad, tail(got.Body, 2_000))
+		}
+
+		assertBodyWithinLimit(t, got.Body)
+	})
+
+	t.Run("a pure rename's old path is marked renamed, not with a line count", func(t *testing.T) {
+		t.Parallel()
+
+		got := review.RenderFiltered(headSHA, answer, review.EventComment, "",
+			review.ScanLeftOut(renamedFile("testdata/old.golden", "testdata/new.golden", `"a": "b"`)))
+
+		// The new path is the file the change writes, and it shows its lines.
+		if want := "- `testdata/new.golden` (+1 line)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a rename's new path is the file the change adds its lines to (issue #342); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		// The old path is the same file under its old name: it adds nothing of
+		// its own, so a count beside it reads as a file nothing was added to.
+		if want := "- `testdata/old.golden` (renamed)\n"; !strings.Contains(got.Body, want) {
+			t.Errorf("the note holds no %q: a rename's old path is the same file as the new one, so the note marks it renamed instead of counting lines it does not add (issue #342, round 4 S4); body:\n%s",
+				want, tail(got.Body, 2_000))
+		}
+
+		if bad := "- `testdata/old.golden` (+0 lines)"; strings.Contains(got.Body, bad) {
+			t.Errorf("the note holds %q for a rename's old path: the count reads as nothing added, and the old path is the same file as the new one (issue #342, round 4 S4); body:\n%s",
+				bad, tail(got.Body, 2_000))
+		}
+
+		assertBodyWithinLimit(t, got.Body)
+	})
+}
+
+// TestTheNotReviewedNoteStaysBounded pins the bound render.go claims for the
+// note (issue #342, round 4 N1): "it stays under 25,000 UTF-16 code units
+// whatever leftOut holds". The note is rendered outside the part of the review
+// Render cuts, so a note that outgrew that bound would eat the review's own
+// room at GitHub's limit and push the body over it. The worst case is a full
+// list of paths and a full list of the scan's findings, each path at its own
+// cap and each line the longest a finding can name.
+func TestTheNotReviewedNoteStaysBounded(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// noteLimit is the bound render.go claims for the note.
+		noteLimit = 25_000
+		// line is the longest line number a finding can name in practice, so
+		// the note carries the widest line a finding prints.
+		line = 9_999_999
+	)
+
+	// One more than each cap, each path four hundred characters long: the note
+	// lists MaxListedExcluded files and MaxScanFindings findings and counts the
+	// rest, so this is the most it can ever write.
+	files := make([]review.LeftOutFile, 0, review.MaxListedExcluded+1)
+	findings := make([]review.ScanFinding, 0, review.MaxScanFindings+1)
+
+	for i := range review.MaxListedExcluded + 1 {
+		files = append(files, review.LeftOutFile{
+			Path:  fmt.Sprintf("testdata/%02d-%s.golden", i, strings.Repeat("a", 400)),
+			Added: 1,
+		})
+	}
+
+	for i := range review.MaxScanFindings + 1 {
+		findings = append(findings, review.ScanFinding{
+			Path: fmt.Sprintf("testdata/%02d-%s.golden", i, strings.Repeat("b", 400)),
+			Line: line,
+			Kind: review.ScanKey,
+		})
+	}
+
+	got := review.RenderFiltered(headSHA, review.Answer{Summary: renderSummary}, review.EventComment, "",
+		review.LeftOut{Files: files, Findings: findings})
+
+	assertBodyWithinLimit(t, got.Body)
+
+	// The note runs from its heading to the footer every review ends with.
+	const (
+		head   = "### Not reviewed"
+		footer = "\n---\n\n_This review is advice"
+	)
+
+	start, end := strings.Index(got.Body, head), strings.Index(got.Body, footer)
+	if start < 0 || end < start {
+		t.Fatalf("the review's body holds no note between %q and %q, so the test pins nothing: body length %d",
+			head, footer, utf16Units(got.Body))
+	}
+
+	if n := utf16Units(got.Body[start:end]); n >= noteLimit {
+		t.Errorf("the note is %d UTF-16 code units, want fewer than %d: the note is rendered outside the part Render cuts, so a longer one would take the review's room and push the body past GitHub's limit (issue #342)",
+			n, noteLimit)
+	}
+}
+
 // listedPathUnits is the cap ADR 0033 puts on each left-out path the "Not
 // reviewed" note and the prompt's left_out_of_diff list write, in UTF-16 code
 // units (issue #324): two for a character outside the BMP, one for any byte
