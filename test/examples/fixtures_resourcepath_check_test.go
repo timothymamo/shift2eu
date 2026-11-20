@@ -91,13 +91,16 @@ var s3ResourceARNPattern = regexp.MustCompile(
 
 // directoryBucketSuffixPattern matches the suffix S3 Express appends to a
 // directory bucket's own words (acme-prod--euc1-az1--x-s3): the availability or
-// local zone's ID (euc1-az1, usw2-lax1-az1) between double hyphens and the
-// --x-s3 marker, lowercased. A zone ID never holds a double hyphen, so the
-// pattern takes only the one suffix at the end and leaves a double hyphen in
-// the bucket's own words (example--acme-prod--euc1-az1--x-s3) to them. The
-// words before it are what is held to the sample rule. It applies only to an
-// s3express ARN's bucket, never to an access point's name.
-var directoryBucketSuffixPattern = regexp.MustCompile(`--[a-z0-9]+(?:-[a-z0-9]+)*--x-s3$`)
+// local zone's ID between double hyphens and the --x-s3 marker, lowercased.
+// Only a zone ID's shape is read there: a region code (euc1, usw2), an optional
+// local zone (lax1) and the zone's number (az1), so customer words in that slot
+// (example--acme-prod--x-s3, example--acme--x-s3) are never taken for a zone and
+// stay in the name. A zone ID never holds a double hyphen, so the pattern takes
+// only the one suffix at the end and leaves a double hyphen in the bucket's own
+// words (example--acme-prod--euc1-az1--x-s3) to them. The words before it are
+// what is held to the sample rule. It applies only to an s3express ARN's
+// bucket, never to an access point's name.
+var directoryBucketSuffixPattern = regexp.MustCompile(`--[a-z]{3,4}[0-9]+(?:-[a-z]+[0-9]+)?-az[0-9]+--x-s3$`)
 
 // sampleResourcePattern matches the sample names a resource path holds that a
 // sample's bucket name (sampleBucketPattern) does not cover, lowercased: the
