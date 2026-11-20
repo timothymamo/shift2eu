@@ -277,6 +277,79 @@ func snapshotDates(t *testing.T) []snapshot {
 	return out
 }
 
+// TestTargetCardsNameTheirHeadOffice pins the line each target card carries
+// (issue #373, EU targets): the card names the city and country of the
+// provider's head office, so a visitor reads where a provider is based before
+// choosing it. ci/sitebuild writes the three strings by hand, so the check pins
+// them here: nothing else would catch an empty line, a typo or a swapped city.
+func TestTargetCardsNameTheirHeadOffice(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]string{
+		"OVHcloud": "Roubaix, France",
+		"Scaleway": "Paris, France",
+		"UpCloud":  "Helsinki, Finland",
+	}
+
+	doc := theBundle(t).html(t, "index.html")
+
+	cards := 0
+	got := make(map[string]string, len(want))
+
+	for _, card := range doc.all() {
+		if !hasClass(card, "target") {
+			continue
+		}
+
+		cards++
+
+		var name, hq *element
+
+		for _, el := range doc.all() {
+			if !isDescendant(el, card) {
+				continue
+			}
+
+			switch {
+			case hasClass(el, "target-name"):
+				name = el
+			case hasClass(el, "target-hq"):
+				hq = el
+			}
+		}
+
+		if name == nil {
+			t.Fatalf("a target card holds no .target-name label, so this check cannot tell whose head office it shows: each card names its provider (issue #373, EU targets)")
+		}
+
+		label := collapseSpace(name.textContent())
+
+		if hq == nil {
+			t.Errorf("the %s target card holds no .target-hq line, want the city and country of the provider's head office: %q (issue #373, EU targets)",
+				label, want[label])
+
+			continue
+		}
+
+		city := collapseSpace(hq.textContent())
+
+		if city == "" {
+			t.Errorf("the %s target card's .target-hq line is empty, want the city and country of the provider's head office: %q (issue #373, EU targets)",
+				label, want[label])
+		}
+
+		got[label] = city
+	}
+
+	if cards != len(want) {
+		t.Fatalf("index.html holds %d target cards, want %d: one per embedded catalog (issue #373, EU targets)", cards, len(want))
+	}
+
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("the target cards name these head offices (-want +got):\n%s", diff)
+	}
+}
+
 // TestArchiveHoldsTheBundleWithFixedTimes pins the archive a release publishes
 // beside the bundle (PRD #297, Layer 3): one entry per bundle file in sorted
 // order, each byte-identical to the file, with fixed owners, one fixed

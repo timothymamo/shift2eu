@@ -185,7 +185,7 @@ func elementByID(t *testing.T, doc *document, id string) *element {
 }
 
 // nextElementSibling returns the element after el among its parent's children,
-// which is the sibling a CSS combinators selects, or nil when el is the last
+// which is the sibling a CSS combinator selects, or nil when el is the last
 // one or the document's own node. Text between the two is no element and does
 // not change which sibling follows.
 func nextElementSibling(el *element) *element {

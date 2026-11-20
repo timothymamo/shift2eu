@@ -700,11 +700,77 @@ func TestStepNumbersAreSilent(t *testing.T) {
 	}
 }
 
+// TestNoMarkerPseudoElementDeclaresABackground pins what a ::marker may state
+// (PRD #379 review, issue #373): ::marker draws the text and the glyph of its own
+// box and ignores a background, so a background declared on a ::marker rule
+// reaches no visitor. Such a declaration is worse than dead: the contrast check
+// then reads a foreground/background pair the browser never paints, and passes a
+// marker whose glyph is unreadable against the surface it really sits on.
+func TestNoMarkerPseudoElementDeclaresABackground(t *testing.T) {
+	t.Parallel()
+
+	name, data := theBundle(t).asset(t, "style", ".css")
+
+	for _, problem := range markerBackgrounds(parseCSS(t, name, data)) {
+		t.Errorf("%s's rule %s: a ::marker pseudo-element ignores a background, so the declaration paints nothing and a contrast check over that pair measures a colour no browser draws: state only the glyph's colour on the ::marker rule, and draw the item's glyph with a ::before box when it needs a background (issue #373, PRD #379 review)",
+			name, problem)
+	}
+}
+
+// TestMarkerBackgroundCheckFires pins that the ::marker background scan reports
+// the declaration it exists for, so the check over the stylesheet cannot pass
+// vacuously: a background on a ::before box is no problem, and neither is a
+// colour on a ::marker.
+func TestMarkerBackgroundCheckFires(t *testing.T) {
+	t.Parallel()
+
+	const source = `
+li::marker { color: #111111; background-color: #ffffff; }
+li::before { content: "\2715"; background: #ffffff; }
+p::marker { color: #111111; }
+`
+
+	problems := markerBackgrounds(parseCSS(t, "synthetic.css", []byte(source)))
+
+	if len(problems) != 1 {
+		t.Fatalf("the scan reported %d problems for a stylesheet with one background on a ::marker, want exactly one: %v", len(problems), problems)
+	}
+
+	if want := "background-color"; !strings.Contains(problems[0], want) {
+		t.Errorf("the scan reported %q, want it to name the %s declaration the ::marker rule makes", problems[0], want)
+	}
+}
+
+// markerBackgrounds returns one problem for every background a rule whose
+// selector names the ::marker pseudo-element declares, naming the rule's
+// selectors and the declaration.
+func markerBackgrounds(rules []cssRule) []string {
+	var problems []string
+
+	for _, rule := range rules {
+		if !slices.ContainsFunc(rule.selectors, func(selector string) bool {
+			return strings.Contains(strings.ToLower(selector), "::marker")
+		}) {
+			continue
+		}
+
+		for _, property := range []string{"background", "background-color"} {
+			if value, ok := rule.decl(property); ok {
+				problems = append(problems, fmt.Sprintf("%s declares %s: %s", strings.Join(rule.selectors, ", "), property, value))
+			}
+		}
+	}
+
+	return problems
+}
+
 // TestBlockerGlyphContentCarriesAnEmptyAlternative pins the decorated content the
 // redesigned report draws (issue #373): a heading and a blocker item show a glyph,
 // and the declaration states the empty alternative text `/ ""` beside it, so a
 // screen reader announces the heading's words and nothing of the glyph. A glyph
-// without an alternative is read aloud as text.
+// without an alternative is read aloud as text. The blocker item's glyph is a
+// ::before box rather than its ::marker, because Safari ignores `content` on
+// ::marker and falls back to a disc (PRD #379 review).
 func TestBlockerGlyphContentCarriesAnEmptyAlternative(t *testing.T) {
 	t.Parallel()
 
@@ -715,7 +781,7 @@ func TestBlockerGlyphContentCarriesAnEmptyAlternative(t *testing.T) {
 		selector string
 		glyph    string
 	}{
-		{name: "a blocker item's marker", selector: "#report .part-blockers > ul > li::marker", glyph: `\2715`},
+		{name: "a blocker item's glyph", selector: "#report .part-blockers > ul > li::before", glyph: `\2715`},
 		{name: "a blockers heading's glyph", selector: "#report .part-blockers > h3::before", glyph: `\2715`},
 		{name: "a required change's heading glyph", selector: "#report .part-changes > h3::before", glyph: `\25d0`},
 	}
