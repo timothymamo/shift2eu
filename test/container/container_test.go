@@ -471,18 +471,69 @@ func TestFinalStageIsMinimalAndNonRoot(t *testing.T) {
 // gone, so `docker buildx build --target server` and `make server-image` build
 // nothing rather than an image nothing publishes, and no image can start
 // serving the API the release no longer ships.
+//
+// The check runs over the repository's Dockerfile, which keeps nothing of the
+// HTTP API, and over fixtures that do: Docker reads a stage name in any case,
+// so a FROM that declares the retired stage as Server declares the same stage.
 func TestTheDockerfileHasNoServerStage(t *testing.T) {
 	t.Parallel()
 
-	dockerfile := readRepoFile(t, dockerfileName)
-	instructions := dockerfileInstructions(t, dockerfile)
+	tests := []struct {
+		name       string
+		dockerfile string
+		// want holds parts of the findings the check must return; none means
+		// the Dockerfile keeps nothing of the HTTP API.
+		want []string
+	}{
+		{
+			name:       "the repository's Dockerfile",
+			dockerfile: readRepoFile(t, dockerfileName),
+		},
+		{
+			name:       "a stage declared as Server",
+			dockerfile: "FROM scratch AS Server\n",
+			want:       []string{"the stage server is declared again"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			findings := retiredServerFindings(t, tc.name, tc.dockerfile)
+
+			for _, finding := range findings {
+				if !slices.ContainsFunc(tc.want, func(want string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("unexpected finding: %s", finding)
+				}
+			}
+
+			for _, want := range tc.want {
+				if !slices.ContainsFunc(findings, func(finding string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("no finding mentions %q, got %q", want, findings)
+				}
+			}
+		})
+	}
+}
+
+// retiredServerFindings returns what name, a Dockerfile, still keeps of the
+// HTTP API that issue #393 retired: its binary and main package, a stage named
+// server written in any case (Docker reads stage names case-insensitively),
+// and an EXPOSE of the port its image served.
+func retiredServerFindings(t *testing.T, name, dockerfile string) []string {
+	t.Helper()
+
+	var findings []string
 
 	for _, retired := range []string{serverBinaryPath, serverMainPackage, serverBuildID} {
 		if strings.Contains(dockerfile, retired) {
-			t.Errorf("%s names %q, want no mention of the HTTP API's binary: the Dockerfile builds the CLI's image alone (issue #393)",
-				dockerfileName, retired)
+			findings = append(findings, fmt.Sprintf("%s names %q, want no mention of the HTTP API's binary: the Dockerfile builds the CLI's image alone (issue #393)",
+				name, retired))
 		}
 	}
+
+	instructions := dockerfileInstructions(t, dockerfile)
 
 	// A stage is named by the `AS <name>` of its FROM, which is the last field.
 	for _, in := range instructions {
@@ -491,12 +542,12 @@ func TestTheDockerfileHasNoServerStage(t *testing.T) {
 		}
 
 		fields := fromFields(in)
-		if fields[len(fields)-1] != serverStageName {
+		if len(fields) == 0 || !strings.EqualFold(fields[len(fields)-1], serverStageName) {
 			continue
 		}
 
-		t.Errorf("%s:%d: the stage %s is declared again: want no stage named %s, so no --target server builds an image of the HTTP API (issue #393)",
-			dockerfileName, in.line, serverStageName, serverStageName)
+		findings = append(findings, fmt.Sprintf("%s:%d: the stage %s is declared again: want no stage named %s, so no --target server builds an image of the HTTP API (issue #393)",
+			name, in.line, serverStageName, serverStageName))
 	}
 
 	for _, in := range instructions {
@@ -504,9 +555,11 @@ func TestTheDockerfileHasNoServerStage(t *testing.T) {
 			continue
 		}
 
-		t.Errorf("%s:%d: the Dockerfile EXPOSEs %s: want no EXPOSE instruction, because the CLI image's binary serves nothing over the network and the port belonged to the HTTP API's image (issue #393)",
-			dockerfileName, in.line, in.arguments())
+		findings = append(findings, fmt.Sprintf("%s:%d: the Dockerfile EXPOSEs %s: want no EXPOSE instruction, because the CLI image's binary serves nothing over the network and the port belonged to the HTTP API's image (issue #393)",
+			name, in.line, in.arguments()))
 	}
+
+	return findings
 }
 
 // assertMinimalNonRootStage holds one stage that ships an image to what both

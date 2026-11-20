@@ -192,7 +192,7 @@ func TestGoReleaserArchives(t *testing.T) {
 		{
 			name:       "no archives section",
 			goreleaser: strings.TrimSuffix(goreleaserArchivesTop, "archives:\n"),
-			wantIn:     "archives",
+			wantIn:     "want one entry, the CLI's build (shift2eu)",
 		},
 		{
 			name: "two archive entries",

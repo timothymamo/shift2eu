@@ -206,7 +206,7 @@ func firstError(errs ...error) error {
 func (r *schemaReader) archives(top []yamlread.Entry, binaries map[string]string) {
 	section, ok := child(top, "archives")
 	if !ok || (section.Value == "" && len(section.Block) == 0) {
-		r.fail("no archives section, want one entry, one per build (%s): goreleaser's default archive takes every build", cliBinary)
+		r.fail("no archives section, want one entry, the CLI's build (%s): goreleaser's default archive takes every build", cliBinary)
 
 		return
 	}
