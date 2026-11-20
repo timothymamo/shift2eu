@@ -250,9 +250,13 @@ func TestParseToolchainPin(t *testing.T) {
 // files written here: an exact go line and the Go it names hold no problem,
 // while a minor-only go line, a prerelease go line, a toolchain line beside it,
 // a go.mod without a go line and a Go other than the pinned one are each one
-// problem, the last naming both versions. A verdict that passed a broken
-// go.mod would let the bundle carry a wasm_exec.js from a toolchain the pin
-// cannot choose; one that invented a problem would fail an innocent module.
+// problem, the last naming both versions. The Go runtime.Version() reports may
+// carry the experiments after the release name (GOEXPERIMENT=X:...), and a
+// devel Go carries no release at all: the release name decides, a Go of the
+// pinned release stands whatever it was built with, and a newer release or a
+// devel Go is still a problem. A verdict that passed a broken go.mod would let
+// the bundle carry a wasm_exec.js from a toolchain the pin cannot choose; one
+// that invented a problem would fail an innocent module.
 func TestToolchainPinProblems(t *testing.T) {
 	t.Parallel()
 
@@ -304,6 +308,28 @@ func TestToolchainPinProblems(t *testing.T) {
 			goVersion:    "go1.28.0",
 			wantProblems: 1,
 			wantMentions: []string{"built by go1.28.0", "go1.27.4", "GOTOOLCHAIN=go1.27.4"},
+		},
+		{
+			// runtime.Version() appends the experiments after the release name
+			// when GOEXPERIMENT is not the default: the release, not the whole
+			// string, is what the pin names.
+			name:      "a Go built with a GOEXPERIMENT suffix is still the pinned release",
+			goMod:     "module example.com/m\n\ngo 1.27.4\n",
+			goVersion: "go1.27.4 X:boringcrypto",
+		},
+		{
+			name:         "a Go newer than the pin with a GOEXPERIMENT suffix is a problem naming it in full",
+			goMod:        "module example.com/m\n\ngo 1.27.4\n",
+			goVersion:    "go1.28.0 X:boringcrypto",
+			wantProblems: 1,
+			wantMentions: []string{"built by go1.28.0 X:boringcrypto", "go1.27.4", "GOTOOLCHAIN=go1.27.4"},
+		},
+		{
+			name:         "a devel Go names no release the pin could be",
+			goMod:        "module example.com/m\n\ngo 1.27.4\n",
+			goVersion:    "devel go1.28-abcdef Thu Jan 1 00:00:00 2026 +0000",
+			wantProblems: 1,
+			wantMentions: []string{"built by devel go1.28-abcdef", "go1.27.4", "GOTOOLCHAIN=go1.27.4"},
 		},
 	}
 
