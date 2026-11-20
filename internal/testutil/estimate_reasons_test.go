@@ -30,6 +30,10 @@ var sourceForms = []struct {
 	// test cannot read, so reading it fails and names it; empty when the source
 	// reads.
 	wantErr string
+	// wantErrMayBe is set for a constant whose value names another constant,
+	// whose type the test cannot see: the error calls it a constant that may be
+	// an estimate.Reason, rather than one it knows to be.
+	wantErrMayBe bool
 	// wantParseErr is set for a source the Go parser refuses, which reading it
 	// fails on too.
 	wantParseErr bool
@@ -199,7 +203,39 @@ const Joined Reason = "no-" + "fit"
 		wantErr: "Joined",
 	},
 	{
-		name: "an untyped constant built from a Reason cannot be read",
+		name: "an untyped iota is not a reason",
+		src: `package estimate
+
+type Reason string
+
+const (
+	NoFit Reason = "no-fit"
+	// Index counts the reasons: iota is predeclared and names a constant of no
+	// package, so a spec built from it alone is no Reason.
+	Index = iota
+)
+`,
+		want: []estimate.Reason{"no-fit"},
+	},
+	{
+		name: "an untyped true and false are not reasons",
+		src: `package estimate
+
+type Reason string
+
+const (
+	NoFit Reason = "no-fit"
+	// Estimated and Free are predeclared booleans, which name no constant of the
+	// module, so neither spec is a Reason.
+	Estimated = true
+	Free      = false
+)
+`,
+		want: []estimate.Reason{"no-fit"},
+	},
+	{
+		name:         "an untyped constant built from a Reason cannot be read",
+		wantErrMayBe: true,
 		src: `package estimate
 
 type Reason string
@@ -214,7 +250,8 @@ const (
 		wantErr: "Aliased",
 	},
 	{
-		name: "an untyped constant built from a Reason and a string cannot be read",
+		name:         "an untyped constant built from a Reason and a string cannot be read",
+		wantErrMayBe: true,
 		src: `package estimate
 
 type Reason string
@@ -227,6 +264,23 @@ const (
 )
 `,
 		wantErr: "NoRegion",
+	},
+	{
+		name: "an untyped constant naming a constant of another package cannot be read",
+		src: `package estimate
+
+import "example.com/catalog"
+
+type Reason string
+
+const (
+	// Qualified names catalog's constant: a qualified identifier is still one
+	// the test cannot see the type of, so it fails rather than skip it.
+	Qualified = catalog.NoFit
+)
+`,
+		wantErr:      "Qualified",
+		wantErrMayBe: true,
 	},
 	{
 		name: "another constant cannot be read",
@@ -242,7 +296,8 @@ const (
 		wantErr: "Alias",
 	},
 	{
-		name: "an untyped constant naming another untyped constant cannot be read",
+		name:         "an untyped constant naming another untyped constant cannot be read",
+		wantErrMayBe: true,
 		src: `package estimate
 
 type Reason string
@@ -304,6 +359,11 @@ func TestEstimateReasonsInSource(t *testing.T) {
 				if !strings.Contains(err.Error(), tc.wantErr) {
 					t.Errorf("estimateReasonsInSource returned the error %q, want it to name the constant %s",
 						err, tc.wantErr)
+				}
+
+				if tc.wantErrMayBe && !strings.Contains(err.Error(), "may be an estimate.Reason") {
+					t.Errorf("estimateReasonsInSource returned the error %q, want it to say the constant may be an "+
+						"estimate.Reason", err)
 				}
 
 				return
