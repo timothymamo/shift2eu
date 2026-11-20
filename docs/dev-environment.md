@@ -267,6 +267,60 @@ Host shift2eu-vm
   IdentityFile /Users/example/.lima/_config/user
 ```
 
+### Swap
+
+The VM has a swap file, `/swapfile`, so that a memory spike (`go test -race`, or builds in several worktrees
+at once) slows the agents down instead of sending the OOM killer after one of them mid-task: the VM ran
+with no swap and died with two units running (issue #294). It is a safety net, not extra memory: the
+provisioning sets `vm.swappiness = 10` in `/etc/sysctl.d/99-shift2eu-swap.conf`, so the kernel swaps only
+under real memory pressure and leaves the agents' working set in RAM.
+
+Under memory pressure the kernel can write pages of the agents' processes, their tokens included, to
+`/swapfile` unencrypted. The file is root-only (`0600`) in the guest and lives on the VM's disk image on the
+host, so the host's disk encryption (FileVault on the Mac) covers it; the low swappiness keeps such writes
+rare.
+
+Its size is the `swapSize` param in `dev/lima.yaml`, `4GiB` by default: a whole number of GiB, or `0GiB`
+for no swap file. The file takes that much of the VM's disk, counted against `VM_DISK` (40 GiB by default).
+When the disk has less than twice the size free, provisioning skips the swap file with a warning in
+`/var/log/cloud-init-output.log` and the VM comes up without it. A value that is no whole number of GiB
+fails the swap step with a message naming `swapSize`: Lima reports the provisioning as failed, and the other
+provisioning steps still run.
+
+The step runs at every boot, like the rest of the system provisioning: it leaves an active file of the
+right size alone, switches on one that is off, and recreates one of another size. It builds a new file under
+a temporary name and renames it into place only once it is ready, and when `swapon` refuses a file of the
+right size (one a crash cut short while it was created) it rebuilds it once, so an interrupted creation is
+repaired at the next boot; a file that still cannot be switched on fails the step with a message. A
+temporary `/swapfile.new` that a crash left behind is never swap: the next boot that sets up swap removes it
+before it checks the free space. Check it in the VM:
+
+```bash
+swapon --show                      # /swapfile, with its size
+free -h                            # the Swap: line
+cat /proc/sys/vm/swappiness        # 10
+```
+
+A VM keeps the template it was created with, so a VM created before the swap step has none: recreate it as
+after a version bump ([Every day](#every-day)), with `make vm-delete vm-create`. To change the size of a VM
+that has the step, set the param in its copy of the template and restart it, which stops every agent in it
+and runs the provisioning again (sizes in GiB, as `swapSize` takes them). The instance is `shift2eu` unless
+`LIMA_INSTANCE` names another, as for the make targets:
+
+```bash
+make vm-stop
+limactl edit --tty=false --set '.param.swapSize = "8GiB"' "${LIMA_INSTANCE:-shift2eu}"
+make vm-up
+```
+
+The new size takes effect only when the disk passes the free-space check above (the old file's size counts
+as free); otherwise the step skips with its warning and the old file stays active.
+
+Setting `0GiB` provisions no swap file but does not remove one already there: switch it off and delete it
+in the VM with `sudo swapoff /swapfile && sudo rm -f /swapfile`. A step that skips, at `0GiB` or for too
+little disk, also keeps `/etc/sysctl.d/99-shift2eu-swap.conf` if an earlier boot wrote it, which is harmless
+without swap.
+
 ### Troubleshooting: a Broken instance
 
 `limactl list` shows an instance as `Broken` when Lima cannot load it, for example when its directory (such
