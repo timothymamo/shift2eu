@@ -738,11 +738,16 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 		wantErr error
 		// wantSkip is the cause the run skips with, when it skips.
 		wantSkip *review.SkipReason
+		// wantBody are the phrases the skipped review's body must also hold,
+		// beyond the words of the skip itself: a part the run did review says
+		// so, and that its findings are not shown (issue #367).
+		wantBody []string
 	}{
 		{
 			name:     "a part unusable twice skips the whole review",
 			answers:  map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusableAnswer}},
 			wantSkip: skipReason(review.SkipNoUsableAnswer),
+			wantBody: []string{"findings are not shown", "1 other part"},
 		},
 		{
 			name:    "a part's model error fails the run",
@@ -827,6 +832,16 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 			for _, want := range []string{"skipped", "no usable answer twice"} {
 				if !strings.Contains(text, want) {
 					t.Errorf("the skipped review does not say %q; body:\n%s", want, post.review.Body)
+				}
+			}
+
+			// The review that left a part's finding out says how many parts it
+			// did review, in the package's own words: a review that left part of
+			// the change out without saying so would read as a full review
+			// (issue #367).
+			for _, want := range tc.wantBody {
+				if !strings.Contains(text, strings.ToLower(want)) {
+					t.Errorf("the skipped review does not say %q about the parts it did review; body:\n%s", want, post.review.Body)
 				}
 			}
 
@@ -1029,15 +1044,11 @@ func TestRunCancelsTheOtherPartsWhenOneFails(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
-	start := time.Now()
-
 	result, err := review.Run(ctx, gh, model, review.Config{
 		Number:       pr.Number,
 		BotLogin:     testBotLogin,
 		Instructions: splitInstructions,
 	})
-
-	elapsed := time.Since(start)
 
 	if !errors.Is(err, review.ErrModel) {
 		t.Fatalf("Run = %v, want an error wrapping ErrModel: the part that failed for real fails the whole run (issue #367)", err)
@@ -1047,10 +1058,9 @@ func TestRunCancelsTheOtherPartsWhenOneFails(t *testing.T) {
 		t.Errorf("Run = %v, which wraps context.Canceled: the run reports the part's failure, never the cancellation it caused (issue #367)", err)
 	}
 
-	if elapsed > 5*time.Second {
-		t.Errorf("Run took %s, want well under 5s: the failure cancels the part still asking the model at once, and no timeout is waited for (issue #367)", elapsed)
-	}
-
+	// That the blocked part saw context.Canceled is what proves the failure
+	// cancelled it at once; how long the run took is no part of the behaviour
+	// (issue #367).
 	blocked := model.blockedErrs()
 
 	if len(blocked) != 1 {

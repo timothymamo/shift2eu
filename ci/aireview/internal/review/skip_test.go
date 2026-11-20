@@ -150,6 +150,13 @@ func TestRunSkipsWhenTheModelGivesNoUsableAnswerTwice(t *testing.T) {
 				}
 			}
 
+			// The whole diff was reviewed in one part, and it gave no usable
+			// answer: no other part was reviewed, so the review leaves no
+			// finding of a part out and says nothing of any (issue #367).
+			if strings.Contains(text, "findings are not shown") {
+				t.Errorf("the skipped review of a diff of one part says findings are not shown, want no word of other parts: no other part was reviewed (issue #367); body:\n%s", post.review.Body)
+			}
+
 			// The skip of two unusable answers warns of the one cause a pull
 			// request itself can fix: content in the diff that makes the model
 			// answer unusably, a prompt injection among it (issue #376).
