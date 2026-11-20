@@ -221,3 +221,21 @@ The module script measured at this commit, Go 1.27.4 on linux/arm64: 8,917,668 b
   the one copy of the image, which Renovate updates with its digest.
 - Every lint run loads `test/browser`. A new import there must join `browser-smoke-test`'s allow list.
 - Milestone 3 runs the same smoke test on the bundle the release attests, before the deploy.
+
+## Amendment: the chromedp check may fetch, in an allow-listed environment (issues #391 and #395)
+
+2026-11-20. `TestNoProductBinaryReachesChromedp` lists `test/browser`'s dependencies with `go list`. Only
+that browser-tagged package imports `chromedp`, and `go test ./...` never builds it, so on an empty module
+cache (a release run) `chromedp` and `cdproto` are in no cache until that listing loads them. With
+`GOPROXY=off`, as the other architecture listings run, it failed (#391). The listing therefore fetches the
+modules go.sum pins through `GOPROXY`, as `go test` itself fetches its own: it is the one listing in
+`test/architecture` that may touch the network, and only on a cold cache.
+
+It does so in an environment built from an allow list, not this test's own minus a few names (#395):
+the variables `check`'s `inheritedEnv` takes for the toolchain, the caches and a temporary directory
+(all except `GOTOOLCHAIN`), `GOPROXY` passed through, and the HTTP proxy and certificate variables a fetch
+through it reads, plus the fixed `CGO_ENABLED=0`, `GOENV=off`, `GOFLAGS=-mod=readonly`,
+`GOTOOLCHAIN=local` and `GOWORK=off`. `GOSUMDB`, `GONOSUMDB`, `GOPRIVATE`, `GONOPROXY`, `GOINSECURE`,
+`GOEXPERIMENT`, `GOOS`, `GOARCH` and every name it does not know stay out, so nothing can make the fetch
+go around `GOPROXY` or go.sum, switch the toolchain, or change what is listed. `TestGoListProbeEnv` pins
+that environment.
