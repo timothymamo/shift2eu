@@ -39,6 +39,16 @@ type callOutcome struct {
 	Kind      string `json:"kind"`
 }
 
+// afterThrowOutcome is what the call after the throwing getter answered: whether
+// it threw, and whether it returned a report.
+type afterThrowOutcome struct {
+	Threw  bool   `json:"threw"`
+	Thrown string `json:"thrown"`
+	Error  string `json:"error"`
+	Kind   string `json:"kind"`
+	Report bool   `json:"report"`
+}
+
 // The names of the hostile calls the test makes, so its assertions can read one
 // outcome by name.
 const (
@@ -187,19 +197,50 @@ func TestGlueReturnsTextOnlyErrors(t *testing.T) {
 		}
 	}
 
-	// A getter that throws while the glue reads the options. The glue recovers
-	// what it can and the page's own call catches what it cannot, so the test
-	// accepts either an internal error or a thrown exception, and asserts the
-	// one property that matters: nothing hostile reached the page.
+	// A getter that throws while the glue reads the options object. syscall/js
+	// cannot catch a JavaScript exception, so not even the glue's recover sees
+	// it: the call throws to the page, whose own call catches it and shows a
+	// constant message (ADR 0036). A call that answered an internal error here
+	// would mean the glue caught what it cannot catch.
 	getter := byName[callThrowingGetter]
 	t.Logf("the call with a throwing getter answered %+v", getter)
+
+	if !getter.Threw {
+		t.Errorf("the call with a throwing getter answered %+v, want a thrown exception: a JavaScript exception a getter throws unwinds through the module and syscall/js cannot catch it (ADR 0036)", getter)
+	} else if getter.Thrown == "" {
+		t.Error("the call with a throwing getter threw an empty exception, so the page could not report anything")
+	}
+
+	// The module still answers after that throw: the same page's next call, with
+	// a valid inventory, returns a report rather than throwing again or leaving
+	// the module dead (ADR 0036).
+	after := eval[afterThrowOutcome](t, ctx, fmt.Sprintf(`(() => {
+	const entry = {threw: false, thrown: "", error: "", kind: "", report: false};
+	let result;
+	try {
+		result = globalThis.shift2euAssess(%s, {targets: ["ovhcloud"]});
+	} catch (failure) {
+		entry.threw = true;
+		entry.thrown = String(failure);
+		return entry;
+	}
+	if (result !== null && typeof result === "object") {
+		entry.error = typeof result.error === "string" ? result.error : "";
+		entry.kind = typeof result.kind === "string" ? result.kind : "";
+		entry.report = typeof result.markdown === "string" && result.markdown !== "" &&
+			typeof result.json === "string" && result.json !== "" &&
+			typeof result.html === "string" && result.html !== "";
+	}
+	return entry;
+})()`, jsString(schemaVersion1Inventory)))
+
 	switch {
-	case getter.Threw:
-		if getter.Thrown == "" {
-			t.Error("the call with a throwing getter threw an empty exception, so the page could not report anything")
-		}
-	case getter.Kind != "internal" || getter.ErrorType != "string" || getter.Error == "":
-		t.Errorf("the call with a throwing getter answered %+v, want an internal error with a constant message or an exception the page's own call catches", getter)
+	case after.Threw:
+		t.Errorf("the assessment after the throwing getter threw %q, want a report: the module stays usable for the page's next run (ADR 0036)", after.Thrown)
+	case after.Error != "" || after.Kind != "":
+		t.Errorf("the assessment after the throwing getter answered the %q error %q, want a report: a valid inventory assessed on the same page", after.Kind, after.Error)
+	case !after.Report:
+		t.Errorf("the assessment after the throwing getter returned %+v, want markdown, json and html for a valid inventory: the module answers normally after the throw", after)
 	}
 
 	// None of the calls inserted anything: the module returns data and the page
