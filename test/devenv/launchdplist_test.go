@@ -12,6 +12,7 @@ package devenv_test
 import (
 	"bytes"
 	"encoding/xml"
+	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
@@ -115,6 +116,22 @@ func (f *launchdFixture) assertNoLeaks(t *testing.T, streams ...string) {
 	}
 
 	assertNoSecrets(t, "the argv of the commands the script ran", f.sb.argvLogText(t), secrets)
+}
+
+// accountHome creates the account's home directory for a test, as /Users/<account> is on the Mac: the generator
+// derives the clone from $0 and HOME from the environment the install hands it, so a home of the test's own
+// stands in for the real one, which no test may create. It is 0700 from a root of its own, because t.TempDir is
+// 0777 minus the umask: under this VM's umask that is group-writable, and the trusted path rule refuses the
+// script's path inside it, rightly and not because of what the test pins (issue #227).
+func accountHome(t *testing.T) string {
+	t.Helper()
+
+	home := filepath.Join(newSandboxRoot(t), "Users", agentsAccount)
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatalf("create the account's home %s: %v", home, err)
+	}
+
+	return home
 }
 
 // launchdRepoRoot is the absolute path of the repository these tests run in, with symlinks resolved the way
@@ -614,6 +631,226 @@ func TestAgentsTokenLaunchdPlistRefusesToRunAsRoot(t *testing.T) {
 	}
 
 	f.assertNoLeaks(t, stdout, stderr)
+}
+
+// TestAgentsTokenLaunchdPlistAccountMode pins the plist the account mode renders (ADR 0031, update of 2026-11-19,
+// 2; ADR 0034, update of 2026-11-19, c): the generator runs as the account, from the account's own clone, so
+// UserName is that account and ProgramArguments and WorkingDirectory are under its home; in SSH mode the four
+// SHIFT2EU_AGENTS_VM_SSH_* variables go into EnvironmentVariables, and PATH is exactly /usr/bin:/bin:/usr/sbin:/sbin
+// with no /opt/homebrew/bin, which the maintainer's uid owns and where a planted openssl, curl or ssh would run as
+// the account with the key. A partial set of the four is refused, naming the missing ones, as the token script
+// refuses it.
+func TestAgentsTokenLaunchdPlistAccountMode(t *testing.T) {
+	t.Parallel()
+
+	home := accountHome(t)
+	clone := filepath.Join(home, "shift2eu-host")
+	script := filepath.Join(clone, launchdScript)
+	writeFileMode(t, script, []byte(readRepoFile(t, launchdScript)), 0o755)
+
+	secrets := filepath.Join(home, ".config", "shift2eu")
+	sshKey := filepath.Join(secrets, "agents-vm-ssh-key")
+	writeFileMode(t, sshKey, []byte("an invented ed25519 private key, never a real one\n"), 0o600)
+
+	knownHosts := filepath.Join(secrets, "known-hosts-shift2eu")
+	writeFileMode(t, knownHosts, []byte("shift2eu-vm-shift2eu ssh-ed25519 AAAA-invented-host-key\n"), 0o600)
+
+	newAccountFixture := func(t *testing.T) *launchdFixture {
+		t.Helper()
+
+		f := newLaunchdFixture(t, "shift2eu", xdgStateHomeUnset)
+		f.env["HOME"] = home
+		f.env["SHIFT2EU_AGENTS_VM_SSH_PORT"] = sshModePort
+		f.env["SHIFT2EU_AGENTS_VM_SSH_USER"] = sshModeUser
+		f.env["SHIFT2EU_AGENTS_VM_SSH_KEY"] = sshKey
+		f.env["SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS"] = knownHosts
+		f.sb.useFakeIDName(t, f.env, agentsAccount)
+
+		return f
+	}
+
+	t.Run("SSH mode renders the account's job", func(t *testing.T) {
+		t.Parallel()
+
+		f := newAccountFixture(t)
+
+		stdout, stderr, err := f.sb.run(t, script, []string{"plist"}, f.env, "")
+		if err != nil {
+			t.Fatalf("sh %s plist as the account exited %v\nstdout: %s\nstderr: %s", launchdScript, err, stdout, stderr)
+		}
+
+		f.assertNoLeaks(t, stdout, stderr)
+
+		dict := parsePlist(t, stdout)
+
+		if got := plistString(t, dict, "UserName"); got != agentsAccount {
+			t.Errorf("the plist's UserName is %q, want the account that rendered it, %q: in account mode the job runs as the account, which owns the key and the clone (ADR 0034, update of 2026-11-19, c)", got, agentsAccount)
+		}
+
+		wantArgs := []string{
+			"/bin/sh",
+			"-c",
+			`umask 077 && mkdir -p "${1%/*}" && exec /bin/sh "$0" refresh >>"$1" 2>&1`,
+			filepath.Join(clone, agentsMintScript),
+			filepath.Join(home, ".local", "state", "shift2eu", "agents-token-refresh-shift2eu.log"),
+		}
+
+		if diff := cmp.Diff(wantArgs, plistStrings(t, plistList(t, dict, "ProgramArguments"))); diff != "" {
+			t.Errorf("the plist's ProgramArguments do not name the account's own clone (-want +got):\n%s\non the Mac they are %s, which is /Users/%s/shift2eu-host (ADR 0034, update of 2026-11-19, c)", diff, filepath.Join(clone, agentsMintScript), agentsAccount)
+		}
+
+		if got := plistString(t, dict, "WorkingDirectory"); got != clone {
+			t.Errorf("the plist's WorkingDirectory is %q, want the account's clone %q", got, clone)
+		}
+
+		env := plistMap(t, dict, "EnvironmentVariables")
+
+		if got, want := plistString(t, env, "PATH"), "/usr/bin:/bin:/usr/sbin:/sbin"; got != want {
+			t.Errorf("the plist's PATH is %q, want exactly %q: /opt/homebrew/bin belongs to the maintainer's uid, and a planted openssl, curl or ssh there would run as the account with the key (ADR 0034, update of 2026-11-19, c)", got, want)
+		}
+
+		wantEnv := map[string]string{
+			"LIMA_INSTANCE":                       "shift2eu",
+			"SHIFT2EU_AGENTS_APP_ID":              launchdAppID,
+			"SHIFT2EU_AGENTS_APP_INSTALLATION_ID": launchdInstallationID,
+			"SHIFT2EU_AGENTS_APP_KEY_FILE":        f.key.path,
+			"SHIFT2EU_AGENTS_VM_SSH_PORT":         sshModePort,
+			"SHIFT2EU_AGENTS_VM_SSH_USER":         sshModeUser,
+			"SHIFT2EU_AGENTS_VM_SSH_KEY":          sshKey,
+			"SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS":  knownHosts,
+			"HOME":                                home,
+		}
+
+		for name, want := range wantEnv {
+			if got := plistString(t, env, name); got != want {
+				t.Errorf("the plist's EnvironmentVariables give %s=%q, want %q: a launchd job inherits no environment, so the plist supplies the SSH mode's variables too (ADR 0034, update of 2026-11-19, c)", name, got, want)
+			}
+		}
+
+		if strings.Contains(stdout, "/opt/homebrew/bin") {
+			t.Errorf("the account's plist names /opt/homebrew/bin, which the maintainer's uid owns (ADR 0034, update of 2026-11-19, c):\n%s", stdout)
+		}
+	})
+
+	t.Run("a partial SSH configuration is refused", func(t *testing.T) {
+		t.Parallel()
+
+		f := newAccountFixture(t)
+		delete(f.env, "SHIFT2EU_AGENTS_VM_SSH_KEY")
+
+		stdout, stderr, err := f.sb.run(t, script, []string{"plist"}, f.env, "")
+		if err == nil {
+			t.Fatalf("sh %s plist exited 0 with three of the four SHIFT2EU_AGENTS_VM_SSH_* variables set, so the job would mint in neither mode: a partial set is refused, naming the missing ones, as the token script refuses it (ADR 0034, update of 2026-11-19, c)\nstdout: %s\nstderr: %s", launchdScript, stdout, stderr)
+		}
+
+		if !strings.Contains(stderr, "SHIFT2EU_AGENTS_VM_SSH_KEY") {
+			t.Errorf("the refusal of a partial SSH configuration does not name the missing SHIFT2EU_AGENTS_VM_SSH_KEY:\n%s", stderr)
+		}
+
+		if strings.TrimSpace(stdout) != "" {
+			t.Errorf("the generator printed a plist although it refused a partial SSH configuration:\n%s", stdout)
+		}
+
+		f.assertNoLeaks(t, stdout, stderr)
+	})
+}
+
+// TestAgentsTokenLaunchdTrustedPathChecksACLs pins audit 3 and review 11 of issue #227 part 2 for the generator:
+// it applies the same rule the refresh does, so a path whose ACL allows another account is refused at install time
+// - naming the path and the ACL - and a deny-only ACL, which every macOS home carries, is accepted. The mode a
+// Mac's ls ends with @ when the entry carries extended attributes beside the ACL is read too (the security
+// audit's second pass).
+func TestAgentsTokenLaunchdTrustedPathChecksACLs(t *testing.T) {
+	t.Parallel()
+
+	const (
+		allowEntry = " 0: user:_shift2euagents allow read,write\n"
+		denyEntry  = " 0: group:everyone deny delete\n"
+	)
+
+	home := accountHome(t)
+	clone := filepath.Join(home, "shift2eu-host")
+	script := filepath.Join(clone, launchdScript)
+	writeFileMode(t, script, []byte(readRepoFile(t, launchdScript)), 0o755)
+
+	secrets := filepath.Join(home, ".config", "shift2eu")
+	sshKey := filepath.Join(secrets, "agents-vm-ssh-key")
+	writeFileMode(t, sshKey, []byte("an invented ed25519 private key, never a real one\n"), 0o600)
+
+	knownHosts := filepath.Join(secrets, "known-hosts-shift2eu")
+	writeFileMode(t, knownHosts, []byte("shift2eu-vm-shift2eu ssh-ed25519 AAAA-invented-host-key\n"), 0o600)
+
+	newAccountFixture := func(t *testing.T) *launchdFixture {
+		t.Helper()
+
+		f := newLaunchdFixture(t, "shift2eu", xdgStateHomeUnset)
+		f.env["HOME"] = home
+		f.env["SHIFT2EU_AGENTS_VM_SSH_PORT"] = sshModePort
+		f.env["SHIFT2EU_AGENTS_VM_SSH_USER"] = sshModeUser
+		f.env["SHIFT2EU_AGENTS_VM_SSH_KEY"] = sshKey
+		f.env["SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS"] = knownHosts
+		f.sb.useFakeIDName(t, f.env, agentsAccount)
+
+		return f
+	}
+
+	cases := []struct {
+		name     string
+		mode     string // the trailer a Mac's ls prints: + for an ACL, @ for extended attributes beside it
+		entries  string
+		accepted bool
+	}{
+		{name: "an ACL that allows another account", mode: "+", entries: allowEntry},
+		{name: "a deny-only ACL", mode: "+", entries: denyEntry, accepted: true},
+		{name: "an extended-attribute mode over an ACL that allows another account", mode: "@", entries: allowEntry},
+		{name: "an extended-attribute mode over a deny-only ACL", mode: "@", entries: denyEntry, accepted: true},
+		{name: "an extended-attribute mode with no ACL", mode: "@", accepted: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAccountFixture(t)
+			aclProbe(t, f.sb, f.env, f.key.path, tc.mode, tc.entries)
+
+			stdout, stderr, err := f.sb.run(t, script, []string{"plist"}, f.env, "")
+
+			if tc.accepted {
+				if err != nil {
+					t.Fatalf("sh %s plist refused a path whose only ACL entry denies, exiting %d: a deny grants nothing, and every macOS home carries one, so the rule accepts it (issue #227 part 2, audit 3)\nstdout: %s\nstderr: %s",
+						launchdScript, exitStatusOf(t, err), stdout, stderr)
+				}
+
+				if strings.TrimSpace(stdout) == "" {
+					t.Errorf("the generator printed no plist for a path with a deny-only ACL")
+				}
+
+				f.assertNoLeaks(t, stdout, stderr)
+
+				return
+			}
+
+			if err == nil {
+				t.Fatalf("sh %s plist exited 0 although the App key's ACL allows another account: the generator applies the trusted path rule at install time, so the job is never rendered for a path another account controls (issue #227 part 2, audit 3)\nstdout: %s\nstderr: %s",
+					launchdScript, stdout, stderr)
+			}
+
+			if !strings.Contains(stderr, "ACL") {
+				t.Errorf("the refusal does not say the entry's ACL is what failed, so a maintainer cannot tell why the path is refused:\n%s", stderr)
+			}
+
+			if !mentionsOneOf(stderr, f.key.path, filepath.Dir(f.key.path)) {
+				t.Errorf("the refusal names neither %s nor its directory, so a maintainer cannot tell which path to fix:\n%s", f.key.path, stderr)
+			}
+
+			if strings.TrimSpace(stdout) != "" {
+				t.Errorf("the generator printed a plist although it refused a path the rule rejects:\n%s", stdout)
+			}
+
+			f.assertNoLeaks(t, stdout, stderr)
+		})
+	}
 }
 
 // plistValue is one value of a parsed property list: the kinds these tests read, and no more.

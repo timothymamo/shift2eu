@@ -74,6 +74,313 @@
 > the workspace, `make deck` typed by hand, or credentials in the `.envrc` above the workspace as current,
 > this update supersedes them.
 
+> **Update (issue #227 part 2), 2026-11-19.** This supersedes "What part 2 leaves open" above. **The App's
+> key moves to a separate macOS account, `_shift2euagents`, which owns it, runs the refresh as the
+> LaunchDaemon's `UserName` ([ADR 0034](0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md)) from
+> a clone of its own, and writes the token into the VM over the VM's SSH port with an SSH key of its own,
+> authorised in the VM only to run one fixed writer.** The maintainer's uid can no longer read the key
+> without a `sudo` password prompt. Today's mode, the refresh as the maintainer through `limactl`, stays
+> as the **single-account mode**, the fallback until the maintainer has switched (6 below).
+>
+> 1. **The account.** `_shift2euagents`: a hidden, standard (not admin) account with no password and no
+>    login shell. The underscore marks a role account, as macOS's own daemons have (`_www`), and keeps it
+>    out of the login window with its uid below 500. Its shell is `/usr/bin/false`, so `sudo -u
+>    _shift2euagents -i` (which ADR 0034 c named) cannot work: every command run as it is
+>    `sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents
+>    PATH=/usr/bin:/bin:/usr/sbin:/sbin <tool by full path>`, run from `/`, which runs the command directly,
+>    never a login shell, with `HOME` set to its home (`-H`; macOS's sudoers keeps the caller's `HOME`
+>    otherwise), none of the maintainer's environment (`env -i`: no `PATH`, `GIT_*`, pager or `DYLD_*` of
+>    the maintainer's reaches it) and no tool the maintainer's uid owns (the full path; Homebrew's `git`
+>    is the maintainer's). The make targets' own `sudo -u <account>` calls keep `-H`, `/usr/bin/env -i` and
+>    tools by full path but run from make's working directory, not `/`: `make agents-token-refresh-install`
+>    passes this `HOME` and `PATH` and the job's variables (5 below) to `/bin/sh
+>    <clone>/dev/agents-token-launchd.sh plist`, and `make vm-agents-token-ssh` (4 below) passes only
+>    `PATH=/usr/bin:/bin`, no `HOME`, to `/bin/cat` and `/bin/sh`. Created once by
+>    the maintainer with `sudo` (`docs/dev-environment.md` carries the runbook; no agent ever runs it,
+>    and no make target creates or deletes an account): a group and a user of the same name and id, the
+>    first free id from 450 to 499 (`dscl . -list /Users UniqueID`, `dscl . -list /Groups
+>    PrimaryGroupID`), `UserShell /usr/bin/false`, `Password '*'`, `IsHidden 1`, `RealName "shift2eu
+>    agents App"`, `NFSHomeDirectory /Users/_shift2euagents`, created with `dscl . -create`, then the
+>    home created by `sudo mkdir -m 0700 /Users/_shift2euagents` and `sudo chown
+>    _shift2euagents:_shift2euagents` on it. `sysadminctl -addUser` is not used: it creates a login
+>    account with a password and a shell. The make targets take the name from `SHIFT2EU_AGENTS_ACCOUNT`
+>    (2 below) and derive its home as `/Users/<account>`; they refuse a name that is empty, does not
+>    begin with a letter or `_` (so no `-`, `.`, `..` or digit first), holds anything but letters, digits,
+>    `.`, `_` and `-`, or is `root` or the maintainer's own (`id -un`). They check the account's kind too,
+>    before any `sudo` (issue #227 part 2, the security audit's second pass): they refuse unless
+>    `dscl . -read /Users/<account> UniqueID` reads a `UniqueID` from 1 to 499 and `dseditgroup -o
+>    checkmember -m <account> admin` gives its explicit negative (a non-zero status with an answer that
+>    begins `no `), naming the check and `SHIFT2EU_AGENTS_ACCOUNT`, never a value: a login account or an
+>    admin would put the key back in the maintainer's silent reach. The admin check fails closed: an exit 0,
+>    a `yes`, an error without an answer or a missing `dseditgroup` refuses the account. The one exception
+>    is the kill switch, `make agents-token-refresh-uninstall`: it keeps the check of the name, but a
+>    failing check of the account's kind only makes it warn, naming the check, and boot the job out anyway,
+>    so a job loaded for such an account can always be removed. The runbook's passing check of the account
+>    confirms the same by hand.
+> 2. **Where everything lives, and the new trust boundary.** Everything that holds or runs with the key
+>    is owned by the account, inside its home, out of reach of the maintainer's uid:
+>
+>    | Path | What | Mode |
+>    |---|---|---|
+>    | `/Users/_shift2euagents` | its home | 0700 |
+>    | `/Users/_shift2euagents/shift2eu-host` | **its host clone**: the code the job runs | owned by it |
+>    | `/Users/_shift2euagents/.config/shift2eu/` | its secrets directory | 0700 |
+>    | `.../agents-app.pem` | the App's private key (`SHIFT2EU_AGENTS_APP_KEY_FILE`) | 0600 |
+>    | `.../agents-vm-ssh-key`, `.../agents-vm-ssh-key.pub` | its SSH key to the VM, ed25519, no passphrase | 0600, 0644 |
+>    | `.../known-hosts-<instance>` | the VM's pinned host key, one file per VM instance | 0600 |
+>    | `/Users/_shift2euagents/.local/state/shift2eu/` | the job's lock and log (ADR 0034's paths, under its `HOME`) | 0700, 0600 |
+>
+>    The paths under `.config/shift2eu` are fixed: in account mode the make targets derive them from the
+>    account's home and pass them to the job, and set no `SHIFT2EU_AGENTS_APP_KEY_FILE` of the
+>    maintainer's. **The boundary is now the account's files, not the maintainer's host clone.** Whoever
+>    can write the account's clone, its secrets directory or any directory above them controls what runs
+>    with the key, so the account's clone replaces the maintainer's: the maintainer's host clone keeps
+>    running every other host target (the `vm-*` targets, `deck`, `gate-check`) and renders and installs
+>    the plist under `sudo`, but no code of it ever runs with the key. **Trusted path rule:** a file and
+>    each directory above it, up to `/`, is owned by the running uid or by root, and has no group or other
+>    write bit, except a root-owned directory with the sticky bit (`/tmp`), where no one else can rename an
+>    entry, and carries no ACL with an `allow` entry: a Mac's `ls -ldn` ends such an entry's mode with `+`,
+>    or with `@` when the entry also carries extended attributes, and under either the rule reads the entries with `ls -lde` and refuses any `allow`, which could grant another
+>    account what the mode bits deny, while a deny-only ACL (`group:everyone deny delete`, on every macOS
+>    home) grants nothing and is accepted. The account mode checks it with `ls -ldn` (a stock Mac has no
+>    GNU `stat`) and `id -u`, on the
+>    App's key, the SSH key, the known-hosts file and the script itself (`$0`), at install time (as the
+>    account, by `dev/agents-token-launchd.sh plist`) and again at every start of the refresh (by
+>    `dev/agents-app-token.sh`, before it mints), and refuses with the path that fails and why ("owned by
+>    uid <n>", "group-writable", "other-writable", "an ACL with an allow entry"), never a file's content. The key and the SSH key must
+>    also have no group or other bit at all (0600 or 0400). **Updating the account's clone** is the
+>    maintainer's step, under `sudo`, from GitHub only:
+>    `cd / && sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents
+>    PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat -C /Users/_shift2euagents/shift2eu-host
+>    pull --ff-only`, then `sudo launchctl kickstart -k system/<label>` to run the pulled code now. It is
+>    cloned once the same way (`cd / && sudo -u _shift2euagents -H /usr/bin/env -i
+>    HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat clone
+>    https://github.com/timothymamo/shift2eu.git /Users/_shift2euagents/shift2eu-host`). `/usr/bin/git` is
+>    a shim for the developer directory `xcode-select -p` names, which the runbook checks is root's. git runs as the account there, with the account's own (empty)
+>    git config and the clone's own hooks, which the maintainer's uid cannot write.
+>    **The key** is put there by the maintainer: a **new** private key generated on the App's page, moved
+>    in with `sudo install -o _shift2euagents -g _shift2euagents -m 0600 <download>
+>    /Users/_shift2euagents/.config/shift2eu/agents-app.pem`, the download then removed, and **every
+>    older key deleted on the App's page**: a key the maintainer's uid ever held must be revoked, or
+>    moving it gains nothing. The download sits in the maintainer's `~/Downloads` for that moment; that
+>    window is accepted. For that moment the download is in the maintainer's reach, usually on another
+>    machine too, carried to the Mini as a 0600 temporary file and removed on both (local Time Machine
+>    snapshots taken in the window deleted; rotating the key closes it for good).
+> 3. **Transport: SSH, not limactl.** The account cannot run `limactl` against the maintainer's
+>    `~/.lima`, so it connects to the VM's forwarded SSH port on `127.0.0.1` itself. Four variables choose
+>    and configure it in `dev/agents-app-token.sh`: `SHIFT2EU_AGENTS_VM_SSH_PORT`,
+>    `SHIFT2EU_AGENTS_VM_SSH_USER` (the VM user, Lima's default the maintainer's Mac user name),
+>    `SHIFT2EU_AGENTS_VM_SSH_KEY` and `SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS` (5 below). `vm_send` then runs,
+>    in this order, with nothing else on its command line:
+>
+>    ```sh
+>    ssh -F /dev/null -T -p <port> -l <user> -i <key> \
+>      -o BatchMode=yes -o IdentitiesOnly=yes -o IdentityAgent=none \
+>      -o StrictHostKeyChecking=yes -o UserKnownHostsFile=<known hosts> -o GlobalKnownHostsFile=/dev/null \
+>      -o HostKeyAlias=shift2eu-vm-<instance> -o CheckHostIP=no -o UpdateHostKeys=no \
+>      -o ControlMaster=no -o ControlPath=none -o ForwardAgent=no -o ForwardX11=no \
+>      -o ClearAllForwardings=yes -o PermitLocalCommand=no \
+>      -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=2 -o LogLevel=ERROR \
+>      127.0.0.1 agents-token-write
+>    ```
+>
+>    `-F /dev/null` reads no user or system `ssh_config`; `HostKeyAlias` pins the host key under the
+>    instance's name, not `[127.0.0.1]:<port>`, so a port change needs no new pin, and each instance's
+>    key stays its own. The token, expiry, name and email go on ssh's standard input, four lines exactly
+>    as on `limactl`'s today, never in an argument; `agents-token-write` is a placeholder the VM ignores
+>    (the forced command, 4 below, runs instead). The test hook for the binary is `SHIFT2EU_AGENTS_SSH`
+>    (default `ssh`), as `LIMACTL` is for limactl. The writer's exit statuses carry through ssh unchanged:
+>    3 is permanent and 4 transient, as today; **255** is ssh's own failure (the VM down, the port closed,
+>    the key not authorised, a host key that does not match) and is transient, with one line that names
+>    every cause without a value: "could not write the <what> into the VM <instance> over SSH
+>    (127.0.0.1:<port>, ssh exit 255): is it running (make vm-up)? If ssh said `Host key verification
+>    failed` above, the VM's host key changed (a recreated VM): pin it again with make
+>    vm-agents-token-ssh; if it said `Permission denied`, the VM does not authorise the account's key: run
+>    make vm-agents-token-ssh". ssh's own standard error goes to the log as it is. A host key mismatch
+>    aborts before ssh authenticates or opens a session, so nothing is sent to whatever answered.
+>    `check_vm` reads the same `clock=` and `gh-wrapper=missing` lines. In SSH mode the script runs no
+>    `limactl` at all, and `LIMA_INSTANCE` names only the alias, the lock, the log and the messages.
+>    **The port must be fixed.** Lima picks a random SSH port at every start unless the instance sets
+>    `ssh.localPort`, so the maintainer pins it once per instance while the VM is stopped:
+>    `limactl stop <instance>`, `limactl edit --set '.ssh.localPort = 48022' <instance>`,
+>    `limactl start <instance>` (48022 for the first instance, 48023 for the next, and so on: below
+>    macOS's ephemeral range, 49152 and up, so no outgoing connection takes it while the VM is down).
+>    `make vm-agents-token-ssh` refuses unless `limactl list --format '{{.SSHLocalPort}}' <instance>`
+>    prints exactly `SHIFT2EU_AGENTS_VM_SSH_PORT`.
+> 4. **The VM side: one root-owned writer, one key that can run only it.** The writer is today's
+>    `vm_write` text, installed as **`/usr/local/libexec/shift2eu/agents-token-write`** (root, mode 0755),
+>    beside the real gh. Its single source stays `dev/agents-app-token.sh`: `dev/agents-app-token.sh
+>    vm-writer` prints `#!/bin/sh`, a line, then `vm_write` byte for byte, and nothing else (the tests
+>    compare the two). The account's key is authorised in a root-owned file of its own, never in
+>    `~/.ssh/authorized_keys`, which cloud-init and Lima manage: the drop-in
+>    **`/etc/ssh/sshd_config.d/50-shift2eu-agents-token.conf`** holds the single line
+>    `AuthorizedKeysFile .ssh/authorized_keys .ssh/authorized_keys2 /etc/ssh/shift2eu-agents-token/%u.keys`
+>    (Ubuntu's `sshd_config` includes the drop-ins first, and nothing else sets the keyword, so Lima's own
+>    key still works), and **`/etc/ssh/shift2eu-agents-token/<vm user>.keys`** (root, 0644, in a root
+>    0755 directory; `%u` makes the file apply to that user only, so the key cannot log in as root or
+>    anyone else) holds exactly one line:
+>
+>    ```
+>    restrict,command="/usr/local/libexec/shift2eu/agents-token-write /usr/local/libexec/shift2eu/gh" ssh-ed25519 <base64> shift2eu-agents-token
+>    ```
+>
+>    `restrict` turns off port, agent and X11 forwarding, the pty and `~/.ssh/rc`; the forced command runs
+>    whatever the client asked for, with the real gh's path as the writer's `$1` as today. No `from=`:
+>    Lima's port forward is relayed by its host agent, so every connection from the Mac, the
+>    maintainer's `limactl shell` included, arrives from the same user-mode network address; a `from=`
+>    would tell nothing apart, and is not used. **`make vm-agents-token-ssh`**, a new host target run by
+>    the maintainer from the maintainer's host clone (in `HOST_TARGETS`), sets it up and is safe to run
+>    again (after `make vm-delete vm-create`, after a new SSH key). It needs `SHIFT2EU_AGENTS_ACCOUNT` and
+>    `SHIFT2EU_AGENTS_VM_SSH_PORT`, and in this order, stopping at the first failure:
+>    1. checks the port (3 above);
+>    2. reads the account's public key with `sudo -u <account> -H /usr/bin/env -i PATH=/usr/bin:/bin
+>       /bin/cat /Users/<account>/.config/shift2eu/agents-vm-ssh-key.pub` (printed with a `+ ` before it, like
+>       every `sudo` the targets run) and refuses anything but one line `ssh-ed25519 <base64>` with an
+>       optional comment of letters, digits and `@ . _ -`: no options, quotes, commas or second line can
+>       reach the keys file. The comment is replaced with `shift2eu-agents-token`;
+>    3. generates, with `sh dev/vm-agents-token-ssh.sh <writer file> <key line> <vm user>` (the writer
+>       from `dev/agents-app-token.sh vm-writer`, in a temporary file), a script whose last line is the
+>       call `vm_agents_token_ssh`, sends it only when it is whole, over `limactl shell --workdir /
+>       <instance> sh -s`'s standard input, exactly as `make vm-gh-wrapper` does, and fails unless the
+>       VM's output holds the line `vm-agents-token-ssh: done`. The VM's stdout and stderr are captured
+>       together and echoed reduced to printable ASCII, tab and newline (all three VM targets do so), so
+>       code in the VM cannot drive the maintainer's terminal with an escape sequence or a C1 control;
+>       when `limactl` exits non-zero they go, filtered the same way, to make's stderr, and the recipe
+>       fails with that status (make reports it as `Error <status>` and exits non-zero). In the VM the script, with `sudo`,
+>       installs the writer as `/usr/local/libexec/shift2eu/.agents-token-write.new` after `sh -n`, then
+>       `mv`s it into place; writes the keys file and the drop-in the same way (a `.new` beside each,
+>       then `mv`); runs `sshd -t` and, only when that passes, `systemctl try-reload-or-restart
+>       ssh.service` (implementation note below; on a failing
+>       `sshd -t` it removes the drop-in again and fails); and prints the keys line it wrote and the VM's
+>       `/etc/ssh/ssh_host_ed25519_key.pub` as `host-key=ssh-ed25519 <base64>`;
+>    4. pins the host key: writes `shift2eu-vm-<instance> ssh-ed25519 <base64>` to
+>       `/Users/<account>/.config/shift2eu/known-hosts-<instance>` as the account, through `sudo -u
+>       <account> -H /usr/bin/env -i PATH=/usr/bin:/bin /bin/sh -c 'umask 077 && /bin/cat >"$1.new" &&
+>       /bin/mv -f "$1.new" "$1"' pin <path>` (printed the same way), the line on standard input. The host key is read through `limactl shell`, which reaches the real VM, so the
+>       pin needs no trust on first use;
+>    5. prints the keys line, the pin, and the next step (`make agents-token-refresh-install`, or
+>       `sudo launchctl kickstart -k system/<label>`, then `sudo -k`, when the job is loaded), and ends
+>       with `sudo -k`, on success and on failure.
+>
+>    **`make vm-agents-token-ssh-uninstall`** removes the drop-in, the keys file and the writer (with
+>    `sudo`, in the VM, over `limactl shell`'s standard input, the same whole-script check and a
+>    `vm-agents-token-ssh-uninstall: done` line; its script comes from `sh dev/vm-agents-token-ssh.sh
+>    --uninstall <vm user>`), reloads sshd, and leaves the account's files alone.
+>    Residual: the agents run as the VM user, who has passwordless `sudo` (ADR 0017), so they can change
+>    the writer, the keys file or sshd. That gains them nothing they lack: the token lands in their own
+>    home either way, and the key never enters the VM.
+> 5. **Mode choice, configuration and refusals.** `dev/agents-app-token.sh` is in **SSH mode** when all
+>    four `SHIFT2EU_AGENTS_VM_SSH_*` variables are set and not empty, in **limactl mode** (today's, the
+>    single-account mode) when none is, and refuses anything between, before it mints, as a permanent
+>    failure (status 1, with `agents App token refresh stopped` under `refresh`): "SSH mode needs all of
+>    SHIFT2EU_AGENTS_VM_SSH_PORT, SHIFT2EU_AGENTS_VM_SSH_USER, SHIFT2EU_AGENTS_VM_SSH_KEY and
+>    SHIFT2EU_AGENTS_VM_SSH_KNOWN_HOSTS; not set: <the names>". In SSH mode it also refuses, the same way and
+>    naming the variable, never its value when it fails: a port that is not 1 to 65535 in digits; a user
+>    that is not letters, digits, `.`, `_` and `-` beginning with a letter, digit or `_`; a key or
+>    known-hosts path that is not absolute, is missing, a symlink or not a regular file, is not owned by
+>    the running uid, or fails the trusted path rule (2 above); a key with any group or other bit; and
+>    the App's key and the script itself failing that rule. The make side has its own switch:
+>    **`SHIFT2EU_AGENTS_ACCOUNT`**, set in the maintainer's host clone's `.envrc` with
+>    `SHIFT2EU_AGENTS_VM_SSH_PORT` (and `SHIFT2EU_AGENTS_VM_SSH_USER` when the VM user is not the
+>    maintainer's `id -un`, its default), turns on the **account mode** of the install targets (ADR 0034,
+>    update of 2026-11-19), which derive the key, SSH key and known-hosts paths from the account's home.
+>    In account mode `make agents-token`, `make agents-token-refresh` and
+>    `make agents-token-refresh-start` refuse before they run anything: "the refresh runs as <account>,
+>    which holds the App's key; the maintainer cannot mint: run sudo launchctl kickstart -k
+>    system/<label> to mint now (docs/dev-environment.md)". A `SHIFT2EU_AGENTS_APP_KEY_FILE` still set
+>    in account mode gets a warning from every token target: the account's key is the derived path, the
+>    variable should go from `.envrc`, and the file it names should be deleted and its key deleted on the
+>    App's page.
+> 6. **Single-account mode stays as the fallback until the switch, then goes.** It is what runs today and
+>    what a Mac without the account still needs, so this change keeps it and its tests unchanged. Once
+>    the maintainer has switched the Mac Mini and the runbook's checks have passed across a reboot, a
+>    follow-up issue removes it: limactl mode from `dev/agents-app-token.sh`, the maintainer-uid paths of
+>    the install, and `make agents-token-refresh-start` with them, so the docs describe one way and no
+>    `.envrc` names a key file again. Until then the docs present account mode as the way for the
+>    unattended Mac and single-account mode as the fallback.
+> 7. **What the maintainer's uid can and cannot still do.**
+>    - It **cannot** read the key, the SSH key or the known-hosts file, write the account's clone or its
+>      secrets directory, or signal the job: all are another uid's, in a 0700 home. It cannot change the
+>      LaunchDaemon's plist, which is root's.
+>    - It **can**, as an admin, with `sudo` and its password: a prompt the maintainer sees, not a silent
+>      read. sudo's timestamp (5 minutes on macOS, per terminal) is the one silent window: code started in
+>      the same terminal within 5 minutes of a `sudo` can `sudo` without a prompt. So the account-mode
+>      targets end with `sudo -k`, on success and on failure, and the runbook says to run `sudo -k` after
+>      any hand-typed `sudo` and never to leave a sudo-enabled terminal to agent-run code. Root, and any
+>      process the maintainer runs under `sudo`, can of course read everything.
+>    - It **can** reach the VM's SSH port, and its own Lima host agent relays every connection to it, but
+>      sees only ciphertext: the session is end to end with the pinned host key. It could write a fake
+>      token into the VM, or take the VM's host key and pose as the VM, but it controls the VM already,
+>      where the agents hold every token anyway; neither gives it the key.
+>    - It **can bind** `127.0.0.1:<port>` while the VM is down and answer the account's ssh. The host key
+>      check fails before any authentication, so it receives no token and no signature it could replay;
+>      the job logs ssh's `Host key verification failed` (exit 255, transient) until the VM is back.
+>    - It **can** render a plist that points the job elsewhere: from a tampered maintainer's host clone at
+>      install time. That plist reaches launchd only through the install's `sudo`, a prompt the maintainer
+>      answers after the install printed the plist, its SHA-256 and the script it runs; the runbook's check
+>      after install looks for `/Users/_shift2euagents/shift2eu-host/dev/agents-app-token.sh` in
+>      `sudo launchctl print system/<label>`. Accepted.
+>    - Backups: Time Machine keeps the account's files with their owners and modes, but a restore or a
+>      mounted backup volume can expose them; the runbook excludes `/Users/_shift2euagents/.config/shift2eu`
+>      with `sudo tmutil addexclusion -p`.
+>    - The other credentials of the maintainer's host clone (`CLAUDE_CODE_OAUTH_TOKEN`, `DEEPSEEK_API_KEY`
+>      in `VM_ENV`) stay in the maintainer's uid's reach: out of this issue's scope.
+> 8. **Sleep, restart, VM down or recreated, port change.**
+>    - **Sleep and wake:** unchanged (ADR 0031 a): the next check after a wake sees the expiry and mints;
+>      an ssh that fails in the meantime is transient.
+>    - **Reboot, power cut:** the LaunchDaemon starts as the account with nobody logged in, needs no
+>      password and no keychain, and writes once the VM's sshd answers on the pinned port.
+>    - **VM down:** ssh exits 255 (connection refused), transient, retried with the usual back-off.
+>    - **VM recreated** (`make vm-delete vm-create`): new host keys, no writer, no keys file, and a random
+>      port again. The job logs `Host key verification failed` (or `Connection refused`) and keeps
+>      trying. Recovery: pin the port (3 above), then `make vm-agents-token-ssh`; the job's next try, at
+>      most five checks later, works without a restart.
+>    - **Port change:** set `SHIFT2EU_AGENTS_VM_SSH_PORT` in the host clone's `.envrc`, pin it in Lima,
+>      run `make vm-agents-token-ssh` and `make agents-token-refresh-install` again (the port is in the
+>      plist); the pin needs no change, thanks to `HostKeyAlias`.
+>    - **A new account SSH key:** `cd / && sudo -u _shift2euagents -H /usr/bin/env -i
+>      HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/ssh-keygen -t ed25519 -N '' -C
+>      shift2eu-agents-token -f /Users/_shift2euagents/.config/shift2eu/agents-vm-ssh-key` (after
+>      removing the old pair as the account), then `make vm-agents-token-ssh`.
+> 9. **Back to single-account mode.** From the maintainer's host clone: `make
+>    agents-token-refresh-uninstall` (it boots out the job whichever mode installed it, and only warns
+>    when the account's kind check fails); `make
+>    vm-agents-token-ssh-uninstall`, while `SHIFT2EU_AGENTS_VM_SSH_USER` (which names the keys file) is
+>    still in `.envrc`; generate a new key on the App's page and put it where
+>    `SHIFT2EU_AGENTS_APP_KEY_FILE` names, outside the workspace, 0600, as before this update (never copy
+>    the account's key out: delete it on the App's page once the new one works); remove
+>    `SHIFT2EU_AGENTS_ACCOUNT` and the `SHIFT2EU_AGENTS_VM_SSH_*` variables from `.envrc`; then `make
+>    agents-token-refresh-install` (or `make agents-token-refresh-start`). The account itself is removed by hand, with `sudo dscl .
+>    -delete /Users/_shift2euagents`, `sudo dscl . -delete /Groups/_shift2euagents` and removing its home.
+>
+> **Implementation notes (same date).** Where the implementation settled what the points above left open:
+>
+> - sshd is reloaded with `systemctl try-reload-or-restart ssh.service`, not `reload`: under Ubuntu's
+>   socket-activated ssh (`ssh.socket`) `ssh.service` can be inactive, where `reload` fails; the try form
+>   reloads a running sshd and leaves an inactive one to the next connection, which reads the new
+>   configuration. The runbook checks it on the real VM.
+> - The account's public key is checked (4, step 2) by `dev/vm-agents-token-ssh.sh` itself, before it prints
+>   anything, so the check runs before anything is sent or pinned.
+> - Commands run as the account in the runbook name their tool by path (`/usr/bin/git`, `/usr/bin/ssh-keygen`,
+>   `/usr/bin/ssh`): macOS's sudoers sets no `secure_path`, so `sudo` can keep the caller's `PATH`, where a bare
+>   name could find Homebrew's, which the maintainer's uid owns.
+> - The generator (ADR 0034, update of the same date, c, step 4) applies the trusted path rule to itself and,
+>   when it is there, to the clone's `dev/agents-app-token.sh`; the token script applies it to itself at every
+>   start in any case.
+> - In SSH mode the refresh's stop line keeps naming `make agents-token-refresh-start` for the single-account
+>   mode and adds `sudo launchctl kickstart -k system/<label>` for the account's job.
+>
+> **Alternatives considered for part 2.** A Keychain item or a password-manager read that prompts: ruled
+> out by the maintainer for the unattended Mac Mini (issue #227, 2026-11-15), every mint after a reboot
+> would wait for a click. The account calling `limactl` with `LIMA_HOME` pointed at the maintainer's
+> `~/.lima`: it would need that directory readable and the instance's SSH key with it, and ties the account
+> to Lima's private layout. The key in `~/.ssh/authorized_keys`: Lima and cloud-init manage that file, and
+> it would let the key log in as any user whose file it reached. A shared group between the account and
+> the maintainer: any group access gives the maintainer's uid what the account has. The account's clone
+> kept in a shared place the maintainer can write (`/Users/Shared`): it fails the trusted path rule, which
+> is the point of the account. The account running `git pull` itself on a schedule: it would move the
+> trusted code with no human looking; pulling stays the maintainer's step.
+
 ## Context
 
 The agents in the Lima VM push branches, open pull requests and file issues with the maintainer's own
