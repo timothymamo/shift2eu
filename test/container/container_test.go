@@ -152,6 +152,33 @@ COPY --from=build /out/shift2eu /shift2eu
 			dockerfile: strings.Replace(fixture, pin+modDownload, modDownload+pin, 1),
 			want:       []string{"after the RUN instruction"},
 		},
+		{
+			name:       "after a go command named by its path",
+			dockerfile: strings.Replace(fixture, pin+modDownload, "RUN /usr/local/go/bin/go mod download\n"+pin, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			name:       "after a go command inside sh -c",
+			dockerfile: strings.Replace(fixture, pin+modDownload, "RUN sh -c \"go mod download\"\n"+pin, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			name:       "after a bare go command",
+			dockerfile: strings.Replace(fixture, pin+modDownload, "RUN go\n"+pin+modDownload, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			// A word that merely holds go, such as gofmt, golang or cargo, runs
+			// no go command: only `go` itself, however it is written, counts.
+			name: "a RUN that only mentions words containing go",
+			dockerfile: strings.Replace(fixture, "FROM golang:1.27.4-alpine AS build\n",
+				"FROM golang:1.27.4-alpine AS build\nRUN apk add --no-cache ca-certificates && ls /usr/local/go/bin/gofmt /usr/local/go/lib/golang /opt/cargo\n", 1),
+		},
+		{
+			name:       "another value after the first RUN that runs go",
+			dockerfile: strings.Replace(fixture, pin+modDownload, modDownload+"ENV GOTOOLCHAIN=auto\n", 1),
+			want:       []string{"after the RUN instruction", "GOTOOLCHAIN=auto"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -199,6 +226,7 @@ func toolchainFindings(t *testing.T, name, dockerfile string) []string {
 		appliedValue string
 		pinned       bool
 		later        instruction
+		laterValue   string
 		laterFound   bool
 	)
 
@@ -213,7 +241,7 @@ func toolchainFindings(t *testing.T, name, dockerfile string) []string {
 		}
 
 		if !laterFound {
-			later, laterFound = in, true
+			later, laterValue, laterFound = in, value, true
 		}
 
 		if in.line < firstGo.line {
@@ -229,7 +257,7 @@ func toolchainFindings(t *testing.T, name, dockerfile string) []string {
 			name, applied.line, toolchainEnv, appliedValue, toolchainEnv, toolchainLocal, goModName)}
 	case laterFound:
 		return []string{fmt.Sprintf("%s:%d: the build stage sets `ENV %s=%s` only at line %d, after the RUN instruction at line %d that runs go (%q), so that step still runs with whatever toolchain the base image holds: want the ENV before the first RUN instruction that runs go, the module download included (issue #383)",
-			name, later.line, toolchainEnv, toolchainLocal, later.line, firstGo.line, firstGo.arguments())}
+			name, later.line, toolchainEnv, laterValue, later.line, firstGo.line, firstGo.arguments())}
 	}
 
 	return []string{fmt.Sprintf("%s:%d: the build stage, the one that runs `go build`, has no ENV %s=%s: want `ENV %s=%s` in that stage, before the first RUN instruction that runs go, so a base image whose Go differs from the go line of %s fails the build instead of fetching another toolchain or building with a different one (issue #383)",
@@ -1354,14 +1382,15 @@ func runsGoBuild(command string) bool {
 }
 
 // runsGo reports whether a RUN instruction's command runs a go command, such as
-// `go mod download` or `go build`. The fields are read in order, so a mention in
-// a flag value or a path, such as the cache mount's target=/go/pkg/mod, is not
-// the command itself.
+// `go mod download` or `go build`, however the command spells it: bare, by its
+// path (`/usr/local/go/bin/go`) or inside a shell (`sh -c "go mod download"`).
+// Each field is unquoted and reduced to its last path element, so only the
+// command `go` counts: a word that merely contains go (`gofmt`, `golang`,
+// `cargo`) and a mention in a flag value or a path, such as the cache mount's
+// target=/go/pkg/mod, is not the command itself.
 func runsGo(command string) bool {
-	fields := strings.Fields(command)
-
-	for i := 0; i+1 < len(fields); i++ {
-		if fields[i] == "go" {
+	for _, field := range strings.Fields(command) {
+		if path.Base(strings.Trim(field, `"'`)) == "go" {
 			return true
 		}
 	}
