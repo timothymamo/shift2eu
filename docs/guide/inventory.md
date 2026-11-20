@@ -336,14 +336,18 @@ Review `inventories/aws.inventory.json`, then delete the raw output: `rm -r inve
 | EC2 instance | `vcpus`, `memoryGiB` | its `InstanceType`, looked up in `ec2 describe-instance-types` (`VCpuInfo.DefaultVCpus`, `MemoryInfo.SizeInMiB` / 1024) |
 | EBS volume | `storageGiB` | `ec2 describe-volumes`, `Volumes[].Size` |
 | RDS DB instance (not in a DB cluster) | `storageGiB` | `rds describe-db-instances`, `DBInstances[].AllocatedStorage` |
+| RDS DB instance (not in a DB cluster), single-node | `count`: 1 | `rds describe-db-instances`, `DBInstances[].MultiAZ` not true |
 | EKS cluster | `count` | the sum of its managed node groups' `scalingConfig.desiredSize` (`eks describe-nodegroup`) |
 
 Not filled in: an RDS instance's vCPU and memory (from its `DBInstanceClass`, such as `db.m5.large`), the
 storage of an instance in a DB cluster (Aurora, or an RDS Multi-AZ DB cluster), whose storage belongs to
-the cluster (`AllocatedStorage` does not describe an instance with a `DBClusterIdentifier`), an EKS
+the cluster (`AllocatedStorage` does not describe an instance with a `DBClusterIdentifier`), the count of
+a Multi-AZ instance, an EKS
 cluster's per-node vCPU and memory (from its node groups' `instanceTypes`), an Auto Scaling group's instance size and count, and an S3 bucket's stored GiB
 (the `BucketSizeBytes` metric in CloudWatch).
-Add them by hand where you want an estimate.
+Add them by hand where you want an estimate. A Multi-AZ instance has a standby, and how many nodes a
+standby counts as depends on how a target prices high availability: the program does not guess, so the
+estimate says "(count assumed 1)" until you set the `count`.
 
 ### AWS classification
 
@@ -476,7 +480,7 @@ gcloud compute instance-groups managed list --project="$project" \
 gcloud compute snapshots list --project="$project" \
   --format='json(kind,sourceDisk)' > "$out/compute-snapshots.json"
 gcloud sql instances list --project="$project" \
-  --format='json(kind,selfLink,region,databaseVersion,replicaNames,settings.availabilityType,settings.backupConfiguration.pointInTimeRecoveryEnabled,settings.backupConfiguration.binaryLogEnabled)' \
+  --format='json(kind,selfLink,region,databaseVersion,replicaNames,settings.availabilityType,settings.tier,settings.dataDiskSizeGb,settings.backupConfiguration.pointInTimeRecoveryEnabled,settings.backupConfiguration.binaryLogEnabled)' \
   > "$out/sql-instances.json"
 gcloud storage buckets list --project="$project" --raw \
   --format='json(kind,name,versioning)' > "$out/storage-buckets.json"
@@ -511,10 +515,16 @@ Review `inventories/gcp.inventory.json`, then delete the raw output: `rm -r inve
 |---|---|---|
 | Compute Engine instance | `vcpus`, `memoryGiB` | its `machineType`, looked up in `compute machine-types list` for its zone (`guestCpus`, `memoryMb` / 1024) |
 | Persistent disk | `storageGiB` | `compute disks list`, `sizeGb` (a string in the API's JSON) |
+| Cloud SQL instance (PostgreSQL or MySQL) | `storageGiB` | `sql instances list`, `settings.dataDiskSizeGb` (a string in the API's JSON) |
+| Cloud SQL instance, custom tier | `vcpus`, `memoryGiB` | `sql instances list`, `settings.tier` `db-custom-<vCPU>-<memory MiB>` (`db-custom-2-7680`: 2 vCPU, 7.5 GiB) |
+| Cloud SQL instance, single-node | `count`: 1 | `sql instances list`, `settings.availabilityType` `ZONAL` |
 
-Not filled in: a Cloud SQL instance's tier and storage, a GKE cluster's node count and machine type, a
-managed instance group's size and instance template, and a bucket's stored GiB. Add them by hand
-where you want an estimate. A custom machine type (`custom-4-16384`) is not in
+Not filled in: the vCPU and memory of a Cloud SQL instance whose tier is not a custom one (such as
+`db-n1-standard-2` or `db-f1-micro`), the count of a `REGIONAL` Cloud SQL instance, a GKE cluster's
+node count and machine type, a managed instance group's size and instance template, and a bucket's
+stored GiB. Add them by hand where you want an estimate. A `REGIONAL` instance has a standby, and how
+many nodes a standby counts as depends on how a target prices high availability: the program does not
+guess, so the estimate says "(count assumed 1)" until you set the `count`. A custom machine type (`custom-4-16384`) is not in
 `machine-types list`; its vCPU and memory are in its name.
 
 ### GCP classification
@@ -687,11 +697,15 @@ Review `inventories/azure.inventory.json`, then delete the raw output: `rm -r in
 | Scale set | `vcpus`, `memoryGiB`, `count` | its `sku.name`, looked up the same way, and `sku.capacity` |
 | Managed disk | `storageGiB` | `properties.diskSizeGB` |
 | PostgreSQL or MySQL flexible server | `storageGiB` | `properties.storage.storageSizeGB` |
+| PostgreSQL or MySQL flexible server, single-node | `count`: 1 | `properties.highAvailability.mode` `Disabled` or not set |
 | AKS cluster | `count` | the sum of its agent pools' `count` |
 
-Not filled in: a flexible server's vCPU and memory (its `sku.name`, such as `Standard_D2ds_v4`), an AKS
-cluster's per-node vCPU and memory (its pools' `vmSize`), and a storage account's stored GiB. Add them
-by hand where you want an estimate.
+Not filled in: a flexible server's vCPU and memory (its `sku.name`, such as `Standard_D2ds_v4`), the
+count of a flexible server with high availability (`ZoneRedundant` or `SameZone`), an AKS cluster's
+per-node vCPU and memory (its pools' `vmSize`), and a storage account's stored GiB. Add them by hand
+where you want an estimate. A server with high availability has a standby, and how many nodes a standby
+counts as depends on how a target prices high availability: the program does not guess, so the estimate
+says "(count assumed 1)" until you set the `count`.
 
 ### Azure classification
 
