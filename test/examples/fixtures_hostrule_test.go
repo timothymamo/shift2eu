@@ -631,6 +631,30 @@ func TestVendorPathProblems(t *testing.T) {
 			want: []string{"api.github.com/acme-corp"},
 		},
 		{
+			// A user account is an owner like an organisation, and the users
+			// endpoint names it the same way: the endpoint is left out of the
+			// value, which is the host and the account.
+			name: "customer owner path after the GitHub API's user endpoint",
+			text: "the user is at https://api.github.com/users/acme-corp",
+			want: []string{"api.github.com/acme-corp"},
+		},
+		{
+			// An organisation is the account a customer's repositories sit
+			// under, and the orgs endpoint names it after the same host.
+			name: "customer owner path after the GitHub API's organisation endpoint",
+			text: "the org is at https://api.github.com/orgs/acme-corp",
+			want: []string{"api.github.com/acme-corp"},
+		},
+		{
+			// The API host only holds on its own, as the other vendor hosts do:
+			// a name below it (evil.api.github.com) is the host name rule's
+			// value, which reads the whole dotted name, and this rule reports
+			// nothing for the owner path after it.
+			name: "name below the GitHub API host",
+			text: "the file is at https://evil.api.github.com/repos/acme-corp/x",
+			want: []string{"evil.api.github.com"},
+		},
+		{
 			// abfss names the container before an @ and the customer's storage
 			// account in the host after it. The host is the host name rule's
 			// value and the account is this rule's, so both are reported: the
@@ -750,8 +774,8 @@ func TestVendorPathProblems(t *testing.T) {
 		},
 		{
 			// An OCI artifact reference names a registry host rather than a
-			// bucket, and the segment after oci:// holds a dot (ghcr.io), which a
-			// bucket's name never does. The owner path after the host is a listed
+			// bucket: the segment after oci:// holds a dot (ghcr.io) and no @
+			// namespace follows it. The owner path after the host is a listed
 			// public open-source one.
 			name: "public open-source OCI registry reference",
 			text: "helm install x oci://ghcr.io/sigstore/charts/x",

@@ -124,11 +124,11 @@ func TestResourcePathProblems(t *testing.T) {
 			want: []string{"accesspoint/acme-ap"},
 		},
 		{
-			// A sample's storage account keeps the example- prefix a sample's
-			// bucket does and then names generic words (examplestorage), so the
-			// prefix alone is no sample: a name that follows it without a generic
-			// word between (exampleacmeprod) is the customer's own, the way the
-			// bucket example-acme-prod is.
+			// A sample's storage account carries the example prefix a sample's
+			// bucket's name starts with and then names generic words
+			// (examplestorage), so the prefix alone is no sample: a name that
+			// follows it without a generic word between (exampleacmeprod) is the
+			// customer's own, the way the bucket example-acme-prod is.
 			name: "customer storage account behind an example- prefix",
 			text: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/exampleacmeprod",
 			want: []string{"storageAccounts/exampleacmeprod"},
@@ -276,8 +276,8 @@ func TestResourcePathProblems(t *testing.T) {
 			want: nil,
 		},
 		{
-			// The sample storage account keeps the same example- prefix a sample
-			// bucket does.
+			// The sample storage account carries the same example prefix a sample
+			// bucket's name starts with.
 			name: "sample storage account in an ARM ID",
 			text: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/examplestorage",
 			want: nil,
