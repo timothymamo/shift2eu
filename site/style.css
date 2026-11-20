@@ -895,9 +895,19 @@ button.secondary:disabled {
   content: "\2715\00a0" / "";
 }
 
-/* Each blocker item carries the same svg-free cross as its heading. */
-#report .part-blockers > ul > li::marker {
+/* Each blocker item carries the same svg-free cross as its heading, drawn
+   with ::before because ::marker ignores a background and Safari ignores its
+   content. The glyph hangs just left of the text, where the marker stood, so
+   the text keeps its indent; the list stays a ul and is announced as one. */
+#report .part-blockers > ul > li {
+  position: relative;
+  list-style: none;
+}
+
+#report .part-blockers > ul > li::before {
   content: "\2715\00a0" / "";
+  position: absolute;
+  right: 100%;
   color: var(--none-ink);
   background-color: var(--surface);
 }
@@ -1073,7 +1083,6 @@ ul.caveats > li {
 
 ul.caveats > li::marker {
   color: var(--muted);
-  background-color: var(--surface);
 }
 
 ul.caveats > li + li,
