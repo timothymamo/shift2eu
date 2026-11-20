@@ -8,7 +8,7 @@
 //
 // Every run is a sandbox run: a fake sudo that records every command and runs nothing of the machine's own, a
 // fake launchctl, plutil and limactl, and, for the account's home under /Users - which no test can create - a fake
-// sudo that answers for the two files the target reads and writes there. No test reaches /Library, a real
+// sudo that answers for the files the targets read, render and write there. No test reaches /Library, a real
 // launchd, a real account, a real VM or the network (CLAUDE.md rules 2 and 3).
 package devenv_test
 
@@ -264,6 +264,117 @@ func TestMakeAgentsTokenRefreshInstallRendersAsTheAccount(t *testing.T) {
 	if _, err := os.Stat(f.dest()); err == nil {
 		t.Errorf("%s is there although no plist was rendered: the install installs only what the account rendered", f.dest())
 	}
+}
+
+// accountModePlist is the plist the account's own generator would render, from the clone under
+// /Users/<account>/shift2eu-host that no test machine has: invented XML, since only the fake plutil reads it and the
+// install compares the file it installed with the plist it was handed (CLAUDE.md rule 2).
+const accountModePlist = `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu</string>
+</dict>
+</plist>
+`
+
+// TestMakeAgentsTokenRefreshInstallAsTheAccountLoadsTheJob pins the account-mode install through to a loaded job
+// (ADR 0034, update of 2026-11-19, c): once the account's own generator has rendered the plist - the one step no
+// test can run, so the log-only sudo answers it with a fixture - the install lints that plist, installs it, loads
+// the job and tells the maintainer how to check it, all through sudo, and creates nothing in the maintainer's state
+// directory: in account mode the log, the state and the lock are the account's, and the install reads no lock at
+// all. It still ends with sudo -k, so no timestamp outlives it.
+func TestMakeAgentsTokenRefreshInstallAsTheAccountLoadsTheJob(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, hostTargetInstance)
+	accountEnv(f.env)
+
+	// The recording cat shows which files the recipe reads with it, the refresh's lock among them.
+	f.sb.useRecordingCat(t)
+
+	// The plist the account rendered, which the log-only sudo answers the render with: /Users/<account> is on no
+	// test machine.
+	rendered := filepath.Join(f.sb.root, "rendered-by-the-account.plist")
+	writeFileMode(t, rendered, []byte(accountModePlist), 0o600)
+	f.env["SHIFT2EU_TEST_ACCOUNT_PLIST_FILE"] = rendered
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install exited %d although the account rendered the plist: the install lints, installs and loads what the account rendered (ADR 0034, update of 2026-11-19, c)\nstdout: %s\nstderr: %s",
+			exitStatusOf(t, err), stdout, stderr)
+	}
+
+	accountHome := agentsAccountHome()
+	accountState := filepath.Join(accountHome, ".local", "state", "shift2eu")
+	accountScript := filepath.Join(accountHome, "shift2eu-host", "dev", "agents-app-token.sh")
+	accountLog := filepath.Join(accountState, "agents-token-refresh-"+hostTargetInstance+".log")
+
+	// The job launchd loads is the plist the account rendered: the file at the LaunchDaemon's path holds its bytes.
+	installed, err := os.ReadFile(f.dest())
+	if err != nil {
+		t.Fatalf("the install loaded no plist at %s: %v\nstdout: %s\nstderr: %s", f.dest(), err, stdout, stderr)
+	}
+
+	if diff := cmp.Diff(accountModePlist, string(installed)); diff != "" {
+		t.Errorf("the plist the install put at %s is not the one the account rendered (-want +got):\n%s", f.dest(), diff)
+	}
+
+	bootstraps := f.bootstrapCalls(t)
+	if len(bootstraps) != 1 {
+		t.Fatalf("the install ran `sudo launchctl bootstrap` %d time(s), want the one that loads the job: %v", len(bootstraps), bootstraps)
+	}
+
+	if diff := cmp.Diff([]string{"launchctl", "bootstrap", "system", f.dest()}, bootstraps[0]); diff != "" {
+		t.Errorf("the install loads the job with a command that differs from `launchctl bootstrap system <plist>` (-want +got):\n%s", diff)
+	}
+
+	// The account mode's own last line: the maintainer checks the job and its log as the account, since neither is
+	// the maintainer's.
+	wantCheck := "agents-token-refresh-install: check it with: sudo launchctl print system/" + f.label() +
+		" (state = running, and " + accountScript + " in its arguments), and its log: sudo tail -n 50 " + accountLog +
+		"; then run sudo -k"
+	if !strings.Contains(stdout, wantCheck) {
+		t.Errorf("the install does not print the account mode's line\n%s\nso a maintainer is sent to the maintainer's own log, which the job never writes (ADR 0034, update of 2026-11-19, c)\nstdout: %s",
+			wantCheck, stdout)
+	}
+
+	// Nothing of the account's install is the maintainer's: no state directory and no log, in either place the
+	// recipe derives the maintainer's state from.
+	for _, state := range []string{f.sb.stateDir(), filepath.Join(f.env["HOME"], ".local", "state", "shift2eu")} {
+		if _, err := os.Stat(state); err == nil {
+			t.Errorf("the install created the maintainer's state directory %s: in account mode the state and the log are the account's, %s (ADR 0034, update of 2026-11-19, c)", state, accountState)
+		}
+
+		log := filepath.Join(state, "agents-token-refresh-"+hostTargetInstance+".log")
+		if _, err := os.Stat(log); err == nil {
+			t.Errorf("the install created %s: in account mode the job logs into the account's own %s, never into the maintainer's state (ADR 0034, update of 2026-11-19, c)", log, accountLog)
+		}
+	}
+
+	// No lock read: the install warns about a refresh started by hand from the lock of the instance it installs, and
+	// in account mode that lock is the account's, which the maintainer's install never reads. The plist is printed
+	// with cat, so the recorder shows that this check could fire.
+	printedThePlist := false
+
+	for _, args := range invocations(f.sb.argvLogText(t), "cat") {
+		for _, arg := range args {
+			if strings.Contains(filepath.Base(arg), "agents-token-refresh-plist.") {
+				printedThePlist = true
+			}
+
+			if strings.Contains(arg, ".lock") {
+				t.Errorf("the install read the refresh's lock through %s: in account mode the lock is the account's, %s, and the maintainer's install reads no lock at all (ADR 0034, update of 2026-11-19, c)",
+					arg, filepath.Join(accountState, "agents-token-refresh-"+hostTargetInstance+".lock", "pid"))
+			}
+		}
+	}
+
+	if !printedThePlist {
+		t.Fatalf("the recording cat saw no read of the rendered plist, so this test cannot tell a lock read from any other cat: the install prints the plist with cat before it installs it\nstdout: %s\nstderr: %s", stdout, stderr)
+	}
+
+	assertEndsWithSudoK(t, f.sudoCommands(t))
 }
 
 // TestMakeAgentsTokenRefreshUninstallEndsWithSudoK pins the other half of ADR 0034's update: the uninstall works
@@ -680,7 +791,7 @@ func TestMakeVMAgentsTokenSSHInstallsTheWriter(t *testing.T) {
 	var pin []string
 
 	for _, args := range invocations(f.sb.argvLogText(t), "sudo") {
-		if len(args) > 2 && args[len(args)-2] == "pin" {
+		if isThePin(args) {
 			pin = args
 
 			break
@@ -871,7 +982,7 @@ func TestMakeVMAgentsTokenSSHRefusesAnIncompleteVMAnswer(t *testing.T) {
 			}
 
 			for _, args := range f.sudoCommands(t) {
-				if len(args) > 0 && args[len(args)-1] == "pin" {
+				if isThePin(args) {
 					t.Errorf("%s, and the target ran the pin %v anyway (issue #227 part 2, review 5)", tc.name, args)
 				}
 			}
@@ -973,7 +1084,14 @@ func TestMakeVMAgentsTokenSSHUninstallRefusesAPartialScript(t *testing.T) {
 	}
 }
 
-// vmScriptRun is one sandbox run of the script make vm-agents-token-ssh sends the VM (issue #227 part 2, review 2):// the generator prints it from a writer the test wrote, and the VM user runs it with a sudo that redirects root's
+// isThePin reports whether args is the target's call of the known-hosts pin: the pin's command line ends with the
+// account's known-hosts file, so `pin` is its second-to-last argument, not its last (issue #227 part 2, review 2).
+func isThePin(args []string) bool {
+	return len(args) > 2 && args[len(args)-2] == "pin"
+}
+
+// vmScriptRun is one sandbox run of the script make vm-agents-token-ssh sends the VM (issue #227 part 2, review 2):
+// the generator prints it from a writer the test wrote, and the VM user runs it with a sudo that redirects root's
 // paths into the sandbox, a fake sshd that answers with the effective configuration the test wrote, and the
 // recording systemctl.
 type vmScriptRun struct {

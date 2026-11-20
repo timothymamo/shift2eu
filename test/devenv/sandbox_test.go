@@ -1044,6 +1044,9 @@ func (sb *sandbox) writeFakeLaunchctl(t *testing.T) {
 //     `/usr/bin/env -i PATH=...`, which the fake resolves first (security audit 1).
 //   - `sudo -u <account> -H /bin/sh -c ... pin <path>` records its standard input in
 //     SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE instead of writing the account's known-hosts file.
+//   - `sudo -u <account> -H /usr/bin/env -i ... /bin/sh <script> plist` prints what
+//     SHIFT2EU_TEST_ACCOUNT_PLIST_FILE holds, standing in for the plist the account's own generator would render
+//     from a clone under a /Users/<account> no test machine has (issue #227 part 2, review 2).
 //   - `launchctl` runs the fake launchctl first on PATH, so a test can pin the load and unload commands and
 //     see launchd's state change between them.
 //   - every other command runs with the fake tools first on PATH, as it would under the real sudo.
@@ -1142,6 +1145,12 @@ rm)
     cat > "${SHIFT2EU_TEST_ACCOUNT_PIN_CAPTURE}" || exit 1
     exit 0
   fi
+  # The render as the account: the plist the account's generator prints, which no test can run, since
+  # /Users/<account>/shift2eu-host is on no test machine (issue #227 part 2, review 2).
+  if [ -n "${SHIFT2EU_TEST_ACCOUNT_PLIST_FILE:-}" ] && [ "${2:-}" = plist ]; then
+    /bin/cat "${SHIFT2EU_TEST_ACCOUNT_PLIST_FILE}" || exit 1
+    exit 0
+  fi
   exec "${command}" "$@"
   ;;
 *)
@@ -1158,6 +1167,24 @@ func (sb *sandbox) useLogOnlySudo(t *testing.T) {
 	path := filepath.Join(sb.binDir, "sudo")
 
 	writeFileMode(t, path, []byte(logOnlySudo), 0o700)
+}
+
+// recordingCat is the machine's own cat behind a recorder: a recipe reads files a test wants to know about, the
+// refresh's lock among them, with cat, and the argv log keeps which paths it read (issue #227 part 2, review 2).
+const recordingCat = `#!/bin/sh
+{
+  printf 'tool=cat\n'
+  for a in "$@"; do printf 'arg=%s\n' "$a"; done
+} >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+exec /bin/cat "$@"
+`
+
+// useRecordingCat puts a cat that records its arguments first on PATH, so a test can pin which files a recipe read
+// through cat - or that it read none of them (issue #227 part 2, review 2).
+func (sb *sandbox) useRecordingCat(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "cat"), []byte(recordingCat), 0o700)
 }
 
 // fakeVMSudo stands in for the VM user's sudo when the script `make vm-agents-token-ssh` sends is run as that
