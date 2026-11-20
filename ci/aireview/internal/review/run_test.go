@@ -934,11 +934,12 @@ func TestRunAnnouncesTheRetryOfAnAnswerItCannotRead(t *testing.T) {
 // notice of #343 does, and no text of either answer reaches the log either.
 //
 // Each malformed answer plants its marker where the decoder quotes it: a field
-// name the answer's shape does not have, which the strict decoder names in full,
-// and an invalid \u escape of a top-level string, of which it quotes the four
-// characters after the escape (so the escape's marker is the four it quotes).
-// Both are positions the decoder's message holds, which is what lets a case fail
-// when it should.
+// name the answer's shape does not have, which the strict decoder names in full
+// (planted at the top level, so the case does not depend on how findings are
+// decoded), and an invalid \u escape of a top-level string, of which it quotes
+// the four characters after the escape (so the escape's marker is the four it
+// quotes). Both are positions the decoder's message holds, which is what lets a
+// case fail when it should.
 func TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns(t *testing.T) {
 	t.Parallel()
 
@@ -959,7 +960,11 @@ func TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns(t *testing.T) {
 			name: "an unexpected field name, which the decoder names in full",
 			answers: []string{
 				`{"MRK366FIRST": 1, "summary": "s", "findings": []}`,
-				`{"summary": "s", "findings": [{"severity": "nit", "title": "t", "body": "b", "MRK366SECOND": 1}]}`,
+				// The second marker sits at the top level as well as inside a
+				// finding: the strict decoder names an unknown field wherever it
+				// meets one, and the top-level one keeps this a shape error whichever
+				// way findings are decoded.
+				`{"MRK366SECOND": 1, "summary": "s", "findings": [{"severity": "nit", "title": "t", "body": "b", "MRK366SECOND": 1}]}`,
 			},
 			markers:   []string{"MRK366FIRST", "MRK366SECOND"},
 			wantCheck: "not one JSON object",
