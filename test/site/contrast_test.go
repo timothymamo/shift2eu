@@ -33,12 +33,22 @@ import (
 //   - A pair counts once per rule and declaration, so a rule repeated in a media
 //     query is checked in both places.
 //
+// A stylesheet that states a light and a dark palette (a
+// `@media (prefers-color-scheme: dark)` block that redefines the tokens) is read
+// as two palettes, and every pair is checked once in each, as palettes below
+// defines them: the light palette resolves var() against the tokens declared
+// outside the dark block, and the dark palette against those with the dark
+// block's tokens on top. Every check here runs for both schemes, and a failure
+// names the scheme it was read in.
+//
 // The check also fails when it reads no text pair and no control pair at all, so
 // a stylesheet that states none of them cannot pass it vacuously.
 
 // contrastPair is one colour pair the stylesheet states, with the ratio it must
 // reach.
 type contrastPair struct {
+	// scheme names the palette the pair was read in: light or dark.
+	scheme string
 	// rule names the selector and the element's part the pair is for.
 	rule string
 	// foreground and background are the pair's colours.
@@ -47,6 +57,12 @@ type contrastPair struct {
 	// outline or a control's border.
 	minimum float64
 }
+
+// The colour schemes a stylesheet states, as a failure names them.
+const (
+	lightScheme = "light"
+	darkScheme  = "dark"
+)
 
 // TestStylesheetContrast reads the built stylesheet's colour pairs as this
 // file's doc comment defines them and fails on one below its WCAG 2.2 AA ratio.
@@ -70,38 +86,161 @@ func TestStylesheetContrast(t *testing.T) {
 	}
 }
 
-// stylesheetContrastFailures reads src's colour pairs as this file's doc
-// comment defines them, and returns one message per pair under its ratio, with
-// the number of text pairs and of control pairs it read.
+// stylesheetContrastFailures reads the colour pairs of src's palettes as this
+// file's doc comment defines them, and returns one message per pair under its
+// ratio, with the number of text pairs and of control pairs it read.
 func stylesheetContrastFailures(t *testing.T, name string, src []byte) ([]string, int, int) {
 	t.Helper()
 
-	rules := parseCSS(t, name, src)
-	props := customProperties(rules)
+	var (
+		findings                []string
+		textPairs, controlPairs int
+	)
 
-	pageBackground, ok := pageBackgroundColour(t, name, rules, props)
+	for _, p := range palettes(t, name, parseCSS(t, name, src)) {
+		pairs := palettePairs(t, name, p)
+
+		for _, pair := range pairs {
+			if pair.minimum >= 4.5 {
+				textPairs++
+			} else {
+				controlPairs++
+			}
+
+			if ratio := contrastRatio(pair.foreground, pair.background); ratio < pair.minimum {
+				findings = append(findings, fmt.Sprintf(
+					"%s scheme: %s's contrast is %.2f:1, under the %.1f:1 WCAG 2.2 AA requires (%s): text needs 4.5:1, a focus outline or a control's border 3:1",
+					pair.scheme, pair.rule, ratio, pair.minimum, name))
+			}
+		}
+	}
+
+	return findings, textPairs, controlPairs
+}
+
+// palette is one colour scheme's view of a stylesheet: the rules that apply in
+// it, the custom properties its var() resolves against, and the page's
+// background.
+type palette struct {
+	// name is the scheme's name, as a failure names it.
+	name string
+	// rules are the style rules that apply in the scheme.
+	rules []cssRule
+	// props are the custom properties the scheme's var() resolves against.
+	props map[string]string
+}
+
+// palettes returns the palettes rules state, light first:
+//
+//   - light holds every rule outside a `@media (prefers-color-scheme: dark)`
+//     block, resolved against the custom properties those rules declare. A rule
+//     inside `@media print` is here too: print states the page on paper, which
+//     is the light palette.
+//   - dark holds the light rules and the rules the dark block states, resolved
+//     against the light properties with every custom property the dark block
+//     declares on top of them. The print rules are left out: print is light.
+//
+// A stylesheet with no dark block has one palette twice, the light one, so both
+// schemes are checked against the same tokens and report the same pairs.
+func palettes(t *testing.T, name string, rules []cssRule) []palette {
+	t.Helper()
+
+	var light, dark []cssRule
+
+	for _, rule := range rules {
+		darkOnly := inMedia(rule.atRules, darkSchemeQuery, darkScheme)
+
+		if darkOnly {
+			dark = append(dark, rule)
+
+			continue
+		}
+
+		light = append(light, rule)
+
+		if !inMedia(rule.atRules, printQuery) {
+			dark = append(dark, rule)
+		}
+	}
+
+	lightProps := customProperties(light)
+	darkProps := customProperties(light)
+
+	for _, rule := range dark {
+		if !inMedia(rule.atRules, darkSchemeQuery, darkScheme) {
+			continue
+		}
+
+		for _, decl := range rule.decls {
+			if strings.HasPrefix(decl.property, "--") {
+				darkProps[decl.property] = decl.value
+			}
+		}
+	}
+
+	return []palette{
+		{name: lightScheme, rules: light, props: lightProps},
+		{name: darkScheme, rules: dark, props: darkProps},
+	}
+}
+
+// The media queries a palette is stated in: a dark colour scheme, and print,
+// which states paper.
+const (
+	darkSchemeQuery = "prefers-color-scheme"
+	printQuery      = "print"
+)
+
+// inMedia reports whether the rule sits inside an `@media` block whose query
+// holds every one of words, compared in lower case.
+func inMedia(atRules []string, words ...string) bool {
+	for _, prelude := range atRules {
+		fields := strings.Fields(strings.ToLower(prelude))
+		if len(fields) < 2 || fields[0] != "@media" {
+			continue
+		}
+
+		query := strings.Join(fields[1:], " ")
+
+		if !slices.ContainsFunc(words, func(word string) bool {
+			return !strings.Contains(query, word)
+		}) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// palettePairs returns the colour pairs p's rules state, as this file's doc
+// comment defines them.
+func palettePairs(t *testing.T, name string, p palette) []contrastPair {
+	t.Helper()
+
+	pageBackground, ok := pageBackgroundColour(t, name, p.rules, p.props)
 	if !ok {
-		t.Fatalf("%s declares no background for :root, html or body, so the colours of the text and controls it sets cannot be read: state the page's background there", name)
+		t.Fatalf("%s declares no background for :root, html or body in its %s palette, so the colours of the text and controls it sets cannot be read: state the page's background there", name, p.name)
 	}
 
 	var pairs []contrastPair
 
-	for _, rule := range rules {
+	for _, rule := range p.rules {
 		selector := strings.Join(rule.selectors, ", ")
 
 		background := pageBackground
 
 		for _, property := range []string{"background-color", "background"} {
 			if value, ok := rule.decl(property); ok {
-				if colourValue, ok := colourOf(t, selector, value, props); ok {
+				if colourValue, ok := colourOf(t, selector, value, p.props); ok {
 					background = colourValue
 				}
 			}
 		}
 
 		if value, ok := rule.decl("color"); ok {
-			if foreground, ok := colourOf(t, selector, value, props); ok {
+			if foreground, ok := colourOf(t, selector, value, p.props); ok {
 				pairs = append(pairs, contrastPair{
+					scheme:     p.name,
 					rule:       selector + " text on " + backgroundString(background),
 					foreground: foreground,
 					background: background,
@@ -120,12 +259,13 @@ func stylesheetContrastFailures(t *testing.T, name string, src []byte) ([]string
 				continue
 			}
 
-			foreground, ok := colourOf(t, selector, value, props)
+			foreground, ok := colourOf(t, selector, value, p.props)
 			if !ok {
 				continue
 			}
 
 			pairs = append(pairs, contrastPair{
+				scheme:     p.name,
 				rule:       selector + " " + property + " on " + backgroundString(background),
 				foreground: foreground,
 				background: background,
@@ -134,26 +274,7 @@ func stylesheetContrastFailures(t *testing.T, name string, src []byte) ([]string
 		}
 	}
 
-	var (
-		findings                []string
-		textPairs, controlPairs int
-	)
-
-	for _, pair := range pairs {
-		if pair.minimum >= 4.5 {
-			textPairs++
-		} else {
-			controlPairs++
-		}
-
-		if ratio := contrastRatio(pair.foreground, pair.background); ratio < pair.minimum {
-			findings = append(findings, fmt.Sprintf(
-				"%s's contrast is %.2f:1, under the %.1f:1 WCAG 2.2 AA requires (%s): text needs 4.5:1, a focus outline or a control's border 3:1",
-				pair.rule, ratio, pair.minimum, name))
-		}
-	}
-
-	return findings, textPairs, controlPairs
+	return pairs
 }
 
 // TestContrastCheckReadsEachPaletteOnItsOwnTokens pins that the check reads a
