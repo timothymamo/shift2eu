@@ -72,7 +72,7 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 ```bash
 make worktree BRANCH=feat/12-short-name   # create or resume the worktree for a PR (prints its path)
 make check             # lint + test + govulncheck: must pass before every commit
-make test              # unit + contract tests, race detector, no network
+make test              # unit + contract tests, race detector, no network of its own (module fetches: see Testing)
 make test-integration  # real cloud APIs, read-only credentials (never in default CI)
 make test-e2e          # build the binary and run it against testdata fixtures
 make lint              # golangci-lint natively and for every release target, then test/lint, incl. architecture rules
@@ -85,10 +85,9 @@ make test-browser      # make site, then the headless-browser smoke test in a pi
 
 Every make target runs exactly go.mod's go line (`GOTOOLCHAIN`, issue #347, ADR 0035). When the local Go is
 another release, the go command fetches the pinned toolchain once (checksum-verified via `sum.golang.org`)
-before anything runs: the only network access the pin adds, and the tests themselves still never touch the
-network. The VM installs the pinned Go, so
-normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a mismatch then fails
-`TestGoModPinsTheBuildingToolchain` instead.
+before anything runs: the only network access the pin adds (the tests' own is under Testing). The VM
+installs the pinned Go, so normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a
+mismatch then fails `TestGoModPinsTheBuildingToolchain` instead.
 
 ## Testing
 
@@ -98,9 +97,10 @@ normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a mis
   `internal/adapter/target/targettest`. Every provider adapter runs them.
 - Renderers and CLI output use golden files under `testdata/`, updated with `-update`.
 - Integration tests use `//go:build integration`; e2e tests use `//go:build e2e` and live in `test/e2e`.
-- Default tests never touch the network, never need credentials, never depend on time or map order. The
-  tests never do; only the go command that runs them may fetch the pinned toolchain, once, before any test
-  starts (see Commands).
+- Default tests never open a connection themselves, never need credentials, never depend on time or map
+  order. Only go commands fetch: the one that runs them may fetch the pinned toolchain, once, before any test starts
+  (see Commands), and on an empty module cache `TestNoProductBinaryReachesChromedp`'s `go list` fetches
+  modules through GOPROXY, verified by go.sum (issue #391).
 
 ## Rules
 

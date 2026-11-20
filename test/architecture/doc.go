@@ -204,5 +204,9 @@
 // would reopen issue #206.
 //
 // The checks are tests: they run in make test, make check and CI's make cover,
-// with no workflow of their own. They need no network and no credentials.
+// with no workflow of their own. They need no credentials, and no network
+// beyond the go command's own: TestNoProductBinaryReachesChromedp lists the
+// browser-tagged test/browser, which go test ./... never builds, so on an empty
+// module cache that listing fetches chromedp through GOPROXY, verified by
+// go.sum, as the go test build fetches every other module (issue #391).
 package architecture

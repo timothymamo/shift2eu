@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 	"github.com/timothymamo/shift2eu/test/internal/releasetarget"
 )
@@ -265,12 +267,24 @@ func goListImportPaths(t *testing.T, dir string, args ...string) []string {
 // test's own but for the variables that would decide what it lists, which
 // check.ListPackages drops too, plus the settings the check's listings fix, so
 // the probe reads the same files the product listings read.
+//
+// Unlike check.ListPackages it leaves GOPROXY as it is (issue #391). Only the
+// browser-tagged test/browser imports chromedp, and go test ./... never builds
+// it, so on an empty module cache, as in a release run, chromedp and cdproto
+// are in no cache until this listing loads them: with GOPROXY=off it would
+// fail. The listing fetches them through GOPROXY as set in the environment
+// (GOENV=off ignores go env -w), as the go test build fetches its own modules,
+// and -mod=readonly keeps go.mod as it is while go.sum pins and verifies every
+// module it fetches. GOTOOLCHAIN=local keeps this networked listing from
+// switching to, and downloading, another toolchain: go test puts the running,
+// pinned one first on PATH.
 func goListProbeEnv() []string {
 	drop := map[string]bool{
 		"GOOS":        true,
 		"GOARCH":      true,
 		"CGO_ENABLED": true,
 		"GOFLAGS":     true,
+		"GOTOOLCHAIN": true,
 		"GOWORK":      true,
 	}
 
@@ -285,5 +299,142 @@ func goListProbeEnv() []string {
 		env = append(env, entry)
 	}
 
-	return append(env, "CGO_ENABLED=0", "GOENV=off", "GOFLAGS=-mod=readonly", "GOPROXY=off", "GOWORK=off")
+	return append(env, "CGO_ENABLED=0", "GOENV=off", "GOFLAGS=-mod=readonly", "GOTOOLCHAIN=local", "GOWORK=off")
+}
+
+// probeEnvSetting is the effective value of one variable as the go command reads
+// it: unset when no entry of the environment names the variable at all, which
+// differs from an entry that sets it to the empty string.
+type probeEnvSetting struct {
+	value string
+	set   bool
+}
+
+// allowProbeEnvSetting lets cmp compare probeEnvSetting, whose fields are
+// unexported because nothing outside this file reads them.
+var allowProbeEnvSetting = cmp.AllowUnexported(probeEnvSetting{})
+
+// effectiveProbeEnvSetting returns the setting the go command reads from env, the
+// environment slice of a child process, for the variable name: of the entries
+// that name it the last one wins, as an environment later in the slice overrides
+// an earlier one, and an entry wins over no entry at all.
+func effectiveProbeEnvSetting(env []string, name string) probeEnvSetting {
+	var setting probeEnvSetting
+
+	for _, entry := range env {
+		key, value, found := strings.Cut(entry, "=")
+		if found && key == name {
+			setting = probeEnvSetting{value: value, set: true}
+		}
+	}
+
+	return setting
+}
+
+// inheritProbeEnv sets name in this test's own environment for the length of t,
+// or unsets it when the setting names no value, so the environment the probe
+// inherits is the one a case names. t.Setenv records the inherited value and
+// restores it, unset included, so the unset below is undone as well.
+func inheritProbeEnv(t *testing.T, name string, setting probeEnvSetting) {
+	t.Helper()
+
+	t.Setenv(name, "")
+	if setting.set {
+		t.Setenv(name, setting.value)
+
+		return
+	}
+
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("os.Unsetenv(%s): %v", name, err)
+	}
+}
+
+// TestGoListProbeEnv pins the environment the browser-driver probe's go list runs
+// in (issue #391): the settings goListProbeEnv fixes whatever it inherits, and
+// GOPROXY, which it passes through instead.
+//
+// The assertions are on the effective value of each variable, the one the go
+// command reads from the environment slice: an entry appended by the probe wins,
+// so a probe that stopped fixing a setting would show the hostile inherited one,
+// and a probe that added a setting of its own — GOPROXY=off, the regression the
+// AI reviewer asked this test for — would show it here rather than in a release
+// run with an empty module cache, the only place it used to show.
+//
+// GOPROXY is the case the two kinds of regression meet in: with GOPROXY=off
+// inherited, a probe that also appended GOPROXY=off would still agree, so a proxy
+// URL and no GOPROXY at all are the cases that catch an appended one, and a
+// dropped pass-through is what the effective value of the inherited URL checks.
+// No case runs a child process or touches the network: goListProbeEnv only builds
+// a slice of strings, and t.Setenv forbids t.Parallel, the whole test's as well.
+func TestGoListProbeEnv(t *testing.T) {
+	// hostile is the environment a developer's shell or a CI step may hand the
+	// probe: a setting that would change what it lists (-mod=mod, a go.work) or
+	// which toolchain runs it, and a GOENV file that would do both. Every one of
+	// them is one the probe must replace.
+	hostile := map[string]string{
+		"GOFLAGS":     "-mod=mod",
+		"GOENV":       "/some/file",
+		"GOTOOLCHAIN": "auto",
+		"GOWORK":      "/some/go.work",
+	}
+
+	// fixed are the settings the probe must carry whatever it inherited: a
+	// listing that keeps go.mod as it is (go.sum pins and verifies every module
+	// it fetches), runs the toolchain go test runs, and reads no go env -w file
+	// (GOENV=off) and no workspace, so it reads the files the product listings
+	// read. GOPROXY is not among them: the probe passes it through.
+	fixed := []struct {
+		name    string
+		setting probeEnvSetting
+	}{
+		{name: "GOFLAGS", setting: probeEnvSetting{value: "-mod=readonly", set: true}},
+		{name: "GOENV", setting: probeEnvSetting{value: "off", set: true}},
+		{name: "GOTOOLCHAIN", setting: probeEnvSetting{value: "local", set: true}},
+		{name: "GOWORK", setting: probeEnvSetting{value: "off", set: true}},
+	}
+
+	for _, tc := range []struct {
+		name        string
+		goproxy     probeEnvSetting
+		wantGOPROXY probeEnvSetting
+	}{
+		{
+			name:        "an inherited GOPROXY=off is passed through",
+			goproxy:     probeEnvSetting{value: "off", set: true},
+			wantGOPROXY: probeEnvSetting{value: "off", set: true},
+		},
+		{
+			name:        "an inherited proxy URL is passed through",
+			goproxy:     probeEnvSetting{value: "https://proxy.example.com", set: true},
+			wantGOPROXY: probeEnvSetting{value: "https://proxy.example.com", set: true},
+		},
+		{
+			name:        "an unset GOPROXY stays unset",
+			goproxy:     probeEnvSetting{},
+			wantGOPROXY: probeEnvSetting{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for name, value := range hostile {
+				t.Setenv(name, value)
+			}
+
+			inheritProbeEnv(t, "GOPROXY", tc.goproxy)
+
+			env := goListProbeEnv()
+
+			wants := append([]struct {
+				name    string
+				setting probeEnvSetting
+			}{{name: "GOPROXY", setting: tc.wantGOPROXY}}, fixed...)
+
+			for _, want := range wants {
+				got := effectiveProbeEnvSetting(env, want.name)
+				if diff := cmp.Diff(want.setting, got, allowProbeEnvSetting); diff != "" {
+					t.Errorf("goListProbeEnv() passes %s to the probe's go list as (-want +got):\n%s", want.name, diff)
+				}
+			}
+		})
+	}
 }
