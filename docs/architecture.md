@@ -112,8 +112,25 @@ Arrows are imports. They point inwards only:
   the CLI. `make lint` and CI's lint matrix lint `js/wasm` as an extra target beside the release platforms,
   and `test/architecture` holds the module's dependency tree to no `net`, `net/http`, `os/exec` or cloud
   SDK and the gzip-compressed module script to 3 MiB.
+- **The site** (PRD #297 milestone 2, ADR 0036) is outside the Go layers. `site/` holds its pages, its
+  stylesheet and its one page script, which loads the module and is the only JavaScript of the site's own.
+  `ci/sitebuild`, the program `make site` runs (and the release, from milestone 3), is CI tooling held
+  by the strict rule `site-builder` to named standard packages and, as its one exception, the three
+  embedded-snapshot targets (`ovhcloud`, `scaleway`, `upcloud`), `internal/domain/catalog` and
+  `internal/version`. It constructs the three targets to write their snapshot dates and regions, and the
+  version, into the pages: the one place outside `cmd/` that constructs adapters, which is why
+  `adapters-are-built-in-cmd` leaves it out (ADR 0036). It assembles the reproducible bundle: content-addressed files, the module embedded in a
+  script of one fixed template, the Subresource Integrity values and the version. Three layers hold the
+  promise that nothing leaves the browser. Layer 1 is `test/site`'s banned-API scan of the page script and
+  of the glue's allow list. Layer 2 is each page's Content Security Policy (`connect-src 'none'`,
+  `img-src 'none'`, `worker-src 'none'`, Trusted Types with the one policy `shift2eu-report`). Layer 3 is
+  the reproducible, attested bundle. `test/browser`, behind `browser && !js`, drives the built bundle in a
+  headless Chromium with `chromedp`, which depguard confines to it (`chromedp-only-in-the-browser-test`,
+  `browser-smoke-test`); `make test-browser` runs it against a container pinned by digest, with DevTools on
+  127.0.0.1 only, and CI runs it as its own job.
 - **`cmd/shift2eu`** and **`cmd/shift2eu-server`** are the composition roots, the only places that construct
-  adapters and inject them: `cmd/shift2eu` into the CLI, `cmd/shift2eu-server` into the HTTP API. `cmd/shift2eu`'s
+  adapters and inject them (besides `cmd/shift2eu-web`, and `ci/sitebuild`, which constructs the three
+  targets only to read their catalogs): `cmd/shift2eu` into the CLI, `cmd/shift2eu-server` into the HTTP API. `cmd/shift2eu`'s
   imports are a strict allow list (`composition-root`, issue #101): the module's own packages and the
   standard packages it needs today (`context`, `os`, `os/signal`, `syscall`), and no third-party package.
   The rule holds `cmd/shift2eu` only. `cmd/shift2eu-server` (PRD #103 milestone 3) is held by its sibling,

@@ -9,12 +9,19 @@ import (
 // allowedSavedPages names the saved-page-shaped files git may track, by their
 // slash-separated path relative to the module root: a file with a saved web
 // page extension (savedPageExtensions) or a file under a *_files directory.
-// Today git ls-files lists none, so it is empty. A saved price page never
-// belongs here: it is read from a scratch directory outside the repository
-// (issue #212). Add an entry only for a file the project itself writes and
-// needs in git, such as an HTML fixture a renderer test reads, with a comment
-// on the entry saying why it is no saved page.
-var allowedSavedPages = map[string]bool{}
+// A saved price page never belongs here: it is read from a scratch directory
+// outside the repository (issue #212). Add an entry only for a file the project
+// itself writes and needs in git, such as an HTML fixture a renderer test reads,
+// with a comment on the entry saying why it is no saved page.
+var allowedSavedPages = map[string]bool{
+	// The site's three pages are the templates ci/sitebuild renders into the
+	// bundle (PRD #297, milestone 2): the project writes them, they load nothing
+	// from a third party and they are no saved web page; the builder and the
+	// site's static checks read them from git.
+	"site/index.html":   true,
+	"site/privacy.html": true,
+	"site/verify.html":  true,
+}
 
 // savedPageExtensions are the lower-cased final extensions of the forms a
 // browser saves a web page in: HTML and its XHTML and server-side-include

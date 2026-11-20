@@ -184,6 +184,28 @@ jobs:
       - name: Each archive holds its own binary
         run: .github/scripts/verify-archives.sh
 
+  # The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036): make test-browser builds
+  # the bundle with make site, runs the headless Chromium the Makefile pins by digest with the host network
+  # and DevTools on 127.0.0.1 only, and drives the bundle served from a local httptest origin. The test
+  # never touches the internet; the image pull is the job's only download beyond Go's.
+  browser:
+    name: Browser smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # cache: false, as lint-target's: an entry saved here would be the one the Test job restores.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Smoke test the site's bundle in a headless Chromium
+        run: make test-browser
+
   # The dry run of release-please.yml (issues #142 and #157, ADR 0021): its guard, tag and relabel steps'
   # own scripts, read from the workflow, run against a fake gh with canned API responses, so a change to
   # how the tag's version is read and validated, to when the step refuses to tag, to the outputs it hands

@@ -96,7 +96,10 @@ func main() {
 // and json are the downloads' bytes, which it offers as blobs and never
 // inserts as HTML; only html is markup, the HTML reporter's fragment. A panic
 // in the assessment is recovered and returned as an internal failure with a
-// constant message, so the module stays usable for the next assessment.
+// constant message, so the module stays usable for the next assessment. A
+// JavaScript exception thrown by a getter of the options object is no panic:
+// syscall/js cannot catch it, so it propagates and shift2euAssess throws to
+// the page, whose own call catches it and shows a constant message (ADR 0036).
 func assess(assessor *web.Assessor, args []js.Value) (result any) {
 	defer func() {
 		if recover() != nil {

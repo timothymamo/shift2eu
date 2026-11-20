@@ -1,6 +1,7 @@
 package markdown
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 
@@ -240,7 +241,7 @@ func notEstimatedReasons(estimates []estimate.Estimate, inTable bool) string {
 	var phrases []string
 
 	add := func(e estimate.Estimate) {
-		if p := renderNotEstimated(e, inTable); !contains(phrases, p) {
+		if p := renderNotEstimated(e, inTable); !slices.Contains(phrases, p) {
 			phrases = append(phrases, p)
 		}
 	}
@@ -254,23 +255,12 @@ func notEstimatedReasons(estimates []estimate.Estimate, inTable bool) string {
 	}
 
 	for _, e := range estimates {
-		if !e.Estimated && !contains(reasonOrder, e.Reason) {
+		if !e.Estimated && !slices.Contains(reasonOrder, e.Reason) {
 			add(e)
 		}
 	}
 
 	return strings.Join(phrases, nameSeparator)
-}
-
-// contains reports whether list holds v.
-func contains[T comparable](list []T, v T) bool {
-	for _, x := range list {
-		if x == v {
-			return true
-		}
-	}
-
-	return false
 }
 
 // estimatesOf returns the estimates of verdicts, in their order, leaving out a

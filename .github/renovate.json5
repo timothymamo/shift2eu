@@ -165,5 +165,17 @@
         '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+\\S+:\\s*(?:image=[^\\s:]+:)?"?(?<currentValue>[^"\\s@]+)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?"?',
       ],
     },
+    {
+      // The Makefile's container image pins (PRD #297 milestone 2: make test-browser's headless Chromium,
+      // which CI's browser job runs through make, so this is its one copy): "# renovate: datasource=docker
+      // depName=<image>" above "NAME := <image>:<tag>@sha256:<digest>". Renovate updates the tag and the
+      // digest together.
+      description: 'Container images pinned by tag and digest in the Makefile',
+      customType: 'regex',
+      managerFilePatterns: ['/^Makefile$/'],
+      matchStrings: [
+        '# renovate: datasource=(?<datasource>docker) depName=(?<depName>\\S+)\\s+[A-Z_]+\\s*:=\\s*[^\\s:]+:(?<currentValue>[^\\s@]+)@(?<currentDigest>sha256:[a-f0-9]{64})',
+      ],
+    },
   ],
 }

@@ -246,7 +246,9 @@ func bestOfferings(candidates []mapping.Candidate) []catalog.Offering {
 // offeredIn returns the offerings available in region
 // (catalog.Offering.AvailableIn, the availability mapping.MapIn scopes a
 // region by), in their order. An offering elsewhere has no price in region, so
-// leaving it out changes no price.
+// leaving it out changes no price: every plan price and storage price of an
+// offering is in one of the offering's regions, because catalog.New, the only
+// constructor of a catalog.Catalog, refuses any other (catalog.ErrPriceRegion).
 func offeredIn(offerings []catalog.Offering, region string) []catalog.Offering {
 	var out []catalog.Offering
 

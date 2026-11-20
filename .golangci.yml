@@ -12,13 +12,19 @@ version: "2"
 #     test elsewhere gets no depguard rule.
 #   - forbidigo's cloud-read-only group checks them like any other file,
 #     which matters most here, where the credentials are real.
-# e2e and integration are the only custom build tags. Never negate them: lint
-# always sets both, so a file behind !e2e or !integration would never be
-# linted, and test/lint refuses such a build constraint.
+#   - the site's headless-browser smoke test, test/browser (PRD #297
+#     milestone 2), is behind the browser tag; its test files have the strict
+#     rule browser-smoke-test, and chromedp-only-in-the-browser-test keeps the
+#     browser driver out of every other file.
+# e2e, integration and browser are the only custom build tags. Never negate
+# them: lint always sets all three, so a file behind !e2e, !integration or
+# !browser would never be linted, and test/lint refuses such a build
+# constraint.
 run:
   build-tags:
     - e2e
     - integration
+    - browser
 
 linters:
   default: standard
@@ -323,6 +329,10 @@ linters:
         # helpers' own _test.go files are held too. An import rule sees no
         # call, so the forbidigo group testutil-no-env refuses the environment
         # reads, directory lookups and process start that os alone allows.
+        # os is also how the report guards' reader finds the module root, from
+        # os.Getwd up to the directory holding go.mod (issue #308), and that
+        # path needs no runtime: runtime.Caller records a module-relative path
+        # under go test -trimpath, which names no directory on disk.
         # A new import needs an entry here and in test/architecture's pin in
         # the same commit.
         testutil-imports:
@@ -345,7 +355,11 @@ linters:
             - strings$
             - testing$
             - time$
+            - go/ast$
+            - go/parser$
+            - go/token$
             - github.com/timothymamo/shift2eu/internal/domain/catalog$
+            - github.com/timothymamo/shift2eu/internal/domain/estimate$
             - github.com/timothymamo/shift2eu/internal/domain/taxonomy$
             - github.com/timothymamo/shift2eu/internal/testutil$
         # The driving adapter gets its adapters from the composition root
@@ -568,6 +582,13 @@ linters:
         # network through their SDK, so they share the strict allow list
         # cloud-adapters-reach-the-cloud-through-the-sdk (ADR 0014), which
         # names no helper under internal/adapter/internal/ at all.
+        #
+        # ci/sitebuild, the site's builder (PRD #297 milestone 2), is left out
+        # too: a main package nothing imports, it constructs the three
+        # embedded-snapshot targets to write their snapshot dates and regions
+        # into the pages, as the composition roots construct them. Its strict
+        # rule, site-builder, names exactly those three adapters, each ending
+        # in $, and no other adapter.
         adapters-are-built-in-cmd:
           list-mode: lax
           files:
@@ -576,6 +597,7 @@ linters:
             - "!**/cmd/shift2eu/**"
             - "!**/cmd/shift2eu-server/**"
             - "!**/cmd/shift2eu-web/**"
+            - "!**/ci/sitebuild/**"
           allow:
             - github.com/timothymamo/shift2eu/internal/adapter/internal/jsondoc$
             - github.com/timothymamo/shift2eu/internal/adapter/target/snapshot$
@@ -1431,9 +1453,11 @@ linters:
         # (docs/adr/0035).
         #
         # context$ is for the context Report takes, fmt$ for fmt.Fprintf to
-        # the given writer, and io$ for io.Writer. An allowed package can
-        # still hold a function that does I/O, which an import rule cannot
-        # see: a reporter must not call fmt.Print* (which writes to stdout).
+        # the given writer, io$ for io.Writer, and slices$ (pure, and already
+        # on the domain's list) for slices.Contains (issue #311). An allowed
+        # package can still hold a function that does I/O, which an import
+        # rule cannot see: a reporter must not call fmt.Print* (which writes
+        # to stdout).
         # Review holds that line; a forbidigo rule (issue #43) could.
         #
         # The allow list already refuses every package below; these entries
@@ -1452,6 +1476,7 @@ linters:
             - context$
             - fmt$
             - io$
+            - slices$
             - strconv$
             - strings$
             - encoding/json$
@@ -1511,6 +1536,83 @@ linters:
           deny:
             - pkg: github.com/google/go-cmp
               desc: go-cmp is a test-only dependency
+        # The browser driver (PRD #297 milestone 2, decision 7): chromedp and
+        # cdproto drive a headless Chromium over the DevTools protocol, which
+        # only the site's smoke test, test/browser, may do. Every other file of
+        # the module, tests included, is refused them, and
+        # test/architecture's TestNoProductBinaryReachesChromedp holds the
+        # product binaries' dependency trees to the same. Any package only
+        # chromedp brings in belongs in this deny too: that check refuses
+        # the driver's dependency tree as go list sees it, and
+        # github.com/go-json-experiment/ is reached only under cdproto's
+        # cdproto_jsoncompat build tag, which the listing does not compile
+        # (test/architecture/browserdriver_test.go).
+        chromedp-only-in-the-browser-test:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!**/test/browser/**"
+          deny:
+            - pkg: github.com/chromedp/
+              desc: only the site's browser smoke test, test/browser, drives a browser (PRD #297)
+            - pkg: github.com/go-json-experiment/
+              desc: cdproto, the protocol library the browser driver brings in, encodes with it under its cdproto_jsoncompat build tag (PRD #297)
+        # The site's headless-browser smoke test (PRD #297 milestone 2). Its
+        # test files, behind the browser tag, are held to exactly what they
+        # import: the standard packages for the local httptest origins, the
+        # CLI and go commands they compare the downloads with, and the two
+        # variables make test-browser sets (SHIFT2EU_DEVTOOLS_URL and
+        # SHIFT2EU_SITE_BUNDLE), and the browser driver's packages, each
+        # ending in $. Its one production file, doc.go, imports nothing and is
+        # held by browser-smoke-test-doc. The tests run in their own test
+        # binary, which no composition root links.
+        browser-smoke-test:
+          list-mode: strict
+          files:
+            - "**/test/browser/**/*_test.go"
+            - "**/test/browser/*_test.go"
+          allow:
+            - context$
+            - encoding/json$
+            - fmt$
+            - net/http$
+            - net/http/httptest$
+            - os$
+            - os/exec$
+            - path/filepath$
+            - regexp$
+            - slices$
+            - strconv$
+            - strings$
+            - sync$
+            - testing$
+            - time$
+            - github.com/chromedp/cdproto/accessibility$
+            - github.com/chromedp/cdproto/browser$
+            - github.com/chromedp/cdproto/network$
+            - github.com/chromedp/cdproto/page$
+            - github.com/chromedp/chromedp$
+            - github.com/chromedp/chromedp/kb$
+            - github.com/chromedp/chromedp/remote$
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/
+              desc: the smoke test drives the built bundle and the CLI as black boxes; it imports no package of the module
+        # test/browser's one production file, doc.go, which carries no build
+        # tag so that go test ./... accepts the package: it imports nothing, so
+        # the rule allows nothing (allow: [] and the one deny entry, os, as
+        # config-is-pure). It is a rule of its own rather than an entry of
+        # test-docs-are-pure, which the package check skips, because
+        # browser-smoke-test holds the test files alone and the package check
+        # must read a rule that holds the package's own imports.
+        browser-smoke-test-doc:
+          list-mode: strict
+          files:
+            - "**/test/browser/**"
+            - "!$test"
+          allow: []
+          deny:
+            - pkg: os
+              desc: test/browser's doc.go imports nothing; its tests, behind the browser tag, are held by browser-smoke-test
         # The composition roots' _test.go files (issue #111). The strict
         # rules composition-root and server-composition-root skip test files
         # (!$test), yet a test is compiled into the root's package and runs in
@@ -1699,6 +1801,10 @@ linters:
         # anywhere, testdata, _ and . directories included. The testdata, _ and . exemption of
         # ./... covers non-Go files only. A package under testdata or _x is still built when it
         # is imported by path, which that check does not cover (the follow-up to #194).
+        # test/site (PRD #297 milestone 2), the site's static checks, is held here too: its
+        # doc.go is its one production file and imports nothing, and its helper
+        # test/site/internal/jsscan, which Go's internal rule keeps out of reach of the roots, is
+        # taken out with a negated glob as test/architecture's internal tree is.
         test-docs-are-pure:
           list-mode: strict
           files:
@@ -1712,6 +1818,8 @@ linters:
             - "**/test/examples/**"
             - "**/test/lint/**"
             - "**/test/openapibundle/**"
+            - "**/test/site/**"
+            - "!**/test/site/internal/**"
             - "!$test"
           allow: []
           deny:
@@ -1774,6 +1882,53 @@ linters:
             - strconv$
             - strings$
             - time$
+        # The site's builder (PRD #297 milestone 2) is no part of the product:
+        # a main package, which Go refuses to import, run by make site, the
+        # site tests and the release. It is held all the same, to the standard
+        # packages it imports and the module's packages it reads, each ending
+        # in $: the three embedded-snapshot targets, whose snapshot dates and
+        # regions it writes into the pages (which is why
+        # adapters-are-built-in-cmd leaves it out), the catalog type they
+        # return, and internal/version for the development value an untagged
+        # build shows. os and os/exec are for the site's sources, the bundle and
+        # the go command it runs (go env, and go build of the module); the
+        # forbidigo group site-builder-env refuses every read of the
+        # environment and every lookup of a home, config, cache or temp
+        # directory, so the go command gets the environment the builder was
+        # given through exec.Cmd.Environ, with the build settings fixed.
+        site-builder:
+          list-mode: strict
+          files:
+            - "**/ci/sitebuild/**"
+            - "!$test"
+          allow:
+            - archive/tar$
+            - bytes$
+            - compress/gzip$
+            - context$
+            - crypto/sha256$
+            - crypto/sha512$
+            - encoding/base64$
+            - encoding/hex$
+            - encoding/json$
+            - errors$
+            - flag$
+            - fmt$
+            - html/template$
+            - io$
+            - io/fs$
+            - os$
+            - os/exec$
+            - path/filepath$
+            - regexp$
+            - slices$
+            - strings$
+            - time$
+            - github.com/timothymamo/shift2eu/internal/adapter/target/ovhcloud$
+            - github.com/timothymamo/shift2eu/internal/adapter/target/scaleway$
+            - github.com/timothymamo/shift2eu/internal/adapter/target/upcloud$
+            - github.com/timothymamo/shift2eu/internal/domain/catalog$
+            - github.com/timothymamo/shift2eu/internal/version$
     exhaustive:
       default-signifies-exhaustive: true
     # forbidigo refuses calls, which an import rule cannot see. Its entries
@@ -2349,6 +2504,20 @@ linters:
         - pattern: '^os\.(?:ReadFile|Open|OpenFile|ReadDir)$'
           pkg: '^os$'
           msg: 'ai-reviewer-one-process: the library of the AI reviewer reads no file; ci/aireview hands it the pull request and the instructions as strings (ADR 0033)'
+        # Group site-builder-env (PRD #297 milestone 2): the site's builder
+        # reads no environment variable, starts no process through os and
+        # locates no home, config, cache or temp directory: its scratch
+        # directory is made beside the bundle it was told to write. It runs the
+        # go command with os/exec in the environment it was given, through
+        # exec.Cmd.Environ, with GOOS, GOARCH, CGO_ENABLED, GOFLAGS and GOWORK
+        # fixed, as make runs it; it never reads, prints or keeps a value of
+        # that environment (CLAUDE.md rule 3). depguard keeps syscall and
+        # unsafe out of it (site-builder). Scope: every file under
+        # ci/sitebuild/, _test.go files included; its exclusion rule drops it
+        # everywhere else.
+        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+          pkg: '^os$'
+          msg: 'site-builder-env: the site builder reads no environment variable, locates no home, config, cache or temp directory and starts no process through os; it runs the go command with os/exec in the environment it was given (CLAUDE.md rule 3)'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -2520,6 +2689,12 @@ linters:
         linters:
           - forbidigo
         text: 'because "ai-reviewer-one-process: [^"]*"$'
+      # site-builder-env: the group holds for every file under ci/sitebuild/,
+      # _test.go files included, and nowhere else.
+      - path-except: ^ci/sitebuild/
+        linters:
+          - forbidigo
+        text: 'because "site-builder-env: [^"]*"$'
 
 formatters:
   enable:
