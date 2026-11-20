@@ -250,12 +250,12 @@ To resize an existing VM without recreating it, keeping its tools, login and con
 edit it with `limactl edit` (sizes in GiB; Lima can grow a disk but not shrink it):
 
 ```bash
-# Mac
+# Mac, host clone
 make vm-stop
 ```
 
 ```bash
-# Mac, once make vm-stop has returned and the VM is stopped
+# Mac, host clone, once make vm-stop has returned and the VM is stopped
 limactl edit --tty=false --cpus=5 --memory=7 --disk=58 shift2eu
 limactl edit --tty=false --set '.ssh.localPort = 60022' shift2eu   # only to change the SSH port
 make vm-up
@@ -265,12 +265,12 @@ The alternative is to rebuild it, which loses everything inside it (its login, t
 `make vm-create` sets it up again:
 
 ```bash
-# Mac
+# Mac, host clone
 make vm-delete
 ```
 
 ```bash
-# Mac, once make vm-delete has succeeded (on a failure, stop here)
+# Mac, host clone, once make vm-delete has succeeded (on a failure, stop here)
 make vm-create VM_CPUS=5 VM_MEMORY=7GiB VM_DISK=58GiB VM_SSH_PORT=60022
 ```
 
@@ -327,12 +327,12 @@ and runs the provisioning again (sizes in GiB, as `swapSize` takes them). The in
 `LIMA_INSTANCE` names another, as for the make targets:
 
 ```bash
-# Mac
+# Mac, host clone
 make vm-stop
 ```
 
 ```bash
-# Mac, once make vm-stop has returned and the VM is stopped
+# Mac, host clone, once make vm-stop has returned and the VM is stopped
 limactl edit --tty=false --set '.param.swapSize = "8GiB"' "${LIMA_INSTANCE:-shift2eu}"
 make vm-up
 ```
@@ -1183,13 +1183,27 @@ sshd and fails with what sshd reads. Then it pins the VM's host key in the accou
 ```bash
 # Mac Mini
 limactl stop shift2eu
+```
+
+```bash
+# Mac Mini, once limactl stop has returned and the VM is stopped
 limactl edit --set '.ssh.localPort = 48022' shift2eu   # answer no if it asks to start the instance
 # PASS: exits 0
 grep -n localPort ~/.lima/shift2eu/lima.yaml           # PASS: localPort: 48022
 limactl start shift2eu
 limactl list --format '{{.SSHLocalPort}}' shift2eu     # PASS: exactly 48022
 nc -z 127.0.0.1 48022 && echo open                     # PASS: open
-limactl stop shift2eu && limactl start shift2eu
+# FAIL any of these: stop and report it with limactl --version
+```
+
+```bash
+# Mac Mini
+limactl stop shift2eu
+```
+
+```bash
+# Mac Mini, once limactl stop has returned
+limactl start shift2eu
 limactl list --format '{{.SSHLocalPort}}' shift2eu     # PASS: still 48022
 # FAIL any of these: stop and report it with limactl --version
 ```
