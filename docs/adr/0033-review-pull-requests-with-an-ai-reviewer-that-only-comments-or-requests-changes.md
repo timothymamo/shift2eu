@@ -246,21 +246,30 @@ reference data, and every schema version bump would be refused the same way. The
   cut to 300 UTF-16 code units), so the maintainer knows what the AI review did not read. The note
   states the total, lists the first 50 paths (`MaxListedExcluded`), each with the lines it adds
   (`(+3 lines)`, issue #342), a binary file as `(binary, not scanned)`, a rename's old path as
-  `(renamed)` and a copy's source path as `(copied)`, and says how many more it does not list. Amended by issue #342: **a model-free scan
-  reads the lines the left-out sections add** (`ScanLeftOut`; never a removed or context line, never a
-  reviewed file) for a twelve-digit account ID, an IPv4 address, a host name and a key-like string
-  (an access key ID, a long token, or a secret access key: a run holding `+` or `/` is one only at
-  exactly 40 characters, so a path or URL is none), by fixed rules that know the
-  sanitised values of CLAUDE.md rule 2. An example domain is no finding at any depth; a provider's
-  domain only as its apex, exactly one label below it, or for `amazonaws.com` `<service>.<region>`:
-  a deeper name is one a customer chose. The left-out paths themselves are shown as they are, escaped
-  and cut, and are not scanned: the pull request's own file list already shows them. The note lists
-  the scan's first 20 findings (`MaxScanFindings`) as the file and line in a code span and the kind
-  found, never the value, and counts the rest. The scan is no part of the prompt, adds no finding to
-  the model's and changes no event. Like the first line and the closing statement, the note is outside
-  the part cut at GitHub's limit: its room is taken off the review's, so a truncated review still
-  holds it whole, and its own bound keeps it to a small part of that limit whatever the pull request
-  changes. A review that left nothing out has no such note.
+  `(renamed)` and a copy's source path as `(copied)`, and says how many more it does not list.
+  Amended by issue #342: **a model-free scan reads the lines the left-out sections add**
+  (`ScanLeftOut`; never a removed or context line, never a reviewed file) for a twelve-digit account
+  ID, an IPv4 address, a host name and a key-like string (an access key ID, a long token, or a secret
+  access key: a run holding `+` or `/` is one only at exactly 40 characters, so a path or URL is none),
+  by fixed rules that know the sanitised values of CLAUDE.md rule 2. An example domain is no finding
+  at any depth; a provider's domain only as its apex, exactly one label below it, or for
+  `amazonaws.com` `<service>.<region>`: a deeper name is one a customer chose. A selector of Go code
+  is no host name (issue #365): its first label starts lower case with no digit or hyphen, the label
+  before the last does not start upper case, and the last is spelt as an exported identifier, an
+  upper-case letter with a lower-case one right after it (`slog.Info`, `r.cfg.App`). What follows the
+  name plays no part, so `db01.corp.info(primary)`, `Shop.Acme.Com` and `db01.corp.Info` are host
+  names. A host in lower case with only its top-level domain in title case (`contoso.Com`,
+  `db.corp.Info`, `mail.contoso.Com`) is an accepted false negative: spelt like a selector, it cannot
+  be told from `cfg.Info`, and the spelling is rare, as hosts are written all lower or all upper case
+  (both found). A false positive, or a false negative that hides real data, is fixed in the scan's
+  rules, never with an allow list of paths. The left-out paths themselves are shown as they are,
+  escaped and cut, and are not scanned: the pull request's own file list already shows them. The note
+  lists the scan's first 20 findings (`MaxScanFindings`) as the file and line in a code span and the
+  kind found, never the value, and counts the rest. The scan is no part of the prompt, adds no finding
+  to the model's and changes no event. Like the first line and the closing statement, the note is
+  outside the part cut at GitHub's limit: its room is taken off the review's, so a truncated review
+  still holds it whole, and its own bound keeps it to a small part of that limit whatever the pull
+  request changes. A review that left nothing out has no such note.
 - **The model is told what was left out.** The untrusted JSON document lists the left-out paths in its
   own field, `left_out_of_diff` (they are the pull request's data, never in the system prompt), and the
   system prompt says that a file listed there was left out on purpose, so its absence is no missing or

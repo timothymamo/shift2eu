@@ -216,47 +216,74 @@ func TestExamplesReportVariants(t *testing.T) {
 		// run names the version: `--format json` alone writes version 3
 		// (docs/adr/0030, issue #307).
 		got := assess(t, scalewayKey, inventory, "--format", jsonFormat, "--schema-version", "2")
-		if got.code != 0 {
-			t.Fatalf("exit code = %d, want 0; stderr = %q", got.code, got.stderr)
-		}
-
-		if got.stderr != "" {
-			t.Errorf("stderr = %q, want empty", got.stderr)
-		}
-
-		if !json.Valid([]byte(got.stdout)) {
-			t.Fatalf("stdout is not valid JSON:\n%s", got.stdout)
-		}
-
-		var doc exampleDocument
-		if err := json.Unmarshal([]byte(got.stdout), &doc); err != nil {
-			t.Fatalf("decoding the document: %v", err)
-		}
-
-		if doc.SchemaVersion != 2 {
-			t.Errorf("schemaVersion = %d, want 2, the version the run names with --schema-version (docs/adr/0030)",
-				doc.SchemaVersion)
-		}
-
-		if doc.Kind != "assessment" {
-			t.Errorf("kind = %q, want %q", doc.Kind, "assessment")
-		}
-
-		if len(doc.Workloads) == 0 {
-			t.Errorf("the document holds no workload, want the sample's workloads:\n%s", got.stdout)
-		}
-
-		if doc.Estimate == nil {
-			t.Fatalf("the document holds no estimate: the sample is sized\n%s", got.stdout)
-		}
-
-		if doc.Estimate.Total.Estimated == 0 {
-			t.Errorf("the estimate total counts %d estimated resource(s) of %d, want at least one: "+
-				"the sample is sized", doc.Estimate.Total.Estimated, doc.Estimate.Total.Resources)
-		}
+		checkSampleJSONDocument(t, got, 2, "the version the run names with --schema-version (docs/adr/0030)")
 
 		testutil.Golden(t, goldenPath("examples-aws-scaleway.json.golden"), []byte(got.stdout))
 	})
+
+	t.Run("json default schema version", func(t *testing.T) {
+		t.Parallel()
+
+		// The command the guide gives, exactly: `--format json` and no
+		// --schema-version, so the run must write the version it emits when it
+		// names none, the version 3 document (docs/adr/0030, issue #307).
+		got := assess(t, scalewayKey, inventory, "--format", jsonFormat)
+		checkSampleJSONDocument(t, got, schemaVersionCurrent,
+			"the default version of a JSON run, which docs/adr/0030 and issue #307 make version 3")
+
+		testutil.Golden(t, goldenPath("examples-aws-scaleway.v3.json.golden"), []byte(got.stdout))
+	})
+}
+
+// checkSampleJSONDocument fails unless got is the result of a successful run that
+// wrote no stderr and a valid schema version wantVersion assessment document of
+// the sample: it groups the workloads and estimates at least one resource, so
+// the sample is sized. why says why that schemaVersion is the expected one, in
+// the failure message.
+//
+// The shared checks live here because two runs write a JSON document of the
+// sample: the one that names the version and the one that takes the default.
+// The shared fixture's documents have a helper of their own in assess_test.go.
+func checkSampleJSONDocument(t *testing.T, got result, wantVersion int, why string) {
+	t.Helper()
+
+	if got.code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr = %q", got.code, got.stderr)
+	}
+
+	if got.stderr != "" {
+		t.Errorf("stderr = %q, want empty", got.stderr)
+	}
+
+	if !json.Valid([]byte(got.stdout)) {
+		t.Fatalf("stdout is not valid JSON:\n%s", got.stdout)
+	}
+
+	var doc exampleDocument
+	if err := json.Unmarshal([]byte(got.stdout), &doc); err != nil {
+		t.Fatalf("decoding the document: %v", err)
+	}
+
+	if doc.SchemaVersion != wantVersion {
+		t.Errorf("schemaVersion = %d, want %d: %s", doc.SchemaVersion, wantVersion, why)
+	}
+
+	if doc.Kind != "assessment" {
+		t.Errorf("kind = %q, want %q", doc.Kind, "assessment")
+	}
+
+	if len(doc.Workloads) == 0 {
+		t.Errorf("the document holds no workload, want the sample's workloads:\n%s", got.stdout)
+	}
+
+	if doc.Estimate == nil {
+		t.Fatalf("the document holds no estimate: the sample is sized\n%s", got.stdout)
+	}
+
+	if doc.Estimate.Total.Estimated == 0 {
+		t.Errorf("the estimate total counts %d estimated resource(s) of %d, want at least one: "+
+			"the sample is sized", doc.Estimate.Total.Estimated, doc.Estimate.Total.Resources)
+	}
 }
 
 // exampleDocument is the part of a JSON report this file checks: the version

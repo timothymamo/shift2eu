@@ -76,6 +76,7 @@ supersedes it.
 - [0033. Review pull requests with an AI reviewer that only comments or requests changes](adr/0033-review-pull-requests-with-an-ai-reviewer-that-only-comments-or-requests-changes.md)
 - [0034. Run the agents App token refresh as a LaunchDaemon, so it survives a reboot](adr/0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md)
 - [0035. Run the assessment in the browser as a WebAssembly driving adapter](adr/0035-run-the-assessment-in-the-browser-as-a-webassembly-driving-adapter.md)
+- [0036. Hold the site to three trust layers, and test them in a headless browser](adr/0036-hold-the-site-to-three-trust-layers-and-test-them-in-a-headless-browser.md)
 
 ## Writing a page
 

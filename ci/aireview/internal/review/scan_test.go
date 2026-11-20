@@ -331,6 +331,88 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 1}},
 		},
 		{
+			// Issue #365: the scan's public TLDs hold info, app, dev, co, io
+			// and ai, so a dotted identifier of Go code read as a host name. No
+			// code is a host, and a golden that quotes code would have failed
+			// the scan for no reason.
+			name: "a dotted code name is no host name",
+			diff: goldenAdds(golden,
+				`slog.Info("the scan found nothing") cfg.App r.Dev errors.Is(err, errLeftOut)`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
+			// The TLDs a code name ends in carry real hosts too: narrowing the
+			// rules for the code names must not quiet the scan about a name a
+			// customer chose (issue #365).
+			name: "a host name in a TLD a code name also uses is still found",
+			diff: goldenAdds(golden,
+				`"db": "db01.corp.info"`,
+				`"shop": "shop.example.io"`,
+				`"account_id": "210987654321"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 3}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+				{Path: golden, Line: 3, Kind: review.ScanAccountID},
+			},
+		},
+		{
+			// Issue #365: the code-name rule hides a real host when it reads a
+			// "(" after the name as a call, and when it reads a mixed-case last
+			// label alone as an exported Go identifier. A host name ends in a
+			// public TLD whatever follows it, and only the whole run of code
+			// decides whether it is a code name, so every one of these is a
+			// host name (a golden that names a database, a customer's domain, a
+			// capitalised host or a URL would otherwise pass the scan).
+			name: "a host name a parenthesis or a mixed-case last label would have hidden is still found",
+			diff: goldenAdds(golden,
+				`"db01": "db01.corp.info(primary)"`,
+				`"shop": "Shop.Acme.Com"`,
+				`"corp": "Corp.Example.Info"`,
+				`"db": "db01.corp.Info"`,
+				`"mail": "https://Mail.Contoso.Net/x"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 5}},
+			wantFindings: []review.ScanFinding{
+				{Path: golden, Line: 1, Kind: review.ScanHostname},
+				{Path: golden, Line: 2, Kind: review.ScanHostname},
+				{Path: golden, Line: 3, Kind: review.ScanHostname},
+				{Path: golden, Line: 4, Kind: review.ScanHostname},
+				{Path: golden, Line: 5, Kind: review.ScanHostname},
+			},
+		},
+		{
+			// The narrowing the case above asks for must keep the code names
+			// quiet: a selector on a receiver, and a call of one whose
+			// parenthesis used to be the whole reason it was no host name
+			// (issue #365).
+			name:      "a chained selector and a call of one are no host name",
+			diff:      goldenAdds(golden, `slog.Info("nothing") r.cfg.App x.cfg.Info("y")`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
+			// An old configuration file writes its host names all upper case,
+			// which is no spelling of an exported Go identifier, so the
+			// code-name rule must not quiet the scan about it (issue #365).
+			name:         "an all-upper host name of an old configuration file is found",
+			diff:         goldenAdds(golden, `"host": "DB01.CORP.INFO"`),
+			wantFiles:    []review.LeftOutFile{{Path: golden, Added: 1}},
+			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanHostname}},
+		},
+		{
+			// This is a known and accepted false negative of the code-name
+			// rule (issue #365): spelt like a Go selector, it cannot be told
+			// from cfg.Info. Such a spelling is rare (configurations write
+			// hosts all lower case or all upper case, and both are found),
+			// and if it ever hides real data, the fix goes in the scan's
+			// rules, never in a path allow list. The miss is broader than
+			// that spelling: a two-label name such as contoso.Com or
+			// acme.Dev reads as code too.
+			name: "a host name in lower case with only its TLD in title case is an accepted miss",
+			diff: goldenAdds(golden, `"db": "db.corp.Info" "mail": "mail.contoso.Com" `+
+				`"site": "contoso.Com"`),
+			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
+		},
+		{
 			// A report's taxonomy categories read like host names, and the
 			// committed goldens are full of them.
 			name: "a taxonomy category is no host name",
@@ -610,6 +692,13 @@ func TestTheScanFindingsAreCapped(t *testing.T) {
 // below the repository root, and the rule for which of them is left out is the
 // reviewer's own (issue #324), restated here so the test names the files it
 // scans itself rather than trusting the code it checks.
+//
+// A failure here is a false positive of the scan or real data. A false positive
+// is fixed in the scan's rules (scanLine and the rules it reads), never with an
+// allow list of paths: a list of paths would have to grow with every fixture
+// this repository commits, and a file moved onto it would hide real data as the
+// scan went quiet about it (issue #365). Real data is removed from the fixture,
+// as CLAUDE.md rule 2 asks.
 func TestTheScanFindsNothingInTheCommittedGoldens(t *testing.T) {
 	t.Parallel()
 

@@ -1,0 +1,192 @@
+/* shift2eu's stylesheet (PRD #297): system fonts, and no reference to any other
+   file, so it loads nothing; colours meet WCAG 2.2 AA, which test/site checks. */
+
+:root {
+  --fg: #1a1a1a;
+  --bg: #ffffff;
+  --muted: #4a4a4a;
+  --accent: #0b4f94;
+  --accent-fg: #ffffff;
+  --border: #6b6b6b;
+  --surface: #f3f4f6;
+  --alert-fg: #8a1111;
+  --alert-bg: #fdf0f0;
+  --notice-border: #0b4f94;
+  color-scheme: light;
+}
+
+html {
+  background-color: var(--bg);
+}
+
+body {
+  margin: 0 auto;
+  max-width: 64rem;
+  padding: 0 1rem 2rem;
+  color: var(--fg);
+  background-color: var(--bg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+#report:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  padding: 1rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.lead {
+  font-size: 1.1rem;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.notice {
+  padding: 0.75rem 1rem;
+  color: var(--fg);
+  background-color: var(--surface);
+  border-left: 4px solid var(--notice-border);
+}
+
+fieldset {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid var(--border);
+}
+
+legend {
+  padding: 0 0.25rem;
+  font-weight: 700;
+}
+
+label {
+  display: inline-block;
+  margin: 0.25rem 0;
+}
+
+textarea,
+select,
+input[type="file"] {
+  max-width: 100%;
+  font: inherit;
+  color: var(--fg);
+  background-color: var(--bg);
+  border: 1px solid var(--border);
+}
+
+textarea {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+}
+
+.field {
+  margin: 0.75rem 0;
+}
+
+.target {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+button {
+  padding: 0.5rem 1rem;
+  font: inherit;
+  color: var(--accent-fg);
+  background-color: var(--accent);
+  border: none;
+  cursor: pointer;
+}
+
+button:disabled {
+  color: #ffffff;
+  background-color: #6b6b6b;
+  cursor: not-allowed;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  margin: 1rem 0;
+}
+
+.alert:not(:empty) {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  color: var(--alert-fg);
+  background-color: var(--alert-bg);
+  border: 2px solid var(--alert-fg);
+}
+
+#report {
+  margin-top: 1.5rem;
+  overflow-x: auto;
+}
+
+table {
+  border-collapse: collapse;
+  margin: 0.5rem 0 1rem;
+}
+
+th,
+td {
+  padding: 0.25rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid var(--border);
+}
+
+code {
+  padding: 0 0.2rem;
+  color: var(--fg);
+  background-color: var(--surface);
+  overflow-wrap: anywhere;
+}
+
+footer {
+  margin-top: 3rem;
+  padding-top: 1rem;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+}

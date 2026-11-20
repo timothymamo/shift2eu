@@ -17,7 +17,7 @@ import (
 // negatableTags are the build tags every lint run sets, run.build-tags in
 // .golangci.yml, which a build constraint must never negate.
 // TestNegatableTagsMatchGolangci keeps the two equal.
-var negatableTags = map[string]bool{"e2e": true, "integration": true}
+var negatableTags = map[string]bool{"browser": true, "e2e": true, "integration": true}
 
 // constraintHides says why comment, the text of a comment above a file's
 // package clause, could keep the file out of lint while a build compiles it.

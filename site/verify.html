@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'none'; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'; worker-src 'none'; child-src 'none'; frame-src 'none'; manifest-src 'none'; require-trusted-types-for 'script'; trusted-types shift2eu-report">
+<meta charset="utf-8">
+<meta http-equiv="x-dns-prefetch-control" content="off">
+<meta name="referrer" content="no-referrer">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Verify this site: shift2eu</title>
+<link rel="stylesheet" {{.StyleAttrs}}>
+<script {{.PageAttrs}} defer></script>
+</head>
+<body>
+<header class="site-header">
+<p class="brand"><a href="index.html">shift2eu</a></p>
+<nav aria-label="Site">
+<ul class="nav">
+<li><a href="index.html">Assessment</a></li>
+<li><a href="privacy.html">Privacy</a></li>
+<li><a href="verify.html" aria-current="page">Verify this site</a></li>
+<li><a href="https://github.com/timothymamo/shift2eu">Repository</a></li>
+</ul>
+</nav>
+</header>
+<main>
+<h1>Verify this site</h1>
+<p class="lead">This site is shift2eu {{.Version}}. Every release publishes the site's bundle, attested by the release workflow, so you can check that what you run is what the release built. The <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/verify-releases.md">release verification guide</a> has the exact commands; this page summarises them.</p>
+<p class="notice">Type https://www.shift2eu.com yourself rather than following an http:// link: on a first visit a network attacker can strip HTTPS and serve a look-alike page. The guide, served by GitHub, carries the same advice.</p>
+{{- if .HSTSWaived}}
+<p id="hsts-waived" class="notice">HSTS is not in force for www.shift2eu.com: the maintainer waived it. Without HSTS the downgrade risk covers returning visitors too, not only a first visit, so type https://www.shift2eu.com every time, or run the attested bundle locally.</p>
+{{- end}}
+
+<h2>Check the live site</h2>
+<ol>
+<li>Note the version this page shows, {{.Version}}, and download that release's site bundle, shift2eu-site_&lt;version&gt;.tar.gz, from the repository's releases.</li>
+<li>Verify its attestation with the GitHub CLI: <code>gh attestation verify</code> on the bundle with <code>--signer-workflow</code> naming the release workflow, <code>--source-ref refs/tags/&lt;tag&gt;</code> and <code>--deny-self-hosted-runners</code>.</li>
+<li>Read manifest.json in the bundle, fetch each file it lists from https://www.shift2eu.com, and compare each file's SHA-256 with the manifest's.</li>
+</ol>
+<p>The check is one point in time from one vantage point: the HTML is the root of trust and nothing pins it. A released page from a poisoned cache can stay in a browser's cache for up to its max-age after the site is repaired, while a page uploaded with a leaked key sets its own caching and can register a service worker, both of which can outlast the repair. A path outside the manifests is not checked.</p>
+
+<h2>Run the bundle yourself</h2>
+<p>The bundle runs unchanged on any origin. Extract the verified archive and serve its directory with any static file server on your own machine, then open it in your browser: you run exactly the attested files, and the host sees nothing.</p>
+</main>
+<footer>
+<p>shift2eu {{.Version}}.</p>
+<p><a href="privacy.html">Privacy</a> · <a href="verify.html">Verify this site</a> · <a href="https://github.com/timothymamo/shift2eu">Repository</a> · <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">Inventory guide</a></p>
+</footer>
+</body>
+</html>

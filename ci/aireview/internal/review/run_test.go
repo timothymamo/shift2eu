@@ -923,3 +923,126 @@ func TestRunAnnouncesTheRetryOfAnAnswerItCannotRead(t *testing.T) {
 		})
 	}
 }
+
+// TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns pins issue #366: when both
+// of the model's answers fail the shape check, the error Run returns is what
+// ci/aireview's main prints as the job's one ::error line, and it cannot hold the
+// decoder's message. encoding/json quotes what it could not read, a field name
+// the model chose or a character of its answer, so wrapping that message text and
+// all into the error would put the model's answer in a public job log. The error
+// names the pull request and the shape check that failed instead, as the retry
+// notice of #343 does, and no text of either answer reaches the log either.
+//
+// Each malformed answer plants its marker where the decoder quotes it: a field
+// name the answer's shape does not have, which the strict decoder names in full
+// (planted at the top level, so the case does not depend on how findings are
+// decoded), and an invalid \u escape of a top-level string, of which it quotes
+// the four characters after the escape (so the escape's marker is the four it
+// quotes). Both are positions the decoder's message holds, which is what lets a
+// case fail when it should.
+func TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns(t *testing.T) {
+	t.Parallel()
+
+	pr := review.PullRequest{Number: 7, Title: "Add x", Author: "agent[bot]", HeadSHA: headSHA, BaseSHA: baseSHA}
+
+	cases := []struct {
+		name string
+		// answers are what the model answers in turn: two answers, each one of
+		// the wrong shape and each holding its own marker.
+		answers []string
+		// markers are the planted texts neither the log nor the error may hold.
+		markers []string
+		// wantCheck is the phrase of the shape check the error must name: the
+		// constant of the check that failed, never text of the answer.
+		wantCheck string
+	}{
+		{
+			name: "an unexpected field name, which the decoder names in full",
+			answers: []string{
+				`{"MRK366FIRST": 1, "summary": "s", "findings": []}`,
+				// The second marker sits at the top level as well as inside a
+				// finding: the strict decoder names an unknown field wherever it
+				// meets one, and the top-level one keeps this a shape error whichever
+				// way findings are decoded.
+				`{"MRK366SECOND": 1, "summary": "s", "findings": [{"severity": "nit", "title": "t", "body": "b", "MRK366SECOND": 1}]}`,
+			},
+			markers:   []string{"MRK366FIRST", "MRK366SECOND"},
+			wantCheck: "not one JSON object",
+		},
+		{
+			name: "an invalid escape sequence, which the decoder quotes",
+			answers: []string{
+				`{"summary": "s\uMRKA", "findings": []}`,
+				`{"findings": [], "summary": "s\uMRKB"}`,
+			},
+			markers:   []string{"MRKA", "MRKB"},
+			wantCheck: "not one JSON object",
+		},
+	}
+
+	// A workflow command names its pull request as "#7" or "7".
+	namesPR := regexp.MustCompile(`pull request #?7\b`)
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gh := &fakeGitHub{
+				pr:    pr,
+				diff:  cleanDiff,
+				files: []review.ChangedFile{{Path: "internal/x/y.go", Status: "modified", Additions: 1}},
+			}
+
+			var log bytes.Buffer
+
+			model := &fakeModel{answers: tc.answers}
+
+			_, err := review.Run(t.Context(), gh, model, review.Config{
+				Number:   pr.Number,
+				BotLogin: testBotLogin,
+				Notices:  &log,
+			})
+
+			if err == nil {
+				t.Fatalf("Run posted a review of two answers it cannot read, want an error that fails the check (issue #316)")
+			}
+
+			// The path this pins is the one where both answers failed the shape
+			// check: asking once more, and then failing the run.
+			if !errors.Is(err, review.ErrMalformedAnswer) {
+				t.Fatalf("Run = %v, want an error wrapping %v: two answers of the wrong shape fail the run", err, review.ErrMalformedAnswer)
+			}
+
+			if model.asked != 2 {
+				t.Errorf("the model was asked %d times, want 2: an answer of the wrong shape is asked once more (issue #316)", model.asked)
+			}
+
+			if len(gh.posts) != 1 {
+				t.Errorf("the run posted %d reviews, want 1: two answers it could not read post the review that says so (issue #316)", len(gh.posts))
+			}
+
+			// The error's text is what main prints in the job's one ::error line.
+			text := err.Error()
+
+			if !namesPR.MatchString(text) {
+				t.Errorf("the error %q does not name pull request #%d: the job log says which pull request it is about", text, pr.Number)
+			}
+
+			if !strings.Contains(text, tc.wantCheck) {
+				t.Errorf("the error %q does not hold %q: it names the shape check that failed, never the decoder's message (issue #366)", text, tc.wantCheck)
+			}
+
+			for _, marker := range tc.markers {
+				if strings.Contains(text, marker) {
+					t.Errorf("the error %q holds %q, text of the model's answer: the decoder's message names what it could not read, so the error that reaches the job log carries none of it (issue #366)",
+						text, marker)
+				}
+
+				if strings.Contains(log.String(), marker) {
+					t.Errorf("the run's log %q holds %q, text of the model's answer: no text of the answer reaches the log, escaped or not (issues #343, #366)",
+						log.String(), marker)
+				}
+			}
+		})
+	}
+}
