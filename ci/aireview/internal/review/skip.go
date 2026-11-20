@@ -161,20 +161,26 @@ func partFiles(part string) map[string]bool {
 	return files
 }
 
+// MaxListedBlocking is how many blocking findings the summary of a skipped
+// split review lists across the parts that answered; one constant line counts
+// the rest (audit M1, issue #388).
+const MaxListedBlocking = 50
+
 // answeredSummary returns the skipped review's summary of the parts of count
-// that answered usably, and "" when none did: a fixed heading, then per part,
-// in the parts' order, how many of its findings block and how many do not,
-// and beneath it one line per blocking finding with its category and its
-// location (issue #388, ADR 0033). The category is this package's constant,
-// CategoryUncategorised reading "other"; the location is the finding's path,
-// and its line when it has one, only when the path is a file of that part's
-// own diff, and "a file outside the part" otherwise. No title, body, summary
-// or other text of the model's answer is shown: the model chooses at most the
-// counts and which of those constants and of the part's paths and lines
-// appear. The number of findings is the model's choice too, so at most
-// MaxListedExcluded blocking findings are listed across all parts, and one
-// constant line after the parts counts the rest (audit M1); the counts stay
-// exact.
+// that answered usably, and "" when none did: the fixed heading "Findings in
+// the parts that answered", then per part, in the parts' order, how many of
+// its findings block and how many do not, and beneath it one line per
+// blocking finding with its category and its location (issue #388, ADR 0033).
+// The category is this package's constant, CategoryUncategorised reading
+// "other"; the location is the finding's path, and its line when it has one,
+// only when the path is a file of that part's own diff, "no file" when the
+// finding has no path, and "a file outside the part" otherwise. No title,
+// body, summary or other text of the model's answer is shown: the model
+// chooses at most the counts and which of those constants and of the part's
+// paths and lines appear. The number of findings is the model's choice too,
+// so at most MaxListedBlocking blocking findings are listed across all parts,
+// and one constant line after the parts counts the rest (audit M1); the
+// counts stay exact.
 func answeredSummary(answered []answeredPart, count int) string {
 	if len(answered) == 0 {
 		return ""
@@ -182,7 +188,7 @@ func answeredSummary(answered []answeredPart, count int) string {
 
 	var b strings.Builder
 
-	b.WriteString("**Blocking findings in the parts that answered:**\n")
+	b.WriteString("**Findings in the parts that answered:**\n")
 
 	listed, unlisted := 0, 0
 
@@ -197,7 +203,7 @@ func answeredSummary(answered []answeredPart, count int) string {
 				continue
 			}
 
-			if listed == MaxListedExcluded {
+			if listed == MaxListedBlocking {
 				unlisted++
 
 				continue
@@ -205,7 +211,7 @@ func answeredSummary(answered []answeredPart, count int) string {
 
 			listed++
 
-			fmt.Fprintf(&b, "\n  - blocking: category %s at %s", summaryCategory(f.Category), summaryLocation(f, part.files))
+			fmt.Fprintf(&b, "\n  - blocking: category %s%s", summaryCategory(f.Category), summaryLocation(f, part.files))
 		}
 	}
 
@@ -228,38 +234,41 @@ func summaryCategory(c Category) string {
 	return string(c)
 }
 
-// summaryLocation returns where the summary says finding f of a part is:
-// "a file outside the part" unless f's path is one of files, the paths of the
-// part's own diff; then the path in a code span, escaped and cut as the "Not
-// reviewed" note shows one (shortPathSpan), followed outside the span by ":"
-// and the line when f has one.
+// summaryLocation returns where the summary says finding f of a part is, as
+// the text that follows its category: ", no file" when f has no path,
+// " at a file outside the part" when f's path is not one of files, the paths
+// of the part's own diff, and otherwise " at " and the path in a code span,
+// escaped and cut as the "Not reviewed" note shows one (shortPathSpan),
+// followed outside the span by ":" and the line when f has one.
 func summaryLocation(f Finding, files map[string]bool) string {
-	if f.Path == "" || !files[f.Path] {
-		return "a file outside the part"
+	switch {
+	case f.Path == "":
+		return ", no file"
+	case !files[f.Path]:
+		return " at a file outside the part"
+	case f.Line > 0:
+		return " at " + shortPathSpan(f.Path) + ":" + strconv.Itoa(f.Line)
+	default:
+		return " at " + shortPathSpan(f.Path)
 	}
-
-	if f.Line > 0 {
-		return shortPathSpan(f.Path) + ":" + strconv.Itoa(f.Line)
-	}
-
-	return shortPathSpan(f.Path)
 }
 
 // leftOutParts returns the fixed sentence that says how many other parts of a
-// split diff got a usable answer whose findings the skipped review leaves out,
-// and asks the maintainer to review those parts by hand, and "" when none did
-// (issue #367). It holds this package's words and the count alone, never text
+// split diff got a usable answer, says that only the summary below
+// (answeredSummary) shows their findings, never the findings' text, and asks
+// the maintainer to review those parts by hand, and "" when none did (issues
+// #367, #388). It holds this package's words and the count alone, never text
 // of the model's answer.
 func leftOutParts(usable int) string {
 	switch {
 	case usable <= 0:
 		return ""
 	case usable == 1:
-		return "1 other part of the diff was reviewed with a usable answer; its findings are not shown, " +
-			"so review that part by hand."
+		return "1 other part of the diff was reviewed with a usable answer; its findings' text is not shown, " +
+			"only the summary below, so review that part by hand."
 	default:
-		return fmt.Sprintf("%d other parts of the diff were reviewed with a usable answer; their findings are not shown, "+
-			"so review those parts by hand.", usable)
+		return fmt.Sprintf("%d other parts of the diff were reviewed with a usable answer; their findings' text "+
+			"is not shown, only the summary below, so review those parts by hand.", usable)
 	}
 }
 

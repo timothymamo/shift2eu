@@ -53,7 +53,7 @@
 // A split diff skipped for one unusable part summarises the parts that
 // answered in that review: counts, and each blocking finding's constant
 // category and a path of that part's diff with its line, at most
-// MaxListedExcluded of them, never model text (issue #388). Every other
+// MaxListedBlocking of them, never model text (issue #388). Every other
 // failure still fails the run.
 //
 // The poster supports exactly two events, COMMENT and REQUEST_CHANGES, and
