@@ -13,6 +13,11 @@ FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943
 
 WORKDIR /src
 
+# go.mod's go line is the toolchain pin: every make target exports it as GOTOOLCHAIN (#347, ADR 0035) and
+# CI's setup-go sets GOTOOLCHAIN=local. With local, a base image whose Go differs fails the build with
+# Go's own error instead of fetching or building with another toolchain (#383).
+ENV GOTOOLCHAIN=local
+
 # Modules first, in their own step, so a source change does not download them again. The module and
 # build caches are cache mounts: they persist between builds but are never part of a layer.
 COPY go.mod go.sum ./
