@@ -265,6 +265,14 @@ func goListImportPaths(t *testing.T, dir string, args ...string) []string {
 // test's own but for the variables that would decide what it lists, which
 // check.ListPackages drops too, plus the settings the check's listings fix, so
 // the probe reads the same files the product listings read.
+//
+// Unlike check.ListPackages it leaves GOPROXY as it is (issue #391). Only the
+// browser-tagged test/browser imports chromedp, and go test ./... never builds
+// it, so on an empty module cache, as in a release run, chromedp and cdproto
+// are in no cache until this listing loads them: with GOPROXY=off it would
+// fail. The listing fetches them through the proxy exactly as the surrounding
+// go test build fetches its own modules, and -mod=readonly keeps go.mod as it
+// is while go.sum pins and verifies every module it fetches.
 func goListProbeEnv() []string {
 	drop := map[string]bool{
 		"GOOS":        true,
@@ -285,5 +293,5 @@ func goListProbeEnv() []string {
 		env = append(env, entry)
 	}
 
-	return append(env, "CGO_ENABLED=0", "GOENV=off", "GOFLAGS=-mod=readonly", "GOPROXY=off", "GOWORK=off")
+	return append(env, "CGO_ENABLED=0", "GOENV=off", "GOFLAGS=-mod=readonly", "GOWORK=off")
 }
