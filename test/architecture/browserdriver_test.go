@@ -454,6 +454,10 @@ func checkAllowedProbeEnv(t *testing.T, env, allowed []string) {
 // allow-listed name, SSL_CERT_FILE or TMP, say, would fail the value check for
 // it rather than go unnoticed.
 //
+// probeInheritedEnv is pinned exactly, against the names the cases set: a name
+// added to it alone would otherwise pass while this machine had that variable
+// unset, and be handed to the probe wherever it is set.
+//
 // No case runs a child process or touches the network: goListProbeEnv only builds
 // a slice of strings, and t.Setenv forbids t.Parallel, the whole test's as well.
 func TestGoListProbeEnv(t *testing.T) {
@@ -587,6 +591,30 @@ func TestGoListProbeEnv(t *testing.T) {
 		{name: "no_proxy", setting: probeEnvSetting{value: "/some/no_proxy", set: true}},
 		{name: "SSL_CERT_FILE", setting: probeEnvSetting{value: "/some/SSL_CERT_FILE", set: true}},
 		{name: "SSL_CERT_DIR", setting: probeEnvSetting{value: "/some/SSL_CERT_DIR", set: true}},
+	}
+
+	// probeInheritedEnv must hold exactly those names and no other, whatever this
+	// machine happens to have set: the settings a case hands it with a sentinel
+	// (passedThrough) and GOPROXY, whose cases give it its own value. A name added
+	// to the list but not to this test would otherwise pass unnoticed while the
+	// variable was unset here, and reach the probe on a machine that set it, so a
+	// widening of what the probe inherits could not land without a case for it.
+	// The order of the list carries no meaning, so both sides are sorted before
+	// they are compared, and a name listed twice is reported as well.
+	wantInherited := make([]string, 0, len(passedThrough)+1)
+	for _, want := range passedThrough {
+		wantInherited = append(wantInherited, want.name)
+	}
+
+	wantInherited = append(wantInherited, "GOPROXY")
+
+	inherited := slices.Clone(probeInheritedEnv)
+
+	slices.Sort(wantInherited)
+	slices.Sort(inherited)
+
+	if diff := cmp.Diff(wantInherited, inherited); diff != "" {
+		t.Errorf("probeInheritedEnv does not hold exactly the variables the cases assert on (-want +got):\n%s", diff)
 	}
 
 	for _, tc := range []struct {
