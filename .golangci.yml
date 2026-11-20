@@ -345,7 +345,12 @@ linters:
             - strings$
             - testing$
             - time$
+            - go/ast$
+            - go/parser$
+            - go/token$
+            - runtime$
             - github.com/timothymamo/shift2eu/internal/domain/catalog$
+            - github.com/timothymamo/shift2eu/internal/domain/estimate$
             - github.com/timothymamo/shift2eu/internal/domain/taxonomy$
             - github.com/timothymamo/shift2eu/internal/testutil$
         # The driving adapter gets its adapters from the composition root
