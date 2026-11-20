@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/chromedp/chromedp"
 )
 
 // This file holds the trust boundary of the page's glue (#346 part 1, the
@@ -573,5 +575,133 @@ func TestInventoryErrorsNameAPositionAndStayUsable(t *testing.T) { //nolint:tpar
 
 	if report := reportOf(t, ctx); !report.hasSection("Summary") {
 		t.Fatalf("the page shows no report after the errors above: %v", report.Sections)
+	}
+}
+
+// nonObjectAnswer is one value the module's function answers in the test below
+// instead of its own: a value that is no object, so the run handler cannot read
+// .error of it.
+type nonObjectAnswer struct {
+	// name is the answer in a failure message.
+	name string
+	// value is the JavaScript expression the page's call answers.
+	value string
+}
+
+// nonObjectAnswers are the answers the module answers in the test below: the
+// undefined a function without a return gives, the null a failed conversion
+// gives, a string that carries markup, and a number. Reading .error of one of
+// them throws inside the page's click handler, which leaves the page's alert
+// empty and says nothing about what happened.
+func nonObjectAnswers() []nonObjectAnswer {
+	return []nonObjectAnswer{
+		{name: "undefined", value: "undefined"},
+		{name: "null", value: "null"},
+		{name: "a string carrying markup", value: jsString(hostileMarker)},
+		{name: "a number", value: "42"},
+	}
+}
+
+// TestNonObjectResultShowsAConstantMessage pins the page's answer to a module
+// result that is no object (PRD #297, Trust and Assessment in the browser; ADR
+// 0036): the run handler reads result.error, and .error of undefined or null
+// throws, so the page must check that result is a non-null object first and show
+// one constant message with textContent when it is not. The module keeps its own
+// function throughout: the test replaces globalThis.shift2euAssess with a function
+// that answers one of the values below, which is what a module answering such a
+// value looks like to the page's handler, and puts the module's function back
+// before it runs the page's own assessment again.
+func TestNonObjectResultShowsAConstantMessage(t *testing.T) {
+	t.Parallel()
+
+	s := newSite(t)
+	ctx := openAssessment(t, s)
+
+	pasteInventory(t, ctx, schemaVersion1Inventory)
+	setTargets(t, ctx, "ovhcloud")
+
+	eval[bool](t, ctx, fmt.Sprintf(`globalThis.%s = %d; true`, injected, hostileInjected))
+
+	answers := nonObjectAnswers()
+
+	values := make([]string, 0, len(answers))
+	for _, answer := range answers {
+		values = append(values, answer.value)
+	}
+
+	eval[bool](t, ctx, fmt.Sprintf(`(() => {
+	globalThis.__shift2euAnswers = [%s];
+	globalThis.__shift2euOriginalAssess = globalThis.shift2euAssess;
+	globalThis.__shift2euIndex = 0;
+	globalThis.__shift2euCalled = false;
+	globalThis.shift2euAssess = function () {
+		globalThis.__shift2euCalled = true;
+		return globalThis.__shift2euAnswers[globalThis.__shift2euIndex];
+	};
+	return true;
+})()`, strings.Join(values, ", ")))
+
+	message := ""
+
+	for i, answer := range answers {
+		eval[bool](t, ctx, fmt.Sprintf(`(() => {
+	globalThis.__shift2euCalled = false;
+	globalThis.__shift2euIndex = %d;
+	return true;
+})()`, i))
+
+		do(t, ctx, chromedp.Click(chromedp.ID("run")))
+		waitFor(t, ctx, "the run handler to answer "+answer.name, `globalThis.__shift2euCalled === true`)
+
+		alert := alertOf(t, ctx)
+
+		if alert.Text == "" {
+			t.Fatalf("the page shows nothing after the module answered %s: the run handler read .error of a value that is no object, so its click threw and left the page's alert empty. A non-null object check before the read shows one constant message instead (PRD #297, Trust and Assessment in the browser)", answer.name)
+		}
+
+		if !alert.TextOnly || alert.Elements != 0 {
+			t.Errorf("the page's message for %s holds markup: its innerHTML is %q, want the message escaped and no element (%q)", answer.name, alert.HTML, alert.Text)
+		}
+
+		if strings.Contains(alert.Text, hostileMarker) {
+			t.Errorf("the page's message for %s is %q, which carries the value the module answered: the message is one constant, so it echoes nothing", answer.name, alert.Text)
+		}
+
+		if i == 0 {
+			message = alert.Text
+		} else if alert.Text != message {
+			t.Errorf("the module answered %s and the page shows %q, but it showed %q for undefined: a constant message is the same for every answer, so it names no value", answer.name, alert.Text, message)
+		}
+
+		if got := eval[int](t, ctx, fmt.Sprintf(`globalThis.%s || 0`, injected)); got != hostileInjected {
+			t.Errorf("a value ran: globalThis.%s is %d after the module answered %s, want %d", injected, got, answer.name, hostileInjected)
+		}
+
+		if report := reportOf(t, ctx); report.Text != "" {
+			t.Errorf("the page shows the report %q after the module answered %s, want no report: a result that is no object carries no assessment", report.Text, answer.name)
+		}
+
+		if enabled := eval[bool](t, ctx, `!document.getElementById("download-markdown").disabled || !document.getElementById("download-json").disabled`); enabled {
+			t.Errorf("the page enables a download after the module answered %s, want both disabled: there are no bytes", answer.name)
+		}
+	}
+
+	// The page stays usable: the module's own function is put back, and the page
+	// runs an assessment again.
+	eval[bool](t, ctx, `(() => {
+	globalThis.shift2euAssess = globalThis.__shift2euOriginalAssess;
+	delete globalThis.__shift2euAnswers;
+	delete globalThis.__shift2euOriginalAssess;
+	return true;
+})()`)
+
+	runAssessment(t, ctx)
+
+	if alert := alertOf(t, ctx).Text; alert != "" {
+		t.Fatalf("the page shows the error %q after the module answered no object, want a report: the page stays usable", alert)
+	}
+
+	if report := reportOf(t, ctx); !report.hasSection("Summary") {
+		t.Fatalf("the page shows no report after the module answered no object: %v", report.Sections)
 	}
 }
