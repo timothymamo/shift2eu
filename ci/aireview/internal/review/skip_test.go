@@ -150,6 +150,13 @@ func TestRunSkipsWhenTheModelGivesNoUsableAnswerTwice(t *testing.T) {
 				}
 			}
 
+			// The skip of two unusable answers warns of the one cause a pull
+			// request itself can fix: content in the diff that makes the model
+			// answer unusably, a prompt injection among it (issue #376).
+			if !strings.Contains(text, "prompt injection") {
+				t.Errorf("the skipped review does not warn that content in the diff can make the model answer unusably, in a sentence that names prompt injection (issue #376); body:\n%s", post.review.Body)
+			}
+
 			for _, text := range []string{post.review.Body, log.String(), result.Skip.Message} {
 				if strings.Contains(text, answerMarker376) {
 					t.Errorf("the skipped outcome repeats %q, text of the model's answer: neither the review, nor the log, nor the skip's message holds any of it (issues #366, #376); text: %q",

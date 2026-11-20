@@ -1,13 +1,17 @@
 package review_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -82,6 +86,14 @@ func diffHeaderOf(path string) string {
 	return "diff --git a/" + path + " b/" + path
 }
 
+// unusableAnswer is an answer of the wrong shape, missing the findings field:
+// the model is asked once more for it (issues #316, #376).
+const unusableAnswer = `{"summary":"The change is fine."}`
+
+// noFindingsAnswer is the answer of a model that reports nothing: a review with
+// no finding at all, which is neither a comment nor a change request.
+const noFindingsAnswer = `{"summary":"Nothing to report.","findings":[]}`
+
 // partModel is Run's Asker for a diff the review splits in parts (ADR 0033,
 // issue #367): the parts run concurrently, so every field a call shares is
 // guarded by a mutex, and each call is answered from the file its prompt holds
@@ -98,11 +110,25 @@ type partModel struct {
 	// afterAsk runs once a call has been answered, with how many calls the run
 	// has made in all, as the deadline tests use it to end the run's context.
 	afterAsk func(calls int)
+	// gates are the files whose call blocks before it answers, on the channel
+	// it names, until that channel is closed or the run's context ends, which
+	// the call then reports as its error: a test makes one part finish after
+	// another without a sleep between them, and a gate nobody closes blocks the
+	// call until the run cancels it. A test sets it before the run.
+	gates map[string]<-chan struct{}
+	// afterAnswer runs once a call has chosen its answer, before it returns,
+	// with the file it held and how many calls that file has been asked: a
+	// test's part closes another part's gate with it. A test sets it before the
+	// run.
+	afterAnswer func(path string, asked int)
 
 	mu       sync.Mutex
 	asked    map[string]int
 	prompts  map[string][]review.Prompt
 	unplaced []review.Prompt
+	// blocked are the context errors of the calls a gate ended, in the order
+	// the calls saw them.
+	blocked []error
 }
 
 // newPartModel returns a partModel that answers for the files of paths.
@@ -111,6 +137,7 @@ func newPartModel(paths ...string) *partModel {
 		paths:   paths,
 		answers: map[string][]string{},
 		errs:    map[string]error{},
+		gates:   map[string]<-chan struct{}{},
 		asked:   map[string]int{},
 		prompts: map[string][]review.Prompt{},
 	}
@@ -128,8 +155,9 @@ func (m *partModel) fileOf(user string) string {
 	return ""
 }
 
-// Ask records the prompt and answers it as the file it holds was told to.
-func (m *partModel) Ask(_ context.Context, p review.Prompt) (string, error) {
+// Ask records the prompt and answers it as the file it holds was told to: it
+// blocks on the file's gate, when it has one, and on nothing else.
+func (m *partModel) Ask(ctx context.Context, p review.Prompt) (string, error) {
 	path := m.fileOf(p.User)
 
 	m.mu.Lock()
@@ -157,19 +185,44 @@ func (m *partModel) Ask(_ context.Context, p review.Prompt) (string, error) {
 		m.afterAsk(calls)
 	}
 
-	if err != nil {
-		return "", err
+	var answer string
+
+	switch {
+	case err != nil:
+	case len(answers) == 0:
+		err = errors.New("the test gave the part no answer")
+	case asked > len(answers):
+		answer = answers[len(answers)-1]
+	default:
+		answer = answers[asked-1]
 	}
 
-	if len(answers) == 0 {
-		return "", errors.New("the test gave the part no answer")
+	if m.afterAnswer != nil {
+		m.afterAnswer(path, asked)
 	}
 
-	if asked > len(answers) {
-		return answers[len(answers)-1], nil
+	if gate, ok := m.gates[path]; ok {
+		select {
+		case <-gate:
+		case <-ctx.Done():
+			m.mu.Lock()
+			m.blocked = append(m.blocked, ctx.Err())
+			m.mu.Unlock()
+
+			return "", ctx.Err()
+		}
 	}
 
-	return answers[asked-1], nil
+	return answer, err
+}
+
+// blockedErrs returns the context errors of the calls a gate ended, in the
+// order the calls saw them. The slice is a copy.
+func (m *partModel) blockedErrs() []error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	return slices.Clone(m.blocked)
 }
 
 // askedOf returns how many calls a file was asked in and the prompts it was
@@ -530,6 +583,20 @@ func TestRunReviewsADiffOverTheLimitInParts(t *testing.T) {
 			wantDismissed:  []int64{21},
 			wantText:       []string{"Part 1 of 2", "Part 2 of 2"},
 		},
+		{
+			// A diff whose every part reports nothing at all is one comment
+			// that holds no inline comment, and it still withdraws the
+			// reviewer's own earlier change request.
+			name:           "a part with no finding at all adds none and withdraws the earlier change request",
+			answers:        map[string][]string{firstPath: {noFindingsAnswer}, secondPath: {noFindingsAnswer}},
+			requestChanges: true,
+			reviews:        earlierChangeRequest,
+			wantEvent:      review.EventComment,
+			wantFindings:   0,
+			wantBlocking:   0,
+			wantDismissed:  []int64{21},
+			wantText:       []string{"Part 1 of 2", "Part 2 of 2"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -600,6 +667,10 @@ func TestRunReviewsADiffOverTheLimitInParts(t *testing.T) {
 				t.Errorf("the posted review's Event = %q, want %q: the event is decided over every part's findings (issue #367)", post.review.Event, tc.wantEvent)
 			}
 
+			if len(post.review.Comments) != 0 {
+				t.Errorf("the combined review holds %d inline comment(s), want none: no finding of this diff names a line of it (issue #367)", len(post.review.Comments))
+			}
+
 			text := post.review.Body
 			for _, comment := range post.review.Comments {
 				text += "\n" + comment.Body
@@ -654,11 +725,7 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 
 	diff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, secondPath, 150_001)
 
-	// The answer a model writes when it reports nothing at all: the field is
-	// missing, so the answer has the wrong shape and is asked once more
-	// (issues #316, #376).
-	unusable := `{"summary":"The change is fine."}`
-
+	// The model error a real failure is: what askOnce wraps with ErrModel.
 	realFailure := fmt.Errorf("ask the model to review pull request 7: %w", review.ErrModel)
 
 	cases := []struct {
@@ -674,13 +741,21 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 	}{
 		{
 			name:     "a part unusable twice skips the whole review",
-			answers:  map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusable}},
+			answers:  map[string][]string{firstPath: {cleanAnswer}, secondPath: {unusableAnswer}},
 			wantSkip: skipReason(review.SkipNoUsableAnswer),
 		},
 		{
 			name:    "a part's model error fails the run",
 			answers: map[string][]string{firstPath: {cleanAnswer}, secondPath: {cleanAnswer}},
 			errs:    map[string]error{secondPath: realFailure},
+			wantErr: review.ErrModel,
+		},
+		{
+			// A real failure beats a skip: the run that failed posts nothing,
+			// so no skip of a part that could not be read hides it.
+			name:    "a part's model error fails the run even when another part is unusable twice",
+			answers: map[string][]string{secondPath: {unusableAnswer}},
+			errs:    map[string]error{firstPath: realFailure},
 			wantErr: review.ErrModel,
 		},
 	}
@@ -773,7 +848,9 @@ func TestRunWhenOneOfPartsFails(t *testing.T) {
 // finding and no inline comment that says the review was skipped and why, no
 // model call at all, and no error, so the check is green rather than red. The
 // review of a file too large names that file in a code span, as the "Not
-// reviewed" note names a path.
+// reviewed" note names a path, and Skip.Message never names it: the message
+// reaches the job's log. Only the no-usable-answer cause warns that content in
+// the diff can make the model answer unusably (issue #376).
 func TestRunSkipsADiffItCannotReview(t *testing.T) {
 	t.Parallel()
 
@@ -785,25 +862,44 @@ func TestRunSkipsADiffItCannotReview(t *testing.T) {
 		diffSectionOfSize(t, "internal/x/five-d.go", 200_000) +
 		diffSectionOfSize(t, "internal/x/five-e.go", 200_000)
 
+	// A diff whose one section starts at a "diff --git" header that names no
+	// path the reviewer can read, and whose lines fill it over MaxDiffBytes: the
+	// review is skipped, and neither the review nor the message can name a file.
+	unreadableHeader := "diff --git garbage\n" + strings.Repeat("+x\n", 100_000)
+
 	cases := []struct {
 		name    string
 		diff    string
 		diffErr error
 		// wantText are texts the skipped review's body must hold.
 		wantText []string
-		// wantFile is a path the skipped review must name in a code span.
+		// wantMessage are texts Skip.Message must hold: the warning and the job
+		// summary name the cause, the size and the limit too.
+		wantMessage []string
+		// wantFile is a path the skipped review must name in a code span, and
+		// Skip.Message must never name.
 		wantFile string
+		// wantNoPath says the skipped review names no path at all: the header of
+		// its one oversized section could not be read.
+		wantNoPath bool
 	}{
 		{
-			name:     "a diff that needs more than four parts",
-			diff:     fiveFiles,
-			wantText: []string{"skipped", "300,000", "4 parts"},
+			name:        "a diff that needs more than four parts",
+			diff:        fiveFiles,
+			wantText:    []string{"skipped", "300,000", "4 parts"},
+			wantMessage: []string{"300,000", "4 parts"},
 		},
 		{
 			name:     "a single file whose section is over the limit",
 			diff:     diffSectionOfSize(t, tooBigFile, review.MaxDiffBytes+1),
 			wantText: []string{"skipped"},
 			wantFile: tooBigFile,
+		},
+		{
+			name:       "a section whose header names no readable path",
+			diff:       unreadableHeader,
+			wantText:   []string{"skipped"},
+			wantNoPath: true,
 		},
 		{
 			name:     "a raw diff over the cap the client reads",
@@ -870,9 +966,385 @@ func TestRunSkipsADiffItCannotReview(t *testing.T) {
 				t.Errorf("the skipped review does not name the file %q in a code span, as the \"Not reviewed\" note names a path; body:\n%s", tc.wantFile, post.review.Body)
 			}
 
+			for _, want := range tc.wantMessage {
+				if !strings.Contains(result.Skip.Message, want) {
+					t.Errorf("Result.Skip.Message = %q, which does not hold %q: the warning and the job summary say why the review was skipped, and how large the limit is (issues #367, #376)", result.Skip.Message, want)
+				}
+			}
+
+			if tc.wantFile != "" && strings.Contains(result.Skip.Message, tc.wantFile) {
+				t.Errorf("Result.Skip.Message = %q, which names the file %q: the path is the pull request's, shown in the review alone, and the message reaches the job's log (issue #367)", result.Skip.Message, tc.wantFile)
+			}
+
+			if tc.wantNoPath && strings.Contains(post.review.Body, "`") {
+				t.Errorf("the skipped review names a path in a code span, though the only header of its oversized section could not be read; body:\n%s", post.review.Body)
+			}
+
+			if strings.Contains(strings.ToLower(post.review.Body), "prompt injection") {
+				t.Errorf("the skipped review of a diff too large warns of prompt injection, which is no cause of this skip: the sentence belongs to the no-usable-answer cause alone (issue #376); body:\n%s", post.review.Body)
+			}
+
 			if len(gh.dismissals) != 0 {
 				t.Errorf("the skipped run dismissed %d review(s), want none: a skip is no finding, so nothing is withdrawn (issues #316, #367)", len(gh.dismissals))
 			}
 		})
+	}
+}
+
+// TestRunCancelsTheOtherPartsWhenOneFails pins what a part that fails for real
+// does to the parts still asking the model (issue #367, ADR 0033): the run
+// cancels them, so the blocked call sees context.Canceled, and the failure the
+// run reports is the part's own, never the cancellation it caused. Run ends as
+// soon as the failing part has failed: no timeout is waited for.
+func TestRunCancelsTheOtherPartsWhenOneFails(t *testing.T) {
+	t.Parallel()
+
+	const (
+		firstPath  = "internal/x/one.go"
+		secondPath = "internal/x/two.go"
+	)
+
+	pr := splitPR()
+	files := []review.ChangedFile{
+		{Path: firstPath, Status: "modified", Additions: 1},
+		{Path: secondPath, Status: "modified", Additions: 1},
+	}
+
+	diff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, secondPath, 150_001)
+
+	model := newPartModel(firstPath, secondPath)
+	model.answers = map[string][]string{firstPath: {cleanAnswer}, secondPath: {cleanAnswer}}
+	model.errs = map[string]error{
+		secondPath: fmt.Errorf("ask the model to review pull request 7: %w", review.ErrModel),
+	}
+
+	// The first part's call blocks until the run's context ends: only the second
+	// part's failure can end it.
+	model.gates = map[string]<-chan struct{}{firstPath: make(chan struct{})}
+
+	gh := &fakeGitHub{pr: pr, diff: diff, files: files}
+
+	// The deadline is no part of the behaviour under test: it bounds a run that
+	// would otherwise block, so this test fails rather than hangs.
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	start := time.Now()
+
+	result, err := review.Run(ctx, gh, model, review.Config{
+		Number:       pr.Number,
+		BotLogin:     testBotLogin,
+		Instructions: splitInstructions,
+	})
+
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, review.ErrModel) {
+		t.Fatalf("Run = %v, want an error wrapping ErrModel: the part that failed for real fails the whole run (issue #367)", err)
+	}
+
+	if errors.Is(err, context.Canceled) {
+		t.Errorf("Run = %v, which wraps context.Canceled: the run reports the part's failure, never the cancellation it caused (issue #367)", err)
+	}
+
+	if elapsed > 5*time.Second {
+		t.Errorf("Run took %s, want well under 5s: the failure cancels the part still asking the model at once, and no timeout is waited for (issue #367)", elapsed)
+	}
+
+	blocked := model.blockedErrs()
+
+	if len(blocked) != 1 {
+		t.Fatalf("%d blocked call(s) saw the run's context end, want 1: the run cancels the part still asking the model (issue #367)", len(blocked))
+	}
+
+	if !errors.Is(blocked[0], context.Canceled) {
+		t.Errorf("the blocked call saw %v, want context.Canceled: the run cancels the other parts rather than letting them end with a deadline (issue #367)", blocked[0])
+	}
+
+	if len(gh.posts) != 0 {
+		t.Errorf("the run posted %d reviews, want none: a part's failure posts nothing (issue #367)", len(gh.posts))
+	}
+
+	if result.Skip != nil {
+		t.Errorf("Result.Skip = %+v, want nil: a real failure is no skipped outcome (issue #367)", *result.Skip)
+	}
+}
+
+// TestRunReviewsASplitDiffThroughTheCLI pins the size cases of issue #367
+// through the Claude Code CLI a whole run asks: a diff of 150,000 and 150,001
+// bytes is two parts, one CLI call each, whose answers the fake CLI prints in
+// its result envelope, and one combined review names both parts; a diff that
+// needs more than MaxDiffParts parts is skipped, and the CLI is never run at
+// all.
+func TestRunReviewsASplitDiffThroughTheCLI(t *testing.T) {
+	t.Parallel()
+
+	const (
+		firstPath  = "internal/x/one.go"
+		secondPath = "internal/x/two.go"
+	)
+
+	pr := splitPR()
+
+	twoParts := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, secondPath, 150_001)
+
+	fiveParts := diffSectionOfSize(t, "internal/x/five-a.go", 200_000) +
+		diffSectionOfSize(t, "internal/x/five-b.go", 200_000) +
+		diffSectionOfSize(t, "internal/x/five-c.go", 200_000) +
+		diffSectionOfSize(t, "internal/x/five-d.go", 200_000) +
+		diffSectionOfSize(t, "internal/x/five-e.go", 200_000)
+
+	cases := []struct {
+		name  string
+		diff  string
+		files []review.ChangedFile
+		// wantParts are the summaries the posted review must name, for a diff
+		// the review reads in parts.
+		wantParts []string
+		// wantSkip says the run ends in the skipped outcome without asking the
+		// CLI at all.
+		wantSkip bool
+	}{
+		{
+			name: "two parts of 150,000 and 150,001 bytes",
+			diff: twoParts,
+			files: []review.ChangedFile{
+				{Path: firstPath, Status: "modified", Additions: 1},
+				{Path: secondPath, Status: "modified", Additions: 1},
+			},
+			wantParts: []string{"Part 1 of 2", "Part 2 of 2"},
+		},
+		{
+			name:     "more than four parts",
+			diff:     fiveParts,
+			wantSkip: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cli, rec := newFakeClaudeCLI(t, claudeFake{stdout: cliAnswer(t, cleanAnswer)})
+
+			gh := &fakeGitHub{pr: pr, diff: tc.diff, files: tc.files}
+
+			result, err := review.Run(t.Context(), gh, review.NewClaudeCLI(cli, testModelToken, time.Minute), review.Config{
+				Number:       pr.Number,
+				BotLogin:     testBotLogin,
+				Instructions: splitInstructions,
+			})
+			if err != nil {
+				t.Fatalf("Run: %v; this diff is reviewed or skipped, and neither fails the check (issue #367)", err)
+			}
+
+			// The fake CLI records its arguments before it answers: a run that
+			// asked it leaves that file, a run that skipped the diff leaves none.
+			_, statErr := os.Stat(filepath.Join(rec.dir, "args"))
+
+			if statErr != nil && !os.IsNotExist(statErr) {
+				t.Fatalf("read whether the fake CLI ran: %v", statErr)
+			}
+
+			ran := statErr == nil
+
+			if tc.wantSkip {
+				if ran {
+					t.Error("the CLI was run, want it never run: a diff that needs more than the parts the review may take is never sent (issue #367)")
+				}
+
+				if result.Skip == nil {
+					t.Fatalf("Result.Skip = nil, want a skip: this diff cannot be reviewed in %d parts (issue #367)", review.MaxDiffParts)
+				}
+
+				if result.Skip.Reason != review.SkipTooLarge {
+					t.Errorf("Result.Skip.Reason = %q, want %q", result.Skip.Reason, review.SkipTooLarge)
+				}
+
+				if len(gh.posts) != 1 {
+					t.Fatalf("the run posted %d reviews, want 1: a skipped review says so on the pull request (issue #367)", len(gh.posts))
+				}
+
+				return
+			}
+
+			if !ran {
+				t.Fatal("the CLI was never run, want it asked once per part: one part is one model call (issue #367)")
+			}
+
+			if result.Skip != nil {
+				t.Errorf("Result.Skip = %+v, want nil: a diff of two parts is reviewed (issue #367)", *result.Skip)
+			}
+
+			if len(gh.posts) != 1 {
+				t.Fatalf("the run posted %d reviews, want 1: the findings of every part go in one review (issue #367)", len(gh.posts))
+			}
+
+			post := gh.posts[0]
+
+			if post.review.Event != review.EventComment {
+				t.Errorf("the posted review's Event = %q, want %q: no finding of this diff is blocking", post.review.Event, review.EventComment)
+			}
+
+			for _, want := range tc.wantParts {
+				if !strings.Contains(post.review.Body, want) {
+					t.Errorf("the posted review does not hold %q, so it is no combined review of the parts; body:\n%s", want, post.review.Body)
+				}
+			}
+		})
+	}
+}
+
+// TestRunFailsWhenTheSkippedReviewIsNotPosted pins the one write a skipped run
+// makes (issues #367, #376, ADR 0033): a skip nobody can see on the pull
+// request would be a silent pass, so a failed post of the skipped review fails
+// the run with the client's error. Run then reports no result and no skip: it
+// never reports a skipped outcome it could not publish.
+func TestRunFailsWhenTheSkippedReviewIsNotPosted(t *testing.T) {
+	t.Parallel()
+
+	const firstPath = "internal/x/one.go"
+
+	pr := splitPR()
+
+	fiveParts := diffSectionOfSize(t, "internal/x/five-a.go", 200_000) +
+		diffSectionOfSize(t, "internal/x/five-b.go", 200_000) +
+		diffSectionOfSize(t, "internal/x/five-c.go", 200_000) +
+		diffSectionOfSize(t, "internal/x/five-d.go", 200_000) +
+		diffSectionOfSize(t, "internal/x/five-e.go", 200_000)
+
+	postErr := fmt.Errorf("post the review of pull request 7: %w", review.ErrGitHub)
+
+	cases := []struct {
+		name string
+		diff string
+		// files are the pull request's changed files.
+		files []review.ChangedFile
+		// answers are what the model answers, every time.
+		answers []string
+	}{
+		{
+			name: "a diff too large to review",
+			diff: fiveParts,
+		},
+		{
+			name:    "a model that answered unusably twice",
+			diff:    cleanDiff,
+			files:   []review.ChangedFile{{Path: firstPath, Status: "modified", Additions: 1}},
+			answers: []string{unusableAnswer},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			gh := &fakeGitHub{pr: pr, diff: tc.diff, files: tc.files, postErr: postErr}
+			model := &fakeModel{answers: tc.answers}
+
+			result, err := review.Run(t.Context(), gh, model, review.Config{
+				Number:       pr.Number,
+				BotLogin:     testBotLogin,
+				Instructions: splitInstructions,
+			})
+
+			if err == nil {
+				t.Fatalf("Run = nil, want an error wrapping ErrGitHub: a skip nobody sees on the pull request would be a silent pass (issues #367, #376)")
+			}
+
+			if !errors.Is(err, review.ErrGitHub) {
+				t.Errorf("Run = %v, want an error wrapping ErrGitHub: the run reports the client's failed post (issues #367, #376)", err)
+			}
+
+			if result.Skip != nil {
+				t.Errorf("Result.Skip = %+v, want nil: the post failed, so the run failed and published no skip (issues #367, #376)", *result.Skip)
+			}
+
+			if diff := cmp.Diff(review.Result{}, result); diff != "" {
+				t.Errorf("Result (-want +got):\n%s\na failed post reports no review and no skip (issues #367, #376)", diff)
+			}
+
+			if len(gh.dismissals) != 0 {
+				t.Errorf("the failed run dismissed %d review(s), want none: a skip is no finding, so nothing is withdrawn (issues #316, #367)", len(gh.dismissals))
+			}
+		})
+	}
+}
+
+// TestRunWritesTheRetryNoticesInPartOrder pins the order of a split diff's
+// retry notices (issues #343, #367): the parts run concurrently and end in any
+// order, and the notices of a run that reviewed a diff in parts are its one
+// log, so they are written in the parts' order, each naming the part it belongs
+// to. The first part's call here blocks until the second part has answered
+// twice, so the second part ends first and today's run writes its notice
+// first.
+func TestRunWritesTheRetryNoticesInPartOrder(t *testing.T) {
+	t.Parallel()
+
+	const (
+		firstPath  = "internal/x/one.go"
+		secondPath = "internal/x/two.go"
+	)
+
+	pr := splitPR()
+	files := []review.ChangedFile{
+		{Path: firstPath, Status: "modified", Additions: 1},
+		{Path: secondPath, Status: "modified", Additions: 1},
+	}
+
+	diff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, secondPath, 150_001)
+
+	// Both parts retry once: their first answer has the wrong shape, their
+	// second one is good.
+	gate := make(chan struct{})
+
+	model := newPartModel(firstPath, secondPath)
+	model.answers = map[string][]string{
+		firstPath:  {unusableAnswer, cleanAnswer},
+		secondPath: {unusableAnswer, cleanAnswer},
+	}
+	model.gates = map[string]<-chan struct{}{firstPath: gate}
+
+	var once sync.Once
+
+	model.afterAnswer = func(path string, asked int) {
+		if path == secondPath && asked == 2 {
+			once.Do(func() { close(gate) })
+		}
+	}
+
+	gh := &fakeGitHub{pr: pr, diff: diff, files: files}
+
+	var log bytes.Buffer
+
+	result, err := review.Run(t.Context(), gh, model, review.Config{
+		Number:       pr.Number,
+		BotLogin:     testBotLogin,
+		Instructions: splitInstructions,
+		Notices:      &log,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v; both parts answered a good second time, so the run posts a review (issues #316, #367)", err)
+	}
+
+	if result.Skip != nil {
+		t.Errorf("Result.Skip = %+v, want nil: both parts answered a good second time (issue #376)", *result.Skip)
+	}
+
+	lines := strings.Split(strings.TrimSuffix(log.String(), "\n"), "\n")
+
+	if len(lines) != 2 {
+		t.Fatalf("the run wrote %d notice line(s), want 2, one per retried part; log:\n%s", len(lines), log.String())
+	}
+
+	for i, line := range lines {
+		if !noticeLine.MatchString(line) {
+			t.Errorf("the run's log holds %q, which is no ::notice:: workflow command (issue #343)", line)
+		}
+
+		want := fmt.Sprintf("part %d of 2", i+1)
+		if !strings.Contains(line, want) {
+			t.Errorf("notice %d of the run's log is %q, which does not name %q: the retry notices are written in the parts' order, whatever order the parts ended in (issue #367)", i+1, line, want)
+		}
 	}
 }

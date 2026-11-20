@@ -23,6 +23,9 @@ type fakeGitHub struct {
 	diffErr error
 	files   []review.ChangedFile
 	reviews []review.PostedReview
+	// postErr, when set, is the error every PostReview fails with, as a client
+	// that could not post does.
+	postErr error
 
 	posts      []fakePost
 	dismissals []fakeDismissal
@@ -59,6 +62,10 @@ func (f *fakeGitHub) Reviews(_ context.Context, _ int) ([]review.PostedReview, e
 }
 
 func (f *fakeGitHub) PostReview(ctx context.Context, number int, r review.Review) error {
+	if f.postErr != nil {
+		return f.postErr
+	}
+
 	// A real client gives up on a cancelled context, so a run that posts on one
 	// posts nothing: the fake fails the same way, which is how the test tells
 	// the detached post of issue #316 apart from a post the run's cancellation
