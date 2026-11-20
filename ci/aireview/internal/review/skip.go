@@ -98,8 +98,10 @@ func skipTooLarge(err error) (skipped, bool) {
 
 // skipNoUsableAnswer returns the skipped outcome of a model that gave no usable
 // answer twice, for part index of count (count 1 for a diff of one part), whose
-// second answer failed the shape check check, one of this package's constants.
-func skipNoUsableAnswer(check string, index, count int) skipped {
+// second answer failed the shape check check, one of this package's constants,
+// while usable other parts got a usable answer, whose findings the review
+// leaves out.
+func skipNoUsableAnswer(check string, index, count, usable int) skipped {
 	where := ""
 	if count > 1 {
 		where = fmt.Sprintf(" for part %d of %d of the diff", index, count)
@@ -110,9 +112,31 @@ func skipNoUsableAnswer(check string, index, count int) skipped {
 
 	// Program text, never the model's: the one cause of this skip a pull
 	// request can bring about itself (issue #376, ADR 0033).
-	body := message + "\n\n" + injectionWarning
+	body := message
+	if left := leftOutParts(usable); left != "" {
+		body += " " + left
+	}
+
+	body += "\n\n" + injectionWarning
 
 	return skipped{skip: Skip{Reason: SkipNoUsableAnswer, Message: message}, body: body}
+}
+
+// leftOutParts returns the fixed sentence that says how many other parts of a
+// split diff got a usable answer whose findings the skipped review leaves out,
+// and "" when none did (issue #367). It holds this package's words and the
+// count alone, never text of the model's answer.
+func leftOutParts(usable int) string {
+	switch {
+	case usable <= 0:
+		return ""
+	case usable == 1:
+		return "1 other part of the diff was reviewed with a usable answer, and its findings are not shown: " +
+			"a review that left part of the change out would read as a full review."
+	default:
+		return fmt.Sprintf("%d other parts of the diff were reviewed with a usable answer, and their findings are not shown: "+
+			"a review that left part of the change out would read as a full review.", usable)
+	}
 }
 
 // skippedReview returns the review a skipped run posts on headSHA: a comment

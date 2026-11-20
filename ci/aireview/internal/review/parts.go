@@ -7,9 +7,11 @@ import (
 )
 
 // MaxDiffParts is the most parts SplitDiff splits a diff into (issue #367, ADR
-// 0033): MaxRawDiffBytes is four times MaxDiffBytes, so four full parts hold
-// any diff the client reads, and four parts bound a run at four model calls
-// (plus a retry each).
+// 0033), which bounds a run at four model calls (plus a retry each). Four
+// parts of MaxDiffBytes match MaxRawDiffBytes in bytes, but parts are cut only
+// at file boundaries, so they are seldom full: a diff under MaxRawDiffBytes
+// can still need more than four parts, and then the run is skipped as too
+// large.
 const MaxDiffParts = 4
 
 // SplitDiff splits diff, a diff FilterDiff kept, into the parts the review asks

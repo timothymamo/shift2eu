@@ -647,7 +647,10 @@ Claude Code CLI wired into a run.
   a skip dismisses nothing, so an earlier change request stays; and pull requests from forks do not run
   the review. Mitigation: the skipped review for two unusable answers carries a fixed sentence telling
   the maintainer that content in the diff can cause this and to read the diff with prompt injection in
-  mind. Follow-up proposed, not in this change: when a split diff skips because one part was unusable,
+  mind. When a split diff skips for one unusable part, the review also says, in a fixed sentence with a
+  count and no text of the model's answer, how many other parts were reviewed with a usable answer and
+  that their findings are not shown (no such sentence when there are none). Follow-up proposed, not in
+  this change: when a split diff skips because one part was unusable,
   still surface the other parts' blocking findings.
 
 ## Alternatives considered

@@ -147,7 +147,7 @@ func Run(ctx context.Context, gh PullRequests, model Asker, cfg Config) (Result,
 			postCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), UnreadablePostTimeout)
 			defer cancel()
 
-			return postSkipped(postCtx, gh, cfg.Number, pr.HeadSHA, skipNoUsableAnswer(unusable.check, unusable.index, unusable.count))
+			return postSkipped(postCtx, gh, cfg.Number, pr.HeadSHA, skipNoUsableAnswer(unusable.check, unusable.index, unusable.count, unusable.usable))
 		}
 
 		return Result{}, err
@@ -224,10 +224,13 @@ var errUnreadableTwice = errors.New("the model was asked twice and neither answe
 // noUsableAnswerError is askParts' error for part index of count, whose model
 // answered twice in turn with an answer of the wrong shape, the second failing
 // the shape check check (issue #376). It wraps errUnreadableTwice and
-// ErrMalformedAnswer, and its text holds no text of the answer.
+// ErrMalformedAnswer, and its text holds no text of the answer. usable is how
+// many other parts askParts got a usable answer for, whose findings the
+// skipped review leaves out (0 for a diff of one part).
 type noUsableAnswerError struct {
 	check        string
 	index, count int
+	usable       int
 }
 
 func (e *noUsableAnswerError) Error() string {
@@ -308,6 +311,7 @@ func askParts(ctx context.Context, model Asker, req partsRequest, notices io.Wri
 		written  = make([][]byte, count)
 		failure  error
 		unusable *noUsableAnswerError
+		usable   int
 	)
 
 	for range count {
@@ -320,6 +324,7 @@ func askParts(ctx context.Context, model Asker, req partsRequest, notices io.Wri
 		switch err := partError(r.err, r.index+1, count); {
 		case err == nil:
 			answers[r.index] = r.answer
+			usable++
 		case errors.As(err, &part):
 			if unusable == nil || part.index < unusable.index {
 				unusable = part
@@ -343,6 +348,10 @@ func askParts(ctx context.Context, model Asker, req partsRequest, notices io.Wri
 	}
 
 	if unusable != nil {
+		// Counted on this goroutine alone, from the results every part sent,
+		// so the skipped review can say what it leaves out (issue #367).
+		unusable.usable = usable
+
 		return nil, unusable
 	}
 
