@@ -44,7 +44,7 @@
 </div>
 
 <fieldset class="card">
-<legend><span class="step">01</span> Inventory</legend>
+<legend><span class="step" aria-hidden="true">01</span> Inventory</legend>
 <div class="field">
 <label for="inventory">Paste an inventory document (JSON, schema version 1 or 2)</label>
 <textarea id="inventory" rows="12" spellcheck="false" autocomplete="off"></textarea>
@@ -68,7 +68,7 @@
 </fieldset>
 
 <fieldset class="card">
-<legend><span class="step">02</span> EU targets</legend>
+<legend><span class="step" aria-hidden="true">02</span> EU targets</legend>
 <div class="targets">
 {{- range .Targets}}
 <div class="target">
@@ -89,7 +89,7 @@
 </fieldset>
 
 <fieldset class="card">
-<legend><span class="step">03</span> Options</legend>
+<legend><span class="step" aria-hidden="true">03</span> Options</legend>
 <label class="check"><input type="checkbox" id="estimate" checked> Estimate monthly list prices</label>
 </fieldset>
 

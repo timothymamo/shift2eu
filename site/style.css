@@ -211,6 +211,9 @@ summary:focus-visible,
   transform: none;
 }
 
+/* The skip link shows over the navy masthead: like the gold button, its
+   outline is drawn inside it, since a 2px offset ring would vanish on the
+   navy band, while navy on gold inside is 9:1. */
 .skip-link:focus-visible {
   outline: 3px solid var(--gold-ink);
   outline-offset: -6px;
@@ -633,7 +636,8 @@ button.secondary:disabled {
 }
 
 /* The gold button sits on navy: its outline is drawn inside it, navy on
-   gold, where it shows. */
+   gold, where it shows. A 2px offset ring would fall on the navy band and
+   vanish; navy on gold inside is 9:1. */
 .button.gold:focus-visible {
   outline: 3px solid var(--gold-ink);
   outline-offset: -6px;
@@ -891,7 +895,9 @@ button.secondary:disabled {
   content: "\2715\00a0" / "";
 }
 
+/* Each blocker item carries the same svg-free cross as its heading. */
 #report .part-blockers > ul > li::marker {
+  content: "\2715\00a0";
   color: var(--none-ink);
   background-color: var(--surface);
 }
