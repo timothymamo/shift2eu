@@ -886,6 +886,15 @@ func (sb *sandbox) useFakeSystemctl(t *testing.T) {
 // SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_FILE, with the pid in SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOCK_PID, makes
 // `bootstrap` write that file with that pid: a job whose refresh takes the instance's lock as launchd starts it,
 // which is what the install finds in the lock right after the bootstrap (issue #229, fifth review).
+//
+// SHIFT2EU_TEST_LAUNCHCTL_JOBS_DIR names a directory whose jobs launchd has loaded, for the tests that pin what a
+// target does about a job other than its own (issue #396): <dir>/system/<label> is a job of the system domain and
+// <dir>/gui/<uid>/<label> one of the user's, and each file holds the job's pid on its first line (`-` when launchd
+// runs no process for it), the path of the plist it was loaded from on its second, and one program argument per
+// line after that, as `launchctl print` prints them. `launchctl list` prints the user domain's jobs, `launchctl
+// list <domain>` and `launchctl print <domain>` the services of the domain named, and `launchctl print
+// <domain>/<label>` the job with its `arguments = { ... }` block; a label the directory does not hold answers 113.
+// `bootout` also removes the job's file, as the real command unloads the job.
 const fakeLaunchctl = `#!/bin/sh
 {
   printf 'tool=launchctl\n'
@@ -893,8 +902,89 @@ const fakeLaunchctl = `#!/bin/sh
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
 status=113
 verb="${1:-}"
+jobs="${SHIFT2EU_TEST_LAUNCHCTL_JOBS_DIR:-}"
+# job_dir <domain> prints the fixture's directory of one domain's jobs.
+job_dir() {
+  [ -n "${jobs}" ] || return 1
+  case "$1" in
+  system) printf '%s/system' "${jobs}" ;;
+  gui/* | user/*) printf '%s/gui/%s' "${jobs}" "${1#*/}" ;;
+  *) return 1 ;;
+  esac
+}
+# print_job <file> <domain> <label> prints a loaded job the way launchctl print does.
+print_job() {
+  printf '%s/%s = {\n' "$2" "$3"
+  printf '\tactive count = 1\n'
+  printf '\tpath = %s\n' "$(sed -n 2p "$1")"
+  case "$2" in
+  system) printf '\ttype = LaunchDaemon\n' ;;
+  *) printf '\ttype = LaunchAgent\n' ;;
+  esac
+  printf '\tstate = running\n'
+  printf '\tprogram = %s\n' "$(sed -n 3p "$1")"
+  printf '\targuments = {\n'
+  sed -n '3,$p' "$1" | while IFS= read -r argument; do printf '\t\t%s\n' "${argument}"; done
+  printf '\t}\n'
+  case "$(sed -n 1p "$1")" in
+  '' | -) ;;
+  *) printf '\tpid = %s\n' "$(sed -n 1p "$1")" ;;
+  esac
+  printf '}\n'
+}
+# print_domain <domain> prints a domain's services the way launchctl print prints them.
+print_domain() {
+  printf '%s = {\n' "$1"
+  printf '\ttype = %s\n' "$1"
+  printf '\tservices = {\n'
+  if dir="$(job_dir "$1")" && [ -d "${dir}" ]; then
+    for file in "${dir}"/*; do
+      [ -f "${file}" ] || continue
+      printf '\t\t%s\t0\t%s\n' "$(sed -n 1p "${file}")" "${file##*/}"
+    done
+  fi
+  printf '\t}\n'
+  printf '}\n'
+}
 case "${verb}" in
+list)
+  domain="gui/$(id -u)"
+  [ "$#" -lt 2 ] || domain="$2"
+  printf 'PID\tStatus\tLabel\n'
+  if dir="$(job_dir "${domain}")" && [ -d "${dir}" ]; then
+    for file in "${dir}"/*; do
+      [ -f "${file}" ] || continue
+      printf '%s\t0\t%s\n' "$(sed -n 1p "${file}")" "${file##*/}"
+    done
+  fi
+  exit 0
+  ;;
 print)
+  target="${2:-}"
+  domain=''
+  label=''
+  case "${target}" in
+  system) domain=system ;;
+  system/?*) domain=system label="${target#system/}" ;;
+  gui/* | user/*)
+    rest="${target#*/}"
+    domain="${target%%/*}/${rest%%/*}"
+    case "${rest}" in
+    */*) label="${rest#*/}" ;;
+    esac
+    ;;
+  esac
+  if [ -n "${domain}" ] && [ -z "${label}" ]; then
+    print_domain "${domain}"
+    exit 0
+  fi
+  if [ -n "${label}" ] && [ -n "${jobs}" ]; then
+    if dir="$(job_dir "${domain}")" && [ -f "${dir}/${label}" ]; then
+      print_job "${dir}/${label}" "${domain}" "${label}"
+      exit 0
+    fi
+    exit 113
+  fi
   status="${SHIFT2EU_TEST_LAUNCHCTL_STATUS:-0}"
   if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ]; then
     if [ -e "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}" ]; then status=0; else status=113; fi
@@ -907,8 +997,25 @@ bootout)
   if [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ] && [ "${SHIFT2EU_TEST_LAUNCHCTL_STUCK:-0}" != 1 ]; then
     rm -f "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}"
   fi
+  target="${2:-}"
+  domain=''
+  label=''
+  case "${target}" in
+  system/?*) domain=system label="${target#system/}" ;;
+  gui/* | user/*)
+    rest="${target#*/}"
+    domain="${target%%/*}/${rest%%/*}"
+    case "${rest}" in
+    */*) label="${rest#*/}" ;;
+    esac
+    ;;
+  esac
+  if [ -n "${label}" ] && [ -n "${jobs}" ] && dir="$(job_dir "${domain}")"; then
+    rm -f "${dir}/${label}"
+  fi
   status="${SHIFT2EU_TEST_LAUNCHCTL_BOOTOUT_STATUS:-0}"
   ;;
+
 bootstrap)
   if [ "${SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_LOADS:-0}" = 1 ] && [ -n "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE:-}" ]; then
     : > "${SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE}"
