@@ -263,13 +263,13 @@ reference data, and every schema version bump would be refused the same way. The
   be told from `cfg.Info`, and the spelling is rare, as hosts are written all lower or all upper case
   (both found). A false positive, or a false negative that hides real data, is fixed in the scan's
   rules, never with an allow list of paths. The left-out paths themselves are shown as they are,
-  escaped and cut, and are not scanned: the pull request's own file list already shows them. The note lists
-  the scan's first 20 findings (`MaxScanFindings`) as the file and line in a code span and the kind
-  found, never the value, and counts the rest. The scan is no part of the prompt, adds no finding to
-  the model's and changes no event. Like the first line and the closing statement, the note is outside
-  the part cut at GitHub's limit: its room is taken off the review's, so a truncated review still
-  holds it whole, and its own bound keeps it to a small part of that limit whatever the pull request
-  changes. A review that left nothing out has no such note.
+  escaped and cut, and are not scanned: the pull request's own file list already shows them. The note
+  lists the scan's first 20 findings (`MaxScanFindings`) as the file and line in a code span and the
+  kind found, never the value, and counts the rest. The scan is no part of the prompt, adds no finding
+  to the model's and changes no event. Like the first line and the closing statement, the note is
+  outside the part cut at GitHub's limit: its room is taken off the review's, so a truncated review
+  still holds it whole, and its own bound keeps it to a small part of that limit whatever the pull
+  request changes. A review that left nothing out has no such note.
 - **The model is told what was left out.** The untrusted JSON document lists the left-out paths in its
   own field, `left_out_of_diff` (they are the pull request's data, never in the system prompt), and the
   system prompt says that a file listed there was left out on purpose, so its absence is no missing or
