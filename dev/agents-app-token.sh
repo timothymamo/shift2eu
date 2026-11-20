@@ -1010,8 +1010,24 @@ clear_stale_asides() {
 }
 
 # unremovable holds the names, separated by spaces, of the entries whose rename reap_entry saw fail with the
-# entry still in place. A name is built from a fixed prefix and a pid of digits, so it holds no space.
+# entry still in place. A name is built from a fixed prefix, the instance and a pid of digits; the script does
+# not validate the instance, so a name is only ever matched or removed as a quoted string, never split or
+# globbed.
 unremovable=''
+
+# forget_unremovable <name> drops name from unremovable, if it is there, by cutting it out of the list padded
+# with a space on each side: the quoted name is matched literally, so a name holding a space or a glob
+# character never splits into words or expands to files.
+forget_unremovable() {
+  list=" ${unremovable} "
+  case "${list}" in
+    *" $1 "*) ;;
+    *) return 0 ;;
+  esac
+  list="${list%%" $1 "*} ${list#*" $1 "}"
+  list="${list# }"
+  unremovable="${list% }"
+}
 
 # is_unremovable <path> returns when the name of path is one reap_entry could not rename before.
 is_unremovable() {
@@ -1026,24 +1042,31 @@ is_unremovable() {
 # the entry first is a lost race and says nothing more; one that fails with the entry still in place says it
 # could not be removed, so the log does not end on a "removing" line for a directory that stays. That is
 # said the first time only: the entry stays, every round tries it again, and a line per round would bury
-# the log (issue #335, the audit's LOW-B). A removal that fails after the rename is said too; the next
-# round or start removes the .reap.<pid> name first.
+# the log (issue #335, the audit's LOW-B). When a later round's rename of such an entry succeeds, its
+# removal is said once, so the log does not end on "could not remove" for a directory that is gone (the
+# review's S1). A removal that fails after the rename is said too; the next round or start removes the
+# .reap.<pid> name first. An entry that has vanished (another start renamed it, or a maintainer removed it)
+# is dropped from unremovable as well, so a later entry of that name is said like any other.
 reap_entry() {
   if mv "$1" "${reap}" 2>/dev/null; then
     # Renamed after all: the name is free again for a later entry, which is said like any other.
+    was_unremovable=''
     if is_unremovable "$1"; then
-      kept=''
-      for name in ${unremovable}; do
-        [ "${name}" = "${1##*/}" ] || kept="${kept} ${name}"
-      done
-      unremovable="${kept# }"
+      was_unremovable='yes'
+      forget_unremovable "${1##*/}"
     fi
-    rm -rf "${reap}" 2>/dev/null ||
+    if rm -rf "${reap}" 2>/dev/null; then
+      [ -z "${was_unremovable}" ] ||
+        say "removed ${1##*/}: a later round renamed it to ${reap##*/} after all"
+    else
       say "could not remove ${reap##*/}, to which ${1##*/} was renamed; it is tried again at the next round or start"
+    fi
   elif [ -e "$1" ] || [ -L "$1" ]; then
     is_unremovable "$1" && return 0
     unremovable="${unremovable:+${unremovable} }${1##*/}"
     say "could not remove ${1##*/}: renaming it to ${reap##*/} failed; it is tried again at the next round or start"
+  else
+    forget_unremovable "${1##*/}"
   fi
 }
 

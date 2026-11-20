@@ -901,10 +901,14 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 		echo "agents-token-refresh-start: warning: the agents App token refresh of $$LIMA_INSTANCE (pid $$started) had stopped; its log's last lines:" >&2; \
 		tail -n 3 "$$log" 2>/dev/null | sed 's/^/  /' >&2 || true; \
 	fi; \
+	if [ -L "$$pid_file" ] || { [ -e "$$pid_file" ] && [ ! -f "$$pid_file" ]; }; then \
+		rm -f "$$pid_file" || { echo "agents-token-refresh-start: nothing was started: $$pid_file is no regular file and could not be removed; remove it by hand" >&2; exit 1; }; \
+	fi; \
 	env -u CLAUDE_CODE_OAUTH_TOKEN -u DEEPSEEK_API_KEY nohup dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
 	pid="$$!"; \
-	if [ -L "$$pid_file" ] || { [ -e "$$pid_file" ] && [ ! -f "$$pid_file" ]; }; then rm -f "$$pid_file" || exit 1; fi; \
-	(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
+	pid_tmp="$$(umask 077 && mktemp "$$state/.agents-token-refresh-$$LIMA_INSTANCE.pid.XXXXXX")" && \
+		echo "$$pid" >"$$pid_tmp" && mv -f "$$pid_tmp" "$$pid_file" || \
+		{ echo "agents-token-refresh-start: the refresh of $$LIMA_INSTANCE runs (pid $$pid), but writing its pid file $$pid_file failed" >&2; exit 1; }; \
 	echo "agents-token-refresh-start: started the agents App token refresh of $$LIMA_INSTANCE (pid $$pid); its log is $$log"
 
 # The LaunchDaemon that runs the refresh at boot, with nobody logged in, as you (issue #229, ADR 0034): one job
