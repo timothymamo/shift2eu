@@ -2614,17 +2614,23 @@ func TestAgentsAppTokenIgnoresAClockThatIsNotAClock(t *testing.T) {
 	const offsetWarning = "off the Mac's"
 
 	cases := []struct {
-		name        string
-		clock       string
+		name string
+		// clock builds the fake VM's reading when the subtest runs, not when the table is built: the script
+		// compares the reading with the Mac's clock and warns when the two are more than a minute apart, so a
+		// reading taken here would be a minute stale once the package is slow enough under t.Parallel(), and
+		// the zero-padded case would warn where it expects no warning (issue #354).
+		clock       func() string
 		wantWarning bool
 	}{
-		{name: "a 14-digit reading is no clock", clock: "17000000000000000"},
-		{name: "a 13-digit reading is no clock", clock: "17000000000000"},
-		{name: "a 12-digit reading is the last one accepted", clock: "170000000000", wantWarning: true},
+		{name: "a 14-digit reading is no clock", clock: func() string { return "17000000000000000" }},
+		{name: "a 13-digit reading is no clock", clock: func() string { return "17000000000000" }},
+		{name: "a 12-digit reading is the last one accepted", clock: func() string { return "170000000000" }, wantWarning: true},
 		// A zero-padded reading with an 8 or a 9: the shell would read the leading 0 as octal and end on the
 		// digit, so it is read as the number its digits are, which is the Mac's clock and no warning at all
 		// (reviewer N-a, auditor L-A).
-		{name: "a zero-padded reading with an 8 or a 9 is the clock it says", clock: zeroPadWithAnEightOrNine(time.Now().Unix())},
+		{name: "a zero-padded reading with an 8 or a 9 is the clock it says", clock: func() string {
+			return zeroPadWithAnEightOrNine(time.Now().Unix())
+		}},
 	}
 
 	for _, tc := range cases {
@@ -2632,19 +2638,22 @@ func TestAgentsAppTokenIgnoresAClockThatIsNotAClock(t *testing.T) {
 			t.Parallel()
 
 			f := newMintFixture(t)
-			f.sb.useFakeVMClock(t, f.env, tc.clock)
+
+			// Read right before the mint runs, so the script's own clock read is seconds behind it at most.
+			clock := tc.clock()
+			f.sb.useFakeVMClock(t, f.env, clock)
 
 			stdout, stderr, err := f.sb.run(t, scriptPath(t, agentsMintScript), []string{"mint"}, f.env, "")
 			if err != nil {
 				t.Fatalf("mint exited non-zero with the VM's clock reading %s: a reading the script cannot use is no reason to leave the VM without a token: %v\nstdout: %s\nstderr: %s",
-					tc.clock, err, stdout, stderr)
+					clock, err, stdout, stderr)
 			}
 
 			readTwoLines(t, f.sb.vmPath(agentsTokenFile), 0o600)
 
 			if got := strings.Contains(stderr, offsetWarning); got != tc.wantWarning {
 				t.Errorf("the mint compares the VM's clock reading %s with the Mac's = %v, want %v: only 1 to 12 digits are a clock the script may compare (second review, item 6)\nstderr: %s",
-					tc.clock, got, tc.wantWarning, stderr)
+					clock, got, tc.wantWarning, stderr)
 			}
 
 			f.assertNoLeaks(t, stdout, stderr)
