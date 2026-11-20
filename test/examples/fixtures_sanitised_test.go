@@ -226,6 +226,37 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"github.com/acme"},
 		},
 		{
+			// The SSH clone form a reader copies out of a git command names the
+			// owner after a colon, and the owner is the customer's all the same.
+			name:    "customer owner in an SSH clone URL",
+			path:    "docs/guide/planted-clone.md",
+			content: "cloned with git@github.com:acme/private-repo.git",
+			want:    []string{"github.com/acme"},
+		},
+		{
+			// An ARN names a bucket with no scheme, and the ARN is reported whole
+			// so the failure says which value to change.
+			name:    "customer bucket in an ARN",
+			path:    "testdata/planted-arn.json",
+			content: `"bucket": "arn:aws:s3:::acme-prod-bucket"`,
+			want:    []string{"arn:aws:s3:::acme-prod-bucket"},
+		},
+		{
+			name:    "customer bucket in a Cloud Storage URL",
+			path:    "testdata/planted-gcs.json",
+			content: "the objects are at https://storage.googleapis.com/acme-prod-data/key",
+			want:    []string{"storage.googleapis.com/acme-prod-data"},
+		},
+		{
+			// The other side of the same rules, planted rather than assumed: the
+			// project's own host and a sample's bucket are what a checked file may
+			// carry, so the check reports nothing for them.
+			name:    "public project host and sample bucket",
+			path:    "testdata/planted-clean.txt",
+			content: "cloned from github.com/timothymamo/shift2eu, the sample objects are in s3://example-bucket/key",
+			want:    nil,
+		},
+		{
 			// Every sample address is in 192.0.2.0/24, and the hyphenated rule
 			// holds an address written into a name to that range just as the
 			// dotted rule does: ip-192-0-2-10 is clean, the other two RFC 5737

@@ -23,7 +23,13 @@ import (
 //
 // A private address is reported in a CIDR suffix written into a name
 // (vpc-10-0-0-0-16, subnet_10_0_0_0_24), and a fifth group after a
-// public-looking run (build-1-2-3-4-5) leaves that run clean. The label before
+// public-looking run (build-1-2-3-4-5) leaves that run clean. A fifth group that
+// ends the run is the prefix length (10-1-2-3-4 is 10.1.2.3/4), while one beyond
+// the prefix range (10-1-2-3-45, vpc-10-0-0-0-33), one of three digits
+// (vpc-10-0-0-0-016) or a further group after a bare run (10-1-2-3-4-5) leaves
+// the run clean too; a name's prefix length that one more digit group follows
+// (subnet-10-0-1-0-24-2, vpc_10_0_0_0_16_1) fails closed and the run is
+// reported. The label before
 // a bare private run excuses it only when the label is an English word ending in
 // ip that stands on its own (zip-10-1-2-3, ship-1-2-3-4): the same word inside a
 // compound name (edge-strip-10-0-0-5, node_tip_10_1_2_3) marks the address, as
@@ -220,6 +226,61 @@ func TestHyphenatedIPv4Problems(t *testing.T) {
 		{
 			name: "private CIDR in a subnet name",
 			text: "the subnet subnet_10_0_0_0_24 holds it",
+			want: []string{"10_0_0_0"},
+		},
+		{
+			// The fifth group of a private run is the prefix length when nothing
+			// follows it, so 10-1-2-3-4 is 10.1.2.3/4 and the address is
+			// reported: the rule fails closed rather than pass a private address
+			// for the sake of a trailing number.
+			name: "private address followed by a prefix length",
+			text: `"peer": "10-1-2-3-4"`,
+			want: []string{"10-1-2-3"},
+		},
+		{
+			// 45 is no prefix length of an IPv4 CIDR, so the run is the tail of
+			// a longer sequence of numbers rather than an address of its own.
+			name: "private address followed by a group beyond the prefix range",
+			text: "the peer 10-1-2-3-45 answers",
+			want: nil,
+		},
+		{
+			name: "private address followed by two further groups",
+			text: "the steps 10-1-2-3-4-5 are listed",
+			want: nil,
+		},
+		{
+			// A prefix length is 0 to 32, so 33 is no prefix and the run stays as
+			// clean as any other fifth group beyond it.
+			name: "prefix length beyond 32 in a VPC name",
+			text: "the vpc vpc-10-0-0-0-33 holds it",
+			want: nil,
+		},
+		{
+			// 016 is three digits, and a prefix length is written with two at
+			// most, so the group is no prefix.
+			name: "prefix length of three digits in a VPC name",
+			text: "the vpc vpc-10-0-0-0-016 holds it",
+			want: nil,
+		},
+		{
+			// The availability zone after the prefix length is no further digit
+			// group, so the name spells a CIDR and the address is reported.
+			name: "prefix length followed by an availability zone in a subnet name",
+			text: "the subnet subnet-10-0-0-0-16-az1 holds it",
+			want: []string{"10-0-0-0"},
+		},
+		{
+			// A prefix length and one more digit group after it: the name may be a
+			// subnet of a /24 and a node's index, or a private address written
+			// behind a label, and the rule fails closed rather than pass one.
+			name: "prefix length followed by a further digit group in a subnet name",
+			text: "the subnet subnet-10-0-1-0-24-2 holds it",
+			want: []string{"10-0-1-0"},
+		},
+		{
+			name: "prefix length followed by a further digit group in an underscored VPC name",
+			text: "the vpc vpc_10_0_0_0_16_1 holds it",
 			want: []string{"10_0_0_0"},
 		},
 		{

@@ -417,10 +417,16 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 //
 // A bucket is reported with the scheme that gives it its shape (s3://,
 // s3a://, s3n://, gs://, az://) or, in an ARN, whole
-// (arn:aws:s3:::acme-prod-bucket). A bucket is a sample value only when it is
-// example or starts with example- and generic words follow (example-bucket,
-// example-logs-2, example), never when a name follows the prefix
-// (example-acme-prod).
+// (arn:aws:s3:::acme-prod-bucket). A Cloud Storage path names the bucket after
+// the service host, in a URL (storage.googleapis.com/acme-prod-data), in a Cloud
+// Asset name (//storage.googleapis.com/acme-prod-data) and in a JSON API path,
+// whose www.googleapis.com host and storage/v1/b segment an upload, a download
+// or a plain call writes alike: the value reported is the host and the path after
+// it. A bucket is a sample value only when it is example or starts with example-
+// and generic words follow (example-bucket, example-logs-2, example), the digits
+// after the last word one to three of them, never when a name follows the prefix
+// (example-acme-prod) or a long run of digits does
+// (example-logs-210987654321).
 //
 // A name below a listed vendor host is no path of that host: evil.github.com is
 // the host name rule's value, not this rule's.
@@ -511,6 +517,50 @@ func TestVendorPathProblems(t *testing.T) {
 			text: "the objects are in s3://example-acme-prod/key",
 			want: []string{"s3://example-acme-prod"},
 		},
+		{
+			// A Cloud Storage JSON API call names the bucket after the resource
+			// path's segment, and www.googleapis.com is the host it is called on:
+			// the host rule's exemption of the service host is no defence, and the
+			// value reported is the host and the path after it.
+			name: "customer bucket in a Cloud Storage JSON API path",
+			text: `"selfLink": "https://www.googleapis.com/storage/v1/b/acme-prod-data"`,
+			want: []string{"www.googleapis.com/storage/v1/b/acme-prod-data"},
+		},
+		{
+			name: "customer bucket in a Cloud Storage JSON API upload path",
+			text: "the upload goes to https://www.googleapis.com/upload/storage/v1/b/acme-prod-data/o",
+			want: []string{"www.googleapis.com/upload/storage/v1/b/acme-prod-data"},
+		},
+		{
+			name: "customer bucket in a Cloud Storage JSON API download path",
+			text: "the download comes from https://www.googleapis.com/download/storage/v1/b/acme-prod-data/o",
+			want: []string{"www.googleapis.com/download/storage/v1/b/acme-prod-data"},
+		},
+		{
+			// The same path as a Cloud Asset name starts with the double slash an
+			// asset name uses, and the value is reported from the host on.
+			name: "customer bucket in a Cloud Storage asset name",
+			text: `"name": "//storage.googleapis.com/storage/v1/b/acme-prod-data"`,
+			want: []string{"storage.googleapis.com/storage/v1/b/acme-prod-data"},
+		},
+		{
+			// The digits after a generic word are a count (example-logs-2) and a
+			// sample writes one to three of them, so a run of twelve is an account
+			// ID or another customer's own suffix.
+			name: "account-ID digits after a sample bucket prefix in an s3 URL",
+			text: "the objects are in s3://example-logs-210987654321/key",
+			want: []string{"s3://example-logs-210987654321"},
+		},
+		{
+			name: "account-ID digits after a sample bucket prefix in an ARN",
+			text: `"bucket": "arn:aws:s3:::example-backup-210987654321"`,
+			want: []string{"arn:aws:s3:::example-backup-210987654321"},
+		},
+		{
+			name: "account-ID digits after a sample bucket prefix in a Cloud Storage path",
+			text: "the asset is storage.googleapis.com/example-data-210987654321",
+			want: []string{"storage.googleapis.com/example-data-210987654321"},
+		},
 
 		// Not reported: the project's own account, a listed public open-source
 		// owner, and a sample's bucket.
@@ -556,6 +606,13 @@ func TestVendorPathProblems(t *testing.T) {
 		{
 			name: "public bucket in a Cloud Storage URL",
 			text: "the sample objects are at https://storage.googleapis.com/example-bucket/key",
+			want: nil,
+		},
+		{
+			// The JSON API's own path names a sample's bucket too, so it
+			// identifies nobody.
+			name: "public bucket in a Cloud Storage JSON API path",
+			text: `"selfLink": "https://www.googleapis.com/storage/v1/b/example-bucket"`,
 			want: nil,
 		},
 		{
