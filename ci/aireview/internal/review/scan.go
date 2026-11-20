@@ -17,10 +17,14 @@ type LeftOutFile struct {
 	// differ" or "GIT binary patch"): it has no line of text, so it was
 	// neither reviewed nor scanned (issue #342).
 	Binary bool
-	// Renamed is true for the old path of a rename or copy that no section
-	// names as its new path: it is the same file as the new one, whose lines
-	// are counted there.
+	// Renamed is true for the old path of a rename that no section names as
+	// its new path: it is the same file as the new one, whose lines are
+	// counted there.
 	Renamed bool
+	// Copied is true for the source path of a copy ("copy from"/"copy to")
+	// that no section names as its new path: the copy's lines are counted on
+	// its new path.
+	Copied bool
 }
 
 // ScanKind names what the model-free scan of the left-out files found.
@@ -61,9 +65,10 @@ const MaxScanFindings = 20
 // to read, so neither is scanned. The scan is a fixed set of rules (scanLine)
 // with no model: it reads a left-out section's hunks, never its header, and
 // keeps the kind and the line of what it found, never the text. It does not cap
-// the findings: the review caps what it lists. A binary file is marked Binary
-// and a rename's old path Renamed, so the note never shows either as a file
-// nothing was added to. The left-out paths themselves are shown as they are,
+// the findings: the review caps what it lists. A binary file is marked Binary,
+// a rename's old path Renamed and a copy's source path Copied, so the note
+// never shows any of them as a file nothing was added to. The left-out paths
+// themselves are shown as they are,
 // escaped and cut, and are not scanned: the pull request's own file list
 // already shows them.
 func ScanLeftOut(raw string) LeftOut {
@@ -93,13 +98,17 @@ func ScanLeftOut(raw string) LeftOut {
 		}
 
 		// Both paths of a rename or copy are left out; the lines it adds
-		// belong to the new one, and the old one is marked renamed unless a
-		// section of its own names it as its new path.
+		// belong to the new one, and the old one is marked copied or renamed
+		// unless a section of its own names it as its new path.
 		oldPath, newPath := paths[0], paths[len(paths)-1]
 		asNew[newPath] = true
 
 		if oldPath != newPath {
-			file(oldPath).Renamed = true
+			if isCopySection(text) {
+				file(oldPath).Copied = true
+			} else {
+				file(oldPath).Renamed = true
+			}
 		}
 
 		count, findings := scanSection(text, newPath)
@@ -130,10 +139,30 @@ func ScanLeftOut(raw string) LeftOut {
 	for _, path := range paths {
 		f := *files[path]
 		f.Renamed = f.Renamed && !asNew[path]
+		f.Copied = f.Copied && !asNew[path]
 		leftOut.Files = append(leftOut.Files, f)
 	}
 
 	return leftOut
+}
+
+// isCopySection reports whether a file section's extended header (its lines
+// before the first "---", "+++", "@@" or "Binary files" line) holds a "copy
+// from" or "copy to" line: git's mark of a copy rather than a rename. A hunk's
+// content, which the pull request's author writes, is never read.
+func isCopySection(section string) bool {
+	for line := range strings.SplitSeq(section, "\n") {
+		if strings.HasPrefix(line, "--- ") || strings.HasPrefix(line, "+++ ") ||
+			strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "Binary files") {
+			return false
+		}
+
+		if strings.HasPrefix(line, "copy from ") || strings.HasPrefix(line, "copy to ") {
+			return true
+		}
+	}
+
+	return false
 }
 
 // isBinarySection reports whether git writes a file section as binary: a
@@ -202,8 +231,9 @@ func scanSection(section, path string) (int, []ScanFinding) {
 //
 //   - an account ID is a run of exactly twelve digits that is not 123456789012,
 //     has no letter, digit, "-" or "_" beside it (a UUID's last group is no
-//     account ID), has no "." or "/" beside it with a digit on the far side (a
-//     decimal number), and is not inside a JSON pointer starting "#/";
+//     account ID), has no "." beside it with a digit on the far side (a
+//     decimal number), and is not inside a JSON pointer starting "#/" (a "/"
+//     beside it is no exception elsewhere: s3://logs/2024/<id> is a finding);
 //   - an IPv4 address is four dotted decimal octets with no letter or digit
 //     beside them, outside 0.0.0.0/8, 127.0.0.0/8, the documentation ranges
 //     192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24, and 255.255.255.255;
@@ -214,11 +244,13 @@ func scanSection(section, path string) (int, []ScanFinding) {
 //     below it, or for amazonaws.com <service>.<region> with a region of the
 //     AWS shape: anything deeper is a name a customer chose;
 //   - a key is a run of letters and digits that is an access key ID (twenty
-//     upper-case letters and digits starting AKIA or ASIA), or a run of
-//     letters, digits, "+" and "/" that begins and ends with a letter or a
-//     digit, is at least 32 long and holds an upper-case letter, a lower-case
-//     letter and a digit (a secret access key); a run that begins or ends with
-//     "/" is a path or a JSON pointer, and "-" ends a run.
+//     upper-case letters and digits starting AKIA or ASIA) or is at least 32
+//     long with an upper-case letter, a lower-case letter and a digit (a
+//     token), or a run of letters, digits, "+" and "/" holding a "+" or "/"
+//     that is exactly 40 long with an upper-case letter, a lower-case letter
+//     and a digit (a secret access key), which may begin or end with "/" or
+//     "+"; a path, a URL or a JSON pointer is rarely exactly 40 long, and "-"
+//     ends a run.
 func scanLine(line string) []ScanKind {
 	var kinds []ScanKind
 
@@ -274,13 +306,14 @@ func hasAccountID(line string) bool {
 
 // isIDNeighbour reports whether c, beside a run of digits with beyond on the
 // far side of c, makes it part of a longer identifier rather than a value of
-// its own: a letter, a digit, "-" or "_", or a "." or "/" with a digit beyond,
-// as in a decimal number.
+// its own: a letter, a digit, "-" or "_", or a "." with a digit beyond, as in
+// a decimal number. A "/" is no such neighbour: a path segment can be an
+// account ID.
 func isIDNeighbour(c, beyond byte) bool {
 	switch c {
 	case '-', '_':
 		return true
-	case '.', '/':
+	case '.':
 		return isDecimalDigit(beyond)
 	default:
 		return isASCIIAlnum(c)
@@ -395,6 +428,10 @@ func isAllowedHost(host string) bool {
 
 		labels := strings.Split(below, ".")
 
+		// The service label of <service>.<region>.amazonaws.com is not
+		// checked: a customer's bucket or database is a name deeper than
+		// that shape (bucket.s3.<region>.amazonaws.com), so a name of this
+		// shape is an AWS endpoint, not one that carries customer data.
 		return len(labels) == 1 ||
 			(domain == "amazonaws.com" && len(labels) == 2 && isAWSRegion(labels[1]))
 	})
@@ -452,9 +489,13 @@ func hasKey(line string) bool {
 	})
 
 	return alnumKey || anyRun(line, isBase64Char, func(run string, _, _ byte) bool {
-		return isASCIIAlnum(run[0]) && isASCIIAlnum(run[len(run)-1]) && isToken(run)
+		return len(run) == secretAccessKeyLength && strings.ContainsAny(run, "+/") && isToken(run)
 	})
 }
+
+// secretAccessKeyLength is the length of a secret access key: the only length
+// a run holding "+" or "/" is taken for a key at.
+const secretAccessKeyLength = 40
 
 // isAccessKeyID reports whether run is an access key ID: twenty upper-case
 // letters and digits starting AKIA or ASIA.

@@ -245,11 +245,12 @@ reference data, and every schema version bump would be refused the same way. The
   finding's path is (backticks made apostrophes, control characters spaces, mentions defused, each path
   cut to 300 UTF-16 code units), so the maintainer knows what the AI review did not read. The note
   states the total, lists the first 50 paths (`MaxListedExcluded`), each with the lines it adds
-  (`(+3 lines)`, issue #342), a binary file as `(binary, not scanned)` and a rename's old path as
-  `(renamed)`, and says how many more it does not list. Amended by issue #342: **a model-free scan
+  (`(+3 lines)`, issue #342), a binary file as `(binary, not scanned)`, a rename's old path as
+  `(renamed)` and a copy's source path as `(copied)`, and says how many more it does not list. Amended by issue #342: **a model-free scan
   reads the lines the left-out sections add** (`ScanLeftOut`; never a removed or context line, never a
   reviewed file) for a twelve-digit account ID, an IPv4 address, a host name and a key-like string
-  (an access key ID or a secret access key, `+` and `/` included), by fixed rules that know the
+  (an access key ID, a long token, or a secret access key: a run holding `+` or `/` is one only at
+  exactly 40 characters, so a path or URL is none), by fixed rules that know the
   sanitised values of CLAUDE.md rule 2. An example domain is no finding at any depth; a provider's
   domain only as its apex, exactly one label below it, or for `amazonaws.com` `<service>.<region>`:
   a deeper name is one a customer chose. The left-out paths themselves are shown as they are, escaped

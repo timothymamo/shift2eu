@@ -476,12 +476,15 @@ func notReviewedNote(leftOut LeftOut) string {
 }
 
 // leftOutFileNote returns what the note says beside a left-out file: that it is
-// binary and was not scanned, that it is a rename's old path, or the lines it
-// adds. A count of 0 for a file nobody read would read as nothing added.
+// binary and was not scanned, that it is a copy's source or a rename's old
+// path, or the lines it adds. A count of 0 for a file nobody read would read as
+// nothing added.
 func leftOutFileNote(file LeftOutFile) string {
 	switch {
 	case file.Binary:
 		return "binary, not scanned"
+	case file.Copied:
+		return "copied"
 	case file.Renamed:
 		return "renamed"
 	default:
