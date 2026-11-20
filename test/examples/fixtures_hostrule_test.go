@@ -22,17 +22,23 @@ import (
 // cloud, ai, co, plus the generic info, biz, tech, online, site, xyz; every
 // EU/EEA country code, so de, fr, nl, uk, ch, at, be, se, fi, no, dk, es, it, pl,
 // us, ie, lu, cz, pt and the rest; and OVHcloud's own ovh - deliberately not md,
-// sh, py, rs or another file-extension clash, and deliberately not is, which a
-// Go selector reads as errors.Is and a name ends with), or if it ends in one of
-// the private DNS suffixes an internal name is built from (.internal, the AWS
+// sh, py, rs or another file-extension clash), or if it ends in one of the
+// private DNS suffixes an internal name is built from (.internal, the AWS
 // and GCP private zone; .corp; .lan), and it is not one of the exact public
 // vendor hosts a page may link to (github.com, www.scaleway.com, ... ). The
 // vendor list is exact, never a suffix match: the subdomain of a listed vendor
 // host is a customer's name and is reported.
 //
+// Two suffixes are country code and private zone and Go selector at once:
+// Iceland's is (errors.Is) and local (time.Local). They are read as hosts only
+// when the whole name is lower case, so db01.corp.local and shop.example.is are
+// reported and the selectors are not (lowercaseOnlyTLDs).
+//
 // The account-ID, GUID, IPv4 and IPv6 rules are unchanged, and the names the
 // examples/ allow list already accepts (example.com and its subdomains, the
-// reserved .example, .test and .invalid names) stay accepted.
+// reserved .example, .test and .invalid names) stay accepted. An IPv4 address
+// written into a name with hyphens (ip-10-0-1-23) is reported beside the name
+// that holds it (hyphenatedIPv4Problems).
 func TestSanitisationProblemsHostNameRule(t *testing.T) {
 	t.Parallel()
 
@@ -135,10 +141,11 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 		},
 		{
 			// An AWS private DNS name: .internal is no public TLD, but the name
-			// still identifies a customer's own network.
+			// still identifies a customer's own network. The address inside it is
+			// reported on its own as well (hyphenatedIPv4Problems).
 			name: "AWS private DNS name",
 			text: `"hostname": "ip-10-0-1-23.eu-central-1.compute.internal"`,
-			want: []string{"ip-10-0-1-23.eu-central-1.compute.internal"},
+			want: []string{"10-0-1-23", "ip-10-0-1-23.eu-central-1.compute.internal"},
 		},
 		{
 			name: "GCP internal DNS name",
