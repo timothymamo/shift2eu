@@ -908,7 +908,8 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 	pid="$$!"; \
 	pid_tmp="$$(umask 077 && mktemp "$$state/.agents-token-refresh-$$LIMA_INSTANCE.pid.XXXXXX")" && \
 		echo "$$pid" >"$$pid_tmp" && mv -f "$$pid_tmp" "$$pid_file" || \
-		{ echo "agents-token-refresh-start: the refresh of $$LIMA_INSTANCE runs (pid $$pid), but writing its pid file $$pid_file failed" >&2; exit 1; }; \
+		{ [ -z "$$pid_tmp" ] || rm -f "$$pid_tmp"; \
+		  echo "agents-token-refresh-start: the refresh of $$LIMA_INSTANCE runs (pid $$pid), but writing its pid file $$pid_file failed" >&2; exit 1; }; \
 	echo "agents-token-refresh-start: started the agents App token refresh of $$LIMA_INSTANCE (pid $$pid); its log is $$log"
 
 # The LaunchDaemon that runs the refresh at boot, with nobody logged in, as you (issue #229, ADR 0034): one job
