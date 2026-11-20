@@ -407,19 +407,19 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 // reads after a vendor host or a bucket scheme. The host name rule exempts the
 // public vendor hosts a page links to (publicVendorHosts), yet the path after one
 // names the customer just as a host would, so an owner a path names after
-// github.com, raw.githubusercontent.com, ghcr.io or storage.googleapis.com is
-// reported as the host and the owner (github.com/acme), in a URL and in the SSH
-// clone form a reader copies (git@github.com:acme/private-repo.git) alike. Only
-// this project's own account and the listed public open-source owners pass, so
-// github.com/timothymamo/shift2eu and github.com/sigstore/cosign are clean while
-// the same host written in another case (GitHub.com/TimothyMamo/shift2eu) is
-// clean too.
+// github.com, raw.githubusercontent.com or ghcr.io is reported as the host and
+// the owner (github.com/acme), in a URL and in the SSH clone form a reader copies
+// (git@github.com:acme/private-repo.git) alike. Only this project's own account
+// and the listed public open-source owners pass, so github.com/timothymamo/shift2eu
+// and github.com/sigstore/cosign are clean and the same host written in another
+// case (GitHub.com/TimothyMamo/shift2eu) is clean too.
 //
 // A bucket is reported with the scheme that gives it its shape (s3://,
 // s3a://, s3n://, gs://, az://) or, in an ARN, whole
-// (arn:aws:s3:::acme-prod-bucket). A Cloud Storage path names the bucket after
-// the service host, in a URL (storage.googleapis.com/acme-prod-data), in a Cloud
-// Asset name (//storage.googleapis.com/acme-prod-data) and in a JSON API path,
+// (arn:aws:s3:::acme-prod-bucket). A Cloud Storage path is read by this rule,
+// not the owner one, and it names the bucket after the service host
+// (storage.googleapis.com), in a URL (storage.googleapis.com/acme-prod-data), in a
+// Cloud Asset name (//storage.googleapis.com/acme-prod-data) and in a JSON API path,
 // whose www.googleapis.com host and storage/v1/b segment an upload, a download
 // or a plain call writes alike: the value reported is the host and the path after
 // it. A bucket is a sample value only when it is example or starts with example-
