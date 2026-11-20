@@ -163,8 +163,9 @@
 >    /Users/_shift2euagents/.config/shift2eu/agents-app.pem`, the download then removed, and **every
 >    older key deleted on the App's page**: a key the maintainer's uid ever held must be revoked, or
 >    moving it gains nothing. For that moment the download sits in the maintainer's `~/Downloads`, in
->    the maintainer's reach, usually on another machine too, and that window is accepted: it is carried to the Mini as a 0600 temporary file and removed on both (local Time Machine
->    snapshots taken in the window deleted; rotating the key closes it for good).
+>    the maintainer's reach, usually on another machine too, and that window is accepted: the download
+>    is carried to the Mini as a 0600 temporary file and removed on both (local Time Machine snapshots
+>    taken in the window deleted; rotating the key closes it for good).
 > 3. **Transport: SSH, not limactl.** The account cannot run `limactl` against the maintainer's
 >    `~/.lima`, so it connects to the VM's forwarded SSH port on `127.0.0.1` itself. Four variables choose
 >    and configure it in `dev/agents-app-token.sh`: `SHIFT2EU_AGENTS_VM_SSH_PORT`,
