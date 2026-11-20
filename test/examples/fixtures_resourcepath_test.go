@@ -226,10 +226,10 @@ func TestResourcePathProblems(t *testing.T) {
 			want: nil,
 		},
 		{
-			// A GCP project ID is six to thirty characters, starts with a
-			// lower-case letter and holds lower-case letters, digits and hyphens
-			// without ending in one: a one-letter segment is the jq placeholder
-			// docs/guide/inventory/gcp.jq writes.
+			// A GCP project ID is six to thirty characters, opens with a letter
+			// and holds letters, digits and hyphens without ending in one: a
+			// one-letter segment is the placeholder docs/guide/inventory/gcp.jq
+			// writes.
 			name: "project segment too short for a project ID",
 			text: "the asset name is //compute.googleapis.com/projects/p/zones/z/instances/n",
 			want: nil,
