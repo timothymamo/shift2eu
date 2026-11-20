@@ -17,8 +17,13 @@
 // names, and owners and buckets after a vendor host, a bucket scheme, in an S3
 // ARN or in a Cloud Storage JSON API path (github.com/acme, git@github.com:acme,
 // s3://acme-bucket, arn:aws:s3:::acme-bucket, storage.googleapis.com/acme-bucket,
-// www.googleapis.com/storage/v1/b/acme-bucket) that are not documentation
-// values. Only directories named exactly testdata are checked
+// www.googleapis.com/storage/v1/b/acme-bucket, api.github.com/repos/acme,
+// abfss://data@acmeaccount..., oci://acme-bucket), and the customer names a
+// provider resource path carries (a GCP project ID in projects/acme-prod, a
+// bucket in projects/_/buckets/acme-bucket, an Azure storage account in an ARM
+// ID's storageAccounts/acmeprod, an S3 access point or Outposts bucket in an
+// ARN) that are not documentation values. Only directories named exactly
+// testdata are checked
 // besides examples/ and docs/guide/, so a new fixture directory must be named
 // testdata. The walk reads the tree on disk, so an untracked or git-ignored file
 // under a checked directory is checked too: a real inventory dropped there

@@ -55,6 +55,26 @@ var realDataAllowList = []allowListEntry{
 		why:   "the second synthetic Auto Scaling group ID, all zero but its last digit",
 	},
 	{
+		file:  "test/e2e/testdata/inventory-guide/azure/blob-services.json",
+		value: "storageAccounts/stshopassets",
+		why:   "the synthetic storage account of the guide's sample shop, named the way Azure's naming guide (st prefix) spells one; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-1.json",
+		value: "storageAccounts/stshopassets",
+		why:   "the guide's sample shop's synthetic asset storage account in the Resource Graph export; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-1.json",
+		value: "storageAccounts/stshopfiles",
+		why:   "the guide's sample shop's synthetic file-share storage account in the Resource Graph export; it names no one's account",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/storage-queues.json",
+		value: "storageAccounts/stshopassets",
+		why:   "the synthetic storage account of the guide's sample shop that holds its queues; it names no one's account",
+	},
+	{
 		file:  "test/e2e/testdata/inventory-guide/gcp/assets.json",
 		value: "storage.googleapis.com/shop-assets-example",
 		why:   "the Cloud Asset name of the guide's synthetic shop bucket, marked -example; it names no one's bucket",
@@ -172,19 +192,21 @@ func holdsCheckedPath(name string) bool {
 
 // sanitisationProblems returns every value a checked file may not carry under
 // CLAUDE.md rule 2, rule by rule: account IDs, GUIDs, IPv4 addresses (written
-// with dots or with hyphens or underscores), IPv6 addresses, host
-// names and the owners and buckets a vendor path or a bucket URL names. The
-// first four rules are the samples' own; the host name rule is the narrower
-// fixture one (fixtureHostnameProblems), and the hyphenated-address rule
-// (hyphenatedIPv4Problems) and the vendor-path rule (vendorPathProblems) cover
+// with dots or with hyphens or underscores), IPv6 addresses, host names, the
+// owners and buckets a vendor path or a bucket URL names, and the customer names
+// a provider resource path carries. The first four rules are the samples' own;
+// the host name rule is the narrower fixture one (fixtureHostnameProblems), and
+// the hyphenated-address rule (hyphenatedIPv4Problems), the vendor-path rule
+// (vendorPathProblems) and the resource-path rule (resourcePathProblems) cover
 // forms a fixture holds, so the strict rule TestSamplesAreSanitised applies over
 // examples/ is unchanged.
 //
-// No rule reads the provider resource paths that hold a globally unique
-// customer name: a GCP project ID (projects/acme-corp-prod/...), an Azure
-// storage account in an ARM ID (.../storageAccounts/acmeprod) or a Cloud Storage
-// bucket in a resource name (projects/_/buckets/acme-prod-data) passes. The gap
-// predates the rules of issues #361 to #363. Issue #406 tracks it.
+// The resource-path rule reads the globally unique names the others never see,
+// since they carry no dot or sit in a path segment (issue #406): a GCP project ID
+// (projects/acme-corp-prod/...), an Azure storage account in an ARM ID
+// (.../storageAccounts/acmeprod), a Cloud Storage bucket in a resource name
+// (projects/_/buckets/acme-prod-data) and an S3 access point or Outposts bucket
+// in an ARN (...:accesspoint/acme-prod-ap).
 func sanitisationProblems(text string) []problem {
 	return slices.Concat(
 		accountIDProblems(text),
@@ -194,6 +216,7 @@ func sanitisationProblems(text string) []problem {
 		ipv6Problems(text),
 		fixtureHostnameProblems(text),
 		vendorPathProblems(text),
+		resourcePathProblems(text),
 	)
 }
 
@@ -218,7 +241,16 @@ func sanitisationProblems(text string) []problem {
 // and Indonesia's id, left out on purpose: every jq and JSON field path a guide
 // page quotes ends in .id (value.id, managedDisk.id), so the code would report
 // those by the dozen while a customer host under it is rare. Additions are
-// expected whenever a likely one turns up in a guide page or a fixture.
+// expected whenever a likely one turns up in a guide page or a fixture. These
+// gaps are accepted (issue #406): a curated list cannot name every TLD without
+// reading every dotted value as a host.
+//
+// The opposite choice is made for home, private, priv, jobs and travel: they
+// match in any case, so a dotted value that is no host at all (workflow.jobs,
+// user.home, cfg.private) is reported too. That is kept on purpose, as it fails
+// closed: a real internal host under these suffixes is customer data, while a
+// false positive costs one allow-list entry. TestSanitisationProblemsHostNameRule
+// pins workflow.jobs being reported.
 //
 // The four suffixes a Go selector ends with would be a worse gap than that, since
 // every Go-source fixture that imports the package carries one of them (Iceland's
@@ -231,7 +263,9 @@ func sanitisationProblems(text string) []problem {
 // (DB01.CORP.LOCAL passes) and a lower-case unexported Go selector in a
 // Go-source fixture (cfg.local, s.is, C.int), which would be reported; only
 // cgo's C.int trips that one in the tree, excused on the allow list, and
-// reporting a selector is the safe direction. Issue #406 tracks these gaps.
+// reporting a selector is the safe direction. Both are accepted (issue #406): a host
+// is written in lower case far more often than in capitals, and reading a
+// capital last label as a host would report every exported Go selector again.
 //
 // It deliberately leaves out the TLDs that clash with a file extension a
 // fixture or a guide page names (md, sh, py, rs), so install.md or run.sh is
@@ -369,10 +403,17 @@ func fixtureHostnameProblems(text string) []problem {
 // owner's name in the SSH clone form (git@github.com:acme/repo.git), which
 // vendorPathProblems accepts only for github.com right after an @, so a port
 // (ghcr.io:443) or a colon in prose is no owner. The host must stand on its own
-// (vendorPathProblems), so a name below it (evil.github.com) and api.github.com,
-// whose first segment is repos rather than an owner, are left to the host name
-// rule.
+// (vendorPathProblems), so a name below it (evil.github.com) is left to the host
+// name rule, and so is api.github.com, whose first segment is an endpoint rather
+// than an owner: apiOwnerPathPattern reads that host.
 var ownerPathPattern = regexp.MustCompile(`(?i)(?:github\.com|raw\.githubusercontent\.com|ghcr\.io)[/:][a-z0-9][a-z0-9_.-]*`)
+
+// apiOwnerPathPattern finds the owner a GitHub API path names behind its
+// endpoint segment (api.github.com/repos/acme/infra, /users/acme, /orgs/acme):
+// the host, the endpoint and the owner, matched case-insensitively. The value
+// reported is the host and the owner (api.github.com/acme), the endpoint left
+// out, the way ownerPathPattern's value is.
+var apiOwnerPathPattern = regexp.MustCompile(`(?i)api\.github\.com/(?:repos|users|orgs)/[a-z0-9][a-z0-9_.-]*`)
 
 // sshCloneHost is the one vendor host whose owner ownerPathPattern reads after
 // a colon, in the SSH clone form user@host:owner/repo.
@@ -380,9 +421,18 @@ const sshCloneHost = "github.com"
 
 // bucketPattern finds the bucket a bucket URL names (s3://acme-prod-bucket/key,
 // s3a:// and s3n://, the Hadoop clients' spellings of the same bucket,
-// gs://acme-prod-bucket/x, az://container/blob): the scheme and the bucket,
-// the first segment after it.
-var bucketPattern = regexp.MustCompile(`(?i)\b(?:s3[an]?|gs|az)://[a-z0-9][a-z0-9_.-]*`)
+// gs://acme-prod-bucket/x, az://container/blob, and oci://acme-prod-bucket@tenancy/x,
+// whose bucket comes before the @ and its namespace): the scheme and the
+// bucket, the first segment after it.
+var bucketPattern = regexp.MustCompile(`(?i)\b(?:s3[an]?|gs|az|oci)://[a-z0-9][a-z0-9_.-]*`)
+
+// storageAccountURLPattern finds the Azure storage account an abfs, abfss, wasb
+// or wasbs URL names after its container
+// (abfss://data@acmeprodlake.dfs.core.windows.net/x): the submatch is the
+// account, three to twenty-four letters and digits before the host's first dot.
+// The host itself is the host name rule's value, and the account is reported on
+// its own beside it, as it is the customer's globally unique name.
+var storageAccountURLPattern = regexp.MustCompile(`(?i)\b(?:abfss?|wasbs?)://[a-z0-9-]+@([a-z0-9]{3,24})\.`)
 
 // bucketARNPattern finds the bucket an S3 ARN names, in any AWS partition
 // (arn:aws:s3:::acme-prod-bucket, arn:aws-cn:s3:::..., arn:aws-us-gov:s3:::...):
@@ -404,12 +454,15 @@ var bucketARNPattern = regexp.MustCompile(`(?i)\barn:aws[a-z-]*:s3:::[a-z0-9][a-
 //     Asset name (//storage.googleapis.com/acme-prod-data): the service host, a
 //     slash and the bucket.
 //
-// The hosts and the JSON API's segments are matched case-insensitively. A
-// bucket's name is lower case, so the bucket is matched in lower case only, and
-// the asset type (storage.googleapis.com/Bucket), whose segment a capital opens,
-// is not read. The bucket is the path's last segment in either form.
+// The hosts and the JSON API's segments are matched case-insensitively. In a
+// JSON API path the b/ segment makes what follows a bucket, so the bucket is
+// matched in any case there (www.googleapis.com/storage/v1/b/Acme-Prod): a name
+// written with a capital is the customer's all the same. After the service host
+// alone a bucket is matched in lower case only, the case Cloud Storage names one
+// in, so the asset type (storage.googleapis.com/Bucket), whose segment a capital
+// opens, is not read. The bucket is the path's last segment in either form.
 var cloudStoragePathPattern = regexp.MustCompile(
-	`(?i:(?:www|storage)\.googleapis\.com/(?:upload/|download/)?storage/v1/b)/[a-z0-9][a-z0-9_.-]*` +
+	`(?i:(?:www|storage)\.googleapis\.com/(?:upload/|download/)?storage/v1/b)/[A-Za-z0-9][A-Za-z0-9_.-]*` +
 		`|(?i:storage\.googleapis\.com)/[a-z0-9][a-z0-9_.-]*`)
 
 // sampleBucketPattern matches a sample's bucket name, lowercased: example, or
@@ -455,55 +508,73 @@ var publicOpenSourceOwners = []string{
 }
 
 // vendorPathProblems returns a problem for every owner a path names after a
-// vendor host whose first segment is an account (ownerPathPattern), and for
-// every bucket a bucket URL (bucketPattern), an S3 ARN (bucketARNPattern) or a
-// Cloud Storage path (cloudStoragePathPattern) names, when it is no sample
-// value: an owner must be sampleOwner or one of publicOpenSourceOwners, and a
-// bucket must be a sample's (sampleBucket: example, or example- and generic
-// words), the way a sample's domain is example.com. The host name rule exempts
-// the vendor host itself, yet the owner or the bucket after it names the
-// customer just as a host would, so the value reported is the host and the
-// owner (github.com/acme, from git@github.com:acme/x.git too), the scheme and
-// the bucket (s3://acme-prod-bucket) or the ARN (arn:aws:s3:::acme-prod-bucket),
-// each as written, or the host and the Cloud Storage path up to the bucket in
-// lower case (storage.googleapis.com/acme-prod-data,
-// www.googleapis.com/upload/storage/v1/b/acme-prod-data).
+// vendor host whose first segment is an account (ownerPathPattern) or behind the
+// GitHub API's endpoint segment (apiOwnerPathPattern), for every bucket a bucket
+// URL (bucketPattern), an S3 ARN (bucketARNPattern) or a Cloud Storage path
+// (cloudStoragePathPattern) names, and for every storage account an abfs or wasb
+// URL names (storageAccountURLPattern), when it is no sample value: an owner
+// must be sampleOwner or one of publicOpenSourceOwners, a bucket must be a
+// sample's (sampleBucket: example, or example- and generic words), the way a
+// sample's domain is example.com, and a storage account must start with example
+// (sampleStorageAccount). The host name rule exempts the vendor host itself, yet
+// the owner or the bucket after it names the customer just as a host would, so
+// the value reported is the host and the owner (github.com/acme, from
+// git@github.com:acme/x.git too, api.github.com/acme from
+// api.github.com/repos/acme/x), the scheme and the bucket (s3://acme-prod-bucket,
+// oci://acme-prod-bucket) or the ARN (arn:aws:s3:::acme-prod-bucket), each as
+// written, the host and the Cloud Storage path up to the bucket, the host and
+// the path in lower case and the bucket as written
+// (storage.googleapis.com/acme-prod-data,
+// www.googleapis.com/upload/storage/v1/b/acme-prod-data,
+// www.googleapis.com/storage/v1/b/Acme-Prod), or the storage account alone
+// (acmeprodlake, beside the host the host name rule reports).
 //
-// It knowingly leaves these gaps:
+// It knowingly leaves these gaps, accepted when issue #406 closed:
 //
-//   - api.github.com, whose first segment is an endpoint (repos, orgs), not an
-//     owner, so api.github.com/repos/acme/x passes;
 //   - an endpoint segment after github.com itself: github.com/orgs/acme
-//     reports github.com/orgs, which fails closed but names the wrong value;
+//     reports github.com/orgs, which fails closed but names the wrong value,
+//     and the reader finds the owner next to it;
 //   - a port in an SSH URL (ssh://git@github.com:22/acme/x), whose colon is no
 //     SSH clone form: it reports github.com/22, which fails closed but names
-//     the wrong value;
+//     the wrong value, for the same reason;
 //   - contrived paths the owner pattern does not read past (github.com//acme,
 //     a .. segment, an encoded slash %2F), which pass, and JSON-escaped slashes
 //     (gs:\/\/acme-prod-data, storage.googleapis.com\/acme-prod-data), which no
-//     pattern reads, so they pass;
-//   - the bucket schemes other than s3, s3a, s3n, gs and az
-//     (abfs://container@account..., wasbs://, oci://), which pass;
-//   - the S3 ARNs of an access point, an Outposts bucket or an Object Lambda
-//     access point (arn:aws:s3:eu-central-1:123456789012:accesspoint/acme-prod-ap),
-//     whose region and account the bucket ARN's ::: never matches, so the
-//     customer's name passes;
+//     pattern reads, so they pass: no tool writes a fixture that way, and
+//     reading every spelling of a slash would make each pattern unreadable;
 //   - an object key after a sample bucket (s3://example-bucket/customers/acme-corp/x):
-//     only the bucket is judged, so a customer's name in the key passes;
-//   - a Cloud Storage bucket written with capitals: Cloud Storage names are
-//     lower case, so the path pattern stops before the first capital
-//     (storage.googleapis.com/Acme-prod passes, the asset type Bucket with it).
-//     In a JSON API path the bucket passes after www.googleapis.com
-//     (www.googleapis.com/storage/v1/b/Acme-prod), while after
-//     storage.googleapis.com it reports storage.googleapis.com/storage, which
-//     fails closed but names the wrong value;
+//     only the bucket is judged, so a customer's name in the key passes, as a
+//     key is free text the check cannot tell from a sample's own;
+//   - a Cloud Storage bucket written with capitals after the service host
+//     alone: Cloud Storage names are lower case, so the URL and asset-name form
+//     stops before the first capital (storage.googleapis.com/Acme-prod passes),
+//     which keeps the asset type (storage.googleapis.com/Bucket) clean; the
+//     JSON API path's b/ segment reads one in any case;
 //   - the paths of every other vendor host publicVendorHosts lists
-//     (golang.org/x/..., www.ovhcloud.com/en/...), whose segments are
-//     the vendor's own.
-//
-// Issue #406 tracks these gaps.
+//     (golang.org/x/..., www.ovhcloud.com/en/...), whose segments are the
+//     vendor's own and name no customer.
 func vendorPathProblems(text string) []problem {
 	var problems []problem
+
+	ownerRule := "names an owner after a vendor host that is neither " + sampleOwner + " nor a listed public open-source owner (CLAUDE.md rule 2)"
+
+	for _, match := range apiOwnerPathPattern.FindAllStringIndex(text, -1) {
+		start, end := match[0], match[1]
+
+		if start > 0 && (labelByte(text[start-1]) || text[start-1] == '.' || text[start-1] == '-') {
+			// A name below the API host: the host name rule reads it.
+			continue
+		}
+
+		value := text[start:end]
+		owner := strings.TrimRight(value[strings.LastIndex(value, "/")+1:], ".")
+
+		if publicOwner(owner) {
+			continue
+		}
+
+		problems = append(problems, problem{line: lineOf(text, start), value: value[:len("api.github.com")] + "/" + owner, rule: ownerRule})
+	}
 
 	for _, match := range ownerPathPattern.FindAllStringIndex(text, -1) {
 		start, end := match[0], match[1]
@@ -526,16 +597,11 @@ func vendorPathProblems(text string) []problem {
 
 		owner := strings.TrimRight(value[sep+1:], ".")
 
-		if strings.EqualFold(owner, sampleOwner) ||
-			slices.ContainsFunc(publicOpenSourceOwners, func(public string) bool { return strings.EqualFold(owner, public) }) {
+		if publicOwner(owner) {
 			continue
 		}
 
-		problems = append(problems, problem{
-			line:  lineOf(text, start),
-			value: host + "/" + owner,
-			rule:  "names an owner after a vendor host that is neither " + sampleOwner + " nor a listed public open-source owner (CLAUDE.md rule 2)",
-		})
+		problems = append(problems, problem{line: lineOf(text, start), value: host + "/" + owner, rule: ownerRule})
 	}
 
 	const bucketRule = "names a bucket that is not example or example- and generic words (CLAUDE.md rule 2)"
@@ -570,17 +636,41 @@ func vendorPathProblems(text string) []problem {
 		}
 
 		// The host and the JSON API's segments are reported in lower case, the
-		// bucket's own letters are lower case already.
-		value := strings.ToLower(strings.TrimRight(text[start:match[1]], "."))
+		// bucket as written.
+		value := strings.TrimRight(text[start:match[1]], ".")
+		slash := strings.LastIndex(value, "/")
+		bucket := value[slash+1:]
 
-		if sampleBucket(value[strings.LastIndex(value, "/")+1:]) {
+		if sampleBucket(bucket) {
 			continue
 		}
 
-		problems = append(problems, problem{line: lineOf(text, match[0]), value: value, rule: bucketRule})
+		problems = append(problems, problem{line: lineOf(text, match[0]), value: strings.ToLower(value[:slash+1]) + bucket, rule: bucketRule})
+	}
+
+	for _, match := range storageAccountURLPattern.FindAllStringSubmatchIndex(text, -1) {
+		account := text[match[2]:match[3]]
+
+		if sampleStorageAccount(account) {
+			continue
+		}
+
+		problems = append(problems, problem{
+			line:  lineOf(text, match[2]),
+			value: account,
+			rule:  "names an Azure storage account that does not start with example (CLAUDE.md rule 2)",
+		})
 	}
 
 	return problems
+}
+
+// publicOwner reports whether owner, as written, is an owner a vendor path may
+// name: sampleOwner or one of publicOpenSourceOwners, matched
+// case-insensitively.
+func publicOwner(owner string) bool {
+	return strings.EqualFold(owner, sampleOwner) ||
+		slices.ContainsFunc(publicOpenSourceOwners, func(public string) bool { return strings.EqualFold(owner, public) })
 }
 
 // lastLabel returns the label after the last dot of name.
@@ -649,8 +739,9 @@ var englishWordsEndingInIP = []string{
 // stands on its own (zip-10-1-2-3); inside a compound name (edge-strip-10-0-0-5,
 // node_tip_10_1_2_3) it marks the address like any other label.
 //
-// It knowingly leaves these forms to a follow-up issue rather than report a value
-// it cannot tell from prose:
+// It knowingly leaves these forms open rather than report a value it cannot tell
+// from prose, gaps accepted when issue #406 closed (a follow-up may narrow one
+// that a fixture turns out to hold):
 //
 //   - a public address in no name (vm-5-10-20-30, 8-8-8-8 in prose): it passes,
 //     like the sequence of numbers it cannot be told from;
@@ -662,15 +753,15 @@ var englishWordsEndingInIP = []string{
 //     after a . or a / too, so x.zip-10-1-2-3 and a/zip-10-1-2-3 stay clean;
 //   - a run a letter or digit is glued to (node10-1-2-3, ip-10-1-2-3a), which
 //     hyphenatedIPv4Bounded keeps out;
-//   - a hexadecimal address (ip-0a010203), which the pattern never matches;
+//   - a hexadecimal address (ip-0a010203), which the pattern never matches, as
+//     eight hex digits are any hash or identifier's shape as well;
 //   - a run a leftmost match swallows: in x-5-10-1-2-3 the pattern matches
 //     5-10-1-2 from the leftmost digit, and the address 10.1.2.3 inside the
 //     five groups is never looked at again; so too in eu-central-1-10-1-2-3,
-//     where the public-looking 1-10-1-2 is read and dropped;
+//     where the public-looking 1-10-1-2 is read and dropped, since rereading
+//     every offset of a longer run would report version-like runs of numbers;
 //   - a run with mixed separators (ip-10_1-2-3), which the pattern never
-//     matches.
-//
-// Issue #406 tracks these gaps.
+//     matches, as no provider writes an address that way.
 func hyphenatedIPv4Problems(text string) []problem {
 	var problems []problem
 
