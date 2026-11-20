@@ -9,7 +9,9 @@ import (
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
+	"github.com/timothymamo/shift2eu/internal/domain/inventory"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
+	"github.com/timothymamo/shift2eu/internal/domain/taxonomy"
 	"github.com/timothymamo/shift2eu/internal/testutil"
 )
 
@@ -293,6 +295,82 @@ func TestReportFitClasses(t *testing.T) {
 				t.Errorf("the fragment holds no direct fit cell, want at least one: every fixture has a resource that moves directly, so a missing badge class would show here")
 			}
 		})
+	}
+}
+
+// TestReportUnknownFitBadge pins the badge of a fit the report does not know: a
+// verdict whose fit is no value of the mapping's enum gets the constant class
+// "fit" alone, never a class made from its text, and the text reaches the cell
+// escaped as text, never as an attribute (PRD #297, issue #373). The reporter
+// renders such a verdict rather than failing, so a fragment of another version's
+// fit still shows a badge, just without a colour.
+func TestReportUnknownFitBadge(t *testing.T) {
+	t.Parallel()
+
+	hostileFit := mapping.Fit(`bogus" onclick=x`)
+
+	a := assessment.Assessment{
+		Target:   "Scaleway",
+		Snapshot: testutil.ScalewaySnapshot(),
+		Source:   sourceName,
+		Verdicts: []assessment.Verdict{{
+			Resource: inventory.Resource{
+				ID:       "vm-example",
+				RawType:  "AWS::EC2::Instance",
+				Category: taxonomy.ComputeVM,
+				Region:   "eu-west-1",
+			},
+			Fit: hostileFit,
+		}},
+	}
+
+	fragment := string(render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}))
+
+	fits := 0
+
+	for _, table := range fragmentTables(t, []byte(fragment)) {
+		if len(table.head) == 0 || table.head[0] != "ID" {
+			continue
+		}
+
+		columns := fitColumns(table)
+		if len(columns) != 1 {
+			t.Fatalf("the Resources table headed %q holds %d Fit columns, want 1: every resource's verdict is a fit badge",
+				strings.Join(table.head, " | "), len(columns))
+		}
+
+		for _, row := range table.rows {
+			if columns[0] >= len(row.cells) {
+				t.Fatalf("a row of the Resources table holds %d cells, want at least %d: its Fit column is missing",
+					len(row.cells), columns[0]+1)
+			}
+
+			cell := row.cells[columns[0]]
+
+			if cell.attrs != `class="fit"` {
+				t.Errorf("the Fit cell showing %q carries %q, want %q: a fit the report does not know gets the badge class alone, never a class made from its text",
+					cell.text, orNone(cell.attrs), `class="fit"`)
+			}
+
+			if want := escapedText(string(hostileFit)); cell.text != want {
+				t.Errorf("the Fit cell reads %q, want %q: the fit's text is shown escaped as text", cell.text, want)
+			}
+
+			fits++
+		}
+	}
+
+	if fits == 0 {
+		t.Fatalf("the fragment holds no Fit cell, so the check read nothing")
+	}
+
+	for _, value := range classAttributes(fragment) {
+		for _, class := range strings.Fields(value) {
+			if !closedClasses[class] {
+				t.Errorf("a class attribute holds %q, want only the constants of the closed set %v: the fit's text never becomes a class",
+					class, sortedClasses())
+			}
+		}
 	}
 }
 
