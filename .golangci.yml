@@ -1530,7 +1530,12 @@ linters:
         # only the site's smoke test, test/browser, may do. Every other file of
         # the module, tests included, is refused them, and
         # test/architecture's TestNoProductBinaryReachesChromedp holds the
-        # product binaries' dependency trees to the same.
+        # product binaries' dependency trees to the same. Any package only
+        # chromedp brings in belongs in this deny too: that check refuses
+        # the driver's dependency tree as go list sees it, and
+        # github.com/go-json-experiment/ is reached only under cdproto's
+        # cdproto_jsoncompat build tag, which the listing does not compile
+        # (test/architecture/browserdriver_test.go).
         chromedp-only-in-the-browser-test:
           list-mode: lax
           files:
@@ -1539,6 +1544,8 @@ linters:
           deny:
             - pkg: github.com/chromedp/
               desc: only the site's browser smoke test, test/browser, drives a browser (PRD #297)
+            - pkg: github.com/go-json-experiment/
+              desc: cdproto, the protocol library the browser driver brings in, encodes with it under its cdproto_jsoncompat build tag (PRD #297)
         # The site's headless-browser smoke test (PRD #297 milestone 2). Its
         # test files, behind the browser tag, are held to exactly what they
         # import: the standard packages for the local httptest origins, the
