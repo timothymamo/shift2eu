@@ -22,18 +22,35 @@
 //     line as bytes. Free space is not read from mountpoint, findmnt or lsblk: they are not faked.
 //   - The step creates the file with `fallocate -l <size> <file>` and sets its mode with `chmod`; the test
 //     fakes both. The faked fallocate succeeds, so a `dd` fallback is never reached.
-//   - A message the step prints to standard error names the swap it declined (the word "swap"): the step runs
-//     under `set -x`, which makes stderr never empty, so a bare non-empty check would pin nothing.
+//   - Creation is atomic: `fallocate`, `chmod` and `mkswap` all name one temporary file in the swap file's own
+//     directory, never the swap file itself, and the step renames it into place after `mkswap` and before
+//     `swapon` (the log keeps the order fallocate, chmod, mkswap, swapon). Only the name the tests pin is the
+//     final path's; how the temporary one is spelled is the implementation's. A crash between `fallocate` and
+//     `mkswap` then leaves nothing of the right size at the path swapon reads, instead of a headerless file
+//     every later boot would skip recreating.
+//   - The file is created under `umask 077`, so no other account of the guest can read its memory while the
+//     header is written, and `chmod 0600` sets the mode explicitly as well.
+//   - A `swapon` that fails on a file of the right size is a file without a swap header (an interrupted
+//     creation, or one a crash cut short before this step wrote the file atomically): the step recreates the
+//     file and activates it again. It recreates at most once, so nothing loops: a `swapon` that fails again
+//     exits non-zero.
+//   - A message the step prints to standard error names the swap it declined or could not activate (the word
+//     "swap" on a line of its own): the step runs under `set -x`, which makes stderr never empty and traces
+//     the swap file's path on every line it adds, so neither a bare non-empty check nor a match anywhere in
+//     stderr would pin a message.
 //   - The step stays portable to the Mac the tests can run on: read the file's size with `wc -c` (or
 //     `stat`'s BSD form), not GNU-only `stat -c %s`, and keep to sh and bash 3.2 (macOS's bash): no ${var^^},
 //     no arrays, no mapfile.
 //
 // The test replaces the commands that would change the machine with fakes first on PATH, which record their
 // argv to $SHIFT2EU_TEST_ARGV_LOG: fallocate, chmod, mkswap, swapon, swapoff, sysctl and df. fallocate makes
-// a sparse file of the length it is given, so the size assertions read a real file, and the faked chmod runs
-// the machine's own chmod after logging, so the mode assertion is real too. The faked swapon and swapoff
-// keep the active swap in $SHIFT2EU_TEST_SWAP_STATE, one path per line, which a case pre-fills to stand for a
-// later boot; the faked df prints $SHIFT2EU_TEST_FREE_BYTES as the free space.
+// a sparse file of the length it is given, so the size assertions read a real file, and notes the mode the new
+// file has before any chmod (`note=created-mode=<octal>`), so the umask assertion reads a real mode too; the
+// faked chmod runs the machine's own chmod after logging, so the mode assertion is real as well. The faked
+// swapon and swapoff keep the active swap in $SHIFT2EU_TEST_SWAP_STATE, one path per line, which a case
+// pre-fills to stand for a later boot; the faked swapon fails its first $SHIFT2EU_TEST_SWAPON_FAILS activation
+// attempts (silently, as a file without a swap header does; queries keep answering) and the faked df prints
+// $SHIFT2EU_TEST_FREE_BYTES as the free space.
 //
 // The step's path in the guest is pinned by swapFilePath below alone: change it there if the implementation
 // picks another.
@@ -75,9 +92,14 @@ const (
 	swapGiB = int64(1) << 30
 
 	// The variables the fakes read.
-	swapArgvLogEnv   = "SHIFT2EU_TEST_ARGV_LOG"   // where every fake appends its argv
-	swapStateEnv     = "SHIFT2EU_TEST_SWAP_STATE" // the active swap, one path per line
-	swapFreeBytesEnv = "SHIFT2EU_TEST_FREE_BYTES" // what the fake df prints as free space
+	swapArgvLogEnv   = "SHIFT2EU_TEST_ARGV_LOG"     // where every fake appends its argv
+	swapStateEnv     = "SHIFT2EU_TEST_SWAP_STATE"   // the active swap, one path per line
+	swapFreeBytesEnv = "SHIFT2EU_TEST_FREE_BYTES"   // what the fake df prints as free space
+	swapFailsEnv     = "SHIFT2EU_TEST_SWAPON_FAILS" // how many of the fake swapon's activations fail
+
+	// swapCreatedModeNote is the note the fake fallocate writes into the argv log: the octal mode the file it
+	// created has before any chmod, so a case can pin the umask the step creates it under.
+	swapCreatedModeNote = "created-mode="
 )
 
 // sysctlSwappiness matches the drop-in line that sets vm.swappiness to 10, with or without a trailing comment.
@@ -126,9 +148,15 @@ case "${size}" in
   ;;
 esac
 truncate -s "${size}" "${file}"
+# The mode the file was created with, before any chmod: what the step's umask left it.
+note="$( { stat -c %a "${file}" || stat -f %Lp "${file}"; } 2>/dev/null )"
+printf 'note=created-mode=%s\n' "${note}" >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
 `
 	// fakeSwaponBody answers a query of the active swap from $SHIFT2EU_TEST_SWAP_STATE, one path per line,
-	// with a header and a row per path unless --noheadings is given, and records an activation there.
+	// with a header and a row per path unless --noheadings is given, and records an activation there. Its
+	// first $SHIFT2EU_TEST_SWAPON_FAILS activation attempts fail, silently and without activating anything, as
+	// a file without a swap header does, and leave a note in the argv log. Activating a path that holds no
+	// file fails too, as the kernel's does, so swapon cannot be run before the rename into place.
 	fakeSwaponBody = `show=0
 noheadings=0
 file=""
@@ -157,6 +185,28 @@ fi
 if [ -z "${file}" ]; then
   echo 'fake swapon: no file to activate' >&2
   exit 64
+fi
+if [ ! -e "${file}" ]; then
+  printf 'note=swapon-missing=%s\n' "${file}" >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+  exit 255
+fi
+counter="${state}.activity"
+attempts=0
+if [ -e "${counter}" ]; then
+  attempts="$(cat "${counter}")"
+fi
+case "${attempts}" in
+'' | *[!0-9]*) attempts=0 ;;
+esac
+attempts=$((attempts + 1))
+printf '%s\n' "${attempts}" > "${counter}"
+fails="${SHIFT2EU_TEST_SWAPON_FAILS:-0}"
+case "${fails}" in
+'' | *[!0-9]*) fails=0 ;;
+esac
+if [ "${attempts}" -le "${fails}" ]; then
+  printf 'note=swapon-failed=%s\n' "${file}" >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
+  exit 255
 fi
 printf '%s\n' "${file}" >> "${state}"
 `
@@ -369,10 +419,18 @@ type swapCase struct {
 	existingSize int64
 	// active says the existing file is already active swap, as it is at a later boot.
 	active bool
-	// wantFailure says the step must exit non-zero, refusing the value before it changes anything.
+	// swaponFails is how many of the step's activations the faked swapon fails: 1 for a file of the right
+	// size without a swap header, as a boot that crashed between fallocate and mkswap leaves it, more for a
+	// swap that cannot be activated at all.
+	swaponFails int
+	// wantFailure says the step must exit non-zero, refusing the value before it changes anything, or
+	// stopping rather than retrying.
 	wantFailure bool
 	// wantMessage says stderr must name the swap the step declined.
 	wantMessage bool
+	// wantCreation says the step must create the swap file in this run, so the case pins how it creates it:
+	// at a temporary path in the swap file's directory, under umask 077, and renamed into place.
+	wantCreation bool
 	// wantCalls are the commands that change the guest's swap that the step must run, in this order.
 	wantCalls []string
 	// wantFileSize is the size of the swap file the step must leave, in bytes: 0 for none.
@@ -391,6 +449,7 @@ var swapCases = []swapCase{
 		size:         swapDefaultSize,
 		freeBytes:    100 * swapGiB,
 		wantCalls:    []string{"fallocate", "chmod", "mkswap", "swapon"},
+		wantCreation: true,
 		wantFileSize: 4 * swapGiB,
 		wantFileMode: 0o600,
 		dropin:       dropinPresent,
@@ -415,12 +474,45 @@ var swapCases = []swapCase{
 		dropin:       dropinPresent,
 	},
 	{
+		// A creation cut short - the guest crashed between fallocate and mkswap - leaves a file of the right
+		// size with no swap header. The size alone would skip recreation, swapon would fail at every later
+		// boot, and set -e would fail the step each time: so a swapon that fails repairs the file. The fake
+		// fails the first activation, as the kernel does on a headerless file.
+		name:         "right-size-inactive-without-a-swap-header",
+		size:         swapDefaultSize,
+		freeBytes:    100 * swapGiB,
+		existingSize: 4 * swapGiB,
+		swaponFails:  1,
+		wantCalls:    []string{"swapon", "fallocate", "chmod", "mkswap", "swapon"},
+		wantCreation: true,
+		wantFileSize: 4 * swapGiB,
+		wantFileMode: 0o600,
+		dropin:       dropinPresent,
+	},
+	{
+		// The repair is bounded: a swap that cannot be activated even after it is recreated must stop the
+		// step with a message, not recreate the file on every boot and loop.
+		name:         "swapon-keeps-failing-after-recreation",
+		size:         swapDefaultSize,
+		freeBytes:    100 * swapGiB,
+		existingSize: 4 * swapGiB,
+		swaponFails:  10,
+		wantFailure:  true,
+		wantMessage:  true,
+		wantCalls:    []string{"swapon", "fallocate", "chmod", "mkswap", "swapon"},
+		wantCreation: true,
+		wantFileSize: 4 * swapGiB,
+		wantFileMode: 0o600,
+		dropin:       dropinAny,
+	},
+	{
 		name:         "wrong-size-active-after-a-param-change",
 		size:         swapDefaultSize,
 		freeBytes:    100 * swapGiB,
 		existingSize: 2 * swapGiB,
 		active:       true,
 		wantCalls:    []string{"swapoff", "fallocate", "chmod", "mkswap", "swapon"},
+		wantCreation: true,
 		wantFileSize: 4 * swapGiB,
 		wantFileMode: 0o600,
 		dropin:       dropinPresent,
@@ -575,6 +667,7 @@ func (g *swapGuest) run(t *testing.T, tc swapCase) (stdout, stderr string, err e
 		swapArgvLogEnv:   g.argvLog,
 		swapStateEnv:     g.statePath,
 		swapFreeBytesEnv: strconv.FormatInt(tc.freeBytes, 10),
+		swapFailsEnv:     strconv.Itoa(tc.swaponFails),
 	})
 
 	var out, errOut bytes.Buffer
@@ -748,6 +841,120 @@ func appliesSwappiness(calls [][]string, dropin string) bool {
 	return false
 }
 
+// swapCreatedModes returns the mode the faked fallocate left on each file it created, before any chmod, as
+// the note lines of the argv log record them: one octal string per creation, in call order.
+func swapCreatedModes(log string) []string {
+	var modes []string
+
+	for _, line := range strings.Split(log, "\n") {
+		rest, ok := strings.CutPrefix(line, "note="+swapCreatedModeNote)
+		if !ok {
+			continue
+		}
+
+		modes = append(modes, rest)
+	}
+
+	return modes
+}
+
+// nonTraceLines returns what the step printed to standard error without the lines set -x traces. bash prefixes
+// every trace line with "+", and the trace names the swap file's path, so a message of the step's own is only
+// to be found outside them.
+func nonTraceLines(stderr string) string {
+	var kept []string
+
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "+") {
+			continue
+		}
+
+		kept = append(kept, line)
+	}
+
+	return strings.Join(kept, "\n")
+}
+
+// assertAtomicCreation pins how the step builds a swap file it has to create: fallocate, chmod and mkswap all
+// name one temporary file in the swap file's own directory, never the swap file itself, so a crash between them
+// leaves nothing a later boot would take for a finished swap file; the file is created 0600, under a umask that
+// keeps other accounts out even before chmod; swapon names the final path; and the file is there afterwards.
+func assertAtomicCreation(t *testing.T, tc swapCase, guest *swapGuest, calls []swapTool, log string) {
+	t.Helper()
+
+	dir := filepath.Dir(guest.swapFile)
+
+	var created []string
+
+	for _, call := range calls {
+		switch call.name {
+		case "fallocate", "chmod", "mkswap":
+			if len(call.args) == 0 {
+				t.Errorf("%s: the step ran %s with no arguments, want one naming the file it creates", tc.name, call.name)
+
+				continue
+			}
+
+			created = append(created, call.args[len(call.args)-1])
+		case "swapon", "swapoff":
+			if len(call.args) == 0 {
+				t.Errorf("%s: the step ran %s with no arguments, want one naming %s", tc.name, call.name, guest.swapFile)
+
+				continue
+			}
+
+			if path := call.args[len(call.args)-1]; path != guest.swapFile {
+				t.Errorf("%s: the step ran %s on %s, want %s: the file is renamed into place before it is activated, and only the final path is the guest's swap",
+					tc.name, call.name, path, guest.swapFile)
+			}
+		}
+	}
+
+	if len(created) != 3 {
+		t.Fatalf("%s: the step ran %d of fallocate, chmod and mkswap on a file, want one each: a created swap file is fallocate, chmod 0600, mkswap, a rename into place and swapon",
+			tc.name, len(created))
+	}
+
+	for _, path := range created {
+		if path == guest.swapFile {
+			t.Errorf("%s: the step builds the swap file in place at %s, want a temporary file in %s renamed into place: a crash between fallocate and mkswap then leaves a file of the right size with no swap header, which every later boot would skip recreating and whose swapon fails",
+				tc.name, guest.swapFile, dir)
+		}
+
+		if got := filepath.Dir(path); got != dir {
+			t.Errorf("%s: the step builds the swap file at %s, in %s, want a temporary file in %s, the swap file's own directory: a rename is atomic only within one filesystem",
+				tc.name, path, got, dir)
+		}
+	}
+
+	for _, path := range created[1:] {
+		if path != created[0] {
+			t.Errorf("%s: the step created %s in one call and then named %s in another, want the same temporary file throughout: fallocate, chmod and mkswap act on the one file that is renamed into place",
+				tc.name, created[0], path)
+		}
+	}
+
+	modes := swapCreatedModes(log)
+
+	if len(modes) == 0 {
+		t.Errorf("%s: the faked fallocate recorded no mode for the file it created, so the umask the step creates the swap file under is pinned by nothing", tc.name)
+	}
+
+	for _, mode := range modes {
+		got, err := strconv.ParseUint(mode, 8, 32)
+		if err != nil {
+			t.Errorf("%s: the faked fallocate recorded the mode %q of the file it created, want an octal mode: %v", tc.name, mode, err)
+
+			continue
+		}
+
+		if os.FileMode(got).Perm() != 0o600 {
+			t.Errorf("%s: the step creates the swap file with mode %04o, want 0600: it must create it under umask 077, so no other account of the guest reads the guest's memory before chmod 0600 (and the mode of a file the creation left behind is never the guest's own)",
+				tc.name, os.FileMode(got).Perm())
+		}
+	}
+}
+
 // assertSwapFile pins the swap file a case leaves behind: none, or one of the size the param names and, when
 // the step had to create it, mode 0600.
 func assertSwapFile(t *testing.T, g *swapGuest, tc swapCase) {
@@ -806,16 +1013,17 @@ func runSwapCase(t *testing.T, script string, tc swapCase) {
 
 	if tc.wantFailure {
 		if err == nil {
-			t.Errorf("%s: the step exited 0 for swapSize %q, want a non-zero exit: it refuses a value that is no whole number of GiB before it changes anything\nstdout: %s\nstderr: %s",
+			t.Errorf("%s: the step exited 0 for swapSize %q, want a non-zero exit: it refuses a value that is no whole number of GiB before it changes anything, and it stops rather than retry an activation that keeps failing\nstdout: %s\nstderr: %s",
 				tc.name, tc.size, stdout, stderr)
 		}
 	} else if err != nil {
 		t.Errorf("%s: the step failed, want exit 0: %v\nstdout: %s\nstderr: %s", tc.name, err, stdout, stderr)
 	}
 
-	// The step runs under set -x, so stderr is never empty: a message must name the swap it declined.
-	if tc.wantMessage && !strings.Contains(strings.ToLower(stderr), "swap") {
-		t.Errorf("%s: stderr does not name the swap the step declined (swapSize %q), so the run reads as a silent one:\n%s",
+	// The step runs under set -x, whose lines name the swap file too: a message must be one of the step's own
+	// and name the swap it declined.
+	if tc.wantMessage && !strings.Contains(strings.ToLower(nonTraceLines(stderr)), "swap") {
+		t.Errorf("%s: no message of the step's own on stderr names the swap it declined (swapSize %q), so the run reads as a silent one:\n%s",
 			tc.name, tc.size, stderr)
 	}
 
@@ -823,12 +1031,16 @@ func runSwapCase(t *testing.T, script string, tc swapCase) {
 
 	if diff := cmp.Diff(tc.wantCalls, swapToolNames(swapToolCalls(log))); diff != "" {
 		t.Errorf("%s: the commands that change the guest's swap (-want +got):\n%s\n"+
-			"A new file is fallocate, chmod 0600, mkswap, swapon, in that order; one of the right size that is not active is swapon alone; an active file of the wrong size is swapoff first; a later boot runs none. "+
+			"A new file is fallocate, chmod 0600 and mkswap on one temporary file in the swap file's directory, the rename into place, then swapon; one of the right size that is not active is swapon alone, and a swapon that fails is followed by one recreation and one more swapon; an active file of the wrong size is swapoff first; a later boot runs none. "+
 			"The test fakes fallocate, chmod, mkswap, swapon, swapoff, sysctl and df, so the step must find them on PATH; a swapon --show query, df and sysctl are not counted, and a faked fallocate succeeds, so a dd fallback is never reached.",
 			tc.name, diff)
 	}
 
 	assertSwapFile(t, guest, tc)
+
+	if tc.wantCreation {
+		assertAtomicCreation(t, tc, guest, swapToolCalls(log), log)
+	}
 
 	switch tc.dropin {
 	case dropinPresent:
