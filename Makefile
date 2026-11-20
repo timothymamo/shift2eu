@@ -108,8 +108,6 @@ GO_LINE := $(shell awk '/^go[ \t]/ { sub(/\r$$/, "", $$2); print $$2; exit }' '$
 ifneq ($(GOTOOLCHAIN),local)
 override GOTOOLCHAIN := $(if $(GO_LINE),go$(GO_LINE))
 endif
-# The HTTP API's binary (PRD #103, docs/adr/0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md).
-SERVER  := shift2eu-server
 PKG     := github.com/timothymamo/shift2eu
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -244,12 +242,8 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^##@/ {printf "\n%s\n", substr($$0, 5)} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: build
-build: server ## Build the shift2eu and shift2eu-server binaries into ./bin
+build: ## Build the shift2eu binary into ./bin
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/$(BINARY)
-
-.PHONY: server
-server: ## Build the shift2eu-server binary (the HTTP API) into ./bin
-	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(SERVER) ./cmd/$(SERVER)
 
 # The site's bundle (PRD #297): make site writes it into bin/site and its archive beside it,
 # bin/shift2eu-site_<version>.tar.gz, both git-ignored under /bin/. SITE_VERSION (read raw and exported in the
@@ -328,10 +322,6 @@ lint: ## Lint natively and for every release target, incl. the architecture (dep
 tidy: ## Tidy go.mod and go.sum, and the lint tools' tools/go.mod and tools/go.sum
 	go mod tidy
 	go -C tools mod tidy
-
-.PHONY: openapi
-openapi: ## Regenerate api/openapi.bundled.json, the API's self-contained OpenAPI document (no longer released, ADR 0037)
-	go test -count=1 ./test/openapibundle -update
 
 ##@ Testing
 

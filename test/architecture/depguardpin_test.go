@@ -351,8 +351,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// the one prefix entry, and the standard packages it imports today,
 		// each exact. A third-party import is refused by the allow list, and
 		// the cloud SDKs by the deny list too, as in app-uses-ports-not-adapters.
-		// A sibling such as cmd/shift2eu-server gets a rule of its own, written
-		// the same way, with its own files: entry.
+		// A sibling such as cmd/shift2eu-web gets a rule of its own, with its
+		// own files: entry.
 		Name:     "composition-root",
 		ListMode: "strict",
 		Files: []string{
@@ -374,64 +374,12 @@ var pinnedDepguardRules = []check.DepguardRule{
 		},
 	},
 	{
-		// The server's composition root (PRD #103, milestone 3), the sibling of
-		// composition-root and written the same way: its files: list names
-		// cmd/shift2eu-server and nothing beside it, its allow list is the module
-		// path as the one prefix entry plus the standard packages the server
-		// imports today, each exact, and its deny list names the four cloud
-		// SDKs. A third-party package the allow list does not name is refused by
-		// the allow list, so the server cannot gain a dependency unseen.
-		//
-		// test/architecture reads the rule the way it reads composition-root:
-		// TestCompositionRootRulesAreChecked pins its files, allow and prefix
-		// entries and its skip of the shared layer listing,
-		// TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget holds
-		// cmd/shift2eu-server to it on every release target, and
-		// TestCompositionRootRulesHoldTheirProbesForEveryReleaseTarget fails a
-		// fixture server root that imports a third-party library or a cloud SDK.
-		Name:     "server-composition-root",
-		ListMode: "strict",
-		Files: []string{
-			"**/cmd/shift2eu-server/**",
-			"!$test",
-		},
-		Allow: []string{
-			"context$",
-			"errors$",
-			"flag$",
-			"fmt$",
-			"io$",
-			"log$",
-			"math$",
-			"net$",
-			"net/http$",
-			"os$",
-			"os/signal$",
-			"runtime$",
-			"runtime/debug$",
-			"slices$",
-			"strconv$",
-			"strings$",
-			"sync$",
-			"syscall$",
-			"time$",
-			"github.com/timothymamo/shift2eu/",
-		},
-		Deny: []string{
-			"github.com/aws/aws-sdk-go-v2",
-			"github.com/Azure/azure-sdk-for-go",
-			"cloud.google.com/go",
-			"google.golang.org/api",
-		},
-	},
-	{
 		Name:     "adapters-are-built-in-cmd",
 		ListMode: "lax",
 		Files: []string{
 			"$all",
 			"!$test",
 			"!**/cmd/shift2eu/**",
-			"!**/cmd/shift2eu-server/**",
 			"!**/cmd/shift2eu-web/**",
 			"!**/ci/sitebuild/**",
 		},
@@ -443,8 +391,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"github.com/timothymamo/shift2eu/internal/adapter/internal/",
 			"github.com/timothymamo/shift2eu/internal/adapter/report/",
 			"github.com/timothymamo/shift2eu/internal/adapter/report$",
-			"github.com/timothymamo/shift2eu/internal/adapter/request/",
-			"github.com/timothymamo/shift2eu/internal/adapter/request$",
 			"github.com/timothymamo/shift2eu/internal/adapter/source/",
 			"github.com/timothymamo/shift2eu/internal/adapter/source$",
 			"github.com/timothymamo/shift2eu/internal/adapter/target/",
@@ -491,7 +437,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"$test",
 			"!**/internal/cli/*_test.go",
 			"!**/cmd/shift2eu-web/internal/wire/*_test.go",
-			"!**/test/apiparity/*_test.go",
 		},
 		Allow: nil,
 		Deny: []string{
@@ -500,72 +445,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 		},
 	},
 	{
-		Name:     "httpapi-gets-adapters-from-cmd",
-		ListMode: "strict",
-		Files: []string{
-			"**/internal/httpapi/**",
-			"!$test",
-		},
-		Allow: []string{
-			"bytes$",
-			"context$",
-			"crypto/sha256$",
-			"crypto/subtle$",
-			"encoding/json$",
-			"errors$",
-			"fmt$",
-			"io$",
-			"maps$",
-			"mime$",
-			"net/http$",
-			"net/url$",
-			"runtime$",
-			"slices$",
-			"sort$",
-			"strconv$",
-			"strings$",
-			"sync$",
-			"time$",
-			"unicode/utf8$",
-			"github.com/timothymamo/shift2eu/internal/app/analysis$",
-			"github.com/timothymamo/shift2eu/internal/domain/assessment$",
-			"github.com/timothymamo/shift2eu/internal/domain/catalog$",
-			"github.com/timothymamo/shift2eu/internal/domain/estimate$",
-			"github.com/timothymamo/shift2eu/internal/domain/inventory$",
-			"github.com/timothymamo/shift2eu/internal/domain/mapping$",
-			"github.com/timothymamo/shift2eu/internal/domain/taxonomy$",
-			"github.com/timothymamo/shift2eu/internal/domain/text$",
-			"github.com/timothymamo/shift2eu/internal/version$",
-		},
-		Deny: []string{
-			"github.com/timothymamo/shift2eu/internal/adapter",
-			"github.com/timothymamo/shift2eu/internal/cli",
-			"github.com/timothymamo/shift2eu/internal/web",
-			"github.com/timothymamo/shift2eu/cmd",
-			"os",
-			"syscall",
-			"plugin",
-			"unsafe",
-		},
-	},
-	{
-		Name:     "httpapi-imported-only-by-the-server",
-		ListMode: "lax",
-		Files: []string{
-			"$all",
-			"!**/test/apiparity/**",
-			"!**/cmd/shift2eu-server/**",
-			"!**/internal/httpapi/**",
-		},
-		Allow: nil,
-		Deny: []string{
-			"github.com/timothymamo/shift2eu/internal/httpapi$",
-			"github.com/timothymamo/shift2eu/internal/httpapi/",
-		},
-	},
-	{
 		// The site's driving adapter (PRD #297): a strict allow list of what
-		// it imports today, the sibling of httpapi-gets-adapters-from-cmd.
+		// it imports today, each standard package named exactly.
 		Name:     "web-gets-adapters-from-cmd",
 		ListMode: "strict",
 		Files: []string{
@@ -588,7 +469,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny: []string{
 			"github.com/timothymamo/shift2eu/internal/adapter",
 			"github.com/timothymamo/shift2eu/internal/cli",
-			"github.com/timothymamo/shift2eu/internal/httpapi",
 			"github.com/timothymamo/shift2eu/cmd",
 			"os",
 			"net",
@@ -632,7 +512,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Deny: []string{
 			"github.com/timothymamo/shift2eu/internal/adapter",
 			"github.com/timothymamo/shift2eu/internal/cli",
-			"github.com/timothymamo/shift2eu/internal/httpapi",
 			"os",
 			"net",
 			"github.com/aws/aws-sdk-go-v2",
@@ -660,9 +539,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"github.com/timothymamo/shift2eu/internal/web$",
 		},
 		Deny: []string{
-			"github.com/timothymamo/shift2eu/internal/adapter/request",
 			"github.com/timothymamo/shift2eu/internal/cli",
-			"github.com/timothymamo/shift2eu/internal/httpapi",
 			"os",
 			"net",
 			"syscall",
@@ -690,7 +567,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"github.com/timothymamo/shift2eu/internal/web$",
 		},
 		Deny: []string{
-			"github.com/timothymamo/shift2eu/internal/httpapi",
 			"os/exec",
 		},
 	},
@@ -828,25 +704,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 		},
 		Deny: []string{
 			"encoding/json",
-		},
-	},
-	{
-		Name:     "request-decoders-parse-bytes",
-		ListMode: "strict",
-		Files: []string{
-			"**/internal/adapter/request/**",
-			"!$test",
-		},
-		Allow: []string{
-			"errors$",
-			"fmt$",
-			"github.com/timothymamo/shift2eu/internal/adapter/internal/jsondoc$",
-		},
-		Deny: []string{
-			"encoding/json",
-			"net",
-			"os",
-			"github.com/timothymamo/shift2eu/internal/httpapi",
 		},
 	},
 	{
@@ -1146,14 +1003,10 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Files: []string{
 			"**/cmd/shift2eu/*_test.go",
 			"**/cmd/shift2eu/**/*_test.go",
-			"**/cmd/shift2eu-server/*_test.go",
-			"**/cmd/shift2eu-server/**/*_test.go",
 			"**/cmd/shift2eu-web/*_test.go",
 			"**/cmd/shift2eu-web/**/*_test.go",
 			"**/internal/cli/*_test.go",
 			"**/internal/cli/**/*_test.go",
-			"**/internal/httpapi/*_test.go",
-			"**/internal/httpapi/**/*_test.go",
 			"**/internal/web/*_test.go",
 			"**/internal/web/**/*_test.go",
 		},
@@ -1242,8 +1095,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 	},
 	{
 		// The test trees' own documentation packages (issue #152, the auditor's finding
-		// H-1): test/apiparity, test/architecture, test/container, test/devenv,
-		// test/docs, test/lint, test/openapibundle (issue #139) and test/examples
+		// H-1): test/architecture, test/container, test/devenv,
+		// test/docs, test/lint and test/examples
 		// (issue #179) hold doc.go and no code, and each is a production package a
 		// composition root can import, because the roots' allow lists name the module
 		// path as a prefix entry. Go's internal
@@ -1268,7 +1121,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Name:     testDocsRule,
 		ListMode: "strict",
 		Files: []string{
-			"**/test/apiparity/**",
 			"**/test/architecture/**",
 			"!**/test/architecture/internal/**",
 			"**/test/container/**",
@@ -1277,7 +1129,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"**/test/e2e/**",
 			"**/test/examples/**",
 			"**/test/lint/**",
-			"**/test/openapibundle/**",
 			"**/test/site/**",
 			"!**/test/site/internal/**",
 			"!$test",

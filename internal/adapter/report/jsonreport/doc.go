@@ -3,8 +3,7 @@
 // the JSON report format, schemaVersion 2 or 3 (docs/adr/0018, docs/adr/0030).
 // It implements the analysis.Reporter and analysis.ComparisonReporter ports.
 // The CLI writes it with --format json (version 3 unless --schema-version 2),
-// and the HTTP API (PRD #103) serves the same documents (version 2 unless the
-// request asks for 3).
+// and the site's page offers the same document as a download.
 //
 // # Versions
 //

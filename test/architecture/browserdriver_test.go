@@ -18,10 +18,10 @@ import (
 // that drives a browser (PRD #297 milestone 2). The site's smoke test, test/browser,
 // starts a headless Chromium over the DevTools protocol through
 // github.com/chromedp/chromedp, a package that needs a browser, a network and a
-// testing-only process, none of which a product binary may carry: cmd/shift2eu,
-// cmd/shift2eu-server and cmd/shift2eu-web are built for a user, and ci/sitebuild
-// assembles the site's bundle for a release. depguard refuses the import of
-// chromedp outside test/browser; this test holds the other half of that promise
+// testing-only process, none of which a product binary may carry: cmd/shift2eu
+// and cmd/shift2eu-web are built for a user, and ci/sitebuild assembles the
+// site's bundle for a release. depguard refuses the import of chromedp outside
+// test/browser; this test holds the other half of that promise
 // on what a binary is actually built from, its dependency tree, where a
 // transitive import no rule of the importing file names would otherwise carry
 // it in.
@@ -55,8 +55,8 @@ const browserDriverProbe = "./test/browser"
 // TestNoProductBinaryReachesChromedp lists the dependencies of every program
 // the repository builds for a user or a release, and fails when one reaches a
 // package the browser driver brings into the module: the release platforms
-// .goreleaser.yaml builds for each of cmd/shift2eu, cmd/shift2eu-server and
-// ci/sitebuild, and js/wasm for cmd/shift2eu-web, the site's module.
+// .goreleaser.yaml builds for each of cmd/shift2eu and ci/sitebuild, and js/wasm
+// for cmd/shift2eu-web, the site's module.
 //
 // The refused set is derived, not a list of prefixes: go list -deps -test with
 // the browser tag over test/browser, the one importer of the driver, names every
@@ -109,7 +109,7 @@ func TestNoProductBinaryReachesChromedp(t *testing.T) {
 	var programs []program
 
 	for _, target := range targets {
-		for _, main := range []string{releasetarget.Main, releasetarget.ServerMain, siteBuilderMain} {
+		for _, main := range []string{releasetarget.Main, siteBuilderMain} {
 			programs = append(programs, program{main: main, target: target})
 		}
 	}

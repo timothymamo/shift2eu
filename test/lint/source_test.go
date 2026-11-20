@@ -261,16 +261,6 @@ func TestScanSources(t *testing.T) {
 			},
 		},
 		{
-			// The HTTP API's tests read no variable either (issue #152),
-			// through httpapi-tests-no-env-or-process, and the guard is
-			// linter-wide, so it covers that group without naming it.
-			name:  "nolint directive on the HTTP API test's environment read",
-			files: map[string]string{"internal/httpapi/httpapi_test.go": "package httpapi_test\n\nimport \"os\"\n\nvar token = os.Getenv(\"TOKEN\") //nolint:forbidigo // probe\n"},
-			want: []string{
-				"internal/httpapi/httpapi_test.go:5:32: //nolint:forbidigo // probe would hide forbidigo issues; fix the design or the call instead (CLAUDE.md)",
-			},
-		},
-		{
 			name:  "nolint directive on a test's environment write",
 			files: map[string]string{"internal/app/analysis/analysis_test.go": "package analysis_test\n\nimport \"testing\"\n\nfunc TestA(t *testing.T) { t.Setenv(\"TOKEN\", \"x\") } //nolint:forbidigo // probe\n"},
 			want: []string{

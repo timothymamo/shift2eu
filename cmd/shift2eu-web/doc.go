@@ -10,8 +10,8 @@
 // that converts the page's values to web.Options, calls web.Assessor.Assess
 // and converts the result back. It holds no assessment logic. It is the only
 // package that imports syscall/js, and it imports only wire, internal/web,
-// syscall/js and a named list of standard packages: never internal/cli,
-// internal/httpapi, a request decoder or a cloud SDK.
+// syscall/js and a named list of standard packages: never internal/cli or a
+// cloud SDK.
 //
 // The glue reads, sets and calls JavaScript names only through get, set and
 // call, which take a jsName: the constants of type jsName are its named allow

@@ -6,8 +6,7 @@ agents' environment. [Architecture](../architecture.md) explains why it is laid 
 
 ```
 cmd/shift2eu/                 CLI entry point and composition root
-cmd/shift2eu-server/          HTTP API entry point and composition root
-api/openapi.json              The HTTP API's OpenAPI 3.1 document
+cmd/shift2eu-web/             The site's WebAssembly module and composition root
 internal/
   domain/                     Pure business rules, standard library only
     taxonomy/                   provider-neutral service categories
@@ -21,10 +20,9 @@ internal/
     source/inventoryfile        the JSON inventory file
     source/{aws,azure,gcp}      read-only discovery   (+ sourcetest contract suite)
     target/{ovhcloud,scaleway,upcloud}  EU catalogs   (+ targettest contract suite)
-    report/{markdown,jsonreport}        renderers
-    request/assessmentrequest   the HTTP API's request decoder
+    report/{markdown,jsonreport,htmlreport}  renderers
   cli/                        Command-line parsing (driving adapter)
-  httpapi/                    The HTTP API (driving adapter)
+  web/                        The site's driving adapter
   config/                     Configuration loading
   version/                    Build metadata
   testutil/                   Test-only helpers (golden files, fixtures)

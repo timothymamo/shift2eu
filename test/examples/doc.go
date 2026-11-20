@@ -12,8 +12,13 @@
 //
 // It also holds the real-data check of issue #249 (CLAUDE.md rule 2): every
 // text file under examples/, docs/guide/ and every testdata/ directory of the
-// module is scanned for account IDs, GUIDs, IP addresses and host names that are
-// not documentation values. Only directories named exactly testdata are checked
+// module is scanned for account IDs, GUIDs, IP addresses (dotted, or written
+// with hyphens or underscores, in a name or a private one on its own), host
+// names, and owners and buckets after a vendor host, a bucket scheme, in an S3
+// ARN or in a Cloud Storage JSON API path (github.com/acme, git@github.com:acme,
+// s3://acme-bucket, arn:aws:s3:::acme-bucket, storage.googleapis.com/acme-bucket,
+// www.googleapis.com/storage/v1/b/acme-bucket) that are not documentation
+// values. Only directories named exactly testdata are checked
 // besides examples/ and docs/guide/, so a new fixture directory must be named
 // testdata. The walk reads the tree on disk, so an untracked or git-ignored file
 // under a checked directory is checked too: a real inventory dropped there

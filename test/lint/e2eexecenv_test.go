@@ -19,7 +19,7 @@ import (
 // with the whole environment of the test process, as the name and the
 // subcommand the source writes, joined by a space. It is the go toolchain's
 // alone: the `go build` calls of assess_test.go's buildAndRun and the
-// `go list -deps` calls of assess_test.go and server_test.go inherit that
+// `go list -deps` calls of assess_test.go inherit that
 // environment because the go command needs it (GOPATH, the module cache,
 // GOFLAGS, a proxy, a toolchain) and print none of it (issue #195). Every other
 // command must set its Env: exec.Cmd reads a nil Env as "inherit the
@@ -201,7 +201,6 @@ func TestE2ETestsSetExecEnv(t *testing.T) {
 	for _, rel := range []string{
 		"test/e2e/assess_test.go",
 		"test/e2e/inventory_guide_test.go",
-		"test/e2e/server_test.go",
 	} {
 		if !slices.Contains(scanned, rel) {
 			t.Errorf("the scan skipped %s, a _test.go file of the e2e tier", rel)

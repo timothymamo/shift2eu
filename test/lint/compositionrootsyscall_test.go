@@ -15,8 +15,8 @@ import (
 
 // syscallSignal matches the one kind of name a composition root may take from
 // package syscall: a signal constant, such as syscall.SIGTERM or
-// syscall.SIGHUP, which is what cmd/shift2eu/main.go and
-// cmd/shift2eu-server/main.go use to cancel a run's context (issue #111).
+// syscall.SIGHUP, which is what cmd/shift2eu/main.go uses to cancel a run's
+// context (issue #111).
 var syscallSignal = regexp.MustCompile(`^SIG[A-Z0-9]+$`)
 
 // syscallNameAllowed reports whether name, the selector of a reference to
@@ -154,7 +154,7 @@ func TestCompositionRootsUseSyscallOnlyForSignals(t *testing.T) {
 func TestSyscallProblems(t *testing.T) {
 	t.Parallel()
 
-	const rel = "cmd/shift2eu-server/probe.go"
+	const rel = "cmd/shift2eu/probe.go"
 	tests := []struct {
 		name string
 		src  string

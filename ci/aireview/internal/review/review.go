@@ -15,11 +15,10 @@ const MaxDiffBytes = 300_000
 
 // MaxRawDiffBytes is the largest diff, in bytes, the GitHub client reads before
 // anything is left out (issue #324, ADR 0033). It is four times MaxDiffBytes,
-// room for a schema version bump whose golden files and generated bundle are
-// most of its diff, while a diff the client reads still costs little memory. A
-// larger diff is refused with ErrDiffTooLarge, and the run ends in the skipped
-// outcome (issue #367): it is never filtered in part, since a diff cut short is
-// no diff.
+// room for a schema version bump whose golden files are most of its diff, while
+// a diff the client reads still costs little memory. A larger diff is refused
+// with ErrDiffTooLarge, and the run ends in the skipped outcome (issue #367): it
+// is never filtered in part, since a diff cut short is no diff.
 const MaxRawDiffBytes = 4 * MaxDiffBytes
 
 // The errors a run fails with. Each one means nothing was posted, except a

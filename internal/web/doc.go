@@ -1,5 +1,5 @@
 // Package web is the driving adapter the site's page calls (PRD #297), beside
-// internal/cli and internal/httpapi: it takes an inventory document and the
+// internal/cli: it takes an inventory document and the
 // options the user chose in the page, runs the assessment, or the comparison
 // of several targets, and returns the Markdown report and the JSON report the
 // page offers as downloads, byte for byte what `shift2eu assess` writes for the

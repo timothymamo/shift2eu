@@ -1,5 +1,10 @@
 # PRD #103: Serve assessments over an HTTP API
 
+> **Retired** ([ADR 0037](../../docs/adr/0037-retire-the-http-api-and-release-the-cli-alone.md), issue
+> #393): the HTTP API this PRD built, `shift2eu-server`, is no longer released, and its code is removed.
+> The CLI and the site run the same assessments. The JSON report format (ADR 0018) stays. This page is
+> kept as history.
+
 **Status:** Complete (milestones 1 to 4 done). The decisions the user accepted with milestones 1 and 2
 are marked *Decided* (issue #112).
 **Issue:** #103

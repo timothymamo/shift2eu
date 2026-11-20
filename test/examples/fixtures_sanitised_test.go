@@ -168,10 +168,93 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"10-1-2-3"},
 		},
 		{
+			// The same address written with underscores rather than hyphens,
+			// the way a page that copies one out of a name may write it.
+			name:    "private address with underscore separators",
+			path:    "docs/guide/planted-ip-underscore.md",
+			content: "the peer ip_10_1_2_3 answers on port 8080",
+			want:    []string{"10_1_2_3"},
+		},
+		{
+			// A zero-padded octet is no octet to netip.ParseAddr, so the run is
+			// read as the address it spells and reported as it is written.
+			name:    "private address with a zero-padded octet",
+			path:    "testdata/planted-ip-padded.json",
+			content: `"peer": "ip-10-01-2-3"`,
+			want:    []string{"10-01-2-3"},
+		},
+		{
+			name:    "customer host under the Indian TLD",
+			path:    "docs/guide/planted-in.md",
+			content: "the shop answers at web.acme.in",
+			want:    []string{"web.acme.in"},
+		},
+		{
+			name:    "customer bucket in an s3 URL",
+			path:    "testdata/planted-bucket.json",
+			content: "the objects are in s3://acme-prod-bucket/key",
+			want:    []string{"s3://acme-prod-bucket"},
+		},
+		{
 			name:    "private address in an AWS host name",
 			path:    "testdata/planted-host.json",
 			content: `"hostname": "ip-10-1-2-3.eu-central-1.compute.internal"`,
 			want:    []string{"10-1-2-3", "ip-10-1-2-3.eu-central-1.compute.internal"},
+		},
+		{
+			// An address is reported wherever a name carries it, not only
+			// behind an ip-: AWS and Azure write it behind a label of the
+			// machine's own as well.
+			name:    "private address after a letter-hyphen prefix",
+			path:    "docs/guide/planted-node.md",
+			content: "the node node-10-1-2-3 answers on port 8080",
+			want:    []string{"10-1-2-3"},
+		},
+		{
+			name:    "customer host under the government TLD",
+			path:    "docs/guide/planted-gov.md",
+			content: "the database is db.acme.gov",
+			want:    []string{"db.acme.gov"},
+		},
+		{
+			// The vendor host is exempt and the path after it is not: the
+			// owner names the customer, so the check reports the host and the
+			// owner together.
+			name:    "customer owner path after a listed vendor host",
+			path:    "testdata/planted-owner.json",
+			content: "the module is github.com/acme/private-repo",
+			want:    []string{"github.com/acme"},
+		},
+		{
+			// The SSH clone form a reader copies out of a git command names the
+			// owner after a colon, and the owner is the customer's all the same.
+			name:    "customer owner in an SSH clone URL",
+			path:    "docs/guide/planted-clone.md",
+			content: "cloned with git@github.com:acme/private-repo.git",
+			want:    []string{"github.com/acme"},
+		},
+		{
+			// An ARN names a bucket with no scheme, and the ARN is reported whole
+			// so the failure says which value to change.
+			name:    "customer bucket in an ARN",
+			path:    "testdata/planted-arn.json",
+			content: `"bucket": "arn:aws:s3:::acme-prod-bucket"`,
+			want:    []string{"arn:aws:s3:::acme-prod-bucket"},
+		},
+		{
+			name:    "customer bucket in a Cloud Storage URL",
+			path:    "testdata/planted-gcs.json",
+			content: "the objects are at https://storage.googleapis.com/acme-prod-data/key",
+			want:    []string{"storage.googleapis.com/acme-prod-data"},
+		},
+		{
+			// The other side of the same rules, planted rather than assumed: the
+			// project's own host and a sample's bucket are what a checked file may
+			// carry, so the check reports nothing for them.
+			name:    "public project host and sample bucket",
+			path:    "testdata/planted-clean.txt",
+			content: "cloned from github.com/timothymamo/shift2eu, the sample objects are in s3://example-bucket/key",
+			want:    nil,
 		},
 		{
 			// Every sample address is in 192.0.2.0/24, and the hyphenated rule
