@@ -54,7 +54,10 @@ func jobTimeoutFromWorkflow(t *testing.T) time.Duration {
 // with minutes to spare for the steps before it. Not parallel, as the package's
 // other test is not.
 func TestRunDeadlineFitsTheJob(t *testing.T) {
-	const stepsBeforeTheRun = 3 * time.Minute // build, install the CLI, mint the token
+	// Build, install the CLI, mint the token: 3 minutes, as ADR 0033 states.
+	// The job's last 1.5 minutes are left as margin for its post steps (the
+	// App token's revocation), which run inside timeout-minutes too.
+	const stepsBeforeTheRun = 3 * time.Minute
 
 	jobTimeout := jobTimeoutFromWorkflow(t)
 	detachedPost := review.UnreadablePostTimeout

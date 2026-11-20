@@ -450,8 +450,11 @@ the trigger option below are the levers.
 - **The run has a deadline of 15 minutes** (`runDeadline`, set by `ci/aireview`'s `main`), so two model
   calls cannot outlive the job's `timeout-minutes: 20`. Each call's ten-minute timeout is derived from
   the run's context and so capped by what remains of the deadline: after a first call of ten minutes,
-  the retry has at most five. The run plus the detached post above takes at most 15.5 minutes, which
-  leaves 4.5 minutes of the job for building the reviewer, installing the CLI and minting the token.
+  the retry has at most five. The run plus the detached post above takes at most 15.5 minutes. The
+  steps before it (building the reviewer, installing the CLI and minting the token) are given 3
+  minutes, more than they take, and the last 1.5 minutes of the job are margin for its post steps,
+  such as the revocation of the App's token, which run inside `timeout-minutes` too
+  (`ci/aireview/deadline_test.go` pins the sum).
   A CLI stopped because the run's deadline passed says so ("the run's deadline passed"), not that it was
   cancelled, which stays the wording for a cancelled run.
 - An inline comment goes only on a line the diff shows on its new side; a finding on any other line, or
