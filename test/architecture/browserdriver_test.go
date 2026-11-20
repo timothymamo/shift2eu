@@ -521,59 +521,28 @@ func TestGoListProbeEnv(t *testing.T) {
 		"SHIFT2EU_PROBE_UNLISTED",
 	}
 
-	// allowed are the only names the probe's environment may hold. It starts
-	// from this test's own environment, as check.ListPackages' listEnv does, for
-	// the variables the go command needs to find its toolchain, its caches and a
-	// temporary directory: PATH and GOROOT for the toolchain, HOME, USERPROFILE,
-	// XDG_CACHE_HOME and LOCALAPPDATA for the defaults of the caches, GOPATH,
-	// GOMODCACHE and GOCACHE for where a developer or CI put them, TMPDIR, TEMP
-	// and TMP for the temporary directory.
-	allowed := []string{
-		"PATH",
-		"GOROOT",
-		"HOME",
-		"USERPROFILE",
-		"XDG_CACHE_HOME",
-		"LOCALAPPDATA",
-		"GOPATH",
-		"GOMODCACHE",
-		"GOCACHE",
-		"TMPDIR",
-		"TEMP",
-		"TMP",
-		// GOPROXY, and the proxy and certificate settings a fetch through it
-		// reads. Unlike the check's listing, the probe's may fetch: on an empty
-		// module cache it loads chromedp and cdproto, which the go test build
-		// loads as well, so the fetch it makes needs the settings that build uses.
-		"GOPROXY",
-		"HTTP_PROXY",
-		"HTTPS_PROXY",
-		"NO_PROXY",
-		"http_proxy",
-		"https_proxy",
-		"no_proxy",
-		"SSL_CERT_FILE",
-		"SSL_CERT_DIR",
-	}
-
-	// The settings the probe fixes, and PWD, which os/exec or the probe may set to
-	// the listing's directory: this test neither requires nor forbids it.
-	for _, want := range fixed {
-		allowed = append(allowed, want.name)
-	}
-
-	allowed = append(allowed, "PWD")
-
-	// passedThrough are the allow-listed variables a case hands the probe with a
-	// sentinel value of its own, so the case checks each one arrives unchanged:
+	// passedThrough are the variables the probe inherits, which a case hands it with
+	// a sentinel value of its own, so the case checks each one arrives unchanged:
 	// every name the probe may inherit but PWD, the settings it fixes (checked
-	// above) and GOPROXY (its own cases below). A slice, not a map, so a failure
-	// reports in this order every run. The proxy and certificate settings come in
-	// two spellings, and os.LookupEnv ignores case on Windows, where HTTP_PROXY and
-	// http_proxy name one variable: a pair carries one sentinel value between its
-	// spellings, so whichever one Windows reads or writes, the effective value the
-	// case asserts is the same. Overriding PATH is safe: no case runs a child
-	// process, and t.Setenv restores every one of them.
+	// above) and GOPROXY (its own cases below). It starts from this test's own
+	// environment, as check.ListPackages' listEnv does, for the variables the go
+	// command needs to find its toolchain, its caches and a temporary directory:
+	// PATH and GOROOT for the toolchain, HOME, USERPROFILE, XDG_CACHE_HOME and
+	// LOCALAPPDATA for the defaults of the caches, GOPATH, GOMODCACHE and GOCACHE
+	// for where a developer or CI put them, TMPDIR, TEMP and TMP for the temporary
+	// directory.
+	//
+	// Unlike the check's listing, the probe's may fetch: on an empty module cache it
+	// loads chromedp and cdproto, which the go test build loads as well, so the
+	// fetch it makes needs the proxy and certificate settings that build uses. The
+	// proxy and certificate settings come in two spellings, and os.LookupEnv ignores
+	// case on Windows, where HTTP_PROXY and http_proxy name one variable: a pair
+	// carries one sentinel value between its spellings, so whichever one Windows
+	// reads or writes, the effective value the case asserts is the same.
+	//
+	// A slice, not a map, so a failure reports in this order every run. Overriding
+	// PATH is safe: no case runs a child process, and t.Setenv restores every one of
+	// them.
 	passedThrough := []probeEnvWant{
 		{name: "PATH", setting: probeEnvSetting{value: "/some/PATH", set: true}},
 		{name: "GOROOT", setting: probeEnvSetting{value: "/some/GOROOT", set: true}},
@@ -596,6 +565,25 @@ func TestGoListProbeEnv(t *testing.T) {
 		{name: "SSL_CERT_FILE", setting: probeEnvSetting{value: "/some/SSL_CERT_FILE", set: true}},
 		{name: "SSL_CERT_DIR", setting: probeEnvSetting{value: "/some/SSL_CERT_DIR", set: true}},
 	}
+
+	// allowed are the only names the probe's environment may hold: the names
+	// passedThrough hands it with a sentinel, GOPROXY, whose cases give it its own
+	// value, the settings it fixes, and PWD, which os/exec or the probe may set to
+	// the listing's directory and this test neither requires nor forbids. Each name
+	// is written out once, in passedThrough and fixed, and gathered here, so the
+	// list the allow-list check uses cannot drift from the cases that assert on it.
+	allowed := make([]string, 0, len(passedThrough)+1+len(fixed)+1)
+	for _, want := range passedThrough {
+		allowed = append(allowed, want.name)
+	}
+
+	allowed = append(allowed, "GOPROXY")
+
+	for _, want := range fixed {
+		allowed = append(allowed, want.name)
+	}
+
+	allowed = append(allowed, "PWD")
 
 	// probeInheritedEnv must hold exactly those names and no other, whatever this
 	// machine happens to have set: the settings a case hands it with a sentinel
