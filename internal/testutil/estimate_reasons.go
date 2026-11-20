@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -25,23 +24,20 @@ import (
 
 // EstimateReasons returns every estimate.Reason constant the estimate domain
 // declares, in declaration order, read from the package's source. It fails tb
-// when it cannot read that source, when a constant typed Reason has a value it
-// cannot read as a string literal (estimateReasonsInSource says which and why),
-// or when the domain declares no reason at all, so a reader that looked in the
-// wrong directory can never pass a guard vacuously.
+// when it cannot read that source, when a constant whose type is Reason has a
+// value it cannot read as a string literal or as a value that names another
+// constant (estimateReasonsInSource says which and why), or when the domain
+// declares no reason at all, so a reader that looked in the wrong directory can
+// never pass a guard vacuously.
 //
-// The directory is found from this file's own path: go test compiles the test
-// binary from the source checkout, so runtime.Caller names the checkout's
-// internal/testutil, and the domain is its sibling package.
+// The directory is found from the working directory: go test runs a test in the
+// directory of the package it tests, so walking up from there reaches the module
+// root, the directory holding go.mod, whatever path the binary was built with,
+// and the domain is internal/domain/estimate below it.
 func EstimateReasons(tb testing.TB) []estimate.Reason {
 	tb.Helper()
 
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		tb.Fatal("cannot name this source file, so cannot find the estimate domain")
-	}
-
-	dir := filepath.Join(filepath.Dir(file), "..", "domain", "estimate")
+	dir := domainEstimateDir(tb)
 
 	reasons := estimateReasonsInDir(tb, dir)
 	if len(reasons) == 0 {
@@ -49,6 +45,31 @@ func EstimateReasons(tb testing.TB) []estimate.Reason {
 	}
 
 	return reasons
+}
+
+// domainEstimateDir returns the estimate domain's directory: internal/domain/estimate
+// below the module root, which is the first directory above the working directory
+// that holds go.mod.
+func domainEstimateDir(tb testing.TB) string {
+	tb.Helper()
+
+	start, err := os.Getwd()
+	if err != nil {
+		tb.Fatalf("getting the working directory returned unexpected error: %v", err)
+	}
+
+	for dir := start; ; dir = filepath.Dir(dir) {
+		// Stat's error is not inspected: the question is whether go.mod is here,
+		// and a path this process cannot read holds none.
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return filepath.Join(dir, "internal", "domain", "estimate")
+		}
+
+		if filepath.Dir(dir) == dir {
+			tb.Fatalf("no go.mod found above %s, so the module root and the estimate domain cannot be found",
+				start)
+		}
+	}
 }
 
 // estimateReasonsInDir returns the reasons the estimate domain's Go files in
@@ -95,11 +116,13 @@ func estimateReasonsInDir(tb testing.TB, dir string) []estimate.Reason {
 //
 // A constant is an estimate.Reason when its spec spells the type out, or when
 // its value is a conversion to Reason, or when it repeats the spec above it
-// (see constantReasons). A spec with values and no type is untyped, even below
-// a typed spec: Go gives each of its expressions its default type, so a string
-// literal there is a string and not a reason. A spec the test reads as a reason
-// whose value is not a string literal is an error naming the constant: skipping
-// it would leave that reason unguarded.
+// (see constantReasons). A spec with values and no type takes the type of each
+// value: a string literal there is a string and not a reason, a conversion to
+// another type is that type, and a value that names another constant takes that
+// constant's type, which only type checking could say is Reason or not, so the
+// test fails on it rather than skip a reason. A spec the test reads as a reason
+// whose value is not a string literal is an error naming the constant too:
+// skipping it would leave that reason unguarded.
 func estimateReasonsInSource(name string, src []byte) ([]estimate.Reason, error) {
 	fset := token.NewFileSet()
 
@@ -130,8 +153,9 @@ func estimateReasonsInSource(name string, src []byte) ([]estimate.Reason, error)
 // type nor values, which Go reads as a textual repetition of the spec above:
 // their type and their values are the ones above, so a typed spec followed by
 // such a spec leaves a Reason whose value the test cannot read. A spec with
-// values of its own takes no type from above, so only a value that is itself a
-// conversion to Reason (Reason("...")) makes it a reason.
+// values of its own takes no type from above: a value that is a conversion to
+// Reason (Reason("...")) makes it a reason, a value that names another constant
+// might, and one that names nothing (a literal expression) is not one.
 func constantReasons(fset *token.FileSet, decl ast.Decl) ([]estimate.Reason, error) {
 	gen, ok := decl.(*ast.GenDecl)
 	if !ok || gen.Tok != token.CONST {
@@ -179,23 +203,33 @@ func constantReasons(fset *token.FileSet, decl ast.Decl) ([]estimate.Reason, err
 					fset.Position(vs.Pos()), vs.Names[0].Name)
 			}
 		default:
-			// A spec with values and no type declares untyped constants, but a
-			// value that is a conversion to Reason names a reason itself.
+			// A spec with values and no type takes the type of each value, so a
+			// value that is a conversion to Reason names a reason itself, and one
+			// that names another constant may be a reason too: Go gives it that
+			// constant's type, and only type checking could say whether it is a
+			// Reason. The test cannot tell, so it fails rather than skip a reason.
 			found := false
 
 			for i, expr := range vs.Values {
-				if !isReasonConversion(expr) {
-					continue
+				switch {
+				case isReasonConversion(expr):
+					reason, err := reasonLiteral(fset, expr, valueName(vs, i))
+					if err != nil {
+						return nil, err
+					}
+
+					reasons = append(reasons, reason)
+
+					found = true
+				case otherConversion(expr):
+					// A conversion to another type: the constant is that type, not a
+					// reason, and its literal argument names nothing to follow.
+				case namesIdent(expr):
+					return nil, fmt.Errorf("%s: estimate.Reason constant %s takes the type of a value that "+
+						"names another constant, which Go may make a Reason; write it as a string literal, or "+
+						"as Reason(\"...\") of one, the only value a report guard can read",
+						fset.Position(expr.Pos()), valueName(vs, i))
 				}
-
-				reason, err := reasonLiteral(fset, expr, valueName(vs, i))
-				if err != nil {
-					return nil, err
-				}
-
-				reasons = append(reasons, reason)
-
-				found = true
 			}
 
 			reasonAbove = found
@@ -214,6 +248,42 @@ func valueName(vs *ast.ValueSpec, i int) string {
 	}
 
 	return vs.Names[len(vs.Names)-1].Name
+}
+
+// otherConversion reports whether expr converts a literal to a type other than
+// Reason, as Method("plan") does. A const spec's value is no function call, so a
+// one-argument call of an identifier there is a conversion, and its literal
+// argument cannot name a Reason: the constant takes the other type.
+func otherConversion(expr ast.Expr) bool {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok || len(call.Args) != 1 {
+		return false
+	}
+
+	ident, ok := call.Fun.(*ast.Ident)
+	if !ok || ident.Name == "Reason" {
+		return false
+	}
+
+	_, literal := call.Args[0].(*ast.BasicLit)
+
+	return literal
+}
+
+// namesIdent reports whether expr is an identifier, or an expression built from
+// one, such as NoFit + "-region": a constant whose type the test cannot see.
+func namesIdent(expr ast.Expr) bool {
+	named := false
+
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if _, ok := node.(*ast.Ident); ok {
+			named = true
+		}
+
+		return !named
+	})
+
+	return named
 }
 
 // isReasonConversion reports whether expr is a conversion to Reason with one

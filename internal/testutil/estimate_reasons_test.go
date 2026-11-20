@@ -4,8 +4,9 @@
 // domain declares one form only, so a guard on the real domain alone would
 // never show that a form it cannot read fails rather than passes unnoticed.
 // The test pins every form: the typed literal, the conversion, the untyped
-// constant below a typed one, and the spec that is a Reason whose value the
-// test cannot read, which must fail and not be skipped.
+// constant below a typed one, the conversion to another type, the untyped
+// constant built from another constant, and the spec that is a Reason whose
+// value the test cannot read, which must fail and not be skipped.
 package testutil
 
 import (
@@ -83,6 +84,18 @@ const Converted = Reason("converted")
 const TypedConverted Reason = Reason("typed-converted")
 `,
 		want: []estimate.Reason{"converted", "typed-converted"},
+	},
+	{
+		name: "a conversion to another type is not a reason",
+		src: `package estimate
+
+type Reason string
+
+type Method string
+
+// Plan converts a literal to Method: the constant is a Method, not a reason.
+const Plan = Method("plan")
+`,
 	},
 	{
 		name: "an untyped constant below a typed one is not a reason",
@@ -227,6 +240,21 @@ const (
 )
 `,
 		wantErr: "Alias",
+	},
+	{
+		name: "an untyped constant naming another untyped constant cannot be read",
+		src: `package estimate
+
+type Reason string
+
+const (
+	Label = "label"
+	// Aliased may be a string like Label, or a Reason if Label were one: the
+	// test reads no type here, so it fails rather than skip it.
+	Aliased = Label
+)
+`,
+		wantErr: "Aliased",
 	},
 	{
 		name: "a file that declares no Reason",

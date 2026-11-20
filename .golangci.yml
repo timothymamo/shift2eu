@@ -323,6 +323,10 @@ linters:
         # helpers' own _test.go files are held too. An import rule sees no
         # call, so the forbidigo group testutil-no-env refuses the environment
         # reads, directory lookups and process start that os alone allows.
+        # os is also how the report guards' reader finds the module root, from
+        # os.Getwd up to the directory holding go.mod (issue #308), and that
+        # path needs no runtime: runtime.Caller records a module-relative path
+        # under go test -trimpath, which names no directory on disk.
         # A new import needs an entry here and in test/architecture's pin in
         # the same commit.
         testutil-imports:
@@ -348,7 +352,6 @@ linters:
             - go/ast$
             - go/parser$
             - go/token$
-            - runtime$
             - github.com/timothymamo/shift2eu/internal/domain/catalog$
             - github.com/timothymamo/shift2eu/internal/domain/estimate$
             - github.com/timothymamo/shift2eu/internal/domain/taxonomy$

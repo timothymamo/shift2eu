@@ -221,8 +221,11 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// reviewer's S1): the application layer's tests may import it, and it
 		// reads and writes golden files, so it imports os and path/filepath
 		// today, and it parses the estimate domain's source for the report
-		// guards (issue #308), so it imports go/ast, go/parser, go/token,
-		// runtime and that domain. Nothing held those imports to anything: a
+		// guards (issue #308), so it imports go/ast, go/parser, go/token and
+		// that domain. os is both: the golden files, and os.Getwd up to the
+		// directory holding go.mod, which is how the reader finds the domain
+		// under go test -trimpath too, so it needs no runtime (runtime.Caller
+		// records a module-relative path there). Nothing held those imports to anything: a
 		// helper that reached the network (net/http), started a program
 		// (os/exec) or read the environment (os.Getenv) would have given an
 		// application test I/O with lint green, since the test's own rule
@@ -266,7 +269,6 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"path/filepath$",
 			"reflect$",
 			"regexp$",
-			"runtime$",
 			"slices$",
 			"strconv$",
 			"strings$",
