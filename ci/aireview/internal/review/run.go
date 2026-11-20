@@ -261,8 +261,9 @@ type partResult struct {
 // with BuildPartPrompt's prompt (a diff of one part is asked on the caller's
 // goroutine), and returns the answers in the parts' order. Each part keeps its
 // own retry of an answer of the wrong shape (askForAnswer). Each part writes
-// its notices to a buffer of its own, which askParts copies to notices as the
-// part ends, on its own goroutine alone, so notices needs no lock.
+// its notices to a buffer of its own, which askParts copies to notices in the
+// parts' order once every part has ended, on its own goroutine alone, so
+// notices needs no lock and reads the same whatever order the parts end in.
 //
 // A part that fails for any reason but two unusable answers cancels the
 // others, and askParts returns the first such failure once every part has
@@ -304,6 +305,7 @@ func askParts(ctx context.Context, model Asker, req partsRequest, notices io.Wri
 
 	var (
 		answers  = make([]Answer, count)
+		written  = make([][]byte, count)
 		failure  error
 		unusable *noUsableAnswerError
 	)
@@ -311,9 +313,7 @@ func askParts(ctx context.Context, model Asker, req partsRequest, notices io.Wri
 	for range count {
 		r := <-results
 
-		// The notice is best effort: a log that cannot be written costs no
-		// review.
-		_, _ = notices.Write(r.notices)
+		written[r.index] = r.notices
 
 		var part *noUsableAnswerError
 
@@ -329,6 +329,13 @@ func askParts(ctx context.Context, model Asker, req partsRequest, notices io.Wri
 
 			cancel()
 		}
+	}
+
+	// Every part has ended: its notices are written in the parts' order, so
+	// the log reads the same whatever order the parts ended in. The notice is
+	// best effort: a log that cannot be written costs no review.
+	for _, w := range written {
+		_, _ = notices.Write(w)
 	}
 
 	if failure != nil {

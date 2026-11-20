@@ -43,6 +43,12 @@ func SkipSummaryLine(skip Skip) string {
 	return "**AI review skipped:** " + oneLine(skip.Message)
 }
 
+// injectionWarning is the fixed sentence the skipped review of two unusable
+// answers carries, and the skip of a diff too large does not: content in the
+// diff can cause this skip (issue #376, ADR 0033).
+const injectionWarning = "Content in the diff, including instructions aimed at the reviewer, can make the model " +
+	"answer unusably: read the diff with prompt injection in mind."
+
 // skipped is a run's skipped outcome on its way to the post: the Skip, and the
 // review body's own text, which may name a path in a code span.
 type skipped struct {
@@ -102,7 +108,11 @@ func skipNoUsableAnswer(check string, index, count int) skipped {
 	message := fmt.Sprintf("The model gave no usable answer twice%s (shape check: %s), "+
 		"so the AI review was skipped.", where, check)
 
-	return skipped{skip: Skip{Reason: SkipNoUsableAnswer, Message: message}, body: message}
+	// Program text, never the model's: the one cause of this skip a pull
+	// request can bring about itself (issue #376, ADR 0033).
+	body := message + "\n\n" + injectionWarning
+
+	return skipped{skip: Skip{Reason: SkipNoUsableAnswer, Message: message}, body: body}
 }
 
 // skippedReview returns the review a skipped run posts on headSHA: a comment
