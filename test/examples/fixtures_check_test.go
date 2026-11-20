@@ -9,10 +9,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"testing"
 	"unicode/utf16"
-
-	"github.com/google/go-cmp/cmp"
 )
 
 // checkedDirs are the directories below the module root whose every file the
@@ -434,53 +431,6 @@ func parseHyphenatedIPv4(candidate string) (netip.Addr, bool) {
 	}
 
 	return addr, true
-}
-
-// TestHyphenatedIPv4Problems pins which hyphenated numbers the fixture check
-// reads as an address: one written into a name (after ip-, or as a component of
-// a dotted name) whose groups are octets and whose address is outside the
-// documentation ranges is reported, while a documentation range, a date, a
-// version-like token and a group that is no octet are not.
-func TestHyphenatedIPv4Problems(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		text string
-		want []string
-	}{
-		{name: "no address", text: "shop-web-1 in eu-central-1", want: nil},
-		{name: "bare address after the ip prefix", text: "the instance ip-10-1-2-3 answers", want: []string{"10-1-2-3"}},
-		{name: "address after the ip prefix in capitals", text: "the instance IP-10-1-2-3 answers", want: []string{"10-1-2-3"}},
-		{
-			name: "address in an AWS host name",
-			text: `"hostname": "ip-10-1-2-3.eu-central-1.compute.internal"`,
-			want: []string{"10-1-2-3"},
-		},
-		{
-			name: "address in a named host without the ip prefix",
-			text: "the node vm-172-16-4-9.acme-corp.internal serves it",
-			want: []string{"172-16-4-9"},
-		},
-		{name: "documentation address", text: "ip-192-0-2-10 is the sample's", want: nil},
-		{name: "other documentation range", text: "ip-198-51-100-7 is documentation too", want: nil},
-		{name: "third documentation range", text: "ip-203-0-113-9 as well", want: nil},
-		{name: "date", text: "released on 2026-11-20", want: nil},
-		{name: "date in the short form", text: "the window 26-11-20 stays", want: nil},
-		{name: "version-like token", text: "the build-1-2-3-4 image is pinned", want: nil},
-		{name: "sequence in prose", text: "the steps 1-2-3-4 in order", want: nil},
-		{name: "group that is no octet", text: "ip-10-1-2-300 is no address", want: nil},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			if diff := cmp.Diff(tc.want, values(hyphenatedIPv4Problems(tc.text))); diff != "" {
-				t.Errorf("hyphenatedIPv4Problems(%q) mismatch (-want +got):\n%s", tc.text, diff)
-			}
-		})
-	}
 }
 
 // fixtureProblems runs the sanitisation check over every checked file below

@@ -172,12 +172,14 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"10-1-2-3", "ip-10-1-2-3.eu-central-1.compute.internal"},
 		},
 		{
-			// A documentation address written the same way is no real data,
-			// whichever of the three RFC 5737 ranges a page names.
+			// Every sample address is in 192.0.2.0/24, and the hyphenated rule
+			// holds an address written into a name to that range just as the
+			// dotted rule does: ip-192-0-2-10 is clean, the other two RFC 5737
+			// ranges are no sample value and are reported.
 			name:    "documentation addresses written into names",
 			path:    "docs/guide/planted-ip-doc.md",
 			content: "ip-192-0-2-10, ip-198-51-100-7 and ip-203-0-113-9 are documentation names",
-			want:    nil,
+			want:    []string{"198-51-100-7", "203-0-113-9"},
 		},
 	}
 
@@ -363,8 +365,8 @@ func TestAllowListStalenessReadsFilesLikeTheCheck(t *testing.T) {
 	}
 
 	if len(stale) != 0 {
-		t.Errorf("%s holds %q as UTF-16, which the check decodes before it looks, but staleAllowListEntries judges the entry stale (it reports %v for the entry that covers %q)",
-			file, value, stale[0].reported, stale[0].entry.value)
+		t.Errorf("%s holds %q as UTF-16, which the check decodes before it looks, but staleAllowListEntries judges %v stale",
+			file, value, stale)
 	}
 }
 

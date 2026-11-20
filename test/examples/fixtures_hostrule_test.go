@@ -100,10 +100,20 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 		{
 			// .local is the suffix of a customer's own internal zone (and of
 			// mDNS), and a Go selector reads as time.Local ends with it too, so
-			// only a name the file writes in lower case is read as a host.
+			// only a name whose last label is the lower-case suffix itself is
+			// read as a host.
 			name: "private name under the local suffix",
 			text: "the file server is db01.corp.local",
 			want: []string{"db01.corp.local"},
+		},
+		{
+			// Only the last label has to be the exact lower-case suffix: a
+			// customer's own internal name capitalises the labels before it all
+			// the time (a Windows domain, a department), and none of them is a
+			// Go selector.
+			name: "mixed-case private name under the local suffix",
+			text: "the file server is db01.Corp.local",
+			want: []string{"db01.Corp.local"},
 		},
 		{
 			// Iceland's is is a real country code and errors.Is ends with it just
@@ -111,6 +121,11 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			name: "customer host in the Icelandic TLD",
 			text: "the shop answers at shop.example.is",
 			want: []string{"shop.example.is"},
+		},
+		{
+			name: "mixed-case customer host in the Icelandic TLD",
+			text: "the shop answers at Shop.Example.is",
+			want: []string{"Shop.Example.is"},
 		},
 		{
 			name: "customer host in the Luxembourg TLD",
@@ -245,6 +260,14 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 		{
 			name: "Go time.Local value",
 			text: "the deadline is measured in time.Local",
+			want: nil,
+		},
+		{
+			// A method expression ends with the same suffix as the exported
+			// field it names, and the capital in its last label is what keeps it
+			// out of the host rule.
+			name: "Go method expression ending with the local suffix",
+			text: "the code reads time.Time.Local from the struct",
 			want: nil,
 		},
 		{
