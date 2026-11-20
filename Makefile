@@ -129,7 +129,7 @@ DOCKER  ?= $(if $(shell command -v docker 2>/dev/null),docker,nerdctl)
 # pinned by tag and digest; Renovate updates both through the comment above it. CI's browser job runs make
 # test-browser too, so this is the one copy of the pin.
 # renovate: datasource=docker depName=chromedp/headless-shell
-HEADLESS_SHELL := chromedp/headless-shell:159.0.8154.13@sha256:381353d3530ab9d579d2fe8b9c0f4519c995617f5a71daf6bb649e2d12005bd9
+HEADLESS_SHELL := chromedp/headless-shell:160.0.8157.0@sha256:1459842ec97ea88a20645fffae40769c0c8dc70f51cf43e7df812fbaef9909cc
 # The DevTools port the headless Chromium listens on, on 127.0.0.1 only.
 DEVTOOLS_PORT := 9222
 # The platforms make image builds, comma separated (linux/amd64,linux/arm64). Empty builds the host's own.
