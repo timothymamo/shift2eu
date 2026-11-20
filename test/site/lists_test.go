@@ -2,6 +2,8 @@ package site_test
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -89,6 +91,142 @@ func TestListsWhoseMarkersTheStylesheetHidesAreAnnounced(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReportFragmentListsTheStylesheetStripsAreAnnounced pins the same rule for
+// the fragment the page inserts into its report section (PR #379 review, issue
+// #373): every `ul` of an HTML reporter golden whose markers a stylesheet rule
+// hides or replaces carries `role="list"`. The static pages' sweep cannot see
+// it -- a report's lists exist only once a report is rendered -- so the sweep
+// reads the reporter's goldens instead, wrapped inside `<section id="report">`
+// as site/index.html places them, and the report's rules match them as they do
+// in the browser. The title list under the fragment's `<h2>` is pinned as a list
+// the sweep must find, so a stylesheet change that stops hiding its markers
+// still fails here until the role and the stylesheet agree.
+func TestReportFragmentListsTheStylesheetStripsAreAnnounced(t *testing.T) {
+	t.Parallel()
+
+	name, data := theBundle(t).asset(t, "style", ".css")
+	rules := parseCSS(t, name, data)
+
+	for _, golden := range reportGoldens(t) {
+		t.Run(golden.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := parseHTML(t, golden.name, []byte(`<section id="report">`+golden.fragment+`</section>`))
+
+			var found []*element
+
+			for _, list := range listsOf(doc) {
+				reasons := markerHidingRules(rules, list)
+				if len(reasons) == 0 {
+					continue
+				}
+
+				found = append(found, list)
+
+				if role, _ := list.attr("role"); !strings.EqualFold(strings.TrimSpace(role), "list") {
+					t.Errorf("%s's %s carries no role=\"list\" but the stylesheet hides its markers (%s): Safari and VoiceOver drop the list role and the item count of a list whose list-style is none, so an unannounced stripped list is read as plain text (PR #379 review, issue #373, Accessibility)",
+						golden.name, fragmentListName(list), strings.Join(reasons, "; "))
+				}
+			}
+
+			title := titleListOf(t, doc)
+
+			if !slices.Contains(found, title) {
+				t.Errorf("%s holds no %s among the lists this check found whose markers the stylesheet hides (%v), but the stylesheet's `#report .shift2eu-report > h2 + ul` rule sets list-style: none on it: the fragment and the stylesheet must agree on the title list (PR #379 review, issue #373)",
+					golden.name, fragmentListName(title), listNames(found))
+			}
+		})
+	}
+}
+
+// reportGolden is one HTML reporter golden: the fragment the page inserts into
+// its report section, and where it comes from.
+type reportGolden struct {
+	// name is the golden's path inside the repository, for a failure message.
+	name string
+	// fragment is the golden's markup.
+	fragment string
+}
+
+// reportGoldens returns the HTML reporter's goldens, failing the test when there
+// is none and when one of the hostile goldens is missing: the hostile fixtures
+// are the ones whose values would turn into markup, so a sweep that read the
+// harmless goldens alone would say little.
+func reportGoldens(t *testing.T) []reportGolden {
+	t.Helper()
+
+	dir := filepath.Join(theRepositoryRoot(t), "internal", "adapter", "report", "htmlreport", "testdata")
+
+	paths, err := filepath.Glob(filepath.Join(dir, "*.golden"))
+	if err != nil {
+		t.Fatalf("list the HTML reporter's goldens in %s: %v", dir, err)
+	}
+
+	slices.Sort(paths)
+
+	if len(paths) == 0 {
+		t.Fatalf("the HTML reporter holds no golden in %s, so this check would read nothing", dir)
+	}
+
+	goldens := make([]reportGolden, 0, len(paths))
+
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read the HTML reporter's golden %s: %v", path, err)
+		}
+
+		goldens = append(goldens, reportGolden{
+			name:     "htmlreport/testdata/" + filepath.Base(path),
+			fragment: string(data),
+		})
+	}
+
+	for _, want := range hostileGoldens {
+		if !slices.ContainsFunc(goldens, func(golden reportGolden) bool {
+			return strings.HasSuffix(golden.name, "/"+want)
+		}) {
+			t.Fatalf("the HTML reporter holds no %s golden, so this check would read the harmless ones alone", want)
+		}
+	}
+
+	return goldens
+}
+
+// titleListOf returns the fragment's title list, the `ul` directly after the
+// report's own `<h2>`, failing the test when the golden holds none: the check
+// would then pin nothing about it.
+func titleListOf(t *testing.T, doc *document) *element {
+	t.Helper()
+
+	for _, list := range listsOf(doc) {
+		if previous := previousElementSibling(list); previous != nil && previous.tag == "h2" {
+			return list
+		}
+	}
+
+	t.Fatalf("the golden holds no list directly after a <h2>, so the check would pin nothing about the title list")
+
+	return nil
+}
+
+// fragmentListName names a fragment list by the heading that leads it, so a
+// failure says which list the report must announce: the title list by the
+// fragment's <h2>, and a Blockers or Cost estimate list by the text of its h3 or
+// h4. A list no heading leads is named by its element and classes.
+func fragmentListName(list *element) string {
+	previous := previousElementSibling(list)
+	if previous == nil || len(previous.tag) != 2 || !strings.HasPrefix(previous.tag, "h") {
+		return describeElement(list)
+	}
+
+	if previous.tag == "h2" {
+		return describeElement(list) + " under the fragment's <h2>"
+	}
+
+	return fmt.Sprintf("%s under the %q <%s>", describeElement(list), strings.Join(strings.Fields(previous.textContent()), " "), previous.tag)
 }
 
 // TestNoListMarkerIsAQuotedString pins that no rule of the stylesheet states a
@@ -302,21 +440,28 @@ func nestedListOf(t *testing.T, doc *document, part string) *element {
 
 // TestElementSelectorMatches pins the selector match the list sweep uses, in both
 // directions, so the sweep cannot pass vacuously: a rule whose subject is the
-// list or one of its items matches, a rule of another list, of another page or of
-// the report does not, and a selector this reader cannot read matches nothing.
+// list, one of its items or its preceding sibling matches, a rule of another
+// list, of another page or of the report does not, and a selector this reader
+// cannot read matches nothing.
 func TestElementSelectorMatches(t *testing.T) {
 	t.Parallel()
 
 	const source = `<body><nav aria-label="Site"><ul class="nav"><li><a href="privacy.html">Privacy</a></li></ul></nav>` +
 		`<div class="prose"><ul class="card caveats"><li>A caveat.</li></ul></div>` +
-		`<ol class="layers"><li><strong>A layer.</strong></li></ol></body>`
+		`<ol class="layers"><li><strong>A layer.</strong></li></ol>` +
+		`<section id="report"><section class="shift2eu-report"><h2>A title</h2><ul><li>A metadata item.</li></ul></section>` +
+		`<section class="part part-blockers"><h3>Blockers</h3><ul><li>A blocker.</li></ul></section></section></body>`
 
 	doc := parseHTML(t, "synthetic.html", []byte(source))
 
 	nav := doc.find("ul")[0]
 	caveats := doc.find("ul")[1]
+	titleList := doc.find("ul")[2]
+	blockerList := doc.find("ul")[3]
 	caveatItem := doc.find("li")[1]
 	layerItem := doc.find("li")[2]
+	titleItem := doc.find("li")[3]
+	blockerItem := doc.find("li")[4]
 
 	tests := []struct {
 		selector string
@@ -336,14 +481,23 @@ func TestElementSelectorMatches(t *testing.T) {
 		{selector: "#report .part-blockers > ul > li", element: caveatItem, want: false},
 		{selector: "#report .shift2eu-report > h2 + ul", element: caveats, want: false},
 		{selector: "li:first-child", element: caveatItem, want: false},
+		{selector: "h2 + ul", element: titleList, want: true},
+		{selector: "#report .shift2eu-report > h2 + ul", element: titleList, want: true},
+		{selector: "h3 + ul", element: titleList, want: false},
+		{selector: "h2 + ul", element: blockerList, want: false},
+		{selector: "h2 + ul li", element: titleItem, want: true},
+		{selector: "h3 + ul > li", element: blockerItem, want: true},
+		{selector: "h2 + ul > li", element: titleItem, want: true},
+		{selector: "h2 + ul > li", element: blockerItem, want: false},
+		{selector: "h2 ~ ul", element: titleList, want: false},
 	}
 
 	for _, tc := range tests {
-		t.Run(tc.selector, func(t *testing.T) {
+		t.Run(tc.selector+" "+describeElement(tc.element), func(t *testing.T) {
 			t.Parallel()
 
 			if got := selectorChainMatches(tc.selector, tc.element); got != tc.want {
-				t.Errorf("selectorChainMatches(%q, <%s>) = %t, want %t", tc.selector, tc.element.tag, got, tc.want)
+				t.Errorf("selectorChainMatches(%q, %s) = %t, want %t", tc.selector, describeElement(tc.element), got, tc.want)
 			}
 		})
 	}
@@ -460,10 +614,11 @@ func markerReplacement(value string) string {
 }
 
 // selectorChainMatches reports whether selector's chain of compounds matches el,
-// reading the descendant and child combinators by walking the element's parents.
-// It fails closed: a selector with any other combinator, or with a compound this
-// reader does not read (a pseudo-class, a pseudo-element, an attribute selector
-// other than [hidden]), matches nothing.
+// reading the descendant, child and adjacent-sibling combinators by walking the
+// element's parents and its immediately preceding sibling. It fails closed: a
+// selector with any other combinator, or with a compound this reader does not
+// read (a pseudo-class, a pseudo-element, an attribute selector other than
+// [hidden]), matches nothing.
 func selectorChainMatches(selector string, el *element) bool {
 	compounds, combinators, ok := splitSelectorChain(selector)
 	if !ok {
@@ -495,9 +650,38 @@ func matchChain(compounds, combinators []string, i int, el *element) bool {
 		return false
 	case ">":
 		return el.parent != nil && el.parent.tag != "#document" && matchChain(compounds, combinators, i-1, el.parent)
+	case "+":
+		// The adjacent-sibling combinator: the element right before el among its
+		// parent's child elements, as `h2 + ul` reads the list a heading leads.
+		previous := previousElementSibling(el)
+
+		return previous != nil && matchChain(compounds, combinators, i-1, previous)
 	default:
 		return false
 	}
+}
+
+// previousElementSibling returns the element immediately before el among its
+// parent's child elements, and nil when el is the first of them: a text run
+// between two elements is no element sibling.
+func previousElementSibling(el *element) *element {
+	if el.parent == nil {
+		return nil
+	}
+
+	for i, child := range el.parent.children {
+		if child != el {
+			continue
+		}
+
+		if i == 0 {
+			return nil
+		}
+
+		return el.parent.children[i-1]
+	}
+
+	return nil
 }
 
 // splitSelectorChain splits selector into its compounds and the combinators
