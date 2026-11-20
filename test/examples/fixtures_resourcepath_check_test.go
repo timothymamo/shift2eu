@@ -105,17 +105,31 @@ var s3ResourceARNPattern = regexp.MustCompile(
 // bucket, never to an access point's name.
 var directoryBucketSuffixPattern = regexp.MustCompile(`--[a-z]{3,4}[0-9]+(?:-[a-z]+[0-9]+)?-az[0-9]+--x-s3$`)
 
-// sampleResourcePattern matches the sample names a resource path holds that a
-// sample's bucket name (sampleBucketPattern) does not cover, lowercased: the
-// sample project, example-project, and the sample access point, example-ap,
-// each optionally numbered (example-project-2).
-var sampleResourcePattern = regexp.MustCompile(`^example-(?:project|ap)(?:-[0-9]{1,3})?$`)
+// sampleProjectPattern matches the sample project ID a projects/ segment holds
+// that a sample's bucket name (sampleBucketPattern) does not cover, lowercased:
+// example-project, optionally numbered (example-project-2).
+var sampleProjectPattern = regexp.MustCompile(`^example-project(?:-[0-9]{1,3})?$`)
 
-// sampleResourceName reports whether name, as written, is a sample's name in a
-// resource path: a sample bucket's (sampleBucket) or one of
-// sampleResourcePattern's, matched case-insensitively.
-func sampleResourceName(name string) bool {
-	return sampleBucket(name) || sampleResourcePattern.MatchString(strings.ToLower(name))
+// sampleAccessPointPattern matches the sample access point an S3 ARN holds that
+// a sample's bucket name (sampleBucketPattern) does not cover, lowercased:
+// example-ap, optionally numbered (example-ap-2).
+var sampleAccessPointPattern = regexp.MustCompile(`^example-ap(?:-[0-9]{1,3})?$`)
+
+// sampleProjectName reports whether name, a GCP project ID as written, is a
+// sample's: a sample bucket's shape (sampleBucket) or sampleProjectPattern's,
+// matched case-insensitively. A sample access point's name (example-ap) is no
+// sample project.
+func sampleProjectName(name string) bool {
+	return sampleBucket(name) || sampleProjectPattern.MatchString(strings.ToLower(name))
+}
+
+// sampleAccessPointName reports whether name, the access point, Outposts
+// bucket or directory bucket of an S3 ARN as written, is a sample's: a sample
+// bucket's shape (sampleBucket) or sampleAccessPointPattern's, matched
+// case-insensitively. A sample project's ID (example-project) is no sample
+// access point.
+func sampleAccessPointName(name string) bool {
+	return sampleBucket(name) || sampleAccessPointPattern.MatchString(strings.ToLower(name))
 }
 
 // sampleStorageAccountPattern matches a sample's storage account name,
@@ -142,8 +156,9 @@ func sampleStorageAccount(account string) bool {
 // (storageAccountPathPattern) and the access point, Outposts bucket or S3
 // Express directory bucket of an S3 ARN (s3ResourceARNPattern). Each is held to
 // its sample value: a project, a bucket or an access point must be a sample's
-// (sampleResourceName: example, example- and generic words, example-project or
-// example-ap; a directory bucket's words before its zone suffix), a storage
+// (example, or example- and generic words, and for a project example-project
+// (sampleProjectName), for an access point example-ap (sampleAccessPointName);
+// a directory bucket's words before its zone suffix), a storage
 // account must be example and generic words (sampleStorageAccount), and outside
 // an ARM ID a child-resource type or an RBAC operation after storageAccounts/
 // (Microsoft.Storage/storageAccounts/blobServices, .../read) is no account at
@@ -193,7 +208,7 @@ func resourcePathProblems(text string) []problem {
 		}
 
 		value := text[start:end]
-		if sampleResourceName(value[strings.Index(value, "/")+1:]) {
+		if sampleProjectName(value[strings.Index(value, "/")+1:]) {
 			continue
 		}
 
@@ -255,7 +270,7 @@ func resourcePathProblems(text string) []problem {
 			name = directoryBucketSuffixPattern.ReplaceAllString(name, "")
 		}
 
-		if sampleResourceName(name) {
+		if sampleAccessPointName(name) {
 			continue
 		}
 

@@ -523,15 +523,15 @@ var publicOpenSourceOwners = []string{
 // must be sampleOwner or one of publicOpenSourceOwners, a bucket must be a
 // sample's (sampleBucket: example, or example- and generic words), the way a
 // sample's domain is example.com, and a storage account must be example and
-// generic words (sampleStorageAccount). The host name rule exempts the vendor host itself, yet
-// the owner or the bucket after it names the customer just as a host would, so
-// the value reported is the host and the owner (github.com/acme, from
-// git@github.com:acme/x.git too, api.github.com/acme from
-// api.github.com/repos/acme/x), the scheme and the bucket (s3://acme-prod-bucket,
-// oci://acme-prod-bucket) or the ARN (arn:aws:s3:::acme-prod-bucket), each as
-// written, the host and the Cloud Storage path up to the bucket, the host and
-// the path in lower case and the bucket as written
-// (storage.googleapis.com/acme-prod-data,
+// generic words (sampleStorageAccount). The host name rule exempts the vendor
+// host itself, yet the owner or the bucket after it names the customer just as
+// a host would, so the value reported is the host and the owner
+// (github.com/acme, from git@github.com:acme/x.git too, api.github.com/acme
+// from api.github.com/repos/acme/x), the scheme and the bucket
+// (s3://acme-prod-bucket, oci://acme-prod-bucket) or the ARN
+// (arn:aws:s3:::acme-prod-bucket), each as written, the host and the Cloud
+// Storage path up to the bucket, the host and the path in lower case and the
+// bucket as written (storage.googleapis.com/acme-prod-data,
 // www.googleapis.com/upload/storage/v1/b/acme-prod-data,
 // www.googleapis.com/storage/v1/b/Acme-Prod), or the storage account alone
 // (acmeprodlake, beside the host the host name rule reports).
@@ -552,6 +552,11 @@ var publicOpenSourceOwners = []string{
 //   - an object key after a sample bucket (s3://example-bucket/customers/acme-corp/x):
 //     only the bucket is judged, so a customer's name in the key passes, as a
 //     key is free text the check cannot tell from a sample's own;
+//   - a dotted OCI bucket without its namespace (oci://acme.prod.backups/x):
+//     it is passed over as a registry host, and the host name rule passes it
+//     when its last label is no listed TLD, as without an @ a dotted segment
+//     cannot be told from a registry host; OCI Object Storage URIs carry
+//     bucket@namespace;
 //   - a Cloud Storage bucket written with capitals after the service host
 //     alone: Cloud Storage names are lower case, so the URL and asset-name form
 //     stops before the first capital (storage.googleapis.com/Acme-prod passes),
