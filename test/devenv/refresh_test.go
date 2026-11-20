@@ -3621,8 +3621,8 @@ func TestAgentsAppTokenRefreshSaysItRemovedTheAsideOnceTheRenameWorks(t *testing
 
 	name := filepath.Base(aside)
 
-	// The test waits for the line, not for the directory: reap_entry may say it removed the entry before or after
-	// the rm, and either order leaves the directory gone by the time the line is written.
+	// The test waits for the line, not for the directory: reap_entry renames the entry to its own .reap name before
+	// it removes it, so the stale name is gone whether the line is said before or after the rm.
 	removedInTime := poll(60*time.Second, func() bool {
 		return countLinesHolding(refresh.errOut()+refresh.out(), name, "removed") >= 1
 	})
@@ -3638,8 +3638,14 @@ func TestAgentsAppTokenRefreshSaysItRemovedTheAsideOnceTheRenameWorks(t *testing
 			name, refusals, where, refresh.errOut()+refresh.out())
 	}
 
-	if _, err := os.Lstat(aside); err != nil {
-		t.Fatalf("the refresher says it removed %s, but the entry is still there: %v\nstate directory:\n%s",
+	// The line is said after the rename succeeded, so the entry is gone by the time it is written: one that is
+	// still there is what this test is about. Any error but a missing entry leaves the test unable to tell, and
+	// is no evidence that the refresher removed it.
+	if info, err := os.Lstat(aside); err == nil {
+		t.Fatalf("the refresher says it removed %s, but the entry is still there (%s): the line claims a removal whose rename never happened, so a maintainer reading it stops looking for a moved-aside lock that is still in the state directory (issue #335, the review's S1)\nstate directory:\n%s",
+			aside, info.Mode(), describeTree(f.sb.stateDir()))
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the refresher says it removed %s, but the test cannot tell whether the entry is gone: %v\nstate directory:\n%s",
 			aside, err, describeTree(f.sb.stateDir()))
 	}
 
