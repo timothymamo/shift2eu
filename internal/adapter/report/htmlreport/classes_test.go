@@ -513,6 +513,78 @@ func TestReportCostTotalItem(t *testing.T) {
 	}
 }
 
+// TestReportListsKeepTheirListRole pins that the two lists the stylesheet strips
+// of markers announce their role (PR #379 review, issue #373): the `<ul>` a
+// Blockers heading leads and the one a Cost estimate heading leads, at h3 and h4
+// level alike, carry the constant attribute `role="list"`, and no other element
+// of the fragment carries a role. Safari and VoiceOver drop the list role and the
+// item count of a list whose markers are gone, so the report says it is a list
+// rather than relying on the marker; the report's other lists keep their markers
+// and need no attribute.
+func TestReportListsKeepTheirListRole(t *testing.T) {
+	t.Parallel()
+
+	for _, fixture := range reportFixtures() {
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Parallel()
+
+			fragment := string(fixture.render(t))
+
+			lists := headedLists(t, fragment)
+			if len(lists) == 0 {
+				t.Fatalf("the fragment holds no <ul> under a Blockers or a Cost estimate heading, so the check read nothing: every fixture has a blockers list")
+			}
+
+			for _, list := range lists {
+				if role, ok := roleOf(list.attrs); !ok || role != "list" {
+					t.Errorf("the <ul> under the %q heading carries %s, want %s: the stylesheet strips its markers with list-style: none, and Safari and VoiceOver drop the list role and its item count once the markers are gone (PR #379 review, issue #373, Accessibility)",
+						list.heading, orNone(list.attrs), `role="list"`)
+				}
+			}
+
+			carriers := roleCarriers(fragment)
+
+			if len(carriers) != len(lists) {
+				t.Fatalf("the fragment holds %d elements stating a role (%s), want exactly %d: the <ul> under each Blockers and Cost estimate heading is the only element that states one",
+					len(carriers), describeRoles(carriers), len(lists))
+			}
+
+			for _, carrier := range carriers {
+				if carrier.tag != "ul" || carrier.role != "list" {
+					t.Errorf("the fragment's <%s> carries role=%q, want the only role to be role=\"list\" on a <ul>: no other element of the report names a role",
+						carrier.tag, carrier.role)
+				}
+			}
+		})
+	}
+}
+
+// TestReportRoleValuesAreClosed pins that the only role value a fragment states is
+// "list" (PR #379 review, issue #373): like a class, a role is a constant of this
+// package, never a value of an inventory or a catalog. The hostile fixtures carry
+// values that would show here if the reporter wrote one into a role.
+func TestReportRoleValuesAreClosed(t *testing.T) {
+	t.Parallel()
+
+	for _, fixture := range reportFixtures() {
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Parallel()
+
+			carriers := roleCarriers(string(fixture.render(t)))
+			if len(carriers) == 0 {
+				t.Fatalf("the fragment states no role attribute, so the check read nothing: the Blockers and Cost estimate lists announce role=\"list\"")
+			}
+
+			for _, carrier := range carriers {
+				if carrier.role != "list" {
+					t.Errorf("the fragment's <%s> carries role=%q, want only role=\"list\": a role is a constant, so no value of an inventory or a catalog can reach one (PR #379 review, issue #373)",
+						carrier.tag, carrier.role)
+				}
+			}
+		})
+	}
+}
+
 // TestReportClassValuesAreClosed pins that no class attribute of the fragment
 // holds anything outside the closed set of names a report element may carry: a
 // class is always a constant, so no value of an inventory or a catalog can
@@ -560,6 +632,14 @@ var (
 	cellPattern  = regexp.MustCompile(`(?s)<t([hd])([^>]*)>(.*?)</t[hd]>`)
 	classPattern = regexp.MustCompile(`class="([^"]*)"`)
 	tagPattern   = regexp.MustCompile(`(?s)<[^>]*>`)
+
+	// elementTagPattern matches one element's start tag: its name and its
+	// attributes, a quoted value kept whole so a `>` inside one ends no tag.
+	elementTagPattern = regexp.MustCompile(`(?s)<([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*)>`)
+	rolePattern       = regexp.MustCompile(`\brole="([^"]*)"`)
+	// headedListPattern matches the list a Blockers or a Cost estimate heading
+	// leads: the heading and the `<ul>` start tag directly after it.
+	headedListPattern = regexp.MustCompile(`(?s)<h([345])>(Blockers|Cost estimate)</h[345]>\s*<ul([^>]*)>`)
 )
 
 // fragmentTable is one <table> of a fragment: the cells of its header row and its
@@ -817,6 +897,79 @@ func sortedClasses() []string {
 	sort.Strings(classes)
 
 	return classes
+}
+
+// headedList is one `<ul>` the fragment emits directly under a Blockers or a Cost
+// estimate heading: the two kinds of list the stylesheet strips of markers.
+type headedList struct {
+	// heading is the heading's own text: "Blockers" or "Cost estimate".
+	heading string
+	// attrs are the attributes of the <ul> start tag, trimmed.
+	attrs string
+}
+
+// headedLists returns the lists of fragment that a Blockers or a Cost estimate
+// heading leads, at h3 and h4 level, in document order, failing the test when a
+// heading holds neither of the two names: the check would read nothing.
+func headedLists(t *testing.T, fragment string) []headedList {
+	t.Helper()
+
+	matches := headedListPattern.FindAllStringSubmatch(fragment, -1)
+
+	lists := make([]headedList, 0, len(matches))
+
+	for _, match := range matches {
+		lists = append(lists, headedList{heading: match[2], attrs: strings.TrimSpace(match[3])})
+	}
+
+	return lists
+}
+
+// roleOf returns the value of the role attribute of a start tag's attributes, and
+// whether one is stated.
+func roleOf(attrs string) (string, bool) {
+	match := rolePattern.FindStringSubmatch(attrs)
+	if match == nil {
+		return "", false
+	}
+
+	return match[1], true
+}
+
+// roleCarrier is one element of a fragment that states a role attribute.
+type roleCarrier struct {
+	// tag is the element's name, lower case.
+	tag string
+	// role is the role attribute's value, as the fragment spells it.
+	role string
+}
+
+// roleCarriers returns every element of fragment that states a role attribute, in
+// order.
+func roleCarriers(fragment string) []roleCarrier {
+	var carriers []roleCarrier
+
+	for _, match := range elementTagPattern.FindAllStringSubmatch(fragment, -1) {
+		role, ok := roleOf(match[2])
+		if !ok {
+			continue
+		}
+
+		carriers = append(carriers, roleCarrier{tag: strings.ToLower(match[1]), role: role})
+	}
+
+	return carriers
+}
+
+// describeRoles names the roles a fragment states, for a failure message.
+func describeRoles(carriers []roleCarrier) string {
+	names := make([]string, 0, len(carriers))
+
+	for _, carrier := range carriers {
+		names = append(names, "<"+carrier.tag+" role=\""+carrier.role+"\">")
+	}
+
+	return strings.Join(names, ", ")
 }
 
 // excerpt returns the first line of content, trimmed and shortened, for a
