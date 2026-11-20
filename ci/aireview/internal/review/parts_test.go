@@ -1354,7 +1354,7 @@ func assertShownInACodeSpanOnly(t *testing.T, body, path string) {
 // TestRunCapsTheSummaryOfThePartsThatAnswered pins the other half of issue #388
 // (audit M1): the skipped review of a split diff whose answering part reported
 // thousands of blocking findings is still a text GitHub accepts. It lists at
-// most MaxListedExcluded blocking findings in all, ends that list with one
+// most MaxListedBlocking blocking findings in all, ends that list with one
 // constant line that counts the rest, keeps each answered part's counts exact,
 // and still holds the sentences after the list — the prompt-injection warning
 // and the advice footer. The cap costs the findings it cannot list, never the
@@ -1478,13 +1478,13 @@ func TestRunCapsTheSummaryOfThePartsThatAnswered(t *testing.T) {
 			const listedLine = "\n  - blocking: category "
 
 			listed := strings.Count(body, listedLine)
-			if listed > review.MaxListedExcluded {
-				t.Errorf("the skipped review lists %d blocking findings, want at most MaxListedExcluded = %d: the list is capped, so the review stays under GitHub's limit whatever the model reports (audit M1)", listed, review.MaxListedExcluded)
+			if listed > review.MaxListedBlocking {
+				t.Errorf("the skipped review lists %d blocking findings, want at most MaxListedBlocking = %d: the list is capped, so the review stays under GitHub's limit whatever the model reports (audit M1)", listed, review.MaxListedBlocking)
 			}
 
-			wantListed := min(tc.total, review.MaxListedExcluded)
+			wantListed := min(tc.total, review.MaxListedBlocking)
 			if listed != wantListed {
-				t.Errorf("the skipped review lists %d blocking findings, want %d: the cap holds back only the findings over MaxListedExcluded = %d, never one under it (audit M1, issue #388); body:\n%s", listed, wantListed, review.MaxListedExcluded, body)
+				t.Errorf("the skipped review lists %d blocking findings, want %d: the cap holds back only the findings over MaxListedBlocking = %d, never one under it (audit M1, issue #388); body:\n%s", listed, wantListed, review.MaxListedBlocking, body)
 			}
 
 			if tc.wantMore != "" {
