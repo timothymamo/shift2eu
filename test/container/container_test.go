@@ -28,9 +28,11 @@ const (
 	versionPackagePath = "github.com/timothymamo/shift2eu/internal/version"
 	mainPackage        = "./cmd/shift2eu"
 
-	// The second binary the release ships, the HTTP API (PRD #103, ADR 0019):
-	// its builds entry, the package it is built from, the path the image keeps
-	// it at and the stage of the Dockerfile that ships it.
+	// The second binary the release used to ship, the HTTP API (PRD #103, ADR
+	// 0019): its builds entry, the package it was built from, the path the image
+	// kept it at and the stage of the Dockerfile that shipped it. The release
+	// builds neither any more (issue #393), so the tests below hold the
+	// repository to their absence.
 	serverBuildID     = "shift2eu-server"
 	serverMainPackage = "./cmd/shift2eu-server"
 	serverBinaryPath  = "/shift2eu-server"
@@ -125,8 +127,8 @@ func TestEveryBaseImageIsDigestPinned(t *testing.T) {
 // rather than left to a mention somewhere in the text.
 //
 // It runs once per image the release ships: the CLI, which the last stage of
-// the Dockerfile builds, and the HTTP API's binary, which the stage named
-// server builds (PRD #103 milestone 4, ADR 0019).
+// the Dockerfile builds. The HTTP API's binary and its server stage are gone
+// (issue #393), which TestTheDockerfileHasNoServerStage pins.
 func TestBuildMatchesGoReleaser(t *testing.T) {
 	t.Parallel()
 
@@ -148,14 +150,6 @@ func TestBuildMatchesGoReleaser(t *testing.T) {
 			stage:     "",
 			stageDesc: "the final stage, the CLI image",
 			imageBin:  cliBinaryPath,
-		},
-		{
-			name:      "server",
-			id:        serverBuildID,
-			pkg:       serverMainPackage,
-			stage:     serverStageName,
-			stageDesc: "the server stage",
-			imageBin:  serverBinaryPath,
 		},
 	}
 
@@ -303,42 +297,44 @@ func assertBuildMatchesGoReleaser(t *testing.T, instructions []instruction, sett
 	}
 }
 
-// TestGoReleaserBuildsTheServer pins that the release builds the HTTP API's
-// binary the way it builds the CLI (PRD #103 milestone 4, ADR 0019): a second
-// entry of the builds list, id shift2eu-server, main ./cmd/shift2eu-server and
-// binary shift2eu-server, with the same env, flags, ldflags, goos and goarch as
-// the shift2eu entry. One release then ships both binaries, built with the same
-// settings, so neither can drift from the other.
-func TestGoReleaserBuildsTheServer(t *testing.T) {
+// TestGoReleaserBuildsTheCLIOnly pins that the release builds one binary, the
+// CLI's (issue #393). .goreleaser.yaml holds one entry of the builds list, id
+// shift2eu, main ./cmd/shift2eu and binary shift2eu, and no entry for the HTTP
+// API: a second one would publish a binary the release no longer ships, for
+// platforms and with settings of its own.
+func TestGoReleaserBuildsTheCLIOnly(t *testing.T) {
 	t.Parallel()
 
 	builds := parseGoreleaserBuilds(t, readRepoFile(t, goreleaserName))
+
+	ids := make([]string, 0, len(builds))
+	for _, build := range builds {
+		ids = append(ids, build.id)
+	}
+
+	if diff := cmp.Diff([]string{"shift2eu"}, ids); diff != "" {
+		t.Errorf("%s: the builds: section holds the entries %q (-want +got):\n%s\nwant exactly one, the CLI's: the release ships shift2eu alone, so the HTTP API's entry is gone (issue #393)",
+			goreleaserName, ids, diff)
+	}
+
 	cli := goreleaserBuildSettings(t, builds, "shift2eu")
-	server := goreleaserBuildSettings(t, builds, serverBuildID)
 
 	for _, tc := range []struct{ field, want, got string }{
-		{field: "main", want: serverMainPackage, got: server.main},
-		{field: "binary", want: serverBuildID, got: server.binary},
+		{field: "main", want: mainPackage, got: cli.main},
+		{field: "binary", want: "shift2eu", got: cli.binary},
 	} {
 		if tc.got != tc.want {
-			t.Errorf("%s: the builds entry %q at line %d sets %s to %q, want %q, so the release ships the HTTP API's binary",
-				goreleaserName, serverBuildID, server.line, tc.field, tc.got, tc.want)
+			t.Errorf("%s: the builds entry %q at line %d sets %s to %q, want %q",
+				goreleaserName, "shift2eu", cli.line, tc.field, tc.got, tc.want)
 		}
 	}
 
-	for _, tc := range []struct {
-		list        string
-		cli, server []string
-	}{
-		{list: "env", cli: cli.env, server: server.env},
-		{list: "flags", cli: cli.flags, server: server.flags},
-		{list: "ldflags", cli: cli.ldflags, server: server.ldflags},
-		{list: "goos", cli: cli.goos, server: server.goos},
-		{list: "goarch", cli: cli.goarch, server: server.goarch},
-	} {
-		if diff := cmp.Diff(tc.cli, tc.server); diff != "" {
-			t.Errorf("%s: the builds entries %q and %q set %s differently (-%s +%s):\n%s\nwant the server built exactly as the CLI, so one release ships both binaries with the same settings",
-				goreleaserName, "shift2eu", serverBuildID, tc.list, "shift2eu", serverBuildID, diff)
+	goreleaser := readRepoFile(t, goreleaserName)
+
+	for _, retired := range []string{serverBuildID, serverMainPackage} {
+		if strings.Contains(goreleaser, retired) {
+			t.Errorf("%s names %q, want no mention of the HTTP API's binary: the release ships the CLI alone (issue #393)",
+				goreleaserName, retired)
 		}
 	}
 }
@@ -469,92 +465,47 @@ func TestFinalStageIsMinimalAndNonRoot(t *testing.T) {
 	assertMinimalNonRootStage(t, final, "the final stage", cliBinaryPath)
 }
 
-// TestServerStageIsMinimalAndNonRoot pins the stage that ships the HTTP API's
-// binary (PRD #103 milestone 4, ADR 0019): a stage named server, built with
-// `docker buildx build --target server`, held to exactly what the CLI image
-// promises, with the server binary as its exec-form entrypoint, copied from the
-// stage that compiles it.
-func TestServerStageIsMinimalAndNonRoot(t *testing.T) {
+// TestTheDockerfileHasNoServerStage pins what issue #393 leaves of PRD #103's
+// milestone 4: the Dockerfile builds the CLI's image alone. A stage named
+// server, the HTTP API's binary, its --listen CMD and its published port are
+// gone, so `docker buildx build --target server` and `make server-image` build
+// nothing rather than an image nothing publishes, and no image can start
+// serving the API the release no longer ships.
+func TestTheDockerfileHasNoServerStage(t *testing.T) {
 	t.Parallel()
 
-	instructions := dockerfileInstructions(t, readRepoFile(t, dockerfileName))
-	stage := stageFor(t, instructions, serverStageName)
+	dockerfile := readRepoFile(t, dockerfileName)
+	instructions := dockerfileInstructions(t, dockerfile)
 
-	assertMinimalNonRootStage(t, stage, "the server stage", serverBinaryPath)
-
-	// The entrypoint path must be the file the COPY writes, or the container
-	// starts with no server to run.
-	_, destination := copiedBinary(t, instructions, stage, "the server stage")
-	if destination != serverBinaryPath {
-		t.Errorf("%s: the server stage copies the binary to %q, want %q, the path its ENTRYPOINT runs, so the container starts the server rather than nothing",
-			dockerfileName, destination, serverBinaryPath)
+	for _, retired := range []string{serverBinaryPath, serverMainPackage, serverBuildID} {
+		if strings.Contains(dockerfile, retired) {
+			t.Errorf("%s names %q, want no mention of the HTTP API's binary: the Dockerfile builds the CLI's image alone (issue #393)",
+				dockerfileName, retired)
+		}
 	}
 
-	// The entrypoint alone leaves the server on its default listen address,
-	// 127.0.0.1:8080, which a container never publishes: the CMD is what puts
-	// the server behind the port the stage EXPOSEs.
-	assertServerListenCommand(t, stage, "the server stage")
-}
-
-// assertServerListenCommand holds the CMD of one image stage to the listen
-// address the image publishes (PRD #103 milestone 4, ADR 0019). Without a CMD
-// the binary keeps its default 127.0.0.1:8080, an address a container never
-// publishes, so `docker run -p 127.0.0.1:8080:8080` finds nothing listening on
-// the port and the API is unreachable. The CMD must pass --listen 0.0.0.0:8080
-// in exec form, so no shell is needed, and the port it names must be the one the
-// stage EXPOSEs, so the published port always has the server behind it. The
-// server refuses to start off loopback without a bearer token (exit 2), which is
-// the intended fail-safe: a container started without one stops rather than
-// serving unauthenticated. name names the stage in failure messages.
-func assertServerListenCommand(t *testing.T, stage []instruction, name string) {
-	t.Helper()
-
-	cmds := stageCommands(stage)
-
-	switch len(cmds) {
-	case 0:
-		t.Errorf("%s: %s has no CMD: want exactly one, CMD [\"--listen\", \"0.0.0.0:8080\"] in exec form, because without it the server keeps its default listen address, 127.0.0.1:8080, which a container does not publish, so the API is unreachable through a published port",
-			dockerfileName, name)
-
-		return
-	case 1:
-	default:
-		lines := make([]string, 0, len(cmds))
-		for _, cmd := range cmds {
-			lines = append(lines, strconv.Itoa(cmd.line))
+	// A stage is named by the `AS <name>` of its FROM, which is the last field.
+	for _, in := range instructions {
+		if in.keyword() != "FROM" {
+			continue
 		}
 
-		t.Errorf("%s: %s has %d CMD instructions (lines %s): want exactly one, so no later CMD quietly replaces the one that gives the server its listen address",
-			dockerfileName, name, len(cmds), strings.Join(lines, ", "))
+		fields := fromFields(in)
+		if fields[len(fields)-1] != serverStageName {
+			continue
+		}
 
-		return
+		t.Errorf("%s:%d: the stage %s is declared again: want no stage named %s, so no --target server builds an image of the HTTP API (issue #393)",
+			dockerfileName, in.line, serverStageName, serverStageName)
 	}
 
-	cmd := cmds[0]
+	for _, in := range instructions {
+		if in.keyword() != "EXPOSE" {
+			continue
+		}
 
-	var argv []string
-	if err := json.Unmarshal([]byte(cmd.arguments()), &argv); err != nil {
-		t.Fatalf("%s:%d: CMD %s is not in exec (JSON array) form, so Docker wraps it in /bin/sh, which the image does not hold: %v",
-			dockerfileName, cmd.line, cmd.arguments(), err)
-	}
-
-	want := []string{"--listen", "0.0.0.0:8080"}
-	if diff := cmp.Diff(want, argv); diff != "" {
-		t.Errorf("%s:%d: CMD mismatch (-want +got):\n%s\nwant the server started on every interface of its published port, which is what makes a published container port reach it; a bare ENTRYPOINT keeps the default 127.0.0.1:8080 and nothing outside the container can connect",
-			dockerfileName, cmd.line, diff)
-
-		return
-	}
-
-	// The port the CMD starts the server on and the one the stage publishes are
-	// the same port: a container publishes the exposed port, so a server on
-	// another one answers nothing there.
-	_, port, _ := strings.Cut(want[1], ":")
-
-	exposed := exposedPorts(t, stage, name)
-	if diff := cmp.Diff([]string{port}, exposed); diff != "" {
-		t.Errorf("%s:%d: the CMD starts the server on port %q and the stage EXPOSEs the ports %q (-CMD +EXPOSE):\n%s\nwant the same port, so the port the image publishes is the one the server listens on",
-			dockerfileName, cmd.line, port, exposed, diff)
+		t.Errorf("%s:%d: the Dockerfile EXPOSEs %s: want no EXPOSE instruction, because the CLI image's binary serves nothing over the network and the port belonged to the HTTP API's image (issue #393)",
+			dockerfileName, in.line, in.arguments())
 	}
 }
 
@@ -1153,34 +1104,6 @@ func stageCommands(stage []instruction) []instruction {
 	}
 
 	return cmds
-}
-
-// exposedPorts returns the ports a stage's EXPOSE instructions publish, with any
-// /<protocol> suffix removed: EXPOSE 8080 and EXPOSE 8080/tcp both give "8080".
-// A stage that publishes none is reported, since the port its CMD starts the
-// server on is compared with them.
-func exposedPorts(t *testing.T, stage []instruction, name string) []string {
-	t.Helper()
-
-	var ports []string
-
-	for _, in := range stage {
-		if in.keyword() != "EXPOSE" {
-			continue
-		}
-
-		for _, field := range strings.Fields(in.arguments()) {
-			port, _, _ := strings.Cut(field, "/")
-			ports = append(ports, port)
-		}
-	}
-
-	if len(ports) == 0 {
-		t.Errorf("%s: %s has no EXPOSE instruction: want EXPOSE 8080, the port its CMD starts the server on",
-			dockerfileName, name)
-	}
-
-	return ports
 }
 
 // lastInstruction returns the last instruction of the given keyword, which is

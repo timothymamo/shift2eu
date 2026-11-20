@@ -8,14 +8,12 @@ import (
 )
 
 // The fixture below is .goreleaser.yaml in parts, as the release leaves it
-// after issue #147: the top level with the two builds, then one archive entry
-// per binary, then the checksum section. Each archive entry is a constant of
-// its own, so a case changes one entry and leaves the other exactly as the
-// release has it.
+// after issue #393: the top level with the one build the release makes, then
+// the one archive entry, then the checksum section.
 
-// goreleaserArchivesTop is .goreleaser.yaml up to its archives:, with the two
-// builds the release makes: the CLI's (shift2eu) and the HTTP API's
-// (shift2eu-server).
+// goreleaserArchivesTop is .goreleaser.yaml up to its archives:, with the one
+// build the release makes: the CLI's (shift2eu). The HTTP API's build is gone
+// with the server (issue #393).
 const goreleaserArchivesTop = `version: 2
 
 project_name: shift2eu
@@ -24,14 +22,11 @@ builds:
   - id: shift2eu
     main: ./cmd/shift2eu
     binary: shift2eu
-  - id: shift2eu-server
-    main: ./cmd/shift2eu-server
-    binary: shift2eu-server
 
 archives:
 `
 
-// cliArchive is the archive entry of the CLI's build: its own id, the builds
+// cliArchive is the archive entry of the CLI's build: its own id, the build
 // it holds (shift2eu alone), the name the CLI's archives have always had,
 // goreleaser's default template written out, tar.gz on every platform, zip on
 // Windows, and the files the archive ships beside the binary (LICENSE and
@@ -55,10 +50,10 @@ const cliArchive = `  - id: shift2eu
 
 `
 
-// serverArchive is the archive entry of the HTTP API's build: its own id, the
-// build it holds (shift2eu-server alone), its own name,
-// shift2eu-server_<version>_<os>_<arch>, the same formats and the same files
-// as the CLI's, examples/ included.
+// serverArchive is the archive entry the release used to publish for the HTTP
+// API's build (PRD #103): a second entry, holding shift2eu-server alone under
+// its own name. Every case that adds it to a document is refused: the release
+// ships the CLI alone (issue #393).
 const serverArchive = `  - id: shift2eu-server
     ids: [shift2eu-server]
     name_template: "{{ .ProjectName }}-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -76,10 +71,17 @@ const serverArchive = `  - id: shift2eu-server
 
 `
 
-// goreleaserChecksum ends the document: one checksums.txt covering every
-// archive of the release, and the bundle the release publishes beside the
-// archives (issue #139), so checksums.txt covers it too.
+// goreleaserChecksum ends the document: one checksums.txt covering the
+// release's archive, and nothing beside it: the bundled OpenAPI document the
+// release used to publish is gone (issue #393).
 const goreleaserChecksum = `checksum:
+  name_template: checksums.txt
+`
+
+// retiredChecksum is the checksum section with the bundled OpenAPI document
+// the release used to publish beside the archives (issue #139) added back, so
+// checksums.txt covered it too. The release refuses it now (issue #393).
+const retiredChecksum = `checksum:
   name_template: checksums.txt
   extra_files:
     - glob: ./api/openapi.bundled.json
@@ -87,55 +89,45 @@ const goreleaserChecksum = `checksum:
 `
 
 // goreleaserArchives renders .goreleaser.yaml from its parts: the top level,
-// the CLI's archive, the server's archive and the checksum section.
-func goreleaserArchives(cli, server string) string {
-	return goreleaserArchivesTop + cli + server + goreleaserChecksum
+// the CLI's archive, the second archive entry a case gives ("" for none) and
+// the checksum section.
+func goreleaserArchives(cli, second string) string {
+	return goreleaserArchivesTop + cli + second + goreleaserChecksum
 }
 
-// TestGoReleaserArchives pins issue #147: the release ships shift2eu and
-// shift2eu-server as two archives of their own, under the same tag and
-// version. check.GoReleaserArchives reads .goreleaser.yaml and returns one
-// message per way the document lets one archive hold both binaries, or one
-// binary move out of the archive its downloads expect:
+// TestGoReleaserArchives pins issue #147, as issue #393 leaves it: the release
+// ships the CLI's binary, shift2eu, in one archive of its own, and nothing
+// else. check.GoReleaserArchives reads .goreleaser.yaml and returns one
+// message per way the document publishes more than that, or moves the binary
+// out of the archive its downloads expect:
 //
-//   - archives: holds exactly two entries, and each names exactly one build
+//   - no line, comments included, names shift2eu-server or openapi: the HTTP
+//     API's build, its archive and the bundled OpenAPI document are gone (issue
+//     #393), worded with the name the line holds;
+//   - archives: holds exactly one entry, and it names exactly one build
 //     through ids: an entry without ids takes every build, and every build of
-//     builds: sits in exactly one archive: the CLI's, the build whose binary
-//     is shift2eu, and the server's, whose binary is shift2eu-server, each
-//     with the ids of its own build alone. The message names the build that
-//     is in no archive, or the id that names no build;
-//   - each entry's id: is the one build its ids: names, and no two entries
-//     share one: goreleaser defaults an entry's id to "default", so two
-//     entries that leave it out are both the archive "default" to it and
-//     `goreleaser check` refuses the document ("found 2 archives with the ID
-//     'default'"). An entry with no id:, two entries with the same id:, and
-//     an id: that is not the build its ids: names are refused, worded with
-//     id;
-//   - each entry's name_template is the one that build's downloads expect:
+//     builds: sits in that archive: the CLI's, the build whose binary is
+//     shift2eu, with the ids of its own build alone. The message names the
+//     build that is in no archive, or the id that names no build;
+//   - the entry's id: is the one build its ids: names: goreleaser defaults an
+//     entry's id to "default", so an entry without id: is the archive
+//     "default" to it. An entry with no id:, and an id: that is not the build
+//     its ids: names, are refused, worded with id;
+//   - its name_template is the one that build's downloads expect:
 //     {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }} for the CLI,
-//     whose archive names stay exactly as they were, and
-//     {{ .ProjectName }}-server_{{ .Version }}_{{ .Os }}_{{ .Arch }} for the
-//     server, so that one is shift2eu-server_<version>_<os>_<arch>. A
-//     name_template that is missing or differs is refused, worded with
-//     name_template;
-//   - each entry is tar.gz on every platform and zip on Windows (formats: and
+//     whose archive names stay exactly as they were. A name_template that is
+//     missing or differs is refused, worded with name_template;
+//   - the entry is tar.gz on every platform and zip on Windows (formats: and
 //     format_overrides:, worded with tar.gz and zip);
-//   - each entry ships exactly LICENSE, README.md, docs/*.md, docs/**/*,
+//   - it ships exactly LICENSE, README.md, docs/*.md, docs/**/*,
 //     examples/*.md and examples/**/* (files:), worded with the entry it does
 //     not ship: README.md's links stay inside the archive (issue #149), and
 //     the walkthrough in docs/guide/try-it.md finds the sample inventories a
 //     release unpacks in examples/ rather than only in a clone (issue #188);
 //   - the checksum section holds exactly name_template: checksums.txt, so one
-//     checksums.txt covers every archive: a missing section, another name and
-//     any other key in it (split: for one) are refused, worded with what it
-//     holds instead;
-//   - the checksum section holds the one extra file the release publishes
-//     beside the archives, api/openapi.bundled.json as
-//     shift2eu-server_openapi.json (issue #139), so checksums.txt covers it
-//     too: a section without it, another glob, another name_template and a
-//     second extra file are refused, worded with extra_files and the file the
-//     release publishes; the release: section's entry is
-//     check.GitHubRelease's (TestGitHubRelease);
+//     checksums.txt covers the archive: a missing section, another name and
+//     any other key in it (split:, and extra_files:, which the release no
+//     longer publishes) are refused, worded with what it holds instead;
 //   - an archive entry holds no key beyond id, ids, name_template, formats,
 //     format_overrides and files: the section is a closed schema, so a key
 //     the check never lists cannot change what an archive is.
@@ -152,12 +144,36 @@ func TestGoReleaserArchives(t *testing.T) {
 		wantIn string
 	}{
 		// The accepted shape.
-		{name: "two archives, one per binary", goreleaser: goreleaserArchives(cliArchive, serverArchive)},
+		{name: "the CLI's archive alone", goreleaser: goreleaserArchives(cliArchive, "")},
 
 		// The document's line ends do not matter, as in every reader here.
 		{
 			name:       "the accepted document with CRLF line ends",
-			goreleaser: strings.ReplaceAll(goreleaserArchives(cliArchive, serverArchive), "\n", "\r\n"),
+			goreleaser: strings.ReplaceAll(goreleaserArchives(cliArchive, ""), "\n", "\r\n"),
+		},
+
+		// The names the release stopped publishing (issue #393): the HTTP
+		// API's binary, its archive and the bundled OpenAPI document are gone,
+		// and no line of the document may name them, a comment included.
+		{
+			name:       "the HTTP API's archive beside the CLI's",
+			goreleaser: goreleaserArchives(cliArchive, serverArchive),
+			wantIn:     "shift2eu-server",
+		},
+		{
+			name:       "the HTTP API's build beside the CLI's",
+			goreleaser: strings.Replace(goreleaserArchives(cliArchive, ""), "  - id: shift2eu\n    main: ./cmd/shift2eu\n    binary: shift2eu\n", "  - id: shift2eu\n    main: ./cmd/shift2eu\n    binary: shift2eu\n  - id: shift2eu-server\n    main: ./cmd/shift2eu-server\n    binary: shift2eu-server\n", 1),
+			wantIn:     "shift2eu-server",
+		},
+		{
+			name:       "a comment naming the HTTP API's binary",
+			goreleaser: goreleaserArchives(cliArchive, "") + "# the shift2eu-server archive is gone\n",
+			wantIn:     "shift2eu-server",
+		},
+		{
+			name:       "a comment naming the bundled OpenAPI document",
+			goreleaser: goreleaserArchives(cliArchive, "") + "# release.extra_files: api/openapi.bundled.json\n",
+			wantIn:     "openapi",
 		},
 
 		// The archives section itself.
@@ -167,89 +183,72 @@ func TestGoReleaserArchives(t *testing.T) {
 			wantIn:     "archives",
 		},
 		{
-			name:       "one archive for two builds",
-			goreleaser: goreleaserArchives(cliArchive, ""),
-			wantIn:     "shift2eu-server",
+			name: "two archive entries",
+			goreleaser: goreleaserArchives(
+				cliArchive,
+				mutate(t, cliArchive, "  - id: shift2eu\n", "  - id: shift2eu-2\n"),
+			),
+			wantIn: "archives holds 2 entries",
 		},
 		{
 			// An entry without ids takes every build, so the download would
-			// hold both binaries again.
+			// hold more than the CLI's binary.
 			name: "an archive entry with no ids",
 			goreleaser: goreleaserArchives(
 				mutate(t, cliArchive, "    ids: [shift2eu]\n    name_template:", "    name_template:"),
-				serverArchive,
+				"",
 			),
 			wantIn: "ids",
 		},
 		{
-			name: "an archive whose ids names both builds",
+			name: "an archive whose ids names two builds",
 			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "ids: [shift2eu-server]", "ids: [shift2eu-server, shift2eu]"),
+				mutate(t, cliArchive, "ids: [shift2eu]", "ids: [shift2eu, shift2eu-http]"),
+				"",
 			),
 			wantIn: "ids",
-		},
-		{
-			// Both entries take the CLI's build, so the server is in no
-			// archive at all.
-			name: "both archives naming the CLI's build",
-			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "ids: [shift2eu-server]", "ids: [shift2eu]"),
-			),
-			wantIn: "shift2eu-server",
 		},
 		{
 			name: "an archive whose ids names no build",
 			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "ids: [shift2eu-server]", "ids: [shift2eu-http]"),
+				mutate(t, cliArchive, "ids: [shift2eu]", "ids: [shift2eu-http]"),
+				"",
 			),
 			wantIn: "shift2eu-http",
 		},
 
-		// The archive ids: goreleaser defaults an entry's id to "default", so
-		// two entries that leave it out are the same archive to it and
-		// `goreleaser check` refuses the document. The rule is one id per
-		// entry, equal to the one build its ids names, so each case below
-		// pins that the message names that id: the one the entry wants
+		// The archive id: goreleaser defaults an entry's id to "default", so
+		// an entry that leaves it out is another archive to it. The rule is
+		// one id per entry, equal to the one build its ids names, so each case
+		// below pins that the message names that id: the one the entry wants
 		// (shift2eu) or the one it wrongly carries (shift2eu-api). Wording the
 		// message with the id is what tells the reader which archive to fix.
 		{
 			name: "an archive entry with no id",
 			goreleaser: goreleaserArchives(
 				mutate(t, cliArchive, "  - id: shift2eu\n    ids: [shift2eu]\n", "  - ids: [shift2eu]\n"),
-				serverArchive,
-			),
-			wantIn: "shift2eu",
-		},
-		{
-			name: "two archive entries with the same id",
-			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "  - id: shift2eu-server\n", "  - id: shift2eu\n"),
+				"",
 			),
 			wantIn: "shift2eu",
 		},
 		{
 			// The id of an entry is the one build its ids names: here the
-			// server's entry holds shift2eu-server but is called
-			// shift2eu-api, an id no build has.
+			// entry holds shift2eu but is called shift2eu-api, an id no build
+			// has.
 			name: "an archive whose id differs from its single ids value",
 			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "  - id: shift2eu-server\n", "  - id: shift2eu-api\n"),
+				mutate(t, cliArchive, "  - id: shift2eu\n", "  - id: shift2eu-api\n"),
+				"",
 			),
 			wantIn: "shift2eu-api",
 		},
 
-		// The archive names: the CLI's must not change, and the server's must
-		// be its own.
+		// The archive name: the CLI's must not change.
 		{
 			name: "a CLI name_template that drifts",
 			goreleaser: goreleaserArchives(
 				mutate(t, cliArchive, `"{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"`, `"{{ .ProjectName }}_{{ .Version }}_{{ .Os }}"`),
-				serverArchive,
+				"",
 			),
 			wantIn: "name_template",
 		},
@@ -257,70 +256,59 @@ func TestGoReleaserArchives(t *testing.T) {
 			name: "a CLI name_template that is no template",
 			goreleaser: goreleaserArchives(
 				mutate(t, cliArchive, `"{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"`, `"shift2eu"`),
-				serverArchive,
+				"",
 			),
 			wantIn: "name_template",
 		},
 		{
-			// The CLI's template on both entries would name the server's
-			// archive shift2eu_<version>_<os>_<arch> as well, and the two
-			// would collide.
-			name: "the server's name_template is the CLI's",
+			name: "an archive with no name_template",
 			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, `"{{ .ProjectName }}-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"`, `"{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"`),
-			),
-			wantIn: "name_template",
-		},
-		{
-			name: "a server archive with no name_template",
-			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "    name_template: \"{{ .ProjectName }}-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}\"\n", ""),
+				mutate(t, cliArchive, "    name_template: \"{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}\"\n", ""),
+				"",
 			),
 			wantIn: "name_template",
 		},
 
-		// The formats: tar.gz everywhere, zip on Windows, in each entry.
+		// The formats: tar.gz everywhere, zip on Windows.
 		{
 			name: "an archive that is not tar.gz",
 			goreleaser: goreleaserArchives(
 				mutate(t, cliArchive, "    formats: [tar.gz]", "    formats: [zip]"),
-				serverArchive,
+				"",
 			),
 			wantIn: "tar.gz",
 		},
 		{
 			name: "a Windows archive that is not zip",
 			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "    format_overrides:\n      - goos: windows\n        formats: [zip]\n", ""),
+				mutate(t, cliArchive, "    format_overrides:\n      - goos: windows\n        formats: [zip]\n", ""),
+				"",
 			),
 			wantIn: "zip",
 		},
 
-		// The files each archive ships beside its binary (issue #149).
+		// The files the archive ships beside its binary (issue #149).
 		{
 			name: "an archive that ships no LICENSE",
 			goreleaser: goreleaserArchives(
 				mutate(t, cliArchive, "      - LICENSE\n", ""),
-				serverArchive,
+				"",
 			),
 			wantIn: "LICENSE",
 		},
 		{
 			name: "an archive that ships no README.md",
 			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "      - README.md\n", ""),
+				mutate(t, cliArchive, "      - README.md\n", ""),
+				"",
 			),
 			wantIn: "README.md",
 		},
 		{
 			name: "an archive without the pages directly in docs/",
 			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "      - docs/*.md\n", ""),
+				mutate(t, cliArchive, "      - docs/*.md\n", ""),
+				"",
 			),
 			wantIn: "docs/*.md",
 		},
@@ -328,7 +316,7 @@ func TestGoReleaserArchives(t *testing.T) {
 			name: "an archive without the pages in the docs/ subdirectories",
 			goreleaser: goreleaserArchives(
 				mutate(t, cliArchive, "      - docs/**/*\n", ""),
-				serverArchive,
+				"",
 			),
 			wantIn: "docs/**/*",
 		},
@@ -338,8 +326,8 @@ func TestGoReleaserArchives(t *testing.T) {
 		{
 			name: "an archive without the sample inventories' README",
 			goreleaser: goreleaserArchives(
-				cliArchive,
-				mutate(t, serverArchive, "      - examples/*.md\n", ""),
+				mutate(t, cliArchive, "      - examples/*.md\n", ""),
+				"",
 			),
 			wantIn: "examples/*.md",
 		},
@@ -347,20 +335,20 @@ func TestGoReleaserArchives(t *testing.T) {
 			name: "an archive without the inventories under examples/",
 			goreleaser: goreleaserArchives(
 				mutate(t, cliArchive, "      - examples/**/*\n", ""),
-				serverArchive,
+				"",
 			),
 			wantIn: "examples/**/*",
 		},
 
-		// The checksum: one file covering every archive.
+		// The checksum: one file covering the archive.
 		{
 			name:       "no checksum section",
-			goreleaser: goreleaserArchivesTop + cliArchive + serverArchive,
+			goreleaser: goreleaserArchivesTop + cliArchive,
 			wantIn:     "checksum",
 		},
 		{
 			name: "a checksum name that is not checksums.txt",
-			goreleaser: goreleaserArchivesTop + cliArchive + serverArchive +
+			goreleaser: goreleaserArchivesTop + cliArchive +
 				"checksum:\n  name_template: SHA256SUMS.txt\n",
 			wantIn: "checksums.txt",
 		},
@@ -368,38 +356,18 @@ func TestGoReleaserArchives(t *testing.T) {
 			// split: true publishes one checksums file per archive, so no
 			// single checksums.txt would cover the release.
 			name: "a checksum section that splits the file",
-			goreleaser: goreleaserArchivesTop + cliArchive + serverArchive +
+			goreleaser: goreleaserArchivesTop + cliArchive +
 				"checksum:\n  name_template: checksums.txt\n  split: true\n",
 			wantIn: "split",
 		},
 
-		// The bundle the release publishes beside the archives (issue #139):
-		// the checksum section holds the same extra file release: does, so
-		// checksums.txt covers it.
+		// The bundle the release published beside the archives (issue #139) is
+		// gone (issue #393): a checksum section that still carries it is
+		// refused rather than read as a covered file.
 		{
-			name: "a checksum section without the bundle's extra file",
-			goreleaser: goreleaserArchivesTop + cliArchive + serverArchive +
-				"checksum:\n  name_template: checksums.txt\n",
-			wantIn: "extra_files",
-		},
-		{
-			name: "a checksum extra file with another glob",
-			goreleaser: goreleaserArchivesTop + cliArchive + serverArchive +
-				mutate(t, goreleaserChecksum, "./api/openapi.bundled.json", "./api/openapi.json"),
-			wantIn: "openapi.bundled.json",
-		},
-		{
-			name: "a checksum extra file with another name_template",
-			goreleaser: goreleaserArchivesTop + cliArchive + serverArchive +
-				mutate(t, goreleaserChecksum, "shift2eu-server_openapi.json", "openapi.json"),
-			wantIn: "shift2eu-server_openapi.json",
-		},
-		{
-			// Two extra files: the second is one the release does not publish.
-			name: "a checksum section with two extra files",
-			goreleaser: goreleaserArchivesTop + cliArchive + serverArchive + goreleaserChecksum +
-				"    - glob: ./api/openapi.json\n      name_template: openapi.json\n",
-			wantIn: "extra_files",
+			name:       "a checksum section with the bundled OpenAPI document",
+			goreleaser: goreleaserArchivesTop + cliArchive + retiredChecksum,
+			wantIn:     "extra_files",
 		},
 
 		// The closed schema.
@@ -407,7 +375,7 @@ func TestGoReleaserArchives(t *testing.T) {
 			name: "an archive entry with a key the check never lists",
 			goreleaser: goreleaserArchives(
 				mutate(t, cliArchive, "    formats: [tar.gz]\n", "    formats: [tar.gz]\n    wrap_in_directory: true\n"),
-				serverArchive,
+				"",
 			),
 			wantIn: "wrap_in_directory",
 		},
@@ -462,7 +430,7 @@ const ciArchiveStep = `      # The release's archives, built by a snapshot run o
 // request and every push to main, installs the release's GoReleaser and runs
 // .github/scripts/verify-archives.sh, which builds the release's archives and
 // fails unless each holds exactly its own binary: the CLI's archive shift2eu
-// and not shift2eu-server, the server's shift2eu-server and not shift2eu.
+// and nothing else (issue #393).
 const ciArchiveCheck = `name: CI
 
 on:
@@ -488,7 +456,7 @@ jobs:
 
 // TestDryRunVerifiesArchives pins the other half of issue #147: the CI dry run
 // verifies what the release publishes, as ci.yml's image job does for the
-// images. check.DryRunVerifiesArchives reads ci.yml and release.yml and returns
+// image. check.DryRunVerifiesArchives reads ci.yml and release.yml and returns
 // one message unless the test job, jobs: test, holds exactly one step named
 //
 //	Each archive holds its own binary

@@ -71,32 +71,31 @@ type workflowJob struct {
 
 // DryRunMirrorsRelease returns a message for every way the image job of
 // ci.yml, the dry run, has drifted from the image and sbom jobs of
-// release.yml, documents ci and release, for each image the release publishes:
-// the CLI's (jobs image and sbom) and the HTTP API's (server-image and
-// server-sbom, PRD #103). What the two publish differs by design (an OCI
+// release.yml, documents ci and release, for the one image the release
+// publishes: the CLI's (jobs image and sbom; issue #393). What the two publish
+// differs by design (an OCI
 // archive against a push, a sample tag against the pushed one), so it compares
 // the fields the release's builds and SBOMs rest on:
 //
 //   - docker/setup-buildx-action, docker/metadata-action,
 //     docker/build-push-action and anchore/sbom-action run at the same
 //     commit in both;
-//   - the BuildKit image of driver-opts is the same tag and digest as each
+//   - the BuildKit image of driver-opts is the same tag and digest as the
 //     image job's, with each ${{ env.NAME }} of the dry run read from its
 //     job's env:;
-//   - for each image, the dry run's multi-platform build of it (its
-//     build-push-action step without load: true and with the image's target:,
-//     server for the HTTP API's and none for the CLI's, of which there must be
-//     exactly one) has the release build's target, platforms, annotations,
+//   - the dry run's multi-platform build of the image (its
+//     build-push-action step without load: true and without a target:, of which
+//     there must be exactly one) has the release build's target, platforms,
+//     annotations,
 //     provenance and sbom, and writes an OCI archive (outputs:
 //     type=oci,dest=<path>);
-//   - for each image, the one anchore/sbom-action step of the dry run that
+//   - the one anchore/sbom-action step of the dry run that
 //     reads that archive (image: oci-archive:<path>) has the release's format
 //     and syft-version;
-//   - every metadata-action step of the dry run has the release's CLI images,
+//   - every metadata-action step of the dry run has the release's image name,
 //     and its tags, once the sample tag of their ,value=<sample> is dropped and
 //     the sample, quoted or not, is replaced by github.ref_name, are exactly
-//     the release's tags: ReleaseWorkflow holds the HTTP API's tag rules to
-//     exactly the CLI's;
+//     the release's tags;
 //   - the release's metadata-action reads latest from its latest job's
 //     output alone (flavor: latest=${{ needs.latest.outputs.latest }}), and
 //     every one of the dry run's from an output of its own step id: latest;
@@ -106,13 +105,12 @@ type workflowJob struct {
 //     release's tag source, git tag -l 'v*.*.*' --merged
 //     refs/remotes/origin/main, is replaced by the dry run's printf '%s\n'
 //     "$@": the same filter, sort and pick, on sample tags;
-//   - for each image, the verify job's step whose run: names <image>:$TAG
+//   - the verify job's step whose run: names <image>:$TAG
 //     (exactly one) runs the image with at least one line starting docker
 //     run, none continued onto the next line, and each such line, its image
 //     argument "$IMAGE" set aside, is a line of a run: step of the dry run's
-//     image job that runs that image's own dry-run build ("$IMAGE" for the
-//     CLI, "$SERVER_IMAGE" for the server): the same flags and the same
-//     command, on the image the dry run built (issue #99).
+//     image job that runs that image's own dry-run build ("$IMAGE"): the same
+//     flags and the same command, on the image the dry run built (issue #99).
 func DryRunMirrorsRelease(ci, release []byte) []string {
 	r := &schemaReader{}
 
@@ -121,8 +119,8 @@ func DryRunMirrorsRelease(ci, release []byte) []string {
 		return r.messages
 	}
 
-	// The release's image and sbom jobs, per image, in releaseImages' order:
-	// the CLI's first.
+	// The release's image and sbom jobs, in releaseImages' order: the CLI's
+	// alone.
 	perImage := make([][]workflowStep, 0, len(releaseImages))
 
 	for _, img := range releaseImages {
@@ -145,7 +143,7 @@ func DryRunMirrorsRelease(ci, release []byte) []string {
 	}
 
 	// The job that decides, once per run, whether the tag is the latest
-	// release: both images and GitHub's "Latest" release follow it.
+	// release: the image and GitHub's "Latest" release follow it.
 	latest, ok := r.readJob(release, "release.yml", releaseLatestJob)
 	if !ok {
 		return r.messages
@@ -163,9 +161,7 @@ func DryRunMirrorsRelease(ci, release []byte) []string {
 		}
 	}
 
-	// The tag rules and the flavor are the CLI image's: ReleaseWorkflow holds
-	// every other image's to exactly the same, its name aside. The highest tag
-	// is picked once, in the latest job.
+	// The tag rules and the flavor are the image's.
 	cli := perImage[0]
 	d.tags(ciJob.steps, cli)
 	d.flavor(ciJob.steps, cli)

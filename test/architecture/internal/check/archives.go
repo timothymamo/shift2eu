@@ -8,15 +8,12 @@ import (
 	"github.com/timothymamo/shift2eu/test/internal/yamlread"
 )
 
-// The binaries the release builds, and the name_template each one's archive
-// must have: the CLI's is goreleaser's default written out, so its archives
-// keep the name shift2eu_<version>_<os>_<arch> they have always had, and the
-// server's is shift2eu-server_<version>_<os>_<arch> (issue #147).
+// The binary the release builds, and the name_template its archive must have:
+// the CLI's is goreleaser's default written out, so its archives keep the name
+// shift2eu_<version>_<os>_<arch> they have always had (issue #147).
 const (
 	cliBinary          = "shift2eu"
-	serverBinary       = "shift2eu-server"
 	cliArchiveName     = "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-	serverArchiveName  = "{{ .ProjectName }}-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 	checksumsFile      = "checksums.txt"
 	archiveFormat      = "tar.gz"
 	windowsFormat      = "zip"
@@ -31,14 +28,49 @@ const (
 	releaseGoReleaserJob = "goreleaser"
 )
 
+// retiredNames are the names no release document may hold any more: the HTTP
+// API's binary and the bundled OpenAPI document that shipped beside the
+// archives. The release publishes the CLI alone (issue #393), so
+// .goreleaser.yaml and release.yml are refused if a line of theirs, a comment
+// included, still names one of them. "openapi" covers both the bundler's path
+// (api/openapi.bundled.json) and the asset name it used to be published as
+// (shift2eu-server_openapi.json).
+var retiredNames = []string{"shift2eu-server", "openapi"}
+
+// retiredNameMessages returns a message for every retired name line holds: a
+// release document may not mention the HTTP API's binary or its OpenAPI
+// document in any way, published or commented out (issue #393).
+func retiredNameMessages(line string) []string {
+	var messages []string
+
+	for _, name := range retiredNames {
+		if strings.Contains(line, name) {
+			messages = append(messages, fmt.Sprintf("the line %q names %s, which the release no longer publishes: it ships the CLI alone (issue #393)", line, name))
+		}
+	}
+
+	return messages
+}
+
+// retiredNameMessagesIn returns a message for every line of doc that names a
+// retired name, each as retiredNameMessages words it.
+func retiredNameMessagesIn(doc []byte) []string {
+	var messages []string
+
+	for _, line := range strings.Split(string(doc), "\n") {
+		messages = append(messages, retiredNameMessages(strings.TrimSpace(strings.TrimSuffix(line, "\r")))...)
+	}
+
+	return messages
+}
+
 // goreleaserSettings are the with: keys of goreleaser-action compared between
 // the dry run and the release: which GoReleaser each installs.
 var goreleaserSettings = []string{"distribution", "version"}
 
-// archiveNames are the name_template of each binary's archive, by binary.
+// archiveNames are the name_template of the one binary's archive, by binary.
 var archiveNames = map[string]string{
-	cliBinary:    cliArchiveName,
-	serverBinary: serverArchiveName,
+	cliBinary: cliArchiveName,
 }
 
 // archiveKeys are the keys an archive entry may hold: the section is a closed
@@ -53,30 +85,27 @@ var archiveKeys = []string{"id", "ids", "name_template", "formats", "format_over
 var archiveFiles = []string{"LICENSE", "README.md", "docs/*.md", "docs/**/*", "examples/*.md", "examples/**/*"}
 
 // GoReleaserArchives returns one message for every way the .goreleaser.yaml
-// document goreleaser lets one archive hold both binaries, or moves a binary
-// out of the archive its downloads expect (issue #147); none for a correct
-// document:
+// document goreleaser lets one archive hold more than the CLI's binary, or
+// moves that binary out of the archive its downloads expect (issue #147); none
+// for a correct document:
 //
-//   - archives: holds exactly two entries, each naming exactly one build
-//     through ids: (an entry without ids takes every build), and every build
-//     of builds: sits in exactly one archive;
-//   - each entry's id: is the one build its ids: names, and no two entries
-//     share one: goreleaser defaults an entry's id to "default", so two
-//     entries without id: are the same archive to it and goreleaser check
-//     refuses the document;
-//   - each entry's name_template is the one of its build's binary:
-//     goreleaser's default written out for the CLI (shift2eu), and
-//     shift2eu-server_<version>_<os>_<arch> for the server (shift2eu-server);
-//   - each entry is tar.gz, and zip on Windows, and ships exactly LICENSE,
+//   - no line, comments included, names shift2eu-server or openapi: the
+//     release publishes the CLI alone, so the HTTP API's build, its archive
+//     and its OpenAPI document are gone rather than merely unreferenced (issue
+//     #393);
+//   - archives: holds exactly one entry, naming exactly one build through ids:
+//     (an entry without ids takes every build), and every build of builds:
+//     sits in that archive;
+//   - the entry's id: is the one build its ids: names, so the CLI's;
+//   - its name_template is the one of its build's binary: goreleaser's default
+//     written out for the CLI (shift2eu);
+//   - the entry is tar.gz, and zip on Windows, and ships exactly LICENSE,
 //     README.md, docs/*.md, docs/**/*, examples/*.md and examples/**/*;
 //   - an entry holds no key beyond id, ids, name_template, formats,
 //     format_overrides and files;
 //   - checksum: holds exactly name_template: checksums.txt, one file covering
-//     every archive, and extra_files: with exactly the bundled OpenAPI
-//     document the release publishes beside the archives,
-//     BundleGlob (./api/openapi.bundled.json) as
-//     shift2eu-server_openapi.json (issue #139), so checksums.txt covers it
-//     too.
+//     the archive, and no extra_files: nothing is published beside the
+//     archives (issue #393).
 func GoReleaserArchives(goreleaser []byte) []string {
 	r := &schemaReader{}
 
@@ -98,7 +127,7 @@ func GoReleaserArchives(goreleaser []byte) []string {
 	r.archives(top, binaries)
 	r.checksum(top)
 
-	return r.messages
+	return append(r.messages, retiredNameMessagesIn(goreleaser)...)
 }
 
 // buildBinaries returns the binary: of each build of builds:, by its id; nil
@@ -173,7 +202,7 @@ func firstError(errs ...error) error {
 func (r *schemaReader) archives(top []yamlread.Entry, binaries map[string]string) {
 	section, ok := child(top, "archives")
 	if !ok || (section.Value == "" && len(section.Block) == 0) {
-		r.fail("no archives section, want two entries, one per build (%s and %s): goreleaser's default archive takes every build, so one download would hold both binaries", cliBinary, serverBinary)
+		r.fail("no archives section, want one entry, one per build (%s): goreleaser's default archive takes every build", cliBinary)
 
 		return
 	}
@@ -191,7 +220,7 @@ func (r *schemaReader) archives(top []yamlread.Entry, binaries map[string]string
 	}
 
 	if len(items) != len(archiveNames) {
-		r.fail("line %d: archives holds %d entries, want exactly %d, one per binary (%s and %s)", section.Num, len(items), len(archiveNames), cliBinary, serverBinary)
+		r.fail("line %d: archives holds %d entries, want exactly %d, the CLI's build (%s)", section.Num, len(items), len(archiveNames), cliBinary)
 	}
 
 	// archived counts the archive entries that name each build, and ids the
@@ -324,7 +353,7 @@ func (r *schemaReader) archiveID(entries []yamlread.Entry, path, build string, i
 func (r *schemaReader) archiveName(entries []yamlread.Entry, path, binary string) {
 	e, ok := child(entries, "name_template")
 	if !ok {
-		r.fail("%s holds no name_template, want the one of its binary: %q for %s, %q for %s", path, cliArchiveName, cliBinary, serverArchiveName, serverBinary)
+		r.fail("%s holds no name_template, want the one of its binary: %q for %s", path, cliArchiveName, cliBinary)
 
 		return
 	}
@@ -335,7 +364,7 @@ func (r *schemaReader) archiveName(entries []yamlread.Entry, path, binary string
 
 	want, known := archiveNames[binary]
 	if !known {
-		r.fail("line %d: %s holds the binary %s, want %s or %s", e.Num, path, binary, cliBinary, serverBinary)
+		r.fail("line %d: %s holds the binary %s, want %s", e.Num, path, binary, cliBinary)
 
 		return
 	}
@@ -432,12 +461,12 @@ func (r *schemaReader) archiveFiles(entries []yamlread.Entry, path string) {
 }
 
 // checksum checks that the checksum section holds exactly
-// name_template: checksums.txt, one file covering every archive, and the
-// bundle's extra file, so that file covers it too.
+// name_template: checksums.txt, one file covering the archive, and nothing
+// else: the release publishes no extra file beside the archives (issue #393).
 func (r *schemaReader) checksum(top []yamlread.Entry) {
 	section, ok := child(top, "checksum")
 	if !ok {
-		r.fail("no checksum section, want checksum: name_template: %s, one file covering every archive", checksumsFile)
+		r.fail("no checksum section, want checksum: name_template: %s, one file covering the archive", checksumsFile)
 
 		return
 	}
@@ -455,13 +484,9 @@ func (r *schemaReader) checksum(top []yamlread.Entry) {
 	}
 
 	for _, e := range entries {
-		if e.Key != "name_template" && e.Key != "extra_files" {
-			r.fail("line %d: checksum holds the key %s, want only name_template: %s, one file covering every archive, and extra_files", e.Num, e.Key, checksumsFile)
+		if e.Key != "name_template" {
+			r.fail("line %d: checksum holds the key %s, want only name_template: %s, one file covering the archive: the release publishes no extra file beside the archives (issue #393)", e.Num, e.Key, checksumsFile)
 		}
-	}
-
-	if err := bundleExtraFile(entries, "checksum"); err != nil {
-		r.fail("%v", err)
 	}
 
 	e, ok := child(entries, "name_template")
