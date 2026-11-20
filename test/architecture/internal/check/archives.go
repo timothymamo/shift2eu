@@ -39,12 +39,16 @@ var retiredNames = []string{"shift2eu-server", "openapi"}
 
 // retiredNameMessages returns a message for every retired name line holds: a
 // release document may not mention the HTTP API's binary or its OpenAPI
-// document in any way, published or commented out (issue #393).
+// document in any way, published or commented out (issue #393). The match is
+// case-insensitive: a line that writes OpenAPI or Shift2eu-Server names the
+// same document or binary.
 func retiredNameMessages(line string) []string {
 	var messages []string
 
+	lower := strings.ToLower(line)
+
 	for _, name := range retiredNames {
-		if strings.Contains(line, name) {
+		if strings.Contains(lower, name) {
 			messages = append(messages, fmt.Sprintf("the line %q names %s, which the release no longer publishes: it ships the CLI alone (issue #393)", line, name))
 		}
 	}

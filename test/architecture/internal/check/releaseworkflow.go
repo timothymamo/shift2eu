@@ -1084,8 +1084,8 @@ var releaseJobs = func() []releaseJob {
 // github.path in any case, nor GITHUB_ENV, GITHUB_PATH or a variable of the
 // go command or of cgo (a word starting GO or CGO in upper case: GOFLAGS,
 // GOEXPERIMENT, GOAMD64, CGO_ENABLED, ...); and no line may name
-// shift2eu-server or openapi, since the release publishes the CLI alone
-// (issue #393).
+// shift2eu-server or openapi, in any case, since the release publishes the CLI
+// alone (issue #393).
 func ReleaseWorkflow(src []byte) []string {
 	var messages []string
 

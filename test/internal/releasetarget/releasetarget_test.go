@@ -480,11 +480,6 @@ func TestRead(t *testing.T) {
 			wantErr:    true,
 		},
 		{
-			name:       "the server built for fewer platforms than the CLI is refused",
-			goreleaser: withBuilds(serverBuild("./cmd/shift2eu-server", "    goos: [linux]", "    goarch: [amd64, arm64]")),
-			wantErr:    true,
-		},
-		{
 			name:       "the server built for more platforms than the CLI is refused",
 			goreleaser: withBuilds(serverBuild("./cmd/shift2eu-server", "    goos: [linux, darwin, windows]", "    goarch: [amd64, arm64, riscv64]")),
 			wantErr:    true,

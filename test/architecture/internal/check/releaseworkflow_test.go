@@ -42,8 +42,8 @@ concurrency:
 
 # The steps of all ten jobs are a closed list that test/architecture holds
 # (check.ReleaseWorkflow): add no step, run: or env: here without changing it.
-# The release ships the CLI alone: the HTTP API's image and archive, and the
-# bundled OpenAPI document, are gone (issue #393). latest alone decides, once
+# The release ships the CLI alone: the HTTP API's image, archive and API
+# document are gone (issue #393). latest alone decides, once
 # per run, whether the tag is the
 # highest release tag on main, so the image's latest tag and GitHub's "Latest"
 # release cannot disagree. goreleaser hands the archives on, attest-archives
@@ -1715,6 +1715,10 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a server-image job beside the image job", workflow: in("verify", "  # The independent check", "  server-image:\n    name: Container image (shift2eu-server)\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n  # The independent check"), wantIn: `jobs holds the key "server-image"`},
 		{name: "a comment naming the HTTP API's binary", workflow: strings.Replace(releaseWorkflow, "# No permission by default; each job asks for its own.", "# The shift2eu-server jobs are gone (issue #393).\n# No permission by default; each job asks for its own.", 1), wantIn: "shift2eu-server"},
 		{name: "a comment naming the bundled OpenAPI document", workflow: strings.Replace(releaseWorkflow, "# No permission by default; each job asks for its own.", "# The bundled api/openapi.bundled.json is gone (issue #393).\n# No permission by default; each job asks for its own.", 1), wantIn: "openapi"},
+		// The name is retired in any case it is written in: a comment that
+		// capitalises it names the same binary or document, and is refused too.
+		{name: "a comment naming the HTTP API's binary in another case", workflow: strings.Replace(releaseWorkflow, "# No permission by default; each job asks for its own.", "# The Shift2eu-Server jobs are gone (issue #393).\n# No permission by default; each job asks for its own.", 1), wantIn: "shift2eu-server"},
+		{name: "a comment naming the bundled API document in another case", workflow: strings.Replace(releaseWorkflow, "# No permission by default; each job asks for its own.", "# The bundled OpenAPI document is gone (issue #393).\n# No permission by default; each job asks for its own.", 1), wantIn: "openapi"},
 		{name: "a target on the CLI image", workflow: in("image", "          context: .\n", "          context: .\n          target: server\n"), wantIn: `key "target"`},
 
 		// The independent check of what the release published (issue #99): a job

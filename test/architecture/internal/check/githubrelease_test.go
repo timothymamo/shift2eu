@@ -219,6 +219,18 @@ func TestGitHubRelease(t *testing.T) {
 			goreleaser: buildFlow + "\n# the shift2eu-server archive is gone\n" + releaseSection("auto"),
 			wantErr:    true,
 		},
+		// The name is retired in any case it is written in: a comment that
+		// capitalises it names the same bundle or binary, and is refused too.
+		{
+			name:       "a comment naming the bundled API document in another case is refused",
+			goreleaser: buildFlow + "\n# The OpenAPI document is gone\n" + releaseSection("auto"),
+			wantErr:    true,
+		},
+		{
+			name:       "a comment naming the HTTP API's binary in another case is refused",
+			goreleaser: buildFlow + "\n# Shift2eu-Server is gone\n" + releaseSection("auto"),
+			wantErr:    true,
+		},
 	}
 
 	for _, tc := range tests {

@@ -422,6 +422,20 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 			release: releaseDryRun,
 			wantIn:  `with: images is "ghcr.io/timothymamo/shift2eu-server"`,
 		},
+		// The dry run is the release's, so no line of its image job, a comment
+		// included, may name a retired name either (issue #393), in any case.
+		{
+			name:    "a dry run whose image job comments on the HTTP API's binary",
+			ci:      mutate(t, ciDryRun, "jobs:\n  image:\n", "jobs:\n  image:\n    # The Shift2eu-Server image is gone (issue #393).\n"),
+			release: releaseDryRun,
+			wantIn:  "names shift2eu-server",
+		},
+		{
+			name:    "a dry run whose image job comments on the bundled OpenAPI document",
+			ci:      mutate(t, ciDryRun, "jobs:\n  image:\n", "jobs:\n  image:\n    # The OpenAPI document is gone (issue #393).\n"),
+			release: releaseDryRun,
+			wantIn:  "names openapi",
+		},
 
 		// The release's verify job (issue #99) is the independent check of what a
 		// release published. A pull request has no published image to verify, so

@@ -101,9 +101,9 @@ func goreleaserArchives(cli, second string) string {
 // message per way the document publishes more than that, or moves the binary
 // out of the archive its downloads expect:
 //
-//   - no line, comments included, names shift2eu-server or openapi: the HTTP
-//     API's build, its archive and the bundled OpenAPI document are gone (issue
-//     #393), worded with the name the line holds;
+//   - no line, comments included, names shift2eu-server or openapi, in any
+//     case: the HTTP API's build, its archive and the bundled OpenAPI document
+//     are gone (issue #393), worded with the name the line holds;
 //   - archives: holds exactly one entry, and it names exactly one build
 //     through ids: an entry without ids takes every build, and every build of
 //     builds: sits in that archive: the CLI's, the build whose binary is
@@ -173,6 +173,18 @@ func TestGoReleaserArchives(t *testing.T) {
 		{
 			name:       "a comment naming the bundled OpenAPI document",
 			goreleaser: goreleaserArchives(cliArchive, "") + "# release.extra_files: api/openapi.bundled.json\n",
+			wantIn:     "openapi",
+		},
+		// The name is retired in any case it is written in: a comment that
+		// capitalises it names the same build or document, and is refused too.
+		{
+			name:       "a comment naming the HTTP API's binary in another case",
+			goreleaser: goreleaserArchives(cliArchive, "") + "# Shift2eu-Server is gone with the release's second image\n",
+			wantIn:     "shift2eu-server",
+		},
+		{
+			name:       "a comment naming the bundled OpenAPI document in another case",
+			goreleaser: goreleaserArchives(cliArchive, "") + "# The OpenAPI document is gone\n",
 			wantIn:     "openapi",
 		},
 

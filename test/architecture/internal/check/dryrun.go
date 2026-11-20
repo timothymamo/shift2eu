@@ -77,6 +77,9 @@ type workflowJob struct {
 // archive against a push, a sample tag against the pushed one), so it compares
 // the fields the release's builds and SBOMs rest on:
 //
+//   - no line of ci.yml's image job, a comment included, names shift2eu-server
+//     or openapi in any case: the release publishes the CLI alone, so its dry
+//     run may name neither either (issue #393);
 //   - docker/setup-buildx-action, docker/metadata-action,
 //     docker/build-push-action and anchore/sbom-action run at the same
 //     commit in both;
@@ -118,6 +121,11 @@ func DryRunMirrorsRelease(ci, release []byte) []string {
 	if !ok {
 		return r.messages
 	}
+
+	// The image job stands in for the release's, so no line of it, comments
+	// and the job's trailing ones included, may name a retired name either
+	// (issue #393).
+	r.messages = append(r.messages, retiredNameMessagesInJob(ci, "image")...)
 
 	// The release's image and sbom jobs, in releaseImages' order: the CLI's
 	// alone.
@@ -188,6 +196,52 @@ func rawLines(doc []byte) []string {
 	}
 
 	return raw
+}
+
+// retiredNameMessagesInJob returns a message for every raw line of the job key
+// of doc, from the job's key line to the last line of the job, that names a
+// retired name (retiredNameMessages). The job runs to the line before the next
+// job's key, or to the end of the document for the last job, so the comment
+// lines the YAML reader drops are the job's own too. A document the reader
+// cannot read yields no message here: readJob fails on it and reports why.
+func retiredNameMessagesInJob(doc []byte, key string) []string {
+	lines, err := yamlread.SplitLines(doc)
+	if err != nil {
+		return nil
+	}
+
+	jobs, err := yamlread.Walk(lines, "jobs")
+	if err != nil {
+		return nil
+	}
+
+	entries, err := yamlread.Mapping(jobs)
+	if err != nil {
+		return nil
+	}
+
+	raw := rawLines(doc)
+
+	for i, e := range entries {
+		if e.Key != key {
+			continue
+		}
+
+		end := len(raw)
+		if i+1 < len(entries) {
+			end = entries[i+1].Num - 1
+		}
+
+		var messages []string
+
+		for _, line := range raw[e.Num-1 : end] {
+			messages = append(messages, retiredNameMessages(strings.TrimSpace(line))...)
+		}
+
+		return messages
+	}
+
+	return nil
 }
 
 // readJob reads the job key of the workflow doc, called file in a message.
