@@ -41,7 +41,7 @@
 </section>
 <section class="part part-blockers">
 <h3>Blockers</h3>
-<ul>
+<ul role="list">
 <li><code>queue-jobs</code>: no offering in the <code>Example Cloud</code> catalog for <code>messaging.queue</code></li>
 <li><code>worker-jobs</code>: affected by a blocker on <code>queue-jobs</code></li>
 </ul>
@@ -70,7 +70,7 @@
 </section>
 <section class="part part-cost">
 <h3>Cost estimate</h3>
-<ul>
+<ul role="list">
 <li class="total">Total: €2,535.00 per month for 4 of 5 resources</li>
 <li>Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering&#39;s listed fee</li>
 <li>Prices in <code>xx-par</code></li>

@@ -431,7 +431,7 @@ func writeCostEstimate(f *fragment, a assessment.Assessment, level int) {
 		{Text: text("Hours: " + hoursLine(a))},
 	}
 
-	f.list(append(items, sourceCostItems(a.SourceCost)...))
+	f.markerlessList(append(items, sourceCostItems(a.SourceCost)...))
 }
 
 // hoursLine is the hours basis of a's plan prices: hoursNote, then one clause

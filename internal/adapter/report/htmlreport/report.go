@@ -295,7 +295,7 @@ func writeBlockers(f *fragment, blockers []assessment.Blocker, verdicts []assess
 		}
 	}
 
-	f.list(items)
+	f.markerlessList(items)
 }
 
 // blockerItems returns one list item per blocker, "ID: reason".

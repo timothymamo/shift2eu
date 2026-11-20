@@ -42,6 +42,16 @@
 // keyed by unexported enums, never built from a value, and render refuses a
 // key outside them.
 //
+// # List role
+//
+// The site's stylesheet strips the markers of the Blockers and the Cost
+// estimate lists (at h3 and h4 level alike), and Safari and VoiceOver drop the
+// list role and the item count of a list drawn without markers. So those two
+// lists carry the constant attribute role="list" (docs/adr/0035, amendment for
+// issue #373), from a fixed table of list start tags keyed by an unexported
+// enum, like the classes; no other element carries a role, and "list" is the
+// only role value.
+//
 // # Values are text
 //
 // The report is built as blocks of segments, each the report's own words or a

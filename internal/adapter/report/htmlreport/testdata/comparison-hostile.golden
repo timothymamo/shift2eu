@@ -85,7 +85,7 @@
 </section>
 <section class="part part-blockers">
 <h4>Blockers</h4>
-<ul>
+<ul role="list">
 <li><code>onerror=alert(1) x=</code>: not classified</li>
 <li><code>a&#34;b&#39;c&amp;d</code>: affected by a blocker on <code>onerror=alert(1) x=</code></li>
 </ul>
@@ -120,7 +120,7 @@
 </section>
 <section class="part part-cost">
 <h4>Cost estimate</h4>
-<ul>
+<ul role="list">
 <li class="total">Total: €45.00 per month for 3 of 4 resources</li>
 <li>Estimate: list prices on 2026-11-08, excluding VAT and discounts; a fixed fee is the offering&#39;s listed fee</li>
 <li>Prices in <code>gra</code></li>
@@ -167,7 +167,7 @@
 </section>
 <section class="part part-blockers">
 <h4>Blockers</h4>
-<ul>
+<ul role="list">
 <li><code>onerror=alert(1) x=</code>: not classified</li>
 <li><code>a&#34;b&#39;c&amp;d</code>: affected by a blocker on <code>onerror=alert(1) x=</code></li>
 </ul>
@@ -202,7 +202,7 @@
 </section>
 <section class="part part-cost">
 <h4>Cost estimate</h4>
-<ul>
+<ul role="list">
 <li class="total">Total: €45.00 per month for 3 of 4 resources</li>
 <li>Estimate: list prices on 2026-11-01, excluding VAT and discounts; a fixed fee is the offering&#39;s listed fee</li>
 <li>Prices in <code>fr-par</code></li>

@@ -82,7 +82,7 @@
 </section>
 <section class="part part-blockers">
 <h4>Blockers</h4>
-<ul>
+<ul role="list">
 <li><code>fn-example</code>: no offering in the <code>OVHcloud</code> catalog for <code>serverless.function</code></li>
 </ul>
 </section>
@@ -125,7 +125,7 @@
 </section>
 <section class="part part-blockers">
 <h4>Blockers</h4>
-<ul>
+<ul role="list">
 <li><code>fn-example</code>: no offering in the <code>Scaleway</code> catalog for <code>serverless.function</code></li>
 </ul>
 </section>
@@ -169,7 +169,7 @@
 </section>
 <section class="part part-blockers">
 <h4>Blockers</h4>
-<ul>
+<ul role="list">
 <li><code>db-example</code>: no offering in the <code>UpCloud</code> catalog for <code>database.postgresql</code></li>
 <li><code>fn-example</code>: no offering in the <code>UpCloud</code> catalog for <code>serverless.function</code></li>
 </ul>

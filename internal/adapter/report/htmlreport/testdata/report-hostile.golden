@@ -39,7 +39,7 @@
 </section>
 <section class="part part-blockers">
 <h3>Blockers</h3>
-<ul>
+<ul role="list">
 <li><code>__shift2euModule</code>: no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></li>
 <li><code>a&#34;b&#39;c&amp;d</code>: no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></li>
 <li><code>onerror=alert(1) x=</code>: not classified</li>

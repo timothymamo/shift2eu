@@ -139,6 +139,27 @@ var partNames = map[part]string{
 	partTarget:     "part part-target",
 }
 
+// listKind is the kind of a list: one of a closed set of constants
+// (listStartTags), chosen from the section the list belongs to, never from a
+// value. The zero kind is a list that keeps its markers.
+type listKind int
+
+// The kinds of list.
+const (
+	listPlain listKind = iota
+	// listMarkerless is a list the site's stylesheet strips of its markers
+	// (the Blockers and the Cost estimate lists): it states role="list",
+	// because Safari and VoiceOver drop the list role and the item count of a
+	// list drawn without markers (issue #373).
+	listMarkerless
+)
+
+// listStartTags are the start tags of the kinds of list, a fixed table.
+var listStartTags = map[listKind]string{
+	listPlain:      "<ul>\n",
+	listMarkerless: "<ul role=\"list\">\n",
+}
+
 // item is one list item, with the items of a nested list.
 type item struct {
 	Text     rich
@@ -185,6 +206,8 @@ type block struct {
 	Text rich
 	// List is a list's items.
 	List []item
+	// ListKind is the kind of the list.
+	ListKind listKind
 	// Table is a table.
 	Table *table
 	// Open starts a part section of this kind.
@@ -222,6 +245,16 @@ func (f *fragment) list(items []item) {
 	}
 
 	f.blocks = append(f.blocks, block{List: items})
+}
+
+// markerlessList adds a list the site's stylesheet strips of its markers,
+// which states role="list" (listMarkerless); an empty list adds nothing.
+func (f *fragment) markerlessList(items []item) {
+	if len(items) == 0 {
+		return
+	}
+
+	f.blocks = append(f.blocks, block{List: items, ListKind: listMarkerless})
 }
 
 // table adds a table.
@@ -283,7 +316,7 @@ func (f *fragment) render(b *strings.Builder) error {
 				return err
 			}
 		case len(blk.List) > 0:
-			if err := writeList(b, blk.List); err != nil {
+			if err := writeList(b, blk.ListKind, blk.List); err != nil {
 				return err
 			}
 		default:
@@ -355,9 +388,15 @@ func writeTable(b *strings.Builder, t *table) error {
 	return nil
 }
 
-// writeList writes items as a list, each item's children as a nested list.
-func writeList(b *strings.Builder, items []item) error {
-	b.WriteString("<ul>\n")
+// writeList writes items as a list of kind, whose start tag is a constant of
+// listStartTags, each item's children as a nested list that keeps its markers.
+func writeList(b *strings.Builder, kind listKind, items []item) error {
+	start, ok := listStartTags[kind]
+	if !ok {
+		return fmt.Errorf("list kind %d is not one of the report's kinds of list", kind)
+	}
+
+	b.WriteString(start)
 
 	for _, it := range items {
 		if err := writeStart(b, "li", it.Class); err != nil {
