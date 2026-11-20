@@ -960,6 +960,19 @@ button.secondary:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* list-style is inherited, so the nested lists the report writes inside a
+   blocker or a cost item (a blocker's per-target reasons, an estimate's
+   basis) would take list-style: none from the rules above. They carry no
+   role="list", and Safari and VoiceOver drop the list role of a list without
+   markers, so they get their markers back here. The blocker glyph keeps the
+   child combinator and stays off their items. */
+#report .part-blockers li ul,
+#report .part-cost li ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+
 /* Contact: the next-steps card shows once a report exists, with CSS alone;
    the band closes the page. */
 
