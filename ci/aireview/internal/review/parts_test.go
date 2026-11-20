@@ -1341,17 +1341,14 @@ func assertShownInACodeSpanOnly(t *testing.T, body, path string) {
 // constant line that counts the rest, keeps each answered part's counts exact,
 // and still holds the sentences after the list — the prompt-injection warning
 // and the advice footer. The cap costs the findings it cannot list, never the
-// skip: the review is posted and the run passes.
+// skip: the review is posted and the run passes. That line is a top-level list
+// item of its own (#374, #388): it counts the findings of every part, not the
+// last part's, so it does not hang indented under that part's last finding, and
+// it says "finding" for one (#374).
 func TestRunCapsTheSummaryOfThePartsThatAnswered(t *testing.T) {
 	t.Parallel()
 
-	const (
-		firstPath = "internal/x/one.go"
-		// total is how many blocking findings the part that answered reports: a
-		// line each, far more than a review of MaxTextUnits UTF-16 code units
-		// can hold.
-		total = 5000
-	)
+	const firstPath = "internal/x/one.go"
 
 	// manyPath is a real file of the second part, near the 300 UTF-16 code
 	// units a listed path may take, so a line per finding adds up past GitHub's
@@ -1362,79 +1359,142 @@ func TestRunCapsTheSummaryOfThePartsThatAnswered(t *testing.T) {
 
 	diff := diffSectionOfSize(t, firstPath, 150_000) + diffSectionOfSize(t, manyPath, 150_001)
 
-	gh := &fakeGitHub{pr: pr, diff: diff, files: []review.ChangedFile{
-		{Path: firstPath, Status: "modified", Additions: 1},
-		{Path: manyPath, Status: "modified", Additions: 1},
-	}}
-
-	var answer strings.Builder
-
-	answer.WriteString(`{"summary":"A summary.","findings":[`)
-
-	for i := range total {
-		if i > 0 {
-			answer.WriteString(",")
-		}
-
-		fmt.Fprintf(&answer, `{"severity":"blocker","category":"security","path":%q,"line":3,"title":"t","body":"b"}`, manyPath)
+	cases := []struct {
+		name string
+		// total is how many blocking findings the part that answered reports: a
+		// line each.
+		total int
+		// wantMore is the top-level list item that ends a capped list, and ""
+		// for a list that holds every finding the part reported.
+		wantMore string
+		// wantAbsent are forms the line that counts the rest must not take: the
+		// old one, indented under the last part and always plural, and the
+		// plural for a single finding (#374).
+		wantAbsent []string
+	}{
+		{
+			name:     "thousands of blocking findings, far more than a review of MaxTextUnits can list",
+			total:    5000,
+			wantMore: "\n- And 4950 more blocking findings across the parts, not listed.",
+			wantAbsent: []string{
+				"\n  - and ",
+				"\n- and ",
+				"more blocking findings, not listed",
+			},
+		},
+		{
+			name:     "one blocking finding over the cap reads as one finding",
+			total:    51,
+			wantMore: "\n- And 1 more blocking finding across the parts, not listed.",
+			wantAbsent: []string{
+				"\n  - and ",
+				"\n- And 1 more blocking findings",
+				"more blocking findings, not listed",
+			},
+		},
+		{
+			name:  "a list that fits the cap counts nothing more",
+			total: 50,
+			wantAbsent: []string{
+				"more blocking",
+			},
+		},
 	}
 
-	answer.WriteString("]}")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	model := newPartModel(firstPath, manyPath)
-	model.answers = map[string][]string{
-		firstPath: {unusableAnswer},
-		manyPath:  {answer.String()},
-	}
+			gh := &fakeGitHub{pr: pr, diff: diff, files: []review.ChangedFile{
+				{Path: firstPath, Status: "modified", Additions: 1},
+				{Path: manyPath, Status: "modified", Additions: 1},
+			}}
 
-	result, err := review.Run(t.Context(), gh, model, review.Config{
-		Number:       pr.Number,
-		BotLogin:     testBotLogin,
-		Instructions: splitInstructions,
-	})
-	if err != nil {
-		t.Fatalf("Run: %v; want the skipped outcome, which is no failure (issue #367)", err)
-	}
+			var answer strings.Builder
 
-	if result.Skip == nil {
-		t.Fatalf("Result.Skip = nil, want a skip: one part answered unusably twice (issue #367)")
-	}
+			answer.WriteString(`{"summary":"A summary.","findings":[`)
 
-	if len(gh.posts) != 1 {
-		t.Fatalf("the run posted %d reviews, want 1: a capped summary is no reason to drop the review that says the AI review was skipped (issue #367, audit M1)", len(gh.posts))
-	}
+			for i := range tc.total {
+				if i > 0 {
+					answer.WriteString(",")
+				}
 
-	body := gh.posts[0].review.Body
+				fmt.Fprintf(&answer, `{"severity":"blocker","category":"security","path":%q,"line":3,"title":"t","body":"b"}`, manyPath)
+			}
 
-	if n := utf16Units(body); n > review.MaxTextUnits {
-		t.Errorf("the skipped review's body is %d UTF-16 code units, over the %d GitHub accepts and answers with a 422: the summary of the %d blocking findings of a part that answered is capped (audit M1, issue #388)", n, review.MaxTextUnits, total)
-	}
+			answer.WriteString("]}")
 
-	const counts = "- Part 2 of 2: 5000 blocking, 0 non-blocking."
-	if !strings.Contains(body, counts) {
-		t.Errorf("the skipped review does not hold %q: a capped summary keeps every answered part's counts exact (issue #388); body:\n%s", counts, body)
-	}
+			model := newPartModel(firstPath, manyPath)
+			model.answers = map[string][]string{
+				firstPath: {unusableAnswer},
+				manyPath:  {answer.String()},
+			}
 
-	if got := strings.Count(body, "\n  - blocking: category "); got > review.MaxListedExcluded {
-		t.Errorf("the skipped review lists %d blocking findings, want at most MaxListedExcluded = %d: the list is capped, so the review stays under GitHub's limit whatever the model reports (audit M1)", got, review.MaxListedExcluded)
-	}
+			result, err := review.Run(t.Context(), gh, model, review.Config{
+				Number:       pr.Number,
+				BotLogin:     testBotLogin,
+				Instructions: splitInstructions,
+			})
+			if err != nil {
+				t.Fatalf("Run: %v; want the skipped outcome, which is no failure (issue #367)", err)
+			}
 
-	const more = "\n  - and 4950 more blocking findings, not listed."
-	if !strings.Contains(body, more) {
-		t.Errorf("the skipped review does not hold %q, the line that ends a capped list: without it the list reads as the whole %d blocking findings the part reported (audit M1, issue #388); body:\n%s", more, total, body)
-	}
+			if result.Skip == nil {
+				t.Fatalf("Result.Skip = nil, want a skip: one part answered unusably twice (issue #367)")
+			}
 
-	if atMore, last := strings.Index(body, more), strings.LastIndex(body, "\n  - blocking: category "); atMore >= 0 && last > atMore {
-		t.Errorf("a blocking finding is listed after the line %q that counts the rest: that line ends the list (audit M1)", more)
-	}
+			if len(gh.posts) != 1 {
+				t.Fatalf("the run posted %d reviews, want 1: a capped summary is no reason to drop the review that says the AI review was skipped (issue #367, audit M1)", len(gh.posts))
+			}
 
-	// The cap takes the room of the blocking findings, never of the sentences
-	// after them: the maintainer still reads that content in the diff can cause
-	// this skip, and that the review is advice.
-	for _, want := range []string{"prompt injection in mind", "this review is advice"} {
-		if !strings.Contains(strings.ToLower(body), want) {
-			t.Errorf("the skipped review does not hold %q after its capped list: the cap costs the findings it cannot list, never the skip's own sentences (audit M1)", want)
-		}
+			body := gh.posts[0].review.Body
+
+			if n := utf16Units(body); n > review.MaxTextUnits {
+				t.Errorf("the skipped review's body is %d UTF-16 code units, over the %d GitHub accepts and answers with a 422: the summary of the %d blocking findings of a part that answered is capped (audit M1, issue #388)", n, review.MaxTextUnits, tc.total)
+			}
+
+			counts := fmt.Sprintf("- Part 2 of 2: %d blocking, 0 non-blocking.", tc.total)
+			if !strings.Contains(body, counts) {
+				t.Errorf("the skipped review does not hold %q: a capped summary keeps every answered part's counts exact (issue #388); body:\n%s", counts, body)
+			}
+
+			const listedLine = "\n  - blocking: category "
+
+			listed := strings.Count(body, listedLine)
+			if listed > review.MaxListedExcluded {
+				t.Errorf("the skipped review lists %d blocking findings, want at most MaxListedExcluded = %d: the list is capped, so the review stays under GitHub's limit whatever the model reports (audit M1)", listed, review.MaxListedExcluded)
+			}
+
+			wantListed := min(tc.total, review.MaxListedExcluded)
+			if listed != wantListed {
+				t.Errorf("the skipped review lists %d blocking findings, want %d: the cap holds back only the findings over MaxListedExcluded = %d, never one under it (audit M1, issue #388); body:\n%s", listed, wantListed, review.MaxListedExcluded, body)
+			}
+
+			if tc.wantMore != "" {
+				if !strings.Contains(body, tc.wantMore) {
+					t.Errorf("the skipped review does not hold %q, the top-level list item that ends a capped list: without it the list reads as the whole %d blocking findings the part reported, and the line counts the findings of every part, so it never hangs indented under the last part's (audit M1, issues #374, #388); body:\n%s", tc.wantMore, tc.total, body)
+				}
+
+				if atMore, last := strings.Index(body, tc.wantMore), strings.LastIndex(body, listedLine); atMore >= 0 && last > atMore {
+					t.Errorf("a blocking finding is listed after the line %q that counts the rest: that line ends the list (audit M1)", tc.wantMore)
+				}
+			}
+
+			for _, unwanted := range tc.wantAbsent {
+				if strings.Contains(body, unwanted) {
+					t.Errorf("the skipped review holds %q, want neither the old line indented under the last part, which counts the findings of all parts, nor its plural for a single finding (issues #374, #388); body:\n%s", unwanted, body)
+				}
+			}
+
+			// The cap takes the room of the blocking findings, never of the
+			// sentences after them: the maintainer still reads that content in the
+			// diff can cause this skip, and that the review is advice.
+			for _, want := range []string{"prompt injection in mind", "this review is advice"} {
+				if !strings.Contains(strings.ToLower(body), want) {
+					t.Errorf("the skipped review does not hold %q after its capped list: the cap costs the findings it cannot list, never the skip's own sentences (audit M1)", want)
+				}
+			}
+		})
 	}
 }
 
