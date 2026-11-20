@@ -237,19 +237,17 @@ func TestMakefileRunsNoDevScriptThroughShOrDotSlash(t *testing.T) {
 
 	recipes := makeRecipes(t, readRepoFile(t, makefilePath))
 
-	found := 0
+	// Only a broken makeRecipes trips this, never a Makefile change on its own: it is kept so that such a parser
+	// cannot make the test pass on nothing (issue #396, item 6).
+	if len(recipes) == 0 {
+		t.Fatal("the Makefile declares no target with a recipe, so this test pins nothing")
+	}
 
 	for _, name := range slices.Sorted(maps.Keys(recipes)) {
-		found++
-
 		if lines := devScriptsRunThroughShellOrPath(recipes[name]); len(lines) != 0 {
 			t.Errorf("the recipe of make %s runs a script of dev/ through `sh` or `./`, which ignores its shebang and executable bit: run it by its path, as every dev script the Makefile runs is (issues #242 and #337):\n%s",
 				name, strings.Join(lines, "\n"))
 		}
-	}
-
-	if found == 0 {
-		t.Fatal("the Makefile declares no target with a recipe, so this test pins nothing")
 	}
 }
 
@@ -1280,10 +1278,11 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 			name: "the job's own refresh takes the lock as it loads",
 		},
 		{
-			// The install reads the lock's pid before the bootstrap and warns only about a refresh that still
-			// holds that pid and is not the pid `launchctl print` reports for the job: the lock can belong to the
-			// job's own refresh even when the maintainer started that refresh by hand, and the last condition is
-			// what the pid comparison is for (issue #229, sixth review).
+			// The lock can belong to the job's own refresh even when the maintainer started that refresh by
+			// hand: the project's job is loaded before the install runs and runs that very pid, so
+			// `launchctl print` reports it. The install must take it for the job's own refresh - not stop it,
+			// not refuse it for the start target never having recorded it, not warn about it - and replace the
+			// loaded job as usual (issue #229, sixth review; issue #396).
 			name:           "the job runs the very pid the lock holds",
 			lockHeldBefore: true,
 			jobRunsLock:    true,
@@ -1309,9 +1308,16 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 			}
 
 			if tc.jobRunsLock {
-				// The job is not loaded yet (the install's first `launchctl print` fails), the bootstrap loads it,
-				// and from then on launchctl names the refresh's own pid as the job's.
+				// The project's job is loaded before the install runs, and `launchctl print` names the refresh's
+				// own pid as the job's: the lock holds the very process the job runs, however that refresh was
+				// started.
 				f.sb.useFakeLaunchctlJobPrintingPid(t, f.env, f.label(), refresh.pid())
+
+				// A job that is loaded cannot be loaded again, so the install boots the old job out first and waits
+				// for it to go: launchd is to have it loaded now (its state file exists), to unload it at that
+				// bootout (the fake removes the file) and to load it again at the bootstrap (the fake creates it,
+				// which useFakeLaunchctlJobPrintingPid set up).
+				writeFileMode(t, f.env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"], nil, 0o600)
 			}
 
 			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
@@ -1325,6 +1331,14 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 
 			combined := stdout + stderr
 
+			if tc.jobRunsLock {
+				// The premise of this case: the job was loaded before the install ran, so the install had an old job
+				// to boot out. Without it the case would stand for the same state as the one above (issue #396).
+				if line := "+ sudo launchctl bootout system/" + f.label(); !strings.Contains(combined, line) {
+					t.Fatalf("the install did not print %q, so the job %s was not loaded before it ran and this case no longer stands for a loaded job that runs the lock's holder (issue #396)\nstdout: %s\nstderr: %s", line, f.label(), stdout, stderr)
+				}
+			}
+
 			// The lock belongs to the job's own refresh: the install must not warn about it, and must not send the
 			// maintainer to kill the loop it just loaded.
 			if strings.Contains(combined, "started by hand") {
@@ -1335,6 +1349,19 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 				if strings.Contains(line, "kill") && strings.Contains(line, pid) {
 					t.Errorf("the install tells the maintainer to kill pid %s, the refresh the job it just loaded runs: that is the process the job exists to keep running (issue #229, fifth review)\nline: %s", pid, line)
 				}
+			}
+
+			// The holder is the job's own refresh, so it is no refresher of the install's to stop, and the job
+			// keeps running it: only the recorded refresher of
+			// TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand is the install's to stop
+			// (issue #396).
+			if !refresh.running() {
+				t.Errorf("the install stopped pid %s, the process the very job it replaced runs: only the refresher the start target recorded in the instance's pid file is the install's to stop (issue #396)\nstdout: %s\nstderr: %s", pid, stdout, stderr)
+			}
+
+			// And it installed the new plist as it always does, beside loading it once.
+			if _, statErr := os.Stat(f.dest()); statErr != nil {
+				t.Errorf("the install did not write the plist %s, although the pid the lock holds is the job's own and the install has nothing to refuse or wait for (issue #396): %v", f.dest(), statErr)
 			}
 		})
 	}

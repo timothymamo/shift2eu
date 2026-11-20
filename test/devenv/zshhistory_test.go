@@ -76,6 +76,11 @@ func zshExpandsHistory(line string) bool {
 
 // zshExpandsBang reports whether what follows a `!` starts a history event: zsh leaves a `!` alone when a
 // blank, `=` or `(` follows it or it ends the line.
+//
+// It is stricter than zsh on purpose (issue #396, item 6): a `!` right before the `"` that closes a double-quoted
+// string ("hi!") is no event in zsh, and this reports it anyway. Telling that case apart would mean tracking
+// double quotes the way zsh's lexer does; reporting it only ever refuses a line that was safe, which the page
+// rewrites at no cost (`!` before a blank, or in single quotes), while a mistake the other way breaks a paste.
 func zshExpandsBang(rest string) bool {
 	if rest == "" {
 		return false
