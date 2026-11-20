@@ -9,6 +9,8 @@
     ],
     "settings": {
       "availabilityType": "REGIONAL",
+      "tier": "db-n1-standard-2",
+      "dataDiskSizeGb": "100",
       "backupConfiguration": {
         "pointInTimeRecoveryEnabled": true
       }
@@ -21,6 +23,8 @@
     "databaseVersion": "MYSQL_8_0",
     "settings": {
       "availabilityType": "ZONAL",
+      "tier": "db-custom-2-7680",
+      "dataDiskSizeGb": "20",
       "backupConfiguration": {
         "binaryLogEnabled": true
       }
@@ -33,6 +37,8 @@
     "databaseVersion": "SQLSERVER_2022_STANDARD",
     "settings": {
       "availabilityType": "ZONAL",
+      "tier": "db-custom-1-3840",
+      "dataDiskSizeGb": "10",
       "backupConfiguration": {}
     }
   }

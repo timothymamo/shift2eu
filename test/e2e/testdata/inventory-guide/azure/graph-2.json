@@ -1,5 +1,5 @@
 {
-  "count": 14,
+  "count": 15,
   "data": [
     {
       "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
@@ -14,6 +14,9 @@
         },
         "highAvailability": {
           "mode": "ZoneRedundant"
+        },
+        "storage": {
+          "storageSizeGB": 128
         }
       }
     },
@@ -31,6 +34,9 @@
         },
         "highAvailability": {
           "mode": "Disabled"
+        },
+        "storage": {
+          "storageSizeGB": 128
         }
       }
     },
@@ -47,6 +53,25 @@
         },
         "highAvailability": {
           "mode": "SameZone"
+        },
+        "storage": {
+          "storageSizeGB": 64
+        }
+      }
+    },
+    {
+      "id": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-shop/providers/Microsoft.DBforMySQL/flexibleServers/mysql-shop-reports",
+      "name": "mysql-shop-reports",
+      "type": "microsoft.dbformysql/flexibleservers",
+      "kind": "",
+      "location": "westeurope",
+      "zones": null,
+      "properties": {
+        "backup": {
+          "backupRetentionDays": 7
+        },
+        "storage": {
+          "storageSizeGB": 32
         }
       }
     },

@@ -25,6 +25,17 @@
       "ReadReplicaDBInstanceIdentifiers": []
     },
     {
+      "DBInstanceIdentifier": "shop-db-cluster-writer",
+      "AllocatedStorage": 100,
+      "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-db-cluster-writer",
+      "DBClusterIdentifier": "shop-db-cluster",
+      "Engine": "postgres",
+      "BackupRetentionPeriod": 7,
+      "MultiAZ": true,
+      "StorageEncrypted": true,
+      "ReadReplicaDBInstanceIdentifiers": []
+    },
+    {
       "DBInstanceIdentifier": "shop-legacy-mysql",
       "AllocatedStorage": 20,
       "DBInstanceArn": "arn:aws:rds:eu-central-1:123456789012:db:shop-legacy-mysql",
