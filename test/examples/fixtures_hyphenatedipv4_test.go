@@ -7,11 +7,11 @@ import (
 )
 
 // TestHyphenatedIPv4Problems pins which hyphenated numbers the fixture check
-// reads as an address: one written into a name (after an ip- that stands on its
-// own, or as a component of a dotted name) whose groups are octets and whose
-// address is outside the documentation range is reported, while a documentation
-// address, a date, a version-like token, a sequence of numbers ending a sentence
-// and a group that is no octet are not.
+// reads as an address: one written into a name - after an ip- that stands on its
+// own, or as the first label of a dotted name, a documentation domain included -
+// whose groups are octets and whose address is outside the sample range
+// 192.0.2.0/24 is reported, while a sample address, a date, a version-like token,
+// a sequence of numbers ending a sentence and a group that is no octet are not.
 func TestHyphenatedIPv4Problems(t *testing.T) {
 	t.Parallel()
 

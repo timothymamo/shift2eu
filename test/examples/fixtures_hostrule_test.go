@@ -31,8 +31,9 @@ import (
 //
 // Two suffixes are country code and private zone and Go selector at once:
 // Iceland's is (errors.Is) and local (time.Local). They are read as hosts only
-// when the whole name is lower case, so db01.corp.local and shop.example.is are
-// reported and the selectors are not (lowercaseOnlyTLDs).
+// when the name's last label is written in exactly that lower case, so
+// db01.corp.local, db01.Corp.local and shop.example.is are reported and the
+// selectors, whose last label a capital opens, are not (lowercaseOnlyTLDs).
 //
 // The account-ID, GUID, IPv4 and IPv6 rules are unchanged, and the names the
 // examples/ allow list already accepts (example.com and its subdomains, the

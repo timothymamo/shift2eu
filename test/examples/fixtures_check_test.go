@@ -223,9 +223,13 @@ func sanitisationProblems(text string) []problem {
 // The two suffixes a Go selector ends with would be a worse gap than that, since
 // every Go-source fixture that imports the package carries one of them (Iceland's
 // is in errors.Is, the private suffix local in time.Local), so both are matched
-// as hosts too, but only when the whole name is lower case (lowercaseOnlyTLDs):
-// db01.corp.local and shop.example.is are reported, the selectors are not. A
-// name under them written in capitals passes, which is one gap of the same kind.
+// as hosts too, but only when the name's last label is written in exactly this
+// lower case (lowercaseOnlyTLDs): db01.corp.local, db01.Corp.local and
+// shop.example.is are reported, the selectors, whose last label a capital opens,
+// are not. The gaps there are a name whose last label is capitals
+// (DB01.CORP.LOCAL passes) and a lower-case unexported Go selector in a
+// Go-source fixture (cfg.local, s.is), which would be reported; nothing in the
+// tree trips that one, and reporting a selector is the safe direction.
 //
 // It deliberately leaves out the TLDs that clash with a file extension a
 // fixture or a guide page names (md, sh, py, rs), so install.md or run.sh is
@@ -238,8 +242,8 @@ var publicTLDs = []string{
 	"info", "biz", "tech", "online", "site", "xyz", "shop", "store",
 	// OVHcloud's own TLD: a customer of the target hosts a site under it.
 	"ovh",
-	// The EU, EEA and EFTA country codes, but is, which is lowercased in
-	// lowercaseOnlyTLDs below.
+	// The EU, EEA and EFTA country codes, but is, which lowercaseOnlyTLDs
+	// matches only in lower case.
 	"eu", "at", "be", "bg", "ch", "cy", "cz", "de", "dk", "ee", "es", "fi",
 	"fr", "gr", "hr", "hu", "ie", "it", "li", "lt", "lu", "lv", "mt", "nl",
 	"no", "pl", "pt", "ro", "se", "si", "sk", "uk",
@@ -250,11 +254,15 @@ var publicTLDs = []string{
 }
 
 // lowercaseOnlyTLDs are the public suffixes under which the fixture check reads
-// a name as a host only when the whole name is written in lower case: a Go
-// selector ends with one of them (errors.Is, time.Local), and a Go-source
-// fixture is full of those, while a lower-case name under them is a host - the
-// country code of Iceland, or the .local zone mDNS and a customer's own internal
-// DNS use.
+// a name as a host only when the name's last label is written in exactly this
+// lower case: a Go selector ends with one of them and capitalises that label
+// (errors.Is, time.Local), and a Go-source fixture is full of those, while a
+// host under them - the country code of Iceland, or the .local zone mDNS and a
+// customer's own internal DNS use - is written in lower case, whatever the
+// labels before it are (db01.Corp.local). An all-caps name (DB01.CORP.LOCAL)
+// passes, a gap of the same kind as the curated TLD list above, and a lower-case
+// unexported selector in a Go-source fixture (cfg.local, s.is) would be
+// reported, which fails closed.
 var lowercaseOnlyTLDs = []string{"local", "is"}
 
 // publicVendorHosts are the exact public hosts of the vendors and projects a
@@ -297,11 +305,11 @@ var publicVendorHosts = []string{
 
 // fixtureHostnameProblems returns the problems hostnameProblems reports that
 // are host names in the fixture sense: names whose last label is a public TLD
-// (publicTLDs) or one of the suffixes a Go selector ends with
-// (lowercaseOnlyTLDs, matched only when the whole name is lower case), and that
-// are not an exact public vendor host (publicVendorHosts). Every name
-// hostnameProblems already accepts (example.com and its subdomains, the reserved
-// .example name, the provider API hosts, the taxonomy vocabulary) stays accepted.
+// (publicTLDs) or, written in lower case exactly, one of the two suffixes a Go
+// selector ends with (lowercaseOnlyTLDs), and that are not an exact public
+// vendor host (publicVendorHosts). Every name hostnameProblems already accepts
+// (example.com and its subdomains, the reserved .example name, the provider API
+// hosts, the taxonomy vocabulary) stays accepted.
 func fixtureHostnameProblems(text string) []problem {
 	var problems []problem
 
@@ -316,10 +324,13 @@ func fixtureHostnameProblems(text string) []problem {
 
 		switch {
 		case slices.Contains(lowercaseOnlyTLDs, label):
-			// A Go selector is written with a capital at the step that ends
-			// with one of these suffixes (errors.Is, time.Local); a host under
-			// them is written in lower case (db01.corp.local).
-			if p.value != lower {
+			// An exported Go selector ends with one of these suffixes and
+			// writes its last label with a capital (errors.Is, time.Local,
+			// time.Time.Local), while a host under them writes that label in
+			// lower case, whatever the labels before it look like
+			// (db01.Corp.local): only a last label that is exactly the
+			// lower-case suffix is a host.
+			if lastLabel(p.value) != label {
 				continue
 			}
 		case !slices.Contains(publicTLDs, label):
@@ -346,33 +357,28 @@ func lastLabel(name string) string {
 // (hyphenatedIPv4InName) whose groups are octets (parseHyphenatedIPv4).
 var hyphenatedIPv4Pattern = regexp.MustCompile(`\b[0-9]{1,3}(?:-[0-9]{1,3}){3}\b`)
 
-var (
-	// hyphenatedIPv4DocumentationRanges are the three documentation ranges of
-	// RFC 5737, in the words a failure message spells them with. The fixture
-	// check accepts an address written into a name in any of them, because a
-	// guide page or a fixture may name any; the samples keep to the one range
-	// ipv4Problems holds them to.
-	hyphenatedIPv4DocumentationRanges = []string{"192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24"}
-
-	// hyphenatedIPv4DocumentationNets is the same list, parsed once.
-	hyphenatedIPv4DocumentationNets = func() []netip.Prefix {
-		nets := make([]netip.Prefix, len(hyphenatedIPv4DocumentationRanges))
-
-		for i, ranges := range hyphenatedIPv4DocumentationRanges {
-			nets[i] = netip.MustParsePrefix(ranges)
-		}
-
-		return nets
-	}()
-)
-
 // hyphenatedIPv4Problems returns a problem for every IPv4 address the fixture
 // check reads in a name written with hyphens, when the address is outside the
-// documentation ranges. It reports the address the way ipv4Problems reports a
-// dotted one. The .internal suffix already catches a full AWS host name
-// (ip-10-1-2-3.eu-central-1.compute.internal) through the host name rule, but a
-// bare ip-10-1-2-3 carries no dot at all, so without this rule a customer's
-// private address written that way would pass.
+// documentation range every sample address is in (documentationPrefix), the same
+// one range the dotted rule holds a sample to. It reports the address the way
+// ipv4Problems reports a dotted one. The .internal suffix already catches a full
+// AWS host name (ip-10-1-2-3.eu-central-1.compute.internal) through the host name
+// rule, but a bare ip-10-1-2-3 carries no dot at all, so without this rule a
+// customer's private address written that way would pass.
+//
+// It knowingly leaves these forms to a follow-up issue rather than report a value
+// it cannot tell from prose:
+//
+//   - an address with no ip- prefix in no dotted name, bare (10-1-2-3) or inside
+//     a single label (node-10-1-2-3): the run alone is a run of numbers, and the
+//     rule reports only what a name marks as an address;
+//   - an address written with underscores (ip_10_1_2_3), which no source writes
+//     into a name;
+//   - a zero-padded octet (ip-10-01-2-3) and a hexadecimal address (ip-0a010203),
+//     which parseHyphenatedIPv4 rejects: a name holding one passes;
+//   - a run a leftmost match swallows: in x-5-10-1-2-3 the pattern matches
+//     5-10-1-2-3 from the leftmost digit, which is no address, and the address
+//     inside it is never looked at again.
 func hyphenatedIPv4Problems(text string) []problem {
 	var problems []problem
 
@@ -388,15 +394,14 @@ func hyphenatedIPv4Problems(text string) []problem {
 			continue
 		}
 
-		if slices.ContainsFunc(hyphenatedIPv4DocumentationNets, func(prefix netip.Prefix) bool { return prefix.Contains(addr) }) {
+		if documentationPrefixNet.Contains(addr) {
 			continue
 		}
 
 		problems = append(problems, problem{
 			line:  lineOf(text, match[0]),
 			value: candidate,
-			rule: "is an IPv4 address written into a name, outside the documentation ranges " +
-				strings.Join(hyphenatedIPv4DocumentationRanges, ", ") + " (CLAUDE.md rule 2)",
+			rule:  "is an IPv4 address written into a name, outside the documentation range " + documentationPrefix + " (CLAUDE.md rule 2)",
 		})
 	}
 
@@ -405,19 +410,47 @@ func hyphenatedIPv4Problems(text string) []problem {
 
 // hyphenatedIPv4InName reports whether the four-group run text[start:end] is an
 // address written into a name rather than a run of numbers that merely has its
-// shape: the run either follows ip-, the prefix AWS and Azure give an address in
-// a machine's name (ip-10-1-2-3), or it is one component of a dotted name
-// (10-1-2-3.eu-central-1.compute.internal, and so vm-10-1-2-3.acme.corp too).
-// A run of four numbers in prose (1-2-3-4) or at the end of a version-like token
-// (build-1-2-3-4) is neither, so the rule stays off values that only look like
-// an address; parseHyphenatedIPv4 then keeps out every run whose groups are not
-// octets and every run of digits with a leading zero.
+// shape: the run either follows an ip- that stands on its own, the prefix AWS and
+// Azure give an address in a machine's name (ip-10-1-2-3), or it is the first
+// label of a dotted name (10-1-2-3.eu-central-1.compute.internal, and so
+// vm-10-1-2-3.acme.corp too). A documentation domain name can hold one as well:
+// 10-1-2-3.example.com names a private address although its domain identifies
+// nobody, so the address alone is reported. A run of four numbers in prose
+// (1-2-3-4) or at the end of a version-like token (build-1-2-3-4) is neither: the
+// ip- inside ship- or zip- is no prefix (hyphenatedIPv4AfterIPPrefix), and the
+// full stop that ends a sentence opens no label, so the rule stays off values that
+// only look like an address; parseHyphenatedIPv4 then keeps out every run whose
+// groups are not octets and every run of digits with a leading zero.
 func hyphenatedIPv4InName(text string, start, end int) bool {
-	if start >= len("ip-") && strings.EqualFold(text[start-len("ip-"):start], "ip-") {
+	if hyphenatedIPv4AfterIPPrefix(text, start) {
 		return true
 	}
 
-	return strings.HasPrefix(text[end:], ".")
+	return strings.HasPrefix(text[end:], ".") && end+1 < len(text) && labelByte(text[end+1])
+}
+
+// hyphenatedIPv4AfterIPPrefix reports whether text[:start] ends with an ip-
+// prefix that stands on its own: one that starts the text, or one whose byte
+// before is no letter or digit, so the ip- inside ship- or zip- is no prefix. The
+// match is case-insensitive, since a name is written in capitals as often as
+// not.
+func hyphenatedIPv4AfterIPPrefix(text string, start int) bool {
+	prefix := start - len("ip-")
+	if prefix < 0 || !strings.EqualFold(text[prefix:start], "ip-") {
+		return false
+	}
+
+	if prefix == 0 {
+		return true
+	}
+
+	return !labelByte(text[prefix-1])
+}
+
+// labelByte reports whether b is a byte a dotted name's label is built from: an
+// ASCII letter or digit, the characters hostnamePattern builds a label from.
+func labelByte(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z'
 }
 
 // parseHyphenatedIPv4 parses candidate, four groups of one to three digits
