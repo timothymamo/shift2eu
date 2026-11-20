@@ -117,8 +117,9 @@ type sizeFact struct {
 	noVCPUs     bool
 	noMemoryGiB bool
 	// noCount says the resource gives no count: a database instance of high
-	// availability is one resource with a stand-by, not a second instance to
-	// move, and the guide fills count for a single-node instance only.
+	// availability gets none, because what its standby adds to the count
+	// depends on how the target prices high availability, and the guide fills
+	// count for a single-node instance only.
 	noCount bool
 }
 
@@ -167,8 +168,9 @@ func inventoryGuides() []inventoryGuideCase {
 				// The GiB of an EBS volume, from ec2 describe-volumes.
 				{id: "vol-0123456789abcdef6", storageGiB: 100},
 				// The AllocatedStorage of an RDS instance, with the one instance a
-				// single-node instance is. A Multi-AZ instance has a stand-by, not
-				// a second instance to move, so it gets no count.
+				// single-node instance is. A Multi-AZ instance gets no count: what
+				// its standby adds depends on how the target prices high
+				// availability, so the program writes none.
 				{id: "shop-db", storageGiB: 50, noCount: true},
 				{id: "shop-db-replica", storageGiB: 50, count: 1},
 				{id: "shop-legacy-mysql", storageGiB: 20, count: 1},
@@ -211,8 +213,8 @@ func inventoryGuides() []inventoryGuideCase {
 				// The dataDiskSizeGb of a Cloud SQL instance, which gcloud writes
 				// as a string. Its tier is db-n1-standard-2, which names no vCPU
 				// and memory the calls report, and its availabilityType is
-				// REGIONAL: a regional instance has a stand-by, not a second
-				// instance to move.
+				// REGIONAL, so it gets no count: what its standby adds depends on
+				// how the target prices high availability.
 				{id: "shop-db", storageGiB: 100, noVCPUs: true, noMemoryGiB: true, noCount: true},
 				// A db-custom-<vCPU>-<memory MiB> tier gives both numbers:
 				// db-custom-2-7680 is 2 vCPU and 7680 MiB. A zonal instance is one
@@ -264,9 +266,9 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "disk-shop-web-1-data", storageGiB: 64},
 				{id: "vm-shop-web-1_OsDisk_1", storageGiB: 128},
 				// The storageSizeGB of a flexible server. ZoneRedundant and SameZone
-				// are server-side redundancy, not a second server to move, so they
-				// get no count; a server with high availability disabled or
-				// unset is one server.
+				// get no count: what a standby adds depends on how the target prices
+				// high availability, so the program writes none; a server with high
+				// availability disabled or unset is one server.
 				{id: "psql-shop", storageGiB: 128, noCount: true},
 				{id: "mysql-shop-catalog", storageGiB: 64, noCount: true},
 				{id: "psql-shop-replica", storageGiB: 128, count: 1},
