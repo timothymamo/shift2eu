@@ -1098,6 +1098,9 @@ func TestVMUpDoesNotRepeatAnUnsafeLimaPlistPath(t *testing.T) {
 		// home is the last component of the fixture's HOME: the sandbox's own directory, so the case adds the
 		// character no path in this test is expected to hold and nothing else about the run changes.
 		home string
+		// loaded has launchd serve the job as loaded in the user's domain, as `limactl autostart enable` leaves
+		// it: the warning then advises the bootout of a loaded job, whose plist path must be held back as well.
+		loaded bool
 	}{
 		{
 			// A space splits `rm -f /Users/John Doe/...` into two commands: rm removes /Users/John, and Doe is
@@ -1114,6 +1117,13 @@ func TestVMUpDoesNotRepeatAnUnsafeLimaPlistPath(t *testing.T) {
 			// A $ expands when the advice is pasted, so the command names another file than the plist.
 			name: "a HOME with a dollar sign",
 			home: "host$home",
+		},
+		{
+			// The job launchd has loaded too: the warning advises its bootout as well as the removal by hand, and
+			// the bootout names the job, never the plist under the unsafe home (issues #315, #398).
+			name:   "a loaded job and a HOME with a space",
+			home:   "host home",
+			loaded: true,
 		},
 	}
 
@@ -1136,10 +1146,17 @@ func TestVMUpDoesNotRepeatAnUnsafeLimaPlistPath(t *testing.T) {
 			// Lima's job's plist as `limactl autostart enable` writes it, into the home the case chose.
 			writeFileMode(t, plist, []byte("Lima's own autostart job of "+vmUpInstance+"\n"), 0o600)
 
+			state := "installed"
+			if tc.loaded {
+				// The same job, loaded in the user's domain as `limactl autostart enable` leaves it.
+				jobs.add(t, userDomain, label, loadedJob{args: []string{"/opt/homebrew/bin/limactl", "start", vmUpInstance, "--foreground"}})
+				state = "loaded in " + jobs.domainName(userDomain)
+			}
+
 			stdout, stderr, err := f.run(t, "vm-up")
 			if err != nil {
-				t.Fatalf("make vm-up exited non-zero for %s although Lima's autostart job %s only warns: the VM still starts, the exit status stays 0 (issues #315, #398): %v\nstdout: %s\nstderr: %s",
-					tc.name, label, err, stdout, stderr)
+				t.Fatalf("make vm-up exited non-zero for %s although Lima's autostart job %s is %s and only warns: the VM still starts, the exit status stays 0 (issues #315, #398): %v\nstdout: %s\nstderr: %s",
+					tc.name, label, state, err, stdout, stderr)
 			}
 
 			// The VM is started either way: the warning changes nothing about the start (issue #315).
@@ -1165,13 +1182,24 @@ func TestVMUpDoesNotRepeatAnUnsafeLimaPlistPath(t *testing.T) {
 			// Holding the path back must not hold back the warning: it still names the job and how to remove it
 			// the supported way, still reports it as installed, and still offers the removal by hand - as a
 			// pointer to the plist, never as a command that names it.
-			for _, want := range []string{
+			wants := []string{
 				label,
-				"is installed",
+				"is " + state,
 				"limactl autostart disable " + vmUpInstance,
 				"not shown",
 				"remove its plist",
-			} {
+				// The pointer to the plist, which is all that may name it: a job loaded from an unsafe path is
+				// still findable without printing that path (security audit L1, auditor nit #396).
+				"ls ~/Library/LaunchAgents/" + label + ".plist",
+			}
+
+			// A loaded job is booted out of its domain before its plist is removed, and never through a command
+			// that names the plist itself (issues #315, #398).
+			if tc.loaded {
+				wants = append(wants, "launchctl bootout gui/"+strconv.Itoa(os.Getuid())+"/"+label)
+			}
+
+			for _, want := range wants {
 				if !strings.Contains(combined, want) {
 					t.Errorf("make vm-up does not warn with %q although it holds the plist's path back: a maintainer still has to find the job, see that it starts the VM at every boot and remove it (security audit L1)\nstdout: %s\nstderr: %s",
 						want, stdout, stderr)
