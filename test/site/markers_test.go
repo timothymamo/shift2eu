@@ -428,7 +428,12 @@ func readSelectorName(s string) (string, string) {
 func hidingDeclaration(t *testing.T, decl cssDecl, props map[string]string) string {
 	t.Helper()
 
-	value := strings.ToLower(resolveValue(t, "stylesheet", decl.value, props))
+	resolved, err := resolveValue("stylesheet", decl.value, props)
+	if err != nil {
+		t.Fatalf("the checks read no value for %s: %v", decl.property, err)
+	}
+
+	value := strings.ToLower(resolved)
 	first := strings.Fields(value + " ")[0]
 
 	switch decl.property {

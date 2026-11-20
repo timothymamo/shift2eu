@@ -64,6 +64,70 @@ func isWebURL(u *url.URL) bool {
 	return u.Scheme == "" || u.Scheme == "http" || u.Scheme == "https"
 }
 
+// referenceSchemes are the schemes an absolute reference of a page may name: the
+// web's http and https, which a page loads or navigates to, and the contact
+// points' mailto, which names an address rather than a resource. A
+// protocol-relative reference spells no scheme at all, and the document's own
+// gives it one of the web's (webSchemes).
+var referenceSchemes = []string{"http", "https", "mailto"}
+
+// absoluteReferenceProblem says why the reference ref is no reference a page of
+// the site may make, and "" when it is one: an absolute reference names the web
+// (http or https, or a protocol-relative path) or the mailto address of a
+// contact point, and no other scheme. A file:, ftp:, ws:, blob: or javascript:
+// reference names a resource or a navigation the site does not mean, and the
+// browser would follow it where a reader cannot see what it does. A relative
+// reference is left to the bundle checks: it names a file of the bundle.
+func absoluteReferenceProblem(ref string) string {
+	if !isAbsoluteURL(ref) {
+		return ""
+	}
+
+	parsed, err := url.Parse(ref)
+	if err != nil {
+		return fmt.Sprintf("it is no URL: %v", err)
+	}
+
+	if parsed.Scheme == "" && strings.HasPrefix(ref, "//") {
+		return ""
+	}
+
+	if slices.Contains(referenceSchemes, parsed.Scheme) {
+		return ""
+	}
+
+	return fmt.Sprintf("it uses the scheme %q, want one of %v: an absolute reference names the web, a protocol-relative path, or the mailto address of a contact point",
+		parsed.Scheme, referenceSchemes)
+}
+
+// siteFileProblem says what about the absolute reference ref is a file of the
+// bundle addressed at an absolute URL, and "" when it addresses none. Only the
+// mailto scheme is exempt, because it names an address rather than a path of
+// the site: every other scheme's path is read as one, so an uppercase HTTPS://
+// and a protocol-relative //host are checked exactly like a file:///index.html
+// a later page might spell.
+func siteFileProblem(bundle *bundle, ref string) string {
+	parsed, err := url.Parse(ref)
+	if err != nil {
+		return fmt.Sprintf("it is no URL: %v", err)
+	}
+
+	if parsed.Scheme == "mailto" {
+		return ""
+	}
+
+	path := strings.TrimPrefix(parsed.Path, "/")
+	if path == "" {
+		path = "index.html"
+	}
+
+	if !slices.Contains(bundle.files, path) {
+		return ""
+	}
+
+	return fmt.Sprintf("it addresses the bundle's own %s at the absolute URL: every reference to a site file is a same-origin relative path", path)
+}
+
 // bundleFile resolves a same-origin relative reference to the bundle file it
 // names, failing the test when the reference is absolute, leaves the bundle or
 // names a file the bundle does not hold.
@@ -323,8 +387,8 @@ func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
 				t.Errorf("isWebURL(%q) = true, want false: a mailto: reference names no file of the site, so the site-file check must not read its address as a path", tc.ref)
 			}
 
-			if path := strings.TrimPrefix(parsed.Path, "/"); path != "" && slices.Contains(bundle.files, path) {
-				t.Errorf("the address of %q reads as the bundle file %q, so the site-file check would refuse it: such a reference names no file", tc.ref, path)
+			if problem := siteFileProblem(bundle, tc.ref); problem != "" {
+				t.Errorf("the site-file check refuses %q: %s, want it left alone: such a reference names no file", tc.ref, problem)
 			}
 		})
 	}
@@ -333,8 +397,10 @@ func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
 // TestNoAbsoluteURLToASiteFile pins that no page addresses a file of its own
 // bundle at an absolute URL: the bundle runs unchanged on any origin, a local
 // static file server included (PRD #297, Layer 2 and Layer 3). A link to another
-// site is no site file and stays allowed, and so does a reference of a scheme
-// that names no path at all, such as a `mailto:` link.
+// site is no site file and stays allowed, and so does a `mailto:` reference,
+// which names an address rather than a path; no other scheme is exempt, so a
+// file:, ftp:, ws:, blob: or javascript: reference is read as a path too (see
+// TestSiteFileAtAnAbsoluteURLIsRefused).
 func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 	t.Parallel()
 
@@ -351,26 +417,138 @@ func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 						continue
 					}
 
-					parsed, err := url.Parse(ref)
-					if err != nil {
-						t.Errorf("%s holds %s=%q on <%s>, which is no URL: %v", page, attribute, ref, el.tag, err)
-
-						continue
-					}
-
-					if !isWebURL(parsed) {
-						continue
-					}
-
-					path := strings.TrimPrefix(parsed.Path, "/")
-					if path == "" {
-						path = "index.html"
-					}
-
-					if slices.Contains(bundle.files, path) {
-						t.Errorf("%s addresses the bundle's own %s at the absolute URL %q: every reference to a site file is a same-origin relative path", page, path, ref)
+					if problem := siteFileProblem(bundle, ref); problem != "" {
+						t.Errorf("%s holds %s=%q on <%s>, and %s", page, attribute, ref, el.tag, problem)
 					}
 				}
+			}
+		})
+	}
+}
+
+// TestSiteFileAtAnAbsoluteURLIsRefused pins what the site-file check reads from
+// an absolute reference of any scheme: a mailto address is the only exemption,
+// and an uppercase HTTPS:// and a protocol-relative //host are read as the paths
+// they spell, so a later file:///index.html or ftp://host/style.css is caught
+// rather than skipped. Each case names the bundle file the check must refuse, or
+// none when the reference names no site file.
+func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	tests := []struct {
+		name string
+		ref  string
+		// wantFile is the bundle file the check must refuse, or "" when the
+		// reference names none.
+		wantFile string
+	}{
+		{name: "an uppercase HTTPS URL to a site file", ref: "HTTPS://example.com/index.html", wantFile: "index.html"},
+		{name: "a protocol-relative URL to a site file", ref: "//example.com/index.html", wantFile: "index.html"},
+		{name: "a file URL to a site file", ref: "file:///index.html", wantFile: "index.html"},
+		{name: "an ftp URL to a site file", ref: "ftp://example.com/privacy.html", wantFile: "privacy.html"},
+		{name: "the contact address", ref: contactHref, wantFile: ""},
+		{name: "an address with a subject", ref: contactHref + "?subject=Assessment", wantFile: ""},
+		{name: "the repository", ref: repositoryURL, wantFile: ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			problem := siteFileProblem(bundle, tc.ref)
+
+			if tc.wantFile == "" {
+				if problem != "" {
+					t.Errorf("siteFileProblem(%q) = %q, want none: the reference names no file of the bundle", tc.ref, problem)
+				}
+
+				return
+			}
+
+			if !strings.Contains(problem, tc.wantFile) {
+				t.Errorf("siteFileProblem(%q) = %q, want a problem naming %q: an absolute URL to a site file is refused, whatever its scheme",
+					tc.ref, problem, tc.wantFile)
+			}
+		})
+	}
+}
+
+// TestAbsoluteReferencesAreOfTheWeb pins that every absolute reference of every
+// page names the web (http or https, or a protocol-relative path) or the mailto
+// address of a contact point: no page holds a file:, ftp:, ws:, blob: or
+// javascript: reference, which a browser would follow where the site means
+// nothing of the kind.
+func TestAbsoluteReferencesAreOfTheWeb(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	for _, page := range pageNames {
+		t.Run(page, func(t *testing.T) {
+			t.Parallel()
+
+			references := 0
+
+			for _, el := range bundle.html(t, page).all() {
+				for _, attribute := range []string{"href", "src", "action", "data"} {
+					ref, ok := el.attr(attribute)
+					if !ok || !isAbsoluteURL(ref) {
+						continue
+					}
+
+					references++
+
+					if problem := absoluteReferenceProblem(ref); problem != "" {
+						t.Errorf("%s holds %s=%q on <%s>, and %s", page, attribute, ref, el.tag, problem)
+					}
+				}
+			}
+
+			if references == 0 {
+				t.Errorf("%s holds no absolute reference, so the check read nothing: every page links to the repository's HTTPS URL", page)
+			}
+		})
+	}
+}
+
+// TestAbsoluteReferenceSchemes pins what the scheme check reads from an inline
+// reference: a javascript: and a file: reference fail, and the web's http and
+// https, an uppercase HTTPS://, a protocol-relative //host and the contact
+// points' mailto pass. A relative reference is no absolute reference and is left
+// to the bundle checks.
+func TestAbsoluteReferenceSchemes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ref  string
+		want bool
+	}{
+		{name: "a javascript reference", ref: "javascript:alert(1)", want: false},
+		{name: "a file reference", ref: "file:///index.html", want: false},
+		{name: "an ftp reference", ref: "ftp://example.com/style.css", want: false},
+		{name: "a blob reference", ref: "blob:https://example.com/6f2c", want: false},
+		{name: "the contact address", ref: contactHref, want: true},
+		{name: "an https reference", ref: "https://example.com/index.html", want: true},
+		{name: "an uppercase HTTPS reference", ref: "HTTPS://example.com/index.html", want: true},
+		{name: "a protocol-relative reference", ref: "//example.com/index.html", want: true},
+		{name: "a relative reference", ref: "index.html", want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			problem := absoluteReferenceProblem(tc.ref)
+
+			if tc.want && problem != "" {
+				t.Errorf("absoluteReferenceProblem(%q) = %q, want none: the reference names the web or a mailto address", tc.ref, problem)
+			}
+
+			if !tc.want && problem == "" {
+				t.Errorf("absoluteReferenceProblem(%q) = none, want a problem: the check must refuse a reference of another scheme", tc.ref)
 			}
 		})
 	}

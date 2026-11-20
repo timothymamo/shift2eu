@@ -1,6 +1,7 @@
 package site_test
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -265,20 +266,20 @@ var namedColours = map[string]colour{
 }
 
 // resolveValue substitutes every var(--name) in value, in one pass per
-// substitution, and returns the result. It fails the test on a var() whose
-// custom property the stylesheet does not declare.
-func resolveValue(t *testing.T, name, value string, props map[string]string) string {
-	t.Helper()
-
+// substitution, and returns the result. It returns an error naming a var() whose
+// custom property the palette does not declare, rather than failing the test, so
+// a case can say what a stylesheet that uses a token of the other palette is
+// read as.
+func resolveValue(name, value string, props map[string]string) (string, error) {
 	for range 8 {
 		start := strings.Index(value, "var(")
 		if start < 0 {
-			return value
+			return value, nil
 		}
 
 		end := strings.Index(value[start:], ")")
 		if end < 0 {
-			t.Fatalf("%s: the value %q has an unterminated var()", name, value)
+			return "", fmt.Errorf("%s: the value %q has an unterminated var()", name, value)
 		}
 
 		inside := value[start+len("var(") : start+end]
@@ -290,16 +291,14 @@ func resolveValue(t *testing.T, name, value string, props map[string]string) str
 			if hasFallback {
 				replacement = strings.TrimSpace(fallback)
 			} else {
-				t.Fatalf("%s: the value %q uses %s, which the stylesheet does not declare", name, value, property)
+				return "", fmt.Errorf("%s: the value %q uses %s, which the stylesheet does not declare", name, value, property)
 			}
 		}
 
 		value = value[:start] + replacement + value[start+end+1:]
 	}
 
-	t.Fatalf("%s: the value %q has too many nested var() calls", name, value)
-
-	return ""
+	return "", fmt.Errorf("%s: the value %q has too many nested var() calls", name, value)
 }
 
 // parseColour reads one colour value: a hexadecimal literal, an rgb() or
