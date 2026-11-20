@@ -69,22 +69,24 @@ func ParseAnswer(text string) (Answer, error) {
 	dec.DisallowUnknownFields()
 
 	var raw rawAnswer
-	if err := dec.Decode(&raw); err != nil {
-		return Answer{}, newShapeError(checkNotOneObject, err)
+	// The decoder's error is dropped: it quotes text of the answer, a field
+	// name or a few characters (shapeError).
+	if dec.Decode(&raw) != nil {
+		return Answer{}, newShapeError(checkNotOneObject)
 	}
 
 	// What the decoder buffered but did not use, then what it never read.
 	rest, err := io.ReadAll(io.MultiReader(dec.Buffered(), src))
 	if err != nil || len(bytes.TrimSpace(rest)) != 0 {
-		return Answer{}, newShapeError(checkTextAfter, nil)
+		return Answer{}, newShapeError(checkTextAfter)
 	}
 
 	if raw.Summary == nil || strings.TrimSpace(*raw.Summary) == "" {
-		return Answer{}, newShapeError(checkNoSummary, nil)
+		return Answer{}, newShapeError(checkNoSummary)
 	}
 
 	if raw.Findings == nil {
-		return Answer{}, newShapeError(checkNoFindings, nil)
+		return Answer{}, newShapeError(checkNoFindings)
 	}
 
 	answer := Answer{Summary: *raw.Summary, Findings: make([]Finding, 0, len(*raw.Findings))}
@@ -107,13 +109,15 @@ func ParseAnswer(text string) (Answer, error) {
 // a field of the wrong type), text around the object, no summary or no
 // findings array. Run asks the model once more for such an answer (issue
 // #316); a finding ParseAnswer refuses is no shapeError and is not asked again.
-// It wraps ErrMalformedAnswer as every malformed answer's error does, and its
-// text is the error's own. check is the phrase of the shape check that failed,
-// one of this package's constants and never text of the answer, which Run's
-// retry notice names (issue #343).
+// It wraps ErrMalformedAnswer as every malformed answer's error does. check is
+// the phrase of the shape check that failed, one of this package's constants
+// and never text of the answer, which Run's retry notice names (issue #343).
+// The error's text is ErrMalformedAnswer's and check's alone, and it wraps
+// nothing else: the decoder's own error quotes what it could not read (a field
+// name the model chose, a character of its answer), and the error reaches the
+// job's public ::error line, so it is dropped rather than wrapped (issue #366).
 type shapeError struct {
 	check string
-	err   error
 }
 
 // The shape checks ParseAnswer makes, as its errors and the retry notice name
@@ -125,19 +129,14 @@ const (
 	checkNoFindings   = "no findings array"
 )
 
-// newShapeError returns the shapeError of check, wrapping ErrMalformedAnswer
-// and cause when there is one.
-func newShapeError(check string, cause error) shapeError {
-	if cause != nil {
-		return shapeError{check: check, err: fmt.Errorf("%w: %s: %w", ErrMalformedAnswer, check, cause)}
-	}
-
-	return shapeError{check: check, err: fmt.Errorf("%w: %s", ErrMalformedAnswer, check)}
+// newShapeError returns the shapeError of check.
+func newShapeError(check string) shapeError {
+	return shapeError{check: check}
 }
 
-func (e shapeError) Error() string { return e.err.Error() }
+func (e shapeError) Error() string { return ErrMalformedAnswer.Error() + ": " + e.check }
 
-func (e shapeError) Unwrap() error { return e.err }
+func (e shapeError) Unwrap() error { return ErrMalformedAnswer }
 
 // isShapeError reports whether err is, or wraps, a shapeError.
 func isShapeError(err error) bool {

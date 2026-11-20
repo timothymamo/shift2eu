@@ -67,9 +67,10 @@ type Result struct {
 // post returns with nothing posted and nothing dismissed, with one exception
 // (issue #316): an answer of the wrong shape is asked once more with the same
 // prompt while ctx is not done, announced by a notice to cfg.Notices (issue
-// #343), and when the second answer has the wrong shape
-// too Run posts a COMMENT review with no finding that says the review could not
-// be read, and still fails with an error wrapping ErrMalformedAnswer. That post
+// #343), and when the second answer has the wrong shape too Run posts a COMMENT
+// review with no finding that says the review could not be read, and still
+// fails with an error wrapping ErrMalformedAnswer, which names the pull request
+// and the shape check, never the decoder's message (issue #366). That post
 // is made on a context detached from ctx's cancellation, bounded by
 // UnreadablePostTimeout, so it is made even when ctx ends right after the
 // second answer. Run sets no deadline of its own: ctx carries the run's
@@ -190,7 +191,12 @@ var errUnreadableTwice = errors.New("the model was asked twice and neither answe
 // ErrMalformedAnswer. A finding ParseAnswer refuses is not asked again (#295
 // keeps those fields strict), and neither is a failed model call. Before the
 // retry it writes one GitHub notice to notices that names the pull request and
-// the shape check that failed, never any text of the answer (issue #343).
+// the shape check that failed, never any text of the answer (issue #343). The
+// error it returns for an answer of the wrong shape, once or twice, holds no
+// text of the answer either: a shapeError's text is the constant phrase of its
+// check alone, never the decoder's message, so the job's ::error line that
+// ci/aireview's main prints of it names the pull request and the check (issue
+// #366).
 func askForAnswer(ctx context.Context, model Asker, prompt Prompt, number int, notices io.Writer) (Answer, error) {
 	answer, err := askOnce(ctx, model, prompt, number)
 
