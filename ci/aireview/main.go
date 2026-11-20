@@ -80,6 +80,12 @@ func run() int {
 		return fail(err)
 	}
 
+	if result.Skip != nil {
+		reportSkipped(os.Stdout, settings.StepSummary, *result.Skip)
+
+		return 0
+	}
+
 	fmt.Printf("ai review: posted %s on %s with %d findings (%d blocking), dismissed %d earlier change requests\n",
 		result.Event, result.HeadSHA, result.Findings, result.Blocking, len(result.Dismissed))
 
@@ -109,6 +115,48 @@ func readInstructions() (review.Instructions, error) {
 		ReviewChangeSkill:  string(reviewChange),
 		SecurityAuditSkill: string(securityAudit),
 	}, nil
+}
+
+// reportSkipped reports a run that ended in the skipped outcome (issues #367,
+// #376, ADR 0033), whose review saying so Run has posted: one workflow warning
+// on stdout (review.SkipAnnotation), then, when summaryPath is not "" (the
+// absolute $GITHUB_STEP_SUMMARY), one line appended to the job summary
+// (review.SkipSummaryLine). A summary that cannot be written is reported as a
+// second warning, with its error escaped, and changes nothing else: the review
+// on the pull request and the first warning already say the review was
+// skipped, so the run still exits 0 rather than turning a skip into a failing
+// check over a log line.
+func reportSkipped(stdout *os.File, summaryPath string, skip review.Skip) {
+	fmt.Fprintln(stdout, review.SkipAnnotation(skip))
+
+	if summaryPath == "" {
+		return
+	}
+
+	if err := appendLine(summaryPath, review.SkipSummaryLine(skip)); err != nil {
+		fmt.Fprintf(stdout, "::warning title=AI review summary not written::%s\n", review.AnnotationData(err.Error()))
+	}
+}
+
+// appendLine appends line and a line break to the file at path, creating it
+// when it does not exist, as the runner's job summary file is appended to.
+func appendLine(path, line string) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600) //nolint:gosec // the runner's absolute $GITHUB_STEP_SUMMARY, which SettingsFromEnv checked; written, never read
+	if err != nil {
+		return fmt.Errorf("open the job summary: %w", err)
+	}
+
+	if _, err := fmt.Fprintln(f, line); err != nil {
+		_ = f.Close()
+
+		return fmt.Errorf("append to the job summary: %w", err)
+	}
+
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("close the job summary: %w", err)
+	}
+
+	return nil
 }
 
 // fail prints err as one workflow error annotation and returns the exit code 1.

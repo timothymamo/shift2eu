@@ -619,6 +619,24 @@ a model that answers twice with no `findings` array ends in the skipped outcome,
 split diff doing so; a part's model error fails the run and posts nothing; and the answer format says
 `"findings": []`.
 
+**As implemented.** The details the design above left open:
+
+- **The warning and the job summary name no path.** The skip's message (`Skip.Message`, which the
+  `::warning` line and the summary line carry) is built from the program's own words and numbers alone;
+  the path of a single file over the limit is the pull request's text, so only the review names it, in
+  a code span escaped and cut as the "Not reviewed" note's paths are.
+- **A job summary that cannot be written** (`ci/aireview`'s `reportSkipped`) is a second `::warning`
+  line with the error escaped, and the run still exits 0: the review on the pull request and the first
+  warning already say the review was skipped, and a log line is no reason to turn the skip into a
+  failing check. An unset or empty `GITHUB_STEP_SUMMARY` writes no summary; a relative one is a bad
+  setting and fails the run before anything is read.
+- **Concurrency.** Each part writes its notices to a buffer of its own, which `Run` copies to the log as
+  the part ends, from its own goroutine alone, so the log needs no lock and a part's notice is never
+  interleaved with another's. The channel is buffered for every part, so no goroutine is left blocked
+  once `Run` returns. The first real failure cancels the other parts' context and is the error returned
+  once every part has ended; with none, the skip names the first part, in the parts' order, whose two
+  answers were unusable.
+
 ## Alternatives considered
 
 - **A third-party action** (an AI review action from the marketplace, or Anthropic's own GitHub
