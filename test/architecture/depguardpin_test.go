@@ -950,6 +950,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"context$",
 			"fmt$",
 			"io$",
+			"slices$",
 			"strconv$",
 			"strings$",
 			"encoding/json$",

@@ -2113,12 +2113,14 @@ func TestReportNoneEstimated(t *testing.T) {
 func workloadEstimateLine(t *testing.T, out []byte, heading string) string {
 	t.Helper()
 
-	for i, line := range sectionLines(t, out, "## Workloads") {
+	lines := sectionLines(t, out, "## Workloads")
+
+	for i, line := range lines {
 		if line != heading {
 			continue
 		}
 
-		for _, next := range sectionLines(t, out, "## Workloads")[i+1:] {
+		for _, next := range lines[i+1:] {
 			if strings.HasPrefix(next, "- Monthly estimate: ") {
 				return next
 			}

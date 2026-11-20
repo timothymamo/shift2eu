@@ -1431,9 +1431,11 @@ linters:
         # (docs/adr/0035).
         #
         # context$ is for the context Report takes, fmt$ for fmt.Fprintf to
-        # the given writer, and io$ for io.Writer. An allowed package can
-        # still hold a function that does I/O, which an import rule cannot
-        # see: a reporter must not call fmt.Print* (which writes to stdout).
+        # the given writer, io$ for io.Writer, and slices$ (pure, and already
+        # on the domain's list) for slices.Contains (issue #311). An allowed
+        # package can still hold a function that does I/O, which an import
+        # rule cannot see: a reporter must not call fmt.Print* (which writes
+        # to stdout).
         # Review holds that line; a forbidigo rule (issue #43) could.
         #
         # The allow list already refuses every package below; these entries
@@ -1452,6 +1454,7 @@ linters:
             - context$
             - fmt$
             - io$
+            - slices$
             - strconv$
             - strings$
             - encoding/json$
