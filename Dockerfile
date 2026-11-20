@@ -15,7 +15,8 @@ WORKDIR /src
 
 # go.mod's go line is the toolchain pin: every make target exports it as GOTOOLCHAIN (#347, ADR 0035) and
 # CI's setup-go sets GOTOOLCHAIN=local. With local, a base image whose Go differs fails the build with
-# Go's own error instead of fetching or building with another toolchain (#383).
+# Go's own error instead of fetching or building with another toolchain. The official golang image sets
+# it too; this line keeps the pin in the repository should a base image drop it or set another (#383).
 ENV GOTOOLCHAIN=local
 
 # Modules first, in their own step, so a source change does not download them again. The module and

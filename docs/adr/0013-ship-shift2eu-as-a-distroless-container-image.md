@@ -95,8 +95,10 @@ and smoke-tests it on every pull request; publishing it to a registry is a follo
   inventory fixture.
 - A Go version bump in `go.mod` must bump the builder's tag and digest too; `test/container` fails
   until it does, and the build stage's `GOTOOLCHAIN=local` makes a stale builder fail with Go's own
-  error rather than fetch another toolchain (#383). Renovate puts the `golang` image in the "Go toolchain" group with the `go` directive
-  and `dev/lima.yaml`, so both move in one PR.
+  error rather than fetch another toolchain (#383). The official `golang` image sets it too; the
+  Dockerfile's line keeps the pin in the repository should a base image drop it or set another value.
+  Renovate puts the `golang` image in the "Go toolchain" group with the `go` directive and
+  `dev/lima.yaml`, so both move in one PR.
 - A new directory the build needs at the root must be added to the `.dockerignore` allow list.
 - Live sources will read credentials through the SDK default chain from `-e` variables or a read-only
   mount at `docker run` time; the image never contains them.
