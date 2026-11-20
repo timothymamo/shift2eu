@@ -210,6 +210,22 @@ func TestResourcePathProblems(t *testing.T) {
 			text: `"name": "//compute.googleapis.com/projects/Acme-Corp-Prod/zones/z/instances/vm-1"`,
 			want: []string{"projects/Acme-Corp-Prod"},
 		},
+		{
+			// The sample names do not cross: example-ap is the sample access
+			// point's name, and a project ID of that shape is the customer's
+			// own, which the project rule reports.
+			name: "project ID named like the sample access point",
+			text: "projects/example-ap/zones/z",
+			want: []string{"projects/example-ap"},
+		},
+		{
+			// And the other way round: example-project is the sample project's
+			// name, and an access point named after it is no sample's access
+			// point (example-ap is), so the ARN's access point is reported.
+			name: "access point named like the sample project",
+			text: `"accessPoint": "arn:aws:s3:eu-central-1:` + dummyAccountID + `:accesspoint/example-project"`,
+			want: []string{"accesspoint/example-project"},
+		},
 
 		// Not reported: a sample value, a segment that names no customer, or a
 		// projects/ segment that is no project ID.

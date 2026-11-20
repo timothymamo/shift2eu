@@ -432,33 +432,32 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 
 // TestVendorPathProblems pins which owner and which bucket the fixture check
 // reads after a vendor host or a bucket scheme. The host name rule exempts the
-// public vendor hosts a page links to (publicVendorHosts), yet the path after one
-// names the customer just as a host would, so an owner a path names after
-// github.com, api.github.com, raw.githubusercontent.com or ghcr.io is reported as
-// the host and the owner (github.com/acme), in a URL and in the SSH clone form a
-// reader copies
-// (git@github.com:acme/private-repo.git) alike, with the GitHub API's endpoint
-// segment (repos, users, orgs, enterprises) left out. Only this project's own
-// account
-// and the listed public open-source owners pass, so github.com/timothymamo/shift2eu
-// and github.com/sigstore/cosign are clean and the same host written in another
-// case (GitHub.com/TimothyMamo/shift2eu) is clean too.
+// public vendor hosts a page links to (publicVendorHosts), yet the path after
+// one names the customer just as a host would, so an owner a path names after
+// github.com, api.github.com, raw.githubusercontent.com or ghcr.io is reported
+// as the host and the owner (github.com/acme), in a URL and in the SSH clone
+// form a reader copies (git@github.com:acme/private-repo.git) alike, with the
+// GitHub API's endpoint segment (repos, users, orgs, enterprises) left out.
+// Only this project's own account and the listed public open-source owners
+// pass, so github.com/timothymamo/shift2eu and github.com/sigstore/cosign are
+// clean and the same host written in another case
+// (GitHub.com/TimothyMamo/shift2eu) is clean too.
 //
-// A bucket is reported with the scheme that gives it its shape (s3://,
-// s3a://, s3n://, gs://, az://, abfss://, wasbs://, oci://) or, in an ARN, whole
+// A bucket is reported with the scheme that gives it its shape (s3://, s3a://,
+// s3n://, gs://, az://, abfss://, wasbs://, oci://) or, in an ARN, whole
 // (arn:aws:s3:::acme-prod-bucket). An oci:// reference names a registry host
 // with a dot in its first segment (ghcr.io, registry.example.com) rather than a
 // bucket, so it is read only when that segment is a bucket's name, as it is in
-// oci://acme-prod-bucket@acmetenancy. A Cloud Storage path is read by this rule,
-// not the owner one, and it names the bucket after the service host
-// (storage.googleapis.com), in a URL (storage.googleapis.com/acme-prod-data), in a
-// Cloud Asset name (//storage.googleapis.com/acme-prod-data) and in a JSON API path,
-// whose www.googleapis.com host and storage/v1/b segment an upload, a download
-// or a plain call writes alike: the value reported is the host and the path after
-// it. A bucket is a sample value only when it is example or starts with example-
-// and generic words follow (example-bucket, example-logs-2, example), the digits
-// after the last word one to three of them, never when a name follows the prefix
-// (example-acme-prod) or a long run of digits does
+// oci://acme-prod-bucket@acmetenancy. A Cloud Storage path is read by this
+// rule, not the owner one, and it names the bucket after the service host
+// (storage.googleapis.com), in a URL (storage.googleapis.com/acme-prod-data),
+// in a Cloud Asset name (//storage.googleapis.com/acme-prod-data) and in a JSON
+// API path, whose www.googleapis.com host and storage/v1/b segment an upload, a
+// download or a plain call writes alike: the value reported is the host and the
+// path after it. A bucket is a sample value only when it is example or starts
+// with example- and generic words follow (example-bucket, example-logs-2,
+// example), the digits after the last word one to three of them, never when a
+// name follows the prefix (example-acme-prod) or a long run of digits does
 // (example-logs-210987654321).
 //
 // A name below a listed vendor host is no path of that host: evil.github.com is
@@ -787,6 +786,15 @@ func TestVendorPathProblems(t *testing.T) {
 			// documentation name, so the host name rule reports nothing either.
 			name: "OCI registry reference on a dotted host rather than a bucket",
 			text: "helm install x oci://registry.example.com/acme/chart",
+			want: nil,
+		},
+		{
+			// An accepted gap, and one vendorPathProblems names in its gap
+			// list: a dotted first segment and no @namespace after it cannot be
+			// told from a registry host (oci://registry.example.com/acme/chart),
+			// so a dotted bucket written that way passes.
+			name: "known gap: dotted oci bucket without a namespace",
+			text: "the objects are in oci://acme.prod.backups/x",
 			want: nil,
 		},
 		{
