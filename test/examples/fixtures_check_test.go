@@ -204,9 +204,10 @@ func holdsCheckedPath(name string) bool {
 // The resource-path rule reads the globally unique names the others never see,
 // since they carry no dot or sit in a path segment (issue #406): a GCP project ID
 // (projects/acme-corp-prod/...), an Azure storage account in an ARM ID
-// (.../storageAccounts/acmeprod), a Cloud Storage bucket in a resource name
-// (projects/_/buckets/acme-prod-data) and an S3 access point or Outposts bucket
-// in an ARN (...:accesspoint/acme-prod-ap).
+// (.../storageAccounts/acmeprod; no other Azure resource's name), a Cloud
+// Storage bucket in a resource name (projects/_/buckets/acme-prod-data) and an
+// S3 access point (Object Lambda included), S3 Express or Outposts bucket in an
+// ARN (...:accesspoint/acme-prod-ap).
 func sanitisationProblems(text string) []problem {
 	return slices.Concat(
 		accountIDProblems(text),
@@ -409,11 +410,12 @@ func fixtureHostnameProblems(text string) []problem {
 var ownerPathPattern = regexp.MustCompile(`(?i)(?:github\.com|raw\.githubusercontent\.com|ghcr\.io)[/:][a-z0-9][a-z0-9_.-]*`)
 
 // apiOwnerPathPattern finds the owner a GitHub API path names behind its
-// endpoint segment (api.github.com/repos/acme/infra, /users/acme, /orgs/acme):
+// endpoint segment (api.github.com/repos/acme/infra, /users/acme, /orgs/acme,
+// /enterprises/acme):
 // the host, the endpoint and the owner, matched case-insensitively. The value
 // reported is the host and the owner (api.github.com/acme), the endpoint left
 // out, the way ownerPathPattern's value is.
-var apiOwnerPathPattern = regexp.MustCompile(`(?i)api\.github\.com/(?:repos|users|orgs)/[a-z0-9][a-z0-9_.-]*`)
+var apiOwnerPathPattern = regexp.MustCompile(`(?i)api\.github\.com/(?:repos|users|orgs|enterprises)/[a-z0-9][a-z0-9_.-]*`)
 
 // sshCloneHost is the one vendor host whose owner ownerPathPattern reads after
 // a colon, in the SSH clone form user@host:owner/repo.
@@ -423,7 +425,10 @@ const sshCloneHost = "github.com"
 // s3a:// and s3n://, the Hadoop clients' spellings of the same bucket,
 // gs://acme-prod-bucket/x, az://container/blob, and oci://acme-prod-bucket@tenancy/x,
 // whose bucket comes before the @ and its namespace): the scheme and the
-// bucket, the first segment after it.
+// bucket, the first segment after it. An oci:// reference whose first segment
+// holds a dot names a registry host (oci://ghcr.io/sigstore/charts/x), which a
+// bucket's name never does, so vendorPathProblems passes it over and leaves the
+// host and its owner path to the host name and owner rules.
 var bucketPattern = regexp.MustCompile(`(?i)\b(?:s3[an]?|gs|az|oci)://[a-z0-9][a-z0-9_.-]*`)
 
 // storageAccountURLPattern finds the Azure storage account an abfs, abfss, wasb
@@ -515,8 +520,8 @@ var publicOpenSourceOwners = []string{
 // URL names (storageAccountURLPattern), when it is no sample value: an owner
 // must be sampleOwner or one of publicOpenSourceOwners, a bucket must be a
 // sample's (sampleBucket: example, or example- and generic words), the way a
-// sample's domain is example.com, and a storage account must start with example
-// (sampleStorageAccount). The host name rule exempts the vendor host itself, yet
+// sample's domain is example.com, and a storage account must be example and
+// generic words (sampleStorageAccount). The host name rule exempts the vendor host itself, yet
 // the owner or the bucket after it names the customer just as a host would, so
 // the value reported is the host and the owner (github.com/acme, from
 // git@github.com:acme/x.git too, api.github.com/acme from
@@ -608,8 +613,15 @@ func vendorPathProblems(text string) []problem {
 
 	for _, match := range bucketPattern.FindAllStringIndex(text, -1) {
 		value := strings.TrimRight(text[match[0]:match[1]], ".")
+		sep := strings.Index(value, "://")
+		bucket := value[sep+len("://"):]
 
-		if sampleBucket(value[strings.Index(value, "://")+len("://"):]) {
+		if strings.EqualFold(value[:sep], "oci") && strings.Contains(bucket, ".") {
+			// A registry host, not a bucket.
+			continue
+		}
+
+		if sampleBucket(bucket) {
 			continue
 		}
 
@@ -658,7 +670,7 @@ func vendorPathProblems(text string) []problem {
 		problems = append(problems, problem{
 			line:  lineOf(text, match[2]),
 			value: account,
-			rule:  "names an Azure storage account that does not start with example (CLAUDE.md rule 2)",
+			rule:  "names an Azure storage account that is not example and generic words (CLAUDE.md rule 2)",
 		})
 	}
 
