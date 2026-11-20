@@ -18,6 +18,11 @@ import (
 // text can be stated beside it, so a screen reader reads the glyph aloud. The
 // pages draw such a glyph with a `::before` box whose `content` states `/ ""`
 // instead, and keep the marker off.
+//
+// A list whose markers a rule takes away also passes that state on: list-style is
+// inherited, so a `ul` the report nests inside a markerless item inherits
+// `list-style: none` unless a rule whose subject is the nested list itself states
+// a visible marker.
 
 // TestListsWhoseMarkersTheStylesheetHidesAreAnnounced pins that every `ul` and
 // `ol` of every page whose markers a stylesheet rule hides or replaces carries
@@ -107,6 +112,192 @@ func TestNoListMarkerIsAQuotedString(t *testing.T) {
 				name, strings.Join(rule.selectors, ", "), property, value)
 		}
 	}
+}
+
+// TestNestedListsInTheReportKeepTheirMarkers pins that the stylesheet states a
+// visible marker on a list nested in a Blockers or a Cost estimate item (PR #379
+// review, issue #373). list-style is inherited: `#report .part-blockers > ul > li`
+// and `#report .part-cost > ul` state `list-style: none`, so a nested `ul` -- the
+// `ul` the reporter writes inside such an item for a blocker's per-target reasons
+// or an estimate's basis (fragment.go's writeList) -- inherits none, and a list
+// with no markers and no role="list" loses its list role and its item count in
+// Safari and VoiceOver. Each item's glyph is drawn by a `::before` box whose
+// selector keeps the child combinator `> ul > li`, so it stays off the nested
+// items and the nested list needs a marker of its own.
+//
+// The fragment below is the markup the htmlreport writes around a nested list, as
+// testdata/comparison.golden shows it for the overview's "Blockers on every
+// target"; no golden holds a nested list inside a `.part-blockers` or a
+// `.part-cost` part yet, so the fragment stands in for the report's shape there.
+func TestNestedListsInTheReportKeepTheirMarkers(t *testing.T) {
+	t.Parallel()
+
+	name, data := theBundle(t).asset(t, "style", ".css")
+	rules := parseCSS(t, name, data)
+
+	doc := parseHTML(t, "report-fragment.html", []byte(nestedListFragment))
+
+	tests := []struct {
+		name string
+		// part is the report part the nested list sits in, by class.
+		part string
+		// why names the rule that hides the markers the nested list inherits.
+		why string
+		// glyphSelector is the item glyph rule that must not reach the nested
+		// items, and "" for a part whose items draw no glyph.
+		glyphSelector string
+	}{
+		{
+			name:          "a blocker's nested list",
+			part:          "part-blockers",
+			why:           "`#report .part-blockers > ul > li { list-style: none }` takes the items' markers away",
+			glyphSelector: "#report .part-blockers > ul > li",
+		},
+		{
+			name: "the cost estimate's nested list",
+			part: "part-cost",
+			why:  "`#report .part-cost > ul { list-style: none }` takes the list's markers away",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			nested := nestedListOf(t, doc, tc.part)
+
+			if tc.glyphSelector != "" {
+				for _, item := range nestedItemsOf(t, nested) {
+					if selectorChainMatches(tc.glyphSelector, item) {
+						t.Errorf("%s's rule %q reaches the %s part's nested items too, want its child combinator to keep the item glyph off them: a glyph on every nested item would stand where the marker this check asks for belongs (PR #379 review, issue #373)",
+							name, tc.glyphSelector, tc.part)
+					}
+				}
+			}
+
+			statements := markerStatements(rules, nested)
+
+			if len(statements) == 0 {
+				t.Errorf("%s states no list-style or list-style-type on a rule whose subject is the %s of the %s part's nested list, so the nested list inherits list-style: none (%s) and loses its markers: a list without markers and without role=\"list\" loses its list role and its item count in Safari and VoiceOver, so state a marker on the nested list itself, as in `#report .%s li ul { list-style: disc; }` (PR #379 review, issue #373)",
+					name, describeElement(nested), tc.part, tc.why, tc.part)
+
+				return
+			}
+
+			for _, statement := range statements {
+				if why := markerReplacement(statement.value); why != "" {
+					t.Errorf("%s's rule `%s { %s: %s }` applies to the %s part's nested list and %s, so the nested list stays markerless: a list without markers and without role=\"list\" loses its list role and its item count in Safari and VoiceOver (PR #379 review, issue #373)",
+						name, statement.selector, statement.property, statement.value, tc.part, why)
+				}
+			}
+		})
+	}
+}
+
+// nestedListFragment is the markup the reporter writes around a nested list: a
+// plain `<ul>` inside an item of a Blockers or a Cost estimate list, as
+// fragment.go's writeList writes it.
+const nestedListFragment = `<div id="report">` +
+	`<section class="part part-blockers"><h3>Blockers</h3><ul role="list">` +
+	`<li><code>fn-example</code>: no offering in the catalog` +
+	`<ul><li><code>OVHcloud</code>: no offering in the <code>OVHcloud</code> catalog</li></ul></li>` +
+	`</ul></section>` +
+	`<section class="part part-cost"><h3>Cost estimate</h3><ul role="list">` +
+	`<li class="total">Total: €45.00 per month for 3 of 4 resources</li>` +
+	`<li>Hours: plan price × count × hours / 730` +
+	`<ul><li>A resource that states no hours counts 730</li></ul></li>` +
+	`</ul></section>` +
+	`</div>`
+
+// markerStatement is one declaration of a rule that states the markers of a
+// nested list itself.
+type markerStatement struct {
+	// selector is the rule's selector that matched the list.
+	selector string
+	// property is the declaration's property: list-style or list-style-type.
+	property string
+	// value is the declaration's value.
+	value string
+}
+
+// markerStatements returns the declarations of the stylesheet's rules that state
+// the markers of list itself, that is of a rule whose selector chain matches the
+// list. A declaration on an item of the list is not one of them: a nested list
+// inherits through the list and the item it sits in, so only a rule whose subject
+// is the list itself beats the value it inherits.
+func markerStatements(rules []cssRule, list *element) []markerStatement {
+	var statements []markerStatement
+
+	for _, rule := range rules {
+		for _, selector := range rule.selectors {
+			if !selectorChainMatches(selector, list) {
+				continue
+			}
+
+			for _, property := range []string{"list-style", "list-style-type"} {
+				value, ok := rule.decl(property)
+				if !ok {
+					continue
+				}
+
+				statements = append(statements, markerStatement{selector: selector, property: property, value: value})
+			}
+		}
+	}
+
+	return statements
+}
+
+// nestedItemsOf returns the items of the nested list, failing the test when it
+// holds none: the glyph check over them would then read nothing.
+func nestedItemsOf(t *testing.T, list *element) []*element {
+	t.Helper()
+
+	var items []*element
+
+	for _, child := range list.children {
+		if child.tag == "li" {
+			items = append(items, child)
+		}
+	}
+
+	if len(items) == 0 {
+		t.Fatalf("the synthetic report fragment's nested %s holds no item, so the glyph check over them would read nothing", list.tag)
+	}
+
+	return items
+}
+
+// nestedListOf returns the first list of doc's part of class part that sits
+// inside an item of another list, which is where the reporter writes a blocker's
+// per-target reasons and an estimate's basis, and fails the test when the part
+// holds none.
+func nestedListOf(t *testing.T, doc *document, part string) *element {
+	t.Helper()
+
+	var section *element
+
+	for _, el := range doc.all() {
+		if el.tag == "section" && hasClass(el, "part") && hasClass(el, part) {
+			section = el
+
+			break
+		}
+	}
+
+	if section == nil {
+		t.Fatalf("the synthetic report fragment holds no section of the %q part class, so the check would read nothing", part)
+	}
+
+	for _, list := range listsOf(doc) {
+		if list.parent != nil && list.parent.tag == "li" && isDescendant(list, section) {
+			return list
+		}
+	}
+
+	t.Fatalf("the synthetic report fragment holds no list nested in an item of its %s part, so the check would read nothing", part)
+
+	return nil
 }
 
 // TestElementSelectorMatches pins the selector match the list sweep uses, in both

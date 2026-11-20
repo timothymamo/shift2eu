@@ -18,7 +18,15 @@ import (
 //     rule's own `background` or `background-color` when it declares one, and
 //     the page's background otherwise, which is the background the first rule
 //     whose selector is :root, html or body declares. So a rule that colours
-//     muted text on the page's background is checked too.
+//     muted text on the page's background is checked too. The limit of that
+//     reading is that a rule nested inside another surface -- a card on
+//     `--surface`, a notice on its own tint, a table header cell on `--surface-2`
+//     -- declares no background of its own, so its `color` is measured against
+//     the page's background and not the surface the text really sits on. A rule
+//     whose text sits on a surface other than the page must therefore declare
+//     that surface's background for this check to pair its colour correctly;
+//     otherwise the pair it reads is one no browser paints, and it can pass a
+//     colour that is unreadable where the text is drawn.
 //   - Every rule that declares a border colour (`border`, `border-color`,
 //     `border-top`, `border-bottom`, `border-left`, `border-right` or one of the
 //     -color forms) or an outline colour (`outline`, `outline-color`) is a

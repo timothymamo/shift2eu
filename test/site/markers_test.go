@@ -706,6 +706,17 @@ func TestStepNumbersAreSilent(t *testing.T) {
 // reaches no visitor. Such a declaration is worse than dead: the contrast check
 // then reads a foreground/background pair the browser never paints, and passes a
 // marker whose glyph is unreadable against the surface it really sits on.
+//
+// One declared background that paints nothing is accepted, and the contrast check
+// relies on it: `.mark-stars` and `.mark-arrow` are `<g>` groups of the brand's
+// SVG, which draws its glyphs with `fill: currentColor` and `stroke:
+// currentColor`, so their `background-color: var(--mast)` never paints. It is
+// declared so the contrast test pairs each glyph's colour with the masthead the
+// glyph sits on, `--mast` (light) or its dark-scheme value, rather than with the
+// page's background the SVG is not drawn on. ::marker stays refused because there
+// the glyph is drawn by the list item's own box, on the item's background: a
+// background declared on the ::marker rule is false about that pair, so the pair
+// it would teach the contrast check would mislead it.
 func TestNoMarkerPseudoElementDeclaresABackground(t *testing.T) {
 	t.Parallel()
 
