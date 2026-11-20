@@ -118,11 +118,14 @@ func estimateReasonsInDir(tb testing.TB, dir string) []estimate.Reason {
 // its value is a conversion to Reason, or when it repeats the spec above it
 // (see constantReasons). A spec with values and no type takes the type of each
 // value: a string literal there is a string and not a reason, a conversion to
-// another type is that type, and a value that names another constant takes that
+// another type is that type, and a value that names another constant, such as
+// NoFit or one qualified by a package as catalog.NoFit is, takes that
 // constant's type, which only type checking could say is Reason or not, so the
-// test fails on it rather than skip a reason. A spec the test reads as a reason
-// whose value is not a string literal is an error naming the constant too:
-// skipping it would leave that reason unguarded.
+// test fails on it rather than skip a reason. An untyped spec built from
+// predeclared identifiers and literals only, such as iota or true, names no
+// constant of the module and is no reason either (see predeclared). A spec the
+// test reads as a reason whose value is not a string literal is an error naming
+// the constant too: skipping it would leave that reason unguarded.
 func estimateReasonsInSource(name string, src []byte) ([]estimate.Reason, error) {
 	fset := token.NewFileSet()
 
@@ -208,6 +211,8 @@ func constantReasons(fset *token.FileSet, decl ast.Decl) ([]estimate.Reason, err
 			// that names another constant may be a reason too: Go gives it that
 			// constant's type, and only type checking could say whether it is a
 			// Reason. The test cannot tell, so it fails rather than skip a reason.
+			// A value built from predeclared identifiers and literals only names
+			// no constant at all, so it is no reason (see namesIdent).
 			found := false
 
 			for i, expr := range vs.Values {
@@ -225,9 +230,9 @@ func constantReasons(fset *token.FileSet, decl ast.Decl) ([]estimate.Reason, err
 					// A conversion to another type: the constant is that type, not a
 					// reason, and its literal argument names nothing to follow.
 				case namesIdent(expr):
-					return nil, fmt.Errorf("%s: estimate.Reason constant %s takes the type of a value that "+
-						"names another constant, which Go may make a Reason; write it as a string literal, or "+
-						"as Reason(\"...\") of one, the only value a report guard can read",
+					return nil, fmt.Errorf("%s: constant %s may be an estimate.Reason: its value names another "+
+						"constant, whose type Go gives it, and which only type checking could read; write it as a "+
+						"string literal, or as Reason(\"...\") of one, the only value a report guard can read",
 						fset.Position(expr.Pos()), valueName(vs, i))
 				}
 			}
@@ -270,20 +275,47 @@ func otherConversion(expr ast.Expr) bool {
 	return literal
 }
 
-// namesIdent reports whether expr is an identifier, or an expression built from
-// one, such as NoFit + "-region": a constant whose type the test cannot see.
+// namesIdent reports whether expr names a constant whose type the test cannot
+// see: an identifier, or an expression built from one, such as NoFit +
+// "-region", or an identifier qualified by a package, such as catalog.NoFit,
+// which is a selector over one. A predeclared identifier (see predeclared)
+// names no constant of the module, so an expression built from those and
+// literals only, such as iota, true or 1 + iota, names nothing here.
 func namesIdent(expr ast.Expr) bool {
 	named := false
 
 	ast.Inspect(expr, func(node ast.Node) bool {
-		if _, ok := node.(*ast.Ident); ok {
-			named = true
+		ident, ok := node.(*ast.Ident)
+		if !ok {
+			return !named
 		}
 
-		return !named
+		if predeclared(ident.Name) {
+			// Keep looking: an expression can name a constant beside a
+			// predeclared identifier, as iota + offset does.
+			return true
+		}
+
+		named = true
+
+		return false
 	})
 
 	return named
+}
+
+// predeclared reports whether name is a predeclared identifier that is no
+// constant of the module: iota, true, false or nil. An untyped const built from
+// those and literals only, such as Index = iota or Estimated = true, takes a
+// predeclared type of its own and is no estimate.Reason, so reading it as no
+// reason is right.
+func predeclared(name string) bool {
+	switch name {
+	case "iota", "true", "false", "nil":
+		return true
+	}
+
+	return false
 }
 
 // isReasonConversion reports whether expr is a conversion to Reason with one
