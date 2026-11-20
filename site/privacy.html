@@ -11,8 +11,10 @@
 <script {{.PageAttrs}} defer></script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="site-header">
-<p class="brand"><a href="index.html">shift2eu</a></p>
+<div class="wrap masthead">
+<p class="brand"><a href="index.html"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><path id="mark-star" d="M16 1.5l.4 1.15 1.22.02-.97.74.35 1.17-1-.7-1 .7.35-1.17-.97-.74 1.22-.02z"/></defs><g class="mark-stars" fill="currentColor"><use href="#mark-star"/><use href="#mark-star" transform="rotate(30 16 16)"/><use href="#mark-star" transform="rotate(60 16 16)"/><use href="#mark-star" transform="rotate(90 16 16)"/><use href="#mark-star" transform="rotate(120 16 16)"/><use href="#mark-star" transform="rotate(150 16 16)"/><use href="#mark-star" transform="rotate(180 16 16)"/><use href="#mark-star" transform="rotate(210 16 16)"/><use href="#mark-star" transform="rotate(240 16 16)"/><use href="#mark-star" transform="rotate(270 16 16)"/><use href="#mark-star" transform="rotate(300 16 16)"/><use href="#mark-star" transform="rotate(330 16 16)"/></g><g class="mark-arrow" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 16h12M17 11.5l4.5 4.5-4.5 4.5"/></g></svg>shift2eu</a></p>
 <nav aria-label="Site">
 <ul class="nav">
 <li><a href="index.html">Assessment</a></li>
@@ -21,26 +23,32 @@
 <li><a href="https://github.com/timothymamo/shift2eu">Repository</a></li>
 </ul>
 </nav>
+</div>
 </header>
-<main>
+<main id="main" class="wrap page">
+<div class="hero">
 <h1>Privacy</h1>
 <p class="lead">This page says what the site is built to do with your inventory, what checks it, and what the site cannot promise. Each statement names the check that backs it; the checks are tests in the <a href="https://github.com/timothymamo/shift2eu">repository</a>, which run on every change.</p>
+</div>
 
+<div class="prose">
 <h2>Nothing leaves the browser</h2>
 <p>The assessment runs in your browser, compiled to WebAssembly from the same Go code as the shift2eu CLI. There is no server-side code: the site is static files, and no inventory, report or choice you make is sent anywhere. Three layers hold this.</p>
-<p id="downgrade-risk" class="notice">Until shift2eu.com is on the HSTS preload list of shipping browsers, a first visit is at risk: HSTS on www.shift2eu.com protects only a browser that has already visited it over HTTPS. On a first visit, or a visit that starts at http://shift2eu.com (answered by the apex redirect's provider, which may send no HSTS), a network attacker can strip HTTPS and serve a look-alike page that sends your inventory away. To avoid it, type https://www.shift2eu.com yourself, or run the attested bundle locally (see <a href="verify.html">Verify this site</a>).</p>
+<p id="downgrade-risk" class="notice warn with-icon"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.5L2.5 20h19z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>Until shift2eu.com is on the HSTS preload list of shipping browsers, a first visit is at risk: HSTS on www.shift2eu.com protects only a browser that has already visited it over HTTPS. On a first visit, or a visit that starts at http://shift2eu.com (answered by the apex redirect's provider, which may send no HSTS), a network attacker can strip HTTPS and serve a look-alike page that sends your inventory away. To avoid it, type https://www.shift2eu.com yourself, or run the attested bundle locally (see <a href="verify.html">Verify this site</a>).</p>
 {{- if .HSTSWaived}}
-<p id="hsts-waived" class="notice">HSTS is not in force for www.shift2eu.com: the maintainer waived it. Without HSTS the downgrade risk above covers returning visitors too, not only a first visit, so type https://www.shift2eu.com every time, or run the attested bundle locally.</p>
+<p id="hsts-waived" class="notice warn with-icon"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.5L2.5 20h19z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>HSTS is not in force for www.shift2eu.com: the maintainer waived it. Without HSTS the downgrade risk above covers returning visitors too, not only a first visit, so type https://www.shift2eu.com every time, or run the attested bundle locally.</p>
 {{- end}}
-<ol>
-<li><strong>The code sends nothing.</strong> The page's one script and the Go code that talks to the browser are held to a static rule that refuses every browser API that can send data or load a resource (fetch, XMLHttpRequest, WebSocket, beacons, WebRTC, workers, navigation), every way to reach another window (postMessage, opener, parent, top, BroadcastChannel, MessageChannel, window.name, message listeners) and every property name computed at run time that could hide one. Backed by the banned-API scan of the page script and of the glue's allow list of names (PRD #297, Trust, Layer 1).</li>
-<li><strong>The browser refuses connections.</strong> Every page carries a Content Security Policy that refuses every network connection (connect-src 'none'), every image (img-src 'none'), every worker (worker-src 'none'), every form submission, every frame, inline script and every third-party resource. The scripts and the stylesheet are loaded with Subresource Integrity. Backed by the static test of each built page's policy and integrity values, and by the headless-browser smoke test, which tries to send and finds every attempt blocked (Layer 2).</li>
-<li><strong>The files you load are the released ones.</strong> Each release builds the site reproducibly, attests the bundle and checks that the live site serves exactly the attested files. Backed by the reproducibility test and the release's live check (Layer 3); <a href="verify.html">Verify this site</a> shows how to check it yourself.</li>
+</div>
+<ol class="layers">
+<li><strong>The code sends nothing.</strong> The page's one script and the Go code that talks to the browser are held to a static rule that refuses every browser API that can send data or load a resource (fetch, XMLHttpRequest, WebSocket, beacons, WebRTC, workers, navigation), every way to reach another window (postMessage, opener, parent, top, BroadcastChannel, MessageChannel, window.name, message listeners) and every property name computed at run time that could hide one. <span class="backed">Backed by the banned-API scan of the page script and of the glue's allow list of names (PRD #297, Trust, Layer 1).</span></li>
+<li><strong>The browser refuses connections.</strong> Every page carries a Content Security Policy that refuses every network connection (connect-src 'none'), every image (img-src 'none'), every worker (worker-src 'none'), every form submission, every frame, inline script and every third-party resource. The scripts and the stylesheet are loaded with Subresource Integrity. <span class="backed">Backed by the static test of each built page's policy and integrity values, and by the headless-browser smoke test, which tries to send and finds every attempt blocked (Layer 2).</span></li>
+<li><strong>The files you load are the released ones.</strong> Each release builds the site reproducibly, attests the bundle and checks that the live site serves exactly the attested files. <span class="backed">Backed by the reproducibility test and the release's live check (Layer 3); <a href="verify.html">Verify this site</a> shows how to check it yourself.</span></li>
 </ol>
-<p>The site sets no cookies, stores nothing in your browser (no local storage, session storage or database), runs no analytics and loads nothing from a third party. Backed by the banned-API scan (no storage API), the policy test (no third-party source) and the static test of every loaded resource (Layers 1 and 2).</p>
+<div class="prose">
+<p class="notice with-icon"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"/><path d="M6 6l12 12"/></svg>The site sets no cookies, stores nothing in your browser (no local storage, session storage or database), runs no analytics and loads nothing from a third party. Backed by the banned-API scan (no storage API), the policy test (no third-party source) and the static test of every loaded resource (Layers 1 and 2).</p>
 
 <h2>What the site cannot promise</h2>
-<ul>
+<ul class="card caveats">
 <li>The hosting provider, Scaleway, sees what any web server sees: your IP address, your user agent and the files you request. It sees nothing of your inventory, which never leaves your browser.</li>
 <li>Browser extensions can read any page, this one included.</li>
 <li>A released page served from a poisoned cache can stay in your browser's own cache for up to its max-age, 300 seconds, after the site is repaired. A page uploaded with a leaked deploy key sets its own caching, up to a year, and can register a service worker; both can outlast the repair in your browser, since the site cannot send Clear-Site-Data. The page script removes any service worker when a genuine page loads, which helps only visitors who load one.</li>
@@ -49,17 +57,20 @@
 </ul>
 
 <h2>Technical note</h2>
-<ul>
+<ul class="card technical">
 <li>The report is the one piece of markup the page inserts, rendered in Go by the HTML reporter, which writes only its own constant elements and every value as escaped text. The page inserts it in one place, through a Trusted Types policy (require-trusted-types-for 'script'). Not every browser enforces Trusted Types: in one that does not, that insertion rests on the reporter's escaping, pinned by a differential test against html/template and by a hostile golden, and on the Content Security Policy's ban on inline script, not on Trusted Types.</li>
 <li>Go's wasm_exec.js is trusted as toolchain code, not scanned: the bundled file is byte for byte the one the building Go toolchain ships, which a test checks, and that toolchain is pinned by go.mod. The module script is not scanned either: it is one fixed template that carries only the encoded module, which a test checks.</li>
 <li>The Content Security Policy does not govern navigation, WebRTC, DNS prefetch or messaging to another window (postMessage, opener, parent, top, BroadcastChannel, MessageChannel, window.name). The banned-API scan closes these gaps in the page's own code, and each page turns DNS prefetch off; the framing guard also sets window.opener to null as defence in depth.</li>
 <li>One gap remains: the site cannot send Cross-Origin-Opener-Policy, so a page that opened this one keeps its handle to it. With that handle it can navigate the tab or post a message in, and read nothing; the page reads no message.</li>
 <li>A meta Content Security Policy cannot carry frame-ancestors, so the page script stops, and says why, when another page frames it.</li>
 </ul>
+</div>
 </main>
 <footer>
+<div class="wrap">
 <p>shift2eu {{.Version}}.</p>
 <p><a href="privacy.html">Privacy</a> · <a href="verify.html">Verify this site</a> · <a href="https://github.com/timothymamo/shift2eu">Repository</a> · <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">Inventory guide</a></p>
+</div>
 </footer>
 </body>
 </html>

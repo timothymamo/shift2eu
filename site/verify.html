@@ -11,8 +11,10 @@
 <script {{.PageAttrs}} defer></script>
 </head>
 <body>
+<a class="skip-link" href="#main">Skip to content</a>
 <header class="site-header">
-<p class="brand"><a href="index.html">shift2eu</a></p>
+<div class="wrap masthead">
+<p class="brand"><a href="index.html"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true" focusable="false"><defs><path id="mark-star" d="M16 1.5l.4 1.15 1.22.02-.97.74.35 1.17-1-.7-1 .7.35-1.17-.97-.74 1.22-.02z"/></defs><g class="mark-stars" fill="currentColor"><use href="#mark-star"/><use href="#mark-star" transform="rotate(30 16 16)"/><use href="#mark-star" transform="rotate(60 16 16)"/><use href="#mark-star" transform="rotate(90 16 16)"/><use href="#mark-star" transform="rotate(120 16 16)"/><use href="#mark-star" transform="rotate(150 16 16)"/><use href="#mark-star" transform="rotate(180 16 16)"/><use href="#mark-star" transform="rotate(210 16 16)"/><use href="#mark-star" transform="rotate(240 16 16)"/><use href="#mark-star" transform="rotate(270 16 16)"/><use href="#mark-star" transform="rotate(300 16 16)"/><use href="#mark-star" transform="rotate(330 16 16)"/></g><g class="mark-arrow" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 16h12M17 11.5l4.5 4.5-4.5 4.5"/></g></svg>shift2eu</a></p>
 <nav aria-label="Site">
 <ul class="nav">
 <li><a href="index.html">Assessment</a></li>
@@ -21,29 +23,39 @@
 <li><a href="https://github.com/timothymamo/shift2eu">Repository</a></li>
 </ul>
 </nav>
+</div>
 </header>
-<main>
+<main id="main" class="wrap page">
+<div class="hero">
 <h1>Verify this site</h1>
-<p class="lead">This site is shift2eu {{.Version}}. Every release publishes the site's bundle, attested by the release workflow, so you can check that what you run is what the release built. The <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/verify-releases.md">release verification guide</a> has the exact commands; this page summarises them.</p>
-<p class="notice">Type https://www.shift2eu.com yourself rather than following an http:// link: on a first visit a network attacker can strip HTTPS and serve a look-alike page. The guide, served by GitHub, carries the same advice.</p>
+<p class="lead">This site is <span class="version-badge">shift2eu {{.Version}}</span>. Every release publishes the site's bundle, attested by the release workflow, so you can check that what you run is what the release built. The <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/verify-releases.md">release verification guide</a> has the exact commands; this page summarises them.</p>
+</div>
+<div class="prose">
+<p class="notice warn with-icon"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.5L2.5 20h19z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>Type https://www.shift2eu.com yourself rather than following an http:// link: on a first visit a network attacker can strip HTTPS and serve a look-alike page. The guide, served by GitHub, carries the same advice.</p>
 {{- if .HSTSWaived}}
-<p id="hsts-waived" class="notice">HSTS is not in force for www.shift2eu.com: the maintainer waived it. Without HSTS the downgrade risk covers returning visitors too, not only a first visit, so type https://www.shift2eu.com every time, or run the attested bundle locally.</p>
+<p id="hsts-waived" class="notice warn with-icon"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3.5L2.5 20h19z"/><path d="M12 10v4.5M12 17.5h.01"/></svg>HSTS is not in force for www.shift2eu.com: the maintainer waived it. Without HSTS the downgrade risk covers returning visitors too, not only a first visit, so type https://www.shift2eu.com every time, or run the attested bundle locally.</p>
 {{- end}}
 
 <h2>Check the live site</h2>
-<ol>
+<ol class="steps">
 <li>Note the version this page shows, {{.Version}}, and download that release's site bundle, shift2eu-site_&lt;version&gt;.tar.gz, from the repository's releases.</li>
 <li>Verify its attestation with the GitHub CLI: <code>gh attestation verify</code> on the bundle with <code>--signer-workflow</code> naming the release workflow, <code>--source-ref refs/tags/&lt;tag&gt;</code> and <code>--deny-self-hosted-runners</code>.</li>
 <li>Read manifest.json in the bundle, fetch each file it lists from https://www.shift2eu.com, and compare each file's SHA-256 with the manifest's.</li>
 </ol>
-<p>The check is one point in time from one vantage point: the HTML is the root of trust and nothing pins it. A released page from a poisoned cache can stay in a browser's cache for up to its max-age after the site is repaired, while a page uploaded with a leaked key sets its own caching and can register a service worker, both of which can outlast the repair. A path outside the manifests is not checked.</p>
+<p class="muted">The check is one point in time from one vantage point: the HTML is the root of trust and nothing pins it. A released page from a poisoned cache can stay in a browser's cache for up to its max-age after the site is repaired, while a page uploaded with a leaked key sets its own caching and can register a service worker, both of which can outlast the repair. A path outside the manifests is not checked.</p>
 
-<h2>Run the bundle yourself</h2>
+<section class="card card-icon" aria-labelledby="run-yourself">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15H17"/></svg>
+<h2 id="run-yourself">Run the bundle yourself</h2>
 <p>The bundle runs unchanged on any origin. Extract the verified archive and serve its directory with any static file server on your own machine, then open it in your browser: you run exactly the attested files, and the host sees nothing.</p>
+</section>
+</div>
 </main>
 <footer>
+<div class="wrap">
 <p>shift2eu {{.Version}}.</p>
 <p><a href="privacy.html">Privacy</a> · <a href="verify.html">Verify this site</a> · <a href="https://github.com/timothymamo/shift2eu">Repository</a> · <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">Inventory guide</a></p>
+</div>
 </footer>
 </body>
 </html>
