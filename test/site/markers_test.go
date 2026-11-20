@@ -770,7 +770,10 @@ func markerBackgrounds(rules []cssRule) []string {
 // screen reader announces the heading's words and nothing of the glyph. A glyph
 // without an alternative is read aloud as text. The blocker item's glyph is a
 // ::before box rather than its ::marker, because Safari ignores `content` on
-// ::marker and falls back to a disc (PR #379 review).
+// ::marker and falls back to a disc (PR #379 review). The privacy page's caveat
+// triangle is drawn the same way: a quoted `list-style-type` replaces the marker
+// with text no alternative text can be stated beside, so the glyph moves to a
+// ::before box with `/ ""` and the items keep `list-style: none` (PR #379 review).
 func TestBlockerGlyphContentCarriesAnEmptyAlternative(t *testing.T) {
 	t.Parallel()
 
@@ -784,6 +787,7 @@ func TestBlockerGlyphContentCarriesAnEmptyAlternative(t *testing.T) {
 		{name: "a blocker item's glyph", selector: "#report .part-blockers > ul > li::before", glyph: `\2715`},
 		{name: "a blockers heading's glyph", selector: "#report .part-blockers > h3::before", glyph: `\2715`},
 		{name: "a required change's heading glyph", selector: "#report .part-changes > h3::before", glyph: `\25d0`},
+		{name: "a caveat item's triangle", selector: "ul.caveats > li::before", glyph: `\25B8`},
 	}
 
 	for _, tc := range tests {
