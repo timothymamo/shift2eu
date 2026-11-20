@@ -7,8 +7,9 @@
 // parameter: there is no seam to pass them through without changing the entry
 // point, which a test may not do. So a test of the argument check sets os.Args
 // and replaces os.Stdout and os.Stderr for the one call and restores them, as
-// os does in its own tests; the package holds this one test, so no parallel test
-// shares the process while it runs.
+// os does in its own tests. This test never goes parallel, so no test that does
+// shares the process while it runs, and the package's others write to files of
+// their own.
 package main
 
 import (
