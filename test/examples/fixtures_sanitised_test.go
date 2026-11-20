@@ -248,6 +248,38 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"storage.googleapis.com/acme-prod-data"},
 		},
 		{
+			// A Cloud Asset name opens with the service host and carries the
+			// customer's project ID, which is globally unique.
+			name:    "customer project ID in a Cloud Asset name",
+			path:    "test/e2e/testdata/planted-project.json",
+			content: `"name": "//compute.googleapis.com/projects/acme-corp-prod/zones/z/instances/vm-1"`,
+			want:    []string{"projects/acme-corp-prod"},
+		},
+		{
+			// The dummy subscription GUID identifies nobody, while the storage
+			// account the ARM ID names is globally unique and the customer's.
+			name:    "customer storage account in an ARM ID",
+			path:    "docs/guide/planted-arm.md",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/acmeprodcustomers",
+			want:    []string{"storageAccounts/acmeprodcustomers"},
+		},
+		{
+			// The reserved projects/_ segment names no project, so only the
+			// bucket after it is the customer's own name.
+			name:    "customer bucket in a Cloud Storage resource name",
+			path:    "docs/guide/inventory/planted-bucket-name.jq",
+			content: `"name": "projects/_/buckets/acme-prod-data"`,
+			want:    []string{"buckets/acme-prod-data"},
+		},
+		{
+			// An S3 access point is an ARN of its own shape, whose region and
+			// account the bucket ARN's ::: never carries.
+			name:    "customer access point in an S3 ARN",
+			path:    "testdata/planted-accesspoint.json",
+			content: `"accessPoint": "arn:aws:s3:eu-central-1:` + dummyAccountID + `:accesspoint/acme-prod-ap"`,
+			want:    []string{"accesspoint/acme-prod-ap"},
+		},
+		{
 			// The other side of the same rules, planted rather than assumed: the
 			// project's own host and a sample's bucket are what a checked file may
 			// carry, so the check reports nothing for them.

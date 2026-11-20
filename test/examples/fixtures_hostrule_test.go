@@ -217,6 +217,32 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 			want: []string{"db01.service.consul"},
 		},
 		{
+			// A company's internal zone is written under the private and the
+			// home suffix as often as under .corp or .lan, and the rule fails
+			// closed on both (see the note on the private suffixes in
+			// publicTLDs): a name under either identifies the customer's own
+			// network whether or not the text marks it as a host.
+			name: "private name under the private suffix in a corporate zone",
+			text: "the database is db01.corp.private",
+			want: []string{"db01.corp.private"},
+		},
+		{
+			name: "home network name under the home suffix",
+			text: "the NAS is nas.acme.home",
+			want: []string{"nas.acme.home"},
+		},
+		{
+			// The home, private, priv, jobs and travel suffixes match in any
+			// case on purpose, so a dotted value that is no host at all is
+			// reported as well: a workflow's `workflow.jobs` field ends in a
+			// TLD. That is an accepted false positive - the rule fails closed,
+			// a customer's own host under these suffixes is real data, and a
+			// value that is no host takes one allow-list entry.
+			name: "accepted false positive: dotted field path under the jobs TLD",
+			text: "the field `workflow.jobs` holds the jobs",
+			want: []string{"workflow.jobs"},
+		},
+		{
 			// arpa is the reverse-DNS suffix, and only home.arpa above is a
 			// customer's own zone: a reverse name is left to the dotted-quad
 			// rule, which reports the address it spells and not the name, so the
@@ -228,7 +254,8 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 		{
 			// The curated list of TLDs names its own gaps, and these are the
 			// ones the audit found: a government, education or international
-			// name, and the two common country codes it left out.
+			// name, and two of the country codes it left out (in, br), while us
+			// was already listed and stays there.
 			name: "customer host under the government TLD",
 			text: "the database is db.acme.gov",
 			want: []string{"db.acme.gov"},
@@ -407,15 +434,16 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 // reads after a vendor host or a bucket scheme. The host name rule exempts the
 // public vendor hosts a page links to (publicVendorHosts), yet the path after one
 // names the customer just as a host would, so an owner a path names after
-// github.com, raw.githubusercontent.com or ghcr.io is reported as the host and
-// the owner (github.com/acme), in a URL and in the SSH clone form a reader copies
+// github.com, api.github.com, raw.githubusercontent.com or ghcr.io is reported as
+// the host and the owner (github.com/acme), in a URL and in the SSH clone form a
+// reader copies
 // (git@github.com:acme/private-repo.git) alike. Only this project's own account
 // and the listed public open-source owners pass, so github.com/timothymamo/shift2eu
 // and github.com/sigstore/cosign are clean and the same host written in another
 // case (GitHub.com/TimothyMamo/shift2eu) is clean too.
 //
 // A bucket is reported with the scheme that gives it its shape (s3://,
-// s3a://, s3n://, gs://, az://) or, in an ARN, whole
+// s3a://, s3n://, gs://, az://, abfss://, wasbs://, oci://) or, in an ARN, whole
 // (arn:aws:s3:::acme-prod-bucket). A Cloud Storage path is read by this rule,
 // not the owner one, and it names the bucket after the service host
 // (storage.googleapis.com), in a URL (storage.googleapis.com/acme-prod-data), in a
@@ -544,25 +572,22 @@ func TestVendorPathProblems(t *testing.T) {
 			want: []string{"storage.googleapis.com/storage/v1/b/acme-prod-data"},
 		},
 		{
-			// A bucket's own letters are lower case in Cloud Storage, so the
-			// path's bucket segment stops at the capital and the JSON API path
-			// names no bucket: www.googleapis.com is a listed vendor host and
-			// reports nothing either, so the value passes. The rule fails open
-			// here, a known gap left to the follow-up issue, because a bucket is
-			// only ever written in lower case and a capital is no bucket.
-			name: "known gap: upper-case bucket in a Cloud Storage JSON API path",
-			text: `"selfLink": "https://www.googleapis.com/storage/v1/b/Acme-prod"`,
-			want: nil,
+			// A bucket's own letters are lower case in Cloud Storage, yet a
+			// bucket written with a capital is the customer's all the same, and
+			// the JSON API path's b/ segment is what makes it a bucket path. The
+			// value reported is the host and the path up to the bucket as the
+			// file writes them, so the failure names the value to change.
+			name: "customer bucket in capitals in a Cloud Storage JSON API path",
+			text: `"selfLink": "https://www.googleapis.com/storage/v1/b/Acme-Prod/o"`,
+			want: []string{"www.googleapis.com/storage/v1/b/Acme-Prod"},
 		},
 		{
-			// After the service host itself, the same upper-case bucket is no
-			// bucket to the path pattern either, and the pattern's host-only
-			// alternative reads the lower-case storage/ segment of the JSON API
-			// path instead: the value reported is the host and that segment, so
-			// the rule fails closed on what it cannot read rather than pass it.
-			name: "fails closed: upper-case bucket in a Cloud Storage path",
-			text: "the asset is storage.googleapis.com/storage/v1/b/Acme-prod",
-			want: []string{"storage.googleapis.com/storage"},
+			// The same JSON API path called on the service host itself, which the
+			// asset name uses: the bucket is read with its capitals here too, so
+			// the rule no longer reports the storage/ segment it read instead.
+			name: "customer bucket in capitals after the Cloud Storage service host",
+			text: "the asset is storage.googleapis.com/storage/v1/b/Acme-Prod",
+			want: []string{"storage.googleapis.com/storage/v1/b/Acme-Prod"},
 		},
 		{
 			// The digits after a generic word are a count (example-logs-2) and a
@@ -581,6 +606,37 @@ func TestVendorPathProblems(t *testing.T) {
 			name: "account-ID digits after a sample bucket prefix in a Cloud Storage path",
 			text: "the asset is storage.googleapis.com/example-data-210987654321",
 			want: []string{"storage.googleapis.com/example-data-210987654321"},
+		},
+		{
+			// api.github.com is a listed vendor host, and the path after it names
+			// the customer's account behind an endpoint segment: the value
+			// reported is the host and the owner, the way the github.com rows
+			// report it, with the endpoint (repos, orgs) left out.
+			name: "customer owner path after the GitHub API host",
+			text: "the file is at https://api.github.com/repos/acme-corp/infra/contents/x",
+			want: []string{"api.github.com/acme-corp"},
+		},
+		{
+			// abfss names the container before an @ and the customer's storage
+			// account in the host after it. The host is the host name rule's
+			// value and the account is this rule's, so both are reported: the
+			// account is globally unique and the customer's own name.
+			name: "customer storage account in an abfss URL",
+			text: "the data lake is at abfss://data@acmeprodlake.dfs.core.windows.net/x",
+			want: []string{"acmeprodlake.dfs.core.windows.net", "acmeprodlake"},
+		},
+		{
+			name: "customer storage account in a wasbs URL",
+			text: "the blobs are at wasbs://data@acmeprodblob.blob.core.windows.net/x",
+			want: []string{"acmeprodblob.blob.core.windows.net", "acmeprodblob"},
+		},
+		{
+			// An oci URL names the customer's bucket before the tenancy, and the
+			// bucket is reported with the scheme that gives it its shape, the way
+			// the s3 and az rows are.
+			name: "customer bucket in an oci URL",
+			text: "the objects are in oci://acme-prod-bucket@acmetenancy/x",
+			want: []string{"oci://acme-prod-bucket"},
 		},
 
 		// Not reported: the project's own account, a listed public open-source
@@ -603,42 +659,64 @@ func TestVendorPathProblems(t *testing.T) {
 		{
 			// A sample's bucket is named the way its domain is: a documentation
 			// value that identifies nobody.
-			name: "public bucket in an s3 URL",
+			name: "sample bucket in an s3 URL",
 			text: "the sample objects are in s3://example-bucket/key",
 			want: nil,
 		},
 		{
-			name: "public bucket in a gs URL",
+			name: "sample bucket in a gs URL",
 			text: "the sample objects are in gs://example-bucket/x",
 			want: nil,
 		},
 		{
 			// Generic words and optional digits follow example-, so the bucket
 			// is a sample's own.
-			name: "public bucket with digits behind the example- prefix",
+			name: "sample bucket with digits behind the example- prefix",
 			text: "the sample objects are in s3://example-logs-2/key",
 			want: nil,
 		},
 		{
-			name: "public bucket named example itself",
+			name: "sample bucket named example itself",
 			text: "the sample objects are in s3://example/key",
 			want: nil,
 		},
 		{
-			name: "public bucket in a Cloud Storage URL",
+			name: "sample bucket in a Cloud Storage URL",
 			text: "the sample objects are at https://storage.googleapis.com/example-bucket/key",
 			want: nil,
 		},
 		{
 			// The JSON API's own path names a sample's bucket too, so it
 			// identifies nobody.
-			name: "public bucket in a Cloud Storage JSON API path",
+			name: "sample bucket in a Cloud Storage JSON API path",
 			text: `"selfLink": "https://www.googleapis.com/storage/v1/b/example-bucket"`,
 			want: nil,
 		},
 		{
-			name: "public bucket in an ARN",
+			name: "sample bucket in an ARN",
 			text: `"bucket": "arn:aws:s3:::example-bucket"`,
+			want: nil,
+		},
+		{
+			// The GitHub API host names the public project's repository here,
+			// and the owner is one of the listed public open-source ones.
+			name: "public open-source owner path after the GitHub API host",
+			text: "the module is https://api.github.com/repos/aws/aws-sdk-go-v2",
+			want: nil,
+		},
+		{
+			// A sample's storage account starts with example, the way a sample's
+			// bucket is named, so this rule reports nothing for it. The host the
+			// account sits in is no documentation name, so the host name rule
+			// reports it: the row pins that no account value joins it in the
+			// report.
+			name: "sample storage account in an abfss URL",
+			text: "the data lake is at abfss://data@examplestorage.dfs.core.windows.net/x",
+			want: []string{"examplestorage.dfs.core.windows.net"},
+		},
+		{
+			name: "sample bucket in an oci URL",
+			text: "the sample objects are in oci://example-bucket@example/x",
 			want: nil,
 		},
 		{
