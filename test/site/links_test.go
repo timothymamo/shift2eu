@@ -54,21 +54,11 @@ func isAbsoluteURL(ref string) bool {
 	return err == nil && parsed.IsAbs()
 }
 
-// isWebURL reports whether u is a URL of the web, which a page loads or
-// navigates to over http: http and https, and a protocol-relative reference,
-// whose scheme the document's own gives it. A URL of another scheme, such as the
-// contact points' `mailto:info@shift2eu.com` (issue #373), names an address or a
-// client, never a file of the site: following it loads nothing, so the CSP does
-// not govern it and no bundle check resolves it as one.
-func isWebURL(u *url.URL) bool {
-	return u.Scheme == "" || u.Scheme == "http" || u.Scheme == "https"
-}
-
 // referenceSchemes are the schemes an absolute reference of a page may name: the
 // web's http and https, which a page loads or navigates to, and the contact
 // points' mailto, which names an address rather than a resource. A
-// protocol-relative reference spells no scheme at all, and the document's own
-// gives it one of the web's (webSchemes).
+// protocol-relative reference spells no scheme at all, so the document's own
+// gives it one of the web's and the check passes it without a scheme to compare.
 var referenceSchemes = []string{"http", "https", "mailto"}
 
 // absoluteReferenceProblem says why the reference ref is no reference a page of
@@ -101,11 +91,14 @@ func absoluteReferenceProblem(ref string) string {
 }
 
 // siteFileProblem says what about the absolute reference ref is a file of the
-// bundle addressed at an absolute URL, and "" when it addresses none. Only the
-// mailto scheme is exempt, because it names an address rather than a path of
-// the site: every other scheme's path is read as one, so an uppercase HTTPS://
-// and a protocol-relative //host are checked exactly like a file:///index.html
-// a later page might spell.
+// bundle addressed at an absolute URL, and "" when it addresses none. The mailto
+// scheme is exempt, because it names an address rather than a path of the site,
+// and so is every opaque reference, such as javascript:alert(1) or
+// tel:+31201234567, which names no path at all: absoluteReferenceProblem decides
+// those, and reading an empty path as index.html would report such a reference
+// as the bundle's own index. Every other scheme's path is read as one, so an
+// uppercase HTTPS:// and a protocol-relative //host are checked exactly like a
+// file:///index.html a later page might spell.
 func siteFileProblem(bundle *bundle, ref string) string {
 	parsed, err := url.Parse(ref)
 	if err != nil {
@@ -113,6 +106,10 @@ func siteFileProblem(bundle *bundle, ref string) string {
 	}
 
 	if parsed.Scheme == "mailto" {
+		return ""
+	}
+
+	if parsed.Opaque != "" {
 		return ""
 	}
 
@@ -247,6 +244,76 @@ func loadedResources(doc *document) []loadedResource {
 	return resources
 }
 
+// referenceAttributes are the attributes of a page that name a URL: the links,
+// the loaded resources, and the form, citation and ping targets. Both walks of
+// this file read them all, so a reference cannot hide in an attribute only one
+// of them knew. A srcset names several candidates and a ping several URLs.
+var referenceAttributes = []string{"href", "src", "action", "data", "formaction", "poster", "srcset", "cite", "ping"}
+
+// pageReference is one reference a page makes, with the element and the
+// attribute that spell it.
+type pageReference struct {
+	element   string
+	attribute string
+	ref       string
+}
+
+// pageReferences returns every reference the element names in the attributes a
+// page names a URL in: one per attribute, one per candidate of a srcset, whose
+// candidate's URL is its first field, and one per URL of a space-separated ping.
+func pageReferences(el *element) []pageReference {
+	var references []pageReference
+
+	add := func(attribute, ref string) {
+		ref = strings.TrimSpace(ref)
+		if ref == "" {
+			return
+		}
+
+		references = append(references, pageReference{element: el.tag, attribute: attribute, ref: ref})
+	}
+
+	for _, attribute := range referenceAttributes {
+		value, ok := el.attr(attribute)
+		if !ok {
+			continue
+		}
+
+		switch attribute {
+		case "srcset":
+			for _, candidate := range strings.Split(value, ",") {
+				if fields := strings.Fields(candidate); len(fields) > 0 {
+					add(attribute, fields[0])
+				}
+			}
+		case "ping":
+			for _, ref := range strings.Fields(value) {
+				add(attribute, ref)
+			}
+		default:
+			add(attribute, value)
+		}
+	}
+
+	return references
+}
+
+// absoluteReferences returns every reference of the document that leaves the
+// page's own origin, in document order.
+func absoluteReferences(doc *document) []pageReference {
+	var references []pageReference
+
+	for _, el := range doc.all() {
+		for _, reference := range pageReferences(el) {
+			if isAbsoluteURL(reference.ref) {
+				references = append(references, reference)
+			}
+		}
+	}
+
+	return references
+}
+
 // TestLoadedResourcesAreSameOrigin pins that no page loads anything from another
 // origin: no third-party script, stylesheet, font, image or frame. A link to
 // another site is a plain <a href> navigation, which the page does not load
@@ -350,9 +417,10 @@ func TestVerificationPageLinksItsGuide(t *testing.T) {
 // TestLinkChecksAcceptAMailtoLink pins what this file's two checks do with the
 // page's contact points, both `mailto:info@shift2eu.com` (issue #373): the
 // reference is absolute, so TestRelativeLinksResolve never resolves it as a file
-// of the bundle, and it is no URL of the web, so TestNoAbsoluteURLToASiteFile
-// leaves it alone rather than reading the address as a path inside the bundle.
-// Neither check refuses it.
+// of the bundle, and the site-file check exempts mailto rather than reading the
+// address as a path inside the bundle. Neither check refuses it. The contact
+// address is opaque, so the exemption is the one every opaque reference gets
+// (see TestSiteFileAtAnAbsoluteURLIsRefused).
 func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
 	t.Parallel()
 
@@ -378,15 +446,6 @@ func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
 				t.Errorf("resolveBundleFile(%q) resolved the reference to a bundle file, want it left alone: the link loads nothing", tc.ref)
 			}
 
-			parsed, err := url.Parse(tc.ref)
-			if err != nil {
-				t.Fatalf("url.Parse(%q): %v", tc.ref, err)
-			}
-
-			if isWebURL(parsed) {
-				t.Errorf("isWebURL(%q) = true, want false: a mailto: reference names no file of the site, so the site-file check must not read its address as a path", tc.ref)
-			}
-
 			if problem := siteFileProblem(bundle, tc.ref); problem != "" {
 				t.Errorf("the site-file check refuses %q: %s, want it left alone: such a reference names no file", tc.ref, problem)
 			}
@@ -398,9 +457,10 @@ func TestLinkChecksAcceptAMailtoLink(t *testing.T) {
 // bundle at an absolute URL: the bundle runs unchanged on any origin, a local
 // static file server included (PRD #297, Layer 2 and Layer 3). A link to another
 // site is no site file and stays allowed, and so does a `mailto:` reference,
-// which names an address rather than a path; no other scheme is exempt, so a
-// file:, ftp:, ws:, blob: or javascript: reference is read as a path too (see
-// TestSiteFileAtAnAbsoluteURLIsRefused).
+// which names an address rather than a path; an opaque reference such as
+// javascript:alert(1) names no path either and is left to the scheme check below.
+// No other scheme is exempt, so a file:, ftp:, ws: or blob: reference is read as
+// a path too (see TestSiteFileAtAnAbsoluteURLIsRefused).
 func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 	t.Parallel()
 
@@ -410,16 +470,9 @@ func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 		t.Run(page, func(t *testing.T) {
 			t.Parallel()
 
-			for _, el := range bundle.html(t, page).all() {
-				for _, attribute := range []string{"href", "src", "action", "data"} {
-					ref, ok := el.attr(attribute)
-					if !ok || !isAbsoluteURL(ref) {
-						continue
-					}
-
-					if problem := siteFileProblem(bundle, ref); problem != "" {
-						t.Errorf("%s holds %s=%q on <%s>, and %s", page, attribute, ref, el.tag, problem)
-					}
+			for _, reference := range absoluteReferences(bundle.html(t, page)) {
+				if problem := siteFileProblem(bundle, reference.ref); problem != "" {
+					t.Errorf("%s holds %s=%q on <%s>, and %s", page, reference.attribute, reference.ref, reference.element, problem)
 				}
 			}
 		})
@@ -427,11 +480,12 @@ func TestNoAbsoluteURLToASiteFile(t *testing.T) {
 }
 
 // TestSiteFileAtAnAbsoluteURLIsRefused pins what the site-file check reads from
-// an absolute reference of any scheme: a mailto address is the only exemption,
-// and an uppercase HTTPS:// and a protocol-relative //host are read as the paths
-// they spell, so a later file:///index.html or ftp://host/style.css is caught
-// rather than skipped. Each case names the bundle file the check must refuse, or
-// none when the reference names no site file.
+// an absolute reference of any scheme: a mailto address is one exemption, and an
+// opaque reference such as javascript:alert(1) or tel:+31201234567 another,
+// since it names no path at all; an uppercase HTTPS:// and a protocol-relative
+// //host are read as the paths they spell, so a later file:///index.html or
+// ftp://host/style.css is caught rather than skipped. Each case names the bundle
+// file the check must refuse, or none when the reference names no site file.
 func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
 	t.Parallel()
 
@@ -451,6 +505,8 @@ func TestSiteFileAtAnAbsoluteURLIsRefused(t *testing.T) {
 		{name: "the contact address", ref: contactHref, wantFile: ""},
 		{name: "an address with a subject", ref: contactHref + "?subject=Assessment", wantFile: ""},
 		{name: "the repository", ref: repositoryURL, wantFile: ""},
+		{name: "a javascript URL", ref: "javascript:alert(1)", wantFile: ""},
+		{name: "a telephone address", ref: "tel:+31201234567", wantFile: ""},
 	}
 
 	for _, tc := range tests {
@@ -489,25 +545,88 @@ func TestAbsoluteReferencesAreOfTheWeb(t *testing.T) {
 		t.Run(page, func(t *testing.T) {
 			t.Parallel()
 
-			references := 0
+			references := absoluteReferences(bundle.html(t, page))
 
-			for _, el := range bundle.html(t, page).all() {
-				for _, attribute := range []string{"href", "src", "action", "data"} {
-					ref, ok := el.attr(attribute)
-					if !ok || !isAbsoluteURL(ref) {
-						continue
-					}
-
-					references++
-
-					if problem := absoluteReferenceProblem(ref); problem != "" {
-						t.Errorf("%s holds %s=%q on <%s>, and %s", page, attribute, ref, el.tag, problem)
-					}
+			for _, reference := range references {
+				if problem := absoluteReferenceProblem(reference.ref); problem != "" {
+					t.Errorf("%s holds %s=%q on <%s>, and %s", page, reference.attribute, reference.ref, reference.element, problem)
 				}
 			}
 
-			if references == 0 {
+			if len(references) == 0 {
 				t.Errorf("%s holds no absolute reference, so the check read nothing: every page links to the repository's HTTPS URL", page)
+			}
+		})
+	}
+}
+
+// TestReferenceWalksCatchANestedURLAttribute pins that both walks read the
+// attributes a page names a URL in beyond href, src, action and data, taking a
+// srcset candidate as its own URL: a button's formaction with a javascript: URL
+// is refused by the scheme check, and an image's srcset candidate with a file:
+// URL by both, so a later page cannot hide a reference in either (issue #373).
+func TestReferenceWalksCatchANestedURLAttribute(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	tests := []struct {
+		name string
+		// markup holds the one element the page might add.
+		markup string
+		// ref is the reference the walk must read and a check refuse.
+		ref string
+		// wantWebProblem is the text absoluteReferenceProblem must name, and
+		// wantSiteFileProblem the one siteFileProblem must name; "" means the
+		// check must leave the reference alone.
+		wantWebProblem      string
+		wantSiteFileProblem string
+	}{
+		{
+			name:                "a formaction that navigates with a javascript URL",
+			markup:              `<form action="index.html"><button formaction="javascript:alert(1)">Go</button></form>`,
+			ref:                 "javascript:alert(1)",
+			wantWebProblem:      `the scheme "javascript"`,
+			wantSiteFileProblem: "",
+		},
+		{
+			name:                "a srcset candidate that names a file",
+			markup:              `<img src="style.css" srcset="style.css 1x, file:///index.html 2x" alt="">`,
+			ref:                 "file:///index.html",
+			wantWebProblem:      `the scheme "file"`,
+			wantSiteFileProblem: "index.html",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := parseHTML(t, "fixture.html", []byte("<html><body>"+tc.markup+"</body></html>"))
+
+			found := false
+
+			for _, reference := range absoluteReferences(doc) {
+				if reference.ref == tc.ref {
+					found = true
+				}
+			}
+
+			if !found {
+				t.Fatalf("the walk reads no %q from %s: both checks read every attribute a page names a URL in, a srcset candidate taken as its own URL",
+					tc.ref, tc.markup)
+			}
+
+			if problem := absoluteReferenceProblem(tc.ref); tc.wantWebProblem == "" && problem != "" {
+				t.Errorf("absoluteReferenceProblem(%q) = %q, want none: an opaque reference names no resource the site loads", tc.ref, problem)
+			} else if tc.wantWebProblem != "" && !strings.Contains(problem, tc.wantWebProblem) {
+				t.Errorf("absoluteReferenceProblem(%q) = %q, want a problem naming %q: the reference leaves the web", tc.ref, problem, tc.wantWebProblem)
+			}
+
+			if problem := siteFileProblem(bundle, tc.ref); tc.wantSiteFileProblem == "" && problem != "" {
+				t.Errorf("siteFileProblem(%q) = %q, want none: the reference names no file of the bundle", tc.ref, problem)
+			} else if tc.wantSiteFileProblem != "" && !strings.Contains(problem, tc.wantSiteFileProblem) {
+				t.Errorf("siteFileProblem(%q) = %q, want a problem naming %q: the reference addresses a file of the bundle", tc.ref, problem, tc.wantSiteFileProblem)
 			}
 		})
 	}
@@ -517,7 +636,8 @@ func TestAbsoluteReferencesAreOfTheWeb(t *testing.T) {
 // reference: a javascript: and a file: reference fail, and the web's http and
 // https, an uppercase HTTPS://, a protocol-relative //host and the contact
 // points' mailto pass. A relative reference is no absolute reference and is left
-// to the bundle checks.
+// to the bundle checks, and so is one that cannot be parsed, which the scheme
+// check refuses rather than passes.
 func TestAbsoluteReferenceSchemes(t *testing.T) {
 	t.Parallel()
 
@@ -534,6 +654,7 @@ func TestAbsoluteReferenceSchemes(t *testing.T) {
 		{name: "an https reference", ref: "https://example.com/index.html", want: true},
 		{name: "an uppercase HTTPS reference", ref: "HTTPS://example.com/index.html", want: true},
 		{name: "a protocol-relative reference", ref: "//example.com/index.html", want: true},
+		{name: "a malformed protocol-relative reference", ref: "//[bad", want: false},
 		{name: "a relative reference", ref: "index.html", want: true},
 	}
 
@@ -548,7 +669,7 @@ func TestAbsoluteReferenceSchemes(t *testing.T) {
 			}
 
 			if !tc.want && problem == "" {
-				t.Errorf("absoluteReferenceProblem(%q) = none, want a problem: the check must refuse a reference of another scheme", tc.ref)
+				t.Errorf("absoluteReferenceProblem(%q) = none, want a problem: the check must refuse a reference of another scheme, and one it cannot parse", tc.ref)
 			}
 		})
 	}

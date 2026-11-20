@@ -12,8 +12,10 @@ import (
 // hsts-waived, loading-notice) must be present, non-empty and shown, "shown"
 // meaning exactly what the Privacy statement's Hidden definition says; the
 // no-JavaScript message must name JavaScript, WebAssembly and the CLI; every
-// control must have a label; and an element with role="alert" must exist so an
-// error is announced.
+// page's footer must carry the site's privacy promise; every control must have a
+// label, a step number must be hidden from assistive technology, the report's
+// glyphs must state an empty alternative text, and an element with role="alert"
+// must exist so an error is announced.
 
 // TestDowngradeRiskIsShown pins the first-visit downgrade statement (PRD #297,
 // Privacy statement): the privacy page carries the element whose id is
@@ -637,5 +639,111 @@ func TestErrorsAreAnnounced(t *testing.T) {
 
 	if alerts == 0 {
 		t.Error("index.html holds no element with role=\"alert\": the error an assessment returns is announced to assistive technology")
+	}
+}
+
+// TestEveryPageCarriesTheFooterStatement pins the one line all three pages share
+// in their footer (issue #373): "No cookies, no tracking: the page sends nothing
+// anywhere." The claim is the site's privacy promise, and the footer is the part
+// a visitor reads on every page, so the build writes the same statement into
+// each page's <footer>.
+func TestEveryPageCarriesTheFooterStatement(t *testing.T) {
+	t.Parallel()
+
+	const statement = "No cookies, no tracking: the page sends nothing anywhere."
+
+	bundle := theBundle(t)
+
+	for _, page := range pageNames {
+		t.Run(page, func(t *testing.T) {
+			t.Parallel()
+
+			footer := collapseSpace(footerOf(t, bundle.html(t, page)).textContent())
+
+			if !strings.Contains(footer, statement) {
+				t.Errorf("%s's footer reads %q, want it to carry %q: every page states the site's privacy promise in its footer (issue #373)",
+					page, footer, statement)
+			}
+		})
+	}
+}
+
+// TestStepNumbersAreSilent pins that the numbers the assessment page's legends
+// show are decoration and hidden from assistive technology (issue #373): a
+// <legend> holds its number in a <span class="step" aria-hidden="true">, so a
+// screen reader names the fieldset "Inventory", "EU targets" or "Options"
+// rather than "01 Inventory".
+func TestStepNumbersAreSilent(t *testing.T) {
+	t.Parallel()
+
+	doc := theBundle(t).html(t, "index.html")
+
+	steps := 0
+
+	for _, legend := range doc.find("legend") {
+		for _, child := range legend.children {
+			if child.tag != "span" || !hasClass(child, "step") {
+				continue
+			}
+
+			steps++
+
+			if got, ok := child.attr("aria-hidden"); !ok || strings.TrimSpace(got) != "true" {
+				t.Errorf("a <legend> holds the step number %q in a <span class=\"step\"> with aria-hidden=%q (present: %t), want \"true\": the number is decoration, and the fieldset is named by the rest of the legend (issue #373, Accessibility)",
+					collapseSpace(child.textContent()), got, ok)
+			}
+		}
+	}
+
+	if steps == 0 {
+		t.Error("index.html holds no <legend> with a <span class=\"step\">, so the check read nothing: the assessment page's three fieldsets show their step number there")
+	}
+}
+
+// TestBlockerGlyphContentCarriesAnEmptyAlternative pins the decorated content the
+// redesigned report draws (issue #373): a heading and a blocker item show a glyph,
+// and the declaration states the empty alternative text `/ ""` beside it, so a
+// screen reader announces the heading's words and nothing of the glyph. A glyph
+// without an alternative is read aloud as text.
+func TestBlockerGlyphContentCarriesAnEmptyAlternative(t *testing.T) {
+	t.Parallel()
+
+	name, data := theBundle(t).asset(t, "style", ".css")
+
+	tests := []struct {
+		name     string
+		selector string
+		glyph    string
+	}{
+		{name: "a blocker item's marker", selector: "#report .part-blockers > ul > li::marker", glyph: `\2715`},
+		{name: "a blockers heading's glyph", selector: "#report .part-blockers > h3::before", glyph: `\2715`},
+		{name: "a required change's heading glyph", selector: "#report .part-changes > h3::before", glyph: `\25d0`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			content, found := declarationOf(t, name, data, tc.selector, "content")
+			if !found {
+				t.Fatalf("%s states no `content` for %q, want a glyph and its empty alternative text: `content: %s\u00a0/ \"\"` (issue #373)",
+					name, tc.selector, tc.glyph)
+			}
+
+			glyph, alternative, ok := strings.Cut(content, "/")
+			if !ok {
+				t.Fatalf("%s's %q sets content: %s, want the glyph and an empty alternative text beside it: a screen reader reads a bare glyph aloud (issue #373)",
+					name, tc.selector, content)
+			}
+
+			if !strings.Contains(strings.ToUpper(glyph), strings.ToUpper(tc.glyph)) {
+				t.Errorf("%s's %q sets content: %s, want it to draw the glyph %s", name, tc.selector, content, tc.glyph)
+			}
+
+			if got := strings.TrimSpace(alternative); got != `""` {
+				t.Errorf("%s's %q states the alternative text %s, want an empty `\"\"`: the glyph is decoration, and the heading's words are what a screen reader reads (issue #373, Accessibility)",
+					name, tc.selector, got)
+			}
+		})
 	}
 }
