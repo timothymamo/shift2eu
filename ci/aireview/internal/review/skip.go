@@ -114,7 +114,7 @@ func skipNoUsableAnswer(check string, index, count, usable int) skipped {
 	// request can bring about itself (issue #376, ADR 0033).
 	body := message
 	if left := leftOutParts(usable); left != "" {
-		body += " " + left
+		body += "\n\n" + left
 	}
 
 	body += "\n\n" + injectionWarning
@@ -124,18 +124,19 @@ func skipNoUsableAnswer(check string, index, count, usable int) skipped {
 
 // leftOutParts returns the fixed sentence that says how many other parts of a
 // split diff got a usable answer whose findings the skipped review leaves out,
-// and "" when none did (issue #367). It holds this package's words and the
-// count alone, never text of the model's answer.
+// and asks the maintainer to review those parts by hand, and "" when none did
+// (issue #367). It holds this package's words and the count alone, never text
+// of the model's answer.
 func leftOutParts(usable int) string {
 	switch {
 	case usable <= 0:
 		return ""
 	case usable == 1:
-		return "1 other part of the diff was reviewed with a usable answer, and its findings are not shown: " +
-			"a review that left part of the change out would read as a full review."
+		return "1 other part of the diff was reviewed with a usable answer; its findings are not shown, " +
+			"so review that part by hand."
 	default:
-		return fmt.Sprintf("%d other parts of the diff were reviewed with a usable answer, and their findings are not shown: "+
-			"a review that left part of the change out would read as a full review.", usable)
+		return fmt.Sprintf("%d other parts of the diff were reviewed with a usable answer; their findings are not shown, "+
+			"so review those parts by hand.", usable)
 	}
 }
 
