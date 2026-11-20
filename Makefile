@@ -442,7 +442,8 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # rule of dev/agents-token-launchd.sh's foreign_jobs (auditor nit #396): the user domain's path is built from
 # $HOME, which may hold a space, a ; or a $ (security audit L1). Otherwise it is never printed, and the advice
 # says "remove its plist, whose path is not shown" with an ls of the literal ~/Library/LaunchAgents/<label>.plist
-# (or $(LIMA_LAUNCHDAEMONS_DIR)/<label>.plist) that names it. It
+# (or $(LIMA_LAUNCHDAEMONS_DIR)/<label>.plist) that names it, joined to the bootout by ", then" rather than the
+# && of the pasteable safe-path command (AI reviewer nit, PR #417). It
 # removes nothing itself. vm-up warns with it; vm-boot-install refuses with it. Only labels and files of Lima's
 # own naming are asked about, so it reads no job of anyone else.
 #
@@ -476,7 +477,7 @@ LIMA_AUTOSTART_JOBS = lima_autostart=''; \
 		(*) lima_label="$(LIMA_AUTOSTART_SYSTEM_LABEL_PREFIX)$$LIMA_INSTANCE"; lima_target="system/$$lima_label"; \
 			lima_plist="$${LIMA_LAUNCHDAEMONS_DIR%/}/$$lima_label.plist"; lima_sudo='sudo ' ;; \
 		esac; \
-		lima_at=" at $$lima_plist"; lima_remove="$${lima_sudo}rm -f $$lima_plist"; \
+		lima_at=" at $$lima_plist"; lima_remove="$${lima_sudo}rm -f $$lima_plist"; lima_then=' && '; \
 		case "$$lima_plist" in \
 		([!/]* | */../* | */.. | *[!/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) \
 			case "$$lima_domain" in \
@@ -484,11 +485,11 @@ LIMA_AUTOSTART_JOBS = lima_autostart=''; \
 			(*) lima_where="$${LIMA_LAUNCHDAEMONS_DIR%/}/$$lima_label.plist" ;; \
 			esac; \
 			lima_at=' (its plist'"'"'s path is not shown)'; \
-			lima_remove="remove its plist, whose path is not shown: ls $$lima_where names it" ;; \
+			lima_remove="remove its plist, whose path is not shown: ls $$lima_where names it"; lima_then=', then ' ;; \
 		esac; \
 		if [ -n "$$lima_launchctl" ] && [ -n "$$lima_target" ] && launchctl print "$$lima_target" </dev/null >/dev/null 2>&1; then \
 			lima_autostart=1; \
-			echo "$@: $(1): Lima's autostart job $$lima_label is loaded in $${lima_target%/*}: it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $${lima_sudo}launchctl bootout $$lima_target && $$lima_remove) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
+			echo "$@: $(1): Lima's autostart job $$lima_label is loaded in $${lima_target%/*}: it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $${lima_sudo}launchctl bootout $$lima_target$$lima_then$$lima_remove) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
 		elif [ -e "$$lima_plist" ] || [ -L "$$lima_plist" ]; then \
 			lima_autostart=1; \
 			echo "$@: $(1): Lima's autostart job $$lima_label is installed$$lima_at, not loaded now: launchd loads it at the next login or boot, and it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $$lima_remove) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
