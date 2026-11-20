@@ -23,7 +23,7 @@ risk. `make vm-up` stopped starting an existing instance with `limactl start` fo
 #254): it runs `limactl shell --start --workdir / <instance> true`, which since Lima 2.0 starts a `Stopped`
 instance, only runs `true` in a `Running` one, and fails with `does not exist` for one that is gone. It never
 creates a VM. On 2026-11-20 the Mini still listed `io.lima-vm.daemon.shift2eu => enabled` in
-`launchctl print system`, a leftover enable override with no job behind it, so an autostart job is not a
+`launchctl print-disabled system`, a leftover enable override with no job behind it, so an autostart job is not a
 hypothetical.
 
 ## Decision
