@@ -29,16 +29,15 @@ import (
 // (vpc-10-0-0-0-016) or a further group after a bare run (10-1-2-3-4-5) leaves
 // the run clean too; a name's prefix length that one more digit group follows
 // (subnet-10-0-1-0-24-2, vpc_10_0_0_0_16_1) fails closed and the run is
-// reported. The label before
-// a bare private run excuses it only when the label is an English word ending in
-// ip that stands on its own (zip-10-1-2-3, ship-1-2-3-4): the same word inside a
-// compound name (edge-strip-10-0-0-5, node_tip_10_1_2_3) marks the address, as
-// does any other word (node-, vm-, eip-, hostip-, nat-), a digit group
-// (eu-central-1-10-1-2-3) excepted. A date, a version-like token, a sequence of
-// numbers and a group that is no octet are not an address. A version-like token
-// that a dotted extension follows (build-1-2-3-4.tar.gz) is the price of the
-// dotted-label rule and is reported: the rule fails closed rather than let an
-// address in a name through.
+// reported. The label before a bare private run excuses it only when the label
+// is an English word ending in ip that stands on its own (zip-10-1-2-3,
+// ship-1-2-3-4): the same word inside a compound name (edge-strip-10-0-0-5,
+// node_tip_10_1_2_3) marks the address, as does any other word (node-, vm-,
+// eip-, hostip-, nat-), a digit group (eu-central-1-10-1-2-3) excepted. A date,
+// a version-like token, a sequence of numbers and a group that is no octet are
+// not an address. A version-like token that a dotted extension follows
+// (build-1-2-3-4.tar.gz) is the price of the dotted-label rule and is reported:
+// the rule fails closed rather than let an address in a name through.
 func TestHyphenatedIPv4Problems(t *testing.T) {
 	t.Parallel()
 
@@ -248,6 +247,14 @@ func TestHyphenatedIPv4Problems(t *testing.T) {
 			name: "private address followed by two further groups",
 			text: "the steps 10-1-2-3-4-5 are listed",
 			want: nil,
+		},
+		{
+			// The same run behind a label is a name rather than prose, so the
+			// prefix length and one more digit group after it fail closed and
+			// the address is reported, where the bare run above stays clean.
+			name: "labelled run followed by two further groups in prose",
+			text: "the steps-10-1-2-3-4-5 run",
+			want: []string{"10-1-2-3"},
 		},
 		{
 			// A prefix length is 0 to 32, so 33 is no prefix and the run stays as

@@ -544,6 +544,27 @@ func TestVendorPathProblems(t *testing.T) {
 			want: []string{"storage.googleapis.com/storage/v1/b/acme-prod-data"},
 		},
 		{
+			// A bucket's own letters are lower case in Cloud Storage, so the
+			// path's bucket segment stops at the capital and the JSON API path
+			// names no bucket: www.googleapis.com is a listed vendor host and
+			// reports nothing either, so the value passes. The rule fails open
+			// here, a known gap left to the follow-up issue, because a bucket is
+			// only ever written in lower case and a capital is no bucket.
+			name: "known gap: upper-case bucket in a Cloud Storage JSON API path",
+			text: `"selfLink": "https://www.googleapis.com/storage/v1/b/Acme-prod"`,
+			want: nil,
+		},
+		{
+			// After the service host itself, the same upper-case bucket is no
+			// bucket to the path pattern either, and the pattern's host-only
+			// alternative reads the lower-case storage/ segment of the JSON API
+			// path instead: the value reported is the host and that segment, so
+			// the rule fails closed on what it cannot read rather than pass it.
+			name: "fails closed: upper-case bucket in a Cloud Storage path",
+			text: "the asset is storage.googleapis.com/storage/v1/b/Acme-prod",
+			want: []string{"storage.googleapis.com/storage"},
+		},
+		{
 			// The digits after a generic word are a count (example-logs-2) and a
 			// sample writes one to three of them, so a run of twelve is an account
 			// ID or another customer's own suffix.
