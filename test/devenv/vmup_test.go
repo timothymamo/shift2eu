@@ -38,6 +38,7 @@
 package devenv_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -877,6 +878,108 @@ func TestVMUpRefusesAnInvalidInstanceName(t *testing.T) {
 			if !strings.Contains(stderr, "LIMA_INSTANCE") {
 				t.Errorf("make vm-up's stderr does not say %q with LIMA_INSTANCE=%q, so a maintainer cannot see which variable to fix (issue #237)\nstderr: %s",
 					"LIMA_INSTANCE", tc.limaInstance, stderr)
+			}
+		})
+	}
+}
+
+// TestVMUpWarnsAboutALimaAutostartJob pins issue #315: make vm-up warns when Lima's own autostart job starts this
+// instance. `limactl autostart enable` writes io.lima-vm.autostart.<instance> in the user's domain and, with
+// --condition=boot, io.lima-vm.daemon.<instance> as a LaunchDaemon, and both run
+// `limactl start <name> --foreground` - the form that can fall back to template:default, a VM that mounts the home
+// directory (issue #237). vm-up warns rather than refuses: the VM still starts, the exit status stays 0, and the
+// warning names the job and `limactl autostart disable <instance>`, so a maintainer can remove it. With neither
+// job loaded it says nothing, and on a host without launchctl - Linux - it neither warns nor fails.
+func TestVMUpWarnsAboutALimaAutostartJob(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// domain is the launchd domain Lima's job would be loaded in; load says the case loads one.
+		domain jobDomain
+		prefix string
+		load   bool
+		// withoutLaunchctl runs make on a PATH that has no launchctl, as Linux CI has none.
+		withoutLaunchctl bool
+		wantWarn         bool
+	}{
+		{
+			name:     "the user domain's io.lima-vm.autostart job",
+			domain:   userDomain,
+			prefix:   vmBootLimaAutostartLabelPrefix,
+			load:     true,
+			wantWarn: true,
+		},
+		{
+			name:     "the system domain's io.lima-vm.daemon job",
+			domain:   systemDomain,
+			prefix:   vmBootLimaDaemonLabelPrefix,
+			load:     true,
+			wantWarn: true,
+		},
+		{name: "no Lima autostart job"},
+		{name: "no launchctl at all, as on Linux", withoutLaunchctl: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// An instance that is listed, Stopped and holds a lima.yaml passes vm-up's checks, so the VM is
+			// started and the warning is the only thing this case adds.
+			f := newVMUpFixture(t, vmUpInstance, "Stopped")
+			f.writeInstanceLimaYaml(t)
+
+			jobs := newLaunchdJobs(t, f.sb)
+			jobs.attach(f.env)
+
+			label := ""
+			if tc.load {
+				label = tc.prefix + vmUpInstance
+				// Lima's job as `limactl autostart enable` writes it.
+				jobs.add(t, tc.domain, label, loadedJob{args: []string{"/opt/homebrew/bin/limactl", "start", vmUpInstance, "--foreground"}})
+			}
+
+			if tc.withoutLaunchctl {
+				if err := os.Remove(filepath.Join(f.sb.binDir, "launchctl")); err != nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("remove the fake launchctl from %s: %v", f.sb.binDir, err)
+				}
+
+				// /usr/local/bin is dropped too: a Mac keeps no launchctl there, but the PATH of the run must
+				// hold nothing the recipe could find one in.
+				f.env["PATH"] = f.sb.binDir + ":" + pathWithout(t, "launchctl")
+			}
+
+			stdout, stderr, err := f.run(t, "vm-up")
+			if err != nil {
+				t.Fatalf("make vm-up exited non-zero for %s: a Lima autostart job is a warning, never a refusal, and a host without launchctl has nothing to warn about: %v\nstdout: %s\nstderr: %s",
+					tc.name, err, stdout, stderr)
+			}
+
+			// The VM is started either way: the warning changes nothing about the start (issue #315).
+			if diff := cmp.Diff([][]string{vmUpStartExistingArgs(vmUpInstance)}, f.starting(t)); diff != "" {
+				t.Errorf("make vm-up with %s did not start the VM the way it always does (-want +got):\n%s\nstdout: %s\nstderr: %s",
+					tc.name, diff, stdout, stderr)
+			}
+
+			combined := stdout + stderr
+
+			if !tc.wantWarn {
+				for _, forbidden := range []string{"io.lima-vm.", "autostart"} {
+					if strings.Contains(combined, forbidden) {
+						t.Errorf("make vm-up warns about %q for %s although no Lima autostart job starts %s: a warning that fires when there is nothing to remove sends a maintainer looking for a job that is not there (issue #315)\nstdout: %s\nstderr: %s",
+							forbidden, tc.name, vmUpInstance, stdout, stderr)
+					}
+				}
+
+				return
+			}
+
+			for _, want := range []string{label, "limactl autostart disable " + vmUpInstance} {
+				if !strings.Contains(combined, want) {
+					t.Errorf("make vm-up does not warn with %q although %s starts %s: the warning must name the job and the command that removes it, or a maintainer cannot act on it (issues #315, #237)\nstdout: %s\nstderr: %s",
+						want, label, vmUpInstance, stdout, stderr)
+				}
 			}
 		})
 	}
