@@ -258,6 +258,9 @@ summary:focus-visible,
   height: 2rem;
 }
 
+/* The marks are SVG <g> elements, which paint no background. The
+   background-color is there so the contrast test pairs each glyph's colour
+   with the masthead it sits on. */
 .mark-stars {
   color: var(--gold);
   background-color: var(--mast);
@@ -780,7 +783,12 @@ button.secondary:disabled {
 }
 
 /* Fit: a word, a colour and a glyph, never colour alone. The glyph is CSS
-   content with empty alternative text, so it is not read out twice. */
+   content with empty alternative text, so it is not read out twice. A
+   browser that cannot parse the alternative-text form drops the whole
+   declaration and shows no glyph; the word and its colour still carry the
+   fit, so nothing is lost. There is no plain fallback declaration on
+   purpose: it would make those browsers announce the glyph. The same holds
+   for the heading and blocker glyphs below. */
 #report td.fit,
 #report tr.fit-direct > td:first-child,
 #report tr.fit-partial > td:first-child,

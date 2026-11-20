@@ -191,3 +191,6 @@ set, over the hostile fixtures too.
 
 A class tied to a value's content, such as one for an estimate that could not be made, or a number in an
 attribute (`<meter value>`), stays ruled out.
+
+The stylesheet's fit and heading glyphs are decoration: the word in the cell or heading carries the fit,
+so a browser that drops the glyph's `content: "…" / ""` declaration loses nothing.

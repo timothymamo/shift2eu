@@ -68,6 +68,8 @@ type target struct {
 }
 
 // targets are the three embedded catalogs, in the order the page lists them.
+// The hq values are maintained by hand, not read from a catalog; test/site's
+// TestTargetCardsNameTheirHeadOffice pins them.
 var targets = []target{
 	{key: "ovhcloud", name: "OVHcloud", hq: "Roubaix, France", catalog: ovhcloud.New().Catalog},
 	{key: "scaleway", name: "Scaleway", hq: "Paris, France", catalog: scaleway.New().Catalog},
