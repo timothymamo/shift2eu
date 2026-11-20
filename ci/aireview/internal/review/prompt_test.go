@@ -1,6 +1,7 @@
 package review_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -262,6 +263,24 @@ func untrustedPart(t *testing.T, user string) string {
 	}
 
 	return before
+}
+
+// leftOutOfPrompt returns the left-out paths the prompt's untrusted document
+// names, read from its left_out_of_diff field as the model reads them: the JSON
+// encoding, not the raw text, so a path is compared after the document's
+// escaping, and an invalid byte comes back as the U+FFFD it is sent as.
+func leftOutOfPrompt(t *testing.T, user string) []string {
+	t.Helper()
+
+	var document struct {
+		LeftOut []string `json:"left_out_of_diff"`
+	}
+
+	if err := json.Unmarshal([]byte(untrustedPart(t, user)), &document); err != nil {
+		t.Fatalf("read the untrusted document's left_out_of_diff: %v", err)
+	}
+
+	return document.LeftOut
 }
 
 // anySentenceHolds reports whether one sentence of text holds every one of
