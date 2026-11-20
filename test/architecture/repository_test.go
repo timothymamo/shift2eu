@@ -950,9 +950,10 @@ type compositionRootProbe struct {
 // The fixture's cmd/shift2eu also imports the standard packages cmd/shift2eu imports today
 // and a nested module, example.com/cmdprobe/nested, whose path is under the probe's
 // module path: the listing must report it as a package that is not the main module.
-// The fixture's cmd/shift2eu-web stands in for a sibling root and imports
-// nothing: the rule holds its own root and no sibling, so a files: list widened
-// to **/cmd/** fails here.
+// The fixture's cmd/shift2eu-web stands in for a sibling root and imports the
+// same third-party library and cloud SDK: the rule holds its own root and no
+// sibling, so a files: list widened to **/cmd/** fails here, both by the packages
+// it holds and by the sibling's refused imports.
 //
 // The fixture's stand-in modules are local directories its go.mod replaces, so the
 // listing needs no network and no go.sum entry, as sdkprobe's do.
