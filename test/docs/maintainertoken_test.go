@@ -207,6 +207,22 @@ func TestTheRunbookSectionSkipsFencedCodeBlocks(t *testing.T) {
 			want: []int{3, 4, 5, 6, 7, 8, 9},
 		},
 		{
+			name: "a fence indented inside a list item is skipped, and the heading after it does end the section",
+			page: []string{
+				"# Development environment",
+				"### The switch-over runbook",
+				"Delete the GITHUB_TOKEN line from the `.envrc`.",
+				"  ```bash",
+				"  # Mac, host clone",
+				"  make vm-env",
+				"  ```",
+				"Then revoke the token on GitHub.",
+				"## Agent permissions",
+				"GITHUB_TOKEN is no credential of the agents.",
+			},
+			want: []int{2, 3, 4, 5, 6, 7, 8},
+		},
+		{
 			name: "a shell comment in a tilde-fenced block does not end the section, and the heading after it does",
 			page: []string{
 				"# Development environment",
