@@ -7,12 +7,12 @@
 // (issue #82).
 //
 // Read returns the goos x goarch product of the document's builds, sorted: the
-// CLI's alone, since the HTTP API is no longer a release binary (issue #393).
+// CLI's alone, since the HTTP API is retired (issue #393, ADR 0037).
 // It fails closed: it refuses every key, hook, env entry, flag and YAML
 // feature that could change what the release compiles and that it does not
 // read, so a change to how the release is built fails the tests until the
-// reader is taught it. Main is the only main package the release may build,
-// ServerMain the one it may not, and Env
+// reader is taught it. Main is the only main package the release may build
+// (a build of the retired server's main package is refused by name), and Env
 // the environment every build must set, exactly: CGO_ENABLED=0, GOWORK=off
 // and GOFLAGS=-mod=readonly (issue #102). The
 // document is read with test/internal/yamlread.

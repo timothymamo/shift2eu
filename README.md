@@ -7,8 +7,7 @@ Analyse what you run on a hyperscaler today, and find out what can move to a Eur
 > report. With resource sizes in the inventory, it names the plan each resource would run on and
 > estimates its monthly list price per resource, per workload and in total (`--no-estimate` turns this
 > off), groups resources by workload, notes blockers on related resources, and can judge a target in
-> one region (`--region scaleway=nl-ams`). `shift2eu-server` serves the same assessments over an HTTP API
-> ([Run the HTTP API](docs/guide/http-api.md)). Live discovery from AWS, Azure and GCP
+> one region (`--region scaleway=nl-ams`). Live discovery from AWS, Azure and GCP
 > is not implemented yet.
 
 ## What it will do
@@ -87,9 +86,6 @@ The [documentation's index](docs/README.md) lists every page. Using `shift2eu`:
 - [Run with Docker](docs/guide/docker.md): the image, mounts, users, reports and credentials.
 - [Verify a release](docs/guide/verify-releases.md): signatures, provenance and SBOMs, and the
   releases before the rename.
-- [Run the HTTP API](docs/guide/http-api.md): `shift2eu-server`, its routes and example requests.
-- [Behind a reverse proxy](docs/guide/reverse-proxy.md): deploying the server, with its flags and an
-  nginx configuration.
 
 Working on `shift2eu`:
 

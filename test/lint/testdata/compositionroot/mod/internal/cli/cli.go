@@ -1,6 +1,6 @@
 // Package cli stands for the CLI's production code, which neither
 // composition-root group reaches: those two hold for files under cmd/shift2eu/
-// and cmd/shift2eu-server/ only, which their linters.exclusions.rules say and
+// only, which their linters.exclusions.rules say and
 // TestCompositionRootExclusions checks. What the CLI may not do is its own
 // group's business (issue #152): cli-no-env-or-process refuses every way to
 // read, write or dump the environment, to locate a home, config, cache or temp

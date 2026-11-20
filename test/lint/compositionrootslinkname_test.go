@@ -54,15 +54,14 @@ func linknameProblems(rel string, src []byte) ([]string, error) {
 	return problems, nil
 }
 
-// TestRootsAndCLILinkNoForeignSymbol checks every Go file of the two composition
-// roots and of the two driving adapters they hand the work to, internal/cli and
-// internal/httpapi, _test.go files included, for a //go:linkname directive
+// TestRootsAndCLILinkNoForeignSymbol checks every Go file of the composition
+// root and of the packages it hands the work to (environmentPathDirs),
+// _test.go files included, for a //go:linkname directive
 // (linknameProblems). The tree holds none today, and the test pins that: the
 // directive reaches any function of any package, the environment dump of runtime
 // and the process entry points of syscall among them, and it needs package
-// unsafe, which depguard's rules deny the roots and the CLI, while internal/httpapi
-// has no strict rule of its own: a test file may import unsafe today, so a
-// directive there runs the same code under `go test`.
+// unsafe, which depguard's rules deny the root and the CLI; the check holds
+// the line where an import rule cannot, in a test file under `go test`.
 func TestRootsAndCLILinkNoForeignSymbol(t *testing.T) {
 	t.Parallel()
 
@@ -101,7 +100,7 @@ func TestRootsAndCLILinkNoForeignSymbol(t *testing.T) {
 func TestLinknameProblems(t *testing.T) {
 	t.Parallel()
 
-	const rel = "cmd/shift2eu-server/probe_test.go"
+	const rel = "cmd/shift2eu/probe_test.go"
 	tests := []struct {
 		name string
 		src  string

@@ -4,12 +4,12 @@
 // passes the contract suite in sourcetest.
 //
 // New reads a file at a path. FromBytes reads the same format from bytes held
-// in memory, such as the inventory in the body of an HTTP API request (PRD
-// #103, ADR 0019): the same Source type, the same cap, decoder, rules and
+// in memory, such as the inventory the site's page hands its WebAssembly
+// module (PRD #297): the same Source type, the same cap, decoder, rules and
 // sentinels; only the way the bytes arrive differs, and its errors start with
 // "inventory document" where a file's name the file. FromBytes takes ownership
 // of its bytes, without a copy. Its errors never repeat a value from the
-// document, which may come from an HTTP client: where a file's error quotes a
+// document, which may come from anyone: where a file's error quotes a
 // refused value, a FromBytes error names its position and field,
 // resources[1].category, and wraps the same sentinel.
 //

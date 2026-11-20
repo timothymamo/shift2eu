@@ -180,8 +180,8 @@ func isNetPackage(path string) bool {
 // them on every release platform: every package of the module it is built from
 // belongs to the main module, sits in the directory its import path names and
 // holds no source but Go files, and the binary carries the packages the page
-// needs. It fails too when the binary reaches internal/cli or internal/httpapi,
-// which the page never runs (PRD #297).
+// needs. TestWebBinaryNeverRunsTheCLI holds it off internal/cli, which the page
+// never runs (PRD #297).
 func TestWebReleaseTargetDependencies(t *testing.T) {
 	t.Parallel()
 
@@ -206,10 +206,10 @@ func TestWebReleaseTargetDependencies(t *testing.T) {
 	}
 }
 
-// TestWebBinaryRunsNeitherTheCLINorTheHTTPAPI pins that the site's binary is a
-// driving adapter of its own: it reaches neither internal/cli nor
-// internal/httpapi, which the page never runs (PRD #297).
-func TestWebBinaryRunsNeitherTheCLINorTheHTTPAPI(t *testing.T) {
+// TestWebBinaryNeverRunsTheCLI pins that the site's binary is a driving
+// adapter of its own: it never reaches internal/cli, which the page never
+// runs (PRD #297).
+func TestWebBinaryNeverRunsTheCLI(t *testing.T) {
 	t.Parallel()
 
 	root := repositoryRoot(t)
@@ -221,12 +221,11 @@ func TestWebBinaryRunsNeitherTheCLINorTheHTTPAPI(t *testing.T) {
 
 	refused := []string{
 		webModulePath + "/internal/cli",
-		webModulePath + "/internal/httpapi",
 	}
 
 	for _, pkg := range pkgs {
 		if slices.Contains(refused, pkg.ImportPath) {
-			t.Errorf("%s reaches %s, which the page never runs: the site is a driving adapter of its own, beside the CLI and the HTTP API",
+			t.Errorf("%s reaches %s, which the page never runs: the site is a driving adapter of its own, beside the CLI",
 				webMain, pkg.ImportPath)
 		}
 	}

@@ -14,11 +14,10 @@ import (
 // lists the packages of the release binary from it.
 const Main = "./cmd/shift2eu"
 
-// ServerMain is the main package of the HTTP API, shift2eu-server (PRD #103,
-// ADR 0019). The release no longer builds it (issue #393), so Read refuses it;
-// the module still holds it, and the repository tests list its packages from
-// it until the PR that removes the server.
-const ServerMain = "./cmd/shift2eu-server"
+// retiredServerMain was the main package of the HTTP API, shift2eu-server (PRD
+// #103, ADR 0019), retired with its code (issue #393, ADR 0037). Read refuses a
+// build of it with an error that names the retirement.
+const retiredServerMain = "./cmd/shift2eu-server"
 
 // Env returns the environment every build of the release must set, exactly
 // and in this order (issue #102): CGO_ENABLED=0, so the binary links no C
@@ -54,8 +53,8 @@ type Target struct {
 //     go.sum for the -mod=readonly build to accept.
 //   - builds must hold a build of Main and nothing else: each main once, no
 //     other package, so the one binary the release ships is the one the
-//     repository test lists the packages of. The HTTP API's main package,
-//     ServerMain, is refused: the release stopped building it (issue #393).
+//     repository test lists the packages of. The retired HTTP API's main
+//     package, ./cmd/shift2eu-server, is refused by name (issue #393).
 //     Each entry
 //     may hold only id, main, binary,
 //     env, flags, ldflags, goos and goarch: ignore and targets (which change
@@ -224,8 +223,8 @@ func readBuild(build yamlread.Item) (string, []Target, error) {
 	}
 
 	if mainPkg != Main {
-		if mainPkg == ServerMain {
-			return "", nil, fmt.Errorf("main is %q, the HTTP API's main package: the release ships the CLI alone, so it builds %s only (issue #393)", mainPkg, Main)
+		if mainPkg == retiredServerMain {
+			return "", nil, fmt.Errorf("main is %q, the retired HTTP API's main package: the release ships the CLI alone, so it builds %s only (issue #393)", mainPkg, Main)
 		}
 
 		return "", nil, fmt.Errorf("main is %q, want %s, the only package the release builds", mainPkg, Main)

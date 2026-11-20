@@ -53,13 +53,13 @@
 //
 // TestOnlyNamedPackagesTestTheCLI holds the lax rule cli-only-in-named-tests to
 // the exact set it means (issue #345): depguard matches its exemptions, such as
-// !**/test/apiparity/*_test.go, against absolute paths with no anchor at the
+// !**/internal/cli/*_test.go, against absolute paths with no anchor at the
 // module root, so a directory whose path ends in the same segments would be
 // exempt too. The test lists ./... natively with no tag and with the e2e,
 // integration and browser tags, on windows with the tags and on js/wasm with
 // and without them, and fails unless the packages whose test files
 // (TestImports, XTestImports) import internal/cli or a package below it are
-// exactly internal/cli, cmd/shift2eu-web/internal/wire and test/apiparity.
+// exactly internal/cli and cmd/shift2eu-web/internal/wire.
 // TestCLITestImportersOf pins its helper.
 //
 // TestGolangciSettingsHideNoIssue covers what the pin does not: whether the
@@ -90,8 +90,7 @@
 // imports on every release platform. version-is-build-metadata, the strict allow
 // list of the build metadata, is read the same way: TestVersionRuleIsBuildMetadata
 // pins its shape and TestReleaseTargetDependencies holds internal/version's
-// imports to it, while the CLI's release listing must name the package (the
-// server reaches no internal/version).
+// imports to it, while the CLI's release listing must name the package.
 //
 // TestCloudAdapterSDKRuleIsChecked pins that the SDK-only rule,
 // cloud-adapters-reach-the-cloud-through-the-sdk, is no skip (issue #79): the
@@ -127,17 +126,11 @@
 // TestCompositionRootRuleHoldsItsProbeForEveryReleaseTarget fails a fixture
 // cmd/shift2eu that imports a third-party library, a stand-in SDK and a nested
 // module under the fixture's own module path, which the main-module assertion
-// must report, while the rule holds its sibling cmd/shift2eu-server not at all.
-// The server's composition root, cmd/shift2eu-server (PRD #103, milestone 3), is
-// held the same way by its sibling strict rule server-composition-root: the
-// module path as the one prefix entry and the standard packages the server
-// imports, each exact. TestCompositionRootRulesAreChecked pins both rules'
-// shape, TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget holds
-// the real cmd/shift2eu and cmd/shift2eu-server to them on every release platform,
-// and TestCompositionRootRulesHoldTheirProbesForEveryReleaseTarget fails a
-// fixture cmd/shift2eu-server that imports a third-party library or a stand-in
-// SDK.
-// Both roots allow every module package through that prefix, so a root can
+// must report, while the rule holds a sibling fixture, cmd/shift2eu-web, not at
+// all. TestCompositionRootRulesAreChecked pins the rule's shape, and
+// TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget holds the
+// real cmd/shift2eu to it on every release platform.
+// The root allows every module package through that prefix, so it can
 // hand a call it may not make to any of them. Two properties close the class
 // (issue #152), over every package go list reports for every release target
 // with the e2e and integration tags: TestEveryModulePackageIsHeldByAStrictRule
@@ -185,7 +178,7 @@
 // each holds exactly its own binary (check.DryRunVerifiesArchives), issue #147.
 //
 // TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget also holds
-// cmd/shift2eu and cmd/shift2eu-server, on every release target, cgo mode and
+// cmd/shift2eu, on every release target, cgo mode and
 // tag set and on the same go list -deps listing as its main-module check, to
 // reaching no package of the module whose path below the module path holds an
 // element the go command skips when it walks ./...: testdata, or one starting

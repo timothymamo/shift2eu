@@ -1767,7 +1767,7 @@ func stageFor(t *testing.T, instructions []instruction, name string) []instructi
 		declared = append(declared, fields[2])
 	}
 
-	t.Fatalf("%s: no stage is named %q: the Dockerfile declares the stages %q; want a stage `FROM <base> AS %s` that ships the HTTP API's binary, built with `docker buildx build --target %s`",
+	t.Fatalf("%s: no stage is named %q: the Dockerfile declares the stages %q; want a stage `FROM <base> AS %s`, built with `docker buildx build --target %s`",
 		dockerfileName, name, declared, name, name)
 
 	return nil

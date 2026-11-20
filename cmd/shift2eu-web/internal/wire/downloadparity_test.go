@@ -11,12 +11,12 @@ import (
 )
 
 // The inventories the download parity runs over: every bundled example, which is
-// discovered rather than counted here, and the two fixtures test/apiparity uses,
+// discovered rather than counted here, and two of the e2e tier's fixtures,
 // one ordinary and one hostile.
 const (
 	examplesRoot = "../../../../examples"
-	// parityFixture is the sanitised multi-category inventory the HTTP API's
-	// parity test also reads.
+	// parityFixture is the sanitised multi-category inventory the e2e tests
+	// also read.
 	parityFixture = "../../../../test/e2e/testdata/inventory.json"
 	// hostileFixture is the inventory whose every text value would be markup in
 	// a renderer.

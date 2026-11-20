@@ -5,19 +5,16 @@ import (
 	"strings"
 )
 
-// generatedBundle is the one generated file the reviewer leaves out by its
-// exact path: the OpenAPI bundle generated from api/ (issue #324, ADR 0033).
-const generatedBundle = "api/openapi.bundled.json"
-
 // diffHeader starts every file section of a unified diff git writes.
 const diffHeader = "diff --git "
 
 // FilterDiff returns diff without the file sections the reviewer does not read
 // (issue #324, ADR 0033), and the paths it left out, each once and sorted.
 //
-// The list is fixed here, and no pull request can widen it: the exact path
-// api/openapi.bundled.json, and any path ending ".golden" with a directory
-// named exactly testdata among its parent directories. Paths are compared as
+// The list is fixed here, and no pull request can widen it: any path ending
+// ".golden" with a directory named exactly testdata among its parent
+// directories. The generated bundle of the HTTP API's document, which the list
+// named too, went with the API (issue #393, ADR 0037). Paths are compared as
 // git writes them, case-sensitively and uncleaned, so a path with an empty, "."
 // or ".." element is never left out. A section goes only when every path its
 // "diff --git a/<old> b/<new>" header names is left out, so a rename or copy
@@ -171,12 +168,8 @@ func parseIndexLine(line string) (string, bool) {
 }
 
 // isReviewed reports whether the reviewer reads the file at path: every path
-// but the generated bundle and the golden files of a testdata directory.
+// but the golden files of a testdata directory.
 func isReviewed(path string) bool {
-	if path == generatedBundle {
-		return false
-	}
-
 	elements := strings.Split(path, "/")
 	if slices.ContainsFunc(elements, func(e string) bool { return e == "" || e == "." || e == ".." }) {
 		return true

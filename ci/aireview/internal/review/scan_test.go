@@ -19,7 +19,7 @@ import (
 
 // goldenAdds returns the file section git writes for a path the reviewer leaves
 // out that adds lines, from line 1 of its new side: a golden file of a testdata
-// directory or the generated OpenAPI bundle, added whole.
+// directory, added whole.
 func goldenAdds(path string, lines ...string) string {
 	var section strings.Builder
 
@@ -60,13 +60,13 @@ func hasScanFinding(body string, f review.ScanFinding) bool {
 }
 
 // TestScanLeftOutFindsRealDataInTheFilesLeftOut pins the model-free scan of
-// issue #342: since the generated bundle and the golden files of testdata
-// directories are left out of the diff the model reads, a real account ID, IP
-// address, host name or key-like string committed in one of them would be
-// reviewed by nobody. The scan reads the added lines of the left-out sections
-// alone (a removed or a context line is not new data, and a reviewed file is the
-// model's to read) and reports the file, the line of its new side and what it
-// found, never the matched text: the review is public.
+// issue #342: since the golden files of testdata directories are left out of
+// the diff the model reads, a real account ID, IP address, host name or
+// key-like string committed in one of them would be reviewed by nobody. The
+// scan reads the added lines of the left-out sections alone (a removed or a
+// context line is not new data, and a reviewed file is the model's to read) and
+// reports the file, the line of its new side and what it found, never the
+// matched text: the review is public.
 //
 // A finding is a class, not a value, so the cases are the sanitised values
 // CLAUDE.md rule 2 requires, which are no finding, beside real-looking ones,
@@ -76,11 +76,11 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 	t.Parallel()
 
 	const (
-		golden    = "testdata/report.golden"
-		bundle    = "api/openapi.bundled.json"
-		reviewed  = "internal/x/y.go"
-		token     = "Zx9Qm2Lp7Rt4Vw8Yb3Nc6Kd1Hf5Jg0Sa2Bd4Ef6G"
-		awsLikeID = "AKIAIOSFODNN7EXAMPLE"
+		golden     = "testdata/report.golden"
+		jsonGolden = "internal/x/testdata/report-v3.golden"
+		reviewed   = "internal/x/y.go"
+		token      = "Zx9Qm2Lp7Rt4Vw8Yb3Nc6Kd1Hf5Jg0Sa2Bd4Ef6G"
+		awsLikeID  = "AKIAIOSFODNN7EXAMPLE"
 	)
 
 	cases := []struct {
@@ -195,14 +195,14 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 		{
 			// Widening the key's alphabet must not turn a path into a secret:
 			// a run that begins or ends with '/' is a path or a JSON pointer,
-			// not a key, however long it is and whatever it holds (S3). The
-			// bundle's schema references are over 32 characters long and hold
+			// not a key, however long it is and whatever it holds (S3). A JSON
+			// document's schema references are over 32 characters long and hold
 			// an upper-case letter, a lower-case letter and a digit.
 			name: "a long JSON pointer or a repository path is no key-like string",
-			diff: goldenAdds(bundle,
+			diff: goldenAdds(jsonGolden,
 				`"$ref": "#/components/schemas/AssessmentReportV2"`,
 				`"note": "internal/adapter/target/scaleway/testdata"`),
-			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 2}},
+			wantFiles: []review.LeftOutFile{{Path: jsonGolden, Added: 2}},
 		},
 		{
 			// Issue #342, round 4 S-A: a relative path, a documentation URL and
@@ -258,10 +258,10 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFiles: nil,
 		},
 		{
-			name:         "the generated OpenAPI bundle is scanned like a golden file",
-			diff:         goldenAdds(bundle, `"account_id": "987654321098"`),
-			wantFiles:    []review.LeftOutFile{{Path: bundle, Added: 1}},
-			wantFindings: []review.ScanFinding{{Path: bundle, Line: 1, Kind: review.ScanAccountID}},
+			name:         "an account ID in a nested testdata directory's JSON golden file is a finding",
+			diff:         goldenAdds(jsonGolden, `"account_id": "987654321098"`),
+			wantFiles:    []review.LeftOutFile{{Path: jsonGolden, Added: 1}},
+			wantFindings: []review.ScanFinding{{Path: jsonGolden, Line: 1, Kind: review.ScanAccountID}},
 		},
 		{
 			// The repository's own committed inventory goldens name their
@@ -319,16 +319,16 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			// value (N-A, S2). Its element here follows a year, so a digit is on
 			// the far side of the '/' too, as in the case above.
 			name:      "a twelve-digit run behind a slash and a digit inside a JSON pointer is no account ID",
-			diff:      goldenAdds(bundle, `"$ref": "#/components/schemas/2024/210987654321"`),
-			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 1}},
+			diff:      goldenAdds(jsonGolden, `"$ref": "#/components/schemas/2024/210987654321"`),
+			wantFiles: []review.LeftOutFile{{Path: jsonGolden, Added: 1}},
 		},
 		{
-			// A JSON pointer starting #/ is a reference into the bundle, not a
+			// A JSON pointer starting #/ is a reference into the document, not a
 			// value: its elements are schema names and array indices of any
 			// length, so a run of twelve digits there is no account ID (S2).
 			name:      "a twelve-digit run inside a JSON pointer is no account ID",
-			diff:      goldenAdds(bundle, `"$ref": "#/components/schemas/210987654321"`),
-			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 1}},
+			diff:      goldenAdds(jsonGolden, `"$ref": "#/components/schemas/210987654321"`),
+			wantFiles: []review.LeftOutFile{{Path: jsonGolden, Added: 1}},
 		},
 		{
 			// Issue #365: the scan's public TLDs hold info, app, dev, co, io
@@ -421,10 +421,10 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			wantFiles: []review.LeftOutFile{{Path: golden, Added: 1}},
 		},
 		{
-			// The bundle's JSON pointers are long runs of the base64 alphabet.
-			name:      "a JSON pointer of the bundle is no key-like string",
-			diff:      goldenAdds(bundle, `"$ref": "#/components/headers/Access-Control-Allow-Headers"`),
-			wantFiles: []review.LeftOutFile{{Path: bundle, Added: 1}},
+			// A JSON document's pointers are long runs of the base64 alphabet.
+			name:      "a JSON pointer of a document is no key-like string",
+			diff:      goldenAdds(jsonGolden, `"$ref": "#/components/headers/Access-Control-Allow-Headers"`),
+			wantFiles: []review.LeftOutFile{{Path: jsonGolden, Added: 1}},
 		},
 		{
 			name: "every finding names its own line of the new side, in the diff's order",
@@ -682,7 +682,7 @@ func TestTheScanFindingsAreCapped(t *testing.T) {
 
 // TestTheScanFindsNothingInTheCommittedGoldens pins the scan against the data
 // this repository commits (issue #342): every golden file of a testdata
-// directory and the generated OpenAPI bundle, with every line of it treated as
+// directory, with every line of it treated as
 // added, so the whole of every one of them is read. CLAUDE.md rule 2 keeps them
 // sanitised (123456789012, 192.0.2.0/24, example.com), so the scan is quiet on
 // them, and a value it reports is real data committed by mistake, which no model
@@ -707,7 +707,7 @@ func TestTheScanFindsNothingInTheCommittedGoldens(t *testing.T) {
 	paths := committedLeftOutFiles(t, root)
 
 	if len(paths) < 2 {
-		t.Fatalf("found %d left-out files under %s (%v), want the repository's golden files and its bundle: the test scans nothing", len(paths), root, paths)
+		t.Fatalf("found %d left-out files under %s (%v), want the repository's golden files: the test scans nothing", len(paths), root, paths)
 	}
 
 	for _, path := range paths {
@@ -733,8 +733,8 @@ func TestTheScanFindsNothingInTheCommittedGoldens(t *testing.T) {
 
 // committedLeftOutFiles returns the paths, relative to root and with forward
 // slashes, of the files the reviewer leaves out of the diff it reads (issue
-// #324): api/openapi.bundled.json, and every file ending .golden with a
-// directory named exactly testdata among its parents.
+// #324): every file ending .golden with a directory named exactly testdata
+// among its parents.
 func committedLeftOutFiles(t *testing.T, root string) []string {
 	t.Helper()
 
@@ -770,8 +770,7 @@ func committedLeftOutFiles(t *testing.T, root string) []string {
 
 		rel = filepath.ToSlash(rel)
 
-		if rel == "api/openapi.bundled.json" || (strings.HasSuffix(rel, ".golden") &&
-			slices.Contains(parentsOf(rel), "testdata")) {
+		if strings.HasSuffix(rel, ".golden") && slices.Contains(parentsOf(rel), "testdata") {
 			paths = append(paths, rel)
 		}
 

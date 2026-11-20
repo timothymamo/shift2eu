@@ -1,16 +1,15 @@
 //go:build !windows
 
-// Command shift2eu is one of the two composition roots, for
+// Command shift2eu is the composition root, for
 // TestCompositionRootForbidigoProbe. Every line that ends in a want comment
 // holds a call that one of the two composition-root groups refuses, and the
 // comment names the group's tag, which starts the msg of every entry in it:
 // composition-root-no-exec for a process, a raw system call and the whole
 // environment, and composition-root-env for one named variable. There is a line
-// for every function the design forbids, here and in cmd/shift2eu-server, and
-// the same calls in internal/cli must pass, as the groups hold for the
-// composition roots only. The file is for the host's platform: the windows
-// entry points of syscall are in probe_windows.go, which the probe's windows run
-// lints.
+// for every function the design forbids, and the same calls in internal/cli
+// must pass, as the groups hold for the composition roots only. The file is for
+// the host's platform: the windows entry points of syscall are in
+// probe_windows.go, which the probe's windows run lints.
 package main
 
 import (
@@ -48,8 +47,7 @@ func syscalls() {
 }
 
 // environment reads one named variable, or locates a directory from an unnamed
-// one, and the composition-root-env group refuses both everywhere but
-// cmd/shift2eu-server/main.go.
+// one, and the composition-root-env group refuses both, with no exception.
 func environment() {
 	_ = os.Getenv("SHIFT2EU_TOKEN")         // want "composition-root-env: "
 	_, _ = os.LookupEnv("SHIFT2EU_TOKEN")   // want "composition-root-env: "

@@ -16,7 +16,7 @@ import (
 // frozen: its schema files stay for documents an earlier release wrote, but no
 // reporter writes it.
 const (
-	// Version2 is the format the HTTP API serves by default on /v1.
+	// Version2 is the format the CLI writes with --schema-version 2.
 	Version2 = 2
 	// Version3 is version 2 with no amount on a total that estimated nothing
 	// (issue #307): the format the CLI writes by default.

@@ -13,8 +13,8 @@ import (
 	"github.com/timothymamo/shift2eu/internal/testutil"
 )
 
-// The benchmarks below measure the Markdown renderer at the size the HTTP API
-// can hand it (issue #310): an inventory at the resource cap, spread over
+// The benchmarks below measure the Markdown renderer at the largest size an
+// inventory can reach (issue #310): the resource cap, spread over
 // thousands of workloads, with estimates on. The per-workload estimate lookup
 // once cost one pass over every verdict per workload (issue #246), which this
 // size makes visible; the many-workloads benchmark of the estimate domain

@@ -44,7 +44,7 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 	// The files FilterDiff left out of the diff: the model reads their paths and
 	// none of their text, and is told they were left out on purpose (issue #324,
 	// reviewer M2).
-	excluded := []string{"api/openapi.bundled.json", "internal/x/testdata/compare.golden"}
+	excluded := []string{"internal/x/testdata/assess.golden", "internal/x/testdata/compare.golden"}
 
 	got := review.BuildPrompt(instructions, pr, files, diff, excluded)
 
@@ -145,7 +145,7 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 
 // TestBuildPromptCapsTheLeftOutList pins that the untrusted document's list of
 // left-out paths is bounded and counted (issue #324, reviewer M1): the program
-// leaves the generated bundle and every testdata golden file out of the diff,
+// leaves every testdata golden file out of the diff,
 // and a pull request that touches thousands of them would otherwise put
 // thousands of paths, a megabyte and more of raw diff's worth, into the
 // untrusted part. The document names the first review.MaxListedExcluded of them,
@@ -155,8 +155,8 @@ func TestBuildPromptKeepsThePullRequestsDataUntrusted(t *testing.T) {
 func TestBuildPromptCapsTheLeftOutList(t *testing.T) {
 	t.Parallel()
 
-	// The paths FilterDiff leaves out, sorted as it returns them: a generated
-	// bundle and golden files of testdata directories.
+	// The paths FilterDiff leaves out, sorted as it returns them: golden files
+	// of testdata directories.
 	manyPaths := make([]string, 5000)
 	for i := range manyPaths {
 		manyPaths[i] = fmt.Sprintf("testdata/file-%04d.golden", i)
@@ -183,14 +183,14 @@ func TestBuildPromptCapsTheLeftOutList(t *testing.T) {
 		{
 			name: "three left-out files are all named",
 			excluded: []string{
-				"api/openapi.bundled.json",
 				"internal/x/testdata/a.golden",
 				"internal/x/testdata/b.golden",
+				"internal/x/testdata/c.golden",
 			},
 			wantListed: []string{
-				"api/openapi.bundled.json",
 				"internal/x/testdata/a.golden",
 				"internal/x/testdata/b.golden",
+				"internal/x/testdata/c.golden",
 			},
 		},
 		{
