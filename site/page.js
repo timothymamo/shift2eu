@@ -207,6 +207,12 @@ function wireControls() {
       status.textContent = "The assessment failed unexpectedly; the page can run another one.";
       return;
     }
+    // The module answers an object; anything else carries no assessment and no
+    // message, so the page shows one constant one and stays usable.
+    if (result === null || typeof result !== "object") {
+      status.textContent = "The assessment gave no result; the page can run another one.";
+      return;
+    }
     if (typeof result.error === "string") {
       status.textContent = result.error;
       return;
