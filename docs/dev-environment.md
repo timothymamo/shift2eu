@@ -137,7 +137,12 @@ It never prints a credential: the checks show only the field they test.
   a theme or trust screen, do the first run by hand, in the workspace and in the repository:
 
   ```bash
-  make vm-shell
+  # Mac, host clone
+  make vm-shell       # into the VM, at the repository
+  ```
+
+  ```bash
+  # VM, at the repository (make vm-shell above)
   (cd .. && claude)   # pick a theme, answer yes to trusting this folder, /exit
   claude              # the repository: answer yes to trusting this folder; /status must show the OAuth token, not an API key; /exit
   exit
@@ -422,6 +427,7 @@ command in the VM, never in the moved checkout on the Mac. Set `WORKSPACE_REPO` 
 `make vm-stop` included, refuses to run without it:
 
 ```bash
+# Mac, host clone
 cd ~/src/shift2eu-host                                         # the host clone
 # set WORKSPACE_REPO="$HOME/src/shift2eu-ws/shift2eu" in the host clone's .envrc, then:
 direnv allow
@@ -429,7 +435,11 @@ make vm-stop
 mkdir ~/src/shift2eu-ws && mv ~/src/shift2eu ~/src/shift2eu-ws/
 limactl edit --tty=false --mount-only "$HOME/src/shift2eu-ws:w" shift2eu
 make vm-up
-make vm-shell                                                  # in the VM, at the moved checkout:
+make vm-shell                                                  # into the VM, at the moved checkout
+```
+
+```bash
+# VM, at the moved checkout (make vm-shell above)
 git worktree repair .worktrees/*                               # only if .worktrees/ holds any
 exit
 ```
@@ -815,6 +825,12 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 # PASS: plutil -lint passes; the plist's SHA-256 is printed; the script line is <host clone>/dev/agents-app-token.sh,
 #   this clone, outside the workspace; each sudo command is printed before it asks for your password
 # FAIL "refused: run it as the maintainer, not as root": run it without sudo
+# FAIL "refused: <clone> is inside <location>, which the VM shift2eu mounts ..." or "refused: the VM shift2eu mounts
+#   <location>, which is inside <clone> ...": install from the host clone, outside every mount of the VM (What install does)
+# FAIL "limactl list could not read the mounts of the VM shift2eu ..." or "limactl list answered about <name>, not the
+#   VM shift2eu ...": create the VM first (make vm-create), check that limactl list prints shift2eu, install again
+# FAIL "refused: <link> is a symlink, so the job would run ...": install from the host clone, with dev/ and
+#   dev/agents-app-token.sh as git checked them out
 # FAIL "the old job <label> is still loaded ...": sudo launchctl print system/<label>, wait or make agents-token-refresh-uninstall, install again
 # FAIL "... is not the plist printed above ...": no job is loaded; look for what changed the file, install again
 # FAIL "launchctl bootstrap failed twice: NO token refresh job ...": install again, or make agents-token-refresh-start
@@ -1197,11 +1213,16 @@ printf '\n\n\n\n' | sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shif
   -o GlobalKnownHostsFile=/dev/null -o HostKeyAlias=shift2eu-vm-shift2eu 127.0.0.1 /bin/sh
 # PASS: one line clock=<Unix seconds>, never a shell prompt or Permission denied
 sudo -k
+```
 
-# VM: did sshd pick the drop-in up?
+Then check in the VM that sshd picked the drop-in up (on the Mac Mini, `limactl shell --workdir / shift2eu`
+gets you in):
+
+```bash
+# VM
 systemctl is-active ssh.socket ssh.service              # how ssh runs
 sudo sshd -T | grep -i authorizedkeysfile               # PASS: names /etc/ssh/shift2eu-agents-token/%u.keys
-# FAIL "Permission denied" above while sshd -T names the file: once, from the Mac,
+# FAIL "Permission denied" in the block above while sshd -T names the file: once, from the Mac Mini,
 #   limactl shell --workdir / shift2eu sudo systemctl restart ssh.service, and report it
 ```
 
