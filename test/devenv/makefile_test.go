@@ -34,6 +34,99 @@ import (
 // direnv .envrc: the App ID, the installation ID and the path of the App's key. None may enter the VM.
 const agentsAppPrefix = "SHIFT2EU_AGENTS_APP_"
 
+// A script of dev/ is run by its path and shebang, never through an explicit `sh` or a leading `./`, which ignore
+// the shebang and need no executable bit (issues #242 and #337). Both matches are at a word boundary, so another
+// command's `foo.sh dev/x.sh` argument is no run of a dev script.
+var (
+	devScriptThroughShell    = regexp.MustCompile(`(^|[^[:alnum:]_.-])sh +dev/`)
+	devScriptThroughDotSlash = regexp.MustCompile(`(^|[^[:alnum:]_.-])\./dev/`)
+)
+
+// devScriptsRunThroughShellOrPath returns the lines of text that run a script of dev/ through `sh` or `./`, in
+// order: make -n output and recipe bodies are both checked line by line.
+func devScriptsRunThroughShellOrPath(text string) []string {
+	var lines []string
+
+	for _, line := range strings.Split(text, "\n") {
+		if devScriptThroughShell.MatchString(line) || devScriptThroughDotSlash.MatchString(line) {
+			lines = append(lines, strings.TrimSpace(line))
+		}
+	}
+
+	return lines
+}
+
+// devScriptName matches a script of dev/ that a recipe names: a path below dev/ that ends in .sh.
+var devScriptName = regexp.MustCompile(`(^|[^[:alnum:]_.-])(dev/[[:alnum:]_./-]+\.sh)`)
+
+// devScriptsIn returns the scripts of dev/ that text names, sorted and each once: every script a recipe runs, since
+// a script of dev/ is run by its path.
+func devScriptsIn(text string) []string {
+	scripts := map[string]bool{}
+
+	for _, match := range devScriptName.FindAllStringSubmatch(text, -1) {
+		scripts[match[2]] = true
+	}
+
+	return slices.Sorted(maps.Keys(scripts))
+}
+
+// TestDevScriptsRunThroughShellOrPathMatchesWholeCommands pins the matcher the two checks below use (issues #242
+// and #337): `sh dev/x.sh` and `./dev/x.sh` are a dev script run the wrong way, where another script's
+// `foo.sh dev/x.sh` argument and a run by path are not.
+func TestDevScriptsRunThroughShellOrPathMatchesWholeCommands(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		line string
+		want []string
+	}{
+		{
+			name: "a script through sh",
+			line: "\tsh dev/worktree.sh \"$(BRANCH)\"",
+			want: []string{`sh dev/worktree.sh "$(BRANCH)"`},
+		},
+		{
+			name: "a script through sh in a command substitution",
+			line: "\t@script=\"$$(sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh)\" || exit 1; \\",
+			want: []string{`@script="$$(sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh)" || exit 1; \`},
+		},
+		{
+			name: "a script through sh with more than one space",
+			line: "\tcd x && sh  dev/vm-agents-token-ssh.sh --uninstall",
+			want: []string{"cd x && sh  dev/vm-agents-token-ssh.sh --uninstall"},
+		},
+		{
+			name: "a path relative to the current directory",
+			line: "\t@./dev/worktree.sh \"$(BRANCH)\"",
+			want: []string{`@./dev/worktree.sh "$(BRANCH)"`},
+		},
+		{
+			name: "another script's argument is no run",
+			line: "\tfoo.sh dev/worktree.sh",
+		},
+		{
+			name: "a run by path",
+			line: "\tdev/worktree.sh \"$(BRANCH)\"",
+		},
+		{
+			name: "a script below another directory",
+			line: "\t/bin/sh \"$$clone/dev/agents-token-launchd.sh\" plist",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, devScriptsRunThroughShellOrPath(tc.line)); diff != "" {
+				t.Errorf("devScriptsRunThroughShellOrPath(%q) (-want +got):\n%s", tc.line, diff)
+			}
+		})
+	}
+}
+
 func TestMakefileVMENVNamesNoAgentsAppVariable(t *testing.T) {
 	t.Parallel()
 
@@ -118,43 +211,112 @@ func TestMakefileHasTheAgentsTokenTargets(t *testing.T) {
 				t.Errorf("make -n %s does not run %q:\n%s", tc.target, tc.want, stdout)
 			}
 
-			// Running the script through `sh` reads no shebang and needs no executable bit, so a recipe that still
-			// does it runs whatever interpreter the maintainer's `sh` is, and a change to the script's shebang
-			// never reaches it (issue #242).
-			if strings.Contains(stdout, "sh dev/") {
-				t.Errorf("make -n %s runs a script of dev/ through `sh`, which ignores its shebang and executable bit: run it by its path, as the other dev scripts are (issue #242):\n%s", tc.target, stdout)
+			// Running a script through `sh` or `./` reads no shebang and needs no executable bit, so a recipe that
+			// still does it runs whatever interpreter the maintainer's `sh` is, and a change to the script's shebang
+			// never reaches it (issues #242 and #337). The match is at a word boundary, so another command's
+			// `foo.sh dev/x` argument is no offender.
+			if lines := devScriptsRunThroughShellOrPath(stdout); len(lines) != 0 {
+				t.Errorf("make -n %s runs a script of dev/ through `sh` or `./`, which ignores its shebang and executable bit: run it by its path, as the other dev scripts are (issues #242 and #337):\n%s",
+					tc.target, strings.Join(lines, "\n"))
 			}
 		})
 	}
 }
 
-// TestMakefileRunsNoAgentsTokenRecipeThroughSh pins the same convention across every agents-token target at once,
-// over the recipes themselves rather than their make -n output, so a target the cases above do not name is held to
-// it too: no agents-token* recipe runs a script of dev/ through an explicit `sh` (issue #242). The LaunchDaemon's
-// own `/bin/sh dev/agents-app-token.sh refresh` program argument is not a recipe and is left as issue #229 pins it.
-func TestMakefileRunsNoAgentsTokenRecipeThroughSh(t *testing.T) {
+// TestMakefileRunsNoDevScriptThroughShOrDotSlash pins the convention across every recipe at once, over the recipes
+// themselves rather than their make -n output, so a target no other test names is held to it too: no recipe runs a
+// script of dev/ through an explicit `sh` or a leading `./`, which ignore the script's shebang and executable bit
+// (issues #242 and #337). The LaunchDaemon's own `/bin/sh dev/agents-app-token.sh refresh` program argument is not a
+// recipe and is left as issue #229 pins it.
+func TestMakefileRunsNoDevScriptThroughShOrDotSlash(t *testing.T) {
 	t.Parallel()
 
 	recipes := makeRecipes(t, readRepoFile(t, makefilePath))
 
-	var found int
+	found := 0
 
 	for _, name := range slices.Sorted(maps.Keys(recipes)) {
-		if !strings.HasPrefix(name, "agents-token") {
-			continue
-		}
-
 		found++
 
-		if strings.Contains(recipes[name], "sh dev/") {
-			t.Errorf("the recipe of make %s runs a script of dev/ through `sh`, which ignores its shebang and executable bit: run it by its path, as the other dev scripts are (issue #242):\n%s",
-				name, recipes[name])
+		if lines := devScriptsRunThroughShellOrPath(recipes[name]); len(lines) != 0 {
+			t.Errorf("the recipe of make %s runs a script of dev/ through `sh` or `./`, which ignores its shebang and executable bit: run it by its path, as every dev script the Makefile runs is (issues #242 and #337):\n%s",
+				name, strings.Join(lines, "\n"))
 		}
 	}
 
 	if found == 0 {
-		t.Fatal("the Makefile declares no agents-token* target, so this test pins nothing: the targets are agents-token, agents-token-refresh and the LaunchDaemon's install and uninstall")
+		t.Fatal("the Makefile declares no target with a recipe, so this test pins nothing")
 	}
+}
+
+// TestEveryDevScriptARecipeRunsIsExecutableInGit pins the other half of the convention (issues #242 and #337): a
+// script of dev/ is run by its path and shebang, so the executable bit git checks it out with is what makes that run
+// work. Only git's record counts, not the working tree's, so a mode changed in a checkout without `git update-index
+// --chmod=+x` fails here.
+func TestEveryDevScriptARecipeRunsIsExecutableInGit(t *testing.T) {
+	t.Parallel()
+
+	modes := gitFileModes(t, "dev")
+
+	recipes := makeRecipes(t, readRepoFile(t, makefilePath))
+
+	for _, name := range slices.Sorted(maps.Keys(recipes)) {
+		for _, script := range devScriptsIn(recipes[name]) {
+			mode, tracked := modes[script]
+			if !tracked {
+				t.Errorf("the recipe of make %s names %s, which git does not track: a script a recipe runs is committed, and executable (issues #242 and #337)",
+					name, script)
+
+				continue
+			}
+
+			if mode != "100755" {
+				t.Errorf("the recipe of make %s runs %s, which git holds as mode %s, not 100755: the recipe runs it by its path and shebang, so git must check it out executable (issues #242 and #337)",
+					name, script, mode)
+			}
+		}
+	}
+
+	// The scripts the convention was adopted for, by name: make vm-gh-wrapper and make worktree run these by path.
+	for _, script := range []string{"dev/vm-gh-wrapper.sh", "dev/worktree.sh"} {
+		if mode := modes[script]; mode != "100755" {
+			t.Errorf("%s is mode %s in git, not 100755: make vm-gh-wrapper and make worktree run it by its path and shebang, which needs the executable bit (issues #242 and #337)",
+				script, mode)
+		}
+	}
+}
+
+// gitFileModes returns the mode git has recorded for the files below dir, keyed by their path from the repository
+// root: git ls-files reads the index, so the test needs no network and no particular working-tree mode.
+func gitFileModes(t *testing.T, dir string) map[string]string {
+	t.Helper()
+
+	cmd := exec.Command("git", "ls-files", "-s", "--", dir)
+	cmd.Dir = moduleRoot
+
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git ls-files -s -- %s: %v: the test reads the modes git recorded", dir, err)
+	}
+
+	modes := map[string]string{}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		// 100755 <object> <stage>\t<path>
+		meta, path, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+
+		fields := strings.Fields(meta)
+		if len(fields) != 3 {
+			continue
+		}
+
+		modes[path] = fields[0]
+	}
+
+	return modes
 }
 
 // TestMakeVMGHWrapperInstallsThePinnedWrapper pins make vm-gh-wrapper (review item 3): a VM created before the
