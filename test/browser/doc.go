@@ -9,8 +9,11 @@
 // verification pages, the module's lifecycle and the accessibility of the flow.
 //
 // The test starts no browser: `make test-browser` runs a headless Chromium in a
-// container pinned by digest with the host network, and passes its DevTools
-// address in SHIFT2EU_DEVTOOLS_URL and the bundle `make site` built in
+// container pinned by digest with the host network, its DevTools on
+// 127.0.0.1 and a port the kernel picks for each run (no fixed port to attach
+// to, no collision between two runs), and passes the browser's DevTools
+// address, read back from Chromium's log, in SHIFT2EU_DEVTOOLS_URL and the
+// bundle `make site` built in
 // SHIFT2EU_SITE_BUNDLE. Without either the test fails, with a message saying
 // which, and never skips: a smoke test that skips reports the same green as one
 // that passed. It never touches the internet: "another origin" is a second

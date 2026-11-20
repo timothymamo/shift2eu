@@ -164,8 +164,9 @@ read only embedded snapshots and never the network, and the release runs it from
   for the Makefile.
 - **The networking model.** The container uses the host network, and its entrypoint is replaced by the
   headless shell itself with `--remote-debugging-address=127.0.0.1`, so DevTools listens on 127.0.0.1
-  only. The image's own `run.sh` would open it on every interface through `socat`. The recipe waits until
-  Chromium logs that DevTools listens on 127.0.0.1, so a port that another process holds fails the wait.
+  only. The image's own `run.sh` would open it on every interface through `socat`. DevTools listens on a
+  port the kernel picks for each run, not a fixed one (amended below, issue #368). The recipe waits until
+  Chromium logs its DevTools address on 127.0.0.1 and passes that address to the test.
   It removes the container on every exit, including a failure or an interrupt. The recipe works with
   docker (CI) and with nerdctl (the VM, whose rootless nerdctl has no bridge network), through the
   Makefile's `DOCKER`.
@@ -239,3 +240,29 @@ through it reads, plus the fixed `CGO_ENABLED=0`, `GOENV=off`, `GOFLAGS=-mod=rea
 `GOEXPERIMENT`, `GOOS`, `GOARCH` and every name it does not know stay out, so nothing can make the fetch
 go around `GOPROXY` or go.sum, switch the toolchain, or change what is listed. `TestGoListProbeEnv` pins
 that environment.
+
+## Amendment: DevTools on a random port, read back from Chromium's log (issue #368)
+
+2026-11-20. The smoke test's Chromium listened on the fixed port 9222. Any process in the VM or on the CI
+runner could attach to it while the test ran, without authentication, and two `make test-browser` runs at
+once collided: the second one's wait failed (the audit of PR #359, finding 2).
+
+`make test-browser` now starts Chromium with `--remote-debugging-port=0`, still on 127.0.0.1 with the
+host network. The kernel picks a free port for each run. The recipe reads the browser's address from the
+log line `DevTools listening on ws://127.0.0.1:<port>/devtools/browser/<id>`, accepting it only on
+127.0.0.1, and passes it as it is in `SHIFT2EU_DEVTOOLS_URL`. Because the address carries the browser's
+id, the test attaches to the browser this run started and to no other. The 60-second wait on the log line
+stays, with its diagnostics, and so does the removal of the container on every exit. The container's name
+carries the recipe shell's PID, so parallel runs never share one. The Makefile's `DEVTOOLS_PORT` is gone.
+
+A port the kernel picks is still a listening port, which a local process can find and attach to. It is
+open only while a run lasts and is no longer a fixed, well-known one. That residual risk is accepted.
+
+**Not chosen: `--remote-debugging-pipe`.** This option opens no port at all. But chromedp (v0.24.0)
+drives a pipe only through its `ExecAllocator`, which starts the browser itself and gives it file
+descriptors 3 and 4 (`allocate_pipe.go`). `docker run` and `nerdctl run` pass only standard input,
+output and error into a container, never further descriptors. A pipe would therefore need the test to
+start the container itself and bridge the protocol over the container's standard streams, with a
+wrapper inside the image. That would give up "the test starts no browser" and move the image pin and the
+container runtime into the test. It is more machinery than a port the kernel picks, for a residual risk
+that is already low.

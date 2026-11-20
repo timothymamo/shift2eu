@@ -126,8 +126,6 @@ DOCKER  ?= $(if $(shell command -v docker 2>/dev/null),docker,nerdctl)
 # test-browser too, so this is the one copy of the pin.
 # renovate: datasource=docker depName=chromedp/headless-shell
 HEADLESS_SHELL := chromedp/headless-shell:160.0.8157.0@sha256:1459842ec97ea88a20645fffae40769c0c8dc70f51cf43e7df812fbaef9909cc
-# The DevTools port the headless Chromium listens on, on 127.0.0.1 only.
-DEVTOOLS_PORT := 9222
 # The platforms make image builds, comma separated (linux/amd64,linux/arm64). Empty builds the host's own.
 PLATFORMS ?=
 
@@ -340,24 +338,31 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). make site builds the bundle; the
 # recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network and its own entrypoint
 # replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface through
-# socat), waits until Chromium logs that DevTools listens on 127.0.0.1 (so a port another process holds fails
-# the wait rather than handing the test a browser it did not start), and runs test/browser against it. The
-# container is removed on every exit, failure and interrupt included.
+# socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is open to
+# guess and two runs at once do not collide. It waits until Chromium logs the browser's DevTools address on
+# 127.0.0.1, reads that address back from the log line (port and browser id, so the test attaches to the
+# browser this run started and no other), and runs test/browser against it. The container's name carries the
+# recipe shell's PID, so parallel runs have their own; it is removed on every exit, failure and interrupt
+# included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but it hands the
+# browser fds 3 and 4 of a process it starts itself, and docker run and nerdctl run pass no such fds into a
+# container (docs/adr/0036, amendment for issue #368).
 .PHONY: test-browser
 test-browser: site ## Build the site's bundle and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
 	@set -eu; \
-	devtools=http://127.0.0.1:$(DEVTOOLS_PORT); \
+	devtools=; \
 	name=shift2eu-test-browser-$$$$; \
 	trap '$(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
 	trap 'exit 130' INT TERM; \
 	$(DOCKER) run -d --name "$$name" --network host --entrypoint /headless-shell/headless-shell \
 		$(HEADLESS_SHELL) --no-sandbox --use-gl=angle --use-angle=swiftshader \
-		--remote-debugging-address=127.0.0.1 --remote-debugging-port=$(DEVTOOLS_PORT) >/dev/null; \
+		--remote-debugging-address=127.0.0.1 --remote-debugging-port=0 >/dev/null; \
 	tries=0; \
-	until $(DOCKER) logs "$$name" 2>&1 | grep -qF "DevTools listening on ws://127.0.0.1:$(DEVTOOLS_PORT)/"; do \
+	until devtools=$$($(DOCKER) logs "$$name" 2>&1 | \
+		sed -n 's|^DevTools listening on \(ws://127\.0\.0\.1:[0-9][0-9]*/devtools/browser/[0-9a-f-][0-9a-f-]*\)$$|\1|p' | \
+		head -n 1); [ -n "$$devtools" ]; do \
 		tries=$$((tries + 1)); \
 		if [ "$$tries" -ge 60 ]; then \
-			echo "test-browser: DevTools did not listen on $$devtools within 60 seconds" >&2; \
+			echo "test-browser: Chromium logged no DevTools address on 127.0.0.1 within 60 seconds" >&2; \
 			$(DOCKER) logs "$$name" >&2 || true; \
 			exit 1; \
 		fi; \
