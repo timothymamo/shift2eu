@@ -701,7 +701,7 @@ func TestStepNumbersAreSilent(t *testing.T) {
 }
 
 // TestNoMarkerPseudoElementDeclaresABackground pins what a ::marker may state
-// (PRD #379 review, issue #373): ::marker draws the text and the glyph of its own
+// (PR #379 review, issue #373): ::marker draws the text and the glyph of its own
 // box and ignores a background, so a background declared on a ::marker rule
 // reaches no visitor. Such a declaration is worse than dead: the contrast check
 // then reads a foreground/background pair the browser never paints, and passes a
@@ -712,7 +712,7 @@ func TestNoMarkerPseudoElementDeclaresABackground(t *testing.T) {
 	name, data := theBundle(t).asset(t, "style", ".css")
 
 	for _, problem := range markerBackgrounds(parseCSS(t, name, data)) {
-		t.Errorf("%s's rule %s: a ::marker pseudo-element ignores a background, so the declaration paints nothing and a contrast check over that pair measures a colour no browser draws: state only the glyph's colour on the ::marker rule, and draw the item's glyph with a ::before box when it needs a background (issue #373, PRD #379 review)",
+		t.Errorf("%s's rule %s: a ::marker pseudo-element ignores a background, so the declaration paints nothing and a contrast check over that pair measures a colour no browser draws: state only the glyph's colour on the ::marker rule, and draw the item's glyph with a ::before box when it needs a background (issue #373, PR #379 review)",
 			name, problem)
 	}
 }
@@ -770,7 +770,7 @@ func markerBackgrounds(rules []cssRule) []string {
 // screen reader announces the heading's words and nothing of the glyph. A glyph
 // without an alternative is read aloud as text. The blocker item's glyph is a
 // ::before box rather than its ::marker, because Safari ignores `content` on
-// ::marker and falls back to a disc (PRD #379 review).
+// ::marker and falls back to a disc (PR #379 review).
 func TestBlockerGlyphContentCarriesAnEmptyAlternative(t *testing.T) {
 	t.Parallel()
 
