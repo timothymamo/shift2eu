@@ -2,6 +2,8 @@ package examples_test
 
 import (
 	"encoding/binary"
+	"errors"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -367,6 +369,60 @@ func TestAllowListStalenessReadsFilesLikeTheCheck(t *testing.T) {
 	if len(stale) != 0 {
 		t.Errorf("%s holds %q as UTF-16, which the check decodes before it looks, but staleAllowListEntries judges %v stale",
 			file, value, stale)
+	}
+}
+
+// TestAllowListStalenessJudgesEveryEntry pins that an allow-list entry whose
+// file the staleness pass cannot read does not end the pass: the entries after
+// it are still judged, and the unreadable entry is reported alongside them. An
+// entry naming a missing or non-regular file is what the allow list's own
+// structural checks report, so ending the judgement there would hide every
+// stale entry behind it, and the duplicate-pair check that follows too, exactly
+// when the allow list is already broken.
+func TestAllowListStalenessJudgesEveryEntry(t *testing.T) {
+	t.Parallel()
+
+	const (
+		missing      = "docs/guide/planted-missing.md"
+		staleFile    = "docs/guide/planted-stale.md"
+		loopbackAddr = "127.0.0.1"
+	)
+
+	dir := t.TempDir()
+	plantFixture(t, dir, staleFile, "the sample node is shop-web-1 in eu-central-1\n")
+
+	// The unreadable entry comes first, so the pass has to go on to the stale
+	// one rather than stop at the read error.
+	list := []allowListEntry{
+		{
+			file:  missing,
+			value: loopbackAddr,
+			why:   "the entry whose file is gone; the structural checks report it",
+		},
+		{
+			file:  staleFile,
+			value: loopbackAddr,
+			why:   "the entry whose file reports nothing, so the entry is stale",
+		},
+	}
+
+	stale, err := staleAllowListEntries(dir, list)
+	if err == nil {
+		t.Errorf("staleAllowListEntries(%q) reports no error although %s cannot be read: an unreadable entry is no clean entry",
+			dir, missing)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("staleAllowListEntries(%q) reports %v, want an error wrapping %v for the unreadable %s",
+			dir, err, fs.ErrNotExist, missing)
+	}
+
+	got := make([]string, len(stale))
+	for i, s := range stale {
+		got[i] = s.entry.file
+	}
+
+	if diff := cmp.Diff([]string{staleFile}, got); diff != "" {
+		t.Errorf("staleAllowListEntries(%q) reads %s as reporting nothing, so its entry is stale, even though %s cannot be read (-want +got):\n%s",
+			dir, staleFile, missing, diff)
 	}
 }
 
