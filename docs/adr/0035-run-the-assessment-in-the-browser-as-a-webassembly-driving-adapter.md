@@ -164,3 +164,30 @@ composition root, built with Go's standard toolchain for `GOOS=js GOARCH=wasm`:
   that reaches the fragment as markup.
 - PRD #297 milestone 2 builds on this: the pages, `make site` with `wasm_exec.js` taken from `GOROOT`, the
   CSP, and the browser smoke test.
+
+## Amendment: constant classes in the fragment (issue #373, 2026-11-20)
+
+The site's redesign (PRD #297, issue #373) draws a fit as a coloured badge, colours the Summary rows, shows
+each report section as a card and the Cost estimate's total as a large figure. A stylesheet cannot select an
+element by its text, so it cannot tell `<td>direct</td>` from `<td>none</td>`, or the Blockers list from the
+Required changes list. The page may not run a script over the report to add classes either: it would have
+to read values to decide them. So the fragment now carries `class` attributes, written by `htmlreport`.
+
+Every class is a constant chosen from a closed set, never derived from a value:
+
+| Element | Classes | Chosen from |
+|---|---|---|
+| A Fit cell of a Resources table, and each per-target fit cell of the comparison's | `fit fit-direct`, `fit fit-partial`, `fit fit-none`; `fit` alone for a fit the report does not know | the `mapping.Fit` enum, by an exhaustive switch |
+| A Summary table's rows, the comparison's included | `fit-direct`, `fit-partial`, `fit-none`, `fit-total` (its estimate rows carry none) | the row's role |
+| A `section` around each report section | `part part-summary`, `part-resources`, `part-changes`, `part-blockers`, `part-workloads`, `part-cost`, `part-comparison`, `part-target` | the section's kind |
+| The Cost estimate's total item | `total` | the item's role |
+
+Both sets are fixed tables in `htmlreport` (`classNames`, `partNames`), keyed by unexported enums; the
+renderer refuses a key outside them. So the rule above still holds: a value is only ever element content,
+escaped as text, never a tag, an attribute or a class. The wrappers are `section` elements, never `div`,
+as the browser test's `TestReportIsSemanticHTML` asks. The goldens were regenerated; they differ from the
+earlier ones by the classes and the wrappers alone. `classes_test.go` refuses any class outside the closed
+set, over the hostile fixtures too.
+
+A class tied to a value's content, such as one for an estimate that could not be made, or a number in an
+attribute (`<meter value>`), stays ruled out.
