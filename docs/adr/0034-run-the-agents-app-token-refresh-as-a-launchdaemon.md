@@ -6,6 +6,12 @@
 Supersedes in part [ADR 0031](0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md),
 open question (1) a): the refresh can now also run under launchd. Everything else in ADR 0031 stands.
 
+> **Update (issue #398), 2026-11-20.** The Context below says the VM comes back on its own after a reboot
+> (`limactl autostart enable --condition=boot`). It did not: that job is forbidden (issue #237), and nothing
+> started the VM. [ADR 0038](0038-start-the-lima-vm-at-boot-with-a-launchdaemon-of-our-own.md) adds a
+> LaunchDaemon of the project's own that starts it at boot with `limactl shell --start`. The refresh's
+> decision is unchanged: it still rides out a VM that is not up yet.
+
 > **Update (issue #227 part 2), 2026-11-19.** Open points c) and d) below are superseded by the **account
 > mode** of [ADR 0031](0031-agents-open-pull-requests-as-a-github-app-with-tokens-minted-on-the-mac.md)'s
 > update of the same date: the job runs as the separate account `_shift2euagents`, from that account's
