@@ -3,8 +3,9 @@
 // the PRD's three trust layers put on them (the Content Security Policy,
 // Subresource Integrity, the scripts per page, the module script's template,
 // wasm_exec.js, the markers, the links, the contrast, the archive and its
-// reproducibility, and the banned-API scan of the page script and of the
-// glue's allow list).
+// reproducibility, the banned-API scan of the page script, the glue's allow list
+// and the names it calls, and the page script's catch clause, which shows one
+// constant message).
 //
 // The checks are test files: they build the bundle with `go run ./ci/sitebuild`
 // into temporary directories, never run make, never start a browser and never
