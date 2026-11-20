@@ -230,6 +230,35 @@ func TestTheRunbookSectionSkipsFencedCodeBlocks(t *testing.T) {
 	}
 }
 
+// TestTheDocsDoNotWidenTheRunbookOnAnUnclosedFence pins the failure mode of the scan above (issue #360): a fence
+// the switch-over runbook opens and never closes used to keep the scan inside the section to the end of the page,
+// so a GITHUB_TOKEN line under the next heading again passed the check. A broken fence must not widen the
+// allowance: the page is reported instead.
+func TestTheDocsDoNotWidenTheRunbookOnAnUnclosedFence(t *testing.T) {
+	t.Parallel()
+
+	lines := strings.Split(strings.Join([]string{
+		"# Development environment",
+		"### The switch-over runbook",
+		"6. **Remove your token from the VM:** delete the GITHUB_TOKEN variable from the `.envrc`.",
+		"```bash",
+		"make vm-env",
+		"## Agent permissions",
+		"GITHUB_TOKEN is no credential of the agents.",
+	}, "\n"), "\n")
+
+	var got []int
+
+	for _, mention := range tokenMentions(devEnvironmentPage, lines) {
+		got = append(got, mention.line)
+	}
+
+	if want := []int{7}; cmp.Diff(want, got) != "" {
+		t.Errorf("tokenMentions(%s) reported the lines %v, want %v: a code fence the switch-over runbook opens and never closes must not widen its allowance to the end of the page (issue #360)",
+			devEnvironmentPage, got, want)
+	}
+}
+
 // markdownHeading returns the level and title of an ATX heading line such as "## Credentials" or "### The
 // switch-over runbook".
 func markdownHeading(line string) (int, string, bool) {
