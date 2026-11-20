@@ -357,6 +357,15 @@ func TestScanLeftOutFindsRealDataInTheFilesLeftOut(t *testing.T) {
 			},
 		},
 		{
+			// An old configuration file writes its host names all upper case,
+			// which is no spelling of an exported Go identifier, so the
+			// code-name rule must not quiet the scan about it (issue #365).
+			name:         "an all-upper host name of an old configuration file is found",
+			diff:         goldenAdds(golden, `"host": "DB01.CORP.INFO"`),
+			wantFiles:    []review.LeftOutFile{{Path: golden, Added: 1}},
+			wantFindings: []review.ScanFinding{{Path: golden, Line: 1, Kind: review.ScanHostname}},
+		},
+		{
 			// A report's taxonomy categories read like host names, and the
 			// committed goldens are full of them.
 			name: "a taxonomy category is no host name",
