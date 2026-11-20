@@ -663,10 +663,14 @@ Claude Code CLI wired into a run.
 
 **The CLI's error result (#374).** An `is_error` result's `result` text can be model output a pull
 request's author steers, and the run's error is the job's public `::error` line. On `is_error` the error
-names only the pull request, the constant class `claude cli error` and the CLI's `subtype` (capped and
-token-redacted as before); it quotes no `result` text. The capped, redacted excerpt stays, unchanged by
-this issue, for the other failures: a failure to start, the stderr of an output that is no JSON result,
-and an element that is no result.
+names only the pull request, the constant class `claude cli error` and the CLI's `subtype`; it quotes no
+`result` text. The CLI's `subtype` (of an `is_error` result and of a turn that did not end) and `type`
+(of an element that is no result) are shown only when they read as one of the CLI's codes, 1 to 40
+characters each a lower-case ASCII letter or `_` (`^[a-z_]{1,40}$`, such as `error_max_turns`), and
+otherwise as the constant `unrecognised`, so a CLI that echoed what it was given cannot carry a pull
+request's text into the `::error` line (auditor L2). The capped, redacted excerpt stays, unchanged by
+this issue, for the other failures: a failure to start and the stderr of an output that is no JSON
+result.
 
 **The shape classes (#375).** Since #366 a malformed answer named only a constant check phrase, which
 could not say what went wrong. `shapeError` now classifies the decoder's error by its type, never by its
@@ -687,14 +691,21 @@ plain Markdown after the "other parts were reviewed" paragraph and before the pr
 **Blocking findings in the parts that answered:**
 
 - Part 2 of 2: 1 blocking, 1 non-blocking.
-  - blocking: category security at internal/x/two.go:3
+  - blocking: category security at `internal/x/two.go`:3
 ```
 
 Per answered part, the counts of its blocking and non-blocking findings; per blocking finding, only its
 category, one of the package's constants (an uncategorised finding reads `other`), and its location: the
-path, when it is a file named by a header of that part's own diff, escaped as plain text (control
-characters made spaces, mentions defused, Markdown punctuation escaped, cut at 300 UTF-16 units),
-followed by `:<line>` when the finding has a line; otherwise `a file outside the part`. No title, body,
+path, when it is a file named by a header of that part's own diff, in a code span as the "Not reviewed"
+note shows a path (backticks made apostrophes, control characters made spaces, mentions defused, cut at
+300 UTF-16 units with `…`), followed outside the span by `:<line>` when the finding has a line;
+otherwise `a file outside the part`. At most 50 blocking findings (`MaxListedExcluded`) are listed across
+all parts; when there are more, one constant line after the parts counts the rest,
+`  - and <K> more blocking findings, not listed.`, and the per-part counts stay exact. The review's body
+is held to `MaxTextUnits` (65,000 UTF-16 units) as `Render` holds a review's: only the text before the
+prompt-injection sentence can be cut, never that sentence, the skip's closing sentences or the footer
+(auditor M1: without the cap, thousands of findings made a body GitHub refuses with a 422, failing the
+run). No title, body,
 summary, invented category or other path is shown, and nothing of the summary reaches `Skip.Message`,
 the `::warning` line or the job summary. The reasoning: the path is checked against the diff's own
 headers and the category against a closed set, so a pull request's author who steers the model can choose
@@ -702,8 +713,10 @@ at most which of those constants appear, and the integers beside them; no model 
 
 **Residual risk.** A steered model can still choose the counts, the categories and which of the part's
 files and lines it names, so the summary can understate or misplace a blocker; it can also hide every
-blocker by making another part, or the one that found it, answer unusably. The diff's paths are the pull
-request's own text, shown escaped as the "Not reviewed" note shows them. The mitigation stays the skip
+blocker by making another part, or the one that found it, answer unusably. The number of findings is the
+model's choice too: it is capped at 50 listed lines and a count, so it can crowd a real blocker out of
+the list, but not out of the counts, and cannot grow the review past GitHub's limit. The diff's paths are
+the pull request's own text, shown in a code span as the "Not reviewed" note shows them. The mitigation stays the skip
 itself: the review still says the AI review was skipped, holds no finding, and asks for the parts to be
 reviewed by hand with prompt injection in mind; the maintainer's approval stays the gate.
 
