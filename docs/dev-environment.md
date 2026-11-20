@@ -1074,7 +1074,7 @@ move it in at once. Downloaded on the Mini itself, install it from `~/Downloads`
 
 ```bash
 # the downloading machine
-# keep the older key on the App's page until step 10 (your way back)
+# keep the older key on the App's page until step 10: deleting it now breaks nothing, but it is your way back
 ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
 rm ~/Downloads/<app>.<date>.private-key.pem
 ```
