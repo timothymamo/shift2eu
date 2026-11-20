@@ -692,7 +692,13 @@ linters:
         # CLI, and cli-and-cmd-imported-only-by-cmd holds the rest. The test
         # files of the site's root are refused by web-root-tests-never-run-the-cli
         # as well, which is kept for its message and because ADR 0035 names it.
-        # A new test importer is named here, in its desc and in the pin.
+        # depguard matches these globs against absolute paths, with no anchor at
+        # the module root, and ** crosses /, so each exemption also matches any
+        # directory whose path ends in the same segments (a test file in
+        # internal/web/test/apiparity would be exempt): test/architecture's
+        # TestOnlyNamedPackagesTestTheCLI holds the exact set of importers by
+        # import path. A new test importer is named here, in its desc, in the
+        # pin and in that test's cliTestImporters.
         cli-only-in-named-tests:
           list-mode: lax
           files:

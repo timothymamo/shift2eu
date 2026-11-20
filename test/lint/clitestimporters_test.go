@@ -15,7 +15,9 @@ import "testing"
 // judge. Each other test file that imports it ends in a want naming the rule:
 // internal/web's, internal/httpapi's, cmd/shift2eu's, one in a package below
 // internal/cli (the rule names directories, not trees), and the site's glue,
-// which web-root-tests-never-run-the-cli refuses as well.
+// which web-root-tests-never-run-the-cli refuses as well. internal/web's also
+// imports internal/cli/sub, so the rule's prefix deny entry, internal/cli/, is
+// held as well as its exact one.
 //
 // make lint runs this probe with SHIFT2EU_LINT_PROBES=require on the host, and
 // every entry of CI's lint-target matrix runs the step that sets it.

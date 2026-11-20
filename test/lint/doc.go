@@ -97,7 +97,10 @@
 // cli-only-in-named-tests rule (issue #345): the test files of internal/cli,
 // the wire package and test/apiparity import internal/cli, and a test of
 // internal/web, internal/httpapi, cmd/shift2eu, the site's glue or a package
-// below internal/cli that imports it is refused.
+// below internal/cli that imports it is refused; internal/web's imports
+// internal/cli/sub too, for the rule's prefix deny entry. The rule's globs
+// match any path that ends in the named directories, so test/architecture's
+// TestOnlyNamedPackagesTestTheCLI holds the exact set of importers.
 // TestVersionImportsProbe (testdata/versionimports) holds internal/version to
 // the strict version-is-build-metadata rule: fmt passes, os and os/exec are
 // refused. TestContractSuitesArePureProbe (testdata/contractsuites) holds the

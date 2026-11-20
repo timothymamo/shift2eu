@@ -51,6 +51,17 @@
 // entry of its own, or a file placed there directly, so a new adapter subtree
 // cannot escape the rule.
 //
+// TestOnlyNamedPackagesTestTheCLI holds the lax rule cli-only-in-named-tests to
+// the exact set it means (issue #345): depguard matches its exemptions, such as
+// !**/test/apiparity/*_test.go, against absolute paths with no anchor at the
+// module root, so a directory whose path ends in the same segments would be
+// exempt too. The test lists ./... natively with no tag and with the e2e,
+// integration and browser tags, on windows with the tags and on js/wasm with
+// and without them, and fails unless the packages whose test files
+// (TestImports, XTestImports) import internal/cli or a package below it are
+// exactly internal/cli, cmd/shift2eu-web/internal/wire and test/apiparity.
+// TestCLITestImportersOf pins its helper.
+//
 // TestGolangciSettingsHideNoIssue covers what the pin does not: whether the
 // rules run and what lint reports (issue #81). It fails, naming the setting, on
 // linters.exclusions.paths or paths-except, a linters.exclusions.generated that
