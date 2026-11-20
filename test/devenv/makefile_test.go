@@ -1628,6 +1628,86 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 	}
 }
 
+// TestMakeAgentsTokenRefreshInstallWarnsWhenTheLoadedJobsPrintNamesNoPid pins the AI reviewer's finding on PR #407:
+// reinstalling over the project's job while it runs is the common case, and the unprivileged `launchctl print` the
+// install asks about that job may report it as loaded (exit 0) with no `pid = N` line, as it can hide the pid
+// without sudo. The install then reads no job_pid, the start target's pid file does not name the holder either, and
+// the classification introduced for issue #396 used to refuse and tell the maintainer to kill the holder - which
+// is the job's own refresh, the one process launchd starts again. Before issue #396 the install only warned about
+// a lock it could not place. So it warns that it could not read the job's pid, naming that holder, stops nothing,
+// prints no `kill <pid>`, and installs and bootstraps the job as usual, exit 0.
+func TestMakeAgentsTokenRefreshInstallWarnsWhenTheLoadedJobsPrintNamesNoPid(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+
+	// The project's job is loaded, and `launchctl print system/<label>` prints the header launchd prints for a
+	// loaded job without the `pid = N` line it adds for the process the job runs: the holder cannot be recognised
+	// as the job's own from it, which is the state the reviewer names (issue #396, PR #407 review).
+	f.sb.useFakeLaunchctlPrint(t, f.env, "0", launchctlPrintHeader(f.label(), 0)+"}\n")
+
+	// The job really is loaded before the install runs, and unloads at the bootout the install runs before it
+	// installs the new plist, as launchd unloads the job an install replaces.
+	loaded := filepath.Join(f.sb.root, "launchctl-loaded")
+	writeFileMode(t, loaded, nil, 0o600)
+	f.env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"] = loaded
+
+	// A live refresh of the instance holds the lock, and no pid file of the start target names it.
+	refresh := standInForARefresh(t, f.sb)
+	pid := strconv.Itoa(refresh.pid())
+	writeFileMode(t, filepath.Join(f.sb.refreshLockDir(f.instance), "pid"), []byte(pid+"\n"), 0o600)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	combined := stdout + stderr
+
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install exited %v although the job %s is loaded and its `launchctl print` named no pid for the refresh holding the lock (pid %s): the install cannot place the holder from a print that hides its pid, and the holder is the job's own refresh, which launchd starts again, so this must not be a refusal that tells the maintainer to kill it (issue #396, PR #407 review)\nstdout: %s\nstderr: %s",
+			err, f.label(), pid, stdout, stderr)
+	}
+
+	// The premise: the job was loaded before the install ran, so the install replaced a loaded job.
+	if line := "+ sudo launchctl bootout system/" + f.label(); !strings.Contains(combined, line) {
+		t.Fatalf("the install did not print %q, so the job %s was not loaded before it ran and this case no longer stands for a loaded job whose print names no pid (issue #396, PR #407 review)\nstdout: %s\nstderr: %s",
+			line, f.label(), stdout, stderr)
+	}
+
+	// The warning: it says which pid it could not place as the job's own, so a maintainer whose job cannot take
+	// the lock learns why.
+	var warned bool
+
+	for _, line := range strings.Split(combined, "\n") {
+		if strings.Contains(line, "could not read the job's pid") && strings.Contains(line, pid) {
+			warned = true
+		}
+
+		if strings.Contains(line, "kill") && strings.Contains(line, pid) {
+			t.Errorf("the install tells the maintainer to kill pid %s although the job %s is loaded and only launchd's print, without sudo, hid its pid: that pid is the job's own refresh, and launchd starts it again (issue #396, PR #407 review)\nline: %s", pid, f.label(), line)
+		}
+
+		if strings.Contains(line, "stopped pid "+pid) || strings.Contains(line, "stopping the refresh") {
+			t.Errorf("the install says it stopped a refresh although no pid file named pid %s as a refresh to stop: only the refresher the start target recorded is the install's to stop (issue #396, PR #407 review)\nline: %s", pid, line)
+		}
+	}
+
+	if !warned {
+		t.Errorf("the install does not warn that it could not read the job's pid, naming pid %s, the refresh that holds the lock of %s while the loaded job's print hides its own: a maintainer never learns that the holder may be the job's own refresh rather than one to kill (issue #396, PR #407 review)\nstdout: %s\nstderr: %s",
+			pid, f.instance, stdout, stderr)
+	}
+
+	if !refresh.running() {
+		t.Errorf("the install stopped pid %s, a refresh no pid file of the start target named: only the refresher the start target recorded is the install's to stop (issue #396)\nstdout: %s\nstderr: %s", pid, stdout, stderr)
+	}
+
+	// And it installed and loaded the job as it always does.
+	if _, statErr := os.Stat(f.dest()); statErr != nil {
+		t.Errorf("the install did not write the plist %s although it only warns about the holder it could not place, and has nothing to stop: %v (issue #396, PR #407 review)", f.dest(), statErr)
+	}
+
+	if calls := f.bootstrapCalls(t); len(calls) != 1 {
+		t.Errorf("the install ran launchctl bootstrap %d time(s), want one, although it only warns about the holder it could not place (issue #396, PR #407 review): %v", len(calls), calls)
+	}
+}
+
 // TestMakeAgentsTokenRefreshInstallRefusesToRunAsRoot pins the sixth review's finding: the plist names the
 // account that rendered it (id -un) as the job's UserName, so an install run under sudo -E would install a job
 // that runs the host clone's script as root - a script the maintainer can still edit, and everything it reaches.
