@@ -12,7 +12,9 @@ import (
 // domain included - whose groups are octets and whose address is outside the
 // sample range 192.0.2.0/24 is reported, while a sample address, a date, a
 // version-like token, a sequence of numbers ending a sentence and a group that is
-// no octet are not.
+// no octet are not. A version-like token that a dotted extension follows
+// (build-1-2-3-4.tar.gz) is the price of the dotted-label rule and is reported:
+// the rule fails closed rather than let an address in a name through.
 func TestHyphenatedIPv4Problems(t *testing.T) {
 	t.Parallel()
 
@@ -67,6 +69,11 @@ func TestHyphenatedIPv4Problems(t *testing.T) {
 		{name: "date", text: "released on 2026-11-20", want: nil},
 		{name: "date in the short form", text: "the window 26-11-20 stays", want: nil},
 		{name: "version-like token", text: "the build-1-2-3-4 image is pinned", want: nil},
+		{
+			name: "version-like token with a dotted extension",
+			text: "the build-1-2-3-4.tar.gz image is pinned",
+			want: []string{"1-2-3-4"},
+		},
 		{name: "sequence in prose", text: "the steps 1-2-3-4 in order", want: nil},
 		{name: "sequence ending a sentence", text: "the steps are 1-2-3-4.", want: nil},
 		{name: "group that is no octet", text: "ip-10-1-2-300 is no address", want: nil},

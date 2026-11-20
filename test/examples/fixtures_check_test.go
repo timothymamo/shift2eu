@@ -431,6 +431,12 @@ func hyphenatedIPv4Problems(text string) []problem {
 // full stop that ends a sentence opens no label, so the rule stays off values that
 // only look like an address; parseHyphenatedIPv4 then keeps out every run whose
 // groups are not octets and every run of digits with a leading zero.
+//
+// Version-like tokens are clean only while they end the label. The same token
+// with a dotted extension (build-1-2-3-4.tar.gz, release-1-2-3-4.md) ends a
+// label that a dotted one follows, so it is read as the address 1.2.3.4 and
+// reported: the rule cannot tell such a version from an address in a name, and
+// it fails closed, so TestHyphenatedIPv4Problems pins the report.
 func hyphenatedIPv4InName(text string, start, end int) bool {
 	if hyphenatedIPv4AfterIPPrefix(text, start) {
 		return true
