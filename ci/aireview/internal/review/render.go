@@ -395,6 +395,12 @@ func pathSpan(path string) string {
 // escaping, so it can only shorten a defused mention or reference (an @ left
 // without its handle, an "&am" no reference), never undo it.
 func shortPathSpan(path string) string {
+	return "`" + shortPathText(path) + "`"
+}
+
+// shortPathText returns the text of shortPathSpan's code span, without its
+// backticks, so a caller can put more in the span after the path.
+func shortPathText(path string) string {
 	span := pathSpan(path)
 	text := span[1 : len(span)-1]
 
@@ -402,7 +408,7 @@ func shortPathSpan(path string) string {
 		text = prefixUnits(text, maxListedPathUnits-1) + "…"
 	}
 
-	return "`" + text + "`"
+	return text
 }
 
 // MaxListedExcluded is how many left-out paths the body's "Not reviewed" note
@@ -437,7 +443,7 @@ func notReviewedNote(leftOut LeftOut) string {
 		listed := files[:min(len(files), MaxListedExcluded)]
 
 		for _, file := range listed {
-			fmt.Fprintf(&note, "- %s (+%d %s)\n", shortPathSpan(file.Path), file.Added, plural(file.Added, "line", "lines"))
+			fmt.Fprintf(&note, "- %s (%s)\n", shortPathSpan(file.Path), leftOutFileNote(file))
 		}
 
 		if more := len(files) - len(listed); more > 0 {
@@ -457,8 +463,7 @@ func notReviewedNote(leftOut LeftOut) string {
 		for _, finding := range listed {
 			// The path is cut as the note's are, and the line follows it
 			// inside the span, so a cut never drops the line.
-			span := shortPathSpan(finding.Path)
-			fmt.Fprintf(&note, "- %s:%d` — %s\n", span[:len(span)-1], finding.Line, finding.Kind)
+			fmt.Fprintf(&note, "- `%s:%d` — %s\n", shortPathText(finding.Path), finding.Line, finding.Kind)
 		}
 
 		if more := len(findings) - len(listed); more > 0 {
@@ -468,6 +473,20 @@ func notReviewedNote(leftOut LeftOut) string {
 	}
 
 	return note.String()
+}
+
+// leftOutFileNote returns what the note says beside a left-out file: that it is
+// binary and was not scanned, that it is a rename's old path, or the lines it
+// adds. A count of 0 for a file nobody read would read as nothing added.
+func leftOutFileNote(file LeftOutFile) string {
+	switch {
+	case file.Binary:
+		return "binary, not scanned"
+	case file.Renamed:
+		return "renamed"
+	default:
+		return fmt.Sprintf("+%d %s", file.Added, plural(file.Added, "line", "lines"))
+	}
 }
 
 // unreadableReview returns the review a run posts when the model's answer

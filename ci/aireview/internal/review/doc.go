@@ -23,10 +23,13 @@
 // files of a list fixed in this package (FilterDiff, issue #324), and the size
 // limit measures what remains; a symbolic link, a submodule or a mode change is
 // never left out. The prompt lists the left-out paths as untrusted data, and the
-// review names them, each with the lines it adds, in a note its truncation never
-// cuts. A model-free scan of those added lines (ScanLeftOut, issue #342) looks
-// for account IDs, IPv4 addresses, host names and key-like strings by fixed
-// rules; the note lists its first MaxScanFindings findings by file, line and
+// review names them, each with the lines it adds (a binary file as not scanned,
+// a rename's old path as renamed), in a note its truncation never cuts. A
+// model-free scan of those added lines (ScanLeftOut, issue #342) looks for
+// account IDs, IPv4 addresses, host names (a provider's domain allowed only as
+// its apex or a service one label below it) and key-like strings by fixed
+// rules; the paths themselves are shown escaped and cut, never scanned. The
+// note lists its first MaxScanFindings findings by file, line and
 // kind, never the value, and the scan touches neither the prompt nor the
 // findings nor the event. An answer of the wrong shape is asked once more,
 // announced by a workflow notice that names the pull request and the failed
