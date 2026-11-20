@@ -214,7 +214,7 @@ func holdsCheckedPath(name string) bool {
 // customer name: a GCP project ID (projects/acme-corp-prod/...), an Azure
 // storage account in an ARM ID (.../storageAccounts/acmeprod) or a Cloud Storage
 // bucket in a resource name (projects/_/buckets/acme-prod-data) passes. The gap
-// predates the rules of issues #361 to #363 and is left for a follow-up issue.
+// predates the rules of issues #361 to #363. Issue #406 tracks it.
 func sanitisationProblems(text string) []problem {
 	return slices.Concat(
 		accountIDProblems(text),
@@ -261,7 +261,7 @@ func sanitisationProblems(text string) []problem {
 // (DB01.CORP.LOCAL passes) and a lower-case unexported Go selector in a
 // Go-source fixture (cfg.local, s.is, C.int), which would be reported; only
 // cgo's C.int trips that one in the tree, excused on the allow list, and
-// reporting a selector is the safe direction.
+// reporting a selector is the safe direction. Issue #406 tracks these gaps.
 //
 // It deliberately leaves out the TLDs that clash with a file extension a
 // fixture or a guide page names (md, sh, py, rs), so install.md or run.sh is
@@ -530,6 +530,8 @@ var publicOpenSourceOwners = []string{
 //   - the paths of every other vendor host publicVendorHosts lists
 //     (golang.org/x/..., www.ovhcloud.com/en/...), whose segments are
 //     the vendor's own.
+//
+// Issue #406 tracks these gaps.
 func vendorPathProblems(text string) []problem {
 	var problems []problem
 
@@ -697,6 +699,8 @@ var englishWordsEndingInIP = []string{
 //     where the public-looking 1-10-1-2 is read and dropped;
 //   - a run with mixed separators (ip-10_1-2-3), which the pattern never
 //     matches.
+//
+// Issue #406 tracks these gaps.
 func hyphenatedIPv4Problems(text string) []problem {
 	var problems []problem
 
