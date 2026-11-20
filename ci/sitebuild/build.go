@@ -58,18 +58,20 @@ const (
 var tagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 
 // target is one target catalog the pages name: its key, as --target takes it,
-// the name the reports give it, and its catalog.
+// the name the reports give it, the city and country of its head office, which
+// the page's target card shows (issue #373), and its catalog.
 type target struct {
 	key     string
 	name    string
+	hq      string
 	catalog func(context.Context) (catalog.Catalog, error)
 }
 
 // targets are the three embedded catalogs, in the order the page lists them.
 var targets = []target{
-	{key: "ovhcloud", name: "OVHcloud", catalog: ovhcloud.New().Catalog},
-	{key: "scaleway", name: "Scaleway", catalog: scaleway.New().Catalog},
-	{key: "upcloud", name: "UpCloud", catalog: upcloud.New().Catalog},
+	{key: "ovhcloud", name: "OVHcloud", hq: "Roubaix, France", catalog: ovhcloud.New().Catalog},
+	{key: "scaleway", name: "Scaleway", hq: "Paris, France", catalog: scaleway.New().Catalog},
+	{key: "upcloud", name: "UpCloud", hq: "Helsinki, Finland", catalog: upcloud.New().Catalog},
 }
 
 // examples are the bundled example inventories, by their directory under
@@ -107,8 +109,10 @@ type pageData struct {
 
 // targetData is one target as the assessment page shows it.
 type targetData struct {
-	Key      string
-	Name     string
+	Key  string
+	Name string
+	// HQ is the city and country of the provider's head office.
+	HQ       string
 	Snapshot string
 	Regions  []string
 }
@@ -418,6 +422,7 @@ func targetsData(ctx context.Context) ([]targetData, error) {
 		out = append(out, targetData{
 			Key:      t.key,
 			Name:     t.name,
+			HQ:       t.hq,
 			Snapshot: c.Snapshot().RetrievedOn.Format("2006-01-02"),
 			Regions:  c.Regions(),
 		})

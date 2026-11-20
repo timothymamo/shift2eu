@@ -25,7 +25,7 @@
 // version of the toolchain that builds the module (the value its
 // runtime.Version() reports), each script's and the stylesheet's name and
 // Subresource Integrity value (SHA-384), each target catalog's snapshot date
-// and regions, the three bundled example inventories of examples/ as inert
+// and regions, each target's head-office city, the three bundled example inventories of examples/ as inert
 // <template> content the page script reads as text, and whether the HSTS
 // record site/records/hsts.json says waived (a missing record is not waived).
 //
