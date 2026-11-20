@@ -10,7 +10,8 @@
 // The job runs as the account that renders the plist (UserName, from id -un), never as root, with a fixed
 // environment (/usr/bin/env -i, HOME, a PATH that finds limactl, LIMA_INSTANCE) and no credential of any kind:
 // the VM needs none to boot, and the agents App's refresh job delivers the token (ADR 0034). It runs once at
-// load (RunAtLoad, no KeepAlive) and logs to ~/.local/state/shift2eu/vm-boot-<instance>.log.
+// load (RunAtLoad, no KeepAlive), leaves the VM's own processes alone when the job ends (AbandonProcessGroup) and
+// logs to ~/.local/state/shift2eu/vm-boot-<instance>.log.
 //
 // A value the plist cannot carry, an instance name that cannot be part of a label, and a run as root are
 // refused before anything is printed, so make never installs half a plist and never installs a job that runs as
@@ -92,7 +93,8 @@ func (f *vmBootPlistFixture) logPath() string {
 
 // TestVMBootLaunchdPlistDescribesTheJob pins the whole of the generated boot job: its label per instance, the
 // maintainer it runs as, the environment it starts the VM with, the limactl command line that starts an existing
-// instance and never creates one, the log path, and that it runs once (RunAtLoad, no KeepAlive).
+// instance and never creates one, the log path, that it runs once (RunAtLoad, no KeepAlive) and that it leaves the
+// processes it started alone when it ends (AbandonProcessGroup).
 func TestVMBootLaunchdPlistDescribesTheJob(t *testing.T) {
 	t.Parallel()
 
@@ -180,6 +182,12 @@ func TestVMBootLaunchdPlistDescribesTheJob(t *testing.T) {
 
 			if kind := plistKind(t, dict, "RunAtLoad"); kind != "true" {
 				t.Errorf("the plist's RunAtLoad is a <%s>, want <true>: the job exists to start the VM at boot (issue #398)\nstdout:\n%s", kind, stdout)
+			}
+
+			// The job exits as soon as limactl shell returns, and launchd kills every process left in a job's own
+			// process group when the job ends: AbandonProcessGroup keeps it from taking down the VM it just started.
+			if kind := plistKind(t, dict, "AbandonProcessGroup"); kind != "true" {
+				t.Errorf("the plist's AbandonProcessGroup is a <%s>, want <true>: the job ends as soon as limactl shell returns, and launchd kills every process left in the job's process group when it does, the VM this job exists to start included (issue #398)\nstdout:\n%s", kind, stdout)
 			}
 
 			// A stopped job is restarted by KeepAlive, and the boot job starts the VM once: it must not run

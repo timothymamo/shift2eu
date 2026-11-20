@@ -8,8 +8,11 @@
 // already starts this instance. `limactl autostart enable` writes io.lima-vm.autostart.<instance> in the user's
 // domain and, with --condition=boot, io.lima-vm.daemon.<instance> as a LaunchDaemon; both run
 // `limactl start <name> --foreground`, the form that can fall back to template:default, a VM that mounts the home
-// directory (issue #237). The refusal names the job, `limactl autostart disable <instance>` and the bootout
-// command that removes it by hand, and installs nothing.
+// directory (issue #237). The job is found either loaded, through `launchctl print`, or as the plist file alone -
+// launchd loads that at the next login or boot (LIMA_LAUNCHDAEMONS_DIR, /Library/LaunchDaemons on the Mac, is the
+// test hook for the system directory). The refusal names the job, its plist, `limactl autostart disable
+// <instance>` and the removal by hand - the bootout of a loaded job and the `rm -f` of the plist, with sudo in the
+// system domain - and installs nothing.
 //
 // The targets are host targets: they run from the host clone, never as root (they run sudo themselves), and
 // VM_BOOT_LAUNCHD_DIR may come from make's command line or from the Makefile, never from the environment - a
@@ -35,6 +38,22 @@ import (
 // vmBootLaunchdDir is the make variable the install and uninstall read the LaunchDaemons directory from: the
 // same hook AGENTS_TOKEN_LAUNCHD_DIR is for the refresh's job (issue #229), pointed into the sandbox.
 const vmBootLaunchdDir = "VM_BOOT_LAUNCHD_DIR"
+
+// limaLaunchDaemonsDirVar is the make variable the checks read the system LaunchDaemons directory from, where
+// Lima's own LaunchDaemon plist io.lima-vm.daemon.<instance>.plist sits: /Library/LaunchDaemons on the Mac, a
+// directory of the sandbox in these tests, passed on make's command line (issues #315, #398).
+const limaLaunchDaemonsDirVar = "LIMA_LAUNCHDAEMONS_DIR"
+
+// limaAutostartPlistPath is where Lima's own autostart job's plist lives, whether launchd has loaded it or not:
+// the user domain's io.lima-vm.autostart.<instance> under the maintainer's ~/Library/LaunchAgents, the system
+// domain's io.lima-vm.daemon.<instance> under the system LaunchDaemons directory (issues #315, #398).
+func limaAutostartPlistPath(domain jobDomain, home, launchDaemonsDir, label string) string {
+	if domain == systemDomain {
+		return filepath.Join(launchDaemonsDir, label+".plist")
+	}
+
+	return filepath.Join(home, "Library", "LaunchAgents", label+".plist")
+}
 
 // vmBootLimactl stands in for limactl in the vm-boot tests: it records its argv and exits 0, answering every
 // listing with the instance's name. Nothing here needs a VM, an instance directory or Lima itself, and an install
@@ -66,6 +85,9 @@ type vmBootInstallFixture struct {
 	instance   string
 	dir        string // where make runs: the repository, whose Makefile is what this test pins
 	launchdDir string // where launchd reads LaunchDaemons from: the make command line's VM_BOOT_LAUNCHD_DIR
+	// limaLaunchDaemonsDir is where Lima's own LaunchDaemon plist sits: the make command line's
+	// LIMA_LAUNCHDAEMONS_DIR, a directory of the sandbox's own, never the boot job's (issues #315, #398).
+	limaLaunchDaemonsDir string
 }
 
 // newVMBootInstallFixture builds the fixture for one VM instance, with no Lima autostart job loaded.
@@ -80,8 +102,14 @@ func newVMBootInstallFixture(t *testing.T, instance string) *vmBootInstallFixtur
 	env["SHIFT2EU_TEST_LIMA_INSTANCE"] = instance
 
 	launchdDir := filepath.Join(sb.root, "LaunchDaemons")
-	if err := os.MkdirAll(launchdDir, 0o700); err != nil {
-		t.Fatalf("create %s: %v", launchdDir, err)
+	// Lima's own LaunchDaemon plist lives in a directory of its own, never beside the boot job's: the install's
+	// own plist must never be taken for Lima's, and a refusal names the two paths apart (issues #315, #398).
+	limaLaunchDaemonsDir := filepath.Join(sb.root, "LimaLaunchDaemons")
+
+	for _, dir := range []string{launchdDir, limaLaunchDaemonsDir} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("create %s: %v", dir, err)
+		}
 	}
 
 	sb.useLogOnlySudo(t)
@@ -96,7 +124,15 @@ func newVMBootInstallFixture(t *testing.T, instance string) *vmBootInstallFixtur
 		t.Fatalf("resolve the repository root: %v", err)
 	}
 
-	return &vmBootInstallFixture{sb: sb, jobs: jobs, env: env, instance: instance, dir: dir, launchdDir: launchdDir}
+	return &vmBootInstallFixture{
+		sb:                   sb,
+		jobs:                 jobs,
+		env:                  env,
+		instance:             instance,
+		dir:                  dir,
+		launchdDir:           launchdDir,
+		limaLaunchDaemonsDir: limaLaunchDaemonsDir,
+	}
 }
 
 // label is the boot job's LaunchDaemon label of the fixture's instance.
@@ -108,12 +144,21 @@ func (f *vmBootInstallFixture) dest() string {
 	return filepath.Join(f.launchdDir, f.label()+".plist")
 }
 
-// run runs one target with VM_BOOT_LAUNCHD_DIR on make's command line, which is one of the only two places the
-// recipe reads it from.
+// limaPlistPath is where Lima's own autostart job's plist of the fixture's instance lives, loaded or not.
+func (f *vmBootInstallFixture) limaPlistPath(domain jobDomain, label string) string {
+	return limaAutostartPlistPath(domain, f.env["HOME"], f.limaLaunchDaemonsDir, label)
+}
+
+// run runs one target with VM_BOOT_LAUNCHD_DIR and LIMA_LAUNCHDAEMONS_DIR on make's command line, the only place
+// the recipes read those test hooks from.
 func (f *vmBootInstallFixture) run(t *testing.T, target string) (string, string, error) {
 	t.Helper()
 
-	return runMakeIn(t, f.dir, []string{vmBootLaunchdDir + "=" + f.launchdDir, target}, f.env)
+	return runMakeIn(t, f.dir, []string{
+		vmBootLaunchdDir + "=" + f.launchdDir,
+		limaLaunchDaemonsDirVar + "=" + f.limaLaunchDaemonsDir,
+		target,
+	}, f.env)
 }
 
 // runWithTheDirectoryInTheEnvironment runs one target with VM_BOOT_LAUNCHD_DIR exported in the environment and not
@@ -173,8 +218,11 @@ func (f *vmBootInstallFixture) installCalls(t *testing.T) [][]string {
 // job starts this instance, the install loads no job of its own - the two would race for the same VM, and Lima's
 // runs `limactl start <name> --foreground`, which can fall back to template:default (issue #237). The refusal
 // comes before anything is installed, in the user's domain (io.lima-vm.autostart.<instance>) and in the system
-// domain (io.lima-vm.daemon.<instance>), and it names the job, the command that removes it the supported way
-// (`limactl autostart disable <instance>`) and the bootout that removes it by hand.
+// domain (io.lima-vm.daemon.<instance>), for a job launchd has loaded and for one whose plist is only installed -
+// launchd loads that file at the next login or boot, so the VM is started twice from then on although nothing runs
+// at this moment. It names the job, the command that removes it the supported way
+// (`limactl autostart disable <instance>`) and the removal by hand: the bootout of a loaded job, and the `rm -f`
+// of the plist, with sudo in the system domain, where root owns it.
 func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 	t.Parallel()
 
@@ -182,20 +230,34 @@ func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 		name   string
 		domain jobDomain
 		prefix string
-		// bootout is the by-hand command that removes the job, up to the label the case appends.
-		bootout string
+		// loaded says the case has launchd run the job; installed says it only writes the job's plist, where
+		// `limactl autostart enable` writes it and launchd loads it at the next login or boot (issue #398).
+		loaded    bool
+		installed bool
 	}{
 		{
-			name:    "the user domain's io.lima-vm.autostart job",
-			domain:  userDomain,
-			prefix:  vmBootLimaAutostartLabelPrefix,
-			bootout: "launchctl bootout gui/" + strconv.Itoa(os.Getuid()) + "/",
+			name:   "the user domain's loaded io.lima-vm.autostart job",
+			domain: userDomain,
+			prefix: vmBootLimaAutostartLabelPrefix,
+			loaded: true,
 		},
 		{
-			name:    "the system domain's io.lima-vm.daemon job",
-			domain:  systemDomain,
-			prefix:  vmBootLimaDaemonLabelPrefix,
-			bootout: "sudo launchctl bootout system/",
+			name:   "the system domain's loaded io.lima-vm.daemon job",
+			domain: systemDomain,
+			prefix: vmBootLimaDaemonLabelPrefix,
+			loaded: true,
+		},
+		{
+			name:      "the user domain's installed io.lima-vm.autostart plist, not loaded",
+			domain:    userDomain,
+			prefix:    vmBootLimaAutostartLabelPrefix,
+			installed: true,
+		},
+		{
+			name:      "the system domain's installed io.lima-vm.daemon plist, not loaded",
+			domain:    systemDomain,
+			prefix:    vmBootLimaDaemonLabelPrefix,
+			installed: true,
 		},
 	}
 
@@ -205,26 +267,50 @@ func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 
 			f := newVMBootInstallFixture(t, hostTargetInstance)
 			label := tc.prefix + f.instance
+			plist := f.limaPlistPath(tc.domain, label)
 
-			// Lima's job as `limactl autostart enable` writes it: limactl start <instance> --foreground.
-			f.jobs.add(t, tc.domain, label, loadedJob{args: []string{"/opt/homebrew/bin/limactl", "start", f.instance, "--foreground"}})
+			state := "installed at " + plist
+
+			if tc.loaded {
+				state = "loaded in the " + f.jobs.domainName(tc.domain) + " domain"
+				// Lima's job as `limactl autostart enable` loads it: limactl start <instance> --foreground.
+				f.jobs.add(t, tc.domain, label, loadedJob{args: []string{"/opt/homebrew/bin/limactl", "start", f.instance, "--foreground"}})
+			} else {
+				// Lima's job's plist as `limactl autostart enable` writes it, which launchd loads at the next
+				// login or boot: nothing runs now, and the VM is started twice from the next boot on.
+				writeFileMode(t, plist, []byte("Lima's own autostart job of "+f.instance+"\n"), 0o600)
+			}
 
 			stdout, stderr, err := f.run(t, "vm-boot-install")
 			if err == nil {
-				t.Fatalf("make vm-boot-install exited 0 although %s is loaded in the %s domain and starts %s: the two jobs would race for the same VM, and Lima's runs limactl start <name>, which can create template:default (issues #237, #398)\nstdout: %s\nstderr: %s",
-					label, f.jobs.domainName(tc.domain), f.instance, stdout, stderr)
+				t.Fatalf("make vm-boot-install exited 0 although Lima's own autostart job %s is %s and starts %s: the two jobs would race for the same VM, and Lima's runs limactl start <name>, which can create template:default (issues #237, #398)\nstdout: %s\nstderr: %s",
+					label, state, f.instance, stdout, stderr)
 			}
 
 			combined := stdout + stderr
 
-			for _, want := range []string{
-				label,
-				"limactl autostart disable " + f.instance,
-				tc.bootout + label,
-			} {
+			wants := []string{label, "limactl autostart disable " + f.instance}
+
+			// The removal by hand: a loaded job is booted out of its domain and its plist removed, and a plist
+			// launchd has not loaded yet only removed - with sudo in the system domain, where root owns it.
+			rm := "rm -f " + plist
+			if tc.domain == systemDomain {
+				rm = "sudo " + rm
+			}
+
+			switch {
+			case tc.loaded && tc.domain == systemDomain:
+				wants = append(wants, "sudo launchctl bootout system/"+label, "rm -f")
+			case tc.loaded:
+				wants = append(wants, "launchctl bootout gui/"+strconv.Itoa(os.Getuid())+"/"+label, "rm -f")
+			default:
+				wants = append(wants, plist, rm)
+			}
+
+			for _, want := range wants {
 				if !strings.Contains(combined, want) {
-					t.Errorf("make vm-boot-install does not say %q although %s starts this instance: the refusal must name the job and how to remove it, or a maintainer cannot install the boot job at all (issue #398)\nstdout: %s\nstderr: %s",
-						want, label, stdout, stderr)
+					t.Errorf("make vm-boot-install does not say %q although Lima's autostart job %s is %s and starts this instance: the refusal must name the job, its plist and how to remove it, or a maintainer cannot install the boot job at all (issues #315, #398)\nstdout: %s\nstderr: %s",
+						want, label, state, stdout, stderr)
 				}
 			}
 
@@ -247,6 +333,14 @@ func TestMakeVMBootInstallRefusesALimaAutostartJob(t *testing.T) {
 			if len(entries) != 0 {
 				t.Errorf("make vm-boot-install left %d file(s) in %s although it refuses to install beside %s, so a refused run still leaves a job for launchd to load (issue #398): %v",
 					len(entries), f.launchdDir, label, entries)
+			}
+
+			// Lima's own file stays where it is: the install refuses beside it and removes nothing of Lima's.
+			if tc.installed {
+				if _, statErr := os.Stat(plist); statErr != nil {
+					t.Errorf("make vm-boot-install removed Lima's own plist %s although it only refuses to install beside it: removing Lima's job is the maintainer's decision, with limactl autostart disable or by hand (issues #315, #398): %v",
+						plist, statErr)
+				}
 			}
 		})
 	}
