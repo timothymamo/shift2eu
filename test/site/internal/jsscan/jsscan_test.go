@@ -2,6 +2,7 @@ package jsscan_test
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -587,6 +588,51 @@ func TestScanFailsClosed(t *testing.T) {
 
 	if err == nil {
 		t.Fatalf("Scan returned no error for a source it cannot lex, and %q as its violations", messages(violations))
+	}
+}
+
+// TestBannedJSNames pins the set the page-script scan shares with the module
+// glue's check (PRD #297, Layer 1): every name bannedNames holds, the reflection
+// objects, the navigation properties and the two names the rules confine to one
+// function, sorted and without a duplicate, and nothing the rules allow.
+//
+// It is a set another check reads, so it must not lose a group without a failure
+// here: a set that quietly held only the messaging names would leave the glue's
+// own check weaker than it says.
+func TestBannedJSNames(t *testing.T) {
+	t.Parallel()
+
+	names := jsscan.BannedJSNames()
+
+	for _, want := range []struct {
+		// group is the list of the rules the name comes from.
+		group string
+		names []string
+	}{
+		{group: "the sending, loading, storing, markup and code names", names: []string{"fetch", "XMLHttpRequest", "Worker", "postMessage", "eval", "Function", "outerHTML", "cookie"}},
+		{group: "the reflection objects", names: []string{"Object", "Reflect"}},
+		{group: "the navigation properties", names: []string{"href", "src", "action", "hostname"}},
+		{group: "the names Scan confines to one function", names: []string{"innerHTML", "createPolicy"}},
+	} {
+		for _, name := range want.names {
+			if !slices.Contains(names, name) {
+				t.Errorf("BannedJSNames() does not hold %q, one of %s: the set is every name the page script may not hold, and a caller compares its own allow list with it", name, want.group)
+			}
+		}
+	}
+
+	for _, allowed := range []string{"textContent", "getElementById", "Blob", "addEventListener", "name", "error"} {
+		if slices.Contains(names, allowed) {
+			t.Errorf("BannedJSNames() holds %q, which the page script's rules allow: the set is the names the rules refuse or confine, not every name a script uses", allowed)
+		}
+	}
+
+	if !slices.IsSorted(names) {
+		t.Errorf("BannedJSNames() is not sorted: %v", names)
+	}
+
+	if compact := slices.Compact(slices.Clone(names)); len(compact) != len(names) {
+		t.Errorf("BannedJSNames() holds a duplicate name: %v", names)
 	}
 }
 

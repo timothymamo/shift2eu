@@ -2,6 +2,7 @@ package jsscan
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -128,6 +129,39 @@ var navigationProperties = map[string]bool{
 	"href": true, "src": true, "action": true, "formAction": true, "search": true, "pathname": true,
 	"hash": true, "host": true, "hostname": true, "port": true, "protocol": true,
 	"username": true, "password": true,
+}
+
+// BannedJSNames returns every name Scan refuses or confines to one place, as a
+// list of JavaScript names an allow list may never hold: bannedNames, the
+// reflection objects, the navigation properties, and innerHTML and
+// createPolicy, which Scan allows only inside one named function (insertReport
+// and the Trusted Types policy). Sorted, so two callers compare sets.
+//
+// A name Scan confines rather than bans is here too: a caller whose code has no
+// insertion point and no policy, as the site's module glue (cmd/shift2eu-web)
+// has none, must not name it either, so the glue's check shares this set
+// instead of keeping a second list that could drift from this one.
+func BannedJSNames() []string {
+	names := make(map[string]bool, len(bannedNames)+len(reflectionObjects)+len(navigationProperties)+2)
+
+	for name := range bannedNames {
+		names[name] = true
+	}
+
+	for name := range reflectionObjects {
+		names[name] = true
+	}
+
+	for name := range navigationProperties {
+		names[name] = true
+	}
+
+	// The two names Scan allows inside one function only: checkInnerHTML and
+	// checkCreatePolicy.
+	names["innerHTML"] = true
+	names["createPolicy"] = true
+
+	return slices.Sorted(maps.Keys(names))
 }
 
 // assignmentOperators are the operators that assign to their left side.
