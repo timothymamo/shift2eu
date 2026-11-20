@@ -379,9 +379,10 @@ func TestEstimateReasonsInSource(t *testing.T) {
 }
 
 // TestEstimateReasonsReadsTheDomain pins the exported reader on the real domain:
-// it finds internal/domain/estimate from its own source file, reads it, and
-// returns the reasons the package declares, the first and the last among them.
-// A reader that looked in the wrong directory would find no reason at all.
+// it finds internal/domain/estimate by walking up from the working directory to
+// the module root, the directory holding go.mod (domainEstimateDir), reads it,
+// and returns the reasons the package declares, the first and the last among
+// them. A reader that looked in the wrong directory would find no reason at all.
 func TestEstimateReasonsReadsTheDomain(t *testing.T) {
 	t.Parallel()
 
