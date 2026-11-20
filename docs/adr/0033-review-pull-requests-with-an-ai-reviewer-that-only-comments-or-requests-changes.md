@@ -246,14 +246,17 @@ reference data, and every schema version bump would be refused the same way. The
   cut to 300 UTF-16 code units), so the maintainer knows what the AI review did not read. The note
   states the total, lists the first 50 paths (`MaxListedExcluded`), each with the lines it adds
   (`(+3 lines)`, issue #342), a binary file as `(binary, not scanned)`, a rename's old path as
-  `(renamed)` and a copy's source path as `(copied)`, and says how many more it does not list. Amended by issue #342: **a model-free scan
-  reads the lines the left-out sections add** (`ScanLeftOut`; never a removed or context line, never a
-  reviewed file) for a twelve-digit account ID, an IPv4 address, a host name and a key-like string
-  (an access key ID, a long token, or a secret access key: a run holding `+` or `/` is one only at
-  exactly 40 characters, so a path or URL is none), by fixed rules that know the
-  sanitised values of CLAUDE.md rule 2. An example domain is no finding at any depth; a provider's
-  domain only as its apex, exactly one label below it, or for `amazonaws.com` `<service>.<region>`:
-  a deeper name is one a customer chose. The left-out paths themselves are shown as they are, escaped
+  `(renamed)` and a copy's source path as `(copied)`, and says how many more it does not list.
+  Amended by issue #342: **a model-free scan reads the lines the left-out sections add**
+  (`ScanLeftOut`; never a removed or context line, never a reviewed file) for a twelve-digit account
+  ID, an IPv4 address, a host name and a key-like string (an access key ID, a long token, or a secret
+  access key: a run holding `+` or `/` is one only at exactly 40 characters, so a path or URL is none),
+  by fixed rules that know the sanitised values of CLAUDE.md rule 2. An example domain is no finding
+  at any depth; a provider's domain only as its apex, exactly one label below it, or for
+  `amazonaws.com` `<service>.<region>`: a deeper name is one a customer chose. A dotted name of code is
+  no host name (issue #365): one followed by `(`, or one whose last label is spelt as an exported
+  identifier (`slog.Info`, `cfg.App`). A false positive is fixed in the scan's rules, never with an
+  allow list of paths. The left-out paths themselves are shown as they are, escaped
   and cut, and are not scanned: the pull request's own file list already shows them. The note lists
   the scan's first 20 findings (`MaxScanFindings`) as the file and line in a code span and the kind
   found, never the value, and counts the rest. The scan is no part of the prompt, adds no finding to

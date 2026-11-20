@@ -68,9 +68,10 @@ const MaxScanFindings = 20
 // the findings: the review caps what it lists. A binary file is marked Binary,
 // a rename's old path Renamed and a copy's source path Copied, so the note
 // never shows any of them as a file nothing was added to. The left-out paths
-// themselves are shown as they are,
-// escaped and cut, and are not scanned: the pull request's own file list
-// already shows them.
+// themselves are shown as they are, escaped and cut, and are not scanned: the
+// pull request's own file list already shows them. A false positive is fixed
+// in the scan's rules, never with an allow list of paths: such a list grows
+// with every fixture, and a file on it hides real data (issue #365).
 func ScanLeftOut(raw string) LeftOut {
 	files := map[string]*LeftOutFile{}
 	asNew := map[string]bool{}
@@ -242,7 +243,12 @@ func scanSection(section, path string) (int, []ScanFinding) {
 //     that is neither an example domain at any depth (exampleDomains) nor a
 //     provider's domain (providerDomains) as the apex, with exactly one label
 //     below it, or for amazonaws.com <service>.<region> with a region of the
-//     AWS shape: anything deeper is a name a customer chose;
+//     AWS shape: anything deeper is a name a customer chose. A dotted name of
+//     code is none (issue #365): one followed by "(" is a call (x.dev()), and
+//     one whose last label is written as an exported identifier, an upper-case
+//     letter then a lower-case one, is a selector (slog.Info, cfg.App), as no
+//     host's top-level domain is spelt; db01.corp.info and DB01.CORP.INFO are
+//     still host names;
 //   - a key is a run of letters and digits that is an access key ID (twenty
 //     upper-case letters and digits starting AKIA or ASIA) or is at least 32
 //     long with an upper-case letter, a lower-case letter and a digit (a
@@ -460,8 +466,13 @@ func isAWSRegion(label string) bool {
 // hasHostname reports whether line holds a host name (scanLine).
 func hasHostname(line string) bool {
 	return anyRun(line, func(c byte) bool { return isASCIIAlnum(c) || c == '.' || c == '-' },
-		func(run string, _, _ byte) bool {
-			host := strings.ToLower(strings.Trim(run, ".-"))
+		func(run string, _, after byte) bool {
+			written := strings.Trim(run, ".-")
+			if after == '(' || isCodeName(written[strings.LastIndexByte(written, '.')+1:]) {
+				return false
+			}
+
+			host := strings.ToLower(written)
 
 			labels := strings.Split(host, ".")
 			if len(labels) < 2 || !slices.Contains(publicTLDs, labels[len(labels)-1]) {
@@ -476,6 +487,17 @@ func hasHostname(line string) bool {
 
 			return !isAllowedHost(host)
 		})
+}
+
+// isCodeName reports whether label, the last of a dotted name as written, is
+// spelt as code spells a name and no host is: an upper-case letter followed by
+// a lower-case one (Info, App, Dev). A host's top-level domain is written all
+// lower case, or all upper case in an old configuration file, never in the
+// mixed case of an exported Go identifier, so slog.Info and cfg.App are code
+// (issue #365).
+func isCodeName(label string) bool {
+	return len(label) > 1 && label[0] >= 'A' && label[0] <= 'Z' &&
+		strings.ContainsFunc(label, func(r rune) bool { return r >= 'a' && r <= 'z' })
 }
 
 // minTokenLength is the shortest run of letters and digits the scan takes for

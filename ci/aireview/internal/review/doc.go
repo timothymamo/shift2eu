@@ -27,18 +27,19 @@
 // a rename's old path as renamed, a copy's source as copied), in a note its
 // truncation never cuts. A model-free scan of those added lines (ScanLeftOut,
 // issue #342) looks for account IDs, IPv4 addresses, host names (a provider's
-// domain allowed only as its apex or a service one label below it) and
-// key-like strings (a run holding "+" or "/" only at a secret access key's
-// exact 40 characters) by fixed rules; the paths themselves are shown escaped
-// and cut, never scanned. The note lists its first MaxScanFindings findings by
-// file, line and
-// kind, never the value, and the scan touches neither the prompt nor the
-// findings nor the event. An answer of the wrong shape is asked once more,
-// announced by a workflow notice that names the pull request and the failed
-// shape check (Config.Notices, issue #343), and two in turn post a comment that
-// says the review could not be read, on a context the run's cancellation does
-// not reach, while the run still fails (issue #316). Run takes its deadline
-// from its context.
+// domain allowed only as its apex or a service one label below it, a dotted
+// name of code none, issue #365) and key-like strings (a run holding "+" or "/"
+// only at a secret access key's exact 40 characters) by fixed rules; a false
+// positive is fixed in those rules, never with an allow list of paths. The
+// paths themselves are shown escaped and cut, never scanned. The note lists its
+// first MaxScanFindings findings by file, line and kind, never the value, and
+// the scan touches neither the prompt nor the findings nor the event. An answer
+// of the wrong shape is asked once more, announced by a workflow notice that
+// names the pull request and the failed shape check (Config.Notices, issue
+// #343), and two in turn post a comment that says the review could not be read,
+// on a context the run's cancellation does not reach, while the run still fails
+// with an error that names the pull request and the check, never the decoder's
+// message (issues #316, #366). Run takes its deadline from its context.
 //
 // The poster supports exactly two events, COMMENT and REQUEST_CHANGES, and
 // refuses any other before it makes an HTTP call: the reviewer never
