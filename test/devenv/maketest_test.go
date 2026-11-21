@@ -9,6 +9,7 @@ package devenv_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -274,6 +275,13 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 					t.Errorf("make test does not end with the summary of the failing packages and tests, the last lines after go's own output (-want +got):\n%s\nstdout:\n%s\nstderr:\n%s",
 						diff, stdout, stderr)
 				}
+			}
+
+			// macOS's mktemp -d makes its directory in the user's own temporary directory
+			// (_CS_DARWIN_USER_TEMP_DIR) whatever TMPDIR says, so only GNU mktemp can be steered into the case's
+			// TMPDIR; the recipe runs in the VM, which is Linux (issue #314).
+			if runtime.GOOS != "linux" {
+				return
 			}
 
 			// The fake go saw the recipe's temporary directory in that TMPDIR while it ran; a run that made its

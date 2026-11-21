@@ -29,6 +29,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -246,6 +247,7 @@ func newSandbox(t *testing.T) *sandbox {
 	}
 
 	sb.writeFakeLimactl(t)
+	sb.writeVMTools(t)
 	sb.writeTripwireGH(t)
 	sb.writeFakeDirectoryTools(t)
 	for _, tool := range []string{"curl", "openssl"} {
@@ -487,6 +489,9 @@ if [ "${found}" -ne 1 ]; then
   exit 64
 fi
 shift $((at - 1))
+# The VM's own tools, ahead of the machine's: the sandbox's vm-bin, beside the VM home (vmToolsPath).
+PATH="${SHIFT2EU_TEST_VM_HOME%/*}/vm-bin:${PATH}"
+export PATH
 exec "$@"
 `
 
@@ -507,6 +512,43 @@ func (sb *sandbox) writeFakeLimactl(t *testing.T) {
 	path := filepath.Join(sb.binDir, "limactl")
 
 	writeFileMode(t, path, []byte(fakeLimactl), 0o700)
+}
+
+// gnuLnT stands in for GNU ln's -T in the fake VM on a machine without GNU coreutils (macOS's BSD ln has no -T):
+// the VM is Linux, and the mint's VM step hard-links its git config lock with `ln -T <tmp> <lock>`, which fails
+// on any entry already at <lock> and never links into a directory there. The shim refuses any entry there and
+// links otherwise, so the step behaves as in the VM; it is no atomic link(2) on an existing entry, which only
+// the plant test pins, and that test runs on Linux only (agentsapptokenlock_test.go). Every other ln call goes
+// to the machine's ln unchanged (issue #314).
+const gnuLnT = `#!/bin/sh
+if [ "$#" -eq 3 ] && [ "$1" = -T ]; then
+  if [ -e "$3" ] || [ -L "$3" ]; then
+    echo "ln: failed to create hard link '$3': File exists" >&2
+    exit 1
+  fi
+  exec /bin/ln -- "$2" "$3"
+fi
+exec /bin/ln "$@"
+`
+
+// vmToolsPath is the directory of the fake VM's own tools, first on the PATH the fake limactl and vmWriteInVM
+// run the VM's steps with: the sandbox's vm-bin, beside the VM home. It holds gnuLnT as ln where the machine's
+// ln is not GNU's (runtime.GOOS other than linux), and nothing on Linux, where the machine's ln is the VM's.
+func (sb *sandbox) vmToolsPath() string {
+	return filepath.Join(sb.root, "vm-bin")
+}
+
+// writeVMTools fills vmToolsPath.
+func (sb *sandbox) writeVMTools(t *testing.T) {
+	t.Helper()
+
+	if err := os.MkdirAll(sb.vmToolsPath(), 0o700); err != nil {
+		t.Fatalf("create %s: %v", sb.vmToolsPath(), err)
+	}
+
+	if runtime.GOOS != "linux" {
+		writeFileMode(t, filepath.Join(sb.vmToolsPath(), "ln"), []byte(gnuLnT), 0o700)
+	}
 }
 
 // ghTrapScript is what the gh on PATH is in a sandbox: a wrapper that runs gh from PATH instead of the
@@ -939,8 +981,9 @@ print_job() {
     printf '\t\t%s\n' "${argument}"
   done
   printf '\t}\n'
+  # The pattern opens with its own ( so bash 3.2, macOS's /bin/sh, does not end the $( at its ) (issue #314).
   environment="$(sed -n '3,$p' "$1" | while IFS= read -r entry; do
-    case "${entry}" in 'env '*) printf '%s\n' "${entry#env }" ;; esac
+    case "${entry}" in ('env '*) printf '%s\n' "${entry#env }" ;; esac
   done)"
   if [ -n "${environment}" ]; then
     printf '\tenvironment = {\n'
