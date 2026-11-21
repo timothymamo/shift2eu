@@ -815,9 +815,10 @@ vm-shell: ## Open a shell in the VM at the workspace's checkout, WORKSPACE_REPO 
 # twice counted at every place (issue #304). A name listed twice is listed once, at its first place. vm-env-check
 # and the write step split the same way, so they count the same names. A loop over it takes the entry's place
 # into $$i and the name into $$name (vm_env_entry); the place's colon is the first one, so ${entry#*:} keeps any
-# colon of the name itself. The recipe reads VM_ENV from its environment ("$$VM_ENV"), never pasted into its own
-# text, and refuses any character but those of names, commas and spaces before it splits the list (with
-# globbing off), so no quote, `$` or glob in VM_ENV ever reaches a shell as code.
+# colon of the name itself. Each recipe reads VM_ENV from its environment ("$$VM_ENV"), never pasted into its own
+# text, and splits it with globbing off. vm-env-check refuses any character but those of names, commas and spaces
+# before it splits the list; the write step, which make -i runs anyway, refuses each name that is not a variable
+# name (vm_env_refuse). So no quote, `$` or glob in VM_ENV ever reaches a shell as code.
 vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', \t\n' '\n\n\n\n' | awk 'NF { n++; if (!seen[$$0]++) print n ":" $$0 }')
 vm_env_entry = i="$${entry%%:*}"; name="$${entry\#*:}"
 # How a message names the entry $$name at place $$i of VM_ENV (vm_env_names), in $$label (issue #268 L1): the
@@ -875,7 +876,11 @@ vm_env_safe_line = ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._~+/=-]*\$$
 # checks VM_ENV the way vm-env reads it: from its environment, never expanded by make, so the refusal of a bad
 # VM_ENV never shows its value, which may be a credential typed by mistake. A per-name refusal names an entry
 # only when it is an upper-case variable name and not an unset key shape, and any other entry by its place in
-# VM_ENV as typed alone (vm_env_label, vm_env_names; issues #268 L1, #304, #305).
+# VM_ENV as typed alone (vm_env_label, vm_env_names; issues #268 L1, #304, #305). printenv is only ever handed a
+# variable name: make -i runs the not-set loop although the per-entry refusal failed, and printenv's option error
+# would print an entry starting with a dash whole, so the loop counts an entry that is no variable name as not set
+# without calling printenv (vm_env_label's own printenv sees upper-case names only, the write step's only names
+# vm_env_refuse let through).
 .PHONY: vm-env-check
 vm-env-check: export VM_ENV := $(value VM_ENV)
 vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-create do first (calls no limactl)
@@ -891,7 +896,8 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 	@set -f; missing=''; hidden=; \
 	for entry in $(vm_env_names); do \
 		$(vm_env_entry); $(vm_env_label); \
-		[ -n "$$(printenv "$$name")" ] || { missing="$$missing $$label"; [ -z "$$ehidden" ] || hidden=1; }; \
+		case "$$name" in ([!A-Za-z_]* | *[!A-Za-z0-9_]*) value=;; (*) value="$$(printenv "$$name")";; esac; \
+		[ -n "$$value" ] || { missing="$$missing $$label"; [ -z "$$ehidden" ] || hidden=1; }; \
 	done; \
 	if [ -n "$$missing" ]; then \
 		echo "vm-env: not set or empty:$$missing.$(vm_env_hidden_why) Nothing was written: the VM's daemon.env is unchanged." >&2; \
@@ -937,6 +943,9 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 # or newline is a separator under make -i too; issue #304). It never re-runs vm-env-check through $(MAKE): make -i
 # would pass -i to that sub-make too. Its success line names the entries it wrote by the same rule (vm_env_label,
 # issue #306): an entry it may not print is still written, and only the line gives it by position, saying why once.
+# A merge's kept line follows the same naming rule: it names each kept upper-case name (vm_env_upper) and gives
+# every other kept name as a count only (`FAKE_ONE and 1 other name not shown`, `2 names not shown`); those
+# lines are still kept in daemon.env, and their names reach no output.
 .PHONY: vm-env
 vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
@@ -983,7 +992,13 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 	if [ -n "$$dropped" ] && [ "$$dropped" -gt 0 ]; then \
 		echo "vm-env: warning: dropped $$dropped line(s) of the VM's daemon.env that were not plain NAME=value assignments (their content is not shown)" >&2; fi && \
 	kept="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-kept:\([A-Za-z0-9_ ]*\)$$/\1/p')" && \
-	if [ -n "$$kept" ]; then echo "vm-env: kept (unchanged): $$kept"; fi && \
+	kshown= && khidden=0 && for k in $$kept; do \
+		case "$$k" in ([!$(vm_env_upper)_]* | *[!$(vm_env_upper)0123456789_]*) khidden=$$((khidden + 1));; \
+		(*) kshown="$$kshown $$k";; esac; \
+	done && if [ "$$khidden" -eq 1 ]; then kword=name; else kword=names; fi && \
+	if [ -n "$$kshown" ] && [ "$$khidden" -gt 0 ]; then echo "vm-env: kept (unchanged):$$kshown and $$khidden other $$kword not shown"; \
+	elif [ -n "$$kshown" ]; then echo "vm-env: kept (unchanged):$$kshown"; \
+	elif [ "$$khidden" -gt 0 ]; then echo "vm-env: kept (unchanged): $$khidden $$kword not shown"; fi && \
 	removed="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-removed:\([A-Z_ ]*\)$$/\1/p')" && \
 	if [ -n "$$removed" ]; then \
 		echo "vm-env: warning: removed $$removed from the VM's daemon.env: every agent in the VM could read it, so revoke that token at GitHub (its value is not shown)" >&2; fi

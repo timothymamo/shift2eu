@@ -666,8 +666,10 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   naming a hidden entry by its position alone. So even `make -i vm-env` leaves `daemon.env` as it was and
   never says it wrote it in those cases; `make -i` still exits 0, so read its messages. The character
   check of the whole `VM_ENV` runs only in `make vm-env-check`; in the write step a tab or newline only
-  separates names, counted as `make vm-env-check` counts them, and a name holding any other such character is refused as not a variable name, so
-  nothing it forbids reaches the VM.
+  separates names, counted as `make vm-env-check` counts them, and a name holding any other such character
+  is refused as not a variable name, so nothing it forbids reaches the VM. `printenv` is only ever handed a
+  variable name: under `make -i` an entry that is none (one starting with a dash, which `printenv` would
+  print whole in its option error) is counted as not set and given by its position, never read.
 - **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the two
   variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY` or the personal GitHub
   token a VM was set up with before PRD #161 milestone 3, is removed. Only a
@@ -681,6 +683,9 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   says how many lines were dropped, never what they held. Blank lines are not kept either, and are not
   counted in that warning, as they held nothing. A merge prints the names of the variable lines
   it kept, never their values: `vm-env: kept (unchanged): CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY`.
+  It follows the same naming rule: only upper-case names are shown, and any other kept name is given as a
+  count (`... DEEPSEEK_API_KEY and 1 other name not shown`, or `2 names not shown`); those lines are still
+  kept.
   Either way the file is written to a temporary file beside `daemon.env`, mode 0600, and moved into
   place, so a failure does not leave half a file. An interrupted run removes its temporary file, and a
   leftover from a killed run (a regular file) is removed by the next `make vm-env` once it is older than a
