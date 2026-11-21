@@ -56,13 +56,20 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   Milan unchanged. No other offering, capability, region or price changed. `retrievedOn` stays
   2026-11-13: it names the date every plan and price was read (above), and this re-check read the prices
   of one offering only.
-- **Declared EU regions re-read on 2026-11-21 for issue #328.** The region sources were read again from
-  public GitHub at the current heads of both repositories (`www.scaleway.com` refuses automated
-  clients): `scaleway/scaleway-sdk-go` default branch `main` at commit
+- **Declared EU regions and the API check re-read on 2026-11-21 for issue #328.** Every region source
+  on public GitHub was read again at the current heads of both repositories (`www.scaleway.com` refuses
+  automated clients): `scaleway/scaleway-sdk-go` default branch `main` at commit
   `a251fd549cab893cd1fcdc7e9a2d382209f42531` (committed 2026-11-19), and `scaleway/docs-content`
   default branch `main` at commit `1ec45ae299fdea70effdd48e5a3c99f5d6dad8b1` (committed 2026-11-20).
-  No region or zone changed; *Declared EU regions* gives the files read. No offering, capability or
-  price was read, so `retrievedOn` stays 2026-11-13.
+  That covers the declared regions and zones (*Declared EU regions* gives the files read) and the API
+  half of the regions rule for every offering (*API reference and SDK*, below, gives the files read).
+  No region or zone changed, and every product API still serves exactly the regions its offering
+  lists. **The availability page was not read again:** it is not part of `docs-content`, and
+  `www.scaleway.com` is off limits to automated clients. It was last read in full on 2026-11-10 and
+  2026-11-11 (above), and its Kapsule row alone on 2026-11-19 for issue #211, from the maintainer's
+  saved copy. A full re-read waits for the maintainer's saved copy of the page. The API reference pages
+  were not read again either. No offering, capability or price was read, so `retrievedOn` stays
+  2026-11-13.
 - **Availability page:** <https://www.scaleway.com/en/product-availability-by-region/>, where every
   offering's regions come from, subject to the API check under *Rules applied*. It has one column per
   region (Paris, Amsterdam, Warsaw, Milan). For a zonal product it gives one mark per zone, and for a
@@ -91,6 +98,31 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   Database for PostgreSQL and MySQL in Milan. That offering's section also cites Scaleway's official
   JavaScript SDK, [`scaleway/scaleway-sdk-js`](https://github.com/scaleway/scaleway-sdk-js), at the
   commit given there.
+  **Re-read on 2026-11-21 (issue #328)** at `scaleway-sdk-go` commit
+  `a251fd549cab893cd1fcdc7e9a2d382209f42531`, one file per offering's product, with the commit that
+  last changed it. Every one still serves exactly what the offering's section records, so no
+  offering's regions changed:
+  - `api/block/v1/block_sdk.go` (last changed in `b9189f296d`, 2026-10-13), *Block Storage*: `Zones()`
+    is all twelve zones of the four regions.
+  - `api/baremetal/v1/baremetal_sdk.go` (`7dcaff287d`, 2026-11-12), *Elastic Metal*: `API.Zones()` is
+    fr-par-1, fr-par-2, nl-ams-1, nl-ams-2, pl-waw-2 and pl-waw-3, so no Milan zone.
+  - `api/instance/v1/instance_sdk.go` (`58b0d2c460`, 2026-11-18), *Instances*: `Zones()` is the three
+    zones of Paris, Amsterdam and Warsaw, and it-mil-1 only.
+  - `api/k8s/v1/k8s_sdk.go` (`e521727b25`, 2026-10-08), *Kubernetes Kapsule* and *Kubernetes Kapsule
+    Dedicated*: `Regions()` is fr-par, nl-ams, pl-waw and it-mil.
+  - `api/rdb/v1/rdb_sdk.go` (`fad3cd62e2`, 2026-11-12), both *Managed Database for PostgreSQL and
+    MySQL* offerings: `Regions()` is fr-par, nl-ams and pl-waw. It still does not declare it-mil, so
+    Milan stays out (that offering's section).
+  - `api/mnq/v1beta1/mnq_sdk.go` (`84e9d4d533`, 2025-11-04), *Queues*: `SqsAPI.Regions()` is fr-par
+    and nl-ams.
+  - `api/function/v1beta1/function_sdk.go` (`28202c2d81`, 2026-10-09), *Serverless Functions*:
+    `Regions()` is fr-par, nl-ams and pl-waw.
+  - *Object Storage*: the SDK's `api/` directory at that commit still has no Object Storage package.
+    `docs-content` `pages/object-storage/concepts.mdx` at commit
+    `1ec45ae299fdea70effdd48e5a3c99f5d6dad8b1` still lists an S3 endpoint for each of fr-par, nl-ams,
+    pl-waw and it-mil.
+
+  The API reference pages and their schemas were not read again (`www.scaleway.com`).
 - **`sourceURL`** is Scaleway's pricing page, <https://www.scaleway.com/en/pricing/>, the index of the
   per-product price pages every plan and storage price comes from (*Prices*). Until the prices were added
   it was the documentation root, <https://www.scaleway.com/en/docs/>, where the capabilities still come
@@ -278,12 +310,17 @@ Poland).
   - `scaleway/docs-content`, branch `main` at commit `1ec45ae299fdea70effdd48e5a3c99f5d6dad8b1`
     (2026-11-20): `changelog/march2026/2026-03-09-global-added-test-global-changelog-entry.mdx` (the
     entry *New region opening - MIL-1 is now available!*, dated 2026-03-10 in its front matter),
-    `changelog/august2026/2026-08-31-containers-added-serverless-containers-available-in-mil.mdx` and
+    `changelog/august2026/2026-08-31-containers-added-serverless-containers-available-in-mil.mdx`,
+    `changelog/august2026/2026-08-31-container-registry-added-container-registry-available-i.mdx` and
     `changelog/october2026/2026-10-08-partner-space-added-a-full-3-az-region-in-milan.mdx` (the entry
     *A full 3-AZ Region in Milan!*, dated 2026-10-12 in its front matter). Their text is unchanged. No
     changelog entry up to that commit opens another region or zone. `macros/concepts/region.mdx` still
     names only Paris, Amsterdam and Warsaw, like the pages listed above.
-  - The availability page is not part of `docs-content` and was not read again.
+  - The availability page is not part of `docs-content` and `www.scaleway.com` is off limits to
+    automated clients, so it was not read again. It was last read in full on 2026-11-10 and 2026-11-11,
+    and its Kapsule row alone on 2026-11-19 (issue #211); a full re-read waits for the maintainer's
+    saved copy of the page.
+  - The per-product API check: *API reference and SDK, for checking regions* (above).
 
 ## Default region
 
