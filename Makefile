@@ -221,12 +221,14 @@ endif
 # or .env in the workspace or above it - both spellings of it, as WORKSPACE_REPO writes it and with its symlinks
 # resolved - which direnv loads in every Mac shell opened in the workspace (found on the Mac Mini on 2026-11-20).
 # The host clone's .envrc is held strictly, as the guard parses no shell: source_up, source_up_if_exists,
-# source_env, source_env_if_exists and bash's source and . are refused whatever they name, a file of the clone
-# included, as they run a file the guard never reads; dotenv and dotenv_if_exists pass only bare (the clone's own
-# .env) or with an argument that, one enclosing pair of matching quotes stripped, holds nothing but
+# source_env, source_env_if_exists, source_url and bash's source and . are refused whatever they name, a file of
+# the clone included, as they run a file the guard never reads; dotenv and dotenv_if_exists pass only bare (the
+# clone's own .env) or with an argument that, one enclosing pair of matching quotes stripped, holds nothing but
 # A-Za-z0-9._/+@=- and resolves inside the clone (a directory standing for its .env); anything else counts as
 # outside. ;, &, |, ( and ) separate directives (each doubled before matching, so no match eats the boundary of
-# the next), and a directive directly followed by a quote or a backslash counts as outside. $(call
+# the next), <, > and a backtick end a directive's word as well (source_up>/dev/null, `source_up`), and a
+# dotenv directly followed by a quote, a backslash, <, > or a backtick, or with an argument starting with one,
+# counts as outside. $(call
 # ENVRC_GUARD,<target>) checks both and names each file on stderr, with the line number, the directive's name and
 # paths only, never a line or a value: of the host clone's .envrc it reads, through grep -a -o, only the words of
 # ENVRC_GUARD_ERE on lines that are no comment (a line ending in \ joined to the next first, as bash does), with
@@ -245,10 +247,13 @@ ENVRC_GUARD_TARGETS := agents-token agents-token-refresh agents-token-refresh-in
 	vm-create vm-env vm-env-check vm-init vm-up
 envrc_guard_goals := $(filter $(ENVRC_GUARD_TARGETS),$(MAKECMDGOALS))
 host_sq = '$(subst ','\'',$(1))'
-# A directive the guard reads: the word, alone (no letter, digit, _ or . before it; a space, a separator, a quote,
-# a backslash or the end after it), with the one word after it, which stops at a space or a separator.
+# A directive the guard reads: the word, alone (no letter, digit, _ or . before it, so a backtick may; a space, a
+# separator, a quote, a backslash, <, >, a backtick or the end after it), with the one word after it, which stops
+# at a space, a separator, < or > after its first character. Its first character may be <, > or a backtick, so
+# dotenv's argument then fails the allow list; a backtick later in it does not stop it, as bash joins what a
+# command substitution prints to the word, so dotenv .env`...` fails the allow list too.
 # docs/dev-environment.md, The host clone, counts the lines with the same words and boundaries.
-ENVRC_GUARD_ERE := (^|[^A-Za-z0-9_.])(source_up_if_exists|source_up|source_env_if_exists|source_env|dotenv_if_exists|dotenv|source|\.)([[:space:]]+[^[:space:];&|()]+|[[:space:];&|()\"'\'']|$$)
+ENVRC_GUARD_ERE := (^|[^A-Za-z0-9_.])(source_up_if_exists|source_up|source_env_if_exists|source_env|source_url|dotenv_if_exists|dotenv|source|\.)([[:space:]]+[^[:space:];&|()][^[:space:];&|()<>]*|[[:space:];&|()<>`\"'\'']|$$)
 ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
 	target=$(call host_sq,$(1)); clone=$(call host_sq,$(REPO_ROOT)); dir=$(call host_sq,$(HOST_WORKSPACE)); \
 	why="every line of the VM's credentials and the agents App's variables belongs in the host clone's .envrc itself (docs/dev-environment.md, The host clone)"; \

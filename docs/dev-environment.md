@@ -827,22 +827,25 @@ sits in the workspace or in any directory above it, up to `/`, in either spellin
 `WORKSPACE_REPO` writes it, and with its symlinks resolved), where direnv loads it in every shell you open in
 the workspace. The guard parses no shell, so it holds the host clone's `.envrc` to three strict rules:
 
-- `source_up`, `source_up_if_exists`, `source_env`, `source_env_if_exists` and bash's `source` and `.` are
-  refused whatever they name, a file inside the clone included: they run another file as shell, which the
-  guard does not read.
+- `source_up`, `source_up_if_exists`, `source_env`, `source_env_if_exists`, `source_url` (which downloads a
+  script) and bash's `source` and `.` are refused whatever they name, a file inside the clone included: they
+  run another file as shell, which the guard does not read.
 - `dotenv` and `dotenv_if_exists` pass alone (they read the clone's own `.env`), or with a path that, after
   one enclosing pair of matching quotes (`"..."` or `'...'`) is stripped, holds only letters, digits and
   `. _ / + @ = -`, and resolves inside the clone (`..` and every symlink followed, the last one too; a
   directory stands for its `.env`). Any other spelling (`$`, a backtick, `~`, a space, a backslash, a brace, a
   glob, a quote inside the path) counts as outside.
-- `;`, `&`, `|`, `(` and `)` separate directives, so `dotenv;source_env ../x` holds two, and a line ending in
-  `\` is joined to the next first, as bash does (an escaped trailing backslash joins too, a safe false
-  positive).
+- `;`, `&`, `|`, `(` and `)` separate directives, so `dotenv;source_env ../x` holds two; `<`, `>` and a
+  backtick end a directive's word too (`source_up>/dev/null`, `` `source_up` ``), and a `dotenv` directly
+  followed by one, or with a path starting with one, counts as outside; a line ending in `\` is joined to the
+  next first, as bash does (an escaped trailing backslash joins too, a safe false positive).
 
 Each refusal names the file, and for a directive its line number (`<path>/.envrc: line <N>: ...`). A directive
-in a trailing comment (`dotenv ./x # source_up`) counts too: the guard refuses it, a safe false positive. The
-guard checks the usual direnv and bash spellings; it is not a sandbox (`eval "$(cat ../x)"` can always read a
-parent), so keep every line in the host clone's `.envrc` itself. It reads only the words of those directives
+word anywhere on a non-comment line counts, in a trailing comment (`dotenv ./x # source_up`) or a quoted value
+too (`export N="open source"`, `export X=.`): the guard refuses it, a safe false positive; reword the value or
+move it to a file `dotenv` loads. The guard checks the usual direnv and bash spellings; it is not a sandbox
+(`eval "$(cat ../x)"`, `direnv_load` or a `use` or `layout` function can always read a parent, and the guard
+does not read them), so keep every line in the host clone's `.envrc` itself. It reads only the words of those directives
 and the path after each, and prints names, line numbers and paths, never a line or a value. It refuses, never
 warns, and has no override: the fix is moving a file.
 `make vm-boot-install` is not guarded: its LaunchDaemon starts the VM and holds no credential. To see what the
@@ -850,16 +853,19 @@ guard checks:
 
 ```bash
 # Mac, host clone: count the non-comment .envrc lines that run another file, then those that say dotenv (prints numbers, never a line)
-grep -v '^[[:space:]]*#' .envrc | grep -cE '(^|[^A-Za-z0-9_.])(source_up_if_exists|source_up|source_env_if_exists|source_env|source|\.)([[:space:];&|()]|$)'
-grep -v '^[[:space:]]*#' .envrc | grep -cE '(^|[^A-Za-z0-9_.])(dotenv_if_exists|dotenv)([[:space:];&|()]|$)'
+grep -v '^[[:space:]]*#' .envrc | grep -cE '(^|[^A-Za-z0-9_.])(source_up_if_exists|source_up|source_env_if_exists|source_env|source_url|source|\.)([[:space:];&|()<>`"\'\'']|$)'
+grep -v '^[[:space:]]*#' .envrc | grep -cE '(^|[^A-Za-z0-9_.])(dotenv_if_exists|dotenv)([[:space:];&|()<>`"\'\'']|$)'
 # PASS: the first count is 0; every line of the second says dotenv alone or names a plain path inside the host clone
 # FAIL "... <path>/.envrc: line <N>: the host clone's .envrc runs another file with <directive> ...": put that file's lines in the host clone's .envrc itself and remove the directive
 # FAIL "... <path>/.envrc: line <N>: the host clone's .envrc loads with <directive> a path this check cannot read ...": write the path plainly, inside the host clone, or move its lines into the host clone's .envrc
 ```
 
+This is a quick count, line by line: `make vm-env-check` (the third block) is the authority, as only the guard
+joins a line ending in `\` to the next.
+
 ```bash
 # Mac, host clone: list every .envrc and .env in the workspace and the directories above it, both spellings (prints paths only)
-: "${WORKSPACE_REPO:?set it in the host clone's .envrc}"; for d in "$(dirname "$WORKSPACE_REPO")" "$(cd "$(dirname "$WORKSPACE_REPO")" && pwd -P)"; do while :; do ls -d "$d/.envrc" "$d/.env" 2>/dev/null; { [ "$d" = / ] || [ "$d" = . ]; } && break; d="$(dirname "$d")"; done; done
+: "${WORKSPACE_REPO:?set it in the host clone's .envrc}"; for d in "$(dirname "$WORKSPACE_REPO")" "$(cd "$(dirname "$WORKSPACE_REPO")" 2>/dev/null && pwd -P || dirname "$WORKSPACE_REPO")"; do while [ "$d" != . ]; do ls -d "$d/.envrc" "$d/.env" 2>/dev/null; [ "$d" = / ] && break; d="$(dirname "$d")"; done; done
 # PASS: no output
 # FAIL "... <file> is in the workspace the VM mounts or in a directory above it ...": move its lines into the host clone's .envrc and remove the file
 ```
