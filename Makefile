@@ -476,8 +476,20 @@ tidy: ## Tidy go.mod and go.sum, and the lint tools' tools/go.mod and tools/go.s
 ##@ Testing
 
 .PHONY: test
+# go's output streams whole; when go fails, its failing packages' and tests' lines (subtests too) are repeated
+# under a header at the end, since in a long run they scroll away (issue #253). go's exit status goes through a
+# file because /bin/sh has no pipefail, and make test exits with it.
 test: ## Unit + contract tests with the race detector (no network, no credentials)
-	go test -race -count=1 ./...
+	@echo 'go test -race -count=1 ./...'
+	@out=$$(mktemp) && status=$$(mktemp) && tab=$$(printf '\t') && \
+	trap 'rm -f "$$out" "$$status"' EXIT && trap 'exit 130' INT TERM && \
+	{ go test -race -count=1 ./...; echo $$? > "$$status"; } | tee "$$out" && \
+	code=$$(cat "$$status") && \
+	if [ "$$code" -ne 0 ]; then \
+		echo 'make test: failing packages and tests:'; \
+		grep -e '^[[:space:]]*--- FAIL: ' -e "^FAIL$$tab" "$$out"; \
+		exit "$$code"; \
+	fi
 
 .PHONY: test-integration
 test-integration: ## Integration tests against real cloud APIs (read-only credentials required)
