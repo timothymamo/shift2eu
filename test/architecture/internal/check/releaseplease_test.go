@@ -8,12 +8,6 @@ import (
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 )
 
-// The release-please workflow's fixtures copy
-// .github/workflows/release-please.yml, whose two actions Renovate moves: the
-// fixtures hold placeholders for their pins (workflowPins), filled in from that
-// workflow (releasePleasePins, workflowpins_test.go), so that a Renovate update
-// needs no edit here (issue #440).
-
 // appToken is the with: of the step that mints one of the two Apps' tokens:
 // the client ID and the private key its environment holds, and the permission-*
 // inputs that narrow the token to what the job does. appID is the input issue
@@ -80,7 +74,10 @@ var tagAppToken = appToken{
 var releasePleaseWorkflow = releasePleaseAppsWorkflowFrom(repoReleasePlease)
 
 // releasePleaseWorkflowTemplate is releasePleaseWorkflow with its pins
-// placeholders (workflowPins).
+// placeholders (workflowPins). The pins of the two actions Renovate moves in
+// .github/workflows/release-please.yml are filled in from that workflow
+// (releasePleasePins, workflowpins_test.go), so that a Renovate update needs no
+// edit here (issue #440).
 var releasePleaseWorkflowTemplate = releasePleaseAppsTemplate(releasePleaseAppToken, tagAppToken, releasePleaseAppToken)
 
 // releasePleaseAppsWorkflowFrom returns releasePleaseWorkflowTemplate with the
@@ -947,11 +944,13 @@ func TestReleasePleaseWorkflow(t *testing.T) {
 
 		// Nothing publishes here: publishing, signing and attesting stay in
 		// release.yml, so the signing identity keeps naming that workflow. Each
-		// case adds the step to the release-please job and wants it named; a
-		// step that uses an action pins it where release.yml does.
+		// case adds the step to the release-please job and wants it named. The
+		// commit of a step that uses an action is deliberately no real pin: the
+		// check matches these steps by the action's name alone, so the cases
+		// need neither release.yml nor a Renovate update of it.
 		{
 			name:     "a goreleaser step",
-			workflow: beforeReleasePlease("uses: " + releasePins.expand("{{commit goreleaser/goreleaser-action}}")),
+			workflow: beforeReleasePlease("uses: goreleaser/goreleaser-action@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "goreleaser",
 		},
 		{
@@ -961,22 +960,22 @@ func TestReleasePleaseWorkflow(t *testing.T) {
 		},
 		{
 			name:     "a cosign step",
-			workflow: beforeReleasePlease("uses: " + releasePins.expand("{{commit sigstore/cosign-installer}}")),
+			workflow: beforeReleasePlease("uses: " + "sigstore/cosign-installer@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "cosign",
 		},
 		{
 			name:     "a docker login step",
-			workflow: beforeReleasePlease("uses: " + releasePins.expand("{{commit docker/login-action}}")),
+			workflow: beforeReleasePlease("uses: " + "docker/login-action@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "docker/login-action",
 		},
 		{
 			name:     "a docker build and push step",
-			workflow: beforeReleasePlease("uses: " + releasePins.expand("{{commit docker/build-push-action}}")),
+			workflow: beforeReleasePlease("uses: " + "docker/build-push-action@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "docker/build-push-action",
 		},
 		{
 			name:     "an attest step",
-			workflow: beforeReleasePlease("uses: " + releasePins.expand("{{commit actions/attest}}")),
+			workflow: beforeReleasePlease("uses: " + "actions/attest@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "actions/attest",
 		},
 		{

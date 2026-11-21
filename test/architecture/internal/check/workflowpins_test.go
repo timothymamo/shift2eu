@@ -49,7 +49,10 @@ var (
 	pinPlaceholder = regexp.MustCompile(`\{\{((?:pin|commit|release|image) [^{}\s]+)\}\}`)
 
 	// pinnedAction matches a uses: line's action, commit and version comment.
-	pinnedAction = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*([^\s@]+)@([0-9a-f]{40}) # (\S+)$`)
+	// Its blanks, like those of pinnedReleases, are spaces and tabs, never a
+	// newline, so that a match never starts on the blank line above the line
+	// it reads.
+	pinnedAction = regexp.MustCompile(`(?m)^[ \t]*-?[ \t]*uses:[ \t]*([^\s@]+)@([0-9a-f]{40}) # (\S+)$`)
 
 	// pinnedReleases are the exact releases a with: pins, and the BuildKit
 	// image, each by the placeholder body that stands for it. GoReleaser's is
@@ -59,9 +62,9 @@ var (
 		key string
 		re  *regexp.Regexp
 	}{
-		{key: "release syft", re: regexp.MustCompile(`(?m)^\s*syft-version:\s*(\S+)$`)},
-		{key: "release goreleaser", re: regexp.MustCompile(`(?m)^\s*distribution:\s*goreleaser\n\s*version:\s*"([^"]+)"`)},
-		{key: "release cosign", re: regexp.MustCompile(`(?m)^\s*cosign-release:\s*(\S+)$`)},
+		{key: "release syft", re: regexp.MustCompile(`(?m)^[ \t]*syft-version:[ \t]*(\S+)$`)},
+		{key: "release goreleaser", re: regexp.MustCompile(`(?m)^[ \t]*distribution:[ \t]*goreleaser\n[ \t]*version:[ \t]*"([^"]+)"`)},
+		{key: "release cosign", re: regexp.MustCompile(`(?m)^[ \t]*cosign-release:[ \t]*(\S+)$`)},
 		{key: "image moby/buildkit", re: regexp.MustCompile(`(?:moby/buildkit:|BUILDKIT_VERSION:\s*)(\S+@sha256:[0-9a-f]{64})`)},
 	}
 

@@ -27,8 +27,8 @@ var (
 	// version comment Renovate moves with it. The comment is matched by shape
 	// alone, so that a pin written as a range or a pre-release is followed as
 	// the pin it is: the helpers' pinnedAction (workflowpins_test.go) takes any
-	// comment too. Its blanks are spaces and tabs, never a newline, so that a
-	// match never starts on the blank line above a uses: line.
+	// comment too. The blanks of both are spaces and tabs, never a newline, so
+	// that a match never starts on the blank line above a uses: line.
 	usesPin = regexp.MustCompile(`(?m)^[ \t]*-?[ \t]*uses:[ \t]*(\S+?@[0-9a-f]{40})(?: # (\S+))?$`)
 
 	// usesCommit matches a uses: line of any shape, whatever follows its
@@ -195,8 +195,8 @@ func TestWorkflowFixturesFollowThePins(t *testing.T) {
 	})
 }
 
-// TestReleasePleaseFixturesFollowThePins pins that the last two fixtures that
-// copy a workflow take their pins from it too (issue #440): releasePleaseWorkflow
+// TestReleasePleaseFixturesFollowThePins pins that the last two fixtures written
+// after a workflow take their pins from it too (issue #440): releasePleaseWorkflow
 // from .github/workflows/release-please.yml, and ciReleasePleaseDryRun from the
 // release-please job of ci.yml. A Renovate update of an action in either
 // workflow then needs no edit of this package, and the checks the two fixtures
