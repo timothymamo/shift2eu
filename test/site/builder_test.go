@@ -31,8 +31,10 @@ import (
 // dates the pages show, the archive, and that two builds of the same commit are
 // byte-identical.
 
-// pageNames are the bundle's HTML pages.
-var pageNames = []string{"index.html", "privacy.html", "verify.html"}
+// pageNames are the bundle's HTML pages. inventory.html is the page that shows
+// how to build an inventory for each source (issue #373, item 15), so it carries
+// every per-page rule the other pages carry.
+var pageNames = []string{"index.html", "inventory.html", "privacy.html", "verify.html"}
 
 // assetKinds are the bundle's content-addressed assets: a prefix, the suffix of
 // its file name, and the cache lifetime reason it is addressed by content.
@@ -277,19 +279,24 @@ func snapshotDates(t *testing.T) []snapshot {
 	return out
 }
 
-// TestTargetCardsNameTheirHeadOffice pins the line each target card carries
-// (issue #373, EU targets): the card names the city and country of the
-// provider's head office, so a visitor reads where a provider is based before
-// choosing it. ci/sitebuild writes the three strings by hand, so the check pins
-// them here: nothing else would catch an empty line, a typo or a swapped city.
-func TestTargetCardsNameTheirHeadOffice(t *testing.T) {
+// TestTargetCardsShowTheCountry pins the one line each target card carries about
+// where its provider is based (issue #373, EU targets, item 05-1): the provider's
+// name followed by its country in brackets, and no head-office city, which the
+// maintainer removed as noise. ci/sitebuild writes the three strings by hand, so
+// the check pins them here: nothing else would catch an empty line, a typo, a
+// swapped country or a city that came back.
+func TestTargetCardsShowTheCountry(t *testing.T) {
 	t.Parallel()
 
 	want := map[string]string{
-		"OVHcloud": "Roubaix, France",
-		"Scaleway": "Paris, France",
-		"UpCloud":  "Helsinki, Finland",
+		"OVHcloud": "(France)",
+		"Scaleway": "(France)",
+		"UpCloud":  "(Finland)",
 	}
+
+	// The cities the cards showed before item 05-1: a card that names one still
+	// shows the head office rather than only the country.
+	cities := []string{"Roubaix", "Paris", "Helsinki"}
 
 	doc := theBundle(t).html(t, "index.html")
 
@@ -303,51 +310,116 @@ func TestTargetCardsNameTheirHeadOffice(t *testing.T) {
 
 		cards++
 
-		var name, hq *element
+		text := collapseSpace(card.textContent())
 
-		for _, el := range doc.all() {
-			if !isDescendant(el, card) {
-				continue
-			}
+		label := ""
 
-			switch {
-			case hasClass(el, "target-name"):
-				name = el
-			case hasClass(el, "target-hq"):
-				hq = el
+		for name := range want {
+			if strings.HasPrefix(text, name) {
+				label = name
 			}
 		}
 
-		if name == nil {
-			t.Fatalf("a target card holds no .target-name label, so this check cannot tell whose head office it shows: each card names its provider (issue #373, EU targets)")
+		if label == "" {
+			t.Fatalf("a target card reads %q, want it to begin with one of the providers' names: each card names its provider (issue #373, EU targets)", text)
 		}
 
-		label := collapseSpace(name.textContent())
-
-		if hq == nil {
-			t.Errorf("the %s target card holds no .target-hq line, want the city and country of the provider's head office: %q (issue #373, EU targets)",
-				label, want[label])
-
-			continue
+		if country := want[label]; !strings.Contains(text, country) {
+			t.Errorf("the %s target card reads %q, want it to name the country of the provider's head office as %q (issue #373, item 05-1)",
+				label, text, country)
 		}
 
-		city := collapseSpace(hq.textContent())
-
-		if city == "" {
-			t.Errorf("the %s target card's .target-hq line is empty, want the city and country of the provider's head office: %q (issue #373, EU targets)",
-				label, want[label])
+		for _, city := range cities {
+			if strings.Contains(text, city) {
+				t.Errorf("the %s target card names the city %q in %q, want only the country in brackets: the head office's city was removed (issue #373, item 05-1)",
+					label, city, text)
+			}
 		}
 
-		got[label] = city
+		got[label] = text
 	}
 
 	if cards != len(want) {
 		t.Fatalf("index.html holds %d target cards, want %d: one per embedded catalog (issue #373, EU targets)", cards, len(want))
 	}
 
-	if diff := cmp.Diff(want, got); diff != "" {
-		t.Errorf("the target cards name these head offices (-want +got):\n%s", diff)
+	if len(got) != len(want) {
+		t.Errorf("the target cards name %d of the %d providers: %v", len(got), len(want), got)
 	}
+}
+
+// TestTargetCardsDateTheirCatalog pins the line each target card carries about
+// its catalog (issue #373, item 05-3): "Catalog retrieved <date>", the date the
+// catalog's prices were retrieved, and never the "Catalog snapshot of" wording
+// the maintainer asked to replace.
+func TestTargetCardsDateTheirCatalog(t *testing.T) {
+	t.Parallel()
+
+	doc := theBundle(t).html(t, "index.html")
+	dates := make(map[string]string, 3)
+
+	for _, snapshot := range snapshotDates(t) {
+		dates[snapshot.target] = snapshot.date
+	}
+
+	cards := 0
+
+	for _, card := range doc.all() {
+		if !hasClass(card, "target") {
+			continue
+		}
+
+		cards++
+
+		text := collapseSpace(card.textContent())
+
+		dated := false
+
+		for target, date := range dates {
+			if strings.Contains(text, target) && strings.Contains(text, "Catalog retrieved "+date) {
+				dated = true
+			}
+		}
+
+		if !dated {
+			t.Errorf("the target card reads %q, want it to say \"Catalog retrieved <date>\" with its catalog's date %v (issue #373, item 05-3)",
+				text, dates)
+		}
+
+		if strings.Contains(text, "Catalog snapshot of") {
+			t.Errorf("the target card reads %q, want \"Catalog retrieved <date>\" instead of \"Catalog snapshot of\" (issue #373, item 05-3)", text)
+		}
+	}
+
+	if cards == 0 {
+		t.Fatal("index.html holds no target card, so the check read nothing: one card per embedded catalog")
+	}
+}
+
+// TestEstimatesNoteIsTheListPriceNote pins the one line under the EU targets
+// (issue #373, item 05-4): the maintainer replaced the page's long paragraph with
+// the artifact's sentence, which says what the estimates are and on what basis.
+func TestEstimatesNoteIsTheListPriceNote(t *testing.T) {
+	t.Parallel()
+
+	const note = "Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts."
+
+	text := collapseSpace(theBundle(t).html(t, "index.html").body(t).textContent())
+
+	if !strings.Contains(text, note) {
+		t.Errorf("index.html's text does not carry %q, want the one-line note under the EU targets (issue #373, item 05-4); the page's text is:\n%s",
+			note, excerptText(text, 2000))
+	}
+}
+
+// excerptText returns the first limit bytes of text, for a failure message that
+// would otherwise print a whole page.
+func excerptText(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+
+	return text[:limit] + "…"
 }
 
 // TestArchiveHoldsTheBundleWithFixedTimes pins the archive a release publishes

@@ -642,15 +642,15 @@ func TestErrorsAreAnnounced(t *testing.T) {
 	}
 }
 
-// TestEveryPageCarriesTheFooterStatement pins the one line all three pages share
-// in their footer (issue #373): "No cookies, no tracking: the page sends nothing
-// anywhere." The claim is the site's privacy promise, and the footer is the part
-// a visitor reads on every page, so the build writes the same statement into
-// each page's <footer>.
+// TestEveryPageCarriesTheFooterStatement pins the one line every page shares in
+// its footer (issue #373, item 09): "No cookies, no tracking, no requests: the
+// page cannot connect anywhere." The claim is the site's privacy promise, and the
+// footer is the part a visitor reads on every page, so the build writes the same
+// statement into each page's <footer>.
 func TestEveryPageCarriesTheFooterStatement(t *testing.T) {
 	t.Parallel()
 
-	const statement = "No cookies, no tracking: the page sends nothing anywhere."
+	const statement = "No cookies, no tracking, no requests: the page cannot connect anywhere."
 
 	bundle := theBundle(t)
 
@@ -661,8 +661,65 @@ func TestEveryPageCarriesTheFooterStatement(t *testing.T) {
 			footer := collapseSpace(footerOf(t, bundle.html(t, page)).textContent())
 
 			if !strings.Contains(footer, statement) {
-				t.Errorf("%s's footer reads %q, want it to carry %q: every page states the site's privacy promise in its footer (issue #373)",
+				t.Errorf("%s's footer reads %q, want it to carry %q: every page states the site's privacy promise in its footer (issue #373, item 09)",
 					page, footer, statement)
+			}
+		})
+	}
+}
+
+// TestFootersLinkTheSiteAndShowTheVersion pins the rest of the footer (issue
+// #373, item 09): the privacy and verification links the other pages already
+// carry, and the version the build was given, never a hard-coded one. Both builds
+// are read, so the check tells the untagged version from the tagged one.
+func TestFootersLinkTheSiteAndShowTheVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		bundle  *bundle
+		version string
+	}{
+		{name: "untagged", bundle: theBundle(t), version: devVersion(t)},
+		{name: "tagged", bundle: theTaggedBundle(t), version: taggedVersion},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, page := range pageNames {
+				t.Run(page, func(t *testing.T) {
+					t.Parallel()
+
+					footer := footerOf(t, tc.bundle.html(t, page))
+
+					links := make(map[string]string, 4)
+
+					for _, anchor := range footer.find("a") {
+						href, _ := anchor.attr("href")
+						links[href] = collapseSpace(anchor.textContent())
+					}
+
+					for href, want := range map[string]string{"privacy.html": "Privacy", "verify.html": "Verify this site"} {
+						if got, ok := links[href]; !ok || got != want {
+							t.Errorf("%s's footer links %q with the text %q, want a link to %s reading %q (issue #373, item 09)",
+								page, href, got, href, want)
+						}
+					}
+
+					text := collapseSpace(footer.textContent())
+
+					if !strings.Contains(text, tc.version) {
+						t.Errorf("%s's footer reads %q, want it to show the version %q: the footer shows the version the build was given, never a hard-coded one (issue #373, item 09)",
+							page, text, tc.version)
+					}
+
+					if tc.version != "v0.10.0" && strings.Contains(text, "v0.10.0") {
+						t.Errorf("%s's footer reads %q, want no hard-coded v0.10.0: the footer shows the version the build was given, %q (issue #373, item 09)",
+							page, text, tc.version)
+					}
+				})
 			}
 		})
 	}

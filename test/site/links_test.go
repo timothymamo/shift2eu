@@ -380,6 +380,44 @@ func TestPagesLinkToTheSite(t *testing.T) {
 	}
 }
 
+// TestRepositoryLinkOpensInANewTab pins every page's Repository link (issue
+// #373, item 01): it opens in a new tab and tells the browser that the page it
+// opens gets no handle on this one. The repository is another site, so a reader
+// who follows it keeps the assessment page they were reading.
+func TestRepositoryLinkOpensInANewTab(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	for _, page := range pageNames {
+		t.Run(page, func(t *testing.T) {
+			t.Parallel()
+
+			links := 0
+
+			for _, anchor := range bundle.html(t, page).find("a") {
+				if href, _ := anchor.attr("href"); href != repositoryURL {
+					continue
+				}
+
+				links++
+
+				if target, _ := anchor.attr("target"); target != "_blank" {
+					t.Errorf("%s's link to the repository carries target=%q, want \"_blank\": it opens in a new tab (issue #373, item 01)", page, target)
+				}
+
+				if rel, _ := anchor.attr("rel"); !slices.Equal(strings.Fields(rel), []string{"noopener", "noreferrer"}) {
+					t.Errorf("%s's link to the repository carries rel=%q, want \"noopener noreferrer\": the page it opens gets no handle on this one (issue #373, item 01)", page, rel)
+				}
+			}
+
+			if links == 0 {
+				t.Errorf("%s holds no link to the repository, want one that opens in a new tab (issue #373, item 01)", page)
+			}
+		})
+	}
+}
+
 // TestVerificationPageLinksItsGuide pins the verification page's link to the
 // guide's path on GitHub at the ref the build shows: main when the build is
 // untagged, and the release's tag otherwise (PRD #297, Layer 3).

@@ -307,6 +307,15 @@ func TestScanRejectsEveryBannedApi(t *testing.T) {
 		{name: "the module global kept", src: `const a = globalThis.__shift2euModule; if (typeof a !== "string") { return; }`, want: []string{"delete"}},
 		{name: "instantiateStreaming", src: `WebAssembly.instantiateStreaming(module);`, want: []string{"instantiateStreaming"}},
 		{name: "compileStreaming", src: `WebAssembly.compileStreaming(module);`, want: []string{"compileStreaming"}},
+
+		// The clipboard: a write is confined to the copy function, which a click
+		// handler calls, so no other function puts text on it.
+		{name: "a clipboard write at the top level", src: `navigator.clipboard.writeText(text);`, want: []string{"clipboard"}},
+		{name: "a clipboard write in another function", src: `function copyText(text) { navigator.clipboard.writeText(text); }`, want: []string{"clipboard"}},
+		{name: "a clipboard write in the copy function, twice", src: `function copyCommand(button) { navigator.clipboard.writeText(button.dataset.command); navigator.clipboard.writeText(button.dataset.command); }`, want: []string{"clipboard"}},
+		{name: "the clipboard read instead of written", src: `function copyCommand(button) { return navigator.clipboard.readText(); }`, want: []string{"clipboard"}},
+		{name: "the write taken out of the clipboard's member", src: `function copyCommand(button) { const writer = navigator.clipboard.writeText; writer(button.dataset.command); }`, want: []string{"clipboard"}},
+		{name: "the clipboard written through another object", src: `function copyCommand(button) { window.clipboard.writeText(button.dataset.command); }`, want: []string{"clipboard"}},
 	}
 
 	// Every assignment to a property that navigates or changes a target, on
@@ -436,6 +445,11 @@ func TestScanConfinesTheExceptions(t *testing.T) {
 			src:  `function insertReport(target, markdown) { target.innerHTML = markdown; }`,
 			want: []string{"markdown"},
 		},
+		{
+			name: "a banned API inside the copy function",
+			src:  `function copyCommand(button) { fetch("/x"); navigator.clipboard.writeText(button.dataset.command); }`,
+			want: []string{"fetch"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -504,6 +518,10 @@ function unregisterServiceWorkers() {
 
 function insertReport(target, html) {
   target.innerHTML = html;
+}
+
+function copyCommand(button) {
+  navigator.clipboard.writeText(button.dataset.command);
 }
 
 function showFailure(status, result) {
@@ -612,7 +630,7 @@ func TestBannedJSNames(t *testing.T) {
 		{group: "the sending, loading, storing, markup and code names", names: []string{"fetch", "XMLHttpRequest", "Worker", "postMessage", "eval", "Function", "outerHTML", "cookie"}},
 		{group: "the reflection objects", names: []string{"Object", "Reflect"}},
 		{group: "the navigation properties", names: []string{"href", "src", "action", "hostname"}},
-		{group: "the names Scan confines to one function", names: []string{"innerHTML", "createPolicy"}},
+		{group: "the names Scan confines to one function", names: []string{"innerHTML", "createPolicy", "clipboard", "writeText"}},
 	} {
 		for _, name := range want.names {
 			if !slices.Contains(names, name) {

@@ -1,0 +1,731 @@
+package site_test
+
+import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/google/go-cmp/cmp"
+)
+
+// This file holds the checks of the site's inventory page (issue #373, item 15):
+// the page that tells a visitor how to build inventory.json for each source. Its
+// commands are the inventory guide's commands, never a hand-typed copy: the
+// source page site/inventory.html carries a placeholder, and ci/sitebuild fills
+// it in from docs/guide/inventory.md at build time. The check reads both and
+// compares them, so the two cannot drift.
+//
+// The page chooses a source with three buttons, never a dropdown, and with no
+// script all three sources are shown: the buttons only hide the sections a
+// visitor did not choose.
+
+// inventoryPageName is the bundle's and site/'s name of the inventory page.
+const inventoryPageName = "inventory.html"
+
+// guideProgramsDirectory is where the guide's programs sit, relative to the
+// repository root.
+const guideProgramsDirectory = "docs/guide/inventory/"
+
+// guideSource is one source the page documents: the key its section and its
+// program are named by; the name its button shows; and the guide's two headings
+// whose bash blocks are that source's commands.
+type guideSource struct {
+	key     string
+	name    string
+	collect string
+	build   string
+}
+
+// guideSources are the three sources, in the order the page lists them: AWS,
+// GCP and Azure, which is the guide's order too.
+var guideSources = []guideSource{
+	{key: "aws", name: "AWS", collect: "Collect from AWS", build: "Build the AWS inventory"},
+	{key: "gcp", name: "GCP", collect: "Collect from GCP", build: "Build the GCP inventory"},
+	{key: "azure", name: "Azure", collect: "Collect from Azure", build: "Build the Azure inventory"},
+}
+
+// commandPlaceholder matches the template action site/inventory.html renders a
+// source's commands through: ci/sitebuild fills the page in at build time, so
+// the source page names the field rather than holding the commands.
+var commandPlaceholder = regexp.MustCompile(`\{\{[^}]*Commands[^}]*\}\}`)
+
+// TestInventoryPageIsInTheBundle pins that the page shipped, and that it is
+// reachable from every page like the privacy and verification pages are: the nav
+// and the footer of each page link it (issue #373, item 15). The bundle's own
+// list of pages, pageNames, holds it too, so every per-page check of this package
+// covers it.
+func TestInventoryPageIsInTheBundle(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	if !slices.Contains(bundle.files, inventoryPageName) {
+		t.Fatalf("the bundle holds no %s, want the inventory page in it (issue #373, item 15)", inventoryPageName)
+	}
+
+	for _, page := range pageNames {
+		t.Run(page, func(t *testing.T) {
+			t.Parallel()
+
+			doc := bundle.html(t, page)
+
+			navs := doc.find("nav")
+			if len(navs) == 0 {
+				t.Fatalf("%s holds no <nav>, so the check cannot read its navigation", page)
+			}
+
+			for _, where := range []*element{navs[0], footerOf(t, doc)} {
+				links := 0
+
+				for _, anchor := range where.find("a") {
+					if href, _ := anchor.attr("href"); href == inventoryPageName {
+						links++
+					}
+				}
+
+				if links != 1 {
+					t.Errorf("%s's <%s> holds %d links to %s, want exactly one: the inventory page is in every page's nav and footer, as the privacy and verification pages are (issue #373, item 15)",
+						page, where.tag, links, inventoryPageName)
+				}
+			}
+		})
+	}
+}
+
+// TestInventoryPageSourceButtons pins the page's own source control (issue #373,
+// item 15): three buttons, AWS, GCP and Azure, each of type="button" with
+// aria-pressed, exactly one of them pressed, each naming with aria-controls the
+// section it shows, and no <select> anywhere on the page, since the maintainer
+// asked for buttons and not a dropdown. The check reads the built page and the
+// source page, so the pressed state is the page's own markup rather than a value
+// a script writes.
+func TestInventoryPageSourceButtons(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	tests := []struct {
+		name string
+		page *document
+	}{
+		{name: "the built page", page: bundle.html(t, inventoryPageName)},
+		{name: "the source page", page: parseHTML(t, inventoryPageName, readSiteFile(t, inventoryPageName))},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if selects := tc.page.find("select"); len(selects) != 0 {
+				t.Errorf("%s holds %d <select> elements, want none: a source is chosen with three buttons, not a dropdown (issue #373, item 15)", tc.name, len(selects))
+			}
+
+			pressed, buttons := 0, 0
+
+			for _, button := range tc.page.find("button") {
+				pressedValue, ok := button.attr("aria-pressed")
+				if !ok {
+					continue
+				}
+
+				buttons++
+
+				switch strings.TrimSpace(pressedValue) {
+				case "true":
+					pressed++
+				case "false":
+				default:
+					t.Errorf("a source button carries aria-pressed=%q, want \"true\" or \"false\" (issue #373, item 15)", pressedValue)
+				}
+
+				if kind, _ := button.attr("type"); strings.TrimSpace(kind) != "button" {
+					t.Errorf("a source button carries type=%q, want type=\"button\": the page's buttons submit no form (issue #373, item 15)", kind)
+				}
+
+				controls, _ := button.attr("aria-controls")
+
+				if elementByIDOrNil(tc.page, controls) == nil {
+					t.Errorf("the source button reading %q controls %q, which is no element of the page: each button names the section it shows (issue #373, item 15)",
+						collapseSpace(button.textContent()), controls)
+				}
+			}
+
+			if buttons != len(guideSources) {
+				t.Errorf("%s holds %d buttons with aria-pressed, want %d: one per source (issue #373, item 15)", tc.name, buttons, len(guideSources))
+			}
+
+			if pressed != 1 {
+				t.Errorf("%s holds %d buttons with aria-pressed=\"true\", want exactly one: the page shows one source at a time, and the one it starts on is pressed (issue #373, item 15)",
+					tc.name, pressed)
+			}
+
+			for _, source := range guideSources {
+				if !slices.ContainsFunc(tc.page.find("button"), func(button *element) bool {
+					return collapseSpace(button.textContent()) == source.name
+				}) {
+					t.Errorf("%s holds no button reading %q, want one per source: AWS, GCP and Azure (issue #373, item 15)",
+						tc.name, source.name)
+				}
+			}
+		})
+	}
+}
+
+// TestInventorySectionsAreShownWithoutScript pins that all three sections are in
+// the HTML and none is hidden (issue #373, item 15): with no script the page
+// still shows every source's commands, as the brief requires, so neither the
+// markup nor the stylesheet hides a section a visitor has not chosen.
+func TestInventorySectionsAreShownWithoutScript(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+	doc := bundle.html(t, inventoryPageName)
+
+	_, stylesheet := bundle.asset(t, "style", ".css")
+	rules := parseCSS(t, "stylesheet", stylesheet)
+	props := customProperties(rules)
+
+	for _, source := range guideSources {
+		t.Run(source.key, func(t *testing.T) {
+			t.Parallel()
+
+			section := inventorySection(t, doc, source)
+
+			if section.hasAttr("hidden") {
+				t.Errorf("%s's %s section carries the hidden attribute, want no section hidden: with no script all three show (issue #373, item 15)",
+					inventoryPageName, source.name)
+			}
+
+			if reason := hiddenReason(t, section, rules, props); reason != "" {
+				t.Errorf("%s's %s section is hidden because %s, want every section shown: with no script all three show (issue #373, item 15)",
+					inventoryPageName, source.name, reason)
+			}
+		})
+	}
+}
+
+// TestInventoryCommandsAreTheGuides pins the page's one source of truth (issue
+// #373, item 15): the commands of each section, in order, are the commands of
+// docs/guide/inventory.md under that source's "Collect from" and "Build the"
+// headings, character for character. A command is one run of lines of a bash
+// block: a blank line ends it, and a line whose first character is "#" starts
+// one, so a comment is copied together with the command it describes and never
+// forms a command of its own.
+func TestInventoryCommandsAreTheGuides(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+	doc := bundle.html(t, inventoryPageName)
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+
+	for _, source := range guideSources {
+		t.Run(source.key, func(t *testing.T) {
+			t.Parallel()
+
+			guideText := guideCommands(t, guide, source)
+			if len(guideText) == 0 {
+				t.Fatalf("docs/guide/inventory.md holds no bash block under %q and %q, so the check read nothing",
+					source.collect, source.build)
+			}
+
+			want := make([]string, 0, len(guideText))
+			for _, command := range guideText {
+				want = append(want, trimCommand(command))
+			}
+
+			section := inventorySection(t, doc, source)
+
+			got := make([]string, 0, len(want))
+
+			for _, pre := range section.find("pre") {
+				codes := pre.find("code")
+				if len(codes) != 1 {
+					t.Errorf("%s's %s section holds a <pre> with %d <code> elements, want exactly one per command (issue #373, item 15)",
+						inventoryPageName, source.name, len(codes))
+
+					continue
+				}
+
+				got = append(got, trimCommand(codes[0].textContent()))
+			}
+
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("%s's %s section shows commands that differ from docs/guide/inventory.md's (-guide +page):\n%s",
+					inventoryPageName, source.name, diff)
+			}
+		})
+	}
+}
+
+// TestInventoryPageHasNoHandTypedCommand pins the build's contract (issue #373,
+// item 15): the source page site/inventory.html holds a placeholder that
+// ci/sitebuild fills with the guide's commands, and no command text of its own.
+// The placeholder is a Go template action whose body names the commands field, so
+// the page cannot carry a copy of the guide that would drift from it.
+func TestInventoryPageHasNoHandTypedCommand(t *testing.T) {
+	t.Parallel()
+
+	source := readSiteFile(t, inventoryPageName)
+
+	if !commandPlaceholder.Match(source) {
+		t.Errorf("site/%s holds no Go template action naming a Commands field (such as {{range .Commands}}), want the placeholder ci/sitebuild fills with the guide's commands: the page carries no hand-typed copy of them (issue #373, item 15)",
+			inventoryPageName)
+	}
+
+	doc := parseHTML(t, inventoryPageName, source)
+
+	for _, tag := range []string{"pre", "code"} {
+		for _, el := range doc.find(tag) {
+			text := collapseSpace(el.textContent())
+
+			for _, verb := range []string{"aws ", "gcloud ", "az "} {
+				if strings.HasPrefix(text, verb) {
+					t.Errorf("site/%s holds a hand-typed command in a <%s>: %q, want a placeholder the build fills from docs/guide/inventory.md (issue #373, item 15)",
+						inventoryPageName, tag, text)
+				}
+			}
+		}
+	}
+
+	guide := string(readRepositoryFile(t, filepath.Join("docs", "guide", "inventory.md")))
+
+	for _, command := range guideCommands(t, guide, guideSources[0]) {
+		for _, line := range strings.Split(command, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+
+			if strings.Contains(string(source), line) {
+				t.Errorf("site/%s holds the guide's command line %q, want a placeholder instead: the commands come from docs/guide/inventory.md at build time (issue #373, item 15)",
+					inventoryPageName, line)
+			}
+		}
+	}
+}
+
+// TestInventoryCommandsHaveACopyButton pins the copy control (issue #373, item
+// 15): every command sits in its own <pre>, and the element that holds the
+// command also holds a <button type="button"> beside it whose accessible name
+// says it copies, so each command is copied on its own rather than one button
+// copying them all.
+func TestInventoryCommandsHaveACopyButton(t *testing.T) {
+	t.Parallel()
+
+	doc := theBundle(t).html(t, inventoryPageName)
+
+	for _, source := range guideSources {
+		section := inventorySection(t, doc, source)
+
+		copies := 0
+
+		for _, button := range section.find("button") {
+			if isCopyButton(button) {
+				copies++
+			}
+		}
+
+		pres := section.find("pre")
+
+		if len(pres) == 0 {
+			t.Errorf("%s's %s section holds no command, want the guide's commands in it (issue #373, item 15)", inventoryPageName, source.name)
+		}
+
+		if copies != len(pres) {
+			t.Errorf("%s's %s section holds %d copy buttons for %d commands, want one copy button per command (issue #373, item 15)",
+				inventoryPageName, source.name, copies, len(pres))
+		}
+
+		for _, pre := range pres {
+			if pre.parent == nil {
+				continue
+			}
+
+			beside := false
+
+			for _, sibling := range pre.parent.children {
+				if isCopyButton(sibling) {
+					beside = true
+				}
+			}
+
+			if !beside {
+				t.Errorf("%s's %s section holds a command in a <pre> whose element holds no copy button beside it, want one per command: each command is copied on its own (issue #373, item 15)",
+					inventoryPageName, source.name)
+			}
+		}
+	}
+}
+
+// TestInventoryCommandsAreEscaped pins that a command reaches the page as text
+// (issue #373, item 15): the markup between <code> and </code> holds no raw "<"
+// and no raw "&", so a command holding either is escaped rather than read as
+// markup. The guide's commands hold neither character today, and the check still
+// reads every command the build writes, so a command that gains one is covered.
+func TestInventoryCommandsAreEscaped(t *testing.T) {
+	t.Parallel()
+
+	page := string(theBundle(t).read(t, inventoryPageName))
+
+	// A command's block: a <pre> and the one <code> it holds, whatever classes
+	// or other attributes the page gives them.
+	block := regexp.MustCompile(`(?s)<pre[^>]*>\s*<code[^>]*>(.*?)</code>`)
+
+	matches := block.FindAllStringSubmatch(page, -1)
+	if len(matches) == 0 {
+		t.Fatalf("%s writes no <pre><code> command, so the check read nothing: each command is its own <pre><code> block (issue #373, item 15)", inventoryPageName)
+	}
+
+	for _, match := range matches {
+		for _, problem := range unescapedMarkup(match[1]) {
+			t.Errorf("%s's command holds the raw %q, want it escaped: a command is text, so a < or an & in one never becomes markup (issue #373, item 15)\n%s",
+				inventoryPageName, problem, match[1])
+		}
+	}
+}
+
+// TestInventoryPageLinksTheGuideAndItsPrograms pins what the page offers for the
+// full text (issue #373, item 15): links to the guide and to the three programs
+// on GitHub, each an absolute https URL at the ref the build shows, each opening
+// in a new tab with rel="noopener noreferrer", and none of them loaded into the
+// page.
+func TestInventoryPageLinksTheGuideAndItsPrograms(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		bundle *bundle
+	}{
+		{name: "untagged", bundle: theBundle(t)},
+		{name: "tagged", bundle: theTaggedBundle(t)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ref := versionRef(tc.bundle)
+
+			want := []string{guideURL(ref, guidePath)}
+			for _, source := range guideSources {
+				want = append(want, guideURL(ref, guideProgramsDirectory+source.key+".jq"))
+			}
+
+			doc := tc.bundle.html(t, inventoryPageName)
+
+			for _, url := range want {
+				anchors := 0
+
+				for _, anchor := range doc.find("a") {
+					if href, _ := anchor.attr("href"); href != url {
+						continue
+					}
+
+					anchors++
+
+					if target, _ := anchor.attr("target"); target != "_blank" {
+						t.Errorf("%s's link to %s carries target=%q, want \"_blank\": the full text opens in a new tab (issue #373, item 15)",
+							inventoryPageName, url, target)
+					}
+
+					if rel, _ := anchor.attr("rel"); !slices.Equal(strings.Fields(rel), []string{"noopener", "noreferrer"}) {
+						t.Errorf("%s's link to %s carries rel=%q, want \"noopener noreferrer\": the page it opens gets no handle on this one (issue #373, item 15)",
+							inventoryPageName, url, rel)
+					}
+				}
+
+				if anchors == 0 {
+					t.Errorf("%s links no %s, want the guide and the three programs of %s (issue #373, item 15)",
+						inventoryPageName, url, guideProgramsDirectory)
+				}
+			}
+
+			for _, resource := range loadedResources(doc) {
+				for _, url := range want {
+					if resource.ref == url {
+						t.Errorf("%s loads %s=%q, want a link only: the page fetches neither the guide nor a program (issue #373, item 15)",
+							inventoryPageName, resource.attribute, resource.ref)
+					}
+				}
+			}
+		})
+	}
+}
+
+// inventorySection returns the section the source's button controls, failing the
+// test when the page holds none: the check reads the section the page itself says
+// the button shows.
+func inventorySection(t *testing.T, doc *document, source guideSource) *element {
+	t.Helper()
+
+	for _, button := range doc.find("button") {
+		if text := collapseSpace(button.textContent()); text != source.name {
+			continue
+		}
+
+		controls, ok := button.attr("aria-controls")
+		if !ok || strings.TrimSpace(controls) == "" {
+			t.Fatalf("the %s button carries no aria-controls, so the check cannot tell which section it shows (issue #373, item 15)", source.name)
+		}
+
+		if section := elementByIDOrNil(doc, controls); section != nil {
+			return section
+		}
+
+		t.Fatalf("the %s button controls %q, which is no element of the page (issue #373, item 15)", source.name, controls)
+	}
+
+	t.Fatalf("%s holds no button reading %q, so the check cannot tell which section holds its commands (issue #373, item 15)",
+		inventoryPageName, source.name)
+
+	return nil
+}
+
+// elementByIDOrNil returns the element of doc whose id is id, or nil.
+func elementByIDOrNil(doc *document, id string) *element {
+	if strings.TrimSpace(id) == "" {
+		return nil
+	}
+
+	for _, el := range doc.all() {
+		if got, ok := el.attr("id"); ok && got == id {
+			return el
+		}
+	}
+
+	return nil
+}
+
+// isCopyButton reports whether the element is a button whose accessible name says
+// it copies a command.
+func isCopyButton(el *element) bool {
+	if el.tag != "button" {
+		return false
+	}
+
+	if kind, ok := el.attr("type"); ok && !strings.EqualFold(strings.TrimSpace(kind), "button") {
+		return false
+	}
+
+	return strings.Contains(strings.ToLower(accessibleName(el)), "copy")
+}
+
+// accessibleName returns the name a screen reader gives a control: its
+// aria-label, or else the text it shows.
+func accessibleName(el *element) string {
+	if label, ok := el.attr("aria-label"); ok && strings.TrimSpace(label) != "" {
+		return collapseSpace(label)
+	}
+
+	return collapseSpace(el.textContent())
+}
+
+// readSiteFile reads a file of the site's sources under site/.
+func readSiteFile(t *testing.T, name string) []byte {
+	t.Helper()
+
+	return readRepositoryFile(t, filepath.Join("site", filepath.FromSlash(name)))
+}
+
+// readRepositoryFile reads a file of this checkout, relative to the repository
+// root.
+func readRepositoryFile(t *testing.T, path string) []byte {
+	t.Helper()
+
+	data, err := os.ReadFile(filepath.Join(theRepositoryRoot(t), path))
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	return data
+}
+
+// headingText returns the words of a Markdown heading line, without its #s, or
+// "" for a line that is no heading.
+func headingText(line string) string {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "#") {
+		return ""
+	}
+
+	return strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+}
+
+// guideCommands returns the commands of the bash blocks of the guide under the
+// source's two headings, in the guide's order.
+func guideCommands(t *testing.T, guide string, source guideSource) []string {
+	t.Helper()
+
+	var commands []string
+
+	for _, heading := range []string{source.collect, source.build} {
+		for _, block := range fencedBashBlocks(t, guide, heading) {
+			commands = append(commands, splitCommands(block)...)
+		}
+	}
+
+	return commands
+}
+
+// fencedBashBlocks returns the lines of each ```bash block of the guide under the
+// heading, up to the next heading: one section of the guide holds the commands of
+// one source.
+func fencedBashBlocks(t *testing.T, guide, heading string) [][]string {
+	t.Helper()
+
+	lines := strings.Split(guide, "\n")
+
+	start := -1
+
+	for i, line := range lines {
+		if headingText(line) == heading {
+			start = i + 1
+
+			break
+		}
+	}
+
+	if start < 0 {
+		return nil
+	}
+
+	var (
+		blocks  [][]string
+		block   []string
+		inBlock bool
+	)
+
+	for _, line := range lines[start:] {
+		trimmed := strings.TrimSpace(line)
+
+		if !inBlock && strings.HasPrefix(trimmed, "#") {
+			break
+		}
+
+		switch {
+		case !inBlock && trimmed == "```bash":
+			inBlock = true
+			block = nil
+		case inBlock && trimmed == "```":
+			inBlock = false
+
+			blocks = append(blocks, block)
+		case inBlock:
+			block = append(block, line)
+		}
+	}
+
+	if inBlock {
+		t.Fatalf("docs/guide/inventory.md's %q section leaves a bash block open", heading)
+	}
+
+	return blocks
+}
+
+// splitCommands splits one bash block into the commands a visitor copies: a blank
+// line ends a command, and a line whose first character is "#" starts one, so a
+// comment is part of the command it describes and never a command of its own.
+// The leading and trailing blank lines of a command are dropped.
+func splitCommands(block []string) []string {
+	var (
+		commands []string
+		current  []string
+	)
+
+	hasCode := func() bool {
+		for _, line := range current {
+			if trimmed := strings.TrimSpace(line); trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+				return true
+			}
+		}
+
+		return false
+	}
+
+	flush := func() {
+		for len(current) > 0 && strings.TrimSpace(current[0]) == "" {
+			current = current[1:]
+		}
+
+		for len(current) > 0 && strings.TrimSpace(current[len(current)-1]) == "" {
+			current = current[:len(current)-1]
+		}
+
+		if len(current) > 0 {
+			commands = append(commands, strings.Join(current, "\n"))
+		}
+
+		current = nil
+	}
+
+	for _, line := range block {
+		trimmed := strings.TrimSpace(line)
+
+		switch {
+		case trimmed == "":
+			// A blank line ends a command that holds code; a run of comments
+			// waits for the command it describes.
+			if hasCode() {
+				flush()
+			}
+		case strings.HasPrefix(trimmed, "#"):
+			if hasCode() {
+				flush()
+			}
+
+			current = append(current, line)
+		default:
+			current = append(current, line)
+		}
+	}
+
+	flush()
+
+	return commands
+}
+
+// trimCommand returns a command as the two sides compare it: each line's trailing
+// white space removed, the leading and trailing blank lines dropped, and every
+// other character kept, since a command is copied as the guide writes it.
+func trimCommand(command string) string {
+	lines := strings.Split(command, "\n")
+
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, " \t")
+	}
+
+	for len(lines) > 0 && strings.TrimSpace(lines[0]) == "" {
+		lines = lines[1:]
+	}
+
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+// unescapedMarkup returns the markup characters of text that a command written as
+// HTML cannot hold: a "<" anywhere, and an "&" that is no part of a character
+// reference.
+func unescapedMarkup(text string) []string {
+	var problems []string
+
+	entity := regexp.MustCompile(`^&(amp|lt|gt|quot|apos|#39|#34|#43|#[0-9]+|#[xX][0-9a-fA-F]+);`)
+
+	for i, r := range text {
+		switch r {
+		case '<':
+			problems = append(problems, "<")
+		case '&':
+			if !entity.MatchString(text[i:]) {
+				problems = append(problems, "&")
+			}
+		}
+	}
+
+	return problems
+}
