@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 
 	"github.com/timothymamo/shift2eu/test/internal/mdlink"
 	"github.com/timothymamo/shift2eu/test/internal/yamlread"
@@ -320,6 +321,50 @@ func TestIndexListsEveryPage(t *testing.T) {
 			},
 			unlisted: []string{"docs/security/audits/old/x.md"},
 		},
+		{
+			name: "a page of any name in a directory a linked sub-index links is indexed",
+			files: map[string]string{
+				"docs/README.md":                         "# Documentation\n\n- [Security](security/README.md)\n",
+				"docs/security/README.md":                "# Security\n\nEvery report in [audits/](audits/), newest first.\n",
+				"docs/security/audits/TEMPLATE.md":       "# Audit report template\n",
+				"docs/security/audits/2026-12-01-123.md": "# Audit report, 2026-12-01\n",
+			},
+		},
+		{
+			name: "a ./ prefix and an anchor do not stop a link listing a page or a directory",
+			files: map[string]string{
+				"docs/README.md":                         "# Documentation\n\n- [Security](./security/README.md#the-reports)\n",
+				"docs/security/README.md":                "# Security\n\n## The reports\n\nEvery report in [audits/](./audits/), newest first.\n",
+				"docs/security/audits/2026-12-01-123.md": "# Audit report, 2026-12-01\n",
+			},
+		},
+		{
+			name: "a page a directory-linked README.md links by file is not indexed",
+			files: map[string]string{
+				"docs/README.md":                         "# Documentation\n\n- [Security](security/)\n",
+				"docs/security/README.md":                "# Security\n\n- [Report](audits/2026-12-01-123.md)\n",
+				"docs/security/audits/2026-12-01-123.md": "# Audit report, 2026-12-01\n",
+			},
+			// A link to a directory lists the Markdown pages directly inside
+			// it, security/README.md among them, but it makes no sub-index of
+			// the directory's README.md: only a link to that file does.
+			unlisted: []string{"docs/security/audits/2026-12-01-123.md"},
+		},
+		{
+			name: "a README.md a directory link reaches is no index of its own",
+			files: map[string]string{
+				"docs/README.md":     "# Documentation\n\n- [A](a/)\n",
+				"docs/a/b/README.md": "# B\n\n- [Page](c.md)\n",
+				"docs/a/b/c.md":      "# Page\n",
+			},
+			// A directory link lists only the pages directly inside the
+			// directory; it does not make the README.md below it an index, so
+			// no chain of indexes arises through directory links.
+			unlisted: []string{
+				"docs/a/b/README.md",
+				"docs/a/b/c.md",
+			},
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -334,14 +379,7 @@ func TestIndexListsEveryPage(t *testing.T) {
 			if err != nil {
 				t.Fatalf("checking which pages the indexes list: %v", err)
 			}
-			want := tc.unlisted
-			if want == nil {
-				want = []string{}
-			}
-			if got == nil {
-				got = []string{}
-			}
-			if diff := cmp.Diff(want, got); diff != "" {
+			if diff := cmp.Diff(tc.unlisted, got, cmpopts.EquateEmpty()); diff != "" {
 				t.Errorf("pages under docs/ that no index lists (-want +got):\n%s", diff)
 			}
 		})
