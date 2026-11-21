@@ -82,37 +82,52 @@ func shipped(name string, files []string) bool {
 	return false
 }
 
-// TestReadmeLinksStayInTheArchive fails on a relative link in README.md to a
-// file or directory a release archive does not ship: every archive ships
-// README.md, so its links must work in an unpacked archive too, whichever
-// binary's archive it is. Deep links into the source belong in the pages under
-// docs/.
-func TestReadmeLinksStayInTheArchive(t *testing.T) {
+// TestRootPagesLinksStayInTheArchive fails on a relative link in a root page of
+// the repository, README.md or SECURITY.md, to a file or directory a release
+// archive does not ship: every archive ships both pages, so their links must
+// work in an unpacked archive too, whichever binary's archive it is. Deep links
+// into the source belong in the pages under docs/.
+func TestRootPagesLinksStayInTheArchive(t *testing.T) {
 	t.Parallel()
 
-	fsys := os.DirFS(repoRoot)
-	archives := archiveFiles(t, fsys)
-	for i, files := range archives {
-		if !shipped("README.md", files) {
-			t.Fatalf(".goreleaser.yaml: archive %d does not ship README.md; files: %q", i+1, files)
-		}
+	tests := []struct {
+		name string
+		// page is the root page whose links the case checks, slash-separated
+		// and relative to the repository's root.
+		page string
+	}{
+		{name: "README.md", page: "README.md"},
+		{name: "SECURITY.md", page: "SECURITY.md"},
 	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	data, err := fs.ReadFile(fsys, "README.md")
-	if err != nil {
-		t.Fatalf("reading README.md: %v", err)
-	}
-	for _, l := range mdlink.Links(data) {
-		target, _, _ := strings.Cut(l.Dest, "#")
-		if target == "" || strings.Contains(target, ":") {
-			continue
-		}
-		name := path.Clean(target)
-		for i, files := range archives {
-			if !shipped(name, files) {
-				t.Errorf("README.md:%d: link %q: archive %d of .goreleaser.yaml does not ship %s (archives: files: %q)", l.Line, l.Dest, i+1, name, files)
+			fsys := os.DirFS(repoRoot)
+			archives := archiveFiles(t, fsys)
+			for i, files := range archives {
+				if !shipped(tc.page, files) {
+					t.Fatalf(".goreleaser.yaml: archive %d does not ship %s; files: %q", i+1, tc.page, files)
+				}
 			}
-		}
+
+			data, err := fs.ReadFile(fsys, tc.page)
+			if err != nil {
+				t.Fatalf("reading %s: %v", tc.page, err)
+			}
+			for _, l := range mdlink.Links(data) {
+				target, _, _ := strings.Cut(l.Dest, "#")
+				if target == "" || strings.Contains(target, ":") {
+					continue
+				}
+				name := path.Clean(target)
+				for i, files := range archives {
+					if !shipped(name, files) {
+						t.Errorf("%s:%d: link %q: archive %d of .goreleaser.yaml does not ship %s (archives: files: %q)", tc.page, l.Line, l.Dest, i+1, name, files)
+					}
+				}
+			}
+		})
 	}
 }
 

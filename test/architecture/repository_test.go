@@ -1236,18 +1236,17 @@ func TestReleaseWorkflowIsClosed(t *testing.T) {
 
 // TestReleaseArchivesHoldOneBinary pins issue #147 as issue #393 leaves it:
 // the release ships the CLI's binary in one archive of its own.
-// .goreleaser.yaml holds one archive entry, limited by ids: to the CLI's build,
-// keeping the name it has always had (check.GoReleaserArchives), with tar.gz
-// everywhere, zip on Windows, and one checksums.txt covering it; and ci.yml's
-// test job, the dry run
-// that runs on every pull request, installs the GoReleaser that release.yml
-// runs and builds that archive with it, failing unless it holds exactly its
-// own binary (check.DryRunVerifiesArchives). The files the archive ships are
-// LICENSE, README.md, SECURITY.md (issue #450), the pages under docs/ (issue
-// #149) and the sample inventories under examples/ the walkthrough runs (issue
-// #188). No second
-// archive, the HTTP API's, is published any more, and neither is the bundled
-// OpenAPI document (issue #393).
+// .goreleaser.yaml holds one archive entry, limited by ids: to the CLI's
+// build, keeping the name it has always had (check.GoReleaserArchives), with
+// tar.gz everywhere, zip on Windows, and one checksums.txt covering it; and
+// ci.yml's test job, the dry run that runs on every pull request, installs the
+// GoReleaser that release.yml runs and builds that archive with it, failing
+// unless it holds exactly its own binary (check.DryRunVerifiesArchives). The
+// files the archive ships are LICENSE, README.md, SECURITY.md (issue #450),
+// the pages under docs/ (issue #149) and the sample inventories under
+// examples/ the walkthrough runs (issue #188). No second archive, the HTTP
+// API's, is published any more, and neither is the bundled OpenAPI document
+// (issue #393).
 func TestReleaseArchivesHoldOneBinary(t *testing.T) {
 	t.Parallel()
 
