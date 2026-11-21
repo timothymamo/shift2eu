@@ -439,12 +439,14 @@ func classAttr(el *element) string {
 }
 
 // displayedBy returns the display value the stylesheet gives el, and the rule
-// that sets it, for a failure message: the last top-level rule that matches the
-// element and sets display, a declaration with !important beating the ones
-// without, as a browser's cascade resolves them. It reads no rule inside an
-// at-rule, since such a rule holds only under a condition and so cannot be what
-// hides the element. It returns "" and a sentence that says no rule sets display
-// when the browser's own value is the one that applies.
+// that sets it, for a failure message: among the top-level rules that match the
+// element and set display it takes the last one in source order, a declaration
+// with !important beating the ones without. It compares no specificity and no
+// inheritance: a matching ancestor's rule counts as the element's, and a later
+// rule beats a more specific one only because it comes later. It reads no rule
+// inside an at-rule, since such a rule holds only under a condition and so
+// cannot be what hides the element. It returns "" and a sentence that says no
+// rule sets display when the browser's own value is the one that applies.
 func displayedBy(t *testing.T, el *element, rules []cssRule, props map[string]string) (string, string) {
 	t.Helper()
 
