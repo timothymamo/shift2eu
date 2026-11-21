@@ -3,8 +3,9 @@
 // rule, what tofu test cannot state - no API key resource, no ACL or visibility, exactly one IAM application
 // and its one policy, only scaleway/scaleway, local modules only, one s3 backend and one required_version -
 // equal to infra/tofu.yaml's tofuVersion - for every applied root, which no module source may reach and no
-// configuration file may sit beside, no provider endpoint, every test file mocking the provider, and so on
-// (the script lists them). With every rule holding it prints nothing and exits 0; a usage error exits 2.
+// configuration file may sit beside, no provider endpoint, every test file mocking the provider, a top-level
+// block of an allowed type only, a provider block setting only organization_id and region, a lock file holding
+// only the line shapes tofu init writes, and so on (the script lists them). With every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
 // The real infra/ must hold every rule, and each case below is one copy of infra/ with exactly one breakage,
 // built in t.TempDir() so the real tree stays untouched and the cases cannot drift apart: the copy is what
@@ -363,6 +364,36 @@ resource "scaleway_rdb_user" "u" {
 				"  profile         = \"default\"\n  organization_id = var.organization_id")
 		},
 	},
+	// The provider "scaleway" block may set only what infra/site/providers.tf sets today: organization_id
+	// and region. Anything else (a project_id, a nested block, ...) is [provider-setting], because a setting
+	// there changes which organization or project the plan reaches, or what a nested block's own provider
+	// does. An attribute a rule names on its own keeps that rule's tag and no [provider-setting] beside it
+	// (access_key, secret_key and profile stay [provider-credentials], api_url [provider-endpoint], alias
+	// [provider-alias]).
+	{
+		name:   "provider-project-id",
+		why:    `project_id = "00000000-0000-0000-0000-000000000000" in the configuration's provider block, a default project every resource without one would land in`,
+		want:   "provider-setting",
+		wantIn: map[string]string{"provider-setting": "{site}/providers.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "providers.tf"),
+				"  organization_id = var.organization_id\n  region          = var.region",
+				"  organization_id = var.organization_id\n  region          = var.region\n  project_id      = \"00000000-0000-0000-0000-000000000000\"")
+		},
+	},
+	{
+		name:   "provider-nested-block",
+		why:    "a some_block {} nested in the configuration's provider block, a setting the rules do not know",
+		want:   "provider-setting",
+		wantIn: map[string]string{"provider-setting": "{site}/providers.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "providers.tf"),
+				"  organization_id = var.organization_id\n  region          = var.region",
+				"  organization_id = var.organization_id\n  region          = var.region\n\n  some_block {\n  }")
+		},
+	},
 	{
 		name: "local-backend",
 		why:  `backend "local" instead of the state bucket through backend "s3"`,
@@ -473,6 +504,85 @@ terraform {
 import {
   to = scaleway_object_bucket.site
   id = "nl-ams/example"
+}
+`)
+		},
+	},
+	// The top-level block types are an allow list: a configuration file holds only terraform, provider,
+	// resource, data, ephemeral, variable, locals, output, module and import, a test file only run,
+	// mock_provider, variables and provider. Any other top-level block is [block-type], because a block no
+	// rule knows is a block no rule reads: moved and removed rewrite the state unseen, check asserts outside
+	// every test, override_resource and override_data replace what a test plans with, and a mock_provider in a
+	// configuration file mocks a provider tofu test never reads there. A block type a rule names on its own
+	// keeps that rule's tag and no [block-type] beside it: a configuration's import block stays [import-block],
+	// a test file's provider block stays [test-provider], and the blocks nested in a refused one (the assert in
+	// a check block) are no findings of their own, since the allow list is the top level's.
+	{
+		name:   "moved-block",
+		why:    "a top-level moved block, which rewrites the state of the resources it names unseen",
+		want:   "block-type",
+		wantIn: map[string]string{"block-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+moved {
+  from = scaleway_object_bucket.site
+  to   = scaleway_object_bucket.other
+}
+`)
+		},
+	},
+	{
+		name:   "check-block",
+		why:    `a top-level check "c" block and the assert block it holds, whose assertions tofu runs outside every test file`,
+		want:   "block-type",
+		wantIn: map[string]string{"block-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+check "c" {
+  assert {
+    condition     = true
+    error_message = "x"
+  }
+}
+`)
+		},
+	},
+	{
+		name:   "removed-block",
+		why:    "a top-level removed block with no provisioner, which drops the object it names from the state unseen",
+		want:   "block-type",
+		wantIn: map[string]string{"block-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+removed {
+  from = scaleway_object_bucket.gone
+}
+`)
+		},
+	},
+	{
+		name:   "mock-provider-in-a-configuration-file",
+		why:    `a mock_provider "scaleway" block in a configuration file, where tofu test reads no mock`,
+		want:   "block-type",
+		wantIn: map[string]string{"block-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), "\nmock_provider \"scaleway\" {}\n")
+		},
+	},
+	{
+		name:   "override-resource-in-a-test-file",
+		why:    "a top-level override_resource block in a test file, which replaces the object the test plans with",
+		want:   "block-type",
+		wantIn: map[string]string{"block-type": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+override_resource {
+  target = scaleway_object_bucket.site
 }
 `)
 		},
@@ -654,6 +764,22 @@ mock_provider "scaleway" {
 `)
 		},
 	},
+	// A .tofutest.hcl is a test file tofu test runs as it runs a .tftest.hcl one, so a source = ... there is
+	// the same mock read from outside the file.
+	{
+		name:   "mock-provider-source-in-a-tofutest-file",
+		why:    `a site/tests/m.tofutest.hcl whose mock_provider "scaleway" sets source = "./tests/mocks"`,
+		want:   "mock-source",
+		wantIn: map[string]string{"mock-source": "{site}/tests/m.tofutest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "m.tofutest.hcl"), `
+mock_provider "scaleway" {
+  source = "./tests/mocks"
+}
+`)
+		},
+	},
 	// A mock data file is a second mock beside the test files, which no test file's mock_provider names: the
 	// mocks belong in the test file that uses them.
 	{
@@ -738,6 +864,38 @@ provider"registry.opentofu.org/hashicorp/external" {
   version = "2.3.4"
 }
 `)
+		},
+	},
+	// The lock file holds only the line shapes tofu init writes: blank lines, # comment lines, the one
+	// Scaleway provider header (any whitespace between its tokens), version = "...", constraints = "...",
+	// hashes = [, a quoted hash string with an optional trailing comma, ] and }. Every other line is
+	// [lock-file]: a provider header behind a comment, a second provider, a line init never writes.
+	{
+		name:   "lock-file-provider-after-a-comment",
+		why:    `a block whose header line is /* x */ provider "registry.opentofu.org/hashicorp/external" {, a second provider behind a comment`,
+		want:   "lock-file",
+		wantIn: map[string]string{"lock-file": "{site}/.terraform.lock.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, ".terraform.lock.hcl"), `
+/* x */ provider "registry.opentofu.org/hashicorp/external" {
+  version = "2.3.4"
+  hashes = [
+    "h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  ]
+}
+`)
+		},
+	},
+	{
+		name: "lock-file-header-with-extra-spaces",
+		why:  `the Scaleway header written provider "registry.opentofu.org/scaleway/scaleway"  { with two spaces before the brace, a shape init's own formatting may hold`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, ".terraform.lock.hcl"),
+				`provider "registry.opentofu.org/scaleway/scaleway" {`,
+				`provider "registry.opentofu.org/scaleway/scaleway"  {`)
 		},
 	},
 	{
@@ -999,10 +1157,13 @@ resource "scaleway_object_bucket" "x" {
 		},
 	},
 	{
-		name:   "provisioner-in-removed",
-		why:    `a provisioner in a top-level removed block, which runs when the object it names is destroyed`,
-		want:   "provisioner",
-		wantIn: map[string]string{"provisioner": "{site}/main.tf"},
+		name: "provisioner-in-removed",
+		why:  `a provisioner in a top-level removed block, which runs when the object it names is destroyed`,
+		want: "provisioner",
+		// The removed block is no top-level type the allow list holds, and its provisioner is one no rule
+		// allows: both are real findings, and neither refusal may hide the other.
+		wantMore: []string{"block-type"},
+		wantIn:   map[string]string{"provisioner": "{site}/main.tf", "block-type": "{site}/main.tf"},
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			appendInfraText(t, filepath.Join(site, "main.tf"), `
@@ -1176,6 +1337,20 @@ locals {
 		},
 	},
 	{
+		name:   "file-function-in-a-template-directive",
+		why:    `a file() call inside a "%{ if ... }" template directive, which the tokenizer reads as template text too`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  text = "%{ if file("/etc/hostname") != "" }y%{ endif }"
+}
+`)
+		},
+	},
+	{
 		name: "file-function-name-in-a-comment",
 		why:  `a comment naming file("x") and pathexpand("~/x"), which reads no file`,
 		want: "",
@@ -1228,6 +1403,21 @@ output "o" {
 			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
 variables {
   organization_id = file("/etc/hostname")
+}
+`)
+		},
+	},
+	// A .tofu file is a configuration file tofu reads as it reads a .tf one, so the rules judge it the same.
+	{
+		name:   "file-function-in-a-tofu-file",
+		why:    `a site/locals.tofu whose locals value calls file("/etc/hostname")`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/locals.tofu"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "locals.tofu"), `
+locals {
+  x = file("/etc/hostname")
 }
 `)
 		},
