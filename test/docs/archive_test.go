@@ -209,10 +209,10 @@ func writeDocsTree(t *testing.T, files map[string]string) fs.FS {
 	root := t.TempDir()
 	for name, content := range files {
 		full := filepath.Join(root, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(full), 0o750); err != nil {
 			t.Fatalf("creating the directory of %s: %v", name, err)
 		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
 			t.Fatalf("writing %s: %v", name, err)
 		}
 	}
