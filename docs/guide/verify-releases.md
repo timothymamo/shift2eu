@@ -124,7 +124,7 @@ Expand-Archive $Archive
 ```
 
 Each archive holds only the `shift2eu` binary (`shift2eu.exe` on Windows), with `README.md`,
-`LICENSE` and the Markdown pages under `docs/`. Older releases list the retired HTTP API's assets
+`LICENSE`, `SECURITY.md` and the Markdown pages under `docs/`. Older releases list the retired HTTP API's assets
 ([Install](install.md)) in the same `checksums.txt`: check them the same way, by their names. The archives'
 attestations start with the first release after `v0.3.0`: for `v0.3.0` and earlier, only the digest
 check applies, and `checksums.txt` comes from the same release as the archive, so it cannot tell a

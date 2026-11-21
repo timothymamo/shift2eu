@@ -82,11 +82,12 @@ var archiveNames = map[string]string{
 var archiveKeys = []string{"id", "ids", "name_template", "formats", "format_overrides", "files"}
 
 // archiveFiles are the files every archive ships beside its binary: LICENSE,
-// README.md, the pages under docs/ that README.md links to (issue #149) and
-// the jq programs docs/guide/inventory.md builds an inventory with (issue
-// #178), and the sample inventories under examples/ that docs/guide/try-it.md
-// runs the CLI on (issue #188).
-var archiveFiles = []string{"LICENSE", "README.md", "docs/*.md", "docs/**/*", "examples/*.md", "examples/**/*"}
+// README.md, the security policy SECURITY.md (issue #450), the pages under
+// docs/ that README.md links to (issue #149) and the jq programs
+// docs/guide/inventory.md builds an inventory with (issue #178), and the
+// sample inventories under examples/ that docs/guide/try-it.md runs the CLI
+// on (issue #188).
+var archiveFiles = []string{"LICENSE", "README.md", "SECURITY.md", "docs/*.md", "docs/**/*", "examples/*.md", "examples/**/*"}
 
 // GoReleaserArchives returns one message for every way the .goreleaser.yaml
 // document goreleaser lets one archive hold more than the CLI's binary, or
@@ -104,7 +105,8 @@ var archiveFiles = []string{"LICENSE", "README.md", "docs/*.md", "docs/**/*", "e
 //   - its name_template is the one of its build's binary: goreleaser's default
 //     written out for the CLI (shift2eu);
 //   - the entry is tar.gz, and zip on Windows, and ships exactly LICENSE,
-//     README.md, docs/*.md, docs/**/*, examples/*.md and examples/**/*;
+//     README.md, SECURITY.md, docs/*.md, docs/**/*, examples/*.md and
+//     examples/**/*;
 //   - an entry holds no key beyond id, ids, name_template, formats,
 //     format_overrides and files;
 //   - checksum: holds exactly name_template: checksums.txt, one file covering
@@ -431,8 +433,9 @@ func (r *schemaReader) archiveFormats(entries []yamlread.Entry, path string) {
 }
 
 // archiveFiles checks that an archive entry ships exactly archiveFiles: beside
-// its binary, LICENSE, README.md and the pages under docs/ (issue #149), so
-// README.md's links work in an unpacked archive, the jq programs
+// its binary, LICENSE, README.md, SECURITY.md (issue #450) and the pages under
+// docs/ (issue #149), so README.md's links work in an unpacked archive, the jq
+// programs
 // docs/guide/inventory.md builds an inventory with (issue #178), and the
 // sample inventories under examples/ that docs/guide/try-it.md runs the CLI on
 // (issue #188).
@@ -453,7 +456,7 @@ func (r *schemaReader) archiveFiles(entries []yamlread.Entry, path string) {
 
 	for _, want := range archiveFiles {
 		if !slices.Contains(got, want) {
-			r.fail("line %d: %s ships no %s, want exactly %s: README.md links to LICENSE and the pages under docs/ (issue #149), docs/guide/inventory.md builds an inventory with the jq programs under docs/guide/inventory/ (issue #178), and docs/guide/try-it.md runs the CLI on the sample inventories under examples/ (issue #188)", e.Num, path, want, strings.Join(archiveFiles, ", "))
+			r.fail("line %d: %s ships no %s, want exactly %s: README.md links to LICENSE and the pages under docs/ (issue #149), SECURITY.md is the security policy (issue #450),docs/guide/inventory.md builds an inventory with the jq programs under docs/guide/inventory/ (issue #178), and docs/guide/try-it.md runs the CLI on the sample inventories under examples/ (issue #188)", e.Num, path, want, strings.Join(archiveFiles, ", "))
 		}
 	}
 

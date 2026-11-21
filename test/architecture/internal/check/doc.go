@@ -131,7 +131,7 @@
 // closed schema: one entry, with an id: equal to the one build its
 // ids: names, keeping the archive's name
 // shift2eu_<version>_<os>_<arch>, tar.gz (zip on Windows) with LICENSE,
-// README.md and docs/, and one checksums.txt covering that archive and no
+// README.md, SECURITY.md and docs/, and one checksums.txt covering that archive and no
 // extra file. DryRunVerifiesArchives holds
 // ci.yml's test job to one step running .github/scripts/verify-archives.sh,
 // which builds a goreleaser snapshot and fails unless the archive holds
