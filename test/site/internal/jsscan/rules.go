@@ -544,7 +544,7 @@ func (s *scanner) checkOpener(i int, owner string) {
 // checkServiceWorker allows the unregister function's
 // navigator.serviceWorker.getRegistrations().
 func (s *scanner) checkServiceWorker(i int, owner string) {
-	form := s.isIdent(i-2, "navigator") && s.isPunct(i-1, ".") && s.isPunct(i+1, ".") &&
+	form := s.isIdent(i-2, "navigator") && !s.isMember(i-2) && s.isPunct(i-1, ".") && s.isPunct(i+1, ".") &&
 		s.isIdent(i+2, "getRegistrations") && s.isPunct(i+3, "(")
 
 	if owner == fnUnregister && form {
@@ -631,7 +631,7 @@ func (s *scanner) checkInnerHTML(i int, owner string) {
 // navigator.clipboard.writeText(...) called in place (issue #373): no read, no
 // other member, no other object's clipboard, and no second write.
 func (s *scanner) checkClipboard(i int, owner string) {
-	form := s.isIdent(i-2, "navigator") && s.isPunct(i-1, ".") && s.isPunct(i+1, ".") &&
+	form := s.isIdent(i-2, "navigator") && !s.isMember(i-2) && s.isPunct(i-1, ".") && s.isPunct(i+1, ".") &&
 		s.isIdent(i+2, "writeText") && s.isPunct(i+3, "(")
 
 	if owner == fnCopyCommand && form && !s.clipboardUsed {
@@ -643,20 +643,27 @@ func (s *scanner) checkClipboard(i int, owner string) {
 	s.report(i, "clipboard is allowed only once, in the copy function %s, as navigator.clipboard.writeText(...): the page writes one command to the clipboard and never reads it", fnCopyCommand)
 }
 
-// checkNavigator allows the name navigator in three uses only (issue #373, the
-// audit's finding 4): as a member base (navigator. or navigator?.), as the
-// right operand of in, and as a member name after . or ?.. The clipboard and
-// service worker rules key on the name, so any other use - a declaration, a
-// parameter, a destructuring target, a function or class name, a shorthand
-// property, an assignment or the bare value passed on - could bind something
-// that stands in for the browser's navigator and passes them. No list of
-// binding shapes can be complete, so every other use is refused.
+// checkNavigator allows the name navigator in two uses only (issue #373, the
+// audit's finding 4): as a member base that is itself no member name
+// (navigator. or navigator?., never o.navigator.), and as the right operand
+// of in that is neither assigned nor an arrow's parameter (in navigator, never
+// in navigator = x or in navigator => x). The clipboard and service worker
+// rules key on the name, so any other use - a declaration, a parameter, a
+// destructuring target, a function or class name, a shorthand property, an
+// assignment, another object's member (window.navigator = x, o.navigator) or
+// the bare value passed on - could bind something that stands in for the
+// browser's navigator and passes them. No list of binding shapes can be
+// complete, so every other use is refused.
 func (s *scanner) checkNavigator(i int) {
-	if s.isMember(i) || s.isPunct(i+1, ".") || s.isPunct(i+1, "?.") || s.isIdent(i-1, "in") {
+	if !s.isMember(i) && (s.isPunct(i+1, ".") || s.isPunct(i+1, "?.")) {
 		return
 	}
 
-	s.report(i, "navigator is allowed only as a member base (navigator.x), the right operand of in or a member name: any other use could bind a stand-in for the browser's navigator, on which the clipboard and service worker rules key")
+	if s.isIdent(i-1, "in") && !s.isAssigned(i) && !s.isPunct(i+1, "=>") {
+		return
+	}
+
+	s.report(i, "navigator is allowed only as a member base of its own (navigator.x, never o.navigator.x) or the right operand of in, neither assigned nor a parameter: any other use could bind a stand-in for the browser's navigator, on which the clipboard and service worker rules key")
 }
 
 // checkWriteText allows writeText only as the clipboard's member, called in
