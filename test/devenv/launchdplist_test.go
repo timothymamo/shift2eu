@@ -132,7 +132,14 @@ func accountHome(t *testing.T) string {
 		t.Fatalf("create the account's home %s: %v", home, err)
 	}
 
-	return home
+	// The script names its clone as `cd ... && pwd -P` resolves it, so the home is held with its symlinks
+	// resolved too (macOS: the temporary directory under /var is /private/var).
+	resolved, err := filepath.EvalSymlinks(home)
+	if err != nil {
+		t.Fatalf("resolve the account's home %s: %v", home, err)
+	}
+
+	return resolved
 }
 
 // launchdRepoRoot is the absolute path of the repository these tests run in, with symlinks resolved the way

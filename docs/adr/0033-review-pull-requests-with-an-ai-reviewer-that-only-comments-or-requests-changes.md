@@ -69,7 +69,7 @@ requests on.**
 **Why the CLI and the subscription, not the Messages API with an API key.** The first version of this
 milestone called `POST https://api.anthropic.com/v1/messages` with an API key. The maintainer chose the
 subscription instead: it is already paid for, it puts no second, per-token bill beside it, and the
-monthly security audit (PRD #175) will ask its model the same way. The subscription is only usable
+scheduled security audit (PRD #175) will ask its model the same way. The subscription is only usable
 through Claude Code, so the one HTTP call became one CLI run; everything else of the program (reading the
 pull request as data, the size limit, the prompt, the strict parser, the event decision, the renderer,
 the poster and the dismissal) is unchanged.
@@ -313,7 +313,7 @@ reference data, and every schema version bump would be refused the same way. The
 ### Cost
 
 **No per-token bill.** Every review draws on the maintainer's Claude subscription and its usage limits,
-which it shares with the agents and, once PRD #175 lands, with the monthly security audit, which will ask
+which it shares with the agents and, once PRD #175 lands, with the scheduled security audit, which will ask
 its model through the CLI the same way. When a limit is reached, the CLI's result says so and the check
 fails with that reason, posting nothing; a later push, or a re-run of the check once the limit has
 reset, reviews the pull request again. The usage below is what the reviewer adds to the subscription.
