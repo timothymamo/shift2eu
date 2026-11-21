@@ -283,7 +283,7 @@ func startsComment(line string) bool {
 }
 
 // wordStartHash reports whether line holds a `#` the shell begins a comment at: outside single and double quotes, at
-// the start of the line's text or just after a blank or one of `; & | (`. On a continued command the shell reads on
+// the start of the line's text or just after a blank or one of `; & | ( )`. On a continued command the shell reads on
 // through the joined lines, so such a `#` drops the rest of the command as well, not just the rest of the line. A `#`
 // behind `$$`, inside a word (`a#b`), after `{` (`$${#x}`) or inside quotes is data. Outside single quotes a backslash
 // takes the character after it as data, inside double quotes too, as the shell does: `\"` opens no string, and the
@@ -305,7 +305,7 @@ func wordStartHash(line string) bool {
 		case c == '"':
 			double = true
 		case c == '#':
-			if i == 0 || strings.ContainsRune(" \t;&|(", rune(line[i-1])) {
+			if i == 0 || strings.ContainsRune(" \t;&|()", rune(line[i-1])) {
 				return true
 			}
 		}
@@ -372,7 +372,8 @@ func continuedRecipeComments(body string) []recipeComment {
 		comments []recipeComment
 
 		// aboveContinues reports that the line above ends in the backslash that joins it to this one, and
-		// aboveIsRecipe reports that the chain it belongs to began on a tab-started recipe line.
+		// aboveIsRecipe reports that the chain it belongs to began on a tab-started recipe line or a rule line with its
+		// own `;` recipe.
 		aboveContinues bool
 		aboveIsRecipe  bool
 	)
@@ -501,6 +502,11 @@ func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *te
 			want: []recipeComment{{Line: 3, Text: "(# a comment \\"}},
 		},
 		{
+			name: "a # right after a closing parenthesis on a continued recipe line",
+			body: "target:\n\t(cd dir)# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "(cd dir)# a comment \\"}},
+		},
+		{
 			name: "a # on a line continued into from above, not itself continuing",
 			body: "target:\n\techo a \\\n\techo b; # a comment\n",
 			want: []recipeComment{{Line: 3, Text: "echo b; # a comment"}},
@@ -611,7 +617,7 @@ func TestMakefileHasNoCommentInsideAContinuedRecipe(t *testing.T) {
 		offenders = append(offenders, fmt.Sprintf("%s:%d: %s", makefilePath, comment.Line, comment.Text))
 	}
 
-	t.Errorf("%s has a `#` recipe line inside a backslash-continued command:\n%s\n\nGNU Make 3.81 (macOS /usr/bin/make) joins such a line to the line above it and the shell comments out the rest of the recipe, so the recipe ends silently with exit 0 and every step after the comment never runs; GNU Make 4.4 runs it fine, so no test on the VM sees it (issue #437). Move the comment above the target as a make comment, or into the docs' text (issue #437)",
+	t.Errorf("%s has a `#` recipe line inside a backslash-continued command:\n%s\n\nGNU Make 3.81 (macOS /usr/bin/make) joins such a line to the line above it and the shell comments out the rest of the recipe, so the recipe ends silently with exit 0 and every step after the comment never runs; GNU Make 4.4 runs it fine, so no test on the VM sees it (issue #437). Move the comment above the target as a make comment, or into the docs' text",
 		makefilePath, strings.Join(offenders, "\n"))
 }
 
