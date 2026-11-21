@@ -119,7 +119,9 @@ run)
 		waited=0
 		while [ "$(ls -A "$SHIFT2EU_TEST_RENDEZVOUS" | wc -l)" -lt 2 ]; do
 			waited=$((waited + 1))
-			if [ "$waited" -gt 200 ]; then
+			# 800 polls of 0.05 s: 40 seconds, still inside the 60 seconds browserRecipeTimeout gives a run,
+			# and long enough that a loaded CI runner under -race does not reach it before the other run does.
+			if [ "$waited" -gt 800 ]; then
 				echo 'fake docker: the second run of the worktree never reached its container' >&2
 				exit 64
 			fi
@@ -165,9 +167,14 @@ exit 0
 
 // fakeGoCommand stands in for the go command the two targets run: make site's builder, which gets the directory
 // and the archive to write, and make test-browser's smoke test, which gets the bundle and the DevTools address.
-// The builder writes a page and the archive, so make site still produces what a release publishes; the smoke test
-// writes one line to the log the test reads, holding what it was handed and what the directory it was handed holds
-// at that moment - the run is serving that directory then, and the test asks what became of it afterwards.
+// The builder answers the way ci/sitebuild does: it refuses a -out directory that holds anything, as its
+// prepareOut does, and it takes a moment between creating that directory and writing the page into it, so a
+// second builder, or the rm -rf of a second make site in the same worktree, shows up as the failure the real
+// builder reports ("write index.html: ... no such file or directory", "the bundle directory ... is not empty")
+// instead of passing because the two writes happened to fall in a safe order (issue #423). The builder writes a
+// page and the archive, so make site still produces what a release publishes; the smoke test writes one line to
+// the log the test reads, holding what it was handed and what the directory it was handed holds at that moment -
+// the run is serving that directory then, and the test asks what became of it afterwards.
 const fakeGoCommand = `#!/bin/sh
 log="${SHIFT2EU_TEST_GO_LOG:?set SHIFT2EU_TEST_GO_LOG}"
 if [ $# -eq 0 ]; then
@@ -199,7 +206,18 @@ run)
 		echo 'fake go: go run names no -out directory, so the site has no bundle to go into' >&2
 		exit 64
 	fi
+	# ci/sitebuild's prepareOut creates the bundle directory, refusing one that holds anything: a stray file
+	# would be deployed without a manifest entry. A second builder meeting a directory the first one is filling
+	# is refused here the same way, rather than quietly adding to a bundle another run is building.
+	if [ -d "$out" ] && [ -n "$(ls -A "$out" 2>/dev/null)" ]; then
+		echo "fake go: the bundle directory $out is not empty" >&2
+		exit 1
+	fi
 	mkdir -p "$out" || exit 1
+	# The real builder takes a moment between creating the bundle directory and writing the pages into it. A run
+	# that removes and rebuilds that directory has that moment to delete it from under the builder, where the
+	# real one then fails to write its page; without the pause the two writes could always fall in a safe order.
+	sleep 0.2
 	printf '%s\n' "${SHIFT2EU_TEST_BUNDLE_PAGE:?set SHIFT2EU_TEST_BUNDLE_PAGE}" > "$out/index.html" || exit 1
 	if [ -n "$archive" ]; then
 		printf 'archive\n' > "$archive" || exit 1
@@ -409,13 +427,25 @@ func runBrowserMake(dir string, args []string, env map[string]string, timeout ti
 // worktree could delete the bundle the first run's browser was serving, because both runs served the shared
 // bin/site that make site removes and rebuilds. So two runs at once, as two agents in one worktree start them,
 // must both pass, and each must serve a directory of its own - not bin/site, not a directory inside it - which it
-// cleans up when it is done, while make site still leaves bin/site for the release and the deploy.
+// cleans up when it is done. bin/site is the release's and the deploy's, make site's alone: a run of make
+// test-browser neither creates nor touches it, not even through a site prerequisite, which is what would remove
+// and rebuild it under the other run's browser.
 func TestMakeTestBrowserRecipeServesABundleOfItsOwn(t *testing.T) {
 	t.Parallel()
 
 	sb := newBrowserRecipeSandbox(t, dockerModeRunning)
 
 	const runs = 2
+
+	// bin/site is what make site builds, and a run of make test-browser must have no business with it: it is
+	// absent before the two runs, so whether either run built, removed or touched it is read from whether it is
+	// there afterwards. A sandbox that already held it would hide that.
+	shared := sb.sharedBundle()
+
+	if _, err := os.Stat(shared); !os.IsNotExist(err) {
+		t.Fatalf("%s is already there before either run of make test-browser, so this test cannot tell whether a run created it: %v",
+			shared, err)
+	}
 
 	// Both runs go at once: the stand-in container holds each one at its docker run until the other arrives, so
 	// both serve their bundle at the same moment, which is the moment the shared one used to be deleted from
@@ -454,8 +484,6 @@ func TestMakeTestBrowserRecipeServesABundleOfItsOwn(t *testing.T) {
 			len(records), runs, sb.goLogText(t))
 	}
 
-	shared := sb.sharedBundle()
-
 	for at, record := range records {
 		served := filepath.Clean(record.bundle)
 
@@ -487,11 +515,14 @@ func TestMakeTestBrowserRecipeServesABundleOfItsOwn(t *testing.T) {
 			records[0].bundle)
 	}
 
-	// make site is the release's and the deploy's: it still writes the shared bundle, and the run that just
-	// served a bundle of its own left it alone.
-	if _, err := os.Stat(shared); err != nil {
-		t.Errorf("make site no longer leaves %s: the bundle the release publishes and the deploy serves must stay where make site writes it, whatever a run of make test-browser serves (issue #423 item 2): %v",
-			shared, err)
+	// make site is the release's and the deploy's: a run of make test-browser builds the bundle it serves into a
+	// directory of its own, and leaves bin/site alone. Today it still has site as a prerequisite, so each run
+	// removes and rebuilds bin/site - the very race under test - and this finds it there afterwards.
+	if _, err := os.Stat(shared); err == nil {
+		t.Errorf("make test-browser created %s, the bundle make site builds: the recipe builds the bundle it serves into a directory of its own, so a run must neither create nor remove that directory, which the release publishes and the deploy serves, and which a second run's make site would rebuild under the first run's browser (issue #423 item 2)",
+			shared)
+	} else if !os.IsNotExist(err) {
+		t.Errorf("look for %s after two runs of make test-browser: %v", shared, err)
 	}
 }
 

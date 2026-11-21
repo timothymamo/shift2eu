@@ -290,18 +290,21 @@ func TestMakeTestBrowserRecipeKeepsDevToolsOnAPickedPortOfTheLoopbackInterface(t
 
 // browserRecipeMakefile is a stand-in Makefile whose one target is test-browser and whose recipe starts Chromium
 // with flags, as the real recipe's docker run line does, after the target it depends on. comments are
-// tab-indented recipe comment lines before that command line.
+// tab-indented recipe comment lines ahead of that command line. A comment line follows one ending in a backslash
+// in no recipe of this repository (issue #437), so those lines come before the first continued line, where they
+// are still recipe lines of test-browser: makeRecipes skips them, and a flag a comment names is no flag.
 func browserRecipeMakefile(flags string, comments ...string) string {
 	makefile := "## Build the site's bundle and run its headless-browser smoke test.\n" +
 		".PHONY: " + testBrowserTarget + "\n" +
 		testBrowserTarget + ": site\n" +
-		"\t@echo site\n" +
-		"\t@set -eu; \\\n" +
-		"\t$(DOCKER) run -d --entrypoint /headless-shell/headless-shell \\\n"
+		"\t@echo site\n"
 
 	for _, comment := range comments {
 		makefile += "\t# " + comment + "\n"
 	}
 
-	return makefile + "\t\t$(HEADLESS_SHELL) " + flags + " >/dev/null\n"
+	return makefile +
+		"\t@set -eu; \\\n" +
+		"\t$(DOCKER) run -d --entrypoint /headless-shell/headless-shell \\\n" +
+		"\t\t$(HEADLESS_SHELL) " + flags + " >/dev/null\n"
 }
