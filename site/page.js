@@ -1,8 +1,9 @@
 // shift2eu's page script (PRD #297). Every page loads it. It sends nothing:
 // test/site scans it for every browser API that can send data, load a
 // resource or reach another window, and refuses any computed property name.
-// The framing guard, the download function, the unregister function and the
-// report's insertion point are the only exceptions, each in its own function.
+// The framing guard, the download function, the unregister function, the
+// report's insertion point and the inventory page's clipboard write
+// (copyCommand) are the only exceptions, each in its own function.
 "use strict";
 
 // The one Trusted Types policy, which the Content Security Policy names. The
@@ -114,7 +115,7 @@ function startAssessment() {
   const encoded = globalThis.__shift2euModule;
   delete globalThis.__shift2euModule;
   if (typeof encoded !== "string") {
-    notice.textContent = "The assessment module is missing from the page, so the assessment cannot run. Reload the page.";
+    notice.textContent = "The assessment engine is missing from the page, so the assessment cannot run. Reload the page.";
     return;
   }
   const bytes = Uint8Array.from(atob(encoded), function (c) {
@@ -124,13 +125,17 @@ function startAssessment() {
   WebAssembly.instantiate(bytes, go.importObject).then(function (instantiated) {
     go.run(instantiated.instance);
     if (typeof globalThis.shift2euAssess !== "function") {
-      notice.textContent = "The assessment module did not start. Reload the page.";
+      notice.textContent = "The assessment engine did not start. Reload the page.";
       return;
     }
-    notice.textContent = "The assessment module is loaded and runs in this browser.";
+    // Once the engine runs, the notice is no box any more (issue #373, item
+    // 03-1): it stays a status that a screen reader announces, and the
+    // enabled Run button is what a reader sees.
+    notice.textContent = "The assessment engine is ready and runs in this browser.";
+    notice.classList.add("visually-hidden");
     wireControls();
   }).catch(function () {
-    notice.textContent = "The assessment module failed to start in this browser. Run the assessment with the shift2eu CLI instead.";
+    notice.textContent = "The assessment engine failed to start in this browser. Run the assessment with the shift2eu CLI instead.";
   });
 }
 
@@ -228,6 +233,61 @@ function wireControls() {
   run.disabled = false;
 }
 
+// copyCommand puts the command beside button on the clipboard: the one place
+// the page writes to it, on a click only, and it never reads it. The command
+// is the text of the <pre> the button sits beside, as the page shows it. The
+// status beside the button says "Copied", and the other buttons' statuses are
+// cleared, so the last copy is the one shown.
+function copyCommand(button) {
+  const box = button.parentElement;
+  const command = box.querySelector("pre");
+  const status = box.querySelector(".copy-status");
+  document.querySelectorAll(".copy-status").forEach(function (other) {
+    other.textContent = "";
+  });
+  navigator.clipboard.writeText(command.textContent).then(function () {
+    status.textContent = "Copied";
+  }).catch(function () {
+    status.textContent = "Copy failed: select the command and copy it yourself.";
+  });
+}
+
+// chooseSource shows the section of the chosen source button and hides the
+// other sources' sections: the buttons say which is shown with aria-pressed.
+// With no script every section stays shown.
+function chooseSource(chosen) {
+  document.querySelectorAll("button[aria-controls]").forEach(function (button) {
+    const section = byId(button.getAttribute("aria-controls"));
+    const pressed = button === chosen;
+    button.ariaPressed = pressed ? "true" : "false";
+    if (section !== null) {
+      section.hidden = !pressed;
+    }
+  });
+}
+
+// wireInventoryPage makes the inventory page's source buttons and copy
+// buttons work. A button's click is what a mouse, Enter and Space all fire.
+function wireInventoryPage() {
+  const sources = document.querySelectorAll("button[aria-controls]");
+  if (sources.length === 0) {
+    return;
+  }
+  sources.forEach(function (button) {
+    button.addEventListener("click", function () {
+      chooseSource(button);
+    });
+    if (button.getAttribute("aria-pressed") === "true") {
+      chooseSource(button);
+    }
+  });
+  document.querySelectorAll("button.copy").forEach(function (button) {
+    button.addEventListener("click", function () {
+      copyCommand(button);
+    });
+  });
+}
+
 // start runs on every page once it is parsed: the scripts are deferred.
 function start() {
   if (!guardFraming()) {
@@ -238,6 +298,7 @@ function start() {
   if (document.body.getAttribute("data-page") === "assessment") {
     startAssessment();
   }
+  wireInventoryPage();
 }
 
 start();

@@ -18,9 +18,10 @@
 <nav aria-label="Site">
 <ul class="nav" role="list">
 <li><a href="index.html">Assessment</a></li>
+<li><a href="inventory.html">Inventory guide</a></li>
 <li><a href="privacy.html" aria-current="page">Privacy</a></li>
 <li><a href="verify.html">Verify this site</a></li>
-<li><a href="https://github.com/timothymamo/shift2eu">Repository</a></li>
+<li><a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">Repository</a></li>
 </ul>
 </nav>
 </div>
@@ -28,7 +29,7 @@
 <main id="main" class="wrap page">
 <div class="hero">
 <h1>Privacy</h1>
-<p class="lead">This page says what the site is built to do with your inventory, what checks it, and what the site cannot promise. Each statement names the check that backs it; the checks are tests in the <a href="https://github.com/timothymamo/shift2eu">repository</a>, which run on every change.</p>
+<p class="lead">This page says what the site is built to do with your inventory, what checks it, and what the site cannot promise. Each statement names the check that backs it; the checks are tests in the <a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">repository</a>, which run on every change.</p>
 </div>
 
 <div class="prose">
@@ -45,7 +46,7 @@
 <li><strong>The files you load are the released ones.</strong> Each release builds the site reproducibly, attests the bundle and checks that the live site serves exactly the attested files. <span class="backed">Backed by the reproducibility test and the release's live check (Layer 3); <a href="verify.html">Verify this site</a> shows how to check it yourself.</span></li>
 </ol>
 <div class="prose">
-<p class="notice with-icon"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"/><path d="M6 6l12 12"/></svg>The site sets no cookies, stores nothing in your browser (no local storage, session storage or database), runs no analytics and loads nothing from a third party. Backed by the banned-API scan (no storage API), the policy test (no third-party source) and the static test of every loaded resource (Layers 1 and 2).</p>
+<p class="notice with-icon"><svg class="notice-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"/><path d="M6 6l12 12"/></svg>No cookies, no local storage, no analytics, nothing loaded from a third party.</p>
 
 <h2>What the site cannot promise</h2>
 <ul class="card caveats" role="list">
@@ -58,6 +59,7 @@
 
 <h2>Technical note</h2>
 <ul class="card technical">
+<li>The site stores nothing in your browser: no cookie, no local or session storage, no database. Backed by the banned-API scan (no storage API), the policy test (no third-party source) and the static test of every loaded resource (Layers 1 and 2).</li>
 <li>The report is the one piece of markup the page inserts, rendered in Go by the HTML reporter, which writes only its own constant elements and every value as escaped text. The page inserts it in one place, through a Trusted Types policy (require-trusted-types-for 'script'). Not every browser enforces Trusted Types: in one that does not, that insertion rests on the reporter's escaping, pinned by a differential test against html/template and by a hostile golden, and on the Content Security Policy's ban on inline script, not on Trusted Types.</li>
 <li>Go's wasm_exec.js is trusted as toolchain code, not scanned: the bundled file is byte for byte the one the building Go toolchain ships, which a test checks, and that toolchain is pinned by go.mod. The module script is not scanned either: it is one fixed template that carries only the encoded module, which a test checks.</li>
 <li>The Content Security Policy does not govern navigation, WebRTC, DNS prefetch or messaging to another window (postMessage, opener, parent, top, BroadcastChannel, MessageChannel, window.name). The banned-API scan closes these gaps in the page's own code, and each page turns DNS prefetch off; the framing guard also sets window.opener to null as defence in depth.</li>
@@ -67,10 +69,9 @@
 </div>
 </main>
 <footer>
-<div class="wrap">
-<p>shift2eu {{.Version}}.</p>
-<p>No cookies, no tracking: the page sends nothing anywhere.</p>
-<p><a href="privacy.html">Privacy</a> · <a href="verify.html">Verify this site</a> · <a href="https://github.com/timothymamo/shift2eu">Repository</a> · <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">Inventory guide</a></p>
+<div class="wrap footer-row">
+<p>No cookies, no tracking, no requests: the page cannot connect anywhere.</p>
+<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <a href="inventory.html">Inventory guide</a> <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">Guide on GitHub</a> <span class="mono">{{.Version}}</span></p>
 </div>
 </footer>
 </body>

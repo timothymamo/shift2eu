@@ -20,9 +20,10 @@
 <nav aria-label="Site">
 <ul class="nav" role="list">
 <li><a href="index.html" aria-current="page">Assessment</a></li>
+<li><a href="inventory.html">Inventory guide</a></li>
 <li><a href="privacy.html">Privacy</a></li>
 <li><a href="verify.html">Verify this site</a></li>
-<li><a href="https://github.com/timothymamo/shift2eu">Repository</a></li>
+<li><a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">Repository</a></li>
 </ul>
 </nav>
 </div>
@@ -37,34 +38,36 @@
 <li><span class="chip"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 7.9-7.5 9.5-4.3-1.6-7.5-4.9-7.5-9.5V6z"/><path d="M8.5 8.5l7 7M15.5 8.5l-7 7"/></svg>Connections blocked by CSP</span></li>
 <li><a class="chip" href="verify.html"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="9.5" r="6"/><path d="M9 14.5V21l3-1.8 3 1.8v-6.5"/><path d="M9.5 9.5l1.8 1.8 3.2-3.3"/></svg>Verifiable release</a></li>
 </ul>
+<p class="privacy-bar"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="8.5"/><path d="M6 6l12 12"/></svg>No cookies, no local storage, no analytics, nothing loaded from a third party.</p>
 <noscript>
-<p class="notice">This assessment needs JavaScript and WebAssembly, and they are off or missing in this browser. Run the same assessment with the shift2eu CLI instead: see the <a href="https://github.com/timothymamo/shift2eu">repository</a>.</p>
+<p class="notice">This assessment needs JavaScript and WebAssembly, and they are off or missing in this browser. Run the same assessment with the shift2eu CLI instead: see the <a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">repository</a>.</p>
 </noscript>
-<p id="loading-notice" class="notice" role="status">Loading the assessment module. It is part of this page and runs in this browser; nothing is sent while it loads.</p>
+<p id="loading-notice" class="notice" role="status">The assessment engine is loading. It is part of this page: nothing is downloaded from elsewhere.</p>
 </div>
 
 <fieldset class="card">
 <legend><span class="step" aria-hidden="true">01</span> Inventory</legend>
 <div class="field">
-<label for="inventory">Paste an inventory document (JSON, schema version 1 or 2)</label>
-<textarea id="inventory" rows="12" spellcheck="false" autocomplete="off"></textarea>
+<label for="inventory">Paste Inventory JSON</label>
+<textarea id="inventory" rows="7" spellcheck="false" autocomplete="off"></textarea>
 </div>
 <div class="field-row">
 <div class="field">
-<label for="inventory-file">Or read one from a file</label>
-<input type="file" id="inventory-file" accept=".json,application/json">
+<label for="inventory-file">Or upload a file</label>
+<input type="file" id="inventory-file" class="file-input" accept=".json,application/json">
+<label for="inventory-file" class="button secondary file-button">Choose a file</label>
 </div>
 <div class="field">
 <label for="example">Or start from an example</label>
-<select id="example">
+<span class="select-wrap"><select id="example">
 {{- range .Examples}}
 <option value="{{.Key}}">{{.Name}} example</option>
 {{- end}}
-</select>
+</select></span>
 <button type="button" id="load-example" class="secondary">Load the example</button>
 </div>
 </div>
-<p class="muted small">The <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">inventory guide</a> shows how to make an inventory from read-only CLI output.</p>
+<p class="muted small"><span>No inventory yet? The </span><a href="inventory.html">inventory guide</a><span> turns read-only CLI output into one.</span></p>
 </fieldset>
 
 <fieldset class="card">
@@ -72,23 +75,22 @@
 <div class="targets">
 {{- range .Targets}}
 <div class="target">
-<label class="target-name"><input type="checkbox" class="target-choice" id="target-{{.Key}}" value="{{.Key}}" checked> {{.Name}}</label>
-<p class="target-hq">{{.HQ}}</p>
+<label class="target-name"><input type="checkbox" class="target-choice" id="target-{{.Key}}" value="{{.Key}}" checked> {{.Name}} <span class="target-country">({{.Country}})</span></label>
 <p class="target-region"><label for="region-{{.Key}}">Region<span class="visually-hidden"> for {{.Name}}</span></label>
-<select id="region-{{.Key}}">
+<span class="select-wrap"><select id="region-{{.Key}}">
 <option value="">Any region</option>
 {{- range .Regions}}
 <option value="{{.}}">{{.}}</option>
 {{- end}}
-</select></p>
-<p class="target-snapshot">Catalog snapshot of <span class="mono">{{.Snapshot}}</span></p>
+</select></span></p>
+<p class="target-snapshot">Catalog retrieved <span class="mono">{{.Snapshot}}</span></p>
 </div>
 {{- end}}
 </div>
-<p class="muted small">Choose one target for an assessment, or several for a comparison. Each target's estimates use the list prices of its catalog snapshot, dated above; they are list prices on that date, not a quote.</p>
+<p class="muted small">Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts.</p>
 </fieldset>
 
-<fieldset class="card">
+<fieldset class="card options">
 <legend><span class="step" aria-hidden="true">03</span> Options</legend>
 <label class="check"><input type="checkbox" id="estimate" checked> Estimate monthly list prices</label>
 </fieldset>
@@ -121,11 +123,11 @@
 </section>
 </main>
 <footer>
-<div class="wrap">
-<p>shift2eu {{.Version}}, its assessment module built with Go <span id="go-version">{{.GoVersion}}</span>.</p>
-<p>No cookies, no tracking: the page sends nothing anywhere.</p>
-<p><a href="privacy.html">Privacy</a> · <a href="verify.html">Verify this site</a> · <a href="https://github.com/timothymamo/shift2eu">Repository</a> · <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">Inventory guide</a></p>
+<div class="wrap footer-row">
+<p>No cookies, no tracking, no requests: the page cannot connect anywhere.</p>
+<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <a href="inventory.html">Inventory guide</a> <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">Guide on GitHub</a> <span class="mono">{{.Version}}</span></p>
 </div>
+<p class="wrap footer-build">The assessment engine is built with Go <span id="go-version">{{.GoVersion}}</span>.</p>
 </footer>
 {{- range .Examples}}
 <template id="example-{{.Key}}">{{.Text}}</template>

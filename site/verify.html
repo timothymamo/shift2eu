@@ -18,9 +18,10 @@
 <nav aria-label="Site">
 <ul class="nav" role="list">
 <li><a href="index.html">Assessment</a></li>
+<li><a href="inventory.html">Inventory guide</a></li>
 <li><a href="privacy.html">Privacy</a></li>
 <li><a href="verify.html" aria-current="page">Verify this site</a></li>
-<li><a href="https://github.com/timothymamo/shift2eu">Repository</a></li>
+<li><a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">Repository</a></li>
 </ul>
 </nav>
 </div>
@@ -52,10 +53,9 @@
 </div>
 </main>
 <footer>
-<div class="wrap">
-<p>shift2eu {{.Version}}.</p>
-<p>No cookies, no tracking: the page sends nothing anywhere.</p>
-<p><a href="privacy.html">Privacy</a> · <a href="verify.html">Verify this site</a> · <a href="https://github.com/timothymamo/shift2eu">Repository</a> · <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md">Inventory guide</a></p>
+<div class="wrap footer-row">
+<p>No cookies, no tracking, no requests: the page cannot connect anywhere.</p>
+<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <a href="inventory.html">Inventory guide</a> <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">Guide on GitHub</a> <span class="mono">{{.Version}}</span></p>
 </div>
 </footer>
 </body>
