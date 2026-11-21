@@ -111,6 +111,24 @@ func TestSourcesDataFailsOnABrokenGuide(t *testing.T) {
 			},
 		},
 		{
+			name:    "a section holds a ~~~ text block",
+			heading: aws.collect,
+			edit: func(t *testing.T, lines []string) []string {
+				t.Helper()
+
+				return withExtraTildeFence(t, lines, aws.collect, "text")
+			},
+		},
+		{
+			name:    "a section holds a bare ~~~ block",
+			heading: aws.collect,
+			edit: func(t *testing.T, lines []string) []string {
+				t.Helper()
+
+				return withExtraTildeFence(t, lines, aws.collect, "")
+			},
+		},
+		{
 			name:    "the same source heading twice",
 			heading: aws.collect,
 			edit: func(t *testing.T, lines []string) []string {
@@ -149,9 +167,10 @@ func TestSourcesDataFailsOnABrokenGuide(t *testing.T) {
 
 // TestSourcesDataIgnoresHeadingsInsideAFence pins the other half of the fence
 // rule (issue #373, item 15): a line that starts with # inside a fenced block is
-// text, not a heading, so a ```text block that sits before the six source
-// sections and shows `# Collect from GCP` is read neither as that section's start
-// nor as a second heading of it. The commands stay the guide's own.
+// text, not a heading, so a ```text block - and a ~~~text block, the other fence
+// Markdown writes - that sits before the six source sections and shows
+// `# Collect from GCP` is read neither as that section's start nor as a second
+// heading of it. The commands stay the guide's own.
 func TestSourcesDataIgnoresHeadingsInsideAFence(t *testing.T) {
 	t.Parallel()
 
@@ -162,40 +181,53 @@ func TestSourcesDataIgnoresHeadingsInsideAFence(t *testing.T) {
 		t.Fatalf("sourcesData failed on docs/guide/inventory.md: %v", err)
 	}
 
-	fence := []string{
-		"```text",
-		"# " + guideSources[1].collect,
-		"```",
-		"",
+	tests := []struct {
+		name  string
+		fence []string
+	}{
+		{
+			name:  "a ```text block",
+			fence: []string{"```text", "# " + guideSources[1].collect, "```", ""},
+		},
+		{
+			name:  "a ~~~text block",
+			fence: []string{"~~~text", "# " + guideSources[1].collect, "~~~", ""},
+		},
 	}
 
 	at := firstSectionLine(t, guide)
 
-	got, err := extract(t, splice(guide, at, at, fence))
-	if err != nil {
-		t.Fatalf("sourcesData failed on a guide whose text block before the source sections holds %q, want it read as text: a line starting with # inside a fence is no heading (issue #373, item 15): %v",
-			"# "+guideSources[1].collect, err)
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	for _, source := range guideSources {
-		if want[source.key].Name != got[source.key].Name {
-			t.Errorf("the %s source's name is %q after a text block before the sections, want %q (issue #373, item 15)",
-				source.key, got[source.key].Name, want[source.key].Name)
-		}
-
-		for _, step := range []struct {
-			name string
-			want []string
-			got  []string
-		}{
-			{name: "collect", want: want[source.key].CollectCommands, got: got[source.key].CollectCommands},
-			{name: "build", want: want[source.key].BuildCommands, got: got[source.key].BuildCommands},
-		} {
-			if !slices.Equal(step.want, step.got) {
-				t.Errorf("the %s source's %s commands are %q after a text block before the sections, want the guide's own %q: the fence's # line ends neither the section nor starts it early (issue #373, item 15)",
-					source.key, step.name, step.got, step.want)
+			got, err := extract(t, splice(guide, at, at, tc.fence))
+			if err != nil {
+				t.Fatalf("sourcesData failed on a guide whose %s before the source sections holds %q, want it read as text: a line starting with # inside that fence is no heading (issue #373, item 15): %v",
+					tc.name, "# "+guideSources[1].collect, err)
 			}
-		}
+
+			for _, source := range guideSources {
+				if want[source.key].Name != got[source.key].Name {
+					t.Errorf("the %s source's name is %q after %s, want %q (issue #373, item 15)",
+						source.key, got[source.key].Name, tc.name, want[source.key].Name)
+				}
+
+				for _, step := range []struct {
+					name string
+					want []string
+					got  []string
+				}{
+					{name: "collect", want: want[source.key].CollectCommands, got: got[source.key].CollectCommands},
+					{name: "build", want: want[source.key].BuildCommands, got: got[source.key].BuildCommands},
+				} {
+					if !slices.Equal(step.want, step.got) {
+						t.Errorf("the %s source's %s commands are %q after %s, want the guide's own %q: the fence's # line ends neither the section nor starts it early (issue #373, item 15)",
+							source.key, step.name, step.got, tc.name, step.want)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -315,6 +347,25 @@ func withExtraFence(t *testing.T, lines []string, name, info string) []string {
 		"```" + info,
 		"This note is no command: the page shows the commands below it.",
 		"```",
+		"",
+	}
+
+	return splice(lines, at+1, at+1, fence)
+}
+
+// withExtraTildeFence returns lines with a ~~~ fenced block of the info string
+// inserted under the heading, before its bash block, holding a line that starts
+// with #: a ~~~ block is a block as ``` is, so the extraction must never read
+// its lines as prose, a heading or a command of the section.
+func withExtraTildeFence(t *testing.T, lines []string, name, info string) []string {
+	t.Helper()
+
+	at := indexOfHeading(t, lines, name)
+
+	fence := []string{
+		"~~~" + info,
+		"# A note in a ~~~ block, not a command and not a heading.",
+		"~~~",
 		"",
 	}
 
