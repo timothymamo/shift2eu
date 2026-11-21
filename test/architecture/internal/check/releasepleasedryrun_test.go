@@ -8,13 +8,18 @@ import (
 )
 
 // ciReleasePleaseDryRun is the part of .github/workflows/ci.yml that
-// check.ReleasePleaseDryRun pins (issue #142): the workflow runs on a
-// pull_request and on a push to main, GITHUB_TOKEN only reads, and one job runs
+// check.ReleasePleaseDryRun pins (issue #142), built from the repository's
+// ci.yml: the cases below change one part of it.
+var ciReleasePleaseDryRun = ciReleasePleaseDryRunFrom(repoCI)
+
+// ciReleasePleaseDryRunTemplate is ciReleasePleaseDryRun with its pin a
+// placeholder (workflowPins): the workflow runs on a pull_request and on a push
+// to main, GITHUB_TOKEN only reads, and one job runs
 // .github/scripts/release-please-dry-run.sh, which reads the release-please
 // workflow's guard and tag steps and runs their scripts against a fake gh. The
 // dry run reaches no network, writes nothing and needs no credential, so the
 // job holds no write permission and no secret.
-const ciReleasePleaseDryRun = `name: CI
+const ciReleasePleaseDryRunTemplate = `name: CI
 
 on:
   push:
@@ -30,22 +35,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           persist-credentials: false
       - name: Tag and guard scripts on sample API responses
         run: .github/scripts/release-please-dry-run.sh
 `
 
-// ciReleasePleaseDryRunFrom returns ciReleasePleaseDryRun built from ci, a
-// ci.yml: every placeholder of the fixture filled in with that workflow's pins
-// (workflowPins), as ciDryRunFrom fills the image job's in (issue #440). RED:
-// the fixture still holds actions/checkout's pin as a literal, so it comes out
-// unchanged whatever workflow it is handed, and
-// TestReleasePleaseFixturesFollowThePins fails until that literal is a
-// placeholder.
+// ciReleasePleaseDryRunFrom returns ciReleasePleaseDryRunTemplate with the pins
+// of ci, a ci.yml, as ciDryRunFrom fills the image job's in (issue #440).
 func ciReleasePleaseDryRunFrom(ci []byte) string {
-	return pinsOf(ci).expand(ciReleasePleaseDryRun)
+	return pinsOf(ci).expand(ciReleasePleaseDryRunTemplate)
 }
 
 // TestReleasePleaseDryRun pins the CI half of issue #142: ci.yml runs the dry

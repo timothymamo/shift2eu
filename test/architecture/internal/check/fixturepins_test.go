@@ -27,12 +27,13 @@ var (
 	// version comment Renovate moves with it. The comment is matched by shape
 	// alone, so that a pin written as a range or a pre-release is followed as
 	// the pin it is: the helpers' pinnedAction (workflowpins_test.go) takes any
-	// comment too.
-	usesPin = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*(\S+?@[0-9a-f]{40})(?: # (\S+))?$`)
+	// comment too. Its blanks are spaces and tabs, never a newline, so that a
+	// match never starts on the blank line above a uses: line.
+	usesPin = regexp.MustCompile(`(?m)^[ \t]*-?[ \t]*uses:[ \t]*(\S+?@[0-9a-f]{40})(?: # (\S+))?$`)
 
 	// usesCommit matches a uses: line of any shape, whatever follows its
 	// commit: what bumpPins holds every pin to.
-	usesCommit = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*\S+@[0-9a-f]{40}`)
+	usesCommit = regexp.MustCompile(`(?m)^[ \t]*-?[ \t]*uses:[ \t]*\S+@[0-9a-f]{40}`)
 
 	// exactRelease matches a version comment or a with: value written as an
 	// exact release, the only kind of pin this test bumps: Renovate moves a
@@ -76,7 +77,9 @@ func TestWorkflowFixturesFollowThePins(t *testing.T) {
 
 	// The fixtures of the two documents, built from the updated bytes.
 	releaseFixture := releaseWorkflowFixtureFrom(bumpedRelease)
-	ciDryRun, releaseDryRun := ciDryRunFrom(bumpedCI), releaseDryRunFrom(bumpedRelease)
+	// Named apart from the package's ciDryRun and releaseDryRun, which are
+	// built from the repository's own workflows.
+	bumpedCIDryRun, bumpedReleaseDryRun := ciDryRunFrom(bumpedCI), releaseDryRunFrom(bumpedRelease)
 
 	t.Run("the release fixture is the updated release workflow", func(t *testing.T) {
 		t.Parallel()
@@ -99,14 +102,14 @@ func TestWorkflowFixturesFollowThePins(t *testing.T) {
 	t.Run("the dry-run fixtures carry the updated pins", func(t *testing.T) {
 		t.Parallel()
 
-		assertPinsFollow(t, "the dry run of ci.yml", ciDryRun, string(bumpedCI))
-		assertPinsFollow(t, "the dry run of release.yml", releaseDryRun, string(bumpedRelease))
+		assertPinsFollow(t, "the dry run of ci.yml", bumpedCIDryRun, string(bumpedCI))
+		assertPinsFollow(t, "the dry run of release.yml", bumpedReleaseDryRun, string(bumpedRelease))
 	})
 
 	t.Run("the updated pair passes the dry-run checks", func(t *testing.T) {
 		t.Parallel()
 
-		if got := check.DryRunMirrorsRelease([]byte(ciDryRun), []byte(releaseDryRun)); len(got) != 0 {
+		if got := check.DryRunMirrorsRelease([]byte(bumpedCIDryRun), []byte(bumpedReleaseDryRun)); len(got) != 0 {
 			t.Errorf("DryRunMirrorsRelease() = %q, want no message", got)
 		}
 	})
@@ -118,9 +121,9 @@ func TestWorkflowFixturesFollowThePins(t *testing.T) {
 
 		want := nextRelease(t, syftOf(t, bumpedCI))
 
-		drifted := replaceOnce(t, ciDryRun, "syft-version: "+syftOf(t, bumpedCI), "syft-version: "+want)
+		drifted := replaceOnce(t, bumpedCIDryRun, "syft-version: "+syftOf(t, bumpedCI), "syft-version: "+want)
 
-		got := check.DryRunMirrorsRelease([]byte(drifted), []byte(releaseDryRun))
+		got := check.DryRunMirrorsRelease([]byte(drifted), []byte(bumpedReleaseDryRun))
 		if !strings.Contains(strings.Join(got, "\n"), `with: syft-version is "`+want+`"`) {
 			t.Errorf("DryRunMirrorsRelease() = %q, want a message containing %q", got, `with: syft-version is "`+want+`"`)
 		}
@@ -131,9 +134,9 @@ func TestWorkflowFixturesFollowThePins(t *testing.T) {
 
 		// The dry run shares docker/metadata-action with the release, which the
 		// check holds to one commit in both.
-		drifted := driftedPin(t, releaseDryRun, "docker/metadata-action")
+		drifted := driftedPin(t, bumpedReleaseDryRun, "docker/metadata-action")
 
-		got := check.DryRunMirrorsRelease([]byte(ciDryRun), []byte(drifted))
+		got := check.DryRunMirrorsRelease([]byte(bumpedCIDryRun), []byte(drifted))
 		if !strings.Contains(strings.Join(got, "\n"), "docker/metadata-action runs at") {
 			t.Errorf("DryRunMirrorsRelease() = %q, want a message naming the drifted docker/metadata-action pin", got)
 		}

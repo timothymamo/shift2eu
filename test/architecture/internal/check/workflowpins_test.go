@@ -90,8 +90,9 @@ var (
 	repoRelease       = readRepoWorkflow(repoReleasePath)
 	repoReleasePlease = readRepoWorkflow(repoReleasePleasePath)
 
-	ciPins      = pinsOf(repoCI)
-	releasePins = pinsOf(repoRelease)
+	ciPins            = pinsOf(repoCI)
+	releasePins       = pinsOf(repoRelease)
+	releasePleasePins = pinsOf(repoReleasePlease)
 )
 
 // readRepoWorkflow returns the repository's workflow at path. It is called
