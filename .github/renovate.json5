@@ -139,7 +139,7 @@
       description: 'Claude Code CLI: ai-review.yml version, with the integrity updated by hand in the same PR; the Claude Code pin check fails the PR until it is',
       matchDepNames: ['@anthropic-ai/claude-code-linux-x64'],
       prBodyNotes: [
-        '**Before merging:** replace `CLAUDE_CODE_INTEGRITY` in `.github/workflows/ai-review.yml` with the output of `npm view @anthropic-ai/claude-code-linux-x64@<new version> dist.integrity`: the **Claude Code pin** check fails this PR until it is replaced, and its error names the published integrity. The check is advisory, not required: do not merge while it is red. Also check that the CLI still accepts every flag `ci/aireview/internal/review/claudecli.go` passes (`claude --help`). The AI review check of this PR runs main\'s pin, not this one.',
+        '**Before merging:** replace `CLAUDE_CODE_INTEGRITY` in `.github/workflows/ai-review.yml` with the output of `npm view @anthropic-ai/claude-code-linux-x64@<new version> dist.integrity`: the **Claude Code pin** check fails this PR until it is replaced, and its error names the published integrity. The check runs on every pull request and is a required status check once the maintainer marks it so in the Protect main ruleset (issue #452): do not merge while it is red. Also check that the CLI still accepts every flag `ci/aireview/internal/review/claudecli.go` passes (`claude --help`). The AI review check of this PR runs main\'s pin, not this one.',
       ],
     },
     {

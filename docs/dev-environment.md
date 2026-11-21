@@ -2036,17 +2036,34 @@ program refuses to run when one is set.
 **The Claude Code pin check** (issue #276). Renovate bumps `CLAUDE_CODE_VERSION` but cannot bump
 `CLAUDE_CODE_INTEGRITY`, and a bump's own AI review runs `main`'s copy of the workflow, so it cannot see a
 stale integrity. The **Claude Code pin** check (`.github/workflows/claude-code-pin.yml`, which runs
-`go run ./ci/claudecodepin`) does: on every pull request that changes `ai-review.yml`,
+`go run ./ci/claudecodepin`) does. It runs on every pull request into `main` (issue #452): a first step
+diffs the pull request's merge commit against its first parent (`git diff --no-renames --name-only -z
+HEAD^1 HEAD`, from a checkout two commits deep) and, when none of `ai-review.yml`,
 `.github/scripts/install-claude-code.sh`, the check, its workflow or `go.mod` (whose go line picks the Go
-that builds the check), and on the push to `main` after the merge, it reads both pins and fails unless the npm
-registry's document of exactly that version of `@anthropic-ai/claude-code-linux-x64` publishes the pinned
-integrity as its `dist.integrity`. Its error names the pinned and the published integrity and the command
-that prints the published one (`npm view @anthropic-ai/claude-code-linux-x64@<version> dist.integrity`). A
-registry that cannot be reached, or answers anything else, fails the check too, never passes it. It runs in
-CI only (the default tests fake the registry), on `pull_request` with a read-only token, reads no secret and
-no environment, and sends the registry one GET of a public document and no credential. It runs only when
-those paths change, so today it is advisory, not a required status check: a Renovate bump of the CLI
-shows it red until the integrity is replaced, and a red **Claude Code pin** check means do not merge.
+that builds the check) changed, passes without contacting the registry, printing that the pin's paths are
+unchanged. It fails closed: any other case (another event, no merge commit, a failing `git diff`) runs the
+check or fails the job, and so does a merge commit whose second parent is not the pull request's head as
+the event file names it (`jq` on `GITHUB_EVENT_PATH`). When a pin path changed, and on the push to `main`
+after a merge that changed one (the push keeps its `paths:` filter), it reads both pins and fails unless
+the npm registry's document of exactly that version of `@anthropic-ai/claude-code-linux-x64` publishes
+the pinned integrity as its `dist.integrity`. Its error names the pinned and the published integrity and
+the command that prints the published one
+(`npm view @anthropic-ai/claude-code-linux-x64@<version> dist.integrity`). A registry that cannot be
+reached, or answers anything else, fails the check too, never passes it. It runs in CI only (the default
+tests fake the registry), on `pull_request` with a read-only token, reads no secret and no environment,
+and sends the registry one GET of a public document and no credential. A Renovate bump of
+the CLI shows it red until the integrity is replaced, and a red **Claude Code pin** check means do not
+merge. Because it reports on every pull request, it can be required, so a missed integrity cannot be
+merged at all. **Maintainer step, once, after issue #452's pull request is merged:** Settings → Rules →
+Rulesets → Protect main → Require status checks to pass → add **Claude Code pin** (the job's name),
+choose **GitHub Actions** as its expected source (not any source, so no other App with checks or statuses
+write can post a green check of the same name) and save. Before that merge the check ran only on pull
+requests that changed its paths, and requiring it then would have left every other pull request waiting
+for a check that never comes. Pull requests opened before the merge have no **Claude Code pin** run (the
+old `paths:` filter never started one) and wait on the required check until they get a new push or
+**Update branch**; re-running their jobs cannot help, since no run exists. The known limit (ADR 0033,
+amended by issue #452): a pull request runs its own copy of the workflow, so it could edit the workflow
+to skip the check; that edit changes a pin path and shows in its diff and its reviews.
 
 **1. Create the reviewer App.** On GitHub, Settings → Developer settings → GitHub Apps → New GitHub App:
 

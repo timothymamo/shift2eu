@@ -5,7 +5,8 @@
   of the diff), 2026-11-19. Amended by issues #367 and #376 (a diff over the limit reviewed in parts,
   the skipped outcome, and the answer format's empty `findings`), 2026-11-20. Amended by issues #374,
   #375 and #388 (constant error classes, and the skipped split review's summary of the parts that
-  answered), 2026-11-20. Amended by issue #276 (the Claude Code pin check), 2026-11-21
+  answered), 2026-11-20. Amended by issue #276 (the Claude Code pin check), 2026-11-21. Amended by
+  issue #452 (the Claude Code pin check runs on every pull request, so it can be required), 2026-11-21
 - Date: 2026-11-18
 
 ## Context
@@ -760,7 +761,48 @@ check reaches the network in CI only.
 `allowedPostUpgradeCommands`, a setting of a self-hosted Renovate only, and no datasource returns an npm
 tarball's integrity to a custom manager. The check is not a required status check: it runs only when its
 paths change, and a required check that never runs would leave every other pull request waiting. It is
-advisory today: a red **Claude Code pin** check on the bump means do not merge.
+advisory today: a red **Claude Code pin** check on the bump means do not merge. (Superseded by the
+amendment of issue #452 below.)
+
+### Amended by issue #452: the Claude Code pin check runs on every pull request
+
+**Problem.** Filtered by `paths:`, the **Claude Code pin** check could not be a required status check: on
+every pull request that changes none of its paths GitHub would wait for a run that never comes. Advisory,
+it relies on everyone reading a red check on a Renovate bump as "do not merge".
+
+**Decision.** On `pull_request` the workflow has no `paths:` filter, so the job, still named
+**Claude Code pin**, reports on every pull request into `main`, and the maintainer marks it a required
+status check of the `Protect main` ruleset with **GitHub Actions** as its expected source, so no other App
+with checks or statuses write can satisfy it with a green check of the same name. A first step,
+`id: changes`, decides whether the pull request touches the pin's paths (the same five:
+`ai-review.yml`, `install-claude-code.sh`, `claude-code-pin.yml`, `ci/claudecodepin/**` and `go.mod`):
+`actions/checkout` checks out the merge commit `refs/pull/<n>/merge` with `fetch-depth: 2`, and
+`git diff --no-renames --name-only -z HEAD^1 HEAD` is exactly what merging the pull request changes on
+`main`. `--no-renames` lists the old path of a rename, `-z` keeps a quote or newline in a name from hiding
+one, and the four files match exactly, the directory by its `ci/claudecodepin/` prefix. Git rather than
+the pull request's file list from the API: no `pull-requests: read` scope (the job keeps `contents: read`
+alone), no pagination and no 3000-file cap, no network call besides the checkout, and the diff is of the
+very tree the check runs on. When no pin path changed, setup-go and `go run ./ci/claudecodepin` are
+skipped and the job passes without contacting the registry; otherwise they run as before. The step fails
+closed: it writes `pin=false` only on a `pull_request` whose `HEAD` has exactly two parents, the second of
+them the event's `pull_request.head.sha` (read with `jq -er .pull_request.head.sha "$GITHUB_EVENT_PATH"`,
+so a missing event file or a failing `jq` fails the step; and so `HEAD^1` is `main` and the diff is the
+pull request's change, not what `main` added), after `git diff` succeeded (its output goes to a file
+first, so a failing diff fails the step, which a process substitution would not) and listed no pin path.
+Every other case writes `pin=true` or fails the step, and the two later steps run under
+`if: steps.changes.outputs.pin != 'false'`, so a missing or garbled output runs the check. The event comes
+from `GITHUB_EVENT_NAME`; no expression is spliced into the script. The push to `main` keeps its `paths:`
+filter: required checks matter on pull requests only, and an npm outage then never fails an unrelated
+merge on `main`. `test/lint`'s `TestClaudeCodePinChangesStepDecides` runs the step's own script in
+temporary git repositories with real merge commits.
+
+**Known limit.** The job runs the pull request's own copy of the workflow, as `pull_request` does, so a
+pull request could edit `claude-code-pin.yml` to skip the check or always pass. Such a pull request
+changes a pin path itself: the edit is in its diff, and its AI review and the maintainer's review see it,
+as with the check of issue #276. The re-check on the push to `main` does not catch it either: it runs the
+merged copy of the workflow, which is the edited one. The security boundary for the CLI tarball stays
+`install-claude-code.sh`'s integrity check, which the AI review runs from `main`'s copy under
+`pull_request_target`, and the maintainer's approval is the human gate.
 
 ## Alternatives considered
 
