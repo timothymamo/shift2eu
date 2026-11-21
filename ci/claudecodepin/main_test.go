@@ -76,31 +76,41 @@ func TestRun(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		integrity  string
-		status     int
-		fixture    string // a registry fixture of the library's testdata, or
-		body       string // the registry's answer itself when fixture is empty
-		header     http.Header
-		wantCode   int
-		wantStdout string
+		name      string
+		integrity string
+		status    int
+		fixture   string // a registry fixture of the library's testdata, or
+		body      string // the registry's answer itself when fixture is empty
+		header    http.Header
+		// workflowName is the -workflow file's name in a fresh temporary
+		// directory; empty means the fixture workflow that pins integrity.
+		// A name whose file does not exist makes run() read an error text
+		// holding the name as it was given.
+		workflowName string
+		// wantRequests is how many registry requests the check sends: none
+		// when it fails before the fetch.
+		wantRequests int
+		wantCode     int
+		wantStdout   string
 		// wantStderr are substrings of the one ::error line.
 		wantStderr []string
 	}{
 		{
-			name:       "published integrity passes",
-			integrity:  publishedIntegrity,
-			status:     http.StatusOK,
-			fixture:    "registry-2.1.330.json",
-			wantCode:   0,
-			wantStdout: "Claude Code pin: ",
+			name:         "published integrity passes",
+			integrity:    publishedIntegrity,
+			status:       http.StatusOK,
+			fixture:      "registry-2.1.330.json",
+			wantRequests: 1,
+			wantCode:     0,
+			wantStdout:   "Claude Code pin: ",
 		},
 		{
-			name:      "stale integrity fails with both values and the npm command",
-			integrity: otherIntegrity,
-			status:    http.StatusOK,
-			fixture:   "registry-2.1.330.json",
-			wantCode:  1,
+			name:         "stale integrity fails with both values and the npm command",
+			integrity:    otherIntegrity,
+			status:       http.StatusOK,
+			fixture:      "registry-2.1.330.json",
+			wantRequests: 1,
+			wantCode:     1,
 			wantStderr: []string{
 				"::error title=Claude Code pin::",
 				otherIntegrity,
@@ -109,45 +119,71 @@ func TestRun(t *testing.T) {
 			},
 		},
 		{
-			name:       "a registry error fails closed",
-			integrity:  publishedIntegrity,
-			status:     http.StatusInternalServerError,
-			fixture:    "registry-2.1.330.json",
-			wantCode:   1,
-			wantStderr: []string{"the registry answered 500, want 200"},
+			name:         "a registry error fails closed",
+			integrity:    publishedIntegrity,
+			status:       http.StatusInternalServerError,
+			fixture:      "registry-2.1.330.json",
+			wantRequests: 1,
+			wantCode:     1,
+			wantStderr:   []string{"the registry answered 500, want 200"},
 		},
 		{
-			name:       "a missing version fails",
-			integrity:  publishedIntegrity,
-			status:     http.StatusNotFound,
-			fixture:    "registry-2.1.330.json",
-			wantCode:   1,
-			wantStderr: []string{"the registry answered 404, want 200"},
+			name:         "a missing version fails",
+			integrity:    publishedIntegrity,
+			status:       http.StatusNotFound,
+			fixture:      "registry-2.1.330.json",
+			wantRequests: 1,
+			wantCode:     1,
+			wantStderr:   []string{"the registry answered 404, want 200"},
 		},
 		{
-			name:       "a redirect is not followed",
-			integrity:  publishedIntegrity,
-			status:     http.StatusFound,
-			header:     http.Header{"Location": {"https://example.com/elsewhere"}},
-			wantCode:   1,
-			wantStderr: []string{"redirect"},
+			// A redirect answer holds a valid registry document: the check
+			// must fail on the status, never read the document the Location
+			// names. The test client answers the redirect with its 302 (the
+			// standard library's no-follow policy), so the case pins fetch's
+			// own refusal of a non-200.
+			name:         "a redirect answer fails closed instead of being followed",
+			integrity:    publishedIntegrity,
+			status:       http.StatusFound,
+			fixture:      "registry-2.1.330.json",
+			header:       http.Header{"Location": {"https://example.com/elsewhere"}},
+			wantRequests: 1,
+			wantCode:     1,
+			wantStderr:   []string{"the registry answered 302, want 200"},
 		},
 		{
-			name:       "a body over the bound fails",
-			integrity:  publishedIntegrity,
-			status:     http.StatusOK,
-			body:       strings.Repeat(" ", maxBody+1),
-			wantCode:   1,
-			wantStderr: []string{"over 1048576 bytes"},
+			name:         "a body over the bound fails",
+			integrity:    publishedIntegrity,
+			status:       http.StatusOK,
+			body:         strings.Repeat(" ", maxBody+1),
+			wantRequests: 1,
+			wantCode:     1,
+			wantStderr:   []string{"over 1048576 bytes"},
 		},
 		{
-			name:      "registry text cannot start a workflow command",
+			// The newline is in the package name, which Verify quotes with
+			// %q, so this case pins Verify's quoting rather than the
+			// annotation's escaping.
+			name:      "a registry package name with a newline is quoted by Verify",
 			integrity: publishedIntegrity,
 			status:    http.StatusOK,
 			body: `{"name":"@anthropic-ai/claude-code-linux-x64\n::warning::injected","version":"2.1.330",` +
 				`"dist":{"integrity":"` + publishedIntegrity + `"}}`,
-			wantCode:   1,
-			wantStderr: []string{"package"},
+			wantRequests: 1,
+			wantCode:     1,
+			wantStderr:   []string{"package"},
+		},
+		{
+			// The -workflow path reaches the ::error message unquoted (read
+			// %s), so its CR, LF and % must be escaped or a workflow command
+			// of the path would run, and the message would span lines.
+			name:         "a workflow path's CR, LF and % are escaped in the one ::error line",
+			integrity:    publishedIntegrity,
+			status:       http.StatusOK,
+			workflowName: "ai-review\n::warning::injected\r100%.yml",
+			wantRequests: 0,
+			wantCode:     1,
+			wantStderr:   []string{"ai-review%0A::warning::injected%0D100%25.yml"},
 		},
 	}
 
@@ -162,31 +198,47 @@ func TestRun(t *testing.T) {
 			registry := &fakeRegistry{status: tc.status, body: body, header: tc.header}
 			client := &http.Client{
 				Transport: registry,
+				// The check's own client refuses redirects with errRedirect
+				// in main, which run() does not build; the standard library's
+				// no-follow policy hands the 302 itself to run() here.
 				CheckRedirect: func(*http.Request, []*http.Request) error {
-					return errRedirect
+					return http.ErrUseLastResponse
 				},
 			}
 
+			path := workflow(t, tc.integrity)
+			if tc.workflowName != "" {
+				path = filepath.Join(t.TempDir(), tc.workflowName)
+			}
+
 			var stdout, stderr bytes.Buffer
-			code := run(t.Context(), []string{"-workflow", workflow(t, tc.integrity)}, client, &stdout, &stderr)
+			code := run(t.Context(), []string{"-workflow", path}, client, &stdout, &stderr)
 
 			if code != tc.wantCode {
 				t.Errorf("run() = %d, want %d (stderr %q)", code, tc.wantCode, stderr.String())
 			}
-			if len(registry.got) != 1 {
-				t.Fatalf("run() sent %d requests, want 1", len(registry.got))
+			if len(registry.got) != tc.wantRequests {
+				t.Fatalf("run() sent %d requests, want %d", len(registry.got), tc.wantRequests)
 			}
-			req := registry.got[0]
-			if req.URL.String() != wantURL || req.Method != http.MethodGet {
-				t.Errorf("run() sent %s %s, want GET %s", req.Method, req.URL, wantURL)
-			}
-			if req.Header.Get("Authorization") != "" || len(req.Header) != 1 {
-				t.Errorf("run() sent headers %v, want Accept alone", req.Header)
+			if len(registry.got) == 1 {
+				req := registry.got[0]
+				if req.URL.String() != wantURL || req.Method != http.MethodGet {
+					t.Errorf("run() sent %s %s, want GET %s", req.Method, req.URL, wantURL)
+				}
+				if accept := req.Header.Values("Accept"); len(req.Header) != 1 || len(accept) != 1 || accept[0] != "application/json" {
+					t.Errorf("run() sent headers %v, want Accept: application/json alone", req.Header)
+				}
 			}
 
 			if tc.wantCode == 0 {
-				if !strings.HasPrefix(stdout.String(), tc.wantStdout) || strings.Count(stdout.String(), "\n") != 1 {
-					t.Errorf("stdout = %q, want one line starting %q", stdout.String(), tc.wantStdout)
+				out := stdout.String()
+				if !strings.HasPrefix(out, tc.wantStdout) || strings.Count(out, "\n") != 1 {
+					t.Errorf("stdout = %q, want one line starting %q", out, tc.wantStdout)
+				}
+				for _, want := range []string{"@anthropic-ai/claude-code-linux-x64@2.1.330", tc.integrity} {
+					if !strings.Contains(out, want) {
+						t.Errorf("stdout = %q, want it to contain %q", out, want)
+					}
 				}
 				if stderr.Len() != 0 {
 					t.Errorf("stderr = %q, want nothing", stderr.String())
@@ -195,8 +247,8 @@ func TestRun(t *testing.T) {
 			}
 
 			out := stderr.String()
-			if strings.Count(out, "\n") != 1 || !strings.HasPrefix(out, "::error title=Claude Code pin::") {
-				t.Errorf("stderr = %q, want one ::error line", out)
+			if strings.Count(out, "\n") != 1 || strings.Contains(out, "\r") || !strings.HasPrefix(out, "::error title=Claude Code pin::") {
+				t.Errorf("stderr = %q, want one CR-less ::error line", out)
 			}
 			for _, want := range tc.wantStderr {
 				if !strings.Contains(out, want) {
@@ -226,8 +278,12 @@ func TestRunRefusesAWorkflowWithoutAPin(t *testing.T) {
 	if len(registry.got) != 0 {
 		t.Errorf("run() sent %d requests, want none before a pin is read", len(registry.got))
 	}
-	if !strings.Contains(stderr.String(), "CLAUDE_CODE_VERSION") {
-		t.Errorf("stderr = %q, want it to name CLAUDE_CODE_VERSION", stderr.String())
+	out := stderr.String()
+	if strings.Count(out, "\n") != 1 || !strings.HasPrefix(out, "::error title=Claude Code pin::") {
+		t.Errorf("stderr = %q, want one ::error line", out)
+	}
+	if !strings.Contains(out, "CLAUDE_CODE_VERSION") {
+		t.Errorf("stderr = %q, want it to name CLAUDE_CODE_VERSION", out)
 	}
 }
 

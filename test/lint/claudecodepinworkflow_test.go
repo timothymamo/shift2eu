@@ -19,10 +19,17 @@ const (
 	ciWorkflowPath            = ".github/workflows/ci.yml"
 )
 
+// claudeCodePinCancel is the one concurrency cancel-in-progress: the pin check
+// may have: cancel a pull request's superseded run, never an earlier run of a
+// push to main, so main's check always finishes.
+const claudeCodePinCancel = "${{ github.event_name == 'pull_request' }}"
+
 // claudeCodePinPaths are the paths every trigger of the pin check filters on:
-// the pinned workflow, the check's own workflow and the check's code.
+// the pinned workflow, the installer that consumes the pin, the check's own
+// workflow and the check's code.
 var claudeCodePinPaths = []string{
 	".github/workflows/ai-review.yml",
+	".github/scripts/install-claude-code.sh",
 	claudeCodePinWorkflowPath,
 	"ci/claudecodepin/**",
 }
@@ -66,6 +73,26 @@ func TestClaudeCodePinWorkflowIsClosed(t *testing.T) {
 			}
 		}
 	}
+
+	t.Run("a push to main never cancels an earlier main run", func(t *testing.T) {
+		t.Parallel()
+
+		concurrency, ok := aiReviewEntry(t, lines, "concurrency")
+		if !ok || concurrency.Value != "" {
+			t.Fatalf("%s: want a top-level concurrency: block, so the check's runs share one group (issue #276)", claudeCodePinWorkflowPath)
+		}
+
+		fields := aiReviewFields(t, concurrency.Block, "concurrency:")
+
+		cancel, ok := aiReviewFind(fields, "cancel-in-progress")
+		if !ok {
+			t.Fatalf("%s: concurrency: names no cancel-in-progress:, want %q", claudeCodePinWorkflowPath, claudeCodePinCancel)
+		}
+
+		if got := aiReviewScalar(t, cancel); got != claudeCodePinCancel {
+			t.Errorf("%s: line %d: cancel-in-progress is %q, want %q: a new pull request cancels the run in progress, but a push to main re-checks what was merged without cancelling an earlier main run (issue #276)", claudeCodePinWorkflowPath, cancel.Num, got, claudeCodePinCancel)
+		}
+	})
 
 	t.Run("pull_request and push to main, filtered to the pin's paths", func(t *testing.T) {
 		t.Parallel()
