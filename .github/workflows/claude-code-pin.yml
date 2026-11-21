@@ -20,16 +20,18 @@ name: Claude Code pin
 # parent is main before the merge and its second the pull request's head, so git diff HEAD^1 HEAD is
 # exactly what merging the pull request changes on main. The step trusts neither the parent count nor
 # their order alone: it reads the head's sha from the event file (jq on GITHUB_EVENT_PATH) and requires it
-# to be HEAD's second parent, since parents the other way round would diff what main added instead. Git, not the API's file list: no pull-requests: read scope, no pagination and no 3000-file cap,
-# no network call besides the checkout, and the diff is of the very tree the check then runs on. When no
-# pin path changed, the job passes without contacting the registry; otherwise it runs the check. It fails
-# closed: the step says the pin is unchanged only on a pull_request whose HEAD is a merge commit with two
-# parents, the second the event's head, whose git diff succeeded and listed no pin path; any other case runs the check or fails the
-# step, and a missing or garbled output runs the check too. So "Claude Code pin" reports on every pull
-# request and is meant to be a required status check of the Protect main ruleset
-# (docs/dev-environment.md, The Claude Code pin check). The push to main keeps the paths: filter: required
-# checks matter on pull requests only, and an npm outage then never fails an unrelated merge on main, while
-# a merge that changed the pin is re-checked.
+# to be HEAD's second parent, since parents the other way round would diff what main added instead.
+#
+# The step diffs with git, not with the API's file list. So it needs no pull-requests: read scope, has no
+# pagination and no 3000-file cap, makes no network call besides the checkout, and diffs the very tree the
+# check then runs on. When no pin path changed, the job passes without contacting the registry; otherwise
+# it runs the check. It fails closed: the step says the pin is unchanged only on a pull_request whose HEAD
+# is a merge commit with two parents, the second the event's head, whose git diff succeeded and listed no
+# pin path. Any other case runs the check or fails the step, and a missing or garbled output runs the
+# check too. So "Claude Code pin" reports on every pull request and is meant to be a required status
+# check of the Protect main ruleset (docs/dev-environment.md, The Claude Code pin check). The push to main
+# keeps the paths: filter: required checks matter on pull requests only, and an npm outage then never
+# fails an unrelated merge on main, while a merge that changed the pin is re-checked.
 on:
   push:
     branches: [main]
