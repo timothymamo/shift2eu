@@ -482,6 +482,20 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 			t.Errorf("%s: line %d: the install step's run: script names the version %s itself; the version is CLAUDE_CODE_VERSION, which Renovate updates with the integrity in one place (CLAUDE.md rule 7)", aiReviewWorkflowPath, run.Num, version)
 		}
 
+		// The pin check (ci/claudecodepin, issue #276) reads exactly these
+		// two env: values and holds them to the npm registry, so the step
+		// must pass exactly them to the installer: the linux-x64 platform
+		// package at ${CLAUDE_CODE_VERSION}, which the check's own package
+		// name mirrors, and ${CLAUDE_CODE_INTEGRITY}. Any other word there
+		// (the meta package, a dist tag, a chained suffix) would check a
+		// download the reviewer never installs, and the check would pass.
+		if got := aiReviewInstallArgs(t, run); !slices.Equal(got, []string{
+			"@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}",
+			"${CLAUDE_CODE_INTEGRITY}",
+		}) {
+			t.Errorf("%s: line %d: the install step passes %v to %s, want exactly @anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION} and ${CLAUDE_CODE_INTEGRITY}: the pin check holds those to the registry, so it checks the download the reviewer runs (issue #276)", aiReviewWorkflowPath, run.Num, got, aiReviewInstallScript)
+		}
+
 		// The CLI is installed before any secret is in a step's environment, so
 		// nothing it writes while installing can read one.
 		for i := 0; i <= index; i++ {
@@ -830,6 +844,34 @@ func aiReviewInstallDir(t *testing.T, run yamlread.Entry) string {
 	}
 
 	return ""
+}
+
+// aiReviewInstallArgs returns the words the install step passes to
+// .github/scripts/install-claude-code.sh after the directory: the platform
+// package and the integrity, quoted words unquoted, or nil when no line calls
+// the script.
+func aiReviewInstallArgs(t *testing.T, run yamlread.Entry) []string {
+	t.Helper()
+
+	for _, line := range aiReviewRunLines(run) {
+		words := aiReviewShellWords(line.text)
+
+		for i, word := range words {
+			if word != aiReviewInstallScript {
+				continue
+			}
+
+			// The directory is the first argument, the package and the
+			// integrity follow it.
+			if i+3 > len(words) {
+				return nil
+			}
+
+			return words[i+2:]
+		}
+	}
+
+	return nil
 }
 
 // aiReviewRunStep returns the step that runs the reviewer, the one whose env:
