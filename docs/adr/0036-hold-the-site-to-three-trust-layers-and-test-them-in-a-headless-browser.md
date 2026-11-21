@@ -296,8 +296,9 @@ that build an inventory, each with its own copy button (PR #379, item 15).
   `docs/guide/inventory.md` from the module root and takes the bash blocks under each source's "Collect
   from" and "Build the ... inventory" headings, splitting each block into commands (a blank line ends one,
   a comment line after code starts the next, so a comment is copied with the command it describes, and
-  comments with no code form none). It tracks every fenced block, ```` ``` ```` or `~~~` (each closed only
-  by its own marker), whatever its info string, so a `#` line inside one is no heading, and it fails the
+  comments with no code form none). It tracks every fenced block, ```` ``` ```` or `~~~` (one opened by N
+  backticks or tildes closed only by a line of the same character, at least N long, and nothing else),
+  whatever its info string, so a `#` line inside one is no heading, and it fails the
   build, naming the heading, on a heading it finds never or twice, a block under it that is a `~~~` block,
   is not bash or is left open, and a section with no command. The
   page renders them through `html/template`, so each is escaped text. The builder reads a file of the
