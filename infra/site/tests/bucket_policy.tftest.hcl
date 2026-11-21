@@ -2,7 +2,8 @@
 # bucket policy allows only what it lists, so this file pins every grant: the deploy application writes and
 # reads the site's objects, everyone may read them at most, and nothing else - no delete, no bucket
 # configuration, no second bucket - is allowed to either. Statements for the maintainer's own principal may
-# exist and are not forbidden (the owner must not be locked out), but they may not use the `*` principal.
+# exist and are not forbidden (the owner must not be locked out), but they may not use the `*` principal,
+# and the one this file's configuration writes names exactly `var.admin_principal`.
 #
 # `mock_provider` replaces the Scaleway provider, so `tofu test` needs no credential and contacts nothing.
 # The mock's computed ids must satisfy the provider's own validators (UUIDs), hence the fixed values below.
@@ -110,5 +111,31 @@ run "the_bucket_policy_is_the_recommended_version_and_only_allows" {
       ) ? length(setsubtract(toset(flatten([try(s.Action, [])])), toset(["s3:PutObject", "s3:GetObject", "s3:ListBucket"]))) == 0 : true
     ])
     error_message = "no statement of scaleway_object_bucket_policy.site.policy may allow anything other than s3:PutObject, s3:GetObject or s3:ListBucket to `*` or to the deploy application (scaleway_iam_application.deploy): s3:*, s3:DeleteObject, s3:PutBucketPolicy and every other bucket-admin action would let the deploy key, or anyone, destroy or reconfigure the site (PRD #297 hosting decision 5)."
+  }
+}
+
+# A bucket policy limits even the organization's owner, so the maintainer's own principal must be in it, and
+# it must be named exactly: the SCW principal is `var.admin_principal` verbatim, never a prefix, an
+# interpolation or `*` (which would give every caller full control of the bucket).
+run "the_admin_statement_names_exactly_the_admin_principal" {
+  command = apply
+
+  assert {
+    condition = anytrue([
+      for s in flatten([jsondecode(scaleway_object_bucket_policy.site.policy).Statement]) :
+      try(s.Principal.SCW, null) == var.admin_principal
+    ])
+    error_message = "scaleway_object_bucket_policy.site.policy must have a statement whose SCW principal is exactly var.admin_principal (\"${var.admin_principal}\"): the bucket policy limits the maintainer too, so without it an apply locks the owner out of the bucket it manages, and any other spelling of the principal - above all `*` - either matches nobody or everyone."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in flatten([jsondecode(scaleway_object_bucket_policy.site.policy).Statement]) :
+      try(s.Principal.SCW, null) != var.admin_principal ? true : (
+        toset(flatten([try(s.Action, [])])) == toset(["s3:*"]) &&
+        toset(flatten([try(s.Resource, [])])) == toset([scaleway_object_bucket.site.name, "${scaleway_object_bucket.site.name}/*"])
+      )
+    ])
+    error_message = "the statement whose SCW principal is var.admin_principal must allow s3:* on both `${scaleway_object_bucket.site.name}` and `${scaleway_object_bucket.site.name}/*`: it is what keeps the maintainer in full control of the bucket OpenTofu manages, and a narrower grant would leave the next apply unable to reconfigure the bucket or the site's objects."
   }
 }

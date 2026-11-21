@@ -1,7 +1,9 @@
 # The inputs' own validation (issue #422): infra/site has no default for organization_id, and a value that
 # is not a Scaleway organization UUID must be refused before any resource is planned, so a typo cannot
-# create the site's project in the wrong organization. `mock_provider` keeps the run offline: nothing here
-# contacts Scaleway, and a plan against the mock needs no credential.
+# create the site's project in the wrong organization. admin_principal must name one user or application by
+# its UUID - never "*", never empty, never a bare prefix with a wildcard - because the bucket policy gives
+# that principal full control of the site bucket (bucket_policy.tftest.hcl). `mock_provider` keeps the runs
+# offline: nothing here contacts Scaleway, and a plan against the mock needs no credential.
 #
 # The plan run plans the whole configuration, so the mock gives every resource's computed id a fixed, valid
 # UUID: the provider's schema validates the ids it is given, and the mock's own random strings are not
@@ -62,4 +64,44 @@ run "refuses_an_organization_id_that_is_not_a_uuid" {
   }
 
   expect_failures = [var.organization_id]
+}
+
+run "refuses_an_admin_principal_of_star" {
+  command = plan
+
+  variables {
+    admin_principal = "*"
+  }
+
+  expect_failures = [var.admin_principal]
+}
+
+run "refuses_an_empty_admin_principal" {
+  command = plan
+
+  variables {
+    admin_principal = ""
+  }
+
+  expect_failures = [var.admin_principal]
+}
+
+run "refuses_an_admin_principal_that_is_not_a_uuid" {
+  command = plan
+
+  variables {
+    admin_principal = "user_id:not-a-uuid"
+  }
+
+  expect_failures = [var.admin_principal]
+}
+
+run "refuses_a_wildcard_application_admin_principal" {
+  command = plan
+
+  variables {
+    admin_principal = "application_id:*"
+  }
+
+  expect_failures = [var.admin_principal]
 }
