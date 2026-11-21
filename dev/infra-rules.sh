@@ -41,7 +41,8 @@
 #                    abspath in a configuration or test file, a template's ${...} too: the plan would read
 #                    the machine that runs it. A name in a comment or in a string without a template is no
 #                    call
-#   [import-block]   a top-level import block: every resource is created fresh, never adopted
+#   [import-block]   a top-level import block in a configuration file: every resource is created fresh,
+#                    never adopted (a test file's import block gets [block-type] alone)
 #   [resource-type]  a scaleway_* resource type infra/site/main.tf does not use, or any scaleway_* data or
 #                    ephemeral type, that no rule above or below names: an allow list in
 #                    dev/infra-rules.awk, extended in the same PR as the new resource. A type a specific
@@ -73,7 +74,7 @@
 #                    ephemeral, variable, locals, output, module and import in a configuration file; run,
 #                    mock_provider, variables and provider in a test file. moved, removed, check, list,
 #                    override_resource, a mock_provider in a configuration, ... are blocks no rule reads. A
-#                    type a rule names ([import-block], [test-provider]) gets only that rule's line; the
+#                    type a rule names ([test-provider]) gets only that rule's line; the
 #                    blocks nested in a refused one get no [block-type] line (a provisioner there keeps its own)
 #   [module-source]  a module, in the configuration or in a test's run block, whose source is not a local
 #                    ./ path, or has a .. segment or another segment starting with "." (such as

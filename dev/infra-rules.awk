@@ -500,7 +500,7 @@ END {
     if (typ == "provisioner" || typ == "connection") {
       problem("provisioner", f, bline[b], "a " typ " block (" p "): a provisioner runs commands, or reaches another machine, on whichever machine applies or tests, where the Scaleway keys and the GitHub admin token live")
     }
-    if (m == 1 && typ == "import") {
+    if (m == 1 && !isTest[f] && typ == "import") {
       problem("import-block", f, bline[b], "an import block: the Runbook creates every resource fresh, so an import would adopt whatever object its id names into the state unasked (ADR 0039)")
     }
     if (m == 1 && isTest[f] && !(typ in testBlock)) {
