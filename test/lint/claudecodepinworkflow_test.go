@@ -532,6 +532,11 @@ type claudeCodePinHistory struct {
 // own repository, no git configuration of the machine (GIT_CONFIG_GLOBAL and
 // GIT_CONFIG_SYSTEM point at /dev/null), a fixed identity and date, and no
 // network.
+//
+// The test needs bash, git and jq on PATH, and fails rather than skips without
+// them: the dev VM installs all three (dev/lima.yaml) and the job runs on
+// ubuntu-latest, so their absence is a broken machine, and a skip would let
+// every row below pass unrun.
 func TestClaudeCodePinChangesStepDecides(t *testing.T) {
 	t.Parallel()
 
@@ -549,11 +554,12 @@ func TestClaudeCodePinChangesStepDecides(t *testing.T) {
 
 	script := claudeCodePinChangesScript(t, lines, strings.Split(string(src), "\n"))
 
-	// The step runs in a shell with git and jq and nothing else: skip where the
-	// machine has none of them rather than fail its repository's checks.
+	// The step runs in a shell with git and jq: a machine without any of the
+	// three fails here rather than skips, because a skip would report the
+	// rows below as run where no row ran.
 	for _, tool := range []string{"bash", "git", "jq"} {
 		if _, err := exec.LookPath(tool); err != nil {
-			t.Skipf("%s is not on PATH, so the changes step cannot run here: %v", tool, err)
+			t.Fatalf("%s is not on PATH, and the changes step needs bash, git and jq: the dev VM installs all three (dev/lima.yaml) and the job runs on ubuntu-latest, so a machine without them fails here rather than skipping the rows below: %v", tool, err)
 		}
 	}
 
@@ -1122,7 +1128,7 @@ func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
 		t.Fatalf("%s: read the workflow : %v", rel, err)
 	}
 
-	block, ok := keyBlock(jobs, "jobs")
+	block, ok := claudeCodePinKeyBlock(jobs, "jobs")
 	if !ok {
 		// A workflow without jobs reports no check at all.
 		return
@@ -1140,17 +1146,17 @@ func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
 			continue
 		}
 
-		name, ok := keyBlock(definitions, job.Key)
+		name, ok := claudeCodePinKeyBlock(definitions, job.Key)
 		if !ok {
 			continue
 		}
 
-		named, ok := keyBlockFromYAML(t, rel, name.Block, "name")
+		named, ok := claudeCodePinKeyBlockFromYAML(t, rel, name.Block, "name")
 		if !ok {
 			continue
 		}
 
-		if got := yamlScalar(t, rel, named); got == claudeCodePinCheckName {
+		if got := claudeCodePinYAMLScalar(t, rel, named); got == claudeCodePinCheckName {
 			t.Errorf("%s: line %d: job %q is named %q, the required check %s alone reports; a required check is matched by name, so a second job of that name could mask the pin's red one (issue #452)", rel, named.Num, job.Key, got, claudeCodePinWorkflowPath)
 		}
 	}
@@ -1264,9 +1270,9 @@ func claudeCodePinScannedFile(t *testing.T, rel, path string) {
 	}
 }
 
-// keyBlock returns the entry of fields for key, and false when fields holds
-// none.
-func keyBlock(fields []yamlread.Entry, key string) (yamlread.Entry, bool) {
+// claudeCodePinKeyBlock returns the entry of fields for key, and false when
+// fields holds none.
+func claudeCodePinKeyBlock(fields []yamlread.Entry, key string) (yamlread.Entry, bool) {
 	for _, field := range fields {
 		if field.Key == key {
 			return field, true
@@ -1276,9 +1282,9 @@ func keyBlock(fields []yamlread.Entry, key string) (yamlread.Entry, bool) {
 	return yamlread.Entry{}, false
 }
 
-// keyBlockFromYAML returns the entry of lines for key, and false when lines
-// holds none; the file path rel names the workflow in its failures.
-func keyBlockFromYAML(t *testing.T, rel string, lines []yamlread.Line, key string) (yamlread.Entry, bool) {
+// claudeCodePinKeyBlockFromYAML returns the entry of lines for key, and false
+// when lines holds none; the file path rel names the workflow in its failures.
+func claudeCodePinKeyBlockFromYAML(t *testing.T, rel string, lines []yamlread.Line, key string) (yamlread.Entry, bool) {
 	t.Helper()
 
 	fields, err := yamlread.Mapping(lines)
@@ -1286,11 +1292,11 @@ func keyBlockFromYAML(t *testing.T, rel string, lines []yamlread.Line, key strin
 		t.Fatalf("%s: read the mapping that holds %s:: %v", rel, key, err)
 	}
 
-	return keyBlock(fields, key)
+	return claudeCodePinKeyBlock(fields, key)
 }
 
-// yamlScalar reads e as one scalar of the workflow at rel.
-func yamlScalar(t *testing.T, rel string, e yamlread.Entry) string {
+// claudeCodePinYAMLScalar reads e as one scalar of the workflow at rel.
+func claudeCodePinYAMLScalar(t *testing.T, rel string, e yamlread.Entry) string {
 	t.Helper()
 
 	value, err := yamlread.Single(e)
