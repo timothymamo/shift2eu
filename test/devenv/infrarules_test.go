@@ -634,6 +634,139 @@ resource "scaleway_object_bucket" "a%%{b}" {
 				"  api_url         = \"https://example.com\"\n  organization_id = var.organization_id")
 		},
 	},
+	// OpenTofu ignores every configuration file whose basename starts with "." (configs.IsIgnoredFile), so
+	// such a file is no part of what runs: the rules must refuse it and read no other rule into it.
+	{
+		name:     "hidden-versions-file",
+		why:      "site/versions.tf renamed to site/.versions.tf, the hidden file beside tofu's view, which holds the root's backend and its required_version",
+		want:     "hidden-file",
+		wantMore: []string{"backend-count", "required-version"},
+		wantIn: map[string]string{
+			"hidden-file":      "{site}/.versions.tf",
+			"backend-count":    "{site}",
+			"required-version": "{site}",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+
+			versions := filepath.Join(site, "versions.tf")
+
+			body, err := os.ReadFile(versions)
+			if err != nil {
+				t.Fatalf("read %s: %v", versions, err)
+			}
+
+			writeInfraText(t, filepath.Join(site, ".versions.tf"), string(body))
+
+			if err := os.Remove(versions); err != nil {
+				t.Fatalf("remove %s: %v", versions, err)
+			}
+		},
+	},
+	{
+		name:   "hidden-test-file",
+		why:    "site/tests/.x.tftest.hcl, a test file tofu test ignores, so its mock_provider is no mock",
+		want:   "hidden-file",
+		wantIn: map[string]string{"hidden-file": "{site}/tests/.x.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", ".x.tftest.hcl"), `
+mock_provider "scaleway" {}
+`)
+		},
+	},
+	{
+		name:   "root-file-tofu",
+		why:    "a <root>/x.tofu, a configuration file directly under the root",
+		want:   "root-file",
+		wantIn: map[string]string{"root-file": "{root}/x.tofu"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(filepath.Dir(site), "x.tofu"), "variable \"v\" {}\n")
+		},
+	},
+	{
+		name:   "root-file-tftest",
+		why:    "a <root>/x.tftest.hcl, a test file directly under the root",
+		want:   "root-file",
+		wantIn: map[string]string{"root-file": "{root}/x.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(filepath.Dir(site), "x.tftest.hcl"), `mock_provider "scaleway" {}
+`)
+		},
+	},
+	// A module directory a local source names is no applied root, so it needs no backend and no
+	// required_version - at any depth a configuration's module source reaches.
+	{
+		name: "module-of-a-module",
+		why:  `site/main.tf's module "m" (source = "./m") naming its own module "sub" (source = "./sub"), neither module directory a root`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+module "m" {
+  source = "./m"
+}
+`)
+			writeInfraText(t, filepath.Join(site, "m", "main.tf"), `
+module "sub" {
+  source = "./sub"
+}
+`)
+			writeInfraText(t, filepath.Join(site, "m", "sub", "main.tf"), "variable \"v\" {}\n")
+		},
+	},
+	// A module source reads a directory whose segment starts with ".": tofu loads it, while these rules
+	// read the tree with a find that prunes .terraform and no tool that hides a dot directory.
+	{
+		name:   "module-under-dot-terraform",
+		why:    `a module with source = "./.terraform/m", whose module directory sits in .terraform, the directory the rules prune`,
+		want:   "module-source",
+		wantIn: map[string]string{"module-source": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+module "m" {
+  source = "./.terraform/m"
+}
+`)
+			writeInfraText(t, filepath.Join(site, ".terraform", "m", "main.tf"), "variable \"v\" {}\n")
+		},
+	},
+	{
+		name:   "module-under-a-hidden-directory",
+		why:    `a module with source = "./.hidden/m", whose module directory starts with "."`,
+		want:   "module-source",
+		wantIn: map[string]string{"module-source": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+module "m" {
+  source = "./.hidden/m"
+}
+`)
+			writeInfraText(t, filepath.Join(site, ".hidden", "m", "main.tf"), "variable \"v\" {}\n")
+		},
+	},
+	{
+		name:   "test-run-block-module-under-dot-terraform",
+		why:    `a run block in site/tests/iam.tftest.hcl with module source = "./.terraform/m"`,
+		want:   "module-source",
+		wantIn: map[string]string{"module-source": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_a_module_in_a_dot_directory" {
+  command = plan
+
+  module {
+    source = "./.terraform/m"
+  }
+}
+`)
+		},
+	},
 }
 
 // rootFileModuleSourceCase is one route-2 case: a configuration file directly under the root, whose module
