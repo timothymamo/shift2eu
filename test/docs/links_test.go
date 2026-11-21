@@ -13,12 +13,14 @@ import (
 // repoRoot is the repository's root, from this package's directory.
 const repoRoot = "../.."
 
-// markdownFiles lists README.md and every Markdown file under each of dirs,
-// slash-separated and relative to the repository's root, in lexical order.
+// markdownFiles lists the repository's root pages, README.md and SECURITY.md,
+// and every Markdown file under each of dirs, slash-separated and relative to
+// the repository's root, in lexical order. SECURITY.md is a root page too and
+// links into docs/, so a moved page must fail here as well.
 func markdownFiles(t *testing.T, fsys fs.FS, dirs ...string) []string {
 	t.Helper()
 
-	files := []string{"README.md"}
+	files := []string{"README.md", "SECURITY.md"}
 	for _, dir := range dirs {
 		err := fs.WalkDir(fsys, dir, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
@@ -37,9 +39,9 @@ func markdownFiles(t *testing.T, fsys fs.FS, dirs ...string) []string {
 }
 
 // TestRelativeLinksResolve fails on every relative link or #anchor in
-// README.md, docs/ and the skills that names a file or a heading that does
-// not exist, leaves the repository, is absolute, or names this repository by
-// URL where a relative link belongs.
+// README.md, SECURITY.md, docs/ and the skills that names a file or a heading
+// that does not exist, leaves the repository, is absolute, or names this
+// repository by URL where a relative link belongs.
 func TestRelativeLinksResolve(t *testing.T) {
 	t.Parallel()
 
@@ -55,9 +57,9 @@ func TestRelativeLinksResolve(t *testing.T) {
 	}
 }
 
-// TestPagesHaveOneTitle fails on a page in README.md or docs/ whose first line
-// is not a # heading, or that has a second # heading: a site generator takes
-// the page's title from it.
+// TestPagesHaveOneTitle fails on a page in README.md, SECURITY.md or docs/ whose
+// first line is not a # heading, or that has a second # heading: a site
+// generator takes the page's title from it.
 func TestPagesHaveOneTitle(t *testing.T) {
 	t.Parallel()
 

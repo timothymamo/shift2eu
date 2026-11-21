@@ -111,6 +111,17 @@ Arrows are imports. They point inwards only:
   headless Chromium with `chromedp`, which depguard confines to it (`chromedp-only-in-the-browser-test`,
   `browser-smoke-test`); `make test-browser` runs it against a container pinned by digest, with DevTools on
   127.0.0.1 only, on a port the kernel picks per run, and CI runs it as its own job.
+- **The other CI tooling** is no part of the product either: main packages under `ci/`, which Go refuses
+  to import, with their libraries under `internal/` directories that Go's internal rule keeps out of reach
+  of `cmd/` and `internal/`, each held to named standard packages by strict rules of its own. `ci/aireview`
+  is the AI reviewer's workflow program (`ai-reviewer-main`, `ai-reviewer-is-standard-library`, ADR 0033).
+  `ci/claudecodepin` is the Claude Code pin check (issue #276, ADR 0033): `.github/workflows/claude-code-pin.yml`
+  runs it on every pull request that changes `ai-review.yml`'s pin, and it fails unless the npm registry
+  publishes the pinned `CLAUDE_CODE_INTEGRITY` for exactly the pinned `CLAUDE_CODE_VERSION`. Its entry point
+  reads the workflow and fetches the one public registry document (`claude-code-pin-main`, no `os/exec`); its
+  library `ci/claudecodepin/internal/pincheck` parses the readers it is given and does no I/O
+  (`claude-code-pin-library`, no `os` or `net`); the forbidigo group `claude-code-pin-env` refuses every read
+  of the environment in both.
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
   constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
   read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the
@@ -575,7 +586,8 @@ target, with the `e2e` and `integration` tags (`strictcoverage_test.go`):
   assembly file needs no import, so `test/lint` refuses one there (issue #194). `TestE2ENoEnvProbe` and
   `TestE2ENoEnvForbidigoPatterns` pin the group.
 - **`test-docs-are-pure`** (depguard, strict) holds the doc-only packages
-  `test/architecture`, `test/container`, `test/devenv`, `test/docs`, `test/e2e` and `test/lint` to
+  `test/architecture`, `test/ci`, `test/container`, `test/devenv`, `test/docs`, `test/e2e`,
+  `test/examples`, `test/lint` and `test/site` to
   `allow: []` and the `os` deny entry, as `config-is-pure`. Each is a production package a root
   could import through the module prefix. `!$test` leaves their tests out, and a negated glob takes
   out `test/architecture/internal/...`, which Go's internal rule hides from the roots and which
