@@ -33,9 +33,14 @@
 #
 # The size comes from the calls too: an instance's vCPU and memory from its
 # machine type (compute machine-types list, the instance's machineType URL
-# matched to the type's selfLink, zone included) and a disk's GiB (compute
+# matched to the type's selfLink, zone included), a disk's GiB (compute
 # disks list, sizeGb, which the Compute API writes as a string; a regional disk
-# is matched by its region). A number no call gives is left out,
+# is matched by its region), and a Cloud SQL instance's storage
+# (settings.dataDiskSizeGb, a string too), its vCPU and memory when its tier is
+# a custom one (db-custom-<vCPU>-<memory MiB>; any other tier gives neither) and
+# a count of 1 when it is a single-node instance (availabilityType ZONAL; a
+# REGIONAL one with a standby gets no count, how many nodes a target bills for
+# a standby is the target's to say). A number no call gives is left out,
 # never guessed. The workload, relations and monthlyCost fields are the user's to
 # add by hand; this program never writes them.
 
@@ -173,7 +178,17 @@ def details(f; k): map(select(f)) | INDEX(k);
                 or ($category == "database.mysql" and $d.settings.backupConfiguration.binaryLogEnabled == true)),
               cap("zone-high-availability"; $d.settings.availabilityType == "REGIONAL"),
               cap("read-replicas"; ($d.replicaNames // []) | length > 0)
-            ] end)}
+            ] end),
+            # Only a custom tier names its vCPU and memory; a single-node
+            # (ZONAL) instance is one instance, one with a standby gets no count.
+            size: (if $category == "unclassified" then null else
+              (($d.settings.tier? // "") | capture("^db-custom-(?<c>[0-9]+)-(?<m>[0-9]+)$")? // null) as $t
+              | size_of({
+                  vcpus: (if $t == null then null else $t.c | tonumber end),
+                  memoryGiB: (if $t == null then null else ($t.m | tonumber) / 1024 end),
+                  storageGiB: ($d.settings.dataDiskSizeGb? // null | if . == null then null else tonumber end),
+                  count: (if $d.settings.availabilityType? == "ZONAL" then 1 else null end)
+                }) end)}
       elif .assetType == "container.googleapis.com/Cluster" then
         $clusters[$key] as $d
         | (.location // "") as $location
