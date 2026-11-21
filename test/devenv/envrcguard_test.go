@@ -126,9 +126,12 @@ func (tc envrcLayoutCase) runs() []string {
 // only while the argument - one enclosing pair of matching quotes stripped - holds nothing but letters, digits and
 // . _ / + @ = - and resolves inside the clone: a quote, a backslash, a brace, a glob, $, a backtick, a tilde or a
 // space counts as outside. The line is read as bash reads it: ;, &, |, ( and ) separate directives, so
-// `dotenv;source_env ../x` holds two. Every one of the eight targets must refuse such a clone, and the refusal must
-// name the clone's .envrc, the line the maintainer has to change, and docs/dev-environment.md, The host clone,
-// where every line belongs.
+// `dotenv;source_env ../x` holds two, and <, > and a backtick end a word as well, so a directive glued to a
+// redirection (`source_up>/dev/null`) or sitting inside backticks is a directive of its own. `source_url <url>
+// <hash>` downloads a script and sources it, another file the guard never reads, so it is refused whatever it
+// names. Every one of the eight targets must refuse such a clone, and the refusal must name the clone's
+// .envrc, the line the maintainer has to change, and docs/dev-environment.md, The host clone, where every line
+// belongs.
 func TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile(t *testing.T) {
 	t.Parallel()
 
@@ -277,6 +280,67 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile(t *testing.T) {
 			want:      []string{"line 1", "The host clone"},
 		},
 		{
+			// bash ends a word at < and > as it does at a space: the redirection after the directive is no part
+			// of it, and the directive is refused for what it runs, as it is with a space (issue #402).
+			name:      "the host clone's .envrc says source_up>/dev/null",
+			hostEnvrc: "source_up>/dev/null\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// The redirection the directive is glued to hides nothing: source_env runs ../outside.env, and the
+			// guard refuses the directive whatever it names (issue #402).
+			name:      "the host clone's .envrc says source_env>/dev/null ../outside.env",
+			hostEnvrc: "source_env>/dev/null ../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// . is bash's source, and a redirection glued to it ends the word as a space does (issue #402).
+			name:      "the host clone's .envrc says .>/dev/null ../outside.env",
+			hostEnvrc: ".>/dev/null ../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// < ends a word too, and reading from /dev/null says nothing about the file source runs (issue #402).
+			name:      "the host clone's .envrc says source</dev/null ../outside.env",
+			hostEnvrc: "source</dev/null ../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// bash hands dotenv ../outside.env: the redirection is not an argument, so the guard must read the
+			// word after it and refuse the path (issue #402).
+			name:      "the host clone's .envrc says dotenv>/dev/null ../outside.env",
+			hostEnvrc: "dotenv>/dev/null ../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// The same for dotenv_if_exists, which loads the file it names when it exists (issue #402).
+			name:      "the host clone's .envrc says dotenv_if_exists>/dev/null ../outside.env",
+			hostEnvrc: "dotenv_if_exists>/dev/null ../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// A backtick runs the command it encloses and splices its output into the line, so the directive
+			// inside the pair runs as surely as one of its own and must be read as one (issue #402).
+			name:      "the host clone's .envrc says x=`source_up`",
+			hostEnvrc: "x=`source_up`\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// The pair on its own: bash ends the word at the opening backtick, so source_up is a command of its
+			// own wherever the word it opens sits (issue #402).
+			name:      "the host clone's .envrc says `source_up` alone",
+			hostEnvrc: "`source_up`\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
 			// The argument holds a space, so bash hands dotenv the first word alone, which names no file at all:
 			// the guard cannot tell what dotenv would load and refuses the line as outside the clone.
 			name: "the host clone's .envrc dotenvs a quoted path holding a space",
@@ -362,6 +426,15 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile(t *testing.T) {
 			hostEnvrc: ". ../secrets.env\n",
 			targets:   []string{"vm-env"},
 			want:      []string{"The host clone"},
+		},
+		{
+			// direnv's source_url downloads the script the URL names and sources it, so it runs a file the guard
+			// has not read as source_env does, and is refused whatever it names - here an invented URL and hash
+			// (issue #402).
+			name:      "the host clone's .envrc says source_url with an invented URL and hash",
+			hostEnvrc: "source_url https://example.com/x.sh sha256-AAAA\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
 		},
 		{
 			// Not the first word of the line: a source behind a ; is a command of its own to bash, and direnv
