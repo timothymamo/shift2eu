@@ -3,6 +3,7 @@ package htmlreport_test
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -19,8 +20,9 @@ import (
 
 // This file pins the constant classes the fragment carries for the site's
 // redesign (PRD #297, issue #373; the design brief's Tier B): a fit badge on
-// every Fit cell, a fit-coloured row on each Summary table, a section part per
-// report section, and the Cost estimate's total item.
+// every Fit cell, the box every table sits in, a fit-coloured row on each
+// comparison Summary table, a section part per report section, and the Cost
+// estimate's total item.
 //
 // Every class is a constant chosen from a closed set, never a value: the report
 // still writes no value into a tag or an attribute, so the escaping tests hold
@@ -39,6 +41,11 @@ var (
 	// the total row's own.
 	summaryClasses = []string{"fit-direct", "fit-partial", "fit-none", "fit-total"}
 
+	// tableClasses are the class names of the box a table sits in: the one box
+	// that scrolls sideways on its own, so the page itself never does (issue
+	// #373, item 11).
+	tableClasses = []string{"table-scroll"}
+
 	// partKinds are the report sections a part section wraps, one kind per
 	// heading the fragment emits.
 	partKinds = []string{
@@ -49,8 +56,10 @@ var (
 	closedClasses = func() map[string]bool {
 		closed := map[string]bool{"shift2eu-report": true, "total": true, "part": true}
 
-		for _, class := range append(append([]string{}, fitClasses...), summaryClasses...) {
-			closed[class] = true
+		for _, classes := range [][]string{fitClasses, summaryClasses, tableClasses} {
+			for _, class := range classes {
+				closed[class] = true
+			}
 		}
 
 		for _, kind := range partKinds {
@@ -87,6 +96,19 @@ type reportFixture struct {
 	// order, without the "Total: " prefix or the basis; none when it has no
 	// estimate.
 	totals []string
+	// summary is what the Summary counts for each fit in a single report, whose
+	// Summary is boxes rather than a table; nil for a comparison, whose Summary
+	// is still a table with a row per fit.
+	summary *summaryCounts
+}
+
+// summaryCounts is what a single report's Summary states per fit: how many of
+// the report's resources have that fit, and how many it assessed.
+type summaryCounts struct {
+	direct    int
+	partial   int
+	none      int
+	resources int
 }
 
 // reportFixtures returns the renderings the checks read: every fit without
@@ -110,6 +132,7 @@ func reportFixtures() []reportFixture {
 				{heading: "Required changes", kind: "changes"},
 				{heading: "Blockers", kind: "blockers"},
 			},
+			summary: &summaryCounts{direct: 2, partial: 1, none: 2, resources: 5},
 		},
 		{
 			name: "with estimates",
@@ -127,7 +150,8 @@ func reportFixtures() []reportFixture {
 				{heading: "Workloads", kind: "workloads"},
 				{heading: "Cost estimate", kind: "cost"},
 			},
-			totals: []string{"€2,535.00"},
+			totals:  []string{"€2,535.00"},
+			summary: &summaryCounts{direct: 4, partial: 0, none: 1, resources: 5},
 		},
 		{
 			name: "a comparison of three targets",
@@ -164,6 +188,7 @@ func reportFixtures() []reportFixture {
 				{heading: "Blockers", kind: "blockers"},
 				{heading: "Workloads", kind: "workloads"},
 			},
+			summary: &summaryCounts{direct: 1, partial: 0, none: 3, resources: 4},
 		},
 		{
 			name: "a hostile comparison with estimates",
@@ -377,13 +402,101 @@ func TestReportUnknownFitBadge(t *testing.T) {
 	}
 }
 
-// TestReportSummaryRows pins that each Summary table carries a row class per fit
-// and a class on its total row: `fit-direct`, `fit-partial`, `fit-none` on the
-// three fit rows, in that order, and `fit-total` on the row that totals them
-// (PRD #297, issue #373). A comparison's Summary table states its rows the same
-// way; its estimate rows follow them and carry no fit class.
+// TestReportSummaryRows pins what a Summary states per fit (PRD #297, issue
+// #373): a single report's Summary is the redesign's boxes (item 10-2), so each
+// fit's box states that fit's count of the resources assessed, the counts the
+// Summary table used to hold; a comparison's Summary is still the table, and its
+// rows carry a class per fit and one on the total: `fit-direct`, `fit-partial`,
+// `fit-none` in that order, and `fit-total` on the row that totals them. Its
+// estimate rows follow the four and carry no fit class.
 func TestReportSummaryRows(t *testing.T) {
 	t.Parallel()
+
+	for _, fixture := range reportFixtures() {
+		t.Run(fixture.name, func(t *testing.T) {
+			t.Parallel()
+
+			fragment := string(fixture.render(t))
+
+			if fixture.summary != nil {
+				checkSummaryBoxes(t, fragment, *fixture.summary)
+
+				return
+			}
+
+			checkComparisonSummaryRows(t, fragment)
+		})
+	}
+}
+
+// checkSummaryBoxes pins the counts a single report's Summary boxes state: the
+// box of each fit states that fit's count of the resources assessed, and the
+// counts are the ones the Summary table stated before item 10-2 turned it into
+// boxes. The summary holds no table at all.
+func checkSummaryBoxes(t *testing.T, fragment string, want summaryCounts) {
+	t.Helper()
+
+	elements := fragmentElements(t, fragment)
+
+	summaries := elementsWithClass(t, elements, "part-summary")
+	if len(summaries) != 1 {
+		t.Fatalf("the fragment holds %d Summary part sections, want exactly one", len(summaries))
+	}
+
+	if tables := tableIndices(elements, summaries[0]); len(tables) != 0 {
+		t.Errorf("the Summary part section holds %d tables, want none: a single report's Summary is one box per fit, not a table (PRD #297, issue #373, item 10-2)", len(tables))
+	}
+
+	boxes := []struct {
+		fit   mapping.Fit
+		count int
+	}{
+		{mapping.Direct, want.direct},
+		{mapping.Partial, want.partial},
+		{mapping.None, want.none},
+	}
+
+	read := 0
+
+	for _, box := range boxes {
+		badges := elementsWithClass(t, elements, "fit", "fit-"+string(box.fit))
+		count := boxesOf(t, elements, summaries[0], badges)
+
+		if len(count) != 1 {
+			t.Errorf("the Summary part section holds %d boxes with the %s badge, want one box per fit (PRD #297, issue #373, item 10-2)",
+				len(count), box.fit)
+
+			continue
+		}
+
+		text := textOfElement(elements, count[0])
+		match := summaryCountPattern.FindStringSubmatch(text)
+
+		if match == nil {
+			t.Errorf("the %s box reads %q, want it to state the count of the resources assessed, as the Summary table did (PRD #297, issue #373, item 10-2)",
+				box.fit, text)
+
+			continue
+		}
+
+		if match[1] != strconv.Itoa(box.count) || match[2] != strconv.Itoa(want.resources) {
+			t.Errorf("the %s box reads %q, want %d of %d resources: the same counts the Summary table stated (PRD #297, issue #373, item 10-2)",
+				box.fit, text, box.count, want.resources)
+		}
+
+		read++
+	}
+
+	if read == 0 {
+		t.Fatalf("the Summary part section holds no box stating a count, so the check read nothing: a single report's Summary is one box per fit")
+	}
+}
+
+// checkComparisonSummaryRows pins the rows of a comparison's Summary table: one
+// class per fit and a class on the total row, in the order direct, partial, none,
+// total, each row beginning with the word its class names.
+func checkComparisonSummaryRows(t *testing.T, fragment string) {
+	t.Helper()
 
 	want := []struct {
 		class string
@@ -395,43 +508,37 @@ func TestReportSummaryRows(t *testing.T) {
 		{class: "fit-total", word: "total"},
 	}
 
-	for _, fixture := range reportFixtures() {
-		t.Run(fixture.name, func(t *testing.T) {
-			t.Parallel()
+	summaries := 0
 
-			summaries := 0
+	for _, table := range fragmentTables(t, []byte(fragment)) {
+		if len(table.head) == 0 || table.head[0] != "Fit" {
+			continue
+		}
 
-			for _, table := range fragmentTables(t, fixture.render(t)) {
-				if len(table.head) == 0 || table.head[0] != "Fit" {
-					continue
-				}
+		summaries++
 
-				summaries++
+		if len(table.rows) < len(want) {
+			t.Fatalf("the Summary table headed %q holds %d rows, want at least %d: one per fit and the total",
+				strings.Join(table.head, " | "), len(table.rows), len(want))
+		}
 
-				if len(table.rows) < len(want) {
-					t.Fatalf("the Summary table headed %q holds %d rows, want at least %d: one per fit and the total",
-						strings.Join(table.head, " | "), len(table.rows), len(want))
-				}
+		for i, row := range want {
+			got := table.rows[i]
 
-				for i, row := range want {
-					got := table.rows[i]
-
-					if want := `class="` + row.class + `"`; got.attrs != want {
-						t.Errorf("the %q row of the Summary table headed %q carries %q, want %q: the stylesheet colours the row of a fit, and the total row on its own",
-							row.word, strings.Join(table.head, " | "), orNone(got.attrs), want)
-					}
-
-					if len(got.cells) == 0 || got.cells[0].text != row.word {
-						t.Errorf("row %d of the Summary table headed %q starts with %q, want %q",
-							i+1, strings.Join(table.head, " | "), firstCell(got), row.word)
-					}
-				}
+			if want := `class="` + row.class + `"`; got.attrs != want {
+				t.Errorf("the %q row of the Summary table headed %q carries %q, want %q: the stylesheet colours the row of a fit, and the total row on its own",
+					row.word, strings.Join(table.head, " | "), orNone(got.attrs), want)
 			}
 
-			if summaries == 0 {
-				t.Fatalf("the fragment holds no Summary table, so the check read nothing")
+			if len(got.cells) == 0 || got.cells[0].text != row.word {
+				t.Errorf("row %d of the Summary table headed %q starts with %q, want %q",
+					i+1, strings.Join(table.head, " | "), firstCell(got), row.word)
 			}
-		})
+		}
+	}
+
+	if summaries == 0 {
+		t.Fatalf("the fragment holds no Summary table, so the check read nothing: a comparison's Summary is still a table with a row per fit")
 	}
 }
 
@@ -471,7 +578,7 @@ func TestReportPartSections(t *testing.T) {
 			}
 
 			if strings.Contains(strings.ToLower(fragment), "<div") {
-				t.Errorf("the fragment holds a <div>, want sections only: a part is a <section>, and the page's script refuses a div inside the report")
+				t.Errorf("the fragment holds a <div>, want the sections alone that a report is made of: a part is a <section>, and so is the box a table scrolls in (docs/adr/0035)")
 			}
 		})
 	}
@@ -649,6 +756,9 @@ var (
 	// titleListPattern matches the title list: the `<ul>` start tag directly
 	// after the fragment's own <h2>, the report's metadata list.
 	titleListPattern = regexp.MustCompile(`(?s)<h2>.*?</h2>\s*<ul([^>]*)>`)
+	// summaryCountPattern matches the count a single report's Summary box
+	// states: how many of the resources assessed have that box's fit.
+	summaryCountPattern = regexp.MustCompile(`\b(\d+) of (\d+) resources\b`)
 )
 
 // fragmentTable is one <table> of a fragment: the cells of its header row and its
