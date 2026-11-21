@@ -180,5 +180,11 @@
 // which reports every symlink, and Sources, which requires a package's
 // directory with symlinks resolved to be the one its import path names.
 //
+// CLIImporterProblems holds the packages whose test files import internal/cli,
+// one CLIImportersBuild per build, to the exemption of the depguard rule
+// cli-only-in-named-tests (issues #345, #382): a package outside it that does
+// so is reported per build, and a package of it that does so in no build, over
+// the union of the builds, as a stale exemption.
+//
 // The package is internal to test/architecture: it is not an API of the module.
 package check
