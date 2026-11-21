@@ -21,7 +21,7 @@
 <li><a href="inventory.html" aria-current="page">Inventory guide</a></li>
 <li><a href="privacy.html">Privacy</a></li>
 <li><a href="verify.html">Verify this site</a></li>
-<li><a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">Repository</a></li>
+<li><a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">Repository<span class="visually-hidden"> (opens in a new tab)</span></a></li>
 </ul>
 </nav>
 </div>
@@ -30,10 +30,10 @@
 <div class="hero">
 <h1>Build an inventory</h1>
 <p class="lead">The assessment reads an inventory: one JSON file that lists your resources. Make it with your provider's own command-line tool, read-only credentials and jq: run the commands below, then the program from the repository that turns their output into inventory.json. Every command lists, describes or queries, and none changes anything in your cloud.</p>
-<p class="muted small">The <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">inventory guide</a> on GitHub is the full text these commands come from: the permissions each provider needs, what each command collects and how the programs classify it.</p>
+<p class="muted small">The <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">inventory guide<span class="visually-hidden"> (opens in a new tab)</span></a> on GitHub is the full text these commands come from: the permissions each provider needs, what each command collects and how the programs classify it.</p>
 </div>
 
-<div class="source-picker" role="group" aria-label="Source">
+<div class="source-picker" role="group" aria-label="Source" hidden>
 <button type="button" class="source-button" aria-pressed="true" aria-controls="source-aws">AWS</button>
 <button type="button" class="source-button" aria-pressed="false" aria-controls="source-gcp">GCP</button>
 <button type="button" class="source-button" aria-pressed="false" aria-controls="source-azure">Azure</button>
@@ -43,27 +43,27 @@
 {{- with index .Sources "aws"}}
 {{template "source" .}}
 {{- end}}
-<p class="muted small">The program is <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory/aws.jq" target="_blank" rel="noopener noreferrer">docs/guide/inventory/aws.jq</a>. Run the collect commands once per region you use. Review the inventory the program writes, then delete the collected directory: it holds the provider's raw output.</p>
+<p class="muted small">The program is <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory/aws.jq" target="_blank" rel="noopener noreferrer">docs/guide/inventory/aws.jq<span class="visually-hidden"> (opens in a new tab)</span></a>. Run the collect commands once per region you use. Review the inventory the program writes, then delete the collected directory: it holds the provider's raw output.</p>
 </section>
 
 <section id="source-gcp" class="card source" aria-labelledby="source-gcp-heading">
 {{- with index .Sources "gcp"}}
 {{template "source" .}}
 {{- end}}
-<p class="muted small">The program is <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory/gcp.jq" target="_blank" rel="noopener noreferrer">docs/guide/inventory/gcp.jq</a>. Review the inventory the program writes, then delete the collected directory: it holds the provider's raw output.</p>
+<p class="muted small">The program is <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory/gcp.jq" target="_blank" rel="noopener noreferrer">docs/guide/inventory/gcp.jq<span class="visually-hidden"> (opens in a new tab)</span></a>. Review the inventory the program writes, then delete the collected directory: it holds the provider's raw output.</p>
 </section>
 
 <section id="source-azure" class="card source" aria-labelledby="source-azure-heading">
 {{- with index .Sources "azure"}}
 {{template "source" .}}
 {{- end}}
-<p class="muted small">The program is <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory/azure.jq" target="_blank" rel="noopener noreferrer">docs/guide/inventory/azure.jq</a>. Review the inventory the program writes, then delete the collected directory: it holds the provider's raw output.</p>
+<p class="muted small">The program is <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory/azure.jq" target="_blank" rel="noopener noreferrer">docs/guide/inventory/azure.jq<span class="visually-hidden"> (opens in a new tab)</span></a>. Review the inventory the program writes, then delete the collected directory: it holds the provider's raw output.</p>
 </section>
 </main>
 <footer>
 <div class="wrap footer-row">
 <p>No cookies, no tracking, no requests: the page cannot connect anywhere.</p>
-<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <a href="inventory.html">Inventory guide</a> <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">Guide on GitHub</a> <span class="mono">{{.Version}}</span></p>
+<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <a href="inventory.html">Inventory guide</a> <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">Guide on GitHub<span class="visually-hidden"> (opens in a new tab)</span></a> <span class="mono">{{.Version}}</span></p>
 </div>
 </footer>
 </body>
@@ -71,12 +71,13 @@
 {{- define "source"}}
 <h2 id="source-{{.Key}}-heading">{{.Name}}</h2>
 <h3><span class="step" aria-hidden="true">01</span> Collect the output</h3>
-<p class="muted small">Run these from the directory you want the files in: they write the provider's output into inventories/{{.Key}}/.</p>
+<p class="muted small">Run these from the directory you want the files in: they write the provider's output into inventories/{{.Key}}/. Run them in order, in one shell: the first sets the variables the others use.</p>
 {{- range .CollectCommands}}
-<div class="command"><pre><code>{{.}}</code></pre><button type="button" class="secondary copy" aria-label="Copy this command">Copy</button><span class="copy-status" role="status"></span></div>
+<div class="command"><pre tabindex="0"><code>{{.}}</code></pre><button type="button" class="secondary copy" aria-label="Copy this command">Copy</button><span class="copy-status" role="status"></span></div>
 {{- end}}
 <h3><span class="step" aria-hidden="true">02</span> Build the inventory</h3>
+<p class="muted small">This runs the program docs/guide/inventory/{{.Key}}.jq from a clone of the repository: run it in the clone, in the directory that holds inventories/{{.Key}}/, or give -f the path of your copy of the program linked below.</p>
 {{- range .BuildCommands}}
-<div class="command"><pre><code>{{.}}</code></pre><button type="button" class="secondary copy" aria-label="Copy this command">Copy</button><span class="copy-status" role="status"></span></div>
+<div class="command"><pre tabindex="0"><code>{{.}}</code></pre><button type="button" class="secondary copy" aria-label="Copy this command">Copy</button><span class="copy-status" role="status"></span></div>
 {{- end}}
 {{- end}}

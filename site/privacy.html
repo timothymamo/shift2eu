@@ -21,7 +21,7 @@
 <li><a href="inventory.html">Inventory guide</a></li>
 <li><a href="privacy.html" aria-current="page">Privacy</a></li>
 <li><a href="verify.html">Verify this site</a></li>
-<li><a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">Repository</a></li>
+<li><a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">Repository<span class="visually-hidden"> (opens in a new tab)</span></a></li>
 </ul>
 </nav>
 </div>
@@ -29,7 +29,7 @@
 <main id="main" class="wrap page">
 <div class="hero">
 <h1>Privacy</h1>
-<p class="lead">This page says what the site is built to do with your inventory, what checks it, and what the site cannot promise. Each statement names the check that backs it; the checks are tests in the <a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">repository</a>, which run on every change.</p>
+<p class="lead">This page says what the site is built to do with your inventory, what checks it, and what the site cannot promise. Each statement names the check that backs it; the checks are tests in the <a href="https://github.com/timothymamo/shift2eu" target="_blank" rel="noopener noreferrer">repository<span class="visually-hidden"> (opens in a new tab)</span></a>, which run on every change.</p>
 </div>
 
 <div class="prose">
@@ -65,13 +65,14 @@
 <li>The Content Security Policy does not govern navigation, WebRTC, DNS prefetch or messaging to another window (postMessage, opener, parent, top, BroadcastChannel, MessageChannel, window.name). The banned-API scan closes these gaps in the page's own code, and each page turns DNS prefetch off; the framing guard also sets window.opener to null as defence in depth.</li>
 <li>One gap remains: the site cannot send Cross-Origin-Opener-Policy, so a page that opened this one keeps its handle to it. With that handle it can navigate the tab or post a message in, and read nothing; the page reads no message.</li>
 <li>A meta Content Security Policy cannot carry frame-ancestors, so the page script stops, and says why, when another page frames it.</li>
+<li>The inventory page writes one command to the clipboard when you click its Copy button, and only then; the site never reads the clipboard. Backed by the banned-API scan, which allows one clipboard write, in the copy function, and no read (Layer 1).</li>
 </ul>
 </div>
 </main>
 <footer>
 <div class="wrap footer-row">
 <p>No cookies, no tracking, no requests: the page cannot connect anywhere.</p>
-<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <a href="inventory.html">Inventory guide</a> <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">Guide on GitHub</a> <span class="mono">{{.Version}}</span></p>
+<p class="footer-links"><a href="privacy.html">Privacy</a> <a href="verify.html">Verify this site</a> <a href="inventory.html">Inventory guide</a> <a href="https://github.com/timothymamo/shift2eu/blob/{{.Ref}}/docs/guide/inventory.md" target="_blank" rel="noopener noreferrer">Guide on GitHub<span class="visually-hidden"> (opens in a new tab)</span></a> <span class="mono">{{.Version}}</span></p>
 </div>
 </footer>
 </body>

@@ -440,6 +440,8 @@ func (s *scanner) checkIdent(i int) {
 		}
 	case "innerHTML":
 		s.checkInnerHTML(i, owner)
+	case "navigator":
+		s.checkNavigator(i)
 	case "clipboard":
 		s.checkClipboard(i, owner)
 	case "writeText":
@@ -639,6 +641,66 @@ func (s *scanner) checkClipboard(i int, owner string) {
 	}
 
 	s.report(i, "clipboard is allowed only once, in the copy function %s, as navigator.clipboard.writeText(...): the page writes one command to the clipboard and never reads it", fnCopyCommand)
+}
+
+// checkNavigator refuses a binding named navigator (issue #373, the audit's
+// finding 4): the clipboard and service worker rules key on the name, so a
+// const, let or var, a function parameter, a destructuring target or an
+// assignment of that name would stand in for the browser's navigator and pass
+// them. The browser's navigator, as a member base or an operand, stays allowed.
+func (s *scanner) checkNavigator(i int) {
+	if s.isMember(i) {
+		return
+	}
+
+	if s.isDeclared(i) || s.isAssigned(i) || s.isParameter(i) || s.isDestructured(i) {
+		s.report(i, "a binding named navigator is banned: it would stand in for the browser's navigator, on which the clipboard and service worker rules key")
+	}
+}
+
+// enclosing returns the index of the innermost bracket that opens before the
+// token at i and closes after it, or -1 at the top level.
+func (s *scanner) enclosing(i int) int {
+	for k := i - 1; k >= 0; k-- {
+		if !s.isPunct(k, "(") && !s.isPunct(k, "[") && !s.isPunct(k, "{") {
+			continue
+		}
+
+		if partner, ok := s.match[k]; ok && partner > i {
+			return k
+		}
+	}
+
+	return -1
+}
+
+// isParameter reports whether the token at i stands in a function's or an
+// arrow function's parameter list.
+func (s *scanner) isParameter(i int) bool {
+	open := s.enclosing(i)
+	if open < 0 || !s.isPunct(open, "(") {
+		return false
+	}
+
+	if s.isIdent(open-1, "function") || (s.tok(open-1).Kind == Ident && s.isIdent(open-2, "function")) {
+		return true
+	}
+
+	return s.isPunct(s.match[open]+1, "=>")
+}
+
+// isDestructured reports whether the token at i stands in a destructuring
+// pattern: braces or brackets a declaration opens, or that an assignment
+// follows.
+func (s *scanner) isDestructured(i int) bool {
+	open := s.enclosing(i)
+	if open < 0 || s.isPunct(open, "(") {
+		return false
+	}
+
+	t := s.tok(open - 1)
+
+	return (t.Kind == Ident && declarations[t.Text]) || s.isPunct(s.match[open]+1, "=")
 }
 
 // checkWriteText allows writeText only as the clipboard's member, called in

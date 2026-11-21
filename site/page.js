@@ -237,19 +237,29 @@ function wireControls() {
 // the page writes to it, on a click only, and it never reads it. The command
 // is the text of the <pre> the button sits beside, as the page shows it. The
 // status beside the button says "Copied", and the other buttons' statuses are
-// cleared, so the last copy is the one shown.
+// cleared, so the last copy is the one shown. A copy fails and says so both
+// when the write is refused and when the browser has no clipboard API, which
+// throws before any promise exists; a failed status carries the class
+// copy-failed, so it is never drawn as a success.
 function copyCommand(button) {
   const box = button.parentElement;
   const command = box.querySelector("pre");
   const status = box.querySelector(".copy-status");
   document.querySelectorAll(".copy-status").forEach(function (other) {
     other.textContent = "";
+    other.classList.remove("copy-failed");
   });
-  navigator.clipboard.writeText(command.textContent).then(function () {
-    status.textContent = "Copied";
-  }).catch(function () {
+  const failed = function () {
     status.textContent = "Copy failed: select the command and copy it yourself.";
-  });
+    status.classList.add("copy-failed");
+  };
+  try {
+    navigator.clipboard.writeText(command.textContent).then(function () {
+      status.textContent = "Copied";
+    }).catch(failed);
+  } catch {
+    failed();
+  }
 }
 
 // chooseSource shows the section of the chosen source button and hides the
@@ -268,11 +278,14 @@ function chooseSource(chosen) {
 
 // wireInventoryPage makes the inventory page's source buttons and copy
 // buttons work. A button's click is what a mouse, Enter and Space all fire.
+// The page hides the source buttons until they work, so it shows them here,
+// once they are wired: with no script they would do nothing.
 function wireInventoryPage() {
   const sources = document.querySelectorAll("button[aria-controls]");
   if (sources.length === 0) {
     return;
   }
+  const picker = document.querySelector(".source-picker");
   sources.forEach(function (button) {
     button.addEventListener("click", function () {
       chooseSource(button);
@@ -286,6 +299,9 @@ function wireInventoryPage() {
       copyCommand(button);
     });
   });
+  if (picker !== null) {
+    picker.hidden = false;
+  }
 }
 
 // start runs on every page once it is parsed: the scripts are deferred.

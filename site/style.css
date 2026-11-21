@@ -1583,6 +1583,12 @@ button.source-button[aria-pressed="true"]:hover:not(:disabled) {
   font-weight: 650;
 }
 
+/* A failed copy is never drawn as a success: page.js sets the class. */
+.copy-status.copy-failed {
+  color: var(--none-ink);
+  background-color: var(--surface);
+}
+
 /* Wider screens. */
 
 @media (min-width: 40rem) {
