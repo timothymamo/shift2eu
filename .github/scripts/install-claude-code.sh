@@ -8,8 +8,8 @@
 # with the pinned npm integrity, and only then extracts its one binary, package/claude, into
 # <directory>, where the reviewer runs it as <directory>/package/claude. A tarball that does not match
 # fails the run and nothing of it is extracted. The tarball is downloaded into a directory of its own
-# from mktemp -d, which an EXIT trap removes on every exit, a failed one included (issue #451);
-# <directory> stays. The meta package @anthropic-ai/claude-code only picks a platform package in a
+# from mktemp -d, which an EXIT trap removes on every exit once its path is assigned, a failed exit
+# included (issue #451); <directory> stays. The meta package @anthropic-ai/claude-code only picks a platform package in a
 # postinstall script, so it is never installed. The workflow pins the version (CLAUDE_CODE_VERSION,
 # under a # renovate: comment) and the integrity (CLAUDE_CODE_INTEGRITY) in the install step's env: and
 # passes both here: a Renovate bump of the version must replace the integrity too (npm view
@@ -57,7 +57,8 @@ if [[ ! "${integrity}" =~ ^sha512-[A-Za-z0-9+/]+=*$ ]]; then
 	exit 2
 fi
 
-# The trap is set before mktemp -d, so a signal right after it returns still removes the directory. The
+# The trap is set before mktemp -d, so once download is assigned, every exit removes the directory; a
+# signal between mktemp creating it and the assignment completing can still leave it behind. The
 # cleanup never decides the verdict: a failed rm leaves the script's own exit status as it was.
 download=""
 remove_download() {
