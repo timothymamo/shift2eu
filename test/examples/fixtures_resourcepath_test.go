@@ -337,6 +337,31 @@ func TestResourcePathProblems(t *testing.T) {
 			want: []string{"namespaces/sb-contoso-prod"},
 		},
 		{
+			// The inventory guide's own shop names are excused by an exact-name
+			// rule (guideShopNamePattern: app-shop-storefront), never by a shape
+			// such as any words after shop, so a customer's web app named the
+			// same way with their own words after them is still reported.
+			name: "customer web app named like the guide's shop",
+			text: testARMID("Microsoft.Web", "sites", "app-shop-acme-prod"),
+			want: []string{"sites/app-shop-acme-prod"},
+		},
+		{
+			// The same exact-name rule holds for the guide's PostgreSQL
+			// flexible server: psql-shop is the guide's, and a customer's
+			// psql-shop-prod is no name the guide writes.
+			name: "customer flexible server named like the guide's shop",
+			text: testARMID("Microsoft.DBforPostgreSQL", "flexibleServers", "psql-shop-prod"),
+			want: []string{"flexibleServers/psql-shop-prod"},
+		},
+		{
+			// The rule matches the guide's name to its end, so a customer's name
+			// that only opens with it (app-shop-storefront2) is their own too:
+			// the excused names are the guide's, not a prefix of them.
+			name: "customer web app whose name opens with the guide's shop name",
+			text: testARMID("Microsoft.Web", "sites", "app-shop-storefront2"),
+			want: []string{"sites/app-shop-storefront2"},
+		},
+		{
 			// A directory bucket's ARN is the S3 Express service's (s3express),
 			// and the bucket it names carries the zone and the suffix the service
 			// appends (...--euc1-az1--x-s3) after the customer's own words, which
