@@ -392,22 +392,19 @@ func TestKapsuleDedicatedInMilan(t *testing.T) {
 	// a fixed fee for the dedicated one (ADR 0026). The price loop below walks the
 	// dedicated offering's plans alone, so a plan present in just one of the two
 	// offerings would go unnoticed, and so would every price it records there
-	// (issue #329). Compare the sets of plan names first, order-independently.
+	// (issue #329). Compare the sets of plan names first, order-independently,
+	// naming each plan one offering is missing: the rule is about a worker node
+	// sold for both, so it names the plans and says nothing else.
 	basePlans, dedicatedPlans := planNames(base), planNames(offering)
 
-	if diff := cmp.Diff(basePlans, dedicatedPlans); diff != "" {
-		t.Errorf("offerings %s and %s list different plan names (-%s +%s):\n%s",
-			text.Quote(mutualized), text.Quote(dedicated), mutualized, dedicated, diff)
+	for _, name := range namesMissingFrom(basePlans, dedicatedPlans) {
+		t.Errorf("offering %s lists plan %s, want offering %s to list it too: a worker node sold for one offering is sold for both",
+			text.Quote(mutualized), text.Quote(name), text.Quote(dedicated))
+	}
 
-		for _, name := range namesMissingFrom(basePlans, dedicatedPlans) {
-			t.Errorf("offering %s lists plan %s, want offering %s to list it too: a worker node sold for one offering is sold for both",
-				text.Quote(mutualized), text.Quote(name), text.Quote(dedicated))
-		}
-
-		for _, name := range namesMissingFrom(dedicatedPlans, basePlans) {
-			t.Errorf("offering %s lists plan %s, want offering %s to list it too: a worker node sold for one offering is sold for both",
-				text.Quote(dedicated), text.Quote(name), text.Quote(mutualized))
-		}
+	for _, name := range namesMissingFrom(dedicatedPlans, basePlans) {
+		t.Errorf("offering %s lists plan %s, want offering %s to list it too: a worker node sold for one offering is sold for both",
+			text.Quote(dedicated), text.Quote(name), text.Quote(mutualized))
 	}
 
 	// Every plan of the dedicated offering is priced exactly where the mutualized
@@ -445,8 +442,8 @@ func TestKapsuleDedicatedInMilan(t *testing.T) {
 }
 
 // planNames returns the names of o's plans, sorted, so that two offerings' plan
-// names can be compared as sets: the snapshot's plan order says nothing, and a
-// diff of sorted names reads name by name.
+// names can be compared as sets: the snapshot's plan order says nothing about
+// whether the two sell the same worker nodes.
 func planNames(o catalog.Offering) []string {
 	names := make([]string, 0, len(o.Plans))
 
