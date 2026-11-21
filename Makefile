@@ -5,9 +5,9 @@
 # directory: its go.mod is then not found and GO_LINE below is empty, as without a go.mod.
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
-# Recipe comments never go inside a backslash-continued command: GNU Make 3.81 (macOS /usr/bin/make) hands
-# such a `#` line to the shell as part of the command, which comments out the rest of the recipe, so it ends
-# silently with exit 0 (issue #437). Write the comment above the target, at column 0, as a make comment.
+# No `#` comment, whole-line or mid-line, anywhere in a backslash-continued recipe command: GNU Make 3.81 (macOS
+# /usr/bin/make) then comments out the rest of the command and the recipe ends silently with exit 0. Put comments
+# above the target (TestMakefileHasNoCommentInsideAContinuedRecipe, issue #437).
 
 # The VM's size and SSH port, for a host that runs several VMs (issue #228, docs/dev-environment.md, Several
 # VMs on one host). Empty keeps dev/lima.yaml's value and the port Lima picks. They apply only when make vm-up
