@@ -9,7 +9,9 @@ name: Infra tools
 # built from its minor version's branch, never the tag), then checks each pin equals that file's line for
 # tofu_<version>_<os>_<arch>.tar.gz. The file names carry the version, so a SHA256SUMS of another release
 # from the same branch cannot vouch for these pins. The cosign that checks it comes from
-# sigstore/cosign-installer, pinned by digest, not from the release under test. It runs on every pull
+# sigstore/cosign-installer, pinned by digest, not from the release under test: v4.1.3 installs cosign
+# v3.1.4, which verifies the --certificate/--signature pair OpenTofu publishes (it warns that both flags
+# are deprecated in favour of a bundle, which OpenTofu's releases do not ship). It runs on every pull
 # request, so it can be a required status check without leaving other PRs waiting for it; the weekly run
 # catches a release asset replaced under a tag already pinned, which Renovate never reports.
 on:

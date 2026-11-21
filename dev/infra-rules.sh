@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The static rules of the OpenTofu configuration under an infra root (issue #422): what tofu test cannot
 # state, read from the files themselves. dev/infra-check.sh runs it on infra/ before any tofu command;
-# the fixtures in dev/testdata/infra-invalid (one broken rule each) run it on themselves. It reads files
-# only: no tofu, no network, no credential.
+# TestInfraRules (test/devenv/infrarules_test.go) runs it on copies of infra/ with one broken rule each.
+# It reads files only: no tofu, no network, no credential. It runs and is tested in the VM and in CI
+# (bash and gawk); the BSD tools on macOS are untested.
 #
 # Each broken rule prints one line on stderr, "infra-rules: [<rule>] <file>[:<line>]: <why>", and the
 # script exits 1; with every rule holding it prints nothing and exits 0; a usage error exits 2. The rules,
@@ -13,7 +14,12 @@
 #   [symlink]        a symlink anywhere under the root: tofu would load what it points at, unread here
 #   [override-file]  an override file (override.tf, *_override.tf, the .tofu and .json forms): it rewrites
 #                    other files' blocks where a review of those files does not see it
-#   [parse]          a heredoc, or a string, comment or bracket left open: the rules fail closed
+#   [shadowed-file]  a <name>.tofu beside <name>.tf, or <name>.tofutest.hcl beside <name>.tftest.hcl:
+#                    OpenTofu loads only the .tofu one, so the reviewed twin is not what runs
+#   [parse]          a heredoc; a string, comment or bracket left open; a backslash in a block label or
+#                    quoted key (HCL decodes escapes such as _); a block header whose labels are not
+#                    plain identifiers or literal strings. The rules fail closed: after a [parse] line
+#                    no other rule is reported
 #   [api-key]        a scaleway_iam_api_key resource or data source: the deploy key is made by hand, so no
 #                    secret reaches the state
 #   [bucket-acl]     a scaleway_object_bucket_acl resource
@@ -26,8 +32,13 @@
 #   [provider-type]  a resource, data source or provider block of any provider but scaleway
 #   [provider-source] a required_providers entry whose source is not exactly "scaleway/scaleway"
 #   [lock-file]      a .terraform.lock.hcl naming any provider but registry.opentofu.org/scaleway/scaleway
-#   [module-source]  a module whose source is not a local ./ path
-#   [backend-count]  a root configuration (a directory with *.tf or *.tofu) without exactly one backend
+#   [provider-alias] alias in a configuration's provider block: a second provider configuration
+#   [provider-credentials] access_key, secret_key or profile in a configuration's provider block: the
+#                    credentials come from the admin machine's environment, never from a file
+#   [module-source]  a module, in the configuration or in a test's run block, whose source is not a local
+#                    ./ path, or has a .. segment
+#   [backend-count]  a root configuration (a directory with *.tf or *.tofu that no local module source
+#                    names) without exactly one backend
 #   [backend-s3]     a backend other than s3 (never local)
 #   [cloud-block]    a cloud block
 #   [required-version] a root without exactly one required_version, or one other than infra/tofu.yaml's
@@ -35,6 +46,8 @@
 #   [test-mock]      a test file (*.tftest.hcl, *.tofutest.hcl) without an unaliased
 #                    mock_provider "scaleway", so tofu test would run the real provider
 #   [test-provider]  a test file with a provider block
+#   [test-providers] providers = ... in a test's run block, which hands the run another provider
+#                    configuration than the mock
 # The HCL is read by dev/infra-rules.awk.
 #
 # Usage: dev/infra-rules.sh <infra root>   (from the repository root: dev/infra-rules.sh infra)
@@ -76,6 +89,17 @@ done <<<"$(files -type f \( -name '*.tf.json' -o -name '*.tofu.json' -o -name '*
 while IFS= read -r f; do
   [ -n "${f}" ] && fail override-file "${f}" "an override file rewrites other files' blocks where a review of those files does not see it"
 done <<<"$(files -type f \( -name 'override.tf' -o -name '*_override.tf' -o -name 'override.tofu' -o -name '*_override.tofu' -o -name 'override.tf.json' -o -name '*_override.tf.json' -o -name 'override.tofu.json' -o -name '*_override.tofu.json' \))"
+
+while IFS= read -r f; do
+  [ -n "${f}" ] || continue
+  case "${f}" in
+    *.tofutest.hcl) twin="${f%.tofutest.hcl}.tftest.hcl" ;;
+    *) twin="${f%.tofu}.tf" ;;
+  esac
+  if [ -e "${twin}" ]; then
+    fail shadowed-file "${f}" "beside ${twin}: OpenTofu loads only the .tofu file of the pair, so the reviewed ${twin##*/} is not what runs"
+  fi
+done <<<"$(files -type f \( -name '*.tofu' -o -name '*.tofutest.hcl' \))"
 
 while IFS= read -r f; do
   [ -n "${f}" ] || continue

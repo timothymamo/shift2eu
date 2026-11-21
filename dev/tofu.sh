@@ -6,8 +6,9 @@
 # The release tarball for this platform (linux_amd64, linux_arm64 or darwin_arm64) is downloaded once
 # from opentofu/opentofu's GitHub release, over HTTPS only, into bin/tofu/<version>-<os>_<arch>/
 # (git-ignored, one per worktree), and kept only if its SHA-256 is its pin in infra/tofu.yaml. Nothing
-# extracted is trusted across runs: every run hashes the kept tarball against the pin again, extracts
-# tofu into a fresh temporary directory beside it, runs that binary and deletes the directory. So a
+# extracted is trusted across runs: every run copies the kept tarball into a fresh temporary directory
+# beside it, hashes that copy against the pin again, extracts tofu from it, runs that binary and deletes
+# the directory (on exit, TERM or HUP; directories a SIGKILL left are swept after a day). So a
 # binary changed or replaced in bin/ is never run, and a changed tarball is refused. The pin is the
 # tarball's digest, which Renovate updates with the version (github-release-attachments); a digest of the
 # extracted binary would be one Renovate cannot keep current. No other tofu, whatever the PATH holds, is
@@ -69,8 +70,19 @@ dir="bin/tofu/${version}-${os}_${arch}"
 asset="tofu_${version#v}_${os}_${arch}.tar.gz"
 tarball="${dir}/${asset}"
 mkdir -p "${dir}"
+
+# Run directories that no trap could delete (SIGKILL, a power cut) are swept once they are a day old, so
+# a run still going in another shell keeps its binary.
+find "${dir}" -mindepth 1 -maxdepth 1 -type d -name 'run.*' -mmin +1440 -exec rm -rf {} + 2>/dev/null || true
+
 tmp="$(mktemp -d "${dir}/run.XXXXXX")"
 trap 'rm -rf "${tmp}"' EXIT
+# TERM and HUP would otherwise end bash without running the EXIT trap; exiting runs it. While tofu runs,
+# bash takes the trap once tofu exits: a closed terminal (HUP) and Ctrl-C (INT) reach tofu as well (one
+# process group), which stops as it always does, and a TERM sent to this script alone lets tofu finish
+# its command rather than cut an apply short.
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 if [ ! -f "${tarball}" ]; then
   echo >&2 "tofu: downloading OpenTofu ${version} for ${os}_${arch}"
@@ -84,12 +96,15 @@ if [ ! -f "${tarball}" ]; then
   mv -f "${tmp}/${asset}" "${tarball}"
 fi
 
-got="$(sha256 "${tarball}")"
+# The kept tarball is copied into this run's directory first, and the copy is the one hashed and
+# extracted: a tarball changed in bin/ between the hash and the extraction is never what runs.
+cp "${tarball}" "${tmp}/${asset}"
+got="$(sha256 "${tmp}/${asset}")"
 if [ "${got}" != "${digest}" ]; then
   echo >&2 "tofu: ${tarball} has SHA-256 ${got}, not ${key} in ${pins}: refusing to run it; delete it to download the release again"
   exit 1
 fi
-tar -C "${tmp}" --no-same-owner -xzf "${tarball}" tofu
+tar -C "${tmp}" --no-same-owner -xzf "${tmp}/${asset}" tofu
 chmod 0755 "${tmp}/tofu"
 
 # Not exec: the trap deletes the extracted binary once tofu exits. Ctrl-C reaches tofu as well (one

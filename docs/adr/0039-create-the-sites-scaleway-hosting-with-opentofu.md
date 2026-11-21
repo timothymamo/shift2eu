@@ -43,14 +43,20 @@ branch.
 lists them), `fmt -check`, `init -backend=false`, `validate` and `tofu test` against `mock_provider`: no
 credential, no state, no call to Scaleway, no passphrase. It runs tofu under `env -i` with an allow list:
 no `SCW_*`, `AWS_*` or `TF_*` variable of the caller's, `SCW_CONFIG_PATH`, `AWS_CONFIG_FILE` and
-`AWS_SHARED_CREDENTIALS_FILE` set to `/dev/null`, and `HOME` an empty directory, so it cannot reach
-Scaleway even on the admin machine with the maintainer's keys exported. Among the static rules: every
-test file declares an unaliased `mock_provider "scaleway"` and no `provider` block; `required_providers`
-names only `scaleway/scaleway` and the lock file only its provider; every resource, data source and
-provider is Scaleway's; a module's source is a local `./` path; exactly one `scaleway_iam_application`
+`AWS_SHARED_CREDENTIALS_FILE` set to `/dev/null`, and `HOME` an empty directory, so no credential of the
+caller's reaches it, even on the admin machine with the maintainer's keys exported. That holds only
+while the configuration itself names no credential and no real provider for a test, which the static
+rules keep: a configuration's `provider` block has no `alias` (a second configuration a test could pick)
+and no `access_key`, `secret_key` or `profile`; a test file declares an unaliased
+`mock_provider "scaleway"`, no `provider` block, and no `providers` in a `run` block. Among the other
+static rules: `required_providers` names only `scaleway/scaleway` and the lock file only its provider;
+every resource, data source and provider is Scaleway's; a module's source, in the configuration or in a
+test's `run` block, is a local `./` path without a `..` segment; exactly one `scaleway_iam_application`
 and one `scaleway_iam_policy`, without `count` or `for_each`, and no other IAM resource; no `acl` or
-`visibility` argument; no override file, JSON file or symlink; and a file the rules cannot read (a
-heredoc, an unbalanced string or bracket) fails them.
+`visibility` argument; no override file, JSON file, symlink, or `.tofu` (`.tofutest.hcl`) file beside a
+`.tf` (`.tftest.hcl`) file of the same name, which OpenTofu would load instead; and a file the rules
+cannot read (a heredoc, an unbalanced string or bracket, a backslash escape in a block label or quoted
+key, a block header of anything but identifiers and literal strings) fails them, with no other verdict.
 
 ### What OpenTofu creates (`infra/site/main.tf`)
 

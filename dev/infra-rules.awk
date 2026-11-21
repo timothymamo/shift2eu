@@ -2,22 +2,42 @@
 # It reads every configuration file (*.tf, *.tofu) and test file (*.tftest.hcl, *.tofutest.hcl) given,
 # tokenizes each as HCL, and prints one line per broken rule:
 #   [<rule>] <file>:<line>: <what is wrong and why>
-# and nothing when every rule holds. dev/infra-rules.sh documents the rules; the tester's fixtures in
-# dev/testdata/infra-invalid match on the [<rule>] tag.
+# and nothing when every rule holds. dev/infra-rules.sh documents the rules; the cases of TestInfraRules
+# (test/devenv/infrarules_test.go), one broken rule each, match on the [<rule>] tag.
 #
 # The tokenizer knows HCL's strings (with ${...} and %{...} templates, which may nest strings), comments
 # (#, // and /* */), identifiers, numbers and punctuation. The parser above it tracks only what the rules
 # need: blocks with their type and labels, and attributes with their name and whether their value is one
 # literal string ("L", its value kept), an object ("O") or any other expression ("E"). Anything it does
-# not read, a heredoc or an unbalanced string, brace or comment, is a [parse] failure: the rules fail
-# closed rather than pass a file they could not read.
+# not read is a [parse] failure: a heredoc; an unbalanced string, brace or comment; a backslash in a block
+# label or a quoted object key (HCL decodes escapes such as _, so the raw text is not the name tofu
+# reads); and a { after a block header whose labels are not plain identifiers or literal strings. The
+# rules fail closed rather than pass a file they could not read: once any file fails to parse, only the
+# [parse] lines are printed, since every other verdict would rest on a partial reading.
 #
 # Usage: awk -v pinned=<required_version> -v root=<infra root> -f dev/infra-rules.awk <files...>
-# POSIX awk only (mawk in the VM, the BSD awk on macOS, gawk in CI).
+# POSIX awk only: no gawk extension, and character classes are written as explicit comparisons where a
+# bracket expression's edge cases (a ] or [ inside it) differ between awks. It runs and is tested in the
+# VM and in CI (gawk on both, through TestInfraRules) and was also run under mawk and busybox awk; the
+# BSD awk on macOS is untested.
+
+BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] range)
+  LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_"
+  DIGITS = "0123456789"
+}
 
 function problem(rule, file, line, msg) {
   print "[" rule "] " file (line == "" ? "" : ":" line) ": " msg
   problems++
+  if (rule == "parse") {
+    parsefailed++
+  }
+}
+
+# A [parse] failure: the rest of the file is not read.
+function unreadable(msg) {
+  problem("parse", FILENAME, tokline, msg)
+  broken = 1
 }
 
 # --- The parser: a stack of contexts. kind is "body" (a block's body, or the file), "obj" (an object
@@ -59,8 +79,7 @@ function push(k, n) {
 
 function pop() {
   if (sp == 0) {
-    problem("parse", FILENAME, tokline, "a closing bracket has no opening one")
-    broken = 1
+    unreadable("a closing bracket has no opening one")
     return
   }
   sp--
@@ -113,22 +132,27 @@ function tok(t, v, lit,   i, ok, n) {
   }
 
   if (t == "P" && (v == "{" || v == "(" || v == "[")) {
-    if (v == "{" && kind[sp] == "body" && !skip && bn >= 1 && bt[1] == "I") {
-      ok = 1
+    if (v == "{" && kind[sp] == "body" && !skip) { # a block header: <type> <label>... {
+      if (bn < 1 || bt[1] != "I") {
+        unreadable("a { that opens no block: a block starts with its type, an identifier")
+        return
+      }
       n = bv[1]
       for (i = 2; i <= bn; i++) {
-        if (bt[i] == "S" && bl[i]) {
+        if (bt[i] == "S" && bl[i] && index(bv[i], "\\") == 0) {
           n = n ":" bv[i]
         } else if (bt[i] == "I") {
           n = n ":" bv[i]
+        } else if (bt[i] == "S" && bl[i]) {
+          unreadable("a block label with a backslash, which HCL decodes (\\u005f is _): write the label without escapes")
+          return
         } else {
-          ok = 0
+          unreadable("a block label that is not a plain identifier or literal string (a template or another token)")
+          return
         }
       }
-      if (ok) {
-        push("body", n)
-        return
-      }
+      push("body", n)
+      return
     }
     if (v == "{") {
       push("obj", "{}")
@@ -152,6 +176,10 @@ function tok(t, v, lit,   i, ok, n) {
     return
   }
   if (t == "P" && (v == "=" || v == ":") && bn == 1 && (bt[1] == "I" || (bt[1] == "S" && bl[1]))) {
+    if (bt[1] == "S" && index(bv[1], "\\") > 0) {
+      unreadable("a quoted key with a backslash, which HCL decodes (\\u005f is _): write the key without escapes")
+      return
+    }
     pa = bv[1]
     pstate = 1
     skip = 1
@@ -263,18 +291,18 @@ FNR == 1 {
       broken = 1
       continue
     }
-    if (c ~ /[A-Za-z_]/) {
+    if (index(LETTERS, c) > 0) {
       j = i
-      while (j < n && substr(line, j + 1, 1) ~ /[A-Za-z0-9_-]/) {
+      while (j < n && index(LETTERS DIGITS "-", substr(line, j + 1, 1)) > 0) {
         j++
       }
       tok("I", substr(line, i, j - i + 1), 0)
       i = j
       continue
     }
-    if (c ~ /[0-9]/) {
+    if (index(DIGITS, c) > 0) {
       j = i
-      while (j < n && substr(line, j + 1, 1) ~ /[0-9.eE]/) {
+      while (j < n && index(DIGITS ".eE", substr(line, j + 1, 1)) > 0) {
         j++
       }
       tok("X", substr(line, i, j - i + 1), 0)
@@ -300,7 +328,7 @@ FNR == 1 {
       tok("X", c, 0)
       continue
     }
-    if (c ~ /[][{}(),:]/) {
+    if (c == "{" || c == "}" || c == "(" || c == ")" || c == "[" || c == "]" || c == "," || c == ":") {
       tok("P", c, 0)
       continue
     }
@@ -336,12 +364,37 @@ function endfile() {
 
 function dirof(f,   d) {
   d = f
-  sub(/\/[^\/]*$/, "", d)
+  sub("/[^/]*$", "", d)
+  return d
+}
+
+# The directory tofu reads a test file's run-block module source against: the root configuration's, the
+# parent of a tests/ directory or the test file's own.
+function testbase(f,   d) {
+  d = dirof(f)
+  if (d ~ "(^|/)tests$") {
+    d = dirof(d)
+  }
+  return d
+}
+
+# <dir>/<a local ./ source>, without ./ segments or a trailing /.
+function joinpath(dir, s,   d) {
+  d = dir "/" substr(s, 3)
+  while (sub("/[.]/", "/", d)) {
+  }
+  while (sub("//", "/", d)) {
+  }
+  sub("/[.]$", "", d)
+  sub("/$", "", d)
   return d
 }
 
 END {
   endfile()
+  if (parsefailed) {
+    exit
+  }
 
   # Blocks.
   for (b = 1; b <= nblk; b++) {
@@ -357,6 +410,11 @@ END {
       }
       if (m == 1 && typ == "provider") {
         problem("test-provider", f, bline[b], "a test file configures a real provider (" last "): it must only mock_provider \"scaleway\", so tofu test never reaches Scaleway")
+      }
+      if (m == 2 && el[1] ~ "^run:" && typ == "module") {
+        nmod++
+        modBlock[nmod] = b
+        isModule[b] = 1
       }
       continue
     }
@@ -383,6 +441,7 @@ END {
     if (m == 1 && typ == "module") {
       nmod++
       modBlock[nmod] = b
+      isModule[b] = 1
     }
     if (m == 2 && el[1] == "terraform" && typ == "backend") {
       backends[dirof(f)]++
@@ -404,7 +463,21 @@ END {
       if (n == "alias" && (ablk[a] in mock) && p == bpath[ablk[a]]) {
         aliased[ablk[a]] = 1
       }
+      if (n == "providers" && p ~ "^run:[^/]+$") {
+        problem("test-providers", f, aline[a], "providers in a run block (" p "): it hands the run a provider configuration other than the file's unaliased mock_provider \"scaleway\"")
+      }
+      if (n == "source" && (ablk[a] in isModule) && p == bpath[ablk[a]]) {
+        modSource[ablk[a]] = (akind[a] == "L") ? aval[a] : "<an expression>"
+      }
       continue
+    }
+    if (p ~ "^provider:[^/]+$") {
+      if (n == "alias") {
+        problem("provider-alias", f, aline[a], "alias in " p ": a second provider configuration under another name, which resources and tests could reach unseen")
+      }
+      if (n == "access_key" || n == "secret_key" || n == "profile") {
+        problem("provider-credentials", f, aline[a], n " in " p ": credentials come from SCW_ACCESS_KEY and SCW_SECRET_KEY on the admin machine, never from a file git holds")
+      }
     }
     if (n == "acl") {
       problem("acl", f, aline[a], "an acl argument, even \"private\": the bucket policy alone decides who reads the site (ADR 0039)")
@@ -428,13 +501,13 @@ END {
         provAt[nprov] = f ":" aline[a]
       }
     }
-    if (p ~ /^terraform\/required_providers\/[^\/]+$/ && n == "source") {
+    if (p ~ "^terraform/required_providers/[^/]+$" && n == "source") {
       provSource[p] = (akind[a] == "L") ? aval[a] : "<an expression>"
     }
-    if (p ~ /^module:[^\/]+$/ && n == "source") {
-      modSource[p] = (akind[a] == "L") ? aval[a] : "<an expression>"
+    if (n == "source" && (ablk[a] in isModule) && p == bpath[ablk[a]]) {
+      modSource[ablk[a]] = (akind[a] == "L") ? aval[a] : "<an expression>"
     }
-    if (p ~ /^resource:scaleway_iam_(policy|application):[^\/]+$/ && (n == "count" || n == "for_each")) {
+    if (p ~ "^resource:scaleway_iam_(policy|application):[^/]+$" && (n == "count" || n == "for_each")) {
       problem("iam-repeat", f, aline[a], n " on " p ": infra/ creates exactly one IAM application and one policy")
     }
   }
@@ -449,9 +522,19 @@ END {
 
   for (i = 1; i <= nmod; i++) {
     b = modBlock[i]
-    s = (bpath[b] in modSource) ? modSource[bpath[b]] : "<none>"
-    if (s !~ /^\.\//) {
-      problem("module-source", bfile[b], bline[b], bpath[b] " has source " s ": a module may only be a local ./ path in this repository, never a registry, git or URL source")
+    f = bfile[b]
+    s = (b in modSource) ? modSource[b] : "<none>"
+    if (s !~ "^[.]/") {
+      problem("module-source", f, bline[b], bpath[b] " has source " s ": a module may only be a local ./ path in this repository, never a registry, git or URL source")
+    } else if (s ~ "(^|/)[.][.](/|$)" || index(s, "\\") > 0) {
+      problem("module-source", f, bline[b], bpath[b] " has source " s ": a .. segment (or an escape) can lead out of the configuration, to files these rules do not read")
+    } else {
+      # A local module's directory is no root configuration: it needs no backend or required_version.
+      base = isTest[f] ? testbase(f) : dirof(f)
+      d = joinpath(base, s)
+      if (d != base) {
+        moduleDir[d] = 1
+      }
     }
   }
 
@@ -463,6 +546,9 @@ END {
   }
 
   for (d in configDir) {
+    if (d in moduleDir) {
+      continue
+    }
     if (backends[d] + 0 != 1) {
       problem("backend-count", d, "", backends[d] + 0 " backends, want exactly one: backend \"s3\"")
     }

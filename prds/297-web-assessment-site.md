@@ -700,9 +700,11 @@ release), *live* (checked against the live site) or *review*.
   ME="$(scw iam api-key get "$SCW_ACCESS_KEY" -o json | jq -r 'if ((.user_id // "") | length) > 0 then "user_id:" + .user_id else "application_id:" + .application_id end')"
   echo "$ADMIN_PROJECT $ME"                         # PASS: your admin project's ID (never the site's) and "user_id:<your user ID>"
   # FAIL the site's project ID (an R5 or R7 left unfinished): scw iam api-key update "$SCW_ACCESS_KEY" default-project-id=<admin project ID>, then R0 again
+  # FAIL an empty value, "null" or "user_id:" alone: the scw call failed (a wrong key, no network); fix it, then R0 again
   # The bucket policy's admin statement must be you (ADR 0039, The bucket policy); the first time, after R2
-  [ "$(sed -n 's/^admin_principal *= *"\(.*\)".*/\1/p' infra/site/terraform.tfvars)" = "$ME" ] && echo "PASS admin_principal is $ME" || echo "FAIL admin_principal is not $ME"
-  # FAIL: set admin_principal = "<the value of $ME>" in infra/site/terraform.tfvars before any plan; a wrong one locks you out of the bucket
+  AP="$(sed -n 's/^admin_principal *= *"\(.*\)".*/\1/p' infra/site/terraform.tfvars 2>/dev/null)"
+  [ -n "$ME" ] && [ -n "$AP" ] && [ "$AP" = "$ME" ] && echo "PASS admin_principal is $ME" || echo "FAIL admin_principal is '$AP', \$ME is '$ME'"
+  # FAIL: an empty $ME: R0's scw lines again; an empty admin_principal (or no terraform.tfvars): set admin_principal = "<the value of $ME>" in infra/site/terraform.tfvars (R2) before any plan; a wrong one locks you out of the bucket
   ```
 
   **R1. The state bucket** (once; your admin project, never the site's, ADR 0039)
@@ -763,11 +765,26 @@ release), *live* (checked against the live site) or *review*.
   W="$(mktemp -d)"; K="origin-probe-$(date +%s).txt"     # scratch files outside the checkout; a new key each time, never one the cache holds
   echo probe > "$W/$K" && aws s3api put-object --bucket "$B" --key "$K" --body "$W/$K" --content-type text/plain
   # FAIL "NoSuchBucket": the key's default project is not the site's; rerun the scw iam api-key update above
-  # The private read first: public_read is false (the default) after the first apply
-  curl -s -o /dev/null -w '%{http_code}\n' "https://$E/$K"   # PASS 200: Edge Services reads the private objects; keep public_read false and record it
-  # FAIL any other answer: record it, then: aws s3api delete-object --bucket "$B" --key "$K";
-  #   scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT"; add public_read = true to infra/site/terraform.tfvars;
+  # The private read first: public_read is false (the default) after the first apply. Only the bucket's own
+  # access-denied answer (403, an S3 <Code>AccessDenied</Code> body) means Edge Services cannot read the private
+  # objects. Anything else (5xx, 404, 000, a TLS error, the edge's own error page) is most likely the pipeline or
+  # its certificate still provisioning: retry for up to 30 minutes, every minute
+  edge() { curl -sS -o "$W/edge-body" -D "$W/edge-head" -w '%{http_code}' "https://$E/$K" 2>"$W/edge-err"; }
+  for i in $(seq 1 30); do
+    C="$(edge)"; [ "$C" = 200 ] && break
+    [ "$C" = 403 ] && grep -q '<Code>AccessDenied</Code>' "$W/edge-body" && break
+    echo "try $i: ${C:-000} $(head -c 200 "$W/edge-err" "$W/edge-body" 2>/dev/null | tr '\n' ' ')"; sleep 60
+  done
+  echo "status $C"; grep -i -E '^(server|via|x-amz-request-id|x-cache|content-type):' "$W/edge-head"; head -c 400 "$W/edge-body"; echo
+  # Status, headers and body tell the edge's own error from the bucket's: an x-amz-request-id header and an S3 XML body come from the bucket
+  # PASS 200: Edge Services reads the private objects; keep public_read false and record it
+  # 403 AccessDenied from the bucket: Edge Services cannot read the private objects; record status, headers and body, then:
+  #   aws s3api delete-object --bucket "$B" --key "$K"; scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT";
+  #   add public_read = true to infra/site/terraform.tfvars;
   #   R4 (its plan adds only the EveryoneReadsTheSite statement), then R5 again from its first line: PASS 200
+  # FAIL any other answer after 30 tries: record status, headers, body and the try lines; leave public_read as it is,
+  #   aws s3api delete-object --bucket "$B" --key "$K"; scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$ADMIN_PROJECT";
+  #   and stop until the pipeline's state (scw edge-services pipeline get "$PL") and the answer are explained
   for u in "https://$E" "http://$E" "https://$B.s3-website.$REGION.scw.cloud" "http://$B.s3-website.$REGION.scw.cloud" \
     "https://$B.s3.$REGION.scw.cloud" "http://$B.s3.$REGION.scw.cloud"; do
     printf '%s ' "$u"; curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "$u/$K"
@@ -805,6 +822,8 @@ release), *live* (checked against the live site) or *review*.
   # 3. The deploy key, for this shell only
   read -rp 'deploy access key: ' AWS_ACCESS_KEY_ID && read -rsp 'deploy secret key: ' AWS_SECRET_ACCESS_KEY && echo && export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
   probe() { if out="$(aws "$@" 2>&1)"; then echo "FAIL allowed: $*"; elif [[ ${out} == *AccessDenied* ]]; then echo "PASS 403: $*"; else echo "INCONCLUSIVE: $* -> ${out}"; fi; }
+  # For a bucket in another project: the key's S3 calls go to its default project (the site's), so such a bucket may answer NoSuchBucket, which denies it as well
+  xprobe() { if out="$(aws "$@" 2>&1)"; then echo "FAIL allowed: $*"; elif [[ ${out} == *AccessDenied* ]]; then echo "PASS 403: $*"; elif [[ ${out} == *NoSuchBucket* ]]; then echo "PASS NoSuchBucket (outside the key's project): $*"; else echo "INCONCLUSIVE: $* -> ${out}"; fi; }
   echo canary > "$W/probe.txt"
   V="$(aws s3api put-object --bucket "$B" --key canary/probe.txt --body "$W/probe.txt" --query VersionId --output text)"; echo "$V"   # PASS: a version ID (PutObject allowed)
   aws s3api list-objects-v2 --bucket "$B" --max-items 1 >/dev/null && echo "ListBucket allowed" || echo "ListBucket denied"   # record it (ADR 0039 open point 3)
@@ -836,13 +855,13 @@ release), *live* (checked against the live site) or *review*.
   probe s3api put-bucket-tagging --bucket "$CB" --tagging 'TagSet=[{Key=probe,Value=1}]'
   probe s3api put-bucket-encryption --bucket "$CB" --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
   # 7. Outside the project
-  probe s3api put-object --bucket <a bucket in another project of yours> --key canary/probe.txt --body "$W/probe.txt"
+  xprobe s3api put-object --bucket <a bucket in another project of yours> --key canary/probe.txt --body "$W/probe.txt"
   probe s3api list-buckets
   # The state bucket (your admin project): the deploy key may neither read, list nor write it
-  probe s3api get-object --bucket <state-bucket> --key site/terraform.tfstate "$W/state-probe.json"
-  probe s3api list-objects-v2 --bucket <state-bucket>
-  probe s3api put-object --bucket <state-bucket> --key canary/probe.txt --body "$W/probe.txt"
-  # PASS: every probe line "PASS 403"
+  xprobe s3api get-object --bucket <state-bucket> --key site/terraform.tfstate "$W/state-probe.json"
+  xprobe s3api list-objects-v2 --bucket <state-bucket>
+  xprobe s3api put-object --bucket <state-bucket> --key canary/probe.txt --body "$W/probe.txt"
+  # PASS: every probe line "PASS 403", and every xprobe line "PASS 403" or "PASS NoSuchBucket"
   # FAIL "FAIL allowed" or "INCONCLUSIVE": record probe, answer and reason in the hosting ADR, restore (8), and stop until it is explained
   # 8. Own key again: restore and clean up
   export AWS_ACCESS_KEY_ID="$SCW_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$SCW_SECRET_KEY"
