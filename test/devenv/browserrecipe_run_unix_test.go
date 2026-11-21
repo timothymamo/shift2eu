@@ -524,7 +524,7 @@ func TestMakeSiteStillWritesTheSharedBundle(t *testing.T) {
 	}
 
 	// The archive goes beside the bundle, named for the site and the version it holds: this asks that make site wrote
-	// one there, not which separator its name spells (the Makefile's own comment and its recipe disagree on it).
+	// one there, not which version its name spells - untagged here, the recipe names it for dev.
 	candidates, err := filepath.Glob(filepath.Join(sb.clone, "bin", "shift2eu-site*.tar.gz"))
 	if err != nil {
 		t.Fatalf("look for make site's archive: %v", err)
