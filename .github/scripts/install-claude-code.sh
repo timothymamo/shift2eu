@@ -7,7 +7,9 @@
 # It downloads the platform package's tarball with npm pack, which runs no install script, compares it
 # with the pinned npm integrity, and only then extracts its one binary, package/claude, into
 # <directory>, where the reviewer runs it as <directory>/package/claude. A tarball that does not match
-# fails the run and nothing of it is extracted. The meta package @anthropic-ai/claude-code only picks a
+# fails the run and nothing of it is extracted. The tarball is downloaded into a directory of its own from
+# mktemp -d, which an EXIT trap removes on every exit, a failed one included (issue #451); <directory>
+# stays. The meta package @anthropic-ai/claude-code only picks a
 # platform package in a postinstall script, so it is never installed. The workflow pins the version
 # (CLAUDE_CODE_VERSION, under a # renovate: comment) and the integrity (CLAUDE_CODE_INTEGRITY) in the
 # install step's env: and passes both here: a Renovate bump of the version must replace the integrity
@@ -56,6 +58,12 @@ if [[ ! "${integrity}" =~ ^sha512-[A-Za-z0-9+/]+=*$ ]]; then
 fi
 
 download=$(mktemp -d)
+remove_download() {
+	if [ -n "${download:-}" ] && [ -d "${download}" ]; then
+		rm -rf -- "${download}"
+	fi
+}
+trap remove_download EXIT
 mkdir -p "${dest}"
 
 tgz=$(npm pack --ignore-scripts --silent --pack-destination "${download}" "${package}")
