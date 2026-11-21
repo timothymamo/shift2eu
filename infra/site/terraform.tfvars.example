@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars (git-ignored) on the admin machine and fill in the real values.
+organization_id = "00000000-0000-0000-0000-000000000000"
+# The owner of the API key in SCW_ACCESS_KEY: "user_id:<uuid>" for your own key, or
+# "application_id:<uuid>" for an admin application's (scw iam api-key get <access-key>).
+admin_principal = "user_id:00000000-0000-0000-0000-000000000000"
+# Optional, with their defaults:
+# region      = "nl-ams"
+# bucket_name = "shift2eu-site-www"
+# Set true only when the Runbook's R5 finds that Edge Services cannot serve the private objects:
+# public_read = false

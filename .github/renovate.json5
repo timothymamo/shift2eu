@@ -97,6 +97,36 @@
       ],
     },
     {
+      // OpenTofu (issue #422). The terraform manager reads infra/site's *.tf (its default pattern,
+      // **/*.tf and **/*.tofu) and reports required_version as dep type required_version for
+      // hashicorp/terraform (https://docs.renovatebot.com/modules/manager/terraform/): point it at
+      // OpenTofu's releases, so it moves with infra/tofu.yaml's tofuVersion and digests in one PR.
+      description: 'OpenTofu: infra/site required_version reads opentofu/opentofu releases',
+      matchManagers: ['terraform'],
+      matchDepTypes: ['required_version'],
+      overrideDatasource: 'github-releases',
+      overrideDepName: 'opentofu/opentofu',
+      overridePackageName: 'opentofu/opentofu',
+      groupName: 'OpenTofu',
+    },
+    {
+      description: 'OpenTofu: infra/tofu.yaml version and per-platform digests with infra/site required_version',
+      matchDepNames: ['opentofu/opentofu'],
+      groupName: 'OpenTofu',
+      prBodyNotes: [
+        '**Before merging:** every `digestVersion` in `infra/tofu.yaml` must equal the new `tofuVersion`, and `required_version` in `infra/site/versions.tf` the same version without its `v` (`dev/infra-check.sh` fails otherwise). The "Infra tools" check must be green: it checks every new digest against the release\'s `tofu_<version>_SHA256SUMS` and that file\'s cosign signature from opentofu/opentofu\'s release workflow. The "Test" check downloads the linux_amd64 tarball and checks it against its pin.',
+      ],
+    },
+    {
+      // "Renovate can not know if you want to use the Terraform or OpenTofu registry"
+      // (https://docs.renovatebot.com/modules/manager/terraform/): tofu installs scaleway/scaleway from
+      // registry.opentofu.org, which .terraform.lock.hcl names, so Renovate reads versions and the
+      // lock file's hashes there too. The manager updates the lock file itself when it bumps a provider.
+      description: 'OpenTofu: providers and modules from the OpenTofu registry',
+      matchDatasources: ['terraform-provider', 'terraform-module'],
+      registryUrls: ['https://registry.opentofu.org'],
+    },
+    {
       // The AI reviewer's Claude Code CLI (ADR 0033) is pinned by version (CLAUDE_CODE_VERSION in the
       // install step's env:, which the "Versions annotated with" manager reads) and by the npm integrity
       // of its tarball (CLAUDE_CODE_INTEGRITY beside it), which Renovate cannot update: a bump must replace
@@ -116,11 +146,12 @@
       // digest when the tag is unchanged, so it proposes no such PR today. What catches a replaced gh,
       // cosign or Lima asset is the weekly run of .github/workflows/vm-tools.yml, which then fails on the
       // pin. vm-tools.yml does not check shellcheck: CI's lint-shell job checks the amd64 digest on every
-      // push, and the arm64 one is checked only when the VM is provisioned.
-      description: 'gh, cosign, Lima and shellcheck: a release asset changed under an existing tag',
-      matchDepNames: ['cli/cli', 'sigstore/cosign', 'lima-vm/lima', 'koalaman/shellcheck'],
+      // push, and the arm64 one is checked only when the VM is provisioned. OpenTofu's pins are checked by
+      // the weekly run of .github/workflows/infra-tools.yml against the release's signed SHA256SUMS.
+      description: 'gh, cosign, Lima, shellcheck and OpenTofu: a release asset changed under an existing tag',
+      matchDepNames: ['cli/cli', 'sigstore/cosign', 'lima-vm/lima', 'koalaman/shellcheck', 'opentofu/opentofu'],
       matchUpdateTypes: ['digest'],
-      groupName: 'replaced gh, cosign, Lima or shellcheck release asset',
+      groupName: 'replaced gh, cosign, Lima, shellcheck or OpenTofu release asset',
       addLabels: ['security-review'],
       automerge: false,
       prBodyNotes: [
@@ -146,6 +177,8 @@
         '/^\\.github/workflows/vm-tools\\.yml$/',
         // ci.yml's lint-shell job pins the shellcheck release the VM does.
         '/^\\.github/workflows/ci\\.yml$/',
+        // The OpenTofu release dev/tofu.sh runs, by a SHA-256 per platform (issue #422).
+        '/^infra/tofu\\.yaml$/',
       ],
       matchStrings: [
         '# renovate: datasource=(?<datasource>github-release-attachments) depName=(?<depName>\\S+) digestVersion=(?<currentValue>\\S+)\\s+\\S+:\\s*"(?<currentDigest>[a-f0-9]{64})"',
@@ -161,6 +194,7 @@
         '/^dev/lima\\.yaml$/',
         '/^dev/testdata/lima-invalid/[^/]+\\.yaml$/',
         '/^\\.github/workflows/[^/]+\\.ya?ml$/',
+        '/^infra/tofu\\.yaml$/',
       ],
       matchStrings: [
         '# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+\\S+:\\s*(?:image=[^\\s:]+:)?"?(?<currentValue>[^"\\s@]+)(?:@(?<currentDigest>sha256:[a-f0-9]{64}))?"?',

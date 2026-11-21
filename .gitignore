@@ -39,6 +39,23 @@ go.work.sum
 .azure/
 .config/gcloud/
 
+# --- OpenTofu (infra/, issue #422) ---------------------------------------------
+# State lives in a Scaleway bucket, never in git; tfvars and backend files hold the maintainer's IDs and
+# bucket names. Only the .example copies are committed.
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+backend.hcl
+.terraform/
+.terraform.tfstate.lock.info
+crash.log
+crash.*.log
+# Override files (override.tf, *_override.tf) are not ignored: one left in infra/site shows in git status
+# as "??" (Runbook R2), and dev/infra-rules.sh refuses one in a commit.
+
 # --- Agent tooling ------------------------------------------------------------
 # One git worktree per pull request (make worktree; docs/adr/0004-one-worktree-per-pull-request.md).
 /.worktrees/

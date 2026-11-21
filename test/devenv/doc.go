@@ -4,10 +4,20 @@
 // .github/workflows/vm-tools.yml must see Lima refuse (issue #137), and the
 // swap file dev/lima.yaml provisions (issue #294). It also pins that the shell
 // blocks of docs/dev-environment.md hold no `!` interactive zsh would expand
-// as a history event (zshhistory_test.go, issue #335), and that the host
-// targets that load the VM's credentials refuse a host clone .envrc that
-// reads a parent, and a .envrc or .env in or above the workspace, before they
-// run anything and without printing a value (envrcguard_test.go, issue #402).
+// as a history event (zshhistory_test.go, issue #335), that the host targets
+// that load the VM's credentials refuse a host clone .envrc that reads a
+// parent, and a .envrc or .env in or above the workspace, before they run
+// anything and without printing a value (envrcguard_test.go, issue #402), and
+// that dev/infra-rules.sh holds the static rules of infra/'s OpenTofu
+// configuration (infrarules_test.go, issue #422).
+//
+// TestInfraRules runs the script on the real infra/, which must hold every
+// rule, and on copies of infra/ in t.TempDir() with exactly one breakage each,
+// for which the script must report that rule's [<tag>] and no other. It reads
+// files only: no tofu, no network, no credentials. TestInfraTracksNoLocalFiles
+// pins that git tracks no file under infra/ that the maintainer's machine keeps
+// (a tfvars file, backend.hcl, a state file, anything under .terraform), only
+// the .example copies; it reads the repository's index and writes nothing.
 //
 // The swap tests (limaswap_test.go) pin the template's swapSize param and run
 // its one system provision step that names PARAM_swapSize under bash, against

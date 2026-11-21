@@ -75,6 +75,7 @@ supersedes it.
 - [0036. Hold the site to three trust layers, and test them in a headless browser](adr/0036-hold-the-site-to-three-trust-layers-and-test-them-in-a-headless-browser.md)
 - [0037. Retire the HTTP API and release the CLI alone](adr/0037-retire-the-http-api-and-release-the-cli-alone.md)
 - [0038. Start the Lima VM at boot with a LaunchDaemon of our own, never limactl autostart](adr/0038-start-the-lima-vm-at-boot-with-a-launchdaemon-of-our-own.md)
+- [0039. Create the site's Scaleway hosting with OpenTofu, its state in a locked bucket outside the site's project](adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md)
 
 ## Writing a page
 
