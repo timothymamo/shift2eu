@@ -1,13 +1,14 @@
 // Pins the static rules of infra/'s OpenTofu configuration (issue #422): dev/infra-rules.sh reads the files
 // under an infra root and reports, one stderr line "infra-rules: [<rule>] <file>[:<line>]: <why>" per broken
 // rule, what tofu test cannot state - no API key resource, no ACL or visibility, exactly one IAM application
-// and its one policy, only scaleway/scaleway, local modules only, one s3 backend per root, required_version
-// equal to infra/tofu.yaml's tofuVersion, every test file mocking the provider, and so on (the script lists
-// them). With every rule holding it prints nothing and exits 0; a usage error exits 2.
+// and its one policy, only scaleway/scaleway, local modules only, one s3 backend and one required_version -
+// equal to infra/tofu.yaml's tofuVersion - for every applied root, which no module source may reach and no
+// configuration file may sit beside, no provider endpoint, every test file mocking the provider, and so on
+// (the script lists them). With every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
 // The real infra/ must hold every rule, and each case below is one copy of infra/ with exactly one breakage,
 // built in t.TempDir() so the real tree stays untouched and the cases cannot drift apart: the copy is what
-// infra/ holds today, whatever a later configuration adds. The case then pins the one [<rule>] tag the script
+// infra/ holds today, whatever a later configuration adds. The case then pins the [<rule>] tags the script
 // must report, and that it reports no other tag, so a breakage the script refuses for an unintended reason
 // fails here instead of passing for the wrong reason. The cases need no network, no credentials and no
 // credential file, and run no tofu: the script reads files only.
@@ -20,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -39,12 +41,14 @@ const (
 // infraRuleTag matches a rule's tag in the script's stderr line "infra-rules: [<rule>] ...".
 var infraRuleTag = regexp.MustCompile(`(?m)^infra-rules: \[([a-z0-9-]+)\] `)
 
-// infraRuleCase is one broken copy of infra/: what the case breaks, and the one rule tag the script must
-// report. A case with an empty tag breaks nothing a rule refuses, and its copy must pass.
+// infraRuleCase is one broken copy of infra/: what the case breaks, and the rule tags the script must report.
+// A case with no tag breaks nothing a rule refuses, and its copy must pass.
 type infraRuleCase struct {
-	name     string // the subtest's name
-	why      string // the breakage, for the reader
-	want     string // the rule tag the script must report, or "" when every rule still holds
+	name     string            // the subtest's name
+	why      string            // the breakage, for the reader
+	want     string            // the rule tag the script must report, or "" when every rule still holds
+	wantMore []string          // the further tags a breakage must report beside want, for the cases that pin a whole refusal
+	wantIn   map[string]string // per tag, a substring the stderr line that reports it must hold: {root} and {site} stand for the copy's root and its site directory
 	breakage func(t *testing.T, site string)
 }
 
@@ -566,6 +570,104 @@ provider "registry.opentofu.org/hashicorp/aws" {
 `)
 		},
 	},
+	// The applied root beside the configuration is never exempt: two routes reach it through a module source,
+	// and a configuration file directly under the root points at it. Its backend and its required_version must
+	// be judged whatever reaches it, a module may not point at an applied root, and no configuration file may
+	// sit directly under the root at all.
+	{
+		name:     "test-file-module-source-pointing-at-a-root",
+		why:      `a test file whose run block sets module source = "./site", the applied root beside tests/`,
+		want:     "backend-count",
+		wantMore: []string{"required-version"},
+		wantIn:   map[string]string{"backend-count": "{site}", "required-version": "{site}"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			removeSiteBackendAndVersion(t, site)
+			writeInfraText(t, filepath.Join(filepath.Dir(site), "tests", "x.tftest.hcl"), `
+mock_provider "scaleway" {}
+
+run "r" {
+  module {
+    source = "./site"
+  }
+}
+`)
+		},
+	},
+	rootFileModuleSourceCase("root-file-module-source-site", "./site"),
+	rootFileModuleSourceCase("root-file-module-source-trailing-slash", "./site/"),
+	rootFileModuleSourceCase("root-file-module-source-dot-segment", "./site/."),
+	rootFileModuleSourceCase("root-file-module-source-leading-dot-segment", "././site"),
+	// HCL decodes a template escape in a label, so the raw text is not the block name tofu reads.
+	{
+		name: "block-label-with-a-dollar-escape",
+		why:  `a resource label written "a$${b}", which HCL reads as the literal "a${b}"`,
+		want: "parse",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_object_bucket" "a$${b}" {
+}
+`)
+		},
+	},
+	{
+		name: "block-label-with-a-percent-escape",
+		why:  `a resource label written "a%%{b}", which HCL reads as the literal "a%{b}"`,
+		want: "parse",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_object_bucket" "a%%{b}" {
+}
+`)
+		},
+	},
+	{
+		name: "provider-endpoint",
+		why:  `api_url = "https://example.com" in the configuration's provider block, an endpoint named in a file git holds`,
+		want: "provider-endpoint",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "providers.tf"),
+				"  organization_id = var.organization_id",
+				"  api_url         = \"https://example.com\"\n  organization_id = var.organization_id")
+		},
+	},
+}
+
+// rootFileModuleSourceCase is one route-2 case: a configuration file directly under the root, whose module
+// source - written one way out of the spellings that reach the same directory - resolves to the applied root
+// beside it. Every spelling must be refused, so none slips past the rules.
+func rootFileModuleSourceCase(name, source string) infraRuleCase {
+	return infraRuleCase{
+		name:     name,
+		why:      "a root.tf directly under the root whose module source " + source + " resolves to the applied root " + infraRulesSiteDir + "/ beside it",
+		want:     "backend-count",
+		wantMore: []string{"module-source", "required-version", "root-file"},
+		wantIn: map[string]string{
+			"backend-count":    "{site}",
+			"required-version": "{site}",
+			"module-source":    "{root}/root.tf",
+			"root-file":        "{root}/root.tf",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			removeSiteBackendAndVersion(t, site)
+			writeInfraText(t, filepath.Join(filepath.Dir(site), "root.tf"), `
+terraform {
+  required_version = "1.13.9"
+
+  backend "s3" {
+  }
+}
+
+module "m" {
+  source = "`+source+`"
+}
+`)
+		},
+	}
 }
 
 // TestInfraRules pins the static rules' two verdicts (issue #422): the repository's own infra/ holds every
@@ -578,7 +680,7 @@ func TestInfraRules(t *testing.T) {
 	t.Run("the real infra holds every rule", func(t *testing.T) {
 		t.Parallel()
 
-		assertInfraRules(t, runInfraRules(t, infraRulesRoot), 0, nil)
+		assertInfraRules(t, runInfraRules(t, infraRulesRoot), 0, nil, nil)
 	})
 
 	t.Run("no root is a usage error", func(t *testing.T) {
@@ -604,18 +706,43 @@ func TestInfraRules(t *testing.T) {
 			t.Parallel()
 
 			root := copyInfraTree(t)
+			site := filepath.Join(root, infraRulesSiteDir)
 			if tc.breakage != nil {
-				tc.breakage(t, filepath.Join(root, infraRulesSiteDir))
+				tc.breakage(t, site)
 			}
 
-			wantExit, wantTags := 0, []string(nil)
+			var wantTags []string
 			if tc.want != "" {
-				wantExit, wantTags = 1, []string{tc.want}
+				wantTags = append(wantTags, tc.want)
 			}
 
-			assertInfraRules(t, runInfraRules(t, root), wantExit, wantTags)
+			wantTags = append(wantTags, tc.wantMore...)
+
+			wantExit := 0
+			if len(wantTags) > 0 {
+				wantExit = 1
+			}
+
+			assertInfraRules(t, runInfraRules(t, root), wantExit, wantTags, infraRuleWantIn(t, tc.wantIn, root, site))
 		})
 	}
+}
+
+// infraRuleWantIn resolves the {root} and {site} placeholders of a case's wantIn, so a case can name the copy's
+// own directories, which live under t.TempDir() and so differ from run to run.
+func infraRuleWantIn(t *testing.T, wantIn map[string]string, root, site string) map[string]string {
+	t.Helper()
+
+	if len(wantIn) == 0 {
+		return nil
+	}
+
+	resolved := make(map[string]string, len(wantIn))
+	for tag, in := range wantIn {
+		resolved[tag] = strings.NewReplacer("{root}", root, "{site}", site).Replace(in)
+	}
+
+	return resolved
 }
 
 // infraRuleRun is one run of the script: what it exited with, what it printed, and the rule tags its stderr
@@ -664,8 +791,10 @@ func runInfraRules(t *testing.T, args ...string) infraRuleRun {
 }
 
 // assertInfraRules fails unless the run exited with wantExit, wrote nothing on stdout, reported exactly
-// wantTags in that order, one stderr line each, and printed nothing at all when wantExit is 0.
-func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []string) {
+// wantTags, one stderr line each and in any order, printed nothing at all when wantExit is 0, and - for every
+// tag in wantIn - reported it on a line that holds the substring, so a rule cannot refuse something without
+// naming the directory or file it judges.
+func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []string, wantIn map[string]string) {
 	t.Helper()
 
 	if got.stdout != "" {
@@ -676,7 +805,11 @@ func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []s
 		t.Errorf("exit code = %d, want %d: stderr was:\n%s", got.exitCode, wantExit, got.stderr)
 	}
 
-	if diff := cmp.Diff(wantTags, got.tags); diff != "" {
+	want, reported := slices.Clone(wantTags), slices.Clone(got.tags)
+	slices.Sort(want)
+	slices.Sort(reported)
+
+	if diff := cmp.Diff(want, reported); diff != "" {
 		t.Errorf("the rule tags the script reported (-want +got):\n%s\nstderr was:\n%s", diff, got.stderr)
 	}
 
@@ -697,6 +830,26 @@ func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []s
 	for _, line := range lines {
 		if !strings.HasPrefix(line, "infra-rules: [") || !strings.Contains(line, "] ") {
 			t.Errorf("stderr line %q is not \"infra-rules: [<rule>] <file>[:<line>]: <why>\"", line)
+		}
+	}
+
+	for tag, in := range wantIn {
+		found := false
+
+		for _, line := range lines {
+			if !strings.Contains(line, "["+tag+"] ") {
+				continue
+			}
+
+			found = true
+
+			if !strings.Contains(line, in) {
+				t.Errorf("the [%s] line %q does not name %q: the rule must name the directory or file it refuses", tag, line, in)
+			}
+		}
+
+		if !found {
+			t.Errorf("no stderr line reports [%s], so nothing names %q", tag, in)
 		}
 	}
 }
@@ -810,4 +963,64 @@ func writeInfraText(t *testing.T, path, text string) {
 	if err := os.WriteFile(path, []byte(text), 0o600); err != nil { //nolint:gosec // G703: path is under the test's own temporary directory
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// removeSiteBackendAndVersion takes the applied root's backend and its required_version out of a copy, so an
+// applied root has neither unless a module source exempts it from the rules: the two anchors are the real
+// site/versions.tf.
+func removeSiteBackendAndVersion(t *testing.T, site string) {
+	t.Helper()
+
+	versions := filepath.Join(site, "versions.tf")
+	editInfraFile(t, versions, "  required_version = \"1.13.9\"\n\n", "")
+	dropInfraBlock(t, versions, "  backend \"s3\" {")
+}
+
+// dropInfraBlock removes the one block in path whose header line is exactly header, through the line that
+// closes it, so a case can take a whole block away without restating its body: header is a string of the real
+// configuration, and the block's closing line is the same indentation and a }.
+func dropInfraBlock(t *testing.T, path, header string) {
+	t.Helper()
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	lines := strings.Split(string(body), "\n")
+
+	start := -1
+
+	for i, line := range lines {
+		if line != header {
+			continue
+		}
+
+		if start >= 0 {
+			t.Fatalf("%s holds the block header %q twice, want exactly once: the case does not name one breakage", path, header)
+		}
+
+		start = i
+	}
+
+	if start < 0 {
+		t.Fatalf("%s holds no block header %q: the case does not name one breakage", path, header)
+	}
+
+	closing := header[:len(header)-len(strings.TrimLeft(header, " \t"))] + "}"
+	end := -1
+
+	for i := start + 1; i < len(lines); i++ {
+		if lines[i] == closing {
+			end = i
+
+			break
+		}
+	}
+
+	if end < 0 {
+		t.Fatalf("%s has no %q line closing the block opened by %q: the case does not name one breakage", path, closing, header)
+	}
+
+	writeInfraText(t, path, strings.Join(append(lines[:start:start], lines[end+1:]...), "\n"))
 }
