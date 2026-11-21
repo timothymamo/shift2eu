@@ -49,7 +49,10 @@ type Pin struct {
 // FromWorkflow reads the pin from the AI review workflow: exactly one
 // CLAUDE_CODE_VERSION: line and exactly one CLAUDE_CODE_INTEGRITY: line. The
 // version must be MAJOR.MINOR.PATCH and the integrity sha512- and the base64
-// of a SHA-512 digest. A missing, repeated or malformed line is an error.
+// of a SHA-512 digest. Each value must be a plain, unquoted YAML scalar with
+// no trailing comment: a quoted value or a trailing # comment fails closed,
+// as a value that is not an exact version or not base64. A missing, repeated
+// or malformed line is an error.
 func FromWorkflow(r io.Reader) (Pin, error) {
 	values := map[string][]string{}
 

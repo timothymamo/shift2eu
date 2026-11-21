@@ -13,8 +13,9 @@ name: Claude Code pin
 # read-only GITHUB_TOKEN, no secret and no environment, as ci.yml runs the pull request's code. It sends
 # the registry one GET of a public document and no credential. The paths: filter runs it on every pull
 # request that changes the pin, the install script that consumes it, the check, this file or go.mod (whose
-# go line picks the Go that builds the check), and the push to main re-checks what was merged. Because of that filter it is advisory, not a required status check:
-# a red "Claude Code pin" check on a pull request (a Renovate bump of the CLI above all) means do not merge.
+# go line picks the Go that builds the check), and the push to main re-checks what was merged. Because of
+# that filter it is advisory, not a required status check: a red "Claude Code pin" check on a pull request
+# (a Renovate bump of the CLI above all) means do not merge.
 on:
   push:
     branches: [main]
@@ -35,8 +36,9 @@ on:
 
 permissions: {}
 
-# A newer push to a pull request cancels its superseded run; a push to main never cancels an earlier main
-# run, so every merge's re-check finishes.
+# A newer push to a pull request cancels its superseded run; a push to main never cancels a main run in
+# progress. GitHub keeps at most one pending run per group, so a queued main run can be replaced by a
+# newer one, but the latest merge is always re-checked.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

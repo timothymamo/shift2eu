@@ -10,7 +10,8 @@
 // FromWorkflow reads both, and refuses a file without exactly one of each, a
 // version that is not MAJOR.MINOR.PATCH (so it never leaves the registry path
 // or names a dist tag) and an integrity that is not sha512- and a base64
-// SHA-512 digest. Pin.RegistryURL names the registry's document of that
+// SHA-512 digest. Each value must be a plain, unquoted YAML scalar with no
+// trailing comment; anything else fails closed. Pin.RegistryURL names the registry's document of that
 // version, and Verify holds the document to the package, the version and the
 // pinned integrity, naming the command that prints the published one when
 // the integrity is stale.

@@ -20,8 +20,9 @@ const (
 )
 
 // claudeCodePinCancel is the one concurrency cancel-in-progress: the pin check
-// may have: cancel a pull request's superseded run, never an earlier run of a
-// push to main, so main's check always finishes.
+// may have: cancel a pull request's superseded run, never a main run in
+// progress, so the latest merge is always re-checked (GitHub may still replace
+// a queued main run with a newer one).
 const claudeCodePinCancel = "${{ github.event_name == 'pull_request' }}"
 
 // claudeCodePinPaths are the paths every trigger of the pin check filters on:

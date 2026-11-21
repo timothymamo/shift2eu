@@ -738,7 +738,9 @@ every AI review failing at the install step (issue #428, after PR #412).
 runs `go run ./ci/claudecodepin` on every pull request into `main` that changes `ai-review.yml`, the
 install script `.github/scripts/install-claude-code.sh`, the check, its workflow or `go.mod` (whose go
 line picks the Go that builds the check), and on the push to
-`main` (a push to `main` never cancels an earlier `main` run). It reads both pins, fetches the npm registry's document of
+`main` (a push to `main` never cancels a `main` run in progress, and the latest merge is always
+re-checked; GitHub keeps at most one pending run per group, so a queued `main` run can be replaced by a
+newer one). It reads both pins, fetches the npm registry's document of
 exactly the pinned version of `@anthropic-ai/claude-code-linux-x64` over HTTPS (a timeout, no redirect, a
 bounded body, no credential), and fails unless that document is of the package and the version and
 publishes the pinned integrity as its `dist.integrity`. Every failure, a registry that cannot be reached
