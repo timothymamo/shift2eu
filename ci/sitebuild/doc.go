@@ -30,7 +30,8 @@
 // as text, the inventory page's commands for AWS, GCP and Azure, which it
 // reads from the bash blocks of docs/guide/inventory.md under each source's
 // "Collect from" and "Build the ... inventory" headings (guide.go: the guide
-// is their one source of truth, issue #373), and whether the HSTS record site/records/hsts.json says waived (a
+// is their one source of truth, issue #373; a guide it cannot read them from
+// fails the build, naming the heading), and whether the HSTS record site/records/hsts.json says waived (a
 // missing record is not waived).
 //
 // The build is reproducible: no clock, no map order and no path reaches a

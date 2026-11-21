@@ -70,21 +70,20 @@ func sourcesData(root string) (map[string]sourceData, error) {
 	return out, nil
 }
 
+// fence is the marker that opens and closes a fenced block of the guide.
+const fence = "```"
+
 // sectionCommands returns the commands of the ```bash blocks under the guide's
-// heading, up to the next heading, in the guide's order.
+// heading, up to the next heading, in the guide's order. Every fenced block is
+// tracked, whatever its info string, so a line starting with # inside one is
+// text and no heading. It fails, naming the heading, when the guide holds the
+// heading never or twice, when a fenced block under it is not bash or is left
+// open, and when the section yields no command: each would ship a page that
+// silently lost commands.
 func sectionCommands(guide []string, heading string) ([]string, error) {
-	start := -1
-
-	for i, line := range guide {
-		if headingText(line) == heading {
-			start = i + 1
-
-			break
-		}
-	}
-
-	if start < 0 {
-		return nil, fmt.Errorf("the inventory guide %s has no heading %q", guideFile, heading)
+	start, err := headingLine(guide, heading)
+	if err != nil {
+		return nil, err
 	}
 
 	var (
@@ -93,22 +92,28 @@ func sectionCommands(guide []string, heading string) ([]string, error) {
 		inBlock  bool
 	)
 
-	for _, line := range guide[start:] {
+	for _, line := range guide[start+1:] {
 		trimmed := strings.TrimSpace(line)
 
-		if !inBlock && strings.HasPrefix(trimmed, "#") {
-			break
-		}
-
 		switch {
-		case !inBlock && trimmed == "```bash":
-			inBlock = true
-			block = nil
-		case inBlock && trimmed == "```":
+		case inBlock && trimmed == fence:
 			inBlock = false
 			commands = append(commands, splitCommands(block)...)
+		case inBlock && strings.HasPrefix(trimmed, fence):
+			// An opening fence inside a block: the block before it was never closed.
+			return nil, fmt.Errorf("the inventory guide %s leaves a bash block open under %q", guideFile, heading)
 		case inBlock:
 			block = append(block, line)
+		case strings.HasPrefix(trimmed, fence):
+			if info := strings.TrimSpace(strings.TrimPrefix(trimmed, fence)); info != "bash" {
+				return nil, fmt.Errorf("the inventory guide %s holds a fenced block with info string %q under %q, want only bash blocks: the page would drop it",
+					guideFile, info, heading)
+			}
+
+			inBlock = true
+			block = nil
+		case headingText(line) != "":
+			return finish(commands, heading)
 		}
 	}
 
@@ -116,6 +121,11 @@ func sectionCommands(guide []string, heading string) ([]string, error) {
 		return nil, fmt.Errorf("the inventory guide %s leaves a bash block open under %q", guideFile, heading)
 	}
 
+	return finish(commands, heading)
+}
+
+// finish returns a section's commands, failing when it holds none.
+func finish(commands []string, heading string) ([]string, error) {
 	if len(commands) == 0 {
 		return nil, fmt.Errorf("the inventory guide %s holds no bash command under %q", guideFile, heading)
 	}
@@ -123,21 +133,60 @@ func sectionCommands(guide []string, heading string) ([]string, error) {
 	return commands, nil
 }
 
+// headingLine returns the index of the guide's one line that is the heading,
+// outside every fenced block, failing when it holds none or more than one.
+func headingLine(guide []string, heading string) (int, error) {
+	found := -1
+	inBlock := false
+
+	for i, line := range guide {
+		trimmed := strings.TrimSpace(line)
+
+		switch {
+		case inBlock:
+			inBlock = trimmed != fence
+		case strings.HasPrefix(trimmed, fence):
+			inBlock = true
+		case headingText(line) == heading:
+			if found >= 0 {
+				return -1, fmt.Errorf("the inventory guide %s holds the heading %q twice, on lines %d and %d",
+					guideFile, heading, found+1, i+1)
+			}
+
+			found = i
+		}
+	}
+
+	if found < 0 {
+		return -1, fmt.Errorf("the inventory guide %s has no heading %q", guideFile, heading)
+	}
+
+	return found, nil
+}
+
 // headingText returns the words of a Markdown heading line, without its #s, or
-// "" for a line that is no heading.
+// "" for a line that is no heading: one to six #s, then a space or the line's
+// end.
 func headingText(line string) string {
 	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, "#") {
+	words := strings.TrimLeft(trimmed, "#")
+
+	if level := len(trimmed) - len(words); level == 0 || level > 6 {
 		return ""
 	}
 
-	return strings.TrimSpace(strings.TrimLeft(trimmed, "#"))
+	if words != "" && words[0] != ' ' && words[0] != '\t' {
+		return ""
+	}
+
+	return strings.TrimSpace(words)
 }
 
 // splitCommands splits one bash block into the commands a visitor copies, each
 // copied on its own: a blank line ends a command that holds code, and a
 // comment line starts a new one after code, so a comment is copied with the
-// command it describes and never forms a command of its own. Each line keeps
+// command it describes and never forms a command of its own: a run of comments
+// with no code line is dropped, so a block of comments only yields none. Each line keeps
 // its text but its trailing white space; a command's leading and trailing
 // blank lines are dropped.
 func splitCommands(block []string) []string {
@@ -165,7 +214,7 @@ func splitCommands(block []string) []string {
 			current = current[:len(current)-1]
 		}
 
-		if len(current) > 0 {
+		if hasCode() {
 			commands = append(commands, strings.Join(current, "\n"))
 		}
 
