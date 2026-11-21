@@ -388,6 +388,25 @@ func TestKapsuleDedicatedInMilan(t *testing.T) {
 		})
 	}
 
+	// Both offerings sell the same worker nodes: only their control plane differs,
+	// a fixed fee for the dedicated one (ADR 0026). The price loop below walks the
+	// dedicated offering's plans alone, so a plan present in just one of the two
+	// offerings would go unnoticed, and so would every price it records there
+	// (issue #329). Compare the sets of plan names first, order-independently,
+	// naming each plan one offering is missing: the rule is about a worker node
+	// sold for both, so it names the plans and says nothing else.
+	basePlans, dedicatedPlans := planNames(base), planNames(offering)
+
+	for _, name := range namesMissingFrom(basePlans, dedicatedPlans) {
+		t.Errorf("offering %s lists plan %s, want offering %s to list it too: a worker node sold for one offering is sold for both",
+			text.Quote(mutualized), text.Quote(name), text.Quote(dedicated))
+	}
+
+	for _, name := range namesMissingFrom(dedicatedPlans, basePlans) {
+		t.Errorf("offering %s lists plan %s, want offering %s to list it too: a worker node sold for one offering is sold for both",
+			text.Quote(dedicated), text.Quote(name), text.Quote(mutualized))
+	}
+
 	// Every plan of the dedicated offering is priced exactly where the mutualized
 	// one prices it, and nowhere else: the worker nodes of a dedicated cluster are
 	// the same nodes, so a plan Scaleway does not sell in a region stays unpriced
@@ -420,6 +439,35 @@ func TestKapsuleDedicatedInMilan(t *testing.T) {
 				text.Quote(dedicated), text.Quote(plan.Name), text.Quote("Dedicated-*"))
 		}
 	}
+}
+
+// planNames returns the names of o's plans, sorted, so that two offerings' plan
+// names can be compared as sets: the snapshot's plan order says nothing about
+// whether the two sell the same worker nodes.
+func planNames(o catalog.Offering) []string {
+	names := make([]string, 0, len(o.Plans))
+
+	for _, plan := range o.Plans {
+		names = append(names, plan.Name)
+	}
+
+	slices.Sort(names)
+
+	return names
+}
+
+// namesMissingFrom returns the names of names that other does not list, in the
+// order names lists them: the plans an offering sells and the other does not.
+func namesMissingFrom(names, other []string) []string {
+	var missing []string
+
+	for _, name := range names {
+		if !slices.Contains(other, name) {
+			missing = append(missing, name)
+		}
+	}
+
+	return missing
 }
 
 // unpricedPlan is what pricedRegions reports for a region an offering does not
