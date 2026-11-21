@@ -56,12 +56,25 @@
 #   [iam-other]      any other scaleway_iam_* resource
 #   [provider-type]  a resource, data source or provider block of any provider but scaleway
 #   [provider-source] a required_providers entry whose source is not exactly "scaleway/scaleway"
-#   [lock-file]      a .terraform.lock.hcl naming any provider but registry.opentofu.org/scaleway/scaleway
+#   [lock-file]      a .terraform.lock.hcl with a line of a shape tofu init does not write: only blank and
+#                    # comment lines, the provider "registry.opentofu.org/scaleway/scaleway" { header (any
+#                    whitespace between its tokens), version = "...", constraints = "...", hashes = [, a
+#                    quoted hash with an optional trailing comma, ] and } pass, so a second provider, or one
+#                    behind a /* */ comment, is refused. The first such line is named, one line per file
 #   [provider-alias] alias in a configuration's provider block: a second provider configuration
 #   [provider-credentials] access_key, secret_key or profile in a configuration's provider block: the
 #                    credentials come from the admin machine's environment, never from a file
 #   [provider-endpoint] api_url in a configuration's provider block: the provider talks to Scaleway's own
 #                    API, never to an endpoint a file names
+#   [provider-setting] an attribute or nested block in a configuration's provider "scaleway" other than
+#                    organization_id and region (a default project_id, ...), besides the ones a rule above
+#                    names (alias, access_key, secret_key, profile, api_url), which get only that rule's line
+#   [block-type]     a top-level block of a type outside the allow list: terraform, provider, resource, data,
+#                    ephemeral, variable, locals, output, module and import in a configuration file; run,
+#                    mock_provider, variables and provider in a test file. moved, removed, check, list,
+#                    override_resource, a mock_provider in a configuration, ... are blocks no rule reads. A
+#                    type a rule names ([import-block], [test-provider]) gets only that rule's line; the
+#                    blocks nested in a refused one get no [block-type] line (a provisioner there keeps its own)
 #   [module-source]  a module, in the configuration or in a test's run block, whose source is not a local
 #                    ./ path, or has a .. segment or another segment starting with "." (such as
 #                    ./.terraform/m, a directory these rules prune); or a configuration's module whose
@@ -161,12 +174,23 @@ while IFS= read -r f; do
   fi
 done <<<"$(files -type f ! -name '.*' \( -name '*.tofu' -o -name '*.tofutest.hcl' \))"
 
+# The line shapes tofu init writes in a lock file for the one Scaleway provider, any whitespace between
+# the tokens: anything else (a second provider, a header behind a /* comment, a line init never writes)
+# is a line these rules did not read, so the first such line is refused.
+lock_lines=(
+  -e '^[[:space:]]*$'
+  -e '^[[:space:]]*#.*$'
+  -e '^[[:space:]]*provider[[:space:]]*"registry\.opentofu\.org/scaleway/scaleway"[[:space:]]*\{[[:space:]]*$'
+  -e '^[[:space:]]*(version|constraints)[[:space:]]*=[[:space:]]*"[^"\\$%]*"[[:space:]]*$'
+  -e '^[[:space:]]*hashes[[:space:]]*=[[:space:]]*\[[[:space:]]*$'
+  -e '^[[:space:]]*"[a-z0-9]+:[A-Za-z0-9+/=]+"[[:space:]]*,?[[:space:]]*$'
+  -e '^[[:space:]]*[]}][[:space:]]*$'
+)
 while IFS= read -r f; do
   [ -n "${f}" ] || continue
-  # A provider header is "provider" followed by anything but an identifier character, a space or none
-  # at all: HCL reads provider"..." { as the same block.
-  if LC_ALL=C grep -E '^[[:space:]]*provider([^A-Za-z0-9_-]|$)' "${f}" | LC_ALL=C grep -vqxE 'provider "registry\.opentofu\.org/scaleway/scaleway" \{'; then
-    fail lock-file "${f}" "names a provider other than registry.opentofu.org/scaleway/scaleway"
+  odd="$(LC_ALL=C grep -nvE "${lock_lines[@]}" "${f}" | head -n 1 || true)"
+  if [ -n "${odd}" ]; then
+    fail lock-file "${f}:${odd%%:*}" "an unexpected line, '${odd#*:}': a lock file holds only what tofu init writes for registry.opentofu.org/scaleway/scaleway (its provider header, version, constraints, hashes, blank and # comment lines), so another provider or a line init never writes is refused"
   fi
 done <<<"$(files -type f -name .terraform.lock.hcl)"
 

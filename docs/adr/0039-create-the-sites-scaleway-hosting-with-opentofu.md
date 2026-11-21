@@ -50,9 +50,16 @@ and `test` run in every applied root. `tofu test` reads a local `terraform.tfvar
 with the defaults. That holds only
 while the configuration itself names no credential and no real provider for a test, which the static
 rules keep: a configuration's `provider` block has no `alias` (a second configuration a test could pick)
-and no `access_key`, `secret_key`, `profile` or `api_url`; a test file declares an unaliased
+and no `access_key`, `secret_key`, `profile` or `api_url`, and sets nothing but `organization_id` and
+`region` (`[provider-setting]`: no default `project_id`, no nested block); a test file declares an unaliased
 `mock_provider "scaleway"`, no `provider` block, and no `providers` in a `run` block. Among the other
-static rules: `required_providers` names only `scaleway/scaleway` and the lock file only its provider;
+static rules: `required_providers` names only `scaleway/scaleway`, and the lock file holds only the line
+shapes `tofu init` writes for that provider (`[lock-file]`: its header, `version`, `constraints`, `hashes`,
+blank and `#` comment lines, so neither a second provider nor one behind a `/* */` comment passes); a
+configuration file holds only `terraform`, `provider`, `resource`, `data`, `ephemeral`, `variable`,
+`locals`, `output`, `module` and `import` blocks at its top level, a test file only `run`,
+`mock_provider`, `variables` and `provider` (`[block-type]`: a `moved`, `removed`, `check` or
+`override_resource` block is one no rule reads);
 every resource, data source and provider is Scaleway's; a module's source, in the configuration or in a
 test's `run` block, is a local `./` path without a `..` segment or another segment starting with `.`
 (such as `./.terraform/m`, under the `.terraform` directory the rules skip); every applied root (a directory directly

@@ -24,7 +24,10 @@ call to Scaleway, no state passphrase (the state is not encrypted, ADR 0039). Be
 and `test`, it runs the static rules of `dev/infra-rules.sh` (which lists them): among them no API key
 resource, no bucket ACL or `visibility`, exactly one IAM application and policy, only `scaleway/scaleway`,
 local modules only, none in a directory starting with `.` and none naming an applied root, one `s3`
-backend for every applied root, no configuration file directly in `infra/`, no provider `api_url`, no
+backend for every applied root, no configuration file directly in `infra/`, no provider `api_url` and no
+provider setting but `organization_id` and `region` (`[provider-setting]`), top-level blocks of the
+allowed types only (`[block-type]`: no `moved`, `removed`, `check` or `override_resource`), a lock file of
+only the lines `tofu init` writes for `scaleway/scaleway` (`[lock-file]`), no
 override, JSON or hidden (`.`-named, which OpenTofu ignores) files, every test file mocking the
 provider, no `provisioner` or `connection` block, no `*.auto.tfvars` (`.json` too), no setting in the
 `s3` backend block beyond `key`, `use_lockfile` and the four `skip_*` ones, no `scaleway_object` (the

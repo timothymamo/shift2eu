@@ -44,6 +44,25 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   for (i in ts) {
     terraformSetting[ts[i]] = 1
   }
+  # The top-level block types a configuration file, and a test file, may hold. Any other (moved, removed,
+  # check, list, override_resource, a mock_provider in a configuration, ...) is a block no rule reads.
+  CONFIG_BLOCKS_TEXT = "terraform, provider, resource, data, ephemeral, variable, locals, output, module and import"
+  split("terraform provider resource data ephemeral variable locals output module import", cb, " ")
+  for (i in cb) {
+    configBlock[cb[i]] = 1
+  }
+  TEST_BLOCKS_TEXT = "run, mock_provider, variables and provider"
+  split("run mock_provider variables provider", tb, " ")
+  for (i in tb) {
+    testBlock[tb[i]] = 1
+  }
+  # What the provider "scaleway" block may set beyond the settings a rule of its own names (alias,
+  # access_key, secret_key, profile, api_url): only what infra/site/providers.tf sets.
+  PROVIDER_SETTINGS_TEXT = "organization_id and region"
+  split("organization_id region alias access_key secret_key profile api_url", ps, " ")
+  for (i in ps) {
+    providerSetting[ps[i]] = 1
+  }
   # The resource types the configuration may hold: exactly the ones infra/site/main.tf uses. No data or
   # ephemeral type is allowed. A new resource extends this list in the same PR that adds it, so the
   # review of that PR sees both. A type a specific rule names (api-key, object, bucket-acl, iam-other,
@@ -484,6 +503,12 @@ END {
     if (m == 1 && typ == "import") {
       problem("import-block", f, bline[b], "an import block: the Runbook creates every resource fresh, so an import would adopt whatever object its id names into the state unasked (ADR 0039)")
     }
+    if (m == 1 && isTest[f] && !(typ in testBlock)) {
+      problem("block-type", f, bline[b], "a top-level " typ " block in a test file: a test file holds only " TEST_BLOCKS_TEXT ", since a block no rule knows (override_resource, override_data, ...) is a block no rule reads")
+    }
+    if (m == 1 && !isTest[f] && !(typ in configBlock)) {
+      problem("block-type", f, bline[b], "a top-level " typ " block in a configuration file: it holds only " CONFIG_BLOCKS_TEXT ", since a block no rule knows (moved, removed, check, a mock_provider, ...) is a block no rule reads")
+    }
     if (isTest[f]) {
       if (m == 1 && typ == "mock_provider") {
         mockBlock[b] = 1
@@ -502,7 +527,7 @@ END {
       continue
     }
     configDir[dirof(f)] = 1
-    if (typ == "resource" || typ == "data" || typ == "ephemeral" || typ == "list") {
+    if (typ == "resource" || typ == "data" || typ == "ephemeral") {
       if (lab[2] !~ /^scaleway_/) {
         problem("provider-type", f, bline[b], typ " \"" lab[2] "\" belongs to no scaleway provider: infra/ uses scaleway/scaleway alone")
       }
@@ -523,7 +548,10 @@ END {
       }
     }
     if (m == 2 && el[1] == "terraform" && !(typ in terraformSetting)) {
-      problem("terraform-setting", f, bline[b], "a " typ " block in a terraform block: it may hold only " TERRAFORM_SETTINGS_TEXT ", since anything else (an encryption key provider, provider_meta, experiments) changes how tofu runs on the admin machine")
+      problem("terraform-setting", f, bline[b], "the terraform block holds " typ ": it may hold only " TERRAFORM_SETTINGS_TEXT ", since anything else (an encryption key provider, provider_meta, experiments) changes how tofu runs on the admin machine")
+    }
+    if (m == 2 && el[1] == "provider:scaleway") {
+      problem("provider-setting", f, bline[b], "the provider \"scaleway\" block holds a " typ " block: it may set only " PROVIDER_SETTINGS_TEXT ", since any other setting changes what the plan reaches")
     }
     if (m == 1 && typ == "provider" && lab[2] != "scaleway") {
       problem("provider-type", f, bline[b], "a provider \"" lab[2] "\": infra/ uses scaleway/scaleway alone")
@@ -576,6 +604,9 @@ END {
       }
       if (n == "api_url") {
         problem("provider-endpoint", f, aline[a], n " in " p ": the provider talks to Scaleway's own API; an endpoint in a file git holds could send the admin machine's credentials elsewhere")
+      }
+      if (p == "provider:scaleway" && !(n in providerSetting)) {
+        problem("provider-setting", f, aline[a], n " in " p ": it may set only " PROVIDER_SETTINGS_TEXT ", since any other setting (a default project_id, ...) changes what the plan reaches")
       }
     }
     if (n == "acl") {
