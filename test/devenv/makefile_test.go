@@ -262,7 +262,8 @@ type recipeComment struct {
 
 // continues reports whether line ends in the odd number of backslashes that joins it to the next line: only the
 // line's last character can be that backslash, since GNU Make leaves a backslash followed by a blank literal, and an
-// even number of them escapes itself (`echo \\` ends in two, which make hands to the shell as one).
+// even number of them escapes itself (`echo \\` ends in two, which make hands to the shell unchanged and the shell
+// reads as one literal backslash).
 func continues(line string) bool {
 	backslashes := 0
 
@@ -317,7 +318,9 @@ func wordStartHash(line string) bool {
 // ruleLineRecipe reports whether line is a make rule line that carries its own recipe after a `;` (`target: ; echo a`),
 // so make hands the text after the semicolon, and every line joined onto it, to the shell as the rule's recipe. Only a
 // non-tab line counts, and only with a `:` before the `;`: an assignment (`X = a; b`, `X := a`, `X ::= a`) declares no
-// rule, so its `;` starts no recipe.
+// rule, so its `;` starts no recipe. Nor does a `;` behind a `#`, which is make comment to the end of the line: the
+// `;` of a help line such as `target: ## Install it; needs sudo`, whose `##` paragraph is free text, belongs to that
+// text, not to a recipe.
 func ruleLineRecipe(line string) bool {
 	if strings.HasPrefix(line, "\t") {
 		return false
@@ -325,6 +328,10 @@ func ruleLineRecipe(line string) bool {
 
 	semicolon := strings.IndexByte(line, ';')
 	if semicolon < 0 {
+		return false
+	}
+
+	if hash := strings.IndexByte(line, '#'); hash >= 0 && hash < semicolon {
 		return false
 	}
 
@@ -473,6 +480,10 @@ func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *te
 		{
 			name: "a make comment line continuing a variable assignment with :=",
 			body: "X := a \\\n# a make comment\ntarget:\n\techo hi\n",
+		},
+		{
+			name: "a # recipe line continuing a continued help line, whose ; sits after its ## comment",
+			body: "agents-token-refresh-install: ## Install the daemon, one per VM instance; needs sudo \\\n\t# x\n",
 		},
 
 		// A `#` that starts a word further along a line of a continued command comments out the rest of it too.
