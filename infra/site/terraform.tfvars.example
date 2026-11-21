@@ -1,0 +1,2 @@
+# Copy to terraform.tfvars (git-ignored) on the admin machine and fill in the real values.
+organization_id = "00000000-0000-0000-0000-000000000000"

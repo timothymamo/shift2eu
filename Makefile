@@ -385,8 +385,14 @@ vuln: ## Scan code and dependencies, and the lint tools, for known vulnerabiliti
 	govulncheck ./...
 	govulncheck -C tools github.com/rhysd/actionlint/cmd/actionlint
 
+# The offline checks of infra/'s OpenTofu configuration (issue #422): dev/infra-check.sh runs the pinned,
+# checksum-verified OpenTofu (dev/tofu.sh, infra/tofu.yaml) with no credential and no call to Scaleway.
+.PHONY: infra-check
+infra-check: ## Check infra/'s OpenTofu configuration offline: static rules, fmt, init -backend=false, validate, test
+	dev/infra-check.sh
+
 .PHONY: check
-check: lint test vuln ## Everything CI gates on; run before every commit
+check: lint test vuln infra-check ## Everything CI gates on; run before every commit
 
 ##@ Workflow
 

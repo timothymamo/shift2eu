@@ -69,7 +69,8 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 
 ```bash
 make worktree BRANCH=feat/12-short-name   # create or resume the worktree for a PR (prints its path)
-make check             # lint + test + govulncheck: must pass before every commit
+make check             # lint + test + govulncheck + infra-check: must pass before every commit
+make infra-check       # infra/'s OpenTofu config offline (pinned tofu via dev/tofu.sh); agents never plan or apply
 make test              # unit + contract tests, race detector, no network of its own (module fetches: see Testing)
 make test-integration  # real cloud APIs, read-only credentials (never in default CI)
 make test-e2e          # build the binary and run it against testdata fixtures

@@ -1,0 +1,16 @@
+# The OpenTofu release that dev/tofu.sh downloads and runs, for make infra-check, CI and the maintainer
+# (issue #422). Its one copy: dev/tofu.sh reads the pins below, and refuses to run a download whose SHA-256
+# is not the pin for its platform. infra/site's required_version is the same version (dev/infra-check.sh
+# fails when they differ); Renovate bumps both in one PR (.github/renovate.json5, group OpenTofu).
+# renovate: datasource=github-releases depName=opentofu/opentofu
+tofuVersion: "v1.13.9"
+# SHA-256 of tofu_<version>_<os>_<arch>.tar.gz per platform: linux_amd64 (CI), linux_arm64 (the Lima VM)
+# and darwin_arm64 (the maintainer's Macs). They were checked against the release's tofu_<version>_SHA256SUMS,
+# whose cosign signature names opentofu/opentofu's release workflow. Renovate moves each digestVersion and
+# digest together with the version.
+# renovate: datasource=github-release-attachments depName=opentofu/opentofu digestVersion=v1.13.9
+tofuSha256LinuxAmd64: "b34b327cc1ef07178207b6f2cd1f5276537d3e5b7be316500f6dac50d4c0a857"
+# renovate: datasource=github-release-attachments depName=opentofu/opentofu digestVersion=v1.13.9
+tofuSha256LinuxArm64: "5dc196dde75b667e4806d358310ec96742774cd0993c54c1237efee5644b69b8"
+# renovate: datasource=github-release-attachments depName=opentofu/opentofu digestVersion=v1.13.9
+tofuSha256DarwinArm64: "496f4c3064b5c3bff79174b3dae4faaf65a66774eb8e2bf074f895412c5f124f"
