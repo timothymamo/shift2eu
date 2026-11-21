@@ -492,7 +492,10 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # run serves a bundle of its own (issue #423), which ci/sitebuild builds straight into a fresh directory from
 # mktemp -d, so two runs in one worktree never rebuild a bundle under each other's browser. The directory is
 # removed on every exit, a hang-up (closing the pane), an interrupt and a termination included: each is
-# trapped, since dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills it. The recipe
+# trapped, since dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills it. The EXIT trap
+# first ignores those signals: a second one arriving while it runs would run its trap's exit and abandon the
+# rest of the cleanup, and one does arrive when the whole process group is signalled, since make forwards a
+# SIGTERM it gets to the recipe's shell. It then removes the directory, then the container. The recipe
 # starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network and its own entrypoint
 # replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface
 # through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is
@@ -515,7 +518,7 @@ test-browser: ## Build the site's bundle into a directory of this run's own and 
 	devtools=; \
 	name=shift2eu-test-browser-$$$$; \
 	bundle_dir=; \
-	trap '$(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir"; fi' EXIT; \
+	trap 'trap "" HUP INT TERM; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir" || true; fi; $(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
 	trap 'exit 129' HUP; \
 	trap 'exit 130' INT; \
 	trap 'exit 143' TERM; \
