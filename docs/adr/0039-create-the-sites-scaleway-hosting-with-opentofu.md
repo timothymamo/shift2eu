@@ -51,13 +51,16 @@ and no `access_key`, `secret_key`, `profile` or `api_url`; a test file declares 
 `mock_provider "scaleway"`, no `provider` block, and no `providers` in a `run` block. Among the other
 static rules: `required_providers` names only `scaleway/scaleway` and the lock file only its provider;
 every resource, data source and provider is Scaleway's; a module's source, in the configuration or in a
-test's `run` block, is a local `./` path without a `..` segment; every applied root (a directory directly
+test's `run` block, is a local `./` path without a `..` segment or another segment starting with `.`
+(such as `./.terraform/m`, under the `.terraform` directory the rules skip); every applied root (a directory directly
 under `infra/`, today `infra/site`) has exactly one `s3` backend and one `required_version`, which no
 module source can waive: a configuration's module may not name an applied root, a test's `run`-block
 module exempts no directory, and no configuration or test file sits directly in `infra/`; exactly one `scaleway_iam_application`
 and one `scaleway_iam_policy`, without `count` or `for_each`, and no other IAM resource; no `acl` or
 `visibility` argument; no override file, JSON file, symlink, or `.tofu` (`.tofutest.hcl`) file beside a
-`.tf` (`.tftest.hcl`) file of the same name, which OpenTofu would load instead; and a file the rules
+`.tf` (`.tftest.hcl`) file of the same name, which OpenTofu would load instead; no hidden configuration
+or test file (a name starting with `.`), which OpenTofu ignores, so the rules refuse it and read it for
+no other rule; and a file the rules
 cannot read (a heredoc, an unbalanced string or bracket, a backslash escape in a block label or quoted
 key, a `$${` or `%%{` escape in a block label, a block header of anything but identifiers and literal strings) fails them, with no other verdict.
 

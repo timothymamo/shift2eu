@@ -23,8 +23,10 @@ hand, in the PRD's *Runbook* section (R0 to R13), which the maintainer follows.
 call to Scaleway, no state passphrase (the state is not encrypted, ADR 0039). Besides `fmt`, `validate`
 and `test`, it runs the static rules of `dev/infra-rules.sh` (which lists them): among them no API key
 resource, no bucket ACL or `visibility`, exactly one IAM application and policy, only `scaleway/scaleway`,
-local modules only and none naming an applied root, one `s3` backend for every applied root, no
-configuration file directly in `infra/`, no provider `api_url`, no override or JSON files, and every test file mocking the provider.
+local modules only, none in a directory starting with `.` and none naming an applied root, one `s3`
+backend for every applied root, no configuration file directly in `infra/`, no provider `api_url`, no
+override, JSON or hidden (`.`-named, which OpenTofu ignores) files, and every test file mocking the
+provider.
 It runs tofu with none of the caller's `SCW_*`, `AWS_*` or `TF_*` variables and no Scaleway or AWS
 configuration file, so it cannot reach Scaleway even where the maintainer's keys are exported. Only the
 maintainer runs `init` with the backend, `plan` and `apply`, on the admin machine, always through

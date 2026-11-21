@@ -9,6 +9,9 @@
 # script exits 1; with every rule holding it prints nothing and exits 0; a usage error exits 2. The rules,
 # by tag:
 #   [no-config]      the root holds no configuration (*.tf, *.tofu)
+#   [hidden-file]    a configuration or test file (any form above or below, JSON too) whose name starts with
+#                    ".": OpenTofu ignores it, so it counts toward no other rule (.terraform.lock.hcl is
+#                    no such file)
 #   [json-config]    a JSON configuration or test file (*.tf.json, *.tofu.json, *.tftest.json,
 #                    *.tofutest.json), which these rules do not read
 #   [symlink]        a symlink anywhere under the root: tofu would load what it points at, unread here
@@ -39,8 +42,9 @@
 #   [provider-endpoint] api_url in a configuration's provider block: the provider talks to Scaleway's own
 #                    API, never to an endpoint a file names
 #   [module-source]  a module, in the configuration or in a test's run block, whose source is not a local
-#                    ./ path, or has a .. segment; or a configuration's module whose source resolves (after
-#                    ./, . segments and a trailing /) to an applied root
+#                    ./ path, or has a .. segment or another segment starting with "." (such as
+#                    ./.terraform/m, a directory these rules prune); or a configuration's module whose
+#                    source resolves (after ./, . segments and a trailing /) to an applied root
 #   [root-file]      a configuration or test file directly in the root's own directory: configurations
 #                    live in the applied roots beneath it
 #   [backend-count]  a configuration directory without exactly one backend. Every applied root (a
@@ -87,17 +91,26 @@ files() {
   find "${root}" -name .terraform -prune -o "$@" -print | LC_ALL=C sort
 }
 
+# The names OpenTofu reads as configuration or tests. A hidden one (basename starting with ".") is one
+# OpenTofu ignores (configs.IsIgnoredFile): [hidden-file] refuses it, and no other rule reads it.
+read_names=(\( -name '*.tf' -o -name '*.tofu' -o -name '*.tf.json' -o -name '*.tofu.json'
+  -o -name '*.tftest.hcl' -o -name '*.tofutest.hcl' -o -name '*.tftest.json' -o -name '*.tofutest.json' \))
+
+while IFS= read -r f; do
+  [ -n "${f}" ] && fail hidden-file "${f}" "a hidden file, which OpenTofu ignores: what it holds (a backend, a pin, a mock) is not what runs, so give it a name without the leading ."
+done <<<"$(files -type f -name '.*' "${read_names[@]}")"
+
 while IFS= read -r f; do
   [ -n "${f}" ] && fail symlink "${f}" "a symlink: tofu would load what it points at, which these rules do not read"
 done <<<"$(files -type l)"
 
 while IFS= read -r f; do
   [ -n "${f}" ] && fail json-config "${f}" "JSON configuration or tests, which these rules do not read"
-done <<<"$(files -type f \( -name '*.tf.json' -o -name '*.tofu.json' -o -name '*.tftest.json' -o -name '*.tofutest.json' \))"
+done <<<"$(files -type f ! -name '.*' \( -name '*.tf.json' -o -name '*.tofu.json' -o -name '*.tftest.json' -o -name '*.tofutest.json' \))"
 
 while IFS= read -r f; do
   [ -n "${f}" ] && fail override-file "${f}" "an override file rewrites other files' blocks where a review of those files does not see it"
-done <<<"$(files -type f \( -name 'override.tf' -o -name '*_override.tf' -o -name 'override.tofu' -o -name '*_override.tofu' -o -name 'override.tf.json' -o -name '*_override.tf.json' -o -name 'override.tofu.json' -o -name '*_override.tofu.json' \))"
+done <<<"$(files -type f ! -name '.*' \( -name 'override.tf' -o -name '*_override.tf' -o -name 'override.tofu' -o -name '*_override.tofu' -o -name 'override.tf.json' -o -name '*_override.tf.json' -o -name 'override.tofu.json' -o -name '*_override.tofu.json' \))"
 
 while IFS= read -r f; do
   [ -n "${f}" ] || continue
@@ -108,7 +121,7 @@ while IFS= read -r f; do
   if [ -e "${twin}" ]; then
     fail shadowed-file "${f}" "beside ${twin}: OpenTofu loads only the .tofu file of the pair, so the reviewed ${twin##*/} is not what runs"
   fi
-done <<<"$(files -type f \( -name '*.tofu' -o -name '*.tofutest.hcl' \))"
+done <<<"$(files -type f ! -name '.*' \( -name '*.tofu' -o -name '*.tofutest.hcl' \))"
 
 while IFS= read -r f; do
   [ -n "${f}" ] || continue
@@ -117,8 +130,8 @@ while IFS= read -r f; do
   fi
 done <<<"$(files -type f -name .terraform.lock.hcl)"
 
-configs="$(files -type f \( -name '*.tf' -o -name '*.tofu' \))"
-tests="$(files -type f \( -name '*.tftest.hcl' -o -name '*.tofutest.hcl' \))"
+configs="$(files -type f ! -name '.*' \( -name '*.tf' -o -name '*.tofu' \))"
+tests="$(files -type f ! -name '.*' \( -name '*.tftest.hcl' -o -name '*.tofutest.hcl' \))"
 if [ -z "${configs}" ]; then
   fail no-config "${root}" "no OpenTofu configuration (*.tf, *.tofu)"
 else

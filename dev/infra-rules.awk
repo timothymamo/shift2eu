@@ -534,17 +534,25 @@ END {
       problem("module-source", f, bline[b], bpath[b] " has source " s ": a module may only be a local ./ path in this repository, never a registry, git or URL source")
     } else if (s ~ "(^|/)[.][.](/|$)" || index(s, "\\") > 0) {
       problem("module-source", f, bline[b], bpath[b] " has source " s ": a .. segment (or an escape) can lead out of the configuration, to files these rules do not read")
-    } else if (!isTest[f]) {
-      # A local module's directory is no root configuration: it needs no backend or required_version. Only
-      # a configuration's module grants that: a test file's run-block module may name a root (a test of
-      # it), but tofu test reads the file only where infra-check runs it, so it exempts nothing. A module
-      # never names an applied root, which must keep its own backend and required_version.
-      base = dirof(f)
-      d = joinpath(base, s)
-      if (isroot(d)) {
-        problem("module-source", f, bline[b], bpath[b] " has source " s ", which is the applied root " d ": a module may not name a root, whose backend and required_version must hold whatever reaches it")
-      } else if (d != base) {
-        moduleDir[d] = 1
+    } else {
+      # A segment starting with . other than . itself names a hidden directory, such as .terraform, which
+      # the rules prune: tofu would load a module there that no rule reads. The directory is still named
+      # as a module below, so the refusal is this one line, not a [backend-count] beside it.
+      if (s ~ "(^|/)[.][^/]") {
+        problem("module-source", f, bline[b], bpath[b] " has source " s ": a segment starting with . names a hidden directory (such as .terraform, which these rules prune), so tofu would load a module no rule reads")
+      }
+      if (!isTest[f]) {
+        # A local module's directory is no root configuration: it needs no backend or required_version.
+        # Only a configuration's module grants that: a test file's run-block module may name a root (a test
+        # of it), but tofu test reads the file only where infra-check runs it, so it exempts nothing. A
+        # module never names an applied root, which must keep its own backend and required_version.
+        base = dirof(f)
+        d = joinpath(base, s)
+        if (isroot(d)) {
+          problem("module-source", f, bline[b], bpath[b] " has source " s ", which is the applied root " d ": a module may not name a root, whose backend and required_version must hold whatever reaches it")
+        } else if (d != base) {
+          moduleDir[d] = 1
+        }
       }
     }
   }
@@ -563,8 +571,9 @@ END {
     problem("iam-application-count", root, "", iamApplications + 0 " scaleway_iam_application resources, want exactly one: the deploy application")
   }
 
+  # The root's own directory is never applied: [root-file] already refuses every file in it.
   for (d in configDir) {
-    if ((d in moduleDir) && !isroot(d)) {
+    if (d == root || ((d in moduleDir) && !isroot(d))) {
       continue
     }
     if (backends[d] + 0 != 1) {
