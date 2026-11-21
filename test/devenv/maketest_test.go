@@ -50,23 +50,41 @@ const timeoutGoTestOutput = "panic: test timed out after 1s\n" +
 	"\t/usr/local/go/src/time/sleep.go:215 +0x38\n" +
 	"FAIL\texample/pkg/e\t1.010s\n"
 
+// fakeGoRecordsTmpDir is what every fake go below does before it does anything else: it writes the entries the
+// recipe's temporary directory left in TMPDIR into the file FAKE_GO_TMPDIR names. A case reads that file back to
+// know that make test made its directory under the TMPDIR the case gave it, so the case's check that the TMPDIR is
+// empty afterwards pins the recipe's cleanup and not a directory that was never there (issue #253).
+const fakeGoRecordsTmpDir = `ls -A "$TMPDIR" > "$FAKE_GO_TMPDIR"
+`
+
 // fakeGoScript is the fake go the cases below put first on PATH: it appends its arguments to the file FAKE_GO_ARGV
 // names, prints the canned output of FAKE_GO_OUTPUT and exits with FAKE_GO_EXIT. The Makefile runs go in recipes
 // only, never at parse time, so the fake answers every call make test makes (issue #253).
 const fakeGoScript = `#!/bin/sh
 printf '%s\n' "$@" >> "$FAKE_GO_ARGV"
-cat "$FAKE_GO_OUTPUT"
+` + fakeGoRecordsTmpDir + `cat "$FAKE_GO_OUTPUT"
 exit "$FAKE_GO_EXIT"
 `
 
 // killingGoScript is a fake go that loses the exit status the recipe reads before that status exists: it prints
 // go's output and then kills the subshell make runs it in, which is its parent ($PPID), before the subshell writes
 // the status file. KILL catches no trap, and only that subshell dies: not make, not this process, so the recipe
-// shell goes on with an empty status file (issue #253).
+// shell goes on with a status file that stayed empty (issue #253).
 const killingGoScript = `#!/bin/sh
 printf '%s\n' "$@" >> "$FAKE_GO_ARGV"
-cat "$FAKE_GO_OUTPUT"
+` + fakeGoRecordsTmpDir + `cat "$FAKE_GO_OUTPUT"
 kill -KILL "$PPID"
+`
+
+// termingGoScript is a fake go that interrupts the run while go still runs: it prints go's output and then sends
+// TERM to the recipe's shell, the signal make test traps to exit 143 on. That shell is not $PPID - which is the
+// subshell the pipeline element `{ go; echo $? > status; }` runs in - but that subshell's parent, so the fake reads
+// the shell's pid from ps (issue #253).
+const termingGoScript = `#!/bin/sh
+printf '%s\n' "$@" >> "$FAKE_GO_ARGV"
+` + fakeGoRecordsTmpDir + `cat "$FAKE_GO_OUTPUT"
+kill -TERM "$(ps -o ppid= -p "$PPID" | tr -d ' ')"
+exit "$FAKE_GO_EXIT"
 `
 
 // TestMakeTestReportsTheFailingPackageAndTest pins what make test prints when it fails (issue #253): a failing run
@@ -88,10 +106,17 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 		// slice pins that go's output is the whole of it, a header on its own pins that the summary is printed
 		// even when go names no package and no test, and nil pins nothing of the tail.
 		wantTail []string
-		// wantNoStderr is a text make test must not print on stderr, empty for none: a status the run lost is
+		// wantNoStderr is a text make test must not print on stderr, empty for none: a status that is not a
+		// number - the status file stayed empty because the shell running go died before it wrote one - is
 		// still a failure the run reports itself, so the summary must not come as the shell's error about a
-		// missing file instead of, or beside, the summary callers read (issue #253).
+		// file it cannot read instead of, or beside, the summary callers read. The recipe creates that file
+		// empty before go runs, so the text of the older design, the shell reading a file nothing created,
+		// must not come back (issue #253).
 		wantNoStderr string
+		// wantStderr is a text make test must print on stderr, empty for none: an interrupted run ends in
+		// make's own report of the status the recipe exited with, so a run that dies never looks like a pass
+		// (issue #253).
+		wantStderr string
 	}{
 		{
 			name:       "a failing test",
@@ -146,9 +171,9 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 			wantTail:   []string{testSummaryHeader},
 		},
 		{
-			// The subshell that runs go dies before it writes go's status, so the status file is never created
-			// and the recipe has no number to test: it must fail the run all the same, not read nothing as
-			// success and exit zero over the failing suite (issue #253). The summary is owed here most of all,
+			// The subshell that runs go dies before it writes go's status, so the status file stays empty and
+			// the recipe reads no number to test: it must fail the run all the same, not read the empty file
+			// as success and exit zero over the failing suite (issue #253). The summary is owed here most of all,
 			// because go's own FAIL line is all the log has: the pipeline has finished and tee has written the
 			// whole file before the recipe reads the status, so the summary is exactly go's lines.
 			name:       "a go whose status is lost",
@@ -161,6 +186,19 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 				"FAIL\texample/pkg/b\t0.1s",
 			},
 			wantNoStderr: "No such file or directory",
+		},
+		{
+			// The run itself is interrupted: TERM reaches the recipe's shell while go still runs, so the
+			// recipe's TERM trap exits 143 and its EXIT trap still removes the temporary directory. make
+			// reports the status the recipe exited with, and the interrupted run prints no summary, which the
+			// empty tail pins (issue #253).
+			name:       "a run make test is interrupted with TERM",
+			output:     "ok  \texample/pkg/a\t0.1s\n",
+			exitCode:   0,
+			wantFailed: true,
+			script:     termingGoScript,
+			wantTail:   []string{},
+			wantStderr: "Error 143",
 		},
 		{
 			// A timeout prints no --- FAIL: line: the panic names the tests that were running instead, one tab in
@@ -185,10 +223,16 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 
 			extra, argvFile := fakeGoOnPath(t, tc.script, tc.output, tc.exitCode)
 
+			// The recipe makes its one temporary directory under TMPDIR and removes it on every exit, interrupted
+			// runs included, so a case gives make a TMPDIR of its own and finds it as empty after the run as
+			// before: nothing of a make test run, neither go's output nor its status, is left behind (issue #253).
+			tmpDir := t.TempDir()
+			extra["TMPDIR"] = tmpDir
+
 			stdout, stderr, err := runMake(t, []string{"test"}, makeEnv(t, extra))
 
 			if tc.wantFailed && err == nil {
-				t.Errorf("make test exited zero although go exited %d, so make check would pass over a failing suite (issue #253)\nstdout:\n%s\nstderr:\n%s",
+				t.Errorf("make test exited zero although the run failed and go exited %d, so make check would pass over a failing suite (issue #253)\nstdout:\n%s\nstderr:\n%s",
 					tc.exitCode, stdout, stderr)
 			}
 			if !tc.wantFailed && err != nil {
@@ -215,6 +259,11 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 					tc.wantNoStderr, stdout, stderr)
 			}
 
+			if tc.wantStderr != "" && !strings.Contains(stderr, tc.wantStderr) {
+				t.Errorf("make test does not report the run's failure with %q on stderr, so a run that dies loses its status (issue #253)\nstdout:\n%s\nstderr:\n%s",
+					tc.wantStderr, stdout, stderr)
+			}
+
 			if tc.wantTail != nil {
 				after := lines[at+len(goLines):]
 				if after == nil {
@@ -225,6 +274,17 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 					t.Errorf("make test does not end with the summary of the failing packages and tests, the last lines after go's own output (-want +got):\n%s\nstdout:\n%s\nstderr:\n%s",
 						diff, stdout, stderr)
 				}
+			}
+
+			// The fake go saw the recipe's temporary directory in that TMPDIR while it ran; a run that made its
+			// directory elsewhere would leave the check below nothing to say (issue #253).
+			if seen := splitLines(readFileString(t, extra["FAKE_GO_TMPDIR"])); len(seen) == 0 {
+				t.Errorf("make test made no temporary directory under the TMPDIR it was given while go ran, so this case cannot tell whether the recipe removes it (issue #253)")
+			}
+
+			if left := dirEntries(t, tmpDir); len(left) != 0 {
+				t.Errorf("make test leaves %q in its TMPDIR after the run, so every run leaves its temporary directory behind (issue #253)",
+					left)
 			}
 		})
 	}
@@ -254,7 +314,25 @@ func fakeGoOnPath(t *testing.T, script, output string, exitCode int) (map[string
 		"FAKE_GO_ARGV":   argvFile,
 		"FAKE_GO_OUTPUT": outputFile,
 		"FAKE_GO_EXIT":   strconv.Itoa(exitCode),
+		"FAKE_GO_TMPDIR": filepath.Join(dir, "tmpdir"),
 	}, argvFile
+}
+
+// dirEntries returns the names in dir, failing the test when it cannot be read.
+func dirEntries(t *testing.T, dir string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+
+	return names
 }
 
 // splitLines splits text into the lines the terminal shows: the newline that ends the last one is dropped and an
