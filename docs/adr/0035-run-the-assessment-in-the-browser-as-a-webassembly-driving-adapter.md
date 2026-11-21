@@ -242,3 +242,40 @@ other is, so the goldens differ from the earlier ones by that attribute alone.
 
 The stylesheet's fit and heading glyphs are decoration: the word in the cell or heading carries the fit,
 so a browser that drops the glyph's `content: "…" / ""` declaration loses nothing.
+
+## Amendment: the fragment's boxes and its one link (issue #373, 2026-11-21)
+
+The maintainer's review of the redesign (PR #379) asked for the report to look like the mock-up: one
+header line, the summary and the workloads as boxes, required changes and blockers side by side, a
+resources table that scrolls in its own box, and a one-line cost estimate. The HTML fragment, and only
+the fragment, changes; the Markdown and JSON reports keep their layout and their words.
+
+- **The header** is one line, a `role="list"` list after the `h2` as before: `source <source> ·
+  <inventory file> · catalog retrieved <date> · region <region>`. The region carries no note about how it
+  was chosen. The dots are `<span aria-hidden="true">`, so a screen reader reads the items of a list. The
+  `h2` holds the words "Migration assessment" in a `span` the stylesheet sets above the target's name.
+- **"catalog retrieved <date>" links the catalog's `SourceURL`**, with `target="_blank"` and
+  `rel="noopener noreferrer"`. This is the one value the fragment writes into an attribute. It is safe
+  there because the domain refuses any catalog URL that is no absolute https URL, the reporter writes the
+  link only for a URL that starts with `https://` (otherwise the words alone), and the URL is escaped by
+  the same escaper as text, which turns both quotes, `&`, `<`, `>` and `+` into references, so it never
+  ends the attribute. A link loads nothing into the page and is no request the Content Security Policy
+  governs. `TestReportCatalogLinkIsEscaped` pins the escaping with a hostile URL.
+- **Boxes are sections without a class**: the summary's tiles are `p` elements (badge, count, caption),
+  each workload is a `section` holding its `h4`, its badges and its estimate, and one `section` holds the
+  Required changes and Blockers parts. The stylesheet lays them out by their place (`.part-summary > p`,
+  `.part-workloads > section`, `section:not([class]):has(> .part-changes)`), so no new class is needed for
+  them. The summary is no table any more; a comparison's summary is still one.
+- **A badge outside a table** is `<span class="fit fit-direct"><span aria-hidden="true">✓</span>
+  direct</span>`: the glyph is markup, a constant of the package chosen by the badge's class, and hidden
+  from screen readers. In a table the Fit cell keeps its classes and holds its word in a `span` the
+  stylesheet draws as a bubble, with the glyph as CSS content, as before.
+- **Every table sits in `<section class="table-scroll">`**, which scrolls sideways on its own, so a wide
+  table never widens the page on a phone. `table-scroll` joins the closed set of classes (`classNames`).
+- **Figures** are `strong` elements; the Cost estimate's total is the one with class `total`, holding the
+  amount alone, with "per month, x of y resources" beside it, and one closing line: the region and date of
+  the list prices, what they exclude, the storage the estimates leave out and the source's cost. The
+  hours basis and the fixed-fee note stay in the Markdown report.
+
+Every element and attribute is still a constant of the package, and every value but the link's URL is
+element content. The goldens were regenerated with `-update`.
