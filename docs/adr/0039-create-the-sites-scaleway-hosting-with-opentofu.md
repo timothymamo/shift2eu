@@ -77,7 +77,10 @@ in its `mock_provider` only `mock_resource`, `mock_data`, `override_resource` an
 (`[test-label]`; every block label enters the rules' block path with `%`, `/` and `:` escaped, so no label
 hides a block's children; the `%` escape is defence in depth, keeping the escaping injective, since no rule
 today tells apart the paths two labels such as `p/q` and `p%2Fq` would otherwise share; a message that quotes a
-label alone quotes it as the source writes it, and one that prints a block path keeps the escaped form);
+label alone quotes it as the source writes it, and one that prints a block path keeps the escaped form, but
+prints a label only if every character is in `A-Za-z0-9_-`, `/`, `%`, `:`, `.` and space, writing `an
+unprintable label` in its place otherwise, and a block path, key or source string likewise, so a label
+such as `##[error]x` never forges a GitHub Actions annotation in the CI log);
 every resource, data source and provider is Scaleway's; a module's source, in the configuration or in a
 test's `run` block, is a local `./` path without a `..` segment or another segment starting with `.`
 (such as `./.terraform/m`, under the `.terraform` directory the rules skip); every applied root (a directory directly

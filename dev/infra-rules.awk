@@ -32,6 +32,8 @@
 BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] range)
   LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_"
   DIGITS = "0123456789"
+  # The characters a message prints of a label, a block path or a key the source chose (shown()).
+  PRINTABLE = LETTERS DIGITS "-/%:. "
   # The functions that read files, render templates, or resolve paths, on the machine that runs tofu.
   split("file filebase64 filebase64sha256 filebase64sha512 fileexists fileset templatefile templatestring filemd5 filesha1 filesha256 filesha512 pathexpand abspath", ff, " ")
   for (i in ff) {
@@ -57,8 +59,9 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
     testBlock[tb[i]] = 1
   }
   # The blocks a test file's run and mock_provider may hold directly (issue #434): what tofu test reads
-  # there, which shapes mocked values and never reaches Scaleway. expect_failures is an attribute today;
-  # its block spelling is named so it is no surprise. OpenTofu also reads override_resource and
+  # there, which shapes mocked values and never reaches Scaleway. tofu reads expect_failures only as an
+  # attribute; its block spelling is allow-listed only because issue #434 lists it, and nothing should
+  # rely on tofu accepting an expect_failures {} block. OpenTofu also reads override_resource and
   # override_data inside a mock_provider (they override that provider's resources and data sources), so
   # they are allowed there too. Only the direct children are judged: a block inside an allowed one (the
   # values of an override_resource) is that block's business.
@@ -183,6 +186,42 @@ function unescaped(s,   i, c, r) {
   return r
 }
 
+# Text the source chose, as a message prints it: s when every character is in PRINTABLE or extra, what
+# otherwise. A message reaches the CI log, where the legacy GitHub Actions annotation form (##[error] and
+# the like) is matched anywhere in a line, so a label such as "##[error]x" must not be printed: it would
+# forge an annotation. Every message that prints such text prints it through quoted() (a label),
+# shownpath() (a block path, whose elements hold labels), shownkey() (a key, which may be quoted) or
+# shownsource() (a source string); none of their character sets holds # or [.
+function shown(s, extra, what,   i) {
+  for (i = 1; i <= length(s); i++) {
+    if (index(PRINTABLE extra, substr(s, i, 1)) == 0) {
+      return what
+    }
+  }
+  return s
+}
+
+# A label as a message quotes it: "<label>" as the source writes it, or an unprintable label.
+function quoted(s) {
+  return shown(s, "", "") == s ? "\"" s "\"" : "an unprintable label"
+}
+
+# A block path as a message prints it: its labels escaped, and the elements an object ({}) or an
+# expression (( or [) adds.
+function shownpath(p) {
+  return shown(p, "{}[(", "a block path with an unprintable label")
+}
+
+# An attribute's or object's key as a message prints it.
+function shownkey(n) {
+  return shown(n, "", "an unprintable name")
+}
+
+# A source string as a message prints it, with what a registry, git or URL source holds besides.
+function shownsource(s) {
+  return shown(s, "<>@?=&+~", "an unprintable source")
+}
+
 # Whether s is an HCL identifier: a letter or _, then letters, digits, _ or -.
 function isident(s,   i) {
   if (s == "" || index(LETTERS, substr(s, 1, 1)) == 0) {
@@ -278,7 +317,7 @@ function tok(t, v, lit, esc,   i, ok, n) {
             nlab++
             labFile[nlab] = FILENAME
             labLine[nlab] = tokline
-            labText[nlab] = bv[1] " \"" bv[i] "\""
+            labText[nlab] = bv[1] " " quoted(bv[i])
           }
           n = n ":" escaped(bv[i])
         } else if (bt[i] == "I") {
@@ -577,7 +616,7 @@ END {
     typ = lab[1]
     # At any depth, in a resource, a removed block or a test file alike.
     if (typ == "provisioner" || typ == "connection") {
-      problem("provisioner", f, bline[b], "a " typ " block (" p "): a provisioner runs commands, or reaches another machine, on whichever machine applies or tests, where the Scaleway keys and the GitHub admin token live")
+      problem("provisioner", f, bline[b], "a " typ " block (" shownpath(p) "): a provisioner runs commands, or reaches another machine, on whichever machine applies or tests, where the Scaleway keys and the GitHub admin token live")
     }
     if (m == 1 && !isTest[f] && typ == "import") {
       problem("import-block", f, bline[b], "an import block: the Runbook creates every resource fresh, so an import would adopt whatever object its id names into the state unasked (ADR 0039)")
@@ -596,10 +635,10 @@ END {
         }
       }
       if (m == 2 && el[1] ~ "^run(:|$)" && !(typ in runChild)) {
-        problem("test-nested-block", f, bline[b], "a " typ " block directly in " el[1] ": a run block holds only " RUN_CHILDREN_TEXT ", since a block no rule knows is a block no rule reads")
+        problem("test-nested-block", f, bline[b], "a " typ " block directly in " shownpath(el[1]) ": a run block holds only " RUN_CHILDREN_TEXT ", since a block no rule knows is a block no rule reads")
       }
       if (m == 2 && el[1] ~ "^mock_provider(:|$)" && !(typ in mockChild)) {
-        problem("test-nested-block", f, bline[b], "a " typ " block directly in " el[1] ": a mock_provider holds only " MOCK_CHILDREN_TEXT ", since a block no rule knows is a block no rule reads")
+        problem("test-nested-block", f, bline[b], "a " typ " block directly in " shownpath(el[1]) ": a mock_provider holds only " MOCK_CHILDREN_TEXT ", since a block no rule knows is a block no rule reads")
       }
       if (m == 1 && typ == "provider") {
         problem("test-provider", f, bline[b], "a test file configures a real provider (" last "): it must only mock_provider \"scaleway\", so tofu test never reaches Scaleway")
@@ -614,7 +653,7 @@ END {
     configDir[dirof(f)] = 1
     if (typ == "resource" || typ == "data" || typ == "ephemeral") {
       if (lab[2] !~ /^scaleway_/) {
-        problem("provider-type", f, bline[b], typ " \"" unescaped(lab[2]) "\" belongs to no scaleway provider: infra/ uses scaleway/scaleway alone")
+        problem("provider-type", f, bline[b], typ " " quoted(unescaped(lab[2])) " belongs to no scaleway provider: infra/ uses scaleway/scaleway alone")
       }
       if (lab[2] == "scaleway_iam_api_key") {
         problem("api-key", f, bline[b], "a " typ " scaleway_iam_api_key: the deploy API key is created by hand, so no secret reaches the state")
@@ -627,9 +666,9 @@ END {
       } else if (typ == "resource" && lab[2] == "scaleway_iam_application") {
         iamApplications++
       } else if (typ == "resource" && lab[2] ~ /^scaleway_iam_/) {
-        problem("iam-other", f, bline[b], "a resource " unescaped(lab[2]) ": infra/ creates exactly one IAM application and its one policy, nothing else in IAM")
+        problem("iam-other", f, bline[b], "a resource " quoted(unescaped(lab[2])) ": infra/ creates exactly one IAM application and its one policy, nothing else in IAM")
       } else if (lab[2] ~ /^scaleway_/ && !(typ == "resource" && (lab[2] in resourceType))) {
-        problem("resource-type", f, bline[b], typ " \"" unescaped(lab[2]) "\" is no resource type infra/site/main.tf uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
+        problem("resource-type", f, bline[b], typ " " quoted(unescaped(lab[2])) " is no resource type infra/site/main.tf uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
       }
     }
     if (m == 2 && el[1] == "terraform" && !(typ in terraformSetting)) {
@@ -639,7 +678,7 @@ END {
       problem("provider-setting", f, bline[b], "the provider \"scaleway\" block holds a " typ " block: it may set only " PROVIDER_SETTINGS_TEXT ", since any other setting changes what the plan reaches")
     }
     if (m == 1 && typ == "provider" && lab[2] != "scaleway") {
-      problem("provider-type", f, bline[b], "a provider \"" unescaped(lab[2]) "\": infra/ uses scaleway/scaleway alone")
+      problem("provider-type", f, bline[b], "a provider " quoted(unescaped(lab[2])) ": infra/ uses scaleway/scaleway alone")
     }
     if (m == 1 && typ == "module") {
       nmod++
@@ -649,11 +688,11 @@ END {
     if (m == 2 && el[1] == "terraform" && typ == "backend") {
       backends[dirof(f)]++
       if (lab[2] != "s3") {
-        problem("backend-s3", f, bline[b], "backend \"" unescaped(lab[2]) "\": the state lives in a Scaleway bucket through the s3 backend, never local")
+        problem("backend-s3", f, bline[b], "backend " quoted(unescaped(lab[2])) ": the state lives in a Scaleway bucket through the s3 backend, never local")
       }
     }
     if (m == 3 && el[1] == "terraform" && el[2] == "backend:s3") {
-      problem("backend-setting", f, bline[b], "a " last " block in the committed backend \"s3\" block (" p "): it may set only " BACKEND_SETTINGS_TEXT)
+      problem("backend-setting", f, bline[b], "a " last " block in the committed backend \"s3\" block (" shownpath(p) "): it may set only " BACKEND_SETTINGS_TEXT)
     }
     if (m == 2 && el[1] == "terraform" && typ == "cloud") {
       problem("cloud-block", f, bline[b], "a cloud block: the state lives in a Scaleway bucket through the s3 backend")
@@ -670,10 +709,10 @@ END {
         aliased[ablk[a]] = 1
       }
       if (n == "source" && (ablk[a] in mockBlock) && p == bpath[ablk[a]]) {
-        problem("mock-source", f, aline[a], "source in " p ": the mocks would come from files outside the test file, so what it mocks is not what it holds")
+        problem("mock-source", f, aline[a], "source in " shownpath(p) ": the mocks would come from files outside the test file, so what it mocks is not what it holds")
       }
       if (n == "providers" && p ~ "^run:[^/]+$") {
-        problem("test-providers", f, aline[a], "providers in a run block (" p "): it hands the run a provider configuration other than the file's unaliased mock_provider \"scaleway\"")
+        problem("test-providers", f, aline[a], "providers in a run block (" shownpath(p) "): it hands the run a provider configuration other than the file's unaliased mock_provider \"scaleway\"")
       }
       if (n == "source" && (ablk[a] in isModule) && p == bpath[ablk[a]]) {
         modSource[ablk[a]] = (akind[a] == "L") ? aval[a] : "<an expression>"
@@ -682,16 +721,16 @@ END {
     }
     if (p ~ "^provider:[^/]+$") {
       if (n == "alias") {
-        problem("provider-alias", f, aline[a], "alias in " p ": a second provider configuration under another name, which resources and tests could reach unseen")
+        problem("provider-alias", f, aline[a], "alias in " shownpath(p) ": a second provider configuration under another name, which resources and tests could reach unseen")
       }
       if (n == "access_key" || n == "secret_key" || n == "profile") {
-        problem("provider-credentials", f, aline[a], n " in " p ": credentials come from SCW_ACCESS_KEY and SCW_SECRET_KEY on the admin machine, never from a file git holds")
+        problem("provider-credentials", f, aline[a], n " in " shownpath(p) ": credentials come from SCW_ACCESS_KEY and SCW_SECRET_KEY on the admin machine, never from a file git holds")
       }
       if (n == "api_url") {
-        problem("provider-endpoint", f, aline[a], n " in " p ": the provider talks to Scaleway's own API; an endpoint in a file git holds could send the admin machine's credentials elsewhere")
+        problem("provider-endpoint", f, aline[a], n " in " shownpath(p) ": the provider talks to Scaleway's own API; an endpoint in a file git holds could send the admin machine's credentials elsewhere")
       }
       if (p == "provider:scaleway" && !(n in providerSetting)) {
-        problem("provider-setting", f, aline[a], n " in " p ": it may set only " PROVIDER_SETTINGS_TEXT ", since any other setting (a default project_id, ...) changes what the plan reaches")
+        problem("provider-setting", f, aline[a], shownkey(n) " in " shownpath(p) ": it may set only " PROVIDER_SETTINGS_TEXT ", since any other setting (a default project_id, ...) changes what the plan reaches")
       }
     }
     if (n == "acl") {
@@ -701,10 +740,10 @@ END {
       problem("visibility", f, aline[a], "a visibility argument, even \"private\": an object's visibility is an ACL, and the bucket policy alone decides who reads the site (ADR 0039)")
     }
     if (p == "terraform/backend:s3" && !(n in backendSetting)) {
-      problem("backend-setting", f, aline[a], n " in the committed backend \"s3\" block: it may set only " BACKEND_SETTINGS_TEXT)
+      problem("backend-setting", f, aline[a], shownkey(n) " in the committed backend \"s3\" block: it may set only " BACKEND_SETTINGS_TEXT)
     }
     if (p == "terraform" && !(n in terraformSetting)) {
-      problem("terraform-setting", f, aline[a], n " in a terraform block: it may hold only " TERRAFORM_SETTINGS_TEXT ", since anything else changes how tofu runs on the admin machine")
+      problem("terraform-setting", f, aline[a], shownkey(n) " in a terraform block: it may hold only " TERRAFORM_SETTINGS_TEXT ", since anything else changes how tofu runs on the admin machine")
     }
     if (p == "terraform" && n == "required_version") {
       versions[dirof(f)]++
@@ -714,7 +753,7 @@ END {
     }
     if (p == "terraform/required_providers") {
       if (akind[a] != "O") {
-        problem("provider-source", f, aline[a], "required_providers entry " n " is not an object with source = \"scaleway/scaleway\"")
+        problem("provider-source", f, aline[a], "required_providers entry " shownkey(n) " is not an object with source = \"scaleway/scaleway\"")
       } else {
         nprov++
         provPath[nprov] = p "/" n
@@ -729,7 +768,7 @@ END {
       modSource[ablk[a]] = (akind[a] == "L") ? aval[a] : "<an expression>"
     }
     if (p ~ "^resource:scaleway_iam_(policy|application):[^/]+$" && (n == "count" || n == "for_each")) {
-      problem("iam-repeat", f, aline[a], n " on " p ": infra/ creates exactly one IAM application and one policy")
+      problem("iam-repeat", f, aline[a], n " on " shownpath(p) ": infra/ creates exactly one IAM application and one policy")
     }
   }
 
@@ -743,7 +782,7 @@ END {
     s = (provPath[i] in provSource) ? provSource[provPath[i]] : "<none>"
     if (s != "scaleway/scaleway") {
       split(provAt[i], at, ":")
-      problem("provider-source", at[1], at[2], "required_providers entry " provName[i] " has source " s ", not \"scaleway/scaleway\": infra/ uses that provider alone")
+      problem("provider-source", at[1], at[2], "required_providers entry " shownkey(provName[i]) " has source " shownsource(s) ", not \"scaleway/scaleway\": infra/ uses that provider alone")
     }
   }
 
@@ -752,15 +791,15 @@ END {
     f = bfile[b]
     s = (b in modSource) ? modSource[b] : "<none>"
     if (s !~ "^[.]/") {
-      problem("module-source", f, bline[b], bpath[b] " has source " s ": a module may only be a local ./ path in this repository, never a registry, git or URL source")
+      problem("module-source", f, bline[b], shownpath(bpath[b]) " has source " shownsource(s) ": a module may only be a local ./ path in this repository, never a registry, git or URL source")
     } else if (s ~ "(^|/)[.][.](/|$)" || index(s, "\\") > 0) {
-      problem("module-source", f, bline[b], bpath[b] " has source " s ": a .. segment (or an escape) can lead out of the configuration, to files these rules do not read")
+      problem("module-source", f, bline[b], shownpath(bpath[b]) " has source " shownsource(s) ": a .. segment (or an escape) can lead out of the configuration, to files these rules do not read")
     } else {
       # A segment starting with . other than . itself names a hidden directory, such as .terraform, which
       # the rules prune: tofu would load a module there that no rule reads. The directory is still named
       # as a module below, so the refusal is this one line, not a [backend-count] beside it.
       if (s ~ "(^|/)[.][^/]") {
-        problem("module-source", f, bline[b], bpath[b] " has source " s ": a segment starting with . names a hidden directory (such as .terraform, which these rules prune), so tofu would load a module no rule reads")
+        problem("module-source", f, bline[b], shownpath(bpath[b]) " has source " shownsource(s) ": a segment starting with . names a hidden directory (such as .terraform, which these rules prune), so tofu would load a module no rule reads")
       }
       if (!isTest[f]) {
         # A local module's directory is no root configuration: it needs no backend or required_version.
@@ -770,7 +809,7 @@ END {
         base = dirof(f)
         d = joinpath(base, s)
         if (isroot(d)) {
-          problem("module-source", f, bline[b], bpath[b] " has source " s ", which is the applied root " d ": a module may not name a root, whose backend and required_version must hold whatever reaches it")
+          problem("module-source", f, bline[b], shownpath(bpath[b]) " has source " shownsource(s) ", which is the applied root " d ": a module may not name a root, whose backend and required_version must hold whatever reaches it")
         } else if (d != base) {
           moduleDir[d] = 1
         }

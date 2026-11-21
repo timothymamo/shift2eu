@@ -116,7 +116,10 @@
 #                    in any file, enters the rules' block path with %, / and : escaped, so a label never
 #                    hides a block's children from the rules above; a message that quotes a label
 #                    alone quotes it as the source writes it, and one that prints a block path keeps
-#                    the escaped form
+#                    the escaped form. A message prints a label only if every character is in
+#                    A-Za-z0-9_-, /, %, :, . and space, and writes "an unprintable label" in its
+#                    place otherwise (a block path, key or source likewise), so a label such as
+#                    "##[error]x" never forges a GitHub Actions annotation in the CI log
 # The HCL is read by dev/infra-rules.awk.
 #
 # Usage: dev/infra-rules.sh <infra root>   (from the repository root: dev/infra-rules.sh infra)
