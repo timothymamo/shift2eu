@@ -1450,6 +1450,10 @@ wait "${job}" || true`
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			if tc.noBackgroundJob {
+				skipUnderMake381OnMacOS(t, `the trap's "${!:-}" is still "$!: unbound variable" under bash 3.2, the Mac's /bin/sh, issue #448`)
+			}
+
 			sb := newSandbox(t)
 			harness := filepath.Join(sb.root, "window.sh")
 			sleepPidFile := filepath.Join(sb.root, "sleep.pid")
