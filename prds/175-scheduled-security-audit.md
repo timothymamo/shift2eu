@@ -805,10 +805,10 @@ options that were weighed and the reason given, so the decision can be revisited
      finding and "run" otherwise, so a check whose only findings are private reads exactly like a check
      with no findings ("run"); the why of a "not run (why)" comes from a fixed vocabulary in the publish
      script, never the model's text (milestone 2). *Decided by the review rounds on PR #273 (2026-11-18),
-     confirmed by the maintainer on 2026-11-21 at PR #444's review.* *Reason:* a public count tied to a named release
-     signals an undisclosed serious flaw before a fix exists, and more sharply for a run started right
-     after a release; a per-check "findings" next to "handled privately" would say where it is.
-     *Residual risk:* the presence flag still says that something exists; the ADR records it.
+     confirmed by the maintainer on 2026-11-21 at PR #444's review.* *Reason:* a public count tied to a
+     named release signals an undisclosed serious flaw before a fix exists, and more sharply for a run
+     started right after a release; a per-check "findings" next to "handled privately" would say where
+     it is. *Residual risk:* the presence flag still says that something exists; the ADR records it.
    - Each advisory carries the finding's fingerprint, a keyed hash (HMAC with `AUDIT_FINGERPRINT_KEY`,
      held only in the publish job) that nobody can predict from the committed script. The publish
      script, not the model, tracks private findings across runs: it lists the advisories **the App

@@ -2,9 +2,8 @@
 
 How `shift2eu`'s security is checked beyond each change's review: a scheduled audit of the whole
 repository and of the latest published release ([not running yet](#the-scheduled-audit)), how its
-findings are disclosed, how to verify a release
-yourself, and where the dated audit reports are. To report a vulnerability, follow the
-[security policy](../../SECURITY.md).
+findings are disclosed, how to verify a release yourself, and where the dated audit reports are. To
+report a vulnerability, follow the [security policy](../../SECURITY.md).
 
 ## The scheduled audit
 
