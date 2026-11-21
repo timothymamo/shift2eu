@@ -727,6 +727,7 @@ release), *live* (checked against the live site) or *review*.
   # FAIL a line starting "??" (an override.tf or another stray file: delete it) or another ignored line (a plan or state file: delete it)
   # R0's region lines again if you set region, and R0's last line: PASS admin_principal
   # Note: make infra-check's tofu test now reads this terraform.tfvars too (CI runs with the defaults); never add a *.auto.tfvars ([tfvars-file] refuses it)
+  # Note: tofu loads terraform.tfvars, then terraform.tfvars.json, then every *.auto.*: keep exactly one of terraform.tfvars or terraform.tfvars.json here (a stray .json would override the .tfvars unseen)
   ```
 
   **R3. The price** (before `apply` takes out the plan; Hosting decision 9)

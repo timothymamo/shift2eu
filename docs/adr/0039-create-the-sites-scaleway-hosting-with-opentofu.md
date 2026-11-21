@@ -66,13 +66,24 @@ or test file (a name starting with `.`), which OpenTofu ignores, so the rules re
 no other rule; no `provisioner` or `connection` block at any depth, in a configuration or test file (a
 `local-exec` would run on the admin machine, where the Scaleway keys and the GitHub admin token live);
 no `*.auto.tfvars` or `*.auto.tfvars.json`, hidden ones too, which tofu loads after `terraform.tfvars`
-unasked (the maintainer's own `terraform.tfvars` stays allowed and out of git); in the committed
+and `terraform.tfvars.json` unasked (the maintainer's own `terraform.tfvars` or `terraform.tfvars.json`,
+exactly one of them, stays allowed and out of git); in the committed
 `backend "s3"` block only `key`, `use_lockfile`, `skip_credentials_validation`, `skip_region_validation`,
 `skip_requesting_account_id` and `skip_s3_checksum`, so no `insecure`, `endpoints`, `assume_role` or
 other setting can redirect or weaken the state's transport; no `scaleway_object` resource (tofu never
-uploads an object, the release does); no call, in a configuration file and in a template's `${...}` too,
-of a function that reads the machine running tofu (`file`, `filebase64*`, `fileexists`, `fileset`,
-`templatefile`, `filemd5`, `filesha*`, `pathexpand`, `abspath`); an empty file is judged as any other;
+uploads an object, the release does); no call, in a configuration or test file and in a template's
+`${...}` too, of a function that reads the machine running tofu (`file`, `filebase64*`, `fileexists`,
+`fileset`, `templatefile`, `templatestring`, `filemd5`, `filesha*`, `pathexpand`, `abspath`); nothing in
+a top-level `terraform` block but `required_version`, `required_providers`, `backend` and `cloud`
+(`[terraform-setting]`: an `encryption` block's `external` key provider runs a local command at init,
+plan and apply, and its `kms` and `openbao` providers send ambient credentials to an endpoint it names;
+`provider_meta` and `experiments` change how tofu runs); no `import` block (`[import-block]`: every
+resource is created fresh, never adopted); no `mock_provider` with a `source` (`[mock-source]`) and no
+`*.tfmock.hcl` or `*.tfmock.json` file (`[mock-file]`), so a test's mocks are what its file holds; only
+the resource types `infra/site/main.tf` uses, and no data or ephemeral type (`[resource-type]`, an allow
+list in `dev/infra-rules.awk`; a type a specific rule names, such as `scaleway_iam_api_key` or
+`scaleway_object`, gets only that rule's line). A new resource type extends the list in the same PR as
+the resource, so its review sees both; an empty file is judged as any other;
 and a file the rules
 cannot read (a heredoc, an unbalanced string or bracket, a backslash escape in a block label or quoted
 key, a `$${` or `%%{` escape in a block label, a block header of anything but identifiers and literal strings) fails them, with no other verdict.

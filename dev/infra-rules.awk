@@ -16,9 +16,10 @@
 # not read: once any file fails to parse, only the [parse] lines are printed, since every other verdict
 # would rest on a partial reading.
 #
-# A call of a function that reads the machine running tofu (file, templatefile, pathexpand, ...) is found
-# by the tokenizer itself, in a configuration file: an identifier with that name whose next character
-# outside whitespace and comments is a (. Inside a template's ${...} or %{...}, which is not tokenized,
+# A call of a function that reads the machine running tofu (file, templatefile, templatestring,
+# pathexpand, ...) is found by the tokenizer itself, in a configuration or test file alike: an identifier
+# with that name whose next character outside whitespace and comments is a (. Inside a template's ${...}
+# or %{...}, which is not tokenized,
 # the raw text is read the same way, so the check fails closed there; a string without a template, or a
 # comment, is never read for it.
 #
@@ -31,10 +32,25 @@
 BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] range)
   LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_"
   DIGITS = "0123456789"
-  # The functions that read files, or resolve paths, on the machine that runs tofu.
-  split("file filebase64 filebase64sha256 filebase64sha512 fileexists fileset templatefile filemd5 filesha1 filesha256 filesha512 pathexpand abspath", ff, " ")
+  # The functions that read files, render templates, or resolve paths, on the machine that runs tofu.
+  split("file filebase64 filebase64sha256 filebase64sha512 fileexists fileset templatefile templatestring filemd5 filesha1 filesha256 filesha512 pathexpand abspath", ff, " ")
   for (i in ff) {
     fileFunc[ff[i]] = 1
+  }
+  # The settings a top-level terraform block may hold, each judged by its own rule. Anything else
+  # (encryption, provider_meta, experiments, ...) changes how tofu runs on the admin machine.
+  TERRAFORM_SETTINGS_TEXT = "required_version, required_providers, backend and cloud"
+  split("required_version required_providers backend cloud", ts, " ")
+  for (i in ts) {
+    terraformSetting[ts[i]] = 1
+  }
+  # The resource types the configuration may hold: exactly the ones infra/site/main.tf uses. No data or
+  # ephemeral type is allowed. A new resource extends this list in the same PR that adds it, so the
+  # review of that PR sees both. A type a specific rule names (api-key, object, bucket-acl, iam-other,
+  # provider-type) is reported by that rule alone.
+  split("scaleway_account_project scaleway_edge_services_backend_stage scaleway_edge_services_cache_stage scaleway_edge_services_dns_stage scaleway_edge_services_head_stage scaleway_edge_services_tls_stage scaleway_edge_services_pipeline scaleway_edge_services_plan scaleway_iam_application scaleway_iam_policy scaleway_object_bucket scaleway_object_bucket_policy scaleway_object_bucket_website_configuration", rt, " ")
+  for (i in rt) {
+    resourceType[rt[i]] = 1
   }
   # The settings the committed backend "s3" block may hold: none names a bucket, endpoint, role or secret.
   BACKEND_SETTINGS_TEXT = "key, use_lockfile, skip_credentials_validation, skip_region_validation, skip_requesting_account_id and skip_s3_checksum; the bucket, region and endpoint come from the git-ignored backend.hcl"
@@ -52,7 +68,7 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
 # An identifier just read: when it names a file function, the next character outside whitespace and
 # comments decides whether it is called.
 function ident(s) {
-  if ((s in fileFunc) && !isTest[FILENAME]) {
+  if (s in fileFunc) {
     ffpend = s
   }
 }
@@ -465,9 +481,15 @@ END {
     if (typ == "provisioner" || typ == "connection") {
       problem("provisioner", f, bline[b], "a " typ " block (" p "): a provisioner runs commands, or reaches another machine, on whichever machine applies or tests, where the Scaleway keys and the GitHub admin token live")
     }
+    if (m == 1 && typ == "import") {
+      problem("import-block", f, bline[b], "an import block: the Runbook creates every resource fresh, so an import would adopt whatever object its id names into the state unasked (ADR 0039)")
+    }
     if (isTest[f]) {
-      if (m == 1 && typ == "mock_provider" && k == 2 && lab[2] == "scaleway") {
-        mock[b] = f
+      if (m == 1 && typ == "mock_provider") {
+        mockBlock[b] = 1
+        if (k == 2 && lab[2] == "scaleway") {
+          mock[b] = f
+        }
       }
       if (m == 1 && typ == "provider") {
         problem("test-provider", f, bline[b], "a test file configures a real provider (" last "): it must only mock_provider \"scaleway\", so tofu test never reaches Scaleway")
@@ -496,7 +518,12 @@ END {
         iamApplications++
       } else if (typ == "resource" && lab[2] ~ /^scaleway_iam_/) {
         problem("iam-other", f, bline[b], "a resource " lab[2] ": infra/ creates exactly one IAM application and its one policy, nothing else in IAM")
+      } else if (lab[2] ~ /^scaleway_/ && !(typ == "resource" && (lab[2] in resourceType))) {
+        problem("resource-type", f, bline[b], typ " \"" lab[2] "\" is no resource type infra/site/main.tf uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
       }
+    }
+    if (m == 2 && el[1] == "terraform" && !(typ in terraformSetting)) {
+      problem("terraform-setting", f, bline[b], "a " typ " block in a terraform block: it may hold only " TERRAFORM_SETTINGS_TEXT ", since anything else (an encryption key provider, provider_meta, experiments) changes how tofu runs on the admin machine")
     }
     if (m == 1 && typ == "provider" && lab[2] != "scaleway") {
       problem("provider-type", f, bline[b], "a provider \"" lab[2] "\": infra/ uses scaleway/scaleway alone")
@@ -529,6 +556,9 @@ END {
       if (n == "alias" && (ablk[a] in mock) && p == bpath[ablk[a]]) {
         aliased[ablk[a]] = 1
       }
+      if (n == "source" && (ablk[a] in mockBlock) && p == bpath[ablk[a]]) {
+        problem("mock-source", f, aline[a], "source in " p ": the mocks would come from files outside the test file, so what it mocks is not what it holds")
+      }
       if (n == "providers" && p ~ "^run:[^/]+$") {
         problem("test-providers", f, aline[a], "providers in a run block (" p "): it hands the run a provider configuration other than the file's unaliased mock_provider \"scaleway\"")
       }
@@ -556,6 +586,9 @@ END {
     }
     if (p == "terraform/backend:s3" && !(n in backendSetting)) {
       problem("backend-setting", f, aline[a], n " in the committed backend \"s3\" block: it may set only " BACKEND_SETTINGS_TEXT)
+    }
+    if (p == "terraform" && !(n in terraformSetting)) {
+      problem("terraform-setting", f, aline[a], n " in a terraform block: it may hold only " TERRAFORM_SETTINGS_TEXT ", since anything else changes how tofu runs on the admin machine")
     }
     if (p == "terraform" && n == "required_version") {
       versions[dirof(f)]++

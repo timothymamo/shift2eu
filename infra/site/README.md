@@ -28,14 +28,21 @@ backend for every applied root, no configuration file directly in `infra/`, no p
 override, JSON or hidden (`.`-named, which OpenTofu ignores) files, every test file mocking the
 provider, no `provisioner` or `connection` block, no `*.auto.tfvars` (`.json` too), no setting in the
 `s3` backend block beyond `key`, `use_lockfile` and the four `skip_*` ones, no `scaleway_object` (the
-release deploys the objects), and no call of a function that reads the local machine (`file`,
-`templatefile`, `fileset`, `pathexpand`, `abspath`, ...).
+release deploys the objects), no call, in a configuration or test file, of a function that reads the
+local machine (`file`, `templatefile`, `templatestring`, `fileset`, `pathexpand`, `abspath`, ...), nothing
+in a `terraform` block but `required_version`, `required_providers`, `backend` and `cloud`
+(`[terraform-setting]`: no `encryption`, whose `external` key provider runs a local command), no `import`
+block, no `mock_provider` with a `source` and no `*.tfmock.hcl` or `*.tfmock.json` file, and only the
+resource types `main.tf` uses today, no data or ephemeral type (`[resource-type]`). A new resource type
+extends that allow list in `dev/infra-rules.awk` in the same PR as the resource.
 `init`, `validate` and `test` run in every applied root (each directory directly under `infra/`).
 
 `tofu test` loads a `terraform.tfvars` in `infra/site` (and in `tests/`) without being asked: on the admin
 machine, where the maintainer's copy lives, the offline tests run with the maintainer's values, while CI,
-which has none, runs them with the defaults. A `*.auto.tfvars`, which tofu would load too, is refused
-(`[tfvars-file]`), so no committed file can override those values.
+which has none, runs them with the defaults. tofu loads `terraform.tfvars`, then `terraform.tfvars.json`,
+then every `*.auto.*`: keep exactly one of `terraform.tfvars` or `terraform.tfvars.json` on the admin
+machine (git tracks neither). A `*.auto.tfvars`, which tofu would load too, is refused (`[tfvars-file]`),
+so no committed file can override those values.
 It runs tofu with none of the caller's `SCW_*`, `AWS_*` or `TF_*` variables and no Scaleway or AWS
 configuration file, so it cannot reach Scaleway even where the maintainer's keys are exported. Only the
 maintainer runs `init` with the backend, `plan` and `apply`, on the admin machine, always through

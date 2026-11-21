@@ -15,8 +15,12 @@
 #   [json-config]    a JSON configuration or test file (*.tf.json, *.tofu.json, *.tftest.json,
 #                    *.tofutest.json), which these rules do not read
 #   [tfvars-file]    a *.auto.tfvars or *.auto.tfvars.json anywhere under the root, hidden ones too: tofu
-#                    loads it after terraform.tfvars unasked, so it would override the maintainer's values
-#                    (a plain terraform.tfvars, the maintainer's own on the admin machine, is not refused)
+#                    loads terraform.tfvars, then terraform.tfvars.json, then every *.auto.* unasked, so it
+#                    would override the maintainer's values (a plain terraform.tfvars or
+#                    terraform.tfvars.json, the maintainer's own on the admin machine, exactly one of them,
+#                    is not refused; git tracks neither)
+#   [mock-file]      a *.tfmock.hcl or *.tfmock.json anywhere under the root, hidden ones too: mocks belong
+#                    in the test file that uses them
 #   [symlink]        a symlink anywhere under the root: tofu would load what it points at, unread here
 #   [override-file]  an override file (override.tf, *_override.tf, the .tofu and .json forms): it rewrites
 #                    other files' blocks where a review of those files does not see it
@@ -33,9 +37,16 @@
 #                    test file): it runs commands on the machine that applies or tests, where the keys live
 #   [object]         a scaleway_object resource: tofu never uploads objects, the release deploys them
 #   [file-function]  a call of file, filebase64, filebase64sha256, filebase64sha512, fileexists, fileset,
-#                    templatefile, filemd5, filesha1, filesha256, filesha512, pathexpand or abspath in a
-#                    configuration file, a template's ${...} too: the plan would read the machine that runs
-#                    it. A name in a comment or in a string without a template is no call
+#                    templatefile, templatestring, filemd5, filesha1, filesha256, filesha512, pathexpand or
+#                    abspath in a configuration or test file, a template's ${...} too: the plan would read
+#                    the machine that runs it. A name in a comment or in a string without a template is no
+#                    call
+#   [import-block]   a top-level import block: every resource is created fresh, never adopted
+#   [resource-type]  a scaleway_* resource type infra/site/main.tf does not use, or any scaleway_* data or
+#                    ephemeral type, that no rule above or below names: an allow list in
+#                    dev/infra-rules.awk, extended in the same PR as the new resource. A type a specific
+#                    rule names ([api-key], [object], [bucket-acl], [iam-other], [provider-type]) gets
+#                    only that rule's line
 #   [bucket-acl]     a scaleway_object_bucket_acl resource
 #   [acl]            an acl argument, even "private"
 #   [visibility]     a visibility argument (an object's ACL), even "private"
@@ -66,6 +77,10 @@
 #                    skip_* settings (insecure, endpoints, assume_role, ...): the bucket, region and
 #                    endpoint come from the git-ignored backend.hcl
 #   [cloud-block]    a cloud block
+#   [terraform-setting] an attribute or block in a top-level terraform block other than required_version,
+#                    required_providers, backend and cloud (encryption, provider_meta, experiments, ...):
+#                    an encryption key provider "external" runs a local command at init, plan and apply,
+#                    and its kms and openbao providers send ambient credentials to an endpoint it names
 #   [required-version] a configuration directory judged as [backend-count] judges it without exactly one
 #                    required_version, or one other than infra/tofu.yaml's
 #                    tofuVersion without its v
@@ -74,6 +89,8 @@
 #   [test-provider]  a test file with a provider block
 #   [test-providers] providers = ... in a test's run block, which hands the run another provider
 #                    configuration than the mock
+#   [mock-source]    a source attribute in a test file's mock_provider: its mocks would come from outside
+#                    the test file
 # The HCL is read by dev/infra-rules.awk.
 #
 # Usage: dev/infra-rules.sh <infra root>   (from the repository root: dev/infra-rules.sh infra)
@@ -118,6 +135,10 @@ while IFS= read -r f; do
 done <<<"$(files -type f \( -name '*.auto.tfvars' -o -name '*.auto.tfvars.json' \))"
 
 while IFS= read -r f; do
+  [ -n "${f}" ] && fail mock-file "${f}" "a mock data file: the mocks belong in the test file that uses them, never in a file beside it that a mock_provider's source could load"
+done <<<"$(files -type f \( -name '*.tfmock.hcl' -o -name '*.tfmock.json' \))"
+
+while IFS= read -r f; do
   [ -n "${f}" ] && fail symlink "${f}" "a symlink: tofu would load what it points at, which these rules do not read"
 done <<<"$(files -type l)"
 
@@ -142,7 +163,9 @@ done <<<"$(files -type f ! -name '.*' \( -name '*.tofu' -o -name '*.tofutest.hcl
 
 while IFS= read -r f; do
   [ -n "${f}" ] || continue
-  if grep -E '^[[:space:]]*provider[[:space:]]' "${f}" | grep -vqxE 'provider "registry\.opentofu\.org/scaleway/scaleway" \{'; then
+  # A provider header is "provider" followed by anything but an identifier character, a space or none
+  # at all: HCL reads provider"..." { as the same block.
+  if LC_ALL=C grep -E '^[[:space:]]*provider([^A-Za-z0-9_-]|$)' "${f}" | LC_ALL=C grep -vqxE 'provider "registry\.opentofu\.org/scaleway/scaleway" \{'; then
     fail lock-file "${f}" "names a provider other than registry.opentofu.org/scaleway/scaleway"
   fi
 done <<<"$(files -type f -name .terraform.lock.hcl)"
