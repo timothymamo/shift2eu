@@ -5,6 +5,6 @@
   "dist": {
     "integrity": "",
     "shasum": "4444444444444444444444444444444444444444",
-    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.330.tgz"
+    "tarball": "https://registry.example.com/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.330.tgz"
   }
 }

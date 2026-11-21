@@ -5,6 +5,6 @@
   "dist": {
     "integrity": "sha512-9Gn+V7DtJ8M1nztP9CeDVl9g3RtrepI7rOFTyPRRnZe8D6zebIHKmC7OvBauucuAP0X0k85SDN/LPVZyjsGezQ==",
     "shasum": "2222222222222222222222222222222222222222",
-    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.330.tgz"
+    "tarball": "https://registry.example.com/@anthropic-ai/claude-code/-/claude-code-2.1.330.tgz"
   }
 }

@@ -4,6 +4,6 @@
   "description": "Claude Code CLI for linux-x64",
   "dist": {
     "shasum": "3333333333333333333333333333333333333333",
-    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.330.tgz"
+    "tarball": "https://registry.example.com/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.330.tgz"
   }
 }
