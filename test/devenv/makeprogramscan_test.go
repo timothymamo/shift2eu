@@ -1,4 +1,5 @@
-// Holds every make this package's tests run to makeProgram (issue #314): a literal exec.Command("make", ...) or
+// Guards against a test of this package running make other than through makeProgram (issue #314). It catches a
+// literal "make" or "gmake" handed to os/exec, not a program name built any other way: a literal exec.Command("make", ...) or
 // exec.CommandContext(ctx, "make", ...) runs the make first on PATH, never the one SHIFT2EU_TEST_MAKE names, so
 // that test would pass in CI's make 3.81 job under make 4.x and say nothing about the Mac's /usr/bin/make.
 package devenv_test
@@ -64,9 +65,10 @@ func literalMakeCalls(fset *token.FileSet, file *ast.File) []token.Position {
 	return found
 }
 
-// TestTestsRunMakeThroughMakeProgram scans every test file of this package for a literal make handed to
-// exec.Command or exec.CommandContext: each make the tests run must come from makeProgram, so CI's make 3.81 job
-// runs every one of them under /usr/bin/make (issue #314).
+// TestTestsRunMakeThroughMakeProgram scans every test file of this package for a literal "make" or "gmake"
+// handed to exec.Command or exec.CommandContext, a guard against a test that runs make by accident: the makes
+// the tests run should come from makeProgram, so CI's make 3.81 job runs them under /usr/bin/make. It does not
+// catch a program name built any other way (issue #314).
 func TestTestsRunMakeThroughMakeProgram(t *testing.T) {
 	t.Parallel()
 

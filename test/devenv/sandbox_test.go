@@ -278,6 +278,9 @@ func (sb *sandbox) baseEnv() map[string]string {
 		"TMPDIR":                 filepath.Join(sb.root, "tmp"),
 		"SHIFT2EU_TEST_ARGV_LOG": sb.argvLog,
 		"SHIFT2EU_TEST_VM_HOME":  sb.vmHome,
+		// The fake VM's own tools, which the fake limactl puts first on the VM's PATH: named here, not derived
+		// from the VM home in the fake, so the two cannot drift apart.
+		"SHIFT2EU_TEST_VM_BIN": sb.vmToolsPath(),
 		// The only tree a host-side install or uninstall recipe's root commands may touch: the log-only sudo
 		// copies, removes and loads files inside it and refuses every path outside it (issue #229).
 		"SHIFT2EU_TEST_SUDO_ROOT": sb.root,
@@ -489,8 +492,8 @@ if [ "${found}" -ne 1 ]; then
   exit 64
 fi
 shift $((at - 1))
-# The VM's own tools, ahead of the machine's: the sandbox's vm-bin, beside the VM home (vmToolsPath).
-PATH="${SHIFT2EU_TEST_VM_HOME%/*}/vm-bin:${PATH}"
+# The VM's own tools, ahead of the machine's: the sandbox's vm-bin, which baseEnv names (vmToolsPath).
+PATH="${SHIFT2EU_TEST_VM_BIN:?set SHIFT2EU_TEST_VM_BIN}:${PATH}"
 export PATH
 exec "$@"
 `

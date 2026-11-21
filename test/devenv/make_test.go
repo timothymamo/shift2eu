@@ -70,9 +70,10 @@ func TestTestMakeIsTheVersionNamed(t *testing.T) {
 	}
 
 	first, _, _ := strings.Cut(string(out), "\n")
-	t.Logf("the tests run %s, which reports %q", program, strings.TrimSpace(first))
+	first = strings.TrimSpace(first)
+	t.Logf("the tests run %s, which reports %q", program, first)
 
-	if want := "GNU Make " + version; strings.TrimSpace(first) != want {
+	if want := "GNU Make " + version; first != want {
 		t.Fatalf("%s --version reports %q, want %q (%s): the tests would not run under the make the job names", program, first, want, testMakeVersionEnv)
 	}
 

@@ -48,7 +48,9 @@
 // and, for 3.81, that a # line inside a continued recipe ends the recipe there,
 // as on the Mac. Without it the test skips. TestTestsRunMakeThroughMakeProgram
 // (makeprogramscan_test.go) refuses a literal make handed to exec.Command or
-// exec.CommandContext in the package's test files, so no make bypasses it. On
+// exec.CommandContext in the package's test files, a guard against a test
+// that runs make by accident: it catches the literal "make" or "gmake", not a
+// program name built any other way. On
 // macOS the fake VM's PATH starts with a GNU-style ln -T shim (sandbox_test.go,
 // gnuLnT), as the VM is Linux and BSD ln has no -T.
 //
