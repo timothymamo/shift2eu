@@ -70,16 +70,32 @@ func sourcesData(root string) (map[string]sourceData, error) {
 	return out, nil
 }
 
-// fence is the marker that opens and closes a fenced block of the guide.
-const fence = "```"
+// The markers that open and close a fenced block of the guide. A block opened
+// by one is closed only by the same marker.
+const (
+	fence      = "```"
+	tildeFence = "~~~"
+)
+
+// fenceOf returns the marker a trimmed line starts with, or "" for a line that
+// is no fence.
+func fenceOf(trimmed string) string {
+	for _, marker := range []string{fence, tildeFence} {
+		if strings.HasPrefix(trimmed, marker) {
+			return marker
+		}
+	}
+
+	return ""
+}
 
 // sectionCommands returns the commands of the ```bash blocks under the guide's
-// heading, up to the next heading, in the guide's order. Every fenced block is
-// tracked, whatever its info string, so a line starting with # inside one is
-// text and no heading. It fails, naming the heading, when the guide holds the
-// heading never or twice, when a fenced block under it is not bash or is left
-// open, and when the section yields no command: each would ship a page that
-// silently lost commands.
+// heading, up to the next heading, in the guide's order. Every fenced block,
+// ``` or ~~~, is tracked, whatever its info string, so a line starting with #
+// inside one is text and no heading. It fails, naming the heading, when the
+// guide holds the heading never or twice, when a fenced block under it is a ~~~
+// block, is not bash or is left open, and when the section yields no command:
+// each would ship a page that silently lost commands.
 func sectionCommands(guide []string, heading string) ([]string, error) {
 	start, err := headingLine(guide, heading)
 	if err != nil {
@@ -94,17 +110,21 @@ func sectionCommands(guide []string, heading string) ([]string, error) {
 
 	for _, line := range guide[start+1:] {
 		trimmed := strings.TrimSpace(line)
+		marker := fenceOf(trimmed)
 
 		switch {
 		case inBlock && trimmed == fence:
 			inBlock = false
 			commands = append(commands, splitCommands(block)...)
-		case inBlock && strings.HasPrefix(trimmed, fence):
+		case inBlock && marker == fence:
 			// An opening fence inside a block: the block before it was never closed.
 			return nil, fmt.Errorf("the inventory guide %s leaves a bash block open under %q", guideFile, heading)
 		case inBlock:
 			block = append(block, line)
-		case strings.HasPrefix(trimmed, fence):
+		case marker == tildeFence:
+			return nil, fmt.Errorf("the inventory guide %s holds a ~~~ fenced block under %q, want only ```bash blocks: the page would drop it",
+				guideFile, heading)
+		case marker == fence:
 			if info := strings.TrimSpace(strings.TrimPrefix(trimmed, fence)); info != "bash" {
 				return nil, fmt.Errorf("the inventory guide %s holds a fenced block with info string %q under %q, want only bash blocks: the page would drop it",
 					guideFile, info, heading)
@@ -134,19 +154,22 @@ func finish(commands []string, heading string) ([]string, error) {
 }
 
 // headingLine returns the index of the guide's one line that is the heading,
-// outside every fenced block, failing when it holds none or more than one.
+// outside every fenced block, ``` or ~~~, failing when it holds none or more
+// than one.
 func headingLine(guide []string, heading string) (int, error) {
 	found := -1
-	inBlock := false
+	open := "" // the marker of the fenced block the line is in, "" outside one
 
 	for i, line := range guide {
 		trimmed := strings.TrimSpace(line)
 
 		switch {
-		case inBlock:
-			inBlock = trimmed != fence
-		case strings.HasPrefix(trimmed, fence):
-			inBlock = true
+		case open != "":
+			if trimmed == open {
+				open = ""
+			}
+		case fenceOf(trimmed) != "":
+			open = fenceOf(trimmed)
 		case headingText(line) == heading:
 			if found >= 0 {
 				return -1, fmt.Errorf("the inventory guide %s holds the heading %q twice, on lines %d and %d",

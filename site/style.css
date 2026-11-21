@@ -1516,6 +1516,12 @@ footer > .wrap:last-child {
   margin: 0 0 1.5rem;
 }
 
+/* The rule above sets display, which beats the browser's own [hidden] rule:
+   without script the picker's buttons do nothing, so hidden must hide them. */
+.source-picker[hidden] {
+  display: none;
+}
+
 button.source-button {
   min-width: 6rem;
   color: var(--accent);
@@ -1586,7 +1592,6 @@ button.source-button[aria-pressed="true"]:hover:not(:disabled) {
 /* A failed copy is never drawn as a success: page.js sets the class. */
 .copy-status.copy-failed {
   color: var(--none-ink);
-  background-color: var(--surface);
 }
 
 /* Wider screens. */

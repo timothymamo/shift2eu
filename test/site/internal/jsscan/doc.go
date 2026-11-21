@@ -46,9 +46,10 @@
 //     createHTML; in copyCommand, the inventory page's copy function (issue
 //     #373), one navigator.clipboard.writeText(...) called in place, and no
 //     other use of clipboard or writeText anywhere. A second declaration of
-//     one of these functions is refused, and so is a binding named navigator
-//     (a declaration, a parameter, a destructuring target or an assignment),
-//     which would stand in for the browser's navigator these rules key on;
+//     one of these functions is refused, and so is every use of navigator
+//     but a member base (navigator. or navigator?.), the right operand of in
+//     and a member name, since any other could bind a stand-in for the
+//     browser's navigator these rules key on;
 //   - Trusted Types: exactly one trustedTypes.createPolicy("shift2eu-report",
 //     ...), its binding never assigned again, and createHTML called only by
 //     insertReport;
