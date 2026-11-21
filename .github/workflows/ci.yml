@@ -212,6 +212,32 @@ jobs:
       - name: Smoke test the site's bundle in a headless Chromium
         run: make test-browser
 
+  # test/devenv under GNU Make 3.81 (issue #314): the maintainer's Mac runs the host targets with
+  # /usr/bin/make, GNU Make 3.81, which ends a recipe at a # line inside a continued command where make 4.x,
+  # the Test job's, runs on (issue #437). A macOS runner's /usr/bin/make is that same make, so nothing is
+  # built or pinned. SHIFT2EU_TEST_MAKE points the package's make at it, and SHIFT2EU_TEST_MAKE_VERSION has
+  # TestTestMakeIsTheVersionNamed check that it reports 3.81 and reads that recipe as 3.81 does. Fakes only,
+  # as in make test: no network beyond Go's module fetches, no credential. actions/setup-go exports
+  # GOTOOLCHAIN=local after installing go.mod's go line, as for the other jobs.
+  make-381:
+    name: Makefile tests under make 3.81
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: test/devenv with /usr/bin/make
+        env:
+          SHIFT2EU_TEST_MAKE: /usr/bin/make
+          SHIFT2EU_TEST_MAKE_VERSION: "3.81"
+        run: go test -race -count=1 ./test/devenv/...
+
   # The dry run of release-please.yml (issues #142 and #157, ADR 0021): its guard, tag and relabel steps'
   # own scripts, read from the workflow, run against a fake gh with canned API responses, so a change to
   # how the tag's version is read and validated, to when the step refuses to tag, to the outputs it hands

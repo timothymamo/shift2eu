@@ -2998,11 +2998,7 @@ func runMake(t *testing.T, args []string, env map[string]string) (string, string
 func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (string, string, error) {
 	t.Helper()
 
-	if _, err := exec.LookPath("make"); err != nil {
-		t.Fatalf("make is not installed: the repository's commands, and this test, need it")
-	}
-
-	cmd := exec.Command("make", append([]string{"-C", dir, "--no-print-directory"}, args...)...)
+	cmd := exec.Command(makeProgram(t), append([]string{"-C", dir, "--no-print-directory"}, args...)...)
 	cmd.Env = envList(env)
 	cmd.Dir = dir
 

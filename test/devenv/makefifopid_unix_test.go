@@ -27,16 +27,14 @@ const makeTimeout = 30 * time.Second
 func runMakeWithin(t *testing.T, args []string, env map[string]string, timeout time.Duration) (string, string, error, bool) {
 	t.Helper()
 
-	if _, err := exec.LookPath("make"); err != nil {
-		t.Fatalf("make is not installed: the repository's commands, and this test, need it")
-	}
+	program := makeProgram(t)
 
 	root, err := filepath.Abs(moduleRoot)
 	if err != nil {
 		t.Fatalf("resolve the repository root: %v", err)
 	}
 
-	cmd := exec.Command("make", append([]string{"-C", root, "--no-print-directory"}, args...)...)
+	cmd := exec.Command(program, append([]string{"-C", root, "--no-print-directory"}, args...)...)
 	cmd.Env = envList(env)
 	cmd.Dir = root
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
