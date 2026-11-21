@@ -537,11 +537,13 @@ func (run browserRecipeRun) output() string {
 	return run.stdout + run.stderr
 }
 
-// runBrowserMake runs make with args in dir, under env alone and with dir as its working directory, and gives up
-// on it after timeout, killing the process group make, its recipe's shell and that shell's children are in: the
-// recipe under test may wait a minute for a log line that never comes, and the package must not wait with it.
-func runBrowserMake(dir string, args []string, env map[string]string, timeout time.Duration) browserRecipeRun {
-	cmd := exec.Command("make", append([]string{"-C", dir, "--no-print-directory"}, args...)...)
+// runBrowserMake runs program, the make makeProgram names, with args in dir, under env alone and with dir as its
+// working directory, and gives up on it after timeout, killing the process group make, its recipe's shell and that
+// shell's children are in: the recipe under test may wait a minute for a log line that never comes, and the
+// package must not wait with it. It takes the program rather than the test, so it can run off the test's
+// goroutine, where makeProgram could not fail the test.
+func runBrowserMake(program, dir string, args []string, env map[string]string, timeout time.Duration) browserRecipeRun {
+	cmd := exec.Command(program, append([]string{"-C", dir, "--no-print-directory"}, args...)...)
 	cmd.Env = envList(env)
 	cmd.Dir = dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -615,13 +617,15 @@ func TestMakeTestBrowserRecipeServesABundleOfItsOwn(t *testing.T) {
 
 	var wg sync.WaitGroup
 
+	program := makeProgram(t)
+
 	for at := range results {
 		wg.Add(1)
 
 		go func(at int) {
 			defer wg.Done()
 
-			results[at] = runBrowserMake(sb.clone, []string{testBrowserTarget}, sb.env, browserRecipeTimeout)
+			results[at] = runBrowserMake(program, sb.clone, []string{testBrowserTarget}, sb.env, browserRecipeTimeout)
 		}(at)
 	}
 
@@ -696,7 +700,7 @@ func TestMakeSiteStillWritesTheSharedBundle(t *testing.T) {
 
 	sb := newBrowserRecipeSandbox(t, dockerModeRunning)
 
-	run := runBrowserMake(sb.clone, []string{"site"}, sb.env, browserRecipeTimeout)
+	run := runBrowserMake(makeProgram(t), sb.clone, []string{"site"}, sb.env, browserRecipeTimeout)
 	if run.timedOut {
 		t.Fatalf("make site was still running after %s and the test stopped it\n%s", browserRecipeTimeout, run.output())
 	}
@@ -739,7 +743,7 @@ func TestMakeTestBrowserRecipeFailsAtOnceWhenTheContainerIsGone(t *testing.T) {
 
 	sb := newBrowserRecipeSandbox(t, dockerModeDead)
 
-	run := runBrowserMake(sb.clone, []string{testBrowserTarget}, sb.env, failFastTimeout)
+	run := runBrowserMake(makeProgram(t), sb.clone, []string{testBrowserTarget}, sb.env, failFastTimeout)
 	output := run.output()
 
 	switch {
@@ -795,7 +799,7 @@ func TestMakeTestBrowserRecipeKeepsPollingAfterAFailedInspect(t *testing.T) {
 	sb.env["SHIFT2EU_TEST_DOCKER_INSPECT_PLAN"] = "fofof"
 	sb.env["SHIFT2EU_TEST_DOCKER_LOG_MISSES"] = "5"
 
-	run := runBrowserMake(sb.clone, []string{testBrowserTarget}, sb.env, browserRecipeTimeout)
+	run := runBrowserMake(makeProgram(t), sb.clone, []string{testBrowserTarget}, sb.env, browserRecipeTimeout)
 	output := run.output()
 
 	switch {
@@ -844,7 +848,7 @@ func TestMakeTestBrowserRecipeFailsAtOnceWhenInspectKeepsFailing(t *testing.T) {
 	sb.env["SHIFT2EU_TEST_DOCKER_INSPECT_PLAN"] = "f"
 	sb.env["SHIFT2EU_TEST_DOCKER_LOG_MISSES"] = "60"
 
-	run := runBrowserMake(sb.clone, []string{testBrowserTarget}, sb.env, failFastTimeout)
+	run := runBrowserMake(makeProgram(t), sb.clone, []string{testBrowserTarget}, sb.env, failFastTimeout)
 	output := run.output()
 
 	switch {
@@ -1438,7 +1442,7 @@ func startBrowserMake(t *testing.T, dir string, args []string, env map[string]st
 	t.Helper()
 
 	proc := &browserRecipeProcess{
-		cmd:    exec.Command("make", append([]string{"-C", dir, "--no-print-directory"}, args...)...),
+		cmd:    exec.Command(makeProgram(t), append([]string{"-C", dir, "--no-print-directory"}, args...)...),
 		stdout: &bytes.Buffer{},
 		stderr: &bytes.Buffer{},
 		done:   make(chan struct{}),
