@@ -213,7 +213,7 @@ func TestDevtoolsFlagProblems(t *testing.T) {
 		},
 		{
 			name:     "a test-browser target with no recipe",
-			makefile: ".PHONY: test-browser\ntest-browser: site\n",
+			makefile: ".PHONY: test-browser\ntest-browser:\n",
 			want: []string{
 				"the Makefile declares no test-browser target with a recipe, so nothing pins where its Chromium opens DevTools (issue #368 and #423, ADR 0036)",
 			},
@@ -288,16 +288,17 @@ func TestMakeTestBrowserRecipeKeepsDevToolsOnAPickedPortOfTheLoopbackInterface(t
 	}
 }
 
-// browserRecipeMakefile is a stand-in Makefile whose one target is test-browser and whose recipe starts Chromium
-// with flags, as the real recipe's docker run line does, after the target it depends on. comments are
-// tab-indented recipe comment lines ahead of that command line. A comment line follows one ending in a backslash
-// in no recipe of this repository (issue #437), so those lines come before the first continued line, where they
-// are still recipe lines of test-browser: makeRecipes skips them, and a flag a comment names is no flag.
+// browserRecipeMakefile is a stand-in Makefile whose one target is test-browser, with no prerequisite: the real
+// recipe builds the bundle it serves into a directory of its own, so make test-browser depends on no target that
+// would build the shared bin/site (issue #423, the reviewer's finding N2). Its recipe starts Chromium with flags, as
+// the real recipe's docker run line does. comments are tab-indented recipe comment lines ahead of that command line.
+// A comment line follows one ending in a backslash in no recipe of this repository (issue #437), so those lines come
+// before the first continued line, where they are still recipe lines of test-browser: makeRecipes skips them, and a
+// flag a comment names is no flag.
 func browserRecipeMakefile(flags string, comments ...string) string {
-	makefile := "## Build the site's bundle and run its headless-browser smoke test.\n" +
+	makefile := "## Build the site's bundle into a directory of this run's own and run its headless-browser smoke test.\n" +
 		".PHONY: " + testBrowserTarget + "\n" +
-		testBrowserTarget + ": site\n" +
-		"\t@echo site\n"
+		testBrowserTarget + ":\n"
 
 	for _, comment := range comments {
 		makefile += "\t# " + comment + "\n"
