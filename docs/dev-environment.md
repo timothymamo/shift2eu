@@ -2053,9 +2053,13 @@ no environment, and sends the registry one GET of a public document and no crede
 the CLI shows it red until the integrity is replaced, and a red **Claude Code pin** check means do not
 merge. Because it reports on every pull request, it can be required, so a missed integrity cannot be
 merged at all. **Maintainer step, once, after issue #452's pull request is merged:** Settings → Rules →
-Rulesets → Protect main → Require status checks to pass → add **Claude Code pin** (the job's name) and save.
-Before that merge the check ran only on pull requests that changed its paths, and requiring it then would
-have left every other pull request waiting for a check that never comes. The known limit (ADR 0033,
+Rulesets → Protect main → Require status checks to pass → add **Claude Code pin** (the job's name), choose
+**GitHub Actions** as its expected source (not any source, so no other App with checks or statuses write can
+post a green check of the same name) and save. Before that merge the check ran only on pull requests that
+changed its paths, and requiring it then would have left every other pull request waiting for a check that
+never comes. Pull requests opened before the merge have no **Claude Code pin** run (the old `paths:` filter
+never started one) and wait on the required check until they get a new push or **Update branch**;
+re-running their jobs cannot help, since no run exists. The known limit (ADR 0033,
 amended by issue #452): a pull request runs its own copy of the workflow, so it could edit the workflow to
 skip the check; that edit changes a pin path and shows in its diff and its reviews.
 

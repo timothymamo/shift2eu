@@ -116,7 +116,7 @@ Arrows are imports. They point inwards only:
   of `cmd/` and `internal/`, each held to named standard packages by strict rules of its own. `ci/aireview`
   is the AI reviewer's workflow program (`ai-reviewer-main`, `ai-reviewer-is-standard-library`, ADR 0033).
   `ci/claudecodepin` is the Claude Code pin check (issue #276, ADR 0033): `.github/workflows/claude-code-pin.yml`
-  runs it on every pull request that changes `ai-review.yml`'s pin, and it fails unless the npm registry
+  runs its job on every pull request and the check when the pin's paths change (issue #452), and it fails unless the npm registry
   publishes the pinned `CLAUDE_CODE_INTEGRITY` for exactly the pinned `CLAUDE_CODE_VERSION`. Its entry point
   reads the workflow and fetches the one public registry document (`claude-code-pin-main`, no `os/exec`); its
   library `ci/claudecodepin/internal/pincheck` parses the readers it is given and does no I/O
