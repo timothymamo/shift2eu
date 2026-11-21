@@ -729,10 +729,10 @@ func TestDispatchSkillNamesTheCLAUDEValues(t *testing.T) {
 		if !strings.HasPrefix(value, "10 PRs") {
 			t.Errorf("%s:%d: the review limit is %q, want a value that starts with 10 PRs (issues #269, #425)", claudeMD, row.line, value)
 		}
-		const night = "from 09:30 until 20:00, 20 from 20:00 until 09:30"
-		if !strings.Contains(value, night) {
-			t.Errorf("%s:%d: the review limit is %q, want it to contain %q: the limit is half-open, its hours are in order, and the day limit is 10 by day and 20 by night (issues #332, #425)",
-				claudeMD, row.line, value, night)
+		const window = "from 09:30 until 20:00, 20 from 20:00 until 09:30"
+		if !strings.Contains(value, window) {
+			t.Errorf("%s:%d: the review limit is %q, want it to contain %q: the limit is half-open, its hours are in order, and the night limit is 20 (issues #332, #425)",
+				claudeMD, row.line, value, window)
 		}
 		if !slices.Contains(valueNames(names), name) {
 			t.Errorf("%s:%d does not name %s, though %s:%d defines it (issue #269)", dispatchSkill, names.line, name, claudeMD, row.line)
