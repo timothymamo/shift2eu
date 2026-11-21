@@ -1640,7 +1640,9 @@ linters:
         # test/site (PRD #297 milestone 2), the site's static checks, is held here too: its
         # doc.go is its one production file and imports nothing, and its helper
         # test/site/internal/jsscan, which Go's internal rule keeps out of reach of the roots, is
-        # taken out with a negated glob as test/architecture's internal tree is.
+        # taken out with a negated glob as test/architecture's internal tree is. test/ci (issue
+        # #275), the behaviour tests of .github/scripts, is held here as well: its doc.go is its
+        # one production file and imports nothing.
         test-docs-are-pure:
           list-mode: strict
           files:
@@ -1654,6 +1656,7 @@ linters:
             - "**/test/lint/**"
             - "**/test/site/**"
             - "!**/test/site/internal/**"
+            - "**/test/ci/**"
             - "!$test"
           allow: []
           deny:

@@ -1096,8 +1096,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 	{
 		// The test trees' own documentation packages (issue #152, the auditor's finding
 		// H-1): test/architecture, test/container, test/devenv,
-		// test/docs, test/lint and test/examples
-		// (issue #179) hold doc.go and no code, and each is a production package a
+		// test/docs, test/lint, test/examples
+		// (issue #179) and test/ci (issue #275) hold doc.go and no code, and each is a production package a
 		// composition root can import, because the roots' allow lists name the module
 		// path as a prefix entry. Go's internal
 		// rule keeps test/internal/... and test/architecture/internal/... out of cmd/
@@ -1131,6 +1131,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"**/test/lint/**",
 			"**/test/site/**",
 			"!**/test/site/internal/**",
+			"**/test/ci/**",
 			"!$test",
 		},
 		Allow: []string{},
