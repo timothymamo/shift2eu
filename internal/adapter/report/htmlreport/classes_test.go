@@ -2,6 +2,7 @@ package htmlreport_test
 
 import (
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -618,7 +619,10 @@ func TestReportCostTotalItem(t *testing.T) {
 // a Blockers heading leads, the one a Cost estimate heading leads, at h3 and h4
 // level alike, and the title list the fragment's own `<h2>` leads -- the
 // metadata list of inventory file, source and catalogs -- carry the constant
-// attribute `role="list"`, and no other element of the fragment carries a role.
+// attribute `role="list"`, and no other element of the fragment carries a role
+// but the box each table sits in, a `<section class="table-scroll">` that carries
+// the constant attribute `role="region"` and is reachable by keyboard (issue
+// #373, item 11).
 // Safari and VoiceOver drop the list role and the item count of a list whose
 // markers are gone, so the report says it is a list rather than relying on the
 // marker; the report's other lists keep their markers and need no attribute.
@@ -655,27 +659,37 @@ func TestReportListsKeepTheirListRole(t *testing.T) {
 				}
 			}
 
+			boxes := tableScrollBoxes(fragment)
+
 			carriers := roleCarriers(fragment)
 
-			if count := len(lists) + len(titles); len(carriers) != count {
-				t.Fatalf("the fragment holds %d elements stating a role (%s), want exactly %d: the <ul> under each Blockers and Cost estimate heading and the title list under the <h2> are the only elements that state one",
+			if count := len(lists) + len(titles) + len(boxes); len(carriers) != count {
+				t.Fatalf("the fragment holds %d elements stating a role (%s), want exactly %d: the <ul> under each Blockers and Cost estimate heading, the title list under the <h2> and the box each table scrolls in are the only elements that state one",
 					len(carriers), describeRoles(carriers), count)
 			}
 
 			for _, carrier := range carriers {
-				if carrier.tag != "ul" || carrier.role != "list" {
-					t.Errorf("the fragment's <%s> carries role=%q, want the only role to be role=\"list\" on a <ul>: no other element of the report names a role",
-						carrier.tag, carrier.role)
+				if carrier.tag == "ul" && carrier.role == "list" {
+					continue
 				}
+
+				if isTableScrollBox(carrier) {
+					continue
+				}
+
+				t.Errorf("the fragment's <%s> carries role=%q on class=%q, want the only roles to be role=\"list\" on a <ul> and role=\"region\" on the table's <section class=\"table-scroll\">: no other element of the report names a role",
+					carrier.tag, carrier.role, strings.Join(carrier.classes, " "))
 			}
 		})
 	}
 }
 
-// TestReportRoleValuesAreClosed pins that the only role value a fragment states is
-// "list" (PR #379 review, issue #373): like a class, a role is a constant of this
-// package, never a value of an inventory or a catalog. The hostile fixtures carry
-// values that would show here if the reporter wrote one into a role.
+// TestReportRoleValuesAreClosed pins that the only role values a fragment states
+// are "list", on the lists whose markers the stylesheet strips, and "region", on
+// the box each table scrolls in (PR #379 review, issue #373): like a class, a role
+// is a constant of this package, never a value of an inventory or a catalog. The
+// hostile fixtures carry values that would show here if the reporter wrote one
+// into a role.
 func TestReportRoleValuesAreClosed(t *testing.T) {
 	t.Parallel()
 
@@ -689,10 +703,12 @@ func TestReportRoleValuesAreClosed(t *testing.T) {
 			}
 
 			for _, carrier := range carriers {
-				if carrier.role != "list" {
-					t.Errorf("the fragment's <%s> carries role=%q, want only role=\"list\": a role is a constant, so no value of an inventory or a catalog can reach one (PR #379 review, issue #373)",
-						carrier.tag, carrier.role)
+				if carrier.role == "list" || isTableScrollBox(carrier) {
+					continue
 				}
+
+				t.Errorf("the fragment's <%s> carries role=%q on class=%q, want only role=\"list\" or role=\"region\" on the table's box: a role is a constant, so no value of an inventory or a catalog can reach one (PR #379 review, issue #373)",
+					carrier.tag, carrier.role, strings.Join(carrier.classes, " "))
 			}
 		})
 	}
@@ -1052,6 +1068,8 @@ type roleCarrier struct {
 	tag string
 	// role is the role attribute's value, as the fragment spells it.
 	role string
+	// classes are the class names the element's start tag carries.
+	classes []string
 }
 
 // roleCarriers returns every element of fragment that states a role attribute, in
@@ -1065,10 +1083,63 @@ func roleCarriers(fragment string) []roleCarrier {
 			continue
 		}
 
-		carriers = append(carriers, roleCarrier{tag: strings.ToLower(match[1]), role: role})
+		carriers = append(carriers, roleCarrier{
+			tag:     strings.ToLower(match[1]),
+			role:    role,
+			classes: classesOf(match[2]),
+		})
 	}
 
 	return carriers
+}
+
+// classesOf returns the class names a start tag's attributes hold, split as the
+// attribute's value spells them.
+func classesOf(attrs string) []string {
+	var classes []string
+
+	for _, match := range classPattern.FindAllStringSubmatch(attrs, -1) {
+		classes = append(classes, strings.Fields(match[1])...)
+	}
+
+	return classes
+}
+
+// tableScrollBoxes returns the attributes of each `<section class="table-scroll">`
+// start tag of fragment, in document order: the box each table sits in, which
+// scrolls sideways on its own and is a region a keyboard visitor can reach
+// (issue #373, item 11).
+func tableScrollBoxes(fragment string) []string {
+	var boxes []string
+
+	for _, match := range elementTagPattern.FindAllStringSubmatch(fragment, -1) {
+		if !strings.EqualFold(match[1], "section") || !carriesTableClass(classesOf(match[2])) {
+			continue
+		}
+
+		boxes = append(boxes, strings.TrimSpace(match[2]))
+	}
+
+	return boxes
+}
+
+// carriesTableClass reports whether classes hold the class name of the box a
+// table sits in.
+func carriesTableClass(classes []string) bool {
+	for _, class := range tableClasses {
+		if slices.Contains(classes, class) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// isTableScrollBox reports whether carrier is the box a table sits in: a
+// `<section class="table-scroll">` stating role="region", the one element besides
+// the marker-less lists the fragment states a role on (issue #373, item 11).
+func isTableScrollBox(carrier roleCarrier) bool {
+	return carrier.tag == "section" && carrier.role == "region" && carriesTableClass(carrier.classes)
 }
 
 // describeRoles names the roles a fragment states, for a failure message.
