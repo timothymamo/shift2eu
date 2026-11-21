@@ -357,7 +357,7 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
           # renovate: datasource=github-releases depName=anchore/syft
-          syft-version: v1.57.1
+          syft-version: v1.57.2
       - name: The SBOM is SPDX and lists shift2eu
         env:
           SBOM: ${{ runner.temp }}/shift2eu.spdx.json
