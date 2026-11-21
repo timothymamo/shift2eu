@@ -45,6 +45,7 @@ mock_provider "scaleway" {
 
 variables {
   organization_id = "00000000-0000-0000-0000-000000000000"
+  admin_principal = "user_id:88888888-8888-8888-8888-888888888888"
 }
 
 run "the_bucket_belongs_to_the_site_project_and_keeps_its_versions" {

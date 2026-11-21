@@ -1,0 +1,209 @@
+# 0039. Create the site's Scaleway hosting with OpenTofu, its state in a locked bucket outside the site's project
+
+- Status: Proposed
+- Date: 2026-11-21
+
+Part of [PRD #297](../../prds/297-web-assessment-site.md) milestone 3, issue #422. It records how the
+hosting is created; the deploy job, the attestation and the live check get milestone 3's hosting ADR
+(amended in milestone 4), which this one does not replace.
+
+## Context
+
+The PRD's *Runbook* had the maintainer create the site's Scaleway hosting by hand in the console: a
+project, a bucket with versioning, its website setting and its bucket policy, an IAM application and
+policy, and an Edge Services pipeline for `www.shift2eu.com`. A hand-made bucket policy or IAM rule is the
+part the site's security rests on (Hosting decisions 5 and 11), and nothing would hold it after the day
+it was typed. The maintainer decided on 2026-11-21 (issue #422) to create it with OpenTofu, from
+`infra/site/`, with the state in a Scaleway bucket, never in git, and to keep three things by hand: the
+deploy API key, the Namecheap DNS records and the GitHub `site` environment.
+
+Agents never hold Scaleway credentials (CLAUDE.md rule 3), so only the maintainer runs `init` with the
+backend, `plan` and `apply`, on the admin machine (mac-mini-home, `docs/dev-environment.md`), and the
+agents' checks must run offline.
+
+What the pinned provider can do was read from its schema (`dev/tofu.sh providers schema -json` after an
+offline init) and its documentation at
+[v2.93.0](https://github.com/scaleway/terraform-provider-scaleway/tree/v2.93.0/docs/resources); what
+Scaleway can do from its documentation's source,
+[scaleway/docs-content](https://github.com/scaleway/docs-content) at commit `1ec45ae`.
+
+## Decision
+
+**OpenTofu 1.13.9 and `scaleway/scaleway` 2.93.0, pinned exactly**, run only through `dev/tofu.sh`, which
+checks the release's SHA-256 against `infra/tofu.yaml`. `make infra-check` (in `make check` and CI) runs
+static rules, `fmt -check`, `init -backend=false`, `validate` and `tofu test` against `mock_provider`: no
+credential, no state, no call to Scaleway, no passphrase.
+
+### What OpenTofu creates (`infra/site/main.tf`)
+
+| Resource | Key arguments |
+|---|---|
+| `scaleway_account_project.site` | `shift2eu-site`: holds only the site's bucket and the pipeline serving it |
+| `scaleway_object_bucket.site` | `project_id` the site's project, `region` `var.region` (default `nl-ams`, Hosting decision 9's prices), `versioning { enabled = true }`, no `acl`, no `force_destroy` |
+| `scaleway_object_bucket_website_configuration.site` | `index_document { suffix = "index.html" }`, no error document (the site ships no error page) |
+| `scaleway_object_bucket_policy.site` | version `2023-04-17`, Allow only, four statements (below) |
+| `scaleway_iam_application.deploy` | the release's deploy job |
+| `scaleway_iam_policy.deploy` | one rule: `ObjectStorageObjectsWrite` and `ObjectStorageObjectsRead`, `project_ids` the site's project, no `organization_id`, no user or group |
+| `scaleway_edge_services_plan.site` | `starter` (Hosting decision 9), in the site's project |
+| `scaleway_edge_services_pipeline.site` | one pipeline |
+| `scaleway_edge_services_backend_stage.site` | `s3_backend_config`: the site bucket, its region, `is_website = true` |
+| `scaleway_edge_services_cache_stage.site` | after the backend; `fallback_ttl = 300` (only for a response without `Cache-Control`), `include_cookies = false` |
+| `scaleway_edge_services_tls_stage.site` | after the cache; `managed_certificate = true` (Let's Encrypt, decision 10's CAA) |
+| `scaleway_edge_services_dns_stage.site` | after TLS; `fqdns = ["www.shift2eu.com"]` |
+| `scaleway_edge_services_head_stage.site` | the DNS stage is the pipeline's head |
+
+No WAF and no route stage: one backend serves every path. Every child of the bucket and every Edge
+Services resource names `project_id` itself, as the provider requires outside the default project; the
+provider has no default project.
+
+**The bucket policy** allows, and nothing else:
+
+1. `AdminManagesTheBucket`: `s3:*` on the bucket and its objects to `var.admin_principal`, the
+   maintainer's own `user_id:` or `application_id:` (never `*`, no default). A bucket policy limits even
+   the bucket's owner ("You will lose access to your bucket if you are not the owner of the Organization,
+   and if you are not explicitly allowed by the bucket policy",
+   [bucket policies](https://www.scaleway.com/en/docs/object-storage/api-cli/bucket-policy/)), and
+   OpenTofu reads and changes the bucket's versioning, website, tags and ACL on every plan, so an apply
+   can never lock the maintainer out.
+2. `DeployWritesAndReadsObjects`: `s3:PutObject` and `s3:GetObject` on `<bucket>/*` to the deploy
+   application.
+3. `DeployListsTheBucket`: `s3:ListBucket` on `<bucket>` to the deploy application. The deploy does not
+   need it to upload; it is granted so the deploy program can list the bucket and fail on a key that is
+   in no release's manifest (Hosting decision 5's mitigation for a page a leaked key put outside every
+   manifest). Whether IAM lets the application list with only the two object permission sets is checked
+   in the runbook (open point 3).
+4. `EveryoneReadsTheSite`: `s3:GetObject` on `<bucket>/*` to `*`.
+
+It is applied after the website configuration, since enabling bucket website may apply Scaleway's
+default policy ([bucket website](https://www.scaleway.com/en/docs/object-storage/how-to/use-bucket-website/)),
+and ours must be the one that stays.
+
+**The read rule (Hosting decision 11) is public read.** A bucket policy's principal is a `user_id`, an
+`application_id` or `*`, and no principal stands for Edge Services. Edge Services' documentation says that
+with bucket website "objects can remain private"
+([create a pipeline](https://www.scaleway.com/en/docs/edge-services/how-to/create-pipeline/)), but names no
+grant that would let it read them; decision 11 says that if no principal does, the rule is public read.
+The backend uses website mode, so `/` answers `index.html`.
+
+**Edge Services lives in the site's project.** The deploy key's policy is scoped to that project, but its
+two permission sets hold no Edge Services permission, so the pipeline being there gives it nothing; one
+project holds the whole site, and a project-wide look (or a destroy) sees all of it. The cache purge is
+the maintainer's, with their own credentials.
+
+### What stays by hand (PRD #297 *Runbook*)
+
+| Item | Why |
+|---|---|
+| The state bucket | It must exist before `init`; a bootstrap configuration would need a local state of its own (below) |
+| The deploy API key, its expiry and rotation | A `scaleway_iam_api_key` resource puts the secret key in the state; `dev/infra-check.sh` refuses one anywhere under `infra/` |
+| The canary check of the key's limits | It needs the key, and it must run against the real service |
+| The Namecheap records (www CNAME, apex redirect, CAA, DNSSEC) | Not Scaleway; the provider has no Namecheap resource, and the apex redirect's means is milestone 4's |
+| The GitHub `site` environment, its deployment policy and secrets | The secrets are the API key; a GitHub provider would need a token with administration rights |
+| Response headers, `http://www` redirect | The provider cannot (below) |
+| The cache purge in the recovery steps | A one-off action, not state |
+
+### The state
+
+- **Location:** a private, versioned bucket in a project that is not the site's (the maintainer's admin
+  project, or one made for it), in `nl-ams`, key `site/terraform.tfstate`. The deploy key is scoped to
+  the site's project, so it can neither read nor write the state. The bucket holds no bucket policy:
+  IAM alone decides, and only the maintainer's own key has Object Storage rights in that project.
+- **Created by hand, not by a bootstrap configuration.** It is one bucket and one versioning call, made
+  once. A bootstrap configuration would need a local state on the admin machine (which
+  `dev/infra-check.sh` refuses, every root having one `s3` backend) or a migration of its own state into
+  the bucket it creates; either is more to keep than two commands. The runbook creates it.
+- **Locking on:** `use_lockfile = true`. OpenTofu's s3 backend writes a lock object with `If-None-Match`,
+  and Scaleway Object Storage supports conditional writes and state locking since 2026-05-26 (its
+  changelog, "Conditional writes and Terraform state locking are now supported";
+  [using conditional writes](https://www.scaleway.com/en/docs/object-storage/api-cli/using-conditional-writes/)).
+  Only one person applies, but a second terminal or a crashed run must not write the state twice.
+- **No client-side state encryption** ([state encryption](https://opentofu.org/docs/language/state/encryption/)).
+  The state holds no secret by design: IDs, names, the bucket policy and the IAM rule, all of which
+  Scaleway holds anyway and none of which grants access. Encryption would protect it only from someone
+  who can already read the admin project's buckets, at the price of a passphrase that every `plan` needs
+  and whose loss makes the state unreadable (recoverable only by importing every resource again). If the
+  state ever has to hold a secret, the decision is revisited: OpenTofu reads the encryption configuration
+  from `TF_ENCRYPTION` as well, so it can be turned on with a `pbkdf2` passphrase from the maintainer's
+  password manager without the offline checks needing it.
+
+### What the provider cannot do at v2.93.0
+
+The Edge Services resources are `pipeline`, `plan`, `head_stage` and the `backend`, `cache`, `tls`,
+`dns`, `route` and `waf` stages
+([docs](https://github.com/scaleway/terraform-provider-scaleway/tree/v2.93.0/docs/resources)). None has an
+argument for:
+
+- **Response headers** (Hosting decision 2): no header, CSP or HSTS setting on any stage. Scaleway's
+  [FAQ](https://www.scaleway.com/en/docs/edge-services/faq/) lists none either. The site keeps its
+  `<meta>` CSP and framing guard; HSTS stays milestone 4's go/no-go, checked by hand there.
+- **Redirecting or refusing plain HTTP on `www`** (decision 3): the DNS and TLS stages have no redirect
+  or HTTPS-only switch. What `http://www.shift2eu.com` answers is checked by hand after the apply
+  (runbook) and decided in milestone 4.
+- **A private read by Edge Services** (decision 11): no Edge principal in a bucket policy, so public read.
+- **Compression and content types** (decision 4): nothing to set; checked by hand in milestone 4.
+- **A one-off cache purge:** the cache stage's `purge_requests` makes a purge part of the configuration;
+  the runbook purges with the Scaleway CLI or console instead.
+
+### The origins (Hosting decision 11)
+
+Under public read, the site is served by:
+
+- `https://www.shift2eu.com`: the pipeline, the only origin attested and checked.
+- The pipeline's own endpoint (the DNS stage's `default_fqdn`, `<id>.svc.edge.scw.cloud`): the same
+  pipeline.
+- The bucket website endpoint `<bucket>.s3-website.<region>.scw.cloud`.
+- The bucket's S3 endpoints (`<bucket>.s3.<region>.scw.cloud/<key>` and
+  `s3.<region>.scw.cloud/<bucket>/<key>`), object by object, without the index document.
+
+Whether each answers over plain HTTP is checked by hand after the apply (runbook) and recorded in
+milestone 3's hosting ADR.
+
+### How the PRD's *Runbook* changes
+
+Its creation steps are now: create the state bucket, fill `backend.hcl` and `terraform.tfvars`,
+`dev/tofu.sh init`, `plan`, `apply` on the admin machine with the maintainer's own credentials, and read
+the outputs. The API key, the canary check, DNS, the GitHub environment, the records, the origin checks
+and the recovery steps stay command blocks the maintainer runs by hand. Removing the site deletes the
+CNAME first, then `tofu destroy`, which keeps the bucket while it holds objects (no `force_destroy`).
+
+## Alternatives considered
+
+- **Terraform.** Its licence (BSL) and HashiCorp's registry; OpenTofu is the maintainer's choice, open
+  source and reads the same provider.
+- **Keep the console steps.** Nothing would hold the bucket and IAM policies after the day they were
+  typed; the offline tests now do.
+- **A private bucket read by Edge Services.** No principal exists for it (above).
+- **A public-read ACL.** It makes every object, present and future, public outside the policy, and the
+  acl attribute is deprecated. `dev/infra-check.sh` refuses any `scaleway_object_bucket_acl` and any
+  `acl` argument, even `private`, so the bucket policy is the only read rule.
+- **The API key in OpenTofu.** Its secret would be in the state.
+- **A bootstrap configuration for the state bucket; state encryption.** Above.
+- **Edge Services in its own project.** Equally safe for the key, but two projects for one site, and a
+  look at the site's project would not show what serves it.
+
+## Consequences
+
+- The bucket policy, the IAM rule and the pipeline's chain are pinned by `infra/site/tests` and
+  re-checked on every `make check`; a change to them shows in the maintainer's `plan`.
+- The maintainer needs, on the admin machine: a checkout of the repository, their own Scaleway API key
+  (in `SCW_*` for the provider and `AWS_*` for the backend), and the `scw` and `aws` CLIs for the hand
+  steps.
+- Objects are public through four origins; only `www` is attested.
+
+### Open points for the maintainer
+
+1. **`admin_principal`:** your own `user_id:` (recommended, when the key you apply with is yours) or an
+   admin application's `application_id:`. If you are the organization's Owner you can always rewrite the
+   policy, but OpenTofu still needs the statement to read the bucket.
+2. **Plain HTTP on `www` and on the other origins** (decisions 3 and 11): checked after the apply; if
+   `http://www` serves 200, milestone 4 is a no-go until Edge Services can redirect or refuse it.
+3. **`s3:ListBucket` for the deploy key:** if the runbook's list probe answers 403, IAM does not grant
+   it with the two object permission sets; the statement then does nothing and the deploy program does
+   not list. Recommended: keep the statement, record the answer.
+4. **State encryption:** recommended off (above); say if you want it on.
+5. **Bucket name:** `shift2eu-site-www` by default; bucket names are global, so set another in
+   `terraform.tfvars` if it is taken.
+6. **The Starter plan in OpenTofu:** a `destroy` ends the subscription too. Recommended: keep it in, so the
+   project is complete; recheck the price first (the runbook does).
+7. **Scaleway CLI commands in the runbook** (`scw iam api-key create`, the cache purge): check each
+   against `scw <command> --help` of the installed version on first use.

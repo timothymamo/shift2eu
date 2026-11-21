@@ -21,6 +21,11 @@ terraform {
   backend "s3" {
     key = "site/terraform.tfstate"
 
+    # State locking with a lock object written with If-None-Match, which Scaleway Object Storage supports
+    # since 2026-05-26 (its changelog: "Conditional writes and Terraform state locking are now supported").
+    # No DynamoDB table: Scaleway has none. ADR 0039.
+    use_lockfile = true
+
     # Scaleway's S3 API is not AWS: no STS, no account ID, no AWS region list, no AWS checksums.
     skip_credentials_validation = true
     skip_region_validation      = true

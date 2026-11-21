@@ -8,6 +8,8 @@
 # First the rules tofu test cannot state, read from the files themselves:
 #   - no scaleway_iam_api_key resource or data source anywhere in infra/: the deploy key is made by hand,
 #     so no secret reaches the state;
+#   - no scaleway_object_bucket_acl resource and no acl argument, not even "private": the bucket policy
+#     alone decides who reads the site (ADR 0039), so no ACL can make an object or the bucket public;
 #   - every root configuration has exactly one backend, and it is s3: never local, never a cloud block;
 #   - no JSON configuration (*.tf.json, *.tofu.json), which the rules above would not read;
 #   - infra/site's required_version is infra/tofu.yaml's tofuVersion, the release dev/tofu.sh runs.
@@ -57,6 +59,12 @@ while IFS= read -r file; do
   [ -n "${file}" ] || continue
   if grep -nE '(resource|data)[[:space:]]+"?scaleway_iam_api_key"?' "${file}" >&2; then
     fail "${file} declares a scaleway_iam_api_key: the deploy API key is created by hand, so no secret reaches the state"
+  fi
+  if grep -nE 'resource[[:space:]]+"?scaleway_object_bucket_acl"?' "${file}" >&2; then
+    fail "${file} declares a scaleway_object_bucket_acl: the bucket policy alone decides who reads the site (ADR 0039), and an ACL could make every object, or the bucket, public"
+  fi
+  if grep -nE '^[[:space:]]*acl[[:space:]]*=' "${file}" >&2; then
+    fail "${file} sets an acl: the bucket policy alone decides who reads the site (ADR 0039)"
   fi
 done <<<"${configs}"
 

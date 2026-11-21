@@ -636,32 +636,252 @@ release), *live* (checked against the live site) or *review*.
 
 ### Runbook
 
-- [ ] A one-time runbook for the maintainer, written in milestone 3 and followed in milestone 4: the
-  Scaleway project that holds only the site's bucket; the bucket, its website setting, versioning (if
-  Scaleway offers it for a website bucket, so an overwrite can be rolled back) and its bucket policy; the
-  Edge Services subscription (Starter) and its one pipeline, its cache and the custom domain
-  `www.shift2eu.com` with a managed Let's Encrypt certificate; the IAM application, its
-  policy, and its API key with an expiry and a rotation step; the `site` GitHub environment, its
-  deployment policy and secrets; the Namecheap records (the `www` CNAME to the Edge Services endpoint, the
-  apex's permanent redirect to `https://www.shift2eu.com` by the means chosen in milestone 4, CAA allowing
-  the certificate authorities of Edge Services and, if it issues its own certificate, the apex redirect's
-  provider (milestone 4), DNSSEC on); the HSTS record (`site/records/hsts.json`) and the preload record
-  (`site/records/preload.json`) committed, merged to `main` and included in a release tag (the outcome
-  is read from `www.shift2eu.com`'s headers before the first deploy; the records PR is a `docs` change,
-  which cuts no release by itself, so its squash commit on `main` carries a `Release-As: <next version>`
-  footer, the version picked by the maintainer when approving and written by them into the squash
-  commit's message when merging, and release-please then opens the release PR whose tag contains the
-  records); and, last, only after that tag exists, `SITE_DEPLOY_ENABLED`. It also says to remove the DNS
-  record before deleting the pipeline or the bucket, so no dangling CNAME can be taken over. Every step
-  names what the `release-tag` checks or the live check verify afterwards. It also has the recovery
-  steps: a redeploy of the last good release (re-running the deploy job of the `release.yml` run of the
-  highest release tag on `main`, which overwrites a live page whose version is not a genuine higher
-  release, *Deploy*; the job takes its artifacts from that run, so the runbook states their retention
-  and how milestone 3 redeploys the last good release once they have expired) or, with versioning, a
-  version rollback, either followed by a manual Edge Services cache purge by the maintainer (Hosting
-  decision 5); and how to re-enable the scheduled live check's workflow if GitHub has disabled its
-  schedule (*Layer 3*).
-- [ ] The runbook has a step, run once the key exists, that verifies the key's limits rather than only
+- [ ] A one-time runbook for the maintainer, written in milestone 3 and followed in milestone 4 (below,
+  [ADR 0039](../docs/adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md), issue #422).
+  **OpenTofu creates** the Scaleway side from `infra/site/`: the project that holds only the site's
+  bucket, the bucket with versioning, its website setting and its bucket policy, the IAM application and
+  its policy, the Edge Services Starter plan, its one pipeline, its cache and `www.shift2eu.com` with a
+  managed Let's Encrypt certificate. The maintainer runs `init`, `plan` and `apply` on mac-mini-home (the
+  admin machine, `docs/dev-environment.md`) with their own Scaleway credentials, through `dev/tofu.sh`
+  from a checkout of the repository there; agents never do. **By hand**, because no secret may reach the
+  state or because the provider cannot: the state bucket (R1); the deploy API key with an expiry, its
+  rotation (R6, R11) and the canary check of its limits (R7); the origin and plain-HTTP checks (R5); the
+  Namecheap records (the `www` CNAME to the Edge Services endpoint, the apex's permanent redirect to
+  `https://www.shift2eu.com` by the means chosen in milestone 4, CAA allowing the certificate
+  authorities of Edge Services and, if it issues its own certificate, the apex redirect's provider,
+  DNSSEC on, R8); the `site` GitHub environment, its deployment policy and secrets (R9); the HSTS record
+  (`site/records/hsts.json`) and the preload record (`site/records/preload.json`) committed, merged to
+  `main` and included in a release tag (the outcome is read from `www.shift2eu.com`'s headers before the
+  first deploy; the records PR is a `docs` change, which cuts no release by itself, so its squash commit
+  on `main` carries a `Release-As: <next version>` footer, the version picked by the maintainer when
+  approving and written by them into the squash commit's message when merging, and release-please then
+  opens the release PR whose tag contains the records) and, last, only after that tag exists,
+  `SITE_DEPLOY_ENABLED` (R10). The teardown removes the DNS record before OpenTofu deletes the pipeline or
+  the bucket, so no dangling CNAME can be taken over (R13). Every step names what the `release-tag`
+  checks or the live check verify afterwards. The recovery steps (R12): a redeploy of the last good
+  release (re-running the deploy job of the `release.yml` run of the highest release tag on `main`, which
+  overwrites a live page whose version is not a genuine higher release, *Deploy*; the job takes its
+  artifacts from that run, so milestone 3's main PR adds their retention and how the last good release is
+  redeployed once they have expired) or a version rollback, either followed by a manual Edge Services
+  cache purge by the maintainer (Hosting decision 5); and how to re-enable the scheduled live check's
+  workflow if GitHub has disabled its schedule (*Layer 3*).
+
+  Placeholders in `<...>` are the maintainer's: `<state-bucket>` the state bucket, `<owner>` the
+  repository's owner; `$P`, `$A`, `$B`, `$E` and `$PL` are `apply`'s outputs (R4): a later shell runs R0,
+  `init` and R4's output lines first. Secrets come from the password manager into the shell with
+  `read -s`, never into a file or the shell history. The `scw` and `aws` commands are checked against
+  their `--help` on first use (ADR 0039, open point 7).
+
+  **R0. The admin machine** (mac-mini-home, in a checkout of the repository at `main`'s head)
+
+  ```bash
+  git pull --ff-only && git status --short          # PASS: no output
+  dev/tofu.sh version                               # PASS: first line "OpenTofu v1.13.9"
+  # FAIL "refusing to run it": the download does not match infra/tofu.yaml's SHA-256; stop, never run another tofu
+  aws --version && scw version                      # PASS: both print a version; FAIL "command not found": brew install awscli scw
+  # Your own Scaleway API key (not the deploy key), for this shell only
+  read -rp 'SCW access key: ' SCW_ACCESS_KEY && read -rsp 'SCW secret key: ' SCW_SECRET_KEY && echo
+  export SCW_ACCESS_KEY SCW_SECRET_KEY AWS_ACCESS_KEY_ID="$SCW_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$SCW_SECRET_KEY"
+  export AWS_DEFAULT_REGION=nl-ams AWS_ENDPOINT_URL=https://s3.nl-ams.scw.cloud
+  scw iam api-key get "$SCW_ACCESS_KEY"             # PASS: default_project_id is your admin project, not the site's
+  ```
+
+  **R1. The state bucket** (once; your admin project, never the site's, ADR 0039)
+
+  ```bash
+  aws s3api create-bucket --bucket <state-bucket>                              # PASS: prints its Location
+  aws s3api put-bucket-versioning --bucket <state-bucket> --versioning-configuration Status=Enabled
+  aws s3api get-bucket-versioning --bucket <state-bucket>                      # PASS: "Status": "Enabled"
+  aws s3api get-bucket-acl --bucket <state-bucket> --query 'Grants[].Grantee'  # PASS: only your own ID; FAIL "AllUsers": aws s3api put-bucket-acl --bucket <state-bucket> --acl private
+  aws s3api get-bucket-policy --bucket <state-bucket>                          # PASS: NoSuchBucketPolicy (IAM alone decides)
+  ```
+
+  **R2. The inputs** (git-ignored files, IDs only, no secret)
+
+  ```bash
+  cp infra/site/backend.hcl.example infra/site/backend.hcl             # bucket = "<state-bucket>"
+  cp infra/site/terraform.tfvars.example infra/site/terraform.tfvars   # organization_id, admin_principal (user_id:<your user ID>)
+  git status --short --ignored infra/site                              # PASS: both files listed as "!!" (ignored), never "??"
+  ```
+
+  **R3. The price** (before `apply` takes out the plan; Hosting decision 9)
+
+  ```bash
+  open 'https://www.scaleway.com/en/pricing/network/#edge-services'   # PASS: Starter still €0.99/month, 1 pipeline
+  # FAIL "another price or limit": stop, and update Hosting decision 9 first
+  ```
+
+  **R4. Create the hosting** (and after every change to `infra/site/` merged to `main`)
+
+  ```bash
+  dev/tofu.sh -chdir=infra/site init -backend-config=backend.hcl -lockfile=readonly   # PASS: "OpenTofu has been successfully initialized!"
+  dev/tofu.sh -chdir=infra/site plan -out=site.tfplan        # PASS (first time): "Plan: 13 to add, 0 to change, 0 to destroy."
+  dev/tofu.sh -chdir=infra/site show site.tfplan | less      # PASS: the bucket policy's four statements (ADR 0039), the IAM rule's two permission sets in one project
+  dev/tofu.sh -chdir=infra/site apply site.tfplan            # PASS: "Apply complete!"
+  # FAIL "Error acquiring the state lock": another tofu holds it; wait, or after a crash dev/tofu.sh -chdir=infra/site force-unlock <lock ID>
+  dev/tofu.sh -chdir=infra/site plan -detailed-exitcode      # PASS: exit 0, "No changes."; FAIL exit 2: read the diff, the provider or someone changed a resource
+  dev/tofu.sh -chdir=infra/site output                       # PASS: project_id, deploy_application_id, bucket_name, bucket_website_endpoint, pipeline_id, edge_endpoint
+  aws s3api list-objects-v2 --bucket <state-bucket> --query 'Contents[].Key'   # PASS: "site/terraform.tfstate" and no .tflock left over
+  rm infra/site/site.tfplan
+  # The outputs the later steps use, read now while your key's default project is the state's
+  P="$(dev/tofu.sh -chdir=infra/site output -raw project_id)"; A="$(dev/tofu.sh -chdir=infra/site output -raw deploy_application_id)"
+  B="$(dev/tofu.sh -chdir=infra/site output -raw bucket_name)"; E="$(dev/tofu.sh -chdir=infra/site output -raw edge_endpoint)"
+  PL="$(dev/tofu.sh -chdir=infra/site output -raw pipeline_id)"; echo "$P $A $B $E $PL"   # PASS: five values, none empty
+  # After a change to the IAM or the bucket policy: R7 again
+  ```
+
+  **R5. The origins** (Hosting decision 11; recorded in milestone 3's hosting ADR)
+
+  ```bash
+  # Your own key's S3 calls land in its default project; the site's bucket is in the site's project (until R7's step 8)
+  scw iam api-key update "$SCW_ACCESS_KEY" default-project-id="$P"
+  echo probe > origin-probe.txt && aws s3api put-object --bucket "$B" --key origin-probe.txt --body origin-probe.txt --content-type text/plain
+  # FAIL "NoSuchBucket": the key's default project is not the site's; rerun the scw iam api-key update above
+  for u in "https://$E" "http://$E" "https://$B.s3-website.nl-ams.scw.cloud" "http://$B.s3-website.nl-ams.scw.cloud" \
+    "https://$B.s3.nl-ams.scw.cloud" "http://$B.s3.nl-ams.scw.cloud"; do
+    printf '%s ' "$u"; curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' "$u/origin-probe.txt"
+  done   # PASS: every line recorded in the hosting ADR (all serve it under public read; per http:// line: 200, a redirect, or refused)
+  aws s3api delete-object --bucket "$B" --key origin-probe.txt && rm origin-probe.txt
+  ```
+
+  **R6. The deploy API key** (by hand: its secret never reaches the state)
+
+  ```bash
+  scw iam api-key create application-id="$A" default-project-id="$P" \
+    expires-at="$(date -u -v+90d +%Y-%m-%dT%H:%M:%SZ)" description="shift2eu site deploy"
+  # PASS: prints access_key and secret_key once; both go into the password manager only, never a file
+  # FAIL "permission denied": your key needs IAMManager in the organization
+  scw iam api-key list bearer-id="$A"   # PASS: one key, with its expires_at
+  ```
+
+  **R7. The deploy key's limits** (the canary step below; after R6, every rotation and every change to the IAM or bucket policy)
+
+  ```bash
+  CB="$B-canary"
+  # 1. Own key (default project the site's, R5): save the site bucket's configuration; R4's apply restores website, versioning and policy, the ACL is restored below
+  aws s3api get-bucket-website --bucket "$B" > saved-website.json
+  aws s3api get-bucket-versioning --bucket "$B" > saved-versioning.json   # PASS: "Status": "Enabled"
+  aws s3api get-bucket-acl --bucket "$B" > saved-acl.json
+  aws s3api get-bucket-policy --bucket "$B" --query Policy --output text > saved-policy.json
+  # 2. Own key: the canary bucket, of the site bucket's shape
+  scw object bucket create name="$CB" region=nl-ams project-id="$P" enable-versioning=true   # PASS: prints the bucket
+  aws s3api put-bucket-website --bucket "$CB" --website-configuration file://saved-website.json
+  sed "s/\"$B/\"$CB/g" saved-policy.json > canary-policy.json && aws s3api put-bucket-policy --bucket "$CB" --policy file://canary-policy.json
+  # 3. The deploy key, for this shell only
+  read -rp 'deploy access key: ' AWS_ACCESS_KEY_ID && read -rsp 'deploy secret key: ' AWS_SECRET_ACCESS_KEY && echo && export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  probe() { if out="$(aws "$@" 2>&1)"; then echo "FAIL allowed: $*"; elif [[ ${out} == *AccessDenied* ]]; then echo "PASS 403: $*"; else echo "INCONCLUSIVE: $* -> ${out}"; fi; }
+  echo canary > probe.txt
+  V="$(aws s3api put-object --bucket "$B" --key canary/probe.txt --body probe.txt --query VersionId --output text)"; echo "$V"   # PASS: a version ID (PutObject allowed)
+  aws s3api list-objects-v2 --bucket "$B" --max-items 1 >/dev/null && echo "ListBucket allowed" || echo "ListBucket denied"   # record it (ADR 0039 open point 3)
+  # 4. Re-submissions on the site bucket
+  probe s3api put-bucket-website --bucket "$B" --website-configuration file://saved-website.json
+  probe s3api put-bucket-versioning --bucket "$B" --versioning-configuration file://saved-versioning.json
+  probe s3api put-bucket-acl --bucket "$B" --access-control-policy file://saved-acl.json
+  probe s3api put-bucket-policy --bucket "$B" --policy file://saved-policy.json
+  # 5. The canary object only
+  probe s3api delete-object --bucket "$B" --key canary/probe.txt
+  probe s3api delete-object --bucket "$B" --key canary/probe.txt --version-id "$V"
+  probe s3api delete-object-tagging --bucket "$B" --key canary/probe.txt
+  probe s3api delete-object-tagging --bucket "$B" --key canary/probe.txt --version-id "$V"
+  probe s3api put-object-tagging --bucket "$B" --key canary/probe.txt --tagging 'TagSet=[]'
+  probe s3api put-object-tagging --bucket "$B" --key canary/probe.txt --version-id "$V" --tagging 'TagSet=[]'
+  probe s3api put-object-acl --bucket "$B" --key canary/probe.txt --acl private
+  probe s3api put-object-retention --bucket "$B" --key canary/probe.txt --retention '{}'
+  probe s3api put-object-legal-hold --bucket "$B" --key canary/probe.txt --legal-hold Status=OFF
+  probe s3api abort-multipart-upload --bucket "$B" --key canary/probe.txt --upload-id does-not-exist
+  probe s3api restore-object --bucket "$B" --key canary/probe.txt --restore-request Days=1
+  # 6. The canary bucket
+  probe s3api delete-bucket-website --bucket "$CB"
+  probe s3api delete-bucket-policy --bucket "$CB"
+  probe s3api delete-bucket --bucket "$CB"
+  probe s3api put-bucket-versioning --bucket "$CB" --versioning-configuration Status=Suspended
+  probe s3api put-object-lock-configuration --bucket "$CB" --object-lock-configuration ObjectLockEnabled=Enabled
+  probe s3api put-bucket-cors --bucket "$CB" --cors-configuration '{"CORSRules":[{"AllowedMethods":["GET"],"AllowedOrigins":["https://example.com"]}]}'
+  probe s3api put-bucket-lifecycle-configuration --bucket "$CB" --lifecycle-configuration '{"Rules":[{"ID":"probe","Status":"Enabled","Filter":{"Prefix":"canary/"},"Expiration":{"Days":365}}]}'
+  probe s3api put-bucket-tagging --bucket "$CB" --tagging 'TagSet=[{Key=probe,Value=1}]'
+  probe s3api put-bucket-encryption --bucket "$CB" --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+  # 7. Outside the project
+  probe s3api put-object --bucket <a bucket in another project of yours> --key canary/probe.txt --body probe.txt
+  probe s3api list-buckets
+  # PASS: every probe line "PASS 403"; FAIL "FAIL allowed" or "INCONCLUSIVE": record probe, answer and reason in the hosting ADR, restore (8), and stop until it is explained
+  # 8. Own key again: restore and clean up
+  export AWS_ACCESS_KEY_ID="$SCW_ACCESS_KEY" AWS_SECRET_ACCESS_KEY="$SCW_SECRET_KEY"
+  aws s3api put-bucket-acl --bucket "$B" --access-control-policy file://saved-acl.json
+  aws s3api list-object-versions --bucket "$B" --prefix canary/ --query '[Versions,DeleteMarkers][][].VersionId' --output text   # each ID: aws s3api delete-object --bucket "$B" --key canary/probe.txt --version-id <ID>
+  aws s3api delete-bucket --bucket "$CB"           # FAIL "BucketNotEmpty": delete its versions as above first
+  rm probe.txt saved-website.json saved-versioning.json saved-acl.json saved-policy.json canary-policy.json
+  scw iam api-key update "$SCW_ACCESS_KEY" default-project-id=<your admin project ID>   # back to the admin project, where the state is
+  dev/tofu.sh -chdir=infra/site plan -detailed-exitcode   # PASS: exit 0 (website, versioning and policy unchanged); FAIL exit 2: dev/tofu.sh -chdir=infra/site apply
+  ```
+
+  **R8. Namecheap** (Domain List, `shift2eu.com`, Advanced DNS; the apex redirect is milestone 4's)
+
+  ```bash
+  # CNAME www -> the edge_endpoint output; CAA @ 0 issue "letsencrypt.org"; CAA @ 0 issuewild ";"; DNSSEC on
+  dig +short CNAME www.shift2eu.com     # PASS: "$E." (the edge_endpoint output)
+  dig +short CAA shift2eu.com           # PASS: exactly 0 issue "letsencrypt.org" and 0 issuewild ";"
+  dig +short DS shift2eu.com            # PASS: a DS record (DNSSEC on)
+  echo | openssl s_client -connect www.shift2eu.com:443 -servername www.shift2eu.com 2>/dev/null | openssl x509 -noout -issuer -enddate   # PASS: a Let's Encrypt issuer; FAIL "unable to load certificate": wait for issuance, then check the CAA record
+  curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' http://www.shift2eu.com/   # record it: 301/308 to https://www.shift2eu.com/, refused, or 200 (a no-go, Hosting decision 3)
+  # The release-tag skill's and the live check's DNS, certificate and redirect checks verify this afterwards
+  ```
+
+  **R9. The GitHub `site` environment** (with your admin token; the `release-tag` skill's step 2 checks it)
+
+  ```bash
+  gh api -X PUT repos/<owner>/shift2eu/environments/site -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true'
+  gh api -X POST repos/<owner>/shift2eu/environments/site/deployment-branch-policies -f name='v*.*.*' -f type=tag
+  gh api repos/<owner>/shift2eu/environments/site/deployment-branch-policies --jq '.branch_policies[] | "\(.type) \(.name)"'   # PASS: exactly "tag v*.*.*"
+  gh secret set SCW_ACCESS_KEY --env site -R <owner>/shift2eu   # paste the deploy key's access key (R6)
+  gh secret set SCW_SECRET_KEY --env site -R <owner>/shift2eu   # paste its secret key
+  gh secret list --env site -R <owner>/shift2eu    # PASS: exactly SCW_ACCESS_KEY and SCW_SECRET_KEY
+  gh secret list -R <owner>/shift2eu               # PASS: neither name at repository level
+  ```
+
+  **R10. Turn the deploy on** (milestone 4, last; the release's live check reads the records at its tag)
+
+  ```bash
+  # The HSTS and preload records PR merged, its squash commit with "Release-As: <version>", and release-please's release PR for it merged
+  git fetch --tags && git tag --contains "$(git log -1 --format=%H -- site/records/hsts.json)" 'v*'   # PASS: the release tag <version>
+  gh variable set SITE_DEPLOY_ENABLED --body true -R <owner>/shift2eu
+  gh variable list -R <owner>/shift2eu             # PASS: SITE_DEPLOY_ENABLED true
+  ```
+
+  **R11. Rotate the deploy key** (before its expiry; then R7 again)
+
+  ```bash
+  # R6 for the new key, then R9's two gh secret set lines with it
+  scw iam api-key delete <old access key>
+  scw iam api-key list bearer-id="$A"   # PASS: one key, the new one
+  ```
+
+  **R12. Recovery** (Hosting decision 5)
+
+  ```bash
+  # Either redeploy the last good release: the release.yml run of the highest release tag on main
+  gh run list -R <owner>/shift2eu --workflow release.yml --limit 20   # its run ID
+  gh run view <run ID> -R <owner>/shift2eu --json jobs --jq '.jobs[] | "\(.databaseId) \(.name)"'   # the deploy job's ID
+  gh run rerun <run ID> -R <owner>/shift2eu --job <deploy job ID>      # PASS: the job succeeds and the live check after it
+  # Or roll an object back (own key, default project the site's, R5)
+  aws s3api list-object-versions --bucket "$B" --prefix index.html --query 'Versions[].[VersionId,LastModified]' --output text
+  aws s3api copy-object --bucket "$B" --key index.html --copy-source "$B/index.html?versionId=<good version ID>"   # PASS: a new VersionId
+  # Then, in either case, purge the cache
+  scw edge-services purge-request create pipeline-id="$PL" all=true   # PASS: a purge request; FAIL "unknown command": purge in the console, the pipeline's Cache tab
+  # A disabled schedule: re-enable the scheduled live check (its workflow file is named in milestone 3)
+  gh workflow enable <live check workflow> -R <owner>/shift2eu && gh workflow list -R <owner>/shift2eu   # PASS: it is "active"
+  ```
+
+  **R13. Remove the site** (the DNS record first, so no dangling CNAME can be taken over)
+
+  ```bash
+  # Namecheap: delete the www CNAME
+  dig +short CNAME www.shift2eu.com            # PASS: no output
+  gh variable set SITE_DEPLOY_ENABLED --body false -R <owner>/shift2eu
+  scw iam api-key delete <deploy access key>
+  # Own key, default project the site's (R5): delete every object version and delete marker in "$B" (R7, step 8), then back to the admin project
+  dev/tofu.sh -chdir=infra/site destroy        # PASS: "Destroy complete!"; FAIL "BucketNotEmpty": delete the remaining versions first
+  ```
+- [ ] The runbook has a step (R7), run once the key exists, that verifies the key's limits rather than only
   reviewing them. With the deploy key, against a canary object under a prefix the site never serves,
   every write action in Scaleway's bucket-policy action list
   ([bucket policies](https://www.scaleway.com/en/docs/object-storage/api-cli/bucket-policy/)) and every
@@ -1157,6 +1377,11 @@ it. Decision 4 is amended by the orchestrator's decision above.
     enabling bucket website applies a default policy that makes every object public
     ([bucket website](https://www.scaleway.com/en/docs/object-storage/how-to/use-bucket-website/)); what
     the backend needs is to be checked for milestone 3, and the ADR records which rule applies.
+    *Outcome (2026-11-21, [ADR 0039](../docs/adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md)):*
+    no principal stands for Edge Services, so the rule is **public read**: the bucket policy grants `*`
+    `s3:GetObject` on the site's objects only, the backend reads the bucket in website mode, and the
+    bucket website endpoint and the bucket's S3 endpoints serve the site's files too (Runbook R5 checks
+    each, over HTTPS and plain HTTP).
 
 ### To be checked by the maintainer
 
@@ -1175,12 +1400,15 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
     policy (the policy allows only `user_id`, `application_id` or `*`), whether Edge Services'
     bucket-website backend can then read private objects, and which actions the grant names; if no
     principal does, the objects are public read, and the bucket website endpoint serves the site too.
+    *Answered by ADR 0039:* no principal does; public read.
   - The other origins (decision 11): which of them serve the site under the chosen read rule, and
-    whether each answers over plain HTTP.
-  - Versioning (decision 5): whether bucket versioning works with a website bucket.
+    whether each answers over plain HTTP. *ADR 0039 lists them; Runbook R5 checks plain HTTP.*
+  - Versioning (decision 5): whether bucket versioning works with a website bucket. *OpenTofu enables
+    both; R4's apply and R7's saved versioning state confirm it.*
   - Listing the bucket (decision 5, *Layer 3*): whether the deploy key can hold `s3:ListBucket` on the
     site's bucket only; if it can, the deploy program lists the bucket and fails on any key that is in no
-    release's manifest.
+    release's manifest. *The bucket policy grants it on the site bucket only; R7 records whether IAM's
+    two object permission sets let it through.*
   - The canary probes (*Runbook*): that each probe's request (the re-submissions on the site bucket; on
     the canary bucket an object-lock configuration with no default retention, one CORS rule, one
     lifecycle rule, one tag, the default encryption; on the canary object an empty tag set, no
@@ -1190,7 +1418,7 @@ Facts still unknown, each with the milestone that needs it. None blocks mileston
     canary bucket can carry versioning, a website configuration and a bucket policy of the site
     bucket's shape; and that it can be deleted after an object-lock probe that unexpectedly succeeded.
   - The manual cache purge (decision 5): how the maintainer purges the pipeline's cache, for the
-    runbook's recovery step.
+    runbook's recovery step. *R12: `scw edge-services purge-request create`, or the console.*
 - **Milestone 4** (the first deploy and its go/no-go):
   - How the apex redirect is served over valid HTTPS (decisions 1 and 3): whether Namecheap's URL
     redirect serves `https://shift2eu.com` with a valid certificate and a 301 or 308 to the same path, or

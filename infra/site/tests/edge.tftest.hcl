@@ -47,6 +47,7 @@ mock_provider "scaleway" {
 
 variables {
   organization_id = "00000000-0000-0000-0000-000000000000"
+  admin_principal = "user_id:88888888-8888-8888-8888-888888888888"
 }
 
 run "one_pipeline_serves_www_from_the_site_bucket" {

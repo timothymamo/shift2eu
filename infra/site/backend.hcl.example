@@ -1,9 +1,10 @@
-# Copy to backend.hcl (git-ignored) and fill in the state bucket the maintainer created, then run
+# Copy to backend.hcl (git-ignored) and fill in the state bucket the maintainer created by hand (PRD #297
+# Runbook, ADR 0039), then run
 #   dev/tofu.sh -chdir=infra/site init -backend-config=backend.hcl
-# No credentials here: the s3 backend reads AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, set to a Scaleway
-# API key of the admin project, from the maintainer's environment.
+# No credentials here: the s3 backend reads AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, set to the
+# maintainer's own Scaleway API key, from the maintainer's environment.
 bucket = "example-state-bucket"
-region = "fr-par"
+region = "nl-ams"
 endpoints = {
-  s3 = "https://s3.fr-par.scw.cloud"
+  s3 = "https://s3.nl-ams.scw.cloud"
 }
