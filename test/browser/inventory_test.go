@@ -349,6 +349,107 @@ func TestInventoryCopyPutsOneCommandOnTheClipboard(t *testing.T) {
 	}
 }
 
+// TestInventoryPickerIsShownOnceTheScriptRuns pins the other half of the picker
+// (issue #373, item 15, review finding 10): the page hides the three source
+// buttons from a visitor whose browser runs no script, and the script removes
+// that hiding once it has wired them, so a visitor whose browser runs it gets the
+// control and its buttons still choose a source.
+func TestInventoryPickerIsShownOnceTheScriptRuns(t *testing.T) {
+	t.Parallel()
+
+	requireInventoryPage(t)
+
+	s := newSite(t)
+	ctx := openPage(t, s, inventoryPage)
+
+	waitFor(t, ctx, "the page's source buttons to be wired", `document.querySelectorAll("button[aria-controls]").length === 3`)
+
+	waitFor(t, ctx, "the picker to be shown", `(() => {
+		const buttons = Array.from(document.querySelectorAll("button[aria-controls]"));
+		if (buttons.length !== 3) {
+			return false;
+		}
+		const picker = buttons[0].parentElement;
+		return picker !== null && !picker.hasAttribute("hidden") && buttons.every(function (button) {
+			return button.checkVisibility();
+		});
+	})()`)
+
+	// The control still works: the buttons choose a source as they did.
+	clickButton(t, ctx, 1)
+
+	waitFor(t, ctx, "the chosen source to change", `(() => {
+		const buttons = Array.from(document.querySelectorAll("button[aria-controls]"));
+		return buttons.length === 3 && buttons[0].getAttribute("aria-pressed") === "false" &&
+			buttons[1].getAttribute("aria-pressed") === "true";
+	})()`)
+
+	states := eval[[]sourceState](t, ctx, `Array.from(document.querySelectorAll("button[aria-controls]")).map(function (button) {
+		const panel = document.getElementById(button.getAttribute("aria-controls"));
+		return {
+			name: button.textContent.trim(),
+			pressed: button.getAttribute("aria-pressed"),
+			panel: button.getAttribute("aria-controls"),
+			shown: panel !== null && panel.checkVisibility(),
+		};
+	})`)
+
+	for i, state := range states {
+		if shown := i == 1; state.Shown != shown {
+			t.Errorf("%q's section is shown=%t after GCP is chosen, want %t: a source button the script repaired still chooses its section (issue #373, item 15)",
+				state.Name, state.Shown, shown)
+		}
+	}
+}
+
+// TestInventoryCopyFailureSaysSo pins what a visitor sees when the page cannot
+// write to the clipboard (issue #373, item 15, review finding 5): a browser
+// without the clipboard API, or a page in a context where the API is absent,
+// throws where the write is called, so the copy function catches that and says
+// the copy failed, and the page throws nothing a visitor would never see. The
+// clipboard is made undefined in this page only, as such a browser leaves it.
+func TestInventoryCopyFailureSaysSo(t *testing.T) {
+	t.Parallel()
+
+	requireInventoryPage(t)
+
+	s := newSite(t)
+	ctx := newTab(t)
+
+	messages := collect(t, ctx)
+
+	do(t, ctx, chromedp.Navigate(s.url(inventoryPage)))
+	waitFor(t, ctx, "the page's source buttons to be wired", `document.querySelectorAll("button[aria-controls]").length === 3`)
+
+	copies := copyButtonsIn(t, ctx, "source-aws")
+	if len(copies) == 0 {
+		t.Fatalf("the AWS section of %s holds no copy button, want one per command (issue #373, item 15)", inventoryPage)
+	}
+
+	if kind := eval[string](t, ctx, `(() => {
+		Object.defineProperty(navigator, "clipboard", { value: undefined });
+		return typeof navigator.clipboard;
+	})()`); kind != "undefined" {
+		t.Fatalf("the page's clipboard is %s after the test took it away, want undefined: the check needs a page without the clipboard API (issue #373, item 15)", kind)
+	}
+
+	clickButton(t, ctx, copies[0])
+
+	waitFor(t, ctx, "the copy's status to say the copy failed", fmt.Sprintf(`(() => {
+		const button = document.querySelectorAll("button")[%d];
+		const box = button === undefined ? null : button.parentElement;
+		const status = box === null ? null : box.querySelector(".copy-status");
+		return status !== null && /failed/i.test(status.textContent);
+	})()`, copies[0]))
+
+	messages.settle(t)
+
+	for _, message := range messages.errors() {
+		t.Errorf("copying a command with no clipboard API throws %q (%s at %s:%d), want no uncaught exception: the copy function catches the missing API and says the copy failed (issue #373, item 15)",
+			message.Text, message.Type, message.URL, message.Line)
+	}
+}
+
 // copyButtonsIn returns the indices, in the document's button order, of the copy
 // buttons inside the section with the id.
 func copyButtonsIn(t *testing.T, ctx context.Context, section string) []int {
