@@ -38,6 +38,13 @@ const (
 	serverBinaryPath  = "/shift2eu-server"
 	serverStageName   = "server"
 	cliBinaryPath     = "/shift2eu"
+
+	// The variable the build stage sets to the name of the toolchain go must use,
+	// and the value that keeps it to the Go of the base image: `local` makes go
+	// fail, with its own error, instead of fetching another toolchain or building
+	// with a different one (issue #383).
+	toolchainEnv   = "GOTOOLCHAIN"
+	toolchainLocal = "local"
 )
 
 // TestBuilderGoVersionMatchesGoMod pins that the builder stage is the golang
@@ -70,6 +77,253 @@ func TestBuilderGoVersionMatchesGoMod(t *testing.T) {
 				dockerfileName, builder.line, builder.image, tag, goModName, want, want, want)
 		}
 	}
+}
+
+// TestBuildStagePinsLocalToolchain pins that the stage that runs `go build` sets
+// ENV GOTOOLCHAIN=local before it runs a single go command, so a base image whose
+// Go differs from go.mod's go line fails the build with Go's own error instead of
+// fetching another toolchain or building with one the repository was never
+// reviewed against (issue #383). The RUN instruction that downloads the modules
+// is the first go command of that stage, so an ENV after it would leave that step
+// unprotected. Docker applies an ENV to the instructions that follow it, so the
+// pin must also be the last value the stage gives the variable: an ENV
+// GOTOOLCHAIN=auto after a correct pin puts another toolchain back in force for
+// `go build`, and is reported as well.
+//
+// The check runs over the repository's Dockerfile and over copies of a fixture
+// that carry one fault each: the ENV removed, moved to the image stage, given
+// another value, left after the module download, or overridden by a later ENV
+// before the build. A check that cannot tell those apart would pass on a
+// Dockerfile that pins nothing, or on one whose last word on the toolchain is
+// not local.
+func TestBuildStagePinsLocalToolchain(t *testing.T) {
+	t.Parallel()
+
+	const fixture = `FROM golang:1.27.4-alpine AS build
+ENV GOTOOLCHAIN=local
+RUN go mod download
+RUN go build -o /out/shift2eu ./cmd/shift2eu
+
+FROM gcr.io/distroless/static-debian13:nonroot
+COPY --from=build /out/shift2eu /shift2eu
+`
+
+	const (
+		pin         = "ENV GOTOOLCHAIN=local\n"
+		modDownload = "RUN go mod download\n"
+		imageFrom   = "FROM gcr.io/distroless/static-debian13:nonroot\n"
+	)
+
+	tests := []struct {
+		name       string
+		dockerfile string
+		// want holds parts of the findings the check must return; none means
+		// the Dockerfile pins the toolchain.
+		want []string
+	}{
+		{
+			name:       "the repository's Dockerfile",
+			dockerfile: readRepoFile(t, dockerfileName),
+		},
+		{
+			name:       "a fixture that pins the toolchain",
+			dockerfile: fixture,
+		},
+		{
+			name:       "a fixture that pins it in the legacy ENV form",
+			dockerfile: strings.Replace(fixture, "ENV GOTOOLCHAIN=local", "ENV GOTOOLCHAIN local", 1),
+		},
+		{
+			name:       "a fixture that quotes the value",
+			dockerfile: strings.Replace(fixture, "ENV GOTOOLCHAIN=local", `ENV GOTOOLCHAIN="local"`, 1),
+		},
+		{
+			name:       "no ENV GOTOOLCHAIN at all",
+			dockerfile: strings.Replace(fixture, pin, "", 1),
+			want:       []string{"no ENV GOTOOLCHAIN=local"},
+		},
+		{
+			name:       "the ENV in the image stage alone",
+			dockerfile: strings.Replace(strings.Replace(fixture, pin, "", 1), imageFrom, imageFrom+pin, 1),
+			want:       []string{"no ENV GOTOOLCHAIN=local"},
+		},
+		{
+			name:       "another value",
+			dockerfile: strings.Replace(fixture, "GOTOOLCHAIN=local", "GOTOOLCHAIN=auto", 1),
+			want:       []string{"GOTOOLCHAIN=auto"},
+		},
+		{
+			name:       "after the first RUN that runs go",
+			dockerfile: strings.Replace(fixture, pin+modDownload, modDownload+pin, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			name:       "after a go command named by its path",
+			dockerfile: strings.Replace(fixture, pin+modDownload, "RUN /usr/local/go/bin/go mod download\n"+pin, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			name:       "after a go command inside sh -c",
+			dockerfile: strings.Replace(fixture, pin+modDownload, "RUN sh -c \"go mod download\"\n"+pin, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			name:       "after a bare go command",
+			dockerfile: strings.Replace(fixture, pin+modDownload, "RUN go\n"+pin+modDownload, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			// A word that merely holds go, such as gofmt, golang or cargo, runs
+			// no go command: only `go` itself, however it is written, counts.
+			name: "a RUN that only mentions words containing go",
+			dockerfile: strings.Replace(fixture, "FROM golang:1.27.4-alpine AS build\n",
+				"FROM golang:1.27.4-alpine AS build\nRUN apk add --no-cache ca-certificates && ls /usr/local/go/bin/gofmt /usr/local/go/lib/golang /opt/cargo\n", 1),
+		},
+		{
+			name:       "another value after the first RUN that runs go",
+			dockerfile: strings.Replace(fixture, pin+modDownload, modDownload+"ENV GOTOOLCHAIN=auto\n", 1),
+			want:       []string{"after the RUN instruction", "GOTOOLCHAIN=auto"},
+		},
+		{
+			// A pin before the first go command is not enough: Docker applies
+			// an ENV to the instructions that follow it, so a later ENV puts
+			// another toolchain back in force for `go build` and the build runs
+			// with one the repository was never reviewed against.
+			name:       "a non-local value after the module download",
+			dockerfile: strings.Replace(fixture, modDownload, modDownload+"ENV GOTOOLCHAIN=auto\n", 1),
+			// The later ENV is on line 4 of the fixture, the go build on line 5.
+			want: []string{"a non-local value after the module download:4: ", "GOTOOLCHAIN=auto"},
+		},
+		{
+			name:       "a second local value after the module download",
+			dockerfile: strings.Replace(fixture, modDownload, modDownload+pin, 1),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			findings := toolchainFindings(t, tc.name, tc.dockerfile)
+
+			for _, finding := range findings {
+				if !slices.ContainsFunc(tc.want, func(want string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("unexpected finding: %s", finding)
+				}
+			}
+
+			for _, want := range tc.want {
+				if !slices.ContainsFunc(findings, func(finding string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("no finding mentions %q, got %q", want, findings)
+				}
+			}
+		})
+	}
+}
+
+// toolchainFindings returns what name, a Dockerfile, gets wrong about the Go
+// toolchain its build stage uses, and no finding when the stage pins it: the
+// stage that runs `go build` must set GOTOOLCHAIN=local before its first RUN
+// instruction that runs a go command, so a base image whose Go differs from
+// go.mod's go line fails the build instead of fetching a toolchain of its own
+// (issue #383). The value that takes effect at that first command is the one the
+// last ENV before it sets, since Docker applies an ENV to the instructions that
+// follow it, and every ENV of the stage that sets another value is reported
+// wherever it stands: one after a correct pin leaves `go build`, and anything
+// else after it, on a toolchain the repository was never reviewed against.
+func toolchainFindings(t *testing.T, name, dockerfile string) []string {
+	t.Helper()
+
+	builder, stage := buildStage(t, dockerfileInstructions(t, dockerfile))
+
+	firstGo, ok := firstGoRun(stage)
+	if !ok {
+		return []string{fmt.Sprintf("%s:%d: the build stage runs no go command, so there is no step for the toolchain pin to protect; want a stage that runs `go mod download` and `go build`",
+			name, builder.line)}
+	}
+
+	// envValue is one ENV of the stage that sets the toolchain variable, with
+	// the value Docker applies from it on.
+	type envValue struct {
+		at    instruction
+		value string
+	}
+
+	var (
+		applied      instruction
+		appliedValue string
+		pinned       bool
+
+		// The first ENV of the stage that sets the variable, wherever it
+		// stands: when none comes before the first go command, it is the one
+		// the finding about a pin in the wrong place names.
+		firstSet   instruction
+		firstValue string
+		firstFound bool
+
+		// Every ENV of the stage that sets a value other than local, in file
+		// order.
+		notLocal []envValue
+	)
+
+	for _, in := range stage {
+		if in.keyword() != "ENV" {
+			continue
+		}
+
+		value, setsIt := envAssignments(in)[toolchainEnv]
+		if !setsIt {
+			continue
+		}
+
+		if !firstFound {
+			firstSet, firstValue, firstFound = in, value, true
+		}
+
+		if in.line < firstGo.line {
+			applied, appliedValue, pinned = in, value, true
+		}
+
+		if value != toolchainLocal {
+			notLocal = append(notLocal, envValue{at: in, value: value})
+		}
+	}
+
+	var findings []string
+
+	// reported holds the lines the checks below name, so an ENV that is both the
+	// value in force at the first go command (or the only one the stage sets) and
+	// a non-local value is reported once, with the finding that says what it
+	// should have been.
+	reported := make(map[int]struct{}, len(notLocal))
+
+	switch {
+	case !pinned && firstFound:
+		findings = append(findings, fmt.Sprintf("%s:%d: the build stage sets `ENV %s=%s` only at line %d, after the RUN instruction at line %d that runs go (%q), so that step still runs with whatever toolchain the base image holds: want the ENV before the first RUN instruction that runs go, the module download included (issue #383)",
+			name, firstSet.line, toolchainEnv, firstValue, firstSet.line, firstGo.line, firstGo.arguments()))
+		reported[firstSet.line] = struct{}{}
+	case pinned && appliedValue != toolchainLocal:
+		findings = append(findings, fmt.Sprintf("%s:%d: the build stage sets %s=%s, want `ENV %s=%s`: with another value go fetches or uses another toolchain instead of failing when the base image's Go differs from the go line of %s (issue #383)",
+			name, applied.line, toolchainEnv, appliedValue, toolchainEnv, toolchainLocal, goModName))
+		reported[applied.line] = struct{}{}
+	case !pinned:
+		findings = append(findings, fmt.Sprintf("%s:%d: the build stage, the one that runs `go build`, has no ENV %s=%s: want `ENV %s=%s` in that stage, before the first RUN instruction that runs go, so a base image whose Go differs from the go line of %s fails the build instead of fetching another toolchain or building with a different one (issue #383)",
+			name, builder.line, toolchainEnv, toolchainLocal, toolchainEnv, toolchainLocal, goModName))
+	}
+
+	// Every other ENV of the stage that leaves the pin: Docker applies it to the
+	// instructions that follow, so the go command after it runs on another
+	// toolchain than the one checked above.
+	for _, set := range notLocal {
+		if _, once := reported[set.at.line]; once {
+			continue
+		}
+
+		findings = append(findings, fmt.Sprintf("%s:%d: the build stage sets `ENV %s=%s` at line %d, which is not `%s`: go fetches or uses another toolchain from there on instead of failing when the base image's Go differs from the go line of %s, so every go command after it, `go build` included, runs on a toolchain the repository was never reviewed against (issue #383)",
+			name, set.at.line, toolchainEnv, set.value, set.at.line, toolchainLocal, goModName))
+	}
+
+	return findings
 }
 
 // TestEveryBaseImageIsDigestPinned pins that every FROM instruction names its
@@ -1189,6 +1443,62 @@ func runsGoBuild(command string) bool {
 	return false
 }
 
+// runsGo reports whether a RUN instruction's command runs a go command, such as
+// `go mod download` or `go build`, however the command spells it: bare, by its
+// path (`/usr/local/go/bin/go`) or inside a shell (`sh -c "go mod download"`).
+// Each field is unquoted and reduced to its last path element, so only the
+// command `go` counts: a word that merely contains go (`gofmt`, `golang`,
+// `cargo`) and a mention in a flag value or a path, such as the cache mount's
+// target=/go/pkg/mod, is not the command itself.
+func runsGo(command string) bool {
+	for _, field := range strings.Fields(command) {
+		if path.Base(strings.Trim(field, `"'`)) == "go" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// firstGoRun returns the first RUN instruction of a stage whose command runs a go
+// command, the step the toolchain pin must come before, and reports whether the
+// stage holds one.
+func firstGoRun(stage []instruction) (instruction, bool) {
+	for _, in := range stage {
+		if in.keyword() == "RUN" && runsGo(in.arguments()) {
+			return in, true
+		}
+	}
+
+	return instruction{}, false
+}
+
+// envAssignments returns the variables an ENV instruction sets, read in both
+// forms Docker accepts: `ENV NAME=value`, one or more variables space separated,
+// and the legacy `ENV NAME value`, whose value is the rest of the line. A value
+// is unquoted, because Docker strips a matching pair of quotes, so
+// `ENV GOTOOLCHAIN="local"` sets the same value as `ENV GOTOOLCHAIN=local`.
+func envAssignments(in instruction) map[string]string {
+	fields := strings.Fields(in.arguments())
+	if len(fields) == 0 {
+		return nil
+	}
+
+	if !strings.Contains(fields[0], "=") {
+		return map[string]string{fields[0]: unquote(strings.Join(fields[1:], " "))}
+	}
+
+	names := make(map[string]string, len(fields))
+
+	for _, field := range fields {
+		if name, value, found := strings.Cut(field, "="); found {
+			names[name] = unquote(value)
+		}
+	}
+
+	return names
+}
+
 // goBuildRunFor returns the one RUN instruction that runs `go build` for pkg:
 // the instruction that builds the binary one image ships, and the only place a
 // build setting can take effect. It fails the test when there is no such
@@ -1707,7 +2017,8 @@ func goreleaserBuildSettings(t *testing.T, builds []goreleaserBuild, id string) 
 	return goreleaserBuild{}
 }
 
-// unquote removes the matching quotes YAML allows around a scalar.
+// unquote removes the matching quotes YAML allows around a scalar, and Docker
+// around an ENV value, which sets GOTOOLCHAIN="local" to local.
 func unquote(value string) string {
 	if len(value) >= 2 {
 		if first, last := value[0], value[len(value)-1]; (first == '"' && last == '"') || (first == '\'' && last == '\'') {
@@ -1795,6 +2106,26 @@ func builderStage(t *testing.T, instructions []instruction) instruction {
 		dockerfileName)
 
 	return instruction{}
+}
+
+// buildStage returns the FROM instruction of the stage that runs `go build` and
+// the instructions after it, up to the next FROM: the whole of the stage whose
+// build the toolchain pin protects.
+func buildStage(t *testing.T, instructions []instruction) (instruction, []instruction) {
+	t.Helper()
+
+	builder := builderStage(t, instructions)
+
+	for i, in := range instructions {
+		if in.keyword() == "FROM" && in.line == builder.line {
+			return builder, stageInstructions(instructions, i)
+		}
+	}
+
+	t.Fatalf("%s:%d: the FROM instruction that starts the stage that runs `go build` is not among the instructions read: want stageInstructions to find it",
+		dockerfileName, builder.line)
+
+	return instruction{}, nil
 }
 
 // copiedBinary returns the path in the build stage that one image stage copies
