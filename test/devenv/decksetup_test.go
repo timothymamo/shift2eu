@@ -2405,7 +2405,7 @@ func TestMakeVMEnvKeptLineNamesOnlyTheKeptNamesItMayPrint(t *testing.T) {
 	hiddenKeptOne := fakeLowerCaseName("kept-one")
 	hiddenKeptTwo := fakeLowerCaseName("kept-two")
 
-	// written is the value the run copies into the file for a name: one invented value per case.
+	// value builds the value the run copies into the file for a name: one invented value per case.
 	value := func(label string) string { return "invented-" + label }
 
 	cases := []struct {
