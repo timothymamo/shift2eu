@@ -9,12 +9,17 @@
 // the pins and an empty bin/ makes the tarball missing - which is the one path that downloads - without
 // reading or writing the worktree's real cache. A fake curl first on PATH records its argv and refuses the
 // download, so nothing reaches the network and the script stops before it would hash or extract anything.
+//
+// TestInfraWorkflowCurlsHaveTimeouts pins the same two flags on every curl the "Infra tools" workflow makes
+// (its verify-tofu-pins job downloads OpenTofu's SHA256SUMS, signature and certificate): it reads the
+// workflow's text, so it runs no curl and needs no network either.
 package devenv_test
 
 import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -24,6 +29,9 @@ const (
 	// tofuDownloadScript is the wrapper dev/infra-check.sh, CI and the maintainer run every tofu command
 	// through.
 	tofuDownloadScript = "dev/tofu.sh"
+	// tofuWorkflow is the "Infra tools" workflow, which downloads OpenTofu's checksums and signature with curl
+	// of its own.
+	tofuWorkflow = ".github/workflows/infra-tools.yml"
 	// tofuDownloadPins is the pin file dev/tofu.sh reads from its working directory.
 	tofuDownloadPins = "infra/tofu.yaml"
 	// tofuCurlLogEnv names the file the fake curl appends its argv to.
@@ -109,6 +117,51 @@ func TestTofuDownloadHasTimeouts(t *testing.T) {
 					i+1, strings.Join(args, " "), flag, value)
 			}
 		}
+	}
+}
+
+// tofuWorkflowCurl matches a curl invocation in a workflow: curl as a word of a shell command line, where a
+// comment (skipped by the case below) or a URL is none.
+var tofuWorkflowCurl = regexp.MustCompile(`(^|[\s;&|(])curl\s`)
+
+// TestInfraWorkflowCurlsHaveTimeouts pins that every curl the "Infra tools" workflow makes carries both a
+// connection timeout and a total one, each a positive number of seconds: a download that stalls would
+// otherwise hold the check, and the pull request waiting on it, open (issue #434). It reads the workflow's
+// lines as written, which is how the workflow writes its curl today; a curl split across continuation lines
+// fails here rather than passing unchecked.
+func TestInfraWorkflowCurlsHaveTimeouts(t *testing.T) {
+	t.Parallel()
+
+	found := 0
+
+	for i, line := range strings.Split(readRepoFile(t, tofuWorkflow), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") || !tofuWorkflowCurl.MatchString(line) {
+			continue
+		}
+
+		found++
+
+		args := strings.Fields(line)
+
+		for _, flag := range []string{"--connect-timeout", "--max-time"} {
+			value, ok := curlFlagValue(args, flag)
+			if !ok {
+				t.Errorf("%s:%d: curl holds no %s, so a download that stalls would hold the check with no deadline (issue #434): %s",
+					tofuWorkflow, i+1, flag, strings.TrimSpace(line))
+
+				continue
+			}
+
+			seconds, err := strconv.Atoi(value)
+			if err != nil || seconds <= 0 {
+				t.Errorf("%s:%d: curl sets %s %q, want a positive number of seconds: %s",
+					tofuWorkflow, i+1, flag, value, strings.TrimSpace(line))
+			}
+		}
+	}
+
+	if found == 0 {
+		t.Fatalf("%s holds no curl line, so this test checks nothing: its verify-tofu-pins job downloads OpenTofu's SHA256SUMS with curl", tofuWorkflow)
 	}
 }
 

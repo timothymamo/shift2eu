@@ -1590,7 +1590,7 @@ run "a_run_with_an_unlisted_block" {
 	// real test files use (assert, variables, mock_resource) and the ones tofu test reads beside them.
 	{
 		name: "allowed-nested-blocks",
-		why:  `a site/tests/zz-allowed.tftest.hcl whose mock_provider holds mock_resource and mock_data, and whose run holds variables, module, plan_options, override_resource, override_data, override_module and assert (expect_failures as the attribute tofu writes)`,
+		why:  `a site/tests/zz-allowed.tftest.hcl whose mock_provider holds mock_resource, mock_data, override_resource and override_data, and whose run holds variables, module, plan_options, override_resource, override_data, override_module and assert (expect_failures as the attribute tofu writes)`,
 		want: "",
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
@@ -1605,6 +1605,16 @@ run "a_run_with_an_unlisted_block" {
     defaults = {
       id = "11111111-1111-1111-1111-111111111111"
     }
+  }
+
+  override_resource {
+    target = scaleway_account_project.site
+    values = {}
+  }
+
+  override_data {
+    target = scaleway_account_project.site
+    values = {}
   }
 }
 
@@ -1665,6 +1675,26 @@ run "a_run_with_a_deeper_block" {
 
     values {
     }
+  }
+}
+`)
+		},
+	},
+	// expect_failures is an attribute in a run block today, which the allowed-nested-blocks case writes. The
+	// allow list names it as a block anyway, so a run that writes it that way is not refused: this case pins
+	// that, since no other case writes the block spelling.
+	{
+		name: "expect_failures-as-a-block",
+		why:  `an expect_failures block directly in a run block of site/tests/iam.tftest.hcl, the spelling the allow list names beside the attribute tofu writes today`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_expect_failures_as_a_block" {
+  command = plan
+
+  expect_failures {
+    targets = [var.organization_id]
   }
 }
 `)
