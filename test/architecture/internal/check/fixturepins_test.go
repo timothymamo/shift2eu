@@ -1,8 +1,6 @@
 package check_test
 
 import (
-	"os"
-	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -26,15 +24,31 @@ import (
 // updated bytes must say what those bytes say.
 var (
 	// usesPin matches a uses: line's value: the action, its commit, and the
-	// version comment Renovate moves with it.
-	usesPin = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*(\S+?@[0-9a-f]{40})(?: # (v[0-9]+\.[0-9]+\.[0-9]+))?$`)
+	// version comment Renovate moves with it. The comment is matched by shape
+	// alone, so that a pin written as a range or a pre-release is followed as
+	// the pin it is: the helpers' pinnedAction (workflowpins_test.go) takes any
+	// comment too.
+	usesPin = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*(\S+?@[0-9a-f]{40})(?: # (\S+))?$`)
+
+	// usesCommit matches a uses: line of any shape, whatever follows its
+	// commit: what bumpPins holds every pin to.
+	usesCommit = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*\S+@[0-9a-f]{40}`)
+
+	// exactRelease matches a version comment or a with: value written as an
+	// exact release, the only kind of pin this test bumps: Renovate moves a
+	// range (# v4) or a pre-release (# v1.2.3-rc.1) itself, untouched by the
+	// update applied here.
+	exactRelease = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
 	// syftVersion matches the exact syft release a syft-version: line pins.
 	syftVersion = regexp.MustCompile(`(?m)^\s*syft-version:\s*(v[0-9]+\.[0-9]+\.[0-9]+)$`)
 
 	// goreleaserVersion matches the exact GoReleaser release the goreleaser
-	// step's with: pins.
-	goreleaserVersion = regexp.MustCompile(`(?m)^\s*version:\s*"(v[0-9]+\.[0-9]+\.[0-9]+)"`)
+	// step's with: pins: the version: right below the goreleaser distribution,
+	// as the helpers' twin holds it (workflowpins_test.go), so that no other
+	// tool's quoted version: (the golangci-lint action's, say) is taken for
+	// GoReleaser's and moved.
+	goreleaserVersion = regexp.MustCompile(`(?m)^\s*distribution:\s*goreleaser\n\s*version:\s*"(v[0-9]+\.[0-9]+\.[0-9]+)"`)
 
 	// cosignRelease matches the exact cosign release a cosign-release: line
 	// pins.
@@ -135,30 +149,66 @@ func TestWorkflowFixturesFollowThePins(t *testing.T) {
 			t.Errorf("ReleaseWorkflow(a range in the updated release.yml's syft-version) = %q, want a message naming syft-version", got)
 		}
 	})
+
+	// The bump is what holds the cases above to a Renovate update, so it is held
+	// to the pins itself: it moves GoReleaser's version: and no other tool's,
+	// and it leaves no action at the commit it found.
+	t.Run("the bump moves GoReleaser's version and no other version:", func(t *testing.T) {
+		t.Parallel()
+
+		// The golangci-lint action's quoted version:, which only a goreleaser
+		// distribution's version: can be mistaken for.
+		doc := "      - uses: goreleaser/goreleaser-action@" + strings.Repeat("a", 40) + " # v7.3.0\n" +
+			"        with:\n" +
+			"          distribution: goreleaser\n" +
+			"          version: \"v2.20.1\"\n" +
+			"      - uses: golangci/golangci-lint-action@" + strings.Repeat("b", 40) + " # v9.3.0\n" +
+			"        with:\n" +
+			"          version: \"v2.15.0\"\n"
+
+		bumped := string(bumpPins(t, []byte(doc)))
+
+		if want := `version: "` + nextRelease(t, "v2.20.1") + `"`; !strings.Contains(bumped, want) {
+			t.Errorf("bumpPins() holds no %s: the goreleaser distribution's version: is the GoReleaser pin:\n%s", want, bumped)
+		}
+
+		if unwanted := `version: "v2.15.0"`; !strings.Contains(bumped, unwanted) {
+			t.Errorf("bumpPins() moved %s, which is not a goreleaser distribution's version::\n%s", unwanted, bumped)
+		}
+	})
+
+	t.Run("the bump moves an action pinned at a range's comment", func(t *testing.T) {
+		t.Parallel()
+
+		// A comment that is no exact release: Renovate moves the commit and
+		// leaves the comment, and no check of the fixtures may skip the pin
+		// because of the comment's shape.
+		commit := strings.Repeat("a", 40)
+		doc := "      - uses: example/action@" + commit + " # v4\n"
+
+		if got, want := string(bumpPins(t, []byte(doc))), "      - uses: example/action@"+nextCommit(t, commit)+" # v4\n"; got != want {
+			t.Errorf("bumpPins() = %q, want %q: the commit moves, the range's comment stays", got, want)
+		}
+	})
 }
 
-// readWorkflows returns the repository's ci.yml and release.yml.
+// readWorkflows returns the repository's ci.yml and release.yml: the two
+// documents the fixtures are built from, read once by this package
+// (repoCI and repoRelease, workflowpins_test.go). The clones are the caller's,
+// so that no case can change what the package's own fixtures were built from;
+// the bump (bumpPins) returns new bytes and leaves neither document changed.
 func readWorkflows(t *testing.T) (ci, release []byte) {
 	t.Helper()
 
-	ci, err := os.ReadFile(filepath.FromSlash("../../../../.github/workflows/ci.yml"))
-	if err != nil {
-		t.Fatalf("read ci.yml: %v", err)
-	}
-
-	release, err = os.ReadFile(filepath.FromSlash("../../../../.github/workflows/release.yml"))
-	if err != nil {
-		t.Fatalf("read release.yml: %v", err)
-	}
-
-	return ci, release
+	return slices.Clone(repoCI), slices.Clone(repoRelease)
 }
 
 // renovateBump returns ci.yml and release.yml with a Renovate update applied to
-// them in memory: every action at the next commit with the next release in its
-// version comment, and GoReleaser, cosign, syft and BuildKit at the next
-// release. Every new value is derived from the one it replaces, so the two
-// documents move together, as a grouped Renovate pull request moves them.
+// them in memory: every action at the next commit, the next release in the
+// version comment of every pin that names one, and GoReleaser, cosign, syft and
+// BuildKit at the next release. Every new value is derived from the one it
+// replaces, so the two documents move together, as a grouped Renovate pull
+// request moves them.
 func renovateBump(t *testing.T, ci, release []byte) (bumpedCI, bumpedRelease []byte) {
 	t.Helper()
 
@@ -176,7 +226,13 @@ func renovateBump(t *testing.T, ci, release []byte) (bumpedCI, bumpedRelease []b
 	return bumpedCI, bumpedRelease
 }
 
-// bumpPins returns doc with every pin this test follows moved on one update.
+// bumpPins returns doc with every pin this test follows moved on one update:
+// every action's commit, the version comment of an action's pin that names an
+// exact release, and the exact releases of GoReleaser, cosign, syft and
+// BuildKit. A comment that is a range or a pre-release stays as Renovate leaves
+// it, while the commit under it moves. Every uses: line doc holds must come out
+// at another commit: a pattern that skipped one would let the checks below pass
+// on a pin no update ever moved, and would let a fixture hard-code it.
 func bumpPins(t *testing.T, doc []byte) []byte {
 	t.Helper()
 
@@ -187,12 +243,21 @@ func bumpPins(t *testing.T, doc []byte) []byte {
 		at := strings.LastIndex(pin, "@")
 
 		out := strings.Replace(line, pin, pin[:at+1]+nextCommit(t, pin[at+1:]), 1)
-		if m[2] != "" {
+		if m[2] != "" && exactRelease.MatchString(m[2]) {
 			out = strings.Replace(out, "# "+m[2], "# "+nextRelease(t, m[2]), 1)
 		}
 
 		return out
 	})
+
+	for _, line := range usesCommit.FindAllString(string(doc), -1) {
+		commit := line[strings.LastIndex(line, "@")+1:]
+
+		if strings.Contains(bumped, "@"+commit) {
+			t.Fatalf("the update left %q at its commit: no pin of the document was bumped there, so the fixtures would be "+
+				"held to a pin no update moves", strings.TrimSpace(line))
+		}
+	}
 
 	for _, re := range []*regexp.Regexp{syftVersion, goreleaserVersion, cosignRelease} {
 		bumped = re.ReplaceAllStringFunc(bumped, func(match string) string {
