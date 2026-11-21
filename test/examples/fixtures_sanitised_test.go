@@ -74,8 +74,12 @@ func TestFixturesAreSanitised(t *testing.T) {
 // test/e2e, at a testdata path nested inside another testdata directory, at a
 // sample path and in the inventory guide's own fixtures under
 // test/e2e/testdata/inventory-guide/ is reported, with the account ID and the
-// host name it carries. Without this, a walker that silently skipped a directory
-// would pass TestFixturesAreSanitised.
+// host name it carries. The guide's own fixtures are where its allow-list
+// entries apply, so the rows planted there pin both sides of one: the value an
+// entry excuses in its file passes, and the same value in another file of that
+// directory, or another type's ARM ID in the same file, is reported. Without
+// this, a walker that silently skipped a directory would pass
+// TestFixturesAreSanitised.
 func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 	t.Parallel()
 
@@ -353,16 +357,38 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"namespaces/sb-shop"},
 		},
 		{
-			// The other side of that rule: inside the guide's own fixtures the
-			// guide's names are the sample, in either case an ARM ID may write
-			// them in (an ARM ID is case-insensitive), so the check reports
-			// nothing there. Without this row an excuse that no file could use
-			// would still pass the two above.
-			name: "guide shop names in the guide's own fixtures",
-			path: "test/e2e/testdata/inventory-guide/azure/planted-arm-shop.json",
-			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop\n" +
-				"/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/flexibleServers/PSQL-SHOP",
-			want: nil,
+			// The guide's seven synthetic shop names are excused by allow-list
+			// entries that each name one file and one type's value, since a
+			// value the check reads only in an ARM ID cannot be held to a file
+			// by a bare entry (issue #424's review). Here the guide's own
+			// Resource Graph export carries its PostgreSQL flexible server's
+			// name, which is the entry's business, so the check reports
+			// nothing. The row plants it at the allow-listed file itself, so it
+			// holds that entry to the file it names.
+			name:    "guide shop name in the guide's own fixture",
+			path:    "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
+			want:    nil,
+		},
+		{
+			// A per-file entry excuses its value in that one file only: the
+			// same ARM ID in a new file of the same directory, where an excuse
+			// over the directory would pass it, names a customer's PostgreSQL
+			// flexible server and is reported.
+			name:    "guide shop name in a new file of the guide's directory",
+			path:    "test/e2e/testdata/inventory-guide/azure/planted-arm-shop.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
+			want:    []string{"flexibleServers/psql-shop"},
+		},
+		{
+			// An entry names the value's type as well as its file, so the
+			// guide's shop name in another type's ARM ID - a Key Vault here,
+			// whose name is a public host of its own - is no name the guide's
+			// fixtures may carry and is reported.
+			name:    "guide shop name in another type's ARM ID",
+			path:    "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.KeyVault/vaults/psql-shop",
+			want:    []string{"vaults/psql-shop"},
 		},
 		{
 			// An abfss URL names the container before an @ and the customer's
@@ -749,6 +775,12 @@ func TestAllowListEntriesAreNarrowAndUsed(t *testing.T) {
 // planted at another checked path, is still reported. An allow list keyed on a
 // value alone would let a real value into a new file, whichever file it came
 // from, so every distinct value is tried rather than the first entry's.
+//
+// A value the check reads only in an ARM ID (an armNameType's type segment and
+// name, flexibleServers/psql-shop) is never reported on its own, so it is
+// planted inside an ARM ID of its own type: bare, it would pass here whatever
+// the allow list said, and the row would pin nothing. A storage account or a
+// bare name is reported wherever it stands and is planted as it is written.
 func TestAllowListDoesNotLeakToOtherFiles(t *testing.T) {
 	t.Parallel()
 
@@ -772,8 +804,10 @@ func TestAllowListDoesNotLeakToOtherFiles(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			t.Parallel()
 
+			content := armIDLeakContent(value)
+
 			dir := t.TempDir()
-			plantFixture(t, dir, plantedPath, "leaked value: "+value)
+			plantFixture(t, dir, plantedPath, content)
 
 			problems, err := fixtureProblems(dir)
 			if err != nil {
@@ -786,6 +820,39 @@ func TestAllowListDoesNotLeakToOtherFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+// armIDLeakContent returns the content a leak row plants value in: value as it
+// is written when the check reads it anywhere (a storage account, a project ID),
+// or the ARM ID an armNameType's name is read in, built from the type's provider
+// namespace (armNameTypes), when the check reads the value in an ARM ID only.
+func armIDLeakContent(value string) string {
+	segment, _, ok := strings.Cut(value, "/")
+	if !ok {
+		return "leaked value: " + value
+	}
+
+	provider, ok := armNameTypeProvider(segment)
+	if !ok {
+		return "leaked value: " + value
+	}
+
+	return "leaked value: /subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/" + provider + "/" + value
+}
+
+// armNameTypeProvider returns the provider namespace of the armNameTypes entry
+// whose resource types include segment, matched in any case as an ARM type is.
+// The first entry wins: where two namespaces share a type segment (a
+// flexibleServers of the PostgreSQL and of the MySQL provider), the name is
+// reported under either, so the row pins the same value.
+func armNameTypeProvider(segment string) (string, bool) {
+	for _, armType := range armNameTypes {
+		if slices.ContainsFunc(armType.types, func(typ string) bool { return strings.EqualFold(typ, segment) }) {
+			return armType.provider, true
+		}
+	}
+
+	return "", false
 }
 
 // problemValues returns the offending values of problems, in order, so a test
