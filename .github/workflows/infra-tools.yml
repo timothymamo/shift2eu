@@ -23,7 +23,7 @@ name: Infra tools
 # over, and dev/infra-lock-compare.sh fails unless every provider's version, constraints and set of
 # hashes equal the committed file's. The regenerated file holds every hash the registry publishes for the
 # provider version, whatever the -platform list: an h1 hash for each of the platforms the provider ships
-# (13 for scaleway/scaleway today), and the zh set from its signed SHA256SUMS. The three -platform flags
+# (13 for scaleway/scaleway 2.93.0), and the zh set from its signed SHA256SUMS. The three -platform flags
 # (darwin_arm64, linux_amd64, linux_arm64, as infra/site/README.md names them) make tofu download and
 # verify those platforms' packages. So this catches a hand-edited or partial hash set early, not a forged
 # provider. It needs no credential and reaches only GitHub (the OpenTofu release, the provider's

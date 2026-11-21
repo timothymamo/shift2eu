@@ -15,7 +15,7 @@ hand, in the PRD's *Runbook* section (R0 to R13), which the maintainer follows.
   default; `region` defaults to `nl-ams`, `bucket_name` to `shift2eu-site-www`, `public_read` to `false`
   (set it only if the runbook's R5 finds that Edge Services cannot serve private objects).
 - `.terraform.lock.hcl`: every hash the registry publishes for the provider version, whatever the
-  `-platform` list: an `h1` hash for each platform the provider ships (13 today) and the `zh` set from
+  `-platform` list: an `h1` hash for each platform the provider ships (13 for scaleway/scaleway 2.93.0) and the `zh` set from
   its signed `SHA256SUMS`. After a provider change, refresh it with
   `dev/tofu.sh -chdir=infra/site providers lock -platform=darwin_arm64 -platform=linux_amd64 -platform=linux_arm64`;
   the three `-platform` flags make tofu download and verify those platforms' packages. The "Infra tools"

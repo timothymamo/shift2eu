@@ -162,6 +162,27 @@ function escaped(s,   i, c, r) {
   return r
 }
 
+# A path element's label as the source writes it, the inverse of escaped(): a message that quotes a label
+# names what the file holds, never the escape the rules judge it by.
+function unescaped(s,   i, c, r) {
+  r = ""
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 3)
+    if (c == "%25") {
+      r = r "%"
+    } else if (c == "%2F") {
+      r = r "/"
+    } else if (c == "%3A") {
+      r = r ":"
+    } else {
+      r = r substr(s, i, 1)
+      continue
+    }
+    i += 2
+  }
+  return r
+}
+
 # Whether s is an HCL identifier: a letter or _, then letters, digits, _ or -.
 function isident(s,   i) {
   if (s == "" || index(LETTERS, substr(s, 1, 1)) == 0) {
@@ -257,7 +278,7 @@ function tok(t, v, lit, esc,   i, ok, n) {
             nlab++
             labFile[nlab] = FILENAME
             labLine[nlab] = tokline
-            labText[nlab] = bv[1] " \"" escaped(bv[i]) "\""
+            labText[nlab] = bv[1] " \"" bv[i] "\""
           }
           n = n ":" escaped(bv[i])
         } else if (bt[i] == "I") {
@@ -593,7 +614,7 @@ END {
     configDir[dirof(f)] = 1
     if (typ == "resource" || typ == "data" || typ == "ephemeral") {
       if (lab[2] !~ /^scaleway_/) {
-        problem("provider-type", f, bline[b], typ " \"" lab[2] "\" belongs to no scaleway provider: infra/ uses scaleway/scaleway alone")
+        problem("provider-type", f, bline[b], typ " \"" unescaped(lab[2]) "\" belongs to no scaleway provider: infra/ uses scaleway/scaleway alone")
       }
       if (lab[2] == "scaleway_iam_api_key") {
         problem("api-key", f, bline[b], "a " typ " scaleway_iam_api_key: the deploy API key is created by hand, so no secret reaches the state")
@@ -606,9 +627,9 @@ END {
       } else if (typ == "resource" && lab[2] == "scaleway_iam_application") {
         iamApplications++
       } else if (typ == "resource" && lab[2] ~ /^scaleway_iam_/) {
-        problem("iam-other", f, bline[b], "a resource " lab[2] ": infra/ creates exactly one IAM application and its one policy, nothing else in IAM")
+        problem("iam-other", f, bline[b], "a resource " unescaped(lab[2]) ": infra/ creates exactly one IAM application and its one policy, nothing else in IAM")
       } else if (lab[2] ~ /^scaleway_/ && !(typ == "resource" && (lab[2] in resourceType))) {
-        problem("resource-type", f, bline[b], typ " \"" lab[2] "\" is no resource type infra/site/main.tf uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
+        problem("resource-type", f, bline[b], typ " \"" unescaped(lab[2]) "\" is no resource type infra/site/main.tf uses (and no data or ephemeral type is allowed): a new type extends the allow list in dev/infra-rules.awk in the same PR, so its review sees both")
       }
     }
     if (m == 2 && el[1] == "terraform" && !(typ in terraformSetting)) {
@@ -618,7 +639,7 @@ END {
       problem("provider-setting", f, bline[b], "the provider \"scaleway\" block holds a " typ " block: it may set only " PROVIDER_SETTINGS_TEXT ", since any other setting changes what the plan reaches")
     }
     if (m == 1 && typ == "provider" && lab[2] != "scaleway") {
-      problem("provider-type", f, bline[b], "a provider \"" lab[2] "\": infra/ uses scaleway/scaleway alone")
+      problem("provider-type", f, bline[b], "a provider \"" unescaped(lab[2]) "\": infra/ uses scaleway/scaleway alone")
     }
     if (m == 1 && typ == "module") {
       nmod++
@@ -628,7 +649,7 @@ END {
     if (m == 2 && el[1] == "terraform" && typ == "backend") {
       backends[dirof(f)]++
       if (lab[2] != "s3") {
-        problem("backend-s3", f, bline[b], "backend \"" lab[2] "\": the state lives in a Scaleway bucket through the s3 backend, never local")
+        problem("backend-s3", f, bline[b], "backend \"" unescaped(lab[2]) "\": the state lives in a Scaleway bucket through the s3 backend, never local")
       }
     }
     if (m == 3 && el[1] == "terraform" && el[2] == "backend:s3") {

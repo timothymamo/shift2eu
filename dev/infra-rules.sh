@@ -114,7 +114,8 @@
 #   [test-label]     a test file's run or mock_provider label that is no identifier (a letter or _, then
 #                    letters, digits, _ or -), such as "x/assert" or "a b" (issue #434). Every block label,
 #                    in any file, enters the rules' block path with %, / and : escaped, so a label never
-#                    hides a block's children from the rules above
+#                    hides a block's children from the rules above; a message quotes a label as the
+#                    source writes it, never escaped
 # The HCL is read by dev/infra-rules.awk.
 #
 # Usage: dev/infra-rules.sh <infra root>   (from the repository root: dev/infra-rules.sh infra)

@@ -13,7 +13,10 @@
 # It reads only the lines tofu writes: blank lines, comments, provider "<address>" {, version = "...",
 # constraints = "...", hashes = [, one quoted hash per line, ] and }, each in its place. Any other line,
 # even one both files hold, fails as "<file>:<line>: a line ...", since the comparison could not see what
-# it says; so does a hash or a provider block one file lists twice, which a set comparison would hide. A
+# it says. The file is then read no further, and when either file has such a line only that line (one per
+# file) is reported and nothing is compared, so one unreadable line never cascades into a refusal for every
+# line or hash below it. A hash or a provider block one file lists twice fails too, which a set comparison
+# would hide. A
 # value outside a strict printable set (an address, version, constraint or hash holding ##[, which would
 # forge a GitHub Actions annotation, or a control character) is never echoed: the line says "an
 # unprintable value" in its place.
@@ -39,7 +42,8 @@ done
 
 # Prints one line per fact of a lock file, sorted, tab-separated: "provider <address>", "version <address>
 # <version>", "constraints <address> <constraints>" and "hash <address> <hash>". Blank lines, comments and
-# the hashes = [ and ] lines carry no fact. A line it cannot read prints "~unreadable <file>:<line> <why>";
+# the hashes = [ and ] lines carry no fact. A line it cannot read prints "~unreadable <file>:<line> <why>"
+# and ends the reading (no later line, and no "ends inside a provider block", is reported for that file);
 # a hash listed twice in one block "~twice hash <address> <hash>"; a provider block listed twice
 # "~twice provider <address>". A tab or control character in a value is kept as an unprintable mark, so
 # the value is compared as itself but never printed.
@@ -51,8 +55,10 @@ facts() { # <lock file>
       gsub(/\t/, "<tab>", s)
       return s
     }
-    function unreadable(why) {
+    function unreadable(why) { # reports the line and stops reading the file: no line below it is read
       print "~unreadable\t" FILENAME ":" FNR "\t" why
+      stopped = 1
+      exit
     }
     /^[[:space:]]*$/ || /^[[:space:]]*(#|\/\/)/ { next }
     state == 0 && /^provider[[:space:]]+"[^"]*"[[:space:]]*\{[[:space:]]*$/ {
@@ -89,7 +95,7 @@ facts() { # <lock file>
       unreadable("a line that is none of the shapes tofu writes in a lock file, here")
     }
     END {
-      if (state != 0) {
+      if (!stopped && state != 0) {
         unreadable("the file ends inside a provider block")
       }
     }
@@ -120,6 +126,16 @@ fail() { # <where> <what>
   echo >&2 "infra-lock-compare: [lock-hashes] $1: $2"
   failed=1
 }
+
+# A file with an unreadable line was read only up to it, so its facts are incomplete: report only the
+# unreadable line of each such file and compare nothing, since every difference would be a false one.
+unreadable="$(grep -h '^~unreadable' <<<"${committed}"$'\n'"${regenerated}" || true)"
+if [ -n "${unreadable}" ]; then
+  while IFS=$'\t' read -r _ where why; do
+    fail "${where}" "${why}"
+  done <<<"${unreadable}"
+  exit 1
+fi
 
 # What a file's reading found wrong in itself: a line it could not read, or a fact listed twice.
 problems() { # <committed|regenerated> <its facts>
