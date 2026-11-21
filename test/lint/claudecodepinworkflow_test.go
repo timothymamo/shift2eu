@@ -1123,18 +1123,18 @@ func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
 		t.Fatalf("%s: read the workflow: %v", rel, err)
 	}
 
-	jobs, err := yamlread.Mapping(lines)
+	top, err := yamlread.Mapping(lines)
 	if err != nil {
-		t.Fatalf("%s: read the workflow : %v", rel, err)
+		t.Fatalf("%s: read the workflow: %v", rel, err)
 	}
 
-	block, ok := claudeCodePinKeyBlock(jobs, "jobs")
+	jobs, ok := claudeCodePinField(top, "jobs")
 	if !ok {
 		// A workflow without jobs reports no check at all.
 		return
 	}
 
-	definitions, err := yamlread.Mapping(block.Block)
+	definitions, err := yamlread.Mapping(jobs.Block)
 	if err != nil {
 		t.Fatalf("%s: read jobs:: %v", rel, err)
 	}
@@ -1146,18 +1146,18 @@ func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
 			continue
 		}
 
-		name, ok := claudeCodePinKeyBlock(definitions, job.Key)
+		definition, ok := claudeCodePinField(definitions, job.Key)
 		if !ok {
 			continue
 		}
 
-		named, ok := claudeCodePinKeyBlockFromYAML(t, rel, name.Block, "name")
+		name, ok := claudeCodePinFieldIn(t, rel, definition.Block, "name")
 		if !ok {
 			continue
 		}
 
-		if got := claudeCodePinYAMLScalar(t, rel, named); got == claudeCodePinCheckName {
-			t.Errorf("%s: line %d: job %q is named %q, the required check %s alone reports; a required check is matched by name, so a second job of that name could mask the pin's red one (issue #452)", rel, named.Num, job.Key, got, claudeCodePinWorkflowPath)
+		if got := claudeCodePinYAMLScalar(t, rel, name); got == claudeCodePinCheckName {
+			t.Errorf("%s: line %d: job %q is named %q, the required check %s alone reports; a required check is matched by name, so a second job of that name could mask the pin's red one (issue #452)", rel, name.Num, job.Key, got, claudeCodePinWorkflowPath)
 		}
 	}
 }
@@ -1270,9 +1270,9 @@ func claudeCodePinScannedFile(t *testing.T, rel, path string) {
 	}
 }
 
-// claudeCodePinKeyBlock returns the entry of fields for key, and false when
+// claudeCodePinField returns the entry of fields for key, and false when
 // fields holds none.
-func claudeCodePinKeyBlock(fields []yamlread.Entry, key string) (yamlread.Entry, bool) {
+func claudeCodePinField(fields []yamlread.Entry, key string) (yamlread.Entry, bool) {
 	for _, field := range fields {
 		if field.Key == key {
 			return field, true
@@ -1282,9 +1282,10 @@ func claudeCodePinKeyBlock(fields []yamlread.Entry, key string) (yamlread.Entry,
 	return yamlread.Entry{}, false
 }
 
-// claudeCodePinKeyBlockFromYAML returns the entry of lines for key, and false
-// when lines holds none; the file path rel names the workflow in its failures.
-func claudeCodePinKeyBlockFromYAML(t *testing.T, rel string, lines []yamlread.Line, key string) (yamlread.Entry, bool) {
+// claudeCodePinFieldIn returns the entry for key among the fields of lines, and
+// false when they hold none; the file path rel names the workflow in its
+// failures.
+func claudeCodePinFieldIn(t *testing.T, rel string, lines []yamlread.Line, key string) (yamlread.Entry, bool) {
 	t.Helper()
 
 	fields, err := yamlread.Mapping(lines)
@@ -1292,7 +1293,7 @@ func claudeCodePinKeyBlockFromYAML(t *testing.T, rel string, lines []yamlread.Li
 		t.Fatalf("%s: read the mapping that holds %s:: %v", rel, key, err)
 	}
 
-	return claudeCodePinKeyBlock(fields, key)
+	return claudeCodePinField(fields, key)
 }
 
 // claudeCodePinYAMLScalar reads e as one scalar of the workflow at rel.
