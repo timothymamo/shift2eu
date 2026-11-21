@@ -9,12 +9,13 @@ import (
 
 // This file holds the page-script rules Scan applies to the tokens (PRD #297,
 // Layer 1): the banned names, the computed member access and the destructuring
-// assignment that could hide one, and the five exceptions, each confined to
+// assignment that could hide one, and the six exceptions, each confined to
 // one named function in one fixed form: the framing guard (guardFraming), the
 // download function (download), the unregister function
 // (unregisterServiceWorkers), the report's one insertion point (insertReport)
-// and the Trusted Types policy it inserts through, plus the module global,
-// read once, checked and deleted.
+// and the Trusted Types policy it inserts through, the inventory page's one
+// clipboard write (copyCommand, issue #373), plus the module global, read
+// once, checked and deleted.
 
 // The named functions the exceptions are confined to.
 const (
@@ -22,6 +23,7 @@ const (
 	fnDownload     = "download"
 	fnUnregister   = "unregisterServiceWorkers"
 	fnInsertReport = "insertReport"
+	fnCopyCommand  = "copyCommand"
 )
 
 // policyName is the one Trusted Types policy the page creates, which the
@@ -156,10 +158,12 @@ func BannedJSNames() []string {
 		names[name] = true
 	}
 
-	// The two names Scan allows inside one function only: checkInnerHTML and
-	// checkCreatePolicy.
+	// The names Scan allows inside one function only: checkInnerHTML,
+	// checkCreatePolicy, and checkClipboard and checkWriteText.
 	names["innerHTML"] = true
 	names["createPolicy"] = true
+	names["clipboard"] = true
+	names["writeText"] = true
 
 	return slices.Sorted(maps.Keys(names))
 }
@@ -202,10 +206,10 @@ type scanner struct {
 	// moduleVar is the binding of the module global's one read.
 	moduleVar string
 
-	topUsed, openerUsed, innerHTMLUsed bool
-	policies                           int
-	moduleReads, moduleDeletes         int
-	moduleSeen                         bool
+	topUsed, openerUsed, innerHTMLUsed, clipboardUsed bool
+	policies                                          int
+	moduleReads, moduleDeletes                        int
+	moduleSeen                                        bool
 }
 
 // newScanner pairs the brackets and finds the named functions, failing on a
@@ -375,7 +379,7 @@ func (s *scanner) checkFunctions() {
 
 	for _, fn := range s.functions {
 		switch fn.name {
-		case fnGuardFraming, fnDownload, fnUnregister, fnInsertReport:
+		case fnGuardFraming, fnDownload, fnUnregister, fnInsertReport, fnCopyCommand:
 		default:
 			continue
 		}
@@ -436,6 +440,10 @@ func (s *scanner) checkIdent(i int) {
 		}
 	case "innerHTML":
 		s.checkInnerHTML(i, owner)
+	case "clipboard":
+		s.checkClipboard(i, owner)
+	case "writeText":
+		s.checkWriteText(i, owner)
 	case "createHTML":
 		if s.isMember(i) && owner != fnInsertReport {
 			s.report(i, "createHTML is called only by the report's insertion point, %s", fnInsertReport)
@@ -615,6 +623,33 @@ func (s *scanner) checkInnerHTML(i int, owner string) {
 	if !namesHTML {
 		s.report(i, "%s's innerHTML takes no html parameter: the report's insertion point inserts the HTML reporter's fragment", fnInsertReport)
 	}
+}
+
+// checkClipboard allows the copy function's one clipboard write,
+// navigator.clipboard.writeText(...) called in place (issue #373): no read, no
+// other member, no other object's clipboard, and no second write.
+func (s *scanner) checkClipboard(i int, owner string) {
+	form := s.isIdent(i-2, "navigator") && s.isPunct(i-1, ".") && s.isPunct(i+1, ".") &&
+		s.isIdent(i+2, "writeText") && s.isPunct(i+3, "(")
+
+	if owner == fnCopyCommand && form && !s.clipboardUsed {
+		s.clipboardUsed = true
+
+		return
+	}
+
+	s.report(i, "clipboard is allowed only once, in the copy function %s, as navigator.clipboard.writeText(...): the page writes one command to the clipboard and never reads it", fnCopyCommand)
+}
+
+// checkWriteText allows writeText only as the clipboard's member, called in
+// place in the copy function: taken off the member, it could be called from
+// anywhere.
+func (s *scanner) checkWriteText(i int, owner string) {
+	if owner == fnCopyCommand && s.isMember(i) && s.isIdent(i-2, "clipboard") && s.isPunct(i+1, "(") {
+		return
+	}
+
+	s.report(i, "writeText is allowed only in the copy function %s, as navigator.clipboard.writeText(...)", fnCopyCommand)
 }
 
 // checkCreatePolicy allows one Trusted Types policy, of the fixed name.

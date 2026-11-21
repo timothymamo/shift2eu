@@ -43,7 +43,10 @@
 //     link.href = url and link.click(); in unregisterServiceWorkers,
 //     navigator.serviceWorker.getRegistrations(); in insertReport, one
 //     target.innerHTML = ... whose value names only html, the policy and
-//     createHTML. A second declaration of one of these functions is refused;
+//     createHTML; in copyCommand, the inventory page's copy function (issue
+//     #373), one navigator.clipboard.writeText(...) called in place, and no
+//     other use of clipboard or writeText anywhere. A second declaration of
+//     one of these functions is refused;
 //   - Trusted Types: exactly one trustedTypes.createPolicy("shift2eu-report",
 //     ...), its binding never assigned again, and createHTML called only by
 //     insertReport;
