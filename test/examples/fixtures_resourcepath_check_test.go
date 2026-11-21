@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 // projectPathPattern finds a GCP project ID in a resource path: the projects
@@ -74,6 +75,132 @@ const armIDProvidersSegment = "providers/microsoft.storage/"
 func armIDAccount(text string, start int) bool {
 	n := len(armIDProvidersSegment)
 	return start >= n && strings.EqualFold(text[start-n:start], armIDProvidersSegment)
+}
+
+// armNameType is one Azure resource type whose name, in an ARM ID, is globally
+// unique: the provider namespace and the resource types under it, written the
+// way Azure documents them, and the shortest name the type allows.
+type armNameType struct {
+	provider string
+	types    []string
+	// minLength is the shortest name, in characters, the type's naming rules
+	// allow. A shorter segment (the guide's placeholder namespaces/n) is no
+	// name of the type and names nobody.
+	minLength int
+}
+
+// armNameTypes are the Azure resource types besides a storage account whose
+// name an ARM ID carries and which Azure's naming rules
+// (learn.microsoft.com/azure/azure-resource-manager/management/resource-name-rules)
+// make globally unique, each the DNS label of a public host of its own:
+// <name>.vault.azure.net, <name>.azurecr.io, <name>.documents.azure.com,
+// <name>.database.windows.net, <name>.azurewebsites.net and
+// <name>.servicebus.windows.net. The naming rules' table lists the PostgreSQL
+// and MySQL single servers as global but not the flexible servers; each
+// flexible server gets the public DNS name <name>.postgres.database.azure.com
+// or <name>.mysql.database.azure.com all the same, so it is treated as global
+// too. The minimum lengths are the naming rules': a Key Vault three to
+// twenty-four characters, a registry five to fifty, a Cosmos DB account three
+// to forty-four, a SQL server one to sixty-three, a PostgreSQL or MySQL server
+// three to sixty-three, a web app two to sixty and a Service Bus namespace six
+// to fifty.
+var armNameTypes = []armNameType{
+	{provider: "Microsoft.KeyVault", types: []string{"vaults"}, minLength: 3},
+	{provider: "Microsoft.ContainerRegistry", types: []string{"registries"}, minLength: 5},
+	{provider: "Microsoft.DocumentDB", types: []string{"databaseAccounts"}, minLength: 3},
+	{provider: "Microsoft.Sql", types: []string{"servers"}, minLength: 1},
+	{provider: "Microsoft.DBforPostgreSQL", types: []string{"servers", "flexibleServers"}, minLength: 3},
+	{provider: "Microsoft.DBforMySQL", types: []string{"servers", "flexibleServers"}, minLength: 3},
+	{provider: "Microsoft.Web", types: []string{"sites"}, minLength: 2},
+	{provider: "Microsoft.ServiceBus", types: []string{"namespaces"}, minLength: 6},
+}
+
+// armNamePattern is the pattern that finds an armNameType's name in an ARM ID:
+// the providers segment, the namespace and one of the type's segments, matched
+// in any case, as an ARM ID is case-insensitive, then the name. The first
+// submatch is the type segment and the name, the value reported as written;
+// the second is the name alone. The name is the whole run of letters, digits,
+// hyphens, underscores and dots up to the next slash or other delimiter, wider
+// than any one type's charset on purpose: a name holding a byte its type never
+// allows is reported all the same rather than cut short and passed (it fails
+// closed), and no maximum length is read for the same reason. Only the child
+// resources after the name (/secrets/db-password, /queues/orders) are left out,
+// since the slash ends the run. A web app's name may hold Unicode letters, so
+// the run reads them too.
+func armNamePattern(t armNameType) *regexp.Regexp {
+	types := make([]string, len(t.types))
+	for i, typ := range t.types {
+		types[i] = regexp.QuoteMeta(typ)
+	}
+
+	return regexp.MustCompile(`(?i)providers/` + regexp.QuoteMeta(t.provider) + `/((?:` +
+		strings.Join(types, "|") + `)/([\p{L}\p{N}_.-]+))`)
+}
+
+// armNamePatterns are armNameTypes' patterns, in the same order.
+var armNamePatterns = func() []*regexp.Regexp {
+	patterns := make([]*regexp.Regexp, len(armNameTypes))
+	for i, t := range armNameTypes {
+		patterns[i] = armNamePattern(t)
+	}
+
+	return patterns
+}()
+
+// guideShopNamePattern matches, lowercased, exactly the synthetic names the
+// inventory guide's sample shop gives its Azure resources
+// (test/e2e/testdata/inventory-guide/azure): Azure's naming-guide abbreviation
+// for the type (psql, mysql, func, app, sb), the word shop and the guide's own
+// role words. A storage account of the shop (stshopassets) is excused by an
+// allow-list entry for its one file instead, but an armNameType's name is read
+// only in an ARM ID, so the bare value an entry would excuse is never reported
+// on its own and TestAllowListDoesNotLeakToOtherFiles could not hold such an
+// entry to its file. The pattern lists the guide's names one by one rather than
+// any word after shop, so a customer's name of that shape
+// (app-shop-acme-prod) is still reported.
+var guideShopNamePattern = regexp.MustCompile(
+	`^(?:psql-shop(?:-replica)?|mysql-shop-(?:catalog|reports)|func-shop-thumbnails|app-shop-storefront|sb-shop)$`)
+
+// sampleARMName reports whether name, an armNameType's name as written, is a
+// sample's: the shape a sample storage account has (example and generic words
+// run together, exampledata), the one a sample bucket has (example- and
+// generic words, example-data), as these types allow hyphens, or one of the
+// inventory guide's synthetic shop names (guideShopNamePattern). All are
+// matched case-insensitively.
+func sampleARMName(name string) bool {
+	return sampleStorageAccount(name) || sampleBucket(name) ||
+		guideShopNamePattern.MatchString(strings.ToLower(name))
+}
+
+// armNameProblems returns a problem for every armNameType's name an ARM ID in
+// text carries that is no sample's (sampleARMName). A match whose providers
+// segment is glued to a letter, digit, hyphen or underscore before it
+// (xproviders/) is no ARM ID's segment, and one whose name, its trailing dots
+// trimmed, is shorter than its type's minimum (namespaces/n) or empty
+// (sites/..., sites/$name) names nobody.
+func armNameProblems(text string) []problem {
+	var problems []problem
+
+	for i, pattern := range armNamePatterns {
+		for _, match := range pattern.FindAllStringSubmatchIndex(text, -1) {
+			if start := match[0]; start > 0 && (labelByte(text[start-1]) || text[start-1] == '-' || text[start-1] == '_') {
+				continue
+			}
+
+			name := strings.TrimRight(text[match[4]:match[5]], ".")
+			if utf8.RuneCountInString(name) < armNameTypes[i].minLength || sampleARMName(name) {
+				continue
+			}
+
+			problems = append(problems, problem{
+				line:  lineOf(text, match[2]),
+				value: text[match[2]:match[4]] + name,
+				rule:  "names a globally unique Azure resource in an ARM ID that is not example and generic words (CLAUDE.md rule 2)",
+			})
+		}
+	}
+
+	return problems
 }
 
 // s3ResourceARNPattern finds the access point or the bucket an S3 ARN names
@@ -153,30 +280,53 @@ func sampleStorageAccount(account string) bool {
 // reads because they carry no dot or sit in a path segment (issue #406): a GCP
 // project ID (projectPathPattern), the bucket of a Cloud Storage resource name
 // (projectBucketPattern), the storage account of an Azure ARM ID
-// (storageAccountPathPattern) and the access point, Outposts bucket or S3
-// Express directory bucket of an S3 ARN (s3ResourceARNPattern). Each is held to
-// its sample value: a project, a bucket or an access point must be a sample's
-// (example, or example- and generic words, and for a project example-project
-// (sampleProjectName), for an access point example-ap (sampleAccessPointName);
-// a directory bucket's words before its zone suffix), a storage
-// account must be example and generic words (sampleStorageAccount), and outside
-// an ARM ID a child-resource type or an RBAC operation after storageAccounts/
-// (Microsoft.Storage/storageAccounts/blobServices, .../read) is no account at
-// all. The value reported is the segment and the name as the file writes them
-// (projects/acme-corp-prod, buckets/acme-prod-data,
-// storageAccounts/acmeprodcustomers, accesspoint/acme-prod-ap,
-// accesspoint:acme-prod-ap, bucket/acme-op-bucket), so the failure names the
-// value to change.
+// (storageAccountPathPattern), the other globally unique Azure names an ARM ID
+// carries (armNameTypes: a Key Vault, a container registry, a Cosmos DB
+// account, a SQL, PostgreSQL or MySQL server or flexible server, a web app and
+// a Service Bus namespace, armNameProblems) and the access point, Outposts
+// bucket or S3 Express directory bucket of an S3 ARN (s3ResourceARNPattern).
+// Each is held to its sample value: a project, a bucket or an access point must
+// be a sample's (example, or example- and generic words, and for a project
+// example-project (sampleProjectName), for an access point example-ap
+// (sampleAccessPointName); a directory bucket's words before its zone suffix),
+// a storage account must be example and generic words (sampleStorageAccount),
+// another Azure name a storage account's or a bucket's sample (sampleARMName),
+// and outside an ARM ID a child-resource type or an RBAC operation after
+// storageAccounts/ (Microsoft.Storage/storageAccounts/blobServices, .../read)
+// is no account at all. The value reported is the segment and the name as the
+// file writes them (projects/acme-corp-prod, buckets/acme-prod-data,
+// storageAccounts/acmeprodcustomers, vaults/kv-contoso-prod,
+// accesspoint/acme-prod-ap, accesspoint:acme-prod-ap, bucket/acme-op-bucket),
+// so the failure names the value to change.
 //
-// It knowingly leaves these gaps, accepted when issue #406 closed:
+// It knowingly leaves these gaps, accepted when issues #406 and #424 closed:
 //
-//   - the other globally unique Azure names an ARM ID carries
-//     (Microsoft.KeyVault/vaults, Microsoft.ContainerRegistry/registries,
-//     Microsoft.DocumentDB/databaseAccounts, Microsoft.Sql/servers,
-//     Microsoft.Web/sites, Microsoft.ServiceBus/namespaces), each the DNS label
-//     of a public host, are not read: reading them needs a sample rule for each
-//     or allow-list entries for the guide's synthetic psql-shop,
-//     app-shop-storefront and sb-shop, left for a follow-up;
+//   - the globally unique Azure names an ARM ID carries beyond armNameTypes
+//     (Microsoft.Cache/redis, Microsoft.EventHub/namespaces,
+//     Microsoft.Relay/namespaces, Microsoft.Search/searchServices,
+//     Microsoft.ApiManagement/service,
+//     Microsoft.AppConfiguration/configurationStores,
+//     Microsoft.SignalRService/signalR, Microsoft.Cdn/profiles/endpoints,
+//     Microsoft.Network/frontDoors, Microsoft.Network/trafficManagerProfiles,
+//     a Cognitive Services account's custom subdomain), each the DNS label of
+//     a public host too, are not read: no fixture or guide page writes one, and
+//     each is one armNameTypes row, added test first with its own rows, when
+//     the inventory guide covers its type (issue #424 scoped the types the
+//     guide reads);
+//   - an armNameType's name outside an ARM ID (a type string with a name after
+//     it, Microsoft.Web/sites/app-contoso-prod, or a bare "name" field), for the
+//     same reason as a bare storage account: without the providers/ segment the
+//     segment after the type is a child-resource type's word as often as a
+//     name (Microsoft.ServiceBus/namespaces/queues);
+//   - an armNameType's name glued to a character outside the run it reads (a
+//     web app's name holding a symbol or a space), which is reported only up to
+//     that character, and a name shorter than its type's minimum, which names
+//     nobody;
+//   - the inventory guide's seven synthetic shop names (guideShopNamePattern),
+//     which pass in every file rather than only in the guide's fixtures, as an
+//     allow-list entry could not be held to one file for a value read only in
+//     an ARM ID; a customer whose resource carries one of those exact names
+//     would pass;
 //   - JSON-escaped slashes (projects\/acme-corp-prod\/...), which no pattern
 //     reads, for the same reason as vendorPathProblems' gap: no tool writes a
 //     fixture that way, and reading every spelling of a slash would make each
@@ -281,7 +431,7 @@ func resourcePathProblems(text string) []problem {
 		})
 	}
 
-	return problems
+	return append(problems, armNameProblems(text)...)
 }
 
 // resourceSegmentBounded reports whether the resource segment text[start:end]
