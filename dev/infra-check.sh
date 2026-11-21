@@ -47,6 +47,13 @@ mkdir -p "${home}" "${cache}"
 # The whole environment tofu (and dev/tofu.sh's download) sees. PATH finds curl, tar and the hash tool;
 # TMPDIR, the proxy settings and the CA bundle location are passed on when set, as a download may need
 # them, and none of them is a credential or changes what is checked.
+#
+# Deadlines (issue #434): dev/tofu.sh's own download carries curl's --connect-timeout and --max-time.
+# For init's provider fetch, TF_REGISTRY_CLIENT_TIMEOUT (seconds, tofu's default 10) bounds each request
+# to the OpenTofu registry's API, stated here so it cannot drift. OpenTofu documents no setting that
+# bounds the whole download of the provider package (the release's other knobs, TF_REGISTRY_DISCOVERY_RETRY,
+# TF_PROVIDER_DOWNLOAD_RETRY and TF_HTTP_RETRY_*, count or space retries): a package download that stalls
+# is bounded only by the CI job's timeout-minutes, or a Ctrl-C on a developer's machine.
 clean=(
   "PATH=${PATH}"
   "HOME=${home}"
@@ -54,6 +61,7 @@ clean=(
   "TF_PLUGIN_CACHE_DIR=${cache}"
   "TF_IN_AUTOMATION=1"
   "TF_INPUT=0"
+  "TF_REGISTRY_CLIENT_TIMEOUT=30"
   "CHECKPOINT_DISABLE=1"
   "SCW_CONFIG_PATH=/dev/null"
   "AWS_CONFIG_FILE=/dev/null"

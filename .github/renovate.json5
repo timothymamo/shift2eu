@@ -100,13 +100,18 @@
       // OpenTofu (issue #422). The terraform manager reads infra/site's *.tf (its default pattern,
       // **/*.tf and **/*.tofu) and reports required_version as dep type required_version for
       // hashicorp/terraform (https://docs.renovatebot.com/modules/manager/terraform/): point it at
-      // OpenTofu's releases, so it moves with infra/tofu.yaml's tofuVersion and digests in one PR.
+      // OpenTofu's releases, so it moves with infra/tofu.yaml's tofuVersion and digests in one PR. The
+      // release tags carry a v (v1.13.9) and required_version does not (1.13.9): extractVersion strips
+      // it, so the proposal is in the pin's own format (issue #434). infra/tofu.yaml's tofuVersion and
+      // digestVersion keep their v, as dev/tofu.sh and the release download need, so no rule strips it
+      // there.
       description: 'OpenTofu: infra/site required_version reads opentofu/opentofu releases',
       matchManagers: ['terraform'],
       matchDepTypes: ['required_version'],
       overrideDatasource: 'github-releases',
       overrideDepName: 'opentofu/opentofu',
       overridePackageName: 'opentofu/opentofu',
+      extractVersion: '^v(?<version>.+)$',
       groupName: 'OpenTofu',
     },
     {

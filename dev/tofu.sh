@@ -86,7 +86,9 @@ trap 'exit 129' HUP
 
 if [ ! -f "${tarball}" ]; then
   echo >&2 "tofu: downloading OpenTofu ${version} for ${os}_${arch}"
-  curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "${tmp}/${asset}" \
+  # A stalled connection or transfer fails within its deadline (per try), never holds make check
+  # (issue #434): the tarball is about 30 MB.
+  curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 300 -o "${tmp}/${asset}" \
     "https://github.com/opentofu/opentofu/releases/download/${version}/${asset}"
   got="$(sha256 "${tmp}/${asset}")"
   if [ "${got}" != "${digest}" ]; then

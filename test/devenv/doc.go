@@ -19,6 +19,17 @@
 // (a tfvars file, backend.hcl, a state file, anything under .terraform), only
 // the .example copies; it reads the repository's index and writes nothing.
 //
+// TestInfraLockCompare and TestInfraLockCompareUsage (infralockcompare_test.go,
+// issue #434) pin dev/infra-lock-compare.sh, which the "Infra tools" workflow
+// runs after regenerating infra/site's lock file: pairs of lock files derived
+// from the committed one, each differing in one way (a missing or extra hash,
+// another version or constraint, a missing provider block), must be refused
+// with [lock-hashes], equal and reordered ones pass, and a missing argument or
+// file is a usage error. TestTofuDownloadHasTimeouts (tofudownload_test.go,
+// issue #434) runs dev/tofu.sh in a temporary tree with a fake curl first on
+// PATH and requires --connect-timeout and --max-time on every download. Both
+// read and write temporary files only: no tofu, no network.
+//
 // The swap tests (limaswap_test.go) pin the template's swapSize param and run
 // its one system provision step that names PARAM_swapSize under bash, against
 // a fake guest root (SHIFT2EU_SWAP_ROOT) with fakes of fallocate, chmod,
