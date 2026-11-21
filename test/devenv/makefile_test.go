@@ -14,6 +14,7 @@ package devenv_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -249,6 +250,141 @@ func TestMakefileRunsNoDevScriptThroughShOrDotSlash(t *testing.T) {
 				name, strings.Join(lines, "\n"))
 		}
 	}
+}
+
+// recipeComment is a recipe line of a Makefile that starts with `#`: its number in the file (1-based) and the
+// line as written, without the leading tab and surrounding blanks. The fields are exported so that cmp.Diff can
+// report a table case's difference.
+type recipeComment struct {
+	Line int
+	Text string
+}
+
+// continues reports whether line ends with the backslash that joins it to the next line. Only a backslash that is
+// the line's last character continues it: GNU Make leaves a backslash followed by spaces literal, so trailing blanks
+// are not trimmed here either.
+func continues(line string) bool {
+	return strings.HasSuffix(line, `\`)
+}
+
+// continuedRecipeComments returns the recipe comment lines of body that make treats as part of a backslash-continued
+// command (issue #437): a line that starts with a tab and whose first non-blank character after that tab is `#`, and
+// that either continues the line above it (that line ends with a backslash, so make joins the two into one shell
+// command) or itself ends with a backslash (so it continues into the line below). Such a line is not harmless: make
+// hands the joined command to the shell, where the `#` comments out everything after it, so the recipe ends there,
+// silently and with exit 0. A `#` recipe line that stands alone is passed to the shell as its own command and does
+// nothing, and a `#` mid-line (in a quoted string, or behind `$$`) is data, so neither is returned.
+func continuedRecipeComments(body string) []recipeComment {
+	lines := strings.Split(body, "\n")
+
+	var comments []recipeComment
+
+	for i, line := range lines {
+		if !strings.HasPrefix(line, "\t") {
+			continue
+		}
+
+		// A recipe line may be indented past its tab with spaces, which make leaves to the shell.
+		if !strings.HasPrefix(strings.TrimLeft(line[1:], " \t"), "#") {
+			continue
+		}
+
+		if !continues(line) && (i == 0 || !continues(lines[i-1])) {
+			continue
+		}
+
+		comments = append(comments, recipeComment{Line: i + 1, Text: strings.TrimSpace(line)})
+	}
+
+	return comments
+}
+
+// TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand pins the matcher the test below uses (issue
+// #437): a `#` recipe line that continues the line above, or that continues into the line below, is one make 3.81
+// turns into a silent end of the recipe, where a `#` recipe line on its own, a make comment above a target and a `#`
+// mid-line are not.
+func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+		want []recipeComment
+	}{
+		{
+			name: "a recipe comment that continues the line above",
+			body: "target:\n\techo before; \\\n\t# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "# a comment \\"}},
+		},
+		{
+			name: "a recipe comment that continues into the line below",
+			body: "target:\n\t# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "# a comment \\"}},
+		},
+		{
+			name: "a recipe comment indented past its tab, continuing the line above",
+			body: "target:\n\techo before; \\\n\t   # a comment\n",
+			want: []recipeComment{{Line: 3, Text: "# a comment"}},
+		},
+		{
+			name: "a recipe comment on its own, not in a continued command",
+			body: "target:\n\techo before\n\t# a comment\n\techo after\n",
+		},
+		{
+			name: "a make comment above a target",
+			body: "# a make comment\ntarget:\n\techo before\n",
+		},
+		{
+			name: "a # in a quoted string of a continued command",
+			body: "target:\n\techo \"a # b\"; \\\n\techo after\n",
+		},
+		{
+			name: "a $$# use mid-line in a continued command",
+			body: "target:\n\techo \"$$#\"; \\\n\techo after\n",
+		},
+		{
+			name: "a recipe comment after a line whose backslash has trailing blanks",
+			body: "target:\n\techo before; \\ \n\t# a comment\n",
+		},
+		{
+			name: "a comment line without a leading tab",
+			body: "target:\n\techo before; \\\n# a comment\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, continuedRecipeComments(tc.body)); diff != "" {
+				t.Errorf("continuedRecipeComments(%q) (-want +got):\n%s", tc.body, diff)
+			}
+		})
+	}
+}
+
+// TestMakefileHasNoCommentInsideAContinuedRecipe pins issue #437's cause, so that it cannot come back: no recipe line
+// of the Makefile is a `#` comment that make treats as part of a backslash-continued command. GNU Make 3.81 (macOS
+// /usr/bin/make) hands such a line to the shell joined with the line above it, where the `#` comments out the rest of
+// the recipe: the command ends there, silently and with exit 0, so make agents-token-refresh-install never ran the
+// take-over nor `launchctl bootstrap`. GNU Make 4.4 (the VM, CI) runs the same recipe fine, so only this check can see
+// it. A comment that explains a recipe belongs above the target, as a make comment, or in the docs.
+func TestMakefileHasNoCommentInsideAContinuedRecipe(t *testing.T) {
+	t.Parallel()
+
+	comments := continuedRecipeComments(readRepoFile(t, makefilePath))
+	if len(comments) == 0 {
+		return
+	}
+
+	var offenders []string
+
+	for _, comment := range comments {
+		offenders = append(offenders, fmt.Sprintf("%s:%d: %s", makefilePath, comment.Line, comment.Text))
+	}
+
+	t.Errorf("%s has a `#` recipe line inside a backslash-continued command:\n%s\n\nGNU Make 3.81 (macOS /usr/bin/make) joins such a line to the line above it and the shell comments out the rest of the recipe, so the recipe ends silently with exit 0 and every step after the comment never runs; GNU Make 4.4 runs it fine, so no test on the VM sees it (issue #437). Move the comment above the target as a make comment, or into the docs' text (issue #437)",
+		makefilePath, strings.Join(offenders, "\n"))
 }
 
 // TestEveryDevScriptARecipeRunsIsExecutableInGit pins the other half of the convention (issues #242 and #337): a
