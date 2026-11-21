@@ -285,8 +285,10 @@ func startsComment(line string) bool {
 // wordStartHash reports whether line holds a `#` the shell begins a comment at: outside single and double quotes, at
 // the start of the line's text or just after a blank or one of `; & | (`. On a continued command the shell reads on
 // through the joined lines, so such a `#` drops the rest of the command as well, not just the rest of the line. A `#`
-// behind `$$`, inside a word (`a#b`), after `{` (`$${#x}`) or inside quotes is data. Quotes are tracked line by line:
-// a string left open at the end of one line of a continued command is not tracked into the next.
+// behind `$$`, inside a word (`a#b`), after `{` (`$${#x}`) or inside quotes is data. Outside single quotes a backslash
+// takes the character after it as data, inside double quotes too, as the shell does: `\"` opens no string, and the
+// `#` of `"a \" b # c"` stays inside the string. Quotes are tracked line by line: a string left open at the end of
+// one line of a continued command is not tracked into the next.
 func wordStartHash(line string) bool {
 	var single, double bool
 
@@ -294,6 +296,8 @@ func wordStartHash(line string) bool {
 		switch c := line[i]; {
 		case single:
 			single = c != '\''
+		case c == '\\':
+			i++
 		case double:
 			double = c != '"'
 		case c == '\'':
@@ -310,6 +314,36 @@ func wordStartHash(line string) bool {
 	return false
 }
 
+// ruleLineRecipe reports whether line is a make rule line that carries its own recipe after a `;` (`target: ; echo a`),
+// so make hands the text after the semicolon, and every line joined onto it, to the shell as the rule's recipe. Only a
+// non-tab line counts, and only with a `:` before the `;`: an assignment (`X = a; b`, `X := a`, `X ::= a`) declares no
+// rule, so its `;` starts no recipe.
+func ruleLineRecipe(line string) bool {
+	if strings.HasPrefix(line, "\t") {
+		return false
+	}
+
+	semicolon := strings.IndexByte(line, ';')
+	if semicolon < 0 {
+		return false
+	}
+
+	rule := line[:semicolon]
+
+	colon := strings.IndexByte(rule, ':')
+	if colon < 0 {
+		return false
+	}
+
+	// `X := a; b` and `X ::= a; b` assign: the `=` that follows the colon makes it an assignment operator, where a
+	// rule's colon is followed by its prerequisites and its `;` recipe.
+	if equals := strings.IndexByte(rule, '='); equals >= colon {
+		return false
+	}
+
+	return true
+}
+
 // continuedRecipeComments returns the lines of body that hold a `#` GNU Make 3.81 turns into the end of a
 // backslash-continued command (issue #437). Make joins a recipe line that ends in a backslash to the line after it
 // and hands the whole of it to one shell, which reads the `#` as the start of a comment: the command ends there,
@@ -323,9 +357,14 @@ func wordStartHash(line string) bool {
 //   - a `#` recipe line that ends in a backslash with no continuation above it: make does not join it there, but
 //     flagging it is the safe reading until its 3.81 behaviour is known.
 //
+// The first line of such a command is a tab-started recipe line or a rule line with its own `;` recipe (ruleLineRecipe);
+// a `#` on a recipe line inside a make function call (`$$(info # x)`) is flagged too, although make expands the call
+// away before the shell sees it, because a miss there costs a silently abandoned recipe.
+//
 // Not returned: a `#` recipe line that stands alone, which is passed to the shell as its own command and does
 // nothing; a `#` behind `$$`, in a word or inside quotes, which is data; and a `#` in a continuation chain that
-// begins at column 0, such as a continued variable assignment, which is make code where `#` is a common make comment.
+// begins at column 0 without a `;` recipe, such as a continued variable assignment, which is make code where `#`
+// is a common make comment.
 func continuedRecipeComments(body string) []recipeComment {
 	lines := strings.Split(body, "\n")
 
@@ -339,10 +378,11 @@ func continuedRecipeComments(body string) []recipeComment {
 	)
 
 	for i, line := range lines {
-		// recipe reports that make hands this line to the shell: a tab-started recipe line that continues no
-		// earlier line, or a later line of such a line's continuation chain, which make joins into the same
-		// command whatever its indentation, a line at column 0 included.
-		recipe := (aboveContinues && aboveIsRecipe) || (!aboveContinues && strings.HasPrefix(line, "\t"))
+		// recipe reports that make hands this line to the shell: a tab-started recipe line or a rule line with its own
+		// `;` recipe that continues no earlier line, or a later line of such a line's continuation chain, which make
+		// joins into the same command whatever its indentation, a line at column 0 included.
+		recipe := (aboveContinues && aboveIsRecipe) ||
+			(!aboveContinues && (strings.HasPrefix(line, "\t") || ruleLineRecipe(line)))
 
 		// joined reports that a `#` on this line comments out the rest of the command: the line continues into
 		// the next one, or the line above continues into it, so the shell reads on past it.
@@ -361,9 +401,10 @@ func continuedRecipeComments(body string) []recipeComment {
 
 // TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand pins the matcher the test below uses (issue
 // #437): every `#` make 3.81 turns into a silent end of a backslash-continued command is one — a `#` line at any
-// indentation inside the command and behind make's `@`, `-` and `+` prefixes, and a `#` that starts a word further
-// along such a line — where a `#` recipe line on its own, a make comment above a target or in a continued variable
-// assignment, and a `#` that is data (behind `$$`, in a word, in quotes) are not.
+// indentation inside the command and behind make's `@`, `-` and `+` prefixes, a `#` that starts a word further along
+// such a line, and a `#` on a line joined onto a rule line's own `;` recipe — where a `#` recipe line on its own, a
+// make comment above a target or in a continued variable assignment, and a `#` that is data (behind `$$`, in a word, in
+// quotes, escaped) are not. A `#` inside a make function call is flagged on purpose, a miss costing a silent recipe.
 func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *testing.T) {
 	t.Parallel()
 
@@ -421,6 +462,18 @@ func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *te
 			want: []recipeComment{{Line: 3, Text: "@-+  # a comment \\"}},
 		},
 
+		// A rule line that carries its own `;` recipe hands the lines joined onto it to the shell as that recipe's
+		// command, so a `#` there ends it too.
+		{
+			name: "a comment line continuing a rule-line recipe",
+			body: "target: ; echo a \\\n\t# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "# a comment \\"}},
+		},
+		{
+			name: "a make comment line continuing a variable assignment with :=",
+			body: "X := a \\\n# a make comment\ntarget:\n\techo hi\n",
+		},
+
 		// A `#` that starts a word further along a line of a continued command comments out the rest of it too.
 		{
 			name: "a # after a blank on a continued recipe line",
@@ -452,6 +505,16 @@ func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *te
 			body: "target:\n\techo a \\\n\techo b; # a comment\n",
 			want: []recipeComment{{Line: 3, Text: "echo b; # a comment"}},
 		},
+		{
+			name: "a # after an escaped quote that opens no string on a continued recipe line",
+			body: "target:\n\techo \\\"a; # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo \\\"a; # a comment \\"}},
+		},
+		{
+			name: "a # inside a make function call on a continued recipe line, flagged on purpose",
+			body: "target:\n\techo $(info # x) \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo $(info # x) \\"}},
+		},
 
 		// Neither a lone comment line nor a `#` that is data is part of a comment that ends a command.
 		{
@@ -481,6 +544,15 @@ func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *te
 		{
 			name: "a # in a single-quoted string of a continued command",
 			body: "target:\n\techo 'a # b'; \\\n\techo after\n",
+		},
+		{
+			name: "a # in a double-quoted string that holds an escaped quote, in a continued command",
+			body: "target:\n\techo \"a \\\" b # c\" \\\n\techo after\n",
+		},
+		{
+			name: "a # after a single-quoted string that holds a backslash, in a continued command",
+			body: "target:\n\techo 'a \\' ; # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo 'a \\' ; # a comment \\"}},
 		},
 		{
 			name: "a # behind $$ on a continued recipe line",
