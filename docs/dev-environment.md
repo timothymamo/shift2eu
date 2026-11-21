@@ -651,17 +651,22 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   by mistake. A refusal of one entry (not set, not a variable name) names it only when it is an upper-case
   variable name, the shape of every credential name; any other entry, such as a token pasted where a name
   goes, is given by its position alone: `VM_ENV entry 2 (entry 2 is not shown)`, with the reason (it may
-  be a credential typed by mistake) said once per message. Entry N is the Nth name of `VM_ENV`, counting
-  each name once (a repeated name only at its first place) and skipping empty entries. The rule rests on the shape of a name, so it
-  has a limit: a value of that shape pasted into `VM_ENV` (upper-case letters, digits and underscores
-  only, such as an AWS access key ID, `AKIA...`, which is not secret on its own) is still printed, e.g.
-  in the not-set list. `make vm-env`'s write step repeats, before it calls `limactl`, the refusals that
+  be a credential typed by mistake) said once per message. Entry N is the Nth word of `VM_ENV` as typed:
+  commas, spaces, tabs and newlines separate words, a run of them counts once, and a name listed twice
+  counts at each of its places (it is still checked and written once). A key can itself have the shape of
+  an upper-case name (an AWS access key ID, `AKIA` or `ASIA` and 16 upper-case letters and digits), so an
+  entry that is **not set** and is 16 characters or longer with no underscore is given by its position
+  too. A set variable, and every credential name above (each holds an underscore), is still named. The
+  limit left: a key of upper-case letters, digits and underscores shorter than that, or holding an
+  underscore, is still printed if not set. The success line, `vm-env: <names> written to ...`, follows the
+  same rule: an entry it may not print is written to `daemon.env` all the same, and only the line gives
+  it by position. `make vm-env`'s write step repeats, before it calls `limactl`, the refusals that
   `make -i` would otherwise skip: a `VM_ENV` that names nothing, a name refused for what it is (a GitHub
   token, a `SHIFT2EU_AGENTS_APP_*` variable, not a variable name), and an unset or empty credential, each
   naming a hidden entry by its position alone. So even `make -i vm-env` leaves `daemon.env` as it was and
   never says it wrote it in those cases; `make -i` still exits 0, so read its messages. The character
   check of the whole `VM_ENV` runs only in `make vm-env-check`; in the write step a tab or newline only
-  separates names, and a name holding any other such character is refused as not a variable name, so
+  separates names, counted as `make vm-env-check` counts them, and a name holding any other such character is refused as not a variable name, so
   nothing it forbids reaches the VM.
 - **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the two
   variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY` or the personal GitHub
