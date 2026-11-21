@@ -2042,7 +2042,8 @@ HEAD^1 HEAD`, from a checkout two commits deep) and, when none of `ai-review.yml
 `.github/scripts/install-claude-code.sh`, the check, its workflow or `go.mod` (whose go line picks the Go
 that builds the check) changed, passes without contacting the registry, printing that the pin's paths are
 unchanged. It fails closed: any other case (another event, no merge commit, a failing `git diff`) runs the
-check or fails the job. When a pin path changed, and on the push to `main` after a merge that changed one
+check or fails the job, and so does a merge commit whose second parent is not the pull request's head
+as the event file names it (`jq` on `GITHUB_EVENT_PATH`). When a pin path changed, and on the push to `main` after a merge that changed one
 (the push keeps its `paths:` filter), it reads both pins and fails unless the npm
 registry's document of exactly that version of `@anthropic-ai/claude-code-linux-x64` publishes the pinned
 integrity as its `dist.integrity`. Its error names the pinned and the published integrity and the command

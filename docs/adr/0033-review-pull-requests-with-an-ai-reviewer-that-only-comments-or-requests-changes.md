@@ -784,8 +784,9 @@ keeps `contents: read` alone), no pagination and no 3000-file cap, no network ca
 and the diff is of the very tree the check runs on. When no pin path changed, setup-go and
 `go run ./ci/claudecodepin` are skipped and the job passes without contacting the registry; otherwise they
 run as before. The step fails closed: it writes `pin=false` only on a `pull_request` whose `HEAD` has
-exactly two parents, the second of them the event's `pull_request.head.sha` (so `HEAD^1` is `main` and
-the diff is the pull request's change, not its reverse), after `git diff` succeeded (its output goes to a file first, so a failing diff fails
+exactly two parents, the second of them the event's `pull_request.head.sha` (read with
+`jq -er .pull_request.head.sha "$GITHUB_EVENT_PATH"`, so a missing event file or a failing `jq` fails the
+step; and so `HEAD^1` is `main` and the diff is the pull request's change, not what `main` added), after `git diff` succeeded (its output goes to a file first, so a failing diff fails
 the step, which a process substitution would not) and listed no pin path. Every other case writes
 `pin=true` or fails the step, and the two later steps run under `if: steps.changes.outputs.pin != 'false'`,
 so a missing or garbled output runs the check. The event comes from `GITHUB_EVENT_NAME`; no expression is

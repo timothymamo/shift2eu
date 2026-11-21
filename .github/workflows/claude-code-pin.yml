@@ -17,12 +17,14 @@ name: Claude Code pin
 # changes step decides whether the pull request touches the pin's paths: ai-review.yml, the install script
 # that consumes the pin, this file, the check's code and go.mod (whose go line picks the Go that builds the
 # check). actions/checkout checks out the merge commit refs/pull/<n>/merge two commits deep; its first
-# parent is main before the merge, so git diff HEAD^1 HEAD is exactly what merging the pull request changes
-# on main. Git, not the API's file list: no pull-requests: read scope, no pagination and no 3000-file cap,
+# parent is main before the merge and its second the pull request's head, so git diff HEAD^1 HEAD is
+# exactly what merging the pull request changes on main. The step trusts neither the parent count nor
+# their order alone: it reads the head's sha from the event file (jq on GITHUB_EVENT_PATH) and requires it
+# to be HEAD's second parent, since parents the other way round would diff what main added instead. Git, not the API's file list: no pull-requests: read scope, no pagination and no 3000-file cap,
 # no network call besides the checkout, and the diff is of the very tree the check then runs on. When no
 # pin path changed, the job passes without contacting the registry; otherwise it runs the check. It fails
 # closed: the step says the pin is unchanged only on a pull_request whose HEAD is a merge commit with two
-# parents, whose git diff succeeded and listed no pin path; any other case runs the check or fails the
+# parents, the second the event's head, whose git diff succeeded and listed no pin path; any other case runs the check or fails the
 # step, and a missing or garbled output runs the check too. So "Claude Code pin" reports on every pull
 # request and is meant to be a required status check of the Protect main ruleset
 # (docs/dev-environment.md, The Claude Code pin check). The push to main keeps the paths: filter: required
@@ -82,6 +84,15 @@ jobs:
             echo "pin=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # The parents in the order the diff needs: the second must be the pull request's head, as the
+          # runner's event file names it, so HEAD^1 is main. A bare assignment, so a missing file or a
+          # failing jq fails the step.
+          head="$(jq -er .pull_request.head.sha "$GITHUB_EVENT_PATH")"
+          if [ "${commits[2]}" != "$head" ]; then
+            echo "HEAD's second parent is not the pull request's head: checking the pin."
+            echo "pin=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # The diff goes to a file first, so a failing git diff fails the step (set -e) instead of
           # handing the loop an empty list, as a process substitution would. The file lives in the
           # checkout's git directory, which the runner discards with the checkout.
@@ -90,6 +101,8 @@ jobs:
           # NUL-separated names: no quote or newline in a name can hide a path, and --no-renames lists
           # the old path of a rename too.
           while IFS= read -r -d '' path || [ -n "$path" ]; do
+            # In a case pattern * crosses /, so ci/claudecodepin/* matches nested files too, as the push
+            # filter's ci/claudecodepin/** does.
             case "$path" in
               .github/workflows/ai-review.yml | .github/scripts/install-claude-code.sh | \
                 .github/workflows/claude-code-pin.yml | go.mod | ci/claudecodepin/*)
