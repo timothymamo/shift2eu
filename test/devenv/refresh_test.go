@@ -1450,6 +1450,10 @@ wait "${job}" || true`
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			if tc.noBackgroundJob {
+				skipUnderMake381OnMacOS(t, `the trap's "${!:-}" is still "$!: unbound variable" under bash 3.2, the Mac's /bin/sh, issue #448`)
+			}
+
 			sb := newSandbox(t)
 			harness := filepath.Join(sb.root, "window.sh")
 			sleepPidFile := filepath.Join(sb.root, "sleep.pid")
@@ -1526,7 +1530,7 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 				waitFor(t, 30*time.Second, "the replay's sleep to be running before the signal goes in", func() bool {
 					comm, err := exec.Command(realTool(t, "ps"), "-p", strconv.Itoa(jobPid), "-o", "comm=").Output()
 
-					return err == nil && strings.TrimSpace(string(comm)) == "sleep"
+					return err == nil && isSleepCommand(string(comm))
 				})
 			default:
 				jobPid = pidFrom(t, jobPidFile, "the background job the window ran to its end")
@@ -1989,7 +1993,7 @@ func TestAgentsAppTokenRefreshAnswersASignalInTheStillLockedWait(t *testing.T) {
 	waitFor(t, 30*time.Second, "the sleep of the refresher's still_locked wait to run", func() bool {
 		comm, err := exec.Command(realTool(t, "ps"), "-p", strconv.Itoa(sleepPid), "-o", "comm=").Output()
 
-		return err == nil && strings.TrimSpace(string(comm)) == "sleep"
+		return err == nil && isSleepCommand(string(comm))
 	})
 
 	pgid := processGroupOf(t, refresh.pid())
@@ -2138,7 +2142,8 @@ func sleepsInProcessGroup(t *testing.T, pgid string) []string {
 
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 4 || fields[1] != pgid || fields[3] != "sleep" || strings.HasPrefix(fields[2], "Z") {
+		if len(fields) < 4 || fields[1] != pgid || !isSleepCommand(strings.Join(fields[3:], " ")) ||
+			strings.HasPrefix(fields[2], "Z") {
 			continue
 		}
 
@@ -2146,6 +2151,13 @@ func sleepsInProcessGroup(t *testing.T, pgid string) []string {
 	}
 
 	return pids
+}
+
+// isSleepCommand reports whether comm, a process's command as `ps -o comm=` prints it, is a sleep. Linux's ps
+// prints the bare name, macOS's the path the process was exec'd by: the shim of issue #319's wait execs the
+// machine's sleep by its absolute path, which macOS shows as /bin/sleep (issue #314).
+func isSleepCommand(comm string) bool {
+	return filepath.Base(strings.TrimSpace(comm)) == "sleep"
 }
 
 // TestAgentsAppTokenRefreshDoesNotEchoTheLockFilesPid pins the finding of issue #288's review: the file the lock

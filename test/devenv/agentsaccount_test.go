@@ -62,7 +62,7 @@ func runMakeForRefusal(t *testing.T, target string, env map[string]string) (stri
 	output := t.TempDir()
 	stdoutPath, stderrPath := filepath.Join(output, "stdout"), filepath.Join(output, "stderr")
 
-	cmd := exec.Command("make", "-C", root, "--no-print-directory", target)
+	cmd := exec.Command(makeProgram(t), "-C", root, "--no-print-directory", target)
 	cmd.Env = envList(env)
 	cmd.Dir = root
 

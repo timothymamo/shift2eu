@@ -38,6 +38,22 @@
 // .expect names. With -update the first test writes the templates and the
 // .expect files from dev/lima.yaml and the cases instead of comparing.
 //
+// Every test that runs the Makefile runs the make SHIFT2EU_TEST_MAKE names
+// (make_test.go, issue #314), make when it is unset, so the suite can run under
+// the Mac's /usr/bin/make, GNU Make 3.81, which reads some recipes differently
+// from the make 4.x of the VM and CI (issue #437). The make-381 job of
+// .github/workflows/ci.yml runs the package on macOS with it set to
+// /usr/bin/make and SHIFT2EU_TEST_MAKE_VERSION=3.81; with that variable set,
+// TestTestMakeIsTheVersionNamed checks that make --version reports that release
+// and, for 3.81, that a # line inside a continued recipe ends the recipe there,
+// as on the Mac. Without it the test skips. TestTestsRunMakeThroughMakeProgram
+// (makeprogramscan_test.go) refuses a literal make handed to exec.Command or
+// exec.CommandContext in the package's test files, a guard against a test
+// that runs make by accident: it catches the literal "make" or "gmake", not a
+// program name built any other way. On
+// macOS the fake VM's PATH starts with a GNU-style ln -T shim (sandbox_test.go,
+// gnuLnT), as the VM is Linux and BSD ln has no -T.
+//
 // The package has no production code. The test runs in make test, make check
 // and CI's make cover, without the network or credentials; whether Lima
 // refuses each template is checked by the job, with the pinned Lima.
