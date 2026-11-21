@@ -7,7 +7,12 @@
 //     fetched;
 //   - README.md and every page under docs/ start with the single # heading
 //     that is its title;
-//   - docs/README.md, the index, links to every page under docs/;
+//   - every page under docs/ is listed by an index: docs/README.md, or a
+//     sub-index, a README.md in a directory directly below docs/ that
+//     docs/README.md links (one level, no chains). A link to a directory
+//     lists every page directly inside it, not those in its subdirectories,
+//     so a dated audit report under docs/security/audits/ needs no index
+//     edit (PRD #175, issue #280);
 //   - README.md links only to files the release archives in .goreleaser.yaml
 //     ship, so its links work in an unpacked archive;
 //   - no shell command block (tagged bash, sh, shell, console, or untagged) in

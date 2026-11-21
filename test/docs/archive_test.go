@@ -130,7 +130,75 @@ func TestReadmeLinksStayInTheArchive(t *testing.T) {
 // A link to a directory lists every Markdown page directly inside it, so a
 // dated report needs no index edit of its own; a page in a subdirectory of a
 // linked directory is not covered by that link.
-func indexProblems(fsys fs.FS) ([]string, error)
+func indexProblems(fsys fs.FS) ([]string, error) {
+	const index = "docs/README.md"
+	listed := map[string]bool{}
+
+	// listLinks marks what the index or sub-index file links as listed: a
+	// page, or every Markdown page directly inside a linked directory. It
+	// returns the links that name a sub-index of docs/README.md's, which only
+	// the index's own links can.
+	listLinks := func(file string) ([]string, error) {
+		data, err := fs.ReadFile(fsys, file)
+		if err != nil {
+			return nil, err
+		}
+		var subIndexes []string
+		for _, l := range mdlink.Links(data) {
+			target, _, _ := strings.Cut(l.Dest, "#")
+			if target == "" || strings.Contains(target, ":") {
+				continue
+			}
+			name := path.Join(path.Dir(file), target)
+			info, err := fs.Stat(fsys, name)
+			if err != nil {
+				continue // a missing target is TestRelativeLinksResolve's to report
+			}
+			if !info.IsDir() {
+				listed[name] = true
+				if path.Base(name) == "README.md" && path.Dir(path.Dir(name)) == "docs" {
+					subIndexes = append(subIndexes, name)
+				}
+				continue
+			}
+			entries, err := fs.ReadDir(fsys, name)
+			if err != nil {
+				return nil, err
+			}
+			for _, e := range entries {
+				if !e.IsDir() && path.Ext(e.Name()) == ".md" {
+					listed[path.Join(name, e.Name())] = true
+				}
+			}
+		}
+		return subIndexes, nil
+	}
+
+	subIndexes, err := listLinks(index)
+	if err != nil {
+		return nil, err
+	}
+	for _, sub := range subIndexes {
+		if _, err := listLinks(sub); err != nil {
+			return nil, err
+		}
+	}
+
+	unlisted := []string{}
+	err = fs.WalkDir(fsys, "docs", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && path.Ext(p) == ".md" && p != index && !listed[p] {
+			unlisted = append(unlisted, p)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return unlisted, nil
+}
 
 // writeDocsTree writes files, a map from a slash-separated path to its
 // contents, under a temporary directory and returns that directory as an fs.FS,
