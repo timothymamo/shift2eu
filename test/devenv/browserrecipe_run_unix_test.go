@@ -2,12 +2,13 @@
 
 // Pins what two runs of make test-browser at once do to the site's bundle, what a run does when the container it
 // started Chromium in is already gone, what it does when the container command merely fails to read that
-// container's state, and what an interrupted run cleans up (issue #423 items 2 and 3 and the reviewer's findings
-// S2 and N2, PRD #297 milestone 2, ADR 0036). Each test runs the real recipe of the real Makefile, in a clone of
-// it, with the two commands the recipe runs replaced by stand-ins - the container command, the recipe's
-// $(DOCKER), and go - so no test needs a container runtime, a browser or a build of the site, and no test writes
-// anything into the worktree it runs from. The stand-ins answer the way the tools they stand for do, whatever the
-// recipe asks them, so the tests pin the recipe's behaviour and not one spelling of it.
+// container's state, and what an interrupted run cleans up - including when a second signal of the same kind
+// reaches it while it cleans up (issue #423 items 2 and 3 and the reviewer's findings S2 and N2, PRD #297
+// milestone 2, ADR 0036). Each test runs the real recipe of the real Makefile, in a clone of it, with the two
+// commands the recipe runs replaced by stand-ins - the container command, the recipe's $(DOCKER), and go - so no
+// test needs a container runtime, a browser or a build of the site, and no test writes anything into the worktree
+// it runs from. The stand-ins answer the way the tools they stand for do, whatever the recipe asks them, so the
+// tests pin the recipe's behaviour and not one spelling of it.
 //
 // Unix only, as the run kills the whole process group of a recipe it gives up on (syscall.SysProcAttr.Setpgid):
 // a recipe that waits out its 60 seconds would otherwise hold the test there, for the minute in which the case
@@ -100,9 +101,14 @@ var exitStatusWord = regexp.MustCompile(`(^|[^0-9])3([^0-9]|$)`)
 // devtoolsLogLine; dockerModeDead, one that exited at once with SHIFT2EU_TEST_DOCKER_STATUS after printing
 // SHIFT2EU_TEST_DOCKER_LOG_LINE; dockerModeInspectTrouble, one that runs while the container command fails on the
 // calls SHIFT2EU_TEST_DOCKER_INSPECT_PLAN names and whose log answers nothing for the first
-// SHIFT2EU_TEST_DOCKER_LOG_MISSES calls; and dockerModeSilent, one that runs and never logs an address. In the
-// trouble mode SHIFT2EU_TEST_DOCKER_INSPECT_PLAN holds one character per inspect call - f fails the call the way
-// the container command fails for a container it cannot find, printing SHIFT2EU_TEST_DOCKER_INSPECT_ERROR on
+// SHIFT2EU_TEST_DOCKER_LOG_MISSES calls; and dockerModeSilent, one that runs and never logs an address.
+//
+// SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM names a signal the container command sends the recipe's shell while it handles
+// rm, once it is a moment into that call: the second signal of the same kind that reaches a run which is cleaning
+// up (issue #423, commit 93b859d).
+//
+// In the trouble mode SHIFT2EU_TEST_DOCKER_INSPECT_PLAN holds one character per inspect call - f fails the call the
+// way the container command fails for a container it cannot find, printing SHIFT2EU_TEST_DOCKER_INSPECT_ERROR on
 // standard error and exiting 1, o answers with the container's state - and its last character holds for the calls
 // beyond its end. A run in dockerModeRunning meets the other run of the same worktree at the rendezvous inside
 // run, so both runs hold what they serve at the same time, whichever of them comes first (issue #423 item 2). A
@@ -208,7 +214,18 @@ ps)
 	*) [ "$mode" = dead ] || printf 'contract-id\n' ;;
 	esac
 	;;
-rm | kill | stop | start | pull)
+rm)
+	if [ -n "${SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM:-}" ]; then
+		# A second signal of the same kind as the one the test sent to the run, arriving while the recipe's EXIT
+		# trap is in this call: what make hands the recipe's shell when it is itself terminated, as a signal to the
+		# whole process group terminates it. The trap has to ignore it, or its own exit ends the shell before the
+		# rest of the cleanup runs.
+		kill -s "${SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM}" "$PPID" 2>/dev/null || true
+		# Stay in the call a moment: the signal must arrive while the trap is in it, not after the trap is done.
+		sleep 0.2
+	fi
+	;;
+kill | stop | start | pull)
 	:
 	;;
 *)
@@ -217,6 +234,18 @@ rm | kill | stop | start | pull)
 	;;
 esac
 exit 0
+`
+
+// fakeRemoveCommand stands in for rm in a sandbox a test asks for it in, so a test can hand the recipe a second
+// signal of its own while the EXIT trap removes the bundle directory, the first of the two removals the fix ordered
+// (issue #423, commit 93b859d). It does what rm does, and hands the rest of its work to the real rm once the signal
+// is sent. SHIFT2EU_TEST_SIGNAL_ON_RM names the signal; a sandbox that writes this stand-in sets it.
+const fakeRemoveCommand = `#!/bin/sh
+if [ -n "${SHIFT2EU_TEST_SIGNAL_ON_RM:-}" ]; then
+	kill -s "${SHIFT2EU_TEST_SIGNAL_ON_RM}" "$PPID" 2>/dev/null || true
+	sleep 0.2
+fi
+exec /bin/rm "$@"
 `
 
 // fakeGoCommand stands in for the go command the two targets run: make site's builder, which gets the directory
@@ -358,6 +387,11 @@ func newBrowserRecipeSandbox(t *testing.T, mode string) *browserRecipeSandbox {
 		"SHIFT2EU_TEST_DOCKER_INSPECT_PLAN":  "",
 		"SHIFT2EU_TEST_DOCKER_INSPECT_ERROR": goneInspectLogLine,
 		"SHIFT2EU_TEST_DOCKER_LOG_MISSES":    "0",
+
+		// The second signal a case sends while the run cleans up, quiet by default: a test that pins the second
+		// signal sets the one its stand-in sends it with, and writes the stand-in rm when it needs that one (#423).
+		"SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM": "",
+		"SHIFT2EU_TEST_SIGNAL_ON_RM":        "",
 	}
 
 	return sb
@@ -366,6 +400,15 @@ func newBrowserRecipeSandbox(t *testing.T, mode string) *browserRecipeSandbox {
 // sharedBundle is the bundle make site builds, the one both runs of a worktree would share if the recipe served it.
 func (sb *browserRecipeSandbox) sharedBundle() string {
 	return filepath.Join(sb.clone, "bin", "site")
+}
+
+// writeRemoveStandIn puts the stand-in rm first on PATH, so a test can send the recipe a second signal of its own
+// while the EXIT trap removes the bundle directory (fakeRemoveCommand, issue #423). The sandboxes of the other tests
+// have no rm of their own and run the machine's.
+func (sb *browserRecipeSandbox) writeRemoveStandIn(t *testing.T) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(sb.binDir, "rm"), []byte(fakeRemoveCommand), 0o700)
 }
 
 // goTestRecord is one run of the stand-in go test: the bundle directory it was handed, the files that directory
@@ -769,119 +812,183 @@ func TestMakeTestBrowserRecipeFailsAtOnceWhenInspectKeepsFailing(t *testing.T) {
 	}
 }
 
+// Where a case's second signal of the same kind arrives, named by the stand-in that sends it while the run cleans up
+// (issue #423): in the container command's rm -f, or in the rm that removes the bundle directory.
+const (
+	againOnContainer = "container"
+	againOnBundle    = "bundle"
+)
+
 // TestMakeTestBrowserRecipeCleansUpOnASignal pins the reviewer's finding S2 on issue #423 that an interrupted run
-// cleans up after itself. The recipe traps a hang-up (what closing the pane sends), an interrupt and a termination
-// and exits through its EXIT trap, because dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills
-// it: an interrupted run must still remove its Chromium container and the bundle directory of its own, and must not
-// report a passing smoke test. The run is interrupted in its wait loop, with a container that runs and never logs a
-// DevTools address - the state a hang-up meets most often, a run that will wait its minute out.
+// cleans up after itself, however the signal reaches it. The recipe traps a hang-up (what closing the pane sends), an
+// interrupt and a termination and exits through its EXIT trap, because dash, the VM's /bin/sh, runs no EXIT trap when
+// an untrapped signal kills it: an interrupted run must still remove its Chromium container and the bundle directory
+// of its own, and must not report a passing smoke test. The run is interrupted in its wait loop, with a container
+// that runs and never logs a DevTools address - the state a hang-up meets most often, a run that will wait its
+// minute out.
 //
-// The signal goes to the recipe's shell, the process the traps are set in, and not to the whole process group the
-// pane's hang-up reaches: a group signal kills the shell's children too, and dash then occasionally aborts the EXIT
-// trap after its first command, as it reaps a killed child, so a run leaves the bundle directory behind now and
-// then (observed in a mirror of this recipe, and here, before the signal was aimed at the shell). What the traps do
-// is what these cases pin, and they pin it on the shell alone, where it holds every time.
+// A second signal of the same kind must not cost the cleanup: one arriving while the EXIT trap runs used to fire
+// that signal's own trap, whose exit ended the shell and abandoned the rest of the cleanup, so the bundle directory
+// was left behind every time. One does arrive in the wild - make forwards a SIGTERM it receives to its children, so
+// a signal to the whole process group, as closing the pane sends it, hands the recipe's shell a second one - which
+// is why the trap now ignores the three signals before it removes anything (issue #423, commit 93b859d). So the
+// cases below hand the run that second signal from a stand-in, once while the trap removes the container and once
+// while it removes the bundle directory, and hand one signal to the whole process group besides, and every one of
+// them must end with the container and the directory gone.
 func TestMakeTestBrowserRecipeCleansUpOnASignal(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
+	// The signals the recipe traps, as the stand-ins spell them for the second signal of the same kind.
+	signals := []struct {
 		name   string
 		signal syscall.Signal
+		// killName is the signal as kill -s takes it, for the stand-in that sends the second one.
+		killName string
 	}{
 		{
-			name:   "a hang-up, as closing the pane sends it",
-			signal: syscall.SIGHUP,
+			name:     "a hang-up",
+			signal:   syscall.SIGHUP,
+			killName: "HUP",
 		},
 		{
-			name:   "an interrupt, as Ctrl-C sends it",
-			signal: syscall.SIGINT,
+			name:     "an interrupt",
+			signal:   syscall.SIGINT,
+			killName: "INT",
 		},
 		{
-			name:   "a termination, as a service stop sends it",
-			signal: syscall.SIGTERM,
+			name:     "a termination",
+			signal:   syscall.SIGTERM,
+			killName: "TERM",
 		},
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	// How the signal reaches the run, and whether a second one of the same kind follows while it cleans up.
+	deliveries := []struct {
+		name string
+		// group sends the signal to the whole process group make, the recipe's shell and that shell's children are
+		// in, as closing the pane does, instead of to the recipe's shell alone.
+		group bool
+		// againOn says where the run meets a second signal of the same kind: "" for a single signal, againOnContainer
+		// while the container command handles the rm -f that removes the container, and againOnBundle while the rm
+		// that removes the bundle directory runs.
+		againOn string
+	}{
+		{
+			name: "once, to the recipe's shell",
+		},
+		{
+			name:    "again, while its trap removes the container",
+			againOn: againOnContainer,
+		},
+		{
+			name:    "again, while its trap removes the bundle",
+			againOn: againOnBundle,
+		},
+		{
+			name:  "to the whole process group, as closing the pane does",
+			group: true,
+		},
+	}
 
-			sb := newBrowserRecipeSandbox(t, dockerModeSilent)
+	for _, sig := range signals {
+		for _, delivery := range deliveries {
+			t.Run(sig.name+", "+delivery.name, func(t *testing.T) {
+				t.Parallel()
 
-			proc := startBrowserMake(t, sb.clone, []string{testBrowserTarget}, sb.env)
-			// The recipe is in its wait loop once it has read the container's log: the traps are in place, the
-			// container runs, and the bundle of the run's own is built and being served.
-			sb.waitForDockerCall(t, "logs")
+				sb := newBrowserRecipeSandbox(t, dockerModeSilent)
 
-			served := sb.runBundleDirs(t)
-			if len(served) != 1 {
-				t.Fatalf("the run holds %d per-run bundle directories in its TMPDIR while it waits for a DevTools line, %v, want 1: the run builds the bundle it serves into a directory of its own, and that directory is what an interrupted run has to clean up (issue #423, the reviewer's finding S2)",
-					len(served), served)
-			}
+				// The second signal of the same kind, from the stand-in in the call under test: a run sent one signal
+				// must clean up as well as a run sent two, since make hands the shell a second one of its own when the
+				// whole group is terminated.
+				switch delivery.againOn {
+				case againOnContainer:
+					sb.env["SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM"] = sig.killName
+				case againOnBundle:
+					sb.writeRemoveStandIn(t)
+					sb.env["SHIFT2EU_TEST_SIGNAL_ON_RM"] = sig.killName
+				}
 
-			if page, err := os.ReadFile(filepath.Join(served[0], "site", "index.html")); err != nil {
-				t.Fatalf("read the page of the bundle the run serves, inside %s: %v", served[0], err)
-			} else if got := strings.TrimSuffix(string(page), "\n"); got != bundlePageLine {
-				t.Fatalf("the bundle the run serves begins %q, want %q: the run must serve the bundle its builder wrote before the test interrupts it (issue #423, the reviewer's finding S2)",
-					got, bundlePageLine)
-			}
+				proc := startBrowserMake(t, sb.clone, []string{testBrowserTarget}, sb.env)
+				// The recipe is in its wait loop once it has read the container's log: the traps are in place, the
+				// container runs, and the bundle of the run's own is built and being served.
+				sb.waitForDockerCall(t, "logs")
 
-			calls := sb.dockerCalls(t)
+				served := sb.runBundleDirs(t)
+				if len(served) != 1 {
+					t.Fatalf("the run holds %d per-run bundle directories in its TMPDIR while it waits for a DevTools line, %v, want 1: the run builds the bundle it serves into a directory of its own, and that directory is what an interrupted run has to clean up (issue #423, the reviewer's finding S2)",
+						len(served), served)
+				}
 
-			name := containerName(calls)
-			if name == "" {
-				t.Fatalf("the stand-in container command recorded no call that started a container with a --name, so this test cannot tell whether the run removed it: %s",
-					sb.dockerLogText(t))
-			}
+				if page, err := os.ReadFile(filepath.Join(served[0], "site", "index.html")); err != nil {
+					t.Fatalf("read the page of the bundle the run serves, inside %s: %v", served[0], err)
+				} else if got := strings.TrimSuffix(string(page), "\n"); got != bundlePageLine {
+					t.Fatalf("the bundle the run serves begins %q, want %q: the run must serve the bundle its builder wrote before the test interrupts it (issue #423, the reviewer's finding S2)",
+						got, bundlePageLine)
+				}
 
-			shell := shellPid(t, calls)
+				calls := sb.dockerCalls(t)
 
-			if err := syscall.Kill(shell, tc.signal); err != nil {
-				t.Fatalf("send %v to pid %d, the shell of the make test-browser recipe: %v", tc.signal, shell, err)
-			}
+				name := containerName(calls)
+				if name == "" {
+					t.Fatalf("the stand-in container command recorded no call that started a container with a --name, so this test cannot tell whether the run removed it: %s",
+						sb.dockerLogText(t))
+				}
 
-			run := proc.wait(failFastTimeout)
-			output := run.output()
+				if delivery.group {
+					if err := syscall.Kill(-proc.pgid(), sig.signal); err != nil {
+						t.Fatalf("send %v to the process group %d of make test-browser, the one closing the pane reaches: %v", sig.signal, proc.pgid(), err)
+					}
+				} else {
+					shell := shellPid(t, calls)
 
-			switch {
-			case run.timedOut:
-				t.Fatalf("make test-browser was still running after %s although the test sent %v to the shell of its recipe: a trapped signal must end the run at once, and an untrapped one ends the shell with it (issue #423, the reviewer's finding S2)\n%s",
-					run.elapsed, tc.signal, output)
-			case run.err == nil:
-				t.Fatalf("make test-browser exited 0 although the test sent %v to the shell of its recipe and no smoke test ever ran: an interrupted run must not report success (issue #423, the reviewer's finding S2)\n%s",
-					tc.signal, output)
-			}
+					if err := syscall.Kill(shell, sig.signal); err != nil {
+						t.Fatalf("send %v to pid %d, the shell of the make test-browser recipe: %v", sig.signal, shell, err)
+					}
+				}
 
-			// The shell runs its EXIT trap before it exits, and make waits for the shell, so the removals are done
-			// when make is: the test looks once more, up to failFastDeadline, rather than race the last of them.
-			cleaned := waitUntil(func() bool {
-				_, err := os.Stat(served[0])
+				run := proc.wait(failFastTimeout)
+				output := run.output()
 
-				return os.IsNotExist(err) && removedContainer(sb.dockerCalls(t), name) && len(sb.runBundleDirs(t)) == 0
+				switch {
+				case run.timedOut:
+					t.Fatalf("make test-browser was still running after %s although the test interrupted it with %v (%s): a trapped signal must end the run at once, and an untrapped one ends the shell with it (issue #423, the reviewer's finding S2)\n%s",
+						run.elapsed, sig.signal, delivery.name, output)
+				case run.err == nil:
+					t.Fatalf("make test-browser exited 0 although the test interrupted it with %v (%s) and no smoke test ever ran: an interrupted run must not report success (issue #423, the reviewer's finding S2)\n%s",
+						sig.signal, delivery.name, output)
+				}
+
+				// The shell runs its EXIT trap before it exits, and make waits for the shell, so the removals are done
+				// when make is: the test looks once more, up to failFastDeadline, rather than race the last of them.
+				cleaned := waitUntil(func() bool {
+					_, err := os.Stat(served[0])
+
+					return os.IsNotExist(err) && removedContainer(sb.dockerCalls(t), name) && len(sb.runBundleDirs(t)) == 0
+				})
+
+				if !cleaned {
+					if _, err := os.Stat(served[0]); err == nil {
+						t.Errorf("the run left the bundle directory %s it was serving behind when the test interrupted it with %v (%s): the trap the signal needs runs the EXIT trap, which removes it, since dash runs no EXIT trap for an untrapped signal, and a second signal of the same kind must not end the shell before that (issue #423, commit 93b859d)\n%s",
+							served[0], sig.signal, delivery.name, output)
+					}
+
+					if leftovers := sb.runBundleDirs(t); len(leftovers) != 0 {
+						t.Errorf("the run left the per-run bundle directories %v behind when the test interrupted it with %v (%s): every directory its mktemp -d made must be removed when the run ends, however it ends, and a second signal of the same kind must not end the shell before that (issue #423, commit 93b859d)",
+							leftovers, sig.signal, delivery.name)
+					}
+
+					if !removedContainer(sb.dockerCalls(t), name) {
+						t.Errorf("the run never asked the container command to remove the container %s it started, when the test interrupted it with %v (%s): a container left behind holds the name the next run of the worktree wants, and the browser with it (issue #423, commit 93b859d)\n%s",
+							name, sig.signal, delivery.name, sb.dockerLogText(t))
+					}
+				}
+
+				if records := sb.goTestRecords(t); len(records) != 0 {
+					t.Errorf("the interrupted run ran the smoke test %d times although its container never logged a DevTools address (issue #423, the reviewer's finding S2)\n%s",
+						len(records), sb.goLogText(t))
+				}
 			})
-
-			if !cleaned {
-				if _, err := os.Stat(served[0]); !os.IsNotExist(err) {
-					t.Errorf("the run left the bundle directory %s it was serving behind when it was sent %v (%v): the trap the signal needs runs the EXIT trap, which removes it, since dash runs no EXIT trap for an untrapped signal (issue #423, the reviewer's finding S2)\n%s",
-						served[0], tc.signal, err, output)
-				}
-
-				if leftovers := sb.runBundleDirs(t); len(leftovers) != 0 {
-					t.Errorf("the run left the per-run bundle directories %v behind when it was sent %v: every directory its mktemp -d made must be removed when the run ends, however it ends (issue #423, the reviewer's finding S2)",
-						leftovers, tc.signal)
-				}
-
-				if !removedContainer(sb.dockerCalls(t), name) {
-					t.Errorf("the run never asked the container command to remove the container %s it started, when it was sent %v: a container left behind holds the name the next run of the worktree wants, and the browser with it (issue #423, the reviewer's finding S2)\n%s",
-						name, tc.signal, sb.dockerLogText(t))
-				}
-			}
-
-			if records := sb.goTestRecords(t); len(records) != 0 {
-				t.Errorf("the interrupted run ran the smoke test %d times although its container never logged a DevTools address (issue #423, the reviewer's finding S2)\n%s",
-					len(records), sb.goLogText(t))
-			}
-		})
+		}
 	}
 }
 
