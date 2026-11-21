@@ -76,8 +76,10 @@ jobs:
       # manager reads the version under its # renovate: comment. A Renovate bump of the version must
       # also replace CLAUDE_CODE_INTEGRITY (npm view @anthropic-ai/claude-code-linux-x64@<version>
       # dist.integrity): until it does, this step fails and nothing unverified runs, which is the safe
-      # way round. A Renovate PR's own AI review runs main's copy of this file, so a missed integrity
-      # shows only once the bump is merged.
+      # way round. A Renovate PR's own AI review runs main's copy of this file, so it cannot catch a missed
+      # integrity; the "Claude Code pin" check (.github/workflows/claude-code-pin.yml, ci/claudecodepin,
+      # issue #276) does, on every pull request that changes this file: it fails unless the npm registry
+      # publishes exactly this integrity for exactly this version.
       - name: Install the Claude Code CLI
         env:
           # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64

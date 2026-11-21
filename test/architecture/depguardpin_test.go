@@ -1240,6 +1240,58 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"github.com/timothymamo/shift2eu/internal/version$",
 		},
 	},
+	{
+		// The Claude Code pin check's entry point (issue #276, ADR 0033): a main
+		// package no root can import, held to the standard packages it imports and
+		// its own library, each exact. os reads the workflow and exits, net/http
+		// fetches the registry's one document; it starts no process, and the
+		// forbidigo group claude-code-pin-env refuses every read of the
+		// environment.
+		Name:     "claude-code-pin-main",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/claudecodepin/**",
+			"!**/ci/claudecodepin/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bytes$",
+			"context$",
+			"errors$",
+			"flag$",
+			"fmt$",
+			"io$",
+			"net/http$",
+			"os$",
+			"strings$",
+			"time$",
+			"github.com/timothymamo/shift2eu/ci/claudecodepin/internal/pincheck$",
+		},
+		Deny: []string{"os/exec"},
+	},
+	{
+		// The pin check's library (issue #276): it parses the readers it is
+		// given and does no I/O of its own, so it is held to pure standard
+		// packages, without os, net, syscall or unsafe. Go's internal rule keeps
+		// it out of reach of cmd/ and internal/.
+		Name:     "claude-code-pin-library",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/claudecodepin/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bufio$",
+			"encoding/base64$",
+			"encoding/json$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"regexp$",
+			"strings$",
+		},
+		Deny: []string{"os", "net"},
+	},
 }
 
 // TestDepguardRulesArePinned pins every depguard rule of .golangci.yml against

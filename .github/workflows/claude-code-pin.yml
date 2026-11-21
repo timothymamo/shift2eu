@@ -1,0 +1,56 @@
+name: Claude Code pin
+
+# claude-code-pin (issue #276, ADR 0033): .github/workflows/ai-review.yml pins the AI reviewer's Claude
+# Code CLI by CLAUDE_CODE_VERSION, which Renovate bumps, and CLAUDE_CODE_INTEGRITY, the npm integrity of
+# that version's tarball, which Renovate cannot bump. A bump's own AI review runs main's copy of that file
+# (pull_request_target), so a stale integrity would show only after the merge, as every review failing at
+# its install step. This job fails the pull request instead: ci/claudecodepin reads both pins and fails
+# unless the npm registry's document of exactly that version of @anthropic-ai/claude-code-linux-x64
+# publishes the pinned integrity as its dist.integrity. A registry that cannot be reached or answers
+# anything else fails the job too, never passes it.
+#
+# pull_request, never pull_request_target: the job runs the pull request's own copy of the check, with a
+# read-only GITHUB_TOKEN, no secret and no environment, as ci.yml runs the pull request's code. It sends
+# the registry one GET of a public document and no credential. The paths: filter runs it on every pull
+# request that changes the pin, the check or this file, and the push to main re-checks what was merged.
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/ai-review.yml
+      - .github/workflows/claude-code-pin.yml
+      - ci/claudecodepin/**
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/ai-review.yml
+      - .github/workflows/claude-code-pin.yml
+      - ci/claudecodepin/**
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  claude-code-pin:
+    name: Claude Code pin
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # No cache: the check is a standard-library program that builds in seconds, and a job that restores
+      # nothing cannot be handed another run's build.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # Prints one line on a pass, and one escaped ::error line naming the pinned and the published
+      # integrity on a failure, so no text of the registry can become a workflow command.
+      - name: Check the Claude Code CLI's pinned integrity against the npm registry
+        run: go run ./ci/claudecodepin
