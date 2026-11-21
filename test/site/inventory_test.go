@@ -209,15 +209,24 @@ func TestInventorySectionsAreShownWithoutScript(t *testing.T) {
 }
 
 // TestInventoryPickerIsHiddenWithoutScript pins the picker with no script (issue
-// #373, item 15, review finding 10): the three source buttons do nothing until
-// the page script wires them, so their container carries the hidden attribute
-// and the script removes it. With no script a visitor sees the three sources'
-// sections, which all show, and no button that announces AWS as pressed and then
-// does nothing when it is pressed.
+// #373, item 15, review findings 10 and 14): the three source buttons do nothing
+// until the page script wires them, so their container carries the hidden
+// attribute and the script removes it. With no script a visitor sees the three
+// sources' sections, which all show, and no button that announces AWS as pressed
+// and then does nothing when it is pressed.
+//
+// The attribute alone is not enough: an author rule that sets display beats the
+// browser's own [hidden] rule, so the stylesheet has to hide the picker itself
+// while the attribute is set. The check reads the built bundle's stylesheet, so
+// it fails when the rule is missing rather than trusting the attribute.
 func TestInventoryPickerIsHiddenWithoutScript(t *testing.T) {
 	t.Parallel()
 
 	bundle := theBundle(t)
+
+	_, stylesheet := bundle.asset(t, "style", ".css")
+	rules := parseCSS(t, "stylesheet", stylesheet)
+	props := customProperties(rules)
 
 	tests := []struct {
 		name string
@@ -236,6 +245,11 @@ func TestInventoryPickerIsHiddenWithoutScript(t *testing.T) {
 			if !picker.hasAttr("hidden") {
 				t.Errorf("%s's <%s class=%q> carries no hidden attribute, want it hidden: with no script the three source buttons do nothing, so the page shows none of them and every section's commands (issue #373, item 15)\n%v",
 					tc.name, picker.tag, classAttr(picker), picker.attrs)
+			}
+
+			if display, rule := displayedBy(t, picker, rules, props); display != "none" {
+				t.Errorf("%s's <%s class=%q hidden> still shows: %s, want the stylesheet to give it display: none while the hidden attribute is set: an author rule that sets display beats the browser's own [hidden] rule, so the three buttons that do nothing without script would still show (issue #373, item 15)",
+					tc.name, picker.tag, classAttr(picker), rule)
 			}
 		})
 	}
@@ -422,6 +436,72 @@ func classAttr(el *element) string {
 	class, _ := el.attr("class")
 
 	return class
+}
+
+// displayedBy returns the display value the stylesheet gives el, and the rule
+// that sets it, for a failure message: the last top-level rule that matches the
+// element and sets display, a declaration with !important beating the ones
+// without, as a browser's cascade resolves them. It reads no rule inside an
+// at-rule, since such a rule holds only under a condition and so cannot be what
+// hides the element. It returns "" and a sentence that says no rule sets display
+// when the browser's own value is the one that applies.
+func displayedBy(t *testing.T, el *element, rules []cssRule, props map[string]string) (string, string) {
+	t.Helper()
+
+	var (
+		value     string
+		rule      string
+		important bool
+	)
+
+	for _, candidate := range rules {
+		if len(candidate.atRules) != 0 {
+			continue
+		}
+
+		if !slices.ContainsFunc(candidate.selectors, func(selector string) bool {
+			return selectorMatches(selector, el)
+		}) {
+			continue
+		}
+
+		for _, decl := range candidate.decls {
+			if decl.property != "display" {
+				continue
+			}
+
+			resolved, err := resolveValue("stylesheet", decl.value, props)
+			if err != nil {
+				t.Fatalf("the checks read no display value for the <%s class=%q>: %v", el.tag, classAttr(el), err)
+			}
+
+			isImportant := strings.Contains(strings.ToLower(resolved), "important")
+			if important && !isImportant {
+				continue
+			}
+
+			value = firstWord(strings.ReplaceAll(strings.ToLower(resolved), "!important", ""))
+			important = isImportant
+			rule = fmt.Sprintf("the stylesheet's rule %q sets display: %s", strings.Join(candidate.selectors, ", "), decl.value)
+		}
+	}
+
+	if rule == "" {
+		return "", "no rule of the stylesheet sets its display, so the browser's own value applies"
+	}
+
+	return value, rule
+}
+
+// firstWord returns the first white-space separated word of value, lower case,
+// or "" for a value of no words.
+func firstWord(value string) string {
+	words := strings.Fields(value)
+	if len(words) == 0 {
+		return ""
+	}
+
+	return strings.ToLower(words[0])
 }
 
 // guideSourceByKey returns the source the page lists by key, failing the test for
