@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.12.0](https://github.com/timothymamo/shift2eu/compare/v0.11.0...v0.12.0) (2026-11-21)
+
+
+### Features
+
+* **devenv:** start the Lima VM at boot with a LaunchDaemon of our own, and warn in vm-up about Lima's autostart ([#398](https://github.com/timothymamo/shift2eu/issues/398), [#315](https://github.com/timothymamo/shift2eu/issues/315)) ([#417](https://github.com/timothymamo/shift2eu/issues/417)) ([ca288cd](https://github.com/timothymamo/shift2eu/commit/ca288cd8759bec9d9e9f44e73ecfd703ea597270))
+* **infra:** create the site's Scaleway hosting with OpenTofu in infra/site ([#422](https://github.com/timothymamo/shift2eu/issues/422)) ([#433](https://github.com/timothymamo/shift2eu/issues/433)) ([febe6cf](https://github.com/timothymamo/shift2eu/commit/febe6cffc8b2121bbbaa6ad4a91084475c7ed30a))
+
+
+### Bug Fixes
+
+* **aireview:** pin the Claude Code 2.1.330 integrity ([#428](https://github.com/timothymamo/shift2eu/issues/428)) ([#429](https://github.com/timothymamo/shift2eu/issues/429)) ([75b4149](https://github.com/timothymamo/shift2eu/commit/75b41492ded0ef1a27ac885afd9cbf62a2069adb))
+* **browser:** pin the random DevTools port, a bundle per run, fail early on a dead container ([#423](https://github.com/timothymamo/shift2eu/issues/423)) ([#443](https://github.com/timothymamo/shift2eu/issues/443)) ([400e4dc](https://github.com/timothymamo/shift2eu/commit/400e4dcd2e84e98837bb0f699e8c7ba56961bcc8))
+* **devenv:** keep comments out of continued recipe commands for make 3.81 ([#437](https://github.com/timothymamo/shift2eu/issues/437)) ([#441](https://github.com/timothymamo/shift2eu/issues/441)) ([b0e1900](https://github.com/timothymamo/shift2eu/commit/b0e19000955ee9c1fd00f53da18fe8cf714facb5))
+* **devenv:** refuse the host targets when the credentials' .envrc is read from in or above the workspace ([#402](https://github.com/timothymamo/shift2eu/issues/402)) ([#430](https://github.com/timothymamo/shift2eu/issues/430)) ([289fdc1](https://github.com/timothymamo/shift2eu/commit/289fdc10c214a8e3a6f505ce68cd88661ee18d22))
+* **devenv:** take over a hand-started refresh, refuse foreign launchd jobs, and [#394](https://github.com/timothymamo/shift2eu/issues/394)'s lock cleanup follow-ups ([#407](https://github.com/timothymamo/shift2eu/issues/407)) ([56d8111](https://github.com/timothymamo/shift2eu/commit/56d8111a72a2e1557a92980b457045d51a2a47ee))
+
 ## [0.11.0](https://github.com/timothymamo/shift2eu/compare/v0.10.1...v0.11.0) (2026-11-20)
 
 
