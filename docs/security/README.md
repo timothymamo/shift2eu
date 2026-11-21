@@ -45,9 +45,9 @@ public is decided in the run, from each finding's severity, confirmation and cat
 | Suspected low or informational | The public report's "needs investigation" list |
 
 The public report says only **whether** private findings exist ("handled privately", "not filed" when
-advisory creation was refused, or "none"), never how many, so it does not announce an undisclosed flaw before its fix. That flag still tells a reader that
-something exists; the maintainer accepts that. The audit never publishes an advisory or requests a CVE:
-that is the maintainer's decision.
+advisory creation was refused, or "none"), never how many, so it does not announce an undisclosed flaw
+before its fix. That flag still tells a reader that something exists; the maintainer accepts that. The
+audit never publishes an advisory or requests a CVE: that is the maintainer's decision.
 
 ## Verify a release yourself
 
@@ -60,8 +60,9 @@ anything. A run checks the latest release the same way.
 Each run adds one report, in its own file, named `docs/security/audits/YYYY-MM-DD-<run_id>.md`: the run's
 UTC date, then the GitHub Actions run ID. A second run on the same day adds a file of its own. Names start
 with the date, so they sort by date, and the directory [`audits/`](audits/) lists every report in that
-order (on GitHub, the directory view lists them by name, oldest first): that listing is the index, so a new report needs no edit to this page, and two reports' pull
-requests never conflict. No report exists yet; the first comes with the audit's first run.
+order (on GitHub, the directory view lists them by name, oldest first): that listing is the index, so
+a new report needs no edit to this page, and two reports' pull requests never conflict. No report exists
+yet; the first comes with the audit's first run.
 
 Every report follows [the report template](audits/TEMPLATE.md): a summary; its scope (commit, release tag,
 tool versions, model); the public findings; whether private findings exist; the coverage of each check;

@@ -31,11 +31,12 @@ The public findings only. One row per finding:
 
 "No public findings." when there are none.
 
-The publish script derives the status from the fingerprints it computes, never from the model: `new` when the last report did not list its
-fingerprint, `open` when the last report listed it and the audited commit still has it, and `fixed` when
-the last report listed it and the audited commit no longer has it. Changes since the last audit, below,
-describes the **last report's** findings in its own words: fixed, still open (the table's `open`) or
-regressed (a fixed finding that is back, `open` again in the table).
+The publish script derives the status from the fingerprints it computes, never from the model: `new`
+when the last report did not list its fingerprint, `open` when the last report listed it and the audited
+commit still has it, and `fixed` when the last report listed it and the audited commit no longer has it.
+From the same derivation it writes, in Changes since the last audit below, one line per public finding
+of the **last report**, by fingerprint: fixed, still open (the table's `open`) or regressed (a fixed
+finding that is back, `open` again in the table).
 
 ### Needs investigation
 
@@ -63,9 +64,11 @@ of `not run (why)` is one of the publish script's fixed reasons.
 
 ## Changes since the last audit
 
-Each public finding of the previous report, by fingerprint, as fixed, still open or regressed; the
-dependencies changed since; and any gap in the schedule, when the previous report is older than the
-schedule allows ([Security](../README.md)). On the first report, "First report."
+The publish script writes, from its own derivation, each public finding of the previous report, by
+fingerprint, as fixed, still open or regressed, and any gap in the schedule, when the previous report is
+older than the schedule allows ([Security](../README.md)). The model's own words cover only the
+dependencies changed since and a short narrative, with no status and no fingerprint. On the first
+report, "First report."
 
 ## False positives
 
@@ -78,9 +81,13 @@ all. The model never writes a fingerprint here. One row each:
 |---|---|
 | `fp-` and 12 lowercase hex characters | one line: why it is no finding |
 
-A later run's publish script drops a finding only when the fingerprint it computed matches a row here
-exactly **and** the finding is low or informational in a category that is not private. A private
-finding's false positive is never listed here; it stays with its advisory. "None." when there are none.
+A dismissal proposed in a run only adds a row here: the finding stays in that run's findings table and
+is handled as any finding, its `security` issue after the merge included. The drop applies only from a
+later run, and only to rows of a report the maintainer has merged: the merge is the human gate on every
+suppression. A later run's publish script then drops a finding only when the fingerprint it computed
+matches such a row exactly **and** the finding is low or informational in a category that is not
+private. A private finding's false positive is never listed here; it stays with its advisory. "None."
+when there are none.
 
 ## Limits
 

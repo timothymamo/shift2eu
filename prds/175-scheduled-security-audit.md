@@ -345,9 +345,12 @@ The publish script:
 - [ ] It **derives** public or private itself, from each finding's severity, confirmation and category
   alone (Report and triage, the table). The model's own "public" flag can only make a finding more
   private, never less. A test covers each row of the table.
-- [ ] It derives each finding's status (new, open or fixed, and whether it regressed) and applies the false-positive
-  match itself, from the fingerprints it computes; the result schema accepts exactly the ten categories
-  of ADR 0040, and any other value is unknown and therefore private.
+- [ ] It derives each finding's status (new, open or fixed, and whether it regressed) and applies the
+  false-positive match itself, from the fingerprints it computes, and only to rows of a merged report:
+  a dismissal proposed in a run only adds a row, and the finding stays in that run's findings table. A
+  test covers an exact match on a low public finding (dropped), a match on a medium finding and on a
+  private-category finding (each reported), and a near-match (reported). The result schema accepts
+  exactly the ten categories of ADR 0040, and any other value is unknown and therefore private.
 - [ ] Before publishing, it scans every text it is about to send (the report, any issue title and body,
   every advisory's text) with gitleaks plus patterns for Claude OAuth tokens and GitHub App private keys,
   and it **decodes every base64 or hex run and matches the decoded bytes against the same patterns**

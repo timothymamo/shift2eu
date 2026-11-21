@@ -207,14 +207,19 @@ category alone:
   set whenever a private finding is reproduced, even one the maintainer dismissed, but a reader can still
   see it change.
 - **An earlier report's false positives shape later runs.** The model never skips a finding and never
-  writes a fingerprint; it may only propose a dismissal, as a one-line reason on a finding. The publish
-  script computes every fingerprint from rule, file and sink, writes the False positives rows and
-  carries them forward, and drops a later finding only when its computed fingerprint matches a row
-  exactly and the finding is low or informational in a category that is not private. The proposed
-  reason is still model text, which hostile input could steer, so a report could hide a low finding
-  from every later run; the exact match and the severity and category floor bound that, private false
-  positives are never listed (they stay with the advisories), and the maintainer's review of each
-  report, its False positives section included, is the check.
+  writes a fingerprint; it may only propose a dismissal, as a one-line reason on a finding. A proposed
+  dismissal only adds a False positives row: the finding stays in that run's findings table and is
+  handled as any finding, Decision 7 included. The drop applies only from a later run, after the
+  maintainer has merged the report that holds the row: the merge is the human gate on every
+  suppression. The publish script computes every fingerprint from rule, file and sink, writes the rows
+  and carries them forward, and drops a later finding only when its computed fingerprint matches a row
+  exactly and the finding is low or informational in a category that is not private. But the model
+  supplies the fingerprint's inputs (rule, file and sink) and the severity the floor tests, so the exact
+  match stops accidental drops, not steered ones. The proposed reason is model text, which hostile
+  input could steer, so a merged report could hide a low finding from every later run. The real bound
+  is the severity and category floor; private false positives are never listed (they stay with the
+  advisories), and the maintainer's review of each report, its False positives section included, stays
+  the check.
 - **The model step's network is limited to the model API by configuration, not enforced** (Decision 6).
   The model's Bash commands have no network, enforced by the sandbox; Claude Code's own connections are
   held to the model API only by its settings, which milestone 2 details.
@@ -273,8 +278,9 @@ the entropy N) and the encoded-token residual risk; the encryption tool and the 
 Actions-cache residual risk; the container flags; the time budget; the checks job's exact read scopes;
 the App token's exact `permission-*` inputs; the finding limit; the publish script's false-positive
 matching and its derivation of each finding's status; the closed category list in the result schema;
-the wrapper's allowed commands and its scrubbed-environment allow list; and whether the Claude subscription is a
-Team or Enterprise plan, so whether server-managed settings could reach the model step.
+the wrapper's allowed commands and its scrubbed-environment allow list; and whether the Claude
+subscription is a Team or Enterprise plan, so whether server-managed settings could reach the model
+step.
 
 ## Alternatives considered
 
@@ -307,8 +313,9 @@ Team or Enterprise plan, so whether server-managed settings could reach the mode
   and its draft advisories to read. Two report pull requests never conflict.
 - The audit draws on the subscription the agents and the AI reviewer use.
 - The residual risks above are accepted: a mislabelled finding is public until the maintainer sees it,
-  the private-findings flag says that something exists, an earlier report's false positives shape later
-  triage within the fingerprint match and the severity and category floor, and the model step's network
+  the private-findings flag says that something exists, an earlier merged report's false positives
+  shape later triage, bounded by the severity and category floor (the fingerprint match stops only
+  accidental drops, since the model supplies its inputs), and the model step's network
   is held to the model API by configuration only.
 - The maintainer must create the App, the environment and its keys, the rulesets and the `security`
   label, and check that no other App holds Actions write, before milestone 2 merges (the PRD's runbook,
