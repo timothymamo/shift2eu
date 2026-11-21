@@ -67,7 +67,7 @@ param:
   cosignSha256Arm64: "ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2"
   # nerdctl-full: nerdctl, containerd, BuildKit, RootlessKit, runc and CNI plugins, run rootless.
   # renovate: datasource=github-releases depName=containerd/nerdctl
-  nerdctlVersion: "v2.4.1"
+  nerdctlVersion: "v2.4.2"
   # shellcheck, which make lint runs on the tracked shell scripts and actionlint on the workflows' run:
   # scripts (ADR 0022). The same pin as CI's lint-shell job in .github/workflows/ci.yml.
   # renovate: datasource=github-releases depName=koalaman/shellcheck
