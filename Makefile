@@ -480,8 +480,29 @@ tidy: ## Tidy go.mod and go.sum, and the lint tools' tools/go.mod and tools/go.s
 ##@ Testing
 
 .PHONY: test
+# The unit run's one go command, echoed and run by make test, so the echo cannot drift from what runs.
+GO_TEST_UNIT := go test -race -count=1 ./...
+# go's output streams whole; when go fails, its failing packages' and tests' lines (subtests too) are repeated
+# under a header at the end, since in a long run they scroll away (issue #253). A test that times out prints no
+# --- FAIL: line, so the summary also repeats go's timeout panic line and the tests it names as running (the lines
+# indented by exactly two tabs; its stack lines have one). go's exit status goes through a file because /bin/sh
+# has no pipefail, and make test exits with it. The file is created empty before go runs, so a status that is not a
+# number (the file stayed empty because the shell running go died) still reaches the summary and fails the run
+# with 1: a lost status never passes and never loses the summary. Both files live in one temporary
+# directory, removed on every exit; HUP, INT and TERM exit with 129, 130 and 143.
 test: ## Unit + contract tests with the race detector (no network, no credentials)
-	go test -race -count=1 ./...
+	@echo '$(GO_TEST_UNIT)'
+	@dir=$$(mktemp -d) && trap 'rm -rf "$$dir"' EXIT && \
+	trap 'exit 129' HUP && trap 'exit 130' INT && trap 'exit 143' TERM && \
+	out="$$dir/out" && status="$$dir/status" && tab=$$(printf '\t') && : > "$$status" && \
+	{ $(GO_TEST_UNIT); echo $$? > "$$status"; } | tee "$$out" && \
+	code=$$(cat "$$status") && \
+	if [ "$$code" != 0 ]; then \
+		case "$$code" in ''|*[!0-9]*) code=1 ;; esac; \
+		echo 'make test: failing packages and tests:'; \
+		grep -e '^[[:space:]]*--- FAIL: ' -e "^FAIL$$tab" -e '^panic: test timed out' -e "^$$tab$$tab[^ $$tab]" "$$out"; \
+		exit "$$code"; \
+	fi
 
 .PHONY: test-integration
 test-integration: ## Integration tests against real cloud APIs (read-only credentials required)

@@ -61,12 +61,12 @@ const testJobHead = `  test:
     steps:
 `
 
-// testSteps are the test job's steps: the whole history with every branch, the
+// testStepTemplates are the test job's steps: the whole history with every branch, the
 // guard that the tagged commit is on main (ADR 0015), setup-go without the
 // Actions cache, and make test.
-var testSteps = []string{
+var testStepTemplates = []string{
 	`      # The whole history, with every branch: the guard below needs origin/main.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -84,7 +84,7 @@ var testSteps = []string{
             exit 1
           }
 `,
-	`      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+	`      - uses: {{pin actions/setup-go}}
         with:
           go-version-file: go.mod
           cache: false # see the comment on the goreleaser job
@@ -114,13 +114,13 @@ const latestJobHead = `  # Decides, once per run, whether the tag is the highest
     steps:
 `
 
-// latestSteps are the latest job's steps: the whole history, and the one step
+// latestStepTemplates are the latest job's steps: the whole history, and the one step
 // that reads the release tags merged into main and writes latest, true only for
 // the highest of them.
-var latestSteps = []string{
+var latestStepTemplates = []string{
 	`      # The whole history, with every branch: the decision below needs
       # origin/main. No repository code runs here, so the token is not kept.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -162,27 +162,27 @@ const goreleaserJobHead = `  # A job of its own, on a fresh runner: no go env fi
     steps:
 `
 
-// goreleaserSteps are the goreleaser job's steps: no repository code runs
+// goreleaserStepTemplates are the goreleaser job's steps: no repository code runs
 // before goreleaser, which is asked for exactly release --clean, and the
 // archives and their checksums leave the job as a workflow artifact for the
 // attest job to attest on a runner of its own (issue #163). Nothing is copied
 // into dist/ beside them: the release publishes the CLI's archives alone
 // (issue #393).
-var goreleaserSteps = []string{
-	`      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+var goreleaserStepTemplates = []string{
+	`      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
 `,
-	`      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+	`      - uses: {{pin actions/setup-go}}
         with:
           go-version-file: go.mod
           cache: false
 `,
-	`      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+	`      - uses: {{pin goreleaser/goreleaser-action}}
         with:
           distribution: goreleaser
-          version: "v2.20.1" # exact pin; Renovate updates it (github-actions manager)
+          version: "{{release goreleaser}}" # exact pin; Renovate updates it (github-actions manager)
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -195,7 +195,7 @@ var goreleaserSteps = []string{
       # directories (dist/shift2eu_linux_amd64_v1/ ...), and would hand on 12
       # bare binaries beside the archives. It is kept a week, so a failed
       # attestation or publication is recovered by re-running the failed jobs.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: {{pin actions/upload-artifact}}
         with:
           name: archives
           path: |
@@ -228,12 +228,12 @@ const attestArchivesJobHead = `  # Attests every archive and checksums.txt with 
     steps:
 `
 
-// attestArchivesSteps are the attest-archives job's steps: GitHub's own
+// attestArchivesStepTemplates are the attest-archives job's steps: GitHub's own
 // download of the archives' workflow artifact, the check of the archives
 // against checksums.txt, and one attestation covering every archive and
 // checksums.txt itself (issue #163).
-var attestArchivesSteps = []string{
-	`      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+var attestArchivesStepTemplates = []string{
+	`      - uses: {{pin actions/download-artifact}}
         with:
           name: archives
 `,
@@ -248,7 +248,7 @@ var attestArchivesSteps = []string{
       # GoReleaser's build directories, and would attest the 12 bare binaries
       # beside the archives.
       - name: Attest the archives
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        uses: {{pin actions/attest-build-provenance}}
         with:
           subject-path: |
             shift2eu_*.tar.gz
@@ -277,7 +277,7 @@ const publishJobHead = `  # The release is published last (issue #156): GoReleas
     steps:
 `
 
-// publishSteps are the publish job's steps (issues #156, #163, #173): the
+// publishStepTemplates are the publish job's steps (issues #156, #163, #173): the
 // attested checksums.txt out of the archives workflow artifact, and the one step
 // that checks the draft release's assets against it and publishes exactly that
 // draft, by the id the API listed it with, with GitHub's "Latest" release moved
@@ -288,11 +288,11 @@ const publishJobHead = `  # The release is published last (issue #156): GoReleas
 // (issue #173). The tag, that decision and the token come through env:, and
 // every gh command is given the repository in its own arguments, so none reads
 // it from a git remote. No checkout: this job runs no repository code.
-var publishSteps = []string{
+var publishStepTemplates = []string{
 	`      # The checksums.txt the attest-archives job attested, from the workflow
       # artifact it attests (issue #156): what is published must be exactly what
       # was attested, and this file is the list of it.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: {{pin actions/download-artifact}}
         with:
           name: archives
 `,
@@ -484,13 +484,13 @@ const verifyArchivesJobHead = `  # A fresh runner that verifies what the publish
     steps:
 `
 
-// verifyArchivesSteps are the verify-archives job's steps: every asset of the
+// verifyArchivesStepTemplates are the verify-archives job's steps: every asset of the
 // release, the check that it is published and holds exactly checksums.txt and
 // the files that file lists, their digests, the provenance of every one of
 // them (docs/guide/verify-releases.md), and the check of GitHub's "Latest"
 // release: never a pre-release, and otherwise the highest release tag merged
 // into main, the version the image's latest tag names (issue #173).
-var verifyArchivesSteps = []string{
+var verifyArchivesStepTemplates = []string{
 	`      # Every asset of the release, not the patterns the workflow expects to
       # find: what is checked is what was published. gh is given the repository
       # with --repo here too, since no checkout runs and gh reads no repository
@@ -667,14 +667,14 @@ const imageJobHead = `  # Builds and pushes the container image to GHCR (ADR 001
     steps:
 `
 
-// imageSteps are the image job's steps: the build arguments GoReleaser stamps,
+// imageStepTemplates are the image job's steps: the build arguments GoReleaser stamps,
 // a build of two platforms from an empty BuildKit, pushed, without BuildKit's
 // own provenance or SBOM, tagged latest by the latest job's decision alone.
-var imageSteps = []string{
+var imageStepTemplates = []string{
 	`      # The whole history and every tag, as GoReleaser checks it out: git picks
       # the length of a short commit from the number of objects it holds, so the
       # stamp reads the commit as GoReleaser does.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -697,13 +697,13 @@ var imageSteps = []string{
 `,
 	`      # No QEMU: the builder stage cross-compiles and the final stage runs
       # nothing, so linux/arm64 builds without emulation (ADR 0013).
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: {{pin docker/setup-buildx-action}}
         with:
           # The BuildKit image, pinned by tag and multi-arch index digest.
           # renovate: datasource=docker depName=moby/buildkit versioning=semver
-          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          driver-opts: image=moby/buildkit:{{image moby/buildkit}}
 `,
-	`      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+	`      - uses: {{pin docker/login-action}}
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -713,7 +713,7 @@ var imageSteps = []string{
       # a pre-release such as v0.1.0-rc.1 gets its own tag only.
       - name: Image tags
         id: tags
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        uses: {{pin docker/metadata-action}}
         with:
           images: ghcr.io/timothymamo/shift2eu
           flavor: latest=${{ needs.latest.outputs.latest }}
@@ -725,7 +725,7 @@ var imageSteps = []string{
       # SBOM are off: the sign job's attestations replace them (ADR 0015).
       - name: Build and push linux/amd64 and linux/arm64
         id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: {{pin docker/build-push-action}}
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -756,17 +756,17 @@ const sbomJobHead = `  # The SBOM of the pushed index, read from the registry by
     steps:
 `
 
-// sbomSteps are the SBOM job's steps: log in read-only, syft the pushed index
+// sbomStepTemplates are the SBOM job's steps: log in read-only, syft the pushed index
 // by digest, and upload the SPDX document under the name the sign job
 // downloads.
-var sbomSteps = []string{
-	`      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+var sbomStepTemplates = []string{
+	`      - uses: {{pin docker/login-action}}
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 `,
-	`      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+	`      - uses: {{pin anchore/sbom-action}}
         with:
           image: registry:ghcr.io/timothymamo/shift2eu@${{ needs.image.outputs.digest }}
           format: spdx-json
@@ -774,9 +774,9 @@ var sbomSteps = []string{
           upload-artifact: false
           upload-release-assets: false
           # renovate: datasource=github-releases depName=anchore/syft
-          syft-version: v1.57.1
+          syft-version: {{release syft}}
 `,
-	`      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+	`      - uses: {{pin actions/upload-artifact}}
         with:
           name: sbom
           path: shift2eu.spdx.json
@@ -802,14 +802,14 @@ const signJobHead = `  # The only job holding the signing identity (id-token: wr
     steps:
 `
 
-// signSteps are the sign job's steps: cosign by exact release, a login fed the
+// signStepTemplates are the sign job's steps: cosign by exact release, a login fed the
 // token through env:, a recursive signature by digest, the provenance
 // attestation, the SBOM artifact, and its attestation.
-var signSteps = []string{
-	`      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+var signStepTemplates = []string{
+	`      - uses: {{pin sigstore/cosign-installer}}
         with:
           # renovate: datasource=github-releases depName=sigstore/cosign
-          cosign-release: v3.1.4
+          cosign-release: {{release cosign}}
 `,
 	`      # cosign writes the registry credential where actions/attest reads it.
       - name: Log in to ghcr.io
@@ -827,19 +827,19 @@ var signSteps = []string{
 `,
 	`      # SLSA build provenance: actions/attest's default without sbom-path.
       - name: Attest the build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        uses: {{pin actions/attest}}
         with:
           subject-name: ghcr.io/timothymamo/shift2eu
           subject-digest: ${{ needs.image.outputs.digest }}
           push-to-registry: true
           create-storage-record: false # an organisation API; needs artifact-metadata: write
 `,
-	`      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+	`      - uses: {{pin actions/download-artifact}}
         with:
           name: sbom
 `,
 	`      - name: Attest the SBOM
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        uses: {{pin actions/attest}}
         with:
           subject-name: ghcr.io/timothymamo/shift2eu
           subject-digest: ${{ needs.image.outputs.digest }}
@@ -870,17 +870,17 @@ const verifyJobHead = `  # The independent check of what the release published (
     steps:
 `
 
-// verifySteps are the verify job's steps: cosign by exact release, a cosign
+// verifyStepTemplates are the verify job's steps: cosign by exact release, a cosign
 // login, the checks of docs/guide/verify-releases.md on the image this run
 // built - the tag resolving to that digest, the signature for this tag and
 // commit, the build provenance, the SBOM, and the image itself - and the tag
 // rule, whose highest release tag is read from main's ancestry without a
 // checkout.
-var verifySteps = []string{
-	`      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+var verifyStepTemplates = []string{
+	`      - uses: {{pin sigstore/cosign-installer}}
         with:
           # renovate: datasource=github-releases depName=sigstore/cosign
-          cosign-release: v3.1.4
+          cosign-release: {{release cosign}}
 `,
 	`      # cosign writes the registry credential where docker and buildx read it,
       # so the checks below pull what the job may read with its own token.
@@ -1065,23 +1065,59 @@ type releaseFixture struct {
 	jobs []releaseJob
 }
 
-// releaseWorkflowFixture returns .github/workflows/release.yml in parts.
+// releaseWorkflowFixture returns .github/workflows/release.yml in parts, with
+// the pins the repository's release.yml holds.
 func releaseWorkflowFixture() releaseFixture {
+	return releaseWorkflowFixtureFrom(repoRelease)
+}
+
+// releaseWorkflowFixtureFrom returns the release workflow in parts, with the
+// pins of release, a release.yml: every placeholder of the step templates
+// (workflowPins) filled in from it.
+func releaseWorkflowFixtureFrom(release []byte) releaseFixture {
+	pins := pinsOf(release)
+
 	return releaseFixture{
 		top: releaseWorkflowTop,
 		jobs: []releaseJob{
-			{key: "test", head: testJobHead, steps: testSteps},
-			{key: "latest", head: latestJobHead, steps: latestSteps},
-			{key: "goreleaser", head: goreleaserJobHead, steps: goreleaserSteps},
-			{key: "attest-archives", head: attestArchivesJobHead, steps: attestArchivesSteps},
-			{key: "publish", head: publishJobHead, steps: publishSteps},
-			{key: "image", head: imageJobHead, steps: imageSteps},
-			{key: "sbom", head: sbomJobHead, steps: sbomSteps},
-			{key: "sign", head: signJobHead, steps: signSteps},
-			{key: "verify", head: verifyJobHead, steps: verifySteps},
-			{key: "verify-archives", head: verifyArchivesJobHead, steps: verifyArchivesSteps},
+			{key: "test", head: testJobHead, steps: expandSteps(pins, testStepTemplates)},
+			{key: "latest", head: latestJobHead, steps: expandSteps(pins, latestStepTemplates)},
+			{key: "goreleaser", head: goreleaserJobHead, steps: expandSteps(pins, goreleaserStepTemplates)},
+			{key: "attest-archives", head: attestArchivesJobHead, steps: expandSteps(pins, attestArchivesStepTemplates)},
+			{key: "publish", head: publishJobHead, steps: expandSteps(pins, publishStepTemplates)},
+			{key: "image", head: imageJobHead, steps: expandSteps(pins, imageStepTemplates)},
+			{key: "sbom", head: sbomJobHead, steps: expandSteps(pins, sbomStepTemplates)},
+			{key: "sign", head: signJobHead, steps: expandSteps(pins, signStepTemplates)},
+			{key: "verify", head: verifyJobHead, steps: expandSteps(pins, verifyStepTemplates)},
+			{key: "verify-archives", head: verifyArchivesJobHead, steps: expandSteps(pins, verifyArchivesStepTemplates)},
 		},
 	}
+}
+
+// The steps of each job with the pins of the repository's release.yml: the
+// cases change one part of them.
+var (
+	testSteps           = expandSteps(releasePins, testStepTemplates)
+	latestSteps         = expandSteps(releasePins, latestStepTemplates)
+	goreleaserSteps     = expandSteps(releasePins, goreleaserStepTemplates)
+	attestArchivesSteps = expandSteps(releasePins, attestArchivesStepTemplates)
+	publishSteps        = expandSteps(releasePins, publishStepTemplates)
+	imageSteps          = expandSteps(releasePins, imageStepTemplates)
+	sbomSteps           = expandSteps(releasePins, sbomStepTemplates)
+	signSteps           = expandSteps(releasePins, signStepTemplates)
+	verifySteps         = expandSteps(releasePins, verifyStepTemplates)
+	verifyArchivesSteps = expandSteps(releasePins, verifyArchivesStepTemplates)
+)
+
+// expandSteps returns steps with every placeholder filled in from pins. A step
+// without one is returned as it is.
+func expandSteps(pins workflowPins, steps []string) []string {
+	out := make([]string, len(steps))
+	for i, step := range steps {
+		out[i] = pins.expand(step)
+	}
+
+	return out
 }
 
 // render returns the fixture as the release workflow file.
@@ -1239,26 +1275,35 @@ func TestReleaseWorkflow(t *testing.T) {
 	release := releaseWorkflowFixture()
 	releaseWorkflow := release.render()
 
+	// The cases write a pin release.yml holds as its placeholder
+	// (workflowPins), which the helpers below fill in from release.yml, so
+	// that a Renovate update of the workflow needs no edit of a case.
+	pin := releasePins.expand
+
+	// The BuildKit image release.yml pins, by tag and digest, for the cases
+	// that change one of the two.
+	buildkitTag, buildkitDigest, _ := strings.Cut(pin("{{image moby/buildkit}}"), "@sha256:")
+
 	// beforeGoreleaser inserts step before the goreleaser step.
 	beforeGoreleaser := func(step string) string {
 		return strings.Replace(releaseWorkflow, "      - uses: goreleaser/goreleaser-action@",
-			"      - "+step+"\n      - uses: goreleaser/goreleaser-action@", 1)
+			"      - "+pin(step)+"\n      - uses: goreleaser/goreleaser-action@", 1)
 	}
 
 	// inTestJob inserts step before the test job's make test.
 	inTestJob := func(step string) string {
-		return strings.Replace(releaseWorkflow, "      - name: Test\n", "      - "+step+"\n      - name: Test\n", 1)
+		return strings.Replace(releaseWorkflow, "      - name: Test\n", "      - "+pin(step)+"\n      - name: Test\n", 1)
 	}
 
 	// in replaces old with new in one job alone, failing unless that job holds
 	// old exactly once.
 	in := func(key, old, new string) string {
-		return release.inJob(t, key, old, new)
+		return release.inJob(t, key, pin(old), pin(new))
 	}
 
 	// steps returns the workflow with the steps of one job replaced.
 	steps := func(key string, steps []string) string {
-		return release.withSteps(t, key, steps)
+		return release.withSteps(t, key, expandSteps(releasePins, steps))
 	}
 
 	// afterPublish returns the workflow with the stale-decision check moved
@@ -1280,27 +1325,11 @@ func TestReleaseWorkflow(t *testing.T) {
 		{
 			// Every pin a Renovate update changes is matched by form: the actions'
 			// commits, goreleaser's, cosign's and syft's versions, and the BuildKit
-			// image in the image job's driver-opts.
-			name: "a newer pin of every action and tool",
-			workflow: strings.NewReplacer(
-				"3d3c42e5aac5ba805825da76410c181273ba90b1", "0d3c42e5aac5ba805825da76410c181273ba90b1",
-				"b7ad1dad31e06c5925ef5d2fc7ad053ef454303e", "07ad1dad31e06c5925ef5d2fc7ad053ef454303e",
-				"a4f02ab5355a589de60d917a659ce617ed19b3de", "a4f02ab5355a589de60d917a659ce617ed19b3df",
-				"f87e5991a6d7451dcb8d9637bfbc97413f497069", "087e5991a6d7451dcb8d9637bfbc97413f497069",
-				"8aa5831fb8d48d8f76594c7ddde61ae58019f550", "0aa5831fb8d48d8f76594c7ddde61ae58019f550",
-				"dc802804100637a589fabce1cb79ff13a1411302", "dc802804100637a589fabce1cb79ff13a1411303",
-				"c3c9e263c25d99ce0380d002d59b67737d91b0dc", "03c9e263c25d99ce0380d002d59b67737d91b0dc",
-				"756fe2d284c7292c4e9b62c8a28f1e5629c59532", "756fe2d284c7292c4e9b62c8a28f1e5629c59533",
-				"1e69f48acb82d1966a394da916b4c1698aa569d6", "1e69f48acb82d1966a394da916b4c1698aa569d7",
-				"66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c", "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6d",
-				"9000827ccba6bdab643e8b6fd33ac0654aef8333", "9000827ccba6bdab643e8b6fd33ac0654aef8334",
-				"cf430e030ddbb5b0abf93d22962f4752f3646cd9", "cf430e030ddbb5b0abf93d22962f4752f3646cda",
-				`"v2.20.1"`, `"v2.21.0"`,
-				"cosign-release: v3.1.4", "cosign-release: v3.2.0",
-				"syft-version: v1.57.1", "syft-version: v1.58.0",
-				"image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe",
-				"image=moby/buildkit:v0.35.0@sha256:1111111111111111111111111111111111111111111111111111111111111111",
-			).Replace(releaseWorkflow),
+			// image in the image job's driver-opts. Each newer pin is derived
+			// from the one it replaces (bumpPins), so the case follows a
+			// Renovate update of release.yml.
+			name:     "a newer pin of every action and tool",
+			workflow: string(bumpPins(t, []byte(releaseWorkflow))),
 		},
 
 		// The probes of the review and audit, each before the goreleaser step.
@@ -1316,7 +1345,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a step added to the test job", workflow: inTestJob(`run: go env -w GOFLAGS=-x`), wantIn: "holds 5 steps, want exactly 4"},
 		{
 			name:     "a step replaced in the goreleaser job",
-			workflow: in("goreleaser", "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache: false\n", "      - run: ./scripts/prepare.sh\n"),
+			workflow: in("goreleaser", "      - uses: {{pin actions/setup-go}}\n        with:\n          go-version-file: go.mod\n          cache: false\n", "      - run: ./scripts/prepare.sh\n"),
 			wantIn:   `want actions/setup-go holds the key "run"`,
 		},
 		{
@@ -1358,10 +1387,10 @@ func TestReleaseWorkflow(t *testing.T) {
 
 		// The tokens through which a step sets the environment or the PATH of
 		// the steps after it, wherever they are, comments included.
-		{name: "github.path in a comment", workflow: strings.Replace(releaseWorkflow, "# v7.3.0", "# ${{ github.path }}", 1), wantIn: "github.path"},
-		{name: "GITHUB.ENV in upper case", workflow: strings.Replace(releaseWorkflow, "# v7.3.0", "# ${{ GITHUB.ENV }}", 1), wantIn: "github.env"},
-		{name: "GITHUB_ENV in a comment", workflow: strings.Replace(releaseWorkflow, "# v7.3.0", "# GITHUB_ENV", 1), wantIn: "GITHUB_ENV"},
-		{name: "GOEXPERIMENT in a comment", workflow: strings.Replace(releaseWorkflow, "# v7.0.1", "# GOEXPERIMENT", 1), wantIn: "GOEXPERIMENT"},
+		{name: "github.path in a comment", workflow: in("goreleaser", "{{pin goreleaser/goreleaser-action}}", "{{commit goreleaser/goreleaser-action}} # ${{ github.path }}"), wantIn: "github.path"},
+		{name: "GITHUB.ENV in upper case", workflow: in("goreleaser", "{{pin goreleaser/goreleaser-action}}", "{{commit goreleaser/goreleaser-action}} # ${{ GITHUB.ENV }}"), wantIn: "github.env"},
+		{name: "GITHUB_ENV in a comment", workflow: in("goreleaser", "{{pin goreleaser/goreleaser-action}}", "{{commit goreleaser/goreleaser-action}} # GITHUB_ENV"), wantIn: "GITHUB_ENV"},
+		{name: "GOEXPERIMENT in a comment", workflow: in("test", "{{pin actions/checkout}}", "{{commit actions/checkout}} # GOEXPERIMENT"), wantIn: "GOEXPERIMENT"},
 
 		// One release at a time, across every tag (ADR 0015): a queued run
 		// waits, none is cancelled, and every tag shares the one group. The
@@ -1389,7 +1418,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a step-level if", workflow: in("test", "        run: make test\n", "        run: make test\n        if: false\n"), wantIn: `key "if"`},
 		{name: "a working-directory", workflow: in("test", "        run: make test\n", "        run: make test\n        working-directory: sub\n"), wantIn: `key "working-directory"`},
 		{name: "an env on another step", workflow: in("goreleaser", "          cache: false\n", "          cache: false\n        env:\n          A: b\n"), wantIn: `key "env"`},
-		{name: "a local action", workflow: in("test", "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e", "./.github/actions/setup"), wantIn: "uses"},
+		{name: "a local action", workflow: in("test", "{{commit actions/setup-go}}", "./.github/actions/setup"), wantIn: "uses"},
 		{name: "a reusable workflow", workflow: in("goreleaser", "    runs-on: ubuntu-latest\n", "    uses: example/repo/.github/workflows/x.yml@main\n"), wantIn: `holds no "runs-on", want exactly name, runs-on, permissions, steps, needs`},
 
 		// What goreleaser is asked to do.
@@ -1397,13 +1426,13 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a --config", workflow: in("goreleaser", "args: release --clean", "args: release --clean --config x.yaml"), wantIn: "args"},
 		{name: "no args", workflow: in("goreleaser", "          args: release --clean\n", ""), wantIn: `no "args"`},
 		{name: "a workdir", workflow: in("goreleaser", "distribution: goreleaser", "distribution: goreleaser\n          workdir: sub"), wantIn: `key "workdir"`},
-		{name: "a goreleaser version range", workflow: in("goreleaser", `"v2.20.1"`, `"~> v2"`), wantIn: "version"},
-		{name: "an action pinned by tag", workflow: in("goreleaser", "goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de", "goreleaser-action@v7"), wantIn: "goreleaser-action@v7"},
+		{name: "a goreleaser version range", workflow: in("goreleaser", `"{{release goreleaser}}"`, `"~> v2"`), wantIn: "version"},
+		{name: "an action pinned by tag", workflow: in("goreleaser", "{{commit goreleaser/goreleaser-action}}", "goreleaser/goreleaser-action@v7"), wantIn: "goreleaser-action@v7"},
 		{name: "a second key in the goreleaser env", workflow: in("goreleaser", "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n", "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          OTHER: x\n"), wantIn: "OTHER"},
 		{name: "a GITHUB_TOKEN from somewhere else", workflow: in("goreleaser", "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", "GITHUB_TOKEN: ${{ vars.TOKEN }}"), wantIn: "GITHUB_TOKEN"},
 		{name: "a flow-style env", workflow: in("goreleaser", "        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n", "        env: {GITHUB_TOKEN: x, A: b}\n"), wantIn: "env"},
 		{name: "a repeated key", workflow: in("goreleaser", "    needs: test\n", "    needs: test\n    needs: test\n"), wantIn: "repeated"},
-		{name: "a tab", workflow: strings.Replace(releaseWorkflow, "# v7.0.1", "#\tv7.0.1", 1), wantIn: "U+0009"},
+		{name: "a tab", workflow: in("test", "{{pin actions/checkout}}", strings.Replace(pin("{{pin actions/checkout}}"), " # ", " #\t", 1)), wantIn: "U+0009"},
 
 		// The draft-then-publish flow (issue #156): GoReleaser uploads every
 		// asset to a draft release, which .goreleaser.yaml's release.draft asks
@@ -1464,7 +1493,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a draft check that trusts the draft's checksums.txt", workflow: in("publish", "            echo \"the draft release's checksums.txt is not the one this run attested\" >&2\n", "            echo \"the draft release's checksums.txt is the attested one\" >&2\n"), wantIn: "the draft release's checksums.txt is not the one this run attested"},
 		{name: "a separate publish step by tag", workflow: steps("publish", slices.Concat(publishSteps, []string{publishByTagStep})), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
 		{name: "an extra step in the publish job", workflow: steps("publish", beforeStep(t, publishSteps, "      - name: Check the draft's assets and publish it", "run: ./scripts/prepare.sh")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
-		{name: "the publish job checking the repository out again", workflow: steps("publish", beforeStep(t, publishSteps, "      - uses: actions/download-artifact@", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          fetch-depth: 0\n          persist-credentials: false")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
+		{name: "the publish job checking the repository out again", workflow: steps("publish", beforeStep(t, publishSteps, "      - uses: actions/download-artifact@", "uses: {{pin actions/checkout}}\n        with:\n          fetch-depth: 0\n          persist-credentials: false")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
 		{name: "the publish step in the goreleaser job", workflow: steps("goreleaser", beforeStep(t, goreleaserSteps, "      - uses: actions/upload-artifact@", "name: Check the draft's assets and publish it\n        run: "+publishByID)), wantIn: "jobs: goreleaser: steps holds 5 steps, want exactly 4"},
 		{name: "the publish step in the test job", workflow: inTestJob("name: Check the draft's assets and publish it\n        run: " + publishByID), wantIn: "holds 5 steps, want exactly 4"},
 
@@ -1561,10 +1590,10 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "an extra step in the image job", workflow: steps("image", beforeStep(t, imageSteps, "      - uses: docker/setup-buildx-action@", "run: ./scripts/prepare.sh")), wantIn: "holds 7 steps, want exactly 6"},
 		{name: "a missing step in the image job", workflow: steps("image", withoutStep(t, imageSteps, "docker/login-action@")), wantIn: "holds 5 steps, want exactly 6"},
 		{name: "two image steps swapped", workflow: steps("image", swappedSteps(t, imageSteps, "docker/setup-buildx-action@", "docker/login-action@")), wantIn: "want docker/setup-buildx-action: uses is"},
-		{name: "build-push-action pinned by tag", workflow: in("image", "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc", "docker/build-push-action@v7"), wantIn: "build-push-action@v7"},
-		{name: "setup-buildx-action pinned by tag", workflow: in("image", "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069", "docker/setup-buildx-action@v4"), wantIn: "setup-buildx-action@v4"},
-		{name: "metadata-action pinned by tag", workflow: in("image", "docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302", "docker/metadata-action@v6"), wantIn: "metadata-action@v6"},
-		{name: "login-action pinned by tag", workflow: in("image", "docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550", "docker/login-action@v4"), wantIn: "login-action@v4"},
+		{name: "build-push-action pinned by tag", workflow: in("image", "{{commit docker/build-push-action}}", "docker/build-push-action@v7"), wantIn: "build-push-action@v7"},
+		{name: "setup-buildx-action pinned by tag", workflow: in("image", "{{commit docker/setup-buildx-action}}", "docker/setup-buildx-action@v4"), wantIn: "setup-buildx-action@v4"},
+		{name: "metadata-action pinned by tag", workflow: in("image", "{{commit docker/metadata-action}}", "docker/metadata-action@v6"), wantIn: "metadata-action@v6"},
+		{name: "login-action pinned by tag", workflow: in("image", "{{commit docker/login-action}}", "docker/login-action@v4"), wantIn: "login-action@v4"},
 
 		// The image job's digest output: what the SBOM job reads the image by
 		// and the sign job signs and attests.
@@ -1620,9 +1649,9 @@ func TestReleaseWorkflow(t *testing.T) {
 
 		// The pins Renovate updates, by form: an exact release, an exact syft,
 		// the BuildKit image by tag and multi-arch index digest.
-		{name: "a BuildKit tag without a digest", workflow: in("image", "image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe", "image=moby/buildkit:v0.34.2"), wantIn: "driver-opts"},
-		{name: "a BuildKit tag that is not an exact release", workflow: in("image", "image=moby/buildkit:v0.34.2@sha256:", "image=moby/buildkit:v0.34@sha256:"), wantIn: "driver-opts"},
-		{name: "a BuildKit digest that is not 64 hex", workflow: in("image", "sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe", "sha256:c5f8862f"), wantIn: "driver-opts"},
+		{name: "a BuildKit tag without a digest", workflow: in("image", "image=moby/buildkit:{{image moby/buildkit}}", "image=moby/buildkit:"+buildkitTag), wantIn: "driver-opts"},
+		{name: "a BuildKit tag that is not an exact release", workflow: in("image", "image=moby/buildkit:"+buildkitTag+"@sha256:", "image=moby/buildkit:"+buildkitTag[:strings.LastIndex(buildkitTag, ".")]+"@sha256:"), wantIn: "driver-opts"},
+		{name: "a BuildKit digest that is not 64 hex", workflow: in("image", "sha256:"+buildkitDigest, "sha256:"+buildkitDigest[:8]), wantIn: "driver-opts"},
 
 		// Another registry, another image name: the checks below read the one
 		// the release publishes.
@@ -1657,25 +1686,25 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "another SBOM format", workflow: in("sbom", "          format: spdx-json\n", "          format: cyclonedx-json\n"), wantIn: "format"},
 		{name: "the SBOM uploaded to the run", workflow: in("sbom", "          upload-artifact: false\n", "          upload-artifact: true\n"), wantIn: "upload-artifact"},
 		{name: "the SBOM uploaded to the release", workflow: in("sbom", "          upload-release-assets: false\n", "          upload-release-assets: true\n"), wantIn: "upload-release-assets"},
-		{name: "a syft version range", workflow: in("sbom", "syft-version: v1.57.1", "syft-version: ~> v1"), wantIn: "syft-version"},
+		{name: "a syft version range", workflow: in("sbom", "syft-version: {{release syft}}", "syft-version: ~> v1"), wantIn: "syft-version"},
 		{name: "another SBOM artifact name", workflow: in("sbom", "          name: sbom\n", "          name: sboms\n"), wantIn: "name"},
 		{name: "another SBOM artifact path", workflow: in("sbom", "          path: shift2eu.spdx.json\n", "          path: report.json\n"), wantIn: "path"},
 		{name: "a tolerated missing SBOM", workflow: in("sbom", "          if-no-files-found: error\n", "          if-no-files-found: warn\n"), wantIn: "if-no-files-found"},
 		{name: "a longer SBOM retention", workflow: in("sbom", "          retention-days: 1\n", "          retention-days: 7\n"), wantIn: "retention-days"},
-		{name: "sbom-action pinned by tag", workflow: in("sbom", "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c", "anchore/sbom-action@v0"), wantIn: "sbom-action@v0"},
+		{name: "sbom-action pinned by tag", workflow: in("sbom", "{{commit anchore/sbom-action}}", "anchore/sbom-action@v0"), wantIn: "sbom-action@v0"},
 
 		// The sign job: the signing identity, with GitHub's and sigstore's code
 		// alone, no checkout, and everything by digest.
 		{name: "the sign job on another runner", workflow: in("sign", "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-24.04\n"), wantIn: "runs-on"},
 		{name: "the sign job without needs", workflow: in("sign", "    needs: [image, sbom]\n", ""), wantIn: `no "needs"`},
-		{name: "an extra step in the sign job", workflow: steps("sign", beforeStep(t, signSteps, "      - uses: actions/download-artifact@", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")), wantIn: "holds 7 steps, want exactly 6"},
-		{name: "a checkout in place of the cosign installer", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 0, 1, "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n")), wantIn: "cosign-installer"},
-		{name: "a docker login in place of the cosign login", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 1, 2, "      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0\n        with:\n          registry: ghcr.io\n")), wantIn: `want the cosign login holds the key "uses"`},
-		{name: "an anchore action in place of the provenance attestation", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 3, 4, "      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n")), wantIn: `want actions/attest (the build provenance) holds no "with", want exactly name, uses, with`},
+		{name: "an extra step in the sign job", workflow: steps("sign", beforeStep(t, signSteps, "      - uses: actions/download-artifact@", "uses: {{commit actions/checkout}}")), wantIn: "holds 7 steps, want exactly 6"},
+		{name: "a checkout in place of the cosign installer", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 0, 1, "      - uses: {{pin actions/checkout}}\n")), wantIn: "cosign-installer"},
+		{name: "a docker login in place of the cosign login", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 1, 2, "      - uses: {{pin docker/login-action}}\n        with:\n          registry: ghcr.io\n")), wantIn: `want the cosign login holds the key "uses"`},
+		{name: "an anchore action in place of the provenance attestation", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 3, 4, "      - uses: {{pin anchore/sbom-action}}\n")), wantIn: `want actions/attest (the build provenance) holds no "with", want exactly name, uses, with`},
 		{name: "two sign steps swapped", workflow: steps("sign", swappedSteps(t, signSteps, "name: Attest the build provenance", "actions/download-artifact@")), wantIn: `want actions/download-artifact holds the key "name"`},
-		{name: "an upload in place of the artifact download", workflow: in("sign", "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n", "      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n"), wantIn: "download-artifact"},
-		{name: "a cosign installer pinned by tag", workflow: in("sign", "sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532", "sigstore/cosign-installer@v4"), wantIn: "cosign-installer@v4"},
-		{name: "a cosign release range", workflow: in("sign", "cosign-release: v3.1.4", "cosign-release: v3"), wantIn: "cosign-release"},
+		{name: "an upload in place of the artifact download", workflow: in("sign", "      - uses: {{pin actions/download-artifact}}\n", "      - uses: {{pin actions/upload-artifact}}\n"), wantIn: "download-artifact"},
+		{name: "a cosign installer pinned by tag", workflow: in("sign", "{{commit sigstore/cosign-installer}}", "sigstore/cosign-installer@v4"), wantIn: "cosign-installer@v4"},
+		{name: "a cosign release range", workflow: in("sign", "cosign-release: {{release cosign}}", "cosign-release: v3"), wantIn: "cosign-release"},
 
 		// The login: the token and the actor through env:, never pasted into
 		// the script, and nothing else in the environment.
@@ -1701,12 +1730,12 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "the SBOM attestation not pushed to the registry", workflow: in("sign", "          sbom-path: shift2eu.spdx.json\n          push-to-registry: true\n", "          sbom-path: shift2eu.spdx.json\n          push-to-registry: false\n"), wantIn: "push-to-registry"},
 		{name: "the provenance attestation stored in the repository", workflow: in("sign", "          create-storage-record: false # an organisation API; needs artifact-metadata: write\n", "          create-storage-record: true # an organisation API; needs artifact-metadata: write\n"), wantIn: "create-storage-record"},
 		{name: "the SBOM attestation stored in the repository", workflow: in("sign", "          push-to-registry: true\n          create-storage-record: false\n", "          push-to-registry: true\n          create-storage-record: true\n"), wantIn: "create-storage-record"},
-		{name: "a provenance attestation of another subject", workflow: in("sign", "      - name: Attest the build provenance\n        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n        with:\n          subject-name: ghcr.io/timothymamo/shift2eu\n", "      - name: Attest the build provenance\n        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n        with:\n          subject-name: ghcr.io/example/shift2eu\n"), wantIn: "subject-name"},
+		{name: "a provenance attestation of another subject", workflow: in("sign", "      - name: Attest the build provenance\n        uses: {{pin actions/attest}}\n        with:\n          subject-name: ghcr.io/timothymamo/shift2eu\n", "      - name: Attest the build provenance\n        uses: {{pin actions/attest}}\n        with:\n          subject-name: ghcr.io/example/shift2eu\n"), wantIn: "subject-name"},
 		{name: "an SBOM attestation of another digest", workflow: in("sign", "          subject-digest: ${{ needs.image.outputs.digest }}\n          sbom-path: shift2eu.spdx.json\n", "          subject-digest: ${{ github.sha }}\n          sbom-path: shift2eu.spdx.json\n"), wantIn: "subject-digest"},
 		{name: "an SBOM attestation without the SBOM", workflow: in("sign", "          sbom-path: shift2eu.spdx.json\n", ""), wantIn: `no "sbom-path"`},
-		{name: "the provenance attested from a file", workflow: in("sign", "      - name: Attest the build provenance\n        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n        with:\n          subject-name: ghcr.io/timothymamo/shift2eu\n", "      - name: Attest the build provenance\n        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n        with:\n          subject-path: dist/shift2eu\n"), wantIn: "subject-path"},
-		{name: "an artifact downloaded under another name", workflow: in("sign", "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: sbom\n", "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: shift2eu-sbom\n"), wantIn: "name"},
-		{name: "another action in place of the artifact download", workflow: in("sign", "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n", "      - uses: example/attest@0123456789abcdef0123456789abcdef01234567\n"), wantIn: "download-artifact"},
+		{name: "the provenance attested from a file", workflow: in("sign", "      - name: Attest the build provenance\n        uses: {{pin actions/attest}}\n        with:\n          subject-name: ghcr.io/timothymamo/shift2eu\n", "      - name: Attest the build provenance\n        uses: {{pin actions/attest}}\n        with:\n          subject-path: dist/shift2eu\n"), wantIn: "subject-path"},
+		{name: "an artifact downloaded under another name", workflow: in("sign", "      - uses: {{pin actions/download-artifact}}\n        with:\n          name: sbom\n", "      - uses: {{pin actions/download-artifact}}\n        with:\n          name: shift2eu-sbom\n"), wantIn: "name"},
+		{name: "another action in place of the artifact download", workflow: in("sign", "      - uses: {{pin actions/download-artifact}}\n", "      - uses: example/attest@0123456789abcdef0123456789abcdef01234567\n"), wantIn: "download-artifact"},
 
 		// The HTTP API's image is gone with the server (issue #393): the release
 		// publishes the CLI's image alone, so a fourth image job, or the jobs
@@ -1756,11 +1785,11 @@ func TestReleaseWorkflow(t *testing.T) {
 		// the check of the image, and the tag rule, and nothing else. No
 		// checkout runs repository code, and every action is pinned by commit.
 		{name: "an extra step in the verify job", workflow: steps("verify", beforeStep(t, verifySteps, "      - name: Log in to ghcr.io", "run: ./scripts/prepare.sh")), wantIn: "holds 5 steps, want exactly 4"},
-		{name: "a checkout in the verify job", workflow: steps("verify", beforeStep(t, verifySteps, "      - name: Log in to ghcr.io", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")), wantIn: "holds 5 steps, want exactly 4"},
+		{name: "a checkout in the verify job", workflow: steps("verify", beforeStep(t, verifySteps, "      - name: Log in to ghcr.io", "uses: {{commit actions/checkout}}")), wantIn: "holds 5 steps, want exactly 4"},
 		{name: "a missing step in the verify job", workflow: steps("verify", withoutStep(t, verifySteps, "name: Log in to ghcr.io")), wantIn: "holds 3 steps, want exactly 4"},
 		{name: "two verify steps swapped", workflow: steps("verify", swappedSteps(t, verifySteps, "name: Verify the CLI image", "name: The tags follow the release rule")), wantIn: "want the CLI image's verification: name is"},
-		{name: "a cosign installer pinned by tag in the verify job", workflow: in("verify", "sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532", "sigstore/cosign-installer@v4"), wantIn: "cosign-installer@v4"},
-		{name: "a cosign release range in the verify job", workflow: in("verify", "cosign-release: v3.1.4", "cosign-release: v3"), wantIn: "cosign-release"},
+		{name: "a cosign installer pinned by tag in the verify job", workflow: in("verify", "{{commit sigstore/cosign-installer}}", "sigstore/cosign-installer@v4"), wantIn: "cosign-installer@v4"},
+		{name: "a cosign release range in the verify job", workflow: in("verify", "cosign-release: {{release cosign}}", "cosign-release: v3"), wantIn: "cosign-release"},
 
 		// The published image is resolved to its digest and used by digest.
 		{name: "the CLI image verified by tag, not by digest", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `IMAGE="ghcr.io/timothymamo/shift2eu@$DIGEST"`, `IMAGE="ghcr.io/timothymamo/shift2eu:$TAG"`)), wantIn: "want the CLI image's verification: run is"},
@@ -1886,11 +1915,11 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "attestations: read for the attest-archives job", workflow: in("attest-archives", "      attestations: write # store the provenance in the repository\n", "      attestations: read # store the provenance in the repository\n"), wantIn: "attestations"},
 		{name: "an extra step in the attest-archives job", workflow: steps("attest-archives", beforeStep(t, attestArchivesSteps, "      - name: Check the archives against checksums.txt", "run: ./scripts/prepare.sh")), wantIn: "holds 4 steps, want exactly 3"},
 		{name: "a missing step in the attest-archives job", workflow: steps("attest-archives", withoutStep(t, attestArchivesSteps, "name: Check the archives against checksums.txt")), wantIn: "holds 2 steps, want exactly 3"},
-		{name: "the archives not downloaded", workflow: in("attest-archives", "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333", "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"), wantIn: "download-artifact"},
+		{name: "the archives not downloaded", workflow: in("attest-archives", "{{commit actions/download-artifact}}", "{{commit actions/upload-artifact}}"), wantIn: "download-artifact"},
 		{name: "the archives downloaded under another name", workflow: in("attest-archives", "          name: archives\n", "          name: dist\n"), wantIn: "name"},
 		{name: "the archives not checked against checksums.txt", workflow: in("attest-archives", "        run: sha256sum -c checksums.txt\n", "        run: sha256sum checksums.txt\n"), wantIn: "sha256sum -c checksums.txt"},
-		{name: "the attest action pinned by tag", workflow: in("attest-archives", "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8", "actions/attest-build-provenance@v4"), wantIn: "attest-build-provenance@v4"},
-		{name: "another action in place of the provenance attestation", workflow: steps("attest-archives", slices.Replace(slices.Clone(attestArchivesSteps), 2, 3, "      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n")), wantIn: "attest-build-provenance"},
+		{name: "the attest action pinned by tag", workflow: in("attest-archives", "{{commit actions/attest-build-provenance}}", "actions/attest-build-provenance@v4"), wantIn: "attest-build-provenance@v4"},
+		{name: "another action in place of the provenance attestation", workflow: steps("attest-archives", slices.Replace(slices.Clone(attestArchivesSteps), 2, 3, "      - uses: {{pin actions/attest}}\n")), wantIn: "attest-build-provenance"},
 		{name: "checksums.txt not attested", workflow: in("attest-archives", "            shift2eu_*.zip\n            checksums.txt\n", "            shift2eu_*.zip\n"), wantIn: "subject-path"},
 		{name: "a bare shift2eu_* subject pattern", workflow: in("attest-archives", "            shift2eu_*.tar.gz\n", "            shift2eu_*\n"), wantIn: "subject-path"},
 		{name: "the archives attested by digest instead", workflow: in("attest-archives", "          subject-path: |\n            shift2eu_*.tar.gz\n            shift2eu_*.zip\n            checksums.txt\n", "          subject-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\n"), wantIn: `no "subject-path"`},
@@ -1928,7 +1957,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "id-token: write for the verify-archives job", workflow: in("verify-archives", "      attestations: read # gh attestation verify reads them through the repository's API\n", "      attestations: read # gh attestation verify reads them through the repository's API\n      id-token: write # sign\n"), wantIn: "id-token"},
 		{name: "packages: read for the verify-archives job", workflow: in("verify-archives", "      attestations: read # gh attestation verify reads them through the repository's API\n", "      attestations: read # gh attestation verify reads them through the repository's API\n      packages: read # pull the images\n"), wantIn: "packages"},
 		{name: "an extra step in the verify-archives job", workflow: steps("verify-archives", beforeStep(t, verifyArchivesSteps, "      - name: Download the published archives", "run: ./scripts/prepare.sh")), wantIn: "holds 4 steps, want exactly 3"},
-		{name: "a checkout in the verify-archives job", workflow: steps("verify-archives", beforeStep(t, verifyArchivesSteps, "      - name: Download the published archives", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")), wantIn: "holds 4 steps, want exactly 3"},
+		{name: "a checkout in the verify-archives job", workflow: steps("verify-archives", beforeStep(t, verifyArchivesSteps, "      - name: Download the published archives", "uses: {{commit actions/checkout}}")), wantIn: "holds 4 steps, want exactly 3"},
 		{name: "a missing step in the verify-archives job", workflow: steps("verify-archives", withoutStep(t, verifyArchivesSteps, "name: Verify the published archives")), wantIn: "holds 2 steps, want exactly 3"},
 		{name: "the published archives not downloaded", workflow: in("verify-archives", `gh release download "$TAG"`, `gh release view "$TAG"`), wantIn: `gh release download \"$TAG\" --repo timothymamo/shift2eu`},
 		{name: "the download without --repo", workflow: in("verify-archives", `gh release download "$TAG" --repo timothymamo/shift2eu`, `gh release download "$TAG"`), wantIn: `want exactly "gh release download \"$TAG\" --repo timothymamo/shift2eu"`},

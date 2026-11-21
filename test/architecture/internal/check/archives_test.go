@@ -419,13 +419,19 @@ func TestGoReleaserArchives(t *testing.T) {
 // installs the GoReleaser the release runs: the same action commit, the same
 // distribution and the same version as release.yml's goreleaser step, installed
 // only, so the snapshot that builds the archives in the dry run is the
-// GoReleaser that publishes them (issue #147).
-const ciGoreleaserInstall = `      # The same goreleaser version release.yml runs, installed only: the script below runs a snapshot of
+// GoReleaser that publishes them (issue #147). Its pins are those of the
+// repository's ci.yml (workflowPins), as the release fixture's are those of
+// its release.yml, so that a Renovate update of both needs no edit here.
+var ciGoreleaserInstall = ciPins.expand(ciGoreleaserInstallTemplate)
+
+// ciGoreleaserInstallTemplate is that step, its pins as placeholders
+// (workflowPins).
+const ciGoreleaserInstallTemplate = `      # The same goreleaser version release.yml runs, installed only: the script below runs a snapshot of
       # the release at this commit, which builds the archives and publishes nothing.
-      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+      - uses: {{pin goreleaser/goreleaser-action}}
         with:
           distribution: goreleaser
-          version: "v2.20.1" # exact pin, as release.yml's; Renovate updates it (github-actions manager)
+          version: "{{release goreleaser}}" # exact pin, as release.yml's; Renovate updates it (github-actions manager)
           install-only: true
 `
 
@@ -442,8 +448,26 @@ const ciArchiveStep = `      # The release's archives, built by a snapshot run o
 // request and every push to main, installs the release's GoReleaser and runs
 // .github/scripts/verify-archives.sh, which builds the release's archives and
 // fails unless each holds exactly its own binary: the CLI's archive shift2eu
-// and nothing else (issue #393).
-const ciArchiveCheck = `name: CI
+// and nothing else (issue #393). It takes ci.yml's pins and the release
+// fixture release.yml's, so a Renovate update that moves the GoReleaser pins
+// in one workflow alone fails the cases that compare the two on purpose: the
+// workflows have drifted apart, and repository_test.go's
+// TestReleaseArchivesHoldOneBinary names the drift.
+var ciArchiveCheck = ciArchiveCheckFrom(repoCI)
+
+// ciArchiveCheckFrom returns ciArchiveCheck with the pins of ci, a ci.yml: the
+// placeholders of the templates below filled in from that workflow
+// (workflowPins), as ciDryRunFrom fills the dry run's in, so that a Renovate
+// update of ci.yml needs no edit here either.
+func ciArchiveCheckFrom(ci []byte) string {
+	pins := pinsOf(ci)
+
+	return pins.expand(ciArchiveCheckTemplate) + pins.expand(ciGoreleaserInstallTemplate) + ciArchiveStep
+}
+
+// ciArchiveCheckTemplate is ciArchiveCheck up to its GoReleaser install, its
+// pins as placeholders (workflowPins).
+const ciArchiveCheckTemplate = `name: CI
 
 on:
   push:
@@ -458,13 +482,35 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: {{pin actions/setup-go}}
         with:
           go-version-file: go.mod
-` + ciGoreleaserInstall + ciArchiveStep
+`
+
+// TestArchiveCheckFixtureFollowsThePins pins that the archive check's fixture
+// is built from ci.yml at test time, as the release and dry-run fixtures are
+// from the workflows they copy: a Renovate update of the GoReleaser install's
+// action pin and version, or of the checkout and setup-go pins, reaches the
+// fixture with no edit of this file (issue #421), and the fixture built from
+// the updated ci.yml still passes the check against the release it pairs with.
+func TestArchiveCheckFixtureFollowsThePins(t *testing.T) {
+	t.Parallel()
+
+	ci, release := readWorkflows(t)
+	bumpedCI, bumpedRelease := renovateBump(t, ci, release)
+
+	archiveCheck := ciArchiveCheckFrom(bumpedCI)
+	releaseWorkflow := releaseWorkflowFixtureFrom(bumpedRelease).render()
+
+	assertPinsFollow(t, "the archive check of ci.yml", archiveCheck, string(bumpedCI))
+
+	if got := check.DryRunVerifiesArchives([]byte(archiveCheck), []byte(releaseWorkflow)); len(got) != 0 {
+		t.Errorf("DryRunVerifiesArchives(the archive check of an updated ci.yml, an updated release.yml) = %q, want no message", got)
+	}
+}
 
 // TestDryRunVerifiesArchives pins the other half of issue #147: the CI dry run
 // verifies what the release publishes, as ci.yml's image job does for the
@@ -498,6 +544,15 @@ func TestDryRunVerifiesArchives(t *testing.T) {
 
 	release := releaseWorkflowFixture()
 	releaseWorkflow := release.render()
+
+	// The GoReleaser pins the fixtures hold, and the drifts the cases below
+	// make of them, each derived from the pin it replaces.
+	goreleaserAction := ciPins.commitOf("goreleaser/goreleaser-action")
+	goreleaser := `version: "` + ciPins.expand("{{release goreleaser}}") + `"`
+	releaseGoreleaser := `version: "` + releasePins.expand("{{release goreleaser}}") + `"`
+	drifted := func(version string) string {
+		return `version: "` + nextRelease(t, strings.TrimSuffix(strings.TrimPrefix(version, `version: "`), `"`)) + `"`
+	}
 
 	tests := []struct {
 		name string
@@ -571,12 +626,12 @@ func TestDryRunVerifiesArchives(t *testing.T) {
 		{
 			// A Renovate pull request bumping ci.yml alone.
 			name:   "a goreleaser-action commit that is not the release's",
-			ci:     mutate(t, ciArchiveCheck, "@a4f02ab5355a589de60d917a659ce617ed19b3de", "@1111111111111111111111111111111111111111"),
+			ci:     mutate(t, ciArchiveCheck, "@"+goreleaserAction, "@"+nextCommit(t, goreleaserAction)),
 			wantIn: "uses",
 		},
 		{
 			name:   "a goreleaser version that is not the release's",
-			ci:     mutate(t, ciArchiveCheck, `version: "v2.20.1"`, `version: "v2.20.2"`),
+			ci:     mutate(t, ciArchiveCheck, goreleaser, drifted(goreleaser)),
 			wantIn: "version",
 		},
 		{
@@ -589,7 +644,7 @@ func TestDryRunVerifiesArchives(t *testing.T) {
 			// the same, whichever workflow moved.
 			name:    "a release version that is not the dry run's",
 			ci:      ciArchiveCheck,
-			release: release.inJob(t, "goreleaser", `version: "v2.20.1"`, `version: "v2.21.0"`),
+			release: release.inJob(t, "goreleaser", releaseGoreleaser, drifted(releaseGoreleaser)),
 			wantIn:  "version",
 		},
 		{
