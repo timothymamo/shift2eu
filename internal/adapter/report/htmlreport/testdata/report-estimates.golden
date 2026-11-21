@@ -1,40 +1,36 @@
 <section class="shift2eu-report">
-<h2>Migration assessment: <code>Example Cloud</code></h2>
+<h2><span>Migration assessment</span> <code>Example Cloud</code></h2>
 <ul role="list">
-<li>Inventory file: <code>inventory.json</code></li>
-<li>Source: <code>aws</code></li>
-<li>Catalog: <code>Example Cloud</code> snapshot from <code>https://www.example.com/pricing/</code>, retrieved 2026-11-13</li>
-<li>Region: <code>xx-par</code> (the target&#39;s default for estimates)</li>
+<li>source <code>aws</code></li>
+<li><span aria-hidden="true">·</span> <code>inventory.json</code></li>
+<li><span aria-hidden="true">·</span> <a href="https://www.example.com/pricing/" target="_blank" rel="noopener noreferrer">catalog retrieved 2026-11-13</a></li>
+<li><span aria-hidden="true">·</span> region <code>xx-par</code></li>
 </ul>
 <section class="part part-summary">
 <h3>Summary</h3>
-<table>
-<thead>
-<tr><th scope="col">Fit</th><th scope="col">Resources</th></tr>
-</thead>
-<tbody>
-<tr class="fit-direct"><td>direct</td><td>4</td></tr>
-<tr class="fit-partial"><td>partial</td><td>0</td></tr>
-<tr class="fit-none"><td>none</td><td>1</td></tr>
-<tr class="fit-total"><td>total</td><td>5</td></tr>
-</tbody>
-</table>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> direct</span> <strong>4</strong> <span>of 5 resources</span></p>
+<p><span class="fit fit-partial"><span aria-hidden="true">◐</span> partial</span> <strong>0</strong> <span>of 5 resources</span></p>
+<p><span class="fit fit-none"><span aria-hidden="true">✕</span> none</span> <strong>1</strong> <span>of 5 resources</span></p>
+<p><span>Monthly estimate</span> <strong>€2,535.00</strong> <span>4 of 5 priced · excl. VAT</span></p>
 </section>
 <section class="part part-resources">
 <h3>Resources</h3>
+<section class="table-scroll">
 <table>
 <thead>
 <tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Plan</th><th scope="col">Monthly estimate</th><th scope="col">Relations</th><th scope="col">Reasons</th></tr>
 </thead>
 <tbody>
-<tr><td><code>bucket-storage</code></td><td><code>AWS::S3::Bucket</code></td><td><code>storage.object</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct">direct</td><td><code>Example Object Storage</code></td><td></td><td>€2,500.00</td><td></td><td><code>Example Object Storage</code> offers every capability the resource uses</td></tr>
-<tr><td><code>cluster-small</code></td><td><code>Scaleway::Kubernetes::Cluster</code></td><td><code>kubernetes.managed</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct">direct</td><td><code>Example Kubernetes</code></td><td><code>KN-S</code> (1 vCPU, 2 GiB)</td><td>€15.00 (includes a fixed fee of €5.00) (count assumed 1) (730 hours assumed)</td><td></td><td><code>Example Kubernetes</code> offers every capability the resource uses</td></tr>
-<tr><td><code>queue-jobs</code></td><td><code>AWS::SQS::Queue</code></td><td><code>messaging.queue</code></td><td><code>eu-west-1</code></td><td class="fit fit-none">none</td><td></td><td></td><td>not estimated: no fit</td><td></td><td>no offering in the <code>Example Cloud</code> catalog for <code>messaging.queue</code></td></tr>
-<tr><td><code>server-small</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct">direct</td><td><code>Example Virtual Machines</code></td><td><code>EX-S</code> (1 vCPU, 2 GiB)</td><td>€10.00 (count assumed 1) (730 hours assumed)</td><td></td><td><code>Example Virtual Machines</code> offers every capability the resource uses</td></tr>
-<tr><td><code>worker-jobs</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct">direct</td><td><code>Example Virtual Machines</code></td><td><code>EX-S</code> (1 vCPU, 2 GiB)</td><td>€10.00 (count assumed 1) (730 hours assumed)</td><td>depends-on <code>queue-jobs</code></td><td><code>Example Virtual Machines</code> offers every capability the resource uses</td></tr>
+<tr><td><code>bucket-storage</code></td><td><code>AWS::S3::Bucket</code></td><td><code>storage.object</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Example Object Storage</code></td><td></td><td>€2,500.00</td><td></td><td><code>Example Object Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>cluster-small</code></td><td><code>Scaleway::Kubernetes::Cluster</code></td><td><code>kubernetes.managed</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Example Kubernetes</code></td><td><code>KN-S</code> (1 vCPU, 2 GiB)</td><td>€15.00 (includes a fixed fee of €5.00) (count assumed 1) (730 hours assumed)</td><td></td><td><code>Example Kubernetes</code> offers every capability the resource uses</td></tr>
+<tr><td><code>queue-jobs</code></td><td><code>AWS::SQS::Queue</code></td><td><code>messaging.queue</code></td><td><code>eu-west-1</code></td><td class="fit fit-none"><span>none</span></td><td></td><td></td><td>not estimated: no fit</td><td></td><td>no offering in the <code>Example Cloud</code> catalog for <code>messaging.queue</code></td></tr>
+<tr><td><code>server-small</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Example Virtual Machines</code></td><td><code>EX-S</code> (1 vCPU, 2 GiB)</td><td>€10.00 (count assumed 1) (730 hours assumed)</td><td></td><td><code>Example Virtual Machines</code> offers every capability the resource uses</td></tr>
+<tr><td><code>worker-jobs</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Example Virtual Machines</code></td><td><code>EX-S</code> (1 vCPU, 2 GiB)</td><td>€10.00 (count assumed 1) (730 hours assumed)</td><td>depends-on <code>queue-jobs</code></td><td><code>Example Virtual Machines</code> offers every capability the resource uses</td></tr>
 </tbody>
 </table>
 </section>
+</section>
+<section>
 <section class="part part-changes">
 <h3>Required changes</h3>
 <p>None.</p>
@@ -46,37 +42,25 @@
 <li><code>worker-jobs</code>: affected by a blocker on <code>queue-jobs</code></li>
 </ul>
 </section>
+</section>
 <section class="part part-workloads">
 <h3>Workloads</h3>
+<section>
 <h4><code>orders</code></h4>
-<ul>
-<li>Fit: 1 direct, 0 partial, 1 none</li>
-<li>Monthly estimate: €10.00 per month for 1 of 2 resources, list prices on 2026-11-13, excluding VAT and discounts</li>
-<li>Source cost: none in the inventory</li>
-<li>Blockers:
-<ul>
-<li><code>queue-jobs</code>: no offering in the <code>Example Cloud</code> catalog for <code>messaging.queue</code></li>
-</ul>
-</li>
-</ul>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1 direct</span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0 partial</span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 1 none</span></p>
+<p><strong>€10.00</strong> <span>/ month</span></p>
+<p>1 of 2 priced · no source cost</p>
+</section>
+<section>
 <h4><code>shop</code></h4>
-<ul>
-<li>Fit: 3 direct, 0 partial, 0 none</li>
-<li>Monthly estimate: €2,525.00 per month for 3 of 3 resources, list prices on 2026-11-13, excluding VAT and discounts</li>
-<li>Source cost: <code>EUR</code> €2,415.00 for 2 of 3 resources</li>
-<li>Source cost: <code>USD</code> $40.00 for 1 of 3 resources</li>
-<li>Blockers: none</li>
-</ul>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 3 direct</span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0 partial</span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0 none</span></p>
+<p><strong>€2,525.00</strong> <span>/ month</span></p>
+<p>3 of 3 priced · source cost <code>EUR</code> €2,415.00 for 2 of 3, <code>USD</code> $40.00 for 1 of 3</p>
+</section>
 </section>
 <section class="part part-cost">
 <h3>Cost estimate</h3>
-<ul role="list">
-<li class="total">Total: €2,535.00 per month for 4 of 5 resources</li>
-<li>Estimate: list prices on 2026-11-13, excluding VAT and discounts; a fixed fee is the offering&#39;s listed fee</li>
-<li>Prices in <code>xx-par</code></li>
-<li>Hours: plan price × count × hours / 730, 730 hours for a resource that gives none</li>
-<li>Source cost: <code>EUR</code> €2,415.00 for 2 of 5 resources</li>
-<li>Source cost: <code>USD</code> $40.00 for 1 of 5 resources</li>
-</ul>
+<p><strong class="total">€2,535.00</strong> <span>per month, 4 of 5 resources</span></p>
+<p>List prices in <code>xx-par</code> on 2026-11-13, excluding VAT and discounts. Source cost: <code>EUR</code> €2,415.00 for 2 of 5, <code>USD</code> $40.00 for 1 of 5.</p>
 </section>
 </section>

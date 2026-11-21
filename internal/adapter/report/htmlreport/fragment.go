@@ -13,12 +13,59 @@ import (
 // can become markup.
 
 // segment is one run of text in a block: the report's own words, or a value
-// from the assessment or the metadata, shown as code.
+// from the assessment or the metadata, shown as code, and the few inline
+// elements the redesign's boxes need (issue #373): a fit badge, an emphasised
+// figure, a plain span, a separator hidden from screen readers and the
+// catalog's link. Every element and attribute a kind writes is a constant;
+// Text is always element content, and only a link writes a value, the
+// catalog's URL, into an attribute (writeRich).
 type segment struct {
 	// Text is the run's text, cleaned (clean).
 	Text string
 	// Code shows Text as code: a value rather than the report's own words.
+	// It takes precedence over Kind.
 	Code bool
+	// Kind is how any other run is written; the zero kind is the report's
+	// words.
+	Kind segmentKind
+	// Class is the class of a badge or a figure: a constant of classNames.
+	Class class
+	// URL is a link's address, cleaned (clean).
+	URL string
+}
+
+// segmentKind is how a segment is written: one of a closed set of constants.
+type segmentKind int
+
+// The kinds of segment.
+const (
+	// segWords is the report's own words, as text.
+	segWords segmentKind = iota
+	// segBadge is a fit badge: a span of Class holding the fit's glyph,
+	// hidden from screen readers, and Text.
+	segBadge
+	// segFigure is a figure the report emphasises: a strong element, of
+	// Class when it has one.
+	segFigure
+	// segSpan is Text inside a span without attributes, which the
+	// stylesheet sets apart by its position.
+	segSpan
+	// segSeparator is Text inside a span hidden from screen readers: a
+	// separator a reader sees between list items and a screen reader does
+	// not read out.
+	segSeparator
+	// segLink is Text linking URL, opened in a new tab with no handle on
+	// the report's page: the catalog's own page (issue #373, item 10-1).
+	segLink
+)
+
+// glyphs are the glyphs of the badge classes, which a badge shows before its
+// text and hides from screen readers: the fit's word or count is what a
+// screen reader reads. The badge of a fit the report does not know shows none.
+var glyphs = map[class]string{
+	classFitDirect:  "✓",
+	classFitPartial: "◐",
+	classFitNone:    "✕",
 }
 
 // rich is the text of a heading, a paragraph, a list item or a table cell.
@@ -39,7 +86,7 @@ func (r rich) words(s string) rich {
 		return r.then(nil)
 	}
 
-	return r.then(rich{{Text: clean(s)}})
+	return r.then(rich{{Text: clean(s), Kind: segWords}})
 }
 
 // code returns r followed by the value s, shown as code. An empty s adds
@@ -50,6 +97,41 @@ func (r rich) code(s string) rich {
 	}
 
 	return r.then(rich{{Text: clean(s), Code: true}})
+}
+
+// badge returns r followed by the badge of class c reading s.
+func (r rich) badge(c class, s string) rich {
+	return r.then(rich{{Text: clean(s), Kind: segBadge, Class: c}})
+}
+
+// figure returns r followed by the figure s, of class c (classNone for
+// none).
+func (r rich) figure(c class, s string) rich {
+	return r.then(rich{{Text: clean(s), Kind: segFigure, Class: c}})
+}
+
+// span returns r followed by the words s inside a span.
+func (r rich) span(s string) rich {
+	return r.then(rich{{Text: clean(s), Kind: segSpan}})
+}
+
+// separator returns r followed by the separator s, hidden from screen
+// readers.
+func (r rich) separator(s string) rich {
+	return r.then(rich{{Text: clean(s), Kind: segSeparator}})
+}
+
+// link returns r followed by the words s linking url, when url is an
+// absolute https URL, and by the words alone otherwise: the domain refuses
+// any other catalog URL already, and the reporter is the last line of
+// defence, so no other scheme (javascript:, data:) ever reaches an href.
+func (r rich) link(s, url string) rich {
+	url = clean(url)
+	if !strings.HasPrefix(url, "https://") {
+		return r.words(s)
+	}
+
+	return r.then(rich{{Text: clean(s), Kind: segLink, URL: url}})
 }
 
 // join returns r followed by parts, separated by the words sep.
@@ -94,21 +176,26 @@ const (
 	classRowPartial
 	classRowNone
 	classRowTotal
-	// classTotal is the Cost estimate's total item.
+	// classTotal is the Cost estimate's total.
 	classTotal
+	// classTableScroll is the box a table sits in, which scrolls sideways
+	// on its own when the table is wider than the page (issue #373, item
+	// 11).
+	classTableScroll
 )
 
 // classNames are the attribute values of the classes, a fixed table.
 var classNames = map[class]string{
-	classFitDirect:  "fit fit-direct",
-	classFitPartial: "fit fit-partial",
-	classFitNone:    "fit fit-none",
-	classFit:        "fit",
-	classRowDirect:  "fit-direct",
-	classRowPartial: "fit-partial",
-	classRowNone:    "fit-none",
-	classRowTotal:   "fit-total",
-	classTotal:      "total",
+	classFitDirect:   "fit fit-direct",
+	classFitPartial:  "fit fit-partial",
+	classFitNone:     "fit fit-none",
+	classFit:         "fit",
+	classRowDirect:   "fit-direct",
+	classRowPartial:  "fit-partial",
+	classRowNone:     "fit-none",
+	classRowTotal:    "fit-total",
+	classTotal:       "total",
+	classTableScroll: "table-scroll",
 }
 
 // part is the kind of a report section a part section wraps: one of a closed
@@ -148,8 +235,7 @@ type listKind int
 const (
 	listPlain listKind = iota
 	// listMarkerless is a list the site's stylesheet strips of its markers
-	// (the title list, the Blockers and the Cost estimate lists): it states
-	// role="list",
+	// (the header line and the Blockers lists): it states role="list",
 	// because Safari and VoiceOver drop the list role and the item count of a
 	// list drawn without markers (issue #373).
 	listMarkerless
@@ -213,7 +299,11 @@ type block struct {
 	Table *table
 	// Open starts a part section of this kind.
 	Open part
-	// Close ends the part section opened last.
+	// Box starts a section without a class: a box the stylesheet lays out by
+	// its place, such as a workload's box or the box that holds the required
+	// changes and the blockers side by side (issue #373).
+	Box bool
+	// Close ends the part section or the box opened last.
 	Close bool
 }
 
@@ -225,6 +315,13 @@ type fragment struct {
 // part writes the blocks body adds inside a part section of kind.
 func (f *fragment) part(kind part, body func()) {
 	f.blocks = append(f.blocks, block{Open: kind})
+	body()
+	f.blocks = append(f.blocks, block{Close: true})
+}
+
+// box writes the blocks body adds inside a box: a section without a class.
+func (f *fragment) box(body func()) {
+	f.blocks = append(f.blocks, block{Box: true})
 	body()
 	f.blocks = append(f.blocks, block{Close: true})
 }
@@ -251,11 +348,9 @@ func (f *fragment) list(items []item) {
 // markerlessList adds a list the site's stylesheet strips of its markers,
 // which states role="list" (listMarkerless). An empty list adds nothing, as
 // list does, so the two differ only by the attribute. No caller passes an
-// empty list: a title list always holds the Source and Catalog items
-// (writeHeader, writeComparisonHeader), the Blockers list is written only
-// when there is a blocker, one item each (writeBlockers, "None." otherwise),
-// and the Cost estimate list always holds its four fixed items
-// (writeCostEstimate).
+// empty list: a header line always holds the source and catalog items
+// (writeHeader, writeComparisonHeader), and the Blockers list is written only
+// when there is a blocker, one item each (writeBlockers, "None." otherwise).
 func (f *fragment) markerlessList(items []item) {
 	if len(items) == 0 {
 		return
@@ -299,6 +394,10 @@ func (f *fragment) render(b *strings.Builder) error {
 			}
 
 			b.WriteString("<section class=\"" + name + "\">\n")
+
+			open++
+		case blk.Box:
+			b.WriteString("<section>\n")
 
 			open++
 		case blk.Close:
@@ -361,9 +460,12 @@ func writeStart(b *strings.Builder, tag string, c class) error {
 	return nil
 }
 
-// writeTable writes t: its header row of column headings, then its body rows.
+// writeTable writes t: its header row of column headings, then its body rows,
+// inside a box of class table-scroll, which scrolls sideways on its own when
+// the table is wider than the page, so the page itself never does (issue
+// #373, item 11).
 func writeTable(b *strings.Builder, t *table) error {
-	b.WriteString("<table>\n<thead>\n<tr>")
+	b.WriteString("<section class=\"" + classNames[classTableScroll] + "\">\n<table>\n<thead>\n<tr>")
 
 	for _, cell := range t.Header {
 		b.WriteString("<th scope=\"col\">")
@@ -390,7 +492,7 @@ func writeTable(b *strings.Builder, t *table) error {
 		b.WriteString("</tr>\n")
 	}
 
-	b.WriteString("</tbody>\n</table>\n")
+	b.WriteString("</tbody>\n</table>\n</section>\n")
 
 	return nil
 }
@@ -432,20 +534,56 @@ func writeList(b *strings.Builder, kind listKind, items []item) error {
 	return nil
 }
 
-// writeRich writes the segments of r, each escaped as text, a value inside a
-// code element.
+// writeRich writes the segments of r, each escaped as text: a value inside a
+// code element, and each other kind inside its constant element. A badge's
+// or a figure's class outside classNames is a mistake in this package and
+// writes no class. A link's URL is the one value written into an attribute,
+// escaped by textEscaper, which escapes both quotes, so it never ends the
+// attribute; link has already refused any URL that is no https URL.
 func writeRich(b *strings.Builder, r rich) {
 	for _, s := range r {
+		escaped := textEscaper.Replace(s.Text)
+
 		if s.Code {
-			b.WriteString("<code>")
-			b.WriteString(textEscaper.Replace(s.Text))
-			b.WriteString("</code>")
+			b.WriteString("<code>" + escaped + "</code>")
 
 			continue
 		}
 
-		b.WriteString(textEscaper.Replace(s.Text))
+		switch s.Kind {
+		case segBadge:
+			b.WriteString("<span" + classAttribute(s.Class) + ">")
+
+			if glyph, ok := glyphs[s.Class]; ok {
+				b.WriteString("<span aria-hidden=\"true\">" + glyph + "</span> ")
+			}
+
+			b.WriteString(escaped + "</span>")
+		case segFigure:
+			b.WriteString("<strong" + classAttribute(s.Class) + ">" + escaped + "</strong>")
+		case segSpan:
+			b.WriteString("<span>" + escaped + "</span>")
+		case segSeparator:
+			b.WriteString("<span aria-hidden=\"true\">" + escaped + "</span>")
+		case segLink:
+			b.WriteString("<a href=\"" + textEscaper.Replace(s.URL) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" +
+				escaped + "</a>")
+		default:
+			b.WriteString(escaped)
+		}
 	}
+}
+
+// classAttribute returns the class attribute of c, a constant of classNames,
+// with its leading space, or nothing for classNone or a class outside the
+// table.
+func classAttribute(c class) string {
+	name, ok := classNames[c]
+	if c == classNone || !ok {
+		return ""
+	}
+
+	return " class=\"" + name + "\""
 }
 
 // textEscaper escapes text for HTML element content, the one context a value

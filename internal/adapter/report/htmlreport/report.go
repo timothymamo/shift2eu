@@ -121,45 +121,69 @@ func write(w io.Writer, f *fragment, what string) error {
 	return nil
 }
 
-// writeHeader writes the title and the list that says what was assessed
-// against what. The inventory file item is left out when the inventory has no
-// file name.
+// headerSeparator is the dot between the header line's items, which a reader
+// sees and a screen reader, reading the items of a list, does not need.
+const headerSeparator = "·"
+
+// writeHeader writes the title and the one line that says what was assessed
+// against what (issue #373, item 10-1): the source, the inventory file (left
+// out when the inventory has no file name), the catalog's retrieval date as a
+// link to the catalog's own page, and the region, when there is one, as a
+// list whose items the stylesheet sets on one line.
 func writeHeader(f *fragment, a assessment.Assessment, meta analysis.ReportMeta) {
-	f.heading(titleLevel, text("Migration assessment: ").code(a.Target))
+	f.heading(titleLevel, title().code(a.Target))
 
-	var items []item
-
-	if meta.InventoryName != "" {
-		items = append(items, item{Text: text("Inventory file: ").code(meta.InventoryName)})
-	}
-
-	items = append(items,
-		item{Text: text("Source: ").code(a.Source)},
-		item{Text: catalogLine(code(a.Target), a)},
-	)
+	items := headerStart(a.Source, meta)
+	items = append(items, headerItem(catalogLink(a)))
 
 	if region := renderRegion(a); region != nil {
-		items = append(items, item{Text: text("Region: ").then(region)})
+		items = append(items, headerItem(text("region ").then(region)))
 	}
 
 	f.markerlessList(items)
 }
 
-// catalogLine is the header's catalog item for the target named name.
-func catalogLine(name rich, a assessment.Assessment) rich {
-	return text("Catalog: ").then(name).words(" snapshot from ").code(a.Snapshot.SourceURL).
-		words(", retrieved " + a.Snapshot.RetrievedOn.UTC().Format(dateLayout))
+// title is the start of the title, the words the stylesheet sets above the
+// target's name.
+func title() rich {
+	return rich{}.span("Migration assessment").words(" ")
+}
+
+// headerStart returns the header line's first items: the source, and the
+// inventory file when it has a name.
+func headerStart(source string, meta analysis.ReportMeta) []item {
+	items := []item{{Text: text("source ").code(source)}}
+
+	if meta.InventoryName != "" {
+		items = append(items, headerItem(code(meta.InventoryName)))
+	}
+
+	return items
+}
+
+// headerItem is an item of the header line after its first: r, after the
+// separator.
+func headerItem(r rich) item {
+	return item{Text: rich{}.separator(headerSeparator).words(" ").then(r)}
+}
+
+// catalogLink is "catalog retrieved <date>", linking the catalog's own page.
+func catalogLink(a assessment.Assessment) rich {
+	return rich{}.link("catalog retrieved "+a.Snapshot.RetrievedOn.UTC().Format(dateLayout), a.Snapshot.SourceURL)
 }
 
 // writeBody writes the sections of the report of a, each headed at level and
 // each in its part section: its summary, resources, required changes and
-// blockers, then the workloads when a.ShowWorkloads and the cost estimate
-// when a has estimates.
+// blockers, the last two in one box so the stylesheet sets them side by side
+// (issue #373, item 12), then the workloads when a.ShowWorkloads and the cost
+// estimate when a has estimates.
 func writeBody(f *fragment, a assessment.Assessment, level int) {
-	f.part(partSummary, func() { writeSummary(f, a.Summary, level) })
+	f.part(partSummary, func() { writeSummary(f, a, level) })
 	f.part(partResources, func() { writeResources(f, a, level) })
-	f.part(partChanges, func() { writeRequiredChanges(f, a.Verdicts, level) })
-	f.part(partBlockers, func() { writeBlockers(f, a.Blockers, a.Verdicts, level) })
+	f.box(func() {
+		f.part(partChanges, func() { writeRequiredChanges(f, a.Verdicts, level) })
+		f.part(partBlockers, func() { writeBlockers(f, a.Blockers, a.Verdicts, level) })
+	})
 
 	if a.ShowWorkloads() {
 		f.part(partWorkloads, func() { writeWorkloads(f, a, level) })
@@ -170,35 +194,52 @@ func writeBody(f *fragment, a assessment.Assessment, level int) {
 	}
 }
 
-// writeSummary writes the number of resources per fit, and in total.
-func writeSummary(f *fragment, s assessment.Summary, level int) {
+// writeSummary writes the summary as boxes (issue #373, item 10-2): one per
+// fit, its badge, the number of resources of that fit and the total they are
+// of, then, when a has estimates, one with the monthly estimate.
+func writeSummary(f *fragment, a assessment.Assessment, level int) {
+	s := a.Summary
+	of := "of " + strconv.Itoa(s.Total) + resourcesNoun(s.Total)
+
 	f.heading(level, text("Summary"))
-	f.table([]rich{text("Fit"), text("Resources")}, []row{
-		{Class: classRowDirect, Cells: cells(text(string(mapping.Direct)), text(strconv.Itoa(s.Direct)))},
-		{Class: classRowPartial, Cells: cells(text(string(mapping.Partial)), text(strconv.Itoa(s.Partial)))},
-		{Class: classRowNone, Cells: cells(text(string(mapping.None)), text(strconv.Itoa(s.None)))},
-		{Class: classRowTotal, Cells: cells(text("total"), text(strconv.Itoa(s.Total)))},
-	})
-}
 
-// fitCell is the Fit cell of a verdict whose fit is fit: the fit's word, with
-// the badge class of that fit, chosen from the mapping's closed set of fits.
-// A fit the report does not know gets the badge class alone, never a class
-// made from its text.
-func fitCell(fit mapping.Fit) cell {
-	c := classFit
-
-	switch fit {
-	case mapping.Direct:
-		c = classFitDirect
-	case mapping.Partial:
-		c = classFitPartial
-	case mapping.None:
-		c = classFitNone
-	default:
+	for _, fit := range []struct {
+		fit   mapping.Fit
+		count int
+	}{
+		{fit: mapping.Direct, count: s.Direct},
+		{fit: mapping.Partial, count: s.Partial},
+		{fit: mapping.None, count: s.None},
+	} {
+		f.paragraph(rich{}.badge(fitClass(fit.fit), string(fit.fit)).words(" ").
+			figure(classNone, strconv.Itoa(fit.count)).words(" ").span(of))
 	}
 
-	return cell{Text: text(string(fit)), Class: c}
+	if hasEstimates(a) {
+		f.paragraph(summaryEstimate(*a.Total))
+	}
+}
+
+// fitClass is the badge class of fit, chosen from the mapping's closed set of
+// fits by an exhaustive switch. A fit the report does not know gets the badge
+// class alone, never a class made from its text.
+func fitClass(fit mapping.Fit) class {
+	switch fit {
+	case mapping.Direct:
+		return classFitDirect
+	case mapping.Partial:
+		return classFitPartial
+	case mapping.None:
+		return classFitNone
+	default:
+		return classFit
+	}
+}
+
+// fitCell is the Fit cell of a verdict whose fit is fit: the fit's word in a
+// span the stylesheet draws as a badge, with the badge class of that fit.
+func fitCell(fit mapping.Fit) cell {
+	return cell{Text: rich{}.span(string(fit)), Class: fitClass(fit)}
 }
 
 // writeResources writes one table row per verdict of a, in its order, with
@@ -359,34 +400,28 @@ func renderReason(r mapping.Reason) rich {
 	return out
 }
 
-// writeComparisonHeader writes the title naming every target, the inventory
-// file item (left out when the inventory has no file name), the source, taken
-// from the first target, one catalog item per target and one region item per
-// target that has a region.
+// writeComparisonHeader writes the title naming every target and the header
+// line: the source, taken from the first target, the inventory file (left out
+// when the inventory has no file name), then one item per target naming it,
+// its catalog's retrieval date as a link to the catalog's own page, and its
+// region when it has one.
 func writeComparisonHeader(f *fragment, targets []assessment.TargetAssessment, meta analysis.ReportMeta) {
 	names := make([]rich, 0, len(targets))
 	for _, t := range targets {
 		names = append(names, code(t.Assessment.Target))
 	}
 
-	f.heading(titleLevel, text("Migration assessment: ").join(names, nameSeparator))
+	f.heading(titleLevel, title().join(names, nameSeparator))
 
-	var items []item
-
-	if meta.InventoryName != "" {
-		items = append(items, item{Text: text("Inventory file: ").code(meta.InventoryName)})
-	}
-
-	items = append(items, item{Text: text("Source: ").code(targets[0].Assessment.Source)})
+	items := headerStart(targets[0].Assessment.Source, meta)
 
 	for i, t := range targets {
-		items = append(items, item{Text: catalogLine(names[i], t.Assessment)})
-	}
-
-	for i, t := range targets {
+		line := names[i].words(" ").then(catalogLink(t.Assessment))
 		if region := renderRegion(t.Assessment); region != nil {
-			items = append(items, item{Text: text("Region: ").then(names[i]).words(": ").then(region)})
+			line = line.words(", region ").then(region)
 		}
+
+		items = append(items, headerItem(line))
 	}
 
 	f.markerlessList(items)
