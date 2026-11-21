@@ -121,24 +121,20 @@
 // draft: true, prerelease: auto and replace_existing_draft: true, so every
 // asset is uploaded to a draft that release.yml publishes last (issue #156),
 // and a pre-release tag is a GitHub pre-release and never the latest release
-// (issue #92), and one extra file, the bundled OpenAPI document published as
-// the asset shift2eu-server_openapi.json (issue #139). Its glob is BundleGlob,
-// "./" + openapibundle.Path: the path test/internal/openapibundle names and
-// test/openapibundle writes, so the release publishes exactly the file the
-// bundler writes.
+// (issue #92), and nothing else: the bundled OpenAPI document the release used
+// to publish beside the archives is gone (issue #393), so no line of the
+// document may name it, or the HTTP API's binary, any more.
 //
 // GoReleaserArchives and DryRunVerifiesArchives hold the release to shipping
-// each binary in archives of its own, under one tag and version (issue #147).
+// the CLI in an archive of its own (issue #147, issue #393).
 // GoReleaserArchives reads the archives: section of .goreleaser.yaml as a
-// closed schema: two entries, each with an id: equal to the one build its
-// ids: names, no two with the same id, the CLI's archive keeping its name
-// shift2eu_<version>_<os>_<arch> and the server's shift2eu-server_<version>_
-// <os>_<arch>, both tar.gz (zip on Windows) with LICENSE, README.md and docs/,
-// and one checksums.txt covering every archive and the bundled OpenAPI
-// document, the same single extra_files entry release: holds (issue #139).
-// DryRunVerifiesArchives holds
+// closed schema: one entry, with an id: equal to the one build its
+// ids: names, keeping the archive's name
+// shift2eu_<version>_<os>_<arch>, tar.gz (zip on Windows) with LICENSE,
+// README.md and docs/, and one checksums.txt covering that archive and no
+// extra file. DryRunVerifiesArchives holds
 // ci.yml's test job to one step running .github/scripts/verify-archives.sh,
-// which builds a goreleaser snapshot and fails unless each archive holds
+// which builds a goreleaser snapshot and fails unless the archive holds
 // exactly its own binary, after one goreleaser-action step that installs
 // (install-only) the GoReleaser release.yml's goreleaser job runs: the same
 // commit, distribution and version.
@@ -183,6 +179,12 @@
 // directory, the other spelling ./... skips, is left to FindLineDirectives,
 // which reports every symlink, and Sources, which requires a package's
 // directory with symlinks resolved to be the one its import path names.
+//
+// CLIImporterProblems holds the packages whose test files import internal/cli,
+// one CLIImportersBuild per build, to the exemption of the depguard rule
+// cli-only-in-named-tests (issues #345, #382): a package outside it that does
+// so is reported per build, and a package of it that does so in no build, over
+// the union of the builds, as a stale exemption.
 //
 // The package is internal to test/architecture: it is not an API of the module.
 package check

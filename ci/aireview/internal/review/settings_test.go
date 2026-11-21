@@ -15,6 +15,11 @@ import (
 // pay-as-you-go billing, so the program will not run beside one (ADR 0033).
 const anthropicAPIKeyVar = "ANTHROPIC_API_KEY"
 
+// stepSummaryVar is the file GitHub Actions appends a job's summary to. A
+// skipped run adds one line there, so the run says the review was skipped away
+// from its log too (issue #367).
+const stepSummaryVar = "GITHUB_STEP_SUMMARY"
+
 // settingsLookup returns the lookup function the tests pass to
 // SettingsFromEnv: a map in place of os.LookupEnv, which the library never calls
 // itself.
@@ -136,6 +141,66 @@ func TestSettingsFromEnvAcceptsNoAnthropicAPIKey(t *testing.T) {
 
 			if settings.ModelToken != testModelToken {
 				t.Errorf("ModelToken = %q, want %q", settings.ModelToken, testModelToken)
+			}
+		})
+	}
+}
+
+// TestSettingsFromEnvReadsTheStepSummary pins the job summary's file (issue
+// #367, ADR 0033): the skipped outcome appends one line to $GITHUB_STEP_SUMMARY,
+// which the workflow sets to a path. It is optional — a run outside Actions has
+// none, and a skipped review is no failure there — and a value that is no
+// absolute path fails the run with ErrSettings, before anything is read or
+// posted, so a typo cannot silently lose the line.
+func TestSettingsFromEnvReadsTheStepSummary(t *testing.T) {
+	t.Parallel()
+
+	const absolute = "/tmp/ai-review-step-summary"
+
+	cases := []struct {
+		name    string
+		value   string
+		unset   bool
+		want    string
+		wantErr bool
+	}{
+		{name: "an absolute path", value: absolute, want: absolute},
+		{name: "unset", unset: true, want: ""},
+		{name: "a relative path", value: "step-summary.md", wantErr: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			env := validEnv()
+
+			if tc.unset {
+				delete(env, stepSummaryVar)
+			} else {
+				env[stepSummaryVar] = tc.value
+			}
+
+			settings, err := review.SettingsFromEnv(settingsLookup(env))
+
+			if tc.wantErr {
+				if !errors.Is(err, review.ErrSettings) {
+					t.Fatalf("SettingsFromEnv with %s = %q = %+v, %v; want an error wrapping ErrSettings", stepSummaryVar, tc.value, settings, err)
+				}
+
+				if !strings.Contains(err.Error(), stepSummaryVar) {
+					t.Errorf("the error %q does not name the variable %s", err, stepSummaryVar)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("SettingsFromEnv with %s %s: %v", stepSummaryVar, tc.name, err)
+			}
+
+			if settings.StepSummary != tc.want {
+				t.Errorf("Settings.StepSummary = %q, want %q", settings.StepSummary, tc.want)
 			}
 		})
 	}

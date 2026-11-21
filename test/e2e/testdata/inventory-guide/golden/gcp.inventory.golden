@@ -47,7 +47,13 @@
       "capabilities": [
         "encryption-at-rest",
         "point-in-time-restore"
-      ]
+      ],
+      "size": {
+        "vcpus": 2,
+        "memoryGiB": 7.5,
+        "storageGiB": 20,
+        "count": 1
+      }
     },
     {
       "id": "shop-cdn-backend",
@@ -64,7 +70,10 @@
         "point-in-time-restore",
         "read-replicas",
         "zone-high-availability"
-      ]
+      ],
+      "size": {
+        "storageGiB": 100
+      }
     },
     {
       "id": "shop-gke",

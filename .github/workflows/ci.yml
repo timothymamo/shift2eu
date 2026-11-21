@@ -172,6 +172,12 @@ jobs:
         run: make build
       - name: End-to-end tests
         run: make test-e2e
+      # make check's infra-check (issue #422): the OpenTofu release infra/tofu.yaml pins, checked by
+      # dev/tofu.sh against its linux_amd64 SHA-256 before it runs, and the provider against
+      # each applied root's .terraform.lock.hcl (today infra/site's). No credential; the tests mock the
+      # Scaleway provider.
+      - name: OpenTofu configuration, offline
+        run: make infra-check
       # The same goreleaser version release.yml runs, installed only: the script below runs a snapshot of
       # the release at this commit, which builds the archives and publishes nothing.
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
@@ -185,9 +191,10 @@ jobs:
         run: .github/scripts/verify-archives.sh
 
   # The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036): make test-browser builds
-  # the bundle with make site, runs the headless Chromium the Makefile pins by digest with the host network
-  # and DevTools on 127.0.0.1 only, and drives the bundle served from a local httptest origin. The test
-  # never touches the internet; the image pull is the job's only download beyond Go's.
+  # a bundle of its own with ci/sitebuild (not make site), runs the headless Chromium the Makefile pins by
+  # digest with the host network and DevTools on 127.0.0.1 only, on a random port, and drives the bundle
+  # served from a local httptest origin. The test never touches the internet; the image pull is the job's
+  # only download beyond Go's.
   browser:
     name: Browser smoke test
     runs-on: ubuntu-latest
@@ -222,20 +229,18 @@ jobs:
       - name: Tag and guard scripts on sample API responses
         run: .github/scripts/release-please-dry-run.sh
 
-  # Builds the container images for both release platforms without pushing them, then
-  # smoke-tests the amd64 images: a broken Dockerfile fails the pull request. It is
+  # Builds the container image for both release platforms without pushing it, then
+  # smoke-tests the amd64 image: a broken Dockerfile fails the pull request. It is
   # also the dry run of release.yml's image and sbom jobs (ADR 0015): the same latest
   # and tag rules for sample tags, the same build settings, and the SBOM of the built
-  # image, for the CLI's image and for the HTTP API's (the server stage, PRD #103),
-  # whose tag rules release.yml's check pins to the CLI's. Pushing, signing and the
-  # attestations need write access and an OIDC token, so only a tag runs them.
+  # image. Pushing, signing and the attestations need write access and an OIDC token,
+  # so only a tag runs them.
   image:
     name: Container image
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
       IMAGE: shift2eu:ci
-      SERVER_IMAGE: shift2eu-server:ci
       # The BuildKit image setup-buildx-action runs, pinned by tag and multi-arch index digest.
       # renovate: datasource=docker depName=moby/buildkit versioning=semver
       BUILDKIT_VERSION: v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
@@ -353,7 +358,7 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
           # renovate: datasource=github-releases depName=anchore/syft
-          syft-version: v1.57.1
+          syft-version: v1.57.2
       - name: The SBOM is SPDX and lists shift2eu
         env:
           SBOM: ${{ runner.temp }}/shift2eu.spdx.json
@@ -409,110 +414,3 @@ jobs:
             docker images "$IMAGE"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      # The HTTP API's image, the Dockerfile's server stage, with the settings of release.yml's
-      # server-image push, written to an OCI archive instead of a registry.
-      - name: Build the server image, linux/amd64 and linux/arm64
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: server
-          platforms: linux/amd64,linux/arm64
-          push: false
-          outputs: type=oci,dest=${{ runner.temp }}/shift2eu-server.oci.tar
-          tags: ghcr.io/timothymamo/shift2eu-server:v1.2.3
-          annotations: index:org.opencontainers.image.source=https://github.com/timothymamo/shift2eu
-          provenance: false
-          sbom: false
-          build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
-            COMMIT=${{ steps.meta.outputs.commit }}
-            DATE=${{ steps.meta.outputs.date }}
-      - name: SBOM of the built server image
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: oci-archive:${{ runner.temp }}/shift2eu-server.oci.tar
-          format: spdx-json
-          output-file: ${{ runner.temp }}/shift2eu-server.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
-          # renovate: datasource=github-releases depName=anchore/syft
-          syft-version: v1.57.1
-      - name: The server SBOM is SPDX and lists shift2eu
-        env:
-          SBOM: ${{ runner.temp }}/shift2eu-server.spdx.json
-        run: |
-          jq -r '.spdxVersion, (.packages | length | "\(.) packages")' "$SBOM"
-          jq -e '.spdxVersion == "SPDX-2.3"' "$SBOM" > /dev/null
-          jq -e 'any(.packages[]; .name == "github.com/timothymamo/shift2eu")' "$SBOM" > /dev/null
-      - name: Load the server image, linux/amd64, for the smoke test
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: server
-          platforms: linux/amd64
-          load: true
-          tags: ${{ env.SERVER_IMAGE }}
-          build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
-            COMMIT=${{ steps.meta.outputs.commit }}
-            DATE=${{ steps.meta.outputs.date }}
-      - name: The server image runs as a non-root user
-        run: |
-          user="$(docker image inspect -f '{{.Config.User}}' "$SERVER_IMAGE")"
-          echo "user: $user"
-          case "${user%%:*}" in
-            ""|root|0) echo "the server image runs as root" >&2; exit 1 ;;
-          esac
-      # release.yml's verify job runs the published server image the same way:
-      # it has no version subcommand, so --help exiting 0 is the smoke test.
-      - name: The server image answers --help, read-only root filesystem, no network
-        run: |
-          docker run --rm --read-only --network none "$SERVER_IMAGE" --help > /dev/null
-      # The image listens on 0.0.0.0:8080 by default (its CMD), so without a token it refuses to
-      # start (exit 2, with the refusal on stderr); timeout ends the run with 124 if a regression
-      # lets it start instead, so the step fails rather than hangs. With a token, on a read-only root filesystem, with
-      # no capabilities and no privilege escalation (the flags in docs/guide/reverse-proxy.md), it answers the health
-      # checks, refuses a request without the token and assesses one with it. The token is random,
-      # masked in the log, lives for this step and reaches curl on stdin, never in its argv.
-      - name: Smoke test the server, read-only root filesystem
-        run: |
-          set +e
-          timeout 30 docker run --rm --name shift2eu-refusal --read-only --cap-drop ALL \
-            --security-opt no-new-privileges --network none "$SERVER_IMAGE" 2> refusal.txt
-          code=$?
-          set -e
-          cat refusal.txt
-          if [ "$code" -eq 124 ]; then
-            docker rm -f shift2eu-refusal > /dev/null 2>&1 || true
-            echo "the server started without a token (still running after 30s)" >&2
-            exit 1
-          fi
-          if [ "$code" -ne 2 ]; then
-            echo "the server started off loopback without a token (exit $code)" >&2
-            exit 1
-          fi
-          if ! grep -q 'refusing to listen on the non-loopback address 0.0.0.0:8080 without a bearer token' refusal.txt; then
-            echo "the server exited 2 without refusing for want of a token" >&2
-            exit 1
-          fi
-          SHIFT2EU_SERVER_TOKEN="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-          echo "::add-mask::$SHIFT2EU_SERVER_TOKEN"
-          export SHIFT2EU_SERVER_TOKEN
-          docker run -d --name shift2eu-server --read-only --cap-drop ALL --security-opt no-new-privileges \
-            -p 127.0.0.1:8080:8080 -e SHIFT2EU_SERVER_TOKEN "$SERVER_IMAGE"
-          trap 'docker logs shift2eu-server; docker rm -f shift2eu-server > /dev/null' EXIT
-          url=http://127.0.0.1:8080
-          curl -fsS --retry 10 --retry-connrefused --retry-delay 1 "$url/healthz"
-          curl -fsS --retry 10 --retry-all-errors --retry-delay 1 "$url/readyz"
-          jq -c '{inventory: ., targets: ["scaleway"]}' test/e2e/testdata/inventory.json > request.json
-          status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' --data-binary @request.json "$url/v1/assessments")"
-          if [ "$status" != 401 ]; then
-            echo "a request without the token got $status, want 401" >&2
-            exit 1
-          fi
-          printf 'Authorization: Bearer %s\n' "$SHIFT2EU_SERVER_TOKEN" |
-            curl -fsS -X POST -H @- \
-              -H 'Content-Type: application/json' -H 'Accept: text/markdown' \
-              --data-binary @request.json "$url/v1/assessments" > report.md
-          head -n 20 report.md
-          test -s report.md

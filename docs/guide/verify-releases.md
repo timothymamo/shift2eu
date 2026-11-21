@@ -12,7 +12,7 @@ release workflow's GitHub identity for that tag, and carries build provenance an
 GitHub attestations. You need cosign v3 or later, which reads the signature from the registry in the
 bundle format the release writes, and the [GitHub CLI](https://cli.github.com/). The release
 workflow's `verify` job runs these same checks on every release, on a fresh GitHub-hosted runner with
-read-only permissions, and fails the release when one fails. It runs after the images are published, so
+read-only permissions, and fails the release when one fails. It runs after the image is published, so
 it detects a bad release rather than prevents one; run the checks yourself before you trust an image.
 
 A tag can be moved; a digest cannot. Resolve the release tag to its digest once, then verify and run
@@ -63,12 +63,10 @@ name the source repository (`org.opencontainers.image.source`) and the commit
 
 ## Verify an archive
 
-The release archives, the CLI's `shift2eu_*` and the HTTP API's `shift2eu-server_*`
-([Install](install.md#the-release-archives)), are listed in one `checksums.txt`, published with the
-release, as is the HTTP API's OpenAPI document `shift2eu-server_openapi.json`
-([Run the HTTP API](http-api.md)). Each archive, the OpenAPI document and `checksums.txt` itself carry
-GitHub build provenance, attested by the release workflow for its tag, before the release is published
-(issues #139, #163). The digest check alone detects a
+The release archives, `shift2eu_*` ([Install](install.md#the-release-archives)), are listed in one
+`checksums.txt`, published with the release. Each archive and `checksums.txt` itself carry GitHub
+build provenance, attested by the release workflow for its tag, before the release is published
+(issue #163). The digest check alone detects a
 download corrupted in transit or on a mirror; the attestation adds who built the file: `release.yml`,
 run on a push of exactly that tag, from that commit, on GitHub's runners. Whoever could replace an
 archive and its `checksums.txt` cannot make that attestation. The release is published only if it
@@ -76,20 +74,20 @@ holds exactly `checksums.txt` and the files it lists, each with the digest it re
 release published is the draft that was checked. The release workflow's `verify-archives` job then
 runs these checks on every asset of every release, on a fresh runner with read-only permissions, and
 fails the release when one fails. It also checks that GitHub's "Latest" release, the one
-`releases/latest/download/...` serves, is the highest version released, the release the images'
+`releases/latest/download/...` serves, is the highest version released, the release the image's
 `latest` tag names: a patch to an older line is published without becoming "Latest", and a
 pre-release never becomes it. The release decides that once per run, in its `latest` job, and both
-the images' `latest` tag and GitHub's "Latest" follow that one decision, so they cannot disagree
-within a run; `verify-archives`, like `verify` for the images, reads the highest release tag again
+the image's `latest` tag and GitHub's "Latest" follow that one decision, so they cannot disagree
+within a run; `verify-archives`, like `verify` for the image, reads the highest release tag again
 on its own, as an independent check. A release tag on `main` whose release is never published (a
 failed run, or a queued run replaced by a newer one) holds both back on the previous release until
-it is published or the tag is deleted; the check then passes with a notice naming that tag. Check either archive, or the OpenAPI document, the same way, with `TAG` set to the release you
-want:
+it is published or the tag is deleted; the check then passes with a notice naming that tag. Check an
+archive, with `TAG` set to the release you want:
 
 ```bash
 TAG=vX.Y.Z
 VERSION="${TAG#v}"
-ARCHIVE="shift2eu_${VERSION}_linux_amd64.tar.gz"   # the HTTP API's: shift2eu-server_${VERSION}_linux_amd64.tar.gz
+ARCHIVE="shift2eu_${VERSION}_linux_amd64.tar.gz"
 
 gh release download "$TAG" --repo timothymamo/shift2eu --pattern "$ARCHIVE" --pattern checksums.txt
 awk -v a="$ARCHIVE" '$2 == a' checksums.txt > "$ARCHIVE.sha256"
@@ -107,27 +105,13 @@ tar -xzf "$ARCHIVE"
 leaves the copied file empty, which fails the check too (non-zero exit, no `OK`) instead of checking
 nothing. `gh attestation verify` must print `✓ Verification succeeded!` and exits non-zero otherwise.
 It works the same on macOS. `gh attestation verify checksums.txt ...`, with the same flags, verifies
-`checksums.txt` itself. The OpenAPI document is checked the same way, by its name, and is not extracted:
-
-```bash
-TAG=vX.Y.Z
-DOC=shift2eu-server_openapi.json
-
-gh release download "$TAG" --repo timothymamo/shift2eu --pattern "$DOC" --pattern checksums.txt
-awk -v a="$DOC" '$2 == a' checksums.txt > "$DOC.sha256"
-sha256sum --check "$DOC.sha256"   # macOS: shasum -a 256 --check "$DOC.sha256"
-gh attestation verify "$DOC" --repo timothymamo/shift2eu \
-  --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
-  --source-ref "refs/tags/$TAG" --deny-self-hosted-runners
-```
-
-The document is attested from the first release after `v0.3.0`, the first to publish it.
+`checksums.txt` itself.
 
 On Windows, in PowerShell, for a `.zip` archive:
 
 ```powershell
 $Tag = "vX.Y.Z"
-$Archive = "shift2eu_$($Tag.TrimStart('v'))_windows_amd64.zip"   # the HTTP API's: shift2eu-server_...
+$Archive = "shift2eu_$($Tag.TrimStart('v'))_windows_amd64.zip"
 gh release download $Tag --repo timothymamo/shift2eu --pattern $Archive --pattern checksums.txt
 $Want = @(Get-Content checksums.txt | Where-Object { $_.EndsWith("  $Archive") })
 if ($Want.Count -ne 1) { throw "$Archive is not in checksums.txt exactly once" }
@@ -139,12 +123,12 @@ if ($LASTEXITCODE -ne 0) { throw "$Archive has no build provenance from release.
 Expand-Archive $Archive
 ```
 
-Each archive holds only its own binary (`shift2eu` or `shift2eu-server`, `.exe` on Windows), with
-`README.md`, `LICENSE` and the Markdown pages under `docs/`. The `shift2eu-server_*` archives start
-with the first release after `v0.2.0`: `v0.2.0` and earlier shipped the CLI only, in `shift2eu_*`.
-The archives' attestations start with the first release after `v0.3.0`: for `v0.3.0` and earlier,
-only the digest check applies, and `checksums.txt` comes from the same release as the archive, so it
-cannot tell a compromised release from a sound one; run the signed image instead where that matters.
+Each archive holds only the `shift2eu` binary (`shift2eu.exe` on Windows), with `README.md`,
+`LICENSE` and the Markdown pages under `docs/`. Older releases list the retired HTTP API's assets
+([Install](install.md)) in the same `checksums.txt`: check them the same way, by their names. The archives'
+attestations start with the first release after `v0.3.0`: for `v0.3.0` and earlier, only the digest
+check applies, and `checksums.txt` comes from the same release as the archive, so it cannot tell a
+compromised release from a sound one; run the signed image instead where that matters.
 
 ## Releases before the rename: v0.1.0 and v0.1.0-rc.1
 

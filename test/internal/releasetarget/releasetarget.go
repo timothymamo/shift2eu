@@ -14,10 +14,10 @@ import (
 // lists the packages of the release binary from it.
 const Main = "./cmd/shift2eu"
 
-// ServerMain is the main package of the HTTP API, shift2eu-server (PRD #103,
-// ADR 0019): the one other package Read lets a build compile. The repository
-// test lists the packages of the server binary from it.
-const ServerMain = "./cmd/shift2eu-server"
+// retiredServerMain was the main package of the HTTP API, shift2eu-server (PRD
+// #103, ADR 0019), retired with its code (issue #393, ADR 0037). Read refuses a
+// build of it with an error that names the retirement.
+const retiredServerMain = "./cmd/shift2eu-server"
 
 // Env returns the environment every build of the release must set, exactly
 // and in this order (issue #102): CGO_ENABLED=0, so the binary links no C
@@ -51,11 +51,11 @@ type Target struct {
 //     could rewrite what it compiles; -diff fails when the module is not tidy
 //     and writes nothing, where plain go mod tidy would rewrite go.mod and
 //     go.sum for the -mod=readonly build to accept.
-//   - builds must hold a build of Main and may hold one of ServerMain, and
-//     nothing else: each main once, no other package, so every binary the
-//     release ships is one the repository test lists the packages of. Every
-//     build must build the same goos x goarch product: one release ships both
-//     binaries for the same platforms, and the check reads one list. Each entry
+//   - builds must hold a build of Main and nothing else: each main once, no
+//     other package, so the one binary the release ships is the one the
+//     repository test lists the packages of. The retired HTTP API's main
+//     package, ./cmd/shift2eu-server, is refused by name (issue #393).
+//     Each entry
 //     may hold only id, main, binary,
 //     env, flags, ldflags, goos and goarch: ignore and targets (which change
 //     the platform list), tags, overrides, goamd64 and goarm64 (which change
@@ -222,8 +222,12 @@ func readBuild(build yamlread.Item) (string, []Target, error) {
 		}
 	}
 
-	if mainPkg != Main && mainPkg != ServerMain {
-		return "", nil, fmt.Errorf("main is %q, want %s or %s, the packages the check lists as release binaries", mainPkg, Main, ServerMain)
+	if mainPkg != Main {
+		if mainPkg == retiredServerMain {
+			return "", nil, fmt.Errorf("main is %q, the retired HTTP API's main package: the release ships the CLI alone, so it builds %s only (issue #393)", mainPkg, Main)
+		}
+
+		return "", nil, fmt.Errorf("main is %q, want %s, the only package the release builds", mainPkg, Main)
 	}
 
 	if want := Env(); !slices.Equal(env, want) {

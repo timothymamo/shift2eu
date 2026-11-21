@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -1127,5 +1128,53 @@ func nestedPlistKeys(value plistValue) []string {
 		return keys
 	default:
 		return nil
+	}
+}
+
+// TestAgentsTokenLaunchDaemonLabelPrefixIsOneLabelInThreePlaces pins review item 2 of issue #355: the job's label
+// prefix is spelled out three times - AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX in the Makefile, label_prefix in
+// dev/agents-token-launchd.sh, which labels the plist, and the stop line of dev/agents-app-token.sh, which tells a
+// maintainer how to kickstart the job - and the three must agree, or the log sends the maintainer to a job that is
+// not the one running, and the install and uninstall work on another label than the job carries. Each value is read
+// from its own source, not from a literal of this test.
+func TestAgentsTokenLaunchDaemonLabelPrefixIsOneLabelInThreePlaces(t *testing.T) {
+	t.Parallel()
+
+	fromMakefile, ok := makeVariable(readRepoFile(t, makefilePath), "AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX")
+	if !ok {
+		t.Fatalf("%s has no AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX assignment any more, so this test cannot read the label the install and uninstall work with (issue #355)", makefilePath)
+	}
+
+	labelPrefix := regexp.MustCompile(`(?m)^label_prefix=(.*)$`).FindStringSubmatch(readRepoFile(t, launchdScript))
+	if labelPrefix == nil {
+		t.Fatalf("%s sets no `label_prefix=...` any more, so this test cannot read the label the plist carries (issue #355)", launchdScript)
+	}
+
+	// The stop line names the job as system/<label prefix>${instance}, beside the kickstart command a maintainer
+	// runs: the prefix ends where the instance begins.
+	stopLine := regexp.MustCompile(`system/([[:alnum:]._-]+)\$\{instance\}`).FindStringSubmatch(readRepoFile(t, agentsMintScript))
+	if stopLine == nil {
+		t.Fatalf("%s's stop line no longer names the job as system/<label prefix>${instance}, so this test cannot read the label from it (issue #355)", agentsMintScript)
+	}
+
+	sources := []struct {
+		where  string
+		prefix string
+	}{
+		{"the Makefile's AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX", fromMakefile},
+		{launchdScript + "'s label_prefix", strings.TrimSpace(labelPrefix[1])},
+		{agentsMintScript + "'s stop line", stopLine[1]},
+	}
+
+	want := sources[0].prefix
+	if want == "" {
+		t.Fatalf("the Makefile's AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX is empty, so the job's label is its instance alone (issue #355)")
+	}
+
+	for _, source := range sources[1:] {
+		if source.prefix != want {
+			t.Errorf("%s names the LaunchDaemon label prefix %q, not the %q of the Makefile's AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX: the three places spell one label, or the stop line sends a maintainer to a job that does not exist, and the install and uninstall work on another label than the job carries (issue #355)",
+				source.where, source.prefix, want)
+		}
 	}
 }

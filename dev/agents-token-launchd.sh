@@ -4,7 +4,12 @@
 # make agents-token-refresh-install renders it with this script and installs it in /Library/LaunchDaemons;
 # this script itself installs nothing and needs no sudo.
 #
-# Usage: dev/agents-token-launchd.sh plist   print the plist of LIMA_INSTANCE's job on standard output
+# Usage: dev/agents-token-launchd.sh plist          print the plist of LIMA_INSTANCE's job on standard output
+#        dev/agents-token-launchd.sh foreign-jobs   exit 3, naming each one and how to remove it, when another
+#                                                   loaded launchd job runs LIMA_INSTANCE's refresh (issue #396;
+#                                                   make agents-token-refresh-install and -start run it, see
+#                                                   foreign_jobs below); it reads launchctl only, needs no sudo
+#                                                   and prints no plist
 #
 # The job, one per VM instance, labelled io.github.timothymamo.shift2eu.agents-token-refresh.<instance>:
 #   - runs `/bin/sh <host clone>/dev/agents-app-token.sh refresh` from the host clone, as the account that
@@ -12,7 +17,8 @@
 #     pull is involved at boot. The plist names the script's path, not its contents: the job runs the host
 #     clone's dev/agents-app-token.sh as it is on disk when the job STARTS (at boot, and at every restart),
 #     not as it was at install time. After a git pull --ff-only in the host clone, restart the job so it runs
-#     the new script now: sudo launchctl kickstart -k system/<label>;
+#     the new script now: sudo launchctl kickstart -k system/<label> (when that does not return,
+#     docs/dev-environment.md, When kickstart does not return);
 #   - hands that refresh exactly LIMA_INSTANCE, SHIFT2EU_AGENTS_APP_ID, SHIFT2EU_AGENTS_APP_INSTALLATION_ID,
 #     SHIFT2EU_AGENTS_APP_KEY_FILE (the key's path, never its contents), HOME, XDG_STATE_HOME when it is set
 #     and not empty (so the job's lock and log are the ones make agents-token-refresh-start and a refresh
@@ -341,10 +347,114 @@ plist() {
   }
 }
 
+# foreign_jobs refuses another loaded launchd job that runs LIMA_INSTANCE's refresh (issue #396): one whose label
+# has not the project's label_prefix and whose program arguments run `agents-app-token.sh refresh` or
+# `make ... agents-token-refresh`, in the system domain or in the user's (gui/<uid>). Such a job (KeepAlive) takes
+# the instance's lock again seconds after every kill, so the project's job finds it held and exits at every
+# ThrottleInterval, and nothing says so. A job whose environment sets LIMA_INSTANCE to another instance is no
+# foreign job of this one. A job whose environment sets no LIMA_INSTANCE (one that takes it from direnv, say)
+# counts for every instance: with two VMs it refuses both installs, failing closed. A job that names the instance
+# only in its arguments (make agents-token-refresh LIMA_INSTANCE=other) is refused too, the conservative
+# direction. It reads launchctl only, never sudo: `launchctl print <domain>` for the loaded labels
+# and `launchctl print <domain>/<label>` for each one's plist path, arguments and environment. Apple's own
+# com.apple.* jobs are skipped, which spares some hundred launchctl calls: none of them runs the refresh. A label
+# outside [A-Za-z0-9._-] is skipped and only counted, in one warning. The user's domain launchctl cannot print (no
+# GUI login, say) has no job loaded; a system domain it cannot print gets a warning, and the check goes on. A
+# plist path outside / and [A-Za-z0-9._-] is never printed. For each job found it prints, on standard error, its
+# label, domain, plist and the commands that remove it, and exits 3; with none it exits 0 and prints nothing but
+# those warnings; any other status is the check's own failure.
+foreign_jobs() {
+  # Unset defaults to shift2eu and empty is refused, the rule dev/agents-app-token.sh follows.
+  instance="${LIMA_INSTANCE-shift2eu}"
+  case "${instance}" in
+  '' | [!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789]* | *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
+    die "invalid LIMA_INSTANCE (its value is not shown): a Lima instance name is letters, digits, '.', '_' and '-', starting with a letter or digit"
+    ;;
+  esac
+  uid="$(id -u)" || die "cannot tell which account runs this (id -u failed)"
+  found=0
+  unusual=0
+  for domain in system "gui/${uid}"; do
+    # The services block's lines are `<pid> <status> <label>`: the label is the rest of the line after the two
+    # fields, read whole, so a label with a space is counted as one unusual label, not checked as its last word.
+    if domain_print="$(launchctl print "${domain}" </dev/null 2>/dev/null)" &&
+      printf '%s\n' "${domain_print}" | grep -q '^[[:space:]]*services = {'; then
+      labels="$(printf '%s\n' "${domain_print}" |
+        awk '/^[[:space:]]*services = \{/ { s = 1; next } s && /^[[:space:]]*\}/ { exit } s && NF >= 3 { sub(/^[[:space:]]*[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+/, ""); print }')"
+    else
+      labels=''
+      # The user's domain has no jobs without a GUI login; the system domain always has, so not listing it
+      # means a foreign LaunchDaemon would go unnoticed.
+      if [ "${domain}" = system ]; then
+        printf 'agents-token-launchd: warning: could not list the system domain (launchctl print system failed or named no services), so a foreign LaunchDaemon that runs the refresh of %s would go unnoticed\n' "${instance}" >&2
+      fi
+    fi
+    # A label per line, read without splitting or globbing.
+    while IFS= read -r job; do
+      case "${job}" in
+      '' | "${label_prefix}"* | com.apple.*) continue ;;
+      *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
+        # Untrusted text that cannot safely be a launchctl argument or be printed: counted, never shown.
+        unusual=$((unusual + 1))
+        continue
+        ;;
+      esac
+      # The plist's path when the job runs this instance's refresh, - when it does and launchctl names no
+      # path, and nothing when it does not.
+      plist="$(launchctl print "${domain}/${job}" </dev/null 2>/dev/null | awk -v instance="${instance}" '
+        /^[[:space:]]*arguments = \{/ { a = 1; next }
+        a && /^[[:space:]]*\}/ { a = 0; next }
+        a { sub(/^[[:space:]]+/, ""); args = args " " $0; next }
+        /^[[:space:]]*environment = \{/ { e = 1; next }
+        e && /^[[:space:]]*\}/ { e = 0; next }
+        e && $1 == "LIMA_INSTANCE" && $2 == "=>" { other = ($3 != instance); next }
+        path == "" && /^[[:space:]]*path = / { sub(/^[[:space:]]*path = /, ""); path = $0 }
+        END {
+          if (other) exit
+          if (args " " ~ /agents-app-token\.sh refresh / || args " " ~ /(^|[ \/])g?make( [^ ]+)* agents-token-refresh /)
+            print (path == "" ? "-" : path)
+        }')" || plist=''
+      [ -n "${plist}" ] || continue
+      found=1
+      if [ "${domain}" = system ]; then
+        run='sudo launchctl'
+        remove="sudo rm ${plist}"
+      else
+        run='launchctl'
+        remove="rm ${plist}"
+      fi
+      shown="${plist}"
+      case "${plist}" in
+      -)
+        remove="remove its plist (launchctl print ${domain}/${job} names none)"
+        ;;
+      [!/]* | */../* | */.. | *[!/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
+        # The path comes from the job's plist: only an absolute path of / and [A-Za-z0-9._-] without a ..
+        # segment is repeated. A relative one (-rf), one with a .. segment, a space, a ; or a control byte is
+        # never repeated, neither to the terminal nor into an rm the maintainer pastes.
+        shown='not shown: its path holds unusual characters'
+        remove="remove its plist (its path: launchctl print ${domain}/${job})"
+        ;;
+      esac
+      printf 'agents-token-launchd: %s is loaded in %s and runs the agents App token refresh of %s (plist %s): it holds the instance'"'"'s lock, so the project'"'"'s job %s%s never takes over. Remove it: %s bootout %s/%s, %s disable %s/%s, %s (docs/dev-environment.md, The agents App)\n' \
+        "${job}" "${domain}" "${instance}" "${shown}" "${label_prefix}" "${instance}" \
+        "${run}" "${domain}" "${job}" "${run}" "${domain}" "${job}" "${remove}" >&2
+    done <<EOF
+${labels}
+EOF
+  done
+  if [ "${unusual}" -gt 0 ]; then
+    printf 'agents-token-launchd: warning: %s job(s) with unusual labels not checked (a label outside letters, digits, ., _ and -; launchctl print system and launchctl print gui/%s list them)\n' "${unusual}" "${uid}" >&2
+  fi
+  # 3: a foreign job found and named above; 0: none; any other status (die, set -e) is the check's own failure.
+  [ "${found}" -eq 0 ] || exit 3
+}
+
 case "${1:-}" in
 plist) plist ;;
+foreign-jobs) foreign_jobs ;;
 *)
-  echo "usage: $0 plist" >&2
+  echo "usage: $0 plist|foreign-jobs" >&2
   exit 2
   ;;
 esac

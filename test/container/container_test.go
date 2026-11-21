@@ -28,14 +28,23 @@ const (
 	versionPackagePath = "github.com/timothymamo/shift2eu/internal/version"
 	mainPackage        = "./cmd/shift2eu"
 
-	// The second binary the release ships, the HTTP API (PRD #103, ADR 0019):
-	// its builds entry, the package it is built from, the path the image keeps
-	// it at and the stage of the Dockerfile that ships it.
+	// The second binary the release used to ship, the HTTP API (PRD #103, ADR
+	// 0019): its builds entry, the package it was built from, the path the image
+	// kept it at and the stage of the Dockerfile that shipped it. The release
+	// builds neither any more (issue #393), so the tests below hold the
+	// repository to their absence.
 	serverBuildID     = "shift2eu-server"
 	serverMainPackage = "./cmd/shift2eu-server"
 	serverBinaryPath  = "/shift2eu-server"
 	serverStageName   = "server"
 	cliBinaryPath     = "/shift2eu"
+
+	// The variable the build stage sets to the name of the toolchain go must use,
+	// and the value that keeps it to the Go of the base image: `local` makes go
+	// fail, with its own error, instead of fetching another toolchain or building
+	// with a different one (issue #383).
+	toolchainEnv   = "GOTOOLCHAIN"
+	toolchainLocal = "local"
 )
 
 // TestBuilderGoVersionMatchesGoMod pins that the builder stage is the golang
@@ -68,6 +77,253 @@ func TestBuilderGoVersionMatchesGoMod(t *testing.T) {
 				dockerfileName, builder.line, builder.image, tag, goModName, want, want, want)
 		}
 	}
+}
+
+// TestBuildStagePinsLocalToolchain pins that the stage that runs `go build` sets
+// ENV GOTOOLCHAIN=local before it runs a single go command, so a base image whose
+// Go differs from go.mod's go line fails the build with Go's own error instead of
+// fetching another toolchain or building with one the repository was never
+// reviewed against (issue #383). The RUN instruction that downloads the modules
+// is the first go command of that stage, so an ENV after it would leave that step
+// unprotected. Docker applies an ENV to the instructions that follow it, so the
+// pin must also be the last value the stage gives the variable: an ENV
+// GOTOOLCHAIN=auto after a correct pin puts another toolchain back in force for
+// `go build`, and is reported as well.
+//
+// The check runs over the repository's Dockerfile and over copies of a fixture
+// that carry one fault each: the ENV removed, moved to the image stage, given
+// another value, left after the module download, or overridden by a later ENV
+// before the build. A check that cannot tell those apart would pass on a
+// Dockerfile that pins nothing, or on one whose last word on the toolchain is
+// not local.
+func TestBuildStagePinsLocalToolchain(t *testing.T) {
+	t.Parallel()
+
+	const fixture = `FROM golang:1.27.4-alpine AS build
+ENV GOTOOLCHAIN=local
+RUN go mod download
+RUN go build -o /out/shift2eu ./cmd/shift2eu
+
+FROM gcr.io/distroless/static-debian13:nonroot
+COPY --from=build /out/shift2eu /shift2eu
+`
+
+	const (
+		pin         = "ENV GOTOOLCHAIN=local\n"
+		modDownload = "RUN go mod download\n"
+		imageFrom   = "FROM gcr.io/distroless/static-debian13:nonroot\n"
+	)
+
+	tests := []struct {
+		name       string
+		dockerfile string
+		// want holds parts of the findings the check must return; none means
+		// the Dockerfile pins the toolchain.
+		want []string
+	}{
+		{
+			name:       "the repository's Dockerfile",
+			dockerfile: readRepoFile(t, dockerfileName),
+		},
+		{
+			name:       "a fixture that pins the toolchain",
+			dockerfile: fixture,
+		},
+		{
+			name:       "a fixture that pins it in the legacy ENV form",
+			dockerfile: strings.Replace(fixture, "ENV GOTOOLCHAIN=local", "ENV GOTOOLCHAIN local", 1),
+		},
+		{
+			name:       "a fixture that quotes the value",
+			dockerfile: strings.Replace(fixture, "ENV GOTOOLCHAIN=local", `ENV GOTOOLCHAIN="local"`, 1),
+		},
+		{
+			name:       "no ENV GOTOOLCHAIN at all",
+			dockerfile: strings.Replace(fixture, pin, "", 1),
+			want:       []string{"no ENV GOTOOLCHAIN=local"},
+		},
+		{
+			name:       "the ENV in the image stage alone",
+			dockerfile: strings.Replace(strings.Replace(fixture, pin, "", 1), imageFrom, imageFrom+pin, 1),
+			want:       []string{"no ENV GOTOOLCHAIN=local"},
+		},
+		{
+			name:       "another value",
+			dockerfile: strings.Replace(fixture, "GOTOOLCHAIN=local", "GOTOOLCHAIN=auto", 1),
+			want:       []string{"GOTOOLCHAIN=auto"},
+		},
+		{
+			name:       "after the first RUN that runs go",
+			dockerfile: strings.Replace(fixture, pin+modDownload, modDownload+pin, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			name:       "after a go command named by its path",
+			dockerfile: strings.Replace(fixture, pin+modDownload, "RUN /usr/local/go/bin/go mod download\n"+pin, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			name:       "after a go command inside sh -c",
+			dockerfile: strings.Replace(fixture, pin+modDownload, "RUN sh -c \"go mod download\"\n"+pin, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			name:       "after a bare go command",
+			dockerfile: strings.Replace(fixture, pin+modDownload, "RUN go\n"+pin+modDownload, 1),
+			want:       []string{"after the RUN instruction"},
+		},
+		{
+			// A word that merely holds go, such as gofmt, golang or cargo, runs
+			// no go command: only `go` itself, however it is written, counts.
+			name: "a RUN that only mentions words containing go",
+			dockerfile: strings.Replace(fixture, "FROM golang:1.27.4-alpine AS build\n",
+				"FROM golang:1.27.4-alpine AS build\nRUN apk add --no-cache ca-certificates && ls /usr/local/go/bin/gofmt /usr/local/go/lib/golang /opt/cargo\n", 1),
+		},
+		{
+			name:       "another value after the first RUN that runs go",
+			dockerfile: strings.Replace(fixture, pin+modDownload, modDownload+"ENV GOTOOLCHAIN=auto\n", 1),
+			want:       []string{"after the RUN instruction", "GOTOOLCHAIN=auto"},
+		},
+		{
+			// A pin before the first go command is not enough: Docker applies
+			// an ENV to the instructions that follow it, so a later ENV puts
+			// another toolchain back in force for `go build` and the build runs
+			// with one the repository was never reviewed against.
+			name:       "a non-local value after the module download",
+			dockerfile: strings.Replace(fixture, modDownload, modDownload+"ENV GOTOOLCHAIN=auto\n", 1),
+			// The later ENV is on line 4 of the fixture, the go build on line 5.
+			want: []string{"a non-local value after the module download:4: ", "GOTOOLCHAIN=auto"},
+		},
+		{
+			name:       "a second local value after the module download",
+			dockerfile: strings.Replace(fixture, modDownload, modDownload+pin, 1),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			findings := toolchainFindings(t, tc.name, tc.dockerfile)
+
+			for _, finding := range findings {
+				if !slices.ContainsFunc(tc.want, func(want string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("unexpected finding: %s", finding)
+				}
+			}
+
+			for _, want := range tc.want {
+				if !slices.ContainsFunc(findings, func(finding string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("no finding mentions %q, got %q", want, findings)
+				}
+			}
+		})
+	}
+}
+
+// toolchainFindings returns what name, a Dockerfile, gets wrong about the Go
+// toolchain its build stage uses, and no finding when the stage pins it: the
+// stage that runs `go build` must set GOTOOLCHAIN=local before its first RUN
+// instruction that runs a go command, so a base image whose Go differs from
+// go.mod's go line fails the build instead of fetching a toolchain of its own
+// (issue #383). The value that takes effect at that first command is the one the
+// last ENV before it sets, since Docker applies an ENV to the instructions that
+// follow it, and every ENV of the stage that sets another value is reported
+// wherever it stands: one after a correct pin leaves `go build`, and anything
+// else after it, on a toolchain the repository was never reviewed against.
+func toolchainFindings(t *testing.T, name, dockerfile string) []string {
+	t.Helper()
+
+	builder, stage := buildStage(t, dockerfileInstructions(t, dockerfile))
+
+	firstGo, ok := firstGoRun(stage)
+	if !ok {
+		return []string{fmt.Sprintf("%s:%d: the build stage runs no go command, so there is no step for the toolchain pin to protect; want a stage that runs `go mod download` and `go build`",
+			name, builder.line)}
+	}
+
+	// envValue is one ENV of the stage that sets the toolchain variable, with
+	// the value Docker applies from it on.
+	type envValue struct {
+		at    instruction
+		value string
+	}
+
+	var (
+		applied      instruction
+		appliedValue string
+		pinned       bool
+
+		// The first ENV of the stage that sets the variable, wherever it
+		// stands: when none comes before the first go command, it is the one
+		// the finding about a pin in the wrong place names.
+		firstSet   instruction
+		firstValue string
+		firstFound bool
+
+		// Every ENV of the stage that sets a value other than local, in file
+		// order.
+		notLocal []envValue
+	)
+
+	for _, in := range stage {
+		if in.keyword() != "ENV" {
+			continue
+		}
+
+		value, setsIt := envAssignments(in)[toolchainEnv]
+		if !setsIt {
+			continue
+		}
+
+		if !firstFound {
+			firstSet, firstValue, firstFound = in, value, true
+		}
+
+		if in.line < firstGo.line {
+			applied, appliedValue, pinned = in, value, true
+		}
+
+		if value != toolchainLocal {
+			notLocal = append(notLocal, envValue{at: in, value: value})
+		}
+	}
+
+	var findings []string
+
+	// reported holds the lines the checks below name, so an ENV that is both the
+	// value in force at the first go command (or the only one the stage sets) and
+	// a non-local value is reported once, with the finding that says what it
+	// should have been.
+	reported := make(map[int]struct{}, len(notLocal))
+
+	switch {
+	case !pinned && firstFound:
+		findings = append(findings, fmt.Sprintf("%s:%d: the build stage sets `ENV %s=%s` only at line %d, after the RUN instruction at line %d that runs go (%q), so that step still runs with whatever toolchain the base image holds: want the ENV before the first RUN instruction that runs go, the module download included (issue #383)",
+			name, firstSet.line, toolchainEnv, firstValue, firstSet.line, firstGo.line, firstGo.arguments()))
+		reported[firstSet.line] = struct{}{}
+	case pinned && appliedValue != toolchainLocal:
+		findings = append(findings, fmt.Sprintf("%s:%d: the build stage sets %s=%s, want `ENV %s=%s`: with another value go fetches or uses another toolchain instead of failing when the base image's Go differs from the go line of %s (issue #383)",
+			name, applied.line, toolchainEnv, appliedValue, toolchainEnv, toolchainLocal, goModName))
+		reported[applied.line] = struct{}{}
+	case !pinned:
+		findings = append(findings, fmt.Sprintf("%s:%d: the build stage, the one that runs `go build`, has no ENV %s=%s: want `ENV %s=%s` in that stage, before the first RUN instruction that runs go, so a base image whose Go differs from the go line of %s fails the build instead of fetching another toolchain or building with a different one (issue #383)",
+			name, builder.line, toolchainEnv, toolchainLocal, toolchainEnv, toolchainLocal, goModName))
+	}
+
+	// Every other ENV of the stage that leaves the pin: Docker applies it to the
+	// instructions that follow, so the go command after it runs on another
+	// toolchain than the one checked above.
+	for _, set := range notLocal {
+		if _, once := reported[set.at.line]; once {
+			continue
+		}
+
+		findings = append(findings, fmt.Sprintf("%s:%d: the build stage sets `ENV %s=%s` at line %d, which is not `%s`: go fetches or uses another toolchain from there on instead of failing when the base image's Go differs from the go line of %s, so every go command after it, `go build` included, runs on a toolchain the repository was never reviewed against (issue #383)",
+			name, set.at.line, toolchainEnv, set.value, set.at.line, toolchainLocal, goModName))
+	}
+
+	return findings
 }
 
 // TestEveryBaseImageIsDigestPinned pins that every FROM instruction names its
@@ -125,8 +381,8 @@ func TestEveryBaseImageIsDigestPinned(t *testing.T) {
 // rather than left to a mention somewhere in the text.
 //
 // It runs once per image the release ships: the CLI, which the last stage of
-// the Dockerfile builds, and the HTTP API's binary, which the stage named
-// server builds (PRD #103 milestone 4, ADR 0019).
+// the Dockerfile builds. The HTTP API's binary and its server stage are gone
+// (issue #393), which TestTheDockerfileHasNoServerStage pins.
 func TestBuildMatchesGoReleaser(t *testing.T) {
 	t.Parallel()
 
@@ -148,14 +404,6 @@ func TestBuildMatchesGoReleaser(t *testing.T) {
 			stage:     "",
 			stageDesc: "the final stage, the CLI image",
 			imageBin:  cliBinaryPath,
-		},
-		{
-			name:      "server",
-			id:        serverBuildID,
-			pkg:       serverMainPackage,
-			stage:     serverStageName,
-			stageDesc: "the server stage",
-			imageBin:  serverBinaryPath,
 		},
 	}
 
@@ -303,42 +551,44 @@ func assertBuildMatchesGoReleaser(t *testing.T, instructions []instruction, sett
 	}
 }
 
-// TestGoReleaserBuildsTheServer pins that the release builds the HTTP API's
-// binary the way it builds the CLI (PRD #103 milestone 4, ADR 0019): a second
-// entry of the builds list, id shift2eu-server, main ./cmd/shift2eu-server and
-// binary shift2eu-server, with the same env, flags, ldflags, goos and goarch as
-// the shift2eu entry. One release then ships both binaries, built with the same
-// settings, so neither can drift from the other.
-func TestGoReleaserBuildsTheServer(t *testing.T) {
+// TestGoReleaserBuildsTheCLIOnly pins that the release builds one binary, the
+// CLI's (issue #393). .goreleaser.yaml holds one entry of the builds list, id
+// shift2eu, main ./cmd/shift2eu and binary shift2eu, and no entry for the HTTP
+// API: a second one would publish a binary the release no longer ships, for
+// platforms and with settings of its own.
+func TestGoReleaserBuildsTheCLIOnly(t *testing.T) {
 	t.Parallel()
 
 	builds := parseGoreleaserBuilds(t, readRepoFile(t, goreleaserName))
+
+	ids := make([]string, 0, len(builds))
+	for _, build := range builds {
+		ids = append(ids, build.id)
+	}
+
+	if diff := cmp.Diff([]string{"shift2eu"}, ids); diff != "" {
+		t.Errorf("%s: the builds: section holds the entries %q (-want +got):\n%s\nwant exactly one, the CLI's: the release ships shift2eu alone, so the HTTP API's entry is gone (issue #393)",
+			goreleaserName, ids, diff)
+	}
+
 	cli := goreleaserBuildSettings(t, builds, "shift2eu")
-	server := goreleaserBuildSettings(t, builds, serverBuildID)
 
 	for _, tc := range []struct{ field, want, got string }{
-		{field: "main", want: serverMainPackage, got: server.main},
-		{field: "binary", want: serverBuildID, got: server.binary},
+		{field: "main", want: mainPackage, got: cli.main},
+		{field: "binary", want: "shift2eu", got: cli.binary},
 	} {
 		if tc.got != tc.want {
-			t.Errorf("%s: the builds entry %q at line %d sets %s to %q, want %q, so the release ships the HTTP API's binary",
-				goreleaserName, serverBuildID, server.line, tc.field, tc.got, tc.want)
+			t.Errorf("%s: the builds entry %q at line %d sets %s to %q, want %q",
+				goreleaserName, "shift2eu", cli.line, tc.field, tc.got, tc.want)
 		}
 	}
 
-	for _, tc := range []struct {
-		list        string
-		cli, server []string
-	}{
-		{list: "env", cli: cli.env, server: server.env},
-		{list: "flags", cli: cli.flags, server: server.flags},
-		{list: "ldflags", cli: cli.ldflags, server: server.ldflags},
-		{list: "goos", cli: cli.goos, server: server.goos},
-		{list: "goarch", cli: cli.goarch, server: server.goarch},
-	} {
-		if diff := cmp.Diff(tc.cli, tc.server); diff != "" {
-			t.Errorf("%s: the builds entries %q and %q set %s differently (-%s +%s):\n%s\nwant the server built exactly as the CLI, so one release ships both binaries with the same settings",
-				goreleaserName, "shift2eu", serverBuildID, tc.list, "shift2eu", serverBuildID, diff)
+	goreleaser := readRepoFile(t, goreleaserName)
+
+	for _, retired := range []string{serverBuildID, serverMainPackage} {
+		if strings.Contains(goreleaser, retired) {
+			t.Errorf("%s names %q, want no mention of the HTTP API's binary: the release ships the CLI alone (issue #393)",
+				goreleaserName, retired)
 		}
 	}
 }
@@ -469,93 +719,101 @@ func TestFinalStageIsMinimalAndNonRoot(t *testing.T) {
 	assertMinimalNonRootStage(t, final, "the final stage", cliBinaryPath)
 }
 
-// TestServerStageIsMinimalAndNonRoot pins the stage that ships the HTTP API's
-// binary (PRD #103 milestone 4, ADR 0019): a stage named server, built with
-// `docker buildx build --target server`, held to exactly what the CLI image
-// promises, with the server binary as its exec-form entrypoint, copied from the
-// stage that compiles it.
-func TestServerStageIsMinimalAndNonRoot(t *testing.T) {
+// TestTheDockerfileHasNoServerStage pins what issue #393 leaves of PRD #103's
+// milestone 4: the Dockerfile builds the CLI's image alone. A stage named
+// server, the HTTP API's binary, its --listen CMD and its published port are
+// gone, so `docker buildx build --target server` and `make server-image` build
+// nothing rather than an image nothing publishes, and no image can start
+// serving the API the release no longer ships.
+//
+// The check runs over the repository's Dockerfile, which keeps nothing of the
+// HTTP API, and over fixtures that do: Docker reads a stage name in any case,
+// so a FROM that declares the retired stage as Server declares the same stage.
+func TestTheDockerfileHasNoServerStage(t *testing.T) {
 	t.Parallel()
 
-	instructions := dockerfileInstructions(t, readRepoFile(t, dockerfileName))
-	stage := stageFor(t, instructions, serverStageName)
-
-	assertMinimalNonRootStage(t, stage, "the server stage", serverBinaryPath)
-
-	// The entrypoint path must be the file the COPY writes, or the container
-	// starts with no server to run.
-	_, destination := copiedBinary(t, instructions, stage, "the server stage")
-	if destination != serverBinaryPath {
-		t.Errorf("%s: the server stage copies the binary to %q, want %q, the path its ENTRYPOINT runs, so the container starts the server rather than nothing",
-			dockerfileName, destination, serverBinaryPath)
+	tests := []struct {
+		name       string
+		dockerfile string
+		// want holds parts of the findings the check must return; none means
+		// the Dockerfile keeps nothing of the HTTP API.
+		want []string
+	}{
+		{
+			name:       "the repository's Dockerfile",
+			dockerfile: readRepoFile(t, dockerfileName),
+		},
+		{
+			name:       "a stage declared as Server",
+			dockerfile: "FROM scratch AS Server\n",
+			want:       []string{"the stage server is declared again"},
+		},
 	}
 
-	// The entrypoint alone leaves the server on its default listen address,
-	// 127.0.0.1:8080, which a container never publishes: the CMD is what puts
-	// the server behind the port the stage EXPOSEs.
-	assertServerListenCommand(t, stage, "the server stage")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			findings := retiredServerFindings(t, tc.name, tc.dockerfile)
+
+			for _, finding := range findings {
+				if !slices.ContainsFunc(tc.want, func(want string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("unexpected finding: %s", finding)
+				}
+			}
+
+			for _, want := range tc.want {
+				if !slices.ContainsFunc(findings, func(finding string) bool { return strings.Contains(finding, want) }) {
+					t.Errorf("no finding mentions %q, got %q", want, findings)
+				}
+			}
+		})
+	}
 }
 
-// assertServerListenCommand holds the CMD of one image stage to the listen
-// address the image publishes (PRD #103 milestone 4, ADR 0019). Without a CMD
-// the binary keeps its default 127.0.0.1:8080, an address a container never
-// publishes, so `docker run -p 127.0.0.1:8080:8080` finds nothing listening on
-// the port and the API is unreachable. The CMD must pass --listen 0.0.0.0:8080
-// in exec form, so no shell is needed, and the port it names must be the one the
-// stage EXPOSEs, so the published port always has the server behind it. The
-// server refuses to start off loopback without a bearer token (exit 2), which is
-// the intended fail-safe: a container started without one stops rather than
-// serving unauthenticated. name names the stage in failure messages.
-func assertServerListenCommand(t *testing.T, stage []instruction, name string) {
+// retiredServerFindings returns what name, a Dockerfile, still keeps of the
+// HTTP API that issue #393 retired: its binary and main package, a stage named
+// server written in any case (Docker reads stage names case-insensitively),
+// and an EXPOSE of the port its image served.
+func retiredServerFindings(t *testing.T, name, dockerfile string) []string {
 	t.Helper()
 
-	cmds := stageCommands(stage)
+	var findings []string
 
-	switch len(cmds) {
-	case 0:
-		t.Errorf("%s: %s has no CMD: want exactly one, CMD [\"--listen\", \"0.0.0.0:8080\"] in exec form, because without it the server keeps its default listen address, 127.0.0.1:8080, which a container does not publish, so the API is unreachable through a published port",
-			dockerfileName, name)
+	for _, retired := range []string{serverBinaryPath, serverMainPackage, serverBuildID} {
+		if strings.Contains(dockerfile, retired) {
+			findings = append(findings, fmt.Sprintf("%s names %q, want no mention of the HTTP API's binary: the Dockerfile builds the CLI's image alone (issue #393)",
+				name, retired))
+		}
+	}
 
-		return
-	case 1:
-	default:
-		lines := make([]string, 0, len(cmds))
-		for _, cmd := range cmds {
-			lines = append(lines, strconv.Itoa(cmd.line))
+	instructions := dockerfileInstructions(t, dockerfile)
+
+	// A stage is named by the `AS <name>` of its FROM, which is the last field.
+	for _, in := range instructions {
+		if in.keyword() != "FROM" {
+			continue
 		}
 
-		t.Errorf("%s: %s has %d CMD instructions (lines %s): want exactly one, so no later CMD quietly replaces the one that gives the server its listen address",
-			dockerfileName, name, len(cmds), strings.Join(lines, ", "))
+		fields := fromFields(in)
+		if len(fields) == 0 || !strings.EqualFold(fields[len(fields)-1], serverStageName) {
+			continue
+		}
 
-		return
+		findings = append(findings, fmt.Sprintf("%s:%d: the stage %s is declared again: want no stage named %s, so no --target server builds an image of the HTTP API (issue #393)",
+			name, in.line, serverStageName, serverStageName))
 	}
 
-	cmd := cmds[0]
+	for _, in := range instructions {
+		if in.keyword() != "EXPOSE" {
+			continue
+		}
 
-	var argv []string
-	if err := json.Unmarshal([]byte(cmd.arguments()), &argv); err != nil {
-		t.Fatalf("%s:%d: CMD %s is not in exec (JSON array) form, so Docker wraps it in /bin/sh, which the image does not hold: %v",
-			dockerfileName, cmd.line, cmd.arguments(), err)
+		findings = append(findings, fmt.Sprintf("%s:%d: the Dockerfile EXPOSEs %s: want no EXPOSE instruction, because the CLI image's binary serves nothing over the network and the port belonged to the HTTP API's image (issue #393)",
+			name, in.line, in.arguments()))
 	}
 
-	want := []string{"--listen", "0.0.0.0:8080"}
-	if diff := cmp.Diff(want, argv); diff != "" {
-		t.Errorf("%s:%d: CMD mismatch (-want +got):\n%s\nwant the server started on every interface of its published port, which is what makes a published container port reach it; a bare ENTRYPOINT keeps the default 127.0.0.1:8080 and nothing outside the container can connect",
-			dockerfileName, cmd.line, diff)
-
-		return
-	}
-
-	// The port the CMD starts the server on and the one the stage publishes are
-	// the same port: a container publishes the exposed port, so a server on
-	// another one answers nothing there.
-	_, port, _ := strings.Cut(want[1], ":")
-
-	exposed := exposedPorts(t, stage, name)
-	if diff := cmp.Diff([]string{port}, exposed); diff != "" {
-		t.Errorf("%s:%d: the CMD starts the server on port %q and the stage EXPOSEs the ports %q (-CMD +EXPOSE):\n%s\nwant the same port, so the port the image publishes is the one the server listens on",
-			dockerfileName, cmd.line, port, exposed, diff)
-	}
+	return findings
 }
 
 // assertMinimalNonRootStage holds one stage that ships an image to what both
@@ -1155,34 +1413,6 @@ func stageCommands(stage []instruction) []instruction {
 	return cmds
 }
 
-// exposedPorts returns the ports a stage's EXPOSE instructions publish, with any
-// /<protocol> suffix removed: EXPOSE 8080 and EXPOSE 8080/tcp both give "8080".
-// A stage that publishes none is reported, since the port its CMD starts the
-// server on is compared with them.
-func exposedPorts(t *testing.T, stage []instruction, name string) []string {
-	t.Helper()
-
-	var ports []string
-
-	for _, in := range stage {
-		if in.keyword() != "EXPOSE" {
-			continue
-		}
-
-		for _, field := range strings.Fields(in.arguments()) {
-			port, _, _ := strings.Cut(field, "/")
-			ports = append(ports, port)
-		}
-	}
-
-	if len(ports) == 0 {
-		t.Errorf("%s: %s has no EXPOSE instruction: want EXPOSE 8080, the port its CMD starts the server on",
-			dockerfileName, name)
-	}
-
-	return ports
-}
-
 // lastInstruction returns the last instruction of the given keyword, which is
 // the one Docker applies when the same instruction appears twice.
 func lastInstruction(instructions []instruction, keyword string) (instruction, bool) {
@@ -1211,6 +1441,62 @@ func runsGoBuild(command string) bool {
 	}
 
 	return false
+}
+
+// runsGo reports whether a RUN instruction's command runs a go command, such as
+// `go mod download` or `go build`, however the command spells it: bare, by its
+// path (`/usr/local/go/bin/go`) or inside a shell (`sh -c "go mod download"`).
+// Each field is unquoted and reduced to its last path element, so only the
+// command `go` counts: a word that merely contains go (`gofmt`, `golang`,
+// `cargo`) and a mention in a flag value or a path, such as the cache mount's
+// target=/go/pkg/mod, is not the command itself.
+func runsGo(command string) bool {
+	for _, field := range strings.Fields(command) {
+		if path.Base(strings.Trim(field, `"'`)) == "go" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// firstGoRun returns the first RUN instruction of a stage whose command runs a go
+// command, the step the toolchain pin must come before, and reports whether the
+// stage holds one.
+func firstGoRun(stage []instruction) (instruction, bool) {
+	for _, in := range stage {
+		if in.keyword() == "RUN" && runsGo(in.arguments()) {
+			return in, true
+		}
+	}
+
+	return instruction{}, false
+}
+
+// envAssignments returns the variables an ENV instruction sets, read in both
+// forms Docker accepts: `ENV NAME=value`, one or more variables space separated,
+// and the legacy `ENV NAME value`, whose value is the rest of the line. A value
+// is unquoted, because Docker strips a matching pair of quotes, so
+// `ENV GOTOOLCHAIN="local"` sets the same value as `ENV GOTOOLCHAIN=local`.
+func envAssignments(in instruction) map[string]string {
+	fields := strings.Fields(in.arguments())
+	if len(fields) == 0 {
+		return nil
+	}
+
+	if !strings.Contains(fields[0], "=") {
+		return map[string]string{fields[0]: unquote(strings.Join(fields[1:], " "))}
+	}
+
+	names := make(map[string]string, len(fields))
+
+	for _, field := range fields {
+		if name, value, found := strings.Cut(field, "="); found {
+			names[name] = unquote(value)
+		}
+	}
+
+	return names
 }
 
 // goBuildRunFor returns the one RUN instruction that runs `go build` for pkg:
@@ -1731,7 +2017,8 @@ func goreleaserBuildSettings(t *testing.T, builds []goreleaserBuild, id string) 
 	return goreleaserBuild{}
 }
 
-// unquote removes the matching quotes YAML allows around a scalar.
+// unquote removes the matching quotes YAML allows around a scalar, and Docker
+// around an ENV value, which sets GOTOOLCHAIN="local" to local.
 func unquote(value string) string {
 	if len(value) >= 2 {
 		if first, last := value[0], value[len(value)-1]; (first == '"' && last == '"') || (first == '\'' && last == '\'') {
@@ -1791,7 +2078,7 @@ func stageFor(t *testing.T, instructions []instruction, name string) []instructi
 		declared = append(declared, fields[2])
 	}
 
-	t.Fatalf("%s: no stage is named %q: the Dockerfile declares the stages %q; want a stage `FROM <base> AS %s` that ships the HTTP API's binary, built with `docker buildx build --target %s`",
+	t.Fatalf("%s: no stage is named %q: the Dockerfile declares the stages %q; want a stage `FROM <base> AS %s`, built with `docker buildx build --target %s`",
 		dockerfileName, name, declared, name, name)
 
 	return nil
@@ -1819,6 +2106,26 @@ func builderStage(t *testing.T, instructions []instruction) instruction {
 		dockerfileName)
 
 	return instruction{}
+}
+
+// buildStage returns the FROM instruction of the stage that runs `go build` and
+// the instructions after it, up to the next FROM: the whole of the stage whose
+// build the toolchain pin protects.
+func buildStage(t *testing.T, instructions []instruction) (instruction, []instruction) {
+	t.Helper()
+
+	builder := builderStage(t, instructions)
+
+	for i, in := range instructions {
+		if in.keyword() == "FROM" && in.line == builder.line {
+			return builder, stageInstructions(instructions, i)
+		}
+	}
+
+	t.Fatalf("%s:%d: the FROM instruction that starts the stage that runs `go build` is not among the instructions read: want stageInstructions to find it",
+		dockerfileName, builder.line)
+
+	return instruction{}, nil
 }
 
 // copiedBinary returns the path in the build stage that one image stage copies

@@ -14,6 +14,7 @@ package devenv_test
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io/fs"
 	"maps"
 	"os"
@@ -33,6 +34,103 @@ import (
 // agentsAppPrefix is the prefix of the three inputs dev/agents-app-token.sh reads from the maintainer's
 // direnv .envrc: the App ID, the installation ID and the path of the App's key. None may enter the VM.
 const agentsAppPrefix = "SHIFT2EU_AGENTS_APP_"
+
+// A script of dev/ is run by its path and shebang, never through an explicit `sh` or a leading `./`, which ignore
+// the shebang and need no executable bit (issues #242 and #337). Both matches are at a word boundary, so another
+// command's `foo.sh dev/x.sh` argument is no run of a dev script. The convention has one exception, and the matcher
+// is why it is not flagged: the vm-init recipe runs the script inside the VM as `bash -l dev/vm-init.sh`, because
+// only a login shell loads the credentials vm-env wrote to /etc/profile.d/shift2eu.sh (Makefile, make vm-init), and
+// the script's own #!/bin/sh would not load them. So the matcher covers `sh` and `./` and deliberately not `bash`:
+// a `bash dev/x.sh` anywhere else would not be caught here either, which is the price of that one allowed line.
+var (
+	devScriptThroughShell    = regexp.MustCompile(`(^|[^[:alnum:]_.-])sh +dev/`)
+	devScriptThroughDotSlash = regexp.MustCompile(`(^|[^[:alnum:]_.-])\./dev/`)
+)
+
+// devScriptsRunThroughShellOrPath returns the lines of text that run a script of dev/ through `sh` or `./`, in
+// order: make -n output and recipe bodies are both checked line by line.
+func devScriptsRunThroughShellOrPath(text string) []string {
+	var lines []string
+
+	for _, line := range strings.Split(text, "\n") {
+		if devScriptThroughShell.MatchString(line) || devScriptThroughDotSlash.MatchString(line) {
+			lines = append(lines, strings.TrimSpace(line))
+		}
+	}
+
+	return lines
+}
+
+// devScriptName matches a script of dev/ that a recipe names: a path below dev/ that ends in .sh.
+var devScriptName = regexp.MustCompile(`(^|[^[:alnum:]_.-])(dev/[[:alnum:]_./-]+\.sh)`)
+
+// devScriptsIn returns the scripts of dev/ that text names, sorted and each once: every script a recipe runs, since
+// a script of dev/ is run by its path.
+func devScriptsIn(text string) []string {
+	scripts := map[string]bool{}
+
+	for _, match := range devScriptName.FindAllStringSubmatch(text, -1) {
+		scripts[match[2]] = true
+	}
+
+	return slices.Sorted(maps.Keys(scripts))
+}
+
+// TestDevScriptsRunThroughShellOrPathMatchesWholeCommands pins the matcher the two checks below use (issues #242
+// and #337): `sh dev/x.sh` and `./dev/x.sh` are a dev script run the wrong way, where another script's
+// `foo.sh dev/x.sh` argument and a run by path are not.
+func TestDevScriptsRunThroughShellOrPathMatchesWholeCommands(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		line string
+		want []string
+	}{
+		{
+			name: "a script through sh",
+			line: "\tsh dev/worktree.sh \"$(BRANCH)\"",
+			want: []string{`sh dev/worktree.sh "$(BRANCH)"`},
+		},
+		{
+			name: "a script through sh in a command substitution",
+			line: "\t@script=\"$$(sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh)\" || exit 1; \\",
+			want: []string{`@script="$$(sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh)" || exit 1; \`},
+		},
+		{
+			name: "a script through sh with more than one space",
+			line: "\tcd x && sh  dev/vm-agents-token-ssh.sh --uninstall",
+			want: []string{"cd x && sh  dev/vm-agents-token-ssh.sh --uninstall"},
+		},
+		{
+			name: "a path relative to the current directory",
+			line: "\t@./dev/worktree.sh \"$(BRANCH)\"",
+			want: []string{`@./dev/worktree.sh "$(BRANCH)"`},
+		},
+		{
+			name: "another script's argument is no run",
+			line: "\tfoo.sh dev/worktree.sh",
+		},
+		{
+			name: "a run by path",
+			line: "\tdev/worktree.sh \"$(BRANCH)\"",
+		},
+		{
+			name: "a script below another directory",
+			line: "\t/bin/sh \"$$clone/dev/agents-token-launchd.sh\" plist",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, devScriptsRunThroughShellOrPath(tc.line)); diff != "" {
+				t.Errorf("devScriptsRunThroughShellOrPath(%q) (-want +got):\n%s", tc.line, diff)
+			}
+		})
+	}
+}
 
 func TestMakefileVMENVNamesNoAgentsAppVariable(t *testing.T) {
 	t.Parallel()
@@ -118,43 +216,490 @@ func TestMakefileHasTheAgentsTokenTargets(t *testing.T) {
 				t.Errorf("make -n %s does not run %q:\n%s", tc.target, tc.want, stdout)
 			}
 
-			// Running the script through `sh` reads no shebang and needs no executable bit, so a recipe that still
-			// does it runs whatever interpreter the maintainer's `sh` is, and a change to the script's shebang
-			// never reaches it (issue #242).
-			if strings.Contains(stdout, "sh dev/") {
-				t.Errorf("make -n %s runs a script of dev/ through `sh`, which ignores its shebang and executable bit: run it by its path, as the other dev scripts are (issue #242):\n%s", tc.target, stdout)
+			// Running a script through `sh` or `./` reads no shebang and needs no executable bit, so a recipe that
+			// still does it runs whatever interpreter the maintainer's `sh` is, and a change to the script's shebang
+			// never reaches it (issues #242 and #337). The match is at a word boundary, so another command's
+			// `foo.sh dev/x` argument is no offender.
+			if lines := devScriptsRunThroughShellOrPath(stdout); len(lines) != 0 {
+				t.Errorf("make -n %s runs a script of dev/ through `sh` or `./`, which ignores its shebang and executable bit: run it by its path, as the other dev scripts are (issues #242 and #337):\n%s",
+					tc.target, strings.Join(lines, "\n"))
 			}
 		})
 	}
 }
 
-// TestMakefileRunsNoAgentsTokenRecipeThroughSh pins the same convention across every agents-token target at once,
-// over the recipes themselves rather than their make -n output, so a target the cases above do not name is held to
-// it too: no agents-token* recipe runs a script of dev/ through an explicit `sh` (issue #242). The LaunchDaemon's
-// own `/bin/sh dev/agents-app-token.sh refresh` program argument is not a recipe and is left as issue #229 pins it.
-func TestMakefileRunsNoAgentsTokenRecipeThroughSh(t *testing.T) {
+// TestMakefileRunsNoDevScriptThroughShOrDotSlash pins the convention across every recipe at once, over the recipes
+// themselves rather than their make -n output, so a target no other test names is held to it too: no recipe runs a
+// script of dev/ through an explicit `sh` or a leading `./`, which ignore the script's shebang and executable bit
+// (issues #242 and #337). The LaunchDaemon's own `/bin/sh dev/agents-app-token.sh refresh` program argument is not a
+// recipe and is left as issue #229 pins it.
+func TestMakefileRunsNoDevScriptThroughShOrDotSlash(t *testing.T) {
 	t.Parallel()
 
 	recipes := makeRecipes(t, readRepoFile(t, makefilePath))
 
-	var found int
+	// Only a broken makeRecipes trips this, never a Makefile change on its own: it is kept so that such a parser
+	// cannot make the test pass on nothing (issue #396, item 6).
+	if len(recipes) == 0 {
+		t.Fatal("the Makefile declares no target with a recipe, so this test pins nothing")
+	}
 
 	for _, name := range slices.Sorted(maps.Keys(recipes)) {
-		if !strings.HasPrefix(name, "agents-token") {
+		if lines := devScriptsRunThroughShellOrPath(recipes[name]); len(lines) != 0 {
+			t.Errorf("the recipe of make %s runs a script of dev/ through `sh` or `./`, which ignores its shebang and executable bit: run it by its path, as every dev script the Makefile runs is (issues #242 and #337):\n%s",
+				name, strings.Join(lines, "\n"))
+		}
+	}
+}
+
+// recipeComment is a line of a Makefile that holds a `#` make turns into the end of a backslash-continued command:
+// its number in the file (1-based) and the line as written, without the leading tab and surrounding blanks. The
+// fields are exported so that cmp.Diff can report a table case's difference.
+type recipeComment struct {
+	Line int
+	Text string
+}
+
+// continues reports whether line ends in the odd number of backslashes that joins it to the next line: only the
+// line's last character can be that backslash, since GNU Make leaves a backslash followed by a blank literal, and an
+// even number of them escapes itself (`echo \\` ends in two, which make hands to the shell unchanged and the shell
+// reads as one literal backslash).
+func continues(line string) bool {
+	backslashes := 0
+
+	for i := len(line) - 1; i >= 0 && line[i] == '\\'; i-- {
+		backslashes++
+	}
+
+	return backslashes%2 == 1
+}
+
+// startsComment reports whether line's text begins with `#`, once make's recipe prefixes are gone: the leading tab
+// (or, on a later line of a continued command, every blank), then any run of the `@`, `-` and `+` make strips from a
+// recipe line, and any blanks around them. On a later line of a continued command make strips no prefix, so a
+// `@`-prefixed `#` there is no comment for the shell; trimming it too only flags a line that starts a recipe command
+// the same way, which keeps the check on the safe side.
+func startsComment(line string) bool {
+	return strings.HasPrefix(strings.TrimLeft(line, " \t@-+"), "#")
+}
+
+// wordStartHash reports whether line holds a `#` the shell begins a comment at: outside single and double quotes, at
+// the start of the line's text or just after a blank or one of `; & | ( )`. On a continued command the shell reads on
+// through the joined lines, so such a `#` drops the rest of the command as well, not just the rest of the line. A `#`
+// behind `$$`, inside a word (`a#b`), after `{` (`$${#x}`) or inside quotes is data. Outside single quotes a backslash
+// takes the character after it as data, inside double quotes too, as the shell does: `\"` opens no string, and the
+// `#` of `"a \" b # c"` stays inside the string. Quotes are tracked line by line: a string left open at the end of
+// one line of a continued command is not tracked into the next.
+func wordStartHash(line string) bool {
+	var single, double bool
+
+	for i := 0; i < len(line); i++ {
+		switch c := line[i]; {
+		case single:
+			single = c != '\''
+		case c == '\\':
+			i++
+		case double:
+			double = c != '"'
+		case c == '\'':
+			single = true
+		case c == '"':
+			double = true
+		case c == '#':
+			if i == 0 || strings.ContainsRune(" \t;&|()", rune(line[i-1])) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// ruleLineRecipe reports whether line is a make rule line that carries its own recipe after a `;` (`target: ; echo a`),
+// so make hands the text after the semicolon, and every line joined onto it, to the shell as the rule's recipe. Only a
+// non-tab line counts, and only with a `:` before the `;`: an assignment (`X = a; b`, `X := a`, `X ::= a`) declares no
+// rule, so its `;` starts no recipe. Nor does a `;` behind a `#`, which is make comment to the end of the line: the
+// `;` of a help line such as `target: ## Install it; needs sudo`, whose `##` paragraph is free text, belongs to that
+// text, not to a recipe.
+func ruleLineRecipe(line string) bool {
+	if strings.HasPrefix(line, "\t") {
+		return false
+	}
+
+	semicolon := strings.IndexByte(line, ';')
+	if semicolon < 0 {
+		return false
+	}
+
+	if hash := strings.IndexByte(line, '#'); hash >= 0 && hash < semicolon {
+		return false
+	}
+
+	rule := line[:semicolon]
+
+	colon := strings.IndexByte(rule, ':')
+	if colon < 0 {
+		return false
+	}
+
+	// `X := a; b` and `X ::= a; b` assign: the `=` that follows the colon makes it an assignment operator, where a
+	// rule's colon is followed by its prerequisites and its `;` recipe.
+	if equals := strings.IndexByte(rule, '='); equals >= colon {
+		return false
+	}
+
+	return true
+}
+
+// continuedRecipeComments returns the lines of body that hold a `#` GNU Make 3.81 turns into the end of a
+// backslash-continued command (issue #437). Make joins a recipe line that ends in a backslash to the line after it
+// and hands the whole of it to one shell, which reads the `#` as the start of a comment: the command ends there,
+// silently and with exit 0, so every step after the comment never runs. The lines that matter are
+//
+//   - a `#` that starts a line make joins into a continued command: with or without the leading tab (make joins a
+//     later line whatever its indentation), and behind make's recipe prefixes (`@`, `-`, `+`) on the first line of
+//     the command (startsComment);
+//   - a `#` that starts a word further along such a line (`echo a; # note`), which comments out the rest of the
+//     joined command too (wordStartHash);
+//   - a `#` recipe line that ends in a backslash with no continuation above it: make does not join it there, but
+//     flagging it is the safe reading until its 3.81 behaviour is known.
+//
+// The first line of such a command is a tab-started recipe line or a rule line with its own `;` recipe (ruleLineRecipe);
+// a `#` on a recipe line inside a make function call (`$$(info # x)`) is flagged too, although make expands the call
+// away before the shell sees it, because a miss there costs a silently abandoned recipe.
+//
+// Not returned: a `#` recipe line that stands alone, which is passed to the shell as its own command and does
+// nothing; a `#` behind `$$`, in a word or inside quotes, which is data; and a `#` in a continuation chain that
+// begins at column 0 without a `;` recipe, such as a continued variable assignment, which is make code where `#`
+// is a common make comment.
+func continuedRecipeComments(body string) []recipeComment {
+	lines := strings.Split(body, "\n")
+
+	var (
+		comments []recipeComment
+
+		// aboveContinues reports that the line above ends in the backslash that joins it to this one, and
+		// aboveIsRecipe reports that the chain it belongs to began on a tab-started recipe line or a rule line with its
+		// own `;` recipe.
+		aboveContinues bool
+		aboveIsRecipe  bool
+	)
+
+	for i, line := range lines {
+		// recipe reports that make hands this line to the shell: a tab-started recipe line or a rule line with its own
+		// `;` recipe that continues no earlier line, or a later line of such a line's continuation chain, which make
+		// joins into the same command whatever its indentation, a line at column 0 included.
+		recipe := (aboveContinues && aboveIsRecipe) ||
+			(!aboveContinues && (strings.HasPrefix(line, "\t") || ruleLineRecipe(line)))
+
+		// joined reports that a `#` on this line comments out the rest of the command: the line continues into
+		// the next one, or the line above continues into it, so the shell reads on past it.
+		joined := continues(line) || (aboveContinues && aboveIsRecipe)
+
+		if recipe && joined && (startsComment(line) || wordStartHash(line)) {
+			comments = append(comments, recipeComment{Line: i + 1, Text: strings.TrimSpace(line)})
+		}
+
+		aboveContinues = continues(line)
+		aboveIsRecipe = recipe
+	}
+
+	return comments
+}
+
+// TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand pins the matcher the test below uses (issue
+// #437): every `#` make 3.81 turns into a silent end of a backslash-continued command is one — a `#` line at any
+// indentation inside the command and behind make's `@`, `-` and `+` prefixes, a `#` that starts a word further along
+// such a line, and a `#` on a line joined onto a rule line's own `;` recipe — where a `#` recipe line on its own, a
+// make comment above a target or in a continued variable assignment, and a `#` that is data (behind `$$`, in a word, in
+// quotes, escaped) are not. A `#` inside a make function call is flagged on purpose, a miss costing a silent recipe.
+func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string
+		want []recipeComment
+	}{
+		// A `#` that starts a line make joins into a continued command, at any indentation.
+		{
+			name: "a recipe comment that continues the line above",
+			body: "target:\n\techo before; \\\n\t# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "# a comment \\"}},
+		},
+		{
+			name: "a recipe comment that continues into the line below",
+			body: "target:\n\t# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "# a comment \\"}},
+		},
+		{
+			name: "a recipe comment indented past its tab, continuing the line above",
+			body: "target:\n\techo before; \\\n\t   # a comment\n",
+			want: []recipeComment{{Line: 3, Text: "# a comment"}},
+		},
+		{
+			name: "a comment line at column 0 inside a continued command",
+			body: "target:\n\techo before; \\\n# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "# a comment \\"}},
+		},
+		{
+			name: "a space-indented comment line inside a continued command",
+			body: "target:\n\techo before; \\\n # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "# a comment \\"}},
+		},
+		{
+			name: "two comment lines in one continued command, the second at column 0",
+			body: "target:\n\techo before; \\\n\t# first \\\n# second \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "# first \\"}, {Line: 4, Text: "# second \\"}},
+		},
+
+		// A `#` behind the recipe prefixes make strips from the start of a recipe command.
+		{
+			name: "a recipe comment behind an @ prefix",
+			body: "target:\n\techo before; \\\n\t@# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "@# a comment \\"}},
+		},
+		{
+			name: "a recipe comment behind a - prefix",
+			body: "target:\n\techo before; \\\n\t-# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "-# a comment \\"}},
+		},
+		{
+			name: "a recipe comment behind @-+ prefixes and blanks",
+			body: "target:\n\techo before; \\\n\t@-+  # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "@-+  # a comment \\"}},
+		},
+
+		// A rule line that carries its own `;` recipe hands the lines joined onto it to the shell as that recipe's
+		// command, so a `#` there ends it too.
+		{
+			name: "a comment line continuing a rule-line recipe",
+			body: "target: ; echo a \\\n\t# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "# a comment \\"}},
+		},
+		{
+			name: "a make comment line continuing a variable assignment with :=",
+			body: "X := a \\\n# a make comment\ntarget:\n\techo hi\n",
+		},
+		{
+			name: "a # recipe line continuing a continued help line, whose ; sits after its ## comment",
+			body: "agents-token-refresh-install: ## Install the daemon, one per VM instance; needs sudo \\\n\t# x\n",
+		},
+
+		// A `#` that starts a word further along a line of a continued command comments out the rest of it too.
+		{
+			name: "a # after a blank on a continued recipe line",
+			body: "target:\n\techo a; # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo a; # a comment \\"}},
+		},
+		{
+			name: "a # right after a semicolon on a continued recipe line",
+			body: "target:\n\techo a;# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo a;# a comment \\"}},
+		},
+		{
+			name: "a # right after && on a continued recipe line",
+			body: "target:\n\ttest -n x &&# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "test -n x &&# a comment \\"}},
+		},
+		{
+			name: "a # right after || on a continued recipe line",
+			body: "target:\n\ttest -n x ||# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "test -n x ||# a comment \\"}},
+		},
+		{
+			name: "a # right after an opening parenthesis on a continued recipe line",
+			body: "target:\n\techo a \\\n\t(# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "(# a comment \\"}},
+		},
+		{
+			name: "a # right after a closing parenthesis on a continued recipe line",
+			body: "target:\n\t(cd dir)# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "(cd dir)# a comment \\"}},
+		},
+		{
+			name: "a # on a line continued into from above, not itself continuing",
+			body: "target:\n\techo a \\\n\techo b; # a comment\n",
+			want: []recipeComment{{Line: 3, Text: "echo b; # a comment"}},
+		},
+		{
+			name: "a # after an escaped quote that opens no string on a continued recipe line",
+			body: "target:\n\techo \\\"a; # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo \\\"a; # a comment \\"}},
+		},
+		{
+			name: "a # inside a make function call on a continued recipe line, flagged on purpose",
+			body: "target:\n\techo $(info # x) \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo $(info # x) \\"}},
+		},
+
+		// Neither a lone comment line nor a `#` that is data is part of a comment that ends a command.
+		{
+			name: "a recipe comment on its own, not in a continued command",
+			body: "target:\n\techo before\n\t# a comment\n\techo after\n",
+		},
+		{
+			name: "a recipe comment on its own, behind an @ prefix",
+			body: "target:\n\techo before\n\t@# a comment\n\techo after\n",
+		},
+		{
+			name: "a # mid-line of a recipe line that does not continue",
+			body: "target:\n\techo a; # a comment\n\techo after\n",
+		},
+		{
+			name: "a make comment above a target",
+			body: "# a make comment\ntarget:\n\techo before\n",
+		},
+		{
+			name: "a make comment in a continued variable assignment at column 0",
+			body: "VERSION = 1 \\\n# a make comment\ntarget:\n\techo hi\n",
+		},
+		{
+			name: "a # in a double-quoted string of a continued command",
+			body: "target:\n\techo \"a # b\"; \\\n\techo after\n",
+		},
+		{
+			name: "a # in a single-quoted string of a continued command",
+			body: "target:\n\techo 'a # b'; \\\n\techo after\n",
+		},
+		{
+			name: "a # in a double-quoted string that holds an escaped quote, in a continued command",
+			body: "target:\n\techo \"a \\\" b # c\" \\\n\techo after\n",
+		},
+		{
+			name: "a # after a single-quoted string that holds a backslash, in a continued command",
+			body: "target:\n\techo 'a \\' ; # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo 'a \\' ; # a comment \\"}},
+		},
+		{
+			name: "a # behind $$ on a continued recipe line",
+			body: "target:\n\techo $$#; \\\n\techo after\n",
+		},
+		{
+			name: "a $$# use inside a quoted string of a continued command",
+			body: "target:\n\techo \"$$#\"; \\\n\techo after\n",
+		},
+		{
+			name: "a # behind { in $${#a} on a continued recipe line",
+			body: "target:\n\techo $${#a}; \\\n\techo after\n",
+		},
+		{
+			name: "a # inside a word on a continued recipe line",
+			body: "target:\n\techo a#b; \\\n\techo after\n",
+		},
+		{
+			name: "a recipe comment after a line whose backslash has trailing blanks",
+			body: "target:\n\techo before; \\ \n\t# a comment\n",
+		},
+		{
+			name: "a recipe comment after a line ending in two backslashes",
+			body: "target:\n\techo \\\\\n\t# a comment\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, continuedRecipeComments(tc.body)); diff != "" {
+				t.Errorf("continuedRecipeComments(%q) (-want +got):\n%s", tc.body, diff)
+			}
+		})
+	}
+}
+
+// TestMakefileHasNoCommentInsideAContinuedRecipe pins issue #437's cause, so that it cannot come back: no recipe line
+// of the Makefile is a `#` comment that make treats as part of a backslash-continued command. GNU Make 3.81 (macOS
+// /usr/bin/make) hands such a line to the shell joined with the line above it, where the `#` comments out the rest of
+// the recipe: the command ends there, silently and with exit 0, so make agents-token-refresh-install never ran the
+// take-over nor `launchctl bootstrap`. GNU Make 4.4 (the VM, CI) runs the same recipe fine, so only this check can see
+// it. A comment that explains a recipe belongs above the target, as a make comment, or in the docs.
+func TestMakefileHasNoCommentInsideAContinuedRecipe(t *testing.T) {
+	t.Parallel()
+
+	comments := continuedRecipeComments(readRepoFile(t, makefilePath))
+	if len(comments) == 0 {
+		return
+	}
+
+	var offenders []string
+
+	for _, comment := range comments {
+		offenders = append(offenders, fmt.Sprintf("%s:%d: %s", makefilePath, comment.Line, comment.Text))
+	}
+
+	t.Errorf("%s has a `#` recipe line inside a backslash-continued command:\n%s\n\nGNU Make 3.81 (macOS /usr/bin/make) joins such a line to the line above it and the shell comments out the rest of the recipe, so the recipe ends silently with exit 0 and every step after the comment never runs; GNU Make 4.4 runs it fine, so no test on the VM sees it (issue #437). Move the comment above the target as a make comment, or into the docs' text",
+		makefilePath, strings.Join(offenders, "\n"))
+}
+
+// TestEveryDevScriptARecipeRunsIsExecutableInGit pins the other half of the convention (issues #242 and #337): a
+// script of dev/ is run by its path and shebang, so the executable bit git checks it out with is what makes that run
+// work. Only git's record counts, not the working tree's, so a mode changed in a checkout without `git update-index
+// --chmod=+x` fails here.
+func TestEveryDevScriptARecipeRunsIsExecutableInGit(t *testing.T) {
+	t.Parallel()
+
+	modes := gitFileModes(t, "dev")
+
+	recipes := makeRecipes(t, readRepoFile(t, makefilePath))
+
+	for _, name := range slices.Sorted(maps.Keys(recipes)) {
+		for _, script := range devScriptsIn(recipes[name]) {
+			mode, tracked := modes[script]
+			if !tracked {
+				t.Errorf("the recipe of make %s names %s, which git does not track: a script a recipe runs is committed, and executable (issues #242 and #337)",
+					name, script)
+
+				continue
+			}
+
+			if mode != "100755" {
+				t.Errorf("the recipe of make %s names %s, which git holds as mode %s, not 100755: the recipe runs it by its path and shebang, so git must check it out executable (issues #242 and #337)",
+					name, script, mode)
+			}
+		}
+	}
+
+	// The scripts the convention was adopted for, by name: make vm-gh-wrapper and make worktree run these by path.
+	for _, script := range []string{"dev/vm-gh-wrapper.sh", "dev/worktree.sh"} {
+		if mode := modes[script]; mode != "100755" {
+			t.Errorf("%s is mode %s in git, not 100755: make vm-gh-wrapper and make worktree run it by its path and shebang, which needs the executable bit (issues #242 and #337)",
+				script, mode)
+		}
+	}
+}
+
+// gitFileModes returns the mode git has recorded for the files below dir, keyed by their path from the repository
+// root: git ls-files reads the index, so the test needs no network and no particular working-tree mode.
+func gitFileModes(t *testing.T, dir string) map[string]string {
+	t.Helper()
+
+	cmd := exec.Command("git", "ls-files", "-s", "--", dir)
+	cmd.Dir = moduleRoot
+
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git ls-files -s -- %s: %v: the test reads the modes git recorded", dir, err)
+	}
+
+	modes := map[string]string{}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		// 100755 <object> <stage>\t<path>
+		meta, path, ok := strings.Cut(line, "\t")
+		if !ok {
 			continue
 		}
 
-		found++
-
-		if strings.Contains(recipes[name], "sh dev/") {
-			t.Errorf("the recipe of make %s runs a script of dev/ through `sh`, which ignores its shebang and executable bit: run it by its path, as the other dev scripts are (issue #242):\n%s",
-				name, recipes[name])
+		fields := strings.Fields(meta)
+		if len(fields) != 3 {
+			continue
 		}
+
+		modes[path] = fields[0]
 	}
 
-	if found == 0 {
-		t.Fatal("the Makefile declares no agents-token* target, so this test pins nothing: the targets are agents-token, agents-token-refresh and the LaunchDaemon's install and uninstall")
-	}
+	return modes
 }
 
 // TestMakeVMGHWrapperInstallsThePinnedWrapper pins make vm-gh-wrapper (review item 3): a VM created before the
@@ -940,12 +1485,429 @@ func TestMakeAgentsTokenRefreshStartRefusesAnInvalidInstance(t *testing.T) {
 	}
 }
 
+// TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand pins the maintainer's first comment in issue
+// #396 and the decision taken for it: a hand-started refresher must not keep the instance's lock while the job
+// waits out its ThrottleInterval, so that tokens arrive from a process that does not survive a reboot. The start
+// target records the refresher it started in the instance's pid file, so an install that finds the lock's pid in
+// that file stops it - TERM, the signal its traps expect, then wait for it to exit - and says so naming its pid,
+// before it loads the job. Any other holder - a refresh started in the foreground with make agents-token-refresh,
+// say, which nothing recorded and which the maintainer is watching - is none of the install's to stop: it refuses
+// before it installs anything, naming the pid and the command that stops it. With no other refresher the install
+// is what it always was.
+func TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// lockHeld says a refresher of this instance holds the instance's lock when the install runs.
+		lockHeld bool
+		// recorded says the start target's pid file names that refresher, which is how the install knows it may
+		// stop it.
+		recorded bool
+		// ignoresTERM says the recorded refresher leaves TERM ignored, as a process in a stop it does not expect
+		// can: the install must wait, warn and load the job anyway.
+		ignoresTERM bool
+		// wantRefused says the install must refuse and install nothing.
+		wantRefused bool
+	}{
+		{
+			// The handover the issue is about: make agents-token-refresh-start started the refresher, then the
+			// maintainer installed the job. The refresher holds the lock as long as it runs and the job exits at
+			// every ThrottleInterval, so the install stops it and the job takes the lock.
+			name:     "the refresher the start target recorded holds the lock",
+			lockHeld: true,
+			recorded: true,
+		},
+		{
+			// A refresh started in the foreground holds the lock and no pid file names it: the install cannot know
+			// that stopping it is what the maintainer wants, and it must not.
+			name:        "another refresher holds the lock",
+			lockHeld:    true,
+			wantRefused: true,
+		},
+		{
+			// TERM ignored: the install cannot stop the recorded refresher, so it warns and loads the job, which
+			// takes the lock as soon as that refresher exits (reviewer's test nit).
+			name:        "the recorded refresher ignores TERM",
+			lockHeld:    true,
+			recorded:    true,
+			ignoresTERM: true,
+		},
+		{name: "no refresher holds the lock"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newLaunchdInstallFixture(t, "shift2eu")
+
+			var refresh *runningScript
+
+			pid := ""
+
+			if tc.lockHeld {
+				if tc.ignoresTERM {
+					refresh = standInForARefreshIgnoringTERM(t, f.sb)
+				} else {
+					refresh = standInForARefresh(t, f.sb)
+				}
+
+				pid = strconv.Itoa(refresh.pid())
+
+				writeFileMode(t, filepath.Join(f.sb.refreshLockDir(f.instance), "pid"), []byte(pid+"\n"), 0o600)
+			}
+
+			pidFile := filepath.Join(f.sb.stateDir(), "agents-token-refresh-"+f.instance+".pid")
+
+			if tc.recorded {
+				writeFileMode(t, pidFile, []byte(pid+"\n"), 0o600)
+			}
+
+			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+			combined := stdout + stderr
+
+			if tc.wantRefused {
+				if err == nil {
+					t.Fatalf("make agents-token-refresh-install exited 0 with the lock of %s held by pid %s, which no pid file of the start target names: the install must refuse rather than stop a refresh it never started, and say what stops it (issue #396)\nstdout: %s\nstderr: %s",
+						f.instance, pid, stdout, stderr)
+				}
+
+				var named bool
+
+				for _, line := range strings.Split(combined, "\n") {
+					if strings.Contains(line, pid) && strings.Contains(line, "kill") {
+						named = true
+					}
+				}
+
+				if !named {
+					t.Errorf("the install refuses while pid %s holds the lock of %s but does not name both the pid and the command that stops it (`kill %s`), so a maintainer cannot free the lock the job waits for (issue #396)\nstdout: %s\nstderr: %s",
+						pid, f.instance, pid, stdout, stderr)
+				}
+
+				// Refusing before anything is installed: a plist left where launchd reads it is a job at the next boot.
+				for _, args := range f.sudoCommands(t) {
+					if len(args) > 0 && args[0] == "install" {
+						t.Errorf("the install ran `sudo install` and then refused because pid %s holds the lock: the refusal must come before the plist is installed, or a job the run refused to load is there at the next boot (issue #396): %v", pid, args)
+					}
+				}
+
+				if _, statErr := os.Stat(f.dest()); !errors.Is(statErr, fs.ErrNotExist) {
+					t.Errorf("the install left %s behind although it refuses while pid %s holds the lock: launchd loads it at the next boot (issue #396) (stat: %v)", f.dest(), pid, statErr)
+				}
+
+				if calls := f.bootstrapCalls(t); len(calls) != 0 {
+					t.Errorf("the install ran launchctl bootstrap although it refuses while pid %s holds the lock (issue #396): %v", pid, calls)
+				}
+
+				if !refresh.running() {
+					t.Errorf("the install stopped pid %s, the refresher it did not start: only the refresher the start target recorded is the install's to stop (issue #396)", pid)
+				}
+
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("make agents-token-refresh-install: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			}
+
+			if calls := f.bootstrapCalls(t); len(calls) != 1 {
+				t.Errorf("the install ran launchctl bootstrap %d time(s), want one: the job must be loaded once whoever holds the lock (issue #396): %v", len(calls), calls)
+			}
+
+			if !tc.recorded {
+				// No other refresher: the install is what it always was, and says nothing about a pid to kill.
+				if _, statErr := os.Stat(f.dest()); statErr != nil {
+					t.Errorf("the install did not write the plist %s although no other refresher holds the lock: %v", f.dest(), statErr)
+				}
+
+				if strings.Contains(strings.ToLower(combined), "kill") {
+					t.Errorf("the install speaks of killing a refresh although no other refresher holds the lock of %s (issue #396)\nstdout: %s\nstderr: %s", f.instance, stdout, stderr)
+				}
+
+				return
+			}
+
+			if tc.ignoresTERM {
+				// TERM did nothing, so the install cannot have stopped it: it warns with the pid and goes on to
+				// load the job, which takes the lock once that refresh exits.
+				var warned bool
+
+				for _, line := range strings.Split(combined, "\n") {
+					if strings.Contains(line, pid) && strings.Contains(line, "still runs") && strings.Contains(strings.ToLower(line), "warning") {
+						warned = true
+					}
+				}
+
+				if !warned {
+					t.Errorf("the install does not warn that pid %s still runs after TERM, the recorded refresher that ignores it: a maintainer never learns that the job waits for a process that may never exit (reviewer's test nit)\nstdout: %s\nstderr: %s",
+						pid, stdout, stderr)
+				}
+
+				if !refresh.running() {
+					t.Errorf("the install stopped pid %s even though it ignores TERM: nothing the install sends ends it, so this case no longer stands for a refresher that outlives its TERM (reviewer's test nit)\nstdout: %s\nstderr: %s",
+						pid, stdout, stderr)
+				}
+
+				return
+			}
+
+			// The recorded refresher is stopped, named by its pid, before the job is loaded.
+			var named bool
+
+			for _, line := range strings.Split(combined, "\n") {
+				if strings.Contains(line, pid) && strings.Contains(strings.ToLower(line), "stopped") {
+					named = true
+				}
+			}
+
+			if !named {
+				t.Errorf("the install does not say that it stopped pid %s, the refresher make agents-token-refresh-start recorded, so a maintainer who started it by hand never learns that the job took over from it (issue #396)\nstdout: %s\nstderr: %s",
+					pid, stdout, stderr)
+			}
+
+			for _, line := range strings.Split(combined, "\n") {
+				if strings.Contains(line, pid) && strings.Contains(line, "kill") {
+					t.Errorf("the install tells the maintainer to kill pid %s, the refresher it just stopped: the line is stale the moment it is printed (issue #396)\nline: %s", pid, line)
+				}
+			}
+
+			// The pid file named the refresher the install stopped, and that refresher is gone: the file must not
+			// outlive it, or the next start warns about a pid that no longer runs.
+			if _, statErr := os.Stat(pidFile); !errors.Is(statErr, fs.ErrNotExist) {
+				t.Errorf("the install left the pid file %s after it stopped pid %s, the refresher that file named: the next make agents-token-refresh-start warns that a refresh that does not run had stopped (issue #396) (stat: %v)",
+					pidFile, pid, statErr)
+			}
+
+			if !poll(10*time.Second, func() bool { return !refresh.running() }) {
+				t.Errorf("pid %s, the refresher the start target recorded, still runs after the install loaded the job: the install must wait for it to exit, or the job finds the lock taken and exits at every ThrottleInterval (issue #396)\nstdout: %s\nstderr: %s",
+					pid, stdout, stderr)
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshDistinguishesAFailedForeignJobsCheck pins the security audit's second finding: every
+// non-zero status of dev/agents-token-launchd.sh foreign-jobs used to read as "a foreign job was found, named
+// above", so a check that could not run told the maintainer to remove a job that does not exist - and taught them
+// that the check is noise. Only status 3, the one the script gives a job it named, is that refusal; any other
+// failure says the check itself failed and names its status, and nothing is installed or started. The failure here
+// is the check's own account lookup (id -u), which its script's `uid="$(id -u)"` turns into status 1.
+func TestMakeAgentsTokenRefreshDistinguishesAFailedForeignJobsCheck(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		target  string
+		fixture func(t *testing.T) *refreshRunningJob
+	}{
+		{name: "the install", target: "agents-token-refresh-install", fixture: newInstallJobFixture},
+		{name: "the start", target: "agents-token-refresh-start", fixture: newStartJobFixture},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := tc.fixture(t)
+
+			// The check cannot tell which account runs it, so it fails before it has any verdict about launchd.
+			f.sb.useFakeIDThatFails(t)
+
+			stdout, stderr, err := f.run(t, tc.target)
+			if err == nil {
+				t.Fatalf("make %s exited 0 although dev/agents-token-launchd.sh foreign-jobs could not tell which account runs it (id -u failed): the check did not run, and nothing may be installed or started on its word (security audit L2)\nstdout: %s\nstderr: %s",
+					tc.target, stdout, stderr)
+			}
+
+			combined := stdout + stderr
+
+			if strings.Contains(combined, "another launchd job runs") {
+				t.Errorf("make %s prints the refusal for a foreign job although the check itself failed: a maintainer then looks for a job that is not there and runs the removal commands on nothing (security audit L2)\nstdout: %s\nstderr: %s",
+					tc.target, stdout, stderr)
+			}
+
+			for _, want := range []string{"foreign-jobs check failed", "status 1", "nothing was"} {
+				if !strings.Contains(combined, want) {
+					t.Errorf("make %s does not say %q when dev/agents-token-launchd.sh foreign-jobs fails on its own account lookup (id -u, status 1): the maintainer must be able to tell a failed check from a foreign job, and must know that nothing was installed or started (security audit L2)\nstdout: %s\nstderr: %s",
+						tc.target, want, stdout, stderr)
+				}
+			}
+
+			// A failed check installs, loads and starts nothing.
+			if calls := f.installedWithSudo(t); len(calls) != 0 {
+				t.Errorf("make %s ran `sudo install` although the foreign-jobs check failed: a plist left where launchd reads it is a job at the next boot whatever the check said (security audit L2): %v",
+					tc.target, calls)
+			}
+
+			if calls := f.bootstrapCalls(t); len(calls) != 0 {
+				t.Errorf("make %s ran `sudo launchctl bootstrap` although the foreign-jobs check failed: %v (security audit L2)", tc.target, calls)
+			}
+
+			if pids := f.pidFiles(t); len(pids) != 0 {
+				t.Errorf("make %s started a refresher although the foreign-jobs check failed: %v (security audit L2)", tc.target, pids)
+			}
+		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallDoesNotStopARefresherThePidFileNoLongerNames pins the security audit's fourth
+// finding: the install re-reads the lock and the process right before the TERM, but not the pid file, and the sudo
+// prompt plus the plist install can be long. In that window the recorded refresh can exit and another refresh can
+// take the lock with a reused pid, and the install would stop a refresh the start target never recorded - the very
+// rule its refusal keeps. The fake sudo rewrites the pid file during `sudo install`, the window the audit names:
+// the install may then refuse or warn, but it must not stop the holder and must not say it did.
+func TestMakeAgentsTokenRefreshInstallDoesNotStopARefresherThePidFileNoLongerNames(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	refresh := standInForARefresh(t, f.sb)
+	pid := strconv.Itoa(refresh.pid())
+
+	writeFileMode(t, filepath.Join(f.sb.refreshLockDir(f.instance), "pid"), []byte(pid+"\n"), 0o600)
+
+	pidFile := filepath.Join(f.sb.stateDir(), "agents-token-refresh-"+f.instance+".pid")
+	writeFileMode(t, pidFile, []byte(pid+"\n"), 0o600)
+
+	// The sudo window: by the time the TERM is due, the pid file names another process, as it does when the
+	// recorded refresh exited and another one took the lock first.
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID_FILE"] = pidFile
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_REWRITE_PID"] = strconv.Itoa(os.Getpid())
+
+	stdout, stderr, _ := f.run(t, "agents-token-refresh-install")
+	combined := stdout + stderr
+
+	// The premise: the window the audit describes really opened, so the case does not pass for want of a rewrite.
+	f.subCommand(t, "install")
+
+	if !refresh.running() {
+		t.Errorf("the install stopped pid %s although the pid file no longer named it when the TERM was due (it named another process after `sudo install`): only the refresher the start target recorded is the install's to stop, and the file is how it knows (security audit L4)\nstdout: %s\nstderr: %s",
+			pid, stdout, stderr)
+	}
+
+	for _, line := range strings.Split(combined, "\n") {
+		if strings.Contains(line, "stopped pid "+pid) {
+			t.Errorf("the install says it stopped pid %s although the pid file no longer named it when the TERM was due: the message sends the maintainer away from the refresh that does hold the lock (security audit L4)\nline: %s",
+				pid, line)
+		}
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallDoesNotWarnWhenTheHandStartedRefreshJustExited pins the reviewer's nit: the
+// re-read of the pid file before the TERM (the audit's fix) treats a pid file that no longer names the recorded
+// refresh as a foreign process taking over, and warns that the recorded refresh is not the holder. But when that
+// refresher itself exits inside the sudo window, its trap removes the pid file and the lock's pid, so the lock is
+// free and nothing took over: warning that "the pid file no longer names pid N" sends the maintainer looking for
+// a refresh that runs nowhere. Then the installation stops nothing and loads the job as usual, exit 0. The fake
+// sudo makes the stand-in exit and removes both files during `sudo install`, as the real refresher's trap does;
+// the lock still naming a live pid is TestMakeAgentsTokenRefreshInstallDoesNotStopARefresherThePidFileNoLongerNames.
+func TestMakeAgentsTokenRefreshInstallDoesNotWarnWhenTheHandStartedRefreshJustExited(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	refresh := standInForARefresh(t, f.sb)
+	pid := strconv.Itoa(refresh.pid())
+
+	lockPidFile := filepath.Join(f.sb.refreshLockDir(f.instance), "pid")
+	writeFileMode(t, lockPidFile, []byte(pid+"\n"), 0o600)
+
+	pidFile := filepath.Join(f.sb.stateDir(), "agents-token-refresh-"+f.instance+".pid")
+	writeFileMode(t, pidFile, []byte(pid+"\n"), 0o600)
+
+	// The sudo window: the recorded refresh exits and its trap removes the pid file of the start target and the
+	// lock's pid, so the lock is free by the time the install re-reads either.
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_EXIT_REFRESH_PID"] = pid
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_PID_FILE"] = pidFile
+	f.env["SHIFT2EU_TEST_SUDO_INSTALL_REMOVE_LOCK_PID_FILE"] = lockPidFile
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	combined := stdout + stderr
+
+	// The premise: the window the reviewer names really opened, so the case does not pass for want of a hook.
+	f.subCommand(t, "install")
+
+	if !refresh.waitExit(10 * time.Second) {
+		t.Fatalf("the stand-in refresh %s did not exit inside the sudo window, so this case pins no hand-started refresh that just exited (reviewer nit, issue #396)", pid)
+	}
+
+	for _, gone := range []string{pidFile, lockPidFile} {
+		if _, statErr := os.Stat(gone); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("%s is still there after the sudo window, although the refresher's trap removes it: this case needs the exited refresher's state (reviewer nit, issue #396): %v", gone, statErr)
+		}
+	}
+
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install: %v although the recorded refresh exited inside the sudo window and its trap freed the lock: nothing holds the lock, so the install loads the job as usual (reviewer nit, issue #396)\nstdout: %s\nstderr: %s",
+			err, stdout, stderr)
+	}
+
+	// The warning the install gives when the recorded refresh is not the holder any more: with the lock free it
+	// would send the maintainer looking for a refresh that has already exited.
+	for _, line := range strings.Split(combined, "\n") {
+		if strings.Contains(line, "no longer names pid") {
+			t.Errorf("the install warns that the pid file no longer names pid %s although that refresher exited itself and its trap removed the pid file and the lock's pid, so nothing holds the lock: the warning names a holder that is not there (reviewer nit, issue #396)\nline: %s",
+				pid, line)
+		}
+
+		if strings.Contains(line, "stopping the refresh") || strings.Contains(line, "stopped pid "+pid) {
+			t.Errorf("the install says it stopped a refresh although pid %s had already exited inside the sudo window: only the refresher the start target recorded and that still holds the lock is the install's to stop (reviewer nit, issue #396)\nline: %s",
+				pid, line)
+		}
+	}
+
+	// Nothing else changes: the job is loaded as any install loads it.
+	if calls := f.bootstrapCalls(t); len(calls) != 1 {
+		t.Errorf("the install ran launchctl bootstrap %d time(s), want one, although the hand-started refresh had just exited and freed the lock: the job still loads as usual (reviewer nit, issue #396): %v",
+			len(calls), calls)
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallSaysWhenTheTakeoverStoppedTheRefreshAndTheJobDidNotLoad pins the reviewer's
+// fifth finding: when the hand-started refresh was stopped and launchctl then refuses both bootstraps, the
+// instance is left with no refresher at all. The error must say that the takeover stopped it and send the
+// maintainer to make agents-token-refresh-start, not only to install again.
+func TestMakeAgentsTokenRefreshInstallSaysWhenTheTakeoverStoppedTheRefreshAndTheJobDidNotLoad(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+	refresh := standInForARefresh(t, f.sb)
+	pid := strconv.Itoa(refresh.pid())
+
+	writeFileMode(t, filepath.Join(f.sb.refreshLockDir(f.instance), "pid"), []byte(pid+"\n"), 0o600)
+	writeFileMode(t, filepath.Join(f.sb.stateDir(), "agents-token-refresh-"+f.instance+".pid"), []byte(pid+"\n"), 0o600)
+
+	// Both bootstraps fail, so after the takeover stopped the recorded refresh no refresher runs at all.
+	f.env["SHIFT2EU_TEST_LAUNCHCTL_BOOTSTRAP_STATUS"] = "1"
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	if err == nil {
+		t.Fatalf("make agents-token-refresh-install exited 0 although both launchctl bootstraps failed: no token refresh job of %s is loaded (reviewer finding 5)\nstdout: %s\nstderr: %s",
+			f.instance, stdout, stderr)
+	}
+
+	combined := stdout + stderr
+
+	for _, want := range []string{"the hand-started refresh was stopped", "make agents-token-refresh-start"} {
+		if !strings.Contains(combined, want) {
+			t.Errorf("the error after the failed bootstrap does not say %q although the takeover stopped the hand-started refresh and no other runs: a maintainer does not learn that the instance has no refresher until the next boot (reviewer finding 5)\nstdout: %s\nstderr: %s",
+				want, stdout, stderr)
+		}
+	}
+
+	if refresh.running() {
+		t.Errorf("pid %s, the refresher the start target recorded, still runs after the install stopped it: the failed bootstrap must come after the takeover, or this case pins no stopped refresher (reviewer finding 5)", pid)
+	}
+}
+
 // TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh pins the fifth review's finding: after
 // `launchctl bootstrap` the job starts and the refresh it runs takes the instance's lock at once, so the lock's
 // pid file names that refresh by the time the install reads it. Telling the maintainer that "a refresh you
 // started by hand (pid N) holds the lock" and to kill N would then point at the job's own loop - the one process
 // the job exists to keep running, and one launchd starts again five minutes later. A refresh that held the lock
-// before the install is still the one to warn about, with its pid.
+// before the install and is not the job's own is no warning any more: issue #396 made the install stop the
+// refresher the start target recorded and refuse any other, which
+// TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand pins.
 func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testing.T) {
 	t.Parallel()
 
@@ -953,21 +1915,16 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 		name           string
 		lockHeldBefore bool // a refresh started by hand holds the lock before make runs
 		jobRunsLock    bool // launchctl print reports the lock's pid as the job's own after the bootstrap
-		wantWarned     bool
 	}{
 		{
 			name: "the job's own refresh takes the lock as it loads",
 		},
 		{
-			name:           "a refresh started by hand held the lock before the install",
-			lockHeldBefore: true,
-			wantWarned:     true,
-		},
-		{
-			// The install reads the lock's pid before the bootstrap and warns only about a refresh that still
-			// holds that pid and is not the pid `launchctl print` reports for the job: the lock can belong to the
-			// job's own refresh even when the maintainer started that refresh by hand, and the last condition is
-			// what the pid comparison is for (issue #229, sixth review).
+			// The lock can belong to the job's own refresh even when the maintainer started that refresh by
+			// hand: the project's job is loaded before the install runs and runs that very pid, so
+			// `launchctl print` reports it. The install must take it for the job's own refresh - not stop it,
+			// not refuse it for the start target never having recorded it, not warn about it - and replace the
+			// loaded job as usual (issue #229, sixth review; issue #396).
 			name:           "the job runs the very pid the lock holds",
 			lockHeldBefore: true,
 			jobRunsLock:    true,
@@ -993,9 +1950,16 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 			}
 
 			if tc.jobRunsLock {
-				// The job is not loaded yet (the install's first `launchctl print` fails), the bootstrap loads it,
-				// and from then on launchctl names the refresh's own pid as the job's.
+				// The project's job is loaded before the install runs, and `launchctl print` names the refresh's
+				// own pid as the job's: the lock holds the very process the job runs, however that refresh was
+				// started.
 				f.sb.useFakeLaunchctlJobPrintingPid(t, f.env, f.label(), refresh.pid())
+
+				// A job that is loaded cannot be loaded again, so the install boots the old job out first and waits
+				// for it to go: launchd is to have it loaded now (its state file exists), to unload it at that
+				// bootout (the fake removes the file) and to load it again at the bootstrap (the fake creates it,
+				// which useFakeLaunchctlJobPrintingPid set up).
+				writeFileMode(t, f.env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"], nil, 0o600)
 			}
 
 			stdout, stderr, err := f.run(t, "agents-token-refresh-install")
@@ -1009,20 +1973,12 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 
 			combined := stdout + stderr
 
-			if tc.wantWarned {
-				var named bool
-
-				for _, line := range strings.Split(combined, "\n") {
-					if strings.Contains(line, "started by hand") && strings.Contains(line, pid) {
-						named = true
-					}
+			if tc.jobRunsLock {
+				// The premise of this case: the job was loaded before the install ran, so the install had an old job
+				// to boot out. Without it the case would stand for the same state as the one above (issue #396).
+				if line := "+ sudo launchctl bootout system/" + f.label(); !strings.Contains(combined, line) {
+					t.Fatalf("the install did not print %q, so the job %s was not loaded before it ran and this case no longer stands for a loaded job that runs the lock's holder (issue #396)\nstdout: %s\nstderr: %s", line, f.label(), stdout, stderr)
 				}
-
-				if !named {
-					t.Errorf("the install does not warn that a refresh started by hand (pid %s) holds the lock of %s, so a maintainer never learns that the job waits for it, trying again every 5 minutes (issue #229, fifth review)\nstdout: %s\nstderr: %s", pid, f.instance, stdout, stderr)
-				}
-
-				return
 			}
 
 			// The lock belongs to the job's own refresh: the install must not warn about it, and must not send the
@@ -1036,7 +1992,100 @@ func TestMakeAgentsTokenRefreshInstallWarnsOnlyAboutAHandStartedRefresh(t *testi
 					t.Errorf("the install tells the maintainer to kill pid %s, the refresh the job it just loaded runs: that is the process the job exists to keep running (issue #229, fifth review)\nline: %s", pid, line)
 				}
 			}
+
+			// The holder is the job's own refresh, so it is no refresher of the install's to stop, and the job
+			// keeps running it: only the recorded refresher of
+			// TestMakeAgentsTokenRefreshInstallTakesOverFromARefreshStartedByHand is the install's to stop
+			// (issue #396).
+			if !refresh.running() {
+				t.Errorf("the install stopped pid %s, the process the very job it replaced runs: only the refresher the start target recorded in the instance's pid file is the install's to stop (issue #396)\nstdout: %s\nstderr: %s", pid, stdout, stderr)
+			}
+
+			// And it installed the new plist as it always does, beside loading it once.
+			if _, statErr := os.Stat(f.dest()); statErr != nil {
+				t.Errorf("the install did not write the plist %s, although the pid the lock holds is the job's own and the install has nothing to refuse or wait for (issue #396): %v", f.dest(), statErr)
+			}
 		})
+	}
+}
+
+// TestMakeAgentsTokenRefreshInstallWarnsWhenTheLoadedJobsPrintNamesNoPid pins the AI reviewer's finding on PR #407:
+// reinstalling over the project's job while it runs is the common case, and the unprivileged `launchctl print` the
+// install asks about that job may report it as loaded (exit 0) with no `pid = N` line, as it can hide the pid
+// without sudo. The install then reads no job_pid, the start target's pid file does not name the holder either, and
+// the classification introduced for issue #396 used to refuse and tell the maintainer to kill the holder - which
+// is the job's own refresh, the one process launchd starts again. Before issue #396 the install only warned about
+// a lock it could not place. So it warns that it could not read the job's pid, naming that holder, stops nothing,
+// prints no `kill <pid>`, and installs and bootstraps the job as usual, exit 0.
+func TestMakeAgentsTokenRefreshInstallWarnsWhenTheLoadedJobsPrintNamesNoPid(t *testing.T) {
+	t.Parallel()
+
+	f := newLaunchdInstallFixture(t, "shift2eu")
+
+	// The project's job is loaded, and `launchctl print system/<label>` prints the header launchd prints for a
+	// loaded job without the `pid = N` line it adds for the process the job runs: the holder cannot be recognised
+	// as the job's own from it, which is the state the reviewer names (issue #396, PR #407 review).
+	f.sb.useFakeLaunchctlPrint(t, f.env, "0", launchctlPrintHeader(f.label(), 0)+"}\n")
+
+	// The job really is loaded before the install runs, and unloads at the bootout the install runs before it
+	// installs the new plist, as launchd unloads the job an install replaces.
+	loaded := filepath.Join(f.sb.root, "launchctl-loaded")
+	writeFileMode(t, loaded, nil, 0o600)
+	f.env["SHIFT2EU_TEST_LAUNCHCTL_LOADED_FILE"] = loaded
+
+	// A live refresh of the instance holds the lock, and no pid file of the start target names it.
+	refresh := standInForARefresh(t, f.sb)
+	pid := strconv.Itoa(refresh.pid())
+	writeFileMode(t, filepath.Join(f.sb.refreshLockDir(f.instance), "pid"), []byte(pid+"\n"), 0o600)
+
+	stdout, stderr, err := f.run(t, "agents-token-refresh-install")
+	combined := stdout + stderr
+
+	if err != nil {
+		t.Fatalf("make agents-token-refresh-install exited %v although the job %s is loaded and its `launchctl print` named no pid for the refresh holding the lock (pid %s): the install cannot place the holder from a print that hides its pid, and the holder is the job's own refresh, which launchd starts again, so this must not be a refusal that tells the maintainer to kill it (issue #396, PR #407 review)\nstdout: %s\nstderr: %s",
+			err, f.label(), pid, stdout, stderr)
+	}
+
+	// The premise: the job was loaded before the install ran, so the install replaced a loaded job.
+	if line := "+ sudo launchctl bootout system/" + f.label(); !strings.Contains(combined, line) {
+		t.Fatalf("the install did not print %q, so the job %s was not loaded before it ran and this case no longer stands for a loaded job whose print names no pid (issue #396, PR #407 review)\nstdout: %s\nstderr: %s",
+			line, f.label(), stdout, stderr)
+	}
+
+	// The warning: it says which pid it could not place as the job's own, so a maintainer whose job cannot take
+	// the lock learns why.
+	var warned bool
+
+	for _, line := range strings.Split(combined, "\n") {
+		if strings.Contains(line, "could not read the job's pid") && strings.Contains(line, pid) {
+			warned = true
+		}
+
+		if strings.Contains(line, "kill") && strings.Contains(line, pid) {
+			t.Errorf("the install tells the maintainer to kill pid %s although the job %s is loaded and only launchd's print, without sudo, hid its pid: that pid is the job's own refresh, and launchd starts it again (issue #396, PR #407 review)\nline: %s", pid, f.label(), line)
+		}
+
+		if strings.Contains(line, "stopped pid "+pid) || strings.Contains(line, "stopping the refresh") {
+			t.Errorf("the install says it stopped a refresh although no pid file named pid %s as a refresh to stop: only the refresher the start target recorded is the install's to stop (issue #396, PR #407 review)\nline: %s", pid, line)
+		}
+	}
+
+	if !warned {
+		t.Errorf("the install does not warn that it could not read the job's pid, naming pid %s, the refresh that holds the lock of %s while the loaded job's print hides its own: a maintainer never learns that the holder may be the job's own refresh rather than one to kill (issue #396, PR #407 review)\nstdout: %s\nstderr: %s",
+			pid, f.instance, stdout, stderr)
+	}
+
+	if !refresh.running() {
+		t.Errorf("the install stopped pid %s, a refresh no pid file of the start target named: only the refresher the start target recorded is the install's to stop (issue #396)\nstdout: %s\nstderr: %s", pid, stdout, stderr)
+	}
+
+	// And it installed and loaded the job as it always does.
+	if _, statErr := os.Stat(f.dest()); statErr != nil {
+		t.Errorf("the install did not write the plist %s although it only warns about the holder it could not place, and has nothing to stop: %v (issue #396, PR #407 review)", f.dest(), statErr)
+	}
+
+	if calls := f.bootstrapCalls(t); len(calls) != 1 {
+		t.Errorf("the install ran launchctl bootstrap %d time(s), want one, although it only warns about the holder it could not place (issue #396, PR #407 review): %v", len(calls), calls)
 	}
 }
 
@@ -1101,6 +2150,24 @@ func standInForARefresh(t *testing.T, sb *sandbox) *runningScript {
 
 	// The lock is only about a running refresh: a stand-in that died would make the install skip the lock, and
 	// the test would pass for the wrong reason.
+	if !r.running() {
+		t.Fatalf("the stand-in refresh %s exited at once; stderr:\n%s", path, r.errOut())
+	}
+
+	return r
+}
+
+// standInForARefreshIgnoringTERM is standInForARefresh with TERM ignored (trap ” TERM), as a process that does
+// not expect to be stopped leaves it: the install's wait runs out, so a test can pin the warning the takeover
+// gives instead of "stopped pid N" (reviewer's test nit).
+func standInForARefreshIgnoringTERM(t *testing.T, sb *sandbox) *runningScript {
+	t.Helper()
+
+	path := filepath.Join(sb.root, "a-copy", "dev", "agents-app-token.sh")
+	writeFileMode(t, path, []byte("#!/bin/sh\n# A stand-in for the refresh the job runs: it runs, ignores TERM, and does nothing else.\ntrap '' TERM\nwhile :; do sleep 1; done\n"), 0o755)
+
+	r := sb.start(t, path, []string{"refresh"}, sb.baseEnv())
+
 	if !r.running() {
 		t.Fatalf("the stand-in refresh %s exited at once; stderr:\n%s", path, r.errOut())
 	}

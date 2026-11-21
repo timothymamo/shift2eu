@@ -103,6 +103,17 @@
       }
     },
     {
+      "id": "shop-db-cluster-writer",
+      "rawType": "AWS::RDS::DBInstance",
+      "category": "database.postgresql",
+      "region": "eu-central-1",
+      "capabilities": [
+        "encryption-at-rest",
+        "point-in-time-restore",
+        "zone-high-availability"
+      ]
+    },
+    {
       "id": "shop-db-replica",
       "rawType": "AWS::RDS::DBInstance",
       "category": "database.postgresql",
@@ -111,7 +122,8 @@
         "encryption-at-rest"
       ],
       "size": {
-        "storageGiB": 50
+        "storageGiB": 50,
+        "count": 1
       }
     },
     {
@@ -145,7 +157,8 @@
         "point-in-time-restore"
       ],
       "size": {
-        "storageGiB": 20
+        "storageGiB": 20,
+        "count": 1
       }
     },
     {

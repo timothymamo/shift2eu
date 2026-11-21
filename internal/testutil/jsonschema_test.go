@@ -1,6 +1,6 @@
 // Package testutil_test pins the JSON Schema validator the tests that hold a
-// document to a schema share: it accepts what the report schemas and the
-// OpenAPI document allow, names what a document gets wrong, and refuses a
+// document to a schema share: it accepts what the report schemas allow, names
+// what a document gets wrong, and refuses a
 // schema keyword it cannot check.
 package testutil_test
 
@@ -288,74 +288,5 @@ func TestParseSchemaRefusesWhatItCannotCheck(t *testing.T) {
 				t.Errorf("ParseSchema(%s) = %q, want an error naming %q", tc.schema, err, tc.want)
 			}
 		})
-	}
-}
-
-// TestParseOpenAPISchemasResolvesComponentReferences pins the OpenAPI form: a
-// component schema refers to another as "#/components/schemas/<name>", and
-// Require names a component or fails the test.
-func TestParseOpenAPISchemasResolvesComponentReferences(t *testing.T) {
-	t.Parallel()
-
-	document := `{"components":{"schemas":{
-		"List":{"type":"object","additionalProperties":false,"required":["entries"],
-			"properties":{"entries":{"type":"array","items":{"$ref":"#/components/schemas/Entry"}}}},
-		"Entry":{"type":"object","additionalProperties":false,"required":["id"],
-			"properties":{"id":{"type":"string"}}}
-	}}}`
-
-	doc, err := testutil.ParseOpenAPISchemas([]byte(document))
-	if err != nil {
-		t.Fatalf("ParseOpenAPISchemas() returned unexpected error: %v", err)
-	}
-
-	list := doc.Require(t, "#/components/schemas/List")
-	entry := doc.Require(t, "#/components/schemas/Entry")
-
-	for _, tc := range []struct {
-		name     string
-		schema   *testutil.Schema
-		document string
-		want     string
-	}{
-		{name: "the component", schema: list, document: `{"entries":[{"id":"a"}]}`},
-		{
-			name:     "the referred component",
-			schema:   list,
-			document: `{"entries":[{"id":2}]}`,
-			want:     "$.entries[0].id: want string, got integer",
-		},
-		{name: "an entry", schema: entry, document: `{"id":"a"}`},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			mismatches, err := tc.schema.Mismatches([]byte(tc.document))
-			if err != nil {
-				t.Fatalf("Mismatches() returned unexpected error: %v", err)
-			}
-
-			joined := strings.Join(mismatches, "\n")
-			if tc.want == "" && len(mismatches) != 0 {
-				t.Errorf("Mismatches(%s) = %q, want none", tc.document, joined)
-			}
-
-			if tc.want != "" && !strings.Contains(joined, tc.want) {
-				t.Errorf("Mismatches(%s) = %q, want it to name %q", tc.document, joined, tc.want)
-			}
-		})
-	}
-}
-
-// TestParseOpenAPISchemasRefusesADocumentWithoutSchemas pins that a document
-// whose components declare no schema is an error instead of a document that
-// validates anything.
-func TestParseOpenAPISchemasRefusesADocumentWithoutSchemas(t *testing.T) {
-	t.Parallel()
-
-	for _, document := range []string{`{}`, `{"components":{}}`, `{"components":{"schemas":{}}}`, `not json`} {
-		if _, err := testutil.ParseOpenAPISchemas([]byte(document)); err == nil {
-			t.Errorf("ParseOpenAPISchemas(%s) returned no error, want one", document)
-		}
 	}
 }

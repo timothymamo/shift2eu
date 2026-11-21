@@ -19,6 +19,18 @@ dot-agent-deck publishes Linux arm64 and amd64 builds and is documented to run o
 
 ## First-time setup
 
+The shell blocks on this page are made to be pasted into a terminal. In zsh, the Mac's default shell, first
+turn on comments, once per terminal; without it each `# ...` line of a block runs as a command (bash needs
+nothing):
+
+```bash
+setopt interactive_comments
+```
+
+Each block's first comment names the machine it runs on. **Mac (admin)** is the machine your browser saved a
+downloaded private key to, where you use GitHub as yourself with your admin token; in account mode it is
+usually not the Mac Mini.
+
 ### On the Mac
 
 You keep two clones of the repository: the **workspace's checkout**, which the VM mounts and the agents
@@ -91,7 +103,8 @@ brew install lima          # the LIMA_VERSION in .github/workflows/vm-tools.yml 
 cd ~/src/shift2eu-host
 make vm-create             # several minutes the first time
 # FAIL "vm-init: gh: cannot read ..." on a new VM: no App token in the VM yet; set up the App (The agents App),
-#   make agents-token-refresh-start in the host clone, then make vm-init again
+#   make agents-token-refresh-start in the host clone, then make vm-init again (a LaunchDaemon installed
+#   after that takes over from this refresh: The refresh as a LaunchDaemon)
 ```
 
 **6. Open the deck:**
@@ -193,6 +206,8 @@ make deck                  # the TUI attaches to the daemon service
 - **The service starts with the VM.** Lima enables lingering for the VM user, so no login is needed.
   `make vm-stop` stops the VM and every agent in it; `make vm-delete` removes the VM and everything
   inside it.
+- **After a reboot** the VM's boot job starts it, with nobody logged in ([The VM at boot as a
+  LaunchDaemon](#the-vm-at-boot-as-a-launchdaemon)); `make vm-up` is needed only on a Mac without it.
 
 Tool versions are pinned in `dev/lima.yaml` under `param:`, and Renovate opens a PR when a new version
 is released. A VM keeps the template it was created with, so after merging a version bump recreate it
@@ -227,6 +242,93 @@ add an entry to `limaBreakages` in `test/devenv/limainvalid_test.go` (the templa
 it replaces and `refusal`, a substring of the message `limactl validate` prints for it), run
 `go test ./test/devenv -update` to write its template and `.expect`, and check with `limactl validate`
 that Lima refuses the new template with that text.
+
+### The VM at boot as a LaunchDaemon
+
+On an unattended Mac, such as the Mac Mini, let launchd start the VM after a reboot or a power cut, with
+nobody logged in ([ADR 0038](adr/0038-start-the-lima-vm-at-boot-with-a-launchdaemon-of-our-own.md)). A
+LaunchDaemon per VM instance, `io.github.timothymamo.shift2eu.vm-boot.<instance>`, runs
+`limactl shell --start --workdir / <instance> true` once at boot, as you: the command `make vm-up` starts an
+existing VM with, which never creates one. It never runs `limactl start`, so never Lima's own autostart
+([Do not let Lima start the VM](#troubleshooting-a-broken-instance)). It carries no credential, and logs to
+`${XDG_STATE_HOME:-~/.local/state}/shift2eu/vm-boot-<instance>.log`. A missing or broken instance makes it
+exit non-zero, with Lima's message in the log; it does not run again until the next boot. The refresh's
+LaunchDaemon ([The refresh as a LaunchDaemon](#the-refresh-as-a-launchdaemon)) needs no change: it retries
+until the VM is up. In account mode too this job runs as you, from your host clone: the VM is yours.
+
+The install refuses, before any `sudo`: a run as root, a Lima autostart job of the instance, loaded or only
+its plist on disk (it names it, `limactl autostart disable <instance>`, and the bootout and `rm -f` of the
+plist that remove it by hand; a plist path with anything but letters, digits, `/`, `.`, `_` and `-`, as
+under a `HOME` with a space, is not repeated, and the advice points at it with an `ls` instead), and an instance `limactl list` does not list. It lints the plist, prints it
+with its SHA-256, prints every `sudo` before it runs, boots a loaded job out first, reads the installed plist
+back and loads it. Loading it runs it once, so a stopped VM starts. Both targets put the plist in
+`VM_BOOT_LAUNCHD_DIR` (`/Library/LaunchDaemons`), a hook for the tests only: never set it on the Mac.
+`LIMA_LAUNCHDAEMONS_DIR` (`/Library/LaunchDaemons`), where the check looks for Lima's LaunchDaemon plist and
+which it only reads, is a hook for the tests only as well. For a second VM, pass `LIMA_INSTANCE=<name>` to
+each `make`.
+
+Over SSH on the Mac Mini, for the instance `shift2eu`. Stop at the first `PASS` that does not hold.
+
+**1. Install**, from the host clone (never the workspace):
+
+```bash
+# Mac Mini, host clone, as yourself (never sudo make)
+cd ~/agents/shift2eu/host/shift2eu
+git pull --ff-only
+direnv exec . make vm-boot-install
+# PASS: plutil -lint passes; the plist and its SHA-256 are printed; each sudo command is printed before it asks for your password
+# PASS: "loaded io.github.timothymamo.shift2eu.vm-boot.shift2eu"
+# FAIL "refused: run it as the maintainer, not as root": run it without sudo
+# FAIL "refused: Lima's autostart job io.lima-vm.<...>.shift2eu is loaded in <domain> ..." or "... is installed at <plist> ...": run limactl autostart disable shift2eu (or the bootout and rm -f, or the rm -f, it names), install again
+# FAIL "refused: Lima lists no instance shift2eu ...": create the VM first (make vm-create), install again
+# FAIL "the old job <label> is still loaded ...": sudo launchctl print system/<label>, wait or make vm-boot-uninstall, install again
+# FAIL "... is not the plist printed above ...": no job is loaded; look for what changed the file, install again
+# FAIL "launchctl bootstrap failed twice ...": install again
+```
+
+**2. Check that it is loaded and ran:**
+
+```bash
+# Mac Mini
+sudo launchctl print system/io.github.timothymamo.shift2eu.vm-boot.shift2eu | grep -E 'state|last exit|limactl'
+# PASS: last exit code = 0, and the arguments name limactl shell --start --workdir / shift2eu true (never limactl start)
+tail ~/.local/state/shift2eu/vm-boot-shift2eu.log
+# PASS: a dated "vm-boot: ... limactl shell --start --workdir / shift2eu true" line, and no error after it
+# FAIL "does not exist": the instance is gone; make vm-boot-uninstall, then make vm-create and install again
+limactl list shift2eu
+# PASS: Running
+```
+
+**3. The reboot test**, with nobody logged in (log out of any GUI session first). With FileVault on, a Mac
+waits at the unlock screen after a reboot and runs no LaunchDaemon: reboot with `sudo fdesetup authrestart`
+(it unlocks the disk once) or test with FileVault off.
+
+```bash
+# Mac Mini
+sudo shutdown -r now      # or sudo fdesetup authrestart
+```
+
+```bash
+# Mac Mini, a few minutes after the reboot, without logging in at the Mac: SSH in again, then
+limactl list shift2eu
+# PASS: Running, within a few minutes of the boot
+tail ~/.local/state/shift2eu/vm-boot-shift2eu.log
+# PASS: a vm-boot line dated after the boot, and no error after it
+tail ~/.local/state/shift2eu/agents-token-refresh-shift2eu.log   # in account mode: sudo tail -n 50 /Users/_shift2euagents/.local/state/shift2eu/agents-token-refresh-shift2eu.log, then sudo -k
+# PASS: a mint after the boot
+# FAIL Stopped, with an error in the vm-boot log: the job cannot start the VM without a login; log in, run make vm-up, make vm-boot-uninstall, and report the log's error in issue #398
+```
+
+**4. Uninstall.** It removes the job and its plist; the VM keeps running, and the log stays. After the next
+reboot, start the VM with `make vm-up` again.
+
+```bash
+# Mac Mini, host clone (direnv exec: LIMA_INSTANCE comes from its .envrc, which SSH does not load)
+direnv exec . make vm-boot-uninstall
+# FAIL "... is still loaded ...": run the sudo launchctl bootout system/<label> it names
+sudo launchctl print system/io.github.timothymamo.shift2eu.vm-boot.shift2eu   # PASS: fails now
+ls /Library/LaunchDaemons/io.github.timothymamo.shift2eu.vm-boot.shift2eu.plist   # PASS: gone
+```
 
 ### Several VMs on one host
 
@@ -387,8 +489,38 @@ LaunchAgent `io.lima-vm.autostart.shift2eu`, or with `--condition=boot` the Laun
 `io.lima-vm.daemon.shift2eu`) runs `limactl start shift2eu --foreground`, the form that falls back to
 `template:default` (#237). If you enabled it, turn it off with `limactl autostart disable shift2eu` while
 the instance still has its `lima.yaml` (it reads that file first, and answers `instance not found` without
-it; unload such a job by hand as below). The agents App's refresh LaunchDaemon ([The refresh as a
-LaunchDaemon](#the-refresh-as-a-launchdaemon)) does not start the VM.
+it; then remove such a job by hand: boot it out and delete its plist, as `make vm-up` names them).
+`make vm-up` warns when such a job is loaded for the instance, or its plist is on disk
+(`~/Library/LaunchAgents/io.lima-vm.autostart.shift2eu.plist`,
+`/Library/LaunchDaemons/io.lima-vm.daemon.shift2eu.plist`), naming it, that command and the removal by hand,
+and starts the VM anyway; `make vm-boot-install` refuses beside one. To start
+the VM at boot, use the project's own job instead ([The VM at boot as a
+LaunchDaemon](#the-vm-at-boot-as-a-launchdaemon)), which runs `limactl shell --start`. The agents App's
+refresh LaunchDaemon ([The refresh as a LaunchDaemon](#the-refresh-as-a-launchdaemon)) does not start the VM.
+
+Remove Lima's jobs by hand, and neutralise a leftover enable override (`=> enabled` in
+`launchctl print-disabled`), once per Mac:
+
+```bash
+# Mac, only if limactl autostart disable shift2eu cannot run (no lima.yaml)
+launchctl bootout gui/$(id -u)/io.lima-vm.autostart.shift2eu; rm -f ~/Library/LaunchAgents/io.lima-vm.autostart.shift2eu.plist
+sudo launchctl bootout system/io.lima-vm.daemon.shift2eu; sudo rm -f /Library/LaunchDaemons/io.lima-vm.daemon.shift2eu.plist
+ls ~/Library/LaunchAgents/io.lima-vm.autostart.shift2eu.plist /Library/LaunchDaemons/io.lima-vm.daemon.shift2eu.plist
+# PASS: No such file or directory (both)
+# Mac, always: turn a leftover enable override into a disable
+sudo launchctl disable system/io.lima-vm.daemon.shift2eu
+launchctl disable gui/$(id -u)/io.lima-vm.autostart.shift2eu   # if it fails over SSH (no GUI domain), run it once after a GUI login
+sudo launchctl print-disabled system | grep io.lima-vm
+# PASS: "io.lima-vm.daemon.shift2eu" => disabled
+launchctl print-disabled gui/$(id -u) | grep io.lima-vm
+# PASS: no line, or "io.lima-vm.autostart.shift2eu" => disabled
+# FAIL "=> enabled": run that domain's disable again (sudo for system, as yourself for gui)
+```
+
+The checks of `make vm-up` and `make vm-boot-install` do not detect an enable override with no job behind
+it: it is inert alone, and the disable above keeps a plist left behind, or copied in later, from loading.
+`limactl autostart enable` may enable the label again; `make vm-up` and `make vm-boot-install` then detect
+its job or plist.
 
 Which fix applies depends on whether the directory still holds a `lima.yaml`:
 
@@ -405,8 +537,8 @@ If the directory comes back after `rm -rf`, even across a reboot, a launchd job 
 LaunchAgent running `limactl start shift2eu`, for example one that starts the VM at boot) is recreating
 it: launchd creates the job's `StandardOutPath` and `StandardErrorPath` log files, which sit in the
 instance directory, every time it runs the job. Find it with `launchctl print system | grep -i lima` and
-in `~/Library/LaunchAgents` and `/Library/LaunchDaemons`, unload it (`launchctl bootout`), then remove the
-directory and run `make vm-up` to create the VM from `dev/lima.yaml`.
+in `~/Library/LaunchAgents` and `/Library/LaunchDaemons`, unload it (`launchctl bootout`) and delete its
+plist (`rm -f`, with `sudo` for a LaunchDaemon), then remove the directory and run `make vm-up` to create the VM from `dev/lima.yaml`.
 
 ## Dispatcher mode
 
@@ -558,8 +690,10 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the
   workspace or the workspace's checkout would be readable by every agent and by the model providers they
   send files to. Keep them in the host clone's `.envrc`, where `make vm-env` runs and the VM cannot see
-  them. A `.envrc` above the workspace, where they were kept before issue #227, is no longer read by any
-  target: remove them from it, so a shell in the workspace does not hold them.
+  them. A `.envrc` above the workspace, where they were kept before issue #227, the targets refuse
+  (`make vm-env`, `vm-env-check`, `vm-up`, `vm-create`, `vm-init`, `agents-token`, `agents-token-refresh`,
+  `agents-token-refresh-install`, `agents-token-refresh-start`; [The host clone](#the-host-clone), The `.envrc` guard): move its lines into
+  the host clone's `.envrc` and remove it, so a shell in the workspace does not hold them.
 - **No GitHub token in `VM_ENV`.** Never put a personal access token, or any token with
   `write:packages`, into `VM_ENV`: the agents' only GitHub credential is the agents App's token, whose
   permissions (no Packages) are what stop agents pushing to GHCR. `make vm-env-check`, and so `make vm-env`
@@ -629,6 +763,33 @@ Never give it Administration: the rulesets' bypass lists need Administration wri
 `Protect main`, so those checks stay yours (ADR 0031, d). Secrets and Variables are not needed either.
 Generate a private key and keep the `.pem` **outside the workspace**, a regular file (not a symlink: the
 script refuses one), readable only by you (`chmod 600`). The App's slug is never configured: the token script reads it from the App (`GET /app`).
+Copy it into place, then delete the downloaded copy. Here the browser and the host clone must be the same
+Mac; a key the browser saved on another machine is carried as in step 4 of the account mode (The key under a
+separate account).
+
+```bash
+# Mac (admin): the Mac whose host clone mints the tokens, only when the browser saved the key here
+# copy, not mv, so the rm below deletes the download
+install -m 0600 ~/Downloads/<app>.<date>.private-key.pem <the path SHIFT2EU_AGENTS_APP_KEY_FILE names>
+# FAIL "install: ...: No such file or directory": use the file's real name (ls ~/Downloads | grep private-key), or, if the key is on another machine, carry it as in step 4 of the account mode
+ls -l <the path SHIFT2EU_AGENTS_APP_KEY_FILE names>   # PASS: -rw------- owned by you, outside the workspace
+```
+
+```bash
+# Mac (admin), then: the machine the browser saved the key to, once the key is in place
+rm ~/Downloads/<app>.<date>.private-key.pem
+# FAIL "rm: ...: No such file or directory": run it on the machine the browser saved the key to, with the file's real name
+ls ~/Downloads/<app>.<date>.private-key.pem         # PASS: No such file or directory
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
+tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
+# FAIL a Time Machine backup ran since the download: rotate the key (generate another, repeat this, delete this one on the App's page)
+```
 
 #### The host clone
 
@@ -688,6 +849,65 @@ App's three variables (`env -u`), and the background refresh `make agents-token-
 without the default `VM_ENV` credentials, `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEEK_API_KEY` (a name a custom
 `VM_ENV` adds is not stripped): each process gets only what its work needs.
 
+**The `.envrc` guard** (issue #402). The host targets that load the credentials or the agents App's key,
+`make vm-env`, `vm-env-check`, `vm-up`, `vm-create`, `vm-init`, `agents-token`, `agents-token-refresh`,
+`agents-token-refresh-install` and `agents-token-refresh-start`, refuse to run, before they run anything (no
+prerequisite, no sub-make, no `limactl`, `launchctl` or `sudo`), in two cases: when the host clone's `.envrc`
+is a symlink to a file outside the clone or hands its lines to another file, and when a `.envrc` or a `.env`
+sits in the workspace or in any directory above it, up to `/`, in either spelling of the workspace (as
+`WORKSPACE_REPO` writes it, and with its symlinks resolved), where direnv loads it in every shell you open in
+the workspace. The guard parses no shell, so it holds the host clone's `.envrc` to three strict rules:
+
+- `source_up`, `source_up_if_exists`, `source_env`, `source_env_if_exists`, `source_url` (which downloads a
+  script) and bash's `source` and `.` are refused whatever they name, a file inside the clone included: they
+  run another file as shell, which the guard does not read.
+- `dotenv` and `dotenv_if_exists` pass alone (they read the clone's own `.env`), or with a path that, after
+  one enclosing pair of matching quotes (`"..."` or `'...'`) is stripped, holds only letters, digits and
+  `. _ / + @ = -`, and resolves inside the clone (`..` and every symlink followed, the last one too; a
+  directory stands for its `.env`). Any other spelling (`$`, a backtick, `~`, a space, a backslash, a brace, a
+  glob, a quote inside the path) counts as outside.
+- `;`, `&`, `|`, `(` and `)` separate directives, so `dotenv;source_env ../x` holds two; `<`, `>` and a
+  backtick end a directive's word too (`source_up>/dev/null`, `` `source_up` ``), and a `dotenv` directly
+  followed by one, or with a path starting with one, counts as outside; a line ending in `\` is joined to the
+  next first, as bash does (an escaped trailing backslash joins too, a safe false positive).
+
+Each refusal names the file, and for a directive its line number (`<path>/.envrc: line <N>: ...`). A directive
+word anywhere on a non-comment line counts, in a trailing comment (`dotenv ./x # source_up`) or a quoted value
+too (`export N="open source"`, `export X=.`): the guard refuses it, a safe false positive; reword the value or
+move it to a file `dotenv` loads. The guard checks the usual direnv and bash spellings; it is not a sandbox
+(`eval "$(cat ../x)"`, `direnv_load` or a `use` or `layout` function can always read a parent, and the guard
+does not read them), so keep every line in the host clone's `.envrc` itself. It reads only the words of those directives
+and the path after each, and prints names, line numbers and paths, never a line or a value. It refuses, never
+warns, and has no override: the fix is moving a file.
+`make vm-boot-install` is not guarded: its LaunchDaemon starts the VM and holds no credential. To see what the
+guard checks:
+
+```bash
+# Mac, host clone: count the non-comment .envrc lines that run another file, then those that say dotenv (prints numbers, never a line)
+grep -v '^[[:space:]]*#' .envrc | grep -cE '(^|[^A-Za-z0-9_.])(source_up_if_exists|source_up|source_env_if_exists|source_env|source_url|source|\.)([[:space:];&|()<>`"\'\'']|$)'
+grep -v '^[[:space:]]*#' .envrc | grep -cE '(^|[^A-Za-z0-9_.])(dotenv_if_exists|dotenv)([[:space:];&|()<>`"\'\'']|$)'
+# PASS: the first count is 0; every line of the second says dotenv alone or names a plain path inside the host clone
+# FAIL "... <path>/.envrc: line <N>: the host clone's .envrc runs another file with <directive> ...": put that file's lines in the host clone's .envrc itself and remove the directive
+# FAIL "... <path>/.envrc: line <N>: the host clone's .envrc loads with <directive> a path this check cannot read ...": write the path plainly, inside the host clone, or move its lines into the host clone's .envrc
+```
+
+This is a quick count, line by line: `make vm-env-check` (the third block) is the authority, as only the guard
+joins a line ending in `\` to the next.
+
+```bash
+# Mac, host clone: list every .envrc and .env in the workspace and the directories above it, both spellings (prints paths only)
+: "${WORKSPACE_REPO:?set it in the host clone's .envrc}"; for d in "$(dirname "$WORKSPACE_REPO")" "$(cd "$(dirname "$WORKSPACE_REPO")" 2>/dev/null && pwd -P || dirname "$WORKSPACE_REPO")"; do while [ "$d" != . ]; do ls -d "$d/.envrc" "$d/.env" 2>/dev/null; [ "$d" = / ] && break; d="$(dirname "$d")"; done; done
+# PASS: no output
+# FAIL "... <file> is in the workspace the VM mounts or in a directory above it ...": move its lines into the host clone's .envrc and remove the file
+```
+
+```bash
+# Mac, host clone: run the guard and the credential check, which call no limactl
+make vm-env-check
+# PASS: no "refused" line, and no "not set or empty" line
+# FAIL "vm-env-check: refused: ...": fix each file it names, as the two checks above say, then run it again
+```
+
 **The refusal.** A host target refuses to run, before it runs anything (no prerequisite, no sub-make, no
 `limactl`, no `git config`), and names itself, the host clone and this section, when `WORKSPACE_REPO` is
 unset, holds a character other than letters, digits and `. _ - / + @ # =` (no whitespace, no quote, no
@@ -717,6 +937,8 @@ Run these from the host clone (`cd ~/src/shift2eu-host`):
 | Command | Does |
 |---|---|
 | `make vm-create`, `make vm-up`, `make vm-env`, `make vm-env-check`, `make vm-claude-settings`, `make vm-init`, `make vm-shell`, `make vm-stop`, `make vm-delete` | The VM's life cycle and setup ([First-time setup](#first-time-setup)) |
+| `make vm-boot-install` | Installs (or updates) the LaunchDaemon that starts the VM at boot, with nobody logged in, one per VM; refuses beside a Lima autostart job; needs `sudo` (macOS; [The VM at boot as a LaunchDaemon](#the-vm-at-boot-as-a-launchdaemon)) |
+| `make vm-boot-uninstall` | Removes that LaunchDaemon; the VM keeps running; needs `sudo` |
 | `make deck` | Opens the deck in the VM at `WORKSPACE_REPO`; it starts no refresh |
 | `make deck-restart` | Restarts the deck's daemon service in the VM |
 | `make vm-gh-wrapper` | Gives a VM created before the gh wrapper the wrapper, without recreating it |
@@ -792,16 +1014,35 @@ is running and exits with status 0, and `make agents-token-refresh-start` names 
 starts nothing. A lock left by a killed refresh is taken over, by one refresh only. Should a refresh that
 moved a lock aside during a takeover fail to put it back (a full disk, say), it keeps the moved-aside
 directory (`.agents-token-refresh-shift2eu.lock.stale.<pid>`), so no lock is lost while none exists, says
-so in the log and stops. The refresh whose lock that was finds no lock within seconds and exits too, and
-nothing removes the moved-aside directory: once no refresh runs, remove it
-(`rm -r ~/.local/state/shift2eu/.agents-token-refresh-shift2eu.lock.stale.<pid>`) and start a refresh
-again (`make agents-token-refresh-start` from the host clone). Stop it with
-`kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"`. No command prints a token,
-the JWT or the key, and nothing writes them to a log or the workspace.
+so in the log and stops. The refresh whose lock that was finds no lock within seconds and exits too: both
+refreshers stop, and nothing refreshes the token until the next refresh starts. That start, or the next
+round of a refresher that already runs, removes the moved-aside directory once neither the pid in its name
+nor the pid inside it runs a refresh and says `removing the moved-aside lock ...` in the log; a start then
+takes the lock and refreshes. A `.agents-token-refresh-shift2eu.lock.reap.<pid>` left by a start stopped
+while it removed one goes the same way once that pid runs no refresh. As the account's LaunchDaemon
+(below), launchd starts it again on its own within 5 minutes (`KeepAlive`, `ThrottleInterval` 300); in
+single-account mode, start it again with `make agents-token-refresh-start` from the host clone. No command
+prints a token, the JWT or the key, and nothing writes them to a log or the workspace. Stop it with the
+block below: it reads the lock's pid only from a regular file, since a `cat` of anything else, a FIFO say,
+can wait for ever, and kills it only when it runs a refresh, as `make agents-token-refresh-start` checks
+(issue #335).
+
+```bash
+# Mac, host clone: stop the refresh, only when the lock's pid runs one
+l=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
+pid=; [ -f "$l/pid" ] && [ ! -L "$l/pid" ] && pid="$(head -c 32 "$l/pid")"
+if [ ! -e "$l" ]; then echo "no lock: no refresh runs"
+elif ! expr "x$pid" : 'x[1-9][0-9]*$' >/dev/null; then echo "the lock holds no pid"
+elif ps -p "$pid" -o command= | grep -q 'agents-app-token.sh refresh'; then kill "$pid" && echo "stopped the refresh, pid $pid"
+else echo "pid $pid runs no refresh"; fi
+# PASS: stopped the refresh, pid <pid>; or no lock: no refresh runs (nothing to stop: go on)
+# FAIL: the lock holds no pid, or pid <pid> runs no refresh: check with ps -axo pid,command | grep 'agents-app-token.sh refresh'; once none runs, remove the lock by hand: rm -r ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
+```
 
 #### The refresh as a LaunchDaemon
 
-A refresh started by hand dies with a reboot or a power cut, while the VM comes back on its own, and within
+A refresh started by hand dies with a reboot or a power cut, while the VM comes back with its boot job
+([The VM at boot as a LaunchDaemon](#the-vm-at-boot-as-a-launchdaemon)), and within
 the hour the agents' `gh` and `git push` fail. On an unattended Mac, such as the Mac Mini, let launchd run
 it instead ([ADR 0034](adr/0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md)): a LaunchDaemon
 per VM instance, `io.github.timothymamo.shift2eu.agents-token-refresh.<instance>`, runs
@@ -817,7 +1058,7 @@ installation ID, the key's path and your `XDG_STATE_HOME` when it is set, copied
 `.envrc` when you install it, never the key or a token: **install again after changing `.envrc`**. The job
 runs the host clone's `dev/agents-app-token.sh` as it is when the job starts, so after a
 `git pull --ff-only` of the host clone run `sudo launchctl kickstart -k system/<label>` to run the pulled
-code now. Installing it from the wrong clone, such as the workspace the VM mounts, would turn a one-off
+code now; if it does not return, see [When kickstart does not return](#when-kickstart-does-not-return). Installing it from the wrong clone, such as the workspace the VM mounts, would turn a one-off
 run of the agents' code into a job that runs it at every boot: install refuses a clone inside any of the
 VM's mounts, or one that holds a mount (through it the agents could edit the clone's `dev/`), and a clone
 whose `dev/` or `dev/agents-app-token.sh` is a symlink. It asks `limactl list` for the VM's name and mounts
@@ -842,9 +1083,19 @@ before running it, and asks for your password. Over a loaded job it first runs `
 and waits up to 10 seconds for the job to unload; still loaded, it installs nothing and the old job keeps
 running. After installing it reads the plist back and checks the SHA-256 it printed: a mismatch or an
 unreadable plist is removed again (`sudo rm -f`, so the next boot cannot load it), nothing is loaded and
-it fails. A failing `launchctl bootstrap` is tried once more. A refresh you started by hand keeps the VM's
-lock: install names its pid, and the job waits, trying every 5 minutes, until you stop that one; it never
-names the job's own refresh, which takes the lock as the job loads. Both targets put the plist in
+it fails. A failing `launchctl bootstrap` is tried once more. A refresh outside the job keeps the VM's
+lock, and the job would only find it taken, every 5 minutes, for as long as that one runs (issue #396). So
+the setup order, `make agents-token-refresh-start` for `make vm-init` and then the install, needs no step
+in between: the install takes over from the refresh `make agents-token-refresh-start` recorded, stopping it
+(`TERM`, waiting up to 10 seconds for it to exit) right before it loads the job, and says so with its pid.
+Any other refresh holding the lock, such as a `make agents-token-refresh` in a terminal or another clone's,
+is not the install's to stop: it refuses before any `sudo`, naming the pid and `kill <pid>`. The job's own
+refresh is neither: the install boots it out as it always has. Before any of this, install and
+`make agents-token-refresh-start` refuse **another launchd job** that runs the VM's refresh, in the system
+domain or in yours (`gui/<uid>`): one whose label is not the project's and whose arguments run
+`agents-app-token.sh refresh` or `make agents-token-refresh`, such as a hand-made LaunchDaemon from before
+ADR 0034. Its `KeepAlive` takes the lock again seconds after every `kill`. The refusal names its label, its
+domain, its plist and the three commands that remove it (step 1). Both targets put the plist in
 `AGENTS_TOKEN_LAUNCHD_DIR` (`/Library/LaunchDaemons`), a hook for the tests only: never set it on the Mac.
 Both refuse it from the environment, since a stale export would install the plist where launchd never
 looks at boot.
@@ -868,7 +1119,15 @@ git pull --ff-only
 direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, even where no direnv hook runs
 # PASS: plutil -lint passes; the plist's SHA-256 is printed; the script line is <host clone>/dev/agents-app-token.sh,
 #   this clone, outside the workspace; each sudo command is printed before it asks for your password
+# PASS, after make agents-token-refresh-start: "stopped pid <pid>, the refresh make agents-token-refresh-start started"
 # FAIL "refused: run it as the maintainer, not as root": run it without sudo
+# FAIL "<label> is loaded in <domain> and runs the agents App token refresh ...": run the bootout, disable and rm it names, install again; if it says "plist not shown", rm the path launchctl print <domain>/<label> names
+# FAIL "foreign-jobs check failed (status <n>): nothing was installed ...": fix what the line above it says, install again
+# WARN "warning: could not list the system domain ...": installed, but a foreign LaunchDaemon would go unnoticed; check sudo launchctl print system
+# WARN "warning: <n> job(s) with unusual labels not checked": installed; look for them in launchctl print system and gui/<uid>
+# WARN "warning: the pid file ... no longer names pid <pid> ...": nothing was stopped; if the log says another refresh runs, stop it, install again
+# WARN "warning: ... could not read the job's pid ... pid <pid> ...": installed; if ps -p <pid> shows a refresh after the bootout, stop it, install again
+# FAIL "refused: a refresh that make agents-token-refresh-start did not start holds the lock ... (pid <pid> ...)": kill <pid>, install again
 # FAIL "refused: <clone> is inside <location>, which the VM shift2eu mounts ..." or "refused: the VM shift2eu mounts
 #   <location>, which is inside <clone> ...": install from the host clone, outside every mount of the VM (What install does)
 # FAIL "limactl list could not read the mounts of the VM shift2eu ..." or "limactl list answered about <name>, not the
@@ -877,8 +1136,8 @@ direnv exec . make agents-token-refresh-install   # loads the clone's .envrc, ev
 #   dev/agents-app-token.sh as git checked them out
 # FAIL "the old job <label> is still loaded ...": sudo launchctl print system/<label>, wait or make agents-token-refresh-uninstall, install again
 # FAIL "... is not the plist printed above ...": no job is loaded; look for what changed the file, install again
-# FAIL "launchctl bootstrap failed twice: NO token refresh job ...": install again, or make agents-token-refresh-start
-# FAIL install names a hand-started refresh's pid: kill <pid>
+# FAIL "launchctl bootstrap failed twice: NO token refresh job ...": install again, or make agents-token-refresh-start (if it says "the hand-started refresh was stopped", none runs at all now)
+# WARN "warning: pid <pid> still runs ... after TERM": installed; once ps -p <pid> shows nothing, the job takes over within 5 minutes
 ```
 
 **2. Check that it is loaded and minting:**
@@ -889,7 +1148,7 @@ sudo launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.
 # PASS: state = running, a pid, and the arguments name ~/agents/shift2eu/host/shift2eu/dev/agents-app-token.sh (never one in the workspace)
 tail ~/.local/state/shift2eu/agents-token-refresh-shift2eu.log
 # PASS: the last lines say wrote a token ... into the VM shift2eu
-# FAIL "another agents App token refresh ... is running" every 5 minutes: a hand-started refresh holds the lock; kill it (step 1)
+# FAIL "another agents App token refresh ... is running (pid <pid> ...)" every 5 minutes: install again (step 1); it stops that refresh, or names it or the foreign job
 # FAIL no new log lines: in sudo launchctl print system/<label>, a growing runs with a non-zero last exit code means the job
 #   exits at once (launchd's own output goes to /dev/null); check HOME and XDG_STATE_HOME in the plist and that the script exists
 launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu >/dev/null && echo found   # without sudo
@@ -921,8 +1180,8 @@ limactl shell --workdir / shift2eu sh -c 'sed -n 2p "$HOME/.config/shift2eu/agen
 valid until it expires.
 
 ```bash
-# Mac Mini, host clone
-make agents-token-refresh-uninstall
+# Mac Mini, host clone (direnv exec: LIMA_INSTANCE comes from its .envrc, which SSH does not load)
+direnv exec . make agents-token-refresh-uninstall
 # FAIL "... is still loaded ...": run the sudo launchctl bootout system/<label> it names
 sudo launchctl print system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu   # PASS: fails now
 ls /Library/LaunchDaemons/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu.plist   # PASS: gone
@@ -998,10 +1257,39 @@ Since milestone 3 the agents have no other GitHub credential, so without the tok
 `git push` fail in the VM (and `make vm-init`'s `gh` step with them) until a token file is back:
 
 ```bash
+# Mac, host clone, first, only if the refresh's LaunchDaemon is installed: launchd would start it again within 5 minutes
+direnv exec . make agents-token-refresh-uninstall
+# PASS: exits 0
+```
+
+```bash
+# Mac, host clone, then: stop a refresh started by hand, only when the lock's pid runs one
+l=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
+pid=; [ -f "$l/pid" ] && [ ! -L "$l/pid" ] && pid="$(head -c 32 "$l/pid")"
+if [ ! -e "$l" ]; then echo "no lock: no refresh runs"
+elif ! expr "x$pid" : 'x[1-9][0-9]*$' >/dev/null; then echo "the lock holds no pid"
+elif ps -p "$pid" -o command= | grep -q 'agents-app-token.sh refresh'; then kill "$pid" && echo "stopped the refresh, pid $pid"
+else echo "pid $pid runs no refresh"; fi
+# PASS: stopped the refresh, pid <pid>; or no lock: no refresh runs (nothing to stop: go on)
+# FAIL: the lock holds no pid, or pid <pid> runs no refresh: check with ps -axo pid,command | grep 'agents-app-token.sh refresh', and delete nothing in the VM while one runs; once none runs, remove the lock by hand: rm -r ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
+```
+
+```bash
 # Mac, host clone
-kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"   # first: stop the refresh
 limactl shell --workdir / shift2eu sh -c 'rm -f "$HOME/.config/shift2eu/agents-app-token" "$HOME/.config/shift2eu/agents-app-identity"'
 make vm-init
+```
+
+##### When kickstart does not return
+
+```bash
+# Seen on the maintainer's Mac on 2026-11-20 (kickstart, with or without -k, printed nothing until Ctrl+C); cause not known (issue #396)
+sudo launchctl print system/<label> | grep -E 'state|pid'      # Mac Mini, after Ctrl+C on the kickstart
+# PASS "state = spawn scheduled": nothing to do, the job runs no process; launchd starts it within its ThrottleInterval (5 minutes)
+sudo launchctl kill TERM system/<label>   # only for state = running: stops this job's process alone (account mode too); launchd restarts it with the script on disk
+# PASS, within 5 minutes: sudo launchctl print system/<label> shows state = running, a new pid, and its log a new start
+# FAIL still spawn scheduled after 5 minutes: a foreign job or another refresh holds the lock; install again (step 1), it names it
+# FAIL launchctl kill does not stop it, last resort only: pkill -f 'agents-app-token.sh refresh' (sudo pkill -u _shift2euagents ... in account mode) stops every instance's refresh and every process whose command line holds that string
 ```
 
 #### The key under a separate account
@@ -1078,8 +1366,15 @@ direnv exec . make agents-token-refresh-uninstall
 ```
 
 ```bash
-# Mac Mini, host clone, only if you started one by hand:
-kill "$(cat ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock/pid)"
+# Mac Mini, host clone, only if you started one by hand: stop it, only when the lock's pid runs one
+l=~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
+pid=; [ -f "$l/pid" ] && [ ! -L "$l/pid" ] && pid="$(head -c 32 "$l/pid")"
+if [ ! -e "$l" ]; then echo "no lock: no refresh runs"
+elif ! expr "x$pid" : 'x[1-9][0-9]*$' >/dev/null; then echo "the lock holds no pid"
+elif ps -p "$pid" -o command= | grep -q 'agents-app-token.sh refresh'; then kill "$pid" && echo "stopped the refresh, pid $pid"
+else echo "pid $pid runs no refresh"; fi
+# PASS: stopped the refresh, pid <pid>; or no lock: no refresh runs (nothing to stop: go on)
+# FAIL: the lock holds no pid, or pid <pid> runs no refresh: check with ps -axo pid,command | grep 'agents-app-token.sh refresh'; once none runs, remove the lock by hand: rm -r ~/.local/state/shift2eu/agents-token-refresh-shift2eu.lock
 ```
 
 ```bash
@@ -1142,12 +1437,31 @@ sudo -k
 **4. The App's key**: generate a **new** private key on the App's settings page. The download is usually
 on another machine (the browser you use for GitHub): carry it to the Mini as a file only you can read, and
 move it in at once. Downloaded on the Mini itself, install it from `~/Downloads` and remove it there instead.
+A Time Machine backup that ran since the download keeps the key: then rotate it (generate another key, repeat
+this step, delete this one on the App's page).
 
 ```bash
-# the downloading machine
+# Mac (admin): the machine the browser saved the key to
 # keep the older key on the App's page until step 10: deleting it now breaks nothing, but it is your way back
 ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
+ssh <the Mini> 'ls -l ~/agents-app.pem.tmp'   # PASS: -rw------- owned by you
+# FAIL a mode other than -rw-------: ssh <the Mini> 'chmod 0600 ~/agents-app.pem.tmp'
+```
+
+```bash
+# Mac (admin), then: the machine the browser saved the key to, once the copy is on the Mini
 rm ~/Downloads/<app>.<date>.private-key.pem
+# FAIL "rm: ...: No such file or directory": run it on the machine the browser saved the key to, with the file's real name
+ls ~/Downloads/<app>.<date>.private-key.pem         # PASS: No such file or directory
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
+tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
+# FAIL a Time Machine backup ran since the download: rotate the key, as above
 ```
 
 ```bash
@@ -1158,24 +1472,19 @@ sudo ls -ln /Users/_shift2euagents/.config/shift2eu/agents-app.pem   # PASS: -rw
 sudo -k
 ```
 
-Then check both machines (empty the Trash first if the file went there). A Time Machine backup that ran
-since the download keeps the key: then rotate it (generate another key, repeat this step, delete this one
-on the App's page).
-
-```bash
-# the downloading machine
-ls ~/Downloads ~/.Trash | grep private-key.pem      # PASS: nothing
-tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
-# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
-# FAIL a Time Machine backup ran since the download: rotate the key, as above
-```
+Then check the Mini too (empty the Trash first if the file went there):
 
 ```bash
 # Mac Mini
-ls ~/Downloads ~/.Trash | grep private-key.pem      # PASS: nothing
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
 ls ~/agents-app.pem.tmp                             # PASS: No such file or directory
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
 # FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
 # FAIL a Time Machine backup ran since the download: rotate the key, as above
 ```
 
@@ -1363,6 +1672,7 @@ sudo -k
 cd /
 sudo -u _shift2euagents -H /usr/bin/env -i HOME=/Users/_shift2euagents PATH=/usr/bin:/bin:/usr/sbin:/sbin /usr/bin/git -c core.pager=cat -C /Users/_shift2euagents/shift2eu-host pull --ff-only
 sudo launchctl kickstart -k system/io.github.timothymamo.shift2eu.agents-token-refresh.shift2eu   # runs the pulled code now
+# FAIL no output and no return until Ctrl+C: When kickstart does not return (its launchctl kill works in account mode too)
 sudo -k
 ```
 
@@ -1371,6 +1681,7 @@ sudo -k
 ```bash
 # Mac Mini
 sudo launchctl kickstart -k system/<label>                                                  # mint now
+# FAIL no output and no return until Ctrl+C: When kickstart does not return (its launchctl kill works in account mode too)
 sudo tail -n 50 /Users/_shift2euagents/.local/state/shift2eu/agents-token-refresh-<instance>.log   # the job's log
 sudo -k
 ```
@@ -1424,9 +1735,35 @@ the keys file to remove):
 direnv exec . make vm-agents-token-ssh-uninstall   # PASS: vm-agents-token-ssh-uninstall: done
 ```
 
-**3. A new key**, generated on the App's page and kept where `SHIFT2EU_AGENTS_APP_KEY_FILE` will name
-it, outside the workspace, mode 0600. Never copy the account's key out; delete it on the App's page once
-the new one works.
+**3. A new key**, generated on the App's page and kept on the Mini where `SHIFT2EU_AGENTS_APP_KEY_FILE` will
+name it, outside the workspace, mode 0600. The download is usually on another machine: carry it to the Mini
+as a file only you can read. Downloaded on the Mini itself, install it from `~/Downloads` and remove it there
+instead. Never copy the account's key out; delete it on the App's page once the new one works.
+
+```bash
+# Mac (admin): the machine the browser saved the key to
+ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
+ssh <the Mini> 'install -m 0600 ~/agents-app.pem.tmp <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name> && rm ~/agents-app.pem.tmp'
+# FAIL "...: No such file or directory": ssh <the Mini> 'mkdir -m 0700 -p <its directory>', then run this block again
+ssh <the Mini> 'ls -l <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name>'   # PASS: -rw------- owned by you, outside the workspace
+ssh <the Mini> 'ls ~/agents-app.pem.tmp'                                   # PASS: No such file or directory
+```
+
+```bash
+# Mac (admin), then: the machine the browser saved the key to, once the new key is in place
+rm ~/Downloads/<app>.<date>.private-key.pem
+# FAIL "rm: ...: No such file or directory": run it on the machine the browser saved the key to, with the file's real name
+ls ~/Downloads/<app>.<date>.private-key.pem         # PASS: No such file or directory
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
+tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
+# FAIL a Time Machine backup ran since the download: rotate the key (generate another, repeat this step, delete this one on the App's page)
+```
 
 **4. The `.envrc`**: remove `SHIFT2EU_AGENTS_ACCOUNT` and the `SHIFT2EU_AGENTS_VM_SSH_*` variables, set
 `SHIFT2EU_AGENTS_APP_KEY_FILE`, then:
@@ -1676,9 +2013,12 @@ GitHub API as data (never checking out or running its code), asks the model for 
 `CLAUDE.md` and the `review-change` and `security-audit` skills, and posts one review as the reviewer
 App: a summary naming the head commit, and inline comments on the lines it flags. It posts `COMMENT` or
 `REQUEST_CHANGES`, never an approval, and stays at `COMMENT` until you turn change requests on. A failed
-run (the diff over 300,000 bytes, GitHub or the model failing, your subscription's usage limit reached,
-an expired token, a malformed answer) is a failing check, never a required one: your approval stays the
-only gate.
+run (GitHub or the model failing, your subscription's usage limit reached, an expired token) is a
+failing check, never a required one: your approval stays the only gate. A diff too large to review or
+two unusable answers from the model end in the skipped outcome: a `COMMENT` review saying so, an
+`AI review skipped` warning annotation and a job summary line, with a passing check (ADR 0033, issues
+#367 and #376). So a green AI review check can be a skip: look for the `AI review skipped` warning or the
+review saying so.
 
 It asks the model through the **Claude Code CLI on your Claude subscription**, not with an API key: the
 workflow installs the CLI at a pinned version and checks the download against a pinned checksum before
@@ -1762,16 +2102,32 @@ it in a file or a note. Set no `ANTHROPIC_API_KEY`, here or at repository level 
 ```bash
 # your own machine, never the VM
 gh secret set AI_REVIEWER_APP_CLIENT_ID --env ai-review --repo timothymamo/shift2eu
-gh secret set AI_REVIEWER_APP_PRIVATE_KEY --env ai-review --repo timothymamo/shift2eu < path/to/the-downloaded-key.pem
+gh secret set AI_REVIEWER_APP_PRIVATE_KEY --env ai-review --repo timothymamo/shift2eu < ~/Downloads/<app>.<date>.private-key.pem
 gh secret set CLAUDE_CODE_OAUTH_TOKEN --env ai-review --repo timothymamo/shift2eu
 gh variable set AI_REVIEW_REQUEST_CHANGES --env ai-review --repo timothymamo/shift2eu --body false
-# then delete the downloaded .pem, or move it to your password manager: GitHub holds the only copy the
-#   workflow needs, and a new key can always be generated
 gh api repos/timothymamo/shift2eu/environments/ai-review/secrets --jq '.secrets[].name'
 # PASS: exactly AI_REVIEWER_APP_CLIENT_ID, AI_REVIEWER_APP_PRIVATE_KEY and CLAUDE_CODE_OAUTH_TOKEN
 gh api repos/timothymamo/shift2eu/actions/secrets --jq '.secrets[].name'
 gh api repos/timothymamo/shift2eu/actions/variables --jq '.variables[].name'
 # PASS: none of the four names and no ANTHROPIC_API_KEY (the release-tag skill checks the same before every release)
+```
+
+GitHub now holds the only copy the workflow needs, and a new key can always be generated:
+
+```bash
+# Mac (admin), then: your own machine, the one the browser saved the key to, once the secrets are set
+rm ~/Downloads/<app>.<date>.private-key.pem
+# FAIL "rm: ...: No such file or directory": run it on the machine the browser saved the key to, with the file's real name
+ls ~/Downloads/<app>.<date>.private-key.pem         # PASS: No such file or directory
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
+tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
+# FAIL a Time Machine backup ran since the download: rotate the key (generate another on the App's page, set the secret again, delete the old key there)
 ```
 
 *Roll back:* delete the secrets and the variable.

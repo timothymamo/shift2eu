@@ -1,6 +1,7 @@
 # 0019. Serve assessments over a versioned HTTP API from a separate binary
 
-- Status: Accepted; amended 2026-11-12: the bundled OpenAPI document moves from milestone 4 to [issue #139](https://github.com/timothymamo/shift2eu/issues/139),
+- Status: Superseded by [0037](0037-retire-the-http-api-and-release-the-cli-alone.md) on 2026-11-20 (issue #393):
+  the HTTP API is retired and the release ships the CLI alone. Before that: Accepted; amended 2026-11-12: the bundled OpenAPI document moves from milestone 4 to [issue #139](https://github.com/timothymamo/shift2eu/issues/139),
   which publishes it as the release asset `shift2eu-server_openapi.json` (Consequences);
   amended by issue #147: `shift2eu-server` ships in release archives of its own (Consequences);
   amended by [ADR 0030](0030-serve-the-version-2-report-on-v1.md) (PRD #190): `/v1` serves the JSON report

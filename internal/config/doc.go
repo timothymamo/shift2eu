@@ -9,5 +9,5 @@
 // that rule's allow list, a forbidigo group that refuses os's environment
 // reads here (test/architecture's TestEveryOsAllowingRuleHasAnEnvironmentGroup
 // fails without one), and an exception for each named variable, decided in an
-// ADR, as composition-root-env's for SHIFT2EU_SERVER_TOKEN (ADR 0019).
+// ADR, as ai-reviewer-env's for ci/aireview/main.go (ADR 0033).
 package config

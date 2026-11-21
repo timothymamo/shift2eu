@@ -65,7 +65,7 @@ type storageNoteCase struct {
 // the fixture are 2 vCPU, 8 GiB, so both land on an OVHcloud Gen 3 plan whose
 // included storage is 0, and only the VM that gives no disk size leaves its boot
 // volume out of the estimate. It reads the JSON report, the document the CLI and
-// the HTTP API serve, so the assertion is on what a consumer of the report sees.
+// the site write, so the assertion is on what a consumer of the report sees.
 func TestStorageNotIncludedThroughTheOvhcloudSnapshot(t *testing.T) {
 	t.Parallel()
 

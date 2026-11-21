@@ -7,8 +7,6 @@ package main
 import (
 	"github.com/timothymamo/shift2eu/internal/adapter/report"
 	"github.com/timothymamo/shift2eu/internal/adapter/report/markdown"
-	"github.com/timothymamo/shift2eu/internal/adapter/request"
-	"github.com/timothymamo/shift2eu/internal/adapter/request/assessmentrequest"
 	"github.com/timothymamo/shift2eu/internal/adapter/source"
 	"github.com/timothymamo/shift2eu/internal/adapter/source/inventoryfile"
 	"github.com/timothymamo/shift2eu/internal/adapter/target"
@@ -16,6 +14,6 @@ import (
 )
 
 func main() {
-	_ = report.Name + markdown.Name + request.Name + assessmentrequest.Name +
+	_ = report.Name + markdown.Name +
 		source.Name + inventoryfile.Name + target.Name + ovhcloud.Name
 }

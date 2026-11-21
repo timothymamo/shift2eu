@@ -12,14 +12,12 @@ have a direct equivalent, which a partial one, which have none, and what blocks 
 against an embedded OVHcloud, Scaleway or UpCloud catalog snapshot, through every layer, or compares
 several targets in one report (`--target all` or a list), as Markdown or as versioned JSON
 (`--format json`, ADR 0018) (PRD #2, OVHcloud from PRD #11, UpCloud from PRD #77 and the comparison
-from PRD #89, the JSON report and the HTTP API from PRD #103, all in `prds/done/`). It reads inventory
+from PRD #89, the JSON report from PRD #103, all in `prds/done/`). It reads inventory
 schema versions 1 and 2 (ADR 0006, ADR 0025). From a sized inventory it names a plan and estimates a
 monthly list price per resource, per workload and in total from the snapshots' dated prices (on by
 default, `--no-estimate` turns it off), groups resources by workload, notes blockers on related
 resources, and scopes a target to one region with `--region` (PRD #190, ADRs 0024 and 0026-0030, in
-`prds/done/`). A second binary,
-`shift2eu-server`, serves the same assessments over a versioned HTTP API (PRD #103, ADR 0019), released
-as a binary and as the image `ghcr.io/timothymamo/shift2eu-server` beside the CLI's. A WebAssembly module,
+`prds/done/`). The HTTP API (PRD #103) is retired (ADR 0037). A WebAssembly module,
 `cmd/shift2eu-web` (PRD #297 milestone 1, ADR 0035), runs the same assessment in the browser and renders it
 as HTML. The site's pages (`site/`) load it under a strict Content Security Policy, and `make site`
 (`ci/sitebuild`) assembles them into a reproducible bundle that a headless-browser smoke test
@@ -50,9 +48,9 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 |---|---|---|
 | Domain | `internal/domain/{taxonomy,inventory,catalog,mapping,estimate,assessment,text}` | Other domain packages and an allow list of pure standard packages (no `os`, `net/http`, `unsafe`, ...) |
 | Application | `internal/app/analysis` | Domain. Declares the ports (interfaces) it consumes |
-| Adapters | `internal/adapter/source/{inventoryfile,aws,azure,gcp}`, `internal/adapter/target/{ovhcloud,scaleway,upcloud}`, `internal/adapter/report/{markdown,jsonreport,htmlreport}` (`htmlreport`: the site's HTML fragment, ADR 0035), `internal/adapter/request/assessmentrequest` (the HTTP API's request decoder), and `internal/adapter/internal/jsondoc`, the JSON decoder they share | Domain, the ports they implement, SDKs. Never `internal/cli`, `internal/httpapi`, `internal/web` or `cmd/` |
-| Driving adapters | `internal/cli` (the CLI), `internal/httpapi` (the HTTP API, ADR 0019) and `internal/web` (the site's WebAssembly adapter, ADR 0035) | Application, domain, `internal/version`; never each other, an adapter or `cmd/`. `internal/web` also never `os`, `net` or `syscall/js`. Repository-wide, only the test files of `internal/cli`, `cmd/shift2eu-web/internal/wire` and `test/apiparity` may import `internal/cli` (`cli-only-in-named-tests`, held exactly by `test/architecture`'s `TestOnlyNamedPackagesTestTheCLI`) |
-| Composition roots | `cmd/shift2eu` (the CLI, offline: never imports `internal/httpapi`), `cmd/shift2eu-server` (the HTTP API, PRD #103 milestone 3; never imports `internal/cli`) and `cmd/shift2eu-web` (the site's module, `js && wasm`, the only importer of `syscall/js`) with its untagged wiring package `cmd/shift2eu-web/internal/wire` (ADR 0035) | Everything but a cloud SDK; the only places adapters are constructed, besides `ci/sitebuild` (below). Each one's imports are a strict allow list (`composition-root`, `server-composition-root`, `web-composition-root`, `web-composition-root-wire`): the module's own packages and the standard packages it needs, no third-party package. Among the composition roots, only wire's test files import `internal/cli`, for the parity tests |
+| Adapters | `internal/adapter/source/{inventoryfile,aws,azure,gcp}`, `internal/adapter/target/{ovhcloud,scaleway,upcloud}`, `internal/adapter/report/{markdown,jsonreport,htmlreport}` (`htmlreport`: the site's HTML fragment, ADR 0035), and `internal/adapter/internal/jsondoc`, the JSON decoder they share | Domain, the ports they implement, SDKs. Never `internal/cli`, `internal/web` or `cmd/` |
+| Driving adapters | `internal/cli` (the CLI) and `internal/web` (the site's WebAssembly adapter, ADR 0035) | Application, domain, `internal/version`; never each other, an adapter or `cmd/`. `internal/web` also never `os`, `net` or `syscall/js`. Repository-wide, only the test files of `internal/cli` and `cmd/shift2eu-web/internal/wire` may import `internal/cli` (`cli-only-in-named-tests`, held exactly by `test/architecture`'s `TestOnlyNamedPackagesTestTheCLI`) |
+| Composition roots | `cmd/shift2eu` (the CLI, offline) and `cmd/shift2eu-web` (the site's module, `js && wasm`, the only importer of `syscall/js`) with its untagged wiring package `cmd/shift2eu-web/internal/wire` (ADR 0035) | Everything but a cloud SDK; the only places adapters are constructed, besides `ci/sitebuild` (below). Each one's imports are a strict allow list (`composition-root`, `web-composition-root`, `web-composition-root-wire`): the module's own packages and the standard packages it needs, no third-party package. Among the composition roots' test files, only wire's import `internal/cli`, for the parity tests |
 | CI tooling (no part of the product) | `ci/aireview` (the AI reviewer's workflow program, ADR 0033) and its library `ci/aireview/internal/review`; `ci/sitebuild`, the program `make site` runs to assemble the site's bundle (PRD #297) | Named standard packages only (`ai-reviewer-main`, `ai-reviewer-is-standard-library`); no release builds them and Go's internal rule keeps the product from importing them. The exception is `ci/sitebuild` (`site-builder`, ADR 0036): it also imports and constructs the three embedded-snapshot targets, `internal/domain/catalog` and `internal/version` to write the snapshot dates, regions and version into the pages, the one place outside `cmd/` that constructs adapters. A main package nothing imports; the release runs it from milestone 3 |
 | Site (no Go) | `site/`: the site's pages, stylesheet and one page script (ADR 0036); `site/records/` is never bundled | Nothing: the page script is held by `test/site`'s banned-API scan, and every page by its Content Security Policy |
 | Browser smoke test | `test/browser` (`browser && !js`), run by `make test-browser` against a pinned headless Chromium | Exactly its listed standard and `chromedp` packages (`browser-smoke-test`), no package of the module; only it imports `chromedp` (`chromedp-only-in-the-browser-test`) |
@@ -71,24 +69,25 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 
 ```bash
 make worktree BRANCH=feat/12-short-name   # create or resume the worktree for a PR (prints its path)
-make check             # lint + test + govulncheck: must pass before every commit
-make test              # unit + contract tests, race detector, no network
+make check             # lint + test + govulncheck + infra-check: must pass before every commit
+make infra-check       # infra/'s OpenTofu config offline (pinned tofu via dev/tofu.sh); agents never plan or apply
+make test              # unit + contract tests, race detector, no network of its own (module fetches: see Testing)
 make test-integration  # real cloud APIs, read-only credentials (never in default CI)
 make test-e2e          # build the binary and run it against testdata fixtures
 make lint              # golangci-lint natively and for every release target, then test/lint, incl. architecture rules
 make fmt               # gofumpt + goimports
-make build             # ./bin/shift2eu and ./bin/shift2eu-server (the HTTP API)
-make server            # ./bin/shift2eu-server only
+make build             # ./bin/shift2eu
 make site              # the site's bundle into bin/site and its archive bin/shift2eu-site_<version>.tar.gz
-make test-browser      # make site, then the headless-browser smoke test in a pinned Chromium container
+make test-browser      # a bundle of its own (never bin/site), then the headless-browser smoke test in a pinned Chromium container
 ```
 
 Every make target runs exactly go.mod's go line (`GOTOOLCHAIN`, issue #347, ADR 0035). When the local Go is
 another release, the go command fetches the pinned toolchain once (checksum-verified via `sum.golang.org`)
-before anything runs: the only network access the pin adds, and the tests themselves still never touch the
-network. The VM installs the pinned Go, so
-normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a mismatch then fails
-`TestGoModPinsTheBuildingToolchain` instead.
+before anything runs: the only network access the pin adds (the tests' own is under Testing). The VM
+installs the pinned Go, so normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a
+mismatch then fails `TestGoModPinsTheBuildingToolchain` instead. `make infra-check` fetches, on first use
+per worktree, only the OpenTofu release `infra/tofu.yaml` pins (SHA-256-checked) and the `scaleway/scaleway`
+provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing else, and never contacts Scaleway.
 
 ## Testing
 
@@ -98,9 +97,10 @@ normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a mis
   `internal/adapter/target/targettest`. Every provider adapter runs them.
 - Renderers and CLI output use golden files under `testdata/`, updated with `-update`.
 - Integration tests use `//go:build integration`; e2e tests use `//go:build e2e` and live in `test/e2e`.
-- Default tests never touch the network, never need credentials, never depend on time or map order. The
-  tests never do; only the go command that runs them may fetch the pinned toolchain, once, before any test
-  starts (see Commands).
+- Default tests never open a connection themselves, never need credentials, never depend on time or map
+  order. Only go commands fetch: the one that runs them may fetch the pinned toolchain, once, before any test starts
+  (see Commands), and on an empty module cache `TestNoProductBinaryReachesChromedp`'s `go list` fetches
+  modules through GOPROXY, verified by go.sum (issue #391).
 
 ## Rules
 
@@ -178,7 +178,7 @@ holds, decisions and the unit branches of waiting PRs). The skill refers to thes
 | Orchestration | `shift2eu` |
 | CLI | `~/.local/bin/dot-agent-deck` |
 | Unit limit | 3 running units (2 when the VM has 8 GiB or less): a unit is closed once its PR is verified and reported ready |
-| Review limit | 5 PRs waiting for the maintainer's review or merge from 09:30 until 20:00, 10 from 20:00 until 09:30 (the local clock of the machine the deck runs on; counted as the sentence below the table says), not counting Renovate's PRs (author `app/renovate`; their label `dependencies` alone excludes nothing) or release-please's release PR (author `app/shift2eu-release`, head branch `release-please--branches--*` and label `autorelease: pending`, never the label alone) |
+| Review limit | 10 PRs waiting for the maintainer's review or merge from 09:30 until 20:00, 20 from 20:00 until 09:30 (the local clock of the machine the deck runs on; counted as the sentence below the table says), not counting Renovate's PRs (author `app/renovate`; their label `dependencies` alone excludes nothing) or release-please's release PR (author `app/shift2eu-release`, head branch `release-please--branches--*` and label `autorelease: pending`, never the label alone) |
 | Checks on a merged scratch tree | `make check` and `make test-e2e` |
 | Maintainer notes directory | `.idea/` in the repository root (git-ignored) |
 | Release flow | The release-please PR, reviewed with the `release-tag` skill |

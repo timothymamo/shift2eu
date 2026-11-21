@@ -19,9 +19,9 @@
 // it httptest servers as base URLs and a fake CLI, so no test reaches the
 // network.
 //
-// The model reads the pull request's diff without the generated and golden
-// files of a list fixed in this package (FilterDiff, issue #324), and the size
-// limit measures what remains; a symbolic link, a submodule or a mode change is
+// The model reads the pull request's diff without the golden files of
+// testdata directories, a rule fixed in this package (FilterDiff, issue #324),
+// and the size limit measures what remains; a symbolic link, a submodule or a mode change is
 // never left out. The prompt lists the left-out paths as untrusted data, and
 // the review names them, each with the lines it adds (a binary file as not
 // scanned, a rename's old path as renamed, a copy's source as copied), in a
@@ -34,13 +34,27 @@
 // list of paths. The paths themselves are shown escaped and cut, never scanned.
 // The note lists its first MaxScanFindings findings by file, line and kind,
 // never the value, and the scan touches neither the prompt nor the findings nor
-// the event. An answer of the wrong shape is asked once more, announced by a
-// workflow notice that names the pull request and the failed shape check
-// (Config.Notices, issue #343), and two in turn post a comment that says the
-// review could not be read, on a context the run's cancellation does not reach,
-// while the run still fails with an error that names the pull request and the
-// check, never the decoder's message (issues #316, #366). Run takes its
+// the event. A filtered diff over the limit is split at file boundaries into at
+// most MaxDiffParts parts (SplitDiff, issue #367), each asked in a model call of
+// its own, concurrently on goroutines that report to one channel, and posted as
+// one review whose event is decided over every part's findings. An answer of
+// the wrong shape is asked once more, announced by a workflow notice that names
+// the pull request, the part and the failed shape check (Config.Notices, issue
+// #343), a constant class with at most a byte offset, never the decoder's
+// message (issues #366, #375). An error result of the CLI is named by a
+// constant class and its subtype, never its text (issue #374). Run takes its
 // deadline from its context.
+//
+// A diff too large to review and a model that gives no usable answer twice end
+// in the skipped outcome (issues #367, #376): one COMMENT review that says the
+// review was skipped and why, no error, and Result.Skip, which ci/aireview's
+// main prints as a warning (SkipAnnotation) and appends to the job summary
+// (SkipSummaryLine), since this package writes no file but the CLI's prompt.
+// A split diff skipped for one unusable part summarises the parts that
+// answered in that review: counts, and each blocking finding's constant
+// category and a path of that part's diff with its line, at most
+// MaxListedBlocking of them, never model text (issue #388). Every other
+// failure still fails the run.
 //
 // The poster supports exactly two events, COMMENT and REQUEST_CHANGES, and
 // refuses any other before it makes an HTTP call: the reviewer never

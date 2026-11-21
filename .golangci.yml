@@ -417,7 +417,7 @@ linters:
             - pkg: github.com/timothymamo/shift2eu/internal/adapter
               desc: the CLI gets its adapters through cli.Deps; construct them in cmd/shift2eu
             - pkg: github.com/timothymamo/shift2eu/internal/web
-              desc: the CLI and the web adapter are separate driving adapters; share what both need through the application or the domain (PRD #297)
+              desc: "the CLI and the web adapter are separate driving adapters; share what both need through the application or the domain (PRD #297)"
         # internal/version is the build metadata: three variables the release
         # sets with -X and the one function that formats them. Both driving
         # adapters may import it, so without a rule of its own it would be a
@@ -453,8 +453,8 @@ linters:
         # constructs without importing the SDK itself.
         #
         # The rule holds cmd/shift2eu only. A glob segment matches no "/", so
-        # **/cmd/shift2eu/** does not match a sibling such as cmd/shift2eu-server,
-        # which has a sibling rule of its own, server-composition-root.
+        # **/cmd/shift2eu/** does not match a sibling such as cmd/shift2eu-web,
+        # which has a sibling rule of its own, web-composition-root.
         composition-root:
           list-mode: strict
           files:
@@ -475,59 +475,14 @@ linters:
               desc: a cloud SDK lives only in its provider's adapter
             - pkg: google.golang.org/api
               desc: a cloud SDK lives only in its provider's adapter
-        # The HTTP API's composition root (PRD #103, ADR 0019), the sibling of
-        # composition-root and written the same way: it constructs the
-        # adapters, hands them to internal/httpapi and runs the http.Server
-        # around it (flags, the token, timeouts, the access log, the graceful
-        # shutdown). Its imports are a strict allow list of the module's own
-        # packages and the standard packages it needs, each ending in $; no
-        # third-party package, no cloud SDK and no os/exec, which
-        # TestServerPathHasNoCloudSDKOrProcess (test/e2e) also pins for the
-        # whole dependency tree. Add a standard package only when
-        # cmd/shift2eu-server needs it, beside the pin in test/architecture.
-        server-composition-root:
-          list-mode: strict
-          files:
-            - "**/cmd/shift2eu-server/**"
-            - "!$test"
-          allow:
-            - context$
-            - errors$
-            - flag$
-            - fmt$
-            - io$
-            - log$
-            - math$
-            - net$
-            - net/http$
-            - os$
-            - os/signal$
-            - runtime$
-            - runtime/debug$
-            - slices$
-            - strconv$
-            - strings$
-            - sync$
-            - syscall$
-            - time$
-            - github.com/timothymamo/shift2eu/
-          deny:
-            - pkg: github.com/aws/aws-sdk-go-v2
-              desc: a cloud SDK lives only in its provider's adapter; the server takes inventory documents, never credentials (ADR 0019)
-            - pkg: github.com/Azure/azure-sdk-for-go
-              desc: a cloud SDK lives only in its provider's adapter; the server takes inventory documents, never credentials (ADR 0019)
-            - pkg: cloud.google.com/go
-              desc: a cloud SDK lives only in its provider's adapter; the server takes inventory documents, never credentials (ADR 0019)
-            - pkg: google.golang.org/api
-              desc: a cloud SDK lives only in its provider's adapter; the server takes inventory documents, never credentials (ADR 0019)
-        # Adapters are constructed only in the composition roots, cmd/shift2eu,
-        # cmd/shift2eu-server (ADR 0019) and cmd/shift2eu-web, whose wire
-        # package builds them (PRD #297), which the rule excludes. No other
-        # production package, adapters included, imports an adapter: one
-        # adapter never builds or calls another, and internal/config, the CLI
-        # or the HTTP API get adapters only through what their composition
-        # root passes in. An adapter's
-        # tests may import its contract suite (contract-suites-only-in-tests).
+        # Adapters are constructed only in the composition roots, cmd/shift2eu
+        # and cmd/shift2eu-web, whose wire package builds them (PRD #297),
+        # which the rule excludes. No other production package, adapters
+        # included, imports an adapter: one adapter never builds or calls
+        # another, and internal/config, the CLI or the web adapter get
+        # adapters only through what their composition root passes in. An
+        # adapter's tests may import its contract suite
+        # (contract-suites-only-in-tests).
         # Helpers shared by adapters live in internal/adapter/internal/ (the
         # JSON decoder jsondoc, ADR 0009): they build no adapter, so adapters may
         # import them. Each helper under internal/adapter/internal/ is named by
@@ -551,16 +506,16 @@ linters:
         # (issues #49 and #50).
         #
         # The deny list names each subtree of internal/adapter (internal/,
-        # report/, request/, source/, target/) rather than internal/adapter/
+        # report/, source/, target/) rather than internal/adapter/
         # once. depguard (v2.2.1) compares an import only with the one entry
         # that sorts nearest before it, as a prefix unless the entry ends in
         # $, so no entry may be a strict prefix of another: with internal/
         # adapter/ beside internal/adapter/internal/, every adapter under
-        # report/, request/, source/ or target/ sorts after internal/, was
+        # report/, source/ or target/ sorts after internal/, was
         # compared with that entry alone, and the rule reported nothing
         # (issue #119). Siblings never shadow each other. An entry ending in
         # / does not cover the package at its own root, so report$,
-        # request$, source$ and target$ deny a package placed directly in
+        # source$ and target$ deny a package placed directly in
         # each subtree (internal/ has none, its helpers are named one by
         # one above); an exact entry shadows nothing. A new subtree
         # under internal/adapter would match no entry and escape the rule, so
@@ -576,7 +531,7 @@ linters:
         # helper not named here. Every adapter that must stay offline also
         # names the helpers it imports, each ending in $, in a
         # strict rule of its own: inventory-file-reader-reads-one-file,
-        # request-decoders-parse-bytes, target-snapshot-reader-parses-bytes,
+        # target-snapshot-reader-parses-bytes,
         # embedded-snapshot-targets-stay-offline and reporters-stay-offline.
         # The live sources (aws, azure, gcp; doc.go stubs today) need the
         # network through their SDK, so they share the strict allow list
@@ -595,7 +550,6 @@ linters:
             - "$all"
             - "!$test"
             - "!**/cmd/shift2eu/**"
-            - "!**/cmd/shift2eu-server/**"
             - "!**/cmd/shift2eu-web/**"
             - "!**/ci/sitebuild/**"
           allow:
@@ -605,21 +559,17 @@ linters:
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/internal/
               desc: an adapter imports only the shared helpers named in adapters-are-built-in-cmd; name a new helper there first (a helper under a testdata or _ directory is never linted) (ADR 0009)
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-server
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report$
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-server
-            - pkg: github.com/timothymamo/shift2eu/internal/adapter/request/
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-server
-            - pkg: github.com/timothymamo/shift2eu/internal/adapter/request$
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-server
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/source/
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-server
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/source$
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-server
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/target/
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-server
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/target$
-              desc: adapters are constructed only in cmd/shift2eu and cmd/shift2eu-server
+              desc: adapters are constructed only in cmd/shift2eu, cmd/shift2eu-web and ci/sitebuild
         # Dependencies point inwards only: the composition root imports the
         # driving adapter, and nothing imports the composition root. So no
         # production package other than cmd/shift2eu and the CLI's own packages
@@ -663,8 +613,7 @@ linters:
         # package's parity tests run the CLI, under their strict rule
         # web-composition-root-wire-tests. Every other test file under
         # cmd/shift2eu-web, the glue's included, is refused internal/cli here,
-        # since cli-and-cmd-imported-only-by-cmd leaves test files out;
-        # httpapi-imported-only-by-the-server refuses them internal/httpapi.
+        # since cli-and-cmd-imported-only-by-cmd leaves test files out.
         web-root-tests-never-run-the-cli:
           list-mode: lax
           files:
@@ -678,16 +627,15 @@ linters:
             - pkg: github.com/timothymamo/shift2eu/internal/cli/
               desc: only the wire package's parity tests run the CLI; the site's module runs internal/web
         # The test files of the whole module (issue #345): the rules above leave
-        # test files out (!$test), so before this rule a test in internal/web or
-        # internal/httpapi could import internal/cli, coupling two driving
+        # test files out (!$test), so before this rule a test in internal/web
+        # could import internal/cli, coupling two driving
         # adapters that never import each other (CLAUDE.md's layer table), with
-        # lint green. Only three packages' test files may import it, each named
+        # lint green. Only two packages' test files may import it, each named
         # by its own directory's files alone (*_test.go, no /**/), so a package
         # added below one of them is refused too:
         #   - internal/cli, whose black-box package cli_test imports the
         #     package under test;
-        #   - cmd/shift2eu-web/internal/wire, the CLI/web parity tests (ADR 0035);
-        #   - test/apiparity, the CLI/HTTP API parity test (PRD #103).
+        #   - cmd/shift2eu-web/internal/wire, the CLI/web parity tests (ADR 0035).
         # Production files are no part of this rule: cmd/shift2eu imports the
         # CLI, and cli-and-cmd-imported-only-by-cmd holds the rest. The test
         # files of the site's root are refused by web-root-tests-never-run-the-cli
@@ -695,7 +643,7 @@ linters:
         # depguard matches these globs against absolute paths, with no anchor at
         # the module root, and ** crosses /, so each exemption also matches any
         # directory whose path ends in the same segments (a test file in
-        # internal/web/test/apiparity would be exempt): test/architecture's
+        # internal/web/internal/cli would be exempt): test/architecture's
         # TestOnlyNamedPackagesTestTheCLI holds the exact set of importers by
         # import path. A new test importer is named here, in its desc, in the
         # pin and in that test's cliTestImporters.
@@ -705,112 +653,20 @@ linters:
             - "$test"
             - "!**/internal/cli/*_test.go"
             - "!**/cmd/shift2eu-web/internal/wire/*_test.go"
-            - "!**/test/apiparity/*_test.go"
           deny:
             - pkg: github.com/timothymamo/shift2eu/internal/cli$
-              desc: "only the test files of internal/cli, cmd/shift2eu-web/internal/wire and test/apiparity import the CLI; name a new importer in cli-only-in-named-tests (issue #345)"
+              desc: "only the test files of internal/cli and cmd/shift2eu-web/internal/wire import the CLI; name a new importer in cli-only-in-named-tests (issue #345)"
             - pkg: github.com/timothymamo/shift2eu/internal/cli/
-              desc: "only the test files of internal/cli, cmd/shift2eu-web/internal/wire and test/apiparity import the CLI; name a new importer in cli-only-in-named-tests (issue #345)"
-        # The HTTP API (ADR 0019) is a driving adapter like internal/cli: it gets
-        # its adapters from its composition root, cmd/shift2eu-server, through
-        # httpapi.Deps and never constructs one, so it imports only the
-        # application, the domain, the build metadata and the standard
-        # packages named here. Unlike cli-gets-adapters-from-cmd it names
-        # each standard package, ending in $, rather than allowing $gostd: so
-        # test/architecture holds the package to this list package by package
-        # for every release target (ADR 0012), and a package that reads files
-        # or the environment, starts a process or listens (os, os/exec,
-        # syscall, net$) stays out. Listening, flags, the environment and the
-        # access log belong to cmd/shift2eu-server. The project packages are
-        # named one by one, each ending in $, for the reason given at
-        # domain-is-pure. Add a standard package only when serving needs it.
-        #
-        # An allowed package can still hold a function that reaches further
-        # than the rule means, which an import rule cannot see: the handler
-        # must not call http.ListenAndServe, http.Get or fmt.Print*, and logs
-        # nothing. Review holds that line.
-        #
-        # The allow list already refuses every package below; these entries
-        # only say why.
-        httpapi-gets-adapters-from-cmd:
-          list-mode: strict
-          files:
-            - "**/internal/httpapi/**"
-            - "!$test"
-          allow:
-            - bytes$
-            - context$
-            - crypto/sha256$
-            - crypto/subtle$
-            - encoding/json$
-            - errors$
-            - fmt$
-            - io$
-            - maps$
-            - mime$
-            - net/http$
-            - net/url$
-            - runtime$
-            - slices$
-            - sort$
-            - strconv$
-            - strings$
-            - sync$
-            - time$
-            - unicode/utf8$
-            - github.com/timothymamo/shift2eu/internal/app/analysis$
-            - github.com/timothymamo/shift2eu/internal/domain/assessment$
-            - github.com/timothymamo/shift2eu/internal/domain/catalog$
-            - github.com/timothymamo/shift2eu/internal/domain/estimate$
-            - github.com/timothymamo/shift2eu/internal/domain/inventory$
-            - github.com/timothymamo/shift2eu/internal/domain/mapping$
-            - github.com/timothymamo/shift2eu/internal/domain/taxonomy$
-            - github.com/timothymamo/shift2eu/internal/domain/text$
-            - github.com/timothymamo/shift2eu/internal/version$
-          deny:
-            - pkg: github.com/timothymamo/shift2eu/internal/adapter
-              desc: the HTTP API gets its adapters through httpapi.Deps; construct them in cmd/shift2eu-server
-            - pkg: github.com/timothymamo/shift2eu/internal/cli
-              desc: the HTTP API and the CLI are separate driving adapters; share what both need through the application or the domain
-            - pkg: github.com/timothymamo/shift2eu/internal/web
-              desc: the HTTP API and the web adapter are separate driving adapters; share what both need through the application or the domain (PRD #297)
-            - pkg: github.com/timothymamo/shift2eu/cmd
-              desc: nothing imports the composition root
-            - pkg: os
-              desc: the HTTP API reads no file and no environment; cmd/shift2eu-server passes what it needs through options
-            - pkg: syscall
-              desc: the HTTP API makes no system call
-            - pkg: plugin
-              desc: the HTTP API loads no code at run time
-            - pkg: unsafe
-              desc: the HTTP API needs no unsafe code
-        # Only the HTTP API's composition root, cmd/shift2eu-server, imports
-        # internal/httpapi (ADR 0019). cmd/shift2eu is covered too, on purpose:
-        # the CLI binary stays offline (PRD #103, the separate-binary
-        # decision), and TestAssessPathHasNoNetworkOrCloudSDK in test/e2e fails
-        # if it depends on net/http at all; this rule names the reason at the
-        # import. Test files elsewhere are covered too; only test/apiparity is
-        # left out, because its offline parity test wires the real adapters
-        # into both driving adapters, as a composition root would. The
-        # package's own tests are exempt with the package.
-        httpapi-imported-only-by-the-server:
-          list-mode: lax
-          files:
-            - "$all"
-            - "!**/test/apiparity/**"
-            - "!**/cmd/shift2eu-server/**"
-            - "!**/internal/httpapi/**"
-          deny:
-            - pkg: github.com/timothymamo/shift2eu/internal/httpapi$
-              desc: only cmd/shift2eu-server imports the HTTP API; cmd/shift2eu stays offline (ADR 0019)
-            - pkg: github.com/timothymamo/shift2eu/internal/httpapi/
-              desc: only cmd/shift2eu-server imports the HTTP API; cmd/shift2eu stays offline (ADR 0019)
+              desc: "only the test files of internal/cli and cmd/shift2eu-web/internal/wire import the CLI; name a new importer in cli-only-in-named-tests (issue #345)"
         # The site's driving adapter (PRD #297), the sibling of
-        # cli-gets-adapters-from-cmd and httpapi-gets-adapters-from-cmd: it
+        # cli-gets-adapters-from-cmd: it
         # gets its adapters from its composition root, cmd/shift2eu-web, through
         # web.Deps and never constructs one, so it imports only the
         # application, the build metadata and the standard packages named
-        # here, each ending in $, as httpapi-gets-adapters-from-cmd names them.
+        # here, each ending in $. Unlike cli-gets-adapters-from-cmd it names
+        # each standard package rather than allowing $gostd, so
+        # test/architecture holds the package to this list package by package
+        # (ADR 0012).
         # It runs in the user's browser, so it reads no file, opens no
         # connection and calls no JavaScript: os, net, syscall (syscall/js
         # among it) belong to nobody here, and syscall/js to cmd/shift2eu-web
@@ -846,8 +702,6 @@ linters:
               desc: the web adapter gets its adapters through web.Deps; construct them in cmd/shift2eu-web/internal/wire
             - pkg: github.com/timothymamo/shift2eu/internal/cli
               desc: the web adapter and the CLI are separate driving adapters; share what both need through the application or the domain
-            - pkg: github.com/timothymamo/shift2eu/internal/httpapi
-              desc: the web adapter and the HTTP API are separate driving adapters; the site never calls the API
             - pkg: github.com/timothymamo/shift2eu/cmd
               desc: nothing imports the composition root
             - pkg: os
@@ -861,13 +715,11 @@ linters:
             - pkg: unsafe
               desc: the web adapter needs no unsafe code
         # Only the site's composition root, cmd/shift2eu-web, and its wiring
-        # package cmd/shift2eu-web/internal/wire import internal/web (PRD #297),
-        # as httpapi-imported-only-by-the-server keeps internal/httpapi to its
-        # root: so neither internal/cli, internal/httpapi, cmd/shift2eu nor
-        # cmd/shift2eu-server imports it. The same holds for the HTML reporter,
-        # htmlreport: the page is the one place its fragment is shown, so only
-        # the wiring package constructs it, and cmd/shift2eu and
-        # cmd/shift2eu-server, which adapters-are-built-in-cmd leaves free to
+        # package cmd/shift2eu-web/internal/wire import internal/web (PRD #297):
+        # so neither internal/cli nor cmd/shift2eu imports it. The same holds
+        # for the HTML reporter, htmlreport: the page is the one place its
+        # fragment is shown, so only the wiring package constructs it, and
+        # cmd/shift2eu, which adapters-are-built-in-cmd leaves free to
         # construct adapters, may not. Test files are covered too; the
         # packages' own directories, whose tests import them, are left out.
         web-imported-only-by-the-web-root:
@@ -879,15 +731,15 @@ linters:
             - "!**/internal/adapter/report/htmlreport/**"
           deny:
             - pkg: github.com/timothymamo/shift2eu/internal/web$
-              desc: only cmd/shift2eu-web and its wire package import the web adapter (PRD #297)
+              desc: "only cmd/shift2eu-web and its wire package import the web adapter (PRD #297)"
             - pkg: github.com/timothymamo/shift2eu/internal/web/
-              desc: only cmd/shift2eu-web and its wire package import the web adapter (PRD #297)
+              desc: "only cmd/shift2eu-web and its wire package import the web adapter (PRD #297)"
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport$
-              desc: only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI and the HTTP API write Markdown and JSON (PRD #297)
+              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown and JSON (PRD #297)"
             - pkg: github.com/timothymamo/shift2eu/internal/adapter/report/htmlreport/
-              desc: only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI and the HTTP API write Markdown and JSON (PRD #297)
+              desc: "only cmd/shift2eu-web/internal/wire constructs the HTML reporter; the CLI writes Markdown and JSON (PRD #297)"
         # The site's composition root (PRD #297), the sibling of
-        # composition-root and server-composition-root, held in two parts.
+        # composition-root, held in two parts.
         # cmd/shift2eu-web itself (build constraint js && wasm) is the thin
         # glue between the page's script and internal/web: it takes the Deps
         # its wire package builds and registers one JavaScript function. Its
@@ -896,9 +748,9 @@ linters:
         # module may import (syscall-js-only-in-the-web-root), and the
         # standard packages the glue needs. Unlike the other roots it names no
         # module prefix: it constructs no adapter itself, so it imports no
-        # adapter, no internal/cli, no internal/httpapi, no request decoder
-        # and no cloud SDK. Its files build for js/wasm only, which make lint
-        # and CI's lint matrix lint as an explicit extra target (ADR 0012).
+        # adapter, no internal/cli and no cloud SDK. Its files build for
+        # js/wasm only, which make lint and CI's lint matrix lint as an
+        # explicit extra target (ADR 0012).
         #
         # The allow list already refuses every package below; these entries
         # only say why.
@@ -919,8 +771,6 @@ linters:
               desc: cmd/shift2eu-web constructs no adapter; its wire package does
             - pkg: github.com/timothymamo/shift2eu/internal/cli
               desc: the page never runs the CLI; it runs internal/web
-            - pkg: github.com/timothymamo/shift2eu/internal/httpapi
-              desc: the page never calls the HTTP API; no inventory leaves the browser
             - pkg: os
               desc: the site's module reads no file and no environment; it runs in the browser
             - pkg: net
@@ -939,9 +789,8 @@ linters:
         # in-memory mode), the three target catalogs and the Markdown and JSON
         # reporters, and the HTML reporter, into internal/web's Deps. Its
         # imports are a strict allow list naming each of those packages,
-        # ending in $: no request decoder, no source adapter that reaches a
-        # cloud, no internal/cli and no internal/httpapi, and no standard
-        # package at all.
+        # ending in $: no source adapter that reaches a cloud, no
+        # internal/cli, and no standard package at all.
         web-composition-root-wire:
           list-mode: strict
           files:
@@ -958,12 +807,8 @@ linters:
             - github.com/timothymamo/shift2eu/internal/app/analysis$
             - github.com/timothymamo/shift2eu/internal/web$
           deny:
-            - pkg: github.com/timothymamo/shift2eu/internal/adapter/request
-              desc: the page decodes no HTTP request; it reads the inventory through inventoryfile.FromBytes
             - pkg: github.com/timothymamo/shift2eu/internal/cli
               desc: only wire's test files run the CLI, for the parity tests; the page never does
-            - pkg: github.com/timothymamo/shift2eu/internal/httpapi
-              desc: the page never calls the HTTP API; no inventory leaves the browser
             - pkg: os
               desc: the wiring constructs adapters and reads nothing
             - pkg: net
@@ -996,8 +841,6 @@ linters:
             - github.com/timothymamo/shift2eu/internal/cli$
             - github.com/timothymamo/shift2eu/internal/web$
           deny:
-            - pkg: github.com/timothymamo/shift2eu/internal/httpapi
-              desc: the parity tests compare the page with the CLI; the HTTP API has its own (test/apiparity)
             - pkg: os/exec
               desc: the parity tests run the CLI in process, never as a program
         # Only cmd/shift2eu-web, the site's glue, may call JavaScript (PRD
@@ -1015,7 +858,7 @@ linters:
             - "!**/cmd/shift2eu-web/**"
           deny:
             - pkg: syscall/js
-              desc: only cmd/shift2eu-web, the site's glue, calls JavaScript (PRD #297)
+              desc: "only cmd/shift2eu-web, the site's glue, calls JavaScript (PRD #297)"
         # Only the packages under internal/adapter/target import the shared
         # snapshot reader (ADR 0007): the target adapters, their contract suite
         # and the reader itself. A source adapter, a reporter, internal/config
@@ -1228,42 +1071,6 @@ linters:
           deny:
             - pkg: encoding/json
               desc: decode the inventory file through internal/adapter/internal/jsondoc (ADR 0009)
-        # A request decoder parses the bytes of an HTTP API request body it is
-        # given (ADR 0019): assessmentrequest decodes POST /v1/assessments. It
-        # reads no file, makes no network call, imports no net/http (the
-        # HTTP API, internal/httpapi, reads the body) and imports no adapter,
-        # internal/cli, internal/httpapi or cmd/. It may import only what is
-        # listed under allow: errors and fmt for its errors, and jsondoc, the
-        # strict decoder (ADR 0009), named with $ for the reason
-        # target-snapshot-reader-parses-bytes gives. The glob ends in /** so it
-        # covers every package under internal/adapter/request, and the files
-        # directly in each. Add a standard package only when parsing needs it,
-        # never one that does I/O. fmt$ is allowed for fmt.Errorf: a decoder
-        # must not call fmt.Print*, which an import rule cannot see, so review
-        # holds that line.
-        #
-        # It decodes only through jsondoc, never with encoding/json of its own,
-        # which matches keys ignoring case and keeps the last of a repeated
-        # key. The allow list already refuses every package below; these
-        # entries only say why.
-        request-decoders-parse-bytes:
-          list-mode: strict
-          files:
-            - "**/internal/adapter/request/**"
-            - "!$test"
-          allow:
-            - errors$
-            - fmt$
-            - github.com/timothymamo/shift2eu/internal/adapter/internal/jsondoc$
-          deny:
-            - pkg: encoding/json
-              desc: decode a request body through internal/adapter/internal/jsondoc (ADR 0009)
-            - pkg: net
-              desc: a request decoder parses the bytes it is given; internal/httpapi reads the body
-            - pkg: os
-              desc: a request decoder reads no file and no environment
-            - pkg: github.com/timothymamo/shift2eu/internal/httpapi
-              desc: an adapter never imports a driving adapter; the composition root passes Decode to it
         # A cloud source adapter reaches its cloud only through the SDK calls
         # forbidigo's cloud-read-only group checks (CLAUDE.md rule 1, ADR
         # 0014). Anything else that can call a method by a name forbidigo
@@ -1588,9 +1395,9 @@ linters:
             - "!**/test/browser/**"
           deny:
             - pkg: github.com/chromedp/
-              desc: only the site's browser smoke test, test/browser, drives a browser (PRD #297)
+              desc: "only the site's browser smoke test, test/browser, drives a browser (PRD #297)"
             - pkg: github.com/go-json-experiment/
-              desc: cdproto, the protocol library the browser driver brings in, encodes with it under its cdproto_jsoncompat build tag (PRD #297)
+              desc: "cdproto, the protocol library the browser driver brings in, encodes with it under its cdproto_jsoncompat build tag (PRD #297)"
         # The site's headless-browser smoke test (PRD #297 milestone 2). Its
         # test files, behind the browser tag, are held to exactly what they
         # import: the standard packages for the local httptest origins, the
@@ -1648,7 +1455,7 @@ linters:
             - pkg: os
               desc: test/browser's doc.go imports nothing; its tests, behind the browser tag, are held by browser-smoke-test
         # The composition roots' _test.go files (issue #111). The strict
-        # rules composition-root and server-composition-root skip test files
+        # rules composition-root and web-composition-root skip test files
         # (!$test), yet a test is compiled into the root's package and runs in
         # the same process: it could start a program, load a plugin, hand a
         # path to a CGI handler, build a package, reach C, or take a pointer
@@ -1661,14 +1468,13 @@ linters:
         # os/user is denied too: a lookup returns a user's home directory,
         # where the environment's variables and credential files point.
         #
-        # Since issue #152 the rule also holds the _test.go files of the two
-        # driving adapters, internal/cli and internal/httpapi: a root hands
-        # them the work, and their tests run in the same process as the code
-        # under test. This import rule is half of the roots' limits; the call
+        # Since issue #152 the rule also holds the _test.go files of the
+        # driving adapters, internal/cli and (PRD #297, below) internal/web:
+        # a root hands them the work, and their tests run in the same process
+        # as the code under test. This import rule is half of the roots' limits; the call
         # half is forbidigo's: composition-root-no-exec and composition-root-env
-        # hold under cmd/ only, cli-no-env-or-process holds every file of
-        # internal/cli, its tests included, and httpapi-tests-no-env-or-process
-        # holds internal/httpapi's tests. The CLI's tests import syscall for
+        # hold under cmd/ only, and cli-no-env-or-process holds every file of
+        # internal/cli, its tests included. The CLI's tests import syscall for
         # syscall.Mkfifo (output_unix_test.go), which neither this deny list
         # nor cli-no-env-or-process names.
         #
@@ -1680,14 +1486,10 @@ linters:
           files:
             - "**/cmd/shift2eu/*_test.go"
             - "**/cmd/shift2eu/**/*_test.go"
-            - "**/cmd/shift2eu-server/*_test.go"
-            - "**/cmd/shift2eu-server/**/*_test.go"
             - "**/cmd/shift2eu-web/*_test.go"
             - "**/cmd/shift2eu-web/**/*_test.go"
             - "**/internal/cli/*_test.go"
             - "**/internal/cli/**/*_test.go"
-            - "**/internal/httpapi/*_test.go"
-            - "**/internal/httpapi/**/*_test.go"
             - "**/internal/web/*_test.go"
             - "**/internal/web/**/*_test.go"
           deny:
@@ -1748,8 +1550,8 @@ linters:
         # its environment reads, as inventoryfile-no-env does
         # (TestEveryOsAllowingRuleHasAnEnvironmentGroup fails until it has
         # one), and any read of a named variable needs an exception decided
-        # in an ADR, as composition-root-env's for SHIFT2EU_SERVER_TOKEN
-        # (ADR 0019). The same commit drops the os deny entry:
+        # in an ADR, as ai-reviewer-env's for ci/aireview/main.go (ADR
+        # 0033). The same commit drops the os deny entry:
         # check.AllowList refuses a rule whose allow list allows a package
         # its deny list names.
         config-is-pure:
@@ -1811,8 +1613,8 @@ linters:
             - github.com/timothymamo/shift2eu/internal/domain/taxonomy$
             - github.com/timothymamo/shift2eu/internal/domain/text$
         # The test trees' own documentation packages (issue #152, the auditor's finding H-1):
-        # test/apiparity, test/architecture, test/container, test/devenv, test/docs, test/lint,
-        # test/openapibundle (issue #139) and test/examples (issue #179) each hold doc.go and no
+        # test/architecture, test/container, test/devenv, test/docs, test/lint
+        # and test/examples (issue #179) each hold doc.go and no
         # code, and each is a production package a composition root can import, because the roots'
         # allow lists name the module path as a prefix entry. Go's internal rule keeps
         # test/internal/... and
@@ -1842,7 +1644,6 @@ linters:
         test-docs-are-pure:
           list-mode: strict
           files:
-            - "**/test/apiparity/**"
             - "**/test/architecture/**"
             - "!**/test/architecture/internal/**"
             - "**/test/container/**"
@@ -1851,7 +1652,6 @@ linters:
             - "**/test/e2e/**"
             - "**/test/examples/**"
             - "**/test/lint/**"
-            - "**/test/openapibundle/**"
             - "**/test/site/**"
             - "!**/test/site/internal/**"
             - "!$test"
@@ -1867,7 +1667,9 @@ linters:
         # either. They are held all the same. ai-reviewer-main holds the entry
         # point to the standard packages it imports and its library, each
         # ending in $: os for main's instruction files, os.Exit and the one
-        # os.LookupEnv the forbidigo group ai-reviewer-env allows it.
+        # os.LookupEnv the forbidigo group ai-reviewer-env allows it; io for
+        # the io.Writer reportSkipped writes to, so its test can pass a
+        # bytes.Buffer (issue #389).
         ai-reviewer-main:
           list-mode: strict
           files:
@@ -1877,6 +1679,7 @@ linters:
           allow:
             - context$
             - fmt$
+            - io$
             - os$
             - os/signal$
             - time$
@@ -2231,24 +2034,19 @@ linters:
         - pattern: '^time\.(?:Parse|Time\.(?:UnmarshalJSON|UnmarshalText|UnmarshalBinary|GobDecode))$'
           pkg: '^time$'
           msg: 'domain-is-pure: this matches a zone offset against time.Local, which reads TZ and /etc/localtime; use time.ParseInLocation with time.UTC or a *time.Location passed in'
-        # Group composition-root-no-exec: the composition roots cmd/shift2eu
-        # and cmd/shift2eu-server (issue #111) start no program and dump no
-        # environment. Their depguard allow lists (composition-root,
-        # server-composition-root) must allow os and syscall, which can start
+        # Group composition-root-no-exec: the composition root cmd/shift2eu
+        # (issue #111) starts no program and dumps no
+        # environment. Its depguard allow list (composition-root)
+        # must allow os and syscall, which can start
         # a process (shelling out to a cloud CLI) or hand over every variable,
         # credentials included (CLAUDE.md rule 3). os/exec is refused as a
         # package: any use of it, whichever name. The group has no exception.
         #
-        # Group composition-root-env: the composition roots read no named
-        # variable either, with one narrow exception: cmd/shift2eu-server/main.go
-        # calls os.LookupEnv once, with tokenEnvVar (SHIFT2EU_SERVER_TOKEN),
-        # in the token source func() (string, bool) it passes to run (ADR
-        # 0019); run, setUp and readToken see only the token, never a lookup
-        # by name. test/lint's TestCompositionRootPassesLookupEnvToRun pins
-        # that shape. The entry stands alone, so the exception's exclusion
-        # rule names its msg and drops no other entry's issue. Since issue
-        # #152 the group also refuses os.UserHomeDir, os.UserConfigDir,
-        # os.UserCacheDir and os.TempDir, which read $HOME, $XDG_CONFIG_HOME,
+        # Group composition-root-env: the composition root reads no named
+        # variable either, and the group has no exception: the one it had,
+        # the HTTP API's token (ADR 0019), went with the API (ADR 0037).
+        # Since issue #152 the group also refuses os.UserHomeDir,
+        # os.UserConfigDir, os.UserCacheDir and os.TempDir, which read $HOME, $XDG_CONFIG_HOME,
         # $XDG_CACHE_HOME and $TMPDIR without naming them, in an entry of
         # their own, so every package allowed os is held to the same nine
         # reads, and since issue #167 every package allowed syscall to the
@@ -2258,20 +2056,16 @@ linters:
         # among them), which no-exec and env refuse between them
         # (test/architecture's TestEveryOsAllowingRuleHasAnEnvironmentGroup).
         #
-        # Scope of both: every file under cmd/shift2eu/ and
-        # cmd/shift2eu-server/, _test.go files included. A test of a
-        # composition root is compiled into the same package and runs with the
-        # same environment, and the server's tests hand run a fake token
-        # source, so none needs a real one. Elsewhere the depguard rules keep os/exec out
-        # by layer; these groups only add the call-level rule depguard cannot
+        # Scope of both: every file under cmd/shift2eu/, _test.go files
+        # included. A test of a composition root is compiled into the same
+        # package and runs with the same environment. Elsewhere the depguard
+        # rules keep os/exec out by layer; these groups only add the call-level rule depguard cannot
         # state for the roots. A root cannot delegate a read to the driving
         # adapter it hands the work to either: internal/cli's strict allow
         # list leaves syscall, unsafe and os/exec out and the group
         # cli-no-env-or-process refuses the calls of os and syscall that
         # reach the environment or start a process, in its tests too (issue
-        # #152); internal/httpapi's strict allow list leaves os and syscall
-        # out, and httpapi-tests-no-env-or-process holds its tests;
-        # internal/version, which the CLI imports, is held to fmt by
+        # #152); internal/version, which the CLI imports, is held to fmt by
         # depguard's version-is-build-metadata; the inventory-file reader is
         # held by inventoryfile-no-env; and every other non-test module
         # package a root can import, under internal/, cmd/, test/ or a new
@@ -2317,15 +2111,12 @@ linters:
         - pattern: '^\w+\.\w+'
           pkg: '^os/exec$'
           msg: 'composition-root-no-exec: a composition root runs no program, such as a cloud CLI; os/exec is refused as a whole'
-        - pattern: '^os\.(?:Getenv|ExpandEnv)$'
+        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv)$'
           pkg: '^os$'
           msg: 'composition-root-env: a composition root reads no environment variable; take the value as a flag'
         - pattern: '^os\.(?:UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'composition-root-env: a composition root locates no home, config, cache or temp directory, where a credentials file sits; take the value as a flag'
-        - pattern: '^os\.LookupEnv$'
-          pkg: '^os$'
-          msg: 'composition-root-env: os.LookupEnv is called in cmd/shift2eu-server/main.go only, for SHIFT2EU_SERVER_TOKEN, in the token source it hands to run (ADR 0019); take any other value as a flag'
         - pattern: '^syscall\.(?:Getenv|GetEnvironmentVariable)$'
           pkg: '^syscall$'
           msg: 'composition-root-env: a composition root reads no environment variable; take the value as a flag'
@@ -2378,24 +2169,6 @@ linters:
         - pattern: '^syscall\.(?:Getenv|GetEnvironmentVariable|Environ|Exec|ForkExec|StartProcess|CreateProcess|CreateProcessAsUser|GetEnvironmentStrings|LoadDLL|MustLoadDLL|NewLazyDLL|LoadLibrary|GetProcAddress|(?:(?:AllThreads|Raw)?Syscall(?:6|9|12|15|18|N)?|SYS_\w+))$'
           pkg: '^syscall$'
           msg: 'cli-no-env-or-process: the CLI has no call that starts or replaces a process, makes a raw system call or reads the environment, in its tests either; pass the value to the code under test (CLAUDE.md rule 3)'
-        # Group httpapi-tests-no-env-or-process (issue #152): the HTTP API's
-        # tests read no environment variable, locate no home, config, cache or
-        # temp directory, start no process and make no raw system call. The
-        # production files need no group: internal/httpapi's strict allow list
-        # (httpapi-gets-adapters-from-cmd) leaves os and syscall out. Its
-        # tests are compiled into the same package and run in the same process
-        # as the code a root hands the work to, so they get the roots' call
-        # limits, with the same names and for the same reasons as
-        # cli-no-env-or-process (one syscall entry, pinned offline). The
-        # writes are tests-no-process-state's; depguard's composition-root-tests
-        # keeps unsafe, os/exec and os/user out. Scope: the _test.go files
-        # under internal/httpapi/; its exclusion rule drops it everywhere else.
-        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
-          pkg: '^os$'
-          msg: 'httpapi-tests-no-env-or-process: a test of the HTTP API reads no environment variable and locates no home, config, cache or temp directory, where credentials live; pass the value to the code under test (CLAUDE.md rule 3)'
-        - pattern: '^syscall\.(?:Getenv|GetEnvironmentVariable|Environ|Exec|ForkExec|StartProcess|CreateProcess|CreateProcessAsUser|GetEnvironmentStrings|LoadDLL|MustLoadDLL|NewLazyDLL|LoadLibrary|GetProcAddress|(?:(?:AllThreads|Raw)?Syscall(?:6|9|12|15|18|N)?|SYS_\w+))$'
-          pkg: '^syscall$'
-          msg: 'httpapi-tests-no-env-or-process: a test of the HTTP API starts or replaces no process, makes a raw system call or reads the environment; pass the value to the code under test (CLAUDE.md rule 3)'
         # Group tests-no-process-state (issue #153): a test changes no
         # environment variable and no working directory. t.Setenv and
         # os.Setenv change the environment of the whole test binary, so every
@@ -2474,7 +2247,7 @@ linters:
         # embedding type and is not refused. The entry is defence in depth
         # for $test, since the non-test files cannot import os/exec. The
         # _test.go files keep $gostd to build and run the binary with
-        # os/exec. The runs of the binary (run and the server helpers) set
+        # os/exec. The runs of the binary (run and its helpers) set
         # cmd.Env; the go build calls in TestMain and the go list -deps calls
         # leave Env nil and inherit the environment, which the go toolchain
         # needs. A nil Env in a _test.go file is refused by test/lint's
@@ -2501,8 +2274,8 @@ linters:
           pkg: '^os/exec$'
           msg: 'e2e-no-env: a command hands its child the whole environment of the test process, where credentials live; set cmd.Env to the variables the binary needs (CLAUDE.md rule 3)'
         # Group ai-reviewer-env (ADR 0033): the AI reviewer reads the
-        # environment through one call only, with one named exception as
-        # composition-root-env's for SHIFT2EU_SERVER_TOKEN: ci/aireview/main.go
+        # environment through one call only, with one named exception:
+        # ci/aireview/main.go
         # passes os.LookupEnv to review.SettingsFromEnv, which reads the
         # variables ADR 0033 names and no other. Everything else is refused:
         # another way to read a variable or the whole environment, a process
@@ -2631,15 +2404,13 @@ linters:
           - forbidigo
         text: 'because "domain-is-pure: [^"]*"$'
       # composition-root-no-exec and composition-root-env: both groups hold
-      # for every file under cmd/shift2eu/ and cmd/shift2eu-server/, _test.go
-      # files included (see the groups in the forbidigo settings). One
-      # path-except rule per group: two per-root rules would each drop the
-      # other root's issues.
-      - path-except: ^cmd/shift2eu(?:-server)?/
+      # for every file under cmd/shift2eu/, _test.go files included (see the
+      # groups in the forbidigo settings). One path-except rule per group.
+      - path-except: ^cmd/shift2eu/
         linters:
           - forbidigo
         text: 'because "composition-root-no-exec: [^"]*"$'
-      - path-except: ^cmd/shift2eu(?:-server)?/
+      - path-except: ^cmd/shift2eu/
         linters:
           - forbidigo
         text: 'because "composition-root-env: [^"]*"$'
@@ -2656,13 +2427,6 @@ linters:
         linters:
           - forbidigo
         text: 'because "cli-no-env-or-process: [^"]*"$'
-      # httpapi-tests-no-env-or-process: the group holds for the _test.go
-      # files under internal/httpapi/ and nowhere else; the production files
-      # are held by their strict import rule.
-      - path-except: ^internal/httpapi/.*_test\.go$
-        linters:
-          - forbidigo
-        text: 'because "httpapi-tests-no-env-or-process: [^"]*"$'
       # tests-no-process-state: the group holds for every file but those of
       # test/lint and test/architecture, which set the go command's own
       # variables on purpose.
@@ -2678,15 +2442,6 @@ linters:
         linters:
           - forbidigo
         text: 'because "tests-no-process-state: [^"]*"$'
-      # The one exception (ADR 0019): os.LookupEnv(tokenEnvVar), the call the
-      # token source that main.go passes to run makes for
-      # SHIFT2EU_SERVER_TOKEN, in cmd/shift2eu-server/main.go alone. text is
-      # the os.LookupEnv entry's msg, so os.Getenv, os.ExpandEnv and
-      # syscall.Getenv are still refused there.
-      - path: ^cmd/shift2eu-server/main\.go$
-        linters:
-          - forbidigo
-        text: 'because "composition-root-env: os\.LookupEnv is called in cmd/shift2eu-server/main\.go only, for SHIFT2EU_SERVER_TOKEN, in the token source it hands to run \(ADR 0019\); take any other value as a flag"$'
       # inventoryfile-no-env: the group holds for every file under
       # internal/adapter/source/inventoryfile/, _test.go files included, and
       # nowhere else.

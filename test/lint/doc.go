@@ -89,14 +89,11 @@
 // which import syscall for syscall.Mkfifo, the roots' syscall names, on the
 // internal/cli of TestCompositionRootForbidigoProbe's module (an aliased os
 // import included), and TestCLINoEnvOrProcessForbidigoPatterns pins its
-// patterns, the windows names offline. The group
-// httpapi-tests-no-env-or-process does the same for internal/httpapi's
-// _test.go files, on the same module's internal/httpapi, and
-// TestHTTPAPITestsNoEnvOrProcessForbidigoPatterns pins it.
+// patterns, the windows names offline.
 // TestCLITestImportersProbe (testdata/clitestimporters) holds the lax
-// cli-only-in-named-tests rule (issue #345): the test files of internal/cli,
-// the wire package and test/apiparity import internal/cli, and a test of
-// internal/web, internal/httpapi, cmd/shift2eu, the site's glue or a package
+// cli-only-in-named-tests rule (issue #345): the test files of internal/cli
+// and the wire package import internal/cli, and a test of
+// internal/web, cmd/shift2eu, the site's glue or a package
 // below internal/cli that imports it is refused; internal/web's imports
 // internal/cli/sub too, for the rule's prefix deny entry. The rule's globs
 // match any path that ends in the named directories, so test/architecture's
@@ -218,8 +215,8 @@
 // exclusion rule that drops forbidigo issues: it names forbidigo alone, its
 // text matches only one group's quoted msg, and the rules of each group are
 // exactly those it states: none for cloud-read-only, and for domain-is-pure
-// one path and one path-except. Two groups hold the composition roots
-// cmd/shift2eu and cmd/shift2eu-server (issue #111): composition-root-no-exec
+// one path and one path-except. Two groups hold the composition root
+// cmd/shift2eu (issue #111): composition-root-no-exec
 // refuses starting a process and dumping the environment (os.StartProcess,
 // os/exec, syscall.Exec, ForkExec, StartProcess, os.Environ, syscall.Environ),
 // the windows entry points (syscall.CreateProcess, CreateProcessAsUser,
@@ -235,14 +232,11 @@
 // TestCompositionRootsUseSyscallOnlyForSignals, an AST check under which the
 // roots, tests included, use package syscall for a ^SIG[A-Z0-9]+$ constant and
 // the type syscall.Signal only, and TestRootsAndCLILinkNoForeignSymbol
-// refuses //go:linkname in them and in both driving adapters, internal/cli
-// and internal/httpapi. TestCompositionRootPassesLookupEnvToRun holds
-// cmd/shift2eu-server/main.go to one os.LookupEnv call, with the identifier
-// tokenEnvVar, as the sole return of the func() (string, bool) token source it
-// passes to run, so run reads no other variable, and
+// refuses //go:linkname in them, in the driving adapter internal/cli and in
+// the inventory-file reader, and
 // TestRootsAndCLINameNoEnvironmentPath refuses a literal holding the path
 // segment proc or dev/fd, at its start or after a /, with or without a
-// trailing /, but not myproc, in the roots, both driving adapters and the
+// trailing /, but not myproc, in the root, the driving adapter and the
 // inventory-file reader (proc/self/environ read through os.DirFS("/") has no
 // leading slash, and os.DirFS("/proc") no trailing one); no group can state
 // either.
@@ -251,9 +245,7 @@
 // _test.go files, which the strict composition-root rules skip, and in the
 // driving adapters' _test.go files; TestCompositionRootTestsReachNoForeignCodeProbe
 // runs it on a probe module (testdata/compositionroottests). TestCompositionRootExclusions
-// pins their one path-except each and the env group's one exception, whose text
-// is the group's form with the os.LookupEnv entry's exact msg in place of
-// [^"]*, so it drops that entry's issue in cmd/shift2eu-server/main.go alone;
+// pins their one path-except each and that neither group has an exception;
 // TestCompositionRootForbidigoPatterns and TestCompositionRootForbidigoProbe
 // pin their entries. It reads linters.exclusions.rules with
 // test/internal/yamlread, the strict line reader test/architecture reads

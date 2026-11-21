@@ -38,7 +38,7 @@ param:
   # renovate: datasource=go depName=golang.org/x/vuln
   govulncheckVersion: "v1.9.0"
   # renovate: datasource=github-releases depName=vfarcic/dot-agent-deck
-  dotAgentDeckVersion: "v0.50.2"
+  dotAgentDeckVersion: "v0.51.0"
   # renovate: datasource=node-version depName=node versioning=node
   nodeVersion: "26.13.0"
   # renovate: datasource=npm depName=@earendil-works/pi-coding-agent
@@ -67,7 +67,7 @@ param:
   cosignSha256Arm64: "ade83b7aac62e131cacfe96d958948b2150cc9efec46a570a2649b8e27dedad2"
   # nerdctl-full: nerdctl, containerd, BuildKit, RootlessKit, runc and CNI plugins, run rootless.
   # renovate: datasource=github-releases depName=containerd/nerdctl
-  nerdctlVersion: "v2.4.1"
+  nerdctlVersion: "v2.4.2"
   # shellcheck, which make lint runs on the tracked shell scripts and actionlint on the workflows' run:
   # scripts (ADR 0022). The same pin as CI's lint-shell job in .github/workflows/ci.yml.
   # renovate: datasource=github-releases depName=koalaman/shellcheck

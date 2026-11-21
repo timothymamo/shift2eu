@@ -20,7 +20,7 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, httpapiTestsNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag}
 
 // siteBuilderEnvTag is the tag of the site builder's environment group (PRD
 // #297 milestone 2).
@@ -106,15 +106,6 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		// nowhere else. The roots' own groups take over under cmd/.
 		cliNoEnvOrProcessTag: {
 			{"path-except": `^internal/cli/`, "text": groupText(cliNoEnvOrProcessTag)},
-		},
-		// The HTTP API's tests (issue #152): one rule, for every path outside
-		// the handler's _test.go files, so the group holds there and nowhere
-		// else. The handler's production files make no call the roots' groups
-		// refuse, and a rule that held them would need an exception of its own
-		// the day it reads the request's own directory; the tests run in the
-		// process the composition root runs in.
-		httpapiTestsNoEnvOrProcessTag: {
-			{"path-except": `^internal/httpapi/.*_test\.go$`, "text": groupText(httpapiTestsNoEnvOrProcessTag)},
 		},
 		// The inventory-file reader (issue #152): one rule, for every path
 		// outside internal/adapter/source/inventoryfile/, so the group holds

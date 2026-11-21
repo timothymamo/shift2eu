@@ -185,11 +185,11 @@ func noNewlineFile(path, added string) string {
 		"\\ No newline at end of file\n"
 }
 
-// TestFilterDiffLeavesGeneratedAndGoldenFilesOut pins what the reviewer does not
+// TestFilterDiffLeavesGoldenFilesOut pins what the reviewer does not
 // read (issue #324, ADR 0033): the diff it sends the model and measures against
-// MaxDiffBytes is the pull request's diff without the generated OpenAPI bundle
-// (api/openapi.bundled.json) and without the golden files of a testdata
-// directory, and every file it left out is listed once, sorted, so the review
+// MaxDiffBytes is the pull request's diff without the golden files of a testdata
+// directory (the generated bundle it left out too went with the HTTP API,
+// issue #393), and every file it left out is listed once, sorted, so the review
 // that names them reads the same for the same diff.
 //
 // The list is the reviewer's own: it is fixed in this package and no pull
@@ -200,7 +200,7 @@ func noNewlineFile(path, added string) string {
 // left-out name or a left-out file by renaming it out of one. A section is cut
 // at its "diff --git " header alone: a line of a hunk is a content line, even
 // when it reads like a header.
-func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
+func TestFilterDiffLeavesGoldenFilesOut(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
@@ -215,12 +215,12 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 			wantKept: diffFile("internal/x/y.go", "CODE-ONE") + diffFile("internal/x/z.go", "CODE-TWO"),
 		},
 		{
-			name: "the generated OpenAPI bundle is left out",
+			name: "a golden file between two code files is left out",
 			diff: diffFile("internal/x/y.go", "CODE-ONE") +
-				diffFile("api/openapi.bundled.json", "GENERATED") +
+				diffFile("internal/x/testdata/report.golden", "GOLDEN") +
 				diffFile("internal/x/z.go", "CODE-TWO"),
 			wantKept:     diffFile("internal/x/y.go", "CODE-ONE") + diffFile("internal/x/z.go", "CODE-TWO"),
-			wantExcluded: []string{"api/openapi.bundled.json"},
+			wantExcluded: []string{"internal/x/testdata/report.golden"},
 		},
 		{
 			name:         "a golden file of a testdata directory is left out",
@@ -240,10 +240,10 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 		{
 			name: "a golden file of testdata is left out wherever it sits in the diff",
 			diff: diffFile("testdata/z.golden", "GOLDEN") +
-				diffFile("api/openapi.bundled.json", "GENERATED") +
+				diffFile("internal/y/testdata/b.golden", "GOLDEN") +
 				diffFile("internal/x/testdata/a.golden", "GOLDEN"),
 			wantKept:     "",
-			wantExcluded: []string{"api/openapi.bundled.json", "internal/x/testdata/a.golden", "testdata/z.golden"},
+			wantExcluded: []string{"internal/x/testdata/a.golden", "internal/y/testdata/b.golden", "testdata/z.golden"},
 		},
 		{
 			name:     "a golden file outside a testdata directory is kept",
@@ -252,15 +252,15 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 		},
 		{
 			// The path is compared as git writes it: cleaning it first would
-			// leave a generated file behind a name no review ever sees.
-			name:     "the generated path with a .. element is kept",
-			diff:     diffFile("api/../api/openapi.bundled.json", "GENERATED"),
-			wantKept: diffFile("api/../api/openapi.bundled.json", "GENERATED"),
+			// leave a file out behind a name no review ever sees.
+			name:     "a golden path with a .. element is kept",
+			diff:     diffFile("testdata/../testdata/a.golden", "GOLDEN"),
+			wantKept: diffFile("testdata/../testdata/a.golden", "GOLDEN"),
 		},
 		{
-			name:     "the generated path in another case is kept",
-			diff:     diffFile("API/openapi.bundled.json", "GENERATED"),
-			wantKept: diffFile("API/openapi.bundled.json", "GENERATED"),
+			name:     "a golden path whose testdata is in another case is kept",
+			diff:     diffFile("TESTDATA/a.golden", "GOLDEN"),
+			wantKept: diffFile("TESTDATA/a.golden", "GOLDEN"),
 		},
 		{
 			// A rename names two paths: the section goes only when both are
@@ -288,9 +288,9 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 			wantExcluded: []string{"testdata/old.golden"},
 		},
 		{
-			name:         "an added generated file is left out",
-			diff:         addedFile("api/openapi.bundled.json", "GENERATED"),
-			wantExcluded: []string{"api/openapi.bundled.json"},
+			name:         "an added golden file of a nested testdata directory is left out",
+			diff:         addedFile("internal/x/testdata/new.golden", "GOLDEN"),
+			wantExcluded: []string{"internal/x/testdata/new.golden"},
 		},
 		{
 			name:         "a binary golden file is left out",
@@ -299,8 +299,8 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 		},
 		{
 			name:     "a header line spoofed inside a hunk does not split the section",
-			diff:     diffFile("internal/x/y.go", "diff --git a/api/openapi.bundled.json b/api/openapi.bundled.json"),
-			wantKept: diffFile("internal/x/y.go", "diff --git a/api/openapi.bundled.json b/api/openapi.bundled.json"),
+			diff:     diffFile("internal/x/y.go", "diff --git a/testdata/a.golden b/testdata/a.golden"),
+			wantKept: diffFile("internal/x/y.go", "diff --git a/testdata/a.golden b/testdata/a.golden"),
 		},
 		{
 			name:     "a quoted path is never left out",
@@ -324,19 +324,19 @@ func TestFilterDiffLeavesGeneratedAndGoldenFilesOut(t *testing.T) {
 			wantKept: symlinkDeletedFile("testdata/report.golden"),
 		},
 		{
-			name:     "a changed symbolic link at the generated bundle's path is kept",
-			diff:     materialChangedFile("api/openapi.bundled.json", "120000", "internal/x/y.go", "internal/x/z.go"),
-			wantKept: materialChangedFile("api/openapi.bundled.json", "120000", "internal/x/y.go", "internal/x/z.go"),
+			name:     "a changed symbolic link at a golden file's path is kept",
+			diff:     materialChangedFile("testdata/a.golden", "120000", "internal/x/y.go", "internal/x/z.go"),
+			wantKept: materialChangedFile("testdata/a.golden", "120000", "internal/x/y.go", "internal/x/z.go"),
 		},
 		{
-			name:     "a submodule added at the generated bundle's path is kept",
-			diff:     gitlinkAddedFile("api/openapi.bundled.json"),
-			wantKept: gitlinkAddedFile("api/openapi.bundled.json"),
+			name:     "a submodule added at a golden file's path is kept",
+			diff:     gitlinkAddedFile("testdata/a.golden"),
+			wantKept: gitlinkAddedFile("testdata/a.golden"),
 		},
 		{
-			name:     "a changed submodule at the generated bundle's path is kept",
-			diff:     materialChangedFile("api/openapi.bundled.json", "160000", "Subproject commit 1111111111111111111111111111111111111111", "Subproject commit 2222222222222222222222222222222222222222"),
-			wantKept: materialChangedFile("api/openapi.bundled.json", "160000", "Subproject commit 1111111111111111111111111111111111111111", "Subproject commit 2222222222222222222222222222222222222222"),
+			name:     "a changed submodule at a golden file's path is kept",
+			diff:     materialChangedFile("testdata/a.golden", "160000", "Subproject commit 1111111111111111111111111111111111111111", "Subproject commit 2222222222222222222222222222222222222222"),
+			wantKept: materialChangedFile("testdata/a.golden", "160000", "Subproject commit 1111111111111111111111111111111111111111", "Subproject commit 2222222222222222222222222222222222222222"),
 		},
 		{
 			name:     "a golden file whose mode alone changed is kept",

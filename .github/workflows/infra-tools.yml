@@ -1,0 +1,96 @@
+name: Infra tools
+
+# verify-tofu-pins: infra/tofu.yaml pins OpenTofu by a SHA-256 of its release tarball per platform, and
+# dev/tofu.sh trusts those pins: it refuses a tarball whose digest is not its platform's pin, but has no
+# signature to check. This job is what makes a pin authentic (issue #422), the way vm-tools.yml's
+# verify-pins does for gh and cosign. It downloads the release's tofu_<version>_SHA256SUMS with its
+# signature and certificate, checks them with cosign against opentofu/opentofu's release workflow on the
+# release branch v<major>.<minor> (the identity OpenTofu's install documentation names; a release is
+# built from its minor version's branch, never the tag), then checks each pin equals that file's line for
+# tofu_<version>_<os>_<arch>.tar.gz. The file names carry the version, so a SHA256SUMS of another release
+# from the same branch cannot vouch for these pins. The cosign that checks it comes from
+# sigstore/cosign-installer, pinned by digest, not from the release under test: v4.1.3 installs cosign
+# v3.1.4, which verifies the --certificate/--signature pair OpenTofu publishes (it warns that both flags
+# are deprecated in favour of a bundle, which OpenTofu's releases do not ship). It runs on every pull
+# request, so it can be a required status check without leaving other PRs waiting for it; the weekly run
+# catches a release asset replaced under a tag already pinned, which Renovate never reports.
+on:
+  push:
+    branches: [main]
+    paths:
+      - infra/tofu.yaml
+      - .github/workflows/infra-tools.yml
+  pull_request:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays, with the Security workflow
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify-tofu-pins:
+    name: Verify the OpenTofu pins
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+      - name: Verify every pinned tarball digest
+        run: |
+          set -euo pipefail
+          # Sets REPLY to <key> of infra/tofu.yaml, read as YAML, which must be a string matching <regex>.
+          # Not called in $(...), so the error reaches the log and exit stops the step.
+          pin() { # <key> <regex> <what it should be>
+            if ! REPLY="$(yq -e ".${1} | select(tag == \"!!str\")" infra/tofu.yaml 2>/dev/null)"; then
+              echo "::error file=infra/tofu.yaml::${1} is missing or not a string"
+              exit 1
+            fi
+            if ! [[ "${REPLY}" =~ $2 ]]; then
+              # The value itself is not printed: it could hold a newline and a workflow command.
+              echo "::error file=infra/tofu.yaml::${1} is not ${3}"
+              exit 1
+            fi
+          }
+          pin tofuVersion '^v([0-9]+)\.([0-9]+)\.[0-9]+$' "a release tag like v1.2.3"
+          version="${REPLY}"
+          branch="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+          cosign version
+          yq --version
+          dir="${RUNNER_TEMP}/tofu"
+          mkdir -p "${dir}"
+          sums="tofu_${version#v}_SHA256SUMS"
+          base="https://github.com/opentofu/opentofu/releases/download/${version}"
+          for f in "${sums}" "${sums}.sig" "${sums}.pem"; do
+            curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "${dir}/${f}" "${base}/${f}"
+          done
+          if ! cosign verify-blob --certificate "${dir}/${sums}.pem" --signature "${dir}/${sums}.sig" \
+            --certificate-identity "https://github.com/opentofu/opentofu/.github/workflows/release.yml@refs/heads/${branch}" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "${dir}/${sums}"; then
+            echo "::error file=infra/tofu.yaml::OpenTofu ${version}: ${sums} is not signed by opentofu/opentofu's release workflow on ${branch}"
+            exit 1
+          fi
+          failed=0
+          for platform in LinuxAmd64:linux_amd64 LinuxArm64:linux_arm64 DarwinArm64:darwin_arm64; do
+            key="tofuSha256${platform%%:*}"
+            asset="tofu_${version#v}_${platform#*:}.tar.gz"
+            pin "${key}" '^[0-9a-f]{64}$' "a SHA-256 in lowercase hex"
+            want="$(awk -v asset="${asset}" '$2 == asset { print $1 }' "${dir}/${sums}")"
+            if ! [[ "${want}" =~ ^[0-9a-f]{64}$ ]]; then
+              echo "::error file=infra/tofu.yaml::${sums} has no single SHA-256 line for ${asset} (${key})"
+              failed=1
+            elif [ "${REPLY}" = "${want}" ]; then
+              echo "${asset}: ${key} matches the signed ${sums}"
+            else
+              echo "::error file=infra/tofu.yaml::${key} is ${REPLY}, but the signed ${sums} gives ${asset} the SHA-256 ${want}"
+              failed=1
+            fi
+          done
+          exit "${failed}"

@@ -4,9 +4,11 @@ name: AI review
 # reads the pull request through the GitHub API as data, asks Claude for findings with main's CLAUDE.md
 # and its review-change and security-audit skills, through one run of the Claude Code CLI on the
 # maintainer's Claude subscription, and posts one review as the reviewer App, COMMENT or REQUEST_CHANGES,
-# never an approval. The review is advice: this is never a required check, and a failed run (the diff
-# over the size limit, GitHub or the model failing, the subscription's usage limit reached, an expired
-# token, a malformed answer) is a failing check, not a silent pass. test/lint/aireviewworkflow_test.go pins this file's shape.
+# never an approval. The review is advice: this is never a required check, and a failed run (GitHub or
+# the model failing, the subscription's usage limit reached, an expired token) is a failing check, not a
+# silent pass. A diff too large to review or two unusable answers end in the skipped outcome: a COMMENT
+# review saying so, a warning annotation and a job summary line, with a passing check (ADR 0033, issues
+# #367 and #376). test/lint/aireviewworkflow_test.go pins this file's shape.
 #
 # pull_request_target runs main's copy of this workflow, in the base repository's context, whatever the
 # pull request changes, and only it can read the ai-review environment's secrets for a pull request. It
@@ -79,8 +81,8 @@ jobs:
       - name: Install the Claude Code CLI
         env:
           # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64
-          CLAUDE_CODE_VERSION: 2.1.327
-          CLAUDE_CODE_INTEGRITY: sha512-uJ24I+t47cpQjeo31ZrHepsFQ8QUsLjCxmDxLshMjYHEtoxhQdgKc4iuViQDaKpFqn3puR85gwHlLj4e7s+1iQ==
+          CLAUDE_CODE_VERSION: 2.1.330
+          CLAUDE_CODE_INTEGRITY: sha512-9Gn+V7DtJ8M1nztP9CeDVl9g3RtrepI7rOFTyPRRnZe8D6zebIHKmC7OvBauucuAP0X0k85SDN/LPVZyjsGezQ==
         run: .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}" "${CLAUDE_CODE_INTEGRITY}"
       # A token of the reviewer App, revoked when the job ends, with exactly Pull requests write (to post
       # and dismiss its reviews) and Contents read. client-id, never the deprecated app-id (ADR 0021).

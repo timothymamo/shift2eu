@@ -39,7 +39,10 @@ const (
 
 var (
 	// devtoolsURL is the DevTools address of the headless Chromium the
-	// container runs, such as ws://127.0.0.1:9222 or http://127.0.0.1:9222.
+	// container runs. `make test-browser` passes the browser's websocket
+	// address from Chromium's log, such as
+	// ws://127.0.0.1:41233/devtools/browser/<id>; ws://host:port and
+	// http://host:port work too.
 	devtoolsURL string
 	// bundleDir is the directory `make site` built the bundle into.
 	bundleDir string
@@ -75,7 +78,7 @@ func missingHarness(devtools, bundle string) (string, bool) {
 	if devtools == "" {
 		return fmt.Sprintf("%s is not set: this test does not start Chromium. `make test-browser` runs "+
 			"the containerised headless Chromium (pinned by digest, DevTools on 127.0.0.1) and passes its "+
-			"DevTools address in %s, such as http://127.0.0.1:9222.", devtoolsEnv, devtoolsEnv), false
+			"DevTools address in %s, such as ws://127.0.0.1:41233/devtools/browser/<id>.", devtoolsEnv, devtoolsEnv), false
 	}
 
 	if bundle == "" {
@@ -115,7 +118,8 @@ func allocator(t *testing.T) context.Context {
 	allocOnce.Do(func() {
 		// NewRemoteAllocator's successor: chromedp moved it to the remote
 		// package in v0.21.0 (chromedp's docs/MIGRATION.md), and it takes the
-		// ws://host:port and http://host:port forms SHIFT2EU_DEVTOOLS_URL uses.
+		// browser's own ws://host:port/devtools/browser/<id> address, which it
+		// dials as it is, and the ws://host:port and http://host:port forms.
 		browserCtx, browserStop = remote.NewAllocator(context.Background(), devtoolsURL,
 			remote.WithDialTimeout(20*time.Second))
 	})

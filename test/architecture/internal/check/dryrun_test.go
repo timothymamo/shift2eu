@@ -1,19 +1,39 @@
 package check_test
 
 import (
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 )
 
-// ciDryRun is the image job of .github/workflows/ci.yml as far as the dry run
-// checks it against release.yml: the same BuildKit, the same action pins, the
-// release's latest and tag rules run on sample tags in place of the pushed one,
-// the release's build settings written to an OCI archive, and the SBOM of the
-// built image.
-const ciDryRun = `name: CI
+// The dry-run fixtures, built from the repository's workflows: the cases below
+// change one part of them. ciDryRun takes ci.yml's pins and releaseDryRun
+// release.yml's, so a Renovate update that moves a pin in one workflow alone
+// fails the cases that compare the two on purpose: the workflows have drifted
+// apart, and TestDryRunMirrorsTheRepositoryWorkflows names the drift.
+var (
+	ciDryRun      = ciDryRunFrom(repoCI)
+	releaseDryRun = releaseDryRunFrom(repoRelease)
+)
+
+// ciDryRunFrom returns ciDryRunTemplate with the pins of ci, a ci.yml.
+func ciDryRunFrom(ci []byte) string {
+	return pinsOf(ci).expand(ciDryRunTemplate)
+}
+
+// releaseDryRunFrom returns releaseDryRunTemplate with the pins of release, a
+// release.yml.
+func releaseDryRunFrom(release []byte) string {
+	return pinsOf(release).expand(releaseDryRunTemplate)
+}
+
+// ciDryRunTemplate is the image job of .github/workflows/ci.yml as far as the
+// dry run checks it against release.yml: the same BuildKit, the same action
+// pins, the release's latest and tag rules run on sample tags in place of the
+// pushed one, the release's build settings written to an OCI archive, and the
+// SBOM of the built image. Its pins are placeholders (workflowPins).
+const ciDryRunTemplate = `name: CI
 
 on:
   pull_request:
@@ -23,9 +43,9 @@ jobs:
     name: Container image
     runs-on: ubuntu-latest
     env:
-      BUILDKIT_VERSION: v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+      BUILDKIT_VERSION: {{image moby/buildkit}}
     steps:
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: {{pin docker/setup-buildx-action}}
         with:
           driver-opts: image=moby/buildkit:${{ env.BUILDKIT_VERSION }}
       - name: Latest for sample tags, as release.yml decides it
@@ -44,7 +64,7 @@ jobs:
             echo "highest=$(decide v1.2.3 v1.1.0 v1.2.2 v1.2.3 v1.3.0-rc.1)"
           } >> "$GITHUB_OUTPUT"
       - name: Image tags for a sample release tag, the highest
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        uses: {{pin docker/metadata-action}}
         with:
           images: ghcr.io/timothymamo/shift2eu
           flavor: latest=${{ steps.latest.outputs.highest }}
@@ -52,7 +72,7 @@ jobs:
             type=semver,pattern={{raw}},value=v1.2.3
             type=semver,pattern={{major}}.{{minor}},value=v1.2.3,enable=${{ !contains('v1.2.3', '-') }}
       - name: Build linux/amd64 and linux/arm64
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: {{pin docker/build-push-action}}
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -62,18 +82,18 @@ jobs:
           provenance: false
           sbom: false
       - name: Load linux/amd64 for the smoke test
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: {{pin docker/build-push-action}}
         with:
           context: .
           platforms: linux/amd64
           load: true
       - name: SBOM of the built image
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: {{pin anchore/sbom-action}}
         with:
           image: oci-archive:${{ runner.temp }}/shift2eu.oci.tar
           format: spdx-json
           output-file: ${{ runner.temp }}/shift2eu.spdx.json
-          syft-version: v1.57.1
+          syft-version: {{release syft}}
       # release.yml's verify job runs the published image the same way, so the
       # dry run runs the image it built the same way, on the runner alone.
       - name: Smoke test the CLI image, read-only root filesystem, no network
@@ -81,13 +101,14 @@ jobs:
           docker run --rm --read-only --network none "$IMAGE" version | tee version.txt
 `
 
-// releaseDryRun is the latest, image, sbom and verify jobs of
+// releaseDryRunTemplate is the latest, image, sbom and verify jobs of
 // .github/workflows/release.yml as far as the dry run checks them: the latest
 // decision on the release tags on main, made once in a job of its own (issue
 // #173) that the image jobs read, the BuildKit image by exact release and index
 // digest, the pins, the tag rules on github.ref_name, the build settings, the
 // SPDX SBOM with an exact syft, and the container run of each published image.
-const releaseDryRun = `name: Release
+// Its pins are placeholders (workflowPins).
+const releaseDryRunTemplate = `name: Release
 
 on:
   push:
@@ -103,7 +124,7 @@ jobs:
     outputs:
       latest: ${{ steps.decide.outputs.latest }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -135,11 +156,11 @@ jobs:
             echo "commit=$(git rev-parse --short HEAD)"
             echo "date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
           } >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: {{pin docker/setup-buildx-action}}
         with:
-          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          driver-opts: image=moby/buildkit:{{image moby/buildkit}}
       - name: Image tags
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        uses: {{pin docker/metadata-action}}
         with:
           images: ghcr.io/timothymamo/shift2eu
           flavor: latest=${{ needs.latest.outputs.latest }}
@@ -147,7 +168,7 @@ jobs:
             type=semver,pattern={{raw}}
             type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
       - name: Build and push linux/amd64 and linux/arm64
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: {{pin docker/build-push-action}}
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -159,14 +180,14 @@ jobs:
     name: SBOM
     runs-on: ubuntu-latest
     steps:
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      - uses: {{pin anchore/sbom-action}}
         with:
           image: registry:ghcr.io/timothymamo/shift2eu@${{ needs.image.outputs.digest }}
           format: spdx-json
           output-file: shift2eu.spdx.json
-          syft-version: v1.57.1
+          syft-version: {{release syft}}
   verify:
-    name: Verify the published images
+    name: Verify the published image
     runs-on: ubuntu-latest
     steps:
       - name: Verify the CLI image
@@ -174,80 +195,6 @@ jobs:
           DIGEST="$(docker buildx imagetools inspect "ghcr.io/timothymamo/shift2eu:$TAG" --format '{{.Manifest.Digest}}')"
           IMAGE="ghcr.io/timothymamo/shift2eu@$DIGEST"
           docker run --rm --read-only --network none "$IMAGE" version | tee version.txt
-      - name: Verify the HTTP API's image
-        run: |
-          DIGEST="$(docker buildx imagetools inspect "ghcr.io/timothymamo/shift2eu-server:$TAG" --format '{{.Manifest.Digest}}')"
-          IMAGE="ghcr.io/timothymamo/shift2eu-server@$DIGEST"
-          docker run --rm --read-only --network none "$IMAGE" --help > /dev/null
-`
-
-// ciDryRunServer is the rest of ci.yml's image job: the dry run of the HTTP
-// API's image (PRD #103), the Dockerfile's server stage, built to an OCI
-// archive of its own, its SBOM read from that archive, and its single-platform
-// load for the smoke test. The cases append it to ciDryRun, the CLI's part, so
-// that a mutation of ciDryRun finds its text exactly once.
-const ciDryRunServer = `      - name: Build the server image, linux/amd64 and linux/arm64
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: server
-          platforms: linux/amd64,linux/arm64
-          push: false
-          outputs: type=oci,dest=${{ runner.temp }}/shift2eu-server.oci.tar
-          annotations: index:org.opencontainers.image.source=https://github.com/timothymamo/shift2eu
-          provenance: false
-          sbom: false
-      - name: SBOM of the built server image
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: oci-archive:${{ runner.temp }}/shift2eu-server.oci.tar
-          format: spdx-json
-          output-file: ${{ runner.temp }}/shift2eu-server.spdx.json
-          syft-version: v1.57.1
-      - name: Load the server image, linux/amd64, for the smoke test
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: server
-          platforms: linux/amd64
-          load: true
-      - name: The server image answers --help, read-only root filesystem, no network
-        run: |
-          docker run --rm --read-only --network none "$SERVER_IMAGE" --help > /dev/null
-`
-
-// releaseDryRunServer is the server-image and server-sbom jobs of
-// release.yml as far as the dry run checks them: the same BuildKit and build
-// settings as the CLI's image job, the server stage as the target, and the
-// SBOM of the pushed server image. The cases append it to releaseDryRun.
-const releaseDryRunServer = `  server-image:
-    name: Container image (shift2eu-server)
-    needs: [test, goreleaser, latest]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
-      - name: Build and push linux/amd64 and linux/arm64
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: server
-          platforms: linux/amd64,linux/arm64
-          push: true
-          annotations: index:org.opencontainers.image.source=https://github.com/timothymamo/shift2eu
-          provenance: false
-          sbom: false
-  server-sbom:
-    name: SBOM (shift2eu-server)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: registry:ghcr.io/timothymamo/shift2eu-server@${{ needs.server-image.outputs.digest }}
-          format: spdx-json
-          output-file: shift2eu-server.spdx.json
-          syft-version: v1.57.1
 `
 
 // mutate returns doc with old replaced by new, failing unless doc holds old
@@ -264,25 +211,34 @@ func mutate(t *testing.T, doc, old, new string) string {
 }
 
 // TestDryRunMirrorsRelease pins the review's finding of issue #72: ci.yml's
-// image job is the dry run of release.yml's image and sbom jobs, for the CLI's
-// image and the HTTP API's (PRD #103), so it must
+// image job is the dry run of release.yml's image and sbom jobs, the CLI
+// image's, so it must
 // fail the pull request when the release's build settings drift from it. What
 // the two documents publish differ by design (push: true against an OCI
 // archive, a real tag against a sample one, a registry image against an
 // archive), so the check compares the fields the release's build and SBOM rest
 // on: the latest decision too, whose step and whose highest-tag pipeline the
-// dry run must have, on sample tags in place of the release's git tag -l.
+// dry run must have, on sample tags in place of the release's git tag -l. The
+// release publishes the CLI's image alone, so a dry run that still builds,
+// tags, reads or runs the HTTP API's image is refused (issue #393).
 func TestDryRunMirrorsRelease(t *testing.T) {
 	t.Parallel()
+
+	// The pins the cases below drift, as the fixtures hold them, and the
+	// values they drift to: each derived from the pin it replaces, so that a
+	// Renovate update moves both and no case stops matching.
+	syft := ciPins.expand("{{release syft}}")
+	driftedSyft := nextRelease(t, syft)
+	buildkit := ciPins.expand("{{image moby/buildkit}}")
+	buildkitTag, buildkitDigest, _ := strings.Cut(buildkit, "@sha256:")
+	driftedBuildkit := nextRelease(t, buildkitTag) + "@sha256:" + nextCommit(t, buildkitDigest)
+	commit := func(action string) string { return ciPins.expand("{{commit " + action + "}}") }
+	driftedCommit := func(action string) string { return action + "@" + nextCommit(t, ciPins.commitOf(action)) }
 
 	tests := []struct {
 		name    string
 		ci      string
 		release string
-		// ciServer and releaseServer are the HTTP API's parts the case
-		// appends to ci and release; "" means ciDryRunServer and
-		// releaseDryRunServer, unchanged.
-		ciServer, releaseServer string
 		// wantIn is a part of the message the check must return; "" means
 		// none at all.
 		wantIn string
@@ -290,11 +246,9 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		{name: "the accepted pair", ci: ciDryRun, release: releaseDryRun},
 		{
 			// The same pair with CRLF line ends, which the reader tolerates.
-			name:          "the accepted pair with CRLF line ends",
-			ci:            strings.ReplaceAll(ciDryRun, "\n", "\r\n"),
-			release:       strings.ReplaceAll(releaseDryRun, "\n", "\r\n"),
-			ciServer:      strings.ReplaceAll(ciDryRunServer, "\n", "\r\n"),
-			releaseServer: strings.ReplaceAll(releaseDryRunServer, "\n", "\r\n"),
+			name:    "the accepted pair with CRLF line ends",
+			ci:      strings.ReplaceAll(ciDryRun, "\n", "\r\n"),
+			release: strings.ReplaceAll(releaseDryRun, "\n", "\r\n"),
 		},
 
 		// The build: the release's platforms, annotations and BuildKit's own
@@ -323,16 +277,21 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		{name: "a drifted image name", ci: mutate(t, ciDryRun, "          images: ghcr.io/timothymamo/shift2eu\n", "          images: ghcr.io/example/shift2eu\n"), release: releaseDryRun, wantIn: `with: images is "ghcr.io/example/shift2eu"`},
 
 		// The SBOM: the release's format and exact syft.
-		{name: "a drifted syft version", ci: mutate(t, ciDryRun, "syft-version: v1.57.1", "syft-version: v1.58.0"), release: releaseDryRun, wantIn: `with: syft-version is "v1.58.0"`},
+		{name: "a drifted syft version", ci: mutate(t, ciDryRun, "syft-version: "+syft, "syft-version: "+driftedSyft), release: releaseDryRun, wantIn: `with: syft-version is "` + driftedSyft + `"`},
 		{name: "a drifted SBOM format", ci: mutate(t, ciDryRun, "          format: spdx-json\n", "          format: cyclonedx-json\n"), release: releaseDryRun, wantIn: `with: format is "cyclonedx-json"`},
 
 		// The pins: the same commit for every action the two share, and the
 		// same BuildKit image by tag and digest.
-		{name: "a drifted metadata-action pin", ci: mutate(t, ciDryRun, "docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302", "docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411303"), release: releaseDryRun, wantIn: "docker/metadata-action runs at"},
-		{name: "a drifted build-push-action pin", ci: ciDryRun, release: mutate(t, releaseDryRun, "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc", "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dd"), wantIn: "docker/build-push-action runs at c3c9e263c25d99ce0380d002d59b67737d91b0dc (line 39) and at c3c9e263c25d99ce0380d002d59b67737d91b0dd"},
-		{name: "a drifted sbom-action pin", ci: mutate(t, ciDryRun, "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c", "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6d"), release: releaseDryRun, wantIn: "anchore/sbom-action runs at"},
-		{name: "a drifted setup-buildx-action pin", ci: ciDryRun, release: mutate(t, releaseDryRun, "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069", "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497070"), wantIn: "docker/setup-buildx-action runs at"},
-		{name: "a drifted BuildKit image", ci: mutate(t, ciDryRun, "v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe", "v0.35.0@sha256:1111111111111111111111111111111111111111111111111111111111111111"), release: releaseDryRun, wantIn: "the dry run must build with the release's moby/buildkit tag and digest"},
+		{name: "a drifted metadata-action pin", ci: mutate(t, ciDryRun, commit("docker/metadata-action"), driftedCommit("docker/metadata-action")), release: releaseDryRun, wantIn: "docker/metadata-action runs at"},
+		{
+			name:    "a drifted build-push-action pin",
+			ci:      ciDryRun,
+			release: mutate(t, releaseDryRun, commit("docker/build-push-action"), driftedCommit("docker/build-push-action")),
+			wantIn:  "docker/build-push-action runs at " + ciPins.commitOf("docker/build-push-action") + " (line 39) and at " + nextCommit(t, ciPins.commitOf("docker/build-push-action")),
+		},
+		{name: "a drifted sbom-action pin", ci: mutate(t, ciDryRun, commit("anchore/sbom-action"), driftedCommit("anchore/sbom-action")), release: releaseDryRun, wantIn: "anchore/sbom-action runs at"},
+		{name: "a drifted setup-buildx-action pin", ci: ciDryRun, release: mutate(t, releaseDryRun, commit("docker/setup-buildx-action"), driftedCommit("docker/setup-buildx-action")), wantIn: "docker/setup-buildx-action runs at"},
+		{name: "a drifted BuildKit image", ci: mutate(t, ciDryRun, buildkit, driftedBuildkit), release: releaseDryRun, wantIn: "the dry run must build with the release's moby/buildkit tag and digest"},
 
 		// The one build the dry run compares is the one that does not load the
 		// image: none left, or a second one, is refused rather than guessed at.
@@ -344,7 +303,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		},
 		{
 			name:    "a second build that does not load the image",
-			ci:      mutate(t, ciDryRun, "      - name: Load linux/amd64 for the smoke test\n", "      - name: Build once more\n        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n          platforms: linux/amd64,linux/arm64\n          push: false\n          outputs: type=oci,dest=${{ runner.temp }}/shift2eu-2.oci.tar\n      - name: Load linux/amd64 for the smoke test\n"),
+			ci:      mutate(t, ciDryRun, "      - name: Load linux/amd64 for the smoke test\n", "      - name: Build once more\n        uses: "+ciPins.expand("{{pin docker/build-push-action}}")+"\n        with:\n          context: .\n          platforms: linux/amd64,linux/arm64\n          push: false\n          outputs: type=oci,dest=${{ runner.temp }}/shift2eu-2.oci.tar\n      - name: Load linux/amd64 for the smoke test\n"),
 			release: releaseDryRun,
 			wantIn:  "load: true left out, for target: none, holds 2 docker/build-push-action steps, want exactly 1",
 		},
@@ -352,7 +311,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 			// The load: true step is the dry run's own smoke test, not part of
 			// what the release publishes: leaving it out leaves the one build.
 			name:    "the dry run without its smoke-test load",
-			ci:      mutate(t, ciDryRun, "      - name: Load linux/amd64 for the smoke test\n        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n          platforms: linux/amd64\n          load: true\n", ""),
+			ci:      mutate(t, ciDryRun, "      - name: Load linux/amd64 for the smoke test\n        uses: "+ciPins.expand("{{pin docker/build-push-action}}")+"\n        with:\n          context: .\n          platforms: linux/amd64\n          load: true\n", ""),
 			release: releaseDryRun,
 		},
 
@@ -372,7 +331,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		},
 		{
 			name:    "a dry run without the metadata-action step",
-			ci:      mutate(t, ciDryRun, "      - name: Image tags for a sample release tag, the highest\n        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0\n        with:\n          images: ghcr.io/timothymamo/shift2eu\n          flavor: latest=${{ steps.latest.outputs.highest }}\n          tags: |\n            type=semver,pattern={{raw}},value=v1.2.3\n            type=semver,pattern={{major}}.{{minor}},value=v1.2.3,enable=${{ !contains('v1.2.3', '-') }}\n", ""),
+			ci:      mutate(t, ciDryRun, "      - name: Image tags for a sample release tag, the highest\n        uses: "+ciPins.expand("{{pin docker/metadata-action}}")+"\n        with:\n          images: ghcr.io/timothymamo/shift2eu\n          flavor: latest=${{ steps.latest.outputs.highest }}\n          tags: |\n            type=semver,pattern={{raw}},value=v1.2.3\n            type=semver,pattern={{major}}.{{minor}},value=v1.2.3,enable=${{ !contains('v1.2.3', '-') }}\n", ""),
 			release: releaseDryRun,
 			wantIn:  "so the dry run checks none of the release's tags",
 		},
@@ -484,35 +443,42 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		},
 		{
 			name:    "a job without the env the BuildKit image is in",
-			ci:      mutate(t, ciDryRun, "    env:\n      BUILDKIT_VERSION: v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe\n", ""),
+			ci:      mutate(t, ciDryRun, "    env:\n      BUILDKIT_VERSION: "+buildkit+"\n", ""),
 			release: releaseDryRun,
 			wantIn:  "the job's env: holds no BUILDKIT_VERSION",
 		},
 		{name: "an env variable whose name the reader does not follow", ci: mutate(t, ciDryRun, "      BUILDKIT_VERSION:", "      buildkit_version:"), release: releaseDryRun, wantIn: "is not one variable this reader understands"},
 
-		// The HTTP API's image (PRD #103): its own build, from the server
-		// stage, with the release's settings, and its own SBOM, found by the
-		// archive that build writes.
-		{name: "a dry run without the server build", ci: ciDryRun, release: releaseDryRun, ciServer: "      - run: true\n", wantIn: "for target: server, holds 0 docker/build-push-action steps, want exactly 1"},
-		{name: "the server build from the CLI's stage", ci: ciDryRun, release: releaseDryRun, ciServer: mutate(t, ciDryRunServer, "          target: server\n          platforms: linux/amd64,linux/arm64\n", "          platforms: linux/amd64,linux/arm64\n"), wantIn: "for target: none, holds 2 docker/build-push-action steps, want exactly 1"},
-		{name: "the server build from another stage", ci: ciDryRun, release: releaseDryRun, ciServer: mutate(t, ciDryRunServer, "          target: server\n          platforms: linux/amd64,linux/arm64\n", "          target: build\n          platforms: linux/amd64,linux/arm64\n"), wantIn: "for target: server, holds 0 docker/build-push-action steps, want exactly 1"},
-		{name: "a drifted server platform", ci: ciDryRun, release: releaseDryRun, ciServer: mutate(t, ciDryRunServer, "          platforms: linux/amd64,linux/arm64\n", "          platforms: linux/amd64\n"), wantIn: `with: platforms is "linux/amd64", release.yml's`},
-		{name: "a drifted server provenance in the release", ci: ciDryRun, release: releaseDryRun, releaseServer: mutate(t, releaseDryRunServer, "          provenance: false\n", "          provenance: true\n"), wantIn: `with: provenance is "false", release.yml's`},
-		{name: "the release's server image built from the CLI's stage", ci: ciDryRun, release: releaseDryRun, releaseServer: mutate(t, releaseDryRunServer, "          target: server\n", ""), wantIn: `with: target is "", want "server"`},
-		{name: "a server build that writes no OCI archive", ci: ciDryRun, release: releaseDryRun, ciServer: mutate(t, ciDryRunServer, "          outputs: type=oci,dest=${{ runner.temp }}/shift2eu-server.oci.tar\n", "          outputs: type=docker\n"), wantIn: "want type=oci,dest=<path>"},
-		{name: "no SBOM of the server archive", ci: ciDryRun, release: releaseDryRun, ciServer: mutate(t, ciDryRunServer, "          image: oci-archive:${{ runner.temp }}/shift2eu-server.oci.tar\n", "          image: oci-archive:${{ runner.temp }}/shift2eu.oci.tar\n"), wantIn: "reading oci-archive:${{ runner.temp }}/shift2eu-server.oci.tar, holds 0 anchore/sbom-action steps"},
-		{name: "a drifted server SBOM format", ci: ciDryRun, release: releaseDryRun, ciServer: mutate(t, ciDryRunServer, "          format: spdx-json\n", "          format: cyclonedx-json\n"), wantIn: `with: format is "cyclonedx-json"`},
-		{name: "a drifted server BuildKit image", ci: ciDryRun, release: releaseDryRun, releaseServer: mutate(t, releaseDryRunServer, "image=moby/buildkit:v0.34.2@", "image=moby/buildkit:v0.35.0@"), wantIn: "the dry run must build with the release's moby/buildkit tag and digest"},
-		{name: "a drifted server build-push-action pin", ci: ciDryRun, release: releaseDryRun, releaseServer: mutate(t, releaseDryRunServer, "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc", "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dd"), wantIn: "docker/build-push-action runs at"},
-		{name: "a release.yml without a server-image job", ci: ciDryRun, release: releaseDryRun, releaseServer: mutate(t, releaseDryRunServer, "  server-image:\n", "  other-image:\n"), wantIn: "release.yml: no jobs: server-image"},
-		{name: "a release.yml without a server-sbom job", ci: ciDryRun, release: releaseDryRun, releaseServer: mutate(t, releaseDryRunServer, "  server-sbom:\n", "  other-sbom:\n"), wantIn: "release.yml: no jobs: server-sbom"},
+		// The HTTP API's image is gone with the server (issue #393): the dry run
+		// builds, tags and reads the CLI's image alone. A dry run that still
+		// tags the server's image is refused, since the release publishes no
+		// such image to dry-run.
+		{
+			name:    "a dry run that still tags the HTTP API's image",
+			ci:      mutate(t, ciDryRun, "      - name: Build linux/amd64 and linux/arm64\n", "      - name: Image tags for the server's image\n        uses: "+ciPins.expand("{{pin docker/metadata-action}}")+"\n        with:\n          images: ghcr.io/timothymamo/shift2eu-server\n          flavor: latest=${{ steps.latest.outputs.highest }}\n          tags: |\n            type=semver,pattern={{raw}},value=v1.2.3\n      - name: Build linux/amd64 and linux/arm64\n"),
+			release: releaseDryRun,
+			wantIn:  `with: images is "ghcr.io/timothymamo/shift2eu-server"`,
+		},
+		// The dry run is the release's, so no line of its image job, a comment
+		// included, may name a retired name either (issue #393), in any case.
+		{
+			name:    "a dry run whose image job comments on the HTTP API's binary",
+			ci:      mutate(t, ciDryRun, "jobs:\n  image:\n", "jobs:\n  image:\n    # The Shift2eu-Server image is gone (issue #393).\n"),
+			release: releaseDryRun,
+			wantIn:  "names shift2eu-server",
+		},
+		{
+			name:    "a dry run whose image job comments on the bundled OpenAPI document",
+			ci:      mutate(t, ciDryRun, "jobs:\n  image:\n", "jobs:\n  image:\n    # The OpenAPI document is gone (issue #393).\n"),
+			release: releaseDryRun,
+			wantIn:  "names openapi",
+		},
 
 		// The release's verify job (issue #99) is the independent check of what a
 		// release published. A pull request has no published image to verify, so
 		// the dry run mirrors the part that needs none of it: the container run of
-		// each image, with the release's flags and the release's command, on the
-		// image it built itself - the CLI's run on the dry run's CLI image, the
-		// server's on its server image, never one on the other's.
+		// the image, with the release's flags and the release's command, on the
+		// image it built itself.
 		{
 			name:    "a dry run that runs the CLI image without --network none",
 			ci:      mutate(t, ciDryRun, `docker run --rm --read-only --network none "$IMAGE" version`, `docker run --rm --read-only "$IMAGE" version`),
@@ -532,29 +498,9 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 			wantIn:  "the dry run must run the image as release.yml's verify job runs it",
 		},
 		{
-			name:     "a dry run that does not run the server image's --help",
-			ci:       ciDryRun,
-			ciServer: mutate(t, ciDryRunServer, "      - name: The server image answers --help, read-only root filesystem, no network\n        run: |\n          docker run --rm --read-only --network none \"$SERVER_IMAGE\" --help > /dev/null\n", ""),
-			release:  releaseDryRun,
-			wantIn:   "the dry run must run the image as release.yml's verify job runs it",
-		},
-		{
-			name:     "a dry run that runs the server image without --network none",
-			ci:       ciDryRun,
-			ciServer: mutate(t, ciDryRunServer, `docker run --rm --read-only --network none "$SERVER_IMAGE" --help`, `docker run --rm --read-only "$SERVER_IMAGE" --help`),
-			release:  releaseDryRun,
-			wantIn:   "the dry run must run the image as release.yml's verify job runs it",
-		},
-		{
 			name:    "a release whose verify job runs the CLI image without --network none",
 			ci:      ciDryRun,
 			release: mutate(t, releaseDryRun, `docker run --rm --read-only --network none "$IMAGE" version`, `docker run --rm --read-only "$IMAGE" version`),
-			wantIn:  "the dry run must run the image as release.yml's verify job runs it",
-		},
-		{
-			name:    "a release whose verify job runs the server image's version in place of --help",
-			ci:      ciDryRun,
-			release: mutate(t, releaseDryRun, `--network none "$IMAGE" --help`, `--network none "$IMAGE" version`),
 			wantIn:  "the dry run must run the image as release.yml's verify job runs it",
 		},
 		{
@@ -562,15 +508,6 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 			ci:      ciDryRun,
 			release: mutate(t, releaseDryRun, `docker run --rm --read-only --network none "$IMAGE" version`, `true`),
 			wantIn:  "runs no container run",
-		},
-		{
-			// The two images are not interchangeable: the server's run mirrored on
-			// the CLI image is no dry run of the server's run at all (review S2).
-			name:     "a dry run that runs the server image's --help on the CLI image",
-			ci:       ciDryRun,
-			ciServer: mutate(t, ciDryRunServer, `docker run --rm --read-only --network none "$SERVER_IMAGE" --help > /dev/null`, `docker run --rm --read-only --network none "$IMAGE" --help > /dev/null`),
-			release:  releaseDryRun,
-			wantIn:   "the dry run must run the image as release.yml's verify job runs it",
 		},
 		{
 			// A docker run line the release continues onto a second line is
@@ -584,9 +521,9 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 			wantIn:  "continues its docker run line onto another line",
 		},
 		{
-			name:    "a release whose verify job names one image alone",
+			name:    "a release whose verify job names the image twice",
 			ci:      ciDryRun,
-			release: mutate(t, releaseDryRun, "ghcr.io/timothymamo/shift2eu-server:$TAG", "ghcr.io/timothymamo/shift2eu:$TAG"),
+			release: mutate(t, releaseDryRun, "      - name: Verify the CLI image\n", "      - name: Verify the CLI image again\n        run: |\n          DIGEST=\"$(docker buildx imagetools inspect \"ghcr.io/timothymamo/shift2eu:$TAG\" --format '{{.Manifest.Digest}}')\"\n      - name: Verify the CLI image\n"),
 			wantIn:  "whose run: names ghcr.io/timothymamo/shift2eu",
 		},
 		{name: "a release.yml without a verify job", ci: ciDryRun, release: mutate(t, releaseDryRun, "  verify:\n", "  publishing:\n"), wantIn: "release.yml: no jobs: verify"},
@@ -600,16 +537,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			ciServer, releaseServer := tc.ciServer, tc.releaseServer
-			if ciServer == "" {
-				ciServer = ciDryRunServer
-			}
-
-			if releaseServer == "" {
-				releaseServer = releaseDryRunServer
-			}
-
-			got := check.DryRunMirrorsRelease([]byte(tc.ci+ciServer), []byte(tc.release+releaseServer))
+			got := check.DryRunMirrorsRelease([]byte(tc.ci), []byte(tc.release))
 
 			if tc.wantIn == "" {
 				if len(got) != 0 {
@@ -631,17 +559,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 func TestDryRunMirrorsTheRepositoryWorkflows(t *testing.T) {
 	t.Parallel()
 
-	ci, err := os.ReadFile("../../../../.github/workflows/ci.yml")
-	if err != nil {
-		t.Fatalf("read ci.yml: %v", err)
-	}
-
-	release, err := os.ReadFile("../../../../.github/workflows/release.yml")
-	if err != nil {
-		t.Fatalf("read release.yml: %v", err)
-	}
-
-	for _, message := range check.DryRunMirrorsRelease(ci, release) {
+	for _, message := range check.DryRunMirrorsRelease(repoCI, repoRelease) {
 		t.Error(message)
 	}
 }

@@ -3,13 +3,18 @@
 **Status:** Draft
 **Issue:** #175
 
+**Scope note (2026-11-20):** `shift2eu-server`, the HTTP API, is no longer released (ADR 0037, issue
+#393). The audit covers what ships: the CLI's release archives and its signed image. The server, its
+image, its OpenAPI document and the server attack harness this PRD first named are out of scope; row 12
+of the checks is dropped and the other rows keep their numbers.
+
 ## Problem
 
-shift2eu ships two binaries and two signed images that read other people's cloud estates. Every change is
+shift2eu ships a binary and a signed image that read other people's cloud estates. Every change is
 reviewed: each unit's `security-audit` pass, the AI reviewer of PRD #161 milestone 4, the maintainer's
 approval, and gosec, govulncheck and CodeQL in CI. But all of them look at a **diff**. Nothing looks at the
 whole tree, its git history and the **released** artifacts as an attacker would. Nothing tests the
-running server with hostile input, checks a published release end to end against
+released CLI with hostile input, checks a published release end to end against
 [the release verification guide](../docs/guide/verify-releases.md), or notices that a dependency nobody
 touched has a new advisory.
 
@@ -31,7 +36,7 @@ start a run by hand: the workflow takes no inputs, and its jobs run for no other
 on fresh GitHub-hosted runners and authenticates with the maintainer's Claude subscription token.
 
 It scans the whole tree and its history, verifies the release's checksums, attestations and signatures,
-scans the images and binaries, and fuzzes and attacks the release **locally**: in containers on the
+scans the image and binaries, and fuzzes and attacks the release **locally**: in containers on the
 runner, with no route off it. It never changes code, pushes to a branch other than its own report branch,
 or touches a cloud, GitHub's or GHCR's services beyond reading them, or any remote host.
 
@@ -67,7 +72,7 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
 | Source providers | none: the audit reads no cloud | Live access to AWS, Azure or GCP, cloud credentials of any kind |
 | Target providers | none | Live access to OVHcloud, Scaleway or UpCloud, their catalog sources |
 | Taxonomy categories | none | |
-| Audit subject | The repository on `main` (tree and full history), the latest published release (archives, `checksums.txt`, both images, their attestations and SBOMs, the OpenAPI document), `.github/`, `.claude/`, `.pi/`, `.dot-agent-deck.toml` and `dev/` as attack surface | Other repositories, dependencies' own code beyond advisories, GitHub's or GHCR's services |
+| Audit subject | The repository on `main` (tree and full history), the latest published release (archives, `checksums.txt`, the CLI image, its attestations and SBOM), `.github/`, `.claude/`, `.pi/`, `.dot-agent-deck.toml` and `dev/` as attack surface | Other repositories, dependencies' own code beyond advisories, GitHub's or GHCR's services |
 | Execution | A scheduled and `workflow_dispatch` workflow on `main`, GitHub-hosted runners, local containers on the runner | A second Lima VM, a launcher script, `dot-agent-deck schedule`, self-hosted runners (Decisions, Where) |
 | Writes | The report PR (`docs/security/` only) and draft security advisories (created and updated, never published), each through the audit App's token in the publish job; `security` issues for public findings of merged reports | Fixing findings in the audit run, editing code or `testdata/`, commenting on or closing other issues and PRs, releases, tags, packages, publishing an advisory or requesting a CVE |
 | Repository settings | The `security-audit` environment, the audit App, the `security-audit/**` branch ruleset, a new ruleset on `main` that requires the audit-report-paths check, the `**` tag ruleset if the maintainer adopts it (Decision 1 leaves it optional), the `security` label, removing Actions write from any App other than the release flow's that holds it (runbook step 6), documented as maintainer steps and read by checks | Changing `Protect main`, the `v*` tag rulesets, the release Apps or their environments (ADR 0021, PRD #161) |
@@ -165,8 +170,8 @@ Triggers, jobs and permissions:
   `actions: read` and `issues: read` if scorecard or the supply-chain reads (row 15) need them, never a
   write scope. A read the token is refused is reported "not run", as scorecard's admin checks are. The
   model and publish jobs have exactly `contents: read` (plus `actions: read` where the ADR shows the
-  artifact listing below needs it). No job ever holds a write scope. The release's images are public, so
-  they are pulled anonymously and no job holds `packages: read`.
+  artifact listing below needs it). No job ever holds a write scope. The release's image is public, so
+  it is pulled anonymously and no job holds `packages: read`.
 - [ ] The audit App's token is minted with `actions/create-github-app-token` (pinned by SHA) **only in the
   publish job**, narrowed with exactly the `permission-*` inputs the ADR lists. The App's client ID is a
   variable and its private key a secret of the `security-audit` environment only, referenced only in the
@@ -209,12 +214,10 @@ The checks job:
   step that runs release code.
 - [ ] No release binary and no fuzz target is executed outside a container. Every such container runs
   with `--read-only --cap-drop ALL --security-opt no-new-privileges`, and a `--tmpfs` only where the ADR
-  shows one is needed. The CLI container runs with `--network none`. The server container and the
-  committed attack harness's container share one Docker network created with `--internal` (no route off
-  the runner) and no other network. Fuzzing runs in a container from a Go image pinned by digest, with
+  shows one is needed. The CLI container runs with `--network none`. Fuzzing runs in a container from a Go image pinned by digest, with
   `--network none` and the module cache copied in.
-- [ ] Inputs reach a container one way, and results leave one way: the committed hostile inventories and
-  the harness's inputs are copied with `docker cp` into a created, not yet started container; results
+- [ ] Inputs reach a container one way, and results leave one way: the committed hostile inventories are
+  copied with `docker cp` into a created, not yet started container; results
   come out on stdout or with `docker cp` from the stopped container. No container has a bind mount of the
   runner's filesystem or the Docker socket.
 
@@ -420,7 +423,7 @@ The publish script:
   when the check produced a **public** finding, "run" otherwise (including when its only findings are
   private), or "not run (why)", where the why is one of a fixed vocabulary in the publish script (for
   example "needs admin read", "no `Fuzz*` targets", "timed out"), never the model's text. A fixture test
-  renders a result with one private finding from the server attack harness (row 12) and shows that row
+  renders a result with one private finding from the CLI's hostile inventories (row 13) and shows that row
   exactly as a check with no findings ("run") (Decision 2).
 - [ ] Values from the run reach the shell only through `env:` and files, never through a `${{ }}`
   expression.
@@ -510,12 +513,12 @@ tag (`gh release view --json tagName`) are recorded first, and every later step 
 | 4 | gitleaks on the full history, `--redact` | checks, workflow step | no |
 | 5 | zizmor and actionlint on `.github/workflows` | checks, workflow step | GitHub reads only |
 | 6 | OpenSSF scorecard, read-only (no publishing, no `id-token`) | checks, workflow step | yes: GitHub reads |
-| 7 | Release download; `checksums.txt`; `gh attestation verify` on every file; `cosign verify` of both images and their provenance and SBOM attestations (Sigstore, GHCR); GitHub's latest release and the images' `latest` tag agree | checks, workflow step | yes |
+| 7 | Release download; `checksums.txt`; `gh attestation verify` on every file; `cosign verify` of the image and its provenance and SBOM attestations (Sigstore, GHCR); GitHub's latest release and the image's `latest` tag agree | checks, workflow step | yes |
 | 8 | Image pulls from GHCR | checks, workflow step | yes |
 | 9 | `govulncheck -mode=binary` on every release binary (read, not run) | checks, workflow step | yes: vulnerability database |
-| 10 | trivy on both images and their SBOMs, from the downloaded database | checks, workflow step | no |
-| 11 | The images run as non-root, with a read-only root filesystem and no shell where none is expected | checks, containers | no |
-| 12 | The server attacked by the committed harness: malformed, oversized and deeply nested bodies; slow clients; path traversal; header injection; content-type confusion; every endpoint of the published OpenAPI document | checks, server and harness containers on an `--internal` network | no |
+| 10 | trivy on the image and its SBOM, from the downloaded database | checks, workflow step | no |
+| 11 | The image runs as non-root, with a read-only root filesystem and no shell where none is expected | checks, containers | no |
+| 12 | Dropped: the server is no longer released (ADR 0037) | none | no |
 | 13 | The CLI on hostile inventory files | checks, container, `--network none` | no |
 | 14 | Time-boxed `go test -fuzz` of the committed `Fuzz*` targets (none yet: Decision 5) | checks, container, `--network none`, `GOPROXY=off` | no |
 | 15 | Supply-chain reads: action pins and workflow `permissions`, rulesets and environments read the way the `release-tag` skill's step 2 reads them, Renovate's state, dependencies changed since the last report | checks, workflow step | yes: GitHub reads |
@@ -589,7 +592,7 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
    `docs/security/audits/TEMPLATE.md`, the docs index, and `TestIndexListsEveryPage` accepting a
    sub-index, with its test. No workflow yet. Depends on nothing; can merge before PRD #161 milestone 4.
 2. [ ] **The workflow, its three jobs, the pinned tools and their checks.** `scheduled-security-audit.yml`
-   with `workflow_dispatch` only (no `schedule` yet), the committed attack harness, the Claude Code
+   with `workflow_dispatch` only (no `schedule` yet), the Claude Code
    launcher, settings, hardening step, sandbox preflight (all six probes, on every run) and wrapper and
    their tests, the two encrypted hand-offs, the publish script and its fake-`gh` tests (keyed private
    fingerprints, App-authored matching only, the pinned gap threshold), the required path check, the
@@ -706,7 +709,7 @@ Every other question is decided.
 - **Model:** Claude Fable 5.2 (`claude-fable-5-2`), effort high, authenticated with the maintainer's
   Claude subscription token (a Claude Code OAuth token, a secret of the `security-audit` environment
   only), not an API key.
-- **Tools:** gitleaks, osv-scanner, trivy (images and SBOMs), zizmor and actionlint, OpenSSF scorecard,
+- **Tools:** gitleaks, osv-scanner, trivy (the image and its SBOM), zizmor and actionlint, OpenSSF scorecard,
   time-boxed `go test -fuzz`. trufflehog, grype and semgrep are dropped as overlaps (gosec, govulncheck
   and CodeQL already run in CI).
 - **Plan:** milestones as above, implemented after PRD #161 milestones 3 and 4 merge, reusing milestone
@@ -842,7 +845,7 @@ options that were weighed and the reason given, so the decision can be revisited
 5. **Fuzz targets.** The tree has no `Fuzz*` test today, and the audit must not change code. Fuzzing runs
    in a container in the checks job, which has no model, so the model cannot write throwaway harnesses
    for it. Options: committed harnesses that only the audit runs, or a separate issue that adds committed
-   fuzz targets (the inventory decoder, the HTTP request decoder, the report renderers) that CI and the
+   fuzz targets (the inventory decoder, the report renderers) that CI and the
    audit both run.
 
    *Decision (maintainer, 2026-11-18):* **a separate issue for committed fuzz targets**, built test-first

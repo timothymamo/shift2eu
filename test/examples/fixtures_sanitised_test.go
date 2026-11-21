@@ -71,9 +71,18 @@ func TestFixturesAreSanitised(t *testing.T) {
 // TestPlantedRealDataFailsTheFixtureCheck pins that the check reaches every kind
 // of path it claims to cover: a file planted at a guide path, at a path under
 // docs/guide/inventory/, at a testdata path of an adapter, of the module root, of
-// test/e2e, at a testdata path nested inside another testdata directory and at a
-// sample path is reported, with the account ID and the host name it carries.
-// Without this, a walker that silently skipped a directory would pass
+// test/e2e, at a testdata path nested inside another testdata directory, at a
+// sample path and in the inventory guide's own fixtures under
+// test/e2e/testdata/inventory-guide/ is reported, with the account ID and the
+// host name it carries. The guide's own fixtures are where its allow-list
+// entries apply, so the rows planted there pin both sides of one: the value an
+// entry excuses in its file passes, and the same value in another file of that
+// directory, or an ARM ID of another type segment in the same file, is
+// reported. An entry names the value's type segment (flexibleServers/, sites/,
+// namespaces/) as well as its file; a namespace that shares the segment is
+// excused alike, which is accepted because the names are synthetic and both
+// namespaces' names are global. Without
+// this, a walker that silently skipped a directory would pass
 // TestFixturesAreSanitised.
 func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 	t.Parallel()
@@ -168,10 +177,275 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"10-1-2-3"},
 		},
 		{
+			// The same address written with underscores rather than hyphens,
+			// the way a page that copies one out of a name may write it.
+			name:    "private address with underscore separators",
+			path:    "docs/guide/planted-ip-underscore.md",
+			content: "the peer ip_10_1_2_3 answers on port 8080",
+			want:    []string{"10_1_2_3"},
+		},
+		{
+			// A zero-padded octet is no octet to netip.ParseAddr, so the run is
+			// read as the address it spells and reported as it is written.
+			name:    "private address with a zero-padded octet",
+			path:    "testdata/planted-ip-padded.json",
+			content: `"peer": "ip-10-01-2-3"`,
+			want:    []string{"10-01-2-3"},
+		},
+		{
+			name:    "customer host under the Indian TLD",
+			path:    "docs/guide/planted-in.md",
+			content: "the shop answers at web.acme.in",
+			want:    []string{"web.acme.in"},
+		},
+		{
+			name:    "customer bucket in an s3 URL",
+			path:    "testdata/planted-bucket.json",
+			content: "the objects are in s3://acme-prod-bucket/key",
+			want:    []string{"s3://acme-prod-bucket"},
+		},
+		{
 			name:    "private address in an AWS host name",
 			path:    "testdata/planted-host.json",
 			content: `"hostname": "ip-10-1-2-3.eu-central-1.compute.internal"`,
 			want:    []string{"10-1-2-3", "ip-10-1-2-3.eu-central-1.compute.internal"},
+		},
+		{
+			// An address is reported wherever a name carries it, not only
+			// behind an ip-: AWS and Azure write it behind a label of the
+			// machine's own as well.
+			name:    "private address after a letter-hyphen prefix",
+			path:    "docs/guide/planted-node.md",
+			content: "the node node-10-1-2-3 answers on port 8080",
+			want:    []string{"10-1-2-3"},
+		},
+		{
+			name:    "customer host under the government TLD",
+			path:    "docs/guide/planted-gov.md",
+			content: "the database is db.acme.gov",
+			want:    []string{"db.acme.gov"},
+		},
+		{
+			// The vendor host is exempt and the path after it is not: the
+			// owner names the customer, so the check reports the host and the
+			// owner together.
+			name:    "customer owner path after a listed vendor host",
+			path:    "testdata/planted-owner.json",
+			content: "the module is github.com/acme/private-repo",
+			want:    []string{"github.com/acme"},
+		},
+		{
+			// The SSH clone form a reader copies out of a git command names the
+			// owner after a colon, and the owner is the customer's all the same.
+			name:    "customer owner in an SSH clone URL",
+			path:    "docs/guide/planted-clone.md",
+			content: "cloned with git@github.com:acme/private-repo.git",
+			want:    []string{"github.com/acme"},
+		},
+		{
+			// An ARN names a bucket with no scheme, and the ARN is reported whole
+			// so the failure says which value to change.
+			name:    "customer bucket in an ARN",
+			path:    "testdata/planted-arn.json",
+			content: `"bucket": "arn:aws:s3:::acme-prod-bucket"`,
+			want:    []string{"arn:aws:s3:::acme-prod-bucket"},
+		},
+		{
+			name:    "customer bucket in a Cloud Storage URL",
+			path:    "testdata/planted-gcs.json",
+			content: "the objects are at https://storage.googleapis.com/acme-prod-data/key",
+			want:    []string{"storage.googleapis.com/acme-prod-data"},
+		},
+		{
+			// A Cloud Asset name opens with the service host and carries the
+			// customer's project ID, which is globally unique.
+			name:    "customer project ID in a Cloud Asset name",
+			path:    "test/e2e/testdata/planted-project.json",
+			content: `"name": "//compute.googleapis.com/projects/acme-corp-prod/zones/z/instances/vm-1"`,
+			want:    []string{"projects/acme-corp-prod"},
+		},
+		{
+			// The dummy subscription GUID identifies nobody, while the storage
+			// account the ARM ID names is globally unique and the customer's.
+			name:    "customer storage account in an ARM ID",
+			path:    "docs/guide/planted-arm.md",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/acmeprodcustomers",
+			want:    []string{"storageAccounts/acmeprodcustomers"},
+		},
+		{
+			// The other Azure names an ARM ID carries are globally unique too,
+			// each the DNS label of a public host of its own, so a planted one
+			// must fail the check as the storage account above does
+			// (issue #424).
+			name:    "customer Key Vault in an ARM ID",
+			path:    "docs/guide/planted-arm-keyvault.md",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.KeyVault/vaults/kv-contoso-prod",
+			want:    []string{"vaults/kv-contoso-prod"},
+		},
+		{
+			name:    "customer container registry in an ARM ID",
+			path:    "testdata/planted-arm-acr.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.ContainerRegistry/registries/acrcontosoprod",
+			want:    []string{"registries/acrcontosoprod"},
+		},
+		{
+			name:    "customer Cosmos DB account in an ARM ID",
+			path:    "test/e2e/testdata/planted-arm-cosmos.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-contoso-prod",
+			want:    []string{"databaseAccounts/cosmos-contoso-prod"},
+		},
+		{
+			name:    "customer SQL server in an ARM ID",
+			path:    "docs/guide/inventory/planted-arm-sql.jq",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.Sql/servers/sql-contoso-prod",
+			want:    []string{"servers/sql-contoso-prod"},
+		},
+		{
+			// The single server's type is the same segment under the PostgreSQL
+			// namespace as under the SQL one, and the namespace is what makes the
+			// provider's name the row plants the customer's.
+			name:    "customer PostgreSQL server in an ARM ID",
+			path:    "testdata/planted-arm-postgres.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/servers/pg-contoso-prod",
+			want:    []string{"servers/pg-contoso-prod"},
+		},
+		{
+			name:    "customer PostgreSQL flexible server in an ARM ID",
+			path:    "testdata/planted-arm-postgres-flexible.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg-contoso-prod",
+			want:    []string{"flexibleServers/pg-contoso-prod"},
+		},
+		{
+			name:    "customer MySQL server in an ARM ID",
+			path:    "testdata/planted-arm-mysql.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforMySQL/servers/mysql-contoso-prod",
+			want:    []string{"servers/mysql-contoso-prod"},
+		},
+		{
+			name:    "customer MySQL flexible server in an ARM ID",
+			path:    "testdata/planted-arm-mysql-flexible.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforMySQL/flexibleServers/mysql-contoso-prod",
+			want:    []string{"flexibleServers/mysql-contoso-prod"},
+		},
+		{
+			name:    "customer web app in an ARM ID",
+			path:    "docs/guide/planted-arm-web.md",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.Web/sites/app-contoso-prod",
+			want:    []string{"sites/app-contoso-prod"},
+		},
+		{
+			name:    "customer Service Bus namespace in an ARM ID",
+			path:    "test/e2e/testdata/planted-arm-servicebus.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.ServiceBus/namespaces/sb-contoso-prod/queues/orders",
+			want:    []string{"namespaces/sb-contoso-prod"},
+		},
+		{
+			// The guide's seven synthetic shop names are the guide's own sample,
+			// so they are excused in the guide's fixtures
+			// (test/e2e/testdata/inventory-guide/) and nowhere else: the same ARM
+			// ID planted at another checked path names a customer's PostgreSQL
+			// flexible server just as psql-shop-prod does, and is reported
+			// (issue #424's review).
+			name:    "guide shop name outside the guide's fixtures",
+			path:    "testdata/planted-arm-shop.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
+			want:    []string{"flexibleServers/psql-shop"},
+		},
+		{
+			// The same for the guide's Service Bus namespace, at a guide path
+			// rather than a testdata one: the excuse follows the file, not the
+			// kind of path.
+			name:    "guide Service Bus namespace outside the guide's fixtures",
+			path:    "docs/guide/planted-arm-shop-sb.md",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.ServiceBus/namespaces/sb-shop",
+			want:    []string{"namespaces/sb-shop"},
+		},
+		{
+			// The guide's seven synthetic shop names are excused by allow-list
+			// entries that each name one file and one value with its type
+			// segment, since a value the check reads only in an ARM ID cannot
+			// be held to a file by a bare entry (issue #424's review); a
+			// namespace that shares the segment is excused alike, which is
+			// accepted because the names are synthetic and both namespaces'
+			// names are global. Here the guide's own
+			// Resource Graph export carries its PostgreSQL flexible server's
+			// name, which is the entry's business, so the check reports
+			// nothing. The row plants it at the allow-listed file itself, so it
+			// holds that entry to the file it names.
+			name:    "guide shop name in the guide's own fixture",
+			path:    "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
+			want:    nil,
+		},
+		{
+			// A per-file entry excuses its value in that one file only: the
+			// same ARM ID in a new file of the same directory, where an excuse
+			// over the directory would pass it, names a customer's PostgreSQL
+			// flexible server and is reported.
+			name:    "guide shop name in a new file of the guide's directory",
+			path:    "test/e2e/testdata/inventory-guide/azure/planted-arm-shop.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
+			want:    []string{"flexibleServers/psql-shop"},
+		},
+		{
+			// An entry names the value's type segment (flexibleServers/,
+			// sites/, namespaces/) as well as its file, so the guide's shop
+			// name in an ARM ID of another type segment - a Key Vault here,
+			// whose name is a public host of its own - is no name the guide's
+			// fixtures may carry and is reported.
+			name:    "guide shop name in another type's ARM ID",
+			path:    "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.KeyVault/vaults/psql-shop",
+			want:    []string{"vaults/psql-shop"},
+		},
+		{
+			// An allow-list entry names the type segment and the file, not the
+			// provider namespace (the allowListEntry doc in
+			// fixtures_check_test.go says why that is accepted), so the
+			// guide's shop name under another namespace of the same type
+			// segment - a MySQL flexibleServers/ here - is excused in the file
+			// the entry names and the check reports nothing. This row holds
+			// that accepted boundary: a change to report the namespace would
+			// have to revisit it.
+			name:    "accepted: guide shop name under another namespace of the same type segment",
+			path:    "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.DBforMySQL/flexibleServers/psql-shop",
+			want:    nil,
+		},
+		{
+			// An abfss URL names the container before an @ and the customer's
+			// storage account in the host after it. The account is reported as the
+			// bare value on its own, beside the host, so the failure names both
+			// values to change (PR #418's review).
+			name:    "customer storage account in an abfss URL",
+			path:    "testdata/planted-abfss.json",
+			content: "the data lake is at abfss://data@acmeprodlake.dfs.core.windows.net/x",
+			want:    []string{"acmeprodlake.dfs.core.windows.net", "acmeprodlake"},
+		},
+		{
+			// The reserved projects/_ segment names no project, so only the
+			// bucket after it is the customer's own name.
+			name:    "customer bucket in a Cloud Storage resource name",
+			path:    "docs/guide/inventory/planted-bucket-name.jq",
+			content: `"name": "projects/_/buckets/acme-prod-data"`,
+			want:    []string{"buckets/acme-prod-data"},
+		},
+		{
+			// An S3 access point is an ARN of its own shape, whose region and
+			// account the bucket ARN's ::: never carries.
+			name:    "customer access point in an S3 ARN",
+			path:    "testdata/planted-accesspoint.json",
+			content: `"accessPoint": "arn:aws:s3:eu-central-1:` + dummyAccountID + `:accesspoint/acme-prod-ap"`,
+			want:    []string{"accesspoint/acme-prod-ap"},
+		},
+		{
+			// The other side of the same rules, planted rather than assumed: the
+			// project's own host and a sample's bucket are what a checked file may
+			// carry, so the check reports nothing for them.
+			name:    "public project host and sample bucket",
+			path:    "testdata/planted-clean.txt",
+			content: "cloned from github.com/timothymamo/shift2eu, the sample objects are in s3://example-bucket/key",
+			want:    nil,
 		},
 		{
 			// Every sample address is in 192.0.2.0/24, and the hyphenated rule
@@ -523,6 +797,12 @@ func TestAllowListEntriesAreNarrowAndUsed(t *testing.T) {
 // planted at another checked path, is still reported. An allow list keyed on a
 // value alone would let a real value into a new file, whichever file it came
 // from, so every distinct value is tried rather than the first entry's.
+//
+// A value the check reads only in an ARM ID (an armNameType's type segment and
+// name, flexibleServers/psql-shop) is never reported on its own, so it is
+// planted inside an ARM ID of its own type: bare, it would pass here whatever
+// the allow list said, and the row would pin nothing. A storage account or a
+// bare name is reported wherever it stands and is planted as it is written.
 func TestAllowListDoesNotLeakToOtherFiles(t *testing.T) {
 	t.Parallel()
 
@@ -546,8 +826,10 @@ func TestAllowListDoesNotLeakToOtherFiles(t *testing.T) {
 		t.Run(value, func(t *testing.T) {
 			t.Parallel()
 
+			content := armIDLeakContent(value)
+
 			dir := t.TempDir()
-			plantFixture(t, dir, plantedPath, "leaked value: "+value)
+			plantFixture(t, dir, plantedPath, content)
 
 			problems, err := fixtureProblems(dir)
 			if err != nil {
@@ -560,6 +842,41 @@ func TestAllowListDoesNotLeakToOtherFiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+// armIDLeakContent returns the content a leak row plants value in: value as it
+// is written when the check reads it anywhere (a storage account, a project ID),
+// or the ARM ID an armNameType's name is read in, built from the type's provider
+// namespace (armNameTypes), when the check reads the value in an ARM ID only.
+func armIDLeakContent(value string) string {
+	segment, _, ok := strings.Cut(value, "/")
+	if !ok {
+		return "leaked value: " + value
+	}
+
+	provider, ok := armNameTypeProvider(segment)
+	if !ok {
+		return "leaked value: " + value
+	}
+
+	return "leaked value: /subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/" + provider + "/" + value
+}
+
+// armNameTypeProvider returns the provider namespace of the armNameTypes entry
+// whose resource types include segment, matched in any case as an ARM type is.
+// The first entry wins: where two namespaces share a type segment (a
+// flexibleServers of the PostgreSQL and of the MySQL provider), the name is
+// reported under either with the same value, the type segment and the name, so
+// the row pins the same value; for the same reason an allow-list entry excuses
+// the name under either namespace.
+func armNameTypeProvider(segment string) (string, bool) {
+	for _, armType := range armNameTypes {
+		if slices.ContainsFunc(armType.types, func(typ string) bool { return strings.EqualFold(typ, segment) }) {
+			return armType.provider, true
+		}
+	}
+
+	return "", false
 }
 
 // problemValues returns the offending values of problems, in order, so a test

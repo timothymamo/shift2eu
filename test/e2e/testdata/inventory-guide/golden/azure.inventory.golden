@@ -55,7 +55,24 @@
         "encryption-at-rest",
         "node-high-availability",
         "point-in-time-restore"
-      ]
+      ],
+      "size": {
+        "storageGiB": 64
+      }
+    },
+    {
+      "id": "mysql-shop-reports",
+      "rawType": "Microsoft.DBforMySQL/flexibleServers",
+      "category": "database.mysql",
+      "region": "westeurope",
+      "capabilities": [
+        "encryption-at-rest",
+        "point-in-time-restore"
+      ],
+      "size": {
+        "storageGiB": 32,
+        "count": 1
+      }
     },
     {
       "id": "nic-shop-web-1",
@@ -73,7 +90,10 @@
         "point-in-time-restore",
         "read-replicas",
         "zone-high-availability"
-      ]
+      ],
+      "size": {
+        "storageGiB": 128
+      }
     },
     {
       "id": "psql-shop-replica",
@@ -83,7 +103,11 @@
       "capabilities": [
         "encryption-at-rest",
         "point-in-time-restore"
-      ]
+      ],
+      "size": {
+        "storageGiB": 128,
+        "count": 1
+      }
     },
     {
       "id": "pvc-00000000-0000-0000-0000-000000000000",

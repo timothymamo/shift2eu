@@ -14,10 +14,9 @@ import (
 )
 
 // This file holds the JSON Schema validator the tests that hold a document to a
-// schema share: internal/httpapi checks response bodies against the OpenAPI
-// document's schemas and test/apiparity checks the API's report against
-// jsonreport's schemas. It implements the draft 2020-12 subset those documents
-// use, and refuses every keyword it does not implement, so a construct it
+// schema share, such as test/examples, which checks the CLI's JSON report
+// against jsonreport's schemas. It implements the draft 2020-12 subset those
+// schemas use, and refuses every keyword it does not implement, so a construct it
 // cannot check never passes unvalidated.
 
 // schemaKeywords lists every keyword the validator checks. A schema that uses
@@ -63,8 +62,7 @@ type Schema struct {
 }
 
 // SchemaDoc is a set of JSON Schema objects that refer to each other by local
-// JSON pointer: "#/$defs/<name>" in a schema file, "#/components/schemas/<name>"
-// in an OpenAPI document.
+// JSON pointer: "#/$defs/<name>" in a schema file.
 type SchemaDoc struct {
 	nodes map[string]*Schema
 }
@@ -95,92 +93,6 @@ func ParseSchema(data []byte) (*SchemaDoc, *Schema, error) {
 	}
 
 	return doc, root, nil
-}
-
-// ParseOpenAPISchemas parses the components.schemas of an OpenAPI 3.1 document.
-// Its schemas refer to each other as "#/components/schemas/<name>"; Require
-// returns one by that pointer.
-func ParseOpenAPISchemas(data []byte) (*SchemaDoc, error) {
-	var document struct {
-		Components struct {
-			Schemas map[string]json.RawMessage `json:"schemas"`
-		} `json:"components"`
-	}
-
-	if err := json.Unmarshal(data, &document); err != nil {
-		return nil, fmt.Errorf("decode the OpenAPI document: %w", err)
-	}
-
-	if len(document.Components.Schemas) == 0 {
-		return nil, fmt.Errorf("the OpenAPI document declares no components.schemas")
-	}
-
-	doc := NewSchemaDoc()
-	schemas := make([]*Schema, 0, len(document.Components.Schemas))
-
-	for _, name := range slices.Sorted(maps.Keys(document.Components.Schemas)) {
-		raw, err := decodeJSONObject(name, document.Components.Schemas[name])
-		if err != nil {
-			return nil, err
-		}
-
-		schema, err := doc.parseSchema(raw)
-		if err != nil {
-			return nil, err
-		}
-
-		doc.nodes[openAPISchemaPointer(name)] = schema
-		schemas = append(schemas, schema)
-	}
-
-	if err := doc.checkReferences(schemas...); err != nil {
-		return nil, err
-	}
-
-	return doc, nil
-}
-
-// openAPISchemaPointer is the pointer a component schema is registered under.
-func openAPISchemaPointer(name string) string {
-	return "#/components/schemas/" + name
-}
-
-// Require returns the schema the document registered at pointer, failing tb
-// when it registered none: a body checked against a missing schema would
-// otherwise pass unvalidated.
-func (d *SchemaDoc) Require(tb testing.TB, pointer string) *Schema {
-	tb.Helper()
-
-	schema, ok := d.nodes[pointer]
-	if !ok {
-		tb.Fatalf("the schema document declares no schema at %q", pointer)
-	}
-
-	return schema
-}
-
-// ParseSchemaObject parses one schema object of the document, for a schema the
-// document uses inline, such as a response body's. Its references resolve
-// against the document's registered schemas, and a reference to one it does not
-// register fails tb.
-func (d *SchemaDoc) ParseSchemaObject(tb testing.TB, data []byte) *Schema {
-	tb.Helper()
-
-	raw, err := decodeJSONObject("the schema", data)
-	if err != nil {
-		tb.Fatalf("%v", err)
-	}
-
-	schema, err := d.parseSchema(raw)
-	if err != nil {
-		tb.Fatalf("the schema is not one the validator implements: %v", err)
-	}
-
-	if err := d.checkReferences(schema); err != nil {
-		tb.Fatalf("%v", err)
-	}
-
-	return schema
 }
 
 // Mismatches returns every way data, one JSON document, fails schema, each as

@@ -8,7 +8,7 @@ the contributor guide, the architecture and the architecture decision records. T
 
 1. [Install](guide/install.md): the release archives, the images, and building from source.
 2. [Try it](guide/try-it.md): a walkthrough from install to a report on a sample inventory, with the
-   CLI, the image and the HTTP API, and how to read the report.
+   CLI and the image, and how to read the report.
 3. [Build an inventory from your cloud](guide/inventory.md): turn an AWS, GCP or Azure estate into
    an inventory file with the provider's read-only CLI and `jq`.
 4. [Assess an inventory](guide/assess.md): the `assess` command, its Markdown and JSON reports, the
@@ -17,10 +17,6 @@ the contributor guide, the architecture and the architecture decision records. T
    and, for live sources, credentials.
 6. [Verify a release](guide/verify-releases.md): the images' signatures, build provenance and SBOMs,
    and the releases published before the rename.
-7. [Run the HTTP API](guide/http-api.md): `shift2eu-server`, its routes, its image and example
-   requests.
-8. [Behind a reverse proxy](guide/reverse-proxy.md): deploying the server, its flags and variables,
-   and a minimal nginx configuration.
 
 ## Contributor guide
 
@@ -77,6 +73,9 @@ supersedes it.
 - [0034. Run the agents App token refresh as a LaunchDaemon, so it survives a reboot](adr/0034-run-the-agents-app-token-refresh-as-a-launchdaemon.md)
 - [0035. Run the assessment in the browser as a WebAssembly driving adapter](adr/0035-run-the-assessment-in-the-browser-as-a-webassembly-driving-adapter.md)
 - [0036. Hold the site to three trust layers, and test them in a headless browser](adr/0036-hold-the-site-to-three-trust-layers-and-test-them-in-a-headless-browser.md)
+- [0037. Retire the HTTP API and release the CLI alone](adr/0037-retire-the-http-api-and-release-the-cli-alone.md)
+- [0038. Start the Lima VM at boot with a LaunchDaemon of our own, never limactl autostart](adr/0038-start-the-lima-vm-at-boot-with-a-launchdaemon-of-our-own.md)
+- [0039. Create the site's Scaleway hosting with OpenTofu, its state in a locked bucket outside the site's project](adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md)
 
 ## Writing a page
 
@@ -103,5 +102,5 @@ repository's files by URL, on a page without its single `#` title, and on a page
 this index does not list. It never fetches an external URL.
 
 The release archives ship `README.md` with `docs/` beside it, so the README's links work in an
-unpacked archive too. Links from these pages to the repository's source files (`api/openapi.json`, the
-JSON Schemas) resolve in the repository, not in an archive.
+unpacked archive too. Links from these pages to the repository's source files (the JSON
+Schemas, for one) resolve in the repository, not in an archive.

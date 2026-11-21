@@ -5,6 +5,10 @@
 # directory: its go.mod is then not found and GO_LINE below is empty, as without a go.mod.
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
+# No `#` comment, whole-line or mid-line, anywhere in a backslash-continued recipe command: GNU Make 3.81 (macOS
+# /usr/bin/make) then comments out the rest of the command and the recipe ends silently with exit 0. Put comments
+# above the target (TestMakefileHasNoCommentInsideAContinuedRecipe, issue #437).
+
 # The VM's size and SSH port, for a host that runs several VMs (issue #228, docs/dev-environment.md, Several
 # VMs on one host). Empty keeps dev/lima.yaml's value and the port Lima picks. They apply only when make vm-up
 # creates the VM: an existing VM is never resized, and vm-up warns that they were ignored. VM_CPUS is a CPU
@@ -108,8 +112,6 @@ GO_LINE := $(shell awk '/^go[ \t]/ { sub(/\r$$/, "", $$2); print $$2; exit }' '$
 ifneq ($(GOTOOLCHAIN),local)
 override GOTOOLCHAIN := $(if $(GO_LINE),go$(GO_LINE))
 endif
-# The HTTP API's binary (PRD #103, docs/adr/0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md).
-SERVER  := shift2eu-server
 PKG     := github.com/timothymamo/shift2eu
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -120,8 +122,6 @@ LDFLAGS := -s -w \
 	-X $(PKG)/internal/version.date=$(DATE)
 # The container image make image builds (docs/adr/0013-ship-shift2eu-as-a-distroless-container-image.md).
 IMAGE   ?= shift2eu
-# The HTTP API's container image make server-image builds, the Dockerfile's server stage (PRD #103).
-SERVER_IMAGE ?= shift2eu-server
 # The container CLI make image runs: docker where it is installed, otherwise nerdctl, the rootless runtime
 # of the Lima VM (docs/adr/0017-run-a-rootless-container-runtime-in-the-lima-vm.md).
 DOCKER  ?= $(if $(shell command -v docker 2>/dev/null),docker,nerdctl)
@@ -129,9 +129,7 @@ DOCKER  ?= $(if $(shell command -v docker 2>/dev/null),docker,nerdctl)
 # pinned by tag and digest; Renovate updates both through the comment above it. CI's browser job runs make
 # test-browser too, so this is the one copy of the pin.
 # renovate: datasource=docker depName=chromedp/headless-shell
-HEADLESS_SHELL := chromedp/headless-shell:159.0.8154.13@sha256:381353d3530ab9d579d2fe8b9c0f4519c995617f5a71daf6bb649e2d12005bd9
-# The DevTools port the headless Chromium listens on, on 127.0.0.1 only.
-DEVTOOLS_PORT := 9222
+HEADLESS_SHELL := chromedp/headless-shell:160.0.8157.0@sha256:1459842ec97ea88a20645fffae40769c0c8dc70f51cf43e7df812fbaef9909cc
 # The platforms make image builds, comma separated (linux/amd64,linux/arm64). Empty builds the host's own.
 PLATFORMS ?=
 
@@ -156,7 +154,7 @@ REPO_ROOT := $(patsubst %/.git,%,$(shell git rev-parse --path-format=absolute --
 # worktree, git-hooks, ...) is the agents', runs in the workspace inside the VM and never reads these.
 HOST_TARGETS := agents-token agents-token-refresh agents-token-refresh-start agents-token-refresh-install \
 	agents-token-refresh-uninstall deck deck-restart gate-check vm-agents-token-ssh vm-agents-token-ssh-uninstall \
-	vm-claude-settings vm-create vm-delete vm-env vm-env-check vm-gh-wrapper vm-init vm-shell vm-stop vm-up
+	vm-boot-install vm-boot-uninstall vm-claude-settings vm-create vm-delete vm-env vm-env-check vm-gh-wrapper vm-init vm-shell vm-stop vm-up
 HOST_WORKSPACE_REPO := $(abspath $(WORKSPACE_REPO))
 HOST_WORKSPACE      := $(patsubst %/,%,$(dir $(HOST_WORKSPACE_REPO)))
 HOST_REPO_NAME      := $(notdir $(HOST_WORKSPACE_REPO))
@@ -219,6 +217,158 @@ $(call host_refuse,make runs in $(REPO_ROOT) - the workspace $(or $(HOST_WORKSPA
 else ifneq ($(filter $(REPO_ROOT)/%,$(host_workspace_real)),)
 $(call host_refuse,the workspace $(HOST_WORKSPACE) is inside $(REPO_ROOT) - the checkout make runs in)
 endif
+# The .envrc guard (issue #402). The host targets that load the VM's credentials or the agents App's key -
+# vm-env, its check vm-env-check, the three that run them (vm-up, vm-create, vm-init), the two that mint the
+# agents App's token in the foreground (agents-token, agents-token-refresh) and the two that start or install its
+# refresh - refuse a layout where direnv reads the credentials from anywhere but the host clone's own .envrc: a
+# host clone .envrc that is a symlink to a file outside the clone or hands its lines to another file, or a .envrc
+# or .env in the workspace or above it - both spellings of it, as WORKSPACE_REPO writes it and with its symlinks
+# resolved - which direnv loads in every Mac shell opened in the workspace (found on the Mac Mini on 2026-11-20).
+# The host clone's .envrc is held strictly, as the guard parses no shell: source_up, source_up_if_exists,
+# source_env, source_env_if_exists, source_url and bash's source and . are refused whatever they name, a file of
+# the clone included, as they run a file the guard never reads; dotenv and dotenv_if_exists pass only bare (the
+# clone's own .env) or with an argument that, one enclosing pair of matching quotes stripped, holds nothing but
+# A-Za-z0-9._/+@=- and resolves inside the clone (a directory standing for its .env); anything else counts as
+# outside. ;, &, |, ( and ) separate directives (each doubled before matching, so no match eats the boundary of
+# the next), <, > and a backtick end a directive's word as well (source_up>/dev/null, `source_up`), and a
+# dotenv directly followed by a quote, a backslash, <, > or a backtick, or with an argument starting with one,
+# counts as outside. $(call
+# ENVRC_GUARD,<target>) checks both and names each file on stderr, with the line number, the directive's name and
+# paths only, never a line or a value: of the host clone's .envrc it reads, through grep -a -o, only the words of
+# ENVRC_GUARD_ERE on lines that are no comment (a line ending in \ joined to the next first, as bash does), with
+# the one word after each; of the files above the workspace nothing, it only tests that they are there. A
+# relative path is resolved against the clone, component by component, every symlink followed, the last one too,
+# at most 40 (macOS: /var is /private/var, as in REPO_ROOT); a loop of symlinks counts as outside. A directive in
+# a trailing comment counts too, a safe false positive. It checks the usual direnv and bash spellings and is no
+# sandbox (eval can always read a parent). It is a macro, not a script of dev/, as it runs while make reads this
+# file, like the refusal above:
+# before any prerequisite (vm-env's vm-env-check), sub-make, $(LIMA_INSTANCE_CHECK) or recipe line, even under
+# make -i or -k; a sub-make (vm-create's) checks again. It prints "refused" on stdout when it refuses, and make
+# then stops with $(error). It refuses, never warns, and has no override: the fix is moving a file
+# (docs/dev-environment.md, The host clone). vm-boot-install is not one of them: its LaunchDaemon starts the VM
+# and holds no credential (its plist names only limactl, LIMA_INSTANCE and LIMA_HOME).
+ENVRC_GUARD_TARGETS := agents-token agents-token-refresh agents-token-refresh-install agents-token-refresh-start \
+	vm-create vm-env vm-env-check vm-init vm-up
+envrc_guard_goals := $(filter $(ENVRC_GUARD_TARGETS),$(MAKECMDGOALS))
+host_sq = '$(subst ','\'',$(1))'
+# A directive the guard reads: the word, alone (no letter, digit, _ or . before it, so a backtick may; a space, a
+# separator, a quote, a backslash, <, >, a backtick or the end after it), with the one word after it, which stops
+# at a space, a separator, < or > after its first character. Its first character may be <, > or a backtick, so
+# dotenv's argument then fails the allow list; a backtick later in it does not stop it, as bash joins what a
+# command substitution prints to the word, so dotenv .env`...` fails the allow list too.
+# docs/dev-environment.md, The host clone, counts the lines with the same words and boundaries.
+ENVRC_GUARD_ERE := (^|[^A-Za-z0-9_.])(source_up_if_exists|source_up|source_env_if_exists|source_env|source_url|dotenv_if_exists|dotenv|source|\.)([[:space:]]+[^[:space:];&|()][^[:space:];&|()<>]*|[[:space:];&|()<>`\"'\'']|$$)
+ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
+	target=$(call host_sq,$(1)); clone=$(call host_sq,$(REPO_ROOT)); dir=$(call host_sq,$(HOST_WORKSPACE)); \
+	why="every line of the VM's credentials and the agents App's variables belongs in the host clone's .envrc itself (docs/dev-environment.md, The host clone)"; \
+	dir_real=$(call host_sq,$(host_workspace_real)); \
+	refused=; nl=$$(printf '\n_'); nl=$${nl%_}; \
+	resolve() { out=; rest=$$1; hops=0; \
+		while :; do \
+			while :; do case $$rest in (/*) rest=$${rest$(host_hash)/} ;; (*) break ;; esac; done; \
+			[ -n "$$rest" ] || break; \
+			part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; \
+			case $$part in \
+			(.) ;; \
+			(..) out=$${out%/*} ;; \
+			(*) if [ -L "$$out/$$part" ]; then \
+					hops=$$((hops + 1)); [ "$$hops" -le 40 ] || return 1; \
+					link=$$(readlink "$$out/$$part") || return 1; \
+					case $$link in (/*) out= ;; esac; rest="$$link$$rest"; \
+				else out="$$out/$$part"; fi ;; \
+			esac; \
+		done; printf '%s\n' "$${out:-/}"; }; \
+	envrc_lines() { acc=; held=0; \
+		while IFS= read -r line || [ -n "$$line" ]; do \
+			if [ "$$held" -eq 0 ]; then \
+				case $${line$(host_hash)"$${line%%[![:space:]]*}"} in ('$(host_hash)'*) line= ;; esac; \
+			fi; \
+			case $$line in \
+			(*'\') acc="$$acc$${line%?}"; held=$$((held + 1)) ;; \
+			(*) printf '%s\n' "$$acc$$line"; acc=; \
+				while [ "$$held" -gt 0 ]; do printf '\n'; held=$$((held - 1)); done ;; \
+			esac; \
+		done; \
+		[ "$$held" -eq 0 ] || printf '%s\n' "$$acc"; }; \
+	envrc="$$clone/.envrc"; \
+	if [ -e "$$envrc" ] || [ -L "$$envrc" ]; then \
+		clone_real=$$(cd "$$clone" && pwd -P); \
+		envrc_real=$$(resolve "$$envrc") || envrc_real=; \
+		if [ -z "$$clone_real" ]; then \
+			envrc_real=; \
+		elif case $$envrc_real in ("$$clone_real"/*) false ;; (*) true ;; esac; then \
+			echo "$$target: refused: the host clone's .envrc, $$envrc, is a symlink to a file outside the host clone: $$why" >&2; \
+			refused=1; envrc_real=-; \
+		fi; \
+		if [ "$$envrc_real" = - ]; then \
+			:; \
+		elif [ -n "$$envrc_real" ] && [ -f "$$envrc_real" ] && [ -r "$$envrc_real" ] && \
+			text=$$(envrc_lines < "$$envrc_real") && \
+			found=$$(printf '%s\n' "$$text" | sed 's/[;&|()]/&&/g' | \
+				grep -a -n -oE '$(ENVRC_GUARD_ERE)' || \
+				[ "$$?" -eq 1 ]); then \
+			text=; \
+			IFS=$$nl; for entry in $$found; do \
+				unset IFS; \
+				num=$${entry%%:*}; match=$${entry$(host_hash)*:}; \
+				case $$match in ([sd.]*) ;; (*) match=$${match$(host_hash)?} ;; esac; \
+				directive=$${match%%[!a-z_.]*}; rest=$${match$(host_hash)"$$directive"}; \
+				set -- $$rest; arg=$${1-}; \
+				case $$arg in (';' | '&' | '|' | '(' | ')') arg= ;; esac; \
+				case $$directive in \
+				(dotenv | dotenv_if_exists) \
+					outside=; \
+					case $$rest in \
+					([\"\'\\]) outside=1 ;; \
+					(*) case $$arg in ('') arg=.env ;; (\"*\" | \'*\') arg=$${arg$(host_hash)?}; arg=$${arg%?} ;; esac; \
+						case $$arg in \
+						('' | *[!A-Za-z0-9._/+@=-]*) outside=1 ;; \
+						(*) case $$arg in (/*) path=$$arg ;; (*) path="$$clone_real/$$arg" ;; esac; \
+							path=$$(resolve "$$path") || path=; \
+							if [ -n "$$path" ] && [ -d "$$path" ]; then path=$$(resolve "$$path/.env") || path=; fi; \
+							case $$path in ("$$clone_real"/*) ;; (*) outside=1 ;; esac ;; \
+						esac ;; \
+					esac; \
+					if [ -n "$$outside" ]; then \
+						echo "$$target: refused: $$envrc: line $$num: the host clone's .envrc loads with $$directive a path this check cannot read as a plain path inside the host clone: $$why" >&2; \
+						refused=1; \
+					fi ;; \
+				(*) echo "$$target: refused: $$envrc: line $$num: the host clone's .envrc runs another file with $$directive, which this check does not read: put that file's lines in the host clone's .envrc itself (docs/dev-environment.md, The host clone)" >&2; \
+					refused=1 ;; \
+				esac; \
+			done; \
+		else \
+			text=; \
+			echo "$$target: refused: cannot read the host clone's .envrc, $$envrc, to check that it reads no file outside the host clone: $$why" >&2; \
+			refused=1; \
+		fi; \
+	fi; \
+	seen=$$nl; \
+	for start in "$$dir" "$$dir_real"; do \
+		dir=$$start; \
+		while :; do \
+			for name in .envrc .env; do \
+				file="$${dir%/}/$$name"; \
+				if [ -e "$$file" ] || [ -L "$$file" ]; then \
+					case $$seen in \
+					(*"$$nl$$file$$nl"*) ;; \
+					(*) seen="$$seen$$file$$nl"; \
+						echo "$$target: refused: $$file is in the workspace the VM mounts or in a directory above it, where direnv loads it in every shell opened in the workspace: move its lines into the host clone's .envrc and remove it; $$why" >&2; \
+						refused=1 ;; \
+					esac; \
+				fi; \
+			done; \
+			[ -n "$$dir" ] && [ "$$dir" != / ] || break; \
+			dir=$${dir%/*}; [ -n "$$dir" ] || dir=/; \
+		done; \
+	done; \
+	[ -z "$$refused" ] || echo refused
+ifneq ($(envrc_guard_goals),)
+envrc_guard_refused := $(shell $(call ENVRC_GUARD,$(firstword $(envrc_guard_goals))))
+ifneq ($(envrc_guard_refused),)
+$(error $(firstword $(envrc_guard_goals)): refused: direnv would read the credentials from a .envrc or .env other than the host clone's own (each named above); nothing ran (docs/dev-environment.md, The host clone))
+endif
+endif
 endif
 # What a host target that opens a shell in the VM (deck, deck-restart, vm-claude-settings, vm-init, vm-shell)
 # puts before limactl: the host clone's .envrc holds the agents App's variables, and none of those commands
@@ -246,12 +396,8 @@ help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^##@/ {printf "\n%s\n", substr($$0, 5)} /^[a-zA-Z0-9_-]+:.*## / {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: build
-build: server ## Build the shift2eu and shift2eu-server binaries into ./bin
+build: ## Build the shift2eu binary into ./bin
 	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) ./cmd/$(BINARY)
-
-.PHONY: server
-server: ## Build the shift2eu-server binary (the HTTP API) into ./bin
-	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(SERVER) ./cmd/$(SERVER)
 
 # The site's bundle (PRD #297): make site writes it into bin/site and its archive beside it,
 # bin/shift2eu-site_<version>.tar.gz, both git-ignored under /bin/. SITE_VERSION (read raw and exported in the
@@ -274,19 +420,6 @@ image: ## Build the local container image shift2eu:<version>, shift2eu:dev and s
 		--tag "$(IMAGE):$(VERSION)" \
 		--tag "$(IMAGE):dev" \
 		--tag "$(IMAGE):latest" \
-		.
-
-.PHONY: server-image
-server-image: ## Build the local container image shift2eu-server:<version>, :dev and :latest, the Dockerfile's server stage, as make image does
-	$(DOCKER) build \
-		$(if $(PLATFORMS),--platform "$(PLATFORMS)") \
-		--target server \
-		--build-arg VERSION="$(VERSION)" \
-		--build-arg COMMIT="$(COMMIT)" \
-		--build-arg DATE="$(DATE)" \
-		--tag "$(SERVER_IMAGE):$(VERSION)" \
-		--tag "$(SERVER_IMAGE):dev" \
-		--tag "$(SERVER_IMAGE):latest" \
 		.
 
 .PHONY: fmt
@@ -344,15 +477,32 @@ tidy: ## Tidy go.mod and go.sum, and the lint tools' tools/go.mod and tools/go.s
 	go mod tidy
 	go -C tools mod tidy
 
-.PHONY: openapi
-openapi: ## Regenerate api/openapi.bundled.json, the self-contained OpenAPI document each release publishes (issue #139)
-	go test -count=1 ./test/openapibundle -update
-
 ##@ Testing
 
 .PHONY: test
+# The unit run's one go command, echoed and run by make test, so the echo cannot drift from what runs.
+GO_TEST_UNIT := go test -race -count=1 ./...
+# go's output streams whole; when go fails, its failing packages' and tests' lines (subtests too) are repeated
+# under a header at the end, since in a long run they scroll away (issue #253). A test that times out prints no
+# --- FAIL: line, so the summary also repeats go's timeout panic line and the tests it names as running (the lines
+# indented by exactly two tabs; its stack lines have one). go's exit status goes through a file because /bin/sh
+# has no pipefail, and make test exits with it. The file is created empty before go runs, so a status that is not a
+# number (the file stayed empty because the shell running go died) still reaches the summary and fails the run
+# with 1: a lost status never passes and never loses the summary. Both files live in one temporary
+# directory, removed on every exit; HUP, INT and TERM exit with 129, 130 and 143.
 test: ## Unit + contract tests with the race detector (no network, no credentials)
-	go test -race -count=1 ./...
+	@echo '$(GO_TEST_UNIT)'
+	@dir=$$(mktemp -d) && trap 'rm -rf "$$dir"' EXIT && \
+	trap 'exit 129' HUP && trap 'exit 130' INT && trap 'exit 143' TERM && \
+	out="$$dir/out" && status="$$dir/status" && tab=$$(printf '\t') && : > "$$status" && \
+	{ $(GO_TEST_UNIT); echo $$? > "$$status"; } | tee "$$out" && \
+	code=$$(cat "$$status") && \
+	if [ "$$code" != 0 ]; then \
+		case "$$code" in ''|*[!0-9]*) code=1 ;; esac; \
+		echo 'make test: failing packages and tests:'; \
+		grep -e '^[[:space:]]*--- FAIL: ' -e "^FAIL$$tab" -e '^panic: test timed out' -e "^$$tab$$tab[^ $$tab]" "$$out"; \
+		exit "$$code"; \
+	fi
 
 .PHONY: test-integration
 test-integration: ## Integration tests against real cloud APIs (read-only credentials required)
@@ -362,33 +512,78 @@ test-integration: ## Integration tests against real cloud APIs (read-only creden
 test-e2e: ## Build and run the binary end to end against testdata fixtures
 	go test -count=1 -tags=e2e ./test/e2e/...
 
-# The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). make site builds the bundle; the
-# recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network and its own entrypoint
-# replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface through
-# socat), waits until Chromium logs that DevTools listens on 127.0.0.1 (so a port another process holds fails
-# the wait rather than handing the test a browser it did not start), and runs test/browser against it. The
-# container is removed on every exit, failure and interrupt included.
+# The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). It does not run make site, and
+# neither creates, reads nor removes bin/site, the bundle make site builds for the release and the deploy: the
+# run serves a bundle of its own (issue #423), which ci/sitebuild builds straight into a fresh directory from
+# mktemp -d, so two runs in one worktree never rebuild a bundle under each other's browser. The directory is
+# removed on every exit, a hang-up (closing the pane), an interrupt and a termination included: each is
+# trapped, since dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills it. The EXIT trap
+# first ignores those signals: a second one arriving while it runs would run its trap's exit and abandon the
+# rest of the cleanup, and one does arrive when the whole process group is signalled, since make forwards a
+# SIGTERM it gets to the recipe's shell. It then removes the directory, then the container, with a command
+# that ignores those signals too, so a hung one needs SIGKILL. The recipe starts the pinned headless Chromium
+# ($(HEADLESS_SHELL)) with the host network and its own entrypoint
+# replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface
+# through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is
+# open to guess and the DevTools ports and containers of two runs at once do not collide. It waits up to
+# 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll checks with
+# $(DOCKER) inspect that the container still runs: one inspect reports as not running (false) fails the
+# run at once, naming its exit status and showing the tail of its log (issue #423). A failed inspect alone
+# is no verdict, so the run keeps polling, but three failed in a row mean the container is gone, and the
+# run fails, showing inspect's last error, instead of waiting out the 60 seconds. It reads the address back
+# from the log line (port and browser id, so the test attaches to the browser this run started and no
+# other: a correctness guarantee, not access control, since any local process that finds the port can
+# read the id from /json/version on it), and runs test/browser against it. The container's name carries
+# the recipe shell's PID, so parallel runs have their own; it is removed on every exit, failure and
+# interrupt included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but
+# it hands the browser fds 3 and 4 of a process it starts itself, and docker run and nerdctl run pass no
+# such fds into a container (docs/adr/0036, amendment for issue #368).
 .PHONY: test-browser
-test-browser: site ## Build the site's bundle and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
+test-browser: ## Build the site's bundle into a directory of this run's own and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
 	@set -eu; \
-	devtools=http://127.0.0.1:$(DEVTOOLS_PORT); \
+	devtools=; \
 	name=shift2eu-test-browser-$$$$; \
-	trap '$(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
-	trap 'exit 130' INT TERM; \
+	bundle_dir=; \
+	trap 'trap "" HUP INT TERM; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir" || true; fi; $(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
+	trap 'exit 129' HUP; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
+	bundle_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/shift2eu-test-browser.XXXXXX"); \
+	go run ./ci/sitebuild -out "$$bundle_dir/site" -archive "$$bundle_dir/shift2eu-site.tar.gz" >/dev/null; \
 	$(DOCKER) run -d --name "$$name" --network host --entrypoint /headless-shell/headless-shell \
 		$(HEADLESS_SHELL) --no-sandbox --use-gl=angle --use-angle=swiftshader \
-		--remote-debugging-address=127.0.0.1 --remote-debugging-port=$(DEVTOOLS_PORT) >/dev/null; \
+		--remote-debugging-address=127.0.0.1 --remote-debugging-port=0 >/dev/null; \
 	tries=0; \
-	until $(DOCKER) logs "$$name" 2>&1 | grep -qF "DevTools listening on ws://127.0.0.1:$(DEVTOOLS_PORT)/"; do \
+	missed=0; \
+	until devtools=$$($(DOCKER) logs "$$name" 2>&1 | \
+		sed -n 's|^DevTools listening on \(ws://127\.0\.0\.1:[0-9][0-9]*/devtools/browser/[0-9a-f-][0-9a-f-]*\)$$|\1|p' | \
+		head -n 1); [ -n "$$devtools" ]; do \
+		if running=$$($(DOCKER) inspect -f '{{.State.Running}}' "$$name" 2>"$$bundle_dir/inspect.err"); then \
+			missed=0; \
+		else \
+			running=; \
+			missed=$$((missed + 1)); \
+		fi; \
+		if [ -z "$$running" ] && [ "$$missed" -ge 3 ]; then \
+			echo "test-browser: $(DOCKER) inspect could not read the state of the Chromium container $$name 3 times in a row, so it is gone; inspect's last error:" >&2; \
+			cat "$$bundle_dir/inspect.err" >&2 || true; \
+			exit 1; \
+		fi; \
+		if [ "$$running" = false ]; then \
+			status=$$($(DOCKER) inspect -f '{{.State.ExitCode}}' "$$name" 2>/dev/null || true); \
+			echo "test-browser: the Chromium container $$name exited with status $${status:-unknown} before it logged a DevTools address; the tail of its log:" >&2; \
+			$(DOCKER) logs --tail 20 "$$name" >&2 || true; \
+			exit 1; \
+		fi; \
 		tries=$$((tries + 1)); \
 		if [ "$$tries" -ge 60 ]; then \
-			echo "test-browser: DevTools did not listen on $$devtools within 60 seconds" >&2; \
+			echo "test-browser: Chromium logged no DevTools address on 127.0.0.1 within 60 seconds" >&2; \
 			$(DOCKER) logs "$$name" >&2 || true; \
 			exit 1; \
 		fi; \
 		sleep 1; \
 	done; \
-	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$(CURDIR)/bin/site" \
+	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$$bundle_dir/site" \
 		go test -count=1 -timeout 20m -tags browser ./test/browser/
 
 .PHONY: cover
@@ -403,8 +598,14 @@ vuln: ## Scan code and dependencies, and the lint tools, for known vulnerabiliti
 	govulncheck ./...
 	govulncheck -C tools github.com/rhysd/actionlint/cmd/actionlint
 
+# The offline checks of infra/'s OpenTofu configuration (issue #422): dev/infra-check.sh runs the pinned,
+# checksum-verified OpenTofu (dev/tofu.sh, infra/tofu.yaml) with no credential and no call to Scaleway.
+.PHONY: infra-check
+infra-check: ## Check infra/'s OpenTofu configuration offline: static rules, fmt, init -backend=false, validate, test
+	dev/infra-check.sh
+
 .PHONY: check
-check: lint test vuln ## Everything CI gates on; run before every commit
+check: lint test vuln infra-check ## Everything CI gates on; run before every commit
 
 ##@ Workflow
 
@@ -416,7 +617,7 @@ gate-check: ## Check that Protect main and CODEOWNERS on main require the mainta
 
 .PHONY: worktree
 worktree: ## Create or resume the worktree for a PR: make worktree BRANCH=feat/12-short-name
-	@./dev/worktree.sh "$(BRANCH)"
+	@dev/worktree.sh "$(BRANCH)"
 
 .PHONY: git-hooks
 git-hooks: ## Enable .githooks, which refuse commits and pushes to main
@@ -449,6 +650,81 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # (a case pattern with the name quoted), so a repository a.b never takes a stray axb for its own - then the
 # instance's status, all in one shell line with its limactl calls, so no make flag (-i, -k) can run limactl
 # after any of these checks failed. It runs neither git nor anything else in the workspace: test and ls only.
+# Before it lists the instances it warns, and only warns, about a Lima autostart job of the instance,
+# $(call LIMA_AUTOSTART_JOBS,warning) below (issue #315): the VM starts as it always does.
+#
+# LIMA_AUTOSTART_JOBS finds Lima's own autostart job of LIMA_INSTANCE (issues #315, #398): `limactl autostart
+# enable` writes and loads io.lima-vm.autostart.<instance> in the user's domain (gui/<uid>,
+# ~/Library/LaunchAgents/<label>.plist) and, with --condition=boot, io.lima-vm.daemon.<instance> as a
+# LaunchDaemon in the system domain ($(LIMA_LAUNCHDAEMONS_DIR)/<label>.plist). Both run
+# `limactl start <name> --foreground`, the form that can fall back to template:default, a VM that mounts the home
+# directory (issue #237). For each it asks, where launchctl exists, `launchctl print <domain>/<label>`, never
+# sudo, and else, launchctl or not, looks for the plist on disk: an SSH-only session has no gui/<uid> domain to
+# ask, and a plist nothing has loaded yet loads at the next login or boot. For each job found, once, it prints on
+# stderr "$@: <its argument>:", the job, its domain (loaded) or its plist (installed), `limactl autostart disable
+# <instance>` and the removal by hand (the bootout and `rm -f` of the plist of a loaded job, the `rm -f` of an
+# installed one; sudo only in the system domain), and sets lima_autostart=1 (empty when there is none). The
+# plist's path is repeated only when it is absolute and holds only / and [A-Za-z0-9._-] with no .. segment, the
+# rule of dev/agents-token-launchd.sh's foreign_jobs (auditor nit #396): the user domain's path is built from
+# $HOME, which may hold a space, a ; or a $ (security audit L1). Otherwise it is never printed, and the advice
+# says "remove its plist, whose path is not shown" with an ls of the literal ~/Library/LaunchAgents/<label>.plist
+# (or $(LIMA_LAUNCHDAEMONS_DIR)/<label>.plist) that names it, joined to the bootout by ", then" rather than the
+# && of the pasteable safe-path command (AI reviewer nit, PR #417). It
+# removes nothing itself. vm-up warns with it; vm-boot-install refuses with it. Only labels and files of Lima's
+# own naming are asked about, so it reads no job of anyone else.
+#
+# LIMA_LAUNCHDAEMONS_DIR is a test hook like VM_BOOT_LAUNCHD_DIR (see there), but only read, never written: the
+# directory Lima's LaunchDaemon plist sits in, /Library/LaunchDaemons. Never set it on a real Mac; it comes only
+# from the make command line or this file, and a value from the environment is silently replaced by
+# /Library/LaunchDaemons: the check only reads there, so a stale export can at worst miss a plist, unlike
+# LAUNCHD_DIR_CHECK, which refuses one for the directories root writes to. The macro refuses a value that is
+# not absolute or holds anything but letters, digits, /, ., _ and -. The test matches every origin that starts
+# with environment, as LAUNCHD_DIR_CHECK's environment* does, so a value from the environment is replaced under
+# make -e too, whichever GNU Make reports it ("environment" or "environment override", as 3.81 on the Mac may).
+ifneq (,$(filter environment%,$(origin LIMA_LAUNCHDAEMONS_DIR)))
+override LIMA_LAUNCHDAEMONS_DIR := /Library/LaunchDaemons
+endif
+LIMA_LAUNCHDAEMONS_DIR ?= /Library/LaunchDaemons
+LIMA_AUTOSTART_USER_LABEL_PREFIX = io.lima-vm.autostart.
+LIMA_AUTOSTART_SYSTEM_LABEL_PREFIX = io.lima-vm.daemon.
+LIMA_AUTOSTART_JOBS = lima_autostart=''; \
+	case "$${LIMA_LAUNCHDAEMONS_DIR:-}" in \
+	(/*) ;; \
+	(*) echo "$@: LIMA_LAUNCHDAEMONS_DIR must be an absolute path (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
+	esac; \
+	case "$$LIMA_LAUNCHDAEMONS_DIR" in \
+	(*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-]* | */../* | */..) \
+		echo "$@: LIMA_LAUNCHDAEMONS_DIR may hold only letters, digits, /, ., _ and -, and no .. component (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
+	esac; \
+	lima_launchctl=''; command -v launchctl >/dev/null 2>&1 && lima_launchctl=1; \
+	lima_uid="$$(id -u)" || lima_uid=''; \
+	for lima_domain in user system; do \
+		case "$$lima_domain" in \
+		(user) lima_label="$(LIMA_AUTOSTART_USER_LABEL_PREFIX)$$LIMA_INSTANCE"; lima_target="$${lima_uid:+gui/$$lima_uid/$$lima_label}"; \
+			lima_plist="$$HOME/Library/LaunchAgents/$$lima_label.plist"; lima_sudo='' ;; \
+		(*) lima_label="$(LIMA_AUTOSTART_SYSTEM_LABEL_PREFIX)$$LIMA_INSTANCE"; lima_target="system/$$lima_label"; \
+			lima_plist="$${LIMA_LAUNCHDAEMONS_DIR%/}/$$lima_label.plist"; lima_sudo='sudo ' ;; \
+		esac; \
+		lima_at=" at $$lima_plist"; lima_remove="$${lima_sudo}rm -f $$lima_plist"; lima_then=' && '; \
+		case "$$lima_plist" in \
+		([!/]* | */../* | */.. | *[!/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*) \
+			case "$$lima_domain" in \
+			(user) lima_where="~/Library/LaunchAgents/$$lima_label.plist" ;; \
+			(*) lima_where="$${LIMA_LAUNCHDAEMONS_DIR%/}/$$lima_label.plist" ;; \
+			esac; \
+			lima_at=' (its plist'"'"'s path is not shown)'; \
+			lima_remove="remove its plist, whose path is not shown: ls $$lima_where names it"; lima_then=', then ' ;; \
+		esac; \
+		if [ -n "$$lima_launchctl" ] && [ -n "$$lima_target" ] && launchctl print "$$lima_target" </dev/null >/dev/null 2>&1; then \
+			lima_autostart=1; \
+			echo "$@: $(1): Lima's autostart job $$lima_label is loaded in $${lima_target%/*}: it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $${lima_sudo}launchctl bootout $$lima_target$$lima_then$$lima_remove) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
+		elif [ -e "$$lima_plist" ] || [ -L "$$lima_plist" ]; then \
+			lima_autostart=1; \
+			echo "$@: $(1): Lima's autostart job $$lima_label is installed$$lima_at, not loaded now: launchd loads it at the next login or boot, and it runs limactl start $$LIMA_INSTANCE --foreground, which can fall back to template:default, a VM that mounts the home directory. Remove it with: limactl autostart disable $$LIMA_INSTANCE (or by hand: $$lima_remove) (docs/dev-environment.md, Do not let Lima start the VM)" >&2; \
+		fi; \
+	done
+
+vm-up vm-boot-install: export LIMA_LAUNCHDAEMONS_DIR := $(LIMA_LAUNCHDAEMONS_DIR)
 .PHONY: vm-up
 vm-up: ## Create or start the Lima VM with only this repository's workspace mounted (VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT on creation)
 	$(LIMA_INSTANCE_CHECK)
@@ -480,6 +756,7 @@ vm-up: ## Create or start the Lima VM with only this repository's workspace moun
 		echo "$$stray" | sed 's/^/  /' >&2; \
 		exit 1; \
 	fi; \
+	$(call LIMA_AUTOSTART_JOBS,warning); \
 	list="$$(limactl list --quiet)" || { \
 		echo "vm-up: could not list the Lima instances, so it cannot tell whether $$LIMA_INSTANCE exists" >&2; \
 		exit 1; \
@@ -729,6 +1006,12 @@ vm-create: ## Create and set up the VM, ready for make deck: vm-env-check, vm-up
 # refresh its lock, one set per VM instance: on the Mac, outside the workspace (ADR 0031).
 AGENTS_TOKEN_STATE = $${XDG_STATE_HOME:-$${HOME:?set HOME}/.local/state}/shift2eu
 
+# $(call AGENTS_TOKEN_READ_PID,"$$path") prints what a pid entry of that state directory holds, or nothing,
+# the way read_pid in dev/agents-app-token.sh reads one: only a regular file that is no symlink, and at most
+# 32 bytes of it. The directory is on the Mac and anything may have been put in it, and a cat of a FIFO
+# nobody writes to blocks for ever (issue #335). An entry that is no regular file reads as empty.
+AGENTS_TOKEN_READ_PID = { [ -f $(1) ] && [ ! -L $(1) ] && head -c 32 $(1) 2>/dev/null || true; }
+
 # The token targets run on the Mac with the App's key in reach. Like every host target they run only from the
 # host clone, whose own direnv .envrc holds the three SHIFT2EU_AGENTS_APP_* variables, and make refuses them
 # elsewhere (HOST_TARGETS above; docs/dev-environment.md, The host clone). Their recipes use only limactl
@@ -852,12 +1135,21 @@ agents-token-refresh: ## Mint the agents App token now and again before each one
 # instance's lock holds (a refresh started by hand with make agents-token-refresh holds it too), or the one
 # this target started earlier. It warns when that one has stopped, and prints where the log is. When launchd
 # has the instance's LaunchDaemon loaded (agents-token-refresh-install), it warns and starts nothing, writing
-# no file: the job is the instance's refresher. Without launchctl (Linux) that check is skipped. Like install
+# no file: the job is the instance's refresher. Before either it refuses another launchd job that runs the
+# instance's refresh, $(AGENTS_TOKEN_FOREIGN_JOBS_CHECK) (issue #396). Without launchctl (Linux) both checks
+# are skipped. Like install
 # and uninstall below, it reads LIMA_INSTANCE from its environment ($$LIMA_INSTANCE) and refuses an invalid
 # name with $(LIMA_INSTANCE_CHECK) before it runs: the name becomes part of its file names and of the job's label.
 # The refresher runs without the default VM_ENV credentials, CLAUDE_CODE_OAUTH_TOKEN and DEEPSEEK_API_KEY
 # (env -u), which it never needs and which a shell with the host clone's .envrc loaded may hold (issue #227).
-# A name a custom VM_ENV adds is not stripped.
+# A name a custom VM_ENV adds is not stripped. It reads both pids with $(AGENTS_TOKEN_READ_PID), and removes a
+# pid file that is no regular file before it writes the new pid, since writing into a FIFO blocks (issue #335).
+# Accepted residue (issue #396, item 5): the new pid goes to a temporary file renamed onto the pid file with
+# mv -f, and a Mac's mv has no -T, so a directory created at the pid file's path between that removal and the
+# rename would take the temporary file inside it, and the next start would find no pid file. Only this uid can
+# create entries in the state directory (created 0700, under the maintainer's home), so that needs code already running
+# as the maintainer, which can do worse; nothing is lost but the pid file, and the lock still keeps a second
+# refresher from running.
 .PHONY: agents-token-refresh-start
 agents-token-refresh-start: ## Start the agents App token refresh in the background, one per VM instance, and print where its log is (host clone)
 	$(LIMA_INSTANCE_CHECK)
@@ -866,6 +1158,7 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 		echo "agents-token-refresh-start: set SHIFT2EU_AGENTS_APP_ID, SHIFT2EU_AGENTS_APP_INSTALLATION_ID and SHIFT2EU_AGENTS_APP_KEY_FILE in the host clone's .envrc (docs/dev-environment.md, The host clone)" >&2; \
 		exit 1; \
 	fi; \
+	$(AGENTS_TOKEN_FOREIGN_JOBS_CHECK); \
 	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; \
 	state="$(AGENTS_TOKEN_STATE)"; pid_file="$$state/agents-token-refresh-$$LIMA_INSTANCE.pid"; log="$$state/agents-token-refresh-$$LIMA_INSTANCE.log"; \
 	if command -v launchctl >/dev/null 2>&1 && printed="$$(launchctl print "system/$$label" 2>/dev/null)"; then \
@@ -881,8 +1174,8 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 	fi; \
 	lock_pid="$$state/agents-token-refresh-$$LIMA_INSTANCE.lock/pid"; \
 	(umask 077 && mkdir -p "$$state" && : >>"$$log") || exit 1; \
-	started="$$(cat "$$pid_file" 2>/dev/null || true)"; \
-	for pid in "$$(cat "$$lock_pid" 2>/dev/null || true)" "$$started"; do \
+	started="$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))"; \
+	for pid in "$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))" "$$started"; do \
 		case "$$pid" in ''|*[!0-9]*) continue ;; esac; \
 		if kill -0 "$$pid" 2>/dev/null && ps -p "$$pid" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
 			echo "agents-token-refresh-start: the agents App token refresh of $$LIMA_INSTANCE is already running (pid $$pid); its log is $$log"; \
@@ -894,9 +1187,15 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 		echo "agents-token-refresh-start: warning: the agents App token refresh of $$LIMA_INSTANCE (pid $$started) had stopped; its log's last lines:" >&2; \
 		tail -n 3 "$$log" 2>/dev/null | sed 's/^/  /' >&2 || true; \
 	fi; \
+	if [ -L "$$pid_file" ] || { [ -e "$$pid_file" ] && [ ! -f "$$pid_file" ]; }; then \
+		rm -f "$$pid_file" || { echo "agents-token-refresh-start: nothing was started: $$pid_file is no regular file and could not be removed; remove it by hand" >&2; exit 1; }; \
+	fi; \
 	env -u CLAUDE_CODE_OAUTH_TOKEN -u DEEPSEEK_API_KEY nohup dev/agents-app-token.sh refresh </dev/null >>"$$log" 2>&1 & \
 	pid="$$!"; \
-	(umask 077 && echo "$$pid" >"$$pid_file") || exit 1; \
+	pid_tmp="$$(umask 077 && mktemp "$$state/.agents-token-refresh-$$LIMA_INSTANCE.pid.XXXXXX")" && \
+		echo "$$pid" >"$$pid_tmp" && mv -f "$$pid_tmp" "$$pid_file" || \
+		{ [ -z "$$pid_tmp" ] || rm -f "$$pid_tmp"; \
+		  echo "agents-token-refresh-start: the refresh of $$LIMA_INSTANCE runs (pid $$pid), but writing its pid file $$pid_file failed" >&2; exit 1; }; \
 	echo "agents-token-refresh-start: started the agents App token refresh of $$LIMA_INSTANCE (pid $$pid); its log is $$log"
 
 # The LaunchDaemon that runs the refresh at boot, with nobody logged in, as you (issue #229, ADR 0034): one job
@@ -904,10 +1203,18 @@ agents-token-refresh-start: ## Start the agents App token refresh in the backgro
 # direnv, holds the variables, copied at install time: install again after changing them). The job runs
 # /bin/sh dev/agents-app-token.sh refresh from the host clone, never make or git, and logs where
 # agents-token-refresh-start does. Installing needs sudo; both targets print every sudo command before they
-# run it. A refresh started by hand keeps the instance's lock while it runs: the job then exits 0 at once and
-# launchd tries again every ThrottleInterval (5 minutes), so install says so and names the pid to stop. It reads
-# the lock before the bootstrap, since the job's own refresh takes the lock as soon as it loads, and warns only
-# about a refresh that held it then, still holds it, and is not the pid launchctl print reports for the job.
+# run it. A refresh outside the job keeps the instance's lock while it runs: the job then exits 0 at once and
+# launchd tries again every ThrottleInterval (5 minutes), for as long as that refresh runs (issue #396). So the
+# install reads the lock before any sudo (the job's own refresh takes it as soon as it loads) and, when a refresh
+# holds it that is not the pid launchctl print reports for the loaded job:
+#   - when it is the refresh agents-token-refresh-start recorded in the instance's pid file (the documented order:
+#     start it for make vm-init, then install), the install takes over from it: right before the bootstrap it
+#     sends it TERM, the signal its traps expect, waits (at most 10 seconds) for it to exit, removes the pid file
+#     and says that it stopped it, naming the pid;
+#   - for any other holder (a make agents-token-refresh in a terminal, another clone's refresh) it refuses before
+#     it installs anything, naming the pid and kill <pid>: a refresh it did not start is not the install's to stop.
+# It also refuses, before anything, another launchd job that runs the instance's refresh,
+# $(AGENTS_TOKEN_FOREIGN_JOBS_CHECK) below.
 #
 # install and uninstall read LIMA_INSTANCE from their environment ($$LIMA_INSTANCE) and refuse an invalid one
 # with $(LIMA_INSTANCE_CHECK) before they run, so make never splices a value into the shell text that runs sudo.
@@ -953,22 +1260,50 @@ AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX = io.github.timothymamo.shift2eu.agents-token-
 # The script a loaded job runs, read from `launchctl print system/<label>`: the first line of its arguments
 # block that ends in /dev/agents-app-token.sh, with the indentation removed (empty when there is none).
 AGENTS_TOKEN_LAUNCHD_SCRIPT_OF = awk '/^[[:space:]]*arguments = \{/ { a = 1; next } a && /^[[:space:]]*\}/ { exit } a { sub(/^[[:space:]]+/, ""); if ($$0 ~ /\/dev\/agents-app-token\.sh$$/) { print; exit } }'
-# The check of AGENTS_TOKEN_LAUNCHD_DIR, the directory root writes the plist into and removes it from.
-AGENTS_TOKEN_LAUNCHD_DIR_CHECK = case "$(AGENTS_TOKEN_LAUNCHD_DIR_ORIGIN)" in \
+# AGENTS_TOKEN_FOREIGN_JOBS_CHECK refuses, where launchctl exists, another loaded launchd job that runs this
+# instance's refresh (issue #396): one of no label of the project's prefix, in the system or the user domain,
+# whose arguments run agents-app-token.sh refresh or make agents-token-refresh. It holds the instance's lock
+# again seconds after every kill (KeepAlive), so the project's job would never take over. dev/agents-token-launchd.sh
+# foreign-jobs finds it with launchctl alone, no sudo, and names each job, its domain, its plist and the
+# commands that remove it. install and start run it before they install, load or start anything. Only its status
+# 3 means a job was found and named; any other non-zero status is the check's own failure, and stops them too.
+AGENTS_TOKEN_FOREIGN_JOBS_CHECK = if command -v launchctl >/dev/null 2>&1; then \
+		foreign_status=0; dev/agents-token-launchd.sh foreign-jobs || foreign_status=$$?; \
+		if [ "$$foreign_status" = 3 ]; then \
+			echo "$@: refused: another launchd job runs the agents App token refresh of $$LIMA_INSTANCE (named above), so nothing was installed, loaded or started: remove it with the commands above, then run make $@ again" >&2; \
+			exit 1; \
+		elif [ "$$foreign_status" != 0 ]; then \
+			echo "$@: foreign-jobs check failed (status $$foreign_status): nothing was installed, loaded or started; see the message above, then run make $@ again" >&2; \
+			exit 1; \
+		fi; \
+	fi
+# $(call LAUNCHD_DIR_CHECK,<variable>) checks a LaunchDaemons directory variable, the directory root writes a
+# plist into and removes it from: AGENTS_TOKEN_LAUNCHD_DIR here, VM_BOOT_LAUNCHD_DIR for the boot job (issue
+# #398). It reads the variable's origin from <variable>_ORIGIN, recorded at parse time, and the value from the
+# recipe's environment, where the target-specific export puts it.
+LAUNCHD_DIR_CHECK = case "$($(1)_ORIGIN)" in \
 	environment*) \
-		echo "$@: refused: AGENTS_TOKEN_LAUNCHD_DIR comes from the environment, where a stale export would have root install the plist where launchd never looks at boot: unset it (it is a test hook: leave it at /Library/LaunchDaemons, or pass it on the make command line)" >&2; exit 1 ;; \
+		echo "$@: refused: $(1) comes from the environment, where a stale export would have root install the plist where launchd never looks at boot: unset it (it is a test hook: leave it at /Library/LaunchDaemons, or pass it on the make command line)" >&2; exit 1 ;; \
 	esac; \
-	case "$${AGENTS_TOKEN_LAUNCHD_DIR:-}" in \
+	case "$${$(1):-}" in \
 	/*) ;; \
-	*) echo "$@: AGENTS_TOKEN_LAUNCHD_DIR must be an absolute path (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
+	*) echo "$@: $(1) must be an absolute path (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
 	esac; \
-	case "$$AGENTS_TOKEN_LAUNCHD_DIR" in \
+	case "$$$(1)" in \
 	*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._-]* | */../* | */..) \
-		echo "$@: AGENTS_TOKEN_LAUNCHD_DIR may hold only letters, digits, /, ., _ and -, and no .. component, since root writes there (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
+		echo "$@: $(1) may hold only letters, digits, /, ., _ and -, and no .. component, since root writes there (it is a test hook: leave it at /Library/LaunchDaemons)" >&2; exit 1 ;; \
 	esac
+AGENTS_TOKEN_LAUNCHD_DIR_CHECK = $(call LAUNCHD_DIR_CHECK,AGENTS_TOKEN_LAUNCHD_DIR)
 
 agents-token-refresh-install agents-token-refresh-uninstall: export AGENTS_TOKEN_LAUNCHD_DIR := $(AGENTS_TOKEN_LAUNCHD_DIR)
 
+# agents-token-refresh-install's take-over of a refresh make agents-token-refresh-start started, between the
+# checked install of the plist and launchctl bootstrap: the pid files are read again after sudo, which can wait
+# for a password: the start target's pid file, so a refresh it no longer names is not stopped; the lock's pid
+# file, so only the refresh that still holds the lock is; and the start target's pid file once more, so only its
+# own pid is removed. The pid could be reused between ps -p and kill -TERM: that window is accepted. (This
+# comment sits here, not in the recipe: a `#` line inside a continued command ends the recipe under make 3.81,
+# issue #437.)
 .PHONY: agents-token-refresh-install
 agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs the agents App token refresh at boot, one per VM instance; needs sudo (host clone, macOS)
 	$(LIMA_INSTANCE_CHECK)
@@ -995,6 +1330,7 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 	fi; \
 	command -v launchctl >/dev/null 2>&1 || { echo "agents-token-refresh-install: no launchctl: the LaunchDaemon is for the Mac; elsewhere use make agents-token-refresh-start" >&2; exit 1; }; \
 	$(AGENTS_TOKEN_LAUNCHD_DIR_CHECK); \
+	$(AGENTS_TOKEN_FOREIGN_JOBS_CHECK); \
 	label="$(AGENTS_TOKEN_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${AGENTS_TOKEN_LAUNCHD_DIR%/}/$$label.plist"; \
 	if [ -n "$$account" ]; then \
 		home="/Users/$$account"; secrets="$$home/.config/shift2eu"; clone="$$home/shift2eu-host"; owner="$$account"; \
@@ -1033,6 +1369,28 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 	done || exit 1; \
 	log="$$state/agents-token-refresh-$$LIMA_INSTANCE.log"; \
 	lock_pid="$$state/agents-token-refresh-$$LIMA_INSTANCE.lock/pid"; \
+	pid_file="$$state/agents-token-refresh-$$LIMA_INSTANCE.pid"; \
+	held=''; \
+	if [ -z "$$account" ]; then held="$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))"; fi; \
+	case "$$held" in ''|*[!0-9]*) held='' ;; *) \
+		kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh' || held='' ;; \
+	esac; \
+	if [ -n "$$held" ]; then \
+		job_loaded=''; \
+		job_print="$$(launchctl print "system/$$label" 2>/dev/null)" && job_loaded=1; \
+		job_pid="$$(printf '%s\n' "$$job_print" | awk '/^[[:space:]]*pid = [0-9]+[[:space:]]*$$/ { print $$3; exit }')"; \
+		if [ "$$held" = "$$job_pid" ]; then \
+			held=''; \
+		elif [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" = "$$held" ]; then \
+			:; \
+		elif [ -n "$$job_loaded" ] && [ -z "$$job_pid" ]; then \
+			echo "agents-token-refresh-install: warning: $$label is loaded, but launchctl print names no pid for it, so the install could not read the job's pid to tell whether pid $$held, which holds the lock of $$LIMA_INSTANCE, is the job's own refresh. It is not stopped: if it is the job's, the bootout below ends it and the new job takes over; if it is not (a make agents-token-refresh in a terminal, or another clone's), the job exits at every ThrottleInterval until it ends: stop that refresh, then run make agents-token-refresh-install again" >&2; \
+			held=''; \
+		else \
+			echo "agents-token-refresh-install: refused: a refresh that make agents-token-refresh-start did not start holds the lock of $$LIMA_INSTANCE (pid $$held; a make agents-token-refresh in a terminal, or another clone's), so the job would find the lock taken and exit at every ThrottleInterval. Nothing was installed: stop it (kill $$held), then run make agents-token-refresh-install again" >&2; \
+			exit 1; \
+		fi; \
+	fi; \
 	tmp="$$(mktemp "$${TMPDIR:-/tmp}/agents-token-refresh-plist.XXXXXX")" || exit 1; \
 	if [ -n "$$account" ]; then \
 		trap 'rm -f "$$tmp"; sudo -k' EXIT; \
@@ -1075,11 +1433,6 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 			exit 1; \
 		fi; \
 	fi; \
-	held=''; \
-	if [ -z "$$account" ]; then held="$$(cat "$$lock_pid" 2>/dev/null || true)"; fi; \
-	case "$$held" in ''|*[!0-9]*) held='' ;; *) \
-		kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh' || held='' ;; \
-	esac; \
 	echo "+ sudo install -m 0644 -o root -g wheel $$tmp $$dest"; \
 	sudo install -m 0644 -o root -g wheel "$$tmp" "$$dest" || exit 1; \
 	installed="$$( { shasum -a 256 | cut -d ' ' -f 1; } 2>/dev/null <"$$dest")" || installed=''; \
@@ -1098,6 +1451,27 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 		exit 1; \
 	fi; \
 	echo "agents-token-refresh-install: $$dest has the SHA-256 printed above"; \
+	stopped=''; \
+	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" != "$$held" ]; then \
+		lock_holder="$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))"; \
+		if [ -n "$$lock_holder" ] && kill -0 "$$lock_holder" 2>/dev/null; then \
+			echo "agents-token-refresh-install: warning: the pid file of make agents-token-refresh-start no longer names pid $$held, which held the lock of $$LIMA_INSTANCE before sudo, so it is not stopped: if a refresh still holds the lock, the job exits at every ThrottleInterval until it ends (stop it, then run make agents-token-refresh-install again)" >&2; \
+		fi; \
+		held=''; \
+	fi; \
+	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))" = "$$held" ] && kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
+		echo "agents-token-refresh-install: stopping the refresh make agents-token-refresh-start started (pid $$held), which holds the lock of $$LIMA_INSTANCE, so the job takes over from it"; \
+		kill -TERM "$$held" 2>/dev/null || true; \
+		tries=0; \
+		while [ "$$tries" -lt 10 ] && kill -0 "$$held" 2>/dev/null; do sleep 1; tries=$$((tries + 1)); done; \
+		if kill -0 "$$held" 2>/dev/null; then \
+			echo "agents-token-refresh-install: warning: pid $$held still runs $$tries second(s) after TERM; the job takes the lock once it has exited" >&2; \
+		else \
+			if [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" = "$$held" ]; then rm -f "$$pid_file"; fi; \
+			stopped=' (the hand-started refresh was stopped above, so none runs: start one with make agents-token-refresh-start)'; \
+			echo "agents-token-refresh-install: stopped pid $$held, the refresh make agents-token-refresh-start started; the job loaded next is the instance's refresher now"; \
+		fi; \
+	fi; \
 	echo "+ sudo launchctl bootstrap system $$dest"; \
 	if ! sudo launchctl bootstrap system "$$dest"; then \
 		sleep 1; \
@@ -1106,18 +1480,12 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 			if launchctl print "system/$$label" >/dev/null 2>&1; then \
 				echo "agents-token-refresh-install: launchctl bootstrap exited non-zero twice, but launchctl print finds $$label loaded: the job is loaded" >&2; \
 			else \
-				echo "agents-token-refresh-install: ERROR: launchctl bootstrap failed twice: NO token refresh job of $$LIMA_INSTANCE is loaded now, and the VM's token expires within the hour. The checked plist stays at $$dest, so launchd loads it at the next boot. Run make agents-token-refresh-install again, or start a refresh by hand with make agents-token-refresh-start" >&2; \
+				echo "agents-token-refresh-install: ERROR: launchctl bootstrap failed twice: NO token refresh job of $$LIMA_INSTANCE is loaded now$$stopped, and the VM's token expires within the hour. The checked plist stays at $$dest, so launchd loads it at the next boot. Run make agents-token-refresh-install again, or start a refresh by hand with make agents-token-refresh-start" >&2; \
 				exit 1; \
 			fi; \
 		fi; \
 	fi; \
 	echo "agents-token-refresh-install: loaded $$label: it runs now, at every boot, and again whenever it exits"; \
-	if [ -n "$$held" ] && [ "$$(cat "$$lock_pid" 2>/dev/null || true)" = "$$held" ] && kill -0 "$$held" 2>/dev/null && ps -p "$$held" -o command= 2>/dev/null | grep -q 'agents-app-token.sh refresh'; then \
-		job_pid="$$(launchctl print "system/$$label" 2>/dev/null | awk '/^[[:space:]]*pid = [0-9]+[[:space:]]*$$/ { print $$3; exit }')"; \
-		if [ "$$held" != "$$job_pid" ]; then \
-			echo "agents-token-refresh-install: warning: a refresh you started by hand (pid $$held) holds the lock of $$LIMA_INSTANCE, so the job waits, trying again every 5 minutes; stop it (kill $$held) and the job takes over" >&2; \
-		fi; \
-	fi; \
 	if [ -n "$$account" ]; then \
 		echo "agents-token-refresh-install: check it with: sudo launchctl print system/$$label (state = running, and $$script in its arguments), and its log: sudo tail -n 50 $$log; then run sudo -k"; \
 	else \
@@ -1156,6 +1524,131 @@ agents-token-refresh-uninstall: ## Stop and remove the agents App token refresh'
 		echo "agents-token-refresh-uninstall: warning: $$label is still loaded: unload it with sudo launchctl bootout system/$$label" >&2; \
 	fi
 
+# The LaunchDaemon that starts the Lima VM of LIMA_INSTANCE at boot, with nobody logged in, as the maintainer
+# (issue #398, docs/adr/0038-start-the-lima-vm-at-boot-with-a-launchdaemon-of-our-own.md). dev/vm-boot-launchd.sh
+# renders its plist: it runs `limactl shell --start --workdir / <instance> true` once at load, never
+# `limactl start`, so it starts an existing instance and never creates one. One job per instance.
+#
+# install refuses, before any sudo: a run as root (the job runs as the account that installs it, and the VM is that
+# account's); a host without launchctl; a VM_BOOT_LAUNCHD_DIR from the environment or of an unsafe form
+# ($(call LAUNCHD_DIR_CHECK,VM_BOOT_LAUNCHD_DIR)); Lima's own autostart job of the instance,
+# $(call LIMA_AUTOSTART_JOBS,refused) (the two would race for the VM, and Lima's can create template:default);
+# and an instance `limactl list --quiet` does not list (or a listing that fails), since the job could only fail.
+# It then renders the plist, lints it with plutil and prints it with its SHA-256, creates the log's directory as
+# the maintainer, boots a loaded job of the same label out (waiting at most 10 seconds until launchctl print stops
+# finding it), installs the plist with `sudo install`, reads it back as the maintainer and compares its SHA-256
+# (removing it again on a mismatch), and loads it with `sudo launchctl bootstrap system <plist>`, tried twice,
+# launchctl print deciding when both fail, as agents-token-refresh-install does. Loading it runs it once now
+# (RunAtLoad): a Stopped VM starts. Every sudo command is printed before it runs, and the target ends with sudo -k.
+#
+# uninstall boots the job out, waits (at most 10 seconds) until launchctl print stops finding it, and removes
+# exactly its plist either way; the VM keeps running, and the log stays.
+#
+# VM_BOOT_LAUNCHD_DIR is the same test hook AGENTS_TOKEN_LAUNCHD_DIR is (see there): never change it on a real
+# Mac, and it comes only from the make command line or this file, never from the environment.
+VM_BOOT_LAUNCHD_DIR_ORIGIN := $(origin VM_BOOT_LAUNCHD_DIR)
+VM_BOOT_LAUNCHD_DIR ?= /Library/LaunchDaemons
+# Also spelled out in dev/vm-boot-launchd.sh (label_prefix): keep the two alike.
+VM_BOOT_LAUNCHD_LABEL_PREFIX = io.github.timothymamo.shift2eu.vm-boot.
+VM_BOOT_STATE = $${XDG_STATE_HOME:-$$HOME/.local/state}/shift2eu
+# The refusal of a run as root, shared by install and uninstall.
+VM_BOOT_ROOT_CHECK = if [ "$$(id -u)" = 0 ]; then \
+		echo "$@: refused: run it as the maintainer, not as root (no sudo make); it runs sudo itself. The job runs as the account that installs it, and the VM it starts is that account's" >&2; \
+		exit 1; \
+	fi; \
+	command -v launchctl >/dev/null 2>&1 || { echo "$@: no launchctl: the LaunchDaemon is for the Mac" >&2; exit 1; }
+
+vm-boot-install vm-boot-uninstall: export VM_BOOT_LAUNCHD_DIR := $(VM_BOOT_LAUNCHD_DIR)
+
+.PHONY: vm-boot-install
+vm-boot-install: ## Install (or update) the LaunchDaemon that starts this VM instance at boot, with nobody logged in; needs sudo (host clone, macOS)
+	$(LIMA_INSTANCE_CHECK)
+	@$(VM_BOOT_ROOT_CHECK); \
+	$(call LAUNCHD_DIR_CHECK,VM_BOOT_LAUNCHD_DIR); \
+	$(call LIMA_AUTOSTART_JOBS,refused); \
+	if [ -n "$$lima_autostart" ]; then \
+		echo "vm-boot-install: refused: Lima's own autostart job of $$LIMA_INSTANCE (named above) is loaded or installed, so nothing was installed: remove it with the commands above, then run make vm-boot-install again" >&2; \
+		exit 1; \
+	fi; \
+	list="$$(limactl list --quiet)" || { \
+		echo "vm-boot-install: refused: could not list the Lima instances, so it cannot tell whether $$LIMA_INSTANCE exists: nothing was installed" >&2; \
+		exit 1; \
+	}; \
+	printf '%s\n' "$$list" | grep -qxF -- "$$LIMA_INSTANCE" || { \
+		echo "vm-boot-install: refused: Lima lists no instance $$LIMA_INSTANCE, and the job starts an existing instance only: create the VM first (make vm-create), then run make vm-boot-install again" >&2; \
+		exit 1; \
+	}; \
+	label="$(VM_BOOT_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${VM_BOOT_LAUNCHD_DIR%/}/$$label.plist"; \
+	state="$(VM_BOOT_STATE)"; log="$$state/vm-boot-$$LIMA_INSTANCE.log"; \
+	tmp="$$(mktemp "$${TMPDIR:-/tmp}/vm-boot-plist.XXXXXX")" || exit 1; \
+	trap 'rm -f "$$tmp"; sudo -k' EXIT; \
+	dev/vm-boot-launchd.sh plist >"$$tmp" || exit 1; \
+	plutil -lint "$$tmp" || { echo "vm-boot-install: plutil refused the rendered plist, so launchd would load no job: nothing was installed" >&2; exit 1; }; \
+	sum="$$(shasum -a 256 <"$$tmp" | cut -d ' ' -f 1)" || exit 1; \
+	echo "vm-boot-install: installing this plist as $$dest (it holds no credential):"; \
+	cat "$$tmp"; \
+	echo "vm-boot-install: its SHA-256 is $$sum"; \
+	echo "vm-boot-install: creating $$state as $$(id -un); the job logs to $$log"; \
+	(umask 077 && mkdir -p "$$state") || exit 1; \
+	if launchctl print "system/$$label" >/dev/null 2>&1; then \
+		echo "vm-boot-install: $$label is loaded already: unloading it to load the new plist"; \
+		echo "+ sudo launchctl bootout system/$$label"; \
+		sudo launchctl bootout "system/$$label" || echo "vm-boot-install: launchctl bootout exited non-zero; checking whether $$label unloaded anyway"; \
+		tries=0; \
+		while [ "$$tries" -lt 10 ] && launchctl print "system/$$label" >/dev/null 2>&1; do sleep 1; tries=$$((tries + 1)); done; \
+		if launchctl print "system/$$label" >/dev/null 2>&1; then \
+			echo "vm-boot-install: ERROR: the old job $$label is still loaded $$tries second(s) after launchctl bootout, so nothing was installed. Check it with sudo launchctl print system/$$label, wait for it to unload or run make vm-boot-uninstall, then run make vm-boot-install again" >&2; \
+			exit 1; \
+		fi; \
+	fi; \
+	echo "+ sudo install -m 0644 -o root -g wheel $$tmp $$dest"; \
+	sudo install -m 0644 -o root -g wheel "$$tmp" "$$dest" || exit 1; \
+	installed="$$( { shasum -a 256 | cut -d ' ' -f 1; } 2>/dev/null <"$$dest")" || installed=''; \
+	if [ "$$installed" != "$$sum" ]; then \
+		echo "+ sudo rm -f $$dest"; \
+		sudo rm -f "$$dest" || { echo "vm-boot-install: ERROR: $$dest is not the plist printed above, and sudo rm -f could not remove it: remove it by hand before the next boot loads it" >&2; exit 1; }; \
+		echo "vm-boot-install: ERROR: $$dest is not the plist printed above (its SHA-256 is $${installed:-unreadable}, not $$sum), so it was removed again and not loaded: look for what changed the file, then run make vm-boot-install again" >&2; \
+		exit 1; \
+	fi; \
+	echo "vm-boot-install: $$dest has the SHA-256 printed above"; \
+	echo "+ sudo launchctl bootstrap system $$dest"; \
+	if ! sudo launchctl bootstrap system "$$dest"; then \
+		sleep 1; \
+		echo "+ sudo launchctl bootstrap system $$dest"; \
+		if ! sudo launchctl bootstrap system "$$dest"; then \
+			if launchctl print "system/$$label" >/dev/null 2>&1; then \
+				echo "vm-boot-install: launchctl bootstrap exited non-zero twice, but launchctl print finds $$label loaded: the job is loaded" >&2; \
+			else \
+				echo "vm-boot-install: ERROR: launchctl bootstrap failed twice: the job is not loaded now. The checked plist stays at $$dest, so launchd loads it at the next boot; run make vm-boot-install again" >&2; \
+				exit 1; \
+			fi; \
+		fi; \
+	fi; \
+	echo "vm-boot-install: loaded $$label: it ran once now (a Stopped VM starts) and runs again at every boot"; \
+	echo "vm-boot-install: check it with: limactl list $$LIMA_INSTANCE (Running) and its log: tail $$log"
+
+.PHONY: vm-boot-uninstall
+vm-boot-uninstall: ## Remove the LaunchDaemon that starts this VM instance at boot (the VM keeps running); needs sudo (host clone, macOS)
+	$(LIMA_INSTANCE_CHECK)
+	@$(VM_BOOT_ROOT_CHECK); \
+	$(call LAUNCHD_DIR_CHECK,VM_BOOT_LAUNCHD_DIR); \
+	label="$(VM_BOOT_LAUNCHD_LABEL_PREFIX)$$LIMA_INSTANCE"; dest="$${VM_BOOT_LAUNCHD_DIR%/}/$$label.plist"; \
+	trap 'sudo -k' EXIT; \
+	echo "+ sudo launchctl bootout system/$$label"; \
+	if sudo launchctl bootout "system/$$label"; then booted=1; else booted=0; fi; \
+	tries=0; \
+	while [ "$$tries" -lt 10 ] && launchctl print "system/$$label" >/dev/null 2>&1; do sleep 1; tries=$$((tries + 1)); done; \
+	if launchctl print "system/$$label" >/dev/null 2>&1; then \
+		echo "vm-boot-uninstall: warning: $$label is still loaded $$tries second(s) after launchctl bootout: unload it with sudo launchctl bootout system/$$label; removing its plist anyway, so the next boot does not load it" >&2; \
+	elif [ "$$booted" = 1 ]; then \
+		echo "vm-boot-uninstall: unloaded $$label"; \
+	else \
+		echo "vm-boot-uninstall: $$label was not loaded (launchctl bootout failed); removing its plist anyway"; \
+	fi; \
+	echo "+ sudo rm -f $$dest"; \
+	sudo rm -f "$$dest" || exit 1; \
+	echo "vm-boot-uninstall: removed $$dest; the VM keeps running and the log stays. After a reboot, start the VM with make vm-up"
+
 # STRIP_CONTROL keeps only tab, newline and printable ASCII of what the VM printed, on stdout and stderr (the
 # recipes capture both, 2>&1), before make echoes it: the scripts in the VM are code the agents can write, and an
 # escape sequence or a C1 control (the byte 0x9B, or its UTF-8 form) could drive the maintainer's terminal (issue
@@ -1183,7 +1676,7 @@ VM_OUTPUT = if [ "$$status" -ne 0 ]; then \
 .PHONY: vm-gh-wrapper
 vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it (instead of make vm-delete vm-create)
 	$(LIMA_INSTANCE_CHECK)
-	@script="$$(sh dev/vm-gh-wrapper.sh dev/gh-app-token.sh)" || exit 1; \
+	@script="$$(dev/vm-gh-wrapper.sh dev/gh-app-token.sh)" || exit 1; \
 	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_gh_wrapper ]; then \
 		echo "vm-gh-wrapper: dev/vm-gh-wrapper.sh printed no whole script (its last line is not vm_gh_wrapper); nothing sent to the VM" >&2; \
 		exit 1; \
@@ -1235,7 +1728,7 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 		echo "vm-agents-token-ssh: cannot read the account's public key $$secrets/agents-vm-ssh-key.pub: generate it as the account (docs/dev-environment.md, The agents App)" >&2; \
 		exit 1; \
 	}; \
-	script="$$(sh dev/vm-agents-token-ssh.sh "$$writer" "$$pub" "$$vm_user")" || exit 1; \
+	script="$$(dev/vm-agents-token-ssh.sh "$$writer" "$$pub" "$$vm_user")" || exit 1; \
 	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_agents_token_ssh ]; then \
 		echo "vm-agents-token-ssh: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh); nothing sent to the VM" >&2; \
 		exit 1; \
@@ -1268,7 +1761,7 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 vm-agents-token-ssh-uninstall: ## Remove the agents App account's writer, keys file and sshd drop-in from the VM (host clone)
 	$(LIMA_INSTANCE_CHECK)
 	@$(AGENTS_SSH_CONFIG_USER); \
-	script="$$(sh dev/vm-agents-token-ssh.sh --uninstall "$$vm_user")" || exit 1; \
+	script="$$(dev/vm-agents-token-ssh.sh --uninstall "$$vm_user")" || exit 1; \
 	if [ "$$(printf '%s\n' "$$script" | tail -n 1)" != vm_agents_token_ssh_uninstall ]; then \
 		echo "vm-agents-token-ssh-uninstall: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh_uninstall); nothing sent to the VM" >&2; \
 		exit 1; \

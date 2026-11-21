@@ -98,7 +98,8 @@ type resourceFact struct {
 
 // sizeFact is the size the inventory has to give one resource, by ID. A zero
 // field is not checked, so a source pins only the numbers its recorded calls
-// give it.
+// give it; no* pins a field the recorded calls do not give, so a size written
+// from a number that is not the resource's fails too.
 type sizeFact struct {
 	// id is the resource's ID in the inventory, short IDs only.
 	id string
@@ -110,6 +111,16 @@ type sizeFact struct {
 	storageGiB float64
 	// count is the number of instances, nodes or volumes.
 	count int
+	// noVCPUs and noMemoryGiB say the resource gives no vcpus and no memoryGiB:
+	// a Cloud SQL tier other than db-custom-<vcpu>-<memory MiB> names no size
+	// the other calls report, so a number taken from it would be a guess.
+	noVCPUs     bool
+	noMemoryGiB bool
+	// noCount says the resource gives no count: a database instance of high
+	// availability gets none, because what its standby adds to the count
+	// depends on how the target prices high availability, and the guide fills
+	// count for a single-node instance only.
+	noCount bool
 }
 
 // inventoryGuides returns the sources the guide covers. A source added to the
@@ -130,6 +141,9 @@ func inventoryGuides() []inventoryGuideCase {
 				// An Aurora cluster is covered by its instances, which
 				// rds describe-db-instances lists.
 				{id: "shop-aurora-1", rawType: "AWS::RDS::DBInstance", category: "database.postgresql"},
+				// So is an RDS Multi-AZ DB cluster: its instances are resources
+				// of their own, classified by their engine.
+				{id: "shop-db-cluster-writer", rawType: "AWS::RDS::DBInstance", category: "database.postgresql"},
 				// A volume that outlives its node is a persistent volume and
 				// stays: only the node's own root volume is left out.
 				{id: "vol-0123456789abcdef6", rawType: "AWS::EC2::Volume", category: "storage.block"},
@@ -137,8 +151,15 @@ func inventoryGuides() []inventoryGuideCase {
 			// The storage of an Aurora instance belongs to its cluster, so
 			// rds describe-db-instances gives every Aurora instance
 			// AllocatedStorage 1 (and, in one fixture, a stale 100): neither is
-			// the instance's size.
-			unsized: []string{"shop-aurora-1", "shop-aurora-2"},
+			// the instance's size. An RDS Multi-AZ DB cluster's instances get
+			// none either, for the same reason, and so does an engine the
+			// program cannot classify.
+			unsized: []string{
+				"shop-aurora-1",
+				"shop-aurora-2",
+				"shop-db-cluster-writer",
+				"shop-reports-mariadb",
+			},
 			sized: []sizeFact{
 				// An m5.large is 2 vCPU and 8 GiB, from ec2 describe-instance-types.
 				{id: "i-0123456789abcdef0", vcpus: 2, memoryGiB: 8},
@@ -146,8 +167,13 @@ func inventoryGuides() []inventoryGuideCase {
 				{id: "i-0123456789abcdef6", vcpus: 96, memoryGiB: 384},
 				// The GiB of an EBS volume, from ec2 describe-volumes.
 				{id: "vol-0123456789abcdef6", storageGiB: 100},
-				// The AllocatedStorage of an RDS instance.
-				{id: "shop-db", storageGiB: 50},
+				// The AllocatedStorage of an RDS instance, with the one instance a
+				// single-node instance is. A Multi-AZ instance gets no count: what
+				// its standby adds depends on how the target prices high
+				// availability, so the program writes none.
+				{id: "shop-db", storageGiB: 50, noCount: true},
+				{id: "shop-db-replica", storageGiB: 50, count: 1},
+				{id: "shop-legacy-mysql", storageGiB: 20, count: 1},
 				// The nodes a managed node group wants, from eks describe-nodegroup.
 				{id: "shop-eks (AWS::EKS::Cluster, eu-central-1)", count: 3},
 			},
@@ -184,7 +210,21 @@ func inventoryGuides() []inventoryGuideCase {
 				// The sizeGb of a disk, from compute disks list.
 				{id: "shop-web-1-data", storageGiB: 100},
 				{id: "pvc-00000000-0000-0000-0000-000000000001", storageGiB: 50},
+				// The dataDiskSizeGb of a Cloud SQL instance, which gcloud writes
+				// as a string. Its tier is db-n1-standard-2, which names no vCPU
+				// and memory the calls report, and its availabilityType is
+				// REGIONAL, so it gets no count: what its standby adds depends on
+				// how the target prices high availability.
+				{id: "shop-db", storageGiB: 100, noVCPUs: true, noMemoryGiB: true, noCount: true},
+				// A db-custom-<vCPU>-<memory MiB> tier gives both numbers:
+				// db-custom-2-7680 is 2 vCPU and 7680 MiB. A zonal instance is one
+				// instance.
+				{id: "shop-catalog-mysql", vcpus: 2, memoryGiB: 7.5, storageGiB: 20, count: 1},
 			},
+			// An engine the program cannot classify gets no size at all, even
+			// though the sql instances list records the instance's disk and
+			// tier.
+			unsized: []string{"shop-reports-sqlserver"},
 			// A node pool's managed instance group, a node with its disk,
 			// labelled goog-gke-node, and the boot and data disks of the group's
 			// member: the group stands for its instances.
@@ -225,6 +265,14 @@ func inventoryGuides() []inventoryGuideCase {
 				// The diskSizeGB of a managed disk, from the Resource Graph query.
 				{id: "disk-shop-web-1-data", storageGiB: 64},
 				{id: "vm-shop-web-1_OsDisk_1", storageGiB: 128},
+				// The storageSizeGB of a flexible server. ZoneRedundant and SameZone
+				// get no count: what a standby adds depends on how the target prices
+				// high availability, so the program writes none; a server with high
+				// availability disabled or unset is one server.
+				{id: "psql-shop", storageGiB: 128, noCount: true},
+				{id: "mysql-shop-catalog", storageGiB: 64, noCount: true},
+				{id: "psql-shop-replica", storageGiB: 128, count: 1},
+				{id: "mysql-shop-reports", storageGiB: 32, count: 1},
 			},
 			// The cluster's node scale set and its load balancer, the OS disk
 			// of a scale set member, and a member's data disk its member deletes
@@ -533,6 +581,9 @@ func assertSized(t *testing.T, source string, doc inventoryDoc, wants []sizeFact
 		assertSizeNumber(t, source, want.id, "vcpus", want.vcpus, resource.Size.VCPUs)
 		assertSizeNumber(t, source, want.id, "memoryGiB", want.memoryGiB, resource.Size.MemoryGiB)
 		assertSizeNumber(t, source, want.id, "storageGiB", want.storageGiB, resource.Size.StorageGiB)
+		assertNoSizeNumber(t, source, want.id, "vcpus", want.noVCPUs, resource.Size.VCPUs)
+		assertNoSizeNumber(t, source, want.id, "memoryGiB", want.noMemoryGiB, resource.Size.MemoryGiB)
+		assertNoSizeCount(t, source, want.id, want.noCount, resource.Size.Count)
 
 		if want.count != 0 && (resource.Size.Count == nil || *resource.Size.Count != want.count) {
 			t.Errorf("%s: resource %q has size.count %s, want %d", source, want.id,
@@ -561,6 +612,18 @@ func (f sizeFact) describe() string {
 		fields = append(fields, "count")
 	}
 
+	if f.noVCPUs {
+		fields = append(fields, "no vcpus")
+	}
+
+	if f.noMemoryGiB {
+		fields = append(fields, "no memoryGiB")
+	}
+
+	if f.noCount {
+		fields = append(fields, "no count")
+	}
+
 	if len(fields) == 0 {
 		return "no field"
 	}
@@ -585,6 +648,28 @@ func assertSizeNumber(t *testing.T, source, id, field string, want float64, got 
 
 	if *got != want {
 		t.Errorf("%s: resource %q has size.%s = %v, want %v", source, id, field, *got, want)
+	}
+}
+
+// assertNoSizeNumber fails when got is set, which the fact says no recorded
+// call gives: a number the program guessed is worse than none, because the
+// assessment prices it instead of saying the size is unknown.
+func assertNoSizeNumber(t *testing.T, source, id, field string, wantNone bool, got *float64) {
+	t.Helper()
+
+	if wantNone && got != nil {
+		t.Errorf("%s: resource %q gives size.%s = %v, want none: no recorded call gives it",
+			source, id, field, *got)
+	}
+}
+
+// assertNoSizeCount fails when the resource gives a count, which the fact says
+// it has none of.
+func assertNoSizeCount(t *testing.T, source, id string, wantNone bool, got *int) {
+	t.Helper()
+
+	if wantNone && got != nil {
+		t.Errorf("%s: resource %q gives size.count = %d, want none", source, id, *got)
 	}
 }
 

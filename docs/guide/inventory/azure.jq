@@ -32,10 +32,13 @@
 # and memory from its VM size (properties.hardwareProfile.vmSize or sku.name,
 # looked up in az vm list-sizes), a scale set's instance count (sku.capacity), a
 # managed disk's GiB (properties.diskSizeGB), a flexible server's storage
-# (properties.storage.storageSizeGB) and an AKS cluster's node count (the counts
-# of its agent pools). A number no call gives is left out, never guessed. The
-# workload, relations and monthlyCost fields are the user's to add by hand; this
-# program never writes them.
+# (properties.storage.storageSizeGB), a single-node flexible server's count of 1
+# (properties.highAvailability.mode Disabled or unset; a server with a standby
+# gets no count, how many nodes a target bills for a standby is the target's to
+# say) and an AKS cluster's node count (the counts of its agent pools). A number
+# no call gives is left out, never guessed. The workload, relations and
+# monthlyCost fields are the user's to add by hand; this program never writes
+# them.
 
 # The Resource Manager type of a resource ID, in the casing of the ID (Resource
 # Graph writes types in lower case):
@@ -227,7 +230,11 @@ def child_types:
               cap("node-high-availability"; .properties.highAvailability.mode? == "SameZone"),
               cap("read-replicas"; $id | IN($replicated[]))
             ],
-            size: size_of({storageGiB: .properties.storage.storageSizeGB?})}
+            # A single-node server is one instance; one with a standby gets no
+            # count, how many nodes a standby is depends on how a target prices it.
+            size: size_of({storageGiB: .properties.storage.storageSizeGB?,
+              count: ((.properties.highAvailability.mode? // "Disabled") as $ha
+                | if $ha == "Disabled" then 1 else null end)})}
         elif $t == "microsoft.containerservice/managedclusters" then
           [.properties.agentPoolProfiles[]?] as $pools
           | $base + {category: "kubernetes.managed", capabilities: [

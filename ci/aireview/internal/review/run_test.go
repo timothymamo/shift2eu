@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
@@ -23,6 +24,9 @@ type fakeGitHub struct {
 	diffErr error
 	files   []review.ChangedFile
 	reviews []review.PostedReview
+	// postErr, when set, is the error every PostReview fails with, as a client
+	// that could not post does.
+	postErr error
 
 	posts      []fakePost
 	dismissals []fakeDismissal
@@ -59,6 +63,10 @@ func (f *fakeGitHub) Reviews(_ context.Context, _ int) ([]review.PostedReview, e
 }
 
 func (f *fakeGitHub) PostReview(ctx context.Context, number int, r review.Review) error {
+	if f.postErr != nil {
+		return f.postErr
+	}
+
 	// A real client gives up on a cancelled context, so a run that posts on one
 	// posts nothing: the fake fails the same way, which is how the test tells
 	// the detached post of issue #316 apart from a post the run's cancellation
@@ -174,13 +182,14 @@ const (
 `
 )
 
-// TestRunReviewsThePullRequestHead pins a whole run (ADR 0033): a draft, a diff
-// over the limit and a raw diff the client could not read whole fail before the
-// model is asked; a model error posts nothing; a structurally malformed answer
-// — no findings array, or another top-level shape error — is asked once more with
-// the same prompt, a valid second answer is posted, and two malformed answers
-// post a review that says the review could not be read and still fail the run
-// (issue #316). A finding whose severity the model got wrong stays as strict as
+// TestRunReviewsThePullRequestHead pins a whole run (ADR 0033): a draft and a
+// diff the client could not read fail before the model is asked; a model error
+// posts nothing; a structurally malformed answer — no findings field, or
+// another top-level shape error — is asked once more with the same prompt, and a
+// valid second answer is posted. Two malformed answers are no failing check
+// since #376: they end in the skipped outcome, the one COMMENT review that says
+// so, which is posted even when the run's context ends right after the second
+// answer. A finding whose severity the model got wrong stays as strict as
 // #295 left it: one call, no review. A blocking finding requests changes only
 // with the switch on; the reviewer withdraws its own earlier change request and
 // nobody else's once nothing blocks; and an instruction in the diff is a
@@ -191,19 +200,19 @@ const (
 func TestRunReviewsThePullRequestHead(t *testing.T) {
 	t.Parallel()
 
-	// A diff of more than MaxDiffBytes that a generated file alone makes up: once
+	// A diff of more than MaxDiffBytes that a golden file alone makes up: once
 	// it is left out nothing is over the limit, so the run reviews the pull
-	// request rather than failing it (issue #324). A golden or generated file's
+	// request rather than failing it (issue #324). A golden file's
 	// content is in the prompt only when the reviewer did not leave its section
 	// out, so each marker is the text of its own case's left-out section: a
 	// marker no kept section holds is what makes the hides assertion able to
 	// fail.
 	const (
-		excludedGoldenMarker    = "EXCLUDED-GOLDEN-CONTENT"
-		excludedGeneratedMarker = "EXCLUDED-GENERATED-CONTENT"
+		excludedGoldenMarker      = "EXCLUDED-GOLDEN-CONTENT"
+		excludedLargeGoldenMarker = "EXCLUDED-LARGE-GOLDEN-CONTENT"
 	)
 
-	generatedOnlyDiff := diffFile("api/openapi.bundled.json", excludedGeneratedMarker+strings.Repeat("x", review.MaxDiffBytes))
+	largeGoldenOnlyDiff := diffFile("internal/x/testdata/large.golden", excludedLargeGoldenMarker+strings.Repeat("x", review.MaxDiffBytes))
 	mixedDiff := cleanDiff + diffFile("testdata/report-v3.golden", excludedGoldenMarker)
 	oversizedDiff := diffFile("internal/x/y.go", strings.Repeat("x", review.MaxDiffBytes))
 
@@ -249,9 +258,11 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 		// wantDismissalText are the texts every dismissal message holds, when
 		// the run dismisses a review.
 		wantDismissalText []string
-		// wantPostOnError says the run posts one review and still fails, as it
-		// does for an answer it could not read at all (issue #316).
-		wantPostOnError bool
+		// wantSkip is the cause the run ends in the skipped outcome with: it
+		// posts one COMMENT review that says the review was skipped and why and
+		// returns no error, and every part of a failure leaves Skip nil
+		// (issues #367, #376).
+		wantSkip *review.SkipReason
 		// wantPromptHolds and wantPromptHides are texts the prompt the model was
 		// asked must hold, and must not hold: a diff the review kept, and one it
 		// left out (issue #324).
@@ -290,11 +301,14 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			wantAsked: 0,
 		},
 		{
-			name:      "a diff over the limit fails the run",
+			// GitHub refusing the diff is a failed call, not a diff over the
+			// size limit: only ErrDiffTooLarge takes the skipped outcome, so a
+			// GitHub failure still fails the check (issues #367, #376).
+			name:      "a diff the client could not read fails the run",
 			pr:        pr,
-			diffErr:   fmt.Errorf("read the diff: %w", review.ErrDiffTooLarge),
+			diffErr:   fmt.Errorf("read the diff: %w", review.ErrGitHub),
 			answer:    cleanAnswer,
-			wantErr:   review.ErrDiffTooLarge,
+			wantErr:   review.ErrGitHub,
 			wantAsked: 0,
 		},
 		{
@@ -308,7 +322,7 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 		// issue #316: a structurally malformed answer is asked once more with the
 		// same prompt, within the run's deadline, and a valid second answer is
 		// posted as usual. "Structurally" is the answer's top-level shape: text
-		// that is no JSON object, no findings array, a findings that is no array.
+		// that is no JSON object, no findings field, a findings that is no array.
 		{
 			name:         "an answer that is not JSON is asked again, and the valid second answer is posted",
 			pr:           pr,
@@ -330,7 +344,7 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			wantText:     []string{"Name it"},
 		},
 		{
-			name:         "an answer with no findings array is asked again",
+			name:         "an answer with no findings field is asked again",
 			pr:           pr,
 			diff:         cleanDiff,
 			answers:      []string{`{"summary":"The change does what the issue asks."}`, cleanAnswer},
@@ -350,34 +364,34 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			wantText:     []string{"Name it"},
 		},
 		{
-			// Two unreadable answers post the review the maintainer needs to see
-			// why this head has no advice, and the run still fails, so the check
-			// stays red and nothing is dismissed on the strength of no finding.
-			name:            "two structurally malformed answers say so and still fail the run",
-			pr:              pr,
-			diff:            cleanDiff,
-			answer:          malformedAnswer,
-			wantErr:         review.ErrMalformedAnswer,
-			wantAsked:       2,
-			wantPostOnError: true,
-			wantEvent:       review.EventComment,
-			wantText:        []string{"could not be read"},
+			// Two unreadable answers are no failing check since #376: the run
+			// posts one COMMENT review that says the review was skipped, holds no
+			// finding, and exits 0, so nothing is dismissed on the strength of a
+			// review that has no finding.
+			name:      "two structurally malformed answers skip the review",
+			pr:        pr,
+			diff:      cleanDiff,
+			answer:    malformedAnswer,
+			wantAsked: 2,
+			wantSkip:  skipReason(review.SkipNoUsableAnswer),
+			wantEvent: review.EventComment,
+			wantText:  []string{"skipped", "no usable answer twice"},
 		},
 		{
-			// The comment that says the answer could not be read is the
-			// maintainer's only sign of a spent model call, so the run posts it
-			// on a context its own cancellation cannot take away (issue #316,
-			// reviewer m3), and still fails so the check stays red.
-			name:                    "an unreadable answer is still posted when the run's context ends after the second answer",
+			// The review that says the review was skipped is the maintainer's
+			// only sign of two spent model calls, so the run posts it on a
+			// context its own cancellation cannot take away (issue #316, reviewer
+			// m3), and the skipped outcome still passes the check (issues #367,
+			// #376).
+			name:                    "the skipped review is posted when the run's context ends after the second answer",
 			pr:                      pr,
 			diff:                    cleanDiff,
 			answer:                  malformedAnswer,
 			cancelAfterSecondAnswer: true,
-			wantErr:                 review.ErrMalformedAnswer,
 			wantAsked:               2,
-			wantPostOnError:         true,
+			wantSkip:                skipReason(review.SkipNoUsableAnswer),
 			wantEvent:               review.EventComment,
-			wantText:                []string{"could not be read"},
+			wantText:                []string{"skipped"},
 		},
 		{
 			name:         "an answer with no findings is valid and is not asked again",
@@ -413,23 +427,28 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			wantAsked:              1,
 		},
 		{
-			name:            "a diff over the limit only because of a generated file is reviewed",
+			name:            "a diff over the limit only because of a golden file is reviewed",
 			pr:              pr,
-			diff:            generatedOnlyDiff,
+			diff:            largeGoldenOnlyDiff,
 			answer:          cleanAnswer,
 			wantAsked:       1,
 			wantEvent:       review.EventComment,
 			wantFindings:    1,
-			wantText:        []string{"Name it", "api/openapi.bundled.json", "not reviewed"},
-			wantPromptHides: []string{excludedGeneratedMarker},
+			wantText:        []string{"Name it", "internal/x/testdata/large.golden", "not reviewed"},
+			wantPromptHides: []string{excludedLargeGoldenMarker},
 		},
 		{
-			name:      "a diff over the limit without generated files still fails the run",
+			// A single file whose own section is over MaxDiffBytes is over the
+			// limit whatever the split: no hunk is ever cut short, so the run
+			// ends in the skipped outcome (issue #367).
+			name:      "a single file over the limit skips the review",
 			pr:        pr,
 			diff:      oversizedDiff,
 			answer:    cleanAnswer,
-			wantErr:   review.ErrDiffTooLarge,
 			wantAsked: 0,
+			wantSkip:  skipReason(review.SkipTooLarge),
+			wantEvent: review.EventComment,
+			wantText:  []string{"skipped"},
 		},
 		{
 			name:            "the review reads the code and leaves the golden file out",
@@ -619,6 +638,18 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 				t.Fatalf("Run: %v", err)
 			}
 
+			// The skipped outcome is a run that posts one review that says so and
+			// returns no error (issues #367, #376); every other outcome leaves
+			// Result.Skip nil, a failure's included.
+			switch {
+			case tc.wantSkip == nil && result.Skip != nil:
+				t.Errorf("Result.Skip = %+v, want nil: this run posts a review of its own or fails", *result.Skip)
+			case tc.wantSkip != nil && result.Skip == nil:
+				t.Errorf("Result.Skip = nil, want a skip whose reason is %q", *tc.wantSkip)
+			case tc.wantSkip != nil && result.Skip.Reason != *tc.wantSkip:
+				t.Errorf("Result.Skip.Reason = %q, want %q", result.Skip.Reason, *tc.wantSkip)
+			}
+
 			if model.asked != tc.wantAsked {
 				t.Errorf("the model was asked %d times, want %d", model.asked, tc.wantAsked)
 			}
@@ -649,11 +680,11 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 				}
 			}
 
-			// A run that failed posts nothing, except the review of an answer it
-			// could not read at all: that one is posted and the run still fails, so
-			// the check stays red (issue #316).
+			// A run that failed posts nothing. The one run that posts and does not
+			// fail is the skipped one: its review says the review was skipped
+			// (issues #367, #376).
 			wantPosts := 0
-			if tc.wantErr == nil || tc.wantPostOnError {
+			if tc.wantErr == nil {
 				wantPosts = 1
 			}
 
@@ -698,8 +729,8 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 					t.Errorf("Run posted the event %q; the reviewer posts COMMENT or REQUEST_CHANGES and never approves (ADR 0033)", post.review.Event)
 				}
 
-				if tc.wantPostOnError && len(post.review.Comments) != 0 {
-					t.Errorf("the review posted for an answer the reviewer could not read holds %d inline comments; it invents no finding", len(post.review.Comments))
+				if tc.wantSkip != nil && len(post.review.Comments) != 0 {
+					t.Errorf("the review posted for a skipped run holds %d inline comments; it invents no finding", len(post.review.Comments))
 				}
 
 				text := post.review.Body
@@ -721,6 +752,20 @@ func TestRunReviewsThePullRequestHead(t *testing.T) {
 			}
 
 			if tc.wantErr != nil {
+				return
+			}
+
+			if tc.wantSkip != nil {
+				// A skipped run posts no finding and no inline comment: its Result
+				// names the skip, not a review's findings (issues #367, #376).
+				if result.Findings != 0 || result.Blocking != 0 {
+					t.Errorf("a skipped run's Result holds %d finding(s) and %d blocking, want none: no part's finding is posted", result.Findings, result.Blocking)
+				}
+
+				if result.Skip != nil && result.Skip.Message == "" {
+					t.Error("Result.Skip.Message is empty: the skip says why the review was skipped")
+				}
+
 				return
 			}
 
@@ -822,13 +867,13 @@ func TestRunAnnouncesTheRetryOfAnAnswerItCannotRead(t *testing.T) {
 		{
 			name:        "an answer that is not JSON is announced, and the good second answer is posted",
 			answers:     []string{"Sure! " + answerMarker + " the change looks fine.", cleanAnswer},
-			wantNotice:  []string{"7", "not one JSON object"},
+			wantNotice:  []string{"7", "syntax"},
 			wantNotices: 1,
 		},
 		{
-			name:        "an answer with no findings array is announced with the check that failed",
+			name:        "an answer with no findings field is announced with the check that failed",
 			answers:     []string{`{"summary":"` + answerMarker + `"}`, cleanAnswer},
-			wantNotice:  []string{"7", "no findings array"},
+			wantNotice:  []string{"7", "missing findings"},
 			wantNotices: 1,
 		},
 		{
@@ -924,14 +969,15 @@ func TestRunAnnouncesTheRetryOfAnAnswerItCannotRead(t *testing.T) {
 	}
 }
 
-// TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns pins issue #366: when both
-// of the model's answers fail the shape check, the error Run returns is what
-// ci/aireview's main prints as the job's one ::error line, and it cannot hold the
+// TestRunKeepsTheDecoderMessageOutOfTheSkippedOutcome pins issues #366 and #376
+// together: when both of the model's answers fail the shape check, the run ends
+// in the skipped outcome, and none of what it leaves behind may hold the
 // decoder's message. encoding/json quotes what it could not read, a field name
-// the model chose or a character of its answer, so wrapping that message text and
-// all into the error would put the model's answer in a public job log. The error
-// names the pull request and the shape check that failed instead, as the retry
-// notice of #343 does, and no text of either answer reaches the log either.
+// the model chose or a character of its answer, so an error, a log line or a
+// review body built from that message would put the model's answer in a public
+// job log and on the pull request. The retry notice and the skip name the shape
+// check that failed instead, as #343 leaves them, and no text of either answer
+// reaches the log, the review or Result.Skip.Message.
 //
 // Each malformed answer plants its marker where the decoder quotes it: a field
 // name the answer's shape does not have, which the strict decoder names in full
@@ -940,7 +986,7 @@ func TestRunAnnouncesTheRetryOfAnAnswerItCannotRead(t *testing.T) {
 // the four characters after the escape (so the escape's marker is the four it
 // quotes). Both are positions the decoder's message holds, which is what lets a
 // case fail when it should.
-func TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns(t *testing.T) {
+func TestRunKeepsTheDecoderMessageOutOfTheSkippedOutcome(t *testing.T) {
 	t.Parallel()
 
 	pr := review.PullRequest{Number: 7, Title: "Add x", Author: "agent[bot]", HeadSHA: headSHA, BaseSHA: baseSHA}
@@ -950,10 +996,11 @@ func TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns(t *testing.T) {
 		// answers are what the model answers in turn: two answers, each one of
 		// the wrong shape and each holding its own marker.
 		answers []string
-		// markers are the planted texts neither the log nor the error may hold.
+		// markers are the planted texts neither the log, nor the review, nor the
+		// skip's message may hold.
 		markers []string
-		// wantCheck is the phrase of the shape check the error must name: the
-		// constant of the check that failed, never text of the answer.
+		// wantCheck is the phrase of the shape check the retry notice must name:
+		// the constant of the check that failed, never text of the answer.
 		wantCheck string
 	}{
 		{
@@ -967,7 +1014,7 @@ func TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns(t *testing.T) {
 				`{"MRK366SECOND": 1, "summary": "s", "findings": [{"severity": "nit", "title": "t", "body": "b", "MRK366SECOND": 1}]}`,
 			},
 			markers:   []string{"MRK366FIRST", "MRK366SECOND"},
-			wantCheck: "not one JSON object",
+			wantCheck: "unknown field",
 		},
 		{
 			name: "an invalid escape sequence, which the decoder quotes",
@@ -976,12 +1023,9 @@ func TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns(t *testing.T) {
 				`{"findings": [], "summary": "s\uMRKB"}`,
 			},
 			markers:   []string{"MRKA", "MRKB"},
-			wantCheck: "not one JSON object",
+			wantCheck: "syntax",
 		},
 	}
-
-	// A workflow command names its pull request as "#7" or "7".
-	namesPR := regexp.MustCompile(`pull request #?7\b`)
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -997,52 +1041,123 @@ func TestRunKeepsTheDecoderMessageOutOfTheErrorItReturns(t *testing.T) {
 
 			model := &fakeModel{answers: tc.answers}
 
-			_, err := review.Run(t.Context(), gh, model, review.Config{
+			result, err := review.Run(t.Context(), gh, model, review.Config{
 				Number:   pr.Number,
 				BotLogin: testBotLogin,
 				Notices:  &log,
 			})
-
-			if err == nil {
-				t.Fatalf("Run posted a review of two answers it cannot read, want an error that fails the check (issue #316)")
-			}
-
-			// The path this pins is the one where both answers failed the shape
-			// check: asking once more, and then failing the run.
-			if !errors.Is(err, review.ErrMalformedAnswer) {
-				t.Fatalf("Run = %v, want an error wrapping %v: two answers of the wrong shape fail the run", err, review.ErrMalformedAnswer)
+			if err != nil {
+				t.Fatalf("Run: %v; two unusable answers skip the review and do not fail the check (issues #367, #376)", err)
 			}
 
 			if model.asked != 2 {
 				t.Errorf("the model was asked %d times, want 2: an answer of the wrong shape is asked once more (issue #316)", model.asked)
 			}
 
+			if result.Skip == nil {
+				t.Fatalf("Result.Skip = nil, want a skip: both answers failed the shape check (issues #367, #376)")
+			}
+
+			if !strings.Contains(log.String(), tc.wantCheck) {
+				t.Errorf("the run's log %q does not hold %q: the retry notice names the shape check that failed, never the decoder's message (issues #343, #366)", log.String(), tc.wantCheck)
+			}
+
 			if len(gh.posts) != 1 {
-				t.Errorf("the run posted %d reviews, want 1: two answers it could not read post the review that says so (issue #316)", len(gh.posts))
+				t.Fatalf("the run posted %d reviews, want 1: two answers it could not read post the review that says the review was skipped (issues #316, #367)", len(gh.posts))
 			}
 
-			// The error's text is what main prints in the job's one ::error line.
-			text := err.Error()
+			post := gh.posts[0]
 
-			if !namesPR.MatchString(text) {
-				t.Errorf("the error %q does not name pull request #%d: the job log says which pull request it is about", text, pr.Number)
+			if post.review.Event != review.EventComment {
+				t.Errorf("the skipped review's Event = %q, want %q", post.review.Event, review.EventComment)
 			}
 
-			if !strings.Contains(text, tc.wantCheck) {
-				t.Errorf("the error %q does not hold %q: it names the shape check that failed, never the decoder's message (issue #366)", text, tc.wantCheck)
+			for _, want := range []string{"skipped", "no usable answer twice"} {
+				if !strings.Contains(strings.ToLower(post.review.Body), want) {
+					t.Errorf("the skipped review does not say %q; body:\n%s", want, post.review.Body)
+				}
+			}
+
+			texts := []string{post.review.Body, log.String(), result.Skip.Message}
+
+			for _, comment := range post.review.Comments {
+				texts = append(texts, comment.Body)
 			}
 
 			for _, marker := range tc.markers {
-				if strings.Contains(text, marker) {
-					t.Errorf("the error %q holds %q, text of the model's answer: the decoder's message names what it could not read, so the error that reaches the job log carries none of it (issue #366)",
-						text, marker)
-				}
-
-				if strings.Contains(log.String(), marker) {
-					t.Errorf("the run's log %q holds %q, text of the model's answer: no text of the answer reaches the log, escaped or not (issues #343, #366)",
-						log.String(), marker)
+				for _, text := range texts {
+					if strings.Contains(text, marker) {
+						t.Errorf("the skipped outcome holds %q, text of the model's answer: the decoder's message names what it could not read, so neither the review, nor the log, nor the skip's message carries any of it (issues #366, #376); text: %q",
+							marker, text)
+					}
 				}
 			}
 		})
+	}
+}
+
+// TestRunKeepsTheCLIErrorResultsOutOfTheError pins issue #374 through the Claude
+// Code CLI a whole run asks: the result text of the CLI's `is_error` envelope is
+// model output a pull request's author can steer, and the run's error is printed
+// as the job's public ::error line (ci/aireview's fail). The error therefore
+// names the pull request, the CLI's constant error class and its subtype, and no
+// text of the result; the run fails with nothing posted. The log holds nothing
+// of it either.
+func TestRunKeepsTheCLIErrorResultsOutOfTheError(t *testing.T) {
+	t.Parallel()
+
+	// cliResultMarker stands for the CLI's result text: the model's words, which
+	// the error and the log must never repeat.
+	const cliResultMarker = "MRK374-THE-CLI-RESULT-TEXT"
+
+	pr := review.PullRequest{Number: 7, Title: "Add x", Author: "agent[bot]", HeadSHA: headSHA, BaseSHA: baseSHA}
+
+	cli, _ := newFakeClaudeCLI(t, claudeFake{
+		stdout: `{"type":"result","subtype":"error_max_turns","is_error":true,"result":"` + cliResultMarker + `"}`,
+	})
+
+	gh := &fakeGitHub{
+		pr:    pr,
+		diff:  cleanDiff,
+		files: []review.ChangedFile{{Path: "internal/x/y.go", Status: "modified", Additions: 1}},
+	}
+
+	var log bytes.Buffer
+
+	result, err := review.Run(t.Context(), gh, review.NewClaudeCLI(cli, testModelToken, time.Minute), review.Config{
+		Number:   pr.Number,
+		BotLogin: testBotLogin,
+		Notices:  &log,
+	})
+	if err == nil {
+		t.Fatal("Run = nil, want an error: the CLI reported an error, so the run fails rather than review the pull request (ADR 0033)")
+	}
+
+	if !errors.Is(err, review.ErrModel) {
+		t.Errorf("Run = %v, want an error wrapping ErrModel", err)
+	}
+
+	// The error is the data of the job's ::error line: it names the pull
+	// request, the constant class of the CLI's error and the CLI's subtype, and
+	// no text of the result.
+	for _, want := range []string{"pull request 7", "claude cli error", "error_max_turns"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Run = %v, which does not name %q: the ::error line names the pull request, a constant class and the CLI's subtype, so a failure is diagnosable without its text (issue #374)", err, want)
+		}
+	}
+
+	for _, text := range []string{err.Error(), log.String()} {
+		if strings.Contains(text, cliResultMarker) {
+			t.Errorf("the run's outcome holds %q, text of the CLI's result: neither the error, which is the public ::error line, nor the log repeats the CLI's own text (issue #374); text: %q",
+				cliResultMarker, text)
+		}
+	}
+
+	if result.Skip != nil {
+		t.Errorf("Result.Skip = %+v, want nil: a CLI that reports an error is no skipped outcome, the run fails (ADR 0033)", *result.Skip)
+	}
+
+	if len(gh.posts) != 0 {
+		t.Errorf("the run posted %d reviews, want none: a failed model call posts nothing (ADR 0033)", len(gh.posts))
 	}
 }

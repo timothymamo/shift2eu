@@ -12,10 +12,8 @@ import (
 
 // compositionRootTags are the tags of forbidigo's two composition-root groups
 // (issue #111). A composition root is the one place that may do what nothing
-// else may: cmd/shift2eu and cmd/shift2eu-server build the object graph, and
-// only they may hand the process an environment read (ADR 0019). Neither may
-// start a program, and neither may dump the environment: the one named variable
-// cmd/shift2eu-server/main.go reads is its exception, below.
+// else may: cmd/shift2eu builds the object graph. It may not start a program,
+// read a named variable or dump the environment.
 //
 // Group composition-root-no-exec forbids starting a process (os.StartProcess,
 // os/exec, syscall.Exec, syscall.ForkExec, syscall.StartProcess, the windows
@@ -27,10 +25,10 @@ import (
 // address, and dumping the whole environment (os.Environ, syscall.Environ,
 // syscall.GetEnvironmentStrings). It has no exception. Group composition-root-env
 // forbids reading a named variable (os.Getenv, os.LookupEnv, syscall.Getenv,
-// syscall.GetEnvironmentVariable, os.ExpandEnv), with exactly one:
-// os.LookupEnv in cmd/shift2eu-server/main.go, which passes it to run for
-// SHIFT2EU_SERVER_TOKEN. Both groups hold for files under cmd/shift2eu/ and
-// cmd/shift2eu-server/ only, which the groups' linters.exclusions.rules say and
+// syscall.GetEnvironmentVariable, os.ExpandEnv), and has no exception either:
+// the one it had, os.LookupEnv for the HTTP API's token (ADR 0019), went with
+// the API (ADR 0037). Both groups hold for files under cmd/shift2eu/ only,
+// which the groups' linters.exclusions.rules say and
 // TestCompositionRootExclusions checks.
 //
 // Every name is a pattern, so a group also holds on the release targets that
@@ -39,23 +37,17 @@ import (
 var compositionRootTags = []string{"composition-root-no-exec", "composition-root-env"}
 
 // probeTags are the tags of forbidigo's groups TestCompositionRootForbidigoProbe
-// covers: the two composition-root groups, the CLI's own group (issue #152),
-// which takes over in internal/cli where the roots' groups stop, and the HTTP
-// API's tests group, which holds the one place under internal/httpapi/ no group
-// of the two reached before.
-var probeTags = slices.Concat(compositionRootTags, []string{cliNoEnvOrProcessTag, httpapiTestsNoEnvOrProcessTag})
+// covers: the two composition-root groups and the CLI's own group (issue
+// #152), which takes over in internal/cli where the roots' groups stop.
+var probeTags = slices.Concat(compositionRootTags, []string{cliNoEnvOrProcessTag})
 
 // TestCompositionRootForbidigoProbe runs forbidigo, with the repository's
-// .golangci.yml, on the two composition roots and a CLI package
+// .golangci.yml, on the composition root and a CLI package
 // (testdata/compositionroot), twice: once for the host's platform, and once for
 // windows, where the windows entry points of syscall type-check. Every function
-// the two groups forbid has a line in cmd/shift2eu and in cmd/shift2eu-server,
-// over all of that command's files, and each must be refused with a msg of the
-// right group. os.LookupEnv in cmd/shift2eu-server/main.go must not be refused,
-// while the same reference in cmd/shift2eu-server/server.go and in cmd/shift2eu
-// is, so the exception is that one file and that one function, and the three
-// other refusal kinds of the env group in main.go keep the file from being
-// exempt as a whole. A _test.go file of a composition root must be refused too:
+// the two groups forbid has a line in cmd/shift2eu, over all of that command's
+// files, and each must be refused with a msg of the right group. A _test.go
+// file of a composition root must be refused too:
 // its tests are compiled into the same package and run with the same
 // environment. Every call the CLI's own group refuses, in internal/cli, has a
 // line there with a want of that group, the CLI's _test.go file included, and
@@ -63,10 +55,7 @@ var probeTags = slices.Concat(compositionRootTags, []string{cliNoEnvOrProcessTag
 // it, creating the report and taking the FIFO's syscall.Mkfifo — must pass: a
 // group that lost its path-except scope, or one of the roots' that lost its own
 // scope and reached internal/cli, is refused by the probe's strictness, which
-// reports every issue the probe does not expect. The HTTP API's _test.go file is
-// held the same way by httpapi-tests-no-env-or-process, which no other group
-// reaches: internal/httpapi's production files make no call of the two roots'
-// groups, and the calls a test of the handler is for must pass beside them.
+// reports every issue the probe does not expect.
 //
 // A file for one platform builds on that platform only, so each run reads the
 // want comments of its own files, and an entry of a group need refuse a line in
@@ -112,8 +101,8 @@ func probeFilesForHost(rel string) bool {
 // probeFilesForWindows reports whether the windows run lints the probe file at
 // rel: the files for windows, and the _test.go files of the commands the run
 // lints, which name no platform's function and build for every platform. The
-// windows run lints ./cmd/... only, as the files of internal/cli and
-// internal/httpapi name unix functions of syscall (the CLI's test takes
+// windows run lints ./cmd/... only, as the files of internal/cli name unix
+// functions of syscall (the CLI's test takes
 // syscall.Mkfifo), and the wants of a file the run does not lint are no wants of
 // it.
 func probeFilesForWindows(rel string) bool {
@@ -337,14 +326,9 @@ func TestCompositionRootForbidigoPatterns(t *testing.T) {
 // composition-root groups, read from .golangci.yml, offline and without
 // golangci-lint. Each rule names forbidigo alone and carries a text in the
 // documented form of its group, so it drops one group's issues and no other's.
-// Both groups hold for files under cmd/shift2eu/ and cmd/shift2eu-server/ only,
-// so every file elsewhere passes them. The composition-root-env group has
-// exactly one exception, on one path: it selects cmd/shift2eu-server/main.go and
-// no other file, its text names the msg of the one entry that refuses
-// os.LookupEnv, and it drops no other entry's issue there, so the exception is
-// os.LookupEnv in that file alone and not the group in it. The no-exec group has
-// no exception, and neither group names a path a single file is the whole of,
-// which is what a blanket allow would look like.
+// Both groups hold for files under cmd/shift2eu/ only, so every file elsewhere
+// passes them. Neither group has an exception (compositionRootRuleProblems), so
+// no rule drops one entry's issues in a file the group holds.
 func TestCompositionRootExclusions(t *testing.T) {
 	t.Parallel()
 
@@ -368,10 +352,10 @@ func TestCompositionRootExclusions(t *testing.T) {
 	}{
 		{"cmd/shift2eu/main.go", true},
 		{"cmd/shift2eu/main_test.go", true},
-		{"cmd/shift2eu-server/main.go", true},
-		{"cmd/shift2eu-server/run.go", true},
+		{"cmd/shift2eu/run.go", true},
 		{"internal/cli/cli.go", false},
-		{"internal/httpapi/handler.go", false},
+		{"internal/web/web.go", false},
+		{"cmd/shift2eu-web/main.go", false},
 		{"internal/adapter/source/aws/aws.go", false},
 		{"cmd/shift2eux/main.go", false},
 		{"cmd/shift2eu.go", false},
@@ -405,80 +389,6 @@ func TestCompositionRootExclusions(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("the one exception", func(t *testing.T) {
-		t.Parallel()
-
-		const tag = "composition-root-env"
-
-		var exceptions []exclusionRule
-		for _, r := range rules[tag] {
-			if r.fields["text"] != groupText(tag) {
-				exceptions = append(exceptions, r)
-			}
-		}
-		if len(exceptions) != 1 {
-			t.Fatalf("group %s has %d exclusion rules that drop one entry's msg rather than the whole group, want exactly one: the exception for os.LookupEnv in cmd/shift2eu-server/main.go", tag, len(exceptions))
-		}
-		exception := exceptions[0]
-		if text := exception.fields["text"]; text == groupText(tag) {
-			t.Errorf(".golangci.yml:%d: the exception's text %q drops every issue of group %s in the files it selects, os.Getenv's and os.ExpandEnv's among them; name the one entry's msg it drops", exception.line, text, tag)
-		}
-
-		selected, ok := exception.fields["path"]
-		if !ok {
-			t.Fatalf(".golangci.yml:%d: the exception selects no path: %q", exception.line, exception.fields)
-		}
-		path := regexp.MustCompile(selected)
-		if !path.MatchString("cmd/shift2eu-server/main.go") {
-			t.Errorf(".golangci.yml:%d: the exception's path %q does not select cmd/shift2eu-server/main.go", exception.line, exception.fields["path"])
-		}
-		for _, other := range []string{
-			"cmd/shift2eu-server/main_test.go",
-			"cmd/shift2eu-server/run.go",
-			"cmd/shift2eu-server/token.go",
-			"cmd/shift2eu/main.go",
-			"internal/cli/main.go",
-		} {
-			if path.MatchString(other) {
-				t.Errorf(".golangci.yml:%d: the exception's path %q also selects %s, so it is no exception for one file", exception.line, exception.fields["path"], other)
-			}
-		}
-
-		// The exception drops the issue of the entry that refuses
-		// os.LookupEnv, and no other entry's issue of the group.
-		entries := groupEntries(t, root, tag)
-		text := regexp.MustCompile(exception.fields["text"])
-		var lookup, others []string
-		for _, e := range entries {
-			if e.pkg.MatchString("os") && e.pattern.MatchString("os.LookupEnv") {
-				lookup = append(lookup, e.msg)
-			} else {
-				others = append(others, e.msg)
-			}
-		}
-		if len(lookup) == 0 {
-			t.Fatalf(".golangci.yml holds no entry of group %s that refuses os.LookupEnv, so the exception drops nothing", tag)
-		}
-		if len(others) == 0 {
-			t.Fatalf(".golangci.yml holds no other entry of group %s, so a blanket allow would pass this check", tag)
-		}
-		for _, msg := range lookup {
-			if !text.MatchString(issueText("os.LookupEnv", msg)) {
-				t.Errorf(".golangci.yml:%d: the exception's text %q does not drop the issue of the entry with msg %q, so it drops nothing of the one call it is for", exception.line, exception.fields["text"], msg)
-			}
-		}
-		for _, msg := range others {
-			if text.MatchString(issueText("os.LookupEnv", msg)) || text.MatchString(issueText("os.Getenv", msg)) {
-				t.Errorf(".golangci.yml:%d: the exception's text %q drops the issue of the entry with msg %q too, so the exception is a blanket allow of the group in that file, not one function", exception.line, exception.fields["text"], msg)
-			}
-		}
-		for _, e := range groupEntries(t, root, "composition-root-no-exec") {
-			if text.MatchString(issueText("os.Environ", e.msg)) {
-				t.Errorf(".golangci.yml:%d: the exception's text %q drops the issue of the entry with msg %q, which is no text of group %s", exception.line, exception.fields["text"], e.msg, tag)
-			}
-		}
-	})
 }
 
 // compositionRootRuleProblems returns what is wrong with rules, the
@@ -486,14 +396,12 @@ func TestCompositionRootExclusions(t *testing.T) {
 // composition-root group with tag, one line each:
 //   - a rule names forbidigo alone, so it drops no other linter's issues;
 //   - it has exactly one of path and path-except;
-//   - a rule whose text is not the group's whole form is an exception: it drops
-//     one entry's issues, so it selects a path, never a path-except. A
-//     path-except would drop that entry's issues in every file but the
-//     directories it names, which is the opposite of an exception, and no other
-//     check reads it: only a whole-group rule scopes its group, so a narrowed
-//     path-except rule would widen what the group allows and pass unseen;
-//   - the composition-root-env group, the one group with an exception, has
-//     exactly one, and no other group of the two has any.
+//   - no rule's text is narrower than the group's whole form: such a rule is an
+//     exception, which drops one entry's issues, and neither group has one
+//     since the HTTP API's token went with the API (ADR 0037). A narrowed
+//     path-except rule in particular passes every check of the group's scope,
+//     as only a whole-group rule scopes its group, so it would widen what the
+//     group allows unseen.
 func compositionRootRuleProblems(t *testing.T, root, tag string, rules []exclusionRule) []string {
 	t.Helper()
 
@@ -511,18 +419,11 @@ func compositionRootRuleProblems(t *testing.T, root, tag string, rules []exclusi
 		if byPath == byExcept {
 			problems = append(problems, fmt.Sprintf(".golangci.yml:%d: an exclusion rule of group %s must have exactly one of path and path-except, and it has %v", r.line, tag, r.fields))
 		}
-		if r.fields["text"] == groupText(tag) {
-			continue
-		}
-		exceptions++
-		if !byPath {
-			problems = append(problems, fmt.Sprintf(".golangci.yml:%d: group %s has one exception, for one entry of the group in one file, and this rule drops %s everywhere but the files its path-except names: an exception selects its file with path", r.line, tag, r.fields["text"]))
+		if r.fields["text"] != groupText(tag) {
+			exceptions++
 		}
 	}
-	switch {
-	case tag == "composition-root-env" && exceptions != 1:
-		problems = append(problems, fmt.Sprintf("group %s has %d exclusion rules that drop one entry's msg and not the whole group, want exactly one: the exception for os.LookupEnv in cmd/shift2eu-server/main.go", tag, exceptions))
-	case tag != "composition-root-env" && exceptions > 0:
+	if exceptions > 0 {
 		problems = append(problems, fmt.Sprintf("group %s has no exception, and %d of its exclusion rules drop one entry's msg instead of the whole group", tag, exceptions))
 	}
 	return problems
@@ -542,28 +443,24 @@ func TestCompositionRootRuleProblems(t *testing.T) {
 	scope := func(tag string) exclusionRule {
 		return exclusionRule{
 			line:    4,
-			fields:  map[string]string{"path-except": `^cmd/shift2eu(?:-server)?/`, "text": groupText(tag)},
+			fields:  map[string]string{"path-except": `^cmd/shift2eu/`, "text": groupText(tag)},
 			linters: []string{"forbidigo"},
 		}
 	}
-	// The msg of the one entry of the env group that refuses os.LookupEnv, and
-	// of the first entry of the no-exec group: the exceptions below name a real
-	// entry's msg, as a narrowed rule does.
-	var lookupEnvMsg, noExecMsg string
+	// The msg of the entry of the env group that refuses os.UserHomeDir, and of
+	// the first entry of the no-exec group: the exceptions below name a real
+	// entry's msg, as a narrowed rule does. Each is the msg of one entry alone,
+	// which a narrowed text must be to count as its group's.
+	var homeDirMsg, noExecMsg string
 	for _, e := range groupEntries(t, root, tag) {
-		if e.pkg.MatchString("os") && e.pattern.MatchString("os.LookupEnv") {
-			lookupEnvMsg = e.msg
+		if e.pkg.MatchString("os") && e.pattern.MatchString("os.UserHomeDir") {
+			homeDirMsg = e.msg
 		}
 	}
-	if lookupEnvMsg == "" {
-		t.Fatalf(".golangci.yml holds no entry of group %s that refuses os.LookupEnv", tag)
+	if homeDirMsg == "" {
+		t.Fatalf(".golangci.yml holds no entry of group %s that refuses os.UserHomeDir", tag)
 	}
 	noExecMsg = groupEntries(t, root, "composition-root-no-exec")[0].msg
-	exception := exclusionRule{
-		line:    9,
-		fields:  map[string]string{"path": `^cmd/shift2eu-server/main\.go$`, "text": narrowedTextOf(lookupEnvMsg)},
-		linters: []string{"forbidigo"},
-	}
 
 	tests := []struct {
 		name  string
@@ -572,35 +469,35 @@ func TestCompositionRootRuleProblems(t *testing.T) {
 		want  []string
 	}{
 		{
-			name:  "the whole group on a path-except scopes it to the composition roots",
+			name:  "the whole group on a path-except scopes it to the composition root",
 			tag:   tag,
-			rules: []exclusionRule{scope(tag), exception},
+			rules: []exclusionRule{scope(tag)},
 		},
 		{
-			// The hole this pins: the rule drops the os.LookupEnv entry in
-			// every file but the two it names as path-except, so it widens what
+			name: "an exception of the env group on one file is refused",
+			tag:  tag,
+			rules: []exclusionRule{scope(tag), {
+				line:    9,
+				fields:  map[string]string{"path": `^cmd/shift2eu/main\.go$`, "text": narrowedTextOf(homeDirMsg)},
+				linters: []string{"forbidigo"},
+			}},
+			want: []string{
+				"group composition-root-env has no exception, and 1 of its exclusion rules drop one entry's msg instead of the whole group",
+			},
+		},
+		{
+			// The hole this pins: the rule drops the os.UserHomeDir entry in
+			// every file but the one it names as path-except, so it widens what
 			// the env group allows there and no scope check reads it.
 			name: "a narrowed rule with a path-except is refused",
 			tag:  tag,
 			rules: []exclusionRule{scope(tag), {
 				line:    9,
-				fields:  map[string]string{"path-except": `^cmd/shift2eu(?:-server)?/(?:main|server)\.go$`, "text": narrowedTextOf(lookupEnvMsg)},
+				fields:  map[string]string{"path-except": `^cmd/shift2eu/main\.go$`, "text": narrowedTextOf(homeDirMsg)},
 				linters: []string{"forbidigo"},
 			}},
 			want: []string{
-				`.golangci.yml:9: group composition-root-env has one exception, for one entry of the group in one file, and this rule drops because "composition-root-env: os\.LookupEnv is called in cmd/shift2eu-server/main\.go only, for SHIFT2EU_SERVER_TOKEN, in the token source it hands to run \(ADR 0019\); take any other value as a flag"$ everywhere but the files its path-except names: an exception selects its file with path`,
-			},
-		},
-		{
-			name: "two exceptions are refused",
-			tag:  tag,
-			rules: []exclusionRule{scope(tag), exception, {
-				line:    14,
-				fields:  map[string]string{"path": `^cmd/shift2eu/main\.go$`, "text": narrowedTextOf(lookupEnvMsg)},
-				linters: []string{"forbidigo"},
-			}},
-			want: []string{
-				"group composition-root-env has 2 exclusion rules that drop one entry's msg and not the whole group, want exactly one: the exception for os.LookupEnv in cmd/shift2eu-server/main.go",
+				"group composition-root-env has no exception, and 1 of its exclusion rules drop one entry's msg instead of the whole group",
 			},
 		},
 		{
@@ -620,9 +517,9 @@ func TestCompositionRootRuleProblems(t *testing.T) {
 			tag:  tag,
 			rules: []exclusionRule{{
 				line:    4,
-				fields:  map[string]string{"path-except": `^cmd/shift2eu(?:-server)?/`, "text": groupText(tag)},
+				fields:  map[string]string{"path-except": `^cmd/shift2eu/`, "text": groupText(tag)},
 				linters: []string{"forbidigo", "gosec"},
-			}, exception},
+			}},
 			want: []string{
 				`.golangci.yml:4: an exclusion rule of group composition-root-env names linters ["forbidigo" "gosec"]; give forbidigo a rule of its own`,
 			},
@@ -634,7 +531,7 @@ func TestCompositionRootRuleProblems(t *testing.T) {
 				line:    4,
 				fields:  map[string]string{"text": groupText(tag)},
 				linters: []string{"forbidigo"},
-			}, exception},
+			}},
 			want: []string{
 				`.golangci.yml:4: an exclusion rule of group composition-root-env must have exactly one of path and path-except, and it has map[text:because "composition-root-env: [^"]*"$]`,
 			},

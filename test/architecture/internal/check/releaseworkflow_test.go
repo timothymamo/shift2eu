@@ -40,14 +40,12 @@ concurrency:
   group: release
   cancel-in-progress: false
 
-# The steps of all thirteen jobs are a closed list that test/architecture holds
+# The steps of all ten jobs are a closed list that test/architecture holds
 # (check.ReleaseWorkflow): add no step, run: or env: here without changing it.
-# The server-image, server-sbom and server-sign jobs publish the HTTP API's
-# image, ghcr.io/timothymamo/shift2eu-server (PRD #103), exactly as image, sbom
-# and sign publish the CLI's: jobs of their own rather than a matrix, as a
-# matrix job's outputs keep one leg's digest only, and each job keeps its own
-# least privilege. latest alone decides, once per run, whether the tag is the
-# highest release tag on main, so the images' latest tag and GitHub's "Latest"
+# The release ships the CLI alone: the HTTP API's image, archive and API
+# document are gone (issue #393). latest alone decides, once
+# per run, whether the tag is the
+# highest release tag on main, so the image's latest tag and GitHub's "Latest"
 # release cannot disagree. goreleaser hands the archives on, attest-archives
 # attests them, publish alone publishes the draft release, and verify-archives
 # checks what it published (issues #156, #163, #173).
@@ -63,12 +61,12 @@ const testJobHead = `  test:
     steps:
 `
 
-// testSteps are the test job's steps: the whole history with every branch, the
+// testStepTemplates are the test job's steps: the whole history with every branch, the
 // guard that the tagged commit is on main (ADR 0015), setup-go without the
 // Actions cache, and make test.
-var testSteps = []string{
+var testStepTemplates = []string{
 	`      # The whole history, with every branch: the guard below needs origin/main.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -86,7 +84,7 @@ var testSteps = []string{
             exit 1
           }
 `,
-	`      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+	`      - uses: {{pin actions/setup-go}}
         with:
           go-version-file: go.mod
           cache: false # see the comment on the goreleaser job
@@ -100,7 +98,7 @@ var testSteps = []string{
 // decides whether the tag is the highest release tag on main, which the images'
 // latest tag and GitHub's "Latest" release both follow (issue #173).
 const latestJobHead = `  # Decides, once per run, whether the tag is the highest release tag on main:
-  # the one decision the images' latest tag and GitHub's "Latest" release both
+  # the one decision the image's latest tag and GitHub's "Latest" release both
   # follow, so a tag pushed while the run is in flight cannot leave them
   # disagreeing (issue #173). Git, sed and sort alone, and read-only: no
   # repository code runs, the whole history brings origin/main, and the token
@@ -116,19 +114,19 @@ const latestJobHead = `  # Decides, once per run, whether the tag is the highest
     steps:
 `
 
-// latestSteps are the latest job's steps: the whole history, and the one step
+// latestStepTemplates are the latest job's steps: the whole history, and the one step
 // that reads the release tags merged into main and writes latest, true only for
 // the highest of them.
-var latestSteps = []string{
+var latestStepTemplates = []string{
 	`      # The whole history, with every branch: the decision below needs
       # origin/main. No repository code runs here, so the token is not kept.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
 `,
 	`      # The release tags merged into main, pre-releases left out, by version
-      # order: only the highest of them moves the images' latest tag and
+      # order: only the highest of them moves the image's latest tag and
       # GitHub's "Latest" release, so a patch on an older line moves neither,
       # and a stray tag off main (one the guard refused and nobody deleted)
       # cannot hold them back. The step refuses a checkout without origin/main:
@@ -164,57 +162,45 @@ const goreleaserJobHead = `  # A job of its own, on a fresh runner: no go env fi
     steps:
 `
 
-// goreleaserSteps are the goreleaser job's steps: no repository code runs
-// before goreleaser, which is asked for exactly release --clean and copies the
-// release's extra files into neither dist/ nor the workflow artifact, so the
-// job puts the bundled OpenAPI document beside the archives itself, and the
-// archives, their checksums and the document leave the job as a workflow
-// artifact for the attest job to attest on a runner of its own (issues #139,
-// #163).
-var goreleaserSteps = []string{
-	`      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+// goreleaserStepTemplates are the goreleaser job's steps: no repository code runs
+// before goreleaser, which is asked for exactly release --clean, and the
+// archives and their checksums leave the job as a workflow artifact for the
+// attest job to attest on a runner of its own (issue #163). Nothing is copied
+// into dist/ beside them: the release publishes the CLI's archives alone
+// (issue #393).
+var goreleaserStepTemplates = []string{
+	`      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
 `,
-	`      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+	`      - uses: {{pin actions/setup-go}}
         with:
           go-version-file: go.mod
           cache: false
 `,
-	`      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+	`      - uses: {{pin goreleaser/goreleaser-action}}
         with:
           distribution: goreleaser
-          version: "v2.20.1" # exact pin; Renovate updates it (github-actions manager)
+          version: "{{release goreleaser}}" # exact pin; Renovate updates it (github-actions manager)
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 `,
-	`      # GoReleaser copies the release's extra files into neither dist/ nor the
-      # workflow artifact, so the bundled OpenAPI document is put beside the
-      # archives here, under the name the release publishes it as, before the
-      # artifact below hands dist/ on and attest-archives attests every file of
-      # it (issue #139).
-      - name: Put the OpenAPI document beside the archives
-        run: cp api/openapi.bundled.json dist/shift2eu-server_openapi.json
-`,
-	`      # The archives, their checksums and the OpenAPI document leave the job as
+	`      # The archives and their checksums leave the job as
       # a workflow artifact, for the attest job to attest on a runner of its
-      # own (issues #139, #163). What is handed on is what this run wrote in
+      # own (issue #163). What is handed on is what this run wrote in
       # dist/ and nothing else. The archives are named by their extension, not
       # by their name alone: dist/shift2eu_* also matches GoReleaser's build
       # directories (dist/shift2eu_linux_amd64_v1/ ...), and would hand on 12
       # bare binaries beside the archives. It is kept a week, so a failed
       # attestation or publication is recovered by re-running the failed jobs.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: {{pin actions/upload-artifact}}
         with:
           name: archives
           path: |
             dist/shift2eu_*.tar.gz
             dist/shift2eu_*.zip
-            dist/shift2eu-server_*.tar.gz
-            dist/shift2eu-server_*.zip
-            dist/shift2eu-server_openapi.json
             dist/checksums.txt
           if-no-files-found: error
           retention-days: 7
@@ -242,12 +228,12 @@ const attestArchivesJobHead = `  # Attests every archive and checksums.txt with 
     steps:
 `
 
-// attestArchivesSteps are the attest-archives job's steps: GitHub's own
+// attestArchivesStepTemplates are the attest-archives job's steps: GitHub's own
 // download of the archives' workflow artifact, the check of the archives
-// against checksums.txt, and one attestation covering every archive, the
-// bundled OpenAPI document and checksums.txt itself (issues #139, #163).
-var attestArchivesSteps = []string{
-	`      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+// against checksums.txt, and one attestation covering every archive and
+// checksums.txt itself (issue #163).
+var attestArchivesStepTemplates = []string{
+	`      - uses: {{pin actions/download-artifact}}
         with:
           name: archives
 `,
@@ -256,20 +242,17 @@ var attestArchivesSteps = []string{
       - name: Check the archives against checksums.txt
         run: sha256sum -c checksums.txt
 `,
-	`      # One attestation covers every archive, their checksums and the bundled
-      # OpenAPI document, so a release whose files were replaced fails
-      # verification (issues #139, #163). The archives are subjects named by
-      # their extension: a bare shift2eu_* also matches GoReleaser's build
-      # directories, and would attest the 12 bare binaries beside the archives.
+	`      # One attestation covers every archive and their checksums, so a release
+      # whose files were replaced fails verification (issue #163). The archives
+      # are subjects named by their extension: a bare shift2eu_* also matches
+      # GoReleaser's build directories, and would attest the 12 bare binaries
+      # beside the archives.
       - name: Attest the archives
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        uses: {{pin actions/attest-build-provenance}}
         with:
           subject-path: |
             shift2eu_*.tar.gz
             shift2eu_*.zip
-            shift2eu-server_*.tar.gz
-            shift2eu-server_*.zip
-            shift2eu-server_openapi.json
             checksums.txt
 `,
 }
@@ -284,7 +267,7 @@ const publishJobHead = `  # The release is published last (issue #156): GoReleas
   # nothing else: nothing in it can sign, push or attest. It checks nothing out
   # and runs no repository code: whether the tag is the highest release tag on
   # main is the latest job's one decision, by which it moves GitHub's "Latest"
-  # release, as the images' latest tag follows it (issue #173).
+  # release, as the image's latest tag follows it (issue #173).
   publish:
     name: Publish the release
     needs: [test, goreleaser, attest-archives, latest]
@@ -294,7 +277,7 @@ const publishJobHead = `  # The release is published last (issue #156): GoReleas
     steps:
 `
 
-// publishSteps are the publish job's steps (issues #156, #163, #173): the
+// publishStepTemplates are the publish job's steps (issues #156, #163, #173): the
 // attested checksums.txt out of the archives workflow artifact, and the one step
 // that checks the draft release's assets against it and publishes exactly that
 // draft, by the id the API listed it with, with GitHub's "Latest" release moved
@@ -305,11 +288,11 @@ const publishJobHead = `  # The release is published last (issue #156): GoReleas
 // (issue #173). The tag, that decision and the token come through env:, and
 // every gh command is given the repository in its own arguments, so none reads
 // it from a git remote. No checkout: this job runs no repository code.
-var publishSteps = []string{
+var publishStepTemplates = []string{
 	`      # The checksums.txt the attest-archives job attested, from the workflow
       # artifact it attests (issue #156): what is published must be exactly what
       # was attested, and this file is the list of it.
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: {{pin actions/download-artifact}}
         with:
           name: archives
 `,
@@ -335,7 +318,7 @@ var publishSteps = []string{
         run: |
           set -euo pipefail
           # Whether this tag is the highest release tag on main is the latest
-          # job's decision, made once for both images and for this release: the
+          # job's decision, made once for this release: the
           # step refuses anything but the two values it can hold, rather than
           # publish a release with a make_latest nobody decided (issue #173).
           case "$LATEST" in
@@ -406,7 +389,7 @@ var publishSteps = []string{
 // checked, by the id the API listed it with, and never by its tag, which gh
 // resolves to a published release before a draft (issues #156, #163), with
 // GitHub's "Latest" release moved by the latest job's one decision, so the
-// release and both images' latest tag move together (issue #173).
+// release and its image's latest tag move together (issue #173).
 const publishByID = `gh api -X PATCH "repos/timothymamo/shift2eu/releases/$id" -F draft=false -f make_latest="$LATEST"`
 
 // publishByTagStep is the publication the second review of issue #163 refused:
@@ -501,13 +484,13 @@ const verifyArchivesJobHead = `  # A fresh runner that verifies what the publish
     steps:
 `
 
-// verifyArchivesSteps are the verify-archives job's steps: every asset of the
+// verifyArchivesStepTemplates are the verify-archives job's steps: every asset of the
 // release, the check that it is published and holds exactly checksums.txt and
 // the files that file lists, their digests, the provenance of every one of
 // them (docs/guide/verify-releases.md), and the check of GitHub's "Latest"
 // release: never a pre-release, and otherwise the highest release tag merged
-// into main, the version the images' latest tag names (issue #173).
-var verifyArchivesSteps = []string{
+// into main, the version the image's latest tag names (issue #173).
+var verifyArchivesStepTemplates = []string{
 	`      # Every asset of the release, not the patterns the workflow expects to
       # find: what is checked is what was published. gh is given the repository
       # with --repo here too, since no checkout runs and gh reads no repository
@@ -684,14 +667,14 @@ const imageJobHead = `  # Builds and pushes the container image to GHCR (ADR 001
     steps:
 `
 
-// imageSteps are the image job's steps: the build arguments GoReleaser stamps,
+// imageStepTemplates are the image job's steps: the build arguments GoReleaser stamps,
 // a build of two platforms from an empty BuildKit, pushed, without BuildKit's
 // own provenance or SBOM, tagged latest by the latest job's decision alone.
-var imageSteps = []string{
+var imageStepTemplates = []string{
 	`      # The whole history and every tag, as GoReleaser checks it out: git picks
       # the length of a short commit from the number of objects it holds, so the
       # stamp reads the commit as GoReleaser does.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -714,13 +697,13 @@ var imageSteps = []string{
 `,
 	`      # No QEMU: the builder stage cross-compiles and the final stage runs
       # nothing, so linux/arm64 builds without emulation (ADR 0013).
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: {{pin docker/setup-buildx-action}}
         with:
           # The BuildKit image, pinned by tag and multi-arch index digest.
           # renovate: datasource=docker depName=moby/buildkit versioning=semver
-          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          driver-opts: image=moby/buildkit:{{image moby/buildkit}}
 `,
-	`      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+	`      - uses: {{pin docker/login-action}}
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -730,7 +713,7 @@ var imageSteps = []string{
       # a pre-release such as v0.1.0-rc.1 gets its own tag only.
       - name: Image tags
         id: tags
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        uses: {{pin docker/metadata-action}}
         with:
           images: ghcr.io/timothymamo/shift2eu
           flavor: latest=${{ needs.latest.outputs.latest }}
@@ -742,7 +725,7 @@ var imageSteps = []string{
       # SBOM are off: the sign job's attestations replace them (ADR 0015).
       - name: Build and push linux/amd64 and linux/arm64
         id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: {{pin docker/build-push-action}}
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -773,17 +756,17 @@ const sbomJobHead = `  # The SBOM of the pushed index, read from the registry by
     steps:
 `
 
-// sbomSteps are the SBOM job's steps: log in read-only, syft the pushed index
+// sbomStepTemplates are the SBOM job's steps: log in read-only, syft the pushed index
 // by digest, and upload the SPDX document under the name the sign job
 // downloads.
-var sbomSteps = []string{
-	`      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+var sbomStepTemplates = []string{
+	`      - uses: {{pin docker/login-action}}
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 `,
-	`      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+	`      - uses: {{pin anchore/sbom-action}}
         with:
           image: registry:ghcr.io/timothymamo/shift2eu@${{ needs.image.outputs.digest }}
           format: spdx-json
@@ -791,9 +774,9 @@ var sbomSteps = []string{
           upload-artifact: false
           upload-release-assets: false
           # renovate: datasource=github-releases depName=anchore/syft
-          syft-version: v1.57.1
+          syft-version: {{release syft}}
 `,
-	`      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+	`      - uses: {{pin actions/upload-artifact}}
         with:
           name: sbom
           path: shift2eu.spdx.json
@@ -819,14 +802,14 @@ const signJobHead = `  # The only job holding the signing identity (id-token: wr
     steps:
 `
 
-// signSteps are the sign job's steps: cosign by exact release, a login fed the
+// signStepTemplates are the sign job's steps: cosign by exact release, a login fed the
 // token through env:, a recursive signature by digest, the provenance
 // attestation, the SBOM artifact, and its attestation.
-var signSteps = []string{
-	`      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+var signStepTemplates = []string{
+	`      - uses: {{pin sigstore/cosign-installer}}
         with:
           # renovate: datasource=github-releases depName=sigstore/cosign
-          cosign-release: v3.1.4
+          cosign-release: {{release cosign}}
 `,
 	`      # cosign writes the registry credential where actions/attest reads it.
       - name: Log in to ghcr.io
@@ -844,19 +827,19 @@ var signSteps = []string{
 `,
 	`      # SLSA build provenance: actions/attest's default without sbom-path.
       - name: Attest the build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        uses: {{pin actions/attest}}
         with:
           subject-name: ghcr.io/timothymamo/shift2eu
           subject-digest: ${{ needs.image.outputs.digest }}
           push-to-registry: true
           create-storage-record: false # an organisation API; needs artifact-metadata: write
 `,
-	`      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+	`      - uses: {{pin actions/download-artifact}}
         with:
           name: sbom
 `,
 	`      - name: Attest the SBOM
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        uses: {{pin actions/attest}}
         with:
           subject-name: ghcr.io/timothymamo/shift2eu
           subject-digest: ${{ needs.image.outputs.digest }}
@@ -866,207 +849,38 @@ var signSteps = []string{
 `,
 }
 
-// serverImageJobHead is the server-image job: the image job for the HTTP API's image, built from the
-// Dockerfile's server stage, up to its steps:.
-const serverImageJobHead = `  # The image job for the HTTP API's image: the Dockerfile's server stage
-  # (--target server), with the same stamp, tags and build settings, and latest
-  # from the latest job's one decision as the CLI image has it.
-  server-image:
-    name: Container image (shift2eu-server)
-    needs: [test, goreleaser, latest]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read # check out the repository
-      packages: write # push the image to ghcr.io
-    outputs:
-      digest: ${{ steps.build.outputs.digest }}
-    steps:
-`
-
-// serverImageSteps are the server-image job's steps.
-var serverImageSteps = []string{
-	`      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-`,
-	`      # The image job's stamp, line for line.
-      - name: Build arguments, as GoReleaser stamps them
-        id: stamp
-        env:
-          TAG: ${{ github.ref_name }}
-        run: |
-          {
-            echo "version=${TAG#v}"
-            echo "commit=$(git rev-parse --short HEAD)"
-            echo "date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
-          } >> "$GITHUB_OUTPUT"
-`,
-	`      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          # renovate: datasource=docker depName=moby/buildkit versioning=semver
-          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
-`,
-	`      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-`,
-	`      - name: Image tags
-        id: tags
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/timothymamo/shift2eu-server
-          flavor: latest=${{ needs.latest.outputs.latest }}
-          tags: |
-            type=semver,pattern={{raw}}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
-`,
-	`      - name: Build and push linux/amd64 and linux/arm64
-        id: build
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          target: server
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          annotations: index:org.opencontainers.image.source=https://github.com/timothymamo/shift2eu
-          provenance: false
-          sbom: false
-          build-args: |
-            VERSION=${{ steps.stamp.outputs.version }}
-            COMMIT=${{ steps.stamp.outputs.commit }}
-            DATE=${{ steps.stamp.outputs.date }}
-`,
-}
-
-// serverSbomJobHead is the server-sbom job: the sbom job for the HTTP API's image, up to its steps:.
-const serverSbomJobHead = `  # The sbom job for the HTTP API's image: read-only, by digest.
-  server-sbom:
-    name: SBOM (shift2eu-server)
-    needs: server-image
-    runs-on: ubuntu-latest
-    permissions:
-      packages: read # pull the image from ghcr.io, private until made public
-    steps:
-`
-
-// serverSbomSteps are the server-sbom job's steps.
-var serverSbomSteps = []string{
-	`      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-`,
-	`      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: registry:ghcr.io/timothymamo/shift2eu-server@${{ needs.server-image.outputs.digest }}
-          format: spdx-json
-          output-file: shift2eu-server.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
-          # renovate: datasource=github-releases depName=anchore/syft
-          syft-version: v1.57.1
-`,
-	`      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: server-sbom
-          path: shift2eu-server.spdx.json
-          if-no-files-found: error
-          retention-days: 1
-`,
-}
-
-// serverSignJobHead is the server-sign job: the sign job for the HTTP API's image, up to its steps:.
-const serverSignJobHead = `  # The sign job for the HTTP API's image: the signing identity, sigstore's
-  # and GitHub's actions only, everything by digest.
-  server-sign:
-    name: Sign and attest (shift2eu-server)
-    needs: [server-image, server-sbom]
-    runs-on: ubuntu-latest
-    permissions:
-      packages: write # push the signatures and attestations to ghcr.io
-      id-token: write # GitHub OIDC token for keyless cosign and attestation signing
-      attestations: write # store the provenance and SBOM attestations in the repository
-    steps:
-`
-
-// serverSignSteps are the server-sign job's steps.
-var serverSignSteps = []string{
-	`      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
-        with:
-          # renovate: datasource=github-releases depName=sigstore/cosign
-          cosign-release: v3.1.4
-`,
-	`      - name: Log in to ghcr.io
-        env:
-          ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: printf '%s' "$GITHUB_TOKEN" | cosign login ghcr.io --username "$ACTOR" --password-stdin
-`,
-	`      - name: Sign the image
-        env:
-          DIGEST: ${{ needs.server-image.outputs.digest }}
-        run: cosign sign --yes --recursive "ghcr.io/timothymamo/shift2eu-server@${DIGEST}"
-`,
-	`      - name: Attest the build provenance
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ghcr.io/timothymamo/shift2eu-server
-          subject-digest: ${{ needs.server-image.outputs.digest }}
-          push-to-registry: true
-          create-storage-record: false # an organisation API; needs artifact-metadata: write
-`,
-	`      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: server-sbom
-`,
-	`      - name: Attest the SBOM
-        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
-        with:
-          subject-name: ghcr.io/timothymamo/shift2eu-server
-          subject-digest: ${{ needs.server-image.outputs.digest }}
-          sbom-path: shift2eu-server.spdx.json
-          push-to-registry: true
-          create-storage-record: false
-`,
-}
-
 // verifyJobHead is the verify job up to its steps: the independent check of
-// what the release published (issue #99), on a fresh runner after both images
-// are built, signed and attested, with read-only access to the registry and to
+// what the release published (issue #99), on a fresh runner after the image is
+// built, signed and attested, with read-only access to the registry and to
 // the repository's attestations, no OIDC token and no checkout.
 const verifyJobHead = `  # The independent check of what the release published (issue #99): a fresh
-  # runner, after both images are signed and attested, with read-only access to
+  # runner, after the image is signed and attested, with read-only access to
   # the registry and no OIDC token, so nothing in it can sign or push. It needs
-  # the image jobs too: each verify step compares the digest the tag resolves to
+  # the image job too: its verify step compares the digest the tag resolves to
   # with the digest this run built, so a tag moved between the build and the
   # check fails here. A tag can be moved and a digest cannot, so every check
   # below reads a digest, never a tag.
   verify:
-    name: Verify the published images
-    needs: [image, sign, server-image, server-sign]
+    name: Verify the published image
+    needs: [image, sign]
     runs-on: ubuntu-latest
     permissions:
-      packages: read # both images and their signatures
+      packages: read # the image and its signature
       attestations: read # gh attestation verify reads them through the repository's API
     steps:
 `
 
-// verifySteps are the verify job's steps: cosign by exact release, a cosign
-// login, the checks of docs/guide/verify-releases.md on each image this run
+// verifyStepTemplates are the verify job's steps: cosign by exact release, a cosign
+// login, the checks of docs/guide/verify-releases.md on the image this run
 // built - the tag resolving to that digest, the signature for this tag and
 // commit, the build provenance, the SBOM, and the image itself - and the tag
 // rule, whose highest release tag is read from main's ancestry without a
 // checkout.
-var verifySteps = []string{
-	`      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+var verifyStepTemplates = []string{
+	`      - uses: {{pin sigstore/cosign-installer}}
         with:
           # renovate: datasource=github-releases depName=sigstore/cosign
-          cosign-release: v3.1.4
+          cosign-release: {{release cosign}}
 `,
 	`      # cosign writes the registry credential where docker and buildx read it,
       # so the checks below pull what the job may read with its own token.
@@ -1109,39 +923,9 @@ var verifySteps = []string{
           docker run --rm --read-only --network none "$IMAGE" version | tee version.txt
           grep -qF "shift2eu ${TAG#v} (" version.txt
 `,
-	`      # The HTTP API's image, checked as the CLI's is, from the digest its own
-      # image job built. It has no version subcommand, so --help exiting 0 is
-      # its smoke test.
-      - name: Verify the HTTP API's image
-        env:
-          TAG: ${{ github.ref_name }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUILT: ${{ needs.server-image.outputs.digest }}
-        run: |
-          set -euo pipefail
-          DIGEST="$(docker buildx imagetools inspect "ghcr.io/timothymamo/shift2eu-server:$TAG" --format '{{.Manifest.Digest}}')"
-          if [ "$DIGEST" != "$BUILT" ]; then
-            echo "ghcr.io/timothymamo/shift2eu-server:$TAG resolves to $DIGEST, not the digest this run built, $BUILT" >&2
-            exit 1
-          fi
-          IMAGE="ghcr.io/timothymamo/shift2eu-server@$DIGEST"
-          cosign verify "$IMAGE" \
-            --certificate-identity "https://github.com/timothymamo/shift2eu/.github/workflows/release.yml@refs/tags/$TAG" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-            --certificate-github-workflow-trigger push \
-            --certificate-github-workflow-sha "$GITHUB_SHA"
-          gh attestation verify "oci://$IMAGE" --repo timothymamo/shift2eu \
-            --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
-            --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners
-          gh attestation verify "oci://$IMAGE" --repo timothymamo/shift2eu \
-            --signer-workflow timothymamo/shift2eu/.github/workflows/release.yml \
-            --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners \
-            --predicate-type https://spdx.dev/Document/v2.3
-          docker run --rm --read-only --network none "$IMAGE" --help > /dev/null
-`,
 	`      # The tag rule ADR 0015 states: vX.Y.Z always, X.Y for every release,
       # latest for the highest release tag alone, and a pre-release, which
-      # moves neither X.Y nor latest. The highest is the tag the image jobs'
+      # moves neither X.Y nor latest. The highest is the tag the image job's
       # stamp read: the release tags merged into main. They are read by
       # ancestry here too, from the public repository into a bare repository of
       # this job's own, so no checkout runs and no repository code runs. Only a
@@ -1153,7 +937,6 @@ var verifySteps = []string{
         env:
           TAG: ${{ github.ref_name }}
           CLI_BUILT: ${{ needs.image.outputs.digest }}
-          SERVER_BUILT: ${{ needs.server-image.outputs.digest }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
@@ -1242,13 +1025,12 @@ var verifySteps = []string{
             esac
           }
           check ghcr.io/timothymamo/shift2eu "$CLI_BUILT"
-          check ghcr.io/timothymamo/shift2eu-server "$SERVER_BUILT"
 `,
 }
 
 // inVerifyStep returns the verify job's steps with the first old replaced by
-// new in the one step whose text holds part: the two image steps are alike, so
-// a case changes the CLI's or the HTTP API's alone.
+// new in the one step whose text holds part: a case changes one step of the
+// job alone.
 func inVerifyStep(t *testing.T, part, old, new string) []string {
 	t.Helper()
 
@@ -1283,26 +1065,59 @@ type releaseFixture struct {
 	jobs []releaseJob
 }
 
-// releaseWorkflowFixture returns .github/workflows/release.yml in parts.
+// releaseWorkflowFixture returns .github/workflows/release.yml in parts, with
+// the pins the repository's release.yml holds.
 func releaseWorkflowFixture() releaseFixture {
+	return releaseWorkflowFixtureFrom(repoRelease)
+}
+
+// releaseWorkflowFixtureFrom returns the release workflow in parts, with the
+// pins of release, a release.yml: every placeholder of the step templates
+// (workflowPins) filled in from it.
+func releaseWorkflowFixtureFrom(release []byte) releaseFixture {
+	pins := pinsOf(release)
+
 	return releaseFixture{
 		top: releaseWorkflowTop,
 		jobs: []releaseJob{
-			{key: "test", head: testJobHead, steps: testSteps},
-			{key: "latest", head: latestJobHead, steps: latestSteps},
-			{key: "goreleaser", head: goreleaserJobHead, steps: goreleaserSteps},
-			{key: "attest-archives", head: attestArchivesJobHead, steps: attestArchivesSteps},
-			{key: "publish", head: publishJobHead, steps: publishSteps},
-			{key: "image", head: imageJobHead, steps: imageSteps},
-			{key: "sbom", head: sbomJobHead, steps: sbomSteps},
-			{key: "sign", head: signJobHead, steps: signSteps},
-			{key: "server-image", head: serverImageJobHead, steps: serverImageSteps},
-			{key: "server-sbom", head: serverSbomJobHead, steps: serverSbomSteps},
-			{key: "server-sign", head: serverSignJobHead, steps: serverSignSteps},
-			{key: "verify", head: verifyJobHead, steps: verifySteps},
-			{key: "verify-archives", head: verifyArchivesJobHead, steps: verifyArchivesSteps},
+			{key: "test", head: testJobHead, steps: expandSteps(pins, testStepTemplates)},
+			{key: "latest", head: latestJobHead, steps: expandSteps(pins, latestStepTemplates)},
+			{key: "goreleaser", head: goreleaserJobHead, steps: expandSteps(pins, goreleaserStepTemplates)},
+			{key: "attest-archives", head: attestArchivesJobHead, steps: expandSteps(pins, attestArchivesStepTemplates)},
+			{key: "publish", head: publishJobHead, steps: expandSteps(pins, publishStepTemplates)},
+			{key: "image", head: imageJobHead, steps: expandSteps(pins, imageStepTemplates)},
+			{key: "sbom", head: sbomJobHead, steps: expandSteps(pins, sbomStepTemplates)},
+			{key: "sign", head: signJobHead, steps: expandSteps(pins, signStepTemplates)},
+			{key: "verify", head: verifyJobHead, steps: expandSteps(pins, verifyStepTemplates)},
+			{key: "verify-archives", head: verifyArchivesJobHead, steps: expandSteps(pins, verifyArchivesStepTemplates)},
 		},
 	}
+}
+
+// The steps of each job with the pins of the repository's release.yml: the
+// cases change one part of them.
+var (
+	testSteps           = expandSteps(releasePins, testStepTemplates)
+	latestSteps         = expandSteps(releasePins, latestStepTemplates)
+	goreleaserSteps     = expandSteps(releasePins, goreleaserStepTemplates)
+	attestArchivesSteps = expandSteps(releasePins, attestArchivesStepTemplates)
+	publishSteps        = expandSteps(releasePins, publishStepTemplates)
+	imageSteps          = expandSteps(releasePins, imageStepTemplates)
+	sbomSteps           = expandSteps(releasePins, sbomStepTemplates)
+	signSteps           = expandSteps(releasePins, signStepTemplates)
+	verifySteps         = expandSteps(releasePins, verifyStepTemplates)
+	verifyArchivesSteps = expandSteps(releasePins, verifyArchivesStepTemplates)
+)
+
+// expandSteps returns steps with every placeholder filled in from pins. A step
+// without one is returned as it is.
+func expandSteps(pins workflowPins, steps []string) []string {
+	out := make([]string, len(steps))
+	for i, step := range steps {
+		out[i] = pins.expand(step)
+	}
+
+	return out
 }
 
 // render returns the fixture as the release workflow file.
@@ -1460,26 +1275,35 @@ func TestReleaseWorkflow(t *testing.T) {
 	release := releaseWorkflowFixture()
 	releaseWorkflow := release.render()
 
+	// The cases write a pin release.yml holds as its placeholder
+	// (workflowPins), which the helpers below fill in from release.yml, so
+	// that a Renovate update of the workflow needs no edit of a case.
+	pin := releasePins.expand
+
+	// The BuildKit image release.yml pins, by tag and digest, for the cases
+	// that change one of the two.
+	buildkitTag, buildkitDigest, _ := strings.Cut(pin("{{image moby/buildkit}}"), "@sha256:")
+
 	// beforeGoreleaser inserts step before the goreleaser step.
 	beforeGoreleaser := func(step string) string {
 		return strings.Replace(releaseWorkflow, "      - uses: goreleaser/goreleaser-action@",
-			"      - "+step+"\n      - uses: goreleaser/goreleaser-action@", 1)
+			"      - "+pin(step)+"\n      - uses: goreleaser/goreleaser-action@", 1)
 	}
 
 	// inTestJob inserts step before the test job's make test.
 	inTestJob := func(step string) string {
-		return strings.Replace(releaseWorkflow, "      - name: Test\n", "      - "+step+"\n      - name: Test\n", 1)
+		return strings.Replace(releaseWorkflow, "      - name: Test\n", "      - "+pin(step)+"\n      - name: Test\n", 1)
 	}
 
 	// in replaces old with new in one job alone, failing unless that job holds
 	// old exactly once.
 	in := func(key, old, new string) string {
-		return release.inJob(t, key, old, new)
+		return release.inJob(t, key, pin(old), pin(new))
 	}
 
 	// steps returns the workflow with the steps of one job replaced.
 	steps := func(key string, steps []string) string {
-		return release.withSteps(t, key, steps)
+		return release.withSteps(t, key, expandSteps(releasePins, steps))
 	}
 
 	// afterPublish returns the workflow with the stale-decision check moved
@@ -1501,43 +1325,27 @@ func TestReleaseWorkflow(t *testing.T) {
 		{
 			// Every pin a Renovate update changes is matched by form: the actions'
 			// commits, goreleaser's, cosign's and syft's versions, and the BuildKit
-			// image in the image job's driver-opts.
-			name: "a newer pin of every action and tool",
-			workflow: strings.NewReplacer(
-				"3d3c42e5aac5ba805825da76410c181273ba90b1", "0d3c42e5aac5ba805825da76410c181273ba90b1",
-				"b7ad1dad31e06c5925ef5d2fc7ad053ef454303e", "07ad1dad31e06c5925ef5d2fc7ad053ef454303e",
-				"a4f02ab5355a589de60d917a659ce617ed19b3de", "a4f02ab5355a589de60d917a659ce617ed19b3df",
-				"f87e5991a6d7451dcb8d9637bfbc97413f497069", "087e5991a6d7451dcb8d9637bfbc97413f497069",
-				"8aa5831fb8d48d8f76594c7ddde61ae58019f550", "0aa5831fb8d48d8f76594c7ddde61ae58019f550",
-				"dc802804100637a589fabce1cb79ff13a1411302", "dc802804100637a589fabce1cb79ff13a1411303",
-				"c3c9e263c25d99ce0380d002d59b67737d91b0dc", "03c9e263c25d99ce0380d002d59b67737d91b0dc",
-				"756fe2d284c7292c4e9b62c8a28f1e5629c59532", "756fe2d284c7292c4e9b62c8a28f1e5629c59533",
-				"1e69f48acb82d1966a394da916b4c1698aa569d6", "1e69f48acb82d1966a394da916b4c1698aa569d7",
-				"66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c", "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6d",
-				"9000827ccba6bdab643e8b6fd33ac0654aef8333", "9000827ccba6bdab643e8b6fd33ac0654aef8334",
-				"cf430e030ddbb5b0abf93d22962f4752f3646cd9", "cf430e030ddbb5b0abf93d22962f4752f3646cda",
-				`"v2.20.1"`, `"v2.21.0"`,
-				"cosign-release: v3.1.4", "cosign-release: v3.2.0",
-				"syft-version: v1.57.1", "syft-version: v1.58.0",
-				"image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe",
-				"image=moby/buildkit:v0.35.0@sha256:1111111111111111111111111111111111111111111111111111111111111111",
-			).Replace(releaseWorkflow),
+			// image in the image job's driver-opts. Each newer pin is derived
+			// from the one it replaces (bumpPins), so the case follows a
+			// Renovate update of release.yml.
+			name:     "a newer pin of every action and tool",
+			workflow: string(bumpPins(t, []byte(releaseWorkflow))),
 		},
 
 		// The probes of the review and audit, each before the goreleaser step.
-		{name: "probe: go env -w GOFLAGS", workflow: beforeGoreleaser(`run: go env -w "G""OFLAGS=-tags=sneaky"`), wantIn: "goreleaser: steps holds 6 steps, want exactly 5"},
+		{name: "probe: go env -w GOFLAGS", workflow: beforeGoreleaser(`run: go env -w "G""OFLAGS=-tags=sneaky"`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
 		{name: "probe: GOFLAGS to github.env", workflow: beforeGoreleaser(`run: echo "G""OFLAGS=-tags=x" >> "${{ github.env }}"`), wantIn: "github.env"},
-		{name: "probe: GITHUB_ENV spelled at run time", workflow: beforeGoreleaser(`run: n=GITHUB_E; n=${n}NV; echo X=1 >> "${!n}"`), wantIn: "goreleaser: steps holds 6 steps, want exactly 5"},
-		{name: "probe: go work init", workflow: beforeGoreleaser(`run: go work init .`), wantIn: "goreleaser: steps holds 6 steps, want exactly 5"},
-		{name: "probe: go mod vendor", workflow: beforeGoreleaser(`run: go mod vendor`), wantIn: "goreleaser: steps holds 6 steps, want exactly 5"},
-		{name: "probe: another goreleaser document copied in", workflow: beforeGoreleaser(`run: cp build/other.yaml .goreleaser.yaml`), wantIn: "goreleaser: steps holds 6 steps, want exactly 5"},
-		{name: "probe: an action that sets the environment", workflow: beforeGoreleaser(`uses: example/sets-env@0123456789abcdef0123456789abcdef01234567`), wantIn: "goreleaser: steps holds 6 steps, want exactly 5"},
-		{name: "probe: a repository script", workflow: beforeGoreleaser(`run: ./scripts/prepare.sh`), wantIn: "goreleaser: steps holds 6 steps, want exactly 5"},
-		{name: "probe: make test back in the goreleaser job", workflow: beforeGoreleaser(`run: make test`), wantIn: "goreleaser: steps holds 6 steps, want exactly 5"},
+		{name: "probe: GITHUB_ENV spelled at run time", workflow: beforeGoreleaser(`run: n=GITHUB_E; n=${n}NV; echo X=1 >> "${!n}"`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
+		{name: "probe: go work init", workflow: beforeGoreleaser(`run: go work init .`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
+		{name: "probe: go mod vendor", workflow: beforeGoreleaser(`run: go mod vendor`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
+		{name: "probe: another goreleaser document copied in", workflow: beforeGoreleaser(`run: cp build/other.yaml .goreleaser.yaml`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
+		{name: "probe: an action that sets the environment", workflow: beforeGoreleaser(`uses: example/sets-env@0123456789abcdef0123456789abcdef01234567`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
+		{name: "probe: a repository script", workflow: beforeGoreleaser(`run: ./scripts/prepare.sh`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
+		{name: "probe: make test back in the goreleaser job", workflow: beforeGoreleaser(`run: make test`), wantIn: "goreleaser: steps holds 5 steps, want exactly 4"},
 		{name: "a step added to the test job", workflow: inTestJob(`run: go env -w GOFLAGS=-x`), wantIn: "holds 5 steps, want exactly 4"},
 		{
 			name:     "a step replaced in the goreleaser job",
-			workflow: in("goreleaser", "      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          go-version-file: go.mod\n          cache: false\n", "      - run: ./scripts/prepare.sh\n"),
+			workflow: in("goreleaser", "      - uses: {{pin actions/setup-go}}\n        with:\n          go-version-file: go.mod\n          cache: false\n", "      - run: ./scripts/prepare.sh\n"),
 			wantIn:   `want actions/setup-go holds the key "run"`,
 		},
 		{
@@ -1579,10 +1387,10 @@ func TestReleaseWorkflow(t *testing.T) {
 
 		// The tokens through which a step sets the environment or the PATH of
 		// the steps after it, wherever they are, comments included.
-		{name: "github.path in a comment", workflow: strings.Replace(releaseWorkflow, "# v7.3.0", "# ${{ github.path }}", 1), wantIn: "github.path"},
-		{name: "GITHUB.ENV in upper case", workflow: strings.Replace(releaseWorkflow, "# v7.3.0", "# ${{ GITHUB.ENV }}", 1), wantIn: "github.env"},
-		{name: "GITHUB_ENV in a comment", workflow: strings.Replace(releaseWorkflow, "# v7.3.0", "# GITHUB_ENV", 1), wantIn: "GITHUB_ENV"},
-		{name: "GOEXPERIMENT in a comment", workflow: strings.Replace(releaseWorkflow, "# v7.0.1", "# GOEXPERIMENT", 1), wantIn: "GOEXPERIMENT"},
+		{name: "github.path in a comment", workflow: in("goreleaser", "{{pin goreleaser/goreleaser-action}}", "{{commit goreleaser/goreleaser-action}} # ${{ github.path }}"), wantIn: "github.path"},
+		{name: "GITHUB.ENV in upper case", workflow: in("goreleaser", "{{pin goreleaser/goreleaser-action}}", "{{commit goreleaser/goreleaser-action}} # ${{ GITHUB.ENV }}"), wantIn: "github.env"},
+		{name: "GITHUB_ENV in a comment", workflow: in("goreleaser", "{{pin goreleaser/goreleaser-action}}", "{{commit goreleaser/goreleaser-action}} # GITHUB_ENV"), wantIn: "GITHUB_ENV"},
+		{name: "GOEXPERIMENT in a comment", workflow: in("test", "{{pin actions/checkout}}", "{{commit actions/checkout}} # GOEXPERIMENT"), wantIn: "GOEXPERIMENT"},
 
 		// One release at a time, across every tag (ADR 0015): a queued run
 		// waits, none is cancelled, and every tag shares the one group. The
@@ -1610,7 +1418,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a step-level if", workflow: in("test", "        run: make test\n", "        run: make test\n        if: false\n"), wantIn: `key "if"`},
 		{name: "a working-directory", workflow: in("test", "        run: make test\n", "        run: make test\n        working-directory: sub\n"), wantIn: `key "working-directory"`},
 		{name: "an env on another step", workflow: in("goreleaser", "          cache: false\n", "          cache: false\n        env:\n          A: b\n"), wantIn: `key "env"`},
-		{name: "a local action", workflow: in("test", "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e", "./.github/actions/setup"), wantIn: "uses"},
+		{name: "a local action", workflow: in("test", "{{commit actions/setup-go}}", "./.github/actions/setup"), wantIn: "uses"},
 		{name: "a reusable workflow", workflow: in("goreleaser", "    runs-on: ubuntu-latest\n", "    uses: example/repo/.github/workflows/x.yml@main\n"), wantIn: `holds no "runs-on", want exactly name, runs-on, permissions, steps, needs`},
 
 		// What goreleaser is asked to do.
@@ -1618,13 +1426,13 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a --config", workflow: in("goreleaser", "args: release --clean", "args: release --clean --config x.yaml"), wantIn: "args"},
 		{name: "no args", workflow: in("goreleaser", "          args: release --clean\n", ""), wantIn: `no "args"`},
 		{name: "a workdir", workflow: in("goreleaser", "distribution: goreleaser", "distribution: goreleaser\n          workdir: sub"), wantIn: `key "workdir"`},
-		{name: "a goreleaser version range", workflow: in("goreleaser", `"v2.20.1"`, `"~> v2"`), wantIn: "version"},
-		{name: "an action pinned by tag", workflow: in("goreleaser", "goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de", "goreleaser-action@v7"), wantIn: "goreleaser-action@v7"},
+		{name: "a goreleaser version range", workflow: in("goreleaser", `"{{release goreleaser}}"`, `"~> v2"`), wantIn: "version"},
+		{name: "an action pinned by tag", workflow: in("goreleaser", "{{commit goreleaser/goreleaser-action}}", "goreleaser/goreleaser-action@v7"), wantIn: "goreleaser-action@v7"},
 		{name: "a second key in the goreleaser env", workflow: in("goreleaser", "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n", "          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          OTHER: x\n"), wantIn: "OTHER"},
 		{name: "a GITHUB_TOKEN from somewhere else", workflow: in("goreleaser", "GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}", "GITHUB_TOKEN: ${{ vars.TOKEN }}"), wantIn: "GITHUB_TOKEN"},
 		{name: "a flow-style env", workflow: in("goreleaser", "        env:\n          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n", "        env: {GITHUB_TOKEN: x, A: b}\n"), wantIn: "env"},
 		{name: "a repeated key", workflow: in("goreleaser", "    needs: test\n", "    needs: test\n    needs: test\n"), wantIn: "repeated"},
-		{name: "a tab", workflow: strings.Replace(releaseWorkflow, "# v7.0.1", "#\tv7.0.1", 1), wantIn: "U+0009"},
+		{name: "a tab", workflow: in("test", "{{pin actions/checkout}}", strings.Replace(pin("{{pin actions/checkout}}"), " # ", " #\t", 1)), wantIn: "U+0009"},
 
 		// The draft-then-publish flow (issue #156): GoReleaser uploads every
 		// asset to a draft release, which .goreleaser.yaml's release.draft asks
@@ -1641,7 +1449,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "the publish job not needing the latest job", workflow: in("publish", "    needs: [test, goreleaser, attest-archives, latest]\n", "    needs: [test, goreleaser, attest-archives]\n"), wantIn: `jobs: publish: needs is ["test" "goreleaser" "attest-archives"], want exactly ["test" "goreleaser" "attest-archives" "latest"]`},
 		{name: "another permission for the publish job", workflow: in("publish", "      contents: write # publish the draft release\n", "      contents: write # publish the draft release\n      packages: write # push\n"), wantIn: "packages"},
 		{name: "no contents: write for the publish job", workflow: in("publish", "      contents: write # publish the draft release\n", ""), wantIn: "contents"},
-		// GitHub's "Latest" release follows the images' latest tag (issue
+		// GitHub's "Latest" release follows the image's latest tag (issue
 		// #173): the publish job sends make_latest from the latest job's one
 		// decision, through env: and never pasted into the script, and never
 		// omitted and never a constant, so publishing a patch on an older line
@@ -1685,8 +1493,8 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "a draft check that trusts the draft's checksums.txt", workflow: in("publish", "            echo \"the draft release's checksums.txt is not the one this run attested\" >&2\n", "            echo \"the draft release's checksums.txt is the attested one\" >&2\n"), wantIn: "the draft release's checksums.txt is not the one this run attested"},
 		{name: "a separate publish step by tag", workflow: steps("publish", slices.Concat(publishSteps, []string{publishByTagStep})), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
 		{name: "an extra step in the publish job", workflow: steps("publish", beforeStep(t, publishSteps, "      - name: Check the draft's assets and publish it", "run: ./scripts/prepare.sh")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
-		{name: "the publish job checking the repository out again", workflow: steps("publish", beforeStep(t, publishSteps, "      - uses: actions/download-artifact@", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          fetch-depth: 0\n          persist-credentials: false")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
-		{name: "the publish step in the goreleaser job", workflow: steps("goreleaser", beforeStep(t, goreleaserSteps, "      - uses: actions/upload-artifact@", "name: Check the draft's assets and publish it\n        run: "+publishByID)), wantIn: "jobs: goreleaser: steps holds 6 steps, want exactly 5"},
+		{name: "the publish job checking the repository out again", workflow: steps("publish", beforeStep(t, publishSteps, "      - uses: actions/download-artifact@", "uses: {{pin actions/checkout}}\n        with:\n          fetch-depth: 0\n          persist-credentials: false")), wantIn: "jobs: publish: steps holds 3 steps, want exactly 2"},
+		{name: "the publish step in the goreleaser job", workflow: steps("goreleaser", beforeStep(t, goreleaserSteps, "      - uses: actions/upload-artifact@", "name: Check the draft's assets and publish it\n        run: "+publishByID)), wantIn: "jobs: goreleaser: steps holds 5 steps, want exactly 4"},
 		{name: "the publish step in the test job", workflow: inTestJob("name: Check the draft's assets and publish it\n        run: " + publishByID), wantIn: "holds 5 steps, want exactly 4"},
 
 		// A partial re-run (gh run rerun --failed) does not re-run the
@@ -1706,7 +1514,7 @@ func TestReleaseWorkflow(t *testing.T) {
 		// run, in a job of its own (issue #173), which both image jobs and the
 		// publish job read. There the decision cannot be made twice from two
 		// checkouts at two moments of one run, so a tag pushed in between cannot
-		// leave the images' latest tag and GitHub's "Latest" release naming
+		// leave the image's latest tag and GitHub's "Latest" release naming
 		// different versions. The job checks the repository out read-only, runs
 		// git, sed and sort alone, and holds the decision as its only output.
 		{name: "no latest job", workflow: release.withoutJob(t, "latest"), wantIn: `holds no "latest"`},
@@ -1782,10 +1590,10 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "an extra step in the image job", workflow: steps("image", beforeStep(t, imageSteps, "      - uses: docker/setup-buildx-action@", "run: ./scripts/prepare.sh")), wantIn: "holds 7 steps, want exactly 6"},
 		{name: "a missing step in the image job", workflow: steps("image", withoutStep(t, imageSteps, "docker/login-action@")), wantIn: "holds 5 steps, want exactly 6"},
 		{name: "two image steps swapped", workflow: steps("image", swappedSteps(t, imageSteps, "docker/setup-buildx-action@", "docker/login-action@")), wantIn: "want docker/setup-buildx-action: uses is"},
-		{name: "build-push-action pinned by tag", workflow: in("image", "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc", "docker/build-push-action@v7"), wantIn: "build-push-action@v7"},
-		{name: "setup-buildx-action pinned by tag", workflow: in("image", "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069", "docker/setup-buildx-action@v4"), wantIn: "setup-buildx-action@v4"},
-		{name: "metadata-action pinned by tag", workflow: in("image", "docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302", "docker/metadata-action@v6"), wantIn: "metadata-action@v6"},
-		{name: "login-action pinned by tag", workflow: in("image", "docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550", "docker/login-action@v4"), wantIn: "login-action@v4"},
+		{name: "build-push-action pinned by tag", workflow: in("image", "{{commit docker/build-push-action}}", "docker/build-push-action@v7"), wantIn: "build-push-action@v7"},
+		{name: "setup-buildx-action pinned by tag", workflow: in("image", "{{commit docker/setup-buildx-action}}", "docker/setup-buildx-action@v4"), wantIn: "setup-buildx-action@v4"},
+		{name: "metadata-action pinned by tag", workflow: in("image", "{{commit docker/metadata-action}}", "docker/metadata-action@v6"), wantIn: "metadata-action@v6"},
+		{name: "login-action pinned by tag", workflow: in("image", "{{commit docker/login-action}}", "docker/login-action@v4"), wantIn: "login-action@v4"},
 
 		// The image job's digest output: what the SBOM job reads the image by
 		// and the sign job signs and attests.
@@ -1829,22 +1637,6 @@ func TestReleaseWorkflow(t *testing.T) {
 			wantIn: "want the stamp of the build arguments: run is",
 		},
 		{
-			name: "the server image's stamp still computing the highest release tag",
-			workflow: in("server-image", `          } >> "$GITHUB_OUTPUT"
-`, `          highest="$(git tag -l 'v*.*.*' --merged refs/remotes/origin/main | sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p' | sort -V | tail -n 1)"
-          } >> "$GITHUB_OUTPUT"
-`),
-			wantIn: "want the stamp of the build arguments: run is",
-		},
-		{
-			name: "the server image's stamp writing its own latest",
-			workflow: in("server-image", `          } >> "$GITHUB_OUTPUT"
-`, `          echo "latest=true" >> "$GITHUB_OUTPUT"
-          } >> "$GITHUB_OUTPUT"
-`),
-			wantIn: "want the stamp of the build arguments: run is",
-		},
-		{
 			name:     "an interpolation inside a run script",
 			workflow: in("image", `            echo "version=${TAG#v}"`+"\n", `            echo "version=${{ github.ref_name }}"`+"\n"),
 			wantIn:   "holds a ${{ }} expression",
@@ -1857,9 +1649,9 @@ func TestReleaseWorkflow(t *testing.T) {
 
 		// The pins Renovate updates, by form: an exact release, an exact syft,
 		// the BuildKit image by tag and multi-arch index digest.
-		{name: "a BuildKit tag without a digest", workflow: in("image", "image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe", "image=moby/buildkit:v0.34.2"), wantIn: "driver-opts"},
-		{name: "a BuildKit tag that is not an exact release", workflow: in("image", "image=moby/buildkit:v0.34.2@sha256:", "image=moby/buildkit:v0.34@sha256:"), wantIn: "driver-opts"},
-		{name: "a BuildKit digest that is not 64 hex", workflow: in("image", "sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe", "sha256:c5f8862f"), wantIn: "driver-opts"},
+		{name: "a BuildKit tag without a digest", workflow: in("image", "image=moby/buildkit:{{image moby/buildkit}}", "image=moby/buildkit:"+buildkitTag), wantIn: "driver-opts"},
+		{name: "a BuildKit tag that is not an exact release", workflow: in("image", "image=moby/buildkit:"+buildkitTag+"@sha256:", "image=moby/buildkit:"+buildkitTag[:strings.LastIndex(buildkitTag, ".")]+"@sha256:"), wantIn: "driver-opts"},
+		{name: "a BuildKit digest that is not 64 hex", workflow: in("image", "sha256:"+buildkitDigest, "sha256:"+buildkitDigest[:8]), wantIn: "driver-opts"},
 
 		// Another registry, another image name: the checks below read the one
 		// the release publishes.
@@ -1894,25 +1686,25 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "another SBOM format", workflow: in("sbom", "          format: spdx-json\n", "          format: cyclonedx-json\n"), wantIn: "format"},
 		{name: "the SBOM uploaded to the run", workflow: in("sbom", "          upload-artifact: false\n", "          upload-artifact: true\n"), wantIn: "upload-artifact"},
 		{name: "the SBOM uploaded to the release", workflow: in("sbom", "          upload-release-assets: false\n", "          upload-release-assets: true\n"), wantIn: "upload-release-assets"},
-		{name: "a syft version range", workflow: in("sbom", "syft-version: v1.57.1", "syft-version: ~> v1"), wantIn: "syft-version"},
+		{name: "a syft version range", workflow: in("sbom", "syft-version: {{release syft}}", "syft-version: ~> v1"), wantIn: "syft-version"},
 		{name: "another SBOM artifact name", workflow: in("sbom", "          name: sbom\n", "          name: sboms\n"), wantIn: "name"},
 		{name: "another SBOM artifact path", workflow: in("sbom", "          path: shift2eu.spdx.json\n", "          path: report.json\n"), wantIn: "path"},
 		{name: "a tolerated missing SBOM", workflow: in("sbom", "          if-no-files-found: error\n", "          if-no-files-found: warn\n"), wantIn: "if-no-files-found"},
 		{name: "a longer SBOM retention", workflow: in("sbom", "          retention-days: 1\n", "          retention-days: 7\n"), wantIn: "retention-days"},
-		{name: "sbom-action pinned by tag", workflow: in("sbom", "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c", "anchore/sbom-action@v0"), wantIn: "sbom-action@v0"},
+		{name: "sbom-action pinned by tag", workflow: in("sbom", "{{commit anchore/sbom-action}}", "anchore/sbom-action@v0"), wantIn: "sbom-action@v0"},
 
 		// The sign job: the signing identity, with GitHub's and sigstore's code
 		// alone, no checkout, and everything by digest.
 		{name: "the sign job on another runner", workflow: in("sign", "    runs-on: ubuntu-latest\n", "    runs-on: ubuntu-24.04\n"), wantIn: "runs-on"},
 		{name: "the sign job without needs", workflow: in("sign", "    needs: [image, sbom]\n", ""), wantIn: `no "needs"`},
-		{name: "an extra step in the sign job", workflow: steps("sign", beforeStep(t, signSteps, "      - uses: actions/download-artifact@", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")), wantIn: "holds 7 steps, want exactly 6"},
-		{name: "a checkout in place of the cosign installer", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 0, 1, "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n")), wantIn: "cosign-installer"},
-		{name: "a docker login in place of the cosign login", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 1, 2, "      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0\n        with:\n          registry: ghcr.io\n")), wantIn: `want the cosign login holds the key "uses"`},
-		{name: "an anchore action in place of the provenance attestation", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 3, 4, "      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3\n")), wantIn: `want actions/attest (the build provenance) holds no "with", want exactly name, uses, with`},
+		{name: "an extra step in the sign job", workflow: steps("sign", beforeStep(t, signSteps, "      - uses: actions/download-artifact@", "uses: {{commit actions/checkout}}")), wantIn: "holds 7 steps, want exactly 6"},
+		{name: "a checkout in place of the cosign installer", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 0, 1, "      - uses: {{pin actions/checkout}}\n")), wantIn: "cosign-installer"},
+		{name: "a docker login in place of the cosign login", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 1, 2, "      - uses: {{pin docker/login-action}}\n        with:\n          registry: ghcr.io\n")), wantIn: `want the cosign login holds the key "uses"`},
+		{name: "an anchore action in place of the provenance attestation", workflow: steps("sign", slices.Replace(slices.Clone(signSteps), 3, 4, "      - uses: {{pin anchore/sbom-action}}\n")), wantIn: `want actions/attest (the build provenance) holds no "with", want exactly name, uses, with`},
 		{name: "two sign steps swapped", workflow: steps("sign", swappedSteps(t, signSteps, "name: Attest the build provenance", "actions/download-artifact@")), wantIn: `want actions/download-artifact holds the key "name"`},
-		{name: "an upload in place of the artifact download", workflow: in("sign", "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n", "      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2\n"), wantIn: "download-artifact"},
-		{name: "a cosign installer pinned by tag", workflow: in("sign", "sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532", "sigstore/cosign-installer@v4"), wantIn: "cosign-installer@v4"},
-		{name: "a cosign release range", workflow: in("sign", "cosign-release: v3.1.4", "cosign-release: v3"), wantIn: "cosign-release"},
+		{name: "an upload in place of the artifact download", workflow: in("sign", "      - uses: {{pin actions/download-artifact}}\n", "      - uses: {{pin actions/upload-artifact}}\n"), wantIn: "download-artifact"},
+		{name: "a cosign installer pinned by tag", workflow: in("sign", "{{commit sigstore/cosign-installer}}", "sigstore/cosign-installer@v4"), wantIn: "cosign-installer@v4"},
+		{name: "a cosign release range", workflow: in("sign", "cosign-release: {{release cosign}}", "cosign-release: v3"), wantIn: "cosign-release"},
 
 		// The login: the token and the actor through env:, never pasted into
 		// the script, and nothing else in the environment.
@@ -1938,78 +1730,51 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "the SBOM attestation not pushed to the registry", workflow: in("sign", "          sbom-path: shift2eu.spdx.json\n          push-to-registry: true\n", "          sbom-path: shift2eu.spdx.json\n          push-to-registry: false\n"), wantIn: "push-to-registry"},
 		{name: "the provenance attestation stored in the repository", workflow: in("sign", "          create-storage-record: false # an organisation API; needs artifact-metadata: write\n", "          create-storage-record: true # an organisation API; needs artifact-metadata: write\n"), wantIn: "create-storage-record"},
 		{name: "the SBOM attestation stored in the repository", workflow: in("sign", "          push-to-registry: true\n          create-storage-record: false\n", "          push-to-registry: true\n          create-storage-record: true\n"), wantIn: "create-storage-record"},
-		{name: "a provenance attestation of another subject", workflow: in("sign", "      - name: Attest the build provenance\n        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n        with:\n          subject-name: ghcr.io/timothymamo/shift2eu\n", "      - name: Attest the build provenance\n        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n        with:\n          subject-name: ghcr.io/example/shift2eu\n"), wantIn: "subject-name"},
+		{name: "a provenance attestation of another subject", workflow: in("sign", "      - name: Attest the build provenance\n        uses: {{pin actions/attest}}\n        with:\n          subject-name: ghcr.io/timothymamo/shift2eu\n", "      - name: Attest the build provenance\n        uses: {{pin actions/attest}}\n        with:\n          subject-name: ghcr.io/example/shift2eu\n"), wantIn: "subject-name"},
 		{name: "an SBOM attestation of another digest", workflow: in("sign", "          subject-digest: ${{ needs.image.outputs.digest }}\n          sbom-path: shift2eu.spdx.json\n", "          subject-digest: ${{ github.sha }}\n          sbom-path: shift2eu.spdx.json\n"), wantIn: "subject-digest"},
 		{name: "an SBOM attestation without the SBOM", workflow: in("sign", "          sbom-path: shift2eu.spdx.json\n", ""), wantIn: `no "sbom-path"`},
-		{name: "the provenance attested from a file", workflow: in("sign", "      - name: Attest the build provenance\n        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n        with:\n          subject-name: ghcr.io/timothymamo/shift2eu\n", "      - name: Attest the build provenance\n        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n        with:\n          subject-path: dist/shift2eu\n"), wantIn: "subject-path"},
-		{name: "an artifact downloaded under another name", workflow: in("sign", "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: sbom\n", "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n        with:\n          name: shift2eu-sbom\n"), wantIn: "name"},
-		{name: "another action in place of the artifact download", workflow: in("sign", "      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2\n", "      - uses: example/attest@0123456789abcdef0123456789abcdef01234567\n"), wantIn: "download-artifact"},
+		{name: "the provenance attested from a file", workflow: in("sign", "      - name: Attest the build provenance\n        uses: {{pin actions/attest}}\n        with:\n          subject-name: ghcr.io/timothymamo/shift2eu\n", "      - name: Attest the build provenance\n        uses: {{pin actions/attest}}\n        with:\n          subject-path: dist/shift2eu\n"), wantIn: "subject-path"},
+		{name: "an artifact downloaded under another name", workflow: in("sign", "      - uses: {{pin actions/download-artifact}}\n        with:\n          name: sbom\n", "      - uses: {{pin actions/download-artifact}}\n        with:\n          name: shift2eu-sbom\n"), wantIn: "name"},
+		{name: "another action in place of the artifact download", workflow: in("sign", "      - uses: {{pin actions/download-artifact}}\n", "      - uses: example/attest@0123456789abcdef0123456789abcdef01234567\n"), wantIn: "download-artifact"},
 
-		// The HTTP API's image (PRD #103) is published exactly as the CLI's:
-		// built from the server stage, pushed, read for its SBOM, signed and
-		// attested, each by its own digest, in jobs of its own with the same
-		// split privileges.
-		{name: "no server-image job", workflow: release.withoutJob(t, "server-image"), wantIn: `no "server-image"`},
-		{name: "no server-sbom job", workflow: release.withoutJob(t, "server-sbom"), wantIn: `no "server-sbom"`},
-		{name: "no server-sign job", workflow: release.withoutJob(t, "server-sign"), wantIn: `no "server-sign"`},
-		{name: "the server image not pushed", workflow: in("server-image", "          push: true\n", "          push: false\n"), wantIn: "jobs: server-image: steps: step 6"},
-		{name: "the server image built from the CLI's stage", workflow: in("server-image", "          target: server\n", ""), wantIn: `no "target"`},
-		{name: "the server image built from another stage", workflow: in("server-image", "          target: server\n", "          target: build\n"), wantIn: "with: target"},
+		// The HTTP API's image is gone with the server (issue #393): the release
+		// publishes the CLI's image alone, so a fourth image job, or the jobs
+		// that read, sign and run it, are refused as keys the release does not
+		// hold, and for the names no line may use.
+		{name: "a server-image job beside the image job", workflow: in("verify", "  # The independent check", "  server-image:\n    name: Container image (shift2eu-server)\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n  # The independent check"), wantIn: `jobs holds the key "server-image"`},
+		{name: "a comment naming the HTTP API's binary", workflow: strings.Replace(releaseWorkflow, "# No permission by default; each job asks for its own.", "# The shift2eu-server jobs are gone (issue #393).\n# No permission by default; each job asks for its own.", 1), wantIn: "shift2eu-server"},
+		{name: "a comment naming the bundled OpenAPI document", workflow: strings.Replace(releaseWorkflow, "# No permission by default; each job asks for its own.", "# The bundled api/openapi.bundled.json is gone (issue #393).\n# No permission by default; each job asks for its own.", 1), wantIn: "openapi"},
+		// The name is retired in any case it is written in: a comment that
+		// capitalises it names the same binary or document, and is refused too.
+		{name: "a comment naming the HTTP API's binary in another case", workflow: strings.Replace(releaseWorkflow, "# No permission by default; each job asks for its own.", "# The Shift2eu-Server jobs are gone (issue #393).\n# No permission by default; each job asks for its own.", 1), wantIn: "shift2eu-server"},
+		{name: "a comment naming the bundled API document in another case", workflow: strings.Replace(releaseWorkflow, "# No permission by default; each job asks for its own.", "# The bundled OpenAPI document is gone (issue #393).\n# No permission by default; each job asks for its own.", 1), wantIn: "openapi"},
 		{name: "a target on the CLI image", workflow: in("image", "          context: .\n", "          context: .\n          target: server\n"), wantIn: `key "target"`},
-		{name: "the server image tagged as the CLI", workflow: in("server-image", "          images: ghcr.io/timothymamo/shift2eu-server\n", "          images: ghcr.io/timothymamo/shift2eu\n"), wantIn: "images"},
-		{name: "the server image tagged latest always", workflow: in("server-image", "          flavor: latest=${{ needs.latest.outputs.latest }}\n", "          flavor: latest=true\n"), wantIn: "want docker/metadata-action: with: flavor is"},
-		{name: "the server image's latest from its own stamp", workflow: in("server-image", "          flavor: latest=${{ needs.latest.outputs.latest }}\n", "          flavor: latest=${{ steps.stamp.outputs.latest }}\n"), wantIn: "want docker/metadata-action: with: flavor is"},
-		{name: "the server image with BuildKit's provenance on", workflow: in("server-image", "          provenance: false\n", "          provenance: true\n"), wantIn: "with: provenance"},
-		{name: "the server image job without its digest output", workflow: in("server-image", "    outputs:\n      digest: ${{ steps.build.outputs.digest }}\n", ""), wantIn: `no "outputs"`},
-		{name: "id-token: write for the server image job", workflow: in("server-image", "      packages: write # push the image to ghcr.io\n", "      packages: write # push the image to ghcr.io\n      id-token: write # sign\n"), wantIn: "id-token"},
-		{name: "the server image job needing only the tests", workflow: in("server-image", "    needs: [test, goreleaser, latest]\n", "    needs: [test]\n"), wantIn: "jobs: server-image: needs is"},
-		{name: "the latest job not needed by the server image job", workflow: in("server-image", "    needs: [test, goreleaser, latest]\n", "    needs: [test, goreleaser]\n"), wantIn: `jobs: server-image: needs is ["test" "goreleaser"], want exactly ["test" "goreleaser" "latest"]`},
-		{name: "the server SBOM read by tag", workflow: in("server-sbom", "image: registry:ghcr.io/timothymamo/shift2eu-server@${{ needs.server-image.outputs.digest }}", "image: registry:ghcr.io/timothymamo/shift2eu-server:latest"), wantIn: "with: image"},
-		{name: "the server SBOM read from the CLI's digest", workflow: in("server-sbom", "@${{ needs.server-image.outputs.digest }}", "@${{ needs.image.outputs.digest }}"), wantIn: "with: image"},
-		{name: "the server SBOM uploaded under the CLI's artifact name", workflow: in("server-sbom", "          name: server-sbom\n", "          name: sbom\n"), wantIn: "name"},
-		{name: "packages: write for the server sbom job", workflow: in("server-sbom", "      packages: read # pull the image from ghcr.io, private until made public\n", "      packages: write # pull the image from ghcr.io, private until made public\n"), wantIn: "packages"},
-		{name: "the server sign job needing only the server image", workflow: in("server-sign", "    needs: [server-image, server-sbom]\n", "    needs: [server-image]\n"), wantIn: "needs"},
-		{name: "the server sign job needing the CLI's jobs", workflow: in("server-sign", "    needs: [server-image, server-sbom]\n", "    needs: [image, sbom]\n"), wantIn: "needs"},
-		{name: "the server image not signed", workflow: steps("server-sign", withoutStep(t, serverSignSteps, "name: Sign the image")), wantIn: "jobs: server-sign: steps holds 5 steps, want exactly 6"},
-		{name: "the server image's provenance not attested", workflow: steps("server-sign", withoutStep(t, serverSignSteps, "name: Attest the build provenance")), wantIn: "jobs: server-sign: steps holds 5 steps, want exactly 6"},
-		{name: "the server image's SBOM not attested", workflow: steps("server-sign", withoutStep(t, serverSignSteps, "name: Attest the SBOM")), wantIn: "jobs: server-sign: steps holds 5 steps, want exactly 6"},
-		{name: "the server image signed by tag", workflow: in("server-sign", `run: cosign sign --yes --recursive "ghcr.io/timothymamo/shift2eu-server@${DIGEST}"`, `run: cosign sign --yes --recursive "ghcr.io/timothymamo/shift2eu-server:${DIGEST}"`), wantIn: "@${DIGEST}"},
-		{name: "the server image signed by the CLI's digest", workflow: in("server-sign", "          DIGEST: ${{ needs.server-image.outputs.digest }}\n", "          DIGEST: ${{ needs.image.outputs.digest }}\n"), wantIn: "the signature: env holds"},
-		{name: "the server image signed as the CLI", workflow: in("server-sign", `run: cosign sign --yes --recursive "ghcr.io/timothymamo/shift2eu-server@${DIGEST}"`, `run: cosign sign --yes --recursive "ghcr.io/timothymamo/shift2eu@${DIGEST}"`), wantIn: "want the signature: run is"},
-		{name: "the server provenance attested for the CLI's digest", workflow: in("server-sign", "          subject-digest: ${{ needs.server-image.outputs.digest }}\n          push-to-registry: true\n", "          subject-digest: ${{ needs.image.outputs.digest }}\n          push-to-registry: true\n"), wantIn: "subject-digest"},
-		{name: "the server SBOM attestation without the server SBOM", workflow: in("server-sign", "          sbom-path: shift2eu-server.spdx.json\n", "          sbom-path: shift2eu.spdx.json\n"), wantIn: "sbom-path"},
-		{name: "the server provenance not pushed to the registry", workflow: in("server-sign", "          push-to-registry: true\n          create-storage-record: false # an organisation API; needs artifact-metadata: write\n", "          push-to-registry: false\n          create-storage-record: false # an organisation API; needs artifact-metadata: write\n"), wantIn: "push-to-registry"},
-		{name: "no id-token: write for the server sign job", workflow: in("server-sign", "      id-token: write # GitHub OIDC token for keyless cosign and attestation signing\n", ""), wantIn: "id-token"},
-		{name: "the server sign job checking out the repository", workflow: steps("server-sign", beforeStep(t, serverSignSteps, "      - uses: actions/download-artifact@", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")), wantIn: "jobs: server-sign: steps holds 7 steps, want exactly 6"},
 
 		// The independent check of what the release published (issue #99): a job
-		// of its own, after both images are built, signed and attested, read-only
-		// to the registry and holding no OIDC token, which compares each tag to
+		// of its own, after the image is built, signed and attested, read-only
+		// to the registry and holding no OIDC token, which compares the tag to
 		// the digest this run built, verifies the signature, the provenance and
 		// the SBOM, runs the image and checks the tag rule. What it must say is a
 		// closed list too.
 		{name: "no verify job", workflow: release.withoutJob(t, "verify"), wantIn: `no "verify"`},
-		{name: "the verify job needing only the CLI's sign job", workflow: in("verify", "    needs: [image, sign, server-image, server-sign]\n", "    needs: [sign]\n"), wantIn: "needs"},
-		{name: "the verify job needing only the server's sign job", workflow: in("verify", "    needs: [image, sign, server-image, server-sign]\n", "    needs: [server-sign]\n"), wantIn: "needs"},
-		{name: "the verify job needing the sign jobs in the other order", workflow: in("verify", "    needs: [image, sign, server-image, server-sign]\n", "    needs: [image, server-sign, server-image, sign]\n"), wantIn: "needs"},
+		{name: "the verify job needing only the sign job", workflow: in("verify", "    needs: [image, sign]\n", "    needs: [sign]\n"), wantIn: "needs"},
+		{name: "the verify job needing the jobs in the other order", workflow: in("verify", "    needs: [image, sign]\n", "    needs: [sign, image]\n"), wantIn: "needs"},
 
-		// The built digests come from the image jobs, not from the signatures:
-		// without them the job cannot tell the digest this run built from the
+		// The built digest comes from the image job, not from the signature:
+		// without it the job cannot tell the digest this run built from the
 		// one the tag resolves to now, and a tag moved between the build and
 		// the check would pass.
-		{name: "the verify job without the image jobs", workflow: in("verify", "    needs: [image, sign, server-image, server-sign]\n", "    needs: [sign, server-sign]\n"), wantIn: "needs"},
-		{name: "the verify job needing only the CLI's image job", workflow: in("verify", "    needs: [image, sign, server-image, server-sign]\n", "    needs: [image, sign, server-sign]\n"), wantIn: "needs"},
-		{name: "the verify job needing only the server's image job", workflow: in("verify", "    needs: [image, sign, server-image, server-sign]\n", "    needs: [sign, server-image, server-sign]\n"), wantIn: "needs"},
-		{name: "the verify job needing the tests too", workflow: in("verify", "    needs: [image, sign, server-image, server-sign]\n", "    needs: [image, sign, server-image, server-sign, test]\n"), wantIn: "needs"},
-		{name: "the verify job without needs", workflow: in("verify", "    needs: [image, sign, server-image, server-sign]\n", ""), wantIn: `no "needs"`},
+		{name: "the verify job without the image job", workflow: in("verify", "    needs: [image, sign]\n", "    needs: [sign, sbom]\n"), wantIn: "needs"},
+		{name: "the verify job needing the tests too", workflow: in("verify", "    needs: [image, sign]\n", "    needs: [image, sign, test]\n"), wantIn: "needs"},
+		{name: "the verify job without needs", workflow: in("verify", "    needs: [image, sign]\n", ""), wantIn: `no "needs"`},
 
 		// It may read the registry and the repository's attestations and nothing
 		// more: no OIDC token, so nothing in it can sign an image of its own, and
 		// no scope it omits, which a job-level permissions block sets to none.
 		{name: "the verify job on a self-hosted runner", workflow: in("verify", "    runs-on: ubuntu-latest\n", "    runs-on: self-hosted\n"), wantIn: "runs-on"},
-		{name: "the verify job without permissions", workflow: in("verify", "    permissions:\n      packages: read # both images and their signatures\n      attestations: read # gh attestation verify reads them through the repository's API\n", ""), wantIn: `no "permissions"`},
-		{name: "packages: write for the verify job", workflow: in("verify", "      packages: read # both images and their signatures\n", "      packages: write # both images and their signatures\n"), wantIn: "packages"},
-		{name: "no packages: read for the verify job", workflow: in("verify", "      packages: read # both images and their signatures\n", ""), wantIn: "packages"},
+		{name: "the verify job without permissions", workflow: in("verify", "    permissions:\n      packages: read # the image and its signature\n      attestations: read # gh attestation verify reads them through the repository's API\n", ""), wantIn: `no "permissions"`},
+		{name: "packages: write for the verify job", workflow: in("verify", "      packages: read # the image and its signature\n", "      packages: write # the image and its signature\n"), wantIn: "packages"},
+		{name: "no packages: read for the verify job", workflow: in("verify", "      packages: read # the image and its signature\n", ""), wantIn: "packages"},
 		{name: "attestations: write for the verify job", workflow: in("verify", "      attestations: read # gh attestation verify reads them through the repository's API\n", "      attestations: write # gh attestation verify reads them through the repository's API\n"), wantIn: "attestations"},
 		{name: "no attestations: read for the verify job", workflow: in("verify", "      attestations: read # gh attestation verify reads them through the repository's API\n", ""), wantIn: "attestations"},
 		{name: "contents: read for the verify job", workflow: in("verify", "      attestations: read # gh attestation verify reads them through the repository's API\n", "      attestations: read # gh attestation verify reads them through the repository's API\n      contents: read # a checkout\n"), wantIn: "contents"},
@@ -2017,26 +1782,22 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "id-token: none for the verify job", workflow: in("verify", "      attestations: read # gh attestation verify reads them through the repository's API\n", "      attestations: read # gh attestation verify reads them through the repository's API\n      id-token: none # nothing to sign\n"), wantIn: "id-token"},
 
 		// Its steps are a closed list: cosign by exact release, a cosign login,
-		// the checks of each image, and the tag rule, and nothing else. No
+		// the check of the image, and the tag rule, and nothing else. No
 		// checkout runs repository code, and every action is pinned by commit.
-		{name: "an extra step in the verify job", workflow: steps("verify", beforeStep(t, verifySteps, "      - name: Log in to ghcr.io", "run: ./scripts/prepare.sh")), wantIn: "holds 6 steps, want exactly 5"},
-		{name: "a checkout in the verify job", workflow: steps("verify", beforeStep(t, verifySteps, "      - name: Log in to ghcr.io", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")), wantIn: "holds 6 steps, want exactly 5"},
-		{name: "a missing step in the verify job", workflow: steps("verify", withoutStep(t, verifySteps, "name: Log in to ghcr.io")), wantIn: "holds 4 steps, want exactly 5"},
-		{name: "two verify steps swapped", workflow: steps("verify", swappedSteps(t, verifySteps, "name: Verify the CLI image", "name: Verify the HTTP API's image")), wantIn: "want the CLI image's verification: name is"},
-		{name: "a cosign installer pinned by tag in the verify job", workflow: in("verify", "sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532", "sigstore/cosign-installer@v4"), wantIn: "cosign-installer@v4"},
-		{name: "a cosign release range in the verify job", workflow: in("verify", "cosign-release: v3.1.4", "cosign-release: v3"), wantIn: "cosign-release"},
+		{name: "an extra step in the verify job", workflow: steps("verify", beforeStep(t, verifySteps, "      - name: Log in to ghcr.io", "run: ./scripts/prepare.sh")), wantIn: "holds 5 steps, want exactly 4"},
+		{name: "a checkout in the verify job", workflow: steps("verify", beforeStep(t, verifySteps, "      - name: Log in to ghcr.io", "uses: {{commit actions/checkout}}")), wantIn: "holds 5 steps, want exactly 4"},
+		{name: "a missing step in the verify job", workflow: steps("verify", withoutStep(t, verifySteps, "name: Log in to ghcr.io")), wantIn: "holds 3 steps, want exactly 4"},
+		{name: "two verify steps swapped", workflow: steps("verify", swappedSteps(t, verifySteps, "name: Verify the CLI image", "name: The tags follow the release rule")), wantIn: "want the CLI image's verification: name is"},
+		{name: "a cosign installer pinned by tag in the verify job", workflow: in("verify", "{{commit sigstore/cosign-installer}}", "sigstore/cosign-installer@v4"), wantIn: "cosign-installer@v4"},
+		{name: "a cosign release range in the verify job", workflow: in("verify", "cosign-release: {{release cosign}}", "cosign-release: v3"), wantIn: "cosign-release"},
 
-		// Each published image is resolved to its digest and used by digest.
+		// The published image is resolved to its digest and used by digest.
 		{name: "the CLI image verified by tag, not by digest", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `IMAGE="ghcr.io/timothymamo/shift2eu@$DIGEST"`, `IMAGE="ghcr.io/timothymamo/shift2eu:$TAG"`)), wantIn: "want the CLI image's verification: run is"},
-		{name: "the server image verified by tag, not by digest", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", `IMAGE="ghcr.io/timothymamo/shift2eu-server@$DIGEST"`, `IMAGE="ghcr.io/timothymamo/shift2eu-server:$TAG"`)), wantIn: "want the HTTP API's image verification: run is"},
 		{name: "the CLI image's tag resolved from no registry", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `DIGEST="$(docker buildx imagetools inspect "ghcr.io/timothymamo/shift2eu:$TAG" --format '{{.Manifest.Digest}}')"`, `DIGEST="latest"`)), wantIn: "want the CLI image's verification: run is"},
 
 		// The tag must resolve to the digest this run built (audit L1): the
 		// digest the image job pushed, that the sign job signed and attested.
 		{name: "the CLI image's tag compared to no built digest", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", "          if [ \"$DIGEST\" != \"$BUILT\" ]; then\n            echo \"ghcr.io/timothymamo/shift2eu:$TAG resolves to $DIGEST, not the digest this run built, $BUILT\" >&2\n            exit 1\n          fi\n", "")), wantIn: "want the CLI image's verification: run is"},
-		{name: "the server image's tag compared to no built digest", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", "          if [ \"$DIGEST\" != \"$BUILT\" ]; then\n            echo \"ghcr.io/timothymamo/shift2eu-server:$TAG resolves to $DIGEST, not the digest this run built, $BUILT\" >&2\n            exit 1\n          fi\n", "")), wantIn: "want the HTTP API's image verification: run is"},
-		{name: "the tag rule's server digest from the CLI's image job", workflow: in("verify", "          SERVER_BUILT: ${{ needs.server-image.outputs.digest }}\n", "          SERVER_BUILT: ${{ needs.image.outputs.digest }}\n"), wantIn: "env holds"},
-		{name: "the server image's built digest from the CLI's image job", workflow: in("verify", "          BUILT: ${{ needs.server-image.outputs.digest }}\n", "          BUILT: ${{ needs.image.outputs.digest }}\n"), wantIn: "env holds"},
 		{name: "the tag rule's CLI digest from another job", workflow: in("verify", "          CLI_BUILT: ${{ needs.image.outputs.digest }}\n", "          CLI_BUILT: ${{ needs.goreleaser.outputs.digest }}\n"), wantIn: "env holds"},
 
 		// The signature: made by this workflow, for exactly this tag, on a push
@@ -2047,8 +1808,6 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "the CLI image verified without the push trigger", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", "            --certificate-github-workflow-trigger push \\\n", "")), wantIn: "want the CLI image's verification: run is"},
 		{name: "the CLI image verified without the certificate's commit", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", "            --certificate-github-workflow-sha \"$GITHUB_SHA\"\n", "")), wantIn: "want the CLI image's verification: run is"},
 		{name: "the CLI image's certificate naming another commit", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `--certificate-github-workflow-sha "$GITHUB_SHA"`, `--certificate-github-workflow-sha "$TAG"`)), wantIn: "want the CLI image's verification: run is"},
-		{name: "the server image verified without the certificate's commit", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", "            --certificate-github-workflow-sha \"$GITHUB_SHA\"\n", "")), wantIn: "want the HTTP API's image verification: run is"},
-		{name: "the server image verified without the certificate identity", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", "            --certificate-identity \"https://github.com/timothymamo/shift2eu/.github/workflows/release.yml@refs/tags/$TAG\" \\\n", "")), wantIn: "want the HTTP API's image verification: run is"},
 
 		// The provenance and the SBOM: both attested from this workflow, for this
 		// tag and this commit (audit L2), on GitHub's runners, and read through
@@ -2058,27 +1817,22 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "the provenance verified without the source ref", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `--source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" `, "")), wantIn: "want the CLI image's verification: run is"},
 		{name: "the provenance verified without the source digest", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `--source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners`+"\n", `--source-ref "refs/tags/$TAG" --deny-self-hosted-runners`+"\n")), wantIn: "want the CLI image's verification: run is"},
 		{name: "the SBOM verified without the source digest", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `--source-digest "$GITHUB_SHA" --deny-self-hosted-runners \`+"\n", `--deny-self-hosted-runners \\`+"\n")), wantIn: "want the CLI image's verification: run is"},
-		{name: "the server provenance verified without the source digest", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", `--source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA" --deny-self-hosted-runners`+"\n", `--source-ref "refs/tags/$TAG" --deny-self-hosted-runners`+"\n")), wantIn: "want the HTTP API's image verification: run is"},
-		{name: "the server SBOM verified without the source digest", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", `--source-digest "$GITHUB_SHA" --deny-self-hosted-runners \`+"\n", `--deny-self-hosted-runners \\`+"\n")), wantIn: "want the HTTP API's image verification: run is"},
 		{name: "self-hosted runners not denied", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", "--deny-self-hosted-runners", "--no-deny")), wantIn: "want the CLI image's verification: run is"},
 		{name: "the SBOM attested under another predicate type", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", "https://spdx.dev/Document/v2.3", "https://spdx.dev/Document/v2.2")), wantIn: "want the CLI image's verification: run is"},
-		{name: "the SBOM not verified for the server image", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", "--predicate-type https://spdx.dev/Document/v2.3", "--predicate-type")), wantIn: "want the HTTP API's image verification: run is"},
 
 		// The image itself: run with a read-only root filesystem and no network,
-		// the CLI's version compared to the tag's, the server's --help exiting 0.
+		// its version compared to the tag's.
 		{name: "the CLI image run without --network none", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `--network none "$IMAGE" version`, `"$IMAGE" version`)), wantIn: "want the CLI image's verification: run is"},
 		{name: "the CLI image run without --read-only", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `docker run --rm --read-only --network none "$IMAGE" version`, `docker run --rm --network none "$IMAGE" version`)), wantIn: "want the CLI image's verification: run is"},
 		{name: "the CLI image run without --rm", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `docker run --rm --read-only --network none "$IMAGE" version`, `docker run --read-only --network none "$IMAGE" version`)), wantIn: "want the CLI image's verification: run is"},
 		{name: "the CLI image's version not compared to the tag's", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", `grep -qF "shift2eu ${TAG#v} (" version.txt`, `true`)), wantIn: "want the CLI image's verification: run is"},
-		{name: "the server image run without --network none", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", `--network none "$IMAGE" --help`, `"$IMAGE" --help`)), wantIn: "want the HTTP API's image verification: run is"},
-		{name: "the server image run without --help", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", `docker run --rm --read-only --network none "$IMAGE" --help > /dev/null`, `docker run --rm --read-only --network none "$IMAGE" version > /dev/null`)), wantIn: "want the HTTP API's image verification: run is"},
 
 		// The tag rule (ADR 0015): vX.Y.Z always, X.Y for every release, latest
 		// for the highest release tag alone, and a pre-release moving neither.
 		{name: "the tag rule without the latest tag", workflow: steps("verify", inVerifyStep(t, "name: The tags follow the release rule", `"$image:latest"`, `"$image:newest"`)), wantIn: "want the tag rule: run is"},
 		{name: "the tag rule without the minor tag", workflow: steps("verify", inVerifyStep(t, "name: The tags follow the release rule", `"$image:$minor"`, `"$image:$TAG"`)), wantIn: "want the tag rule: run is"},
 		{name: "the tag rule without the pre-release case", workflow: steps("verify", inVerifyStep(t, "name: The tags follow the release rule", "              *-*)\n", "              x-*)\n")), wantIn: "want the tag rule: run is"},
-		{name: "the tag rule checking one image alone", workflow: steps("verify", inVerifyStep(t, "name: The tags follow the release rule", "          check ghcr.io/timothymamo/shift2eu-server \"$SERVER_BUILT\"\n", "")), wantIn: "want the tag rule: run is"},
+		{name: "the tag rule checking another image too", workflow: steps("verify", inVerifyStep(t, "name: The tags follow the release rule", "          check ghcr.io/timothymamo/shift2eu \"$CLI_BUILT\"\n", "          check ghcr.io/timothymamo/shift2eu \"$CLI_BUILT\"\n          check ghcr.io/example/shift2eu \"$CLI_BUILT\"\n")), wantIn: "want the tag rule: run is"},
 
 		// The tag rule's branch for a pre-release (review B1, audit M1): a
 		// pre-release must not move X.Y or latest, but their existence is fine,
@@ -2137,7 +1891,6 @@ func TestReleaseWorkflow(t *testing.T) {
 		// set -euo pipefail, an empty highest is an error, and a registry error
 		// is not read as an absent tag.
 		{name: "the CLI image's verification without set -euo pipefail", workflow: steps("verify", inVerifyStep(t, "name: Verify the CLI image", "        run: |\n          set -euo pipefail\n", "        run: |\n")), wantIn: "want the CLI image's verification: run is"},
-		{name: "the server image's verification without set -euo pipefail", workflow: steps("verify", inVerifyStep(t, "name: Verify the HTTP API's image", "        run: |\n          set -euo pipefail\n", "        run: |\n")), wantIn: "want the HTTP API's image verification: run is"},
 		{name: "the tag rule without set -euo pipefail", workflow: steps("verify", inVerifyStep(t, "name: The tags follow the release rule", "        run: |\n          set -euo pipefail\n", "        run: |\n")), wantIn: "want the tag rule: run is"},
 		{name: "a shell on the tag rule step", workflow: in("verify", "      - name: The tags follow the release rule\n", "      - name: The tags follow the release rule\n        shell: bash\n"), wantIn: `key "shell"`},
 		{name: "the tag rule without the guard on an empty highest", workflow: steps("verify", inVerifyStep(t, "name: The tags follow the release rule", "          if [ -z \"$highest\" ]; then\n            echo \"no release tag is merged into main, so X.Y and latest cannot be checked\" >&2\n            exit 1\n          fi\n", "")), wantIn: "want the tag rule: run is"},
@@ -2162,53 +1915,23 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "attestations: read for the attest-archives job", workflow: in("attest-archives", "      attestations: write # store the provenance in the repository\n", "      attestations: read # store the provenance in the repository\n"), wantIn: "attestations"},
 		{name: "an extra step in the attest-archives job", workflow: steps("attest-archives", beforeStep(t, attestArchivesSteps, "      - name: Check the archives against checksums.txt", "run: ./scripts/prepare.sh")), wantIn: "holds 4 steps, want exactly 3"},
 		{name: "a missing step in the attest-archives job", workflow: steps("attest-archives", withoutStep(t, attestArchivesSteps, "name: Check the archives against checksums.txt")), wantIn: "holds 2 steps, want exactly 3"},
-		{name: "the archives not downloaded", workflow: in("attest-archives", "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333", "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9"), wantIn: "download-artifact"},
+		{name: "the archives not downloaded", workflow: in("attest-archives", "{{commit actions/download-artifact}}", "{{commit actions/upload-artifact}}"), wantIn: "download-artifact"},
 		{name: "the archives downloaded under another name", workflow: in("attest-archives", "          name: archives\n", "          name: dist\n"), wantIn: "name"},
 		{name: "the archives not checked against checksums.txt", workflow: in("attest-archives", "        run: sha256sum -c checksums.txt\n", "        run: sha256sum checksums.txt\n"), wantIn: "sha256sum -c checksums.txt"},
-		{name: "the attest action pinned by tag", workflow: in("attest-archives", "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8", "actions/attest-build-provenance@v4"), wantIn: "attest-build-provenance@v4"},
-		{name: "another action in place of the provenance attestation", workflow: steps("attest-archives", slices.Replace(slices.Clone(attestArchivesSteps), 2, 3, "      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2\n")), wantIn: "attest-build-provenance"},
-		{name: "checksums.txt not attested", workflow: in("attest-archives", "            shift2eu-server_*.zip\n            shift2eu-server_openapi.json\n            checksums.txt\n", "            shift2eu-server_*.zip\n            shift2eu-server_openapi.json\n"), wantIn: "subject-path"},
-		{name: "the server's archives not attested", workflow: in("attest-archives", "            shift2eu_*.zip\n            shift2eu-server_*.tar.gz\n            shift2eu-server_*.zip\n", "            shift2eu_*.zip\n"), wantIn: "subject-path"},
+		{name: "the attest action pinned by tag", workflow: in("attest-archives", "{{commit actions/attest-build-provenance}}", "actions/attest-build-provenance@v4"), wantIn: "attest-build-provenance@v4"},
+		{name: "another action in place of the provenance attestation", workflow: steps("attest-archives", slices.Replace(slices.Clone(attestArchivesSteps), 2, 3, "      - uses: {{pin actions/attest}}\n")), wantIn: "attest-build-provenance"},
+		{name: "checksums.txt not attested", workflow: in("attest-archives", "            shift2eu_*.zip\n            checksums.txt\n", "            shift2eu_*.zip\n"), wantIn: "subject-path"},
 		{name: "a bare shift2eu_* subject pattern", workflow: in("attest-archives", "            shift2eu_*.tar.gz\n", "            shift2eu_*\n"), wantIn: "subject-path"},
-		{name: "the archives attested by digest instead", workflow: in("attest-archives", "          subject-path: |\n            shift2eu_*.tar.gz\n            shift2eu_*.zip\n            shift2eu-server_*.tar.gz\n            shift2eu-server_*.zip\n            shift2eu-server_openapi.json\n            checksums.txt\n", "          subject-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\n"), wantIn: `no "subject-path"`},
-		{name: "the archives not handed on by goreleaser", workflow: steps("goreleaser", withoutStep(t, goreleaserSteps, "actions/upload-artifact@")), wantIn: "holds 4 steps, want exactly 5"},
-		// The bundled OpenAPI document is a release asset like the archives, and
-		// GoReleaser copies neither release.extra_files nor checksum.extra_files
-		// into dist/, so the goreleaser job puts it beside them itself, under the
-		// name the release publishes it as, before the artifact and the
-		// attestation of dist/ (issue #139). What the artifact hands on and what
-		// attest-archives attests is every archive, the document and
-		// checksums.txt: a document missing from either is never attested.
-		{name: "the OpenAPI document not put beside the archives", workflow: steps("goreleaser", withoutStep(t, goreleaserSteps, "name: Put the OpenAPI document beside the archives")), wantIn: "holds 4 steps, want exactly 5"},
+		{name: "the archives attested by digest instead", workflow: in("attest-archives", "          subject-path: |\n            shift2eu_*.tar.gz\n            shift2eu_*.zip\n            checksums.txt\n", "          subject-digest: sha256:0000000000000000000000000000000000000000000000000000000000000000\n"), wantIn: `no "subject-path"`},
+		{name: "the archives not handed on by goreleaser", workflow: steps("goreleaser", withoutStep(t, goreleaserSteps, "actions/upload-artifact@")), wantIn: "holds 3 steps, want exactly 4"},
+		// What the artifact hands on and what attest-archives attests is the
+		// archives and checksums.txt. Nothing is copied into dist/ beside them:
+		// the bundled OpenAPI document the release used to publish is gone
+		// (issue #393), so a step that copies it back is refused.
 		{
-			name:     "the OpenAPI document copied from another file",
-			workflow: in("goreleaser", "cp api/openapi.bundled.json dist/shift2eu-server_openapi.json", "cp api/openapi.json dist/shift2eu-server_openapi.json"),
-			wantIn:   `want exactly "cp api/openapi.bundled.json dist/shift2eu-server_openapi.json"`,
-		},
-		{
-			name:     "the OpenAPI document copied from the release's glob",
-			workflow: in("goreleaser", "cp api/openapi.bundled.json dist/shift2eu-server_openapi.json", "cp ./api/openapi.bundled.json dist/shift2eu-server_openapi.json"),
-			wantIn:   `want exactly "cp api/openapi.bundled.json dist/shift2eu-server_openapi.json"`,
-		},
-		{
-			name:     "the OpenAPI document copied under another name",
-			workflow: in("goreleaser", "cp api/openapi.bundled.json dist/shift2eu-server_openapi.json", "cp api/openapi.bundled.json dist/openapi.json"),
-			wantIn:   `want exactly "cp api/openapi.bundled.json dist/shift2eu-server_openapi.json"`,
-		},
-		{
-			name:     "the OpenAPI document put beside the archives after the artifact",
-			workflow: steps("goreleaser", swappedSteps(t, goreleaserSteps, "name: Put the OpenAPI document beside the archives", "actions/upload-artifact@")),
-			wantIn:   "want the copy of the OpenAPI document beside the archives",
-		},
-		{
-			name:     "the OpenAPI document not handed on by goreleaser",
-			workflow: in("goreleaser", "            dist/shift2eu-server_openapi.json\n", ""),
-			wantIn:   "with: path",
-		},
-		{
-			name:     "the OpenAPI document not attested",
-			workflow: in("attest-archives", "            shift2eu-server_openapi.json\n", ""),
-			wantIn:   "with: subject-path",
+			name:     "the OpenAPI document put beside the archives again",
+			workflow: steps("goreleaser", beforeStep(t, goreleaserSteps, "      - uses: actions/upload-artifact@", "name: Put the OpenAPI document beside the archives\n        run: cp api/openapi.bundled.json dist/shift2eu-server_openapi.json")),
+			wantIn:   "holds 5 steps, want exactly 4",
 		},
 		// The archives artifact is kept a week, so a failed attestation or
 		// publication is recovered by re-running the failed jobs; the SBOM
@@ -2234,11 +1957,11 @@ func TestReleaseWorkflow(t *testing.T) {
 		{name: "id-token: write for the verify-archives job", workflow: in("verify-archives", "      attestations: read # gh attestation verify reads them through the repository's API\n", "      attestations: read # gh attestation verify reads them through the repository's API\n      id-token: write # sign\n"), wantIn: "id-token"},
 		{name: "packages: read for the verify-archives job", workflow: in("verify-archives", "      attestations: read # gh attestation verify reads them through the repository's API\n", "      attestations: read # gh attestation verify reads them through the repository's API\n      packages: read # pull the images\n"), wantIn: "packages"},
 		{name: "an extra step in the verify-archives job", workflow: steps("verify-archives", beforeStep(t, verifyArchivesSteps, "      - name: Download the published archives", "run: ./scripts/prepare.sh")), wantIn: "holds 4 steps, want exactly 3"},
-		{name: "a checkout in the verify-archives job", workflow: steps("verify-archives", beforeStep(t, verifyArchivesSteps, "      - name: Download the published archives", "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1")), wantIn: "holds 4 steps, want exactly 3"},
+		{name: "a checkout in the verify-archives job", workflow: steps("verify-archives", beforeStep(t, verifyArchivesSteps, "      - name: Download the published archives", "uses: {{commit actions/checkout}}")), wantIn: "holds 4 steps, want exactly 3"},
 		{name: "a missing step in the verify-archives job", workflow: steps("verify-archives", withoutStep(t, verifyArchivesSteps, "name: Verify the published archives")), wantIn: "holds 2 steps, want exactly 3"},
 		{name: "the published archives not downloaded", workflow: in("verify-archives", `gh release download "$TAG"`, `gh release view "$TAG"`), wantIn: `gh release download \"$TAG\" --repo timothymamo/shift2eu`},
 		{name: "the download without --repo", workflow: in("verify-archives", `gh release download "$TAG" --repo timothymamo/shift2eu`, `gh release download "$TAG"`), wantIn: `want exactly "gh release download \"$TAG\" --repo timothymamo/shift2eu"`},
-		{name: "a download of the expected patterns alone", workflow: in("verify-archives", `gh release download "$TAG" --repo timothymamo/shift2eu`, `gh release download "$TAG" --repo timothymamo/shift2eu --pattern 'shift2eu_*' --pattern 'shift2eu-server_*' --pattern checksums.txt`), wantIn: `want exactly "gh release download \"$TAG\" --repo timothymamo/shift2eu"`},
+		{name: "a download of the expected patterns alone", workflow: in("verify-archives", `gh release download "$TAG" --repo timothymamo/shift2eu`, `gh release download "$TAG" --repo timothymamo/shift2eu --pattern 'shift2eu_*' --pattern checksums.txt`), wantIn: `want exactly "gh release download \"$TAG\" --repo timothymamo/shift2eu"`},
 		// What the release holds is exactly checksums.txt and the files it
 		// lists, and it is published: an asset the attestation does not cover,
 		// or one the release never got, fails here rather than pass unverified.
@@ -2255,8 +1978,8 @@ func TestReleaseWorkflow(t *testing.T) {
 		// Every downloaded file is a subject: the download directory holds the
 		// release's assets alone, so no pattern of the workflow's own decides
 		// what is verified, and a list that could leave one out is refused.
-		{name: "the old glob list of subjects", workflow: in("verify-archives", "for subject in *; do", "for subject in shift2eu_* shift2eu-server_* checksums.txt; do"), wantIn: "for subject in shift2eu_* shift2eu-server_* checksums.txt"},
-		{name: "a subject list leaving checksums.txt out", workflow: in("verify-archives", "for subject in *; do", "for subject in shift2eu_* shift2eu-server_*; do"), wantIn: "for subject in shift2eu_* shift2eu-server_*; do"},
+		{name: "the old glob list of subjects", workflow: in("verify-archives", "for subject in *; do", "for subject in shift2eu_* checksums.txt; do"), wantIn: "for subject in shift2eu_* checksums.txt"},
+		{name: "a subject list leaving checksums.txt out", workflow: in("verify-archives", "for subject in *; do", "for subject in shift2eu_*; do"), wantIn: "for subject in shift2eu_*; do"},
 		// A name that starts with "." is a file like any other, and an asset must
 		// not be able to hide from the check or from the loop (reviewer N2, issue
 		// #163): the file set and the subjects are both read with the dotfiles
@@ -2266,7 +1989,7 @@ func TestReleaseWorkflow(t *testing.T) {
 
 		// GitHub's "Latest" release is checked by the job that runs after
 		// publish, against its own independent reading of the highest release
-		// tag, which the images' latest tag follows (issue #173): a release that
+		// tag, which the image's latest tag follows (issue #173): a release that
 		// is not the highest must not be GitHub's "Latest", a pre-release never
 		// is one, and while the highest release tag has no release yet the check
 		// is skipped with a notice, as the image latest check skips it. Each case

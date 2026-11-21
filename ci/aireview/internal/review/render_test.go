@@ -1167,7 +1167,7 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 	// count beside the path, so the maintainer knows how much of the change the
 	// AI review did not read, not only that it did not read it.
 	leftOut := review.LeftOut{Files: []review.LeftOutFile{
-		{Path: "api/openapi.bundled.json", Added: 12},
+		{Path: "internal/report/testdata/assess-v3.golden", Added: 12},
 		{Path: "testdata/comparison-v3.golden", Added: 3},
 		{Path: "testdata/`code`.golden", Added: 1},
 		{Path: "testdata/@octocat.golden", Added: 0},
@@ -1184,7 +1184,7 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 		// A path is shown in a code span, as a finding's path in the body is,
 		// with the backticks it holds turned into apostrophes.
 		for _, want := range []string{
-			"`api/openapi.bundled.json`",
+			"`internal/report/testdata/assess-v3.golden`",
 			"`testdata/comparison-v3.golden`",
 			"`testdata/'code'.golden`",
 			"`testdata/<img src=x>.golden`",
@@ -1198,7 +1198,7 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 		// count beside the path it belongs to, in the singular when it is one
 		// and with no lines at all for a file the change only deletes.
 		for _, want := range []string{
-			"`api/openapi.bundled.json` (+12 lines)",
+			"`internal/report/testdata/assess-v3.golden` (+12 lines)",
 			"`testdata/comparison-v3.golden` (+3 lines)",
 			"`testdata/'code'.golden` (+1 line)",
 			"`testdata/<img src=x>.golden` (+2 lines)",
@@ -1317,7 +1317,7 @@ func TestRenderNamesTheFilesTheReviewDidNotRead(t *testing.T) {
 		}
 
 		notRead := []review.LeftOutFile{
-			{Path: "api/openapi.bundled.json", Added: 1_000},
+			{Path: "internal/report/testdata/assess-v3.golden", Added: 1_000},
 			{Path: "internal/x/testdata/a.golden", Added: 300},
 			{Path: "testdata/b.golden", Added: 0},
 		}

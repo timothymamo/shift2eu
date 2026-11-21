@@ -6,10 +6,9 @@ The decision and its alternatives are in [ADR 0001](adr/0001-hexagonal-architect
 ## Layers and the dependency rule
 
 ```
-            ┌──── cmd/shift2eu, cmd/shift2eu-server, cmd/shift2eu-web (composition roots) ───────────────┐
+            ┌──── cmd/shift2eu, cmd/shift2eu-web (composition roots) ──────────────────────────────────┐
             │                                                                                      │
             │   internal/cli ──────▶ internal/app/analysis ◀────── internal/adapter/...           │
-            │   internal/httpapi ──┤                                                               │
             │   internal/web ──────┘                                                               │
             │   (driving adapters)     (use case + ports)          (driven adapters: implement     │
             │                                 │                     the ports)                     │
@@ -70,26 +69,7 @@ Arrows are imports. They point inwards only:
   imports today, `os` among them for the files the user names; the forbidigo group
   `cli-no-env-or-process` keeps it from reaching the environment through `os` (Composition-root
   process and environment rule below).
-- **HTTP API** (`internal/httpapi`) is the second driving adapter, beside the CLI
-  ([ADR 0019](adr/0019-serve-assessments-over-a-versioned-http-api-from-a-separate-binary.md)): it serves
-  the same use cases over `/v1/` and returns an `http.Handler`. Like the CLI it gets every adapter from
-  its composition root through `httpapi.Deps` and imports only the application, the domain,
-  `internal/version` and a named list of standard packages (`httpapi-gets-adapters-from-cmd`), never an
-  adapter, the CLI, `cmd/` or `os`. Strict JSON decoding stays in the adapters, because `jsondoc` is
-  internal to `internal/adapter`: the request body is decoded by the adapter
-  `adapter/request/assessmentrequest` (`request-decoders-parse-bytes`: `errors`, `fmt` and `jsondoc`
-  only, no `net/http`), and the inventory in it by `inventoryfile.FromBytes`, both passed in as function
-  values. `FromBytes` reads in an in-memory-only mode whose errors name a position and field, never a
-  value, so no value from a request is ever echoed in an API error. Only `cmd/shift2eu-server` imports it,
-  and of the tests only the parity test in `test/apiparity` (`httpapi-imported-only-by-the-server`);
-  `cmd/shift2eu` never does, so the CLI stays offline. `api/openapi.json` (OpenAPI 3.1) describes the API
-  and refers to the JSON report's schemas by relative path rather than copying them; a document that
-  bundles them, for readers outside the repository, is not published yet
-  ([issue #139](https://github.com/timothymamo/shift2eu/issues/139)). The release ships the server
-  as its own binary and its own image, `ghcr.io/timothymamo/shift2eu-server`, built from the
-  `Dockerfile`'s `server` stage and signed and attested as the CLI's is (ADR 0013, ADR 0015);
-  [Behind a reverse proxy](guide/reverse-proxy.md) documents running it behind a reverse proxy.
-- **Web adapter** (`internal/web`) is the third driving adapter, the logic the site's page calls
+- **Web adapter** (`internal/web`) is the second driving adapter, beside the CLI: the logic the site's page calls
   ([ADR 0035](adr/0035-run-the-assessment-in-the-browser-as-a-webassembly-driving-adapter.md), PRD #297):
   it takes an inventory document and the options the user chose and returns the Markdown report and the
   JSON report the page offers as downloads, byte for byte what `shift2eu assess` writes, and the HTML
@@ -100,7 +80,7 @@ Arrows are imports. They point inwards only:
   case once with one reporter that renders every format, and gets every adapter through `web.Deps`. Its
   imports are a strict allow list (`web-gets-adapters-from-cmd`): the application, two domain packages,
   `internal/version` and a named list of pure standard packages, never `os`, `net`, `syscall/js`, an
-  adapter, the CLI or the HTTP API. Only the site's composition root and its wiring import it or the HTML
+  adapter or the CLI. Only the site's composition root and its wiring import it or the HTML
   reporter (`web-imported-only-by-the-web-root`).
 - **`cmd/shift2eu-web`** is the site's composition root, in two parts. The package itself (`js && wasm`)
   is the thin `syscall/js` glue: it registers one JavaScript function that calls `internal/web`, and it is
@@ -109,7 +89,7 @@ Arrows are imports. They point inwards only:
   builds, the inventory reader in its in-memory mode and the HTML reporter, into `web.Deps`
   (`web-composition-root-wire`). It builds and is tested natively. Its tests, allowed to import
   `internal/cli` (`web-composition-root-wire-tests`), hold the option parity and the download parity with
-  the CLI. Beside them only `internal/cli`'s own tests and `test/apiparity`'s import it; every other test
+  the CLI. Beside them only `internal/cli`'s own tests import it; every other test
   file is refused it (`cli-only-in-named-tests`, issue #345), and `test/architecture`
   (`TestOnlyNamedPackagesTestTheCLI`) holds that exact set by import path, which the rule's path globs
   cannot anchor. `make lint` and CI's lint matrix lint `js/wasm` as an extra target beside the release
@@ -130,22 +110,13 @@ Arrows are imports. They point inwards only:
   the reproducible, attested bundle. `test/browser`, behind `browser && !js`, drives the built bundle in a
   headless Chromium with `chromedp`, which depguard confines to it (`chromedp-only-in-the-browser-test`,
   `browser-smoke-test`); `make test-browser` runs it against a container pinned by digest, with DevTools on
-  127.0.0.1 only, and CI runs it as its own job.
-- **`cmd/shift2eu`** and **`cmd/shift2eu-server`** are the composition roots, the only places that construct
-  adapters and inject them (besides `cmd/shift2eu-web`, and `ci/sitebuild`, which constructs the three
-  targets only to read their catalogs): `cmd/shift2eu` into the CLI, `cmd/shift2eu-server` into the HTTP API. `cmd/shift2eu`'s
-  imports are a strict allow list (`composition-root`, issue #101): the module's own packages and the
-  standard packages it needs today (`context`, `os`, `os/signal`, `syscall`), and no third-party package.
-  The rule holds `cmd/shift2eu` only. `cmd/shift2eu-server` (PRD #103 milestone 3) is held by its sibling,
-  `server-composition-root`, written the same way: the module's own packages and the standard packages
-  the server needs (`context`, `errors`, `flag`, `fmt`, `io`, `log`, `math`, `net`,
-  `net/http`, `os`, `os/signal`, `runtime`, `runtime/debug`, `slices`, `strconv`, `strings`, `sync`,
-  `syscall`, `time`), no third-party package and no cloud SDK. `test/architecture` holds it to that
-  list on every release target, and `TestServerPathHasNoCloudSDKOrProcess` (`test/e2e`) refuses a cloud
-  SDK or `os/exec` anywhere in its dependency tree. Around the handler, `cmd/shift2eu-server` owns what a
-  running server needs: the flags and the token (from `SHIFT2EU_SERVER_TOKEN` or `--token-file`, never a
-  flag), the loopback rule, the `http.Server` timeouts, the `Host` allow-list, the concurrency default,
-  the readiness check, the access log and the graceful shutdown (ADR 0019).
+  127.0.0.1 only, on a port the kernel picks per run, and CI runs it as its own job.
+- **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
+  constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
+  read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the
+  module's own packages and the standard packages it needs today (`context`, `os`, `os/signal`,
+  `syscall`), and no third-party package. The HTTP API and its composition root were
+  retired ([ADR 0037](adr/0037-retire-the-http-api-and-release-the-cli-alone.md)).
 
 The rule is enforced by `depguard` in `.golangci.yml`, so `make lint`, which lints the host natively and
 then every GOOS/GOARCH `.goreleaser.yaml` builds with cgo off, fails on a violating import. These are all
@@ -164,10 +135,10 @@ the ways code could be hidden from it, and what refuses each:
   deliberate defence in depth.
 - A file name. `test/architecture` checks every directory a strict depguard rule names (the domain, the
   application layer and its tests, the snapshot reader, the adapter helpers, the inventory file reader, the
-  request decoders, the HTTP API and the targets that embed a snapshot) package by package, for every platform `.goreleaser.yaml` builds. It
+  web adapter and the targets that embed a snapshot) package by package, for every platform `.goreleaser.yaml` builds. It
   reads those directories from `.golangci.yml`, lists them with `go list` and holds each package to the
   allow list of every rule that covers it, and it holds every package of the module in the release
-  binaries, `shift2eu` and `shift2eu-server`, to Go sources in their own directory, so assembly, cgo, line directives and symlinked
+  binary, `shift2eu`, to Go sources in their own directory, so assembly, cgo, line directives and symlinked
   directories cannot get past the file-name-based rules
   ([ADR 0012](adr/0012-check-layer-dependencies-by-package-for-every-release-target.md)).
 - An edit to the rules themselves. A merge conflict resolution once dropped the whole
@@ -349,7 +320,7 @@ hand-written GCP package, add an entry for it, a probe line only it refuses and 
   directory, so neither depguard nor `test/lint` sees it, yet the go command builds it when a package
   imports it by explicit path. `test/architecture`
   (`TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget`, on the same listing as its
-  main-module check) refuses one in `go list -deps` of `cmd/shift2eu` and `cmd/shift2eu-server`, imported
+  main-module check) refuses one in `go list -deps` of `cmd/shift2eu`, imported
   directly or transitively, on every release target, cgo mode and tag set, with the finding
   `<root> reaches <pkg>, which ./... never walks but go builds when a package imports it by explicit
   path: no lint or architecture rule sees it`. A probe module (`testdata/hiddenpathprobe`, whose
@@ -394,10 +365,10 @@ hand-written GCP package, add an entry for it, a probe line only it refuses and 
 
 ## Composition-root process and environment rule
 
-The strict allow lists `composition-root` and `server-composition-root` must allow `os` and
+The strict allow list `composition-root` must allow `os` and
 `syscall`, and both can start a process (shelling out to a cloud CLI) or read the environment, where
 credentials live (CLAUDE.md rule 3). An import rule cannot see a call, so two forbidigo groups hold
-`cmd/shift2eu` and `cmd/shift2eu-server` (issue #111, the security audit's LOW-2 on issue #101):
+`cmd/shift2eu` (issue #111, the security audit's LOW-2 on issue #101):
 
 - **`composition-root-no-exec`** refuses `os.StartProcess`, `syscall.Exec`, `syscall.ForkExec`,
   `syscall.StartProcess`, every use of `os/exec` (pattern `^\w+\.\w+` with `pkg: '^os/exec$'`), and
@@ -418,31 +389,24 @@ credentials live (CLAUDE.md rule 3). An import rule cannot see a call, so two fo
   #152 it also refuses `os.UserHomeDir`, `os.UserConfigDir`, `os.UserCacheDir` and `os.TempDir`, in
   an entry of their own: each reads `$HOME`, `$XDG_CONFIG_HOME`, `$XDG_CACHE_HOME` or `$TMPDIR`
   without naming it, the directories a credentials file sits under, so the roots are held to the
-  same nine `os` reads as every other package allowed `os` (below). Its one
-  exception is a single `os.LookupEnv` call in `cmd/shift2eu-server/main.go`, with the argument
-  `tokenEnvVar` (`SHIFT2EU_SERVER_TOKEN`), in the token source
-  `func() (string, bool) { return os.LookupEnv(tokenEnvVar) }` that `main` hands to `run` (ADR 0019).
-  `run`, `setUp` and `readToken` see only the token and whether it is set, never a lookup by name, so
-  no code in `cmd/shift2eu-server` can read another variable through them.
-  `os.LookupEnv` has an entry of its own, and the exception's exclusion rule has
-  `path: ^cmd/shift2eu-server/main\.go$` and a text that is the group's form instantiated with that
-  entry's msg, regex-escaped, so it drops no other entry's issue in that file and nothing elsewhere.
+  same nine `os` reads as every other package allowed `os` (below). It has no exception: the one it
+  had, the HTTP API's token (ADR 0019), went with the API
+  ([ADR 0037](adr/0037-retire-the-http-api-and-release-the-cli-alone.md)).
 
-Each group has one exclusion rule, `path-except: ^cmd/shift2eu(?:-server)?/` (two per-root rules would
-each drop the other root's issues). Both hold for `_test.go` files under the roots too: a test there
-runs in the same package and environment, and the server's tests hand `run` a fake token source. The
+Each group has one exclusion rule, `path-except: ^cmd/shift2eu/`. Both hold for `_test.go` files
+under the root too: a test there runs in the same package and environment. The
 patterns are names, so they hold on every release target whether a name exists there or not
 (`syscall.Exec` has no windows form, `syscall.CreateProcess` no unix one).
 `TestCompositionRootForbidigoProbe` runs forbidigo on a probe module
-(`test/lint/testdata/compositionroot`) with every refused call in both roots and in `internal/cli`
+(`test/lint/testdata/compositionroot`) with every refused call in the root and in `internal/cli`
 (where the CLI's own group refuses them, below),
 natively and with `GOOS=windows GOARCH=amd64 CGO_ENABLED=0`, where the windows names type-check.
 `TestCompositionRootForbidigoPatterns` pins the patterns against lists of refused and allowed names,
-and `TestCompositionRootExclusions` pins the scope and the one exception.
+and `TestCompositionRootExclusions` pins the scope.
 
-Four source checks in `test/lint` read the real roots, tests included, as the groups cannot state
-them; the `//go:linkname` and `/proc` checks read both driving adapters, `internal/cli` and
-`internal/httpapi`, and the inventory-file reader, `internal/adapter/source/inventoryfile`, as well
+Three source checks in `test/lint` read the real roots, tests included, as the groups cannot state
+them; the `//go:linkname` and `/proc` checks read the driving adapter `internal/cli` and the
+inventory-file reader, `internal/adapter/source/inventoryfile`, as well
 (issue #152):
 
 - `TestCompositionRootsUseSyscallOnlyForSignals` is the comprehensive guard on `syscall`: an AST
@@ -452,11 +416,6 @@ them; the `//go:linkname` and `/proc` checks read both driving adapters, `intern
 - `TestRootsAndCLILinkNoForeignSymbol` refuses a `//go:linkname` directive in the roots and the
   driving adapters, which
   would reach an unexported runtime or `syscall` symbol past every name rule.
-- `TestCompositionRootPassesLookupEnvToRun` holds `cmd/shift2eu-server/main.go` to exactly one
-  reference to `os.LookupEnv`: a call with the one argument `tokenEnvVar`, the sole return expression
-  of a `func() (string, bool)` literal passed directly to the package-level `run`, which `main.go`
-  neither declares nor assigns (the forbidigo exception is a path and a msg, so a second use in that
-  file, or handing `os.LookupEnv` itself to `run`, would lint clean).
 - `TestRootsAndCLINameNoEnvironmentPath` refuses a string literal holding the path segment `proc`
   or `dev/fd`, at its start or after a `/` and followed by a `/` or the end of the literal, in any Go
   file of the roots, the driving adapters and the inventory-file reader, as
@@ -468,14 +427,14 @@ them; the `//go:linkname` and `/proc` checks read both driving adapters, `intern
   (`myproc/...`, `/procfs/...`) passes.
 
 The roots' `_test.go` files are compiled into the same package and run in the same process, but the
-strict depguard rules `composition-root` and `server-composition-root` skip them. The lax depguard
+strict depguard rules `composition-root` and `web-composition-root` skip them. The lax depguard
 rule `composition-root-tests` covers them: it denies `go/build`, `net/http/cgi`, `os/exec`, `plugin`,
 `os/user` (a lookup returns a home directory), `runtime/cgo`, `syscall/js` and `unsafe`. Since issue
-#152 it holds the `_test.go` files of the two driving adapters, `internal/cli` and `internal/httpapi`,
+#152 it holds the `_test.go` files of the driving adapters, `internal/cli` and (PRD #297) `internal/web`,
 as well: a root hands them the work, and their tests run in the same process as the code under test.
 This import rule is only half of the roots' limits; the call half is in "The driving adapters" below.
 `TestCompositionRootTestsReachNoForeignCodeProbe` runs it on a probe module
-(`test/lint/testdata/compositionroottests`) for both roots and both driving adapters, and
+(`test/lint/testdata/compositionroottests`) for the roots and the driving adapters, and
 `test/architecture` pins it with the other depguard rules.
 
 ### The driving adapters
@@ -520,19 +479,13 @@ now held as well:
   exclusion rule, `path-except: ^internal/cli/`, makes it hold for every file there, `_test.go` files
   included. `TestCompositionRootForbidigoProbe` runs it on the probe's `internal/cli`, an aliased
   `os` import included.
-- **`httpapi-tests-no-env-or-process`** (forbidigo, `analyze-types`) holds the `_test.go` files of
-  `internal/httpapi` to the same `os` and `syscall` names, for the same reasons. Its production files
-  need no group: `httpapi-gets-adapters-from-cmd` is a strict allow list that leaves `os` and
-  `syscall` out. Its exclusion rule is `path-except: ^internal/httpapi/.*_test\.go$`.
-  `TestCompositionRootForbidigoProbe` runs it on the probe's `internal/httpapi`, and
-  `TestHTTPAPITestsNoEnvOrProcessForbidigoPatterns` pins the patterns.
 
 `os.Getwd` stays allowed in the CLI: it reads `$PWD` (when it names the working directory) and
 returns a path only, the one the user ran the CLI in.
 
 ### Every package a root reaches is held
 
-Both roots allow every module package through the prefix `github.com/timothymamo/shift2eu/`, so a
+The CLI's root allows every module package through the prefix `github.com/timothymamo/shift2eu/`, so a
 root can hand a call it may not make to any package of the module, not only to the driving adapters.
 The audit of #152 found three such packages that no strict rule held (`internal/config`, the contract
 suites) and one allowed `os` with no call rule (`inventoryfile`). Issue #152 closes the class with three
@@ -583,7 +536,7 @@ target, with the `e2e` and `integration` tags (`strictcoverage_test.go`):
   empty allow list is what refuses every import. Its `doc.go` announces flags, the environment and a
   file; a future `os` import comes with a forbidigo group for its reads (the second property fails
   until it does), and any read of a named variable needs an exception decided in an ADR, as
-  `composition-root-env`'s for `SHIFT2EU_SERVER_TOKEN` (ADR 0019). The same commit drops the `os`
+  `ai-reviewer-env`'s for `ci/aireview/main.go` (ADR 0033). The same commit drops the `os`
   deny entry, as `check.AllowList` refuses a rule whose allow list allows a package its deny list
   names.
 - **`target-docs-are-pure`** (depguard, strict) holds `internal/adapter/target`, a `doc.go` with no
@@ -612,7 +565,7 @@ target, with the `e2e` and `integration` tags (`strictcoverage_test.go`):
   through an embedded `*exec.Cmd` (`type w struct{ *exec.Cmd }; w{cmd}.Environ()`) is rendered
   under the embedding type and is not refused; the entry is defence in depth for `$test`, since the
   non-test files cannot import `os/exec`. The e2e `_test.go` files keep `$gostd` to build and run
-  the binary with `os/exec`. The runs of the binary (`run` and the server helpers) set `cmd.Env`;
+  the binary with `os/exec`. The runs of the binary (`run` and its helpers) set `cmd.Env`;
   the `go build` calls in `TestMain` and the `go list -deps` calls leave `Env` nil and inherit the
   environment, which the go toolchain needs. A nil `Env` in a `_test.go` file is not refused: issue
   #185 leaves `$test` as it is, and issue #195 follows it up. In the non-test files
@@ -621,7 +574,7 @@ target, with the `e2e` and `integration` tags (`strictcoverage_test.go`):
   nil `Env`, which inherits the whole environment, cannot be written there through an import. An
   assembly file needs no import, so `test/lint` refuses one there (issue #194). `TestE2ENoEnvProbe` and
   `TestE2ENoEnvForbidigoPatterns` pin the group.
-- **`test-docs-are-pure`** (depguard, strict) holds the doc-only packages `test/apiparity`,
+- **`test-docs-are-pure`** (depguard, strict) holds the doc-only packages
   `test/architecture`, `test/container`, `test/devenv`, `test/docs`, `test/e2e` and `test/lint` to
   `allow: []` and the `os` deny entry, as `config-is-pure`. Each is a production package a root
   could import through the module prefix. `!$test` leaves their tests out, and a negated glob takes
@@ -692,7 +645,7 @@ Known gaps, which these rules do not close:
   `$TMPDIR` through `os.TempDir` (issue #153): they return only a fresh temporary path, never a home,
   config or credential path, and `t.TempDir` goes through the same read, so refusing them would leave
   a test no way to get a temporary directory. They are accepted; `os.TempDir` named directly stays
-  refused where `testutil-no-env`, `cli-no-env-or-process`, `httpapi-tests-no-env-or-process`,
+  refused where `testutil-no-env`, `cli-no-env-or-process`,
   `inventoryfile-no-env` and, since issue #152, `composition-root-env` refuse it. That refusal is no confidentiality control: `filepath.Dir` of any temporary path
   recovers `$TMPDIR`. It is acceptable because `$TMPDIR` holds no secret; the refusal keeps a helper
   from building paths off the temporary directory by habit, nothing more.
