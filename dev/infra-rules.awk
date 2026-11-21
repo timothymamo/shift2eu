@@ -552,9 +552,6 @@ END {
       problem("acl", f, aline[a], "an acl argument, even \"private\": the bucket policy alone decides who reads the site (ADR 0039)")
     }
     if (n == "visibility") {
-      if (p == bpath[ablk[a]]) {
-        visibilityIn[ablk[a]] = 1
-      }
       problem("visibility", f, aline[a], "a visibility argument, even \"private\": an object's visibility is an ACL, and the bucket policy alone decides who reads the site (ADR 0039)")
     }
     if (p == "terraform/backend:s3" && !(n in backendSetting)) {
@@ -587,9 +584,8 @@ END {
     }
   }
 
-  # A scaleway_object whose visibility [visibility] already refuses gets that one line, not a second.
   for (b = 1; b <= nblk; b++) {
-    if ((b in objects) && !(b in visibilityIn)) {
+    if (b in objects) {
       problem("object", bfile[b], bline[b], "a scaleway_object resource: tofu never uploads an object, the release deploys them (ADR 0039)")
     }
   }
