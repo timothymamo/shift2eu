@@ -56,6 +56,13 @@ records where each fact comes from, so the snapshot can be checked and refreshed
   Milan unchanged. No other offering, capability, region or price changed. `retrievedOn` stays
   2026-11-13: it names the date every plan and price was read (above), and this re-check read the prices
   of one offering only.
+- **Declared EU regions re-read on 2026-11-21 for issue #328.** The region sources were read again from
+  public GitHub at the current heads of both repositories (`www.scaleway.com` refuses automated
+  clients): `scaleway/scaleway-sdk-go` default branch `main` at commit
+  `a251fd549cab893cd1fcdc7e9a2d382209f42531` (committed 2026-11-19), and `scaleway/docs-content`
+  default branch `main` at commit `1ec45ae299fdea70effdd48e5a3c99f5d6dad8b1` (committed 2026-11-20).
+  No region or zone changed; *Declared EU regions* gives the files read. No offering, capability or
+  price was read, so `retrievedOn` stays 2026-11-13.
 - **Availability page:** <https://www.scaleway.com/en/product-availability-by-region/>, where every
   offering's regions come from, subject to the API check under *Rules applied*. It has one column per
   region (Paris, Amsterdam, Warsaw, Milan). For a zonal product it gives one mark per zone, and for a
@@ -262,6 +269,21 @@ Poland).
   Storage and the Object Storage Standard Multi-AZ class. Some pages still name only Paris, Amsterdam and
   Warsaw: the Instances FAQ, the Block Storage concepts page, and the introductions of the Kubernetes and
   Managed Database API references.
+- **Re-read on 2026-11-21 (issue #328): no region or zone changed.** Still `fr-par`, `it-mil`, `nl-ams`
+  and `pl-waw`, each with three zones. The files read:
+  - SDK `scaleway/scaleway-sdk-go`, branch `main` (its default; `master` is stale) at commit
+    `a251fd549cab893cd1fcdc7e9a2d382209f42531` (2026-11-19), file `scw/locality.go`: `AllRegions` is
+    fr-par, nl-ams, pl-waw, it-mil, and `AllZones` is `<region>-1` to `<region>-3` for each. The file
+    last changed in commit `5cd6bec617` (2026-10-08), which added it-mil-2 and it-mil-3.
+  - `scaleway/docs-content`, branch `main` at commit `1ec45ae299fdea70effdd48e5a3c99f5d6dad8b1`
+    (2026-11-20): `changelog/march2026/2026-03-09-global-added-test-global-changelog-entry.mdx` (the
+    entry *New region opening - MIL-1 is now available!*, dated 2026-03-10 in its front matter),
+    `changelog/august2026/2026-08-31-containers-added-serverless-containers-available-in-mil.mdx` and
+    `changelog/october2026/2026-10-08-partner-space-added-a-full-3-az-region-in-milan.mdx` (the entry
+    *A full 3-AZ Region in Milan!*, dated 2026-10-12 in its front matter). Their text is unchanged. No
+    changelog entry up to that commit opens another region or zone. `macros/concepts/region.mdx` still
+    names only Paris, Amsterdam and Warsaw, like the pages listed above.
+  - The availability page is not part of `docs-content` and was not read again.
 
 ## Default region
 
