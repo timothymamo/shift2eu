@@ -8,12 +8,30 @@ import (
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 )
 
-// ciDryRun is the image job of .github/workflows/ci.yml as far as the dry run
-// checks it against release.yml: the same BuildKit, the same action pins, the
-// release's latest and tag rules run on sample tags in place of the pushed one,
-// the release's build settings written to an OCI archive, and the SBOM of the
-// built image.
-const ciDryRun = `name: CI
+// The dry-run fixtures, built from the repository's workflows: the cases below
+// change one part of them.
+var (
+	ciDryRun      = ciDryRunFrom(repoCI)
+	releaseDryRun = releaseDryRunFrom(repoRelease)
+)
+
+// ciDryRunFrom returns ciDryRunTemplate with the pins of ci, a ci.yml.
+func ciDryRunFrom(ci []byte) string {
+	return pinsOf(ci).expand(ciDryRunTemplate)
+}
+
+// releaseDryRunFrom returns releaseDryRunTemplate with the pins of release, a
+// release.yml.
+func releaseDryRunFrom(release []byte) string {
+	return pinsOf(release).expand(releaseDryRunTemplate)
+}
+
+// ciDryRunTemplate is the image job of .github/workflows/ci.yml as far as the
+// dry run checks it against release.yml: the same BuildKit, the same action
+// pins, the release's latest and tag rules run on sample tags in place of the
+// pushed one, the release's build settings written to an OCI archive, and the
+// SBOM of the built image. Its pins are placeholders (workflowPins).
+const ciDryRunTemplate = `name: CI
 
 on:
   pull_request:
@@ -23,9 +41,9 @@ jobs:
     name: Container image
     runs-on: ubuntu-latest
     env:
-      BUILDKIT_VERSION: v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+      BUILDKIT_VERSION: {{image moby/buildkit}}
     steps:
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: {{pin docker/setup-buildx-action}}
         with:
           driver-opts: image=moby/buildkit:${{ env.BUILDKIT_VERSION }}
       - name: Latest for sample tags, as release.yml decides it
@@ -44,7 +62,7 @@ jobs:
             echo "highest=$(decide v1.2.3 v1.1.0 v1.2.2 v1.2.3 v1.3.0-rc.1)"
           } >> "$GITHUB_OUTPUT"
       - name: Image tags for a sample release tag, the highest
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        uses: {{pin docker/metadata-action}}
         with:
           images: ghcr.io/timothymamo/shift2eu
           flavor: latest=${{ steps.latest.outputs.highest }}
@@ -52,7 +70,7 @@ jobs:
             type=semver,pattern={{raw}},value=v1.2.3
             type=semver,pattern={{major}}.{{minor}},value=v1.2.3,enable=${{ !contains('v1.2.3', '-') }}
       - name: Build linux/amd64 and linux/arm64
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: {{pin docker/build-push-action}}
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -62,18 +80,18 @@ jobs:
           provenance: false
           sbom: false
       - name: Load linux/amd64 for the smoke test
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: {{pin docker/build-push-action}}
         with:
           context: .
           platforms: linux/amd64
           load: true
       - name: SBOM of the built image
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        uses: {{pin anchore/sbom-action}}
         with:
           image: oci-archive:${{ runner.temp }}/shift2eu.oci.tar
           format: spdx-json
           output-file: ${{ runner.temp }}/shift2eu.spdx.json
-          syft-version: v1.57.1
+          syft-version: {{release syft}}
       # release.yml's verify job runs the published image the same way, so the
       # dry run runs the image it built the same way, on the runner alone.
       - name: Smoke test the CLI image, read-only root filesystem, no network
@@ -81,13 +99,14 @@ jobs:
           docker run --rm --read-only --network none "$IMAGE" version | tee version.txt
 `
 
-// releaseDryRun is the latest, image, sbom and verify jobs of
+// releaseDryRunTemplate is the latest, image, sbom and verify jobs of
 // .github/workflows/release.yml as far as the dry run checks them: the latest
 // decision on the release tags on main, made once in a job of its own (issue
 // #173) that the image jobs read, the BuildKit image by exact release and index
 // digest, the pins, the tag rules on github.ref_name, the build settings, the
 // SPDX SBOM with an exact syft, and the container run of each published image.
-const releaseDryRun = `name: Release
+// Its pins are placeholders (workflowPins).
+const releaseDryRunTemplate = `name: Release
 
 on:
   push:
@@ -103,7 +122,7 @@ jobs:
     outputs:
       latest: ${{ steps.decide.outputs.latest }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: {{pin actions/checkout}}
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -135,11 +154,11 @@ jobs:
             echo "commit=$(git rev-parse --short HEAD)"
             echo "date=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ)"
           } >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: {{pin docker/setup-buildx-action}}
         with:
-          driver-opts: image=moby/buildkit:v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+          driver-opts: image=moby/buildkit:{{image moby/buildkit}}
       - name: Image tags
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        uses: {{pin docker/metadata-action}}
         with:
           images: ghcr.io/timothymamo/shift2eu
           flavor: latest=${{ needs.latest.outputs.latest }}
@@ -147,7 +166,7 @@ jobs:
             type=semver,pattern={{raw}}
             type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
       - name: Build and push linux/amd64 and linux/arm64
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        uses: {{pin docker/build-push-action}}
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -159,12 +178,12 @@ jobs:
     name: SBOM
     runs-on: ubuntu-latest
     steps:
-      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      - uses: {{pin anchore/sbom-action}}
         with:
           image: registry:ghcr.io/timothymamo/shift2eu@${{ needs.image.outputs.digest }}
           format: spdx-json
           output-file: shift2eu.spdx.json
-          syft-version: v1.57.1
+          syft-version: {{release syft}}
   verify:
     name: Verify the published image
     runs-on: ubuntu-latest
@@ -202,6 +221,17 @@ func mutate(t *testing.T, doc, old, new string) string {
 // tags, reads or runs the HTTP API's image is refused (issue #393).
 func TestDryRunMirrorsRelease(t *testing.T) {
 	t.Parallel()
+
+	// The pins the cases below drift, as the fixtures hold them, and the
+	// values they drift to: each derived from the pin it replaces, so that a
+	// Renovate update moves both and no case stops matching.
+	syft := ciPins.expand("{{release syft}}")
+	driftedSyft := nextRelease(t, syft)
+	buildkit := ciPins.expand("{{image moby/buildkit}}")
+	buildkitTag, _, _ := strings.Cut(buildkit, "@")
+	driftedBuildkit := nextRelease(t, buildkitTag) + "@sha256:" + strings.Repeat("1", 64)
+	commit := func(action string) string { return ciPins.expand("{{commit " + action + "}}") }
+	driftedCommit := func(action string) string { return action + "@" + nextCommit(t, ciPins.commitOf(action)) }
 
 	tests := []struct {
 		name    string
@@ -245,16 +275,21 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		{name: "a drifted image name", ci: mutate(t, ciDryRun, "          images: ghcr.io/timothymamo/shift2eu\n", "          images: ghcr.io/example/shift2eu\n"), release: releaseDryRun, wantIn: `with: images is "ghcr.io/example/shift2eu"`},
 
 		// The SBOM: the release's format and exact syft.
-		{name: "a drifted syft version", ci: mutate(t, ciDryRun, "syft-version: v1.57.1", "syft-version: v1.58.0"), release: releaseDryRun, wantIn: `with: syft-version is "v1.58.0"`},
+		{name: "a drifted syft version", ci: mutate(t, ciDryRun, "syft-version: "+syft, "syft-version: "+driftedSyft), release: releaseDryRun, wantIn: `with: syft-version is "` + driftedSyft + `"`},
 		{name: "a drifted SBOM format", ci: mutate(t, ciDryRun, "          format: spdx-json\n", "          format: cyclonedx-json\n"), release: releaseDryRun, wantIn: `with: format is "cyclonedx-json"`},
 
 		// The pins: the same commit for every action the two share, and the
 		// same BuildKit image by tag and digest.
-		{name: "a drifted metadata-action pin", ci: mutate(t, ciDryRun, "docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302", "docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411303"), release: releaseDryRun, wantIn: "docker/metadata-action runs at"},
-		{name: "a drifted build-push-action pin", ci: ciDryRun, release: mutate(t, releaseDryRun, "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc", "docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dd"), wantIn: "docker/build-push-action runs at c3c9e263c25d99ce0380d002d59b67737d91b0dc (line 39) and at c3c9e263c25d99ce0380d002d59b67737d91b0dd"},
-		{name: "a drifted sbom-action pin", ci: mutate(t, ciDryRun, "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c", "anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6d"), release: releaseDryRun, wantIn: "anchore/sbom-action runs at"},
-		{name: "a drifted setup-buildx-action pin", ci: ciDryRun, release: mutate(t, releaseDryRun, "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069", "docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497070"), wantIn: "docker/setup-buildx-action runs at"},
-		{name: "a drifted BuildKit image", ci: mutate(t, ciDryRun, "v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe", "v0.35.0@sha256:1111111111111111111111111111111111111111111111111111111111111111"), release: releaseDryRun, wantIn: "the dry run must build with the release's moby/buildkit tag and digest"},
+		{name: "a drifted metadata-action pin", ci: mutate(t, ciDryRun, commit("docker/metadata-action"), driftedCommit("docker/metadata-action")), release: releaseDryRun, wantIn: "docker/metadata-action runs at"},
+		{
+			name:    "a drifted build-push-action pin",
+			ci:      ciDryRun,
+			release: mutate(t, releaseDryRun, commit("docker/build-push-action"), driftedCommit("docker/build-push-action")),
+			wantIn:  "docker/build-push-action runs at " + ciPins.commitOf("docker/build-push-action") + " (line 39) and at " + nextCommit(t, ciPins.commitOf("docker/build-push-action")),
+		},
+		{name: "a drifted sbom-action pin", ci: mutate(t, ciDryRun, commit("anchore/sbom-action"), driftedCommit("anchore/sbom-action")), release: releaseDryRun, wantIn: "anchore/sbom-action runs at"},
+		{name: "a drifted setup-buildx-action pin", ci: ciDryRun, release: mutate(t, releaseDryRun, commit("docker/setup-buildx-action"), driftedCommit("docker/setup-buildx-action")), wantIn: "docker/setup-buildx-action runs at"},
+		{name: "a drifted BuildKit image", ci: mutate(t, ciDryRun, buildkit, driftedBuildkit), release: releaseDryRun, wantIn: "the dry run must build with the release's moby/buildkit tag and digest"},
 
 		// The one build the dry run compares is the one that does not load the
 		// image: none left, or a second one, is refused rather than guessed at.
@@ -266,7 +301,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		},
 		{
 			name:    "a second build that does not load the image",
-			ci:      mutate(t, ciDryRun, "      - name: Load linux/amd64 for the smoke test\n", "      - name: Build once more\n        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n          platforms: linux/amd64,linux/arm64\n          push: false\n          outputs: type=oci,dest=${{ runner.temp }}/shift2eu-2.oci.tar\n      - name: Load linux/amd64 for the smoke test\n"),
+			ci:      mutate(t, ciDryRun, "      - name: Load linux/amd64 for the smoke test\n", "      - name: Build once more\n        uses: "+ciPins.expand("{{pin docker/build-push-action}}")+"\n        with:\n          context: .\n          platforms: linux/amd64,linux/arm64\n          push: false\n          outputs: type=oci,dest=${{ runner.temp }}/shift2eu-2.oci.tar\n      - name: Load linux/amd64 for the smoke test\n"),
 			release: releaseDryRun,
 			wantIn:  "load: true left out, for target: none, holds 2 docker/build-push-action steps, want exactly 1",
 		},
@@ -274,7 +309,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 			// The load: true step is the dry run's own smoke test, not part of
 			// what the release publishes: leaving it out leaves the one build.
 			name:    "the dry run without its smoke-test load",
-			ci:      mutate(t, ciDryRun, "      - name: Load linux/amd64 for the smoke test\n        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n          platforms: linux/amd64\n          load: true\n", ""),
+			ci:      mutate(t, ciDryRun, "      - name: Load linux/amd64 for the smoke test\n        uses: "+ciPins.expand("{{pin docker/build-push-action}}")+"\n        with:\n          context: .\n          platforms: linux/amd64\n          load: true\n", ""),
 			release: releaseDryRun,
 		},
 
@@ -294,7 +329,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		},
 		{
 			name:    "a dry run without the metadata-action step",
-			ci:      mutate(t, ciDryRun, "      - name: Image tags for a sample release tag, the highest\n        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0\n        with:\n          images: ghcr.io/timothymamo/shift2eu\n          flavor: latest=${{ steps.latest.outputs.highest }}\n          tags: |\n            type=semver,pattern={{raw}},value=v1.2.3\n            type=semver,pattern={{major}}.{{minor}},value=v1.2.3,enable=${{ !contains('v1.2.3', '-') }}\n", ""),
+			ci:      mutate(t, ciDryRun, "      - name: Image tags for a sample release tag, the highest\n        uses: "+ciPins.expand("{{pin docker/metadata-action}}")+"\n        with:\n          images: ghcr.io/timothymamo/shift2eu\n          flavor: latest=${{ steps.latest.outputs.highest }}\n          tags: |\n            type=semver,pattern={{raw}},value=v1.2.3\n            type=semver,pattern={{major}}.{{minor}},value=v1.2.3,enable=${{ !contains('v1.2.3', '-') }}\n", ""),
 			release: releaseDryRun,
 			wantIn:  "so the dry run checks none of the release's tags",
 		},
@@ -406,7 +441,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		},
 		{
 			name:    "a job without the env the BuildKit image is in",
-			ci:      mutate(t, ciDryRun, "    env:\n      BUILDKIT_VERSION: v0.34.2@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe\n", ""),
+			ci:      mutate(t, ciDryRun, "    env:\n      BUILDKIT_VERSION: "+buildkit+"\n", ""),
 			release: releaseDryRun,
 			wantIn:  "the job's env: holds no BUILDKIT_VERSION",
 		},
@@ -418,7 +453,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 		// such image to dry-run.
 		{
 			name:    "a dry run that still tags the HTTP API's image",
-			ci:      mutate(t, ciDryRun, "      - name: Build linux/amd64 and linux/arm64\n", "      - name: Image tags for the server's image\n        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0\n        with:\n          images: ghcr.io/timothymamo/shift2eu-server\n          flavor: latest=${{ steps.latest.outputs.highest }}\n          tags: |\n            type=semver,pattern={{raw}},value=v1.2.3\n      - name: Build linux/amd64 and linux/arm64\n"),
+			ci:      mutate(t, ciDryRun, "      - name: Build linux/amd64 and linux/arm64\n", "      - name: Image tags for the server's image\n        uses: "+ciPins.expand("{{pin docker/metadata-action}}")+"\n        with:\n          images: ghcr.io/timothymamo/shift2eu-server\n          flavor: latest=${{ steps.latest.outputs.highest }}\n          tags: |\n            type=semver,pattern={{raw}},value=v1.2.3\n      - name: Build linux/amd64 and linux/arm64\n"),
 			release: releaseDryRun,
 			wantIn:  `with: images is "ghcr.io/timothymamo/shift2eu-server"`,
 		},
