@@ -6,11 +6,12 @@ rendered report. The plan is the cheapest covering plan the estimate chose, the 
 monthly list price in EUR rounded to the cent, and a resource that is not estimated gives its
 reason instead. Regenerate with `go test ./test/examples -update`.
 
-Sizes, from PRD #190's sizing rules: a virtual machine is 2 vCPU, 4 GiB of memory, count 1 and
-730 hours a month; a bare-metal server is 4 vCPU and 32 GiB, the smallest plan every target's
-bare-metal offering covers; Kubernetes counts 3 nodes of the virtual-machine size; a managed
-database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage is one 100 GiB volume
-and object storage 100 GiB stored; a function is 1 GiB of memory; a queue takes no size.
+Sizes, chosen for this table within PRD #190's sizing fields (inventory format version 2,
+ADR 0025): a virtual machine is 2 vCPU, 4 GiB of memory, count 1 and 730 hours a month; a
+bare-metal server is 4 vCPU and 32 GiB, the smallest plan OVHcloud's and Scaleway's bare-metal
+offerings cover (UpCloud offers none); Kubernetes counts 3 nodes of the virtual-machine size; a
+managed database is 2 vCPU, 4 GiB of memory and 50 GiB of storage; block storage is one 100 GiB
+volume and object storage 100 GiB stored; a function is 1 GiB of memory; a queue takes no size.
 
 - `OVHcloud`: prices retrieved 2026-11-14 from `https://www.ovhcloud.com/en-ie/public-cloud/prices/`, estimated in `GRA` (its default region)
 - `Scaleway`: prices retrieved 2026-11-13 from `https://www.scaleway.com/en/pricing/`, estimated in `fr-par` (its default region)
