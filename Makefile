@@ -5,6 +5,10 @@
 # directory: its go.mod is then not found and GO_LINE below is empty, as without a go.mod.
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
+# Recipe comments never go inside a backslash-continued command: GNU Make 3.81 (macOS /usr/bin/make) hands
+# such a `#` line to the shell as part of the command, which comments out the rest of the recipe, so it ends
+# silently with exit 0 (issue #437). Write the comment above the target, at column 0, as a make comment.
+
 # The VM's size and SSH port, for a host that runs several VMs (issue #228, docs/dev-environment.md, Several
 # VMs on one host). Empty keeps dev/lima.yaml's value and the port Lima picks. They apply only when make vm-up
 # creates the VM: an existing VM is never resized, and vm-up warns that they were ignored. VM_CPUS is a CPU
@@ -1236,6 +1240,13 @@ AGENTS_TOKEN_LAUNCHD_DIR_CHECK = $(call LAUNCHD_DIR_CHECK,AGENTS_TOKEN_LAUNCHD_D
 
 agents-token-refresh-install agents-token-refresh-uninstall: export AGENTS_TOKEN_LAUNCHD_DIR := $(AGENTS_TOKEN_LAUNCHD_DIR)
 
+# agents-token-refresh-install's take-over of a refresh make agents-token-refresh-start started, between the
+# checked install of the plist and launchctl bootstrap: the pid files are read again after sudo, which can wait
+# for a password: the start target's pid file, so a refresh it no longer names is not stopped; the lock's pid
+# file, so only the refresh that still holds the lock is; and the start target's pid file once more, so only its
+# own pid is removed. The pid could be reused between ps -p and kill -TERM: that window is accepted. (This
+# comment sits here, not in the recipe: a `#` line inside a continued command ends the recipe under make 3.81,
+# issue #437.)
 .PHONY: agents-token-refresh-install
 agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs the agents App token refresh at boot, one per VM instance; needs sudo (host clone, macOS)
 	$(LIMA_INSTANCE_CHECK)
@@ -1384,11 +1395,6 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 	fi; \
 	echo "agents-token-refresh-install: $$dest has the SHA-256 printed above"; \
 	stopped=''; \
-	# The pid files are read again after sudo, which can wait for a password: \
-	# the start target's pid file, so a refresh it no longer names is not stopped; \
-	# the lock's pid file, so only the refresh that still holds the lock is; \
-	# and the start target's pid file once more, so only its own pid is removed. \
-	# The pid could be reused between ps -p and kill -TERM: that window is accepted. \
 	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" != "$$held" ]; then \
 		lock_holder="$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))"; \
 		if [ -n "$$lock_holder" ] && kill -0 "$$lock_holder" 2>/dev/null; then \
