@@ -8,14 +8,6 @@ import (
 	"github.com/timothymamo/shift2eu/test/architecture/internal/check"
 )
 
-// The commits the release-please workflow's two actions are pinned to, as
-// Renovate moves them (v3.3.0 and v5.0.0 when issues #157 and #159 were
-// decided).
-const (
-	appCommit              = "64ab729a6294000f5aa4a4bc0b73d1f32bc45510"
-	releasePleaseActionPin = "45996ed1f6d02564a971a2fa1b5860e934307cf7"
-)
-
 // appToken is the with: of the step that mints one of the two Apps' tokens:
 // the client ID and the private key its environment holds, and the permission-*
 // inputs that narrow the token to what the job does. appID is the input issue
@@ -29,7 +21,8 @@ type appToken struct {
 	permissions []string
 }
 
-// step renders the token step, named name, that mints the token.
+// step renders the token step, named name, that mints the token, its action's
+// pin a placeholder.
 func (a appToken) step(name string) string {
 	with := make([]string, 0, 3+len(a.permissions))
 
@@ -51,7 +44,7 @@ func (a appToken) step(name string) string {
 
 	return "      - name: " + name + "\n" +
 		"        id: app\n" +
-		"        uses: actions/create-github-app-token@" + appCommit + " # v3.3.0\n" +
+		"        uses: {{pin actions/create-github-app-token}}\n" +
 		"        with:\n" +
 		strings.Join(with, "\n") + "\n"
 }
@@ -78,14 +71,32 @@ var tagAppToken = appToken{
 // releasePleaseWorkflow is the accepted shape, which the privilege check reads
 // too: it publishes nothing itself, so that check must accept it, and refuse it
 // as soon as one of its jobs writes through GITHUB_TOKEN.
-var releasePleaseWorkflow = releasePleaseAppsWorkflow(releasePleaseAppToken, tagAppToken, releasePleaseAppToken)
+var releasePleaseWorkflow = releasePleaseAppsWorkflowFrom(repoReleasePlease)
+
+// releasePleaseWorkflowTemplate is releasePleaseWorkflow with its pins
+// placeholders (workflowPins). The pins of the two actions Renovate moves in
+// .github/workflows/release-please.yml are filled in from that workflow
+// (releasePleasePins, workflowpins_test.go), so that a Renovate update needs no
+// edit here (issue #440).
+var releasePleaseWorkflowTemplate = releasePleaseAppsTemplate(releasePleaseAppToken, tagAppToken, releasePleaseAppToken)
+
+// releasePleaseAppsWorkflowFrom returns releasePleaseWorkflowTemplate with the
+// pins of releasePlease, a release-please.yml, as releaseWorkflowFixtureFrom
+// builds the release fixture from a release.yml (issue #440).
+func releasePleaseAppsWorkflowFrom(releasePlease []byte) string {
+	return pinsOf(releasePlease).expand(releasePleaseWorkflowTemplate)
+}
 
 // releasePleaseActionStep opens or updates the release PR with the
-// release-please App's token. Every input but token would override
+// release-please App's token, at the pin release-please.yml holds.
+var releasePleaseActionStep = releasePleasePins.expand(releasePleaseActionStepTemplate)
+
+// releasePleaseActionStepTemplate is releasePleaseActionStep with its pin a
+// placeholder. Every input but token would override
 // release-please-config.json, so none is set. With skip-github-release in that
 // configuration release-please creates no GitHub Release and so no tag:
 // GoReleaser creates the Release, and the tag job creates the tag.
-var releasePleaseActionStep = `      - uses: googleapis/release-please-action@` + releasePleaseActionPin + ` # v5.0.0
+const releasePleaseActionStepTemplate = `      - uses: {{pin googleapis/release-please-action}}
         with:
           token: ${{ steps.app.outputs.token }}
 `
@@ -206,8 +217,15 @@ const (
 // flight, and creates the tag. The relabel job, in the release-please
 // environment, mints the release-please App's token again and, when the tag job
 // tagged a PR, relabels it. Each token step passes client-id, never the
-// deprecated app-id, and no job reads the other App's variable or secret.
+// deprecated app-id, and no job reads the other App's variable or secret. Its
+// actions run at the pins release-please.yml holds.
 func releasePleaseAppsWorkflow(release, tag, relabel appToken) string {
+	return releasePleasePins.expand(releasePleaseAppsTemplate(release, tag, relabel))
+}
+
+// releasePleaseAppsTemplate is releasePleaseAppsWorkflow with its pins
+// placeholders (workflowPins).
+func releasePleaseAppsTemplate(release, tag, relabel appToken) string {
 	return `name: Release please
 
 # A push to main alone proposes a version: the tag is created after the release
@@ -238,7 +256,7 @@ jobs:
     permissions:
       contents: read
     steps:
-` + release.step("Mint the release-please App's token") + releasePleaseActionStep + `  tag:
+` + release.step("Mint the release-please App's token") + releasePleaseActionStepTemplate + `  tag:
     name: Tag
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -344,6 +362,11 @@ func TestReleasePleaseWorkflow(t *testing.T) {
 	// withTokens returns the workflow whose three token steps mint release,
 	// tag and relabel.
 	withTokens := releasePleaseAppsWorkflow
+
+	// The two actions at the commits release-please.yml pins them to, which
+	// the drift cases move to refs no Renovate update ever writes.
+	appTokenAction := releasePleasePins.expand("{{commit actions/create-github-app-token}}")
+	releasePleaseAction := releasePleasePins.expand("{{commit googleapis/release-please-action}}")
 
 	tests := []struct {
 		name     string
@@ -905,26 +928,29 @@ func TestReleasePleaseWorkflow(t *testing.T) {
 		// update moves and which a tag or branch never is.
 		{
 			name:     "the App token action pinned by tag",
-			workflow: mutateEvery(t, acceptedWorkflow, "create-github-app-token@"+appCommit, "create-github-app-token@v1"),
+			workflow: mutateEvery(t, acceptedWorkflow, appTokenAction, "actions/create-github-app-token@v1"),
 			wantIn:   "create-github-app-token@v1",
 		},
 		{
 			name:     "the release-please action pinned by branch",
-			workflow: mutate(t, acceptedWorkflow, "release-please-action@"+releasePleaseActionPin, "release-please-action@main"),
+			workflow: mutate(t, acceptedWorkflow, releasePleaseAction, "googleapis/release-please-action@main"),
 			wantIn:   "release-please-action@main",
 		},
 		{
 			name:     "the release-please action pinned by a short commit",
-			workflow: mutate(t, acceptedWorkflow, "release-please-action@"+releasePleaseActionPin, "release-please-action@0123456"),
+			workflow: mutate(t, acceptedWorkflow, releasePleaseAction, "googleapis/release-please-action@0123456"),
 			wantIn:   "release-please-action@0123456",
 		},
 
 		// Nothing publishes here: publishing, signing and attesting stay in
 		// release.yml, so the signing identity keeps naming that workflow. Each
-		// case adds the step to the release-please job and wants it named.
+		// case adds the step to the release-please job and wants it named. The
+		// commit of a step that uses an action is deliberately no real pin: the
+		// check matches these steps by the action's name alone, so the cases
+		// need neither release.yml nor a Renovate update of it.
 		{
 			name:     "a goreleaser step",
-			workflow: beforeReleasePlease("uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de"),
+			workflow: beforeReleasePlease("uses: goreleaser/goreleaser-action@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "goreleaser",
 		},
 		{
@@ -934,22 +960,22 @@ func TestReleasePleaseWorkflow(t *testing.T) {
 		},
 		{
 			name:     "a cosign step",
-			workflow: beforeReleasePlease("uses: sigstore/cosign-installer@1e69f48acb82d1966a394da916b4c1698aa569d6"),
+			workflow: beforeReleasePlease("uses: " + "sigstore/cosign-installer@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "cosign",
 		},
 		{
 			name:     "a docker login step",
-			workflow: beforeReleasePlease("uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550"),
+			workflow: beforeReleasePlease("uses: " + "docker/login-action@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "docker/login-action",
 		},
 		{
 			name:     "a docker build and push step",
-			workflow: beforeReleasePlease("uses: docker/build-push-action@dc802804100637a589fabce1cb79ff13a1411302"),
+			workflow: beforeReleasePlease("uses: " + "docker/build-push-action@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "docker/build-push-action",
 		},
 		{
 			name:     "an attest step",
-			workflow: beforeReleasePlease("uses: actions/attest@9000827ccba6bdab643e8b6fd33ac0654aef8333"),
+			workflow: beforeReleasePlease("uses: " + "actions/attest@0123456789abcdef0123456789abcdef01234567"),
 			wantIn:   "actions/attest",
 		},
 		{
