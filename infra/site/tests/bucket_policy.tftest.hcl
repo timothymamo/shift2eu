@@ -1,9 +1,11 @@
 # The site bucket's read and write rule (issue #422, PRD #297 "Hosting decisions" 5 and 11). A Scaleway
 # bucket policy allows only what it lists, so this file pins every grant: the deploy application writes and
 # reads the site's objects, everyone may read them at most, and nothing else - no delete, no bucket
-# configuration, no second bucket - is allowed to either. Statements for the maintainer's own principal may
-# exist and are not forbidden (the owner must not be locked out), but they may not use the `*` principal,
-# and the one this file's configuration writes names exactly `var.admin_principal`.
+# configuration, no second bucket - is allowed to either. The principals are pinned whole as well: every
+# statement names one (`*` or one SCW entry holding one string), and the statements together name exactly the
+# maintainer's own principal (`var.admin_principal`, the owner must not be locked out of the bucket it
+# manages), the deploy application's, and `*` only while var.public_read is on. No other user, application or
+# organization is granted anything.
 #
 # `mock_provider` replaces the Scaleway provider, so `tofu test` needs no credential and contacts nothing.
 # The mock's computed ids must satisfy the provider's own validators (UUIDs), hence the fixed values below.
@@ -111,6 +113,85 @@ run "the_bucket_policy_is_the_recommended_version_and_only_allows" {
       ) ? length(setsubtract(toset(flatten([try(s.Action, [])])), toset(["s3:PutObject", "s3:GetObject", "s3:ListBucket"]))) == 0 : true
     ])
     error_message = "no statement of scaleway_object_bucket_policy.site.policy may allow anything other than s3:PutObject, s3:GetObject or s3:ListBucket to `*` or to the deploy application (scaleway_iam_application.deploy): s3:*, s3:DeleteObject, s3:PutBucketPolicy and every other bucket-admin action would let the deploy key, or anyone, destroy or reconfigure the site (PRD #297 hosting decision 5)."
+  }
+
+  # The statements above are constrained one kind at a time, which leaves a grant to anyone the three kinds do
+  # not name - a second ID, an organization, an object of two principals - unread. So the whole document is
+  # constrained too: every principal is one value (the string `*`, or an SCW entry holding a string, never a
+  # list of two IDs), and the principals of every statement together are exactly the two the off-by-default
+  # configuration writes: the maintainer and the deploy application, and nobody else.
+  assert {
+    condition = alltrue([
+      for s in flatten([jsondecode(scaleway_object_bucket_policy.site.policy).Statement]) :
+      try(s.Principal, null) == "*" ? true : (
+        try(length(keys(s.Principal)), 0) == 1 &&
+        try(keys(s.Principal)[0], null) == "SCW" &&
+        # tostring succeeds on a string and fails on a list, which is the shape a second ID arrives in.
+        can(tostring(s.Principal.SCW))
+      )
+    ])
+    error_message = "every statement of scaleway_object_bucket_policy.site.policy must name its principal as a single value: the string `*`, or one SCW entry holding one string (exactly `var.admin_principal` or `application_id:<scaleway_iam_application.deploy.id>`). A principal list holds a second ID beside the one the statement is about, and a policy reader then cannot tell who the statement grants."
+  }
+
+  assert {
+    condition = toset(flatten([
+      for s in flatten([jsondecode(scaleway_object_bucket_policy.site.policy).Statement]) :
+      try(s.Principal, null) == "*" ? ["*"] : [try(tostring(s.Principal.SCW), "<no SCW principal>")]
+    ])) == toset([var.admin_principal, "application_id:${scaleway_iam_application.deploy.id}"])
+    error_message = "the principals of scaleway_object_bucket_policy.site.policy's statements together must be exactly var.admin_principal and \"application_id:${scaleway_iam_application.deploy.id}\" while public_read is off (its default): a bucket policy allows only what it lists, so any other principal - an organization, a second application, a second user - is a grant nobody decided (PRD #297 hosting decision 5)."
+  }
+}
+
+# Hosting decision 11's fallback, made explicit (var.public_read): off, nobody anonymous may read anything; on,
+# exactly one statement lets everyone read the site's objects, and nothing else.
+run "public_read_off_keeps_everyone_out" {
+  command = apply
+
+  variables {
+    public_read = false
+  }
+
+  assert {
+    condition = !contains(toset(flatten([
+      for s in flatten([jsondecode(scaleway_object_bucket_policy.site.policy).Statement]) :
+      try(s.Principal, null) == "*" ? ["*"] : [try(tostring(s.Principal.SCW), "<no SCW principal>")]
+    ])), "*")
+    error_message = "with public_read = false, no statement of scaleway_object_bucket_policy.site.policy may name the principal `*`: the Runbook applies the site with public read off, and anonymous callers get nothing until Edge Services has been seen to fail on a private object (PRD #297 hosting decision 11)."
+  }
+}
+
+run "public_read_lets_everyone_read_the_site" {
+  command = apply
+
+  variables {
+    public_read = true
+  }
+
+  assert {
+    condition = length([
+      for s in flatten([jsondecode(scaleway_object_bucket_policy.site.policy).Statement]) :
+      s if try(s.Principal, null) == "*"
+    ]) == 1
+    error_message = "with public_read = true, scaleway_object_bucket_policy.site.policy must hold exactly one statement whose principal is `*`: one public-read grant, not none and not a second one that could carry another action or resource."
+  }
+
+  assert {
+    condition = alltrue([
+      for s in flatten([jsondecode(scaleway_object_bucket_policy.site.policy).Statement]) :
+      try(s.Principal, null) != "*" ? true : (
+        toset(flatten([try(s.Action, [])])) == toset(["s3:GetObject"]) &&
+        toset(flatten([try(s.Resource, [])])) == toset(["${scaleway_object_bucket.site.name}/*"])
+      )
+    ])
+    error_message = "with public_read = true, the statement whose principal is `*` must allow exactly s3:GetObject on exactly `${scaleway_object_bucket.site.name}/*`: anonymous callers read the site's objects, and never write, delete, list or administer the bucket or anything outside it."
+  }
+
+  assert {
+    condition = toset(flatten([
+      for s in flatten([jsondecode(scaleway_object_bucket_policy.site.policy).Statement]) :
+      try(s.Principal, null) == "*" ? ["*"] : [try(tostring(s.Principal.SCW), "<no SCW principal>")]
+    ])) == toset(["*", var.admin_principal, "application_id:${scaleway_iam_application.deploy.id}"])
+    error_message = "with public_read = true, the principals of scaleway_object_bucket_policy.site.policy's statements together must be exactly `*`, var.admin_principal and \"application_id:${scaleway_iam_application.deploy.id}\": public read adds anonymous readers to the two principals the site already grants, and nobody else."
   }
 }
 
