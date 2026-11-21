@@ -38,7 +38,7 @@ const (
 
 	noKeyTrashCheck = "the block starting with " + `"` + keyDeletionBlockHeader + `"` +
 		` does not look for the key in the download directory and the Trash: it needs an ` +
-		`"ls ~/Downloads ~/.Trash | grep private-key.pem" line with "# PASS: nothing" (issue #381)`
+		`"ls ~/Downloads ~/.Trash | grep private-key" line with "# PASS: nothing" (issue #381)`
 
 	keyDeletionInAComment = "only a comment inside another block tells the maintainer to delete the downloaded key: " +
 		"pasted whole, the block runs past the comment and the .pem stays in the download directory (issue #381)"
@@ -55,14 +55,15 @@ var (
 )
 
 // downloadedKeyPath matches the .pem path a shell line names a downloaded private key by: the download directory a
-// browser writes to, a name ending in private-key.pem, and the placeholder path the AI reviewer's page uses. The
-// line may name it in any position - a "<" redirect, scp, cp, mv, cat, install - so the path is matched wherever it
-// stands, and [^\s'"]* keeps the match to one token.
-var downloadedKeyPath = regexp.MustCompile(`(?:~/Downloads/[^\s'"]*\.pem|[^\s'"]*private-key\.pem|path/to/the-downloaded-key\.pem)`)
+// browser writes to, and a name ending in private-key.pem. The line may name it in any position - a "<" redirect,
+// scp, cp, mv, cat, install - so the path is matched wherever it stands, and [^\s'"]* keeps the match to one token.
+var downloadedKeyPath = regexp.MustCompile(`(?:~/Downloads/[^\s'"]*\.pem|[^\s'"]*private-key\.pem)`)
 
 // checksTheDownloadDirectories matches the line that looks for a leftover key in the download directory and the
-// Trash. It names a private-key.pem without downloading one, so it is no key download of its own.
-var checksTheDownloadDirectories = regexp.MustCompile(`^\s*(?:sudo\s+)?ls\b.*~/Downloads.*~/\.Trash.*\|\s*grep\s+\S*private-key\.pem`)
+// Trash. It names the key without downloading one, so it is no key download of its own. The grep may name the
+// suffix or only the stem: a browser saves a second download as "private-key (1).pem", which a check of
+// "private-key.pem" misses.
+var checksTheDownloadDirectories = regexp.MustCompile(`^\s*(?:sudo\s+)?ls\b.*~/Downloads.*~/\.Trash.*\|\s*grep\s+\S*private-key(?:\.pem)?`)
 
 // boldNumberedStep matches a step of a runbook written as a bold numbered line, "**4. The App's key**: ...". A
 // step ends at the next one, so a deletion block past it belongs to that step and not this one (issue #381).
@@ -581,6 +582,23 @@ func TestEveryKeyDownloadIsFollowedByItsDeletionBlock(t *testing.T) {
 			},
 		},
 		{
+			name: "a deletion block that greps the key's name without its suffix passes",
+			page: []string{
+				"# Development environment",
+				"",
+				"**3. Store its secrets:** generate a **new** private key on the App's page.",
+				"",
+				"```bash",
+				"# Mac (admin), then:",
+				"rm ~/Downloads/<app>.<date>.private-key.pem",
+				"ls ~/Downloads/<app>.<date>.private-key.pem   # PASS: No such file or directory",
+				// A browser names a second download "private-key (1).pem", which a check of "private-key.pem"
+				// misses, so the check may grep the stem alone.
+				"ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing",
+				"```",
+			},
+		},
+		{
 			name: "a deletion only described in a comment inside the block fails",
 			page: []string{
 				"# Development environment",
@@ -605,7 +623,7 @@ func TestEveryKeyDownloadIsFollowedByItsDeletionBlock(t *testing.T) {
 				"**3. Store the key:**",
 				"",
 				"```bash",
-				"gh secret set AI_REVIEWER_APP_PRIVATE_KEY < path/to/the-downloaded-key.pem",
+				"gh secret set AI_REVIEWER_APP_PRIVATE_KEY < ~/Downloads/<app>.<date>.private-key.pem",
 				"```",
 			},
 			want: []keyFinding{{line: 6, rule: noKeyDeletionBlock}},
@@ -622,13 +640,13 @@ func TestEveryKeyDownloadIsFollowedByItsDeletionBlock(t *testing.T) {
 				"**3. Store its secrets:**",
 				"",
 				"```bash",
-				"gh secret set AI_REVIEWER_APP_PRIVATE_KEY --env ai-review < path/to/the-downloaded-key.pem",
+				"gh secret set AI_REVIEWER_APP_PRIVATE_KEY --env ai-review < ~/Downloads/<app>.<date>.private-key.pem",
 				"```",
 				"",
 				"```bash",
 				"# Mac (admin), then:",
-				"rm path/to/the-downloaded-key.pem",
-				"ls path/to/the-downloaded-key.pem   # PASS: No such file or directory",
+				"rm ~/Downloads/<app>.<date>.private-key.pem",
+				"ls ~/Downloads/<app>.<date>.private-key.pem   # PASS: No such file or directory",
 				"ls ~/Downloads ~/.Trash | grep private-key.pem   # PASS: nothing",
 				"```",
 			},
@@ -823,6 +841,7 @@ func TestEveryKeyDownloadIsFollowedByItsDeletionBlock(t *testing.T) {
 				"",
 				"```bash",
 				"ls ~/Downloads ~/.Trash | grep private-key.pem   # PASS: nothing",
+				"ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing",
 				"ls ~/agents-app.pem.tmp   # PASS: No such file or directory",
 				"```",
 			},
