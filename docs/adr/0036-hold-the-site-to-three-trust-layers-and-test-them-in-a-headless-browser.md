@@ -255,8 +255,16 @@ id, the test attaches to the browser this run started and to no other. That is a
 not access control: any local process that finds the port can read the id from `/json/version` on it.
 The 60-second wait on the log line stays, with its diagnostics, and so does the removal of the container
 on every exit. The container's name carries the recipe shell's PID, so the DevTools ports and containers
-of parallel runs never collide. Two runs in the same worktree still share `bin/site`, which `make site`
-removes and rebuilds; that is tracked as a follow-up. The Makefile's `DEVTOOLS_PORT` is gone.
+of parallel runs never collide. The Makefile's `DEVTOOLS_PORT` is gone.
+
+Issue #423 settles the two follow-ups. Each run serves a bundle of its own: `ci/sitebuild` builds it
+straight into a fresh directory from `mktemp -d`, which the run passes in `SHIFT2EU_SITE_BUNDLE` and
+removes on every exit. The run never reads `bin/site`, which a second run's `make site` in the same
+worktree removes and rebuilds. A copy of `bin/site` could still race with that rebuild, and a lock would
+make a second run wait or refuse, so neither was chosen. `make site` still writes `bin/site` and its
+archive for the release. During the 60-second wait, each poll also asks `docker inspect` (or `nerdctl
+inspect`) whether the container still runs. A container that has exited fails the run at once, naming
+its exit status and showing the tail of its log.
 
 A port the kernel picks is still a listening port, which a local process can find and attach to. It is
 open only while a run lasts and is no longer a fixed, well-known one. That residual risk is accepted.

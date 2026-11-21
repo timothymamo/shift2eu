@@ -11,15 +11,17 @@
 // The test starts no browser: `make test-browser` runs a headless Chromium in a
 // container pinned by digest with the host network, its DevTools on
 // 127.0.0.1 and a port the kernel picks for each run (no fixed port to attach
-// to, and the DevTools ports and containers of two runs do not collide; two
-// runs in the same worktree still share bin/site, a follow-up), and passes
-// the browser's DevTools address, read back from Chromium's log, in
-// SHIFT2EU_DEVTOOLS_URL and the bundle `make site` built in
-// SHIFT2EU_SITE_BUNDLE. The address's browser id makes the test attach to the
-// browser its run started: a correctness guarantee, not access control, since
-// any local process that finds the port can read the id from /json/version. Without either the test fails, with a message saying
-// which, and never skips: a smoke test that skips reports the same green as one
-// that passed. It never touches the internet: "another origin" is a second
+// to, and the DevTools ports and containers of two runs do not collide). It
+// passes the browser's DevTools address, read back from Chromium's log, in
+// SHIFT2EU_DEVTOOLS_URL, and in SHIFT2EU_SITE_BUNDLE a bundle of the run's
+// own: ci/sitebuild builds it into a temporary directory that the run removes
+// when it ends, never bin/site, so a second run's `make site` in the same
+// worktree cannot delete it from under the browser (issue #423). The address's
+// browser id makes the test attach to the browser its run started: a
+// correctness guarantee, not access control, since any local process that
+// finds the port can read the id from /json/version. Without either variable
+// the test fails, with a message saying which, and never skips: a smoke test
+// that skips reports the same green as one that passed. It never touches the internet: "another origin" is a second
 // local httptest server on its own port, and pinning that proves the bundle
 // runs unchanged on any origin.
 //

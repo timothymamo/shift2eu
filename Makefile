@@ -487,26 +487,34 @@ test-integration: ## Integration tests against real cloud APIs (read-only creden
 test-e2e: ## Build and run the binary end to end against testdata fixtures
 	go test -count=1 -tags=e2e ./test/e2e/...
 
-# The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). make site builds the bundle; the
-# recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network and its own entrypoint
-# replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface through
-# socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is open to
-# guess and the DevTools ports and containers of two runs at once do not collide. Two runs in the same worktree
-# still share bin/site, which make site removes and rebuilds (a follow-up). It waits until Chromium logs the
-# browser's DevTools address on 127.0.0.1, reads that address back from the log line (port and browser id, so
-# the test attaches to the browser this run started and no other: a correctness guarantee, not access control,
-# since any local process that finds the port can read the id from /json/version on it), and runs test/browser
-# against it. The container's name carries the recipe shell's PID, so parallel runs have their own; it is
-# removed on every exit, failure and interrupt included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but it hands the
-# browser fds 3 and 4 of a process it starts itself, and docker run and nerdctl run pass no such fds into a
-# container (docs/adr/0036, amendment for issue #368).
+# The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). make site still builds the
+# shared bundle in bin/site, but the run serves a bundle of its own (issue #423): ci/sitebuild builds it straight
+# into a fresh directory from mktemp -d, so the run never reads bin/site, which a second run's make site in the
+# same worktree removes and rebuilds; a copy of bin/site could still race with that rebuild. The directory is
+# removed on every exit. The recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network
+# and its own entrypoint replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on
+# every interface through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no
+# fixed port is open to guess and the DevTools ports and containers of two runs at once do not collide. It waits
+# up to 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll checks with
+# $(DOCKER) inspect that the container still runs: one that has exited fails the run at once, naming its exit
+# status and showing the tail of its log (issue #423). It reads the address back from the log line (port and
+# browser id, so the test attaches to the browser this run started and no other: a correctness guarantee, not
+# access control, since any local process that finds the port can read the id from /json/version on it), and
+# runs test/browser against it. The container's name carries the recipe shell's PID, so parallel runs have their
+# own; it is removed on every exit, failure and interrupt included. chromedp's pipe transport
+# (--remote-debugging-pipe) would open no port at all, but it hands the browser fds 3 and 4 of a process it
+# starts itself, and docker run and nerdctl run pass no such fds into a container (docs/adr/0036, amendment for
+# issue #368).
 .PHONY: test-browser
 test-browser: site ## Build the site's bundle and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
 	@set -eu; \
 	devtools=; \
 	name=shift2eu-test-browser-$$$$; \
-	trap '$(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
+	bundle_dir=; \
+	trap '$(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir"; fi' EXIT; \
 	trap 'exit 130' INT TERM; \
+	bundle_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/shift2eu-test-browser.XXXXXX"); \
+	go run ./ci/sitebuild -out "$$bundle_dir/site" -archive "$$bundle_dir/shift2eu-site.tar.gz" >/dev/null; \
 	$(DOCKER) run -d --name "$$name" --network host --entrypoint /headless-shell/headless-shell \
 		$(HEADLESS_SHELL) --no-sandbox --use-gl=angle --use-angle=swiftshader \
 		--remote-debugging-address=127.0.0.1 --remote-debugging-port=0 >/dev/null; \
@@ -514,6 +522,13 @@ test-browser: site ## Build the site's bundle and run its headless-browser smoke
 	until devtools=$$($(DOCKER) logs "$$name" 2>&1 | \
 		sed -n 's|^DevTools listening on \(ws://127\.0\.0\.1:[0-9][0-9]*/devtools/browser/[0-9a-f-][0-9a-f-]*\)$$|\1|p' | \
 		head -n 1); [ -n "$$devtools" ]; do \
+		running=$$($(DOCKER) inspect -f '{{.State.Running}}' "$$name" 2>/dev/null || true); \
+		if [ "$$running" != true ]; then \
+			status=$$($(DOCKER) inspect -f '{{.State.ExitCode}}' "$$name" 2>/dev/null || true); \
+			echo "test-browser: the Chromium container $$name exited with status $${status:-unknown} before it logged a DevTools address; the tail of its log:" >&2; \
+			$(DOCKER) logs --tail 20 "$$name" >&2 || true; \
+			exit 1; \
+		fi; \
 		tries=$$((tries + 1)); \
 		if [ "$$tries" -ge 60 ]; then \
 			echo "test-browser: Chromium logged no DevTools address on 127.0.0.1 within 60 seconds" >&2; \
@@ -522,7 +537,7 @@ test-browser: site ## Build the site's bundle and run its headless-browser smoke
 		fi; \
 		sleep 1; \
 	done; \
-	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$(CURDIR)/bin/site" \
+	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$$bundle_dir/site" \
 		go test -count=1 -timeout 20m -tags browser ./test/browser/
 
 .PHONY: cover
