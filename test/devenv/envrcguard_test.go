@@ -205,6 +205,36 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatReadsAParent(t *testing.T) {
 			want:      []string{"The host clone"},
 		},
 		{
+			// bash searches PATH for a word with no slash before the current directory, so `source creds.env`
+			// reads whichever creds.env PATH finds first, not the clone's: the guard cannot know which file
+			// that is, and must refuse it. The fix is writing ./creds.env (issue #402).
+			name: "the host clone's .envrc says source with a name that holds no slash",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.env"), []byte(plantedEnvrcLines()), 0o600)
+				writeHostEnvrc(t, l, "source creds.env\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"line 1", "The host clone"},
+		},
+		{
+			// . is bash's source: the same PATH search, and the same refusal for a word with no slash.
+			name: "the host clone's .envrc says . with a name that holds no slash",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.env"), []byte(plantedEnvrcLines()), 0o600)
+				writeHostEnvrc(t, l, ". creds.env\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"line 1", "The host clone"},
+		},
+		{
 			// A backslash continues the line, so bash hands source_env the ../secrets.env of the second line:
 			// the directive's argument is the two lines together, not the lone backslash of the first.
 			name:      "the host clone's .envrc continues source_env with a backslash",
@@ -527,6 +557,20 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 				t.Helper()
 
 				writeFileMode(t, filepath.Join(l.root, "host-secrets.env"), []byte(plantedEnvrcLines()), 0o600)
+				writeFileMode(t, filepath.Join(l.root, ".env.local"), []byte(plantedEnvrcLines()), 0o600)
+
+				return nil
+			},
+		},
+		{
+			// direnv resolves a name with no slash against the .envrc's own directory, not against PATH, so
+			// `dotenv .env.local` reads the clone's file: the PATH search that makes `source creds.env`
+			// unreadable is bash's alone, and this layout is the one the docs ask for (issue #402).
+			name:      "the host clone's .envrc dotenvs a name that holds no slash",
+			hostEnvrc: "dotenv .env.local\n",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
 				writeFileMode(t, filepath.Join(l.root, ".env.local"), []byte(plantedEnvrcLines()), 0o600)
 
 				return nil
