@@ -17,7 +17,8 @@
 #   [shadowed-file]  a <name>.tofu beside <name>.tf, or <name>.tofutest.hcl beside <name>.tftest.hcl:
 #                    OpenTofu loads only the .tofu one, so the reviewed twin is not what runs
 #   [parse]          a heredoc; a string, comment or bracket left open; a backslash in a block label or
-#                    quoted key (HCL decodes escapes such as _); a block header whose labels are not
+#                    quoted key (HCL decodes escapes such as _), or a $${ or %%{ in a block label (HCL
+#                    reads them as ${ and %{); a block header whose labels are not
 #                    plain identifiers or literal strings. The rules fail closed: after a [parse] line
 #                    no other rule is reported
 #   [api-key]        a scaleway_iam_api_key resource or data source: the deploy key is made by hand, so no
@@ -35,13 +36,21 @@
 #   [provider-alias] alias in a configuration's provider block: a second provider configuration
 #   [provider-credentials] access_key, secret_key or profile in a configuration's provider block: the
 #                    credentials come from the admin machine's environment, never from a file
+#   [provider-endpoint] api_url in a configuration's provider block: the provider talks to Scaleway's own
+#                    API, never to an endpoint a file names
 #   [module-source]  a module, in the configuration or in a test's run block, whose source is not a local
-#                    ./ path, or has a .. segment
-#   [backend-count]  a root configuration (a directory with *.tf or *.tofu that no local module source
-#                    names) without exactly one backend
+#                    ./ path, or has a .. segment; or a configuration's module whose source resolves (after
+#                    ./, . segments and a trailing /) to an applied root
+#   [root-file]      a configuration or test file directly in the root's own directory: configurations
+#                    live in the applied roots beneath it
+#   [backend-count]  a configuration directory without exactly one backend. Every applied root (a
+#                    directory directly under the root, today infra/site) is judged; a deeper directory
+#                    is exempt only when a configuration's local module names it (a test file's run-block
+#                    module exempts nothing)
 #   [backend-s3]     a backend other than s3 (never local)
 #   [cloud-block]    a cloud block
-#   [required-version] a root without exactly one required_version, or one other than infra/tofu.yaml's
+#   [required-version] a configuration directory judged as [backend-count] judges it without exactly one
+#                    required_version, or one other than infra/tofu.yaml's
 #                    tofuVersion without its v
 #   [test-mock]      a test file (*.tftest.hcl, *.tofutest.hcl) without an unaliased
 #                    mock_provider "scaleway", so tofu test would run the real provider

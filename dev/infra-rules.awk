@@ -11,7 +11,7 @@
 # literal string ("L", its value kept), an object ("O") or any other expression ("E"). Anything it does
 # not read is a [parse] failure: a heredoc; an unbalanced string, brace or comment; a backslash in a block
 # label or a quoted object key (HCL decodes escapes such as _, so the raw text is not the name tofu
-# reads); and a { after a block header whose labels are not plain identifiers or literal strings. The
+# reads); a $${ or %%{ in a block label (read as ${ and %{); and a { after a block header whose labels are not plain identifiers or literal strings. The
 # rules fail closed rather than pass a file they could not read: once any file fails to parse, only the
 # [parse] lines are printed, since every other verdict would rest on a partial reading.
 #
@@ -105,7 +105,7 @@ function attr(n, k, v) {
 
 # One token: t is "I" (identifier), "S" (string; lit is 1 when it holds no template), "P" (one of
 # { } ( ) [ ] , : =), "N" (a newline outside brackets that matter) or "X" (anything else).
-function tok(t, v, lit,   i, ok, n) {
+function tok(t, v, lit, esc,   i, ok, n) {
   if (broken) {
     return
   }
@@ -139,10 +139,13 @@ function tok(t, v, lit,   i, ok, n) {
       }
       n = bv[1]
       for (i = 2; i <= bn; i++) {
-        if (bt[i] == "S" && bl[i] && index(bv[i], "\\") == 0) {
+        if (bt[i] == "S" && bl[i] && index(bv[i], "\\") == 0 && !be[i]) {
           n = n ":" bv[i]
         } else if (bt[i] == "I") {
           n = n ":" bv[i]
+        } else if (bt[i] == "S" && bl[i] && be[i]) {
+          unreadable("a block label with a $${ or %%{ escape, which HCL decodes ($${ is ${): write the label without escapes")
+          return
         } else if (bt[i] == "S" && bl[i]) {
           unreadable("a block label with a backslash, which HCL decodes (\\u005f is _): write the label without escapes")
           return
@@ -189,6 +192,7 @@ function tok(t, v, lit,   i, ok, n) {
   bt[bn] = t
   bv[bn] = v
   bl[bn] = lit
+  be[bn] = esc
 }
 
 # --- The tokenizer, one line at a time; strings and templates may not span lines, block comments may.
@@ -205,6 +209,7 @@ FNR == 1 {
   broken = 0
   reset()
   files++
+  fileSeen[FILENAME] = 1
   isTest[FILENAME] = (FILENAME ~ /\.(tftest|tofutest)\.hcl$/)
 }
 
@@ -233,6 +238,7 @@ FNR == 1 {
       if ((c == "$" || c == "%") && nx == c && substr(line, i + 2, 1) == "{") { # $${ and %%{ are literal
         if (md == 1) {
           sval = sval c "{"
+          stresc = 1
         }
         i += 2
         continue
@@ -248,7 +254,7 @@ FNR == 1 {
       if (c == "\"") {
         md--
         if (md == 0) {
-          tok("S", sval, strlit)
+          tok("S", sval, strlit, stresc)
         }
         continue
       }
@@ -271,6 +277,7 @@ FNR == 1 {
       if (md == 1) {
         sval = ""
         strlit = 1
+        stresc = 0
       }
       continue
     }
@@ -368,14 +375,10 @@ function dirof(f,   d) {
   return d
 }
 
-# The directory tofu reads a test file's run-block module source against: the root configuration's, the
-# parent of a tests/ directory or the test file's own.
-function testbase(f,   d) {
-  d = dirof(f)
-  if (d ~ "(^|/)tests$") {
-    d = dirof(d)
-  }
-  return d
+# An applied root: a directory directly under the root argument (today <root>/site). The maintainer runs
+# init and apply there, so it is never a module and always needs its own backend and required_version.
+function isroot(d) {
+  return d != root && dirof(d) == root
 }
 
 # <dir>/<a local ./ source>, without ./ segments or a trailing /.
@@ -478,6 +481,9 @@ END {
       if (n == "access_key" || n == "secret_key" || n == "profile") {
         problem("provider-credentials", f, aline[a], n " in " p ": credentials come from SCW_ACCESS_KEY and SCW_SECRET_KEY on the admin machine, never from a file git holds")
       }
+      if (n == "api_url") {
+        problem("provider-endpoint", f, aline[a], n " in " p ": the provider talks to Scaleway's own API; an endpoint in a file git holds could send the admin machine's credentials elsewhere")
+      }
     }
     if (n == "acl") {
       problem("acl", f, aline[a], "an acl argument, even \"private\": the bucket policy alone decides who reads the site (ADR 0039)")
@@ -528,13 +534,25 @@ END {
       problem("module-source", f, bline[b], bpath[b] " has source " s ": a module may only be a local ./ path in this repository, never a registry, git or URL source")
     } else if (s ~ "(^|/)[.][.](/|$)" || index(s, "\\") > 0) {
       problem("module-source", f, bline[b], bpath[b] " has source " s ": a .. segment (or an escape) can lead out of the configuration, to files these rules do not read")
-    } else {
-      # A local module's directory is no root configuration: it needs no backend or required_version.
-      base = isTest[f] ? testbase(f) : dirof(f)
+    } else if (!isTest[f]) {
+      # A local module's directory is no root configuration: it needs no backend or required_version. Only
+      # a configuration's module grants that: a test file's run-block module may name a root (a test of
+      # it), but tofu test reads the file only where infra-check runs it, so it exempts nothing. A module
+      # never names an applied root, which must keep its own backend and required_version.
+      base = dirof(f)
       d = joinpath(base, s)
-      if (d != base) {
+      if (isroot(d)) {
+        problem("module-source", f, bline[b], bpath[b] " has source " s ", which is the applied root " d ": a module may not name a root, whose backend and required_version must hold whatever reaches it")
+      } else if (d != base) {
         moduleDir[d] = 1
       }
+    }
+  }
+
+  # A file directly in the root's directory is no applied root's: the root holds only root directories.
+  for (f in fileSeen) {
+    if (dirof(f) == root) {
+      problem("root-file", f, "", "a configuration or test file directly under " root ": every configuration lives in a root directory beneath it (such as " root "/site), which is applied, holds its own backend and is never a module")
     }
   }
 
@@ -546,7 +564,7 @@ END {
   }
 
   for (d in configDir) {
-    if (d in moduleDir) {
+    if ((d in moduleDir) && !isroot(d)) {
       continue
     }
     if (backends[d] + 0 != 1) {
