@@ -20,11 +20,15 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag}
 
 // siteBuilderEnvTag is the tag of the site builder's environment group (PRD
 // #297 milestone 2).
 const siteBuilderEnvTag = "site-builder-env"
+
+// claudeCodePinEnvTag is the tag of the Claude Code pin check's environment
+// group (issue #276).
+const claudeCodePinEnvTag = "claude-code-pin-env"
 
 // aiReviewerEnvTag is the tag of the AI reviewer's environment group (ADR 0033),
 // and aiReviewerLookupEnvMsg the msg of its one entry with an exception: the
@@ -160,6 +164,12 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		// _test.go files included.
 		siteBuilderEnvTag: {
 			{"path-except": `^ci/sitebuild/`, "text": groupText(siteBuilderEnvTag)},
+		},
+		// The Claude Code pin check (issue #276): one rule for every path
+		// outside ci/claudecodepin/, so the group holds there and nowhere else,
+		// _test.go files included.
+		claudeCodePinEnvTag: {
+			{"path-except": `^ci/claudecodepin/`, "text": groupText(claudeCodePinEnvTag)},
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {

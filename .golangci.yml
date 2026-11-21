@@ -1770,6 +1770,59 @@ linters:
             - github.com/timothymamo/shift2eu/internal/adapter/target/upcloud$
             - github.com/timothymamo/shift2eu/internal/domain/catalog$
             - github.com/timothymamo/shift2eu/internal/version$
+        # The Claude Code pin check (issue #276, ADR 0033) is no part of the
+        # product: ci/claudecodepin is a main package, which Go refuses to
+        # import, run by .github/workflows/claude-code-pin.yml, and its library
+        # ci/claudecodepin/internal/pincheck is under an internal directory
+        # whose parent is ci/claudecodepin, so Go's internal rule keeps it out
+        # of reach of cmd/ and internal/. Both are held all the same, each to
+        # the standard packages it imports, ending in $. The entry point reads
+        # the workflow (os), fetches the registry's one document (net/http)
+        # and exits; it starts no process (os/exec), and the forbidigo group
+        # claude-code-pin-env refuses every read of the environment.
+        claude-code-pin-main:
+          list-mode: strict
+          files:
+            - "**/ci/claudecodepin/**"
+            - "!**/ci/claudecodepin/internal/**"
+            - "!$test"
+          allow:
+            - bytes$
+            - context$
+            - errors$
+            - flag$
+            - fmt$
+            - io$
+            - net/http$
+            - os$
+            - strings$
+            - time$
+            - github.com/timothymamo/shift2eu/ci/claudecodepin/internal/pincheck$
+          deny:
+            - pkg: os/exec
+              desc: "the Claude Code pin check runs no program; it reads the workflow and fetches one registry document (issue #276)"
+        # The pin check's library does no I/O of its own: it parses the readers
+        # it is given, so it is held to pure standard packages, without os,
+        # net, syscall or unsafe, and to no package of the product.
+        claude-code-pin-library:
+          list-mode: strict
+          files:
+            - "**/ci/claudecodepin/internal/**"
+            - "!$test"
+          allow:
+            - bufio$
+            - encoding/base64$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - io$
+            - regexp$
+            - strings$
+          deny:
+            - pkg: os
+              desc: "the Claude Code pin check's library opens no file; ci/claudecodepin hands it readers (issue #276)"
+            - pkg: net
+              desc: "the Claude Code pin check's library opens no connection; ci/claudecodepin fetches the registry's document (issue #276)"
     exhaustive:
       default-signifies-exhaustive: true
     # forbidigo refuses calls, which an import rule cannot see. Its entries
@@ -2329,6 +2382,17 @@ linters:
         - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'site-builder-env: the site builder reads no environment variable, locates no home, config, cache or temp directory and starts no process through os; it runs the go command with os/exec in the environment it was given (CLAUDE.md rule 3)'
+        # Group claude-code-pin-env (issue #276): the Claude Code pin check
+        # reads no environment variable, starts no process and locates no home,
+        # config, cache or temp directory: it reads the workflow it is told to
+        # and the registry's one public document, and holds no credential
+        # (CLAUDE.md rule 3). depguard keeps os/exec, syscall and unsafe out of
+        # it (claude-code-pin-main, claude-code-pin-library). Scope: every file
+        # under ci/claudecodepin/, _test.go files included; its exclusion rule
+        # drops it everywhere else.
+        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+          pkg: '^os$'
+          msg: 'claude-code-pin-env: the Claude Code pin check reads no environment variable, locates no home, config, cache or temp directory and starts no process; it reads the workflow and one public registry document (CLAUDE.md rule 3)'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -2488,6 +2552,12 @@ linters:
         linters:
           - forbidigo
         text: 'because "site-builder-env: [^"]*"$'
+      # claude-code-pin-env: the group holds for every file under
+      # ci/claudecodepin/, _test.go files included, and nowhere else.
+      - path-except: ^ci/claudecodepin/
+        linters:
+          - forbidigo
+        text: 'because "claude-code-pin-env: [^"]*"$'
 
 formatters:
   enable:
