@@ -74,6 +74,7 @@ supersedes it.
 - [0035. Run the assessment in the browser as a WebAssembly driving adapter](adr/0035-run-the-assessment-in-the-browser-as-a-webassembly-driving-adapter.md)
 - [0036. Hold the site to three trust layers, and test them in a headless browser](adr/0036-hold-the-site-to-three-trust-layers-and-test-them-in-a-headless-browser.md)
 - [0037. Retire the HTTP API and release the CLI alone](adr/0037-retire-the-http-api-and-release-the-cli-alone.md)
+- [0038. Start the Lima VM at boot with a LaunchDaemon of our own, never limactl autostart](adr/0038-start-the-lima-vm-at-boot-with-a-launchdaemon-of-our-own.md)
 
 ## Writing a page
 

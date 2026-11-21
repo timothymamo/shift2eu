@@ -46,6 +46,8 @@ var hostTargets = []string{
 	"gate-check",
 	"vm-agents-token-ssh",
 	"vm-agents-token-ssh-uninstall",
+	"vm-boot-install",
+	"vm-boot-uninstall",
 	"vm-claude-settings",
 	"vm-create",
 	"vm-delete",

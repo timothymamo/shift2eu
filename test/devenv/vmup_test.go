@@ -38,10 +38,12 @@
 package devenv_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -168,6 +170,9 @@ type vmUpFixture struct {
 	limaInstance string
 	// marker is a file no run may create: what a value the Makefile got wrong would run (issue #228).
 	marker string
+	// limaLaunchDaemonsDir is where Lima's own LaunchDaemon plist sits: the sandbox's directory, passed on make's
+	// command line as LIMA_LAUNCHDAEMONS_DIR, so no test reads the machine's /Library/LaunchDaemons (issue #398).
+	limaLaunchDaemonsDir string
 }
 
 // newVMUpFixture builds the fixture for one case: instance is what limactl list --quiet answers (empty for
@@ -200,12 +205,26 @@ func newVMUpFixture(t *testing.T, instance, status string) *vmUpFixture {
 		env[name] = fakeEnvValue(name)
 	}
 
+	// vm-up asks launchctl about Lima's own autostart job of the instance (issue #315), so the sandbox's recording
+	// launchctl stands in for the machine's, with no job loaded: no run of make vm-up reaches a real launchd, and
+	// no job of the machine can make a warning appear (issue #398).
+	sb.useFakeLaunchctl(t, env, "113")
+
+	// Lima's own LaunchDaemon plist lives in the system LaunchDaemons directory, /Library/LaunchDaemons on the
+	// Mac: a directory of the sandbox's own travels on make's command line, so no run reads the machine's (issue
+	// #398).
+	limaLaunchDaemonsDir := filepath.Join(sb.root, "LimaLaunchDaemons")
+	if err := os.MkdirAll(limaLaunchDaemonsDir, 0o700); err != nil {
+		t.Fatalf("create %s: %v", limaLaunchDaemonsDir, err)
+	}
+
 	return &vmUpFixture{
-		sb:           sb,
-		env:          env,
-		root:         root,
-		limaInstance: vmUpInstance,
-		marker:       filepath.Join(sb.root, "marker-a-value-ran"),
+		sb:                   sb,
+		env:                  env,
+		root:                 root,
+		limaInstance:         vmUpInstance,
+		marker:               filepath.Join(sb.root, "marker-a-value-ran"),
+		limaLaunchDaemonsDir: limaLaunchDaemonsDir,
 	}
 }
 
@@ -252,11 +271,15 @@ func (f *vmUpFixture) symlinkInstanceLimaYaml(t *testing.T) {
 	}
 }
 
-// run runs make with args in the clone, with the fixture's environment alone.
+// run runs make with args in the clone, with the fixture's environment alone, and LIMA_LAUNCHDAEMONS_DIR on
+// make's command line: the Makefile reads that test hook from nowhere else, and the sandbox's directory holds no
+// plist of the machine's (issue #398).
 func (f *vmUpFixture) run(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 
-	return runMakeIn(t, f.root, args, f.env)
+	makeArgs := append(slices.Clone(args), limaLaunchDaemonsDirVar+"="+f.limaLaunchDaemonsDir)
+
+	return runMakeIn(t, f.root, makeArgs, f.env)
 }
 
 // statusQueries returns the argv of every limactl list that is not the existence check (--quiet), in call
@@ -879,5 +902,356 @@ func TestVMUpRefusesAnInvalidInstanceName(t *testing.T) {
 					"LIMA_INSTANCE", tc.limaInstance, stderr)
 			}
 		})
+	}
+}
+
+// TestVMUpWarnsAboutALimaAutostartJob pins issue #315: make vm-up warns when Lima's own autostart job starts this
+// instance. `limactl autostart enable` writes io.lima-vm.autostart.<instance> in the user's domain and, with
+// --condition=boot, io.lima-vm.daemon.<instance> as a LaunchDaemon, and both run
+// `limactl start <name> --foreground` - the form that can fall back to template:default, a VM that mounts the home
+// directory (issue #237). vm-up warns rather than refuses: the VM still starts, the exit status stays 0, and the
+// warning names the job and `limactl autostart disable <instance>`, so a maintainer can remove it. The job is
+// found loaded too, through `launchctl print`, and as the installed plist alone (issue #398): launchd loads that
+// file at the next login or boot, so the warning names the file as well, since no `launchctl print` knows it.
+// Each warning ends with the removal by hand, as a maintainer pastes it: the bootout of a loaded job and
+// `rm -f <plist>`, with sudo in the system domain only. With neither job it says nothing, and on a host without
+// launchctl - Linux - it still looks for the plist on disk and warns when there is one.
+func TestVMUpWarnsAboutALimaAutostartJob(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// domain is the launchd domain Lima's job would be loaded in; load says the case loads one, installed
+		// says it only writes the job's plist file (issues #315, #398).
+		domain    jobDomain
+		prefix    string
+		load      bool
+		installed bool
+		// withoutLaunchctl runs make on a PATH that has no launchctl, as Linux CI has none.
+		withoutLaunchctl bool
+		wantWarn         bool
+	}{
+		{
+			name:     "the user domain's loaded io.lima-vm.autostart job",
+			domain:   userDomain,
+			prefix:   vmBootLimaAutostartLabelPrefix,
+			load:     true,
+			wantWarn: true,
+		},
+		{
+			name:     "the system domain's loaded io.lima-vm.daemon job",
+			domain:   systemDomain,
+			prefix:   vmBootLimaDaemonLabelPrefix,
+			load:     true,
+			wantWarn: true,
+		},
+		{
+			name:      "the user domain's installed io.lima-vm.autostart plist, not loaded",
+			domain:    userDomain,
+			prefix:    vmBootLimaAutostartLabelPrefix,
+			installed: true,
+			wantWarn:  true,
+		},
+		{
+			name:      "the system domain's installed io.lima-vm.daemon plist, not loaded",
+			domain:    systemDomain,
+			prefix:    vmBootLimaDaemonLabelPrefix,
+			installed: true,
+			wantWarn:  true,
+		},
+		{name: "no Lima autostart job"},
+		{name: "no launchctl at all, as on Linux", withoutLaunchctl: true},
+		{
+			// A host without launchctl still looks for Lima's plist on disk: an SSH-only session has no gui/<uid>
+			// domain to ask, and a plist nothing has loaded yet starts the VM at the next login or boot (issue
+			// #398).
+			name:             "no launchctl at all, and the user domain's installed plist on disk",
+			domain:           userDomain,
+			prefix:           vmBootLimaAutostartLabelPrefix,
+			installed:        true,
+			withoutLaunchctl: true,
+			wantWarn:         true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// An instance that is listed, Stopped and holds a lima.yaml passes vm-up's checks, so the VM is
+			// started and the warning is the only thing this case adds.
+			f := newVMUpFixture(t, vmUpInstance, "Stopped")
+			f.writeInstanceLimaYaml(t)
+
+			jobs := newLaunchdJobs(t, f.sb)
+			jobs.attach(f.env)
+
+			label, plist := "", ""
+			if tc.load || tc.installed {
+				label = tc.prefix + vmUpInstance
+				plist = limaAutostartPlistPath(tc.domain, f.env["HOME"], f.limaLaunchDaemonsDir, label)
+			}
+
+			switch {
+			case tc.load:
+				// Lima's job as `limactl autostart enable` loads it.
+				jobs.add(t, tc.domain, label, loadedJob{args: []string{"/opt/homebrew/bin/limactl", "start", vmUpInstance, "--foreground"}})
+			case tc.installed:
+				// Lima's job's plist as `limactl autostart enable` writes it: launchd loads it at the next login
+				// or boot, so it starts the VM then although nothing runs now (issue #398).
+				writeFileMode(t, plist, []byte("Lima's own autostart job of "+vmUpInstance+"\n"), 0o600)
+			}
+
+			if tc.withoutLaunchctl {
+				if err := os.Remove(filepath.Join(f.sb.binDir, "launchctl")); err != nil && !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("remove the fake launchctl from %s: %v", f.sb.binDir, err)
+				}
+
+				// /usr/local/bin is dropped too: a Mac keeps no launchctl there, but the PATH of the run must
+				// hold nothing the recipe could find one in.
+				f.env["PATH"] = f.sb.binDir + ":" + pathWithout(t, "launchctl")
+			}
+
+			stdout, stderr, err := f.run(t, "vm-up")
+			if err != nil {
+				t.Fatalf("make vm-up exited non-zero for %s: a Lima autostart job is a warning, never a refusal, and a host without launchctl has nothing to warn about: %v\nstdout: %s\nstderr: %s",
+					tc.name, err, stdout, stderr)
+			}
+
+			// The VM is started either way: the warning changes nothing about the start (issue #315).
+			if diff := cmp.Diff([][]string{vmUpStartExistingArgs(vmUpInstance)}, f.starting(t)); diff != "" {
+				t.Errorf("make vm-up with %s did not start the VM the way it always does (-want +got):\n%s\nstdout: %s\nstderr: %s",
+					tc.name, diff, stdout, stderr)
+			}
+
+			combined := stdout + stderr
+
+			if !tc.wantWarn {
+				for _, forbidden := range []string{"io.lima-vm.", "autostart"} {
+					if strings.Contains(combined, forbidden) {
+						t.Errorf("make vm-up warns about %q for %s although no Lima autostart job starts %s: a warning that fires when there is nothing to remove sends a maintainer looking for a job that is not there (issue #315)\nstdout: %s\nstderr: %s",
+							forbidden, tc.name, vmUpInstance, stdout, stderr)
+					}
+				}
+
+				return
+			}
+
+			wants := []string{label, "limactl autostart disable " + vmUpInstance}
+
+			// The removal by hand, whole and as a maintainer pastes it: the bootout of a loaded job and
+			// `rm -f <plist>`, with sudo in the system domain, where root owns the plist, and never in the user's,
+			// where the plist is the maintainer's own (issues #315, #398).
+			removal := "rm -f " + plist
+			if tc.domain == systemDomain {
+				removal = "sudo " + removal
+			}
+
+			if tc.load {
+				if tc.domain == systemDomain {
+					wants = append(wants, "sudo launchctl bootout system/"+label)
+				} else {
+					wants = append(wants, "launchctl bootout gui/"+strconv.Itoa(os.Getuid())+"/"+label)
+				}
+			}
+
+			wants = append(wants, removal)
+
+			if tc.installed {
+				// No launchd has loaded this job, so no launchctl print knows it: the warning names the plist
+				// file itself, or a maintainer cannot find what starts the VM twice (issue #398).
+				wants = append(wants, plist)
+			}
+
+			for _, want := range wants {
+				if !strings.Contains(combined, want) {
+					t.Errorf("make vm-up does not warn with %q although %s starts %s: the warning must name the job, its plist where nothing has loaded it, the command that removes it the supported way and the removal by hand, or a maintainer cannot act on it (issues #315, #237, #398)\nstdout: %s\nstderr: %s",
+						want, label, vmUpInstance, stdout, stderr)
+				}
+			}
+
+			// The user's plist belongs to the maintainer: no advice may put sudo in front of removing it (issue
+			// #398).
+			if sudoRemoval := "sudo " + removal; tc.domain == userDomain && strings.Contains(combined, sudoRemoval) {
+				t.Errorf("make vm-up warns with `%s` although Lima's autostart plist %s is the maintainer's own: only the system domain's plist is root's, and sudo would run the maintainer's own removal as root (issues #315, #398)\nstdout: %s\nstderr: %s",
+					sudoRemoval, plist, stdout, stderr)
+			}
+		})
+	}
+}
+
+// TestVMUpDoesNotRepeatAnUnsafeLimaPlistPath pins the security audit's L1 finding on #398 for make vm-up: the
+// warning's removal by hand prints `rm -f <plist>` for Lima's user-domain job, whose plist lives under $HOME, and a
+// maintainer's home may hold a space (/Users/John Doe) or a shell metacharacter. Pasted as it stands, that path
+// splits the command into another one, expands a variable or names another file.
+//
+// The repository's rule for paths in pasteable advice is the one dev/agents-token-launchd.sh follows for a foreign
+// job's plist and TestAgentsTokenLaunchdForeignJobsDoesNotRepeatAnUnsafePlistPath pins (auditor nit, issue #396):
+// only an absolute path of / and [A-Za-z0-9._-], without a .. segment, is repeated, and the warning says where to
+// see the path instead. The job is still named and the VM still starts: a Lima autostart job is a warning, never a
+// refusal (issue #315).
+func TestVMUpDoesNotRepeatAnUnsafeLimaPlistPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// home is the last component of the fixture's HOME: the sandbox's own directory, so the case adds the
+		// character no path in this test is expected to hold and nothing else about the run changes.
+		home string
+		// loaded has launchd serve the job as loaded in the user's domain, as `limactl autostart enable` leaves
+		// it: the warning then advises the bootout of a loaded job, whose plist path must be held back as well.
+		loaded bool
+	}{
+		{
+			// A space splits `rm -f /Users/John Doe/...` into two commands: rm removes /Users/John, and Doe is
+			// run as a command of its own.
+			name: "a HOME with a space",
+			home: "host home",
+		},
+		{
+			// A ; ends the command: what follows it runs as another one.
+			name: "a HOME with a semicolon",
+			home: "host;home",
+		},
+		{
+			// A $ expands when the advice is pasted, so the command names another file than the plist.
+			name: "a HOME with a dollar sign",
+			home: "host$home",
+		},
+		{
+			// The job launchd has loaded too: the warning advises its bootout as well as the removal by hand, and
+			// the bootout names the job, never the plist under the unsafe home (issues #315, #398).
+			name:   "a loaded job and a HOME with a space",
+			home:   "host home",
+			loaded: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// An instance that is listed, Stopped and holds a lima.yaml passes vm-up's checks, so the VM is
+			// started and the warning is the only thing this case adds.
+			f := newVMUpFixture(t, vmUpInstance, "Stopped")
+			f.env["HOME"] = filepath.Join(f.sb.root, tc.home)
+			f.writeInstanceLimaYaml(t)
+
+			jobs := newLaunchdJobs(t, f.sb)
+			jobs.attach(f.env)
+
+			label := vmBootLimaAutostartLabelPrefix + vmUpInstance
+			plist := limaAutostartPlistPath(userDomain, f.env["HOME"], f.limaLaunchDaemonsDir, label)
+
+			// Lima's job's plist as `limactl autostart enable` writes it, into the home the case chose.
+			writeFileMode(t, plist, []byte("Lima's own autostart job of "+vmUpInstance+"\n"), 0o600)
+
+			state := "installed"
+			if tc.loaded {
+				// The same job, loaded in the user's domain as `limactl autostart enable` leaves it.
+				jobs.add(t, userDomain, label, loadedJob{args: []string{"/opt/homebrew/bin/limactl", "start", vmUpInstance, "--foreground"}})
+				state = "loaded in " + jobs.domainName(userDomain)
+			}
+
+			stdout, stderr, err := f.run(t, "vm-up")
+			if err != nil {
+				t.Fatalf("make vm-up exited non-zero for %s although Lima's autostart job %s is %s and only warns: the VM still starts, the exit status stays 0 (issues #315, #398): %v\nstdout: %s\nstderr: %s",
+					tc.name, label, state, err, stdout, stderr)
+			}
+
+			// The VM is started either way: the warning changes nothing about the start (issue #315).
+			if diff := cmp.Diff([][]string{vmUpStartExistingArgs(vmUpInstance)}, f.starting(t)); diff != "" {
+				t.Errorf("make vm-up with %s did not start the VM the way it always does (-want +got):\n%s\nstdout: %s\nstderr: %s",
+					tc.name, diff, stdout, stderr)
+			}
+
+			combined := stdout + stderr
+
+			// The plist's path is no path the repository repeats in advice: it is not absolute with only
+			// /[A-Za-z0-9._-], so no command it prints may name it (security audit L1, auditor nit #396).
+			if strings.Contains(combined, "rm -f "+plist) {
+				t.Errorf("the warning prints the ready-made command `rm -f %s` although that path is no absolute path of / and [A-Za-z0-9._-]: pasted by a maintainer, it removes another file or runs another command (security audit L1, auditor nit #396)\nstdout: %s\nstderr: %s",
+					plist, stdout, stderr)
+			}
+
+			if strings.Contains(combined, plist) {
+				t.Errorf("the warning prints the plist's path %q although it is no absolute path of / and [A-Za-z0-9._-] without a .. segment: the repository's rule (dev/agents-token-launchd.sh, foreign_jobs; auditor nit #396) repeats no such path to the terminal or into a command, and says where to see it instead (security audit L1)\nstdout: %s\nstderr: %s",
+					plist, stdout, stderr)
+			}
+
+			// Holding the path back must not hold back the warning: it still names the job and how to remove it
+			// the supported way, still reports it as installed, and still offers the removal by hand - as a
+			// pointer to the plist, never as a command that names it.
+			wants := []string{
+				label,
+				"is " + state,
+				"limactl autostart disable " + vmUpInstance,
+				"not shown",
+				"remove its plist",
+				// The pointer to the plist, which is all that may name it: a job loaded from an unsafe path is
+				// still findable without printing that path (security audit L1, auditor nit #396).
+				"ls ~/Library/LaunchAgents/" + label + ".plist",
+			}
+
+			// A loaded job is booted out of its domain before its plist is removed, and never through a command
+			// that names the plist itself (issues #315, #398).
+			if tc.loaded {
+				wants = append(wants, "launchctl bootout gui/"+strconv.Itoa(os.Getuid())+"/"+label)
+			}
+
+			for _, want := range wants {
+				if !strings.Contains(combined, want) {
+					t.Errorf("make vm-up does not warn with %q although it holds the plist's path back: a maintainer still has to find the job, see that it starts the VM at every boot and remove it (security audit L1)\nstdout: %s\nstderr: %s",
+						want, stdout, stderr)
+				}
+			}
+
+			// Lima's own plist stays where it is: the warning removes nothing.
+			if _, statErr := os.Stat(plist); statErr != nil {
+				t.Errorf("make vm-up removed Lima's own plist %s although it only warns about it: removing Lima's job is the maintainer's decision (issues #315, #398): %v",
+					plist, statErr)
+			}
+		})
+	}
+}
+
+// TestVMUpRefusesAnUnsafeLIMAsLaunchDaemonsDir pins make vm-up's side of the check audit S1 asks for (issues #315,
+// #398): a LIMA_LAUNCHDAEMONS_DIR on make's command line that is no absolute path or holds a character no
+// LaunchDaemons path has stops vm-up before any limactl call. The check would look in a directory launchd never
+// reads, so Lima's own autostart job - which starts the VM at every boot - would go unreported while vm-up said the
+// VM is fine.
+func TestVMUpRefusesAnUnsafeLIMAsLaunchDaemonsDir(t *testing.T) {
+	t.Parallel()
+
+	// A ; ends the path if any recipe ever expanded it unquoted, and no LaunchDaemons path holds one.
+	const unsafeDir = "/a;b"
+
+	// An instance that is listed, Stopped and holds a lima.yaml would pass every other check of vm-up, so the
+	// hook's own check is what this case observes.
+	f := newVMUpFixture(t, vmUpInstance, "Stopped")
+	f.writeInstanceLimaYaml(t)
+
+	stdout, stderr, err := runMakeIn(t, f.root, []string{limaLaunchDaemonsDirVar + "=" + unsafeDir, "vm-up"}, f.env)
+	if err == nil {
+		t.Fatalf("make vm-up exited 0 with LIMA_LAUNCHDAEMONS_DIR=%q on its command line: a directory launchd never reads hides Lima's own autostart job, so the VM is started twice at every boot without a word (issues #315, #398)\nstdout: %s\nstderr: %s",
+			unsafeDir, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, limaLaunchDaemonsDirVar) {
+		t.Errorf("the refusal does not name %s with the value %q, so a maintainer cannot tell which variable to fix:\nstdout: %s\nstderr: %s",
+			limaLaunchDaemonsDirVar, unsafeDir, stdout, stderr)
+	}
+
+	if !strings.Contains(stderr, "may hold only letters, digits, /, ., _ and -") {
+		t.Errorf("the refusal does not say what is wrong with LIMA_LAUNCHDAEMONS_DIR=%q, so a maintainer cannot tell which form the check takes (issues #315, #398)\nstdout: %s\nstderr: %s",
+			unsafeDir, stdout, stderr)
+	}
+
+	// The check comes before anything runs: no limactl call, so nothing was created or started, and no sudo.
+	for _, tool := range []string{"limactl", "sudo"} {
+		if calls := invocations(f.sb.argvLogText(t), tool); len(calls) != 0 {
+			t.Errorf("make vm-up ran %s with LIMA_LAUNCHDAEMONS_DIR=%q although the check of the hook comes before any Lima call: the VM must not be started when the warning could not be worked out (issues #315, #398): %v\nstdout: %s\nstderr: %s",
+				tool, unsafeDir, calls, stdout, stderr)
+		}
 	}
 }
