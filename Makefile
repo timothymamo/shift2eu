@@ -5,6 +5,10 @@
 # directory: its go.mod is then not found and GO_LINE below is empty, as without a go.mod.
 MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 
+# No `#` comment, whole-line or mid-line, anywhere in a backslash-continued recipe command: GNU Make 3.81 (macOS
+# /usr/bin/make) then comments out the rest of the command and the recipe ends silently with exit 0. Put comments
+# above the target (TestMakefileHasNoCommentInsideAContinuedRecipe, issue #437).
+
 # The VM's size and SSH port, for a host that runs several VMs (issue #228, docs/dev-environment.md, Several
 # VMs on one host). Empty keeps dev/lima.yaml's value and the port Lima picks. They apply only when make vm-up
 # creates the VM: an existing VM is never resized, and vm-up warns that they were ignored. VM_CPUS is a CPU
@@ -508,33 +512,69 @@ test-integration: ## Integration tests against real cloud APIs (read-only creden
 test-e2e: ## Build and run the binary end to end against testdata fixtures
 	go test -count=1 -tags=e2e ./test/e2e/...
 
-# The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). make site builds the bundle; the
-# recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network and its own entrypoint
-# replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface through
-# socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is open to
-# guess and the DevTools ports and containers of two runs at once do not collide. Two runs in the same worktree
-# still share bin/site, which make site removes and rebuilds (a follow-up). It waits until Chromium logs the
-# browser's DevTools address on 127.0.0.1, reads that address back from the log line (port and browser id, so
-# the test attaches to the browser this run started and no other: a correctness guarantee, not access control,
-# since any local process that finds the port can read the id from /json/version on it), and runs test/browser
-# against it. The container's name carries the recipe shell's PID, so parallel runs have their own; it is
-# removed on every exit, failure and interrupt included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but it hands the
-# browser fds 3 and 4 of a process it starts itself, and docker run and nerdctl run pass no such fds into a
-# container (docs/adr/0036, amendment for issue #368).
+# The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). It does not run make site, and
+# neither creates, reads nor removes bin/site, the bundle make site builds for the release and the deploy: the
+# run serves a bundle of its own (issue #423), which ci/sitebuild builds straight into a fresh directory from
+# mktemp -d, so two runs in one worktree never rebuild a bundle under each other's browser. The directory is
+# removed on every exit, a hang-up (closing the pane), an interrupt and a termination included: each is
+# trapped, since dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills it. The EXIT trap
+# first ignores those signals: a second one arriving while it runs would run its trap's exit and abandon the
+# rest of the cleanup, and one does arrive when the whole process group is signalled, since make forwards a
+# SIGTERM it gets to the recipe's shell. It then removes the directory, then the container, with a command
+# that ignores those signals too, so a hung one needs SIGKILL. The recipe starts the pinned headless Chromium
+# ($(HEADLESS_SHELL)) with the host network and its own entrypoint
+# replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface
+# through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is
+# open to guess and the DevTools ports and containers of two runs at once do not collide. It waits up to
+# 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll checks with
+# $(DOCKER) inspect that the container still runs: one inspect reports as not running (false) fails the
+# run at once, naming its exit status and showing the tail of its log (issue #423). A failed inspect alone
+# is no verdict, so the run keeps polling, but three failed in a row mean the container is gone, and the
+# run fails, showing inspect's last error, instead of waiting out the 60 seconds. It reads the address back
+# from the log line (port and browser id, so the test attaches to the browser this run started and no
+# other: a correctness guarantee, not access control, since any local process that finds the port can
+# read the id from /json/version on it), and runs test/browser against it. The container's name carries
+# the recipe shell's PID, so parallel runs have their own; it is removed on every exit, failure and
+# interrupt included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but
+# it hands the browser fds 3 and 4 of a process it starts itself, and docker run and nerdctl run pass no
+# such fds into a container (docs/adr/0036, amendment for issue #368).
 .PHONY: test-browser
-test-browser: site ## Build the site's bundle and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
+test-browser: ## Build the site's bundle into a directory of this run's own and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
 	@set -eu; \
 	devtools=; \
 	name=shift2eu-test-browser-$$$$; \
-	trap '$(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
-	trap 'exit 130' INT TERM; \
+	bundle_dir=; \
+	trap 'trap "" HUP INT TERM; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir" || true; fi; $(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
+	trap 'exit 129' HUP; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
+	bundle_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/shift2eu-test-browser.XXXXXX"); \
+	go run ./ci/sitebuild -out "$$bundle_dir/site" -archive "$$bundle_dir/shift2eu-site.tar.gz" >/dev/null; \
 	$(DOCKER) run -d --name "$$name" --network host --entrypoint /headless-shell/headless-shell \
 		$(HEADLESS_SHELL) --no-sandbox --use-gl=angle --use-angle=swiftshader \
 		--remote-debugging-address=127.0.0.1 --remote-debugging-port=0 >/dev/null; \
 	tries=0; \
+	missed=0; \
 	until devtools=$$($(DOCKER) logs "$$name" 2>&1 | \
 		sed -n 's|^DevTools listening on \(ws://127\.0\.0\.1:[0-9][0-9]*/devtools/browser/[0-9a-f-][0-9a-f-]*\)$$|\1|p' | \
 		head -n 1); [ -n "$$devtools" ]; do \
+		if running=$$($(DOCKER) inspect -f '{{.State.Running}}' "$$name" 2>"$$bundle_dir/inspect.err"); then \
+			missed=0; \
+		else \
+			running=; \
+			missed=$$((missed + 1)); \
+		fi; \
+		if [ -z "$$running" ] && [ "$$missed" -ge 3 ]; then \
+			echo "test-browser: $(DOCKER) inspect could not read the state of the Chromium container $$name 3 times in a row, so it is gone; inspect's last error:" >&2; \
+			cat "$$bundle_dir/inspect.err" >&2 || true; \
+			exit 1; \
+		fi; \
+		if [ "$$running" = false ]; then \
+			status=$$($(DOCKER) inspect -f '{{.State.ExitCode}}' "$$name" 2>/dev/null || true); \
+			echo "test-browser: the Chromium container $$name exited with status $${status:-unknown} before it logged a DevTools address; the tail of its log:" >&2; \
+			$(DOCKER) logs --tail 20 "$$name" >&2 || true; \
+			exit 1; \
+		fi; \
 		tries=$$((tries + 1)); \
 		if [ "$$tries" -ge 60 ]; then \
 			echo "test-browser: Chromium logged no DevTools address on 127.0.0.1 within 60 seconds" >&2; \
@@ -543,7 +583,7 @@ test-browser: site ## Build the site's bundle and run its headless-browser smoke
 		fi; \
 		sleep 1; \
 	done; \
-	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$(CURDIR)/bin/site" \
+	SHIFT2EU_DEVTOOLS_URL="$$devtools" SHIFT2EU_SITE_BUNDLE="$$bundle_dir/site" \
 		go test -count=1 -timeout 20m -tags browser ./test/browser/
 
 .PHONY: cover
@@ -1257,6 +1297,13 @@ AGENTS_TOKEN_LAUNCHD_DIR_CHECK = $(call LAUNCHD_DIR_CHECK,AGENTS_TOKEN_LAUNCHD_D
 
 agents-token-refresh-install agents-token-refresh-uninstall: export AGENTS_TOKEN_LAUNCHD_DIR := $(AGENTS_TOKEN_LAUNCHD_DIR)
 
+# agents-token-refresh-install's take-over of a refresh make agents-token-refresh-start started, between the
+# checked install of the plist and launchctl bootstrap: the pid files are read again after sudo, which can wait
+# for a password: the start target's pid file, so a refresh it no longer names is not stopped; the lock's pid
+# file, so only the refresh that still holds the lock is; and the start target's pid file once more, so only its
+# own pid is removed. The pid could be reused between ps -p and kill -TERM: that window is accepted. (This
+# comment sits here, not in the recipe: a `#` line inside a continued command ends the recipe under make 3.81,
+# issue #437.)
 .PHONY: agents-token-refresh-install
 agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs the agents App token refresh at boot, one per VM instance; needs sudo (host clone, macOS)
 	$(LIMA_INSTANCE_CHECK)
@@ -1405,11 +1452,6 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 	fi; \
 	echo "agents-token-refresh-install: $$dest has the SHA-256 printed above"; \
 	stopped=''; \
-	# The pid files are read again after sudo, which can wait for a password: \
-	# the start target's pid file, so a refresh it no longer names is not stopped; \
-	# the lock's pid file, so only the refresh that still holds the lock is; \
-	# and the start target's pid file once more, so only its own pid is removed. \
-	# The pid could be reused between ps -p and kill -TERM: that window is accepted. \
 	if [ -n "$$held" ] && [ "$$($(call AGENTS_TOKEN_READ_PID,"$$pid_file"))" != "$$held" ]; then \
 		lock_holder="$$($(call AGENTS_TOKEN_READ_PID,"$$lock_pid"))"; \
 		if [ -n "$$lock_holder" ] && kill -0 "$$lock_holder" 2>/dev/null; then \

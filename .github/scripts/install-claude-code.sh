@@ -16,10 +16,23 @@
 # It fails when /etc/claude-code exists: the CLI applies an admin-managed policy from there
 # (managed-settings.json, managed plugins' hooks) under every flag, --safe-mode and --setting-sources ""
 # included. The GitHub-hosted runner image ships none; one that does is noticed rather than applied.
+#
+# CLAUDE_CODE_INSTALL_ROOT, a test hook only test/ci sets (issue #275), stands in for / in that check, so
+# a test can put a policy at <root>/etc/claude-code unprivileged; unset, the check reads /etc/claude-code.
+# It can only move the check, never drop it, and the script refuses it whenever GITHUB_ACTIONS is true,
+# even when it is empty, so no workflow step can take effect through it.
 set -euo pipefail
 
-if [ -e /etc/claude-code ]; then
-	echo "::error title=Claude Code CLI::/etc/claude-code exists on this runner; its managed policy would apply to the reviewer's CLI under every flag (ADR 0033)"
+if [ -n "${CLAUDE_CODE_INSTALL_ROOT+x}" ] && [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+	echo "::error title=Claude Code CLI::CLAUDE_CODE_INSTALL_ROOT is a test hook and is refused in a GitHub Actions run; unset it so the managed-policy check reads /etc/claude-code (ADR 0033)"
+	exit 1
+fi
+
+policy="${CLAUDE_CODE_INSTALL_ROOT:-/}"
+policy="${policy%/}/etc/claude-code"
+
+if [ -e "${policy}" ]; then
+	echo "::error title=Claude Code CLI::${policy} exists on this runner; its managed policy would apply to the reviewer's CLI under every flag (ADR 0033)"
 	exit 1
 fi
 

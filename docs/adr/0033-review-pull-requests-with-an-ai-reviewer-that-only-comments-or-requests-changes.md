@@ -5,7 +5,7 @@
   of the diff), 2026-11-19. Amended by issues #367 and #376 (a diff over the limit reviewed in parts,
   the skipped outcome, and the answer format's empty `findings`), 2026-11-20. Amended by issues #374,
   #375 and #388 (constant error classes, and the skipped split review's summary of the parts that
-  answered), 2026-11-20
+  answered), 2026-11-20. Amended by issue #276 (the Claude Code pin check), 2026-11-21
 - Date: 2026-11-18
 
 ## Context
@@ -727,6 +727,40 @@ the list, but not out of the counts, and cannot grow the review past GitHub's li
 the pull request's own text, shown in a code span as the "Not reviewed" note shows them. The mitigation stays the skip
 itself: the review still says the AI review was skipped, holds no finding, and asks for the parts to be
 reviewed by hand with prompt injection in mind; the maintainer's approval stays the gate.
+
+### Amended by issue #276: the Claude Code pin check
+
+**Problem.** Renovate bumps `CLAUDE_CODE_VERSION` but cannot bump `CLAUDE_CODE_INTEGRITY`, and a bump's
+own AI review runs `main`'s copy of the workflow, so a missed integrity showed only after the merge, as
+every AI review failing at the install step (issue #428, after PR #412).
+
+**Decision.** A CI check on pull requests, **Claude Code pin** (`.github/workflows/claude-code-pin.yml`),
+runs `go run ./ci/claudecodepin` on every pull request into `main` that changes `ai-review.yml`, the
+install script `.github/scripts/install-claude-code.sh`, the check, its workflow or `go.mod` (whose go
+line picks the Go that builds the check), and on the push to
+`main` (a push to `main` never cancels a `main` run in progress, and the latest merge is always
+re-checked; GitHub keeps at most one pending run per group, so a queued `main` run can be replaced by a
+newer one). It reads both pins, fetches the npm registry's document of
+exactly the pinned version of `@anthropic-ai/claude-code-linux-x64` over HTTPS (a timeout, no redirect, a
+bounded body, no credential), and fails unless that document is of the package and the version and
+publishes the pinned integrity as its `dist.integrity`. Every failure, a registry that cannot be reached
+included, fails the check; its one `::error` line is escaped, so no registry text becomes a workflow
+command. It runs on `pull_request`, never `pull_request_target`, with a token that reads contents only, no
+secret and no environment, so it runs no more of the pull request's code than CI already does. It is the
+pull request's own copy that runs, which is what checks the pull request's own pin.
+
+The code is CI tooling beside `ci/aireview`: the main package `ci/claudecodepin`
+(`claude-code-pin-main`, no `os/exec`) and its library `ci/claudecodepin/internal/pincheck`
+(`claude-code-pin-library`, no `os` or `net`: it parses the readers it is given), held by the forbidigo
+group `claude-code-pin-env` to no read of the environment. `test/lint`'s
+`TestClaudeCodePinWorkflowIsClosed` pins the workflow's shape. The default tests fake the registry; the
+check reaches the network in CI only.
+
+**Not taken.** Renovate updating the integrity itself: a post-upgrade task needs
+`allowedPostUpgradeCommands`, a setting of a self-hosted Renovate only, and no datasource returns an npm
+tarball's integrity to a custom manager. The check is not a required status check: it runs only when its
+paths change, and a required check that never runs would leave every other pull request waiting. It is
+advisory today: a red **Claude Code pin** check on the bump means do not merge.
 
 ## Alternatives considered
 

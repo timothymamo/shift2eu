@@ -1,0 +1,10 @@
+{
+  "name": "@anthropic-ai/claude-code-linux-x64",
+  "version": "2.1.330",
+  "description": "Claude Code CLI for linux-x64",
+  "dist": {
+    "integrity": "",
+    "shasum": "4444444444444444444444444444444444444444",
+    "tarball": "https://registry.example.com/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.330.tgz"
+  }
+}
