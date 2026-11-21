@@ -6,7 +6,7 @@
 // a .envrc there - or above it, which direnv finds with source_up - hands the credentials to every Mac shell the
 // maintainer opens in it, and the VM's credentials are meant for the VM alone (issue #227, ADR 0031).
 //
-// Every row runs one of the six host targets that load the credentials in a sandbox layout - the host clone make
+// Every row runs one of the eight host targets that load the credentials in a sandbox layout - the host clone make
 // runs in, and the workspace whose checkout WORKSPACE_REPO names - and pins one of two things: a refusal (a
 // non-zero exit, a message on stderr naming the file the maintainer must move, and no call of any tool the fakes
 // record, so the guard ran before anything else), or a pass (the target reaches its next step, which is what the
@@ -14,8 +14,9 @@
 // made-up credential values, and no output may carry either of them (CLAUDE.md rule 3, issue #402).
 //
 // The host targets that load the credentials are vm-env, the three that run it or its check (vm-up, vm-create,
-// vm-init) and the two that start or install the agents App token refresh (agents-token-refresh-start,
-// agents-token-refresh-install). The tests refuse rather than warn: vm-env copies the credentials into the VM,
+// vm-init), the two that start or install the agents App token refresh (agents-token-refresh-start,
+// agents-token-refresh-install) and the two foreground ones that mint the App's token in the maintainer's shell
+// with the App's key in reach (agents-token, agents-token-refresh). The tests refuse rather than warn: vm-env copies the credentials into the VM,
 // so a run with a .envrc in the wrong place is the moment to stop it. vm-env-check, the check the three run
 // first, is refused on its own too, so a maintainer who runs it alone learns of the layout as well.
 package devenv_test
@@ -29,10 +30,13 @@ import (
 	"testing"
 )
 
-// envrcGuardTargets are the six host targets issue #402 gives the guard to: the ones that load the VM's
-// credentials, directly (vm-env) or through the checks and sub-makes around it, and the two that run the agents
-// App's token refresh with the App's key in reach.
+// envrcGuardTargets are the eight host targets issue #402 gives the guard to: the ones that load the VM's
+// credentials, directly (vm-env) or through the checks and sub-makes around it, and the four that run the agents
+// App's token script with the App's key in reach (the two that mint in the foreground and the two that start or
+// install the background refresh).
 var envrcGuardTargets = []string{
+	"agents-token",
+	"agents-token-refresh",
 	"agents-token-refresh-install",
 	"agents-token-refresh-start",
 	"vm-create",
@@ -65,7 +69,7 @@ func plantedEnvrcLines() string {
 // the sandbox record each call, so one call of any of them proves the guard did not run first (issue #402).
 var envrcGuardTools = []string{"dscl", "dseditgroup", "ssh"}
 
-// envrcNextStep is what one of the six targets reaches once the guard lets it through: the first tool it runs, or
+// envrcNextStep is what one of the eight targets reaches once the guard lets it through: the first tool it runs, or
 // the message of the credential check it prints when the sandbox sets no agents App variable, which is as far as
 // a target the sandbox cannot take further gets. Reaching it is what "the guard passed" means here.
 type envrcNextStep struct {
@@ -73,8 +77,12 @@ type envrcNextStep struct {
 	message string
 }
 
-// envrcNextSteps is the next step of each of the six targets.
+// envrcNextSteps is the next step of each of the eight targets. The four token targets print the same message
+// once the guard lets them through: the sandbox sets no agents App variable, and dev/agents-app-token.sh's
+// check_inputs dies on the missing SHIFT2EU_AGENTS_APP_ID before it mints anything or runs a tool.
 var envrcNextSteps = map[string]envrcNextStep{
+	"agents-token":                 {message: "SHIFT2EU_AGENTS_APP_ID"},
+	"agents-token-refresh":         {message: "SHIFT2EU_AGENTS_APP_ID"},
 	"agents-token-refresh-install": {message: "SHIFT2EU_AGENTS_APP_ID"},
 	"agents-token-refresh-start":   {message: "SHIFT2EU_AGENTS_APP_ID"},
 	"vm-create":                    {tool: "limactl"},
@@ -83,7 +91,7 @@ var envrcNextSteps = map[string]envrcNextStep{
 	"vm-up":                        {tool: "limactl"},
 }
 
-// envrcLayoutCase is one layout the guard is run in, for one or more of the six targets: the .envrc files a
+// envrcLayoutCase is one layout the guard is run in, for one or more of the eight targets: the .envrc files a
 // maintainer's machine would have, and the files a refusal must name.
 type envrcLayoutCase struct {
 	name string
@@ -93,7 +101,7 @@ type envrcLayoutCase struct {
 	// setup writes the files of the layout hostEnvrc cannot spell, such as a file outside the clone whose path
 	// only the sandbox knows, and returns the paths a refusal must name.
 	setup func(t *testing.T, l *hostLayout) []string
-	// targets narrows the case to some of the six targets, and empty runs it against all of them.
+	// targets narrows the case to some of the eight targets, and empty runs it against all of them.
 	targets []string
 	// want is what a refusal's stderr must say beyond the paths, such as the docs section that holds the fix.
 	want []string
@@ -112,7 +120,7 @@ func (tc envrcLayoutCase) runs() []string {
 // may hold the maintainer's credentials, but it may not read a parent. `source_up` and `source_up_if_exists` find
 // a .envrc in a directory above the clone, and `source_env`, `source_env_if_exists`, `dotenv` and
 // `dotenv_if_exists` name one: the credentials would then live in a file outside the clone, which direnv loads
-// in every shell the maintainer opens there, and which no review of this repository reaches. Every one of the six
+// in every shell the maintainer opens there, and which no review of this repository reaches. Every one of the eight
 // targets must refuse such a clone, and the refusal must name the clone's .envrc and send the maintainer to
 // docs/dev-environment.md, The host clone, where every line belongs.
 func TestHostTargetsRefuseAHostCloneEnvrcThatReadsAParent(t *testing.T) {
@@ -173,6 +181,120 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatReadsAParent(t *testing.T) {
 			hostEnvrc: "source_env \"$HOME/secrets.env\"\n",
 			targets:   []string{"vm-env"},
 			want:      []string{"The host clone"},
+		},
+		{
+			// direnv runs the .envrc in bash, where source and . are the same directive as source_env: a line
+			// that reads a parent with them is as far outside the clone as source_env .. (issue #402).
+			name:      "the host clone's .envrc says source ../secrets.env",
+			hostEnvrc: "source ../secrets.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"The host clone"},
+		},
+		{
+			name:      "the host clone's .envrc says . ../secrets.env",
+			hostEnvrc: ". ../secrets.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"The host clone"},
+		},
+		{
+			// Not the first word of the line: a source behind a ; is a command of its own to bash, and direnv
+			// runs the whole line.
+			name:      "the host clone's .envrc says export A=1; source ../secrets.env",
+			hostEnvrc: "export A=1; source ../secrets.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"The host clone"},
+		},
+		{
+			// A backslash continues the line, so bash hands source_env the ../secrets.env of the second line:
+			// the directive's argument is the two lines together, not the lone backslash of the first.
+			name:      "the host clone's .envrc continues source_env with a backslash",
+			hostEnvrc: "source_env \\\n  ../secrets.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"The host clone"},
+		},
+		{
+			// dotenv reads the file it names, and a symlink loads like the file it points at: the guard must
+			// resolve a path inside the clone before it calls it inside.
+			name: "the host clone's .envrc dotenvs a symlink that points outside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				target := filepath.Join(l.sb.root, "outside", "secrets.env")
+				writeFileMode(t, target, []byte(plantedEnvrcLines()), 0o600)
+
+				link := filepath.Join(l.root, "filelink")
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatalf("symlink %s: %v", link, err)
+				}
+
+				writeHostEnvrc(t, l, "dotenv filelink\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
+		{
+			// The clone's own .envrc is what the guard reads, and a symlink there makes the credentials live
+			// in a file outside the clone: the refusal names the clone's .envrc, the file to replace with its
+			// target's lines, and reads none of them.
+			name: "the host clone's .envrc is a symlink to a file outside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				target := filepath.Join(l.sb.root, "outside", "envrc.outside")
+				writeFileMode(t, target, []byte("export X=1\n"+plantedEnvrcLines()), 0o600)
+
+				link := filepath.Join(l.root, ".envrc")
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatalf("symlink %s: %v", link, err)
+				}
+
+				return []string{link}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
+		{
+			// A credential on the directive's own line: the guard reads that line, and its message must name
+			// the directive and paths only, never the value beside them (CLAUDE.md rule 3).
+			name:      "the host clone's .envrc holds a credential after a directive on the same line",
+			hostEnvrc: "dotenv ../x.env; export CLAUDE_CODE_OAUTH_TOKEN=" + plantedOAuthValue + "\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"The host clone"},
+		},
+		{
+			// The directive sits inside a double-quoted value: bash only passes it to direnv as an argument of
+			// export, so loading it is arguable - refusing the line is not, and either way no value may reach
+			// the terminal.
+			name:      "the host clone's .envrc holds a directive inside a quoted value",
+			hostEnvrc: "export DEEPSEEK_API_KEY=\"" + plantedDeepseekValue + " dotenv /planted\"\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"The host clone"},
+		},
+		{
+			// A sibling whose name begins with the clone's is no directory of the clone: a check that compares
+			// the paths as strings must compare whole components.
+			name: "the host clone's .envrc sources a sibling whose name begins with the clone's",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				sibling := filepath.Join(filepath.Dir(l.root), filepath.Base(l.root)+"-old")
+				writeFileMode(t, filepath.Join(sibling, "x.envrc"), []byte(plantedEnvrcLines()), 0o600)
+				writeHostEnvrc(t, l, "source_env ../"+filepath.Base(sibling)+"/x.envrc\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
+		{
+			// A refusal names the line the maintainer has to change, so the two directives on lines 2 and 4
+			// are named by their numbers as well as by the file.
+			name:      "the host clone's .envrc reads a parent on two lines",
+			hostEnvrc: "# the maintainer's own settings\ndotenv ../a.env\n\ndotenv ../a.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 2", "line 4"},
 		},
 		{
 			// vm-env-check is the check the three that copy the credentials run first, and the guard gives it
@@ -287,6 +409,63 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 			},
 		},
 		{
+			// WORKSPACE_REPO is a path, and direnv reads the .envrcs of the path as written, while the VM mounts
+			// the directory it leads to: the guard must walk both, or a file above one spelling only is missed.
+			// Here the symlink keeps the .envrc of the directory holding it in the chain of the spelling alone.
+			name: "a .envrc above the workspace only in the spelling WORKSPACE_REPO writes",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeHostEnvrc(t, l, "")
+
+				linkparent := filepath.Join(l.sb.root, "linkparent")
+				if err := os.MkdirAll(linkparent, 0o700); err != nil {
+					t.Fatalf("create %s: %v", linkparent, err)
+				}
+
+				link := filepath.Join(linkparent, "wslink")
+				if err := os.Symlink(l.workspace(), link); err != nil {
+					t.Fatalf("symlink %s: %v", link, err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(link, filepath.Base(l.workspaceRepo()))
+
+				above := filepath.Join(linkparent, ".envrc")
+				writeFileMode(t, above, []byte(plantedEnvrcLines()), 0o600)
+
+				return []string{above}
+			},
+			targets: []string{"vm-env-check"},
+		},
+		{
+			// The other spelling: the symlink leads below the workspace of the path as written, so a .envrc in
+			// the directory above where it leads matches no directory of WORKSPACE_REPO's own chain.
+			name: "a .envrc above the workspace the spelling WORKSPACE_REPO leads to",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeHostEnvrc(t, l, "")
+
+				// The physical workspace, the directory the symlink leads to, and its parent - which is no
+				// directory of the spelling's own chain (<sandbox>/link, <sandbox>, ...).
+				physical := filepath.Join(l.sb.workspaceRoot(), "sub")
+				writeClone(t, filepath.Join(physical, filepath.Base(l.workspaceRepo())))
+
+				link := filepath.Join(l.sb.root, "link")
+				if err := os.Symlink(physical, link); err != nil {
+					t.Fatalf("symlink %s: %v", link, err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(link, filepath.Base(l.workspaceRepo()))
+
+				above := filepath.Join(l.sb.workspaceRoot(), ".envrc")
+				writeFileMode(t, above, []byte(plantedEnvrcLines()), 0o600)
+
+				return []string{above}
+			},
+			targets: []string{"vm-env-check"},
+		},
+		{
 			// The same refusal for the check the three credential targets run first, run on its own.
 			name: "the check refuses the workspace's .envrc when run through vm-env-check alone",
 			setup: func(t *testing.T, l *hostLayout) []string {
@@ -318,7 +497,7 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 
 // TestHostTargetsPassACleanEnvrcLayout pins what the guard must not stop: the maintainer's layout when the host
 // clone's .envrc reads no parent - it holds its lines itself, or it sources a file inside the clone, written as a
-// relative or an absolute path - and when no .envrc and no .env sits in the workspace or above it. Each of the six
+// relative or an absolute path - and when no .envrc and no .env sits in the workspace or above it. Each of the eight
 // targets must reach its next step, so the guard does not refuse the layout the docs ask for.
 func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 	t.Parallel()
@@ -330,6 +509,20 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 		{
 			name:      "the host clone's .envrc sources a file inside the clone",
 			hostEnvrc: "source_env ./host-secrets.env\ndotenv ./.env.local\n",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "host-secrets.env"), []byte(plantedEnvrcLines()), 0o600)
+				writeFileMode(t, filepath.Join(l.root, ".env.local"), []byte(plantedEnvrcLines()), 0o600)
+
+				return nil
+			},
+		},
+		{
+			// direnv runs the .envrc in bash, where source and . read a file as source_env does: a file inside
+			// the clone is what the docs ask for, whichever of the three the maintainer writes.
+			name:      "the host clone's .envrc says source and . with a path inside the clone",
+			hostEnvrc: "source ./host-secrets.env\n. ./.env.local\n",
 			setup: func(t *testing.T, l *hostLayout) []string {
 				t.Helper()
 
@@ -374,6 +567,58 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 	}
 }
 
+// envrcGuardRefusalTexts are the guard's two refusals, the phrases that say direnv reads a credential file
+// outside the host clone: a target the guard does not cover must print neither of them, and no recipe line of the
+// Makefile holds either (the guard is make code that runs while make reads the file, not a recipe).
+var envrcGuardRefusalTexts = []string{
+	"is in the workspace the VM mounts or in a directory above it",
+	"direnv would read the credentials from a .envrc or .env other than the host clone's own",
+}
+
+// TestHostTargetsOutsideTheGuardIgnoreAnEnvrcAboveTheWorkspace pins the other side of issue #402: the guard is the
+// credential targets' alone. A host target that loads no credential - vm-boot-install, whose LaunchDaemon starts
+// the VM and holds none - must still run with a .envrc in the workspace: refusing it too would stop the maintainer
+// doing the one thing the docs ask for while the file is still there, and a guard that refuses every host target
+// could only be switched off by deleting the guard. make -n prints the recipe and runs nothing, which is all this
+// case needs: whether the guard refused shows on the streams, not in what ran.
+func TestHostTargetsOutsideTheGuardIgnoreAnEnvrcAboveTheWorkspace(t *testing.T) {
+	t.Parallel()
+
+	const target = "vm-boot-install"
+
+	l := newHostLayout(t)
+	l.workspaceCheckout(t)
+	writeHostEnvrc(t, l, "")
+
+	above := writeAboveWorkspace(t, l, 1, ".envrc")
+
+	stdout, stderr, err := runMakeIn(t, l.root, []string{"-n", target}, maps.Clone(l.env))
+	if err != nil {
+		t.Fatalf("make -n %s exited non-zero with %s in the workspace, a file the guard refuses for the targets that load a credential and must leave alone for the ones that load none (issue #402): %v\nstdout: %s\nstderr: %s",
+			target, above, err, stdout, stderr)
+	}
+
+	if !strings.Contains(stdout, target+":") {
+		t.Errorf("make -n %s printed none of %s's recipe lines, so this case pins nothing about the guard letting it through (issue #402)\nstdout: %s\nstderr: %s",
+			target, target, stdout, stderr)
+	}
+
+	for _, text := range envrcGuardRefusalTexts {
+		if strings.Contains(stdout, text) || strings.Contains(stderr, text) {
+			t.Errorf("make -n %s printed the guard's refusal %q although %s loads no credential and the guard must not cover it: only the targets that load the VM's credentials or the agents App's key are refused (issue #402)\nstdout: %s\nstderr: %s",
+				target, text, target, stdout, stderr)
+		}
+	}
+
+	if namesAnywhere(stdout+stderr, pathForms(t, above)) {
+		t.Errorf("make -n %s names %s, the .envrc above the workspace, although it loads no credential and the guard must not cover it (issue #402)\nstdout: %s\nstderr: %s",
+			target, above, stdout, stderr)
+	}
+
+	run := envrcRun{layout: l, stdout: stdout, stderr: stderr, err: err}
+	run.assertNoPlantedValue(t, "make -n "+target)
+}
+
 // envrcRun is one run of one host target in a layout the guard is run in: what make printed and returned, the
 // sandbox whose fakes recorded what ran, and the files a refusal must name.
 type envrcRun struct {
@@ -398,6 +643,11 @@ func makeInEnvrcLayout(t *testing.T, target string, tc envrcLayoutCase) envrcRun
 
 	// The workspace holds the repository's own checkout, which WORKSPACE_REPO names.
 	l.workspaceCheckout(t)
+
+	// The host clone holds the script the two foreground token targets run, as the maintainer's does, so their
+	// next step is the script's own refusal of the App variables the sandbox does not set.
+	writeFileMode(t, filepath.Join(l.root, "dev", "agents-app-token.sh"),
+		[]byte(readRepoFile(t, "dev/agents-app-token.sh")), 0o700)
 
 	var files []string
 
