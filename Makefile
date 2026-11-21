@@ -491,25 +491,26 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # neither creates, reads nor removes bin/site, the bundle make site builds for the release and the deploy: the
 # run serves a bundle of its own (issue #423), which ci/sitebuild builds straight into a fresh directory from
 # mktemp -d, so two runs in one worktree never rebuild a bundle under each other's browser. The directory is
-# removed on every exit, a hang-up (closing the pane), an interrupt and a termination included: each is trapped,
-# since dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills it. The recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network
-# and its own entrypoint replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on
-# every interface through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no
-# fixed port is open to guess and the DevTools ports and containers of two runs at once do not collide. It waits
-# up to 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll checks with
-# $(DOCKER) inspect that the container still runs: one inspect reports as not running (false) fails the run at
-# once, naming its exit status and showing the tail of its log (issue #423). A failed inspect alone is no verdict,
-# so the run keeps polling, but three failed in a row mean the container is gone, and the run fails, showing
-# inspect's last error, instead of waiting out the 60 seconds. It reads the address back from the log line (port and
-# browser id, so the test attaches to the browser this run started and no other: a correctness guarantee, not
-# access control, since any local process that finds the port can read the id from /json/version on it), and
-# runs test/browser against it. The container's name carries the recipe shell's PID, so parallel runs have their
-# own; it is removed on every exit, failure and interrupt included. chromedp's pipe transport
-# (--remote-debugging-pipe) would open no port at all, but it hands the browser fds 3 and 4 of a process it
-# starts itself, and docker run and nerdctl run pass no such fds into a container (docs/adr/0036, amendment for
-# issue #368).
+# removed on every exit, a hang-up (closing the pane), an interrupt and a termination included: each is
+# trapped, since dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills it. The recipe
+# starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network and its own entrypoint
+# replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface
+# through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is
+# open to guess and the DevTools ports and containers of two runs at once do not collide. It waits up to
+# 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll checks with
+# $(DOCKER) inspect that the container still runs: one inspect reports as not running (false) fails the
+# run at once, naming its exit status and showing the tail of its log (issue #423). A failed inspect alone
+# is no verdict, so the run keeps polling, but three failed in a row mean the container is gone, and the
+# run fails, showing inspect's last error, instead of waiting out the 60 seconds. It reads the address back
+# from the log line (port and browser id, so the test attaches to the browser this run started and no
+# other: a correctness guarantee, not access control, since any local process that finds the port can
+# read the id from /json/version on it), and runs test/browser against it. The container's name carries
+# the recipe shell's PID, so parallel runs have their own; it is removed on every exit, failure and
+# interrupt included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but
+# it hands the browser fds 3 and 4 of a process it starts itself, and docker run and nerdctl run pass no
+# such fds into a container (docs/adr/0036, amendment for issue #368).
 .PHONY: test-browser
-test-browser: ## Build a bundle of the site's own for this run and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
+test-browser: ## Build the site's bundle into a directory of this run's own and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
 	@set -eu; \
 	devtools=; \
 	name=shift2eu-test-browser-$$$$; \
