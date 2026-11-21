@@ -1095,9 +1095,10 @@ var pinnedDepguardRules = []check.DepguardRule{
 	},
 	{
 		// The test trees' own documentation packages (issue #152, the auditor's finding
-		// H-1): test/architecture, test/container, test/devenv,
-		// test/docs, test/lint, test/examples
-		// (issue #179) and test/ci (issue #275) hold doc.go and no code, and each is a production package a
+		// H-1): test/architecture, test/container, test/devenv, test/docs, test/e2e,
+		// test/examples (issue #179), test/lint, test/site (PRD #297 milestone 2) and
+		// test/ci (issue #275). Each has a doc.go that imports nothing as its one
+		// production file (test/e2e and test/site: below), and each is a production package a
 		// composition root can import, because the roots' allow lists name the module
 		// path as a prefix entry. Go's internal
 		// rule keeps test/internal/... and test/architecture/internal/... out of cmd/
@@ -1118,6 +1119,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// test/architecture is taken out with a negated glob, as a rule's files: list
 		// cannot say "this directory only": without it the rule would hold
 		// test/architecture/internal/check, which reads os and os/exec, and refuse them.
+		// test/site's helper test/site/internal/jsscan, which Go's internal rule keeps
+		// out of reach of the roots, is taken out the same way.
 		Name:     testDocsRule,
 		ListMode: "strict",
 		Files: []string{

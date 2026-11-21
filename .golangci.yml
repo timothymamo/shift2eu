@@ -1613,9 +1613,10 @@ linters:
             - github.com/timothymamo/shift2eu/internal/domain/taxonomy$
             - github.com/timothymamo/shift2eu/internal/domain/text$
         # The test trees' own documentation packages (issue #152, the auditor's finding H-1):
-        # test/architecture, test/container, test/devenv, test/docs, test/lint
-        # and test/examples (issue #179) each hold doc.go and no
-        # code, and each is a production package a composition root can import, because the roots'
+        # test/architecture, test/container, test/devenv, test/docs, test/e2e,
+        # test/examples (issue #179), test/lint, test/site and test/ci (issue #275)
+        # each have a doc.go that imports nothing as their one production file
+        # (test/e2e, test/site and test/ci, below), and each is a production package a composition root can import, because the roots'
         # allow lists name the module path as a prefix entry. Go's internal rule keeps
         # test/internal/... and
         # test/architecture/internal/... out of reach of cmd/ and internal/, and nothing keeps
