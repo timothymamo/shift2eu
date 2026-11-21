@@ -186,8 +186,8 @@ jobs:
 
   # The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036): make test-browser builds
   # the bundle with make site, runs the headless Chromium the Makefile pins by digest with the host network
-  # and DevTools on 127.0.0.1 only, and drives the bundle served from a local httptest origin. The test
-  # never touches the internet; the image pull is the job's only download beyond Go's.
+  # and DevTools on 127.0.0.1 only, on a random port, and drives the bundle served from a local httptest
+  # origin. The test never touches the internet; the image pull is the job's only download beyond Go's.
   browser:
     name: Browser smoke test
     runs-on: ubuntu-latest

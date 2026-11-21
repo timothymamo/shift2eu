@@ -110,7 +110,7 @@ Arrows are imports. They point inwards only:
   the reproducible, attested bundle. `test/browser`, behind `browser && !js`, drives the built bundle in a
   headless Chromium with `chromedp`, which depguard confines to it (`chromedp-only-in-the-browser-test`,
   `browser-smoke-test`); `make test-browser` runs it against a container pinned by digest, with DevTools on
-  127.0.0.1 only, and CI runs it as its own job.
+  127.0.0.1 only, on a port the kernel picks per run, and CI runs it as its own job.
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
   constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
   read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the
