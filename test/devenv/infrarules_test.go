@@ -103,8 +103,11 @@ module "m" {
 	},
 	{
 		name: "object-visibility",
-		why:  `a scaleway_object whose visibility = "public-read" would make the object an ACL`,
+		why:  `a scaleway_object whose visibility = "public-read" would make the object an ACL, beside the object the rule refuses on its own`,
 		want: "visibility",
+		// The visibility argument is the ACL rule; the scaleway_object holding it breaks the object rule too,
+		// and neither refusal may hide the other.
+		wantMore: []string{"object"},
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			appendInfraText(t, filepath.Join(site, "main.tf"), `
