@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -31,6 +32,22 @@ type reportView struct {
 	IDs int `json:"ids"`
 	// Handlers is the number of attributes starting with "on" in the report.
 	Handlers int `json:"handlers"`
+	// Header is the report's header line: the text below its title, which
+	// names the source, the inventory file, the catalogs and the region.
+	Header string `json:"header"`
+	// Summary is the boxes of the report's summary, in document order: a
+	// single report shows one box per fit, and one for the monthly estimate
+	// when it has one.
+	Summary []summaryBox `json:"summary"`
+}
+
+// summaryBox is one box of the report's summary.
+type summaryBox struct {
+	// Text is the box's text, with runs of whitespace collapsed.
+	Text string `json:"text"`
+	// Badge is the class attribute of the fit badge the box holds, "" when the
+	// box holds none.
+	Badge string `json:"badge"`
 }
 
 // table is one table of the report.
@@ -45,7 +62,7 @@ type table struct {
 const reportExpression = `(() => {
 	const report = document.getElementById("report");
 	if (report === null) {
-		return {text: "", sections: [], tables: [], tags: [], ids: 0, handlers: 0};
+		return {text: "", sections: [], tables: [], tags: [], ids: 0, handlers: 0, header: "", summary: []};
 	}
 	const one = function (el) { return el.textContent.replace(/\s+/g, " ").trim(); };
 	const all = Array.from(report.querySelectorAll("*"));
@@ -60,6 +77,11 @@ const reportExpression = `(() => {
 			return attr.name.toLowerCase().indexOf("on") === 0;
 		}).length;
 	}, 0);
+	const header = report.querySelector(".shift2eu-report > h2 + ul");
+	const summary = Array.from(report.querySelectorAll(".part-summary > *")).map(function (box) {
+		const badge = box.querySelector(".fit");
+		return {text: one(box), badge: badge === null ? "" : badge.className};
+	});
 	return {
 		text: one(report),
 		sections: Array.from(report.querySelectorAll("h2, h3, h4, h5")).map(one),
@@ -67,6 +89,8 @@ const reportExpression = `(() => {
 		tags: Array.from(new Set(all.map(function (el) { return el.tagName.toLowerCase(); }))).sort(),
 		ids: report.querySelectorAll("[id], [name]").length,
 		handlers: handlers,
+		header: header === null ? "" : one(header),
+		summary: summary,
 	};
 })()`
 
@@ -129,8 +153,67 @@ func resourceCount(t *testing.T, document string) int {
 	return len(doc.Resources)
 }
 
-// listPricesDatePattern matches the date a report's estimate caveat carries.
-var listPricesDatePattern = regexp.MustCompile(`list prices on (\d{4}-\d{2}-\d{2})`)
+// listPricesDatePattern matches the date a report's estimate caveat carries: the
+// cost estimate's closing line names the region the list prices are in and the
+// catalog snapshot's date (issue #373, item 14).
+var listPricesDatePattern = regexp.MustCompile(`List prices in \S+ on (\d{4}-\d{2}-\d{2})`)
+
+// summaryCountPattern matches the count a summary box of one fit states: how
+// many of the report's resources have that fit.
+var summaryCountPattern = regexp.MustCompile(`\b(\d+) of (\d+) resources\b`)
+
+// summaryFitCounts reads the report's summary boxes (issue #373, item 10-2):
+// the count each fit states, by the fit's name, and the number of resources the
+// summary states it counted them of. A box with no fit badge, the monthly
+// estimate's, is left out.
+func summaryFitCounts(t *testing.T, report reportView) (map[string]int, int) {
+	t.Helper()
+
+	number := func(text string) int {
+		n, err := strconv.Atoi(text)
+		if err != nil {
+			t.Fatalf("the report's summary states %q, which is no number: %v", text, err)
+		}
+
+		return n
+	}
+
+	counts := make(map[string]int, 3)
+	assessed := -1
+
+	for _, box := range report.Summary {
+		fit, ok := strings.CutPrefix(box.Badge, "fit fit-")
+		if !ok {
+			continue
+		}
+
+		match := summaryCountPattern.FindStringSubmatch(box.Text)
+		if match == nil {
+			t.Errorf("the summary's %q box reads %q, want the fit's count of the resources assessed (PRD #297, issue #373, item 10-2)",
+				fit, box.Text)
+
+			continue
+		}
+
+		count, total := number(match[1]), number(match[2])
+
+		if assessed < 0 {
+			assessed = total
+		} else if total != assessed {
+			t.Errorf("the summary's %q box counts its fit of %d resources and another box of %d, want every box counting the same resources (PRD #297, issue #373, item 10-2)",
+				fit, total, assessed)
+		}
+
+		counts[fit] = count
+	}
+
+	if assessed < 0 {
+		t.Fatalf("the report's summary states no fit's count, want one box per fit holding the count, in place of the summary table (PRD #297, issue #373, item 10-2): %v",
+			report.Summary)
+	}
+
+	return counts, assessed
+}
 
 // TestAssessmentShowsTheReport pins the first assessment criterion (PRD #297,
 // Assessment in the browser): a bundled example, one target, run — and the page
@@ -171,13 +254,31 @@ func TestAssessmentShowsTheReport(t *testing.T) {
 				}
 			}
 
-			summary, ok := report.tableWith("Fit", "Resources")
-			if !ok {
-				t.Fatalf("the report of the %s example holds no summary table of fits, only %v", example, report.Tables)
+			// The summary is one box per fit (issue #373, item 10-2): each fit's
+			// box states that fit's count of the resources, in place of the
+			// summary table, and the counts cover every resource the inventory
+			// holds.
+			counts, assessed := summaryFitCounts(t, report)
+
+			if want := resourceCount(t, inventory); assessed != want {
+				t.Errorf("the summary of the %s example counts its fits of %d resources, want the %d the inventory holds", example, assessed, want)
 			}
 
-			if summary.Rows < 4 {
-				t.Errorf("the summary table of the %s example holds %d rows, want at least the four fits direct, partial, none and total", example, summary.Rows)
+			counted := 0
+
+			for _, fit := range []string{"direct", "partial", "none"} {
+				count, ok := counts[fit]
+				if !ok {
+					t.Errorf("the summary of the %s example holds no box counting the %s fit, want one box per fit (issue #373, item 10-2): %v", example, fit, report.Summary)
+
+					continue
+				}
+
+				counted += count
+			}
+
+			if len(counts) == 3 && counted != assessed {
+				t.Errorf("the summary of the %s example counts %d of the %d resources it assessed, want every resource in one of its three fits: %v", example, counted, assessed, counts)
 			}
 
 			resources, ok := report.tableWith("ID", "Fit", "Best offering")
@@ -197,7 +298,7 @@ func TestAssessmentShowsTheReport(t *testing.T) {
 			dates := listPricesDatePattern.FindAllStringSubmatch(report.Text, -1)
 			if len(dates) == 0 {
 				t.Fatalf("the report of the %s example states no estimate caveat %q, so no estimate carries the snapshot's date: %q",
-					example, "list prices on "+snapshot, report.Text)
+					example, "List prices in <region> on "+snapshot, report.Text)
 			}
 
 			for _, match := range dates {
@@ -208,15 +309,17 @@ func TestAssessmentShowsTheReport(t *testing.T) {
 			}
 
 			if !strings.Contains(report.Text, "excluding VAT and discounts") {
-				t.Errorf("the report of the %s example carries no caveat saying what the estimates are (list prices on the snapshot's date, excluding VAT and discounts): %q",
+				t.Errorf("the report of the %s example carries no caveat saying what the estimates are (list prices in the region on the snapshot's date, excluding VAT and discounts): %q",
 					example, report.Text)
 			}
 
-			// The page's own prose carries the caveat that they are no quote,
-			// which the report's own wording leaves to the page.
+			// The page's own prose carries the estimates note, which the report's
+			// own wording leaves to the page: the wording the maintainer asked for
+			// (issue #373, item 05-4).
 			prose := eval[string](t, ctx, `document.querySelector("main").textContent.replace(/\s+/g, " ")`)
-			if !strings.Contains(prose, "not a quote") {
-				t.Errorf("the assessment page's prose carries no caveat that the estimates are list prices on that date, not a quote: %q", prose)
+
+			if note := "Estimates are list prices on each catalog's retrieval date, excluding VAT and discounts."; !strings.Contains(prose, note) {
+				t.Errorf("the assessment page's prose carries no estimates note %q (issue #373, item 05-4): %q", note, prose)
 			}
 
 			// The blockers and required changes the report has are the ones the
@@ -438,14 +541,26 @@ func TestAssessmentRegionAndEstimate(t *testing.T) {
 		}
 
 		report := reportOf(t, ctx)
-		if want := "Region: " + region + " (chosen with --region)"; !strings.Contains(report.Text, want) {
-			t.Errorf("the report does not state the chosen region as %q, so the region did not scope it: %q", want, report.Text)
+
+		// The header line names the region the report is scoped to, beside the
+		// source, the file and the catalogs (issue #373, item 10-1). Item 10-1
+		// removed the note saying how the region was chosen, so no bracketed
+		// note follows the region.
+		if want := "region " + region; !strings.Contains(report.Header, want) {
+			t.Errorf("the report's header line reads %q, want it to state the chosen region as %q, so the region did scope it (PRD #297, issue #373, item 10-1)",
+				report.Header, want)
 		}
 
-		// The same report without a region states the target's default region
-		// instead, so the region line above is the choice and not the default.
-		if strings.Contains(report.Text, "the target's default for estimates") {
-			t.Errorf("the report with a chosen region still dates its estimates to the target's default region: %q", report.Text)
+		if note := "region " + region + " ("; strings.Contains(report.Header, note) {
+			t.Errorf("the report's header line reads %q, want the chosen region alone: it carries no bracketed note about how it was chosen (PRD #297, issue #373, item 10-1)",
+				report.Header)
+		}
+
+		for _, unwanted := range []string{"(chosen with", "(the target's default", "for estimates)"} {
+			if strings.Contains(report.Text, unwanted) {
+				t.Errorf("the report with a chosen region still carries %q, want no note about how the region was chosen: the header names it alone (PRD #297, issue #373, item 10-1): %q",
+					unwanted, report.Text)
+			}
 		}
 	})
 
@@ -470,7 +585,7 @@ func TestAssessmentRegionAndEstimate(t *testing.T) {
 			t.Errorf("the report shows the %q section although the estimate switch is off: --no-estimate writes none", "Cost estimate")
 		}
 
-		for _, unwanted := range []string{"list prices on", "excluding VAT and discounts", "Monthly estimate", "€", "Total:"} {
+		for _, unwanted := range []string{"List prices", "excluding VAT and discounts", "Monthly estimate", "€", "Total:"} {
 			if strings.Contains(report.Text, unwanted) {
 				t.Errorf("the report with the estimate switch off still carries %q: --no-estimate removes every estimate", unwanted)
 			}

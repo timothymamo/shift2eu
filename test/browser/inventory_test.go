@@ -275,7 +275,9 @@ func pressButton(t *testing.T, ctx context.Context, index int, key string) {
 // item 15): the clipboard is granted to the origin, as the hosting's
 // Permissions-Policy must allow it, and a copy button then puts exactly its own
 // command on the clipboard, in place of whatever was there: not the whole page and
-// not the other commands.
+// not the other commands. The page shows one source's section at a time, so a
+// command of a section that is not shown is copied after its source's button is
+// pressed, as a visitor reaches it.
 func TestInventoryCopyPutsOneCommandOnTheClipboard(t *testing.T) {
 	t.Parallel()
 
@@ -290,22 +292,41 @@ func TestInventoryCopyPutsOneCommandOnTheClipboard(t *testing.T) {
 		return ((button.getAttribute("aria-label") || button.textContent) || "").toLowerCase().indexOf("copy") >= 0;
 	}).length >= 2`)
 
-	copies := eval[[]int](t, ctx, `(() => {
-		const indices = [];
-		Array.from(document.querySelectorAll("button")).forEach(function (button, index) {
-			const name = ((button.getAttribute("aria-label") || button.textContent) || "").toLowerCase();
-			if (name.indexOf("copy") >= 0) {
-				indices.push(index);
-			}
-		});
-		return indices;
-	})()`)
-
-	if len(copies) < 2 {
-		t.Fatalf("%s holds %d copy buttons, want two at least: each command has its own (issue #373, item 15)", inventoryPage, len(copies))
+	tests := []struct {
+		name string
+		// section is the id of the source's section the command is copied from.
+		section string
+		// shown says whether the page shows that section on load, which the
+		// AWS one does and the others do not.
+		shown bool
+		// last copies the section's last command rather than its first, so the
+		// two copies are never the same button.
+		last bool
+	}{
+		{name: "AWS", section: "source-aws", shown: true},
+		{name: "Azure", section: "source-azure", last: true},
 	}
 
-	for _, copy := range []int{copies[0], copies[len(copies)-1]} {
+	for _, tc := range tests {
+		if !tc.shown {
+			clickButton(t, ctx, sourceButtonIndex(t, ctx, tc.section))
+
+			waitFor(t, ctx, "the "+tc.name+" section to be shown", fmt.Sprintf(`(() => {
+				const panel = document.getElementById(%s);
+				return panel !== null && !panel.hidden;
+			})()`, jsString(tc.section)))
+		}
+
+		copies := copyButtonsIn(t, ctx, tc.section)
+		if len(copies) == 0 {
+			t.Fatalf("the %s section of %s holds no copy button, want one per command (issue #373, item 15)", tc.name, inventoryPage)
+		}
+
+		copy := copies[0]
+		if tc.last {
+			copy = copies[len(copies)-1]
+		}
+
 		command := eval[string](t, ctx, fmt.Sprintf(`(() => {
 			const button = document.querySelectorAll("button")[%d];
 			const box = button.parentElement;
@@ -322,10 +343,49 @@ func TestInventoryCopyPutsOneCommandOnTheClipboard(t *testing.T) {
 		clipboard := readClipboard(t, ctx)
 
 		if clipboard != command {
-			t.Errorf("the copy button %d puts %q on the clipboard, want exactly its own command %q (issue #373, item 15)",
-				copy+1, clipboard, command)
+			t.Errorf("the %s section's copy button puts %q on the clipboard, want exactly its own command %q (issue #373, item 15)",
+				tc.name, clipboard, command)
 		}
 	}
+}
+
+// copyButtonsIn returns the indices, in the document's button order, of the copy
+// buttons inside the section with the id.
+func copyButtonsIn(t *testing.T, ctx context.Context, section string) []int {
+	t.Helper()
+
+	return eval[[]int](t, ctx, fmt.Sprintf(`(() => {
+		const indices = [];
+		document.querySelectorAll("button").forEach(function (button, index) {
+			const name = ((button.getAttribute("aria-label") || button.textContent) || "").toLowerCase();
+			if (button.closest(%s) !== null && name.indexOf("copy") >= 0) {
+				indices.push(index);
+			}
+		});
+		return indices;
+	})()`, jsString("#"+section)))
+}
+
+// sourceButtonIndex returns the index, in the document's button order, of the
+// source button that controls the section with the id.
+func sourceButtonIndex(t *testing.T, ctx context.Context, section string) int {
+	t.Helper()
+
+	indices := eval[[]int](t, ctx, fmt.Sprintf(`(() => {
+		const indices = [];
+		document.querySelectorAll("button").forEach(function (button, index) {
+			if ((button.getAttribute("aria-controls") || "") === %s) {
+				indices.push(index);
+			}
+		});
+		return indices;
+	})()`, jsString(section)))
+
+	if len(indices) != 1 {
+		t.Fatalf("%s holds %d buttons controlling the section %q, want exactly one (issue #373, item 15)", inventoryPage, len(indices), section)
+	}
+
+	return indices[0]
 }
 
 // grantClipboard grants the origin the clipboard permissions the copy control
