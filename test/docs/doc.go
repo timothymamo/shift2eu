@@ -13,8 +13,9 @@
 //     lists every page directly inside it, not those in its subdirectories,
 //     so a dated audit report under docs/security/audits/ needs no index
 //     edit (PRD #175, issue #280);
-//   - README.md links only to files the release archives in .goreleaser.yaml
-//     ship, so its links work in an unpacked archive;
+//   - README.md and SECURITY.md, the root pages every release archive ships,
+//     link only to files those archives ship, so their links work in an
+//     unpacked archive;
 //   - no shell command block (tagged bash, sh, shell, console, or untagged) in
 //     CLAUDE.md or in a skill writes or removes a file through the shell
 //     (heredoc, redirection, tee, sed -i, perl -i) or removes a path held in a

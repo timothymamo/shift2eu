@@ -38,7 +38,10 @@ builds:
 # README.md links only to LICENSE and the pages under docs/ (test/docs holds
 # it to that), so each archive ships docs/ beside it and the links work in an
 # unpacked archive too (issue #149). docs/**/* matches only the files in
-# docs/'s subdirectories, so docs/*.md takes those directly in it.
+# docs/'s subdirectories, so docs/*.md takes those directly in it. Each
+# archive ships the security policy, SECURITY.md, beside LICENSE and README.md
+# too, so a user of a release can read how to report a vulnerability without
+# a clone (issue #450).
 #
 # docs/guide/try-it.md runs the CLI on the sample inventories under
 # examples/, so each archive ships examples/ beside docs/ too, and the
@@ -57,6 +60,7 @@ archives:
     files:
       - LICENSE
       - README.md
+      - SECURITY.md
       - docs/*.md
       - docs/**/*
       - examples/*.md

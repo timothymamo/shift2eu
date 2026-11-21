@@ -29,10 +29,10 @@ archives:
 // cliArchive is the archive entry of the CLI's build: its own id, the build
 // it holds (shift2eu alone), the name the CLI's archives have always had,
 // goreleaser's default template written out, tar.gz on every platform, zip on
-// Windows, and the files the archive ships beside the binary (LICENSE and
-// README.md, with the pages under docs/ that README.md links to, issue #149,
-// and the sample inventories under examples/ that docs/guide/try-it.md runs
-// the CLI on, issue #188).
+// Windows, and the files the archive ships beside the binary (LICENSE,
+// README.md and SECURITY.md, with the pages under docs/ that README.md links
+// to, issue #149, and the sample inventories under examples/ that
+// docs/guide/try-it.md runs the CLI on, issue #188).
 const cliArchive = `  - id: shift2eu
     ids: [shift2eu]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
@@ -43,6 +43,7 @@ const cliArchive = `  - id: shift2eu
     files:
       - LICENSE
       - README.md
+      - SECURITY.md
       - docs/*.md
       - docs/**/*
       - examples/*.md
@@ -64,6 +65,7 @@ const serverArchive = `  - id: shift2eu-server
     files:
       - LICENSE
       - README.md
+      - SECURITY.md
       - docs/*.md
       - docs/**/*
       - examples/*.md
@@ -119,11 +121,13 @@ func goreleaserArchives(cli, second string) string {
 //     missing or differs is refused, worded with name_template;
 //   - the entry is tar.gz on every platform and zip on Windows (formats: and
 //     format_overrides:, worded with tar.gz and zip);
-//   - it ships exactly LICENSE, README.md, docs/*.md, docs/**/*,
+//   - it ships exactly LICENSE, README.md, SECURITY.md, docs/*.md, docs/**/*,
 //     examples/*.md and examples/**/* (files:), worded with the entry it does
-//     not ship: README.md's links stay inside the archive (issue #149), and
-//     the walkthrough in docs/guide/try-it.md finds the sample inventories a
-//     release unpacks in examples/ rather than only in a clone (issue #188);
+//     not ship: README.md's links stay inside the archive (issue #149), the
+//     walkthrough in docs/guide/try-it.md finds the sample inventories a
+//     release unpacks in examples/ rather than only in a clone (issue #188),
+//     and the security policy a user of the release needs ships with it rather
+//     than only online (issue #450);
 //   - the checksum section holds exactly name_template: checksums.txt, so one
 //     checksums.txt covers the archive: a missing section, another name and
 //     any other key in it (split:, and extra_files:, which the release no
@@ -315,6 +319,17 @@ func TestGoReleaserArchives(t *testing.T) {
 				"",
 			),
 			wantIn: "README.md",
+		},
+		{
+			// The security policy: a user of a release must be able to read
+			// which versions are supported and how to report a vulnerability
+			// without a clone (issue #450).
+			name: "an archive that ships no SECURITY.md",
+			goreleaser: goreleaserArchives(
+				mutate(t, cliArchive, "      - SECURITY.md\n", ""),
+				"",
+			),
+			wantIn: "SECURITY.md",
 		},
 		{
 			name: "an archive without the pages directly in docs/",
