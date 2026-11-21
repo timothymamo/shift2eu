@@ -9,6 +9,7 @@ package devenv_test
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -276,15 +277,25 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 				}
 			}
 
-			// The fake go saw the recipe's temporary directory in that TMPDIR while it ran; a run that made its
-			// directory elsewhere would leave the check below nothing to say (issue #253).
-			if seen := splitLines(readFileString(t, extra["FAKE_GO_TMPDIR"])); len(seen) == 0 {
-				t.Errorf("make test made no temporary directory under the TMPDIR it was given while go ran, so this case cannot tell whether the recipe removes it (issue #253)")
-			}
-
+			// Nothing of the run is left in the case's TMPDIR. This holds on every platform: on macOS the recipe's
+			// own directory is not made there (below), so it pins only that nothing else of the run lands there.
 			if left := dirEntries(t, tmpDir); len(left) != 0 {
 				t.Errorf("make test leaves %q in its TMPDIR after the run, so every run leaves its temporary directory behind (issue #253)",
 					left)
+			}
+
+			// The fake go saw the recipe's temporary directory in that TMPDIR while it ran; a run that made its
+			// directory elsewhere would leave the check above nothing to say (issue #253). macOS's (BSD) mktemp -d
+			// makes its directory in the user's own temporary directory (_CS_DARWIN_USER_TEMP_DIR) whatever TMPDIR
+			// says, so only GNU mktemp can be steered into the case's TMPDIR. That is a permanent platform
+			// difference, not a bug: the recipe runs in the VM, which is Linux (issue #314).
+			if runtime.GOOS == "linux" {
+				if seen := splitLines(readFileString(t, extra["FAKE_GO_TMPDIR"])); len(seen) == 0 {
+					t.Errorf("make test made no temporary directory under the TMPDIR it was given while go ran, so this case cannot tell whether the recipe removes it (issue #253)")
+				}
+			} else {
+				t.Logf("not checked on %s: BSD mktemp -d ignores TMPDIR, so whether the recipe removes its temporary directory is checked on Linux only (issue #314)",
+					runtime.GOOS)
 			}
 		})
 	}

@@ -368,7 +368,7 @@ func (f *mintFixture) vmWriteInVM(t *testing.T, stdin string) (string, string, e
 	cmd := exec.Command("sh", "-c", vmWriteScript(t), "vm-write", filepath.Join(f.sb.root, "vm-real-gh"))
 	cmd.Env = envList(map[string]string{
 		"HOME":                f.sb.vmHome,
-		"PATH":                f.sb.binDir + ":/usr/local/bin:/usr/bin:/bin",
+		"PATH":                f.sb.vmToolsPath() + ":" + f.sb.binDir + ":/usr/local/bin:/usr/bin:/bin",
 		"TMPDIR":              filepath.Join(f.sb.root, "tmp"),
 		"GIT_CONFIG_NOSYSTEM": "1",
 		"GIT_CONFIG_SYSTEM":   os.DevNull,

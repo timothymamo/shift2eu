@@ -1,7 +1,7 @@
 # Documentation
 
 The index of `shift2eu`'s documentation: every page, in reading order, grouped into the user guide,
-the contributor guide, the architecture and the architecture decision records. The
+security, the contributor guide, the architecture and the architecture decision records. The
 [README](../README.md) introduces the project; start there if you are new to it.
 
 ## User guide
@@ -17,6 +17,12 @@ the contributor guide, the architecture and the architecture decision records. T
    and, for live sources, credentials.
 6. [Verify a release](guide/verify-releases.md): the images' signatures, build provenance and SBOMs,
    and the releases published before the rename.
+
+## Security
+
+[Security](security/README.md): the scheduled audit of the repository and the latest release, how its
+findings are disclosed, and its dated reports. That page is a sub-index: it lists the reports, so this
+index does not.
 
 ## Contributor guide
 
@@ -76,6 +82,7 @@ supersedes it.
 - [0037. Retire the HTTP API and release the CLI alone](adr/0037-retire-the-http-api-and-release-the-cli-alone.md)
 - [0038. Start the Lima VM at boot with a LaunchDaemon of our own, never limactl autostart](adr/0038-start-the-lima-vm-at-boot-with-a-launchdaemon-of-our-own.md)
 - [0039. Create the site's Scaleway hosting with OpenTofu, its state in a locked bucket outside the site's project](adr/0039-create-the-sites-scaleway-hosting-with-opentofu.md)
+- [0040. Audit the repository and the latest release on a schedule, with a model that triages and a script that publishes](adr/0040-audit-the-repository-and-the-latest-release-on-a-schedule.md)
 
 ## Writing a page
 
@@ -94,12 +101,16 @@ The pages are written so that a static site generator can publish them later wit
 - **Images and other assets under `docs/assets/`.**
 - **Stable headings.** Other pages link to their anchors; when a heading must change, update every
   link to it.
-- **Every page is listed here,** in its group and in reading order.
+- **Every page is listed here,** in its group and in reading order, or by a **sub-index**: a
+  `README.md` in a directory directly below `docs/` that this index links (one level, no chains). Only a
+  link to the `README.md` file itself makes a sub-index; a link to its directory does not. A link to a
+  directory lists every page directly inside it, as `security/README.md` lists the dated audit reports
+  by linking `audits/`.
 
 `make check` holds the pages to part of this: `test/docs` fails on a relative link or `#anchor` in
-`README.md`, `docs/` or `.claude/skills/` that names no existing file or heading, on a link to this
+`README.md`, `SECURITY.md`, `docs/` or `.claude/skills/` that names no existing file or heading, on a link to this
 repository's files by URL, on a page without its single `#` title, and on a page under `docs/` that
-this index does not list. It never fetches an external URL.
+neither this index nor a sub-index lists. It never fetches an external URL.
 
 The release archives ship `README.md` with `docs/` beside it, so the README's links work in an
 unpacked archive too. Links from these pages to the repository's source files (the JSON

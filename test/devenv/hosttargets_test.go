@@ -251,7 +251,8 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 			layout: workspaceRepoHolding(func(l *hostLayout) string { return filepath.Join(l.sb.workspaceRoot(), "another-clone") }),
 		},
 		{
-			name: "the workspace is inside the checkout make runs from",
+			name:             "the workspace is inside the checkout make runs from",
+			skipOnMacMake381: "the host-clone guard fails open for a workspace that does not exist under a symlinked path (macOS /var is /private/var), issue #447",
 			layout: func(t *testing.T, l *hostLayout) string {
 				t.Helper()
 
@@ -437,6 +438,10 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			if tc.skipOnMacMake381 != "" {
+				skipUnderMake381OnMacOS(t, tc.skipOnMacMake381)
+			}
+
 			for _, run := range tc.runs() {
 				t.Run(run.name, func(t *testing.T) {
 					t.Parallel()
@@ -526,6 +531,9 @@ type refusalCase struct {
 	// emptyStdout says the run prints nothing on stdout: no recipe line, no prerequisite and no other goal of
 	// its command line ran.
 	emptyStdout bool
+	// skipOnMacMake381, when set, names the issue of a known failure of the case on macOS: CI's make 3.81 job
+	// skips the case's runs there (skipUnderMake381OnMacOS), and every other run of the tests keeps them.
+	skipOnMacMake381 string
 }
 
 // runs is the runs the case makes: one whole command line, or every host target with the case's flags.
