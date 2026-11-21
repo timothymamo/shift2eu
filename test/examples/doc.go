@@ -10,6 +10,11 @@
 // reports the walkthrough quotes are golden files regenerated with -update so a
 // catalog snapshot change shows up in the diff.
 //
+// It also pins one worked estimate per target and taxonomy category that
+// target's embedded snapshot offers (issue #245, PRD #190): one representative
+// sized resource per row, assessed with estimates on, its offering, plan and
+// monthly estimate or not-estimated reason kept in a golden file.
+//
 // It also holds the real-data check of issue #249 (CLAUDE.md rule 2): every
 // text file under examples/, docs/guide/ and every testdata/ directory of the
 // module is scanned for account IDs, GUIDs, IP addresses (dotted, or written
