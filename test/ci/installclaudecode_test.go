@@ -15,19 +15,24 @@
 //     integrity. Nothing of a refused tarball is extracted.
 //   - It refuses, with exit 1, a runner whose /etc/claude-code exists, a directory or a plain file: the CLI applies
 //     an admin-managed policy from there under every flag.
+//   - The managed-policy check runs before the argument checks, so a runner that carries a policy is refused as
+//     such even when the arguments would be refused too, and no download is attempted either way.
 //   - A tarball that matches installs its one binary, package/claude, executable, into <directory> - the other
 //     files of the tarball stay out - and the installer prints the version line the binary prints.
 //   - CLAUDE_CODE_INSTALL_ROOT, which only a test sets, stands in for / in the managed-policy check, and
 //     GITHUB_ACTIONS cannot weaken that check: with it set and the root overridden, the installer refuses too, so
 //     no workflow step can drop the check by setting the variable. It refuses the variable when it is empty as
-//     well, since a step could set it to nothing to make the check read / again without unsetting it.
-//     GITHUB_ACTIONS alone is no refusal.
+//     well, since a step could set it to nothing to make the check read / again without unsetting it. A trailing
+//     slash on the root is stripped, so the path the installer checks and names is <root>/etc/claude-code, never
+//     <root>//etc/claude-code. GITHUB_ACTIONS alone is no refusal.
 //
-// Every case runs the real script with an explicit environment built from this process's, without GITHUB_ACTIONS
-// and CLAUDE_CODE_INSTALL_ROOT, so a case decides those two itself and the tests run inside CI as well. A fake npm
-// first on PATH copies a tarball the test builds at run time (no binary blob is committed) into the pack
-// destination and prints its file name, and it touches a marker file so a case can assert npm was not called; the
-// rest of PATH stays, so bash, tar, openssl, base64 and mktemp are the machine's own.
+// Every case runs the real script with an explicit environment built from this process's, without GITHUB_ACTIONS,
+// CLAUDE_CODE_INSTALL_ROOT, BASH_ENV, ENV and TMPDIR, so a case decides its own and the environment a BASH_ENV or a
+// TMPDIR points at cannot reach the run; the case's TMPDIR is a directory below its t.TempDir(), which holds what
+// the installer's mktemp -d leaves behind. A fake npm first on PATH copies a tarball the test builds at run time (no
+// binary blob is committed) into the pack destination and prints its file name, and it touches a marker file so a
+// case can assert npm was not called; the rest of PATH stays, so bash, tar, openssl, base64, mktemp, cp, sh and
+// gzip are the machine's own.
 //
 // The test needs no root and no network, and the root it overrides is a fresh t.TempDir(); a case that needs the
 // machine's real /etc/claude-code absent skips when it exists.
@@ -153,6 +158,9 @@ type installCase struct {
 	noInstallRoot bool
 	// emptyInstallRoot sets CLAUDE_CODE_INSTALL_ROOT to the empty string, which the installer treats as set.
 	emptyInstallRoot bool
+	// trailingSlashInstallRoot sets CLAUDE_CODE_INSTALL_ROOT to the root with a trailing slash, which the installer
+	// must strip before it appends etc/claude-code.
+	trailingSlashInstallRoot bool
 
 	// wantExit is the exit status the installer must end with.
 	wantExit int
@@ -164,16 +172,28 @@ type installCase struct {
 	wantExecutable bool
 	// wantOutput holds substrings of the run's stdout and stderr together that must appear.
 	wantOutput []string
+	// wantRootOutput holds paths below the case's install root: each must appear in the output resolved against
+	// that root, so a case pins the exact path the installer checked and named, not a suffix of it.
+	wantRootOutput []string
 }
 
 // TestInstallClaudeCodeRefusesUnverifiedPackages runs the installer's cases against a fixture tarball.
 func TestInstallClaudeCodeRefusesUnverifiedPackages(t *testing.T) {
 	t.Parallel()
 
-	for _, tool := range []string{"bash", "tar", "openssl", "base64"} {
+	for _, tool := range []string{"bash", "tar", "openssl", "base64", "mktemp", "cp", "sh", "gzip"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s is not on PATH: %s needs it", tool, installScript)
 		}
+	}
+
+	// The installer spells the tarball's digest with base64 -w0, which only GNU coreutils' base64 has: the BSD one
+	// rejects -w and would otherwise fail the integrity comparison on wrapped lines.
+	probe := exec.Command("base64", "-w0")
+	probe.Stdin = strings.NewReader("")
+
+	if out, err := probe.Output(); err != nil {
+		t.Skipf("base64 -w0 </dev/null failed (%v, output %q): %s needs GNU coreutils' base64", err, out, installScript)
 	}
 
 	fx := newFixture(t)
@@ -288,18 +308,35 @@ func installCases() []installCase {
 			wantOutput: []string{"does not match"},
 		},
 		{
-			name:       "a managed policy directory on the runner",
-			args:       validArgs,
-			policy:     policyDirectory,
-			wantExit:   1,
-			wantOutput: []string{hostPolicyPath},
+			name:           "a managed policy directory on the runner",
+			args:           validArgs,
+			policy:         policyDirectory,
+			wantExit:       1,
+			wantRootOutput: []string{policyDir},
 		},
 		{
-			name:       "a managed policy file on the runner",
-			args:       validArgs,
-			policy:     policyFile,
-			wantExit:   1,
-			wantOutput: []string{hostPolicyPath},
+			name:           "a managed policy file on the runner",
+			args:           validArgs,
+			policy:         policyFile,
+			wantExit:       1,
+			wantRootOutput: []string{policyDir},
+		},
+		{
+			name:                     "a managed policy directory under a root with a trailing slash",
+			args:                     validArgs,
+			policy:                   policyDirectory,
+			trailingSlashInstallRoot: true,
+			wantExit:                 1,
+			wantRootOutput:           []string{policyDir},
+		},
+		{
+			// The managed-policy check runs before the argument checks: this case would exit 2 for its package,
+			// so exit 1 with the policy message pins the order.
+			name:           "a managed policy directory and bad arguments",
+			args:           withPackage("@anthropic-ai/claude-code-linux-x64@latest"),
+			policy:         policyDirectory,
+			wantExit:       1,
+			wantRootOutput: []string{policyDir},
 		},
 		{
 			name:           "a matching tarball",
@@ -434,7 +471,14 @@ func runInstallCase(t *testing.T, tc installCase, fx fixture) {
 
 	writePolicy(t, root, tc.policy)
 
-	env := childEnv(t, binDir, map[string]string{
+	// The installer's mktemp -d honours TMPDIR and never removes what it made, so the case hands it a directory
+	// below its own temp dir instead of the machine's.
+	tmpDir := filepath.Join(base, "tmp")
+	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+		t.Fatalf("create the case's TMPDIR %s: %v", tmpDir, err)
+	}
+
+	env := childEnv(t, binDir, tmpDir, map[string]string{
 		npmTarballEnv: tarballPath,
 		npmNameEnv:    tarballName,
 		npmMarkerEnv:  marker,
@@ -444,6 +488,8 @@ func runInstallCase(t *testing.T, tc installCase, fx fixture) {
 	case tc.noInstallRoot:
 	case tc.emptyInstallRoot:
 		env = append(env, installRootEnv+"=")
+	case tc.trailingSlashInstallRoot:
+		env = append(env, installRootEnv+"="+root+"/")
 	default:
 		env = append(env, installRootEnv+"="+root)
 	}
@@ -460,6 +506,12 @@ func runInstallCase(t *testing.T, tc installCase, fx fixture) {
 
 	for _, want := range tc.wantOutput {
 		if !strings.Contains(output, want) {
+			t.Errorf("output does not contain %q:\n%s", want, output)
+		}
+	}
+
+	for _, want := range tc.wantRootOutput {
+		if want = filepath.Join(root, want); !strings.Contains(output, want) {
 			t.Errorf("output does not contain %q:\n%s", want, output)
 		}
 	}
@@ -528,9 +580,10 @@ func writeFile(t *testing.T, path string, content []byte, mode os.FileMode) {
 	}
 }
 
-// childEnv returns this process's environment without PATH, GITHUB_ACTIONS and CLAUDE_CODE_INSTALL_ROOT, which a
-// case decides itself, and with dir first on PATH and the fake npm's variables added.
-func childEnv(t *testing.T, dir string, extra map[string]string) []string {
+// childEnv returns this process's environment without PATH, GITHUB_ACTIONS, CLAUDE_CODE_INSTALL_ROOT, BASH_ENV,
+// ENV and TMPDIR, which a case decides itself, and with dir first on PATH, tmpDir as TMPDIR and the fake npm's
+// variables added.
+func childEnv(t *testing.T, dir, tmpDir string, extra map[string]string) []string {
 	t.Helper()
 
 	var (
@@ -547,7 +600,7 @@ func childEnv(t *testing.T, dir string, extra map[string]string) []string {
 		switch name {
 		case "PATH":
 			path = value
-		case githubActionsEnv, installRootEnv:
+		case githubActionsEnv, installRootEnv, "BASH_ENV", "ENV", "TMPDIR":
 		default:
 			env = append(env, kv)
 		}
@@ -564,7 +617,7 @@ func childEnv(t *testing.T, dir string, extra map[string]string) []string {
 		env = append(env, name+"="+extra[name])
 	}
 
-	return append(env, "PATH="+dir+string(os.PathListSeparator)+path)
+	return append(env, "PATH="+dir+string(os.PathListSeparator)+path, "TMPDIR="+tmpDir)
 }
 
 // runInstaller runs the installer with env and args, and returns its stdout and stderr together and its exit

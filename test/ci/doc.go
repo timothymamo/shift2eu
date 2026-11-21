@@ -17,7 +17,9 @@
 // the script in place of /, points every case at a root in t.TempDir(), so no
 // test touches /etc; the cases pin that GITHUB_ACTIONS cannot weaken that check.
 //
-// A script needs bash, tar, openssl and base64 on PATH, and the test skips when
-// one of them is missing. The package has no production code, so it imports
-// nothing, and its dependency rule holds it to that (test-docs-are-pure).
+// A script needs bash, tar, openssl, mktemp, cp, sh and gzip on PATH, and GNU
+// coreutils' base64, the only one with -w0 for the unwrapped digest the
+// installer compares; the test skips when one of them is missing. The package
+// has no production code, so it imports nothing, and its dependency rule holds
+// it to that (test-docs-are-pure).
 package ci
