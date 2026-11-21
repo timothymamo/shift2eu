@@ -81,7 +81,7 @@ jobs:
       - name: Install the Claude Code CLI
         env:
           # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64
-          CLAUDE_CODE_VERSION: 2.1.327
+          CLAUDE_CODE_VERSION: 2.1.330
           CLAUDE_CODE_INTEGRITY: sha512-uJ24I+t47cpQjeo31ZrHepsFQ8QUsLjCxmDxLshMjYHEtoxhQdgKc4iuViQDaKpFqn3puR85gwHlLj4e7s+1iQ==
         run: .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}" "${CLAUDE_CODE_INTEGRITY}"
       # A token of the reviewer App, revoked when the job ends, with exactly Pull requests write (to post
