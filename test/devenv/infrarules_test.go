@@ -513,10 +513,12 @@ import {
 	// mock_provider, variables and provider. Any other top-level block is [block-type], because a block no
 	// rule knows is a block no rule reads: moved and removed rewrite the state unseen, check asserts outside
 	// every test, override_resource and override_data replace what a test plans with, and a mock_provider in a
-	// configuration file mocks a provider tofu test never reads there. A block type a rule names on its own
-	// keeps that rule's tag and no [block-type] beside it: a configuration's import block stays [import-block],
-	// a test file's provider block stays [test-provider], and the blocks nested in a refused one (the assert in
-	// a check block) are no findings of their own, since the allow list is the top level's.
+	// configuration file mocks a provider tofu test never reads there. A block type a rule names on its own, in
+	// the file kinds that rule reads, keeps that rule's tag and no [block-type] beside it: a configuration's
+	// import block stays [import-block], and a test file's provider block stays [test-provider]. An import block
+	// in a test file is no such case, since the import rule reads configuration files only: it is a top-level
+	// block the test allow list refuses, so it stays [block-type] alone. The blocks nested in a refused one (the
+	// assert in a check block) are no findings of their own, since the allow list is the top level's.
 	{
 		name:   "moved-block",
 		why:    "a top-level moved block, which rewrites the state of the resources it names unseen",
@@ -571,6 +573,37 @@ removed {
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			appendInfraText(t, filepath.Join(site, "main.tf"), "\nmock_provider \"scaleway\" {}\n")
+		},
+	},
+	{
+		name:   "list-block",
+		why:    `a top-level list "x" {} block in a configuration file of its own, a block type of a later OpenTofu release`,
+		want:   "block-type",
+		wantIn: map[string]string{"block-type": "{site}/zz-list.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "zz-list.tf"), `list "x" {}
+`)
+		},
+	},
+	{
+		name:   "import-block-in-a-test-file",
+		why:    `a top-level import block in a test file, beside the mock_provider and the run block the test allow list holds`,
+		want:   "block-type",
+		wantIn: map[string]string{"block-type": "{site}/tests/zz.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "zz.tftest.hcl"), `mock_provider "scaleway" {}
+
+import {
+  to = scaleway_object_bucket.site
+  id = "fr-par/x"
+}
+
+run "x" {
+  command = plan
+}
+`)
 		},
 	},
 	{
