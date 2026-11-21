@@ -67,7 +67,14 @@ type infraRuleCase struct {
 // loudly (as a test failure, never as a silent pass) when the configuration moves under it. The file-reading
 // functions' cases come from infraFileFunctionCases, one per name the rules must refuse, so a name dropped
 // from them fails here instead of passing unrefused.
-var infraRuleCases = append(append(append(append(append(infraFileFunctionCases(), namedInfraRuleCases...), infraTestNestedBlockCases...), infraTestLabelCases...), infraLabelPathCases...), infraConfigurationLabelQuoteCases...)
+var infraRuleCases = slices.Concat(
+	infraFileFunctionCases(),
+	namedInfraRuleCases,
+	infraTestNestedBlockCases,
+	infraTestLabelCases,
+	infraLabelPathCases,
+	infraConfigurationLabelQuoteCases,
+)
 
 // namedInfraRuleCases are the breakages written out one by one, in the order the script's rules are read.
 var namedInfraRuleCases = []infraRuleCase{
@@ -1721,7 +1728,10 @@ run "a_run_with_expect_failures_as_a_block" {
 // the other side, so the rule does not refuse a label tofu test reads (its - and its digits are identifiers).
 // The [test-label] message quotes the label as the source writes it, never as the escaped path element the
 // rules judge the block by: `run "a/b"` is named `run "a/b"`, not `run "a%2Fb"`, and `run "a%2Fb"` is not
-// escaped twice to `run "a%252Fb"` - an operator reading the message must find the label they wrote.
+// escaped twice to `run "a%252Fb"` - an operator reading the message must find the label they wrote. What the
+// message prints is another matter: a label outside the printable set (A-Za-z0-9_-, /, %, :, . and space) is
+// replaced by `an unprintable label`, so a label such as `##[error]x` never puts the `##[` the legacy GitHub
+// Actions annotation form matches anywhere in a CI log line into that log, and never forges an annotation.
 var infraTestLabelCases = []infraRuleCase{
 	{
 		name:     "run-label-with-a-slash-hides-its-nested-block",
@@ -1840,6 +1850,21 @@ run "a/b" {
 			t.Helper()
 			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
 run "a%2Fb" {
+  command = plan
+}
+`)
+		},
+	},
+	{
+		name:      "run-label-with-unprintable-characters-is-not-quoted",
+		why:       `a run "##[error]x" in site/tests/iam.tftest.hcl whose label holds the ##[ a legacy GitHub Actions annotation starts with: [test-label] must not quote it, since the CI log would carry an annotation forged out of a label`,
+		want:      "test-label",
+		wantIn:    map[string]string{"test-label": "an unprintable label"},
+		wantNotIn: map[string]string{"test-label": "##["},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "##[error]x" {
   command = plan
 }
 `)
@@ -1984,6 +2009,20 @@ var infraConfigurationLabelQuoteCases = []infraRuleCase{
 			t.Helper()
 			appendInfraText(t, filepath.Join(site, "main.tf"), `
 resource "scaleway_a/b" "x" {
+}
+`)
+		},
+	},
+	{
+		name:      "resource-type-label-with-unprintable-characters-is-not-quoted",
+		why:       `a resource "scaleway_##[warning]x" "y" in site/main.tf, a type holding the ##[ a legacy GitHub Actions annotation starts with: [resource-type] must not quote it, since the CI log would carry an annotation forged out of a label`,
+		want:      "resource-type",
+		wantIn:    map[string]string{"resource-type": "an unprintable label"},
+		wantNotIn: map[string]string{"resource-type": "##["},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_##[warning]x" "y" {
 }
 `)
 		},
