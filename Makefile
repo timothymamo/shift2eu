@@ -487,17 +487,20 @@ test-integration: ## Integration tests against real cloud APIs (read-only creden
 test-e2e: ## Build and run the binary end to end against testdata fixtures
 	go test -count=1 -tags=e2e ./test/e2e/...
 
-# The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). make site still builds the
-# shared bundle in bin/site, but the run serves a bundle of its own (issue #423): ci/sitebuild builds it straight
-# into a fresh directory from mktemp -d, so the run never reads bin/site, which a second run's make site in the
-# same worktree removes and rebuilds; a copy of bin/site could still race with that rebuild. The directory is
-# removed on every exit. The recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network
+# The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036). It does not run make site, and
+# neither creates, reads nor removes bin/site, the bundle make site builds for the release and the deploy: the
+# run serves a bundle of its own (issue #423), which ci/sitebuild builds straight into a fresh directory from
+# mktemp -d, so two runs in one worktree never rebuild a bundle under each other's browser. The directory is
+# removed on every exit, a hang-up (closing the pane), an interrupt and a termination included: each is trapped,
+# since dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills it. The recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network
 # and its own entrypoint replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on
 # every interface through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no
 # fixed port is open to guess and the DevTools ports and containers of two runs at once do not collide. It waits
 # up to 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll checks with
-# $(DOCKER) inspect that the container still runs: one that has exited fails the run at once, naming its exit
-# status and showing the tail of its log (issue #423). It reads the address back from the log line (port and
+# $(DOCKER) inspect that the container still runs: one inspect reports as not running (false) fails the run at
+# once, naming its exit status and showing the tail of its log (issue #423). A failed inspect alone is no verdict,
+# so the run keeps polling, but three failed in a row mean the container is gone, and the run fails, showing
+# inspect's last error, instead of waiting out the 60 seconds. It reads the address back from the log line (port and
 # browser id, so the test attaches to the browser this run started and no other: a correctness guarantee, not
 # access control, since any local process that finds the port can read the id from /json/version on it), and
 # runs test/browser against it. The container's name carries the recipe shell's PID, so parallel runs have their
@@ -506,24 +509,37 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # starts itself, and docker run and nerdctl run pass no such fds into a container (docs/adr/0036, amendment for
 # issue #368).
 .PHONY: test-browser
-test-browser: site ## Build the site's bundle and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
+test-browser: ## Build a bundle of the site's own for this run and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
 	@set -eu; \
 	devtools=; \
 	name=shift2eu-test-browser-$$$$; \
 	bundle_dir=; \
 	trap '$(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir"; fi' EXIT; \
-	trap 'exit 130' INT TERM; \
+	trap 'exit 129' HUP; \
+	trap 'exit 130' INT; \
+	trap 'exit 143' TERM; \
 	bundle_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/shift2eu-test-browser.XXXXXX"); \
 	go run ./ci/sitebuild -out "$$bundle_dir/site" -archive "$$bundle_dir/shift2eu-site.tar.gz" >/dev/null; \
 	$(DOCKER) run -d --name "$$name" --network host --entrypoint /headless-shell/headless-shell \
 		$(HEADLESS_SHELL) --no-sandbox --use-gl=angle --use-angle=swiftshader \
 		--remote-debugging-address=127.0.0.1 --remote-debugging-port=0 >/dev/null; \
 	tries=0; \
+	missed=0; \
 	until devtools=$$($(DOCKER) logs "$$name" 2>&1 | \
 		sed -n 's|^DevTools listening on \(ws://127\.0\.0\.1:[0-9][0-9]*/devtools/browser/[0-9a-f-][0-9a-f-]*\)$$|\1|p' | \
 		head -n 1); [ -n "$$devtools" ]; do \
-		running=$$($(DOCKER) inspect -f '{{.State.Running}}' "$$name" 2>/dev/null || true); \
-		if [ "$$running" != true ]; then \
+		if running=$$($(DOCKER) inspect -f '{{.State.Running}}' "$$name" 2>"$$bundle_dir/inspect.err"); then \
+			missed=0; \
+		else \
+			running=; \
+			missed=$$((missed + 1)); \
+		fi; \
+		if [ -z "$$running" ] && [ "$$missed" -ge 3 ]; then \
+			echo "test-browser: $(DOCKER) inspect could not read the state of the Chromium container $$name 3 times in a row, so it is gone; inspect's last error:" >&2; \
+			cat "$$bundle_dir/inspect.err" >&2 || true; \
+			exit 1; \
+		fi; \
+		if [ "$$running" = false ]; then \
 			status=$$($(DOCKER) inspect -f '{{.State.ExitCode}}' "$$name" 2>/dev/null || true); \
 			echo "test-browser: the Chromium container $$name exited with status $${status:-unknown} before it logged a DevTools address; the tail of its log:" >&2; \
 			$(DOCKER) logs --tail 20 "$$name" >&2 || true; \

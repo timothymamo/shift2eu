@@ -78,7 +78,7 @@ make lint              # golangci-lint natively and for every release target, th
 make fmt               # gofumpt + goimports
 make build             # ./bin/shift2eu
 make site              # the site's bundle into bin/site and its archive bin/shift2eu-site_<version>.tar.gz
-make test-browser      # make site, then the headless-browser smoke test in a pinned Chromium container
+make test-browser      # a bundle of its own (never bin/site), then the headless-browser smoke test in a pinned Chromium container
 ```
 
 Every make target runs exactly go.mod's go line (`GOTOOLCHAIN`, issue #347, ADR 0035). When the local Go is

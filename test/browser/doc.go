@@ -15,15 +15,16 @@
 // passes the browser's DevTools address, read back from Chromium's log, in
 // SHIFT2EU_DEVTOOLS_URL, and in SHIFT2EU_SITE_BUNDLE a bundle of the run's
 // own: ci/sitebuild builds it into a temporary directory that the run removes
-// when it ends, never bin/site, so a second run's `make site` in the same
-// worktree cannot delete it from under the browser (issue #423). The address's
-// browser id makes the test attach to the browser its run started: a
-// correctness guarantee, not access control, since any local process that
-// finds the port can read the id from /json/version. Without either variable
-// the test fails, with a message saying which, and never skips: a smoke test
-// that skips reports the same green as one that passed. It never touches the internet: "another origin" is a second
-// local httptest server on its own port, and pinning that proves the bundle
-// runs unchanged on any origin.
+// when it ends. The run does not run `make site` and leaves bin/site alone, so
+// two runs in the same worktree never rebuild a bundle from under each other's
+// browser (issue #423). The address's browser id makes the test attach to the
+// browser its run started: a correctness guarantee, not access control, since
+// any local process that finds the port can read the id from /json/version.
+// Without either variable the test fails, with a message saying which, and
+// never skips: a smoke test that skips reports the same green as one that
+// passed. It never touches the internet: "another origin" is a second local
+// httptest server on its own port, and pinning that proves the bundle runs
+// unchanged on any origin.
 //
 // The test files carry the build constraint `browser && !js`: `go test ./...`
 // and `make test` never compile this package's tests and never need Chromium.
