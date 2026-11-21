@@ -4,8 +4,11 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 
 	"github.com/timothymamo/shift2eu/test/internal/mdlink"
 	"github.com/timothymamo/shift2eu/test/internal/yamlread"
@@ -112,28 +115,167 @@ func TestReadmeLinksStayInTheArchive(t *testing.T) {
 	}
 }
 
-// TestIndexListsEveryPage fails on a Markdown page under docs/ that
-// docs/README.md, the documentation's index, does not link to.
+// indexProblems returns every Markdown page under docs/ in fsys that no index
+// lists, slash-separated and relative to fsys's root, in lexical order, or an
+// error when it cannot read one of them. Only docs/ is read: a root README.md
+// is none of its business. A page is listed when an index links it, directly or
+// through a directory. There are two kinds of index (PRD #175 milestone 1,
+// issue #280):
+//
+//   - docs/README.md, the documentation's index;
+//   - a sub-index: a README.md in a directory directly below docs/ that
+//     docs/README.md links. One level only, no chains: a README.md that only a
+//     sub-index links is a page, not an index.
+//
+// A link to a directory lists every Markdown page directly inside it, so a
+// dated report needs no index edit of its own; a page in a subdirectory of a
+// linked directory is not covered by that link.
+func indexProblems(fsys fs.FS) ([]string, error)
+
+// writeDocsTree writes files, a map from a slash-separated path to its
+// contents, under a temporary directory and returns that directory as an fs.FS,
+// so a test reads a docs tree of its own.
+func writeDocsTree(t *testing.T, files map[string]string) fs.FS {
+	t.Helper()
+
+	root := t.TempDir()
+	for name, content := range files {
+		full := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("creating the directory of %s: %v", name, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %s: %v", name, err)
+		}
+	}
+	return os.DirFS(root)
+}
+
+// TestIndexListsEveryPage fails on a Markdown page under docs/ that no index
+// lists: neither docs/README.md, the documentation's index, nor a sub-index it
+// links, nor a directory one of them links (indexProblems). The first case is
+// the repository's own tree; the others are small docs trees written for the
+// test, so the rule is pinned without a page of the real tree changing.
 func TestIndexListsEveryPage(t *testing.T) {
 	t.Parallel()
 
-	fsys := os.DirFS(repoRoot)
-	const index = "docs/README.md"
-	data, err := fs.ReadFile(fsys, index)
-	if err != nil {
-		t.Fatalf("reading %s: %v", index, err)
+	tests := []struct {
+		name string
+		// files is the docs tree to write to a temporary directory, from a
+		// slash-separated path to its contents. Empty reads the repository's
+		// own tree.
+		files map[string]string
+		// unlisted are the pages no index lists, in lexical order.
+		unlisted []string
+	}{
+		{
+			name: "the repository's own docs tree",
+		},
+		{
+			name: "a page the index links is indexed",
+			files: map[string]string{
+				"docs/README.md":        "# Documentation\n\n- [Install](guide/install.md)\n",
+				"docs/guide/install.md": "# Install\n",
+			},
+		},
+		{
+			name: "a page no index links is not indexed",
+			files: map[string]string{
+				"docs/README.md":        "# Documentation\n",
+				"docs/guide/install.md": "# Install\n",
+			},
+			unlisted: []string{"docs/guide/install.md"},
+		},
+		{
+			name: "a page a linked sub-index links is indexed",
+			files: map[string]string{
+				"docs/README.md":                       "# Documentation\n\n- [Security](security/README.md)\n",
+				"docs/security/README.md":              "# Security\n\n- [Report](audits/2026-12-01-1.md)\n",
+				"docs/security/audits/2026-12-01-1.md": "# Audit report, 2026-12-01\n",
+			},
+		},
+		{
+			name: "a page only an unlinked sub-index links is not indexed",
+			files: map[string]string{
+				"docs/README.md":                       "# Documentation\n\n- [Install](guide/install.md)\n",
+				"docs/guide/install.md":                "# Install\n",
+				"docs/security/README.md":              "# Security\n\n- [Report](audits/2026-12-01-1.md)\n",
+				"docs/security/audits/2026-12-01-1.md": "# Audit report, 2026-12-01\n",
+			},
+			unlisted: []string{
+				"docs/security/README.md",
+				"docs/security/audits/2026-12-01-1.md",
+			},
+		},
+		{
+			name: "a page only a sub-index of a sub-index links is not indexed",
+			files: map[string]string{
+				"docs/README.md":     "# Documentation\n\n- [A](a/README.md)\n",
+				"docs/a/README.md":   "# A\n\n- [B](b/README.md)\n",
+				"docs/a/b/README.md": "# B\n\n- [Page](page.md)\n",
+				"docs/a/b/page.md":   "# Page\n",
+			},
+			unlisted: []string{"docs/a/b/page.md"},
+		},
+		{
+			name: "a page in a directory a linked sub-index links is indexed",
+			files: map[string]string{
+				"docs/README.md":                         "# Documentation\n\n- [Security](security/README.md)\n",
+				"docs/security/README.md":                "# Security\n\nEvery report in [audits/](audits/), newest first.\n",
+				"docs/security/audits/2026-11-01-1.md":   "# Audit report, 2026-11-01\n",
+				"docs/security/audits/2026-12-01-123.md": "# Audit report, 2026-12-01\n",
+			},
+		},
+		{
+			name: "a page in a directory a linked sub-index links without a trailing slash is indexed",
+			files: map[string]string{
+				"docs/README.md":                         "# Documentation\n\n- [Security](security/README.md)\n",
+				"docs/security/README.md":                "# Security\n\nEvery report in [audits](audits), newest first.\n",
+				"docs/security/audits/2026-12-01-123.md": "# Audit report, 2026-12-01\n",
+			},
+		},
+		{
+			name: "a page in a directory the index links is indexed",
+			files: map[string]string{
+				"docs/README.md":                         "# Documentation\n\n- [Security](security/README.md)\n- [Audit reports](security/audits/)\n",
+				"docs/security/README.md":                "# Security\n",
+				"docs/security/audits/2026-12-01-123.md": "# Audit report, 2026-12-01\n",
+			},
+		},
+		{
+			name: "a page deeper than a linked directory is not indexed",
+			files: map[string]string{
+				"docs/README.md":                         "# Documentation\n\n- [Security](security/README.md)\n",
+				"docs/security/README.md":                "# Security\n\nEvery report in [audits/](audits/), newest first.\n",
+				"docs/security/audits/2026-12-01-123.md": "# Audit report, 2026-12-01\n",
+				"docs/security/audits/old/x.md":          "# An older report, moved here\n",
+			},
+			unlisted: []string{"docs/security/audits/old/x.md"},
+		},
 	}
-	linked := map[string]bool{}
-	for _, l := range mdlink.Links(data) {
-		target, _, _ := strings.Cut(l.Dest, "#")
-		if target != "" && !strings.Contains(target, ":") {
-			linked[path.Join("docs", target)] = true
-		}
-	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	for _, page := range markdownFiles(t, fsys, "docs")[1:] { // [0] is README.md
-		if page != index && !linked[page] {
-			t.Errorf("%s: not listed in %s, the documentation's index", page, index)
-		}
+			fsys := os.DirFS(repoRoot)
+			if tc.files != nil {
+				fsys = writeDocsTree(t, tc.files)
+			}
+
+			got, err := indexProblems(fsys)
+			if err != nil {
+				t.Fatalf("checking which pages the indexes list: %v", err)
+			}
+			want := tc.unlisted
+			if want == nil {
+				want = []string{}
+			}
+			if got == nil {
+				got = []string{}
+			}
+			if diff := cmp.Diff(want, got); diff != "" {
+				t.Errorf("pages under docs/ that no index lists (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
