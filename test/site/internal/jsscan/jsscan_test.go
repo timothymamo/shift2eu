@@ -316,6 +316,15 @@ func TestScanRejectsEveryBannedApi(t *testing.T) {
 		{name: "the clipboard read instead of written", src: `function copyCommand(button) { return navigator.clipboard.readText(); }`, want: []string{"clipboard"}},
 		{name: "the write taken out of the clipboard's member", src: `function copyCommand(button) { const writer = navigator.clipboard.writeText; writer(button.dataset.command); }`, want: []string{"clipboard"}},
 		{name: "the clipboard written through another object", src: `function copyCommand(button) { window.clipboard.writeText(button.dataset.command); }`, want: []string{"clipboard"}},
+
+		// A binding that takes the name navigator: the clipboard and service worker
+		// rules key on the name, so a local navigator would stand in for the browser's
+		// and carry any object the script likes into an allowed form (audit finding 4).
+		{name: "navigator declared by const", src: `const navigator = stand_in;`, want: []string{"navigator"}},
+		{name: "navigator declared by let", src: `let navigator = stand_in;`, want: []string{"navigator"}},
+		{name: "navigator declared by var", src: `var navigator = stand_in;`, want: []string{"navigator"}},
+		{name: "navigator as a function parameter", src: `function standIn(navigator) { return navigator; }`, want: []string{"navigator"}},
+		{name: "navigator as a destructuring target", src: `const { navigator } = stand_in;`, want: []string{"navigator"}},
 	}
 
 	// Every assignment to a property that navigates or changes a target, on

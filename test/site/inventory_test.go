@@ -1,6 +1,7 @@
 package site_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -205,6 +206,304 @@ func TestInventorySectionsAreShownWithoutScript(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestInventoryPickerIsHiddenWithoutScript pins the picker with no script (issue
+// #373, item 15, review finding 10): the three source buttons do nothing until
+// the page script wires them, so their container carries the hidden attribute
+// and the script removes it. With no script a visitor sees the three sources'
+// sections, which all show, and no button that announces AWS as pressed and then
+// does nothing when it is pressed.
+func TestInventoryPickerIsHiddenWithoutScript(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	tests := []struct {
+		name string
+		page *document
+	}{
+		{name: "the built page", page: bundle.html(t, inventoryPageName)},
+		{name: "the source page", page: parseHTML(t, inventoryPageName, readSiteFile(t, inventoryPageName))},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			picker := sourcePicker(t, tc.page)
+
+			if !picker.hasAttr("hidden") {
+				t.Errorf("%s's <%s class=%q> carries no hidden attribute, want it hidden: with no script the three source buttons do nothing, so the page shows none of them and every section's commands (issue #373, item 15)\n%v",
+					tc.name, picker.tag, classAttr(picker), picker.attrs)
+			}
+		})
+	}
+}
+
+// TestInventoryCommandsPerStep pins how many commands each source's two steps
+// show (issue #373, item 15, audit finding 3): the numbers are written down here,
+// by hand, rather than read back through a parser of the guide, so a page that
+// silently lost a command to a truncated extraction fails a check of its own and
+// not only the parity check both sides share. The counts are what the guide holds
+// once a comment heads only the command it describes (review finding 12): the
+// page shows one <pre><code> per command, in the guide's order.
+func TestInventoryCommandsPerStep(t *testing.T) {
+	t.Parallel()
+
+	want := []struct {
+		key     string
+		collect int
+		build   int
+	}{
+		{key: "aws", collect: 10, build: 1},
+		{key: "gcp", collect: 6, build: 1},
+		{key: "azure", collect: 6, build: 1},
+	}
+
+	doc := theBundle(t).html(t, inventoryPageName)
+
+	for _, tc := range want {
+		t.Run(tc.key, func(t *testing.T) {
+			t.Parallel()
+
+			section := inventorySection(t, doc, guideSourceByKey(t, tc.key))
+			steps := inventorySteps(t, section)
+
+			if got := len(steps["collect"]); got != tc.collect {
+				t.Errorf("%s's %q step shows %d commands, want %d: the guide's \"Collect from %s\" section holds that many, one per command, and a comment heads only the command it describes (issue #373, item 15)\n%s",
+					inventoryPageName, "01 Collect the output", got, tc.collect, strings.ToUpper(tc.key), describeCommands(steps["collect"]))
+			}
+
+			if got := len(steps["build"]); got != tc.build {
+				t.Errorf("%s's %q step shows %d commands, want %d: the guide's \"Build the %s inventory\" section holds that many (issue #373, item 15)\n%s",
+					inventoryPageName, "02 Build the inventory", got, tc.build, strings.ToUpper(tc.key), describeCommands(steps["build"]))
+			}
+		})
+	}
+}
+
+// TestInventoryCommentHeadsOnlyItsCommand pins that a comment heads the command
+// it describes and no other (issue #373, item 15, review finding 12): the guide's
+// block runs a comment into the calls that follow it when it has no blank line
+// after the call it describes, and the page copies whatever the block holds. A
+// visitor who copies the commented command gets that one call, not a page of
+// unrelated ones.
+func TestInventoryCommentHeadsOnlyItsCommand(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		key  string
+		// comment is the first line of the command, the comment that describes it.
+		comment string
+		// describes is the call the comment describes.
+		describes string
+		// others are the calls that belong to another command.
+		others []string
+	}{
+		{
+			name:      "the AWS instance types' vCPU and memory",
+			key:       "aws",
+			comment:   "# The vCPU and memory of the instance types in use.",
+			describes: "aws ec2 describe-instance-types",
+			others:    []string{"aws ec2 describe-volumes", "aws ec2 describe-snapshots", "aws autoscaling describe-auto-scaling-groups"},
+		},
+		{
+			name:      "the two GCP labels the program reads",
+			key:       "gcp",
+			comment:   "# Keep only the two labels gcp.jq reads, not the values of any other label.",
+			describes: "gcloud asset search-all-resources",
+			others:    []string{"gcloud compute instances list"},
+		},
+		{
+			name:      "GCP's machine types, with no instances to ask for",
+			key:       "gcp",
+			comment:   "# With no instances there are no types to ask for: write an empty list instead.",
+			describes: "gcloud compute machine-types list",
+			others: []string{
+				"gcloud compute disks list",
+				"gcloud compute instance-groups managed list",
+				"gcloud compute snapshots list",
+				"gcloud sql instances list",
+				"gcloud storage buckets list",
+				"gcloud container clusters list",
+				"gcloud pubsub subscriptions list",
+			},
+		},
+	}
+
+	doc := theBundle(t).html(t, inventoryPageName)
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			section := inventorySection(t, doc, guideSourceByKey(t, tc.key))
+			steps := inventorySteps(t, section)
+
+			var headed []string
+
+			for _, step := range []string{"collect", "build"} {
+				for _, command := range steps[step] {
+					if strings.HasPrefix(strings.TrimSpace(command), tc.comment) {
+						headed = append(headed, command)
+					}
+				}
+			}
+
+			if len(headed) == 0 {
+				t.Fatalf("%s's %s section shows no command starting with %q, so this check read nothing: the guide's comment heads a command of its own (issue #373, item 15)\n%s",
+					inventoryPageName, strings.ToUpper(tc.key), tc.comment, describeCommands(steps["collect"]))
+			}
+
+			if len(headed) > 1 {
+				t.Fatalf("%s's %s section shows %d commands starting with %q, want one: a comment heads one command (issue #373, item 15)",
+					inventoryPageName, strings.ToUpper(tc.key), len(headed), tc.comment)
+			}
+
+			if !strings.Contains(headed[0], tc.describes) {
+				t.Errorf("%s's command headed by %q does not hold %q, want the call the comment describes (issue #373, item 15)\n%s",
+					inventoryPageName, tc.comment, tc.describes, headed[0])
+			}
+
+			for _, other := range tc.others {
+				if strings.Contains(headed[0], other) {
+					t.Errorf("%s's command headed by %q also holds %q, want the call the comment describes and no other: the guide needs a blank line between the two, so each is copied on its own (issue #373, item 15)\n%s",
+						inventoryPageName, tc.comment, other, headed[0])
+				}
+			}
+		})
+	}
+}
+
+// sourcePicker returns the element that holds the page's three source buttons:
+// the narrowest element the script shows and hides. It fails the test when the
+// page holds no button carrying aria-controls, or when no element holds them all.
+func sourcePicker(t *testing.T, doc *document) *element {
+	t.Helper()
+
+	var buttons []*element
+
+	for _, button := range doc.find("button") {
+		if _, ok := button.attr("aria-controls"); ok {
+			buttons = append(buttons, button)
+		}
+	}
+
+	if len(buttons) == 0 {
+		t.Fatalf("%s holds no button carrying aria-controls, so this check read nothing: each source button names the section it shows (issue #373, item 15)",
+			inventoryPageName)
+	}
+
+	for _, candidate := range buttons[0].ancestors() {
+		holds := true
+
+		for _, button := range buttons {
+			if !isDescendant(button, candidate) {
+				holds = false
+			}
+		}
+
+		if holds {
+			return candidate
+		}
+	}
+
+	t.Fatalf("%s's source buttons sit in no element that holds all %d of them, want them grouped in one container the script shows (issue #373, item 15)",
+		inventoryPageName, len(buttons))
+
+	return nil
+}
+
+// classAttr returns the element's class attribute as it spells it, for a failure
+// message.
+func classAttr(el *element) string {
+	class, _ := el.attr("class")
+
+	return class
+}
+
+// guideSourceByKey returns the source the page lists by key, failing the test for
+// a key no source has.
+func guideSourceByKey(t *testing.T, key string) guideSource {
+	t.Helper()
+
+	for _, source := range guideSources {
+		if source.key == key {
+			return source
+		}
+	}
+
+	t.Fatalf("the page documents no source with the key %q, so this check read nothing: the sources are %v", key, guideSources)
+
+	return guideSource{}
+}
+
+// inventorySteps returns the commands of a source's section, by the step the page
+// shows above them: "collect" for the page's "01 Collect the output" and "build"
+// for its "02 Build the inventory". A command shown before either step fails the
+// test, so a page that lost its steps cannot pass on nothing.
+func inventorySteps(t *testing.T, section *element) map[string][]string {
+	t.Helper()
+
+	steps := map[string][]string{}
+	step := ""
+
+	var walk func(el *element)
+
+	walk = func(el *element) {
+		if el.tag == "pre" {
+			if step == "" {
+				t.Fatalf("%s's %q section shows a command above its first step heading, so this check cannot tell its collect commands from its build commands (issue #373, item 15)\n%s",
+					inventoryPageName, collapseSpace(section.textContent()), collapseSpace(el.textContent()))
+			}
+
+			steps[step] = append(steps[step], el.textContent())
+
+			return
+		}
+
+		for _, child := range el.children {
+			walk(child)
+		}
+	}
+
+	for _, child := range section.children {
+		if child.tag == "h3" {
+			heading := collapseSpace(child.textContent())
+
+			switch {
+			case strings.Contains(heading, "Collect"):
+				step = "collect"
+			case strings.Contains(heading, "Build"):
+				step = "build"
+			default:
+				t.Fatalf("%s's %q section shows the step heading %q, want one that says Collect or Build (issue #373, item 15)",
+					inventoryPageName, collapseSpace(section.textContent()), heading)
+			}
+
+			continue
+		}
+
+		walk(child)
+	}
+
+	return steps
+}
+
+// describeCommands renders commands for a failure message: the command's first
+// line and how many lines it holds.
+func describeCommands(commands []string) string {
+	var out strings.Builder
+
+	for i, command := range commands {
+		lines := strings.Split(command, "\n")
+
+		fmt.Fprintf(&out, "  [%02d] (%d lines) %s\n", i+1, len(lines), strings.TrimSpace(lines[0]))
+	}
+
+	return out.String()
 }
 
 // TestInventoryCommandsAreTheGuides pins the page's one source of truth (issue
