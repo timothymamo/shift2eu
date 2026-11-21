@@ -11,7 +11,10 @@
 // TestInfraRules runs the script on the real infra/, which must hold every
 // rule, and on copies of infra/ in t.TempDir() with exactly one breakage each,
 // for which the script must report that rule's [<tag>] and no other. It reads
-// files only: no tofu, no network, no credentials.
+// files only: no tofu, no network, no credentials. TestInfraTracksNoLocalFiles
+// pins that git tracks no file under infra/ that the maintainer's machine keeps
+// (a tfvars file, backend.hcl, a state file, anything under .terraform), only
+// the .example copies; it reads the repository's index and writes nothing.
 //
 // The swap tests (limaswap_test.go) pin the template's swapSize param and run
 // its one system provision step that names PARAM_swapSize under bash, against

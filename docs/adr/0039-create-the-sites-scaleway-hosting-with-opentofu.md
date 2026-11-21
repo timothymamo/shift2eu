@@ -44,7 +44,10 @@ lists them), `fmt -check`, `init -backend=false`, `validate` and `tofu test` aga
 credential, no state, no call to Scaleway, no passphrase. It runs tofu under `env -i` with an allow list:
 no `SCW_*`, `AWS_*` or `TF_*` variable of the caller's, `SCW_CONFIG_PATH`, `AWS_CONFIG_FILE` and
 `AWS_SHARED_CREDENTIALS_FILE` set to `/dev/null`, and `HOME` an empty directory, so no credential of the
-caller's reaches it, even on the admin machine with the maintainer's keys exported. That holds only
+caller's reaches it, even on the admin machine with the maintainer's keys exported. `init`, `validate`
+and `test` run in every applied root. `tofu test` reads a local `terraform.tfvars` in the root (and its
+`tests/`) unasked, so on the admin machine the offline tests run with the maintainer's values and in CI
+with the defaults. That holds only
 while the configuration itself names no credential and no real provider for a test, which the static
 rules keep: a configuration's `provider` block has no `alias` (a second configuration a test could pick)
 and no `access_key`, `secret_key`, `profile` or `api_url`; a test file declares an unaliased
@@ -60,7 +63,17 @@ and one `scaleway_iam_policy`, without `count` or `for_each`, and no other IAM r
 `visibility` argument; no override file, JSON file, symlink, or `.tofu` (`.tofutest.hcl`) file beside a
 `.tf` (`.tftest.hcl`) file of the same name, which OpenTofu would load instead; no hidden configuration
 or test file (a name starting with `.`), which OpenTofu ignores, so the rules refuse it and read it for
-no other rule; and a file the rules
+no other rule; no `provisioner` or `connection` block at any depth, in a configuration or test file (a
+`local-exec` would run on the admin machine, where the Scaleway keys and the GitHub admin token live);
+no `*.auto.tfvars` or `*.auto.tfvars.json`, hidden ones too, which tofu loads after `terraform.tfvars`
+unasked (the maintainer's own `terraform.tfvars` stays allowed and out of git); in the committed
+`backend "s3"` block only `key`, `use_lockfile`, `skip_credentials_validation`, `skip_region_validation`,
+`skip_requesting_account_id` and `skip_s3_checksum`, so no `insecure`, `endpoints`, `assume_role` or
+other setting can redirect or weaken the state's transport; no `scaleway_object` resource (tofu never
+uploads an object, the release does); no call, in a configuration file and in a template's `${...}` too,
+of a function that reads the machine running tofu (`file`, `filebase64*`, `fileexists`, `fileset`,
+`templatefile`, `filemd5`, `filesha*`, `pathexpand`, `abspath`); an empty file is judged as any other;
+and a file the rules
 cannot read (a heredoc, an unbalanced string or bracket, a backslash escape in a block label or quoted
 key, a `$${` or `%%{` escape in a block label, a block header of anything but identifiers and literal strings) fails them, with no other verdict.
 

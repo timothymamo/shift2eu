@@ -25,8 +25,17 @@ and `test`, it runs the static rules of `dev/infra-rules.sh` (which lists them):
 resource, no bucket ACL or `visibility`, exactly one IAM application and policy, only `scaleway/scaleway`,
 local modules only, none in a directory starting with `.` and none naming an applied root, one `s3`
 backend for every applied root, no configuration file directly in `infra/`, no provider `api_url`, no
-override, JSON or hidden (`.`-named, which OpenTofu ignores) files, and every test file mocking the
-provider.
+override, JSON or hidden (`.`-named, which OpenTofu ignores) files, every test file mocking the
+provider, no `provisioner` or `connection` block, no `*.auto.tfvars` (`.json` too), no setting in the
+`s3` backend block beyond `key`, `use_lockfile` and the four `skip_*` ones, no `scaleway_object` (the
+release deploys the objects), and no call of a function that reads the local machine (`file`,
+`templatefile`, `fileset`, `pathexpand`, `abspath`, ...).
+`init`, `validate` and `test` run in every applied root (each directory directly under `infra/`).
+
+`tofu test` loads a `terraform.tfvars` in `infra/site` (and in `tests/`) without being asked: on the admin
+machine, where the maintainer's copy lives, the offline tests run with the maintainer's values, while CI,
+which has none, runs them with the defaults. A `*.auto.tfvars`, which tofu would load too, is refused
+(`[tfvars-file]`), so no committed file can override those values.
 It runs tofu with none of the caller's `SCW_*`, `AWS_*` or `TF_*` variables and no Scaleway or AWS
 configuration file, so it cannot reach Scaleway even where the maintainer's keys are exported. Only the
 maintainer runs `init` with the backend, `plan` and `apply`, on the admin machine, always through

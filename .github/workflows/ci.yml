@@ -174,7 +174,8 @@ jobs:
         run: make test-e2e
       # make check's infra-check (issue #422): the OpenTofu release infra/tofu.yaml pins, checked by
       # dev/tofu.sh against its linux_amd64 SHA-256 before it runs, and the provider against
-      # infra/site/.terraform.lock.hcl. No credential; the tests mock the Scaleway provider.
+      # each applied root's .terraform.lock.hcl (today infra/site's). No credential; the tests mock the
+      # Scaleway provider.
       - name: OpenTofu configuration, offline
         run: make infra-check
       # The same goreleaser version release.yml runs, installed only: the script below runs a snapshot of

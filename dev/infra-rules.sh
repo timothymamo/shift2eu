@@ -14,6 +14,9 @@
 #                    no such file)
 #   [json-config]    a JSON configuration or test file (*.tf.json, *.tofu.json, *.tftest.json,
 #                    *.tofutest.json), which these rules do not read
+#   [tfvars-file]    a *.auto.tfvars or *.auto.tfvars.json anywhere under the root, hidden ones too: tofu
+#                    loads it after terraform.tfvars unasked, so it would override the maintainer's values
+#                    (a plain terraform.tfvars, the maintainer's own on the admin machine, is not refused)
 #   [symlink]        a symlink anywhere under the root: tofu would load what it points at, unread here
 #   [override-file]  an override file (override.tf, *_override.tf, the .tofu and .json forms): it rewrites
 #                    other files' blocks where a review of those files does not see it
@@ -26,6 +29,13 @@
 #                    no other rule is reported
 #   [api-key]        a scaleway_iam_api_key resource or data source: the deploy key is made by hand, so no
 #                    secret reaches the state
+#   [provisioner]    a provisioner or connection block at any depth (in a resource, a removed block or a
+#                    test file): it runs commands on the machine that applies or tests, where the keys live
+#   [object]         a scaleway_object resource: tofu never uploads objects, the release deploys them
+#   [file-function]  a call of file, filebase64, filebase64sha256, filebase64sha512, fileexists, fileset,
+#                    templatefile, filemd5, filesha1, filesha256, filesha512, pathexpand or abspath in a
+#                    configuration file, a template's ${...} too: the plan would read the machine that runs
+#                    it. A name in a comment or in a string without a template is no call
 #   [bucket-acl]     a scaleway_object_bucket_acl resource
 #   [acl]            an acl argument, even "private"
 #   [visibility]     a visibility argument (an object's ACL), even "private"
@@ -52,6 +62,9 @@
 #                    is exempt only when a configuration's local module names it (a test file's run-block
 #                    module exempts nothing)
 #   [backend-s3]     a backend other than s3 (never local)
+#   [backend-setting] an attribute or nested block in backend "s3" other than key, use_lockfile and the four
+#                    skip_* settings (insecure, endpoints, assume_role, ...): the bucket, region and
+#                    endpoint come from the git-ignored backend.hcl
 #   [cloud-block]    a cloud block
 #   [required-version] a configuration directory judged as [backend-count] judges it without exactly one
 #                    required_version, or one other than infra/tofu.yaml's
@@ -99,6 +112,10 @@ read_names=(\( -name '*.tf' -o -name '*.tofu' -o -name '*.tf.json' -o -name '*.t
 while IFS= read -r f; do
   [ -n "${f}" ] && fail hidden-file "${f}" "a hidden file, which OpenTofu ignores: what it holds (a backend, a pin, a mock) is not what runs, so give it a name without the leading ."
 done <<<"$(files -type f -name '.*' "${read_names[@]}")"
+
+while IFS= read -r f; do
+  [ -n "${f}" ] && fail tfvars-file "${f}" "an auto-loaded variables file: tofu reads it after terraform.tfvars without anyone naming it, so a value git holds would override the maintainer's own"
+done <<<"$(files -type f \( -name '*.auto.tfvars' -o -name '*.auto.tfvars.json' \))"
 
 while IFS= read -r f; do
   [ -n "${f}" ] && fail symlink "${f}" "a symlink: tofu would load what it points at, which these rules do not read"

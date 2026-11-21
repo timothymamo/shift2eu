@@ -11,9 +11,16 @@
 # literal string ("L", its value kept), an object ("O") or any other expression ("E"). Anything it does
 # not read is a [parse] failure: a heredoc; an unbalanced string, brace or comment; a backslash in a block
 # label or a quoted object key (HCL decodes escapes such as _, so the raw text is not the name tofu
-# reads); a $${ or %%{ in a block label (read as ${ and %{); and a { after a block header whose labels are not plain identifiers or literal strings. The
-# rules fail closed rather than pass a file they could not read: once any file fails to parse, only the
-# [parse] lines are printed, since every other verdict would rest on a partial reading.
+# reads); a $${ or %%{ in a block label (read as ${ and %{); and a { after a block header whose labels
+# are not plain identifiers or literal strings. The rules fail closed rather than pass a file they could
+# not read: once any file fails to parse, only the [parse] lines are printed, since every other verdict
+# would rest on a partial reading.
+#
+# A call of a function that reads the machine running tofu (file, templatefile, pathexpand, ...) is found
+# by the tokenizer itself, in a configuration file: an identifier with that name whose next character
+# outside whitespace and comments is a (. Inside a template's ${...} or %{...}, which is not tokenized,
+# the raw text is read the same way, so the check fails closed there; a string without a template, or a
+# comment, is never read for it.
 #
 # Usage: awk -v pinned=<required_version> -v root=<infra root> -f dev/infra-rules.awk <files...>
 # POSIX awk only: no gawk extension, and character classes are written as explicit comparisons where a
@@ -24,6 +31,30 @@
 BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] range)
   LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_"
   DIGITS = "0123456789"
+  # The functions that read files, or resolve paths, on the machine that runs tofu.
+  split("file filebase64 filebase64sha256 filebase64sha512 fileexists fileset templatefile filemd5 filesha1 filesha256 filesha512 pathexpand abspath", ff, " ")
+  for (i in ff) {
+    fileFunc[ff[i]] = 1
+  }
+  # The settings the committed backend "s3" block may hold: none names a bucket, endpoint, role or secret.
+  BACKEND_SETTINGS_TEXT = "key, use_lockfile, skip_credentials_validation, skip_region_validation, skip_requesting_account_id and skip_s3_checksum; the bucket, region and endpoint come from the git-ignored backend.hcl"
+  split("key use_lockfile skip_credentials_validation skip_region_validation skip_requesting_account_id skip_s3_checksum", bs, " ")
+  for (i in bs) {
+    backendSetting[bs[i]] = 1
+  }
+  # Every file given is judged, an empty one too: FNR == 1 never fires for a zero-byte file.
+  for (i = 1; i < ARGC; i++) {
+    fileSeen[ARGV[i]] = 1
+    isTest[ARGV[i]] = (ARGV[i] ~ /\.(tftest|tofutest)\.hcl$/)
+  }
+}
+
+# An identifier just read: when it names a file function, the next character outside whitespace and
+# comments decides whether it is called.
+function ident(s) {
+  if ((s in fileFunc) && !isTest[FILENAME]) {
+    ffpend = s
+  }
 }
 
 function problem(rule, file, line, msg) {
@@ -207,6 +238,7 @@ FNR == 1 {
   incomment = 0
   pstate = 0
   broken = 0
+  ffpend = ""
   reset()
   files++
   fileSeen[FILENAME] = 1
@@ -271,6 +303,15 @@ FNR == 1 {
       i++
       continue
     }
+    if (ffpend != "" && c != " " && c != "\t" && c != "\r") { # a file function's name: is it called?
+      if (c == "(") {
+        nff++
+        ffFile[nff] = FILENAME
+        ffLine[nff] = FNR
+        ffName[nff] = ffpend
+      }
+      ffpend = ""
+    }
     if (c == "\"") {
       md++
       mode[md] = "S"
@@ -282,7 +323,14 @@ FNR == 1 {
       continue
     }
     if (md > 0) { # inside a template's ${...}: follow its braces, emit nothing
-      if (c == "{") {
+      if (index(LETTERS, c) > 0) { # an identifier, read only for a file function's call
+        j = i
+        while (j < n && index(LETTERS DIGITS "-", substr(line, j + 1, 1)) > 0) {
+          j++
+        }
+        ident(substr(line, i, j - i + 1))
+        i = j
+      } else if (c == "{") {
         depth[md]++
       } else if (c == "}") {
         if (depth[md] == 0) {
@@ -304,6 +352,7 @@ FNR == 1 {
         j++
       }
       tok("I", substr(line, i, j - i + 1), 0)
+      ident(substr(line, i, j - i + 1))
       i = j
       continue
     }
@@ -399,6 +448,11 @@ END {
     exit
   }
 
+  # Calls found by the tokenizer, reported only now, so a [parse] failure elsewhere keeps them unprinted.
+  for (i = 1; i <= nff; i++) {
+    problem("file-function", ffFile[i], ffLine[i], ffName[i] "(): it reads the machine that runs tofu, so the plan would differ per machine and could carry a local file into the state")
+  }
+
   # Blocks.
   for (b = 1; b <= nblk; b++) {
     f = bfile[b]
@@ -407,6 +461,10 @@ END {
     last = el[m]
     k = split(last, lab, ":")
     typ = lab[1]
+    # At any depth, in a resource, a removed block or a test file alike.
+    if (typ == "provisioner" || typ == "connection") {
+      problem("provisioner", f, bline[b], "a " typ " block (" p "): a provisioner runs commands, or reaches another machine, on whichever machine applies or tests, where the Scaleway keys and the GitHub admin token live")
+    }
     if (isTest[f]) {
       if (m == 1 && typ == "mock_provider" && k == 2 && lab[2] == "scaleway") {
         mock[b] = f
@@ -428,6 +486,8 @@ END {
       }
       if (lab[2] == "scaleway_iam_api_key") {
         problem("api-key", f, bline[b], "a " typ " scaleway_iam_api_key: the deploy API key is created by hand, so no secret reaches the state")
+      } else if (typ == "resource" && lab[2] == "scaleway_object") {
+        objects[b] = 1 # reported after the attributes, below
       } else if (typ == "resource" && lab[2] == "scaleway_object_bucket_acl") {
         problem("bucket-acl", f, bline[b], "a scaleway_object_bucket_acl: the bucket policy alone decides who reads the site (ADR 0039), and an ACL could make every object, or the bucket, public")
       } else if (typ == "resource" && lab[2] == "scaleway_iam_policy") {
@@ -451,6 +511,9 @@ END {
       if (lab[2] != "s3") {
         problem("backend-s3", f, bline[b], "backend \"" lab[2] "\": the state lives in a Scaleway bucket through the s3 backend, never local")
       }
+    }
+    if (m == 3 && el[1] == "terraform" && el[2] == "backend:s3") {
+      problem("backend-setting", f, bline[b], "a " last " block in the committed backend \"s3\" block (" p "): it may set only " BACKEND_SETTINGS_TEXT)
     }
     if (m == 2 && el[1] == "terraform" && typ == "cloud") {
       problem("cloud-block", f, bline[b], "a cloud block: the state lives in a Scaleway bucket through the s3 backend")
@@ -489,7 +552,13 @@ END {
       problem("acl", f, aline[a], "an acl argument, even \"private\": the bucket policy alone decides who reads the site (ADR 0039)")
     }
     if (n == "visibility") {
+      if (p == bpath[ablk[a]]) {
+        visibilityIn[ablk[a]] = 1
+      }
       problem("visibility", f, aline[a], "a visibility argument, even \"private\": an object's visibility is an ACL, and the bucket policy alone decides who reads the site (ADR 0039)")
+    }
+    if (p == "terraform/backend:s3" && !(n in backendSetting)) {
+      problem("backend-setting", f, aline[a], n " in the committed backend \"s3\" block: it may set only " BACKEND_SETTINGS_TEXT)
     }
     if (p == "terraform" && n == "required_version") {
       versions[dirof(f)]++
@@ -515,6 +584,13 @@ END {
     }
     if (p ~ "^resource:scaleway_iam_(policy|application):[^/]+$" && (n == "count" || n == "for_each")) {
       problem("iam-repeat", f, aline[a], n " on " p ": infra/ creates exactly one IAM application and one policy")
+    }
+  }
+
+  # A scaleway_object whose visibility [visibility] already refuses gets that one line, not a second.
+  for (b = 1; b <= nblk; b++) {
+    if ((b in objects) && !(b in visibilityIn)) {
+      problem("object", bfile[b], bline[b], "a scaleway_object resource: tofu never uploads an object, the release deploys them (ADR 0039)")
     }
   }
 
