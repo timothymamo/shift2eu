@@ -448,7 +448,11 @@ const ciArchiveStep = `      # The release's archives, built by a snapshot run o
 // request and every push to main, installs the release's GoReleaser and runs
 // .github/scripts/verify-archives.sh, which builds the release's archives and
 // fails unless each holds exactly its own binary: the CLI's archive shift2eu
-// and nothing else (issue #393).
+// and nothing else (issue #393). It takes ci.yml's pins and the release
+// fixture release.yml's, so a Renovate update that moves the GoReleaser pins
+// in one workflow alone fails the cases that compare the two on purpose: the
+// workflows have drifted apart, and repository_test.go's
+// TestReleaseArchivesHoldOneBinary names the drift.
 var ciArchiveCheck = ciArchiveCheckFrom(repoCI)
 
 // ciArchiveCheckFrom returns ciArchiveCheck with the pins of ci, a ci.yml: the

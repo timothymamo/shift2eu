@@ -1,7 +1,6 @@
 package check_test
 
 import (
-	"os"
 	"strings"
 	"testing"
 
@@ -9,7 +8,10 @@ import (
 )
 
 // The dry-run fixtures, built from the repository's workflows: the cases below
-// change one part of them.
+// change one part of them. ciDryRun takes ci.yml's pins and releaseDryRun
+// release.yml's, so a Renovate update that moves a pin in one workflow alone
+// fails the cases that compare the two on purpose: the workflows have drifted
+// apart, and TestDryRunMirrorsTheRepositoryWorkflows names the drift.
 var (
 	ciDryRun      = ciDryRunFrom(repoCI)
 	releaseDryRun = releaseDryRunFrom(repoRelease)
@@ -228,8 +230,8 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 	syft := ciPins.expand("{{release syft}}")
 	driftedSyft := nextRelease(t, syft)
 	buildkit := ciPins.expand("{{image moby/buildkit}}")
-	buildkitTag, _, _ := strings.Cut(buildkit, "@")
-	driftedBuildkit := nextRelease(t, buildkitTag) + "@sha256:" + strings.Repeat("1", 64)
+	buildkitTag, buildkitDigest, _ := strings.Cut(buildkit, "@sha256:")
+	driftedBuildkit := nextRelease(t, buildkitTag) + "@sha256:" + nextCommit(t, buildkitDigest)
 	commit := func(action string) string { return ciPins.expand("{{commit " + action + "}}") }
 	driftedCommit := func(action string) string { return action + "@" + nextCommit(t, ciPins.commitOf(action)) }
 
@@ -557,17 +559,7 @@ func TestDryRunMirrorsRelease(t *testing.T) {
 func TestDryRunMirrorsTheRepositoryWorkflows(t *testing.T) {
 	t.Parallel()
 
-	ci, err := os.ReadFile("../../../../.github/workflows/ci.yml")
-	if err != nil {
-		t.Fatalf("read ci.yml: %v", err)
-	}
-
-	release, err := os.ReadFile("../../../../.github/workflows/release.yml")
-	if err != nil {
-		t.Fatalf("read release.yml: %v", err)
-	}
-
-	for _, message := range check.DryRunMirrorsRelease(ci, release) {
+	for _, message := range check.DryRunMirrorsRelease(repoCI, repoRelease) {
 		t.Error(message)
 	}
 }
