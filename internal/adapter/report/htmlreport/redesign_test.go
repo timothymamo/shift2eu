@@ -330,6 +330,170 @@ func TestReportCatalogLinkIsEscaped(t *testing.T) {
 	}
 }
 
+// TestReportCatalogURLThatIsNoHTTPSURLIsWords pins the reporter's last line of
+// defence around the catalog link (issue #373, item 10-1, audit finding 1): a
+// catalog URL that is no absolute https URL reaches the page as the words alone,
+// with no link at all, so a URL of another scheme (javascript:, data:) or of
+// another form (http, a leading space, upper-case HTTPS) never reaches an href,
+// even if the domain stopped refusing such a URL. The date is still shown, as
+// text: the reader loses the link, never the catalog's date.
+func TestReportCatalogURLThatIsNoHTTPSURLIsWords(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{name: "javascript", url: "javascript:alert(1)"},
+		{name: "javascript in capitals", url: "JAVASCRIPT:alert(1)"},
+		{name: "data", url: "data:text/html,x"},
+		{name: "http", url: "http://example.com/"},
+		{name: "a leading space", url: " https://x"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := fitsAssessment(t)
+			a.Snapshot.SourceURL = tc.url
+
+			got := render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName})
+
+			checkNoInjectedMarkup(t, got)
+
+			fragment := string(got)
+
+			for _, unwanted := range []string{"<a", "href="} {
+				if strings.Contains(fragment, unwanted) {
+					t.Errorf("the fragment whose catalog URL is %q holds %q, want the words alone with no link: the reporter writes an href only for an absolute https URL (issue #373, item 10-1)\n%s",
+						tc.url, unwanted, fragment)
+				}
+			}
+
+			date := a.Snapshot.RetrievedOn.UTC().Format("2006-01-02")
+
+			if want := "catalog retrieved " + date; !strings.Contains(textOf(fragment), want) {
+				t.Errorf("the fragment whose catalog URL is %q reads %q, want it to carry %q as text: a URL that is no https URL loses the link, never the catalog's date (issue #373, item 10-1)\n%s",
+					tc.url, textOf(fragment), want, fragment)
+			}
+		})
+	}
+}
+
+// TestReportTableScrollsByKeyboard pins that a table's box can be reached and
+// scrolled with the keyboard (issue #373, item 11, review finding 6): each box
+// that scrolls sideways is a named region of its own, focusable, so Safari's and
+// Firefox's keyboard users can scroll it and a screen reader announces what it
+// is. The name is a constant of the reporter's, never a value from the
+// inventory, so the fragment's escaping invariant holds: text from an inventory
+// is never markup, and no attribute of the fragment is taken from one.
+func TestReportTableScrollsByKeyboard(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		report func(t *testing.T) []byte
+		ids    []string
+	}{
+		{
+			name: "every fit, without estimates",
+			report: func(t *testing.T) []byte {
+				t.Helper()
+
+				return render(t, fitsAssessment(t), analysis.ReportMeta{InventoryName: inventoryFileName})
+			},
+			ids: resourceIDs(awsResources()),
+		},
+		{
+			name: "with estimates",
+			report: func(t *testing.T) []byte {
+				t.Helper()
+
+				return render(t, estimatesAssessment(t), analysis.ReportMeta{InventoryName: inventoryFileName})
+			},
+			ids: resourceIDs(estimateResources()),
+		},
+		{
+			name: "a comparison of three targets",
+			report: func(t *testing.T) []byte {
+				t.Helper()
+
+				inv := newInventory(t, sourceName, comparisonResources())
+
+				return renderComparison(t, assessment.Compare([]assessment.TargetAssessment{
+					{Key: "ovhcloud", Assessment: assessment.Assess(inv, testutil.OVHcloudCatalog(t))},
+					{Key: "scaleway", Assessment: assessment.Assess(inv, testutil.ScalewayCatalog(t))},
+					{Key: "upcloud", Assessment: assessment.Assess(inv, testutil.UpCloudCatalog(t))},
+				}), analysis.ReportMeta{InventoryName: inventoryFileName})
+			},
+			ids: resourceIDs(comparisonResources()),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			elements := fragmentElements(t, string(tc.report(t)))
+
+			boxes := elementsWithClass(t, elements, "table-scroll")
+			if len(boxes) == 0 {
+				t.Fatal("the fragment holds no box carrying the class \"table-scroll\", so this check read nothing: each table sits in a box of its own that scrolls sideways (issue #373, item 11)")
+			}
+
+			for _, box := range boxes {
+				if got, _ := attributeOf(elements[box].attrs, "tabindex"); got != "0" {
+					t.Errorf("a table's box carries tabindex=%q, want \"0\": the box scrolls sideways, so a keyboard visitor must be able to focus it and scroll it (issue #373, item 11)\n%s",
+						got, elements[box].attrs)
+				}
+
+				if got, _ := attributeOf(elements[box].attrs, "role"); got != "region" {
+					t.Errorf("a table's box carries role=%q, want \"region\": a focusable box that scrolls is a region of its own, announced as one (issue #373, item 11)\n%s",
+						got, elements[box].attrs)
+				}
+
+				label, ok := attributeOf(elements[box].attrs, "aria-label")
+				if !ok || strings.TrimSpace(label) == "" {
+					t.Errorf("a table's box carries aria-label=%q, want a non-empty constant that names the table: a region with no name tells a screen reader nothing (issue #373, item 11)",
+						label)
+				}
+
+				for _, id := range tc.ids {
+					if strings.Contains(label, id) {
+						t.Errorf("a table's box is named %q, which holds the inventory's value %q, want a constant of the reporter's: no attribute of the fragment is taken from the inventory (issue #373, item 10-1)\n%s",
+							label, id, elements[box].attrs)
+					}
+				}
+			}
+
+			for i, element := range elements {
+				if element.tag != "table" {
+					continue
+				}
+
+				header := headerCells(t, elements, i)
+				if len(header) < 2 || header[0] != "ID" || header[1] != "Raw type" {
+					continue
+				}
+
+				box := element.parent
+				if box < 0 {
+					t.Fatalf("a Resources table sits at the fragment's top level, want it in a box of its own (issue #373, item 11)")
+				}
+
+				if label, _ := attributeOf(elements[box].attrs, "aria-label"); label != resourcesTableLabel {
+					t.Errorf("the Resources table's box is named %q, want %q: the box is a named region, and its name is a constant of the reporter's (issue #373, item 11)",
+						label, resourcesTableLabel)
+				}
+			}
+		})
+	}
+}
+
+// resourcesTableLabel is the name the resources table's scrolling box carries.
+const resourcesTableLabel = "Resources table"
+
 // TestReportSummaryShowsABoxPerFit pins the summary (issue #373, item 10-2): one
 // box per fit, each holding the fit's badge and the fit's count, and, when the
 // report has estimates, one more box holding the monthly estimate. The summary is
