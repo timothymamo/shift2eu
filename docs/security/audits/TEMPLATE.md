@@ -10,7 +10,8 @@ run's content.
 ## Summary
 
 One paragraph: what was audited, the number of public findings by severity, whether private findings
-exist (the flag below, never a count), and anything the maintainer should read first.
+exist (the flag below, never a count), and anything public the maintainer should read first; never a
+private finding, a hint at one, or its existence beyond the private-findings flag.
 
 ## Scope
 
@@ -29,6 +30,12 @@ The public findings only. One row per finding:
 | `fp-` and 12 lowercase hex characters | critical, high, medium, low or informational | the finding's category | new, open or fixed | `path:line` or the release artifact | the concrete attack or failure | the fix |
 
 "No public findings." when there are none.
+
+The status describes this run's view of a finding: `new` when the last report did not list its
+fingerprint, `open` when the last report listed it and the audited commit still has it, and `fixed` when
+the last report listed it and the audited commit no longer has it. Changes since the last audit, below,
+describes the **last report's** findings in its own words: fixed, still open (the table's `open`) or
+regressed (a fixed finding that is back, `open` again in the table).
 
 ### Needs investigation
 
@@ -59,6 +66,19 @@ of `not run (why)` is one of the publish script's fixed reasons.
 Each public finding of the previous report, by fingerprint, as fixed, still open or regressed; the
 dependencies changed since; and any gap in the schedule, when the previous report is older than the
 schedule allows ([Security](../README.md)). On the first report, "First report."
+
+## False positives
+
+Every public finding dismissed as a false positive, this run's and every earlier report's, carried
+forward from the last report so the newest report holds them all. One row each:
+
+| Fingerprint | Reason |
+|---|---|
+| `fp-` and 12 lowercase hex characters | one line: why it is no finding |
+
+A later run skips a finding only when its fingerprint matches a row here exactly, and never one of
+severity medium or higher or in a private category. A private finding's false positive is never listed
+here; it stays with its advisory. "None." when there are none.
 
 ## Limits
 

@@ -126,11 +126,13 @@ func TestReadmeLinksStayInTheArchive(t *testing.T) {
 //   - docs/README.md, the documentation's index;
 //   - a sub-index: a README.md in a directory directly below docs/ that
 //     docs/README.md links. One level only, no chains: a README.md that only a
-//     sub-index links is a page, not an index.
+//     sub-index links is a page, not an index. Only a link to the README.md
+//     file itself makes a sub-index; a link to its directory does not.
 //
 // A link to a directory lists every Markdown page directly inside it, so a
 // dated report needs no index edit of its own; a page in a subdirectory of a
-// linked directory is not covered by that link.
+// linked directory is not covered by that link, and a README.md the link
+// lists is a page, not an index.
 func indexProblems(fsys fs.FS) ([]string, error) {
 	const index = "docs/README.md"
 	listed := map[string]bool{}

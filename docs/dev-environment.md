@@ -2157,7 +2157,7 @@ nothing waits for it. To remove it for good, delete the environment and uninstal
 
 **Model and usage.** Claude Opus 5.5 (`claude-opus-5-5`), one CLI run per review, no tools. There is
 **no per-token bill**: every review draws on your Claude subscription's usage limits, which it shares
-with the agents and, once PRD #175 lands, with the monthly security audit, which will ask its model
+with the agents and, once PRD #175 lands, with the [scheduled security audit](security/README.md), which will ask its model
 through the CLI the same way. When a limit is reached, the check fails with that reason and posts
 nothing; a later push, or a re-run of the check once the limit has reset, reviews the pull request again.
 The usage, from ADR 0033:

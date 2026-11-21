@@ -102,12 +102,13 @@ The pages are written so that a static site generator can publish them later wit
 - **Stable headings.** Other pages link to their anchors; when a heading must change, update every
   link to it.
 - **Every page is listed here,** in its group and in reading order, or by a **sub-index**: a
-  `README.md` in a directory directly below `docs/` that this index links (one level, no chains). A link
-  to a directory lists every page directly inside it, as `security/README.md` lists the dated audit
-  reports by linking `audits/`.
+  `README.md` in a directory directly below `docs/` that this index links (one level, no chains). Only a
+  link to the `README.md` file itself makes a sub-index; a link to its directory does not. A link to a
+  directory lists every page directly inside it, as `security/README.md` lists the dated audit reports
+  by linking `audits/`.
 
 `make check` holds the pages to part of this: `test/docs` fails on a relative link or `#anchor` in
-`README.md`, `docs/` or `.claude/skills/` that names no existing file or heading, on a link to this
+`README.md`, `SECURITY.md`, `docs/` or `.claude/skills/` that names no existing file or heading, on a link to this
 repository's files by URL, on a page without its single `#` title, and on a page under `docs/` that
 neither this index nor a sub-index lists. It never fetches an external URL.
 

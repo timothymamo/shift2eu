@@ -17,7 +17,9 @@ and recorded in [ADR 0040](../adr/0040-audit-the-repository-and-the-latest-relea
 
 - **Cadence: monthly**, on the 3rd of each month at 04:17 UTC, once the schedule is enabled. The
   maintainer can also start a run by hand at any time, for example after a release. This page is the one
-  place the cadence is stated; every other document links here.
+  user-facing page that states the cadence; every other document links here.
+  [ADR 0040](../adr/0040-audit-the-repository-and-the-latest-release-on-a-schedule.md) records it, with
+  the values derived from it.
 - **Read-only.** A run scans the tree and its history, verifies the release's checksums, attestations and
   signatures, scans the image and binaries, and tests the released CLI with hostile input **locally**, in
   containers without network on GitHub's runner. It never changes code, never touches a cloud, and writes
@@ -35,7 +37,7 @@ public is decided in the run, from each finding's severity, confirmation and cat
 
 | Finding | Where it goes |
 |---|---|
-| Critical, high or medium, confirmed or suspected | A draft security advisory, visible to the maintainer only |
+| Critical, high or medium, confirmed or suspected | A draft security advisory, visible only to the repository's administrators (and anyone they add to the advisory) |
 | Injection, authentication bypass, credential exposure or remote code execution, whatever the severity | A draft security advisory |
 | Missing or unknown severity or category | A draft security advisory |
 | A secret found in the git history | A draft security advisory naming the commit and the rule, never the value, for the maintainer to check |
@@ -58,9 +60,10 @@ anything. A run checks the latest release the same way.
 Each run adds one report, in its own file, named `docs/security/audits/YYYY-MM-DD-<run_id>.md`: the run's
 UTC date, then the GitHub Actions run ID. A second run on the same day adds a file of its own. Names start
 with the date, so they sort by date, and the directory [`audits/`](audits/) lists every report in that
-order: that listing is the index, so a new report needs no edit to this page, and two reports' pull
+order (on GitHub, the directory view lists them by name, oldest first): that listing is the index, so a new report needs no edit to this page, and two reports' pull
 requests never conflict. No report exists yet; the first comes with the audit's first run.
 
 Every report follows [the report template](audits/TEMPLATE.md): a summary; its scope (commit, release tag,
 tool versions, model); the public findings; whether private findings exist; the coverage of each check;
-the changes since the last report, and any gap in the schedule; and the run's limits.
+the changes since the last report, and any gap in the schedule; the public findings dismissed as false
+positives; and the run's limits.

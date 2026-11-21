@@ -33,9 +33,9 @@ the CLI's release archives and its signed image, and no server, OpenAPI document
 
 The maintainer decided where it runs, the model, the tools, the report pull request and the cadence on
 2026-11-18 (issue #175 and PR #273), and accepted the PRD's recommendation on Decisions 1 to 7. One
-rule waited for confirmation at review: Decision 2's, that the public report says only **whether**
-private findings exist, and the per-check coverage rule that follows from it. Merging this record
-confirms it.
+rule waits for the maintainer's explicit confirmation at this record's review: Decision 2's, that the
+public report says only **whether** private findings exist, and the per-check coverage rule that follows
+from it.
 
 ## Decision
 
@@ -96,7 +96,8 @@ subscription usage of a weekly one, and a run by hand covers a release or an adv
 ### Who can start a run
 
 - The workflow triggers on `schedule` and `workflow_dispatch` only, and its `workflow_dispatch` takes no
-  inputs. Only the maintainer, who owns the repository, can start a run by hand; no login is hard-coded.
+  inputs. Anyone with Actions write can start a run, but only the maintainer's, who owns the repository,
+  does anything: in anyone else's, every job is skipped. No login is hard-coded.
 - **One guard condition**, used verbatim by every job's `if:` and inside the concurrency group:
 
   `github.ref == 'refs/heads/main' && github.run_attempt == 1 && (github.event_name == 'schedule' || github.triggering_actor == github.repository_owner)`
@@ -183,6 +184,13 @@ category alone:
   body and commit message, and the publish job's summary say only **whether** private findings exist
   ("handled privately", "not filed" or "none"), never how many; a check whose only findings are private
   reads "run", like a check with none.
+- **The category vocabulary is closed.** A finding's category is exactly one of: `injection`,
+  `authentication bypass`, `credential exposure`, `remote code execution` (the four private categories),
+  `supply chain`, `dependency vulnerability`, `configuration`, `hardening`, `denial of service` and
+  `information disclosure`. Any other value is unknown, so the finding is private. Every gitleaks hit and
+  every secret, token or key found anywhere is `credential exposure`; every instruction embedded in an
+  input is `injection`. The `security-audit-run` skill gives the model this list, and milestone 2's
+  result schema and publish script adopt the same list.
 - Every advisory, issue and fingerprint the script matches is one the audit App wrote; it never touches a
   private vulnerability report (`triage` state) or another's issue.
 
@@ -196,6 +204,17 @@ category alone:
 - **The private-findings flag still says that something exists.** It is one bit, kept steadier by being
   set whenever a private finding is reproduced, even one the maintainer dismissed, but a reader can still
   see it change.
+- **An earlier, model-written report shapes later triage.** The model reads the last report's public
+  findings and its False positives section, and skips a finding recorded there as a false positive. A
+  report that hostile input steered could so hide a finding from every later run. This is bounded: a
+  finding is skipped only when its fingerprint matches a row of that section exactly, never by location
+  or wording, and no earlier report can suppress a finding of severity medium or higher or one in a
+  private category, which is reported again. Private false positives are never listed; they stay with
+  the advisories. The maintainer's review of each report, its False positives section included, is the
+  check.
+- **The model step's network is limited to the model API by configuration, not enforced** (Decision 6).
+  The model's Bash commands have no network, enforced by the sandbox; Claude Code's own connections are
+  held to the model API only by its settings, which milestone 2 details.
 
 ### The audit App's permissions and their side effects (Decision 1)
 
@@ -236,7 +255,7 @@ flag read only names matching the pattern.
 
 *Why not an index line per report:* any index with one line per report, hand-written or generated and
 checked, makes two report pull requests from the same `main` edit the same lines, so the second
-conflicts once the first is merged, and resolving it by hand is impossible (a maintainer's commit on the
+conflicts once the first is merged, and the conflict cannot be resolved on the App's branch (a maintainer's commit on the
 App's branch cannot be approved under `require_last_push_approval` and breaks the App-authored docs-only
 check). With the directory link, two reports' pull requests merge in either order.
 
@@ -283,7 +302,9 @@ Team or Enterprise plan, so whether server-managed settings could reach the mode
   and its draft advisories to read. Two report pull requests never conflict.
 - The audit draws on the subscription the agents and the AI reviewer use.
 - The residual risks above are accepted: a mislabelled finding is public until the maintainer sees it,
-  and the private-findings flag says that something exists.
+  the private-findings flag says that something exists, an earlier report's false positives shape later
+  triage within the fingerprint match and the severity and category floor, and the model step's network
+  is held to the model API by configuration only.
 - The maintainer must create the App, the environment and its keys, the rulesets and the `security`
   label, and check that no other App holds Actions write, before milestone 2 merges (the PRD's runbook,
   which milestone 2 moves into `docs/dev-environment.md`).
