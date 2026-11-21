@@ -14,11 +14,26 @@ name: Infra tools
 # are deprecated in favour of a bundle, which OpenTofu's releases do not ship). It runs on every pull
 # request, so it can be a required status check without leaving other PRs waiting for it; the weekly run
 # catches a release asset replaced under a tag already pinned, which Renovate never reports.
+#
+# verify-provider-lock (issue #434): tofu init accepts infra/site/.terraform.lock.hcl as long as it holds a
+# hash for the platform init runs on, so a lock file that lost another platform's hash, or holds one the
+# registry never published, passes make infra-check where it was changed. This job regenerates the lock
+# file with the pinned OpenTofu (dev/tofu.sh) in a scratch copy of infra/site's *.tf that holds no lock
+# file, so nothing of the committed one is carried over, for the platforms infra/site/README.md names
+# (darwin_arm64, linux_amd64, linux_arm64), and dev/infra-lock-compare.sh fails unless every provider's
+# version, constraints and set of hashes equal the committed file's. tofu also checks the registry's
+# signed SHA256SUMS at init, so this catches a hand-edited or partial hash set early, not a forged
+# provider. It needs no credential and reaches only GitHub (the OpenTofu release, the provider's
+# packages) and the OpenTofu registry, never Scaleway: providers lock reads no state and no backend. It
+# runs on every pull request for the same reason as verify-tofu-pins (it can be a required check), and
+# weekly, as the registry could change a published hash set.
 on:
   push:
     branches: [main]
     paths:
-      - infra/tofu.yaml
+      - infra/**
+      - dev/tofu.sh
+      - dev/infra-lock-compare.sh
       - .github/workflows/infra-tools.yml
   pull_request:
   schedule:
@@ -69,7 +84,7 @@ jobs:
           sums="tofu_${version#v}_SHA256SUMS"
           base="https://github.com/opentofu/opentofu/releases/download/${version}"
           for f in "${sums}" "${sums}.sig" "${sums}.pem"; do
-            curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "${dir}/${f}" "${base}/${f}"
+            curl -fsSL --proto '=https' --tlsv1.2 --retry 3 --connect-timeout 20 --max-time 120 -o "${dir}/${f}" "${base}/${f}"
           done
           if ! cosign verify-blob --certificate "${dir}/${sums}.pem" --signature "${dir}/${sums}.sig" \
             --certificate-identity "https://github.com/opentofu/opentofu/.github/workflows/release.yml@refs/heads/${branch}" \
@@ -94,3 +109,34 @@ jobs:
             fi
           done
           exit "${failed}"
+
+  verify-provider-lock:
+    name: Verify the provider lock file
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Regenerate the lock file and compare its hash set
+        run: |
+          set -euo pipefail
+          work="${RUNNER_TEMP}/lock/site"
+          home="${RUNNER_TEMP}/lock/home"
+          mkdir -p "${work}" "${home}"
+          # The configuration only: the regenerated lock file starts empty.
+          cp infra/site/*.tf "${work}/"
+          if [ -e "${work}/.terraform.lock.hcl" ]; then
+            echo "::error::the scratch copy holds a lock file before providers lock ran"
+            exit 1
+          fi
+          # As dev/infra-check.sh runs tofu: an allow-listed environment, no credential, no CLI config.
+          env -i "PATH=${PATH}" "HOME=${home}" "TMPDIR=${RUNNER_TEMP}" \
+            TF_CLI_CONFIG_FILE=/dev/null TF_IN_AUTOMATION=1 TF_INPUT=0 TF_REGISTRY_CLIENT_TIMEOUT=30 \
+            CHECKPOINT_DISABLE=1 SCW_CONFIG_PATH=/dev/null AWS_CONFIG_FILE=/dev/null \
+            AWS_SHARED_CREDENTIALS_FILE=/dev/null "TF_DATA_DIR=${RUNNER_TEMP}/lock/data" \
+            dev/tofu.sh -chdir="${work}" providers lock \
+            -platform=darwin_arm64 -platform=linux_amd64 -platform=linux_arm64
+          dev/infra-lock-compare.sh infra/site/.terraform.lock.hcl "${work}/.terraform.lock.hcl"

@@ -37,7 +37,12 @@ tarball's digest is pinned: Renovate keeps it current (`github-release-attachmen
 keep a digest of the extracted binary. The "Infra tools" workflow (`.github/workflows/infra-tools.yml`,
 on every pull request and weekly) checks every pin against the release's `tofu_<version>_SHA256SUMS`,
 whose cosign signature must come from `opentofu/opentofu`'s `release.yml` on its `v<major>.<minor>`
-branch.
+branch. Its `verify-provider-lock` job (issue #434, on the same triggers) runs `tofu providers lock` for
+darwin_arm64, linux_amd64 and linux_arm64 in a scratch copy of `infra/site`'s `*.tf` without a lock file,
+and `dev/infra-lock-compare.sh` fails unless each provider's version, constraints and set of hashes equal
+the committed `.terraform.lock.hcl`'s: a lock file that lost a platform's hash, or holds an extra one,
+fails there rather than at the next machine's init. It needs no credential and never reaches Scaleway.
+Every download `dev/tofu.sh` and the workflow make carries curl's `--connect-timeout` and `--max-time`.
 
 `make infra-check` (in `make check` and CI) runs the static rules (`dev/infra-rules.sh infra`, which
 lists them), `fmt -check`, `init -backend=false`, `validate` and `tofu test` against `mock_provider`: no
@@ -59,7 +64,10 @@ blank and `#` comment lines, so neither a second provider nor one behind a `/* *
 configuration file holds only `terraform`, `provider`, `resource`, `data`, `ephemeral`, `variable`,
 `locals`, `output`, `module` and `import` blocks at its top level, a test file only `run`,
 `mock_provider`, `variables` and `provider` (`[block-type]`: a `moved`, `removed`, `check` or
-`override_resource` block is one no rule reads);
+`override_resource` block is one no rule reads), and directly in a test's `run` only `override_resource`,
+`override_data`, `override_module`, `assert`, `variables`, `module`, `plan_options` and `expect_failures`,
+in its `mock_provider` only `mock_resource`, `mock_data`, `override_resource` and `override_data`
+(`[test-nested-block]`, issue #434);
 every resource, data source and provider is Scaleway's; a module's source, in the configuration or in a
 test's `run` block, is a local `./` path without a `..` segment or another segment starting with `.`
 (such as `./.terraform/m`, under the `.terraform` directory the rules skip); every applied root (a directory directly

@@ -105,6 +105,12 @@
 #                    configuration than the mock
 #   [mock-source]    a source attribute in a test file's mock_provider: its mocks would come from outside
 #                    the test file
+#   [test-nested-block] a block directly in a test file's run block other than override_resource,
+#                    override_data, override_module, assert, variables, module, plan_options and
+#                    expect_failures, or directly in its mock_provider other than mock_resource, mock_data,
+#                    override_resource and override_data (issue #434): a block no rule knows is a block no
+#                    rule reads. Deeper blocks (the values of an override_resource) are not judged; a
+#                    provisioner in a run block gets [provisioner] beside it
 # The HCL is read by dev/infra-rules.awk.
 #
 # Usage: dev/infra-rules.sh <infra root>   (from the repository root: dev/infra-rules.sh infra)

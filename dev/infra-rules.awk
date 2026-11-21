@@ -56,6 +56,22 @@ BEGIN { # explicit character sets, the same in every awk and locale (no [A-Z] ra
   for (i in tb) {
     testBlock[tb[i]] = 1
   }
+  # The blocks a test file's run and mock_provider may hold directly (issue #434): what tofu test reads
+  # there, which shapes mocked values and never reaches Scaleway. expect_failures is an attribute today;
+  # its block spelling is named so it is no surprise. OpenTofu also reads override_resource and
+  # override_data inside a mock_provider (they override that provider's resources and data sources), so
+  # they are allowed there too. Only the direct children are judged: a block inside an allowed one (the
+  # values of an override_resource) is that block's business.
+  RUN_CHILDREN_TEXT = "override_resource, override_data, override_module, assert, variables, module, plan_options and expect_failures"
+  split("override_resource override_data override_module assert variables module plan_options expect_failures", rc, " ")
+  for (i in rc) {
+    runChild[rc[i]] = 1
+  }
+  MOCK_CHILDREN_TEXT = "mock_resource, mock_data, override_resource and override_data"
+  split("mock_resource mock_data override_resource override_data", mc, " ")
+  for (i in mc) {
+    mockChild[mc[i]] = 1
+  }
   # What the provider "scaleway" block may set beyond the settings a rule of its own names (alias,
   # access_key, secret_key, profile, api_url): only what infra/site/providers.tf sets.
   PROVIDER_SETTINGS_TEXT = "organization_id and region"
@@ -515,6 +531,12 @@ END {
         if (k == 2 && lab[2] == "scaleway") {
           mock[b] = f
         }
+      }
+      if (m == 2 && el[1] ~ "^run(:|$)" && !(typ in runChild)) {
+        problem("test-nested-block", f, bline[b], "a " typ " block directly in " el[1] ": a run block holds only " RUN_CHILDREN_TEXT ", since a block no rule knows is a block no rule reads")
+      }
+      if (m == 2 && el[1] ~ "^mock_provider(:|$)" && !(typ in mockChild)) {
+        problem("test-nested-block", f, bline[b], "a " typ " block directly in " el[1] ": a mock_provider holds only " MOCK_CHILDREN_TEXT ", since a block no rule knows is a block no rule reads")
       }
       if (m == 1 && typ == "provider") {
         problem("test-provider", f, bline[b], "a test file configures a real provider (" last "): it must only mock_provider \"scaleway\", so tofu test never reaches Scaleway")
