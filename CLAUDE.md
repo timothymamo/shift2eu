@@ -85,7 +85,9 @@ Every make target runs exactly go.mod's go line (`GOTOOLCHAIN`, issue #347, ADR 
 another release, the go command fetches the pinned toolchain once (checksum-verified via `sum.golang.org`)
 before anything runs: the only network access the pin adds (the tests' own is under Testing). The VM
 installs the pinned Go, so normally nothing is fetched. `GOTOOLCHAIN=local make ...` never downloads; a
-mismatch then fails `TestGoModPinsTheBuildingToolchain` instead.
+mismatch then fails `TestGoModPinsTheBuildingToolchain` instead. `make infra-check` fetches, on first use
+per worktree, only the OpenTofu release `infra/tofu.yaml` pins (SHA-256-checked) and the `scaleway/scaleway`
+provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing else, and never contacts Scaleway.
 
 ## Testing
 

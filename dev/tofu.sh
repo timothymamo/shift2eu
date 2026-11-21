@@ -3,11 +3,16 @@
 # infra-check and CI run it through dev/infra-check.sh; the maintainer runs it for init, plan and apply in
 # infra/site on the admin machine (docs/dev-environment.md). Agents never run plan, apply or import.
 #
-# The release tarball for this platform (linux_amd64, linux_arm64 or darwin_arm64) is downloaded from
-# opentofu/opentofu's GitHub release and must match its SHA-256 pin in infra/tofu.yaml before anything is
-# extracted. The binary goes to bin/tofu/<version>-<os>_<arch>/tofu (git-ignored, one per worktree), and a
-# binary already there is used only when it reports the pinned version. No other tofu, whatever the PATH
-# holds, is ever run.
+# The release tarball for this platform (linux_amd64, linux_arm64 or darwin_arm64) is downloaded once
+# from opentofu/opentofu's GitHub release, over HTTPS only, into bin/tofu/<version>-<os>_<arch>/
+# (git-ignored, one per worktree), and kept only if its SHA-256 is its pin in infra/tofu.yaml. Nothing
+# extracted is trusted across runs: every run hashes the kept tarball against the pin again, extracts
+# tofu into a fresh temporary directory beside it, runs that binary and deletes the directory. So a
+# binary changed or replaced in bin/ is never run, and a changed tarball is refused. The pin is the
+# tarball's digest, which Renovate updates with the version (github-release-attachments); a digest of the
+# extracted binary would be one Renovate cannot keep current. No other tofu, whatever the PATH holds, is
+# ever run. CI checks every pin against the release's cosign-signed tofu_<version>_SHA256SUMS
+# (.github/workflows/infra-tools.yml).
 #
 # Usage: dev/tofu.sh <tofu arguments>   (from the repository root, where make runs it)
 set -euo pipefail
@@ -50,30 +55,45 @@ if ! [[ "${digest}" =~ ^[0-9a-f]{64}$ ]]; then
   exit 1
 fi
 
-dir="bin/tofu/${version}-${os}_${arch}"
-bin="${dir}/tofu"
-
-if ! "${bin}" version 2>/dev/null | head -n 1 | grep -qx "OpenTofu ${version}"; then
-  asset="tofu_${version#v}_${os}_${arch}.tar.gz"
-  mkdir -p "${dir}"
-  tmp="$(mktemp -d "${dir}/download.XXXXXX")"
-  trap 'rm -rf "${tmp}"' EXIT
-  echo >&2 "tofu: downloading OpenTofu ${version} for ${os}_${arch}"
-  curl -fsSL --retry 3 -o "${tmp}/${asset}" \
-    "https://github.com/opentofu/opentofu/releases/download/${version}/${asset}"
+sha256() { # <file>: prints its SHA-256
+  local sum
   if command -v sha256sum >/dev/null; then
-    got="$(sha256sum "${tmp}/${asset}")"
+    sum="$(sha256sum "$1")"
   else
-    got="$(shasum -a 256 "${tmp}/${asset}")"
+    sum="$(shasum -a 256 "$1")"
   fi
-  got="${got%% *}"
+  echo "${sum%% *}"
+}
+
+dir="bin/tofu/${version}-${os}_${arch}"
+asset="tofu_${version#v}_${os}_${arch}.tar.gz"
+tarball="${dir}/${asset}"
+mkdir -p "${dir}"
+tmp="$(mktemp -d "${dir}/run.XXXXXX")"
+trap 'rm -rf "${tmp}"' EXIT
+
+if [ ! -f "${tarball}" ]; then
+  echo >&2 "tofu: downloading OpenTofu ${version} for ${os}_${arch}"
+  curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "${tmp}/${asset}" \
+    "https://github.com/opentofu/opentofu/releases/download/${version}/${asset}"
+  got="$(sha256 "${tmp}/${asset}")"
   if [ "${got}" != "${digest}" ]; then
-    echo >&2 "tofu: ${asset} has SHA-256 ${got}, not ${key} in ${pins}: refusing to run it"
+    echo >&2 "tofu: the downloaded ${asset} has SHA-256 ${got}, not ${key} in ${pins}: refusing to run it"
     exit 1
   fi
-  tar -C "${tmp}" --no-same-owner -xzf "${tmp}/${asset}" tofu
-  chmod 0755 "${tmp}/tofu"
-  mv -f "${tmp}/tofu" "${bin}"
+  mv -f "${tmp}/${asset}" "${tarball}"
 fi
 
-exec "${bin}" "$@"
+got="$(sha256 "${tarball}")"
+if [ "${got}" != "${digest}" ]; then
+  echo >&2 "tofu: ${tarball} has SHA-256 ${got}, not ${key} in ${pins}: refusing to run it; delete it to download the release again"
+  exit 1
+fi
+tar -C "${tmp}" --no-same-owner -xzf "${tarball}" tofu
+chmod 0755 "${tmp}/tofu"
+
+# Not exec: the trap deletes the extracted binary once tofu exits. Ctrl-C reaches tofu as well (one
+# process group), which stops as it always does; its exit status is this script's.
+status=0
+"${tmp}/tofu" "$@" || status=$?
+exit "${status}"

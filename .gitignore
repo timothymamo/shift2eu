@@ -53,10 +53,8 @@ backend.hcl
 .terraform.tfstate.lock.info
 crash.log
 crash.*.log
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
+# Override files (override.tf, *_override.tf) are not ignored: one left in infra/site shows in git status
+# as "??" (Runbook R2), and dev/infra-rules.sh refuses one in a commit.
 
 # --- Agent tooling ------------------------------------------------------------
 # One git worktree per pull request (make worktree; docs/adr/0004-one-worktree-per-pull-request.md).

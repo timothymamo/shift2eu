@@ -5,9 +5,11 @@
 # renovate: datasource=github-releases depName=opentofu/opentofu
 tofuVersion: "v1.13.9"
 # SHA-256 of tofu_<version>_<os>_<arch>.tar.gz per platform: linux_amd64 (CI), linux_arm64 (the Lima VM)
-# and darwin_arm64 (the maintainer's Macs). They were checked against the release's tofu_<version>_SHA256SUMS,
-# whose cosign signature names opentofu/opentofu's release workflow. Renovate moves each digestVersion and
-# digest together with the version.
+# and darwin_arm64 (the maintainer's Macs). dev/tofu.sh re-hashes the kept tarball against its pin on
+# every run and runs a freshly extracted binary, so only the tarball's digest is pinned, the one Renovate
+# can keep current. The "Infra tools" workflow checks each against the release's tofu_<version>_SHA256SUMS,
+# whose cosign signature must name opentofu/opentofu's release workflow. Renovate moves each digestVersion
+# and digest together with the version.
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu digestVersion=v1.13.9
 tofuSha256LinuxAmd64: "b34b327cc1ef07178207b6f2cd1f5276537d3e5b7be316500f6dac50d4c0a857"
 # renovate: datasource=github-release-attachments depName=opentofu/opentofu digestVersion=v1.13.9

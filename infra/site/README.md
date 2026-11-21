@@ -12,7 +12,8 @@ hand, in the PRD's *Runbook* section (R0 to R13), which the maintainer follows.
 - `providers.tf`: the provider, with the organization and region and no default project.
 - `main.tf`: every resource; `outputs.tf`: the IDs and endpoints the runbook's hand steps need.
 - `variables.tf`: the inputs (`terraform.tfvars.example`): `organization_id` and `admin_principal` have no
-  default; `region` defaults to `nl-ams`, `bucket_name` to `shift2eu-site-www`.
+  default; `region` defaults to `nl-ams`, `bucket_name` to `shift2eu-site-www`, `public_read` to `false`
+  (set it only if the runbook's R5 finds that Edge Services cannot serve private objects).
 - `.terraform.lock.hcl`: the provider's hashes for darwin_arm64, linux_amd64 and linux_arm64. After a
   provider change, refresh it with
   `dev/tofu.sh -chdir=infra/site providers lock -platform=darwin_arm64 -platform=linux_amd64 -platform=linux_arm64`.
@@ -20,7 +21,11 @@ hand, in the PRD's *Runbook* section (R0 to R13), which the maintainer follows.
 
 `make infra-check` (part of `make check`, and CI's Test job) runs `dev/infra-check.sh`: no credential, no
 call to Scaleway, no state passphrase (the state is not encrypted, ADR 0039). Besides `fmt`, `validate`
-and `test`, it refuses an API key resource, any bucket ACL, a backend other than `s3` and JSON
-configuration. Only the maintainer runs `init` with the backend, `plan` and `apply`, on the admin
-machine, always through `dev/tofu.sh`, which runs the release `infra/tofu.yaml` pins after checking its
-SHA-256. Agents never do.
+and `test`, it runs the static rules of `dev/infra-rules.sh` (which lists them): among them no API key
+resource, no bucket ACL or `visibility`, exactly one IAM application and policy, only `scaleway/scaleway`,
+local modules only, one `s3` backend, no override or JSON files, and every test file mocking the provider.
+It runs tofu with none of the caller's `SCW_*`, `AWS_*` or `TF_*` variables and no Scaleway or AWS
+configuration file, so it cannot reach Scaleway even where the maintainer's keys are exported. Only the
+maintainer runs `init` with the backend, `plan` and `apply`, on the admin machine, always through
+`dev/tofu.sh`, which re-checks the pinned release's SHA-256 and extracts it afresh on every run. Agents
+never do.

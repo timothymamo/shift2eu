@@ -6,3 +6,5 @@ admin_principal = "user_id:00000000-0000-0000-0000-000000000000"
 # Optional, with their defaults:
 # region      = "nl-ams"
 # bucket_name = "shift2eu-site-www"
+# Set true only when the Runbook's R5 finds that Edge Services cannot serve the private objects:
+# public_read = false

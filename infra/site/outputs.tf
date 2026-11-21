@@ -16,7 +16,7 @@ output "bucket_name" {
 }
 
 output "bucket_website_endpoint" {
-  description = "The bucket website endpoint, one of the origins Hosting decision 11 lists (public read serves the site there too)."
+  description = "The bucket website endpoint, one of the origins Hosting decision 11 lists (with public_read it serves the site too)."
   value       = scaleway_object_bucket_website_configuration.site.website_endpoint
 }
 

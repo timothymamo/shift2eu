@@ -114,7 +114,7 @@
       matchDepNames: ['opentofu/opentofu'],
       groupName: 'OpenTofu',
       prBodyNotes: [
-        '**Before merging:** every `digestVersion` in `infra/tofu.yaml` must equal the new `tofuVersion`, and `required_version` in `infra/site/versions.tf` the same version without its `v` (`dev/infra-check.sh` fails otherwise). Check the new digests against the release\'s `tofu_<version>_SHA256SUMS` and its cosign signature from opentofu/opentofu\'s release workflow. The "Test" check downloads the linux_amd64 tarball and checks it against its pin.',
+        '**Before merging:** every `digestVersion` in `infra/tofu.yaml` must equal the new `tofuVersion`, and `required_version` in `infra/site/versions.tf` the same version without its `v` (`dev/infra-check.sh` fails otherwise). The "Infra tools" check must be green: it checks every new digest against the release\'s `tofu_<version>_SHA256SUMS` and that file\'s cosign signature from opentofu/opentofu\'s release workflow. The "Test" check downloads the linux_amd64 tarball and checks it against its pin.',
       ],
     },
     {
@@ -146,8 +146,8 @@
       // digest when the tag is unchanged, so it proposes no such PR today. What catches a replaced gh,
       // cosign or Lima asset is the weekly run of .github/workflows/vm-tools.yml, which then fails on the
       // pin. vm-tools.yml does not check shellcheck: CI's lint-shell job checks the amd64 digest on every
-      // push, and the arm64 one is checked only when the VM is provisioned. Nor does it check OpenTofu:
-      // CI's Test job checks the linux_amd64 digest on every push, the others when dev/tofu.sh downloads.
+      // push, and the arm64 one is checked only when the VM is provisioned. OpenTofu's pins are checked by
+      // the weekly run of .github/workflows/infra-tools.yml against the release's signed SHA256SUMS.
       description: 'gh, cosign, Lima, shellcheck and OpenTofu: a release asset changed under an existing tag',
       matchDepNames: ['cli/cli', 'sigstore/cosign', 'lima-vm/lima', 'koalaman/shellcheck', 'opentofu/opentofu'],
       matchUpdateTypes: ['digest'],

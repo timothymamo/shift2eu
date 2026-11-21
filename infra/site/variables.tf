@@ -35,6 +35,13 @@ variable "region" {
   }
 }
 
+variable "public_read" {
+  description = "Whether the bucket policy lets everyone (\"*\") read the site's objects, Hosting decision 11's fallback. Off by default: the Runbook applies it off, checks whether Edge Services serves the private objects (R5), and sets it true in terraform.tfvars only if it does not."
+  type        = bool
+  nullable    = false
+  default     = false
+}
+
 variable "bucket_name" {
   description = "The site bucket's name. Bucket names are global across Scaleway: if this one is taken, choose another in terraform.tfvars."
   type        = string

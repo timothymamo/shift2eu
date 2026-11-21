@@ -44,8 +44,10 @@ resource "scaleway_object_bucket_website_configuration" "site" {
 # it lists. A bucket policy limits even its owner, so the first statement keeps the maintainer's own
 # principal (never "*") in full control of the bucket OpenTofu manages. The deploy application may write
 # and read objects and list the bucket, nothing else. Edge Services has no bucket-policy principal (a
-# principal is a user_id, an application_id or "*"), so the site's objects are public read (decision 11's
-# fallback).
+# principal is a user_id, an application_id or "*"), but its documentation says that with bucket website
+# the objects can stay private. So the public read statement (decision 11's fallback) is there only with
+# var.public_read, which is off until the Runbook's R5 has seen Edge Services fail to serve a private
+# object.
 #
 # It is applied after the website configuration: enabling bucket website may apply Scaleway's default
 # policy, and this one must be the one that stays.
@@ -57,7 +59,7 @@ resource "scaleway_object_bucket_policy" "site" {
   policy = jsonencode({
     Version = "2023-04-17"
     Id      = "shift2eu-site"
-    Statement = [
+    Statement = concat([
       {
         Sid       = "AdminManagesTheBucket"
         Effect    = "Allow"
@@ -79,6 +81,7 @@ resource "scaleway_object_bucket_policy" "site" {
         Action    = ["s3:ListBucket"]
         Resource  = [scaleway_object_bucket.site.name]
       },
+      ], var.public_read ? [
       {
         Sid       = "EveryoneReadsTheSite"
         Effect    = "Allow"
@@ -86,7 +89,7 @@ resource "scaleway_object_bucket_policy" "site" {
         Action    = ["s3:GetObject"]
         Resource  = ["${scaleway_object_bucket.site.name}/*"]
       },
-    ]
+    ] : [])
   })
 
   depends_on = [scaleway_object_bucket_website_configuration.site]
@@ -95,7 +98,7 @@ resource "scaleway_object_bucket_policy" "site" {
 # --- IAM: the deploy application -------------------------------------------------------------------------
 
 # The release's deploy job uploads as this application. Its API key is created by hand (Runbook), so the
-# secret never reaches the state; dev/infra-check.sh refuses a scaleway_iam_api_key anywhere in infra/.
+# secret never reaches the state; dev/infra-rules.sh refuses a scaleway_iam_api_key anywhere in infra/.
 resource "scaleway_iam_application" "deploy" {
   name        = "shift2eu-site-deploy"
   description = "The release's site deploy: writes and reads objects in the shift2eu-site project only (infra/site)."
