@@ -71,10 +71,11 @@ func TestFixturesAreSanitised(t *testing.T) {
 // TestPlantedRealDataFailsTheFixtureCheck pins that the check reaches every kind
 // of path it claims to cover: a file planted at a guide path, at a path under
 // docs/guide/inventory/, at a testdata path of an adapter, of the module root, of
-// test/e2e, at a testdata path nested inside another testdata directory and at a
-// sample path is reported, with the account ID and the host name it carries.
-// Without this, a walker that silently skipped a directory would pass
-// TestFixturesAreSanitised.
+// test/e2e, at a testdata path nested inside another testdata directory, at a
+// sample path and in the inventory guide's own fixtures under
+// test/e2e/testdata/inventory-guide/ is reported, with the account ID and the
+// host name it carries. Without this, a walker that silently skipped a directory
+// would pass TestFixturesAreSanitised.
 func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 	t.Parallel()
 
@@ -329,6 +330,39 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			path:    "test/e2e/testdata/planted-arm-servicebus.json",
 			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.ServiceBus/namespaces/sb-contoso-prod/queues/orders",
 			want:    []string{"namespaces/sb-contoso-prod"},
+		},
+		{
+			// The guide's seven synthetic shop names are the guide's own sample,
+			// so they are excused in the guide's fixtures
+			// (test/e2e/testdata/inventory-guide/) and nowhere else: the same ARM
+			// ID planted at another checked path names a customer's PostgreSQL
+			// flexible server just as psql-shop-prod does, and is reported
+			// (issue #424's review).
+			name:    "guide shop name outside the guide's fixtures",
+			path:    "testdata/planted-arm-shop.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop",
+			want:    []string{"flexibleServers/psql-shop"},
+		},
+		{
+			// The same for the guide's Service Bus namespace, at a guide path
+			// rather than a testdata one: the excuse follows the file, not the
+			// kind of path.
+			name:    "guide Service Bus namespace outside the guide's fixtures",
+			path:    "docs/guide/planted-arm-shop-sb.md",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.ServiceBus/namespaces/sb-shop",
+			want:    []string{"namespaces/sb-shop"},
+		},
+		{
+			// The other side of that rule: inside the guide's own fixtures the
+			// guide's names are the sample, in either case an ARM ID may write
+			// them in (an ARM ID is case-insensitive), so the check reports
+			// nothing there. Without this row an excuse that no file could use
+			// would still pass the two above.
+			name: "guide shop names in the guide's own fixtures",
+			path: "test/e2e/testdata/inventory-guide/azure/planted-arm-shop.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/flexibleServers/psql-shop\n" +
+				"/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/flexibleServers/PSQL-SHOP",
+			want: nil,
 		},
 		{
 			// An abfss URL names the container before an @ and the customer's
