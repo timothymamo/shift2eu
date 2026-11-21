@@ -29,6 +29,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // What the stand-ins answer with, and what the tests read back from their answers.
@@ -819,6 +821,64 @@ const (
 	againOnBundle    = "bundle"
 )
 
+// TestDockerCallsReadsOnlyCompleteLines pins the reader of the stand-in container command's log: a line it finds
+// while the stand-in is still writing it is no line of the log, so neither a truncated pid nor a truncated argument
+// is read back as a whole one (issue #423, the reviewer's finding N2).
+func TestDockerCallsReadsOnlyCompleteLines(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		body string // what the stand-in has written to its log so far
+		// want is one entry per call read back: the shell's pid, then the argv as the stand-in logged it, so the
+		// comparison shows a field the reader got wrong without reaching into the unexported call.
+		want []string
+	}{
+		{
+			name: "a log the stand-in has finished writing",
+			body: "tool=docker\nppid=12345\narg=run\narg=--name\narg=s2eu-1\ntool=docker\nppid=12345\narg=rm\n",
+			want: []string{"12345: run --name s2eu-1", "12345: rm"},
+		},
+		{
+			name: "a ppid line the stand-in is still writing",
+			body: "tool=docker\nppid=12345\narg=run\ntool=docker\nppid=12",
+			want: []string{"12345: run", "0: "},
+		},
+		{
+			name: "an arg line the stand-in is still writing",
+			body: "tool=docker\nppid=12345\narg=inspect\ntool=docker\nppid=12345\narg=ins",
+			want: []string{"12345: inspect", "12345: "},
+		},
+		{
+			name: "an empty log",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := &browserRecipeSandbox{dockerLog: filepath.Join(t.TempDir(), "docker.log")}
+			if err := os.WriteFile(sb.dockerLog, []byte(tc.body), 0o600); err != nil {
+				t.Fatalf("write %s: %v", sb.dockerLog, err)
+			}
+
+			calls := sb.dockerCalls(t)
+
+			var got []string
+
+			for _, call := range calls {
+				got = append(got, fmt.Sprintf("%d: %s", call.shell, strings.Join(call.argv, " ")))
+			}
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("the stand-in container command's log %q is read back as different calls (-want +got):\n%s\na line the stand-in is still writing is no call and no field of one, so a test that reads the log mid-run must not take a truncated pid or argument for a whole one (issue #423, the reviewer's finding N2)",
+					tc.body, diff)
+			}
+		})
+	}
+}
+
 // TestMakeTestBrowserRecipeCleansUpOnASignal pins the reviewer's finding S2 on issue #423 that an interrupted run
 // cleans up after itself, however the signal reaches it. The recipe traps a hang-up (what closing the pane sends), an
 // interrupt and a termination and exits through its EXIT trap, because dash, the VM's /bin/sh, runs no EXIT trap when
@@ -1049,7 +1109,16 @@ func (sb *browserRecipeSandbox) dockerCalls(t *testing.T) []dockerCall {
 
 	var calls []dockerCall
 
-	for _, line := range strings.Split(string(body), "\n") {
+	// A body the stand-in is still writing ends in a line it has not finished, and only a line ending in the newline
+	// that completes it is a line of the log: the split's last element is either that unfinished line or the empty
+	// string after a complete one, so it is dropped unless the body ends in a newline (issue #423, the reviewer's
+	// finding N2).
+	lines := strings.Split(string(body), "\n")
+	if !strings.HasSuffix(string(body), "\n") {
+		lines = lines[:len(lines)-1]
+	}
+
+	for _, line := range lines {
 		switch {
 		case line == "tool=docker":
 			calls = append(calls, dockerCall{})
@@ -1058,8 +1127,9 @@ func (sb *browserRecipeSandbox) dockerCalls(t *testing.T) []dockerCall {
 				t.Fatalf("%s holds the parent line %q before any call of the stand-in container command", sb.dockerLog, line)
 			}
 
-			// A line read while the stand-in is still writing it is no pid: the call keeps no shell, and the caller
-			// that needs one reads the log again, after the run.
+			// Only a complete line reaches this loop, so the number here is the whole number the stand-in wrote: a
+			// "ppid=12" of a "ppid=12345" still being written never gets here to pass for the pid 12. A complete line
+			// that holds no number leaves the call without a shell, and the caller that needs one reports it.
 			if pid, err := strconv.Atoi(strings.TrimPrefix(line, "ppid=")); err == nil {
 				calls[len(calls)-1].shell = pid
 			}
