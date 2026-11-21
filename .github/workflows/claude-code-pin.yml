@@ -12,8 +12,8 @@ name: Claude Code pin
 # pull_request, never pull_request_target: the job runs the pull request's own copy of the check, with a
 # read-only GITHUB_TOKEN, no secret and no environment, as ci.yml runs the pull request's code. It sends
 # the registry one GET of a public document and no credential. The paths: filter runs it on every pull
-# request that changes the pin, the install script that consumes it, the check or this file, and the push
-# to main re-checks what was merged. Because of that filter it is advisory, not a required status check:
+# request that changes the pin, the install script that consumes it, the check, this file or go.mod (whose
+# go line picks the Go that builds the check), and the push to main re-checks what was merged. Because of that filter it is advisory, not a required status check:
 # a red "Claude Code pin" check on a pull request (a Renovate bump of the CLI above all) means do not merge.
 on:
   push:
@@ -23,6 +23,7 @@ on:
       - .github/scripts/install-claude-code.sh
       - .github/workflows/claude-code-pin.yml
       - ci/claudecodepin/**
+      - go.mod
   pull_request:
     branches: [main]
     paths:
@@ -30,6 +31,7 @@ on:
       - .github/scripts/install-claude-code.sh
       - .github/workflows/claude-code-pin.yml
       - ci/claudecodepin/**
+      - go.mod
 
 permissions: {}
 

@@ -736,7 +736,8 @@ every AI review failing at the install step (issue #428, after PR #412).
 
 **Decision.** A CI check on pull requests, **Claude Code pin** (`.github/workflows/claude-code-pin.yml`),
 runs `go run ./ci/claudecodepin` on every pull request into `main` that changes `ai-review.yml`, the
-install script `.github/scripts/install-claude-code.sh`, the check or its workflow, and on the push to
+install script `.github/scripts/install-claude-code.sh`, the check, its workflow or `go.mod` (whose go
+line picks the Go that builds the check), and on the push to
 `main` (a push to `main` never cancels an earlier `main` run). It reads both pins, fetches the npm registry's document of
 exactly the pinned version of `@anthropic-ai/claude-code-linux-x64` over HTTPS (a timeout, no redirect, a
 bounded body, no credential), and fails unless that document is of the package and the version and

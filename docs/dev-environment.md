@@ -2037,7 +2037,8 @@ program refuses to run when one is set.
 `CLAUDE_CODE_INTEGRITY`, and a bump's own AI review runs `main`'s copy of the workflow, so it cannot see a
 stale integrity. The **Claude Code pin** check (`.github/workflows/claude-code-pin.yml`, which runs
 `go run ./ci/claudecodepin`) does: on every pull request that changes `ai-review.yml`,
-`.github/scripts/install-claude-code.sh`, the check or its workflow, and on the push to `main` after the merge, it reads both pins and fails unless the npm
+`.github/scripts/install-claude-code.sh`, the check, its workflow or `go.mod` (whose go line picks the Go
+that builds the check), and on the push to `main` after the merge, it reads both pins and fails unless the npm
 registry's document of exactly that version of `@anthropic-ai/claude-code-linux-x64` publishes the pinned
 integrity as its `dist.integrity`. Its error names the pinned and the published integrity and the command
 that prints the published one (`npm view @anthropic-ai/claude-code-linux-x64@<version> dist.integrity`). A
