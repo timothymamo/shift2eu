@@ -345,6 +345,9 @@ The publish script:
 - [ ] It **derives** public or private itself, from each finding's severity, confirmation and category
   alone (Report and triage, the table). The model's own "public" flag can only make a finding more
   private, never less. A test covers each row of the table.
+- [ ] It derives each finding's status (new, open or fixed, and whether it regressed) and applies the false-positive
+  match itself, from the fingerprints it computes; the result schema accepts exactly the ten categories
+  of ADR 0040, and any other value is unknown and therefore private.
 - [ ] Before publishing, it scans every text it is about to send (the report, any issue title and body,
   every advisory's text) with gitleaks plus patterns for Claude OAuth tokens and GitHub App private keys,
   and it **decodes every base64 or hex run and matches the decoded bytes against the same patterns**
@@ -545,7 +548,8 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
   private findings exist ("private findings: handled privately", "not filed" when advisory creation is
   refused, or "none", never a count; Decision 2); coverage, each check "run", "findings" (a public
   finding only) or "not run (why)", as the publish script derives it; changes since the last audit, and
-  any gap in the schedule; the run's limits.
+  any gap in the schedule; the false positives (public only, written and carried forward by the
+  publish script); the run's limits.
 - **Disclosure split.** The PR is public **the moment it is opened**, before the maintainer reviews it,
   so the split is decided in the run by the publish script, from severity, confirmation and category
   alone:
@@ -567,7 +571,9 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
   anything unknown narrow this; they do not close it. The PRD and the ADR state it; the maintainer's
   review of each report is the last check, after publication.
 - **Signal over noise.** Every finding is confirmed by a PoC or a precise trace, or listed as
-  unconfirmed. A false positive recorded in an earlier report is not reported again.
+  unconfirmed. The publish script drops a finding only when its computed fingerprint matches a row of
+  the last report's false positives section exactly, and never one of medium or higher severity or in a
+  private category.
 
 ## The subscription token
 

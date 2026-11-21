@@ -31,7 +31,7 @@ The public findings only. One row per finding:
 
 "No public findings." when there are none.
 
-The status describes this run's view of a finding: `new` when the last report did not list its
+The publish script derives the status from the fingerprints it computes, never from the model: `new` when the last report did not list its
 fingerprint, `open` when the last report listed it and the audited commit still has it, and `fixed` when
 the last report listed it and the audited commit no longer has it. Changes since the last audit, below,
 describes the **last report's** findings in its own words: fixed, still open (the table's `open`) or
@@ -69,16 +69,18 @@ schedule allows ([Security](../README.md)). On the first report, "First report."
 
 ## False positives
 
-Every public finding dismissed as a false positive, this run's and every earlier report's, carried
-forward from the last report so the newest report holds them all. One row each:
+Every public finding dismissed as a false positive, this run's and every earlier report's. The publish
+script writes each row, with the fingerprint it computed from the finding's rule, file and sink and the
+model's one-line reason, and carries the last report's rows forward, so the newest report holds them
+all. The model never writes a fingerprint here. One row each:
 
 | Fingerprint | Reason |
 |---|---|
 | `fp-` and 12 lowercase hex characters | one line: why it is no finding |
 
-A later run skips a finding only when its fingerprint matches a row here exactly, and never one of
-severity medium or higher or in a private category. A private finding's false positive is never listed
-here; it stays with its advisory. "None." when there are none.
+A later run's publish script drops a finding only when the fingerprint it computed matches a row here
+exactly **and** the finding is low or informational in a category that is not private. A private
+finding's false positive is never listed here; it stays with its advisory. "None." when there are none.
 
 ## Limits
 

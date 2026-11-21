@@ -1,6 +1,8 @@
 # 0040. Audit the repository and the latest release on a schedule, with a model that triages and a script that publishes
 
-- Status: Accepted. PRD #175 milestone 2 amends this record with the workflow's implementation (below)
+- Status: Accepted, except Decision 2's presence-flag rule and the coverage rule that follows from it,
+  which wait for the maintainer's explicit confirmation at this record's review (see Context). PRD #175
+  milestone 2 amends this record with the workflow's implementation (below)
 - Date: 2026-11-21
 
 ## Context
@@ -204,14 +206,15 @@ category alone:
 - **The private-findings flag still says that something exists.** It is one bit, kept steadier by being
   set whenever a private finding is reproduced, even one the maintainer dismissed, but a reader can still
   see it change.
-- **An earlier, model-written report shapes later triage.** The model reads the last report's public
-  findings and its False positives section, and skips a finding recorded there as a false positive. A
-  report that hostile input steered could so hide a finding from every later run. This is bounded: a
-  finding is skipped only when its fingerprint matches a row of that section exactly, never by location
-  or wording, and no earlier report can suppress a finding of severity medium or higher or one in a
-  private category, which is reported again. Private false positives are never listed; they stay with
-  the advisories. The maintainer's review of each report, its False positives section included, is the
-  check.
+- **An earlier report's false positives shape later runs.** The model never skips a finding and never
+  writes a fingerprint; it may only propose a dismissal, as a one-line reason on a finding. The publish
+  script computes every fingerprint from rule, file and sink, writes the False positives rows and
+  carries them forward, and drops a later finding only when its computed fingerprint matches a row
+  exactly and the finding is low or informational in a category that is not private. The proposed
+  reason is still model text, which hostile input could steer, so a report could hide a low finding
+  from every later run; the exact match and the severity and category floor bound that, private false
+  positives are never listed (they stay with the advisories), and the maintainer's review of each
+  report, its False positives section included, is the check.
 - **The model step's network is limited to the model API by configuration, not enforced** (Decision 6).
   The model's Bash commands have no network, enforced by the sandbox; Claude Code's own connections are
   held to the model API only by its settings, which milestone 2 details.
@@ -268,7 +271,9 @@ user-namespace restriction is handled; the sandbox preflight's six probes and th
 stops Docker and removes the runner user's sudo rule; the encoded-run thresholds (the minimum length L and
 the entropy N) and the encoded-token residual risk; the encryption tool and the artifact handling; the
 Actions-cache residual risk; the container flags; the time budget; the checks job's exact read scopes;
-the App token's exact `permission-*` inputs; the finding limit; and whether the Claude subscription is a
+the App token's exact `permission-*` inputs; the finding limit; the publish script's false-positive
+matching and its derivation of each finding's status; the closed category list in the result schema;
+the wrapper's allowed commands and its scrubbed-environment allow list; and whether the Claude subscription is a
 Team or Enterprise plan, so whether server-managed settings could reach the model step.
 
 ## Alternatives considered

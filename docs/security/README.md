@@ -44,8 +44,8 @@ public is decided in the run, from each finding's severity, confirmation and cat
 | Confirmed low or informational, hardening included | The public report, then a `security` issue once the maintainer has merged that report |
 | Suspected low or informational | The public report's "needs investigation" list |
 
-The public report says only **whether** private findings exist ("handled privately" or "none"), never how
-many, so it does not announce an undisclosed flaw before its fix. That flag still tells a reader that
+The public report says only **whether** private findings exist ("handled privately", "not filed" when
+advisory creation was refused, or "none"), never how many, so it does not announce an undisclosed flaw before its fix. That flag still tells a reader that
 something exists; the maintainer accepts that. The audit never publishes an advisory or requests a CVE:
 that is the maintainer's decision.
 
