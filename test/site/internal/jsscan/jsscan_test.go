@@ -360,6 +360,9 @@ func TestScanRejectsEveryBannedApi(t *testing.T) {
 		{name: "another object's navigator property read as a value", src: `const n = wrapper.navigator;`, want: []string{"navigator"}, refuse: "navigator"},
 		{name: "navigator assigned after in", src: `for (const k in navigator = fake) {}`, want: []string{"navigator"}, refuse: "navigator"},
 		{name: "navigator as an arrow's parameter after in", src: `for (const k in navigator => 1) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator incremented after in", src: `if ("x" in navigator++) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator decremented after in", src: `if ("x" in navigator--) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator read after in in a ternary", src: `const b = "x" in navigator ? 1 : 2;`, want: []string{"navigator"}, refuse: "navigator"},
 		{name: "the clipboard write through window's navigator", src: `function copyCommand(x) { window.navigator.clipboard.writeText(x); }`, want: []string{"navigator"}, refuse: "navigator"},
 		{name: "the unregister through another object's navigator", src: `function unregisterServiceWorkers() { o.navigator.serviceWorker.getRegistrations(); }`, want: []string{"navigator"}, refuse: "navigator"},
 	}
@@ -404,7 +407,7 @@ func TestScanRejectsEveryBannedApi(t *testing.T) {
 				if !slices.ContainsFunc(violations, func(violation jsscan.Violation) bool {
 					return violation.Line == line && violation.Col == col
 				}) {
-					t.Errorf("Scan(%q) reported %q, none of it at %s's own token %d:%d: the rule for %s must refuse that token whatever its shape, a member base (no member name, the next token . or ?.) and the right operand of in (the next token neither an assignment operator nor =>) being the only uses it allows (issue #373, review finding 1)",
+					t.Errorf("Scan(%q) reported %q, none of it at %s's own token %d:%d: the rule for %s must refuse that token whatever its shape, a member base (no member name, the next token . or ?.) and the right operand of in inside parentheses (the next token )) being the only uses it allows (issue #373, review finding 1)",
 						tc.src, joined, tc.refuse, line, col, tc.refuse)
 				}
 			}
@@ -638,7 +641,9 @@ const raw = new Blob([result.json], { type: "application/json" });
 		{
 			name: "the browser's navigator as the right operand of in",
 			src: `const policy = trustedTypes.createPolicy("shift2eu-report", { createHTML: function (html) { return html; } });
-const supported = "serviceWorker" in navigator;
+if (!("serviceWorker" in navigator)) {
+  const supported = false;
+}
 `,
 		},
 	}
@@ -661,10 +666,10 @@ const supported = "serviceWorker" in navigator;
 
 // TestScanAcceptsEveryNavigatorForm pins the allowed side of the navigator rule
 // (issue #373, audit finding 4, review finding 1): the browser's navigator
-// appears as a member base, as the right operand of in, and through optional
-// chaining - the two uses that read it, the member name and the assignment being
-// refused now, since a member name reaches another object's navigator and an
-// assignment binds any object to the name. The check reads the findings'
+// appears as a member base, as the right operand of in inside parentheses, and
+// through optional chaining - the uses that read it. The member name and the
+// assignment are refused now, since a member name reaches another object's
+// navigator and an assignment binds any object to the name. The check reads the findings'
 // positions, not their words, so a refusal of the navigator token fails it
 // whatever its message says, while a finding about another name - the service
 // worker rule's, say - does not: a rule that refused any of these forms would
@@ -677,7 +682,8 @@ func TestScanAcceptsEveryNavigatorForm(t *testing.T) {
 		src  string
 	}{
 		{name: "a member base", src: `const workers = navigator.serviceWorker.getRegistrations();`},
-		{name: "the right operand of in", src: `const supported = "serviceWorker" in navigator;`},
+		{name: "the right operand of in", src: `if ("serviceWorker" in navigator) { const supported = true; }`},
+		{name: "the right operand of in a for-in loop", src: `for (const k in navigator) {}`},
 		{name: "a member base through optional chaining", src: `const workers = navigator?.serviceWorker;`},
 	}
 
@@ -698,7 +704,7 @@ func TestScanAcceptsEveryNavigatorForm(t *testing.T) {
 
 			for _, violation := range violations {
 				if violation.Line == line && violation.Col == col {
-					t.Errorf("Scan(%q) refused the token navigator at %d:%d: %s\nwant it allowed as a member base (no member name, the next token . or ?.) and as the right operand of in (the next token neither an assignment operator nor =>) (issue #373, review finding 1)",
+					t.Errorf("Scan(%q) refused the token navigator at %d:%d: %s\nwant it allowed as a member base (no member name, the next token . or ?.) and as the right operand of in inside parentheses (the next token )) (issue #373, review finding 1)",
 						tc.src, line, col, violation.Message)
 				}
 			}
