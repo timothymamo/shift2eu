@@ -1,8 +1,7 @@
 # 0040. Audit the repository and the latest release on a schedule, with a model that triages and a script that publishes
 
-- Status: Accepted, except Decision 2's presence-flag rule and the coverage rule that follows from it,
-  which wait for the maintainer's explicit confirmation at this record's review (see Context). PRD #175
-  milestone 2 amends this record with the workflow's implementation (below)
+- Status: Accepted, Decision 2's presence-flag rule and the coverage rule that follows from it included:
+  the maintainer confirmed both on 2026-11-21 at PR #444's review (see Context). PRD #175 milestone 2 amends this record with the workflow's implementation (below)
 - Date: 2026-11-21
 
 ## Context
@@ -34,10 +33,10 @@ longer released ([ADR 0037](0037-retire-the-http-api-and-release-the-cli-alone.m
 the CLI's release archives and its signed image, and no server, OpenAPI document or server harness.
 
 The maintainer decided where it runs, the model, the tools, the report pull request and the cadence on
-2026-11-18 (issue #175 and PR #273), and accepted the PRD's recommendation on Decisions 1 to 7. One
-rule waits for the maintainer's explicit confirmation at this record's review: Decision 2's, that the
-public report says only **whether** private findings exist, and the per-check coverage rule that follows
-from it.
+2026-11-18 (issue #175 and PR #273), and accepted the PRD's recommendation on Decisions 1 to 7. The
+maintainer confirmed the last rule on 2026-11-21 at PR #444's review: Decision 2's, that the public
+report says only **whether** private findings exist, and the per-check coverage rule that follows from
+it.
 
 ## Decision
 

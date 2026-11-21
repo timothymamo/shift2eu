@@ -31,6 +31,6 @@ enough.
 
 ## Audit reports
 
-Besides each change's review, the repository and its latest release are audited on a schedule. How that
-works, how its findings are disclosed, and its dated reports are in
-[Security](docs/security/README.md).
+Besides each change's review, the repository and its latest release will be audited on a schedule once
+the audit is enabled; it is not running yet. Its state, how it will work, how its findings are
+disclosed, and its dated reports are in [Security](docs/security/README.md).

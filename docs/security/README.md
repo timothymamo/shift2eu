@@ -1,7 +1,8 @@
 # Security
 
 How `shift2eu`'s security is checked beyond each change's review: a scheduled audit of the whole
-repository and of the latest published release, how its findings are disclosed, how to verify a release
+repository and of the latest published release ([not running yet](#the-scheduled-audit)), how its
+findings are disclosed, how to verify a release
 yourself, and where the dated audit reports are. To report a vulnerability, follow the
 [security policy](../../SECURITY.md).
 
@@ -53,7 +54,7 @@ audit never publishes an advisory or requests a CVE: that is the maintainer's de
 
 Every image is signed and carries build provenance and an SBOM, and every release archive carries build
 provenance. [Verify a release](../guide/verify-releases.md) shows how to check them before you run
-anything. A run checks the latest release the same way.
+anything. Once the audit runs, each run will check the latest release the same way.
 
 ## The reports
 

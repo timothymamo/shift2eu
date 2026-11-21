@@ -706,9 +706,9 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
 
 ## Decisions and open questions
 
-One decision waits for the maintainer's confirmation at PR review: Decision 2's rule that the public
-report says only whether private findings exist, and the per-check coverage rule that follows from it.
-Every other question is decided.
+Every question is decided. The last one, Decision 2's rule that the public report says only whether
+private findings exist, and the per-check coverage rule that follows from it, the maintainer confirmed on
+2026-11-21 at PR #444's review.
 
 **Decided (maintainer, 2026-11-18, in issue #175), replacing the parts of the issue they contradict:**
 
@@ -805,7 +805,7 @@ options that were weighed and the reason given, so the decision can be revisited
      finding and "run" otherwise, so a check whose only findings are private reads exactly like a check
      with no findings ("run"); the why of a "not run (why)" comes from a fixed vocabulary in the publish
      script, never the model's text (milestone 2). *Decided by the review rounds on PR #273 (2026-11-18),
-     pending the maintainer's confirmation at PR review.* *Reason:* a public count tied to a named release
+     confirmed by the maintainer on 2026-11-21 at PR #444's review.* *Reason:* a public count tied to a named release
      signals an undisclosed serious flaw before a fix exists, and more sharply for a run started right
      after a release; a per-check "findings" next to "handled privately" would say where it is.
      *Residual risk:* the presence flag still says that something exists; the ADR records it.
