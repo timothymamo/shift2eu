@@ -59,8 +59,13 @@ type infraRuleCase struct {
 
 // infraRuleCases are the breakages dev/infra-rules.awk must refuse, one rule each. breakage gets the absolute
 // path of the copied infra/site; the anchors it edits are strings of the real configuration, so a case fails
-// loudly (as a test failure, never as a silent pass) when the configuration moves under it.
-var infraRuleCases = []infraRuleCase{
+// loudly (as a test failure, never as a silent pass) when the configuration moves under it. The file-reading
+// functions' cases come from infraFileFunctionCases, one per name the rules must refuse, so a name dropped
+// from them fails here instead of passing unrefused.
+var infraRuleCases = append(infraFileFunctionCases(), namedInfraRuleCases...)
+
+// namedInfraRuleCases are the breakages written out one by one, in the order the script's rules are read.
+var namedInfraRuleCases = []infraRuleCase{
 	{
 		name: "module-from-git",
 		why:  `a module with source = "git::https://example.com/m"`,
@@ -277,6 +282,54 @@ resource "terraform_data" "marker" {
 `)
 		},
 	},
+	// The resource, data and ephemeral types are an allow list of the ones main.tf uses today: a type no rule
+	// names on its own is [resource-type], so a new Scaleway service cannot enter the configuration unreviewed.
+	// A type a specific rule names keeps that one label, one finding per type.
+	{
+		name:   "resource-type-data-source",
+		why:    `a data "scaleway_secret_version" source, a type main.tf does not use`,
+		want:   "resource-type",
+		wantIn: map[string]string{"resource-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+data "scaleway_secret_version" "s" {
+  secret_id = "x"
+}
+`)
+		},
+	},
+	{
+		name:   "resource-type-resource",
+		why:    `a resource "scaleway_secret_version", a type main.tf does not use, whose data would reach the state`,
+		want:   "resource-type",
+		wantIn: map[string]string{"resource-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_secret_version" "s" {
+  secret_id = "x"
+  data      = "eA=="
+}
+`)
+		},
+	},
+	{
+		name:   "resource-type-rdb-user",
+		why:    `a resource "scaleway_rdb_user", a managed database the site does not use`,
+		want:   "resource-type",
+		wantIn: map[string]string{"resource-type": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_rdb_user" "u" {
+  instance_id = "x"
+  name        = "u"
+  password    = "p"
+}
+`)
+		},
+	},
 	{
 		name: "provider-alias",
 		why:  `alias = "real" on the configuration's provider block, a second provider instance under an unseen name`,
@@ -344,6 +397,82 @@ terraform {
 			appendInfraText(t, filepath.Join(site, "versions.tf"), `
 terraform {
   cloud {}
+}
+`)
+		},
+	},
+	// The top-level terraform block is an allow list: required_version, required_providers, backend and cloud,
+	// each judged by its own rule. Anything else is [terraform-setting], because a block there changes how the
+	// plan runs on the admin machine: an encryption block's external key provider runs a local command at init,
+	// plan and apply (OpenTofu 1.13.9 ships it), and its kms and openbao key providers send ambient credentials
+	// to an endpoint the block names.
+	{
+		name:   "terraform-encryption-block",
+		why:    `a terraform block's encryption block whose external key provider runs command = ["echo", "hi"] on the machine that plans`,
+		want:   "terraform-setting",
+		wantIn: map[string]string{"terraform-setting": "{site}/encryption.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "encryption.tf"), `
+terraform {
+  encryption {
+    key_provider "external" "k" {
+      command = ["echo", "hi"]
+    }
+
+    method "aes_gcm" "m" {
+      keys = key_provider.external.k
+    }
+
+    state {
+      method = method.aes_gcm.m
+    }
+  }
+}
+`)
+		},
+	},
+	{
+		name:   "terraform-provider-meta-block",
+		why:    `a terraform block's provider_meta "scaleway" {} block`,
+		want:   "terraform-setting",
+		wantIn: map[string]string{"terraform-setting": "{site}/provider_meta.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "provider_meta.tf"), `
+terraform {
+  provider_meta "scaleway" {}
+}
+`)
+		},
+	},
+	{
+		name:   "terraform-experiments-attribute",
+		why:    "experiments = [] in a terraform block, a setting that turns on a release's experimental features",
+		want:   "terraform-setting",
+		wantIn: map[string]string{"terraform-setting": "{site}/experiments.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "experiments.tf"), `
+terraform {
+  experiments = []
+}
+`)
+		},
+	},
+	// Nothing imports a resource: the Runbook creates every resource fresh, so an import block would adopt
+	// whatever object the id names into the state unasked (ADR 0039).
+	{
+		name:   "import-block",
+		why:    `a top-level import block adopting the site bucket's object`,
+		want:   "import-block",
+		wantIn: map[string]string{"import-block": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+import {
+  to = scaleway_object_bucket.site
+  id = "nl-ams/example"
 }
 `)
 		},
@@ -509,6 +638,36 @@ mock_provider "scaleway" {
 `)
 		},
 	},
+	// A mock provider is the test file's own declaration: a source = ... makes it one the test file does not
+	// hold, so what the file mocks is no longer what the file holds.
+	{
+		name:   "mock-provider-with-a-source",
+		why:    `a mock_provider "scaleway" with source = "./tests/mocks", mocks read from outside the test file`,
+		want:   "mock-source",
+		wantIn: map[string]string{"mock-source": "{site}/tests/m.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "m.tftest.hcl"), `
+mock_provider "scaleway" {
+  source = "./tests/mocks"
+}
+`)
+		},
+	},
+	// A mock data file is a second mock beside the test files, which no test file's mock_provider names: the
+	// mocks belong in the test file that uses them.
+	{
+		name:   "mock-data-file",
+		why:    `a site/tests/mocks/scaleway.tfmock.hcl holding mock_resource "scaleway_object_bucket" {}`,
+		want:   "mock-file",
+		wantIn: map[string]string{"mock-file": "{site}/tests/mocks/scaleway.tfmock.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "mocks", "scaleway.tfmock.hcl"), `
+mock_resource "scaleway_object_bucket" {}
+`)
+		},
+	},
 	{
 		name: "mock-provider-label-written-with-an-escape",
 		why:  `a mock_provider whose label spells scaleway as scal\u0065way, so the real provider is no longer the one the file mocks`,
@@ -563,6 +722,20 @@ run "a_run_with_a_module" {
 provider "registry.opentofu.org/hashicorp/aws" {
   version = "5.0.0"
   hashes  = ["h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="]
+}
+`)
+		},
+	},
+	{
+		name:   "lock-file-provider-without-a-space",
+		why:    `a lock file block written provider"registry.opentofu.org/hashicorp/external", where HCL takes the { without the space`,
+		want:   "lock-file",
+		wantIn: map[string]string{"lock-file": "{site}/.terraform.lock.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, ".terraform.lock.hcl"), `
+provider"registry.opentofu.org/hashicorp/external" {
+  version = "2.3.4"
 }
 `)
 		},
@@ -844,6 +1017,24 @@ removed {
 `)
 		},
 	},
+	{
+		name:   "provisioner-in-a-test-file",
+		why:    `a local-exec provisioner inside a run block of site/tests/iam.tftest.hcl, which runs on the machine that tests`,
+		want:   "provisioner",
+		wantIn: map[string]string{"provisioner": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_a_provisioner" {
+  command = plan
+
+  provisioner "local-exec" {
+    command = "echo hi"
+  }
+}
+`)
+		},
+	},
 	// OpenTofu loads every *.auto.tfvars (and *auto.tfvars.json, hidden ones too) without anyone naming it,
 	// so a value git holds would decide what is applied. A plain terraform.tfvars is the maintainer's own,
 	// kept on the admin machine, and no rule refuses one.
@@ -1008,6 +1199,39 @@ locals {
 `)
 		},
 	},
+	{
+		name: "file-function-templatestring",
+		why:  `an output calling templatestring(local.t, {}), which renders a template string`,
+		want: "file-function",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "templatestring.tf"), `
+locals {
+  t = "x"
+}
+
+output "o" {
+  value = templatestring(local.t, {})
+}
+`)
+		},
+	},
+	// A test file is read by the machine that runs tofu test too, so a file function there reads the same
+	// local file and changes the same plan: it is refused exactly as in a configuration file.
+	{
+		name:   "file-function-in-a-test-file",
+		why:    `a variables block in site/tests/iam.tftest.hcl setting organization_id = file("/etc/hostname")`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+variables {
+  organization_id = file("/etc/hostname")
+}
+`)
+		},
+	},
 	// A zero-byte file is a file tofu reads too: the rules judge it as they judge any other.
 	{
 		name:   "empty-root-file",
@@ -1090,6 +1314,56 @@ locals {
 			writeInfraText(t, filepath.Join(site, "main.tf~"), "resource {\n")
 		},
 	},
+}
+
+// infraFileFunctions are the functions a call of which reads a file, or resolves a path, on the machine that
+// runs tofu: the plan would then differ per machine and could carry a local file into the state. Every name
+// here gets its own case below, and the rules may refuse no fewer.
+var infraFileFunctions = []string{
+	"file",
+	"filebase64",
+	"filebase64sha256",
+	"filebase64sha512",
+	"fileexists",
+	"fileset",
+	"templatefile",
+	"templatestring",
+	"filemd5",
+	"filesha1",
+	"filesha256",
+	"filesha512",
+	"pathexpand",
+	"abspath",
+}
+
+// infraFileFunctionCases returns one case per file-reading function, each calling it the way the configuration
+// would: fileset, templatefile and templatestring take a second argument, so they are called with one.
+func infraFileFunctionCases() []infraRuleCase {
+	cases := make([]infraRuleCase, 0, len(infraFileFunctions))
+
+	for _, function := range infraFileFunctions {
+		call := function + `("a")`
+		if function == "fileset" || function == "templatefile" || function == "templatestring" {
+			call = function + `("a", "b")`
+		}
+
+		cases = append(cases, infraRuleCase{
+			name:   "file-function-call-" + function,
+			why:    `a locals value calling ` + call + `, which reads the machine that runs the plan`,
+			want:   "file-function",
+			wantIn: map[string]string{"file-function": "{site}/main.tf"},
+			breakage: func(t *testing.T, site string) {
+				t.Helper()
+				appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  x = `+call+`
+}
+`)
+			},
+		})
+	}
+
+	return cases
 }
 
 // rootFileModuleSourceCase is one route-2 case: a configuration file directly under the root, whose module
@@ -1219,6 +1493,11 @@ var infraLocalFileCases = []struct {
 		name:    "an-auto-tfvars-json-file",
 		tracked: []string{"infra/site/zz.auto.tfvars.json"},
 		want:    []string{"infra/site/zz.auto.tfvars.json"},
+	},
+	{
+		name:    "a-tfvars-json-file",
+		tracked: []string{"infra/site/terraform.tfvars.json"},
+		want:    []string{"infra/site/terraform.tfvars.json"},
 	},
 	{
 		name:    "a-backend-file",
