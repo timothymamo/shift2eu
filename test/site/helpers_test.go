@@ -11,6 +11,48 @@ import (
 // fail or make an innocent page fail, and neither shows in a check whose
 // subject is the bundle, so they are pinned here.
 
+// TestTextContentKeepsDocumentOrder pins that an element's text content reads in
+// the order the document holds it: its own runs of text in among its children's,
+// as a browser's textContent reads it, rather than the element's text first and
+// its children's after, which no page's sentence would survive.
+func TestTextContentKeepsDocumentOrder(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		source string
+		want   string
+	}{
+		{
+			name:   "text around a child element",
+			source: `<p>No inventory yet? <a href="inventory.html">the guide</a> turns it into one.</p>`,
+			want:   "No inventory yet? the guide turns it into one.",
+		},
+		{
+			name:   "text before, between and after two children",
+			source: `<p>a<b>b</b>c<i>d</i>e</p>`,
+			want:   "abcde",
+		},
+		{
+			name:   "a child element holding text of its own",
+			source: `<p><span>one</span> and <span>two</span></p>`,
+			want:   "one and two",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			doc := parseHTML(t, "synthetic.html", []byte(tc.source))
+
+			if got := doc.find("p")[0].textContent(); got != tc.want {
+				t.Errorf("the reader reads the text content of %q as %q, want %q: the text is read in document order", tc.source, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestParseHTMLReadsElementsAndText pins the HTML reader on the constructs the
 // built pages and the reporter's goldens hold.
 func TestParseHTMLReadsElementsAndText(t *testing.T) {
