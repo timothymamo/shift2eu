@@ -10,8 +10,18 @@
 // Every case below is derived from the committed infra/site/.terraform.lock.hcl in t.TempDir(), one
 // difference each: an identical copy and a reordered one pass; a dropped h1: hash (one platform), a dropped
 // zh: hash (a registry checksum), an added hash, a changed version, changed constraints and a provider block
-// the committed file misses are refused. A refusal prints [lock-hashes] with the provider address, and names
-// each missing or extra hash. A usage error (a missing argument, a file that is not there) is refused too.
+// the committed file misses are refused. So is a provider block the committed file holds and the regenerated
+// one misses, and a hash the committed file lists twice. A refusal prints [lock-hashes] with the provider
+// address, and names each missing or extra hash. A usage error (a missing argument, a file that is not there)
+// is refused too.
+//
+// A lock file is input, so its lines reach the CI log: a value the script cannot print safely (a constraints
+// or hash value holding ##[, which would forge a GitHub Actions annotation, or any other character outside a
+// printable set) is named "an unprintable value" and never echoed - the run's whole output must hold no ##[ -
+// and a non-blank, non-comment line that is no lock line at all (two hashes on one line, a provider header
+// with a trailing comment) is [lock-hashes] too, with the file and the line number, even when both files hold
+// it: tofu init would rewrite that file unseen otherwise.
+//
 // The cases read and write files only: no tofu, no network, no credentials.
 package devenv_test
 
@@ -21,6 +31,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -36,6 +47,12 @@ const (
 	infraLockTag = "[lock-hashes]"
 	// infraLockUsageWord is the word a usage error's message must hold.
 	infraLockUsageWord = "usage"
+	// infraLockUnprintableWord is the word a refusal must print instead of a value it cannot echo: a
+	// constraints or hash value holding ##[ would forge a GitHub Actions annotation in the CI log.
+	infraLockUnprintableWord = "unprintable"
+	// infraLockOtherProvider is a provider address the committed file does not lock: a case adds its block to
+	// that file, so the comparison must refuse a block only the committed file holds.
+	infraLockOtherProvider = "registry.opentofu.org/hashicorp/aws"
 )
 
 var (
@@ -46,6 +63,11 @@ var (
 	lockVersionLine = regexp.MustCompile(`(?m)^(\s*version\s*=\s*")[^"]*(")$`)
 	// lockConstraintsLine matches the constraints line of a provider block.
 	lockConstraintsLine = regexp.MustCompile(`(?m)^(\s*constraints\s*=\s*")[^"]*(")$`)
+	// lockFirstH1Line matches any h1: hash line, so a case can replace the first one with a line the script
+	// does not read.
+	lockFirstH1Line = regexp.MustCompile(`^\s+"h1:`)
+	// lockProviderHeaderLine matches a provider block's header line.
+	lockProviderHeaderLine = regexp.MustCompile(`^\s*provider\s+"`)
 )
 
 // lockCompareCase is one pair of lock files a run compares: what the committed file holds, what the
@@ -56,7 +78,7 @@ type lockCompareCase struct {
 	committed   string   // the lock file git would hold
 	regenerated string   // the lock file `tofu providers lock` regenerated
 	wantFail    bool     // whether the script must refuse the pair
-	wantOut     []string // substrings the refusal's output must hold, the hash values and the provider address
+	wantOut     []string // substrings a [lock-hashes] line must hold, the hash values, the file:line and the provider address; {committed} and {regenerated} stand for the case's two file paths
 }
 
 // TestInfraLockCompare pins the script's verdict on the pairs of lock files that differ in one way each.
@@ -79,6 +101,13 @@ func TestInfraLockCompare(t *testing.T) {
 
 			got := runLockCompare(t, committed, regenerated)
 
+			// A lock file is input: a value that would forge a CI annotation must never come back out, whatever
+			// the case's verdict.
+			if strings.Contains(got.output(), "##[") {
+				t.Errorf("%s echoed %q on %s, want the value named as unprintable: a line holding ##[ forges a GitHub Actions annotation in the CI log: output was:\n%s",
+					infraLockCompareScript, "##[", tc.why, got.output())
+			}
+
 			if !tc.wantFail {
 				if got.exitCode != 0 {
 					t.Errorf("%s exited %d on %s, want 0: output was:\n%s", infraLockCompareScript, got.exitCode, tc.why, got.output())
@@ -100,12 +129,32 @@ func TestInfraLockCompare(t *testing.T) {
 			}
 
 			for _, want := range tc.wantOut {
-				if !strings.Contains(got.output(), want) {
-					t.Errorf("%s printed no %q on %s: output was:\n%s", infraLockCompareScript, want, tc.why, got.output())
+				want := lockComparePath(want, committed, regenerated)
+				if !lockCompareNames(got.output(), infraLockTag, want) {
+					t.Errorf("%s printed no %s line holding %q on %s: output was:\n%s", infraLockCompareScript, infraLockTag, want, tc.why, got.output())
 				}
 			}
 		})
 	}
+}
+
+// lockComparePath resolves the {committed} and {regenerated} placeholders of a case's wantOut, so a case can
+// name the file:line it breaks, which lives under t.TempDir() and so differs from run to run.
+func lockComparePath(want, committed, regenerated string) string {
+	return strings.NewReplacer("{committed}", committed, "{regenerated}", regenerated).Replace(want)
+}
+
+// lockCompareNames reports whether some line of text holds both the tag and want: a refusal must name what it
+// refuses on the line that reports it, so a provider address or a file:line found anywhere else in the output
+// does not stand for it.
+func lockCompareNames(text, tag, want string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if strings.Contains(line, tag) && strings.Contains(line, want) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // lockCompareCases derives the cases from the committed lock file: each one differs from it in exactly one
@@ -119,6 +168,11 @@ func lockCompareCases(t *testing.T, base string) []lockCompareCase {
 
 	older := withLockLine(t, base, lockVersionLine, "2.92.0")
 	wider := withLockLine(t, base, lockConstraintsLine, ">= 2.93.0")
+	unprintableConstraints := withLockLine(t, base, lockConstraintsLine, "##[error]forged")
+	unprintableHash := withLockHash(t, base, "h1:##[add-mask]x")
+	twoHashesOnOneLine, twoHashesLine := withLockLineReplaced(t, base, lockFirstH1Line, `    "h1:AAA=", "h1:BBB=",`)
+	commentedProviderHeader, commentedHeaderLine := withLockLineReplaced(t, base, lockProviderHeaderLine, `provider "`+infraLockProvider+`" { # x`)
+	duplicatedHash := withLockHash(t, base, h1)
 
 	return []lockCompareCase{
 		{
@@ -181,7 +235,93 @@ func lockCompareCases(t *testing.T, base string) []lockCompareCase {
 			wantFail:    true,
 			wantOut:     []string{infraLockProvider},
 		},
+		{
+			name:        "a-provider-block-the-regenerated-file-misses",
+			why:         "a committed file holding " + infraLockOtherProvider + " beside the scaleway block, where the regenerated one holds the scaleway block alone",
+			committed:   withLockProviderBlock(base, infraLockOtherProvider),
+			regenerated: base,
+			wantFail:    true,
+			wantOut:     []string{infraLockOtherProvider},
+		},
+		{
+			name:        "a-hash-the-committed-file-lists-twice",
+			why:         "a committed file listing " + h1 + " twice, where the regenerated one lists it once: the hash set is the same, but a repeated line is no file tofu init writes",
+			committed:   duplicatedHash,
+			regenerated: base,
+			wantFail:    true,
+			wantOut:     []string{infraLockProvider, h1},
+		},
+		{
+			name:        "an-unprintable-constraint",
+			why:         `a committed file whose constraints are "##[error]forged", a value that would forge a GitHub Actions annotation if the script echoed it`,
+			committed:   unprintableConstraints,
+			regenerated: base,
+			wantFail:    true,
+			wantOut:     []string{infraLockProvider, infraLockUnprintableWord},
+		},
+		{
+			name:        "an-unprintable-hash",
+			why:         `a committed file holding the hash "h1:##[add-mask]x", which the regenerated file does not`,
+			committed:   unprintableHash,
+			regenerated: base,
+			wantFail:    true,
+			wantOut:     []string{infraLockProvider, infraLockUnprintableWord},
+		},
+		{
+			name:        "two-hashes-on-one-line",
+			why:         `a committed file and a regenerated one that both write two hashes on one line ("h1:AAA=", "h1:BBB="), a line tofu init never writes`,
+			committed:   twoHashesOnOneLine,
+			regenerated: twoHashesOnOneLine,
+			wantFail:    true,
+			// The files differ in nothing, so only a refusal of the unread line itself can fail here.
+			wantOut: []string{"{committed}:" + strconv.Itoa(twoHashesLine)},
+		},
+		{
+			name:        "a-provider-header-with-a-trailing-comment",
+			why:         "a committed file and a regenerated one that both put a trailing comment on the provider header, a line tofu init never writes",
+			committed:   commentedProviderHeader,
+			regenerated: commentedProviderHeader,
+			wantFail:    true,
+			wantOut:     []string{"{committed}:" + strconv.Itoa(commentedHeaderLine)},
+		},
 	}
+}
+
+// withLockLineReplaced returns text with the first line matching pattern replaced by replacement, and the
+// number of the line it replaced, so a case can state a line tofu init never writes - one the script must
+// refuse as unreadable, at that line - without restating the whole file.
+func withLockLineReplaced(t *testing.T, text string, pattern *regexp.Regexp, replacement string) (string, int) {
+	t.Helper()
+
+	lines := strings.Split(text, "\n")
+
+	for i, line := range lines {
+		if !pattern.MatchString(line) {
+			continue
+		}
+
+		lines[i] = replacement
+
+		return strings.Join(lines, "\n"), i + 1
+	}
+
+	t.Fatalf("the lock file holds no line matching %s: the case names one it can replace", pattern)
+
+	return "", 0
+}
+
+// withLockProviderBlock returns text with a provider block for addr appended, as tofu init writes one: a
+// version, its constraints and one hash line of its own.
+func withLockProviderBlock(text, addr string) string {
+	return text + `
+provider "` + addr + `" {
+  version     = "5.0.0"
+  constraints = "5.0.0"
+  hashes = [
+    "h1:AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHHIIIIJJJJKKK=",
+  ]
+}
+`
 }
 
 // TestInfraLockCompareUsage pins the script's refusals of a call it cannot judge: a missing argument, and a
