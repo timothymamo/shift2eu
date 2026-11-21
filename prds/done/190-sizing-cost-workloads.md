@@ -1,6 +1,6 @@
 # PRD #190: Sizing, cost estimates and workloads
 
-**Status:** Complete (milestones 1 to 9 done). Two acceptance criteria stay open, each with its reason
+**Status:** Complete (milestones 1 to 9 done). One acceptance criterion stays open, with its reason
 below and a follow-up issue proposed.
 **Issue:** #190 (takes in #186)
 
@@ -114,13 +114,14 @@ All criteria are pinned by tests that run offline under `make test` or `make tes
   fewer vCPU, then less memory, then name.
 - [x] Given a size that no plan covers, the resource shows "no plan large enough" with the largest plan's
   size, and gets no estimate. Its fit is unchanged.
-- [ ] The monthly estimate of a resource is plan price × `count` × `hoursPerMonth` / 730, plus storage
+- [x] The monthly estimate of a resource is plan price × `count` × `hoursPerMonth` / 730, plus storage
   above what the plan includes × the per-GiB price. It's rounded to the cent only for display. A test
   table pins one example per priced category on each target.
 
-  *Open:* `TestFor` (`internal/domain/estimate`) pins the formula with one example per priced category
-  on an invented catalog, and the sample goldens pin real estimates on every target, but no test table
-  pins one worked example per priced category on each real target's snapshot.
+  `TestFor` (`internal/domain/estimate`) pins the formula with one example per priced category on an
+  invented catalog. `TestEstimatePerTargetAndCategory` (`test/examples`, golden
+  `estimates-per-category.md.golden`) pins one example per category on each real target's snapshot
+  (issue #245).
 - [x] A resource with no size, no fit, a usage-priced category or no price for its region shows "not
   estimated" with that reason. Totals sum only the estimated resources and say how many weren't
   estimated ("€1,234.56 per month for 9 of 13 resources").

@@ -178,7 +178,7 @@ holds, decisions and the unit branches of waiting PRs). The skill refers to thes
 | Orchestration | `shift2eu` |
 | CLI | `~/.local/bin/dot-agent-deck` |
 | Unit limit | 3 running units (2 when the VM has 8 GiB or less): a unit is closed once its PR is verified and reported ready |
-| Review limit | 5 PRs waiting for the maintainer's review or merge from 09:30 until 20:00, 10 from 20:00 until 09:30 (the local clock of the machine the deck runs on; counted as the sentence below the table says), not counting Renovate's PRs (author `app/renovate`; their label `dependencies` alone excludes nothing) or release-please's release PR (author `app/shift2eu-release`, head branch `release-please--branches--*` and label `autorelease: pending`, never the label alone) |
+| Review limit | 10 PRs waiting for the maintainer's review or merge from 09:30 until 20:00, 20 from 20:00 until 09:30 (the local clock of the machine the deck runs on; counted as the sentence below the table says), not counting Renovate's PRs (author `app/renovate`; their label `dependencies` alone excludes nothing) or release-please's release PR (author `app/shift2eu-release`, head branch `release-please--branches--*` and label `autorelease: pending`, never the label alone) |
 | Checks on a merged scratch tree | `make check` and `make test-e2e` |
 | Maintainer notes directory | `.idea/` in the repository root (git-ignored) |
 | Release flow | The release-please PR, reviewed with the `release-tag` skill |
