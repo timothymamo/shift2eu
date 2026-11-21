@@ -37,11 +37,17 @@ tarball's digest is pinned: Renovate keeps it current (`github-release-attachmen
 keep a digest of the extracted binary. The "Infra tools" workflow (`.github/workflows/infra-tools.yml`,
 on every pull request and weekly) checks every pin against the release's `tofu_<version>_SHA256SUMS`,
 whose cosign signature must come from `opentofu/opentofu`'s `release.yml` on its `v<major>.<minor>`
-branch. Its `verify-provider-lock` job (issue #434, on the same triggers) runs `tofu providers lock` for
-darwin_arm64, linux_amd64 and linux_arm64 in a scratch copy of `infra/site`'s `*.tf` without a lock file,
-and `dev/infra-lock-compare.sh` fails unless each provider's version, constraints and set of hashes equal
+branch. Its `verify-provider-lock` job (issue #434, on the same triggers) runs `tofu providers lock` in a
+scratch copy of the `infra/site` root without its lock file or `.terraform`, and
+`dev/infra-lock-compare.sh` fails unless each provider's version, constraints and set of hashes equal
 the committed `.terraform.lock.hcl`'s: a lock file that lost a platform's hash, or holds an extra one,
-fails there rather than at the next machine's init. It needs no credential and never reaches Scaleway.
+fails there rather than at the next machine's init. The regenerated file holds every hash the registry
+publishes for the provider version, whatever the `-platform` list (an `h1` hash for each of the 13
+platforms the provider ships, and the `zh` set from its signed `SHA256SUMS`); the `-platform` flags for
+darwin_arm64, linux_amd64 and linux_arm64 make tofu download and verify those packages. A weekly failure
+means the registry's published set changed, and the lock file is refreshed with `infra/site/README.md`'s
+command. The comparison reads only the lines tofu writes, refuses a hash listed twice, and never echoes a
+value outside a strict printable set. It needs no credential and never reaches Scaleway.
 Every download `dev/tofu.sh` and the workflow make carries curl's `--connect-timeout` and `--max-time`.
 
 `make infra-check` (in `make check` and CI) runs the static rules (`dev/infra-rules.sh infra`, which
@@ -67,7 +73,9 @@ configuration file holds only `terraform`, `provider`, `resource`, `data`, `ephe
 `override_resource` block is one no rule reads), and directly in a test's `run` only `override_resource`,
 `override_data`, `override_module`, `assert`, `variables`, `module`, `plan_options` and `expect_failures`,
 in its `mock_provider` only `mock_resource`, `mock_data`, `override_resource` and `override_data`
-(`[test-nested-block]`, issue #434);
+(`[test-nested-block]`, issue #434), and a `run` or `mock_provider` label is an identifier
+(`[test-label]`; every block label enters the rules' block path with `/` and `:` escaped, so no label
+hides a block's children);
 every resource, data source and provider is Scaleway's; a module's source, in the configuration or in a
 test's `run` block, is a local `./` path without a `..` segment or another segment starting with `.`
 (such as `./.terraform/m`, under the `.terraform` directory the rules skip); every applied root (a directory directly

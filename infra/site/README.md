@@ -14,11 +14,14 @@ hand, in the PRD's *Runbook* section (R0 to R13), which the maintainer follows.
 - `variables.tf`: the inputs (`terraform.tfvars.example`): `organization_id` and `admin_principal` have no
   default; `region` defaults to `nl-ams`, `bucket_name` to `shift2eu-site-www`, `public_read` to `false`
   (set it only if the runbook's R5 finds that Edge Services cannot serve private objects).
-- `.terraform.lock.hcl`: the provider's hashes for darwin_arm64, linux_amd64 and linux_arm64. After a
-  provider change, refresh it with
-  `dev/tofu.sh -chdir=infra/site providers lock -platform=darwin_arm64 -platform=linux_amd64 -platform=linux_arm64`.
-  The "Infra tools" workflow's `verify-provider-lock` job regenerates it for these three platforms and
-  fails unless its hash set equals the committed one (`dev/infra-lock-compare.sh`, issue #434).
+- `.terraform.lock.hcl`: every hash the registry publishes for the provider version, whatever the
+  `-platform` list: an `h1` hash for each platform the provider ships (13 today) and the `zh` set from
+  its signed `SHA256SUMS`. After a provider change, refresh it with
+  `dev/tofu.sh -chdir=infra/site providers lock -platform=darwin_arm64 -platform=linux_amd64 -platform=linux_arm64`;
+  the three `-platform` flags make tofu download and verify those platforms' packages. The "Infra tools"
+  workflow's `verify-provider-lock` job regenerates it the same way in a scratch copy of this root and
+  fails unless its hash set equals the committed one (`dev/infra-lock-compare.sh`, issue #434). A weekly
+  failure there means the registry's published set changed: refresh the lock file with the command above.
 - `tests/`: `tofu test` files, with the Scaleway provider mocked.
 
 `make infra-check` (part of `make check`, and CI's Test job) runs `dev/infra-check.sh`: no credential, no

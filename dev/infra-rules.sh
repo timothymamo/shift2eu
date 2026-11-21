@@ -111,6 +111,10 @@
 #                    override_resource and override_data (issue #434): a block no rule knows is a block no
 #                    rule reads. Deeper blocks (the values of an override_resource) are not judged; a
 #                    provisioner in a run block gets [provisioner] beside it
+#   [test-label]     a test file's run or mock_provider label that is no identifier (a letter or _, then
+#                    letters, digits, _ or -), such as "x/assert" or "a b" (issue #434). Every block label,
+#                    in any file, enters the rules' block path with %, / and : escaped, so a label never
+#                    hides a block's children from the rules above
 # The HCL is read by dev/infra-rules.awk.
 #
 # Usage: dev/infra-rules.sh <infra root>   (from the repository root: dev/infra-rules.sh infra)

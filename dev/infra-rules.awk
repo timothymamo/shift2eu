@@ -144,6 +144,37 @@ function blockid(   i) { # the innermost block's instance number, 0 at the top l
   return 0
 }
 
+# A block label as a path element: %, / and : are written %25, %2F and %3A, so a label never adds a
+# segment or a label to the path, and the rules keep judging the block's real children (issue #434).
+function escaped(s,   i, c, r) {
+  r = ""
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (c == "%") {
+      c = "%25"
+    } else if (c == "/") {
+      c = "%2F"
+    } else if (c == ":") {
+      c = "%3A"
+    }
+    r = r c
+  }
+  return r
+}
+
+# Whether s is an HCL identifier: a letter or _, then letters, digits, _ or -.
+function isident(s,   i) {
+  if (s == "" || index(LETTERS, substr(s, 1, 1)) == 0) {
+    return 0
+  }
+  for (i = 2; i <= length(s); i++) {
+    if (index(LETTERS DIGITS "-", substr(s, i, 1)) == 0) {
+      return 0
+    }
+  }
+  return 1
+}
+
 function push(k, n) {
   sp++
   kind[sp] = k
@@ -222,7 +253,13 @@ function tok(t, v, lit, esc,   i, ok, n) {
       n = bv[1]
       for (i = 2; i <= bn; i++) {
         if (bt[i] == "S" && bl[i] && index(bv[i], "\\") == 0 && !be[i]) {
-          n = n ":" bv[i]
+          if (sp == 0 && isTest[FILENAME] && (n == "run" || n == "mock_provider") && !isident(bv[i])) {
+            nlab++
+            labFile[nlab] = FILENAME
+            labLine[nlab] = tokline
+            labText[nlab] = bv[1] " \"" escaped(bv[i]) "\""
+          }
+          n = n ":" escaped(bv[i])
         } else if (bt[i] == "I") {
           n = n ":" bv[i]
         } else if (bt[i] == "S" && bl[i] && be[i]) {
@@ -502,6 +539,11 @@ END {
   # Calls found by the tokenizer, reported only now, so a [parse] failure elsewhere keeps them unprinted.
   for (i = 1; i <= nff; i++) {
     problem("file-function", ffFile[i], ffLine[i], ffName[i] "(): it reads the machine that runs tofu, so the plan would differ per machine and could carry a local file into the state")
+  }
+
+  # A run or mock_provider label that is no identifier: tofu test names runs and mocks by it.
+  for (i = 1; i <= nlab; i++) {
+    problem("test-label", labFile[i], labLine[i], labText[i] ": a run or mock_provider label must be an identifier (a letter or _, then letters, digits, _ or -)")
   }
 
   # Blocks.

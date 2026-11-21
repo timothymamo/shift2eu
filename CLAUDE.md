@@ -24,7 +24,8 @@ as HTML. The site's pages (`site/`) load it under a strict Content Security Poli
 (`test/browser`, `make test-browser`) drives (PRD #297 milestone 2, ADR 0036); its release and deploy come
 in the PRD's later milestones. `infra/` holds the OpenTofu configuration of the site's Scaleway hosting
 (`infra/site`, ADR 0039, no Go): the maintainer alone runs its plan and apply, on the admin machine;
-agents never plan or apply, and `make infra-check` checks it offline. Live source adapters do not exist yet. Work is planned as PRDs in `prds/`.
+agents never plan or apply, and `make infra-check` checks it offline. Live source adapters do not exist
+yet. Work is planned as PRDs in `prds/`.
 
 ## Ubiquitous language
 

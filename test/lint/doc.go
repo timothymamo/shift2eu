@@ -289,4 +289,11 @@
 // TestInterfaceFindingsProbe runs the interface rule on the probe, and
 // TestWriteVerbsMatchForbidigo keeps the write verbs the same here and in
 // .golangci.yml.
+//
+// TestOpenTofuRequiredVersionRuleStripsTheV (renovateopentofu_test.go, issue
+// #434) reads .github/renovate.json5 as JSON5, with the reader of
+// aireviewrenovate_test.go, and pins that the packageRule pointing
+// infra/site/versions.tf's required_version at OpenTofu's releases sets an
+// extractVersion that strips the tag's v, so Renovate proposes 1.14.0, the
+// format required_version and dev/infra-check.sh want, not v1.14.0.
 package lint

@@ -18,15 +18,19 @@ name: Infra tools
 # verify-provider-lock (issue #434): tofu init accepts infra/site/.terraform.lock.hcl as long as it holds a
 # hash for the platform init runs on, so a lock file that lost another platform's hash, or holds one the
 # registry never published, passes make infra-check where it was changed. This job regenerates the lock
-# file with the pinned OpenTofu (dev/tofu.sh) in a scratch copy of infra/site's *.tf that holds no lock
-# file, so nothing of the committed one is carried over, for the platforms infra/site/README.md names
-# (darwin_arm64, linux_amd64, linux_arm64), and dev/infra-lock-compare.sh fails unless every provider's
-# version, constraints and set of hashes equal the committed file's. tofu also checks the registry's
-# signed SHA256SUMS at init, so this catches a hand-edited or partial hash set early, not a forged
+# file with the pinned OpenTofu (dev/tofu.sh) in a scratch copy of the infra/site root (its *.tf, *.tofu
+# and local modules) without its lock file or .terraform, so nothing of the committed lock is carried
+# over, and dev/infra-lock-compare.sh fails unless every provider's version, constraints and set of
+# hashes equal the committed file's. The regenerated file holds every hash the registry publishes for the
+# provider version, whatever the -platform list: an h1 hash for each of the platforms the provider ships
+# (13 for scaleway/scaleway today), and the zh set from its signed SHA256SUMS. The three -platform flags
+# (darwin_arm64, linux_amd64, linux_arm64, as infra/site/README.md names them) make tofu download and
+# verify those platforms' packages. So this catches a hand-edited or partial hash set early, not a forged
 # provider. It needs no credential and reaches only GitHub (the OpenTofu release, the provider's
 # packages) and the OpenTofu registry, never Scaleway: providers lock reads no state and no backend. It
 # runs on every pull request for the same reason as verify-tofu-pins (it can be a required check), and
-# weekly, as the registry could change a published hash set.
+# weekly: a weekly failure means the registry's published hash set changed, and the lock file is
+# refreshed with infra/site/README.md's command.
 on:
   push:
     branches: [main]
@@ -126,8 +130,11 @@ jobs:
           work="${RUNNER_TEMP}/lock/site"
           home="${RUNNER_TEMP}/lock/home"
           mkdir -p "${work}" "${home}"
-          # The configuration only: the regenerated lock file starts empty.
-          cp infra/site/*.tf "${work}/"
+          # The whole root (*.tf, *.tofu, local modules) without its lock file or .terraform: the
+          # regenerated lock file starts empty.
+          cp -R infra/site/. "${work}/"
+          rm -f "${work}/.terraform.lock.hcl"
+          rm -rf "${work}/.terraform"
           if [ -e "${work}/.terraform.lock.hcl" ]; then
             echo "::error::the scratch copy holds a lock file before providers lock ran"
             exit 1
