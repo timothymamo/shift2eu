@@ -1068,6 +1068,10 @@ func TestMakeVMEnvWriteStepCountsANameByItsPlaceInVMEnvAsTyped(t *testing.T) {
 		wantLines []string
 		// wantAt are the raw 1-based positions of the hidden entries a message must not print.
 		wantAt []int
+		// wantNotSetLine is the write step's whole message about the one entry it refuses, in the wording
+		// vm_env_label gives it: the entry by its raw position and nothing of its text. A run that stops at the
+		// hidden entry names no name it was given, so there is nothing else the message may list (issue #304).
+		wantNotSetLine string
 		// wantShown are names a message must still print by name.
 		wantShown []string
 		// wantLower are substrings a message must hold, compared case-insensitively.
@@ -1076,13 +1080,13 @@ func TestMakeVMEnvWriteStepCountsANameByItsPlaceInVMEnvAsTyped(t *testing.T) {
 		why       string
 	}{
 		{
-			name:      "a repeated name and an empty entry before the hidden one",
-			vmEnv:     "CLAUDE_CODE_OAUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN,, " + hidden,
-			wantAt:    []int{3},
-			wantShown: []string{"CLAUDE_CODE_OAUTH_TOKEN"},
-			wantLower: []string{"not set or empty"},
-			secrets:   []secret{{kind: "entry 3 of VM_ENV", value: hidden}},
-			why:       "the hidden entry is the third word of VM_ENV as typed, although it is the second name left after the duplicate and the empty entry were removed",
+			name:           "a repeated name and an empty entry before the hidden one",
+			vmEnv:          "CLAUDE_CODE_OAUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN,, " + hidden,
+			wantAt:         []int{3},
+			wantNotSetLine: "vm-env: VM_ENV entry 3 (entry 3 is not shown) is not set or empty.",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 3 of VM_ENV", value: hidden}},
+			why:            "the hidden entry is the third word of VM_ENV as typed, although it is the second name left after the duplicate and the empty entry were removed",
 		},
 		{
 			name:      "a tab between names is a separator to split on",
@@ -1106,22 +1110,22 @@ func TestMakeVMEnvWriteStepCountsANameByItsPlaceInVMEnvAsTyped(t *testing.T) {
 			why:       "a name listed twice is written once (docs/dev-environment.md), and the tab between the two is the separator that makes them two words",
 		},
 		{
-			name:      "two tabs and a repeated name before the hidden one",
-			vmEnv:     "CLAUDE_CODE_OAUTH_TOKEN\tCLAUDE_CODE_OAUTH_TOKEN\t\t" + hidden,
-			wantAt:    []int{3},
-			wantShown: []string{"CLAUDE_CODE_OAUTH_TOKEN"},
-			wantLower: []string{"not set or empty"},
-			secrets:   []secret{{kind: "entry 3 of VM_ENV", value: hidden}},
-			why:       "a run of tabs separates two words and counts once, and the repeated name is counted at every place",
+			name:           "two tabs and a repeated name before the hidden one",
+			vmEnv:          "CLAUDE_CODE_OAUTH_TOKEN\tCLAUDE_CODE_OAUTH_TOKEN\t\t" + hidden,
+			wantAt:         []int{3},
+			wantNotSetLine: "vm-env: VM_ENV entry 3 (entry 3 is not shown) is not set or empty.",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 3 of VM_ENV", value: hidden}},
+			why:            "a run of tabs separates two words and counts once, and the repeated name is counted at every place, so the write step stops at the third word and not at the tab-joined whole",
 		},
 		{
-			name:      "a newline and a repeated name before the hidden one",
-			vmEnv:     "CLAUDE_CODE_OAUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN\n" + hidden,
-			wantAt:    []int{3},
-			wantShown: []string{"CLAUDE_CODE_OAUTH_TOKEN"},
-			wantLower: []string{"not set or empty"},
-			secrets:   []secret{{kind: "entry 3 of VM_ENV", value: hidden}},
-			why:       "a newline separates two words as a comma does, so the hidden entry is the third word",
+			name:           "a newline and a repeated name before the hidden one",
+			vmEnv:          "CLAUDE_CODE_OAUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN\n" + hidden,
+			wantAt:         []int{3},
+			wantNotSetLine: "vm-env: VM_ENV entry 3 (entry 3 is not shown) is not set or empty.",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 3 of VM_ENV", value: hidden}},
+			why:            "a newline separates two words as a comma does, so the hidden entry is the third word",
 		},
 	}
 
@@ -1165,6 +1169,14 @@ func TestMakeVMEnvWriteStepCountsANameByItsPlaceInVMEnvAsTyped(t *testing.T) {
 
 			for _, at := range tc.wantAt {
 				assertEntryPositionNotShown(t, "make -i vm-env's output", text, at, tc.why)
+			}
+
+			// The write step stops at the entry it refuses and names it by its raw position alone, so the message
+			// lists the hidden entry and no name the run was given: a name it printed here would be one it refused
+			// for being unset, although it is set (issue #304).
+			if tc.wantNotSetLine != "" && !strings.Contains(text, tc.wantNotSetLine) {
+				t.Errorf("make -i vm-env's output does not hold the write step's message %q although %s: the entry it refuses must be given by its raw position in VM_ENV, and no other entry may be listed (issue #304)\nstdout: %s\nstderr: %s",
+					tc.wantNotSetLine, tc.why, stdout, stderr)
 			}
 
 			for _, name := range tc.wantShown {
@@ -1227,6 +1239,11 @@ func TestMakeVMEnvHidesAnUnsetEntryShapedLikeAKey(t *testing.T) {
 		wantAt []int
 		// notHiddenAt are positions a message must print by name: the shape rule hides an unset key, not a name.
 		notHiddenAt []int
+		// wantNotSetLine is the whole not-set-or-empty message of the step the case runs: it gives the hidden entry
+		// by its raw position and nothing of its text, and lists no other entry. A run that stops at an entry that
+		// is not set names no name it was given, so this is what a case may pin about the entry it is set (issue
+		// #305).
+		wantNotSetLine string
 		// wantShown are names the output must still print by name.
 		wantShown []string
 		// wantLower are substrings a message must hold, compared case-insensitively.
@@ -1235,14 +1252,14 @@ func TestMakeVMEnvHidesAnUnsetEntryShapedLikeAKey(t *testing.T) {
 		why       string
 	}{
 		{
-			name:      "an AWS-shaped key beside a set credential name",
-			args:      []string{"vm-env-check", "VM_ENV=CLAUDE_CODE_OAUTH_TOKEN," + awsShapedKey},
-			unset:     []string{awsShapedKey},
-			wantAt:    []int{2},
-			wantShown: []string{"CLAUDE_CODE_OAUTH_TOKEN"},
-			wantLower: []string{"not set or empty"},
-			secrets:   []secret{{kind: "entry 2 of VM_ENV", value: awsShapedKey}},
-			why:       "an access key ID pasted where a name goes has the shape of an upper-case variable name, so the not-set list used to print it in full",
+			name:           "an AWS-shaped key beside a set credential name",
+			args:           []string{"vm-env-check", "VM_ENV=CLAUDE_CODE_OAUTH_TOKEN," + awsShapedKey},
+			unset:          []string{awsShapedKey},
+			wantAt:         []int{2},
+			wantNotSetLine: "vm-env: not set or empty: VM_ENV entry 2 (entry 2 is not shown).",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 2 of VM_ENV", value: awsShapedKey}},
+			why:            "an access key ID pasted where a name goes has the shape of an upper-case variable name, so the not-set list used to print it in full",
 		},
 		{
 			name:      "an ASIA-shaped key alone",
@@ -1263,14 +1280,14 @@ func TestMakeVMEnvHidesAnUnsetEntryShapedLikeAKey(t *testing.T) {
 			why:       "a key pasted where a name goes need not have a known shape: sixteen characters or more with no underscore is no variable name anyone types",
 		},
 		{
-			name:      "the write step hides an AWS-shaped key that is not set",
-			args:      []string{"-i", "vm-env", "VM_ENV=DEEPSEEK_API_KEY," + awsShapedKey},
-			unset:     []string{awsShapedKey},
-			wantAt:    []int{2},
-			wantShown: []string{"DEEPSEEK_API_KEY"},
-			wantLower: []string{"not set or empty"},
-			secrets:   []secret{{kind: "entry 2 of VM_ENV", value: awsShapedKey}},
-			why:       "under make -i the write step refuses the unset entry itself, and its message must hide it the way vm-env-check's does (issue #268 L2)",
+			name:           "the write step hides an AWS-shaped key that is not set",
+			args:           []string{"-i", "vm-env", "VM_ENV=DEEPSEEK_API_KEY," + awsShapedKey},
+			unset:          []string{awsShapedKey},
+			wantAt:         []int{2},
+			wantNotSetLine: "vm-env: VM_ENV entry 2 (entry 2 is not shown) is not set or empty.",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 2 of VM_ENV", value: awsShapedKey}},
+			why:            "under make -i the write step refuses the unset entry itself, and its message must hide it the way vm-env-check's does (issue #268 L2)",
 		},
 		{
 			name:        "a documented credential name that is not set",
@@ -1358,6 +1375,14 @@ func TestMakeVMEnvHidesAnUnsetEntryShapedLikeAKey(t *testing.T) {
 					t.Errorf("make's output does not name %s although %s: the shape rule may not hide a name a maintainer has to fix (issue #305)\nstdout: %s\nstderr: %s",
 						name, tc.why, stdout, stderr)
 				}
+			}
+
+			// The not-set-or-empty message gives the hidden entry by its raw position and lists nothing else: a
+			// run that refuses one entry names no name it was given, and a set name in that list would tell a
+			// maintainer to fix a credential that is there (issue #234, #305).
+			if tc.wantNotSetLine != "" && !strings.Contains(text, tc.wantNotSetLine) {
+				t.Errorf("make's output does not hold the not-set-or-empty message %q although %s: it must give the hidden entry by its raw position in VM_ENV and list no other entry (issue #305)\nstdout: %s\nstderr: %s",
+					tc.wantNotSetLine, tc.why, stdout, stderr)
 			}
 
 			for _, want := range tc.wantLower {
