@@ -213,6 +213,10 @@ type scanRow struct {
 	// want are the words, compared case-insensitively, that the messages must
 	// hold. Empty means any finding is enough.
 	want []string
+	// refuse, when set, is a name whose first occurrence in src the scan must
+	// report: the row pins that the rule for that name fires at that token, not
+	// that some other rule's message happens to hold the word.
+	refuse string
 }
 
 // TestScanRejectsEveryBannedApi pins rule by rule that the page-script scan
@@ -320,11 +324,26 @@ func TestScanRejectsEveryBannedApi(t *testing.T) {
 		// A binding that takes the name navigator: the clipboard and service worker
 		// rules key on the name, so a local navigator would stand in for the browser's
 		// and carry any object the script likes into an allowed form (audit finding 4).
-		{name: "navigator declared by const", src: `const navigator = stand_in;`, want: []string{"navigator"}},
-		{name: "navigator declared by let", src: `let navigator = stand_in;`, want: []string{"navigator"}},
-		{name: "navigator declared by var", src: `var navigator = stand_in;`, want: []string{"navigator"}},
-		{name: "navigator as a function parameter", src: `function standIn(navigator) { return navigator; }`, want: []string{"navigator"}},
-		{name: "navigator as a destructuring target", src: `const { navigator } = stand_in;`, want: []string{"navigator"}},
+		// The rule is the token's use, not its shape: navigator is allowed only as a
+		// member base (the next token is . or ?.), as the right operand of in, or as a
+		// member name after . or ?.; every other occurrence is refused, so no binding
+		// form can slip past it.
+		{name: "navigator declared by const", src: `const navigator = stand_in;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator declared by let", src: `let navigator = stand_in;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator declared by var", src: `var navigator = stand_in;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a function parameter", src: `function standIn(navigator) { return navigator; }`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a destructuring target", src: `const { navigator } = stand_in;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as an arrow function's parameter without parentheses", src: `const f = navigator => navigator.clipboard.writeText(x);`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator in a destructured arrow parameter", src: `const f = ({navigator}) => navigator.clipboard.writeText(x);`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator in a destructured function parameter", src: `function f({ navigator }) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator in a nested object destructuring", src: `const { a: { navigator } } = x;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator in a nested array destructuring", src: `const [[navigator]] = x;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a catch parameter", src: `try { x(); } catch (navigator) { navigator.clipboard.writeText(x); }`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a method's parameter", src: `const o = { m(navigator) { return navigator; } };`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a function declaration's name", src: `function navigator() {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a class declaration's name", src: `class navigator {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "the bare navigator passed as a value", src: `f(navigator);`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a shorthand property", src: `const o = { navigator };`, want: []string{"navigator"}, refuse: "navigator"},
 	}
 
 	// Every assignment to a property that navigates or changes a target, on
@@ -358,6 +377,17 @@ func TestScanRejectsEveryBannedApi(t *testing.T) {
 			for _, want := range tc.want {
 				if !strings.Contains(joined, strings.ToLower(want)) {
 					t.Errorf("Scan(%q) reported %q, want a finding that names %q, so the failure says which rule fired", tc.src, joined, want)
+				}
+			}
+
+			if tc.refuse != "" {
+				line, col := tokenPosition(t, tc.src, tc.refuse)
+
+				if !slices.ContainsFunc(violations, func(violation jsscan.Violation) bool {
+					return violation.Line == line && violation.Col == col
+				}) {
+					t.Errorf("Scan(%q) reported %q, none of it at %s's own token %d:%d: the rule for %s must refuse that token whatever its shape, as a member base (next token . or ?.), the right operand of in and a member name after . or ?. are the only uses it allows (issue #373, audit finding 4)",
+						tc.src, joined, tc.refuse, line, col, tc.refuse)
 				}
 			}
 		})
@@ -587,6 +617,18 @@ const md = new Blob([result.markdown], { type: "text/markdown" });
 const raw = new Blob([result.json], { type: "application/json" });
 `,
 		},
+		{
+			name: "the browser's navigator as the right operand of in",
+			src: `const policy = trustedTypes.createPolicy("shift2eu-report", { createHTML: function (html) { return html; } });
+const supported = "serviceWorker" in navigator;
+`,
+		},
+		{
+			name: "another object's navigator property",
+			src: `const policy = trustedTypes.createPolicy("shift2eu-report", { createHTML: function (html) { return html; } });
+const ns = wrapper.navigator;
+`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -603,6 +645,66 @@ const raw = new Blob([result.json], { type: "application/json" });
 			}
 		})
 	}
+}
+
+// TestScanAcceptsEveryNavigatorForm pins the allowed side of the navigator rule
+// (issue #373, audit finding 4): the browser's navigator appears as a member
+// base, as the right operand of in, through optional chaining, and as the member
+// name of another object's property. The check reads the findings' positions, not
+// their words, so a refusal of the navigator token fails it whatever its message
+// says, while a finding about another name - the service worker rule's, say -
+// does not: a rule that refused any of these forms would push the page away from
+// the use it needs.
+func TestScanAcceptsEveryNavigatorForm(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{name: "a member base", src: `const workers = navigator.serviceWorker.getRegistrations();`},
+		{name: "the right operand of in", src: `const supported = "serviceWorker" in navigator;`},
+		{name: "a member base through optional chaining", src: `const workers = navigator?.serviceWorker;`},
+		{name: "another object's navigator property", src: `const ns = wrapper.navigator;`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			violations, err := jsscan.Scan([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("Scan(%q): %v", tc.src, err)
+			}
+
+			if count := strings.Count(tc.src, "navigator"); count != 1 {
+				t.Fatalf("src %q holds %d occurrences of %q, want exactly one, so this check reads the token it means", tc.src, count, "navigator")
+			}
+
+			line, col := tokenPosition(t, tc.src, "navigator")
+
+			for _, violation := range violations {
+				if violation.Line == line && violation.Col == col {
+					t.Errorf("Scan(%q) refused the token navigator at %d:%d: %s\nwant it allowed as a member base (the next token is . or ?.), as the right operand of in, and as a member name after . or ?. (issue #373, audit finding 4)",
+						tc.src, line, col, violation.Message)
+				}
+			}
+		})
+	}
+}
+
+// tokenPosition returns the 1-based line and column of src's first occurrence of
+// name, failing when src holds none, so a row this check reads cannot silently
+// test another token.
+func tokenPosition(t *testing.T, src, name string) (int, int) {
+	t.Helper()
+
+	at := strings.Index(src, name)
+	if at < 0 {
+		t.Fatalf("src %q holds no %q, so this check reads no token", src, name)
+	}
+
+	return strings.Count(src[:at], "\n") + 1, at - strings.LastIndex(src[:at], "\n")
 }
 
 // TestScanFailsClosed pins that a script the lexer cannot read is an error, not
