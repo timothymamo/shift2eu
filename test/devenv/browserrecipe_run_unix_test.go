@@ -10,6 +10,9 @@
 // it runs from. The stand-ins answer the way the tools they stand for do, whatever the recipe asks them, so the
 // tests pin the recipe's behaviour and not one spelling of it.
 //
+// The stand-ins poll with a fraction of a second - sleep 0.05 - so they assume a sleep that takes one, as GNU
+// coreutils, BSD/macOS and busybox do, and not the POSIX one, whose argument is whole seconds.
+//
 // Unix only, as the run kills the whole process group of a recipe it gives up on (syscall.SysProcAttr.Setpgid):
 // a recipe that waits out its 60 seconds would otherwise hold the test there, for the minute in which the case
 // under test is the wait itself. Lint type-checks the package for the windows release targets too, where a
@@ -81,13 +84,34 @@ const (
 // a run that is still going is one whose recipe waits for something that never comes.
 const browserRecipeTimeout = 60 * time.Second
 
-// The cases a run must fail at once are bounded well under the recipe's own 60 seconds: the recipe must notice the
-// dead container, or the container whose state it could not read three times in a row, and fail, and a test that
-// waited the minute would report the wait these cases exist to remove.
+// The cases a run must fail at once get this long before the test stops the run: the stand-ins answer in
+// milliseconds, so the run ends well inside it, and this is only the hang guard - a recipe that waits where the test
+// waits would hold the package here - never the thing under test. What such a run did is counted below, in calls of
+// the stand-in container command: a count is the same on every machine, where a wall clock is not (issue #423, the
+// reviewer's advice on PR #443).
+const failFastTimeout = 20 * time.Second
+
+// The counts a run that must fail at once is read back by, in calls of the stand-in container command rather than in
+// seconds: each is far below what a run that waited for a DevTools line makes, so none of them can pass by waiting
+// (issue #423, the reviewer's advice on PR #443).
 const (
-	failFastTimeout  = 20 * time.Second
-	failFastDeadline = 15 * time.Second
+	// deadContainerPolls is how many polls of its wait loop a run may make before it notices that its container is
+	// gone: one, whose log read finds no DevTools line and whose inspect then reports the container exited, is the
+	// last. The second log read is the tail the failure shows its maintainer. A run that went on waiting for the
+	// line - the recipe issue #423 item 3 fixed - makes the loop's 60 polls, a log read and an inspect on each, 120
+	// calls where this bound allows two of either.
+	deadContainerPolls = 2
+
+	// failedInspectPolls is how many polls a run may make while the container command fails to read the container's
+	// state: the third failed inspect in a row fails the run, so three polls, one log read each. A run that went on
+	// waiting for the DevTools line instead makes the loop's 60 (issue #423, the reviewer's finding S2).
+	failedInspectPolls = 3
 )
+
+// waitDeadline is how long a polling helper gives the state it waits for before it reports that the state never
+// came: the stand-ins answer in milliseconds, so it is the guard that keeps a recipe off the rails from holding the
+// test, not a duration a test asserts on.
+const waitDeadline = 15 * time.Second
 
 // exitStatusWord matches deadContainerStatus as a number of its own: "exited with status 3", "exit code 3" and
 // "Error 3" all hold it, where a line number or a status that merely holds a 3 (13, 130, 403) does not.
@@ -105,9 +129,9 @@ var exitStatusWord = regexp.MustCompile(`(^|[^0-9])3([^0-9]|$)`)
 // calls SHIFT2EU_TEST_DOCKER_INSPECT_PLAN names and whose log answers nothing for the first
 // SHIFT2EU_TEST_DOCKER_LOG_MISSES calls; and dockerModeSilent, one that runs and never logs an address.
 //
-// SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM names a signal the container command sends the recipe's shell while it handles
-// rm, once it is a moment into that call: the second signal of the same kind that reaches a run which is cleaning
-// up (issue #423, commit 93b859d).
+// SHIFT2EU_TEST_CLEANUP_RENDEZVOUS names the stand-in that holds while the recipe's EXIT trap is in its rm call -
+// container for this one, bundle for the stand-in rm - so the test can hand the run the second signal of the same
+// kind there (issue #423, commit 93b859d). The hold is a pair of files, never a pause: see hold_for_the_second_signal.
 //
 // In the trouble mode SHIFT2EU_TEST_DOCKER_INSPECT_PLAN holds one character per inspect call - f fails the call the
 // way the container command fails for a container it cannot find, printing SHIFT2EU_TEST_DOCKER_INSPECT_ERROR on
@@ -136,6 +160,23 @@ container | image)
 	shift
 	;;
 esac
+# hold_for_the_second_signal tells the test, through a file of the rendezvous directory, that the recipe's EXIT trap
+# is in this call, and stays in the call until the test has written its own file back: the shell waits for this call,
+# so a signal the test sends between the two files reaches it while the trap is in it. Two files order the two sides
+# on every machine, where a pause in this call would only make the moment likelier.
+hold_for_the_second_signal() {
+	: > "${SHIFT2EU_TEST_RENDEZVOUS:?set SHIFT2EU_TEST_RENDEZVOUS}/cleanup.$$" || exit 1
+	waited=0
+	while [ ! -e "$SHIFT2EU_TEST_RENDEZVOUS/cleanup.go" ]; do
+		waited=$((waited + 1))
+		# 800 polls of 0.05 s: 40 seconds, inside the 60 seconds browserRecipeTimeout gives a run.
+		if [ "$waited" -gt 800 ]; then
+			echo 'fake docker: the test never released the cleanup' >&2
+			exit 64
+		fi
+		sleep 0.05
+	done
+}
 if [ "$mode" = dead ]; then
 	running=false
 	state=exited
@@ -154,6 +195,8 @@ run)
 	if [ "$mode" = running ]; then
 		: > "${SHIFT2EU_TEST_RENDEZVOUS:?set SHIFT2EU_TEST_RENDEZVOUS}/run.$$" || exit 1
 		waited=0
+		# A poll of the rendezvous directory, not a pause that orders anything: the two runs meet when both
+		# files are there, however long either took to arrive.
 		while [ "$(ls -A "$SHIFT2EU_TEST_RENDEZVOUS" | wc -l)" -lt 2 ]; do
 			waited=$((waited + 1))
 			# 800 polls of 0.05 s: 40 seconds, still inside the 60 seconds browserRecipeTimeout gives a run,
@@ -217,14 +260,10 @@ ps)
 	esac
 	;;
 rm)
-	if [ -n "${SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM:-}" ]; then
-		# A second signal of the same kind as the one the test sent to the run, arriving while the recipe's EXIT
-		# trap is in this call: what make hands the recipe's shell when it is itself terminated, as a signal to the
-		# whole process group terminates it. The trap has to ignore it, or its own exit ends the shell before the
-		# rest of the cleanup runs.
-		kill -s "${SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM}" "$PPID" 2>/dev/null || true
-		# Stay in the call a moment: the signal must arrive while the trap is in it, not after the trap is done.
-		sleep 0.2
+	# Where the trap's rm -f is, a case that hands the run a second signal of the same kind once the trap is in
+	# this call: the trap has to ignore it, or its own exit ends the shell before the rest of the cleanup runs.
+	if [ "${SHIFT2EU_TEST_CLEANUP_RENDEZVOUS:-}" = container ]; then
+		hold_for_the_second_signal
 	fi
 	;;
 kill | stop | start | pull)
@@ -240,12 +279,25 @@ exit 0
 
 // fakeRemoveCommand stands in for rm in a sandbox a test asks for it in, so a test can hand the recipe a second
 // signal of its own while the EXIT trap removes the bundle directory, the first of the two removals the fix ordered
-// (issue #423, commit 93b859d). It does what rm does, and hands the rest of its work to the real rm once the signal
-// is sent. SHIFT2EU_TEST_SIGNAL_ON_RM names the signal; a sandbox that writes this stand-in sets it.
+// (issue #423, commit 93b859d). It does what rm does, and hands the rest of its work to the real rm once the test has
+// let it go on. SHIFT2EU_TEST_CLEANUP_RENDEZVOUS=bundle is what a sandbox that writes this stand-in sets.
 const fakeRemoveCommand = `#!/bin/sh
-if [ -n "${SHIFT2EU_TEST_SIGNAL_ON_RM:-}" ]; then
-	kill -s "${SHIFT2EU_TEST_SIGNAL_ON_RM}" "$PPID" 2>/dev/null || true
-	sleep 0.2
+# The same hold as the stand-in container command's hold_for_the_second_signal, for the other removal the trap runs:
+# the test writes the file it waits on once it has sent the second signal, and the real rm runs after it.
+hold_for_the_second_signal() {
+	: > "${SHIFT2EU_TEST_RENDEZVOUS:?set SHIFT2EU_TEST_RENDEZVOUS}/cleanup.$$" || exit 1
+	waited=0
+	while [ ! -e "$SHIFT2EU_TEST_RENDEZVOUS/cleanup.go" ]; do
+		waited=$((waited + 1))
+		if [ "$waited" -gt 800 ]; then
+			echo 'fake rm: the test never released the cleanup' >&2
+			exit 64
+		fi
+		sleep 0.05
+	done
+}
+if [ "${SHIFT2EU_TEST_CLEANUP_RENDEZVOUS:-}" = bundle ]; then
+	hold_for_the_second_signal
 fi
 exec /bin/rm "$@"
 `
@@ -390,10 +442,10 @@ func newBrowserRecipeSandbox(t *testing.T, mode string) *browserRecipeSandbox {
 		"SHIFT2EU_TEST_DOCKER_INSPECT_ERROR": goneInspectLogLine,
 		"SHIFT2EU_TEST_DOCKER_LOG_MISSES":    "0",
 
-		// The second signal a case sends while the run cleans up, quiet by default: a test that pins the second
-		// signal sets the one its stand-in sends it with, and writes the stand-in rm when it needs that one (#423).
-		"SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM": "",
-		"SHIFT2EU_TEST_SIGNAL_ON_RM":        "",
+		// The stand-in that holds for the second signal while the run cleans up, quiet by default: a test that pins
+		// the second signal names the removal it waits in, and writes the stand-in rm when that one is the bundle's
+		// (issue #423).
+		"SHIFT2EU_TEST_CLEANUP_RENDEZVOUS": "",
 	}
 
 	return sb
@@ -609,7 +661,7 @@ func TestMakeTestBrowserRecipeServesABundleOfItsOwn(t *testing.T) {
 		}
 
 		if !strings.Contains(record.files, "index.html") || record.page != bundlePageLine {
-			t.Errorf("run %d of make test-browser served %s, which held %q and whose index.html began %q, want the bundle's page %q: the run must serve the bundle make site built, not an empty directory of its own (issue #423 item 2)",
+			t.Errorf("run %d of make test-browser served %s, which held %q and whose index.html began %q, want the bundle's page %q: the run must serve the bundle its own build wrote, not an empty directory (issue #423 item 2)",
 				at+1, served, record.files, record.page, bundlePageLine)
 		}
 
@@ -680,7 +732,8 @@ func TestMakeSiteStillWritesTheSharedBundle(t *testing.T) {
 // TestMakeTestBrowserRecipeFailsAtOnceWhenTheContainerIsGone pins issue #423 item 3: the recipe waited up to 60
 // seconds for Chromium's DevTools line, so a container that exited at once cost the full minute and then said the
 // line never came. It must notice that the container is gone, and fail at once, naming the status it exited with
-// and the tail of its log.
+// and the tail of its log. That it failed at once is read back from the calls the stand-ins saw - the run never got
+// past its first poll - and not from a wall clock (issue #423, the reviewer's advice on PR #443).
 func TestMakeTestBrowserRecipeFailsAtOnceWhenTheContainerIsGone(t *testing.T) {
 	t.Parallel()
 
@@ -691,16 +744,25 @@ func TestMakeTestBrowserRecipeFailsAtOnceWhenTheContainerIsGone(t *testing.T) {
 
 	switch {
 	case run.timedOut:
-		t.Fatalf("make test-browser was still running after %s although its container had already exited with status %s: the recipe waits out its 60 seconds for a DevTools line a dead container never logs, and a maintainer waits with it (issue #423 item 3)\n%s",
-			run.elapsed, deadContainerStatus, output)
+		t.Fatalf("make test-browser was still running after %s and the test stopped it, although its container had already exited with status %s: the recipe waits out its 60 seconds for a DevTools line a dead container never logs, and a maintainer waits with it (issue #423 item 3)\n%s",
+			failFastTimeout, deadContainerStatus, output)
 	case run.err == nil:
 		t.Fatalf("make test-browser exited 0 although its container had exited at once with status %s: the run drove no browser and must not report a passing smoke test (issue #423 item 3)\n%s",
 			deadContainerStatus, output)
 	}
 
-	if run.elapsed > failFastDeadline {
-		t.Errorf("make test-browser took %s to fail on a container that exited at once, want under %s, well inside the 60 seconds the recipe waits for a log line (issue #423 item 3)\n%s",
-			run.elapsed, failFastDeadline, output)
+	// A run that noticed the dead container on its first poll read the log twice - once on that poll, once for the
+	// tail it shows - and inspected the container twice, for its state and for the status it exited with. A run that
+	// waited for the DevTools line instead makes the loop's 60 polls and so more than a hundred calls: the count
+	// says which of the two happened, whatever the machine's load (issue #423, the reviewer's advice on PR #443).
+	if got := sb.logCalls(t); got > deadContainerPolls {
+		t.Errorf("make test-browser read the container's log %d times before it failed, want at most %d: a run that notices its container is gone makes its first poll and no more, where a run that waits for the DevTools line reads the log on every one of the recipe's 60 polls (issue #423 item 3)\n%s",
+			got, deadContainerPolls, sb.dockerLogText(t))
+	}
+
+	if got := sb.inspectCalls(t); got > deadContainerPolls {
+		t.Errorf("make test-browser inspected the container %d times before it failed, want at most %d: a run that notices its container is gone checks it on its first poll and no more, where a run that waits for the DevTools line inspects it on every one of the recipe's 60 polls (issue #423 item 3)\n%s",
+			got, deadContainerPolls, sb.dockerLogText(t))
 	}
 
 	if !exitStatusWord.MatchString(output) {
@@ -771,7 +833,8 @@ func TestMakeTestBrowserRecipeKeepsPollingAfterAFailedInspect(t *testing.T) {
 // TestMakeTestBrowserRecipeFailsAtOnceWhenInspectKeepsFailing pins the other half of the reviewer's finding S2
 // (issue #423): three failed inspects in a row mean the container is gone, and a run that would otherwise wait out
 // its 60 seconds must fail at once, showing inspect's last error, or a maintainer watching a container runtime
-// that answers nothing learns only that no DevTools line came.
+// that answers nothing learns only that no DevTools line came. That it failed at once is read back from the calls
+// the stand-ins saw - three polls and no more - and not from a wall clock (the reviewer's advice on PR #443).
 func TestMakeTestBrowserRecipeFailsAtOnceWhenInspectKeepsFailing(t *testing.T) {
 	t.Parallel()
 
@@ -786,16 +849,11 @@ func TestMakeTestBrowserRecipeFailsAtOnceWhenInspectKeepsFailing(t *testing.T) {
 
 	switch {
 	case run.timedOut:
-		t.Fatalf("make test-browser was still running after %s although its container command had failed to read the container for every poll: the recipe must count the failed inspects and fail on the third in a row, well inside the 60 seconds it waits for a DevTools line a gone container never logs (issue #423, the reviewer's finding S2)\n%s",
-			run.elapsed, output)
+		t.Fatalf("make test-browser was still running after %s and the test stopped it, although its container command had failed to read the container for every poll: the recipe must count the failed inspects and fail on the third in a row, well inside the 60 seconds it waits for a DevTools line a gone container never logs (issue #423, the reviewer's finding S2)\n%s",
+			failFastTimeout, output)
 	case run.err == nil:
 		t.Fatalf("make test-browser exited 0 although its container command could read the container's state on no poll: the run drove no browser and must not report a passing smoke test (issue #423, the reviewer's finding S2)\n%s",
 			output)
-	}
-
-	if run.elapsed > failFastDeadline {
-		t.Errorf("make test-browser took %s to fail on a container whose state it could not read, want under %s, well inside the 60 seconds the recipe waits (issue #423, the reviewer's finding S2)\n%s",
-			run.elapsed, failFastDeadline, output)
 	}
 
 	if !strings.Contains(output, goneInspectLogLine) {
@@ -803,9 +861,16 @@ func TestMakeTestBrowserRecipeFailsAtOnceWhenInspectKeepsFailing(t *testing.T) {
 			goneInspectLogLine, output)
 	}
 
-	if got := sb.inspectCalls(t); got != 3 {
-		t.Errorf("the recipe inspected the container %d times before it failed, want 3: three failed inspects in a row are what fail the run, and neither the first nor a fourth must decide it (issue #423, the reviewer's finding S2)\n%s",
-			got, sb.dockerLogText(t))
+	if got := sb.inspectCalls(t); got != failedInspectPolls {
+		t.Errorf("the recipe inspected the container %d times before it failed, want %d: three failed inspects in a row are what fail the run, and neither the first nor a fourth must decide it, where a run that waited for the DevTools line makes the recipe's 60 polls and 60 inspects (issue #423, the reviewer's finding S2)\n%s",
+			got, failedInspectPolls, sb.dockerLogText(t))
+	}
+
+	// Three polls, so three log reads: a run that gave up on its third failed inspect read the log no more often,
+	// where one that waited for the DevTools line would have read it 60 times.
+	if got := sb.logCalls(t); got > failedInspectPolls {
+		t.Errorf("make test-browser read the container's log %d times before it failed, want at most %d, one for each of the three polls whose inspect failed: a run that waits for the DevTools line reads it on every one of the recipe's 60 polls (issue #423, the reviewer's finding S2)\n%s",
+			got, failedInspectPolls, sb.dockerLogText(t))
 	}
 
 	if records := sb.goTestRecords(t); len(records) != 0 {
@@ -814,8 +879,9 @@ func TestMakeTestBrowserRecipeFailsAtOnceWhenInspectKeepsFailing(t *testing.T) {
 	}
 }
 
-// Where a case's second signal of the same kind arrives, named by the stand-in that sends it while the run cleans up
-// (issue #423): in the container command's rm -f, or in the rm that removes the bundle directory.
+// Where a case's second signal of the same kind arrives, named by the stand-in that runs that removal and holds in it
+// while the run cleans up (issue #423): in the container command's rm -f, or in the rm that removes the bundle
+// directory. Each is the value the sandbox sets SHIFT2EU_TEST_CLEANUP_RENDEZVOUS to.
 const (
 	againOnContainer = "container"
 	againOnBundle    = "bundle"
@@ -892,33 +958,29 @@ func TestDockerCallsReadsOnlyCompleteLines(t *testing.T) {
 // was left behind every time. One does arrive in the wild - make forwards a SIGTERM it receives to its children, so
 // a signal to the whole process group, as closing the pane sends it, hands the recipe's shell a second one - which
 // is why the trap now ignores the three signals before it removes anything (issue #423, commit 93b859d). So the
-// cases below hand the run that second signal from a stand-in, once while the trap removes the container and once
-// while it removes the bundle directory, and hand one signal to the whole process group besides, and every one of
-// them must end with the container and the directory gone.
+// cases below hand the run that second signal itself, once while the trap removes the container and once while it
+// removes the bundle directory - each time when the stand-in that runs that removal says it is in the call, never
+// after a pause - and hand one signal to the whole process group besides, and every one of them must end with the
+// container and the directory gone.
 func TestMakeTestBrowserRecipeCleansUpOnASignal(t *testing.T) {
 	t.Parallel()
 
-	// The signals the recipe traps, as the stand-ins spell them for the second signal of the same kind.
+	// The signals the recipe traps.
 	signals := []struct {
 		name   string
 		signal syscall.Signal
-		// killName is the signal as kill -s takes it, for the stand-in that sends the second one.
-		killName string
 	}{
 		{
-			name:     "a hang-up",
-			signal:   syscall.SIGHUP,
-			killName: "HUP",
+			name:   "a hang-up",
+			signal: syscall.SIGHUP,
 		},
 		{
-			name:     "an interrupt",
-			signal:   syscall.SIGINT,
-			killName: "INT",
+			name:   "an interrupt",
+			signal: syscall.SIGINT,
 		},
 		{
-			name:     "a termination",
-			signal:   syscall.SIGTERM,
-			killName: "TERM",
+			name:   "a termination",
+			signal: syscall.SIGTERM,
 		},
 	}
 
@@ -957,15 +1019,16 @@ func TestMakeTestBrowserRecipeCleansUpOnASignal(t *testing.T) {
 
 				sb := newBrowserRecipeSandbox(t, dockerModeSilent)
 
-				// The second signal of the same kind, from the stand-in in the call under test: a run sent one signal
-				// must clean up as well as a run sent two, since make hands the shell a second one of its own when the
-				// whole group is terminated.
-				switch delivery.againOn {
-				case againOnContainer:
-					sb.env["SHIFT2EU_TEST_DOCKER_SIGNAL_ON_RM"] = sig.killName
-				case againOnBundle:
+				// The removal the second signal of the same kind meets: the stand-in that runs it writes a file when
+				// it is in the call and waits for the test's, so the signal arrives while the trap is there on any
+				// machine. A run sent one signal must clean up as well as a run sent two, since make hands the shell a
+				// second one of its own when the whole group is terminated.
+				if delivery.againOn != "" {
+					sb.env["SHIFT2EU_TEST_CLEANUP_RENDEZVOUS"] = delivery.againOn
+				}
+
+				if delivery.againOn == againOnBundle {
 					sb.writeRemoveStandIn(t)
-					sb.env["SHIFT2EU_TEST_SIGNAL_ON_RM"] = sig.killName
 				}
 
 				proc := startBrowserMake(t, sb.clone, []string{testBrowserTarget}, sb.env)
@@ -994,16 +1057,27 @@ func TestMakeTestBrowserRecipeCleansUpOnASignal(t *testing.T) {
 						sb.dockerLogText(t))
 				}
 
+				shell := shellPid(t, calls)
+
 				if delivery.group {
 					if err := syscall.Kill(-proc.pgid(), sig.signal); err != nil {
 						t.Fatalf("send %v to the process group %d of make test-browser, the one closing the pane reaches: %v", sig.signal, proc.pgid(), err)
 					}
-				} else {
-					shell := shellPid(t, calls)
+				} else if err := syscall.Kill(shell, sig.signal); err != nil {
+					t.Fatalf("send %v to pid %d, the shell of the make test-browser recipe: %v", sig.signal, shell, err)
+				}
+
+				if delivery.againOn != "" {
+					// The trap is in the removal the stand-in holds: the shell waits for that call, so a signal sent now
+					// reaches the shell while the trap is in it, which is where the fix's ignored signals are what keep
+					// the rest of the cleanup running.
+					sb.waitForCleanupCall(t)
 
 					if err := syscall.Kill(shell, sig.signal); err != nil {
-						t.Fatalf("send %v to pid %d, the shell of the make test-browser recipe: %v", sig.signal, shell, err)
+						t.Fatalf("send a second %v to pid %d, the shell of the make test-browser recipe, while its EXIT trap removes what it cleans up: %v", sig.signal, shell, err)
 					}
+
+					sb.releaseCleanupCall(t)
 				}
 
 				run := proc.wait(failFastTimeout)
@@ -1019,7 +1093,7 @@ func TestMakeTestBrowserRecipeCleansUpOnASignal(t *testing.T) {
 				}
 
 				// The shell runs its EXIT trap before it exits, and make waits for the shell, so the removals are done
-				// when make is: the test looks once more, up to failFastDeadline, rather than race the last of them.
+				// when make is: the test looks once more, up to waitDeadline, rather than race the last of them.
 				cleaned := waitUntil(func() bool {
 					_, err := os.Stat(served[0])
 
@@ -1052,11 +1126,11 @@ func TestMakeTestBrowserRecipeCleansUpOnASignal(t *testing.T) {
 	}
 }
 
-// waitUntil polls cond every 20 milliseconds until it holds, and gives it failFastDeadline before reporting that it
+// waitUntil polls cond every 20 milliseconds until it holds, and gives it waitDeadline before reporting that it
 // never did. It is what reads what a signalled run leaves behind, after a moment's wait rather than the instant make
 // exits, so a cleanup that trails the signal by a few milliseconds is no failure.
 func waitUntil(cond func() bool) bool {
-	deadline := time.Now().Add(failFastDeadline)
+	deadline := time.Now().Add(waitDeadline)
 
 	for time.Now().Before(deadline) {
 		if cond() {
@@ -1162,20 +1236,36 @@ func (sb *browserRecipeSandbox) dockerLogText(t *testing.T) string {
 	return string(body)
 }
 
-// inspectCalls is how many times the stand-in container command was asked for the container's state: one check per
-// poll the recipe waits through, and no check on the poll that finds the DevTools line.
-func (sb *browserRecipeSandbox) inspectCalls(t *testing.T) int {
+// callsTo is how many times the stand-in container command was asked command - one of run, logs, inspect or rm:
+// the count a test reads a run back by, which no loaded machine changes, where a duration is the machine's.
+func (sb *browserRecipeSandbox) callsTo(t *testing.T, command string) int {
 	t.Helper()
 
 	calls := 0
 
 	for _, call := range sb.dockerCalls(t) {
-		if len(call.argv) > 0 && call.argv[0] == "inspect" {
+		if len(call.argv) > 0 && call.argv[0] == command {
 			calls++
 		}
 	}
 
 	return calls
+}
+
+// inspectCalls is how many times the stand-in container command was asked for the container's state: one check per
+// poll the recipe waits through, and no check on the poll that finds the DevTools line.
+func (sb *browserRecipeSandbox) inspectCalls(t *testing.T) int {
+	t.Helper()
+
+	return sb.callsTo(t, "inspect")
+}
+
+// logCalls is how many times the stand-in container command was asked for the container's log: one read per poll of
+// the recipe's wait loop, and the read that shows the tail when the run gives up.
+func (sb *browserRecipeSandbox) logCalls(t *testing.T) int {
+	t.Helper()
+
+	return sb.callsTo(t, "logs")
 }
 
 // runBundleDirs are the per-run bundle directories the recipe has left in the sandbox's TMPDIR, in name order: the
@@ -1202,12 +1292,12 @@ func (sb *browserRecipeSandbox) runBundleDirs(t *testing.T) []string {
 }
 
 // waitForDockerCall waits until the stand-in container command has been asked name - run, logs, inspect - and fails
-// the test when it is asked nothing of the sort within failFastDeadline: a recipe that has not reached that call is
-// not yet in the part of the run a test means to interrupt.
+// the test when it is asked nothing of the sort within waitDeadline: a recipe that has not reached that call is not
+// yet in the part of the run a test means to interrupt.
 func (sb *browserRecipeSandbox) waitForDockerCall(t *testing.T, name string) {
 	t.Helper()
 
-	deadline := time.Now().Add(failFastDeadline)
+	deadline := time.Now().Add(waitDeadline)
 
 	for time.Now().Before(deadline) {
 		for _, call := range sb.dockerCalls(t) {
@@ -1220,7 +1310,55 @@ func (sb *browserRecipeSandbox) waitForDockerCall(t *testing.T, name string) {
 	}
 
 	t.Fatalf("the stand-in container command was never asked %q within %s, so make test-browser never reached that call: %s",
-		name, failFastDeadline, sb.dockerLogText(t))
+		name, waitDeadline, sb.dockerLogText(t))
+}
+
+// The files a case's second signal meets the stand-in that runs the removal under test by, in the sandbox's
+// rendezvous directory: the stand-in writes cleanupHeld.<pid> once the recipe's EXIT trap is in its call, and the test
+// writes cleanupRelease once it has sent the second signal (fakeContainerCommand, fakeRemoveCommand).
+const (
+	cleanupHeld    = "cleanup"
+	cleanupRelease = "cleanup.go"
+)
+
+// cleanupAnnouncement matches the file the stand-in writes, cleanupHeld and its pid.
+var cleanupAnnouncement = regexp.MustCompile(`^` + cleanupHeld + `\.[0-9]+$`)
+
+// waitForCleanupCall waits until the stand-in the case named has written its file - the recipe's EXIT trap is in the
+// call that removes the container or the bundle directory - and fails the test when it never does: a run that never
+// reaches that call has no cleanup for a second signal to meet.
+func (sb *browserRecipeSandbox) waitForCleanupCall(t *testing.T) {
+	t.Helper()
+
+	deadline := time.Now().Add(waitDeadline)
+
+	for time.Now().Before(deadline) {
+		entries, err := os.ReadDir(filepath.Join(sb.root, "rendezvous"))
+		if err != nil {
+			t.Fatalf("read the rendezvous directory of the sandbox: %v", err)
+		}
+
+		for _, entry := range entries {
+			if cleanupAnnouncement.MatchString(entry.Name()) {
+				return
+			}
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("the stand-in that runs the removal under test never announced that the recipe's EXIT trap was in it, within %s, so the run has no cleanup for the second signal to meet: %s",
+		waitDeadline, sb.dockerLogText(t))
+}
+
+// releaseCleanupCall lets the stand-in that announced its removal go on: it removes what it was asked to, and the
+// shell's EXIT trap carries on with the rest of the cleanup, the signal the test sent in between still pending.
+func (sb *browserRecipeSandbox) releaseCleanupCall(t *testing.T) {
+	t.Helper()
+
+	if err := os.WriteFile(filepath.Join(sb.root, "rendezvous", cleanupRelease), nil, 0o600); err != nil {
+		t.Fatalf("release the stand-in that runs the removal under test: %v", err)
+	}
 }
 
 // containerName is the name the recipe gave its container, from the --name of the call that started it, and "" when
