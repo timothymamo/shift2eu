@@ -61,8 +61,12 @@
 // markers, so those lists, and only they, carry the
 // constant attribute role="list" (docs/adr/0035, amendment for
 // issue #373), from a fixed table of list start tags keyed by an unexported
-// enum, like the classes; no other element carries a role, and "list" is the
-// only role value.
+// enum, like the classes. The one other role is the table box's: each box of
+// class "table-scroll" scrolls sideways, so a keyboard visitor must reach it,
+// and it carries the constant attributes tabindex="0", role="region" and an
+// aria-label from a fixed table of names keyed by an unexported enum
+// ("Resources table", "Summary table"), never from a value (issue #373,
+// review 6). No other element carries a role.
 //
 // # Values are text
 //

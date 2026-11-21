@@ -234,8 +234,8 @@ and h4 level alike. These are exactly the lists the stylesheet strips of their m
 is read as plain text; stating the role keeps it announced as a list (PR #379 review). Every other list
 keeps its markers and needs no role; `test/site` sweeps the goldens against the stylesheet so a list it
 strips without the role fails. The start tag comes from a fixed table in `htmlreport` (`listStartTags`,
-keyed by an unexported enum), like the classes, so it is never derived from a value; no other element
-carries a role, and `classes_test.go` refuses any role value other than `list`. None of these lists can
+keyed by an unexported enum), like the classes, so it is never derived from a value; no other list
+carries a role, and the only other role is the table box's constant `region` (below). None of these lists can
 be empty (the title list always names the source and a catalog, the Blockers list is written only when
 there is a blocker, the Cost estimate list has fixed items), and an empty list would be left out as any
 other is, so the goldens differ from the earlier ones by that attribute alone.
@@ -272,6 +272,10 @@ the fragment, changes; the Markdown and JSON reports keep their layout and their
   stylesheet draws as a bubble, with the glyph as CSS content, as before.
 - **Every table sits in `<section class="table-scroll">`**, which scrolls sideways on its own, so a wide
   table never widens the page on a phone. `table-scroll` joins the closed set of classes (`classNames`).
+  A box that scrolls must be reachable by keyboard, so it carries the constant attributes `tabindex="0"`,
+  `role="region"` and an `aria-label` from a fixed table keyed by an unexported enum (`tableLabels`:
+  "Resources table", "Summary table"), never from a value (PR #379 review). `region` is the second role
+  value the fragment states, besides `list`.
 - **Figures** are `strong` elements; the Cost estimate's total is the one with class `total`, holding the
   amount alone, with "per month, x of y resources" beside it, and one closing line: the region and date of
   the list prices, what they exclude, the storage the estimates leave out and the source's cost. The

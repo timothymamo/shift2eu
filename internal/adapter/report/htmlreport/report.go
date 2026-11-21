@@ -281,7 +281,7 @@ func writeResources(f *fragment, a assessment.Assessment, level int) {
 	}
 
 	f.heading(level, text("Resources"))
-	f.table(header, rows)
+	f.table(tableResources, header, rows)
 }
 
 // writeRequiredChanges writes one list item per partial verdict that has
@@ -463,7 +463,7 @@ func writeComparisonSummary(f *fragment, targets []assessment.TargetAssessment) 
 	}
 
 	f.heading(sectionLevel+1, text("Summary"))
-	f.table(header, rows)
+	f.table(tableSummary, header, rows)
 
 	if estimated {
 		f.paragraph(text("Estimates are list prices on each catalog's retrieval date, " + excludedNote +
@@ -506,7 +506,7 @@ func writeComparisonResources(f *fragment, targets []assessment.TargetAssessment
 	}
 
 	f.heading(sectionLevel+1, text("Resources"))
-	f.table(header, rows)
+	f.table(tableResources, header, rows)
 }
 
 // writeSharedBlockers writes one list item per resource blocked on every

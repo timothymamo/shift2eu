@@ -9,7 +9,7 @@
 <section class="part part-comparison">
 <h3>Comparison</h3>
 <h4>Summary</h4>
-<section class="table-scroll">
+<section class="table-scroll" tabindex="0" role="region" aria-label="Summary table">
 <table>
 <thead>
 <tr><th scope="col">Fit</th><th scope="col"><code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code></th><th scope="col"><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code></th></tr>
@@ -26,7 +26,7 @@
 </section>
 <p>Estimates are list prices on each catalog&#39;s retrieval date, excluding VAT and discounts; each target&#39;s own section gives its basis.</p>
 <h4>Resources</h4>
-<section class="table-scroll">
+<section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
 <table>
 <thead>
 <tr><th scope="col">ID</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col"><code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> fit</th><th scope="col"><code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> best offering</th><th scope="col"><code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> monthly estimate</th><th scope="col"><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code> fit</th><th scope="col"><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code> best offering</th><th scope="col"><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code> monthly estimate</th></tr>
@@ -60,7 +60,7 @@
 </section>
 <section class="part part-resources">
 <h4>Resources</h4>
-<section class="table-scroll">
+<section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
 <table>
 <thead>
 <tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Plan</th><th scope="col">Monthly estimate</th><th scope="col">Relations</th><th scope="col">Reasons</th></tr>
@@ -127,7 +127,7 @@
 </section>
 <section class="part part-resources">
 <h4>Resources</h4>
-<section class="table-scroll">
+<section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
 <table>
 <thead>
 <tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Plan</th><th scope="col">Monthly estimate</th><th scope="col">Relations</th><th scope="col">Reasons</th></tr>

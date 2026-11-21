@@ -277,10 +277,29 @@ func cells(rs ...rich) []cell {
 	return out
 }
 
-// table is a table: one header row of column headings, and its body rows.
+// table is a table: the name of its box, one header row of column headings,
+// and its body rows.
 type table struct {
+	Label  tableLabel
 	Header []rich
 	Rows   []row
+}
+
+// tableLabel names the box a table sits in, for a screen reader: one of a
+// closed set of constants (tableLabels), chosen from the section the table
+// belongs to, never from a value.
+type tableLabel int
+
+// The names of a table's box.
+const (
+	tableResources tableLabel = iota + 1
+	tableSummary
+)
+
+// tableLabels are the aria-label values of a table's box, a fixed table.
+var tableLabels = map[tableLabel]string{
+	tableResources: "Resources table",
+	tableSummary:   "Summary table",
 }
 
 // block is one block of a report: exactly one of a heading (Heading set to
@@ -359,9 +378,9 @@ func (f *fragment) markerlessList(items []item) {
 	f.blocks = append(f.blocks, block{List: items, ListKind: listMarkerless})
 }
 
-// table adds a table.
-func (f *fragment) table(header []rich, rows []row) {
-	f.blocks = append(f.blocks, block{Table: &table{Header: header, Rows: rows}})
+// table adds a table whose box is named label.
+func (f *fragment) table(label tableLabel, header []rich, rows []row) {
+	f.blocks = append(f.blocks, block{Table: &table{Label: label, Header: header, Rows: rows}})
 }
 
 // headingTags are the opening and closing tags of each heading level a block
@@ -463,9 +482,16 @@ func writeStart(b *strings.Builder, tag string, c class) error {
 // writeTable writes t: its header row of column headings, then its body rows,
 // inside a box of class table-scroll, which scrolls sideways on its own when
 // the table is wider than the page, so the page itself never does (issue
-// #373, item 11).
+// #373, item 11). The box is a focusable region, named by a constant of
+// tableLabels, so a keyboard visitor can scroll it too.
 func writeTable(b *strings.Builder, t *table) error {
-	b.WriteString("<section class=\"" + classNames[classTableScroll] + "\">\n<table>\n<thead>\n<tr>")
+	label, ok := tableLabels[t.Label]
+	if !ok {
+		return fmt.Errorf("table label %d is not one of the report's table names", t.Label)
+	}
+
+	b.WriteString("<section class=\"" + classNames[classTableScroll] + "\" tabindex=\"0\" role=\"region\" aria-label=\"" +
+		label + "\">\n<table>\n<thead>\n<tr>")
 
 	for _, cell := range t.Header {
 		b.WriteString("<th scope=\"col\">")
