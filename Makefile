@@ -832,8 +832,11 @@ vm_env_entry = i="$${entry%%:*}"; name="$${entry\#*:}"
 # locales. It sets $$ehidden for a hidden entry and clears it for a shown one, so a message about that one entry
 # says why, $(vm_env_entry_why), only when it hides the entry. A message listing several entries sets $$hidden
 # only when it lists a hidden one, and says why once, after its list: $(vm_env_hidden_why).
+# vm_env_not_upper is the case pattern of every name that is not of that upper-case shape, the one rule
+# vm_env_label and vm-env's kept line both name by.
 vm_env_upper = ABCDEFGHIJKLMNOPQRSTUVWXYZ
-vm_env_label = case "$$name" in ([!$(vm_env_upper)_]* | *[!$(vm_env_upper)0123456789_]*) ehidden=1;; \
+vm_env_not_upper = [!$(vm_env_upper)_]* | *[!$(vm_env_upper)0123456789_]*
+vm_env_label = case "$$name" in ($(vm_env_not_upper)) ehidden=1;; \
 	(*_*) ehidden=;; \
 	(????????????????*) if [ -n "$$(printenv "$$name")" ]; then ehidden=; else ehidden=1; fi;; \
 	(*) ehidden=;; esac; \
@@ -943,7 +946,7 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 # or newline is a separator under make -i too; issue #304). It never re-runs vm-env-check through $(MAKE): make -i
 # would pass -i to that sub-make too. Its success line names the entries it wrote by the same rule (vm_env_label,
 # issue #306): an entry it may not print is still written, and only the line gives it by position, saying why once.
-# A merge's kept line follows the same naming rule: it names each kept upper-case name (vm_env_upper) and gives
+# A merge's kept line follows the same naming rule: it names each kept upper-case name (vm_env_not_upper) and gives
 # every other kept name as a count only (`FAKE_ONE and 1 other name not shown`, `2 names not shown`); those
 # lines are still kept in daemon.env, and their names reach no output.
 .PHONY: vm-env
@@ -993,7 +996,7 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 		echo "vm-env: warning: dropped $$dropped line(s) of the VM's daemon.env that were not plain NAME=value assignments (their content is not shown)" >&2; fi && \
 	kept="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-kept:\([A-Za-z0-9_ ]*\)$$/\1/p')" && \
 	kshown= && khidden=0 && for k in $$kept; do \
-		case "$$k" in ([!$(vm_env_upper)_]* | *[!$(vm_env_upper)0123456789_]*) khidden=$$((khidden + 1));; \
+		case "$$k" in ($(vm_env_not_upper)) khidden=$$((khidden + 1));; \
 		(*) kshown="$$kshown $$k";; esac; \
 	done && if [ "$$khidden" -eq 1 ]; then kword=name; else kword=names; fi && \
 	if [ -n "$$kshown" ] && [ "$$khidden" -gt 0 ]; then echo "vm-env: kept (unchanged):$$kshown and $$khidden other $$kword not shown"; \
