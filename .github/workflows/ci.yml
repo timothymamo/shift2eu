@@ -218,7 +218,9 @@ jobs:
   # built or pinned. SHIFT2EU_TEST_MAKE points the package's make at it, and SHIFT2EU_TEST_MAKE_VERSION has
   # TestTestMakeIsTheVersionNamed check that it reports 3.81 and reads that recipe as 3.81 does. Fakes only,
   # as in make test: no network beyond Go's module fetches, no credential. actions/setup-go exports
-  # GOTOOLCHAIN=local after installing go.mod's go line, as for the other jobs.
+  # GOTOOLCHAIN=local after installing go.mod's go line, as for the other jobs. The job's name, "Makefile
+  # tests under make 3.81", is what a required check would name: renaming it would drop such a check. Its
+  # tests reach agents-token-refresh-install, so it fails until #437's fix (PR #441) is on main.
   make-381:
     name: Makefile tests under make 3.81
     runs-on: macos-15
@@ -229,9 +231,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # cache: false, as lint-target's: a macOS entry would only take up the repository's cache quota.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+          cache: false
       - name: test/devenv with /usr/bin/make
         env:
           SHIFT2EU_TEST_MAKE: /usr/bin/make

@@ -58,6 +58,8 @@ func TestTestMakeIsTheVersionNamed(t *testing.T) {
 	}
 
 	first, _, _ := strings.Cut(string(out), "\n")
+	t.Logf("the tests run %s, which reports %q", program, strings.TrimSpace(first))
+
 	if want := "GNU Make " + version; strings.TrimSpace(first) != want {
 		t.Fatalf("%s --version reports %q, want %q (%s): the tests would not run under the make the job names", program, first, want, testMakeVersionEnv)
 	}
@@ -76,6 +78,8 @@ func TestTestMakeIsTheVersionNamed(t *testing.T) {
 
 	cmd := exec.Command(program, "-f", makefile)
 	cmd.Dir = dir
+	// Only PATH, on purpose: a parent make's MAKEFLAGS and MAKELEVEL stay out, so the canary sees the
+	// program's own behaviour.
 	cmd.Env = envList(map[string]string{"PATH": os.Getenv("PATH")})
 
 	var stdout, stderr bytes.Buffer
