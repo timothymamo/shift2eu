@@ -67,7 +67,7 @@ type infraRuleCase struct {
 // loudly (as a test failure, never as a silent pass) when the configuration moves under it. The file-reading
 // functions' cases come from infraFileFunctionCases, one per name the rules must refuse, so a name dropped
 // from them fails here instead of passing unrefused.
-var infraRuleCases = append(append(append(append(infraFileFunctionCases(), namedInfraRuleCases...), infraTestNestedBlockCases...), infraTestLabelCases...), infraLabelPathCases...)
+var infraRuleCases = append(append(append(append(append(infraFileFunctionCases(), namedInfraRuleCases...), infraTestNestedBlockCases...), infraTestLabelCases...), infraLabelPathCases...), infraConfigurationLabelQuoteCases...)
 
 // namedInfraRuleCases are the breakages written out one by one, in the order the script's rules are read.
 var namedInfraRuleCases = []infraRuleCase{
@@ -1963,6 +1963,41 @@ run "x/y" {
   }
 }
 `)
+		},
+	},
+}
+
+// infraConfigurationLabelQuoteCases pin the other half of the fix for the auditor's first finding (issue #434):
+// the five refusals that quote a configuration block's label - [provider-type] for a resource, data or
+// ephemeral block, [iam-other], [resource-type], [provider-type] for a provider block, and [backend-s3] - must
+// quote the label as the source writes it, never the %2F, %3A or %25 the rules escape into the block's path so
+// a label's / cannot shift the block. A message carrying the escape names a type, a provider or a backend that
+// no file holds, so the reader looks for something the configuration does not contain.
+var infraConfigurationLabelQuoteCases = []infraRuleCase{
+	{
+		name:      "resource-type-label-written-with-a-slash-is-quoted-as-written",
+		why:       `a resource "scaleway_a/b" "x" in site/main.tf, a type whose / the rules escape into the block's path: [resource-type] must quote the type the way the source writes it`,
+		want:      "resource-type",
+		wantIn:    map[string]string{"resource-type": `"scaleway_a/b"`},
+		wantNotIn: map[string]string{"resource-type": "%2F"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_a/b" "x" {
+}
+`)
+		},
+	},
+	{
+		name:      "backend-label-written-with-a-slash-is-quoted-as-written",
+		why:       `site/versions.tf's backend block written "s3/x", a label whose / the rules escape into the block's path: [backend-s3] must quote the label the way the source writes it`,
+		want:      "backend-s3",
+		wantIn:    map[string]string{"backend-s3": `"s3/x"`},
+		wantNotIn: map[string]string{"backend-s3": "%2F"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "versions.tf"),
+				`backend "s3" {`, `backend "s3/x" {`)
 		},
 	},
 }
