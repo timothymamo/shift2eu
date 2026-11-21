@@ -6,7 +6,7 @@
 //	go run ./ci/sitebuild -out <dir> -archive <file.tar.gz> [-version <vX.Y.Z>] [-site <dir>]
 //
 // It writes exactly these files into -out, which must be missing or empty:
-// index.html, privacy.html and verify.html, rendered from the pages of -site
+// index.html, inventory.html, privacy.html and verify.html, rendered from the pages of -site
 // (site/ of the module by default); style.<h>.css and page.<h>.js, site/style.css
 // and site/page.js byte for byte; wasm_exec.<h>.js, the building toolchain's
 // $(go env GOROOT)/lib/wasm/wasm_exec.js byte for byte; module.<h>.js, the
@@ -25,9 +25,12 @@
 // version of the toolchain that builds the module (the value its
 // runtime.Version() reports), each script's and the stylesheet's name and
 // Subresource Integrity value (SHA-384), each target catalog's snapshot date
-// and regions, each target's head-office city, the three bundled example
+// and regions, each target's head-office country, the three bundled example
 // inventories of examples/ as inert <template> content the page script reads
-// as text, and whether the HSTS record site/records/hsts.json says waived (a
+// as text, the inventory page's commands for AWS, GCP and Azure, which it
+// reads from the bash blocks of docs/guide/inventory.md under each source's
+// "Collect from" and "Build the ... inventory" headings (guide.go: the guide
+// is their one source of truth, issue #373), and whether the HSTS record site/records/hsts.json says waived (a
 // missing record is not waived).
 //
 // The build is reproducible: no clock, no map order and no path reaches a
