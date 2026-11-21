@@ -1,6 +1,7 @@
 package lint_test
 
 import (
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -441,6 +442,23 @@ const (
 	claudeCodePinNeverSkipped
 )
 
+// claudeCodePinEventHead names whose tip the event file the step reads reports
+// as the pull request's head, and the one case in which the run has no event
+// file at all.
+type claudeCodePinEventHead int
+
+const (
+	// claudeCodePinEventHeadPRTip: the tip of the pull request's branch, the
+	// second parent of the merge commit actions/checkout gives the step.
+	claudeCodePinEventHeadPRTip claudeCodePinEventHead = iota
+	// claudeCodePinEventHeadBase: another commit than that parent, the base the
+	// branch starts from: a head the merge commit does not hold.
+	claudeCodePinEventHeadBase
+	// claudeCodePinEventNoFile: GITHUB_EVENT_PATH names no file, as on a run
+	// whose event file the runner did not write.
+	claudeCodePinEventNoFile
+)
+
 // claudeCodePinCase is one history the changes step runs in, and what it must
 // decide.
 type claudeCodePinCase struct {
@@ -452,12 +470,34 @@ type claudeCodePinCase struct {
 	changed []string
 	// renamed is a path the branch renames, and its new name.
 	renamed [2]string
+	// deleted are paths the branch deletes outright.
+	deleted []string
+	// mainChanged are the paths main gains a commit for before a merge into the
+	// branch, which a merge needs to have anything to merge.
+	mainChanged []string
+	// mergeMainIntoBranch makes HEAD a merge of main into the pull request's
+	// branch, so its first parent is the branch's tip and its second main's: the
+	// parents in the other order than actions/checkout gives them.
+	mergeMainIntoBranch bool
 	// singleParent checks out the branch's tip, which has one parent, instead of
 	// a merge commit: the history a checkout without the pull request's merge
 	// ref gives.
 	singleParent bool
+	// head names whose tip the event file reports as the pull request's head.
+	head claudeCodePinEventHead
 	// decision is what the step must write for the history.
 	decision claudeCodePinDecision
+}
+
+// claudeCodePinHistory is the repository one case is run in, with the two shas
+// the event file and the merge commit are about.
+type claudeCodePinHistory struct {
+	// dir is the repository the step runs in.
+	dir string
+	// base is the sha of the commit on main the branch starts from.
+	base string
+	// prTip is the sha of the tip of the pull request's branch.
+	prTip string
 }
 
 // TestClaudeCodePinChangesStepDecides pins the decision the workflow's changes
@@ -475,12 +515,23 @@ type claudeCodePinCase struct {
 // -z ends each name with NUL, so neither a rename away from a pin path nor a
 // quote or newline in a name can hide one.
 //
+// The step trusts neither the parent count alone nor the order of the parents:
+// a merge of main into the pull request's branch has the parents the other way
+// round, so its diff HEAD^1 HEAD shows what main added and not what the pull
+// request changes. So on pull_request the step reads the pull request's head sha
+// from the event file the runner writes (jq -er .pull_request.head.sha
+// "$GITHUB_EVENT_PATH") and skips only when that sha is HEAD's second parent;
+// an event file that does not hold that sha, or is not there at all, runs the
+// check.
+//
 // The test runs the step's script as the workflow writes it, with bash -e in
 // temporary git repositories: each a base commit on main, the pull request's
 // branch a commit on top of it, and a real merge commit with two parents. The
-// environment is the step's own: GITHUB_EVENT_NAME, GITHUB_OUTPUT, no git
-// configuration of the machine (GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM point at
-// /dev/null), a fixed identity and date, and no network.
+// environment is the step's own: GITHUB_EVENT_NAME, GITHUB_OUTPUT,
+// GITHUB_EVENT_PATH pointing at a JSON file the test writes with the shas of its
+// own repository, no git configuration of the machine (GIT_CONFIG_GLOBAL and
+// GIT_CONFIG_SYSTEM point at /dev/null), a fixed identity and date, and no
+// network.
 func TestClaudeCodePinChangesStepDecides(t *testing.T) {
 	t.Parallel()
 
@@ -498,9 +549,9 @@ func TestClaudeCodePinChangesStepDecides(t *testing.T) {
 
 	script := claudeCodePinChangesScript(t, lines, strings.Split(string(src), "\n"))
 
-	// The step runs in a shell with git and nothing else: skip where the machine
-	// has no such shell rather than fail its repository's checks.
-	for _, tool := range []string{"bash", "git"} {
+	// The step runs in a shell with git and jq and nothing else: skip where the
+	// machine has none of them rather than fail its repository's checks.
+	for _, tool := range []string{"bash", "git", "jq"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Skipf("%s is not on PATH, so the changes step cannot run here: %v", tool, err)
 		}
@@ -556,6 +607,44 @@ func TestClaudeCodePinChangesStepDecides(t *testing.T) {
 			decision: claudeCodePinSkipped,
 		},
 		{
+			name:     "a pull request that deletes the install script runs the check",
+			event:    claudeCodePinPullRequest,
+			deleted:  []string{aiReviewInstallScript},
+			decision: claudeCodePinRuns,
+		},
+		{
+			name:     "a pull request that adds a pin file whose name is not ASCII runs the check",
+			event:    claudeCodePinPullRequest,
+			changed:  []string{"ci/claudecodepin/ä.go"},
+			decision: claudeCodePinRuns,
+		},
+		{
+			// The parents the other way round: HEAD^1 is the pull request's tip,
+			// so HEAD^1's diff names what main added, never the ai-review.yml
+			// this pull request changes. Only the head sha the event file holds
+			// tells the step which parent is the pull request's.
+			name:                "a merge whose first parent is the pull request's tip does not skip the check",
+			event:               claudeCodePinPullRequest,
+			changed:             []string{aiReviewWorkflowPath},
+			mainChanged:         []string{"README.md"},
+			mergeMainIntoBranch: true,
+			decision:            claudeCodePinNeverSkipped,
+		},
+		{
+			name:     "an event whose head is no parent of the merge commit does not skip the check",
+			event:    claudeCodePinPullRequest,
+			changed:  []string{"README.md"},
+			head:     claudeCodePinEventHeadBase,
+			decision: claudeCodePinNeverSkipped,
+		},
+		{
+			name:     "a run with no event file does not skip the check",
+			event:    claudeCodePinPullRequest,
+			changed:  []string{"README.md"},
+			head:     claudeCodePinEventNoFile,
+			decision: claudeCodePinNeverSkipped,
+		},
+		{
 			name:         "a commit that is no merge does not skip the check",
 			event:        claudeCodePinPullRequest,
 			changed:      []string{"README.md"},
@@ -570,12 +659,19 @@ func TestClaudeCodePinChangesStepDecides(t *testing.T) {
 		},
 	}
 
+	// One case per path of the push filter, so a path added there and not to the
+	// step's case fails here rather than letting a pull request that changes it
+	// pass unopened.
+	cases = append(cases, claudeCodePinPushFilterCases(t, lines)...)
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			dir := claudeCodePinRepo(t, tc)
-			pin, out, err := claudeCodePinRun(t, dir, tc.event, script)
+			history := claudeCodePinRepo(t, tc)
+			eventPath := claudeCodePinEventFile(t, history, tc.head)
+
+			pin, out, err := claudeCodePinRun(t, history.dir, tc.event, eventPath, script)
 
 			want := "true"
 			if tc.decision == claudeCodePinSkipped {
@@ -698,12 +794,74 @@ func claudeCodePinStepLabel(t *testing.T, raw []string, fields []yamlread.Entry)
 	return claudeCodePinRunText(t, raw, run)
 }
 
+// claudeCodePinPushFilterCases returns one case per path of the workflow's own
+// on.push.paths, each a pull request that changes a file the filter names: a pin
+// path added to the push filter and not to the changes step's case fails here,
+// instead of every pull request that changes it passing as if the pin were
+// untouched. The filter's own list is pinned by
+// TestClaudeCodePinWorkflowIsClosed, so a path dropped from it fails there.
+func claudeCodePinPushFilterCases(t *testing.T, lines []yamlread.Line) []claudeCodePinCase {
+	t.Helper()
+
+	on, ok := aiReviewEntry(t, lines, "on")
+	if !ok {
+		t.Fatalf("%s: the workflow has no on: block of triggers", claudeCodePinWorkflowPath)
+	}
+
+	push, ok := aiReviewEntry(t, on.Block, "push")
+	if !ok {
+		t.Fatalf("%s: on: names no push: trigger, whose paths: filter is the list of the pin's paths", claudeCodePinWorkflowPath)
+	}
+
+	paths, ok := aiReviewEntry(t, push.Block, "paths")
+	if !ok {
+		t.Fatalf("%s: on: push: names no paths:, so this test cannot derive one case per pin path from it", claudeCodePinWorkflowPath)
+	}
+
+	patterns, err := yamlread.List(paths)
+	if err != nil {
+		t.Fatalf("%s: on: push: read paths:: %v", claudeCodePinWorkflowPath, err)
+	}
+
+	cases := make([]claudeCodePinCase, 0, len(patterns))
+	for _, pattern := range patterns {
+		path := claudeCodePinFileIn(t, pattern)
+		cases = append(cases, claudeCodePinCase{
+			name:     "a pull request that changes " + path + " runs the check, as the push filter names " + pattern,
+			event:    claudeCodePinPullRequest,
+			changed:  []string{path},
+			decision: claudeCodePinRuns,
+		})
+	}
+
+	return cases
+}
+
+// claudeCodePinFileIn returns one file path the push filter's pattern matches:
+// the pattern itself when it names a file, or a nested file below it when it
+// ends in /**, the glob GitHub reads as every file below that directory.
+func claudeCodePinFileIn(t *testing.T, pattern string) string {
+	t.Helper()
+
+	if dir, ok := strings.CutSuffix(pattern, "/**"); ok {
+		return dir + "/internal/x/y.go"
+	}
+
+	if strings.ContainsAny(pattern, "*?[") {
+		t.Fatalf("%s: on: push: paths: %q is a glob this test cannot name one file of, want a path or a /** directory", claudeCodePinWorkflowPath, pattern)
+	}
+
+	return pattern
+}
+
 // claudeCodePinRepo builds the history tc describes in a temporary git
-// repository and returns its directory: a base commit on main, the pull
-// request's branch a commit on top of it, and then either the branch's tip, one
-// parent, or a merge commit whose first parent is main and whose second is the
-// branch, as actions/checkout gives it on a pull request.
-func claudeCodePinRepo(t *testing.T, tc claudeCodePinCase) string {
+// repository and returns it: a base commit on main, the pull request's branch a
+// commit on top of it, and then either the branch's tip, one parent, or a merge
+// commit whose first parent is main and whose second is the branch, as
+// actions/checkout gives it on a pull request. A case that asks for
+// mergeMainIntoBranch gets the parents the other way round: the branch merges
+// main into itself, so the first parent is the branch's tip.
+func claudeCodePinRepo(t *testing.T, tc claudeCodePinCase) claudeCodePinHistory {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -717,10 +875,16 @@ func claudeCodePinRepo(t *testing.T, tc claudeCodePinCase) string {
 	claudeCodePinGit(t, dir, "add", "--all")
 	claudeCodePinGit(t, dir, "commit", "--quiet", "--message=base")
 
+	history := claudeCodePinHistory{dir: dir, base: claudeCodePinRevParse(t, dir, "HEAD")}
+
 	claudeCodePinGit(t, dir, "checkout", "--quiet", "-b", "pull-request")
 
 	for _, path := range tc.changed {
 		claudeCodePinWrite(t, dir, path, "changed by the pull request\n")
+	}
+
+	for _, path := range tc.deleted {
+		claudeCodePinGit(t, dir, "rm", "--quiet", path)
 	}
 
 	if tc.renamed != [2]string{} {
@@ -730,14 +894,32 @@ func claudeCodePinRepo(t *testing.T, tc claudeCodePinCase) string {
 	claudeCodePinGit(t, dir, "add", "--all")
 	claudeCodePinGit(t, dir, "commit", "--quiet", "--message=pull request")
 
+	history.prTip = claudeCodePinRevParse(t, dir, "HEAD")
+
+	if tc.mergeMainIntoBranch {
+		claudeCodePinGit(t, dir, "checkout", "--quiet", "main")
+
+		for _, path := range tc.mainChanged {
+			claudeCodePinWrite(t, dir, path, "changed by main\n")
+		}
+
+		claudeCodePinGit(t, dir, "add", "--all")
+		claudeCodePinGit(t, dir, "commit", "--quiet", "--message=main moves on")
+
+		claudeCodePinGit(t, dir, "checkout", "--quiet", "pull-request")
+		claudeCodePinGit(t, dir, "merge", "--quiet", "--no-ff", "--message=merge", "main")
+
+		return history
+	}
+
 	if tc.singleParent {
-		return dir
+		return history
 	}
 
 	claudeCodePinGit(t, dir, "checkout", "--quiet", "main")
 	claudeCodePinGit(t, dir, "merge", "--quiet", "--no-ff", "--message=merge", "pull-request")
 
-	return dir
+	return history
 }
 
 // claudeCodePinGit runs git args in dir as the test's fixed author and
@@ -771,11 +953,56 @@ func claudeCodePinWrite(t *testing.T, dir, path, value string) {
 	}
 }
 
+// claudeCodePinRevParse returns the sha rev names in the repository dir.
+func claudeCodePinRevParse(t *testing.T, dir, rev string) string {
+	t.Helper()
+
+	cmd := exec.CommandContext(t.Context(), "git", "rev-parse", rev)
+	cmd.Dir = dir
+	cmd.Env = childEnv(claudeCodePinGitConfig...)
+
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse %s in %s: %v", rev, dir, err)
+	}
+
+	return strings.TrimSpace(string(out))
+}
+
+// claudeCodePinEventFile writes the event file the runner gives the step, as
+// GitHub writes the pull request event, and returns its path: the sha of the
+// pull request's head that the history's event names, or the path of a file it
+// never writes for a run with no event file at all.
+func claudeCodePinEventFile(t *testing.T, history claudeCodePinHistory, head claudeCodePinEventHead) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), "event.json")
+
+	sha := ""
+	switch head {
+	case claudeCodePinEventHeadPRTip:
+		sha = history.prTip
+	case claudeCodePinEventHeadBase:
+		sha = history.base
+	case claudeCodePinEventNoFile:
+		// The runner wrote no event there, or the run has none: jq -er fails
+		// and the step still never skips the check.
+		return path
+	}
+
+	doc := `{"pull_request":{"head":{"sha":"` + sha + `"}}}`
+	if err := os.WriteFile(path, []byte(doc), 0o600); err != nil {
+		t.Fatalf("write the step's GITHUB_EVENT_PATH file: %v", err)
+	}
+
+	return path
+}
+
 // claudeCodePinRun runs the changes step's script in the repository dir with the
-// event the history belongs to, and returns what the step wrote for pin, its
-// output and its error. bash -e is the shell GitHub gives a run: step on Linux;
-// the script itself sets -euo pipefail.
-func claudeCodePinRun(t *testing.T, dir, event, script string) (string, []byte, error) {
+// event the history belongs to and the event file's path, and returns what the
+// step wrote for pin, its output and its error. bash -e is the shell GitHub
+// gives a run: step on Linux; the script itself sets -euo pipefail.
+func claudeCodePinRun(t *testing.T, dir, event, eventPath, script string) (string, []byte, error) {
 	t.Helper()
 
 	output := filepath.Join(t.TempDir(), "github-output")
@@ -788,6 +1015,7 @@ func claudeCodePinRun(t *testing.T, dir, event, script string) (string, []byte, 
 	cmd.Dir = dir
 	cmd.Env = childEnv(slices.Concat(claudeCodePinGitConfig, []string{
 		"GITHUB_EVENT_NAME=" + event,
+		"GITHUB_EVENT_PATH=" + eventPath,
 		"GITHUB_OUTPUT=" + output,
 	})...)
 
@@ -811,6 +1039,263 @@ func claudeCodePinPin(t *testing.T, path string) string {
 		if rest, ok := strings.CutPrefix(line, "pin="); ok {
 			value = rest
 		}
+	}
+
+	return value
+}
+
+// claudeCodePinCheckName is the name of the status check the maintainer can
+// mark required, and claudeCodePinJobID the id of the job that reports it: a job
+// with no name: reports its id instead.
+const (
+	claudeCodePinCheckName = "Claude Code pin"
+	claudeCodePinJobID     = "claude-code-pin"
+)
+
+// TestNoOtherWorkflowReportsTheClaudeCodePinCheck pins that
+// .github/workflows/claude-code-pin.yml is the only workflow of .github that
+// reports a job as "Claude Code pin". A required status check is matched by
+// name, so a same-named job in another workflow could post the green check of
+// that name while the pin's own job is red, or post two checks of one name of
+// which only one has to pass. A job without a name: reports the id of its job,
+// so a job whose id is claude-code-pin is refused too (issue #452).
+func TestNoOtherWorkflowReportsTheClaudeCodePinCheck(t *testing.T) {
+	t.Parallel()
+
+	root := moduleRoot(t)
+
+	dir := filepath.Join(root, filepath.Dir(claudeCodePinWorkflowPath))
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	ours := filepath.Base(claudeCodePinWorkflowPath)
+
+	workflows := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || name == ours {
+			continue
+		}
+
+		if ext := filepath.Ext(name); ext != ".yml" && ext != ".yaml" {
+			continue
+		}
+
+		workflows++
+
+		path := filepath.Join(dir, name)
+		claudeCodePinNoSameNamedJob(t, root, path)
+	}
+
+	if workflows == 0 {
+		t.Fatalf("%s holds no other workflow, want the repository's workflows: the check's name has to be theirs alone", dir)
+	}
+}
+
+// claudeCodePinNoSameNamedJob fails when the workflow at path has a job that
+// reports the pin check's name, by its own name: or by its id.
+func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
+	t.Helper()
+
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		t.Fatalf("locate %s in the module: %v", path, err)
+	}
+
+	rel = filepath.ToSlash(rel)
+
+	lines, err := yamlread.SplitLines(src)
+	if err != nil {
+		t.Fatalf("%s: read the workflow: %v", rel, err)
+	}
+
+	jobs, err := yamlread.Mapping(lines)
+	if err != nil {
+		t.Fatalf("%s: read the workflow : %v", rel, err)
+	}
+
+	block, ok := keyBlock(jobs, "jobs")
+	if !ok {
+		// A workflow without jobs reports no check at all.
+		return
+	}
+
+	definitions, err := yamlread.Mapping(block.Block)
+	if err != nil {
+		t.Fatalf("%s: read jobs:: %v", rel, err)
+	}
+
+	for _, job := range definitions {
+		if job.Key == claudeCodePinJobID {
+			t.Errorf("%s: line %d: has a job %q, whose id reports a check of that name; %s alone reports %q, so no other workflow may name or be named it (issue #452)", rel, job.Num, job.Key, claudeCodePinWorkflowPath, claudeCodePinCheckName)
+
+			continue
+		}
+
+		name, ok := keyBlock(definitions, job.Key)
+		if !ok {
+			continue
+		}
+
+		named, ok := keyBlockFromYAML(t, rel, name.Block, "name")
+		if !ok {
+			continue
+		}
+
+		if got := yamlScalar(t, rel, named); got == claudeCodePinCheckName {
+			t.Errorf("%s: line %d: job %q is named %q, the required check %s alone reports; a required check is matched by name, so a second job of that name could mask the pin's red one (issue #452)", rel, named.Num, job.Key, got, claudeCodePinWorkflowPath)
+		}
+	}
+}
+
+// claudeCodePinPinNamingFiles are the files of .github that may hold a string
+// that names the Claude Code pin (issue #452):
+//
+//   - .github/workflows/ai-review.yml, the one place that installs the CLI, so
+//     the one place that pins its version and its integrity.
+//   - .github/scripts/install-claude-code.sh, the installer itself: its header
+//     names its own file and both variables the caller pins.
+//   - .github/workflows/claude-code-pin.yml, the check's workflow, which names
+//     both in its paths:, in the case of its changes step and in the comment
+//     that explains them.
+//
+// Nothing else under .github/workflows, .github/scripts and .github/actions may
+// hold them.
+var claudeCodePinPinNamingFiles = []string{
+	aiReviewWorkflowPath,
+	aiReviewInstallScript,
+	claudeCodePinWorkflowPath,
+}
+
+// claudeCodePinPinNamingStrings are the strings that name the Claude Code pin: a
+// second install with a pin of its own under .github/ would be read by no check
+// of this repository's, since ci/claudecodepin reads ai-review.yml alone.
+var claudeCodePinPinNamingStrings = []string{
+	"CLAUDE_CODE_INTEGRITY",
+	"install-claude-code.sh",
+}
+
+// claudeCodePinSearchedDirs are the directories of .github this test reads: its
+// workflows, its scripts and, when the repository has one, its actions. A file
+// at .github/ itself (CODEOWNERS, renovate.json5) runs no install.
+var claudeCodePinSearchedDirs = []string{".github/workflows", ".github/scripts", ".github/actions"}
+
+// TestClaudeCodePinLivesOnlyInAIReview pins that the Claude Code CLI is
+// installed from one pin, in .github/workflows/ai-review.yml: no other workflow,
+// script or action of .github mentions CLAUDE_CODE_INTEGRITY or
+// install-claude-code.sh, but the installer itself, the check's workflow and the
+// workflow that installs it. ci/claudecodepin reads the version and the
+// integrity out of ai-review.yml alone, so a second install with a pin of its
+// own would be checked by nothing, and would run whatever its pin says (issue
+// #452).
+func TestClaudeCodePinLivesOnlyInAIReview(t *testing.T) {
+	t.Parallel()
+
+	root := moduleRoot(t)
+
+	scanned := 0
+	for _, dir := range claudeCodePinSearchedDirs {
+		abs := filepath.Join(root, filepath.FromSlash(dir))
+
+		if _, err := os.Stat(abs); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+
+			t.Fatalf("look for %s: %v", dir, err)
+		}
+
+		walkErr := filepath.WalkDir(abs, func(path string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+
+			if d.IsDir() {
+				return nil
+			}
+
+			rel, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+
+			claudeCodePinScannedFile(t, filepath.ToSlash(rel), path)
+			scanned++
+
+			return nil
+		})
+		if walkErr != nil {
+			t.Fatalf("walk %s: %v", dir, walkErr)
+		}
+	}
+
+	if scanned == 0 {
+		t.Fatalf("read no file of %v, want the workflows and scripts that could install the CLI", claudeCodePinSearchedDirs)
+	}
+}
+
+// claudeCodePinScannedFile fails when the file at path holds a string that names
+// the pin and is not one of the files that may, rel being its module-relative
+// path for the failure message.
+func claudeCodePinScannedFile(t *testing.T, rel, path string) {
+	t.Helper()
+
+	if slices.Contains(claudeCodePinPinNamingFiles, rel) {
+		return
+	}
+
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+
+	for _, marker := range claudeCodePinPinNamingStrings {
+		if strings.Contains(string(src), marker) {
+			t.Errorf("%s names %q: the Claude Code pin lives in %s alone, and ci/claudecodepin reads it there, so a second install with its own pin would be checked by nothing (issue #452)", rel, marker, aiReviewWorkflowPath)
+		}
+	}
+}
+
+// keyBlock returns the entry of fields for key, and false when fields holds
+// none.
+func keyBlock(fields []yamlread.Entry, key string) (yamlread.Entry, bool) {
+	for _, field := range fields {
+		if field.Key == key {
+			return field, true
+		}
+	}
+
+	return yamlread.Entry{}, false
+}
+
+// keyBlockFromYAML returns the entry of lines for key, and false when lines
+// holds none; the file path rel names the workflow in its failures.
+func keyBlockFromYAML(t *testing.T, rel string, lines []yamlread.Line, key string) (yamlread.Entry, bool) {
+	t.Helper()
+
+	fields, err := yamlread.Mapping(lines)
+	if err != nil {
+		t.Fatalf("%s: read the mapping that holds %s:: %v", rel, key, err)
+	}
+
+	return keyBlock(fields, key)
+}
+
+// yamlScalar reads e as one scalar of the workflow at rel.
+func yamlScalar(t *testing.T, rel string, e yamlread.Entry) string {
+	t.Helper()
+
+	value, err := yamlread.Single(e)
+	if err != nil {
+		t.Fatalf("%s: line %d: read %s:: %v", rel, e.Num, e.Key, err)
 	}
 
 	return value
