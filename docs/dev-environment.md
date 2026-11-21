@@ -769,7 +769,7 @@ separate account).
 # Mac (admin): the Mac whose host clone mints the tokens, only when the browser saved the key here
 # copy, not mv, so the rm below deletes the download
 install -m 0600 ~/Downloads/<app>.<date>.private-key.pem <the path SHIFT2EU_AGENTS_APP_KEY_FILE names>
-# FAIL "install: ...: No such file or directory": the key is on another machine; carry it as in step 4 of the account mode
+# FAIL "install: ...: No such file or directory": use the file's real name (ls ~/Downloads | grep private-key), or, if the key is on another machine, carry it as in step 4 of the account mode
 ls -l <the path SHIFT2EU_AGENTS_APP_KEY_FILE names>   # PASS: -rw------- owned by you, outside the workspace
 ```
 
@@ -783,7 +783,9 @@ ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
 # FAIL any other private-key file: delete it too
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
 # FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
 tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
 # FAIL a Time Machine backup ran since the download: rotate the key (generate another, repeat this, delete this one on the App's page)
 ```
 
@@ -1382,6 +1384,7 @@ this step, delete this one on the App's page).
 # keep the older key on the App's page until step 10: deleting it now breaks nothing, but it is your way back
 ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
 ssh <the Mini> 'ls -l ~/agents-app.pem.tmp'   # PASS: -rw------- owned by you
+# FAIL a mode other than -rw-------: ssh <the Mini> 'chmod 0600 ~/agents-app.pem.tmp'
 ```
 
 ```bash
@@ -1394,7 +1397,9 @@ ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
 # FAIL any other private-key file: delete it too
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
 # FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
 tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
 # FAIL a Time Machine backup ran since the download: rotate the key, as above
 ```
 
@@ -1416,7 +1421,9 @@ ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
 ls ~/agents-app.pem.tmp                             # PASS: No such file or directory
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
 # FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
 tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
 # FAIL a Time Machine backup ran since the download: rotate the key, as above
 ```
 
@@ -1675,9 +1682,8 @@ instead. Never copy the account's key out; delete it on the App's page once the 
 ```bash
 # Mac (admin): the machine the browser saved the key to
 ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
-ssh <the Mini> 'install -m 0600 ~/agents-app.pem.tmp <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name>'
-# FAIL "...: No such file or directory": create its directory on the Mini, mkdir -m 0700 -p <its directory>, then run it again
-ssh <the Mini> 'rm ~/agents-app.pem.tmp'
+ssh <the Mini> 'install -m 0600 ~/agents-app.pem.tmp <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name> && rm ~/agents-app.pem.tmp'
+# FAIL "...: No such file or directory": ssh <the Mini> 'mkdir -m 0700 -p <its directory>', then run this block again
 ssh <the Mini> 'ls -l <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name>'   # PASS: -rw------- owned by you, outside the workspace
 ssh <the Mini> 'ls ~/agents-app.pem.tmp'                                   # PASS: No such file or directory
 ```
@@ -1692,7 +1698,9 @@ ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
 # FAIL any other private-key file: delete it too
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
 # FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
 tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
 # FAIL a Time Machine backup ran since the download: rotate the key (generate another, repeat this step, delete this one on the App's page)
 ```
 
@@ -2055,7 +2063,9 @@ ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
 # FAIL any other private-key file: delete it too
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
 # FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
 tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
 # FAIL a Time Machine backup ran since the download: rotate the key (generate another on the App's page, set the secret again, delete the old key there)
 ```
 
