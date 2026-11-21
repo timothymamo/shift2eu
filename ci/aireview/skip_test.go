@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,8 +15,9 @@ import (
 // annotation on its stdout, and one line appended to the job summary when one is
 // set, after what the file already holds. A summary it cannot write is one more
 // warning, and the skip stays no failure: reportSkipped returns nothing that
-// could fail the run. The test writes to files of its own, never to the
-// process's stdout, so it shares no process state.
+// could fail the run. It writes the warning to a bytes.Buffer and the summary to
+// a file of its own, never to the process's stdout, so it shares no process
+// state.
 func TestReportSkippedPrintsTheWarningAndAppendsTheSummary(t *testing.T) {
 	t.Parallel()
 
@@ -64,23 +66,13 @@ func TestReportSkippedPrintsTheWarningAndAppendsTheSummary(t *testing.T) {
 				}
 			}
 
-			stdout, err := os.Create(filepath.Join(dir, "stdout"))
-			if err != nil {
-				t.Fatalf("create the file stdout is written to: %v", err)
-			}
+			var buf bytes.Buffer
 
-			reportSkipped(stdout, summary, skip)
+			reportSkipped(&buf, summary, skip)
 
-			if err := stdout.Close(); err != nil {
-				t.Fatalf("close stdout's file: %v", err)
-			}
+			written := buf.String()
 
-			written, err := os.ReadFile(stdout.Name())
-			if err != nil {
-				t.Fatalf("read stdout's file: %v", err)
-			}
-
-			lines := strings.Split(strings.TrimSuffix(string(written), "\n"), "\n")
+			lines := strings.Split(strings.TrimSuffix(written, "\n"), "\n")
 			if len(lines) != len(tc.wantLines) {
 				t.Fatalf("stdout holds %d line(s) (%q), want %d", len(lines), written, len(tc.wantLines))
 			}

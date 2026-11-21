@@ -1140,7 +1140,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// The AI reviewer's entry point (PRD #161 milestone 4, ADR 0033): a main
 		// package no root can import, held to the standard packages it imports and
 		// its own library, each exact. os is for main's instruction files, os.Exit
-		// and the one os.LookupEnv the forbidigo group ai-reviewer-env allows.
+		// and the one os.LookupEnv the forbidigo group ai-reviewer-env allows; io
+		// is for the io.Writer reportSkipped writes to (issue #389).
 		Name:     "ai-reviewer-main",
 		ListMode: "strict",
 		Files: []string{
@@ -1151,6 +1152,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 		Allow: []string{
 			"context$",
 			"fmt$",
+			"io$",
 			"os$",
 			"os/signal$",
 			"time$",

@@ -102,7 +102,12 @@ func SettingsFromEnv(lookup func(string) (string, bool)) (Settings, error) {
 	}
 
 	// A relative path would be appended to a file of the working directory,
-	// main's checkout, and a typo would lose the line without a word.
+	// main's checkout, and a typo would lose the line without a word. The
+	// AI-review job runs on Linux only (runs-on: ubuntu-latest in
+	// .github/workflows/ai-review.yml), where an absolute path begins with
+	// "/", so filepath.IsAbs would cover no case the job meets, and
+	// ai-reviewer-is-standard-library's allow list stays without
+	// path/filepath (issue #389).
 	if s.StepSummary = lookupValue(lookup, EnvStepSummary); s.StepSummary != "" && !strings.HasPrefix(s.StepSummary, "/") {
 		return Settings{}, fmt.Errorf("%w: %s is not an absolute path", ErrSettings, EnvStepSummary)
 	}

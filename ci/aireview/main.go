@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"time"
@@ -126,7 +127,7 @@ func readInstructions() (review.Instructions, error) {
 // on the pull request and the first warning already say the review was
 // skipped, so the run still exits 0 rather than turning a skip into a failing
 // check over a log line.
-func reportSkipped(stdout *os.File, summaryPath string, skip review.Skip) {
+func reportSkipped(stdout io.Writer, summaryPath string, skip review.Skip) {
 	fmt.Fprintln(stdout, review.SkipAnnotation(skip))
 
 	if summaryPath == "" {

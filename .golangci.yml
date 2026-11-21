@@ -1667,7 +1667,9 @@ linters:
         # either. They are held all the same. ai-reviewer-main holds the entry
         # point to the standard packages it imports and its library, each
         # ending in $: os for main's instruction files, os.Exit and the one
-        # os.LookupEnv the forbidigo group ai-reviewer-env allows it.
+        # os.LookupEnv the forbidigo group ai-reviewer-env allows it; io for
+        # the io.Writer reportSkipped writes to, so its test can pass a
+        # bytes.Buffer (issue #389).
         ai-reviewer-main:
           list-mode: strict
           files:
@@ -1677,6 +1679,7 @@ linters:
           allow:
             - context$
             - fmt$
+            - io$
             - os$
             - os/signal$
             - time$
