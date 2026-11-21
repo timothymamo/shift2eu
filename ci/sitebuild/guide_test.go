@@ -166,11 +166,13 @@ func TestSourcesDataFailsOnABrokenGuide(t *testing.T) {
 }
 
 // TestSourcesDataIgnoresHeadingsInsideAFence pins the other half of the fence
-// rule (issue #373, item 15): a line that starts with # inside a fenced block is
-// text, not a heading, so a ```text block - and a ~~~text block, the other fence
-// Markdown writes - that sits before the six source sections and shows
-// `# Collect from GCP` is read neither as that section's start nor as a second
-// heading of it. The commands stay the guide's own.
+// rule (issue #373, item 15, review finding 2): a line that starts with # inside
+// a fenced block is text, not a heading, so a ```text block - and a ~~~text
+// block, the other fence Markdown writes - that sits before the six source
+// sections and shows `# Collect from GCP` is read neither as that section's start
+// nor as a second heading of it. A fence opened by N backticks closes only on a
+// line of at least N of them (CommonMark), so a shorter run of backticks inside
+// a longer fence is text too and ends nothing. The commands stay the guide's own.
 func TestSourcesDataIgnoresHeadingsInsideAFence(t *testing.T) {
 	t.Parallel()
 
@@ -192,6 +194,10 @@ func TestSourcesDataIgnoresHeadingsInsideAFence(t *testing.T) {
 		{
 			name:  "a ~~~text block",
 			fence: []string{"~~~text", "# " + guideSources[1].collect, "~~~", ""},
+		},
+		{
+			name:  "a ````text block holding a ``` line",
+			fence: []string{"````text", "```", "# " + guideSources[1].collect, "````", ""},
 		},
 	}
 
