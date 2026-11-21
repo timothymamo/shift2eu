@@ -14,13 +14,15 @@ import (
 // itself writes and needs in git, such as an HTML fixture a renderer test reads,
 // with a comment on the entry saying why it is no saved page.
 var allowedSavedPages = map[string]bool{
-	// The site's three pages are the templates ci/sitebuild renders into the
-	// bundle (PRD #297, milestone 2): the project writes them, they load nothing
-	// from a third party and they are no saved web page; the builder and the
-	// site's static checks read them from git.
-	"site/index.html":   true,
-	"site/privacy.html": true,
-	"site/verify.html":  true,
+	// The site's pages are the templates ci/sitebuild renders into the
+	// bundle (PRD #297, milestones 2 and the redesign's inventory page): the
+	// project writes them, they load nothing from a third party and they are
+	// no saved web page; the builder and the site's static checks read them
+	// from git.
+	"site/index.html":     true,
+	"site/inventory.html": true,
+	"site/privacy.html":   true,
+	"site/verify.html":    true,
 }
 
 // savedPageExtensions are the lower-cased final extensions of the forms a
