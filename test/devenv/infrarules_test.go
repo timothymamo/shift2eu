@@ -66,8 +66,21 @@ module "m" {
 		},
 	},
 	{
-		name: "module-from-the-registry-with-a-local-source",
-		why:  `a module with source = "./m", which is the one source a rule allows`,
+		name: "module-from-a-path-that-climbs-out-of-the-configuration",
+		why:  `a module with source = "./../../../../tmp/x", a relative path whose .. segments leave the root`,
+		want: "module-source",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+module "m" {
+  source = "./../../../../tmp/x"
+}
+`)
+		},
+	},
+	{
+		name: "module-with-a-local-source",
+		why:  `a module with source = "./m", a local module directory beside the configuration, which is the one source a rule allows`,
 		want: "",
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
@@ -76,9 +89,7 @@ module "m" {
   source = "./m"
 }
 `)
-			if err := os.MkdirAll(filepath.Join(site, "m"), 0o700); err != nil {
-				t.Fatalf("create the local module's directory: %v", err)
-			}
+			writeInfraText(t, filepath.Join(site, "m", "main.tf"), "variable \"v\" {}\n")
 		},
 	},
 	{
@@ -121,6 +132,18 @@ resource "scaleway_object_bucket_acl" "site" {
 		},
 	},
 	{
+		name: "acl-resource-type-written-with-an-escape",
+		why:  `a resource whose type spells the underscore of scaleway_object_bucket_acl as \u005f, so the text no longer reads as an ACL`,
+		want: "parse",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_object_bucket\u005facl" "x" {
+}
+`)
+		},
+	},
+	{
 		name: "api-key-resource",
 		why:  "a scaleway_iam_api_key resource, whose secret would reach the state",
 		want: "api-key",
@@ -129,6 +152,30 @@ resource "scaleway_object_bucket_acl" "site" {
 			appendInfraText(t, filepath.Join(site, "main.tf"), `
 resource "scaleway_iam_api_key" "deploy" {
   application_id = scaleway_iam_application.deploy.id
+}
+`)
+		},
+	},
+	{
+		name: "api-key-resource-type-written-with-an-escape",
+		why:  `a resource whose type spells the underscore of scaleway_iam_api_key as \u005f, so the text no longer reads as an API key`,
+		want: "parse",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_iam_api\u005fkey" "deploy" {
+}
+`)
+		},
+	},
+	{
+		name: "api-key-data-source",
+		why:  `a data "scaleway_iam_api_key" block, whose attributes no rule reads`,
+		want: "api-key",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+data "scaleway_iam_api_key" "k" {
 }
 `)
 		},
@@ -184,6 +231,17 @@ resource "scaleway_iam_group" "ops" {
 		},
 	},
 	{
+		name: "iam-application-with-for-each",
+		why:  "for_each on the deploy application, which makes it one application per element",
+		want: "iam-repeat",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				"resource \"scaleway_iam_application\" \"deploy\" {\n  name        = \"shift2eu-site-deploy\"",
+				"resource \"scaleway_iam_application\" \"deploy\" {\n  for_each    = toset([\"shift2eu-site\"])\n  name        = \"shift2eu-site-deploy\"")
+		},
+	},
+	{
 		name: "second-provider-source",
 		why:  `a required_providers entry aws = { source = "hashicorp/aws" }`,
 		want: "provider-source",
@@ -205,6 +263,39 @@ resource "terraform_data" "marker" {
   input = "the site"
 }
 `)
+		},
+	},
+	{
+		name: "provider-alias",
+		why:  `alias = "real" on the configuration's provider block, a second provider instance under an unseen name`,
+		want: "provider-alias",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "providers.tf"),
+				"  organization_id = var.organization_id",
+				"  alias           = \"real\"\n  organization_id = var.organization_id")
+		},
+	},
+	{
+		name: "provider-access-key",
+		why:  `access_key = "x" in the configuration's provider block, a credential in a file git holds`,
+		want: "provider-credentials",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "providers.tf"),
+				"  organization_id = var.organization_id",
+				"  access_key      = \"x\"\n  organization_id = var.organization_id")
+		},
+	},
+	{
+		name: "provider-profile",
+		why:  `profile = "default" in the configuration's provider block, a credential source named in a file git holds`,
+		want: "provider-credentials",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "providers.tf"),
+				"  organization_id = var.organization_id",
+				"  profile         = \"default\"\n  organization_id = var.organization_id")
 		},
 	},
 	{
@@ -256,6 +347,29 @@ terraform {
 		},
 	},
 	{
+		name: "no-required-version",
+		why:  `a root with no required_version at all, so any tofu release may read it`,
+		want: "required-version",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "versions.tf"),
+				"  required_version = \"1.13.9\"\n\n", "")
+		},
+	},
+	{
+		name: "second-required-version",
+		why:  "a second required_version in the same root, two constraints tofu would intersect",
+		want: "required-version",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "versions.tf"), `
+terraform {
+  required_version = "1.13.9"
+}
+`)
+		},
+	},
+	{
 		name: "json-configuration",
 		why:  "an x.tf.json file, which the rules do not read",
 		want: "json-config",
@@ -274,6 +388,85 @@ terraform {
 		},
 	},
 	{
+		name: "tofu-file-beside-a-tf-file-of-the-same-name",
+		why:  "a versions.tofu beside versions.tf, a second file tofu loads under the same root",
+		want: "shadowed-file",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "versions.tofu"), "# A .tofu twin of versions.tf.\n")
+		},
+	},
+	{
+		name: "tofutest-file-beside-a-tftest-file-of-the-same-name",
+		why:  "an iam.tofutest.hcl beside iam.tftest.hcl, a second test file tofu test would also run",
+		want: "shadowed-file",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "iam.tofutest.hcl"), `
+mock_provider "scaleway" {}
+`)
+		},
+	},
+	{
+		name: "heredoc",
+		why:  "a heredoc, whose body the tokenizer does not read",
+		want: "parse",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  text = <<-EOT
+    hello
+  EOT
+}
+`)
+		},
+	},
+	{
+		name: "unclosed-string",
+		why:  "a quoted string that does not end on its line",
+		want: "parse",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  text = "unterminated
+}
+`)
+		},
+	},
+	{
+		name: "unclosed-comment",
+		why:  "a /* comment that never ends, which would swallow the rest of the file",
+		want: "parse",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "outputs.tf"), "\n/* the comment that never ends\n")
+		},
+	},
+	{
+		name: "symlink",
+		why:  "a symlink under the root, whose target the rules do not read",
+		want: "symlink",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			if err := os.Symlink(filepath.Join(site, "main.tf"), filepath.Join(site, "main_linked.tf")); err != nil {
+				t.Fatalf("create the symlink: %v", err)
+			}
+		},
+	},
+	{
+		name: "a-root-with-no-configuration",
+		why:  "a root with no *.tf or *.tofu at all, so there is nothing the rules can read",
+		want: "no-config",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			if err := os.RemoveAll(site); err != nil {
+				t.Fatalf("remove the copied configuration: %v", err)
+			}
+		},
+	},
+	{
 		name: "test-without-mock",
 		why:  "a test file with no mock_provider \"scaleway\", so tofu test would run the real provider",
 		want: "test-mock",
@@ -289,6 +482,63 @@ terraform {
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), "\nprovider \"scaleway\" {}\n")
+		},
+	},
+	{
+		name: "aliased-mock-provider",
+		why:  `a test file whose only mock_provider "scaleway" carries an alias, so no unaliased mock replaces the provider`,
+		want: "test-mock",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "aliased.tftest.hcl"), `
+mock_provider "scaleway" {
+  alias = "real"
+}
+`)
+		},
+	},
+	{
+		name: "mock-provider-label-written-with-an-escape",
+		why:  `a mock_provider whose label spells scaleway as scal\u0065way, so the real provider is no longer the one the file mocks`,
+		want: "parse",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "tests", "iam.tftest.hcl"),
+				`mock_provider "scaleway" {`, `mock_provider "scal\u0065way" {`)
+		},
+	},
+	{
+		name: "test-run-block-with-providers",
+		why:  `a run block with providers = { scaleway = scaleway.real }, which hands the run a real provider configuration`,
+		want: "test-providers",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_providers" {
+  command = plan
+
+  providers = {
+    scaleway = scaleway.real
+  }
+}
+`)
+		},
+	},
+	{
+		name: "module-inside-a-test-run-block",
+		why:  `a module block in a test file's run block, whose source is not a local ./ path`,
+		want: "module-source",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_a_module" {
+  command = plan
+
+  module {
+    source = "git::https://example.com/m"
+  }
+}
+`)
 		},
 	},
 	{
