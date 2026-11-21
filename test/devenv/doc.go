@@ -4,7 +4,10 @@
 // .github/workflows/vm-tools.yml must see Lima refuse (issue #137), and the
 // swap file dev/lima.yaml provisions (issue #294). It also pins that the shell
 // blocks of docs/dev-environment.md hold no `!` interactive zsh would expand
-// as a history event (zshhistory_test.go, issue #335).
+// as a history event (zshhistory_test.go, issue #335), and that the host
+// targets that load the VM's credentials refuse a host clone .envrc that
+// reads a parent, and a .envrc or .env in or above the workspace, before they
+// run anything and without printing a value (envrcguard_test.go, issue #402).
 //
 // The swap tests (limaswap_test.go) pin the template's swapSize param and run
 // its one system provision step that names PARAM_swapSize under bash, against

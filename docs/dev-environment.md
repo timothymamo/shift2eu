@@ -686,8 +686,10 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the
   workspace or the workspace's checkout would be readable by every agent and by the model providers they
   send files to. Keep them in the host clone's `.envrc`, where `make vm-env` runs and the VM cannot see
-  them. A `.envrc` above the workspace, where they were kept before issue #227, is no longer read by any
-  target: remove them from it, so a shell in the workspace does not hold them.
+  them. A `.envrc` above the workspace, where they were kept before issue #227, the targets refuse
+  (`make vm-env`, `vm-env-check`, `vm-up`, `vm-create`, `vm-init`, `agents-token-refresh-install`,
+  `agents-token-refresh-start`; [The host clone](#the-host-clone), The `.envrc` guard): move its lines into
+  the host clone's `.envrc` and remove it, so a shell in the workspace does not hold them.
 - **No GitHub token in `VM_ENV`.** Never put a personal access token, or any token with
   `write:packages`, into `VM_ENV`: the agents' only GitHub credential is the agents App's token, whose
   permissions (no Packages) are what stop agents pushing to GHCR. `make vm-env-check`, and so `make vm-env`
@@ -815,6 +817,40 @@ neither the key nor its path enters the VM. The host targets that open a shell i
 App's three variables (`env -u`), and the background refresh `make agents-token-refresh-start` starts runs
 without the default `VM_ENV` credentials, `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEEK_API_KEY` (a name a custom
 `VM_ENV` adds is not stripped): each process gets only what its work needs.
+
+**The `.envrc` guard** (issue #402). The host targets that load the credentials, `make vm-env`,
+`vm-env-check`, `vm-up`, `vm-create`, `vm-init`, `agents-token-refresh-install` and
+`agents-token-refresh-start`, refuse to run, before they run anything (no prerequisite, no sub-make, no
+`limactl`, `launchctl` or `sudo`), in two cases: when the host clone's `.envrc` reads a parent
+(`source_up`, `source_up_if_exists`, or a `source_env`, `source_env_if_exists`, `dotenv` or
+`dotenv_if_exists` naming a path outside the clone, `..` and symlinks resolved; a path holding `$`, a
+backtick or a leading `~` counts as outside), and when a `.envrc` or a `.env` sits in the workspace or in
+any directory above it, up to `/`, where direnv loads it in every shell you open in the workspace. Each
+refusal names the file. Put every line in the host clone's `.envrc` itself. The guard reads only the words of
+those directives and the path after each, and prints names and paths, never a line or a value. It refuses,
+never warns, and has no override: the fix is moving a file. `make vm-boot-install` is not guarded: its
+LaunchDaemon starts the VM and holds no credential. To see what the guard checks:
+
+```bash
+# Mac, host clone: count the .envrc lines that read another file (prints a number, never a line)
+grep -cE '(^|[^A-Za-z0-9_])(source_up|source_up_if_exists|source_env|source_env_if_exists|dotenv|dotenv_if_exists)([^A-Za-z0-9_]|$)' .envrc
+# PASS: 0, or only lines that name a file inside the host clone
+# FAIL "... the host clone's .envrc, <path>, reads a file outside the host clone with <directive> ...": move that file's lines into the host clone's .envrc and remove the directive
+```
+
+```bash
+# Mac, host clone: list every .envrc and .env in the workspace and the directories above it (prints paths only)
+d="$(dirname "$WORKSPACE_REPO")"; while :; do ls -d "$d/.envrc" "$d/.env" 2>/dev/null; [ "$d" = / ] && break; d="$(dirname "$d")"; done
+# PASS: no output
+# FAIL "... <file> is in the workspace the VM mounts or in a directory above it ...": move its lines into the host clone's .envrc and remove the file
+```
+
+```bash
+# Mac, host clone: run the guard and the credential check, which call no limactl
+make vm-env-check
+# PASS: no "refused" line, and no "not set or empty" line
+# FAIL "vm-env-check: refused: ...": fix each file it names, as the two checks above say, then run it again
+```
 
 **The refusal.** A host target refuses to run, before it runs anything (no prerequisite, no sub-make, no
 `limactl`, no `git config`), and names itself, the host clone and this section, when `WORKSPACE_REPO` is
