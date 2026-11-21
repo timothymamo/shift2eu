@@ -757,6 +757,13 @@ Never give it Administration: the rulesets' bypass lists need Administration wri
 `Protect main`, so those checks stay yours (ADR 0031, d). Secrets and Variables are not needed either.
 Generate a private key and keep the `.pem` **outside the workspace**, a regular file (not a symlink: the
 script refuses one), readable only by you (`chmod 600`). The App's slug is never configured: the token script reads it from the App (`GET /app`).
+Once it is in place, delete the downloaded copy:
+
+```bash
+# Mac (admin), then: the key is where SHIFT2EU_AGENTS_APP_KEY_FILE names it
+rm ~/Downloads/<app>.<date>.private-key.pem
+ls ~/Downloads/<app>.<date>.private-key.pem   # PASS: No such file or directory
+```
 
 #### The host clone
 
@@ -1350,7 +1357,12 @@ move it in at once. Downloaded on the Mini itself, install it from `~/Downloads`
 # the downloading machine
 # keep the older key on the App's page until step 10: deleting it now breaks nothing, but it is your way back
 ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
+```
+
+```bash
+# Mac (admin), then: the downloading machine, once the copy is on the Mini
 rm ~/Downloads/<app>.<date>.private-key.pem
+ls ~/Downloads/<app>.<date>.private-key.pem   # PASS: No such file or directory
 ```
 
 ```bash
@@ -1632,6 +1644,12 @@ direnv exec . make vm-agents-token-ssh-uninstall   # PASS: vm-agents-token-ssh-u
 **3. A new key**, generated on the App's page and kept where `SHIFT2EU_AGENTS_APP_KEY_FILE` will name
 it, outside the workspace, mode 0600. Never copy the account's key out; delete it on the App's page once
 the new one works.
+
+```bash
+# Mac (admin), then: the new key is in place
+rm ~/Downloads/<app>.<date>.private-key.pem
+ls ~/Downloads/<app>.<date>.private-key.pem   # PASS: No such file or directory
+```
 
 **4. The `.envrc`**: remove `SHIFT2EU_AGENTS_ACCOUNT` and the `SHIFT2EU_AGENTS_VM_SSH_*` variables, set
 `SHIFT2EU_AGENTS_APP_KEY_FILE`, then:
@@ -1973,13 +1991,19 @@ gh secret set AI_REVIEWER_APP_CLIENT_ID --env ai-review --repo timothymamo/shift
 gh secret set AI_REVIEWER_APP_PRIVATE_KEY --env ai-review --repo timothymamo/shift2eu < path/to/the-downloaded-key.pem
 gh secret set CLAUDE_CODE_OAUTH_TOKEN --env ai-review --repo timothymamo/shift2eu
 gh variable set AI_REVIEW_REQUEST_CHANGES --env ai-review --repo timothymamo/shift2eu --body false
-# then delete the downloaded .pem, or move it to your password manager: GitHub holds the only copy the
-#   workflow needs, and a new key can always be generated
 gh api repos/timothymamo/shift2eu/environments/ai-review/secrets --jq '.secrets[].name'
 # PASS: exactly AI_REVIEWER_APP_CLIENT_ID, AI_REVIEWER_APP_PRIVATE_KEY and CLAUDE_CODE_OAUTH_TOKEN
 gh api repos/timothymamo/shift2eu/actions/secrets --jq '.secrets[].name'
 gh api repos/timothymamo/shift2eu/actions/variables --jq '.variables[].name'
 # PASS: none of the four names and no ANTHROPIC_API_KEY (the release-tag skill checks the same before every release)
+```
+
+GitHub now holds the only copy the workflow needs, and a new key can always be generated:
+
+```bash
+# Mac (admin), then: the secrets are set
+rm path/to/the-downloaded-key.pem
+ls path/to/the-downloaded-key.pem   # PASS: No such file or directory
 ```
 
 *Roll back:* delete the secrets and the variable.
