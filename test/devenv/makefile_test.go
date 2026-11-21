@@ -252,57 +252,118 @@ func TestMakefileRunsNoDevScriptThroughShOrDotSlash(t *testing.T) {
 	}
 }
 
-// recipeComment is a recipe line of a Makefile that starts with `#`: its number in the file (1-based) and the
-// line as written, without the leading tab and surrounding blanks. The fields are exported so that cmp.Diff can
-// report a table case's difference.
+// recipeComment is a line of a Makefile that holds a `#` make turns into the end of a backslash-continued command:
+// its number in the file (1-based) and the line as written, without the leading tab and surrounding blanks. The
+// fields are exported so that cmp.Diff can report a table case's difference.
 type recipeComment struct {
 	Line int
 	Text string
 }
 
-// continues reports whether line ends with the backslash that joins it to the next line. Only a backslash that is
-// the line's last character continues it: GNU Make leaves a backslash followed by spaces literal, so trailing blanks
-// are not trimmed here either.
+// continues reports whether line ends in the odd number of backslashes that joins it to the next line: only the
+// line's last character can be that backslash, since GNU Make leaves a backslash followed by a blank literal, and an
+// even number of them escapes itself (`echo \\` ends in two, which make hands to the shell as one).
 func continues(line string) bool {
-	return strings.HasSuffix(line, `\`)
+	backslashes := 0
+
+	for i := len(line) - 1; i >= 0 && line[i] == '\\'; i-- {
+		backslashes++
+	}
+
+	return backslashes%2 == 1
 }
 
-// continuedRecipeComments returns the recipe comment lines of body that make treats as part of a backslash-continued
-// command (issue #437): a line that starts with a tab and whose first non-blank character after that tab is `#`, and
-// that either continues the line above it (that line ends with a backslash, so make joins the two into one shell
-// command) or itself ends with a backslash (so it continues into the line below). Such a line is not harmless: make
-// hands the joined command to the shell, where the `#` comments out everything after it, so the recipe ends there,
-// silently and with exit 0. A `#` recipe line that stands alone is passed to the shell as its own command and does
-// nothing, and a `#` mid-line (in a quoted string, or behind `$$`) is data, so neither is returned.
+// startsComment reports whether line's text begins with `#`, once make's recipe prefixes are gone: the leading tab
+// (or, on a later line of a continued command, every blank), then any run of the `@`, `-` and `+` make strips from a
+// recipe line, and any blanks around them. On a later line of a continued command make strips no prefix, so a
+// `@`-prefixed `#` there is no comment for the shell; trimming it too only flags a line that starts a recipe command
+// the same way, which keeps the check on the safe side.
+func startsComment(line string) bool {
+	return strings.HasPrefix(strings.TrimLeft(line, " \t@-+"), "#")
+}
+
+// wordStartHash reports whether line holds a `#` the shell begins a comment at: outside single and double quotes, at
+// the start of the line's text or just after a blank or one of `; & | (`. On a continued command the shell reads on
+// through the joined lines, so such a `#` drops the rest of the command as well, not just the rest of the line. A `#`
+// behind `$$`, inside a word (`a#b`), after `{` (`$${#x}`) or inside quotes is data. Quotes are tracked line by line:
+// a string left open at the end of one line of a continued command is not tracked into the next.
+func wordStartHash(line string) bool {
+	var single, double bool
+
+	for i := 0; i < len(line); i++ {
+		switch c := line[i]; {
+		case single:
+			single = c != '\''
+		case double:
+			double = c != '"'
+		case c == '\'':
+			single = true
+		case c == '"':
+			double = true
+		case c == '#':
+			if i == 0 || strings.ContainsRune(" \t;&|(", rune(line[i-1])) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// continuedRecipeComments returns the lines of body that hold a `#` GNU Make 3.81 turns into the end of a
+// backslash-continued command (issue #437). Make joins a recipe line that ends in a backslash to the line after it
+// and hands the whole of it to one shell, which reads the `#` as the start of a comment: the command ends there,
+// silently and with exit 0, so every step after the comment never runs. The lines that matter are
+//
+//   - a `#` that starts a line make joins into a continued command: with or without the leading tab (make joins a
+//     later line whatever its indentation), and behind make's recipe prefixes (`@`, `-`, `+`) on the first line of
+//     the command (startsComment);
+//   - a `#` that starts a word further along such a line (`echo a; # note`), which comments out the rest of the
+//     joined command too (wordStartHash);
+//   - a `#` recipe line that ends in a backslash with no continuation above it: make does not join it there, but
+//     flagging it is the safe reading until its 3.81 behaviour is known.
+//
+// Not returned: a `#` recipe line that stands alone, which is passed to the shell as its own command and does
+// nothing; a `#` behind `$$`, in a word or inside quotes, which is data; and a `#` in a continuation chain that
+// begins at column 0, such as a continued variable assignment, which is make code where `#` is a common make comment.
 func continuedRecipeComments(body string) []recipeComment {
 	lines := strings.Split(body, "\n")
 
-	var comments []recipeComment
+	var (
+		comments []recipeComment
+
+		// aboveContinues reports that the line above ends in the backslash that joins it to this one, and
+		// aboveIsRecipe reports that the chain it belongs to began on a tab-started recipe line.
+		aboveContinues bool
+		aboveIsRecipe  bool
+	)
 
 	for i, line := range lines {
-		if !strings.HasPrefix(line, "\t") {
-			continue
+		// recipe reports that make hands this line to the shell: a tab-started recipe line that continues no
+		// earlier line, or a later line of such a line's continuation chain, which make joins into the same
+		// command whatever its indentation, a line at column 0 included.
+		recipe := (aboveContinues && aboveIsRecipe) || (!aboveContinues && strings.HasPrefix(line, "\t"))
+
+		// joined reports that a `#` on this line comments out the rest of the command: the line continues into
+		// the next one, or the line above continues into it, so the shell reads on past it.
+		joined := continues(line) || (aboveContinues && aboveIsRecipe)
+
+		if recipe && joined && (startsComment(line) || wordStartHash(line)) {
+			comments = append(comments, recipeComment{Line: i + 1, Text: strings.TrimSpace(line)})
 		}
 
-		// A recipe line may be indented past its tab with spaces, which make leaves to the shell.
-		if !strings.HasPrefix(strings.TrimLeft(line[1:], " \t"), "#") {
-			continue
-		}
-
-		if !continues(line) && (i == 0 || !continues(lines[i-1])) {
-			continue
-		}
-
-		comments = append(comments, recipeComment{Line: i + 1, Text: strings.TrimSpace(line)})
+		aboveContinues = continues(line)
+		aboveIsRecipe = recipe
 	}
 
 	return comments
 }
 
 // TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand pins the matcher the test below uses (issue
-// #437): a `#` recipe line that continues the line above, or that continues into the line below, is one make 3.81
-// turns into a silent end of the recipe, where a `#` recipe line on its own, a make comment above a target and a `#`
-// mid-line are not.
+// #437): every `#` make 3.81 turns into a silent end of a backslash-continued command is one — a `#` line at any
+// indentation inside the command and behind make's `@`, `-` and `+` prefixes, and a `#` that starts a word further
+// along such a line — where a `#` recipe line on its own, a make comment above a target or in a continued variable
+// assignment, and a `#` that is data (behind `$$`, in a word, in quotes) are not.
 func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *testing.T) {
 	t.Parallel()
 
@@ -311,6 +372,7 @@ func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *te
 		body string
 		want []recipeComment
 	}{
+		// A `#` that starts a line make joins into a continued command, at any indentation.
 		{
 			name: "a recipe comment that continues the line above",
 			body: "target:\n\techo before; \\\n\t# a comment \\\n\techo after\n",
@@ -327,28 +389,122 @@ func TestContinuedRecipeCommentsMatchesOnlyACommentInsideAContinuedCommand(t *te
 			want: []recipeComment{{Line: 3, Text: "# a comment"}},
 		},
 		{
+			name: "a comment line at column 0 inside a continued command",
+			body: "target:\n\techo before; \\\n# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "# a comment \\"}},
+		},
+		{
+			name: "a space-indented comment line inside a continued command",
+			body: "target:\n\techo before; \\\n # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "# a comment \\"}},
+		},
+		{
+			name: "two comment lines in one continued command, the second at column 0",
+			body: "target:\n\techo before; \\\n\t# first \\\n# second \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "# first \\"}, {Line: 4, Text: "# second \\"}},
+		},
+
+		// A `#` behind the recipe prefixes make strips from the start of a recipe command.
+		{
+			name: "a recipe comment behind an @ prefix",
+			body: "target:\n\techo before; \\\n\t@# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "@# a comment \\"}},
+		},
+		{
+			name: "a recipe comment behind a - prefix",
+			body: "target:\n\techo before; \\\n\t-# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "-# a comment \\"}},
+		},
+		{
+			name: "a recipe comment behind @-+ prefixes and blanks",
+			body: "target:\n\techo before; \\\n\t@-+  # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "@-+  # a comment \\"}},
+		},
+
+		// A `#` that starts a word further along a line of a continued command comments out the rest of it too.
+		{
+			name: "a # after a blank on a continued recipe line",
+			body: "target:\n\techo a; # a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo a; # a comment \\"}},
+		},
+		{
+			name: "a # right after a semicolon on a continued recipe line",
+			body: "target:\n\techo a;# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "echo a;# a comment \\"}},
+		},
+		{
+			name: "a # right after && on a continued recipe line",
+			body: "target:\n\ttest -n x &&# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "test -n x &&# a comment \\"}},
+		},
+		{
+			name: "a # right after || on a continued recipe line",
+			body: "target:\n\ttest -n x ||# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 2, Text: "test -n x ||# a comment \\"}},
+		},
+		{
+			name: "a # right after an opening parenthesis on a continued recipe line",
+			body: "target:\n\techo a \\\n\t(# a comment \\\n\techo after\n",
+			want: []recipeComment{{Line: 3, Text: "(# a comment \\"}},
+		},
+		{
+			name: "a # on a line continued into from above, not itself continuing",
+			body: "target:\n\techo a \\\n\techo b; # a comment\n",
+			want: []recipeComment{{Line: 3, Text: "echo b; # a comment"}},
+		},
+
+		// Neither a lone comment line nor a `#` that is data is part of a comment that ends a command.
+		{
 			name: "a recipe comment on its own, not in a continued command",
 			body: "target:\n\techo before\n\t# a comment\n\techo after\n",
+		},
+		{
+			name: "a recipe comment on its own, behind an @ prefix",
+			body: "target:\n\techo before\n\t@# a comment\n\techo after\n",
+		},
+		{
+			name: "a # mid-line of a recipe line that does not continue",
+			body: "target:\n\techo a; # a comment\n\techo after\n",
 		},
 		{
 			name: "a make comment above a target",
 			body: "# a make comment\ntarget:\n\techo before\n",
 		},
 		{
-			name: "a # in a quoted string of a continued command",
+			name: "a make comment in a continued variable assignment at column 0",
+			body: "VERSION = 1 \\\n# a make comment\ntarget:\n\techo hi\n",
+		},
+		{
+			name: "a # in a double-quoted string of a continued command",
 			body: "target:\n\techo \"a # b\"; \\\n\techo after\n",
 		},
 		{
-			name: "a $$# use mid-line in a continued command",
+			name: "a # in a single-quoted string of a continued command",
+			body: "target:\n\techo 'a # b'; \\\n\techo after\n",
+		},
+		{
+			name: "a # behind $$ on a continued recipe line",
+			body: "target:\n\techo $$#; \\\n\techo after\n",
+		},
+		{
+			name: "a $$# use inside a quoted string of a continued command",
 			body: "target:\n\techo \"$$#\"; \\\n\techo after\n",
+		},
+		{
+			name: "a # behind { in $${#a} on a continued recipe line",
+			body: "target:\n\techo $${#a}; \\\n\techo after\n",
+		},
+		{
+			name: "a # inside a word on a continued recipe line",
+			body: "target:\n\techo a#b; \\\n\techo after\n",
 		},
 		{
 			name: "a recipe comment after a line whose backslash has trailing blanks",
 			body: "target:\n\techo before; \\ \n\t# a comment\n",
 		},
 		{
-			name: "a comment line without a leading tab",
-			body: "target:\n\techo before; \\\n# a comment\n",
+			name: "a recipe comment after a line ending in two backslashes",
+			body: "target:\n\techo \\\\\n\t# a comment\n",
 		},
 	}
 
