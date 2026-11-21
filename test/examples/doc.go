@@ -22,8 +22,11 @@
 // abfss://data@acmeaccount..., oci://acme-bucket), and the customer names a
 // provider resource path carries (a GCP project ID in projects/acme-prod, a
 // bucket in projects/_/buckets/acme-bucket, an Azure storage account in an ARM
-// ID's storageAccounts/acmeprod, an S3 access point (Object Lambda included),
-// S3 Express or Outposts bucket in an ARN) that are not documentation values.
+// ID's storageAccounts/acmeprod and the other globally unique Azure names an
+// ARM ID carries (a Key Vault, a container registry, a Cosmos DB account, a
+// SQL, PostgreSQL or MySQL server, a web app, a Service Bus namespace), an S3
+// access point (Object Lambda included), S3 Express or Outposts bucket in an
+// ARN) that are not documentation values.
 // Only directories named exactly testdata are checked besides examples/ and
 // docs/guide/, so a new fixture directory must be named testdata. The walk
 // reads the tree on disk, so an untracked or git-ignored file under a checked

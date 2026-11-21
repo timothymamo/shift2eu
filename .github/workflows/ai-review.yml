@@ -82,7 +82,7 @@ jobs:
         env:
           # renovate: datasource=npm depName=@anthropic-ai/claude-code-linux-x64
           CLAUDE_CODE_VERSION: 2.1.330
-          CLAUDE_CODE_INTEGRITY: sha512-uJ24I+t47cpQjeo31ZrHepsFQ8QUsLjCxmDxLshMjYHEtoxhQdgKc4iuViQDaKpFqn3puR85gwHlLj4e7s+1iQ==
+          CLAUDE_CODE_INTEGRITY: sha512-9Gn+V7DtJ8M1nztP9CeDVl9g3RtrepI7rOFTyPRRnZe8D6zebIHKmC7OvBauucuAP0X0k85SDN/LPVZyjsGezQ==
         run: .github/scripts/install-claude-code.sh "${RUNNER_TEMP}/claude-code" "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}" "${CLAUDE_CODE_INTEGRITY}"
       # A token of the reviewer App, revoked when the job ends, with exactly Pull requests write (to post
       # and dismiss its reviews) and Contents read. client-id, never the deprecated app-id (ADR 0021).

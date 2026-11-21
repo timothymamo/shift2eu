@@ -444,8 +444,10 @@ func TestSanitisationProblemsHostNameRule(t *testing.T) {
 // (GitHub.com/TimothyMamo/shift2eu) is clean too.
 //
 // A bucket is reported with the scheme that gives it its shape (s3://, s3a://,
-// s3n://, gs://, az://, abfss://, wasbs://, oci://) or, in an ARN, whole
-// (arn:aws:s3:::acme-prod-bucket). An oci:// reference names a registry host
+// s3n://, gs://, az://, oci://) or, in an ARN, whole
+// (arn:aws:s3:::acme-prod-bucket). An abfss or wasbs URL names a storage
+// account, which is reported on its own (acmeprodlake), beside the host the
+// host name rule reports. An oci:// reference names a registry host
 // with a dot in its first segment (ghcr.io, registry.example.com) rather than a
 // bucket, so it is read only when that segment is a bucket's name, as it is in
 // oci://acme-prod-bucket@acmetenancy. A Cloud Storage path is read by this

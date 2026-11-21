@@ -55,12 +55,20 @@
 // the exact set it means (issue #345): depguard matches its exemptions, such as
 // !**/internal/cli/*_test.go, against absolute paths with no anchor at the
 // module root, so a directory whose path ends in the same segments would be
-// exempt too. The test lists ./... natively with no tag and with the e2e,
-// integration and browser tags, on windows with the tags and on js/wasm with
-// and without them, and fails unless the packages whose test files
-// (TestImports, XTestImports) import internal/cli or a package below it are
-// exactly internal/cli and cmd/shift2eu-web/internal/wire.
-// TestCLITestImportersOf pins its helper.
+// exempt too. The test lists ./... natively with no tag and with every tag of
+// run.build-tags in .golangci.yml, on windows with those tags and on js/wasm
+// with and without them. It fails, naming the build, on a package outside
+// internal/cli and cmd/shift2eu-web/internal/wire whose test files
+// (TestImports, XTestImports) import internal/cli or a package below it in
+// that build, and on a package of those two that does so in no build: the
+// must-import direction is checked once, over the union of the builds, so a
+// parity test behind a build constraint is no stale exemption (issue #382).
+// check.CLIImporterProblems makes that decision, and TestCLIImporterProblems
+// and TestCLITestImportersOf pin it and the helper.
+//
+// TestDepguardDescsKeepTheirWholeMessage fails on a depguard desc: in
+// .golangci.yml that is a plain, unquoted YAML scalar holding " #", which YAML
+// would cut at the # as a comment (issue #382).
 //
 // TestGolangciSettingsHideNoIssue covers what the pin does not: whether the
 // rules run and what lint reports (issue #81). It fails, naming the setting, on

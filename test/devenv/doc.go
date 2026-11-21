@@ -4,9 +4,12 @@
 // .github/workflows/vm-tools.yml must see Lima refuse (issue #137), and the
 // swap file dev/lima.yaml provisions (issue #294). It also pins that the shell
 // blocks of docs/dev-environment.md hold no `!` interactive zsh would expand
-// as a history event (zshhistory_test.go, issue #335), and that
-// dev/infra-rules.sh holds the static rules of infra/'s OpenTofu configuration
-// (infrarules_test.go, issue #422).
+// as a history event (zshhistory_test.go, issue #335), that the host targets
+// that load the VM's credentials refuse a host clone .envrc that reads a
+// parent, and a .envrc or .env in or above the workspace, before they run
+// anything and without printing a value (envrcguard_test.go, issue #402), and
+// that dev/infra-rules.sh holds the static rules of infra/'s OpenTofu
+// configuration (infrarules_test.go, issue #422).
 //
 // TestInfraRules runs the script on the real infra/, which must hold every
 // rule, and on copies of infra/ in t.TempDir() with exactly one breakage each,

@@ -213,6 +213,158 @@ $(call host_refuse,make runs in $(REPO_ROOT) - the workspace $(or $(HOST_WORKSPA
 else ifneq ($(filter $(REPO_ROOT)/%,$(host_workspace_real)),)
 $(call host_refuse,the workspace $(HOST_WORKSPACE) is inside $(REPO_ROOT) - the checkout make runs in)
 endif
+# The .envrc guard (issue #402). The host targets that load the VM's credentials or the agents App's key -
+# vm-env, its check vm-env-check, the three that run them (vm-up, vm-create, vm-init), the two that mint the
+# agents App's token in the foreground (agents-token, agents-token-refresh) and the two that start or install its
+# refresh - refuse a layout where direnv reads the credentials from anywhere but the host clone's own .envrc: a
+# host clone .envrc that is a symlink to a file outside the clone or hands its lines to another file, or a .envrc
+# or .env in the workspace or above it - both spellings of it, as WORKSPACE_REPO writes it and with its symlinks
+# resolved - which direnv loads in every Mac shell opened in the workspace (found on the Mac Mini on 2026-11-20).
+# The host clone's .envrc is held strictly, as the guard parses no shell: source_up, source_up_if_exists,
+# source_env, source_env_if_exists, source_url and bash's source and . are refused whatever they name, a file of
+# the clone included, as they run a file the guard never reads; dotenv and dotenv_if_exists pass only bare (the
+# clone's own .env) or with an argument that, one enclosing pair of matching quotes stripped, holds nothing but
+# A-Za-z0-9._/+@=- and resolves inside the clone (a directory standing for its .env); anything else counts as
+# outside. ;, &, |, ( and ) separate directives (each doubled before matching, so no match eats the boundary of
+# the next), <, > and a backtick end a directive's word as well (source_up>/dev/null, `source_up`), and a
+# dotenv directly followed by a quote, a backslash, <, > or a backtick, or with an argument starting with one,
+# counts as outside. $(call
+# ENVRC_GUARD,<target>) checks both and names each file on stderr, with the line number, the directive's name and
+# paths only, never a line or a value: of the host clone's .envrc it reads, through grep -a -o, only the words of
+# ENVRC_GUARD_ERE on lines that are no comment (a line ending in \ joined to the next first, as bash does), with
+# the one word after each; of the files above the workspace nothing, it only tests that they are there. A
+# relative path is resolved against the clone, component by component, every symlink followed, the last one too,
+# at most 40 (macOS: /var is /private/var, as in REPO_ROOT); a loop of symlinks counts as outside. A directive in
+# a trailing comment counts too, a safe false positive. It checks the usual direnv and bash spellings and is no
+# sandbox (eval can always read a parent). It is a macro, not a script of dev/, as it runs while make reads this
+# file, like the refusal above:
+# before any prerequisite (vm-env's vm-env-check), sub-make, $(LIMA_INSTANCE_CHECK) or recipe line, even under
+# make -i or -k; a sub-make (vm-create's) checks again. It prints "refused" on stdout when it refuses, and make
+# then stops with $(error). It refuses, never warns, and has no override: the fix is moving a file
+# (docs/dev-environment.md, The host clone). vm-boot-install is not one of them: its LaunchDaemon starts the VM
+# and holds no credential (its plist names only limactl, LIMA_INSTANCE and LIMA_HOME).
+ENVRC_GUARD_TARGETS := agents-token agents-token-refresh agents-token-refresh-install agents-token-refresh-start \
+	vm-create vm-env vm-env-check vm-init vm-up
+envrc_guard_goals := $(filter $(ENVRC_GUARD_TARGETS),$(MAKECMDGOALS))
+host_sq = '$(subst ','\'',$(1))'
+# A directive the guard reads: the word, alone (no letter, digit, _ or . before it, so a backtick may; a space, a
+# separator, a quote, a backslash, <, >, a backtick or the end after it), with the one word after it, which stops
+# at a space, a separator, < or > after its first character. Its first character may be <, > or a backtick, so
+# dotenv's argument then fails the allow list; a backtick later in it does not stop it, as bash joins what a
+# command substitution prints to the word, so dotenv .env`...` fails the allow list too.
+# docs/dev-environment.md, The host clone, counts the lines with the same words and boundaries.
+ENVRC_GUARD_ERE := (^|[^A-Za-z0-9_.])(source_up_if_exists|source_up|source_env_if_exists|source_env|source_url|dotenv_if_exists|dotenv|source|\.)([[:space:]]+[^[:space:];&|()][^[:space:];&|()<>]*|[[:space:];&|()<>`\"'\'']|$$)
+ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
+	target=$(call host_sq,$(1)); clone=$(call host_sq,$(REPO_ROOT)); dir=$(call host_sq,$(HOST_WORKSPACE)); \
+	why="every line of the VM's credentials and the agents App's variables belongs in the host clone's .envrc itself (docs/dev-environment.md, The host clone)"; \
+	dir_real=$(call host_sq,$(host_workspace_real)); \
+	refused=; nl=$$(printf '\n_'); nl=$${nl%_}; \
+	resolve() { out=; rest=$$1; hops=0; \
+		while :; do \
+			while :; do case $$rest in (/*) rest=$${rest$(host_hash)/} ;; (*) break ;; esac; done; \
+			[ -n "$$rest" ] || break; \
+			part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; \
+			case $$part in \
+			(.) ;; \
+			(..) out=$${out%/*} ;; \
+			(*) if [ -L "$$out/$$part" ]; then \
+					hops=$$((hops + 1)); [ "$$hops" -le 40 ] || return 1; \
+					link=$$(readlink "$$out/$$part") || return 1; \
+					case $$link in (/*) out= ;; esac; rest="$$link$$rest"; \
+				else out="$$out/$$part"; fi ;; \
+			esac; \
+		done; printf '%s\n' "$${out:-/}"; }; \
+	envrc_lines() { acc=; held=0; \
+		while IFS= read -r line || [ -n "$$line" ]; do \
+			if [ "$$held" -eq 0 ]; then \
+				case $${line$(host_hash)"$${line%%[![:space:]]*}"} in ('$(host_hash)'*) line= ;; esac; \
+			fi; \
+			case $$line in \
+			(*'\') acc="$$acc$${line%?}"; held=$$((held + 1)) ;; \
+			(*) printf '%s\n' "$$acc$$line"; acc=; \
+				while [ "$$held" -gt 0 ]; do printf '\n'; held=$$((held - 1)); done ;; \
+			esac; \
+		done; \
+		[ "$$held" -eq 0 ] || printf '%s\n' "$$acc"; }; \
+	envrc="$$clone/.envrc"; \
+	if [ -e "$$envrc" ] || [ -L "$$envrc" ]; then \
+		clone_real=$$(cd "$$clone" && pwd -P); \
+		envrc_real=$$(resolve "$$envrc") || envrc_real=; \
+		if [ -z "$$clone_real" ]; then \
+			envrc_real=; \
+		elif case $$envrc_real in ("$$clone_real"/*) false ;; (*) true ;; esac; then \
+			echo "$$target: refused: the host clone's .envrc, $$envrc, is a symlink to a file outside the host clone: $$why" >&2; \
+			refused=1; envrc_real=-; \
+		fi; \
+		if [ "$$envrc_real" = - ]; then \
+			:; \
+		elif [ -n "$$envrc_real" ] && [ -f "$$envrc_real" ] && [ -r "$$envrc_real" ] && \
+			text=$$(envrc_lines < "$$envrc_real") && \
+			found=$$(printf '%s\n' "$$text" | sed 's/[;&|()]/&&/g' | \
+				grep -a -n -oE '$(ENVRC_GUARD_ERE)' || \
+				[ "$$?" -eq 1 ]); then \
+			text=; \
+			IFS=$$nl; for entry in $$found; do \
+				unset IFS; \
+				num=$${entry%%:*}; match=$${entry$(host_hash)*:}; \
+				case $$match in ([sd.]*) ;; (*) match=$${match$(host_hash)?} ;; esac; \
+				directive=$${match%%[!a-z_.]*}; rest=$${match$(host_hash)"$$directive"}; \
+				set -- $$rest; arg=$${1-}; \
+				case $$arg in (';' | '&' | '|' | '(' | ')') arg= ;; esac; \
+				case $$directive in \
+				(dotenv | dotenv_if_exists) \
+					outside=; \
+					case $$rest in \
+					([\"\'\\]) outside=1 ;; \
+					(*) case $$arg in ('') arg=.env ;; (\"*\" | \'*\') arg=$${arg$(host_hash)?}; arg=$${arg%?} ;; esac; \
+						case $$arg in \
+						('' | *[!A-Za-z0-9._/+@=-]*) outside=1 ;; \
+						(*) case $$arg in (/*) path=$$arg ;; (*) path="$$clone_real/$$arg" ;; esac; \
+							path=$$(resolve "$$path") || path=; \
+							if [ -n "$$path" ] && [ -d "$$path" ]; then path=$$(resolve "$$path/.env") || path=; fi; \
+							case $$path in ("$$clone_real"/*) ;; (*) outside=1 ;; esac ;; \
+						esac ;; \
+					esac; \
+					if [ -n "$$outside" ]; then \
+						echo "$$target: refused: $$envrc: line $$num: the host clone's .envrc loads with $$directive a path this check cannot read as a plain path inside the host clone: $$why" >&2; \
+						refused=1; \
+					fi ;; \
+				(*) echo "$$target: refused: $$envrc: line $$num: the host clone's .envrc runs another file with $$directive, which this check does not read: put that file's lines in the host clone's .envrc itself (docs/dev-environment.md, The host clone)" >&2; \
+					refused=1 ;; \
+				esac; \
+			done; \
+		else \
+			text=; \
+			echo "$$target: refused: cannot read the host clone's .envrc, $$envrc, to check that it reads no file outside the host clone: $$why" >&2; \
+			refused=1; \
+		fi; \
+	fi; \
+	seen=$$nl; \
+	for start in "$$dir" "$$dir_real"; do \
+		dir=$$start; \
+		while :; do \
+			for name in .envrc .env; do \
+				file="$${dir%/}/$$name"; \
+				if [ -e "$$file" ] || [ -L "$$file" ]; then \
+					case $$seen in \
+					(*"$$nl$$file$$nl"*) ;; \
+					(*) seen="$$seen$$file$$nl"; \
+						echo "$$target: refused: $$file is in the workspace the VM mounts or in a directory above it, where direnv loads it in every shell opened in the workspace: move its lines into the host clone's .envrc and remove it; $$why" >&2; \
+						refused=1 ;; \
+					esac; \
+				fi; \
+			done; \
+			[ -n "$$dir" ] && [ "$$dir" != / ] || break; \
+			dir=$${dir%/*}; [ -n "$$dir" ] || dir=/; \
+		done; \
+	done; \
+	[ -z "$$refused" ] || echo refused
+ifneq ($(envrc_guard_goals),)
+envrc_guard_refused := $(shell $(call ENVRC_GUARD,$(firstword $(envrc_guard_goals))))
+ifneq ($(envrc_guard_refused),)
+$(error $(firstword $(envrc_guard_goals)): refused: direnv would read the credentials from a .envrc or .env other than the host clone's own (each named above); nothing ran (docs/dev-environment.md, The host clone))
+endif
+endif
 endif
 # What a host target that opens a shell in the VM (deck, deck-restart, vm-claude-settings, vm-init, vm-shell)
 # puts before limactl: the host clone's .envrc holds the agents App's variables, and none of those commands
