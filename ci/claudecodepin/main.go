@@ -33,13 +33,20 @@ const (
 var errRedirect = errors.New("the registry answered with a redirect, which the check does not follow")
 
 func main() {
-	client := &http.Client{
-		Timeout: fetchTimeout,
+	os.Exit(run(context.Background(), os.Args[1:], newRegistryClient(nil), os.Stdout, os.Stderr))
+}
+
+// newRegistryClient returns the client the check reads the registry with:
+// bounded by fetchTimeout, refusing every redirect with errRedirect, and
+// sending its requests through transport (nil means http.DefaultTransport).
+func newRegistryClient(transport http.RoundTripper) *http.Client {
+	return &http.Client{
+		Transport: transport,
+		Timeout:   fetchTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errRedirect
 		},
 	}
-	os.Exit(run(context.Background(), os.Args[1:], client, os.Stdout, os.Stderr))
 }
 
 // run checks the pin of the workflow args names (or defaultWorkflow) against
