@@ -237,6 +237,46 @@ func TestSourcesDataIgnoresHeadingsInsideAFence(t *testing.T) {
 	}
 }
 
+// TestSourcesDataKeepsALongerFenceOpen pins the longer-fence half of the fence
+// rule in sectionCommands (issue #373, item 15, review nit 2): a ```bash block
+// opened by four backticks closes only on a line of at least four, so a ``` or
+// ```bash line inside it is command text of that block, neither a close nor a
+// second block. Closing at the shorter run instead would drop both lines from
+// the page's commands without a word.
+func TestSourcesDataKeepsALongerFenceOpen(t *testing.T) {
+	t.Parallel()
+
+	aws := guideSources[0]
+
+	guide := theGuide(t)
+	open, closeAt := bashFence(t, guide, aws.collect)
+
+	want := "aws s3api list-buckets --output json\n" +
+		"```\n" +
+		"```bash\n" +
+		"aws s3api list-objects-v2 --bucket 123456789012-example"
+
+	block := []string{
+		"````bash",
+		"aws s3api list-buckets --output json",
+		"```",
+		"```bash",
+		"aws s3api list-objects-v2 --bucket 123456789012-example",
+		"````",
+	}
+
+	got, err := extract(t, splice(guide, open, closeAt+1, block))
+	if err != nil {
+		t.Fatalf("sourcesData failed on a guide whose %q section holds a ````bash block with ``` lines in it, want it read as one block (issue #373, item 15): %v",
+			aws.collect, err)
+	}
+
+	if !slices.Contains(got[aws.key].CollectCommands, want) {
+		t.Errorf("the %s collect commands are %q, want one of them %q: a ``` or ```bash line inside a ````bash block is command text, and only a line of four backticks closes the block (issue #373, item 15)",
+			aws.key, got[aws.key].CollectCommands, want)
+	}
+}
+
 // theGuide reads docs/guide/inventory.md as the extractor reads it.
 func theGuide(t *testing.T) []string {
 	t.Helper()
