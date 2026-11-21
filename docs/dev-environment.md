@@ -27,6 +27,10 @@ nothing):
 setopt interactive_comments
 ```
 
+Each block's first comment names the machine it runs on. **Mac (admin)** is the machine your browser saved a
+downloaded private key to, where you use GitHub as yourself with your admin token; in account mode it is
+usually not the Mac Mini.
+
 ### On the Mac
 
 You keep two clones of the repository: the **workspace's checkout**, which the VM mounts and the agents
@@ -759,6 +763,33 @@ Never give it Administration: the rulesets' bypass lists need Administration wri
 `Protect main`, so those checks stay yours (ADR 0031, d). Secrets and Variables are not needed either.
 Generate a private key and keep the `.pem` **outside the workspace**, a regular file (not a symlink: the
 script refuses one), readable only by you (`chmod 600`). The App's slug is never configured: the token script reads it from the App (`GET /app`).
+Copy it into place, then delete the downloaded copy. Here the browser and the host clone must be the same
+Mac; a key the browser saved on another machine is carried as in step 4 of the account mode (The key under a
+separate account).
+
+```bash
+# Mac (admin): the Mac whose host clone mints the tokens, only when the browser saved the key here
+# copy, not mv, so the rm below deletes the download
+install -m 0600 ~/Downloads/<app>.<date>.private-key.pem <the path SHIFT2EU_AGENTS_APP_KEY_FILE names>
+# FAIL "install: ...: No such file or directory": use the file's real name (ls ~/Downloads | grep private-key), or, if the key is on another machine, carry it as in step 4 of the account mode
+ls -l <the path SHIFT2EU_AGENTS_APP_KEY_FILE names>   # PASS: -rw------- owned by you, outside the workspace
+```
+
+```bash
+# Mac (admin), then: the machine the browser saved the key to, once the key is in place
+rm ~/Downloads/<app>.<date>.private-key.pem
+# FAIL "rm: ...: No such file or directory": run it on the machine the browser saved the key to, with the file's real name
+ls ~/Downloads/<app>.<date>.private-key.pem         # PASS: No such file or directory
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
+tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
+# FAIL a Time Machine backup ran since the download: rotate the key (generate another, repeat this, delete this one on the App's page)
+```
 
 #### The host clone
 
@@ -1406,12 +1437,31 @@ sudo -k
 **4. The App's key**: generate a **new** private key on the App's settings page. The download is usually
 on another machine (the browser you use for GitHub): carry it to the Mini as a file only you can read, and
 move it in at once. Downloaded on the Mini itself, install it from `~/Downloads` and remove it there instead.
+A Time Machine backup that ran since the download keeps the key: then rotate it (generate another key, repeat
+this step, delete this one on the App's page).
 
 ```bash
-# the downloading machine
+# Mac (admin): the machine the browser saved the key to
 # keep the older key on the App's page until step 10: deleting it now breaks nothing, but it is your way back
 ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
+ssh <the Mini> 'ls -l ~/agents-app.pem.tmp'   # PASS: -rw------- owned by you
+# FAIL a mode other than -rw-------: ssh <the Mini> 'chmod 0600 ~/agents-app.pem.tmp'
+```
+
+```bash
+# Mac (admin), then: the machine the browser saved the key to, once the copy is on the Mini
 rm ~/Downloads/<app>.<date>.private-key.pem
+# FAIL "rm: ...: No such file or directory": run it on the machine the browser saved the key to, with the file's real name
+ls ~/Downloads/<app>.<date>.private-key.pem         # PASS: No such file or directory
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
+tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
+# FAIL a Time Machine backup ran since the download: rotate the key, as above
 ```
 
 ```bash
@@ -1422,24 +1472,19 @@ sudo ls -ln /Users/_shift2euagents/.config/shift2eu/agents-app.pem   # PASS: -rw
 sudo -k
 ```
 
-Then check both machines (empty the Trash first if the file went there). A Time Machine backup that ran
-since the download keeps the key: then rotate it (generate another key, repeat this step, delete this one
-on the App's page).
-
-```bash
-# the downloading machine
-ls ~/Downloads ~/.Trash | grep private-key.pem      # PASS: nothing
-tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
-# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
-# FAIL a Time Machine backup ran since the download: rotate the key, as above
-```
+Then check the Mini too (empty the Trash first if the file went there):
 
 ```bash
 # Mac Mini
-ls ~/Downloads ~/.Trash | grep private-key.pem      # PASS: nothing
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
 ls ~/agents-app.pem.tmp                             # PASS: No such file or directory
 tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
 # FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
 # FAIL a Time Machine backup ran since the download: rotate the key, as above
 ```
 
@@ -1690,9 +1735,35 @@ the keys file to remove):
 direnv exec . make vm-agents-token-ssh-uninstall   # PASS: vm-agents-token-ssh-uninstall: done
 ```
 
-**3. A new key**, generated on the App's page and kept where `SHIFT2EU_AGENTS_APP_KEY_FILE` will name
-it, outside the workspace, mode 0600. Never copy the account's key out; delete it on the App's page once
-the new one works.
+**3. A new key**, generated on the App's page and kept on the Mini where `SHIFT2EU_AGENTS_APP_KEY_FILE` will
+name it, outside the workspace, mode 0600. The download is usually on another machine: carry it to the Mini
+as a file only you can read. Downloaded on the Mini itself, install it from `~/Downloads` and remove it there
+instead. Never copy the account's key out; delete it on the App's page once the new one works.
+
+```bash
+# Mac (admin): the machine the browser saved the key to
+ssh <the Mini> 'umask 077 && cat >~/agents-app.pem.tmp' < ~/Downloads/<app>.<date>.private-key.pem
+ssh <the Mini> 'install -m 0600 ~/agents-app.pem.tmp <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name> && rm ~/agents-app.pem.tmp'
+# FAIL "...: No such file or directory": ssh <the Mini> 'mkdir -m 0700 -p <its directory>', then run this block again
+ssh <the Mini> 'ls -l <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name>'   # PASS: -rw------- owned by you, outside the workspace
+ssh <the Mini> 'ls ~/agents-app.pem.tmp'                                   # PASS: No such file or directory
+```
+
+```bash
+# Mac (admin), then: the machine the browser saved the key to, once the new key is in place
+rm ~/Downloads/<app>.<date>.private-key.pem
+# FAIL "rm: ...: No such file or directory": run it on the machine the browser saved the key to, with the file's real name
+ls ~/Downloads/<app>.<date>.private-key.pem         # PASS: No such file or directory
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
+tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
+# FAIL a Time Machine backup ran since the download: rotate the key (generate another, repeat this step, delete this one on the App's page)
+```
 
 **4. The `.envrc`**: remove `SHIFT2EU_AGENTS_ACCOUNT` and the `SHIFT2EU_AGENTS_VM_SSH_*` variables, set
 `SHIFT2EU_AGENTS_APP_KEY_FILE`, then:
@@ -2031,16 +2102,32 @@ it in a file or a note. Set no `ANTHROPIC_API_KEY`, here or at repository level 
 ```bash
 # your own machine, never the VM
 gh secret set AI_REVIEWER_APP_CLIENT_ID --env ai-review --repo timothymamo/shift2eu
-gh secret set AI_REVIEWER_APP_PRIVATE_KEY --env ai-review --repo timothymamo/shift2eu < path/to/the-downloaded-key.pem
+gh secret set AI_REVIEWER_APP_PRIVATE_KEY --env ai-review --repo timothymamo/shift2eu < ~/Downloads/<app>.<date>.private-key.pem
 gh secret set CLAUDE_CODE_OAUTH_TOKEN --env ai-review --repo timothymamo/shift2eu
 gh variable set AI_REVIEW_REQUEST_CHANGES --env ai-review --repo timothymamo/shift2eu --body false
-# then delete the downloaded .pem, or move it to your password manager: GitHub holds the only copy the
-#   workflow needs, and a new key can always be generated
 gh api repos/timothymamo/shift2eu/environments/ai-review/secrets --jq '.secrets[].name'
 # PASS: exactly AI_REVIEWER_APP_CLIENT_ID, AI_REVIEWER_APP_PRIVATE_KEY and CLAUDE_CODE_OAUTH_TOKEN
 gh api repos/timothymamo/shift2eu/actions/secrets --jq '.secrets[].name'
 gh api repos/timothymamo/shift2eu/actions/variables --jq '.variables[].name'
 # PASS: none of the four names and no ANTHROPIC_API_KEY (the release-tag skill checks the same before every release)
+```
+
+GitHub now holds the only copy the workflow needs, and a new key can always be generated:
+
+```bash
+# Mac (admin), then: your own machine, the one the browser saved the key to, once the secrets are set
+rm ~/Downloads/<app>.<date>.private-key.pem
+# FAIL "rm: ...: No such file or directory": run it on the machine the browser saved the key to, with the file's real name
+ls ~/Downloads/<app>.<date>.private-key.pem         # PASS: No such file or directory
+ls ~/Downloads ~/.Trash | grep private-key   # PASS: nothing
+# FAIL "ls: ...: Operation not permitted": the Trash was not read; give the terminal Full Disk Access or look in the Trash in the Finder
+# FAIL any other private-key file: delete it too
+tmutil listlocalsnapshots /                         # PASS: no snapshot taken since the download
+# FAIL a snapshot since the download: sudo tmutil deletelocalsnapshots <date> for each, then sudo -k
+tmutil destinationinfo   # PASS: "No destinations configured", or a destination listed
+tmutil latestbackup   # PASS: a time before the download, or no backup destination
+# FAIL an error or no output while a destination is listed: connect it and run it again, or read "Latest backup" in System Settings > General > Time Machine
+# FAIL a Time Machine backup ran since the download: rotate the key (generate another on the App's page, set the secret again, delete the old key there)
 ```
 
 *Roll back:* delete the secrets and the variable.
