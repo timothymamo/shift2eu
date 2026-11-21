@@ -26,12 +26,14 @@ const claudeCodePinCancel = "${{ github.event_name == 'pull_request' }}"
 
 // claudeCodePinPaths are the paths every trigger of the pin check filters on:
 // the pinned workflow, the installer that consumes the pin, the check's own
-// workflow and the check's code.
+// workflow, the check's code and go.mod, whose go line names the toolchain the
+// check is built with.
 var claudeCodePinPaths = []string{
 	".github/workflows/ai-review.yml",
 	".github/scripts/install-claude-code.sh",
 	claudeCodePinWorkflowPath,
 	"ci/claudecodepin/**",
+	"go.mod",
 }
 
 // ciUsesLine matches one uses: line of a workflow with its action, its commit and

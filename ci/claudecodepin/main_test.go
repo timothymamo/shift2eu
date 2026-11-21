@@ -198,7 +198,9 @@ func TestRun(t *testing.T) {
 		{
 			// The newline is in the package name, which Verify quotes with
 			// %q, so this case pins Verify's quoting rather than the
-			// annotation's escaping.
+			// annotation's escaping: the quoted name holds the raw newline
+			// as the two characters \ and n, so no ::warning command can
+			// follow it.
 			name:      "a registry package name with a newline is quoted by Verify",
 			integrity: publishedIntegrity,
 			status:    http.StatusOK,
@@ -206,7 +208,10 @@ func TestRun(t *testing.T) {
 				`"dist":{"integrity":"` + publishedIntegrity + `"}}`,
 			wantRequests: 1,
 			wantCode:     1,
-			wantStderr:   []string{"package"},
+			wantStderr: []string{
+				"package",
+				`"@anthropic-ai/claude-code-linux-x64\n::warning::injected"`,
+			},
 		},
 		{
 			// The -workflow path reaches the ::error message unquoted (read
