@@ -20,9 +20,9 @@ Each [release](https://github.com/timothymamo/shift2eu/releases) publishes one a
 
 `<version>` is the tag without its `v` (`shift2eu_X.Y.Z_linux_amd64.tar.gz` for `vX.Y.Z`). Each
 archive holds the `shift2eu` binary with `README.md`, `LICENSE`, the security policy `SECURITY.md`,
-the documentation under `docs/` and
-the sample inventories under `examples/` that [Try it](try-it.md) runs on. The binary is static and
-needs nothing else: [Assess an inventory](assess.md) shows how to run it.
+the documentation under `docs/` and the sample inventories under `examples/` that [Try it](try-it.md)
+runs on. The binary is static and needs nothing else: [Assess an inventory](assess.md) shows how to
+run it.
 [Verify a release](verify-releases.md#verify-an-archive) shows how to check an archive against
 `checksums.txt`, which detects a corrupted download, and against the build provenance the release
 workflow attests for it, which detects a tampered release (from the first release after `v0.3.0`).

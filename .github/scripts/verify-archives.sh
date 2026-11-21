@@ -4,17 +4,17 @@
 # what it should. The release ships the CLI alone (ADR 0037, issue #393): its archives,
 # shift2eu_<version>_<os>_<arch>, hold shift2eu (shift2eu.exe on Windows), and no other archive is
 # built. Besides its binary an archive may hold only LICENSE, README.md and SECURITY.md at its root,
-# each of which it must hold (issue #450), Markdown pages under docs/ (no path segment may start with a dot, so no ., .. or hidden
-# file), and exactly the samples docs/guide/try-it.md runs on (issue #188): examples/README.md and, for
-# each of aws, azure and gcp, examples/<source>/README.md and examples/<source>/inventory.json, with
-# their directories, and exactly the jq programs docs/guide/inventory.md builds an inventory with (issue
-# #178): docs/guide/inventory/<source>.jq for aws, azure and gcp. Any other entry fails the run, so a
-# stray file under docs/ (a .jq file there that is not one of the three), or any file under examples/
-# that is not a known sample (a real inventory committed as examples/<name>/inventory.json), never ships
-# unnoticed. Each archive must hold every sample and jq program too. Every entry must be a regular file
-# or a directory: a symbolic link, hard link or device fails the run too. Every built platform has one
-# archive, and checksums.txt lists and matches every archive and must pass sha256sum -c in dist/ as a
-# whole.
+# each of which it must hold (issue #450), Markdown pages under docs/ (no path segment may start with
+# a dot, so no ., .. or hidden file), and exactly the samples docs/guide/try-it.md runs on (issue
+# #188): examples/README.md and, for each of aws, azure and gcp, examples/<source>/README.md and
+# examples/<source>/inventory.json, with their directories, and exactly the jq programs
+# docs/guide/inventory.md builds an inventory with (issue #178): docs/guide/inventory/<source>.jq for
+# aws, azure and gcp. Any other entry fails the run, so a stray file under docs/ (a .jq file there
+# that is not one of the three), or any file under examples/ that is not a known sample (a real
+# inventory committed as examples/<name>/inventory.json), never ships unnoticed. Each archive must
+# hold every sample and jq program too. Every entry must be a regular file or a directory: a symbolic
+# link, hard link or device fails the run too. Every built platform has one archive, and checksums.txt
+# lists and matches every archive and must pass sha256sum -c in dist/ as a whole.
 # It then mirrors release.yml's hand-over of the archives to attest-archives (issues #156 and #163): the
 # files its patterns pick must pass sha256sum -c checksums.txt, and the subjects they attest must be
 # exactly the archives and checksums.txt, which must also be exactly what GoReleaser would upload to the
@@ -90,9 +90,8 @@ sift() {
 # otherwise only the root files (root_files: LICENSE, README.md, SECURITY.md), Markdown pages under
 # docs/, the inventory guide's jq programs (guide_programs) and the samples (with their directories,
 # sample_dirs), each a regular file or a directory. No other binary is on that list, so an archive
-# holding one fails too. Under examples/ it may hold only the samples, and it must hold every one of
-# them, every root file and every jq program: one list, so a file there that is not a known sample
-# fails the run.
+# holding one fails too. It must hold every root file, sample and jq program. Under examples/ it may
+# hold only the samples: one list, so a file there that is not a known sample fails the run.
 check_archive() {
   local archive="$1" own="$2" list long special owns stray sample
   list="$(entries "${archive}")" || { problem "${archive}: cannot list its entries"; return; }

@@ -129,15 +129,15 @@
 // the CLI in an archive of its own (issue #147, issue #393).
 // GoReleaserArchives reads the archives: section of .goreleaser.yaml as a
 // closed schema: one entry, with an id: equal to the one build its
-// ids: names, keeping the archive's name
-// shift2eu_<version>_<os>_<arch>, tar.gz (zip on Windows) with LICENSE,
-// README.md, SECURITY.md and docs/, and one checksums.txt covering that archive and no
-// extra file. DryRunVerifiesArchives holds
-// ci.yml's test job to one step running .github/scripts/verify-archives.sh,
-// which builds a goreleaser snapshot and fails unless the archive holds
-// exactly its own binary, after one goreleaser-action step that installs
-// (install-only) the GoReleaser release.yml's goreleaser job runs: the same
-// commit, distribution and version.
+// ids: names, keeping the archive's name shift2eu_<version>_<os>_<arch>,
+// tar.gz (zip on Windows) with LICENSE, README.md, SECURITY.md and docs/, and
+// one checksums.txt covering that archive and no extra file.
+// DryRunVerifiesArchives holds ci.yml's test job to one step running
+// .github/scripts/verify-archives.sh, which builds a goreleaser snapshot and
+// fails unless the archive holds exactly its own binary, after one
+// goreleaser-action step that installs (install-only) the GoReleaser
+// release.yml's goreleaser job runs: the same commit, distribution and
+// version.
 //
 // Nothing is copied: the release platforms are read from .goreleaser.yaml
 // (releasetarget.Read, in test/internal/releasetarget, which test/lint reads
