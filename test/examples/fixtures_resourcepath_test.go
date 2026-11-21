@@ -1,6 +1,7 @@
 package examples_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -28,8 +29,21 @@ import (
 // The value is reported as the file writes it, since ARM IDs are
 // case-insensitive and a lower-case resource type names the same account
 // (microsoft.storage/storageaccounts/acmeprodcustomers), and so does a name
-// written with capitals (projects/Acme-Corp-Prod). An S3 ARN is read in every
-// partition (arn:aws:, arn:aws-us-gov:), in the S3 Express service's own
+// written with capitals (projects/Acme-Corp-Prod). The other Azure names an ARM
+// ID carries are globally unique too, each the DNS label of a public host of its
+// own, so the same rule reads them (issue #424): a Key Vault
+// (vaults/kv-contoso-prod), a container registry (registries/acrcontosoprod), a
+// Cosmos DB account (databaseAccounts/cosmos-contoso-prod), a SQL, PostgreSQL or
+// MySQL server (servers/sql-contoso-prod, servers/pg-contoso-prod,
+// servers/mysql-contoso-prod, and a flexible server in flexibleServers/), a web
+// app (sites/app-contoso-prod) and a Service Bus namespace
+// (namespaces/sb-contoso-prod). Each is held to the shape its provider's naming
+// rules give it, to the sample rule a storage account's name is held to
+// (example and generic words, exampledata), and to an ARM ID's providers/
+// segment before its namespace, so a resource type (a child type after a
+// namespace, Microsoft.ServiceBus/namespaces/queues) and a placeholder too short
+// for a name (namespaces/n in the guide's ARM ID comment) name nobody. An S3 ARN
+// is read in every partition (arn:aws:, arn:aws-us-gov:), in the S3 Express service's own
 // spelling (arn:aws:s3express:...) and with either delimiter the ARN may use
 // (accesspoint/acme-prod-ap, accesspoint:acme-prod-ap), and an Outposts or
 // Object Lambda ARN names its access point or bucket in a path of its own, after
@@ -147,6 +161,180 @@ func TestResourcePathProblems(t *testing.T) {
 			name: "customer storage account named like a child resource",
 			text: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.Storage/storageAccounts/blobservices/blobServices/default",
 			want: []string{"storageAccounts/blobservices"},
+		},
+		// The other Azure names an ARM ID carries are globally unique too, each
+		// the DNS label of a public host of its own (<name>.vault.azure.net,
+		// <name>.azurecr.io, <name>.documents.azure.com,
+		// <name>.database.windows.net, <name>.postgres.database.azure.com,
+		// <name>.mysql.database.azure.com, <name>.azurewebsites.net,
+		// <name>.servicebus.windows.net), so the segment after the resource type
+		// names the customer as directly as a host would (issue #424). The type
+		// segment and the name are reported as the file writes them, since an
+		// ARM ID's provider and type are case-insensitive, and each type's name
+		// is held to the shape its provider's naming rules give it.
+		{
+			name: "customer Key Vault in an ARM ID",
+			text: testARMID("Microsoft.KeyVault", "vaults", "kv-contoso-prod"),
+			want: []string{"vaults/kv-contoso-prod"},
+		},
+		{
+			name: "customer Key Vault in a lower-case ARM ID",
+			text: testARMID("microsoft.keyvault", "VAULTS", "kv-contoso-prod"),
+			want: []string{"VAULTS/kv-contoso-prod"},
+		},
+		{
+			// A secret is a child resource of the vault, and only the vault's own
+			// name is the customer's: the child segment reports nothing.
+			name: "customer Key Vault with a secret after its name",
+			text: testARMID("Microsoft.KeyVault", "vaults", "kv-contoso-prod") + "/secrets/db-password",
+			want: []string{"vaults/kv-contoso-prod"},
+		},
+		{
+			name: "customer container registry in an ARM ID",
+			text: testARMID("Microsoft.ContainerRegistry", "registries", "acrcontosoprod"),
+			want: []string{"registries/acrcontosoprod"},
+		},
+		{
+			name: "customer container registry in a lower-case ARM ID",
+			text: testARMID("microsoft.containerregistry", "REGISTRIES", "acrcontosoprod"),
+			want: []string{"REGISTRIES/acrcontosoprod"},
+		},
+		{
+			// A registry task is a child resource of the registry.
+			name: "customer container registry with a task after its name",
+			text: testARMID("Microsoft.ContainerRegistry", "registries", "acrcontosoprod") + "/tasks/build",
+			want: []string{"registries/acrcontosoprod"},
+		},
+		{
+			name: "customer Cosmos DB account in an ARM ID",
+			text: testARMID("Microsoft.DocumentDB", "databaseAccounts", "cosmos-contoso-prod"),
+			want: []string{"databaseAccounts/cosmos-contoso-prod"},
+		},
+		{
+			name: "customer Cosmos DB account in a lower-case ARM ID",
+			text: testARMID("microsoft.documentdb", "DATABASEACCOUNTS", "cosmos-contoso-prod"),
+			want: []string{"DATABASEACCOUNTS/cosmos-contoso-prod"},
+		},
+		{
+			// A database is a child resource of the account.
+			name: "customer Cosmos DB account with a database after its name",
+			text: testARMID("Microsoft.DocumentDB", "databaseAccounts", "cosmos-contoso-prod") + "/sqlDatabases/shop",
+			want: []string{"databaseAccounts/cosmos-contoso-prod"},
+		},
+		{
+			name: "customer SQL server in an ARM ID",
+			text: testARMID("Microsoft.Sql", "servers", "sql-contoso-prod"),
+			want: []string{"servers/sql-contoso-prod"},
+		},
+		{
+			name: "customer SQL server in a lower-case ARM ID",
+			text: testARMID("microsoft.sql", "SERVERS", "sql-contoso-prod"),
+			want: []string{"SERVERS/sql-contoso-prod"},
+		},
+		{
+			// A database is a child resource of the server.
+			name: "customer SQL server with a database after its name",
+			text: testARMID("Microsoft.Sql", "servers", "sql-contoso-prod") + "/databases/shop",
+			want: []string{"servers/sql-contoso-prod"},
+		},
+		{
+			// A single server's name is global; the servers type is the same
+			// segment under the PostgreSQL namespace as under the SQL one, and
+			// the namespace is what tells the provider's name from SQL's.
+			name: "customer PostgreSQL server in an ARM ID",
+			text: testARMID("Microsoft.DBforPostgreSQL", "servers", "pg-contoso-prod"),
+			want: []string{"servers/pg-contoso-prod"},
+		},
+		{
+			name: "customer PostgreSQL server in a lower-case ARM ID",
+			text: testARMID("microsoft.dbforpostgresql", "SERVERS", "pg-contoso-prod"),
+			want: []string{"SERVERS/pg-contoso-prod"},
+		},
+		{
+			name: "customer PostgreSQL server with a database after its name",
+			text: testARMID("Microsoft.DBforPostgreSQL", "servers", "pg-contoso-prod") + "/databases/shop",
+			want: []string{"servers/pg-contoso-prod"},
+		},
+		{
+			// A flexible server is the same globally unique name in a type of
+			// its own, whose segment ends in the single server's (flexibleServers
+			// holds servers): the type before the name is what is reported.
+			name: "customer PostgreSQL flexible server in an ARM ID",
+			text: testARMID("Microsoft.DBforPostgreSQL", "flexibleServers", "pg-contoso-prod"),
+			want: []string{"flexibleServers/pg-contoso-prod"},
+		},
+		{
+			name: "customer PostgreSQL flexible server in a lower-case ARM ID",
+			text: testARMID("microsoft.dbforpostgresql", "FLEXIBLESERVERS", "pg-contoso-prod"),
+			want: []string{"FLEXIBLESERVERS/pg-contoso-prod"},
+		},
+		{
+			name: "customer PostgreSQL flexible server with a database after its name",
+			text: testARMID("Microsoft.DBforPostgreSQL", "flexibleServers", "pg-contoso-prod") + "/databases/shop",
+			want: []string{"flexibleServers/pg-contoso-prod"},
+		},
+		{
+			name: "customer MySQL server in an ARM ID",
+			text: testARMID("Microsoft.DBforMySQL", "servers", "mysql-contoso-prod"),
+			want: []string{"servers/mysql-contoso-prod"},
+		},
+		{
+			name: "customer MySQL server in a lower-case ARM ID",
+			text: testARMID("microsoft.dbformysql", "SERVERS", "mysql-contoso-prod"),
+			want: []string{"SERVERS/mysql-contoso-prod"},
+		},
+		{
+			name: "customer MySQL server with a database after its name",
+			text: testARMID("Microsoft.DBforMySQL", "servers", "mysql-contoso-prod") + "/databases/shop",
+			want: []string{"servers/mysql-contoso-prod"},
+		},
+		{
+			name: "customer MySQL flexible server in an ARM ID",
+			text: testARMID("Microsoft.DBforMySQL", "flexibleServers", "mysql-contoso-prod"),
+			want: []string{"flexibleServers/mysql-contoso-prod"},
+		},
+		{
+			name: "customer MySQL flexible server in a lower-case ARM ID",
+			text: testARMID("microsoft.dbformysql", "FLEXIBLESERVERS", "mysql-contoso-prod"),
+			want: []string{"FLEXIBLESERVERS/mysql-contoso-prod"},
+		},
+		{
+			name: "customer MySQL flexible server with a database after its name",
+			text: testARMID("Microsoft.DBforMySQL", "flexibleServers", "mysql-contoso-prod") + "/databases/shop",
+			want: []string{"flexibleServers/mysql-contoso-prod"},
+		},
+		{
+			name: "customer web app in an ARM ID",
+			text: testARMID("Microsoft.Web", "sites", "app-contoso-prod"),
+			want: []string{"sites/app-contoso-prod"},
+		},
+		{
+			name: "customer web app in a lower-case ARM ID",
+			text: testARMID("microsoft.web", "SITES", "app-contoso-prod"),
+			want: []string{"SITES/app-contoso-prod"},
+		},
+		{
+			// A slot is a child resource of the site, and a site's own name is
+			// the one the DNS label carries.
+			name: "customer web app with a slot after its name",
+			text: testARMID("Microsoft.Web", "sites", "app-contoso-prod") + "/slots/staging",
+			want: []string{"sites/app-contoso-prod"},
+		},
+		{
+			name: "customer Service Bus namespace in an ARM ID",
+			text: testARMID("Microsoft.ServiceBus", "namespaces", "sb-contoso-prod"),
+			want: []string{"namespaces/sb-contoso-prod"},
+		},
+		{
+			name: "customer Service Bus namespace in a lower-case ARM ID",
+			text: testARMID("microsoft.servicebus", "NAMESPACES", "sb-contoso-prod"),
+			want: []string{"NAMESPACES/sb-contoso-prod"},
+		},
+		{
+			// A queue is a child resource of the namespace.
+			name: "customer Service Bus namespace with a queue after its name",
+			text: testARMID("Microsoft.ServiceBus", "namespaces", "sb-contoso-prod") + "/queues/orders",
+			want: []string{"namespaces/sb-contoso-prod"},
 		},
 		{
 			// A directory bucket's ARN is the S3 Express service's (s3express),
@@ -387,6 +575,138 @@ func TestResourcePathProblems(t *testing.T) {
 			text: `"bucket": "arn:aws:s3express:eu-central-1:` + dummyAccountID + `:bucket/example-bucket--usw2-lax1-az1--x-s3"`,
 			want: nil,
 		},
+		{
+			// The sample rule a storage account is held to, example and generic
+			// words (exampledata), names no customer for the other Azure types
+			// either: it is the one rule every one of these names is held to.
+			name: "sample Key Vault name in an ARM ID",
+			text: testARMID("Microsoft.KeyVault", "vaults", "exampledata"),
+			want: nil,
+		},
+		{
+			name: "sample container registry name in an ARM ID",
+			text: testARMID("Microsoft.ContainerRegistry", "registries", "exampledata"),
+			want: nil,
+		},
+		{
+			name: "sample Cosmos DB account name in an ARM ID",
+			text: testARMID("Microsoft.DocumentDB", "databaseAccounts", "exampledata"),
+			want: nil,
+		},
+		{
+			name: "sample SQL server name in an ARM ID",
+			text: testARMID("Microsoft.Sql", "servers", "exampledata"),
+			want: nil,
+		},
+		{
+			name: "sample PostgreSQL server name in an ARM ID",
+			text: testARMID("Microsoft.DBforPostgreSQL", "servers", "exampledata"),
+			want: nil,
+		},
+		{
+			name: "sample PostgreSQL flexible server name in an ARM ID",
+			text: testARMID("Microsoft.DBforPostgreSQL", "flexibleServers", "exampledata"),
+			want: nil,
+		},
+		{
+			name: "sample MySQL server name in an ARM ID",
+			text: testARMID("Microsoft.DBforMySQL", "servers", "exampledata"),
+			want: nil,
+		},
+		{
+			name: "sample MySQL flexible server name in an ARM ID",
+			text: testARMID("Microsoft.DBforMySQL", "flexibleServers", "exampledata"),
+			want: nil,
+		},
+		{
+			name: "sample web app name in an ARM ID",
+			text: testARMID("Microsoft.Web", "sites", "exampledata"),
+			want: nil,
+		},
+		{
+			name: "sample Service Bus namespace name in an ARM ID",
+			text: testARMID("Microsoft.ServiceBus", "namespaces", "exampledata"),
+			want: nil,
+		},
+		{
+			// A resource type written with a name after it in a path is no ARM
+			// ID: with no providers/ segment before the namespace, the segment
+			// after the type names no resource of anyone's, the way the
+			// storage-account rows leave an RBAC action string alone.
+			name: "Key Vault name outside an ARM ID",
+			text: `"type": "Microsoft.KeyVault/vaults/kv-contoso-prod"`,
+			want: nil,
+		},
+		{
+			name: "container registry name outside an ARM ID",
+			text: `"type": "Microsoft.ContainerRegistry/registries/acrcontosoprod"`,
+			want: nil,
+		},
+		{
+			name: "Cosmos DB account name outside an ARM ID",
+			text: `"type": "Microsoft.DocumentDB/databaseAccounts/cosmos-contoso-prod"`,
+			want: nil,
+		},
+		{
+			name: "SQL server name outside an ARM ID",
+			text: `"type": "Microsoft.Sql/servers/sql-contoso-prod"`,
+			want: nil,
+		},
+		{
+			name: "PostgreSQL server name outside an ARM ID",
+			text: `"type": "Microsoft.DBforPostgreSQL/servers/pg-contoso-prod"`,
+			want: nil,
+		},
+		{
+			name: "PostgreSQL flexible server name outside an ARM ID",
+			text: `"type": "Microsoft.DBforPostgreSQL/flexibleServers/pg-contoso-prod"`,
+			want: nil,
+		},
+		{
+			name: "MySQL server name outside an ARM ID",
+			text: `"type": "Microsoft.DBforMySQL/servers/mysql-contoso-prod"`,
+			want: nil,
+		},
+		{
+			name: "MySQL flexible server name outside an ARM ID",
+			text: `"type": "Microsoft.DBforMySQL/flexibleServers/mysql-contoso-prod"`,
+			want: nil,
+		},
+		{
+			name: "web app name outside an ARM ID",
+			text: `"type": "Microsoft.Web/sites/app-contoso-prod"`,
+			want: nil,
+		},
+		{
+			name: "Service Bus namespace name outside an ARM ID",
+			text: `"type": "Microsoft.ServiceBus/namespaces/sb-contoso-prod"`,
+			want: nil,
+		},
+		{
+			// The guides write the namespace's child-resource types after the
+			// namespace segment (Microsoft.ServiceBus/namespaces/queues,
+			// .../topics), the way they write a storage account's
+			// (Microsoft.Storage/storageAccounts/blobServices). With no
+			// providers/ segment before them, they name a type rather than a
+			// namespace, so neither is a customer's name.
+			name: "queue child-resource type after a Service Bus namespace",
+			text: `"rawType": "Microsoft.ServiceBus/namespaces/queues"`,
+			want: nil,
+		},
+		{
+			name: "topic child-resource type after a Service Bus namespace",
+			text: `"rawType": "Microsoft.ServiceBus/namespaces/topics"`,
+			want: nil,
+		},
+		{
+			// The one-letter placeholder docs/guide/inventory/azure.jq writes in
+			// an ARM ID's shape is no namespace's name: a Service Bus namespace's
+			// name is six to fifty characters, so the placeholder identifies
+			// nobody and the guide's own page stays clean.
+			name: "namespace segment too short for a namespace",
+			text: "# /subscriptions/s/resourceGroups/g/providers/Microsoft.ServiceBus/namespaces/n/queues/q",
+			want: nil,
+		},
 	}
 
 	for _, tc := range tests {
@@ -397,5 +717,58 @@ func TestResourcePathProblems(t *testing.T) {
 				t.Errorf("resourcePathProblems(%q) mismatch (-want +got):\n%s", tc.text, diff)
 			}
 		})
+	}
+}
+
+// testARMID returns the ARM ID a row plants: the sample subscription GUID, a
+// resource group, and the provider namespace, resource type and name the row
+// gives. The parts are written as given, so a row writes a lower-case provider
+// and type where it pins that an ARM ID's case does not matter.
+func testARMID(provider, resourceType, name string) string {
+	return "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/" + provider + "/" + resourceType + "/" + name
+}
+
+// TestARMIDAccountDoesNotAllocate pins that reading the segment before an ARM
+// ID's storageAccounts segment costs no copy: armIDAccount compares only the
+// bytes just before the match (strings.EqualFold over the providers segment) and
+// never lowercases the text that precedes it. Lowercasing it copies the whole
+// prefix on every match, which makes a check over a Resource Graph export or a
+// long guide page quadratic in its length (issue #424, from PR #418's review).
+//
+// The text is ten thousand bytes of the capitalised prose a guide page holds,
+// with no storageAccounts segment in it and the one ARM ID at its end, so the
+// per-match copy is as large as it gets. The test does not run in parallel with
+// the others: AllocsPerRun counts the process's allocations, so another test's
+// work during the measured runs would be counted here too.
+func TestARMIDAccountDoesNotAllocate(t *testing.T) {
+	text := strings.Repeat("Microsoft Azure Resource Group. ", 300) +
+		"/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.Storage/storageAccounts/acmeprod"
+
+	start := strings.Index(text, "storageAccounts/")
+	if start < len("providers/microsoft.storage/") {
+		t.Fatalf("the text holds no storageAccounts segment with the providers segment before it (start %d), so it pins no ARM ID", start)
+	}
+
+	if !armIDAccount(text, start) {
+		t.Fatalf("armIDAccount(0:%d, %d) is false for the storageAccounts segment of an ARM ID, so the case measured is not the one the reported copy costs", len(text), start)
+	}
+
+	// The result of each run is observed, since a call the compiler can drop is
+	// no measurement of the copy that call makes.
+	var misses int
+
+	allocs := testing.AllocsPerRun(100, func() {
+		if !armIDAccount(text, start) {
+			misses++
+		}
+	})
+
+	if misses != 0 {
+		t.Fatalf("armIDAccount over the ARM ID at %d of %d bytes reports false in %d of the 100 measured runs, so no allocation is measured", start, len(text), misses)
+	}
+
+	if allocs != 0 {
+		t.Errorf("armIDAccount over a %d-byte text with the match at %d allocates %.1f times per call, want 0: it copies and lowercases everything before the match, which is quadratic over a long file (issue #424)",
+			len(text), start, allocs)
 	}
 }

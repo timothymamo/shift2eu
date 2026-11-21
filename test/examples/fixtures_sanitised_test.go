@@ -264,6 +264,83 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"storageAccounts/acmeprodcustomers"},
 		},
 		{
+			// The other Azure names an ARM ID carries are globally unique too,
+			// each the DNS label of a public host of its own, so a planted one
+			// must fail the check as the storage account above does
+			// (issue #424).
+			name:    "customer Key Vault in an ARM ID",
+			path:    "docs/guide/planted-arm-keyvault.md",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.KeyVault/vaults/kv-contoso-prod",
+			want:    []string{"vaults/kv-contoso-prod"},
+		},
+		{
+			name:    "customer container registry in an ARM ID",
+			path:    "testdata/planted-arm-acr.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.ContainerRegistry/registries/acrcontosoprod",
+			want:    []string{"registries/acrcontosoprod"},
+		},
+		{
+			name:    "customer Cosmos DB account in an ARM ID",
+			path:    "test/e2e/testdata/planted-arm-cosmos.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-contoso-prod",
+			want:    []string{"databaseAccounts/cosmos-contoso-prod"},
+		},
+		{
+			name:    "customer SQL server in an ARM ID",
+			path:    "docs/guide/inventory/planted-arm-sql.jq",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.Sql/servers/sql-contoso-prod",
+			want:    []string{"servers/sql-contoso-prod"},
+		},
+		{
+			// The single server's type is the same segment under the PostgreSQL
+			// namespace as under the SQL one, and the namespace is what makes the
+			// provider's name the row plants the customer's.
+			name:    "customer PostgreSQL server in an ARM ID",
+			path:    "testdata/planted-arm-postgres.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/servers/pg-contoso-prod",
+			want:    []string{"servers/pg-contoso-prod"},
+		},
+		{
+			name:    "customer PostgreSQL flexible server in an ARM ID",
+			path:    "testdata/planted-arm-postgres-flexible.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforPostgreSQL/flexibleServers/pg-contoso-prod",
+			want:    []string{"flexibleServers/pg-contoso-prod"},
+		},
+		{
+			name:    "customer MySQL server in an ARM ID",
+			path:    "testdata/planted-arm-mysql.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforMySQL/servers/mysql-contoso-prod",
+			want:    []string{"servers/mysql-contoso-prod"},
+		},
+		{
+			name:    "customer MySQL flexible server in an ARM ID",
+			path:    "testdata/planted-arm-mysql-flexible.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.DBforMySQL/flexibleServers/mysql-contoso-prod",
+			want:    []string{"flexibleServers/mysql-contoso-prod"},
+		},
+		{
+			name:    "customer web app in an ARM ID",
+			path:    "docs/guide/planted-arm-web.md",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.Web/sites/app-contoso-prod",
+			want:    []string{"sites/app-contoso-prod"},
+		},
+		{
+			name:    "customer Service Bus namespace in an ARM ID",
+			path:    "test/e2e/testdata/planted-arm-servicebus.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/providers/Microsoft.ServiceBus/namespaces/sb-contoso-prod/queues/orders",
+			want:    []string{"namespaces/sb-contoso-prod"},
+		},
+		{
+			// An abfss URL names the container before an @ and the customer's
+			// storage account in the host after it. The account is reported as the
+			// bare value on its own, beside the host, so the failure names both
+			// values to change (PR #418's review).
+			name:    "customer storage account in an abfss URL",
+			path:    "testdata/planted-abfss.json",
+			content: "the data lake is at abfss://data@acmeprodlake.dfs.core.windows.net/x",
+			want:    []string{"acmeprodlake.dfs.core.windows.net", "acmeprodlake"},
+		},
+		{
 			// The reserved projects/_ segment names no project, so only the
 			// bucket after it is the customer's own name.
 			name:    "customer bucket in a Cloud Storage resource name",
