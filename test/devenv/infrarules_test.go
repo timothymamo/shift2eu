@@ -53,12 +53,13 @@ var infraRuleTag = regexp.MustCompile(`(?m)^infra-rules: \[([a-z0-9-]+)\] `)
 // infraRuleCase is one broken copy of infra/: what the case breaks, and the rule tags the script must report.
 // A case with no tag breaks nothing a rule refuses, and its copy must pass.
 type infraRuleCase struct {
-	name     string            // the subtest's name
-	why      string            // the breakage, for the reader
-	want     string            // the rule tag the script must report, or "" when every rule still holds
-	wantMore []string          // the further tags a breakage must report beside want, for the cases that pin a whole refusal
-	wantIn   map[string]string // per tag, a substring the stderr line that reports it must hold: {root} and {site} stand for the copy's root and its site directory
-	breakage func(t *testing.T, site string)
+	name      string            // the subtest's name
+	why       string            // the breakage, for the reader
+	want      string            // the rule tag the script must report, or "" when every rule still holds
+	wantMore  []string          // the further tags a breakage must report beside want, for the cases that pin a whole refusal
+	wantIn    map[string]string // per tag, a substring the stderr line that reports it must hold: {root} and {site} stand for the copy's root and its site directory
+	wantNotIn map[string]string // per tag, a substring the stderr line that reports it must not hold: {root} and {site} as in wantIn
+	breakage  func(t *testing.T, site string)
 }
 
 // infraRuleCases are the breakages dev/infra-rules.awk must refuse, one rule each. breakage gets the absolute
@@ -1718,6 +1719,9 @@ run "a_run_with_expect_failures_as_a_block" {
 // configuration. Both tags are required, so a fix that only tags the label and leaves the path shifted
 // fails here: the label's / must no longer decide which block the rules see. The identifier pass case pins
 // the other side, so the rule does not refuse a label tofu test reads (its - and its digits are identifiers).
+// The [test-label] message quotes the label as the source writes it, never as the escaped path element the
+// rules judge the block by: `run "a/b"` is named `run "a/b"`, not `run "a%2Fb"`, and `run "a%2Fb"` is not
+// escaped twice to `run "a%252Fb"` - an operator reading the message must find the label they wrote.
 var infraTestLabelCases = []infraRuleCase{
 	{
 		name:     "run-label-with-a-slash-hides-its-nested-block",
@@ -1812,6 +1816,36 @@ run "a:b" {
 		},
 	},
 	{
+		name:      "run-label-with-a-slash-is-quoted-as-written",
+		why:       `a run "a/b" in site/tests/iam.tftest.hcl: [test-label] must quote the label the way the source writes it, never as the escaped path element the rules judge the block by`,
+		want:      "test-label",
+		wantIn:    map[string]string{"test-label": `run "a/b"`},
+		wantNotIn: map[string]string{"test-label": "%2F"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a/b" {
+  command = plan
+}
+`)
+		},
+	},
+	{
+		name:      "run-label-written-with-an-escape-is-quoted-as-written",
+		why:       `a run "a%2Fb" in site/tests/iam.tftest.hcl whose label holds a %: [test-label] must quote it as written, so its % is never escaped a second time to %252F`,
+		want:      "test-label",
+		wantIn:    map[string]string{"test-label": `run "a%2Fb"`},
+		wantNotIn: map[string]string{"test-label": "%252F"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a%2Fb" {
+  command = plan
+}
+`)
+		},
+	},
+	{
 		name: "run-and-mock-provider-labels-that-are-identifiers",
 		why:  `a run "a-run_2" in site/tests/iam.tftest.hcl whose label holds the - and the digits an identifier allows, which tofu test reads`,
 		want: "",
@@ -1864,6 +1898,30 @@ module "a/b" {
 			editInfraFile(t, filepath.Join(site, "main.tf"),
 				"resource \"scaleway_iam_policy\" \"deploy\" {\n  name           = \"shift2eu-site-deploy\"",
 				"resource \"scaleway_iam_policy\" \"p/q\" {\n  count          = 2\n  name           = \"shift2eu-site-deploy\"")
+		},
+	},
+	{
+		name:   "iam-policy-label-with-a-percent-escape-repeated",
+		why:    `the deploy policy's label written "p%2Fq", with count = 2: the % is escaped like the / and the : the path joins a label with, so a label that reads like an escape is still one segment and the rule still judges the block`,
+		want:   "iam-repeat",
+		wantIn: map[string]string{"iam-repeat": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				"resource \"scaleway_iam_policy\" \"deploy\" {\n  name           = \"shift2eu-site-deploy\"",
+				"resource \"scaleway_iam_policy\" \"p%2Fq\" {\n  count          = 2\n  name           = \"shift2eu-site-deploy\"")
+		},
+	},
+	{
+		name:   "iam-policy-label-with-a-colon-repeated",
+		why:    `the deploy policy's label written "p:q", with count = 2: the : is escaped like the / the path joins a label with, so the rule still judges the block`,
+		want:   "iam-repeat",
+		wantIn: map[string]string{"iam-repeat": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				"resource \"scaleway_iam_policy\" \"deploy\" {\n  name           = \"shift2eu-site-deploy\"",
+				"resource \"scaleway_iam_policy\" \"p:q\" {\n  count          = 2\n  name           = \"shift2eu-site-deploy\"")
 		},
 	},
 	{
@@ -2003,7 +2061,7 @@ func TestInfraRules(t *testing.T) {
 	t.Run("the real infra holds every rule", func(t *testing.T) {
 		t.Parallel()
 
-		assertInfraRules(t, runInfraRules(t, infraRulesRoot), 0, nil, nil)
+		assertInfraRules(t, runInfraRules(t, infraRulesRoot), 0, nil, nil, nil)
 	})
 
 	t.Run("no root is a usage error", func(t *testing.T) {
@@ -2046,7 +2104,7 @@ func TestInfraRules(t *testing.T) {
 				wantExit = 1
 			}
 
-			assertInfraRules(t, runInfraRules(t, root), wantExit, wantTags, infraRuleWantIn(t, tc.wantIn, root, site))
+			assertInfraRules(t, runInfraRules(t, root), wantExit, wantTags, infraRuleWantIn(t, tc.wantIn, root, site), infraRuleWantIn(t, tc.wantNotIn, root, site))
 		})
 	}
 }
@@ -2271,8 +2329,10 @@ func runInfraRules(t *testing.T, args ...string) infraRuleRun {
 // assertInfraRules fails unless the run exited with wantExit, wrote nothing on stdout, reported exactly
 // wantTags, one stderr line each and in any order, printed nothing at all when wantExit is 0, and - for every
 // tag in wantIn - reported it on a line that holds the substring, so a rule cannot refuse something without
-// naming the directory or file it judges.
-func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []string, wantIn map[string]string) {
+// naming the directory or file it judges. For every tag in wantNotIn, the lines that report it must not hold
+// the substring: a message that quoted a value the way the rules escaped it internally would name something
+// the source does not write.
+func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []string, wantIn, wantNotIn map[string]string) {
 	t.Helper()
 
 	if got.stdout != "" {
@@ -2322,12 +2382,20 @@ func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []s
 			found = true
 
 			if !strings.Contains(line, in) {
-				t.Errorf("the [%s] line %q does not name %q: the rule must name the directory or file it refuses", tag, line, in)
+				t.Errorf("the [%s] line %q does not hold %q: a rule names the file, directory or value it refuses", tag, line, in)
 			}
 		}
 
 		if !found {
 			t.Errorf("no stderr line reports [%s], so nothing names %q", tag, in)
+		}
+	}
+
+	for tag, not := range wantNotIn {
+		for _, line := range lines {
+			if strings.Contains(line, "["+tag+"] ") && strings.Contains(line, not) {
+				t.Errorf("the [%s] line %q holds %q: a message names what the source writes, never a value the rules escaped to judge it", tag, line, not)
+			}
 		}
 	}
 }
