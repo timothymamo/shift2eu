@@ -516,8 +516,9 @@ func TestMakeTestBrowserRecipeServesABundleOfItsOwn(t *testing.T) {
 	}
 
 	// make site is the release's and the deploy's: a run of make test-browser builds the bundle it serves into a
-	// directory of its own, and leaves bin/site alone. Today it still has site as a prerequisite, so each run
-	// removes and rebuilds bin/site - the very race under test - and this finds it there afterwards.
+	// directory of its own, and leaves bin/site alone. The recipe has no site prerequisite any more, so this reads
+	// whether a run built, removed or touched bin/site all the same, as an edit that put the prerequisite back - the
+	// very race under test - or a recipe that built the shared bundle would.
 	if _, err := os.Stat(shared); err == nil {
 		t.Errorf("make test-browser created %s, the bundle make site builds: the recipe builds the bundle it serves into a directory of its own, so a run must neither create nor remove that directory, which the release publishes and the deploy serves, and which a second run's make site would rebuild under the first run's browser (issue #423 item 2)",
 			shared)
