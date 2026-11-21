@@ -339,6 +339,40 @@ func TestResourcePathProblems(t *testing.T) {
 			want: []string{"namespaces/sb-contoso-prod"},
 		},
 		{
+			// An ARM ID's providers/ segment stands on its own: glued to a
+			// word before it (xproviders/) it opens no ID, so the vault it names
+			// is no ARM ID's value while the real ID after it is read all the
+			// same.
+			name: "customer Key Vault after a glued providers segment",
+			text: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-acme/xproviders/Microsoft.KeyVault/vaults/kv-a" +
+				"/providers/Microsoft.KeyVault/vaults/kv-contoso-prod",
+			want: []string{"vaults/kv-contoso-prod"},
+		},
+		{
+			// The glued segment is no match at all, so it consumes none of the
+			// text after it: the real ID whose providers/ segment would have sat
+			// past the glued one's name is still read rather than swallowed.
+			name: "customer Key Vault after a glued providers segment whose name runs on",
+			text: "xproviders/Microsoft.KeyVault/vaults/providers/Microsoft.KeyVault/vaults/kv-contoso-prod",
+			want: []string{"vaults/kv-contoso-prod"},
+		},
+		{
+			// The start of the text is the other boundary a providers/ segment
+			// may have, so an ARM ID read from its providers/ segment is read.
+			name: "customer Key Vault in an ARM ID that opens the text",
+			text: "providers/Microsoft.KeyVault/vaults/kv-contoso-prod",
+			want: []string{"vaults/kv-contoso-prod"},
+		},
+		{
+			// The problems come in the order the text writes them, not in the
+			// order armNameTypes lists the types: the Service Bus namespace is
+			// written before the Key Vault, so it is reported first.
+			name: "namespace and vault reported in text order",
+			text: testARMID("Microsoft.ServiceBus", "namespaces", "sb-contoso-prod") + " and " +
+				testARMID("Microsoft.KeyVault", "vaults", "kv-contoso-prod"),
+			want: []string{"namespaces/sb-contoso-prod", "vaults/kv-contoso-prod"},
+		},
+		{
 			// The inventory guide's own shop names are excused only by exact
 			// allow-list entries in the guide's files (realDataAllowList:
 			// sites/app-shop-storefront), never by a shape such as any words
