@@ -192,6 +192,81 @@ func TestWorkflowFixturesFollowThePins(t *testing.T) {
 	})
 }
 
+// TestReleasePleaseFixturesFollowThePins pins that the last two fixtures that
+// copy a workflow take their pins from it too (issue #440): releasePleaseWorkflow
+// from .github/workflows/release-please.yml, and ciReleasePleaseDryRun from the
+// release-please job of ci.yml. A Renovate update of an action in either
+// workflow then needs no edit of this package, and the checks the two fixtures
+// feed still accept them once it is applied to the workflow in memory, as
+// TestWorkflowFixturesFollowThePins holds the release and dry-run fixtures to
+// theirs. The drift cases of TestReleasePleaseWorkflow stay literal on purpose:
+// they are commits no update ever writes, and must still be refused.
+func TestReleasePleaseFixturesFollowThePins(t *testing.T) {
+	t.Parallel()
+
+	bumpedReleasePlease := bumpPins(t, repoReleasePlease)
+	bumpedCI := bumpPins(t, repoCI)
+
+	t.Run("the release-please fixture follows release-please.yml", func(t *testing.T) {
+		t.Parallel()
+
+		workflow := releasePleaseAppsWorkflowFrom(bumpedReleasePlease)
+
+		// Both actions, and no other pin of the fixture: a bump of either one
+		// reaches it, and neither old pin is left behind.
+		for _, action := range []string{"actions/create-github-app-token", "googleapis/release-please-action"} {
+			assertPinMoved(t, "the release-please workflow", action, repoReleasePlease, bumpedReleasePlease, workflow)
+		}
+
+		assertPinsFollow(t, "the release-please workflow", workflow, string(bumpedReleasePlease))
+
+		if got := check.ReleasePleaseWorkflow([]byte(workflow)); len(got) != 0 {
+			t.Errorf("ReleasePleaseWorkflow(the fixture built from an updated release-please.yml) = %q, want no message", got)
+		}
+
+		// The privilege check reads the same fixture (TestWorkflowPrivileges),
+		// which must accept the updated one as it accepts the repository's.
+		if got := check.WorkflowPrivileges(".github/workflows/release-please.yml", []byte(workflow)); len(got) != 0 {
+			t.Errorf("WorkflowPrivileges(release-please.yml, the fixture built from an updated release-please.yml) = %q, want no message", got)
+		}
+	})
+
+	t.Run("the release-please dry run follows ci.yml", func(t *testing.T) {
+		t.Parallel()
+
+		dryRun := ciReleasePleaseDryRunFrom(bumpedCI)
+
+		assertPinMoved(t, "the release-please dry run", "actions/checkout", repoCI, bumpedCI, dryRun)
+		assertPinsFollow(t, "the release-please dry run", dryRun, string(bumpedCI))
+
+		if got := check.ReleasePleaseDryRun([]byte(dryRun)); len(got) != 0 {
+			t.Errorf("ReleasePleaseDryRun(the fixture built from an updated ci.yml) = %q, want no message", got)
+		}
+	})
+}
+
+// assertPinMoved fails unless built, the fixture built from updated, pins
+// action at the pin updated holds and at no pin before holds: a fixture that
+// still carries the pin the update moved is a literal, not one built from the
+// workflow. before and updated are the workflow before and after the update,
+// and what names built in a message.
+func assertPinMoved(t *testing.T, what, action string, before, updated []byte, built string) {
+	t.Helper()
+
+	was, isNow := pinsOf(before).values["pin "+action], pinsOf(updated).values["pin "+action]
+	if was == "" || isNow == "" || was == isNow {
+		t.Fatalf("the workflow pins %s as %q before and %q after the update: the case cannot tell a pin built from it from a literal", action, was, isNow)
+	}
+
+	if !strings.Contains(built, isNow) {
+		t.Errorf("%s holds no %q, the pin its workflow now holds: the fixture must take the pin from the workflow", what, isNow)
+	}
+
+	if strings.Contains(built, was) {
+		t.Errorf("%s still holds %q, which its workflow no longer pins: the fixture must take the pin from the workflow", what, was)
+	}
+}
+
 // readWorkflows returns the repository's ci.yml and release.yml: the two
 // documents the fixtures are built from, read once by this package
 // (repoCI and repoRelease, workflowpins_test.go). The clones are the caller's,

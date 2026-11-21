@@ -72,20 +72,23 @@ var (
 // The repository's workflows, by path from this package and by top-level
 // name, so that a panic names the file a document is.
 const (
-	repoCIPath      = "../../../../.github/workflows/ci.yml"
-	repoReleasePath = "../../../../.github/workflows/release.yml"
+	repoCIPath            = "../../../../.github/workflows/ci.yml"
+	repoReleasePath       = "../../../../.github/workflows/release.yml"
+	repoReleasePleasePath = "../../../../.github/workflows/release-please.yml"
 )
 
 var workflowFiles = map[string]string{
-	"CI":      ".github/workflows/ci.yml",
-	"Release": ".github/workflows/release.yml",
+	"CI":             ".github/workflows/ci.yml",
+	"Release":        ".github/workflows/release.yml",
+	"Release please": ".github/workflows/release-please.yml",
 }
 
 // The repository's workflows and their pins, read once: the fixtures every
 // case changes one part of are built from them.
 var (
-	repoCI      = readRepoWorkflow(repoCIPath)
-	repoRelease = readRepoWorkflow(repoReleasePath)
+	repoCI            = readRepoWorkflow(repoCIPath)
+	repoRelease       = readRepoWorkflow(repoReleasePath)
+	repoReleasePlease = readRepoWorkflow(repoReleasePleasePath)
 
 	ciPins      = pinsOf(repoCI)
 	releasePins = pinsOf(repoRelease)

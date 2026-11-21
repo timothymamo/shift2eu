@@ -37,6 +37,17 @@ jobs:
         run: .github/scripts/release-please-dry-run.sh
 `
 
+// ciReleasePleaseDryRunFrom returns ciReleasePleaseDryRun built from ci, a
+// ci.yml: every placeholder of the fixture filled in with that workflow's pins
+// (workflowPins), as ciDryRunFrom fills the image job's in (issue #440). RED:
+// the fixture still holds actions/checkout's pin as a literal, so it comes out
+// unchanged whatever workflow it is handed, and
+// TestReleasePleaseFixturesFollowThePins fails until that literal is a
+// placeholder.
+func ciReleasePleaseDryRunFrom(ci []byte) string {
+	return pinsOf(ci).expand(ciReleasePleaseDryRun)
+}
+
 // TestReleasePleaseDryRun pins the CI half of issue #142: ci.yml runs the dry
 // run of release-please.yml's guard and tag steps on every pull request and on
 // every push to main, in a job that holds no write permission and no secret.

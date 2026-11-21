@@ -80,6 +80,18 @@ var tagAppToken = appToken{
 // as soon as one of its jobs writes through GITHUB_TOKEN.
 var releasePleaseWorkflow = releasePleaseAppsWorkflow(releasePleaseAppToken, tagAppToken, releasePleaseAppToken)
 
+// releasePleaseAppsWorkflowFrom returns .github/workflows/release-please.yml's
+// fixture built from releasePlease, a release-please.yml, as
+// releaseWorkflowFixtureFrom builds the release fixture from a release.yml
+// (issue #440): every placeholder of the fixture filled in with that workflow's
+// pins (workflowPins). RED: the fixture still holds the two actions' pins as
+// literals, so it comes out unchanged whatever workflow it is handed, and
+// TestReleasePleaseFixturesFollowThePins fails until those literals are
+// placeholders.
+func releasePleaseAppsWorkflowFrom(releasePlease []byte) string {
+	return pinsOf(releasePlease).expand(releasePleaseWorkflow)
+}
+
 // releasePleaseActionStep opens or updates the release PR with the
 // release-please App's token. Every input but token would override
 // release-please-config.json, so none is set. With skip-github-release in that
