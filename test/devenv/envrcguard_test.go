@@ -16,7 +16,8 @@
 // The host targets that load the credentials are vm-env, the three that run it or its check (vm-up, vm-create,
 // vm-init) and the two that start or install the agents App token refresh (agents-token-refresh-start,
 // agents-token-refresh-install). The tests refuse rather than warn: vm-env copies the credentials into the VM,
-// so a run with a .envrc in the wrong place is the moment to stop it.
+// so a run with a .envrc in the wrong place is the moment to stop it. vm-env-check, the check the three run
+// first, is refused on its own too, so a maintainer who runs it alone learns of the layout as well.
 package devenv_test
 
 import (
@@ -166,6 +167,22 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatReadsAParent(t *testing.T) {
 			want:      []string{"The host clone"},
 		},
 		{
+			// A path holding $ is expanded by the shell direnv runs the .envrc with, so the guard cannot
+			// resolve it and must treat it as outside the clone.
+			name:      "the host clone's .envrc says source_env with a $HOME path",
+			hostEnvrc: "source_env \"$HOME/secrets.env\"\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"The host clone"},
+		},
+		{
+			// vm-env-check is the check the three that copy the credentials run first, and the guard gives it
+			// the same refusal, so running it alone tells the maintainer of the layout too.
+			name:      "the host clone's .envrc says source_up, run through vm-env-check alone",
+			hostEnvrc: "source_up\n",
+			targets:   []string{"vm-env-check"},
+			want:      []string{"The host clone"},
+		},
+		{
 			// An absolute path outside the clone is as far outside it as `..` is: a file of the workspace's
 			// parent, which only the sandbox knows the path of.
 			name: "the host clone's .envrc names an absolute path outside the clone",
@@ -249,6 +266,38 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 				return []string{writeAboveWorkspace(t, l, 2, ".env")}
 			},
 		},
+		{
+			// A symlink loads like the file it points at, so the guard must refuse it by its own path, which
+			// is the one in the workspace the maintainer has to remove.
+			name: "the workspace holds a .envrc symlink",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeHostEnvrc(t, l, "")
+
+				target := filepath.Join(l.sb.root, "outside", "secrets.env")
+				writeFileMode(t, target, []byte(plantedEnvrcLines()), 0o600)
+
+				link := filepath.Join(l.workspace(), ".envrc")
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatalf("symlink %s: %v", link, err)
+				}
+
+				return []string{link}
+			},
+		},
+		{
+			// The same refusal for the check the three credential targets run first, run on its own.
+			name: "the check refuses the workspace's .envrc when run through vm-env-check alone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeHostEnvrc(t, l, "")
+
+				return []string{writeAboveWorkspace(t, l, 1, ".envrc")}
+			},
+			targets: []string{"vm-env-check"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -289,6 +338,11 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 
 				return nil
 			},
+		},
+		{
+			// A commented-out directive loads nothing, so it must not refuse the layout the docs ask for.
+			name:      "the host clone's .envrc only mentions source_up in comments",
+			hostEnvrc: "# source_up\n#   dotenv ../secrets.env\n",
 		},
 		{
 			name: "the host clone's .envrc names an absolute path inside the clone",
