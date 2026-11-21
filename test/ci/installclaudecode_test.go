@@ -213,7 +213,9 @@ func TestInstallClaudeCodeRefusesUnverifiedPackages(t *testing.T) {
 // itself, so no variable of the developer's own environment - a configuration file a tool reads, a shell hook, a
 // preloaded library, a proxy, a credential of the agents' - can change a case's result or reach a failure's output.
 // The parent environment is a parameter, so the test states what a case must ignore instead of changing the
-// environment of the whole test binary (t.Setenv is forbidden, CLAUDE.md rule 3).
+// environment of the whole test binary: the tests-no-process-state forbidigo rule in .golangci.yml refuses
+// t.Setenv, because a test changes no environment variable or working directory that every test of the process
+// shares.
 func TestChildEnvCarriesNothingFromTheParent(t *testing.T) {
 	base := t.TempDir()
 
