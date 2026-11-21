@@ -575,7 +575,8 @@ target, with the `e2e` and `integration` tags (`strictcoverage_test.go`):
   assembly file needs no import, so `test/lint` refuses one there (issue #194). `TestE2ENoEnvProbe` and
   `TestE2ENoEnvForbidigoPatterns` pin the group.
 - **`test-docs-are-pure`** (depguard, strict) holds the doc-only packages
-  `test/architecture`, `test/container`, `test/devenv`, `test/docs`, `test/e2e` and `test/lint` to
+  `test/architecture`, `test/ci`, `test/container`, `test/devenv`, `test/docs`, `test/e2e`,
+  `test/examples`, `test/lint` and `test/site` to
   `allow: []` and the `os` deny entry, as `config-is-pure`. Each is a production package a root
   could import through the module prefix. `!$test` leaves their tests out, and a negated glob takes
   out `test/architecture/internal/...`, which Go's internal rule hides from the roots and which

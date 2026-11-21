@@ -1095,12 +1095,13 @@ var pinnedDepguardRules = []check.DepguardRule{
 	},
 	{
 		// The test trees' own documentation packages (issue #152, the auditor's finding
-		// H-1): test/architecture, test/container, test/devenv,
-		// test/docs, test/lint and test/examples
-		// (issue #179) hold doc.go and no code, and each is a production package a
-		// composition root can import, because the roots' allow lists name the module
-		// path as a prefix entry. Go's internal
-		// rule keeps test/internal/... and test/architecture/internal/... out of cmd/
+		// H-1): test/architecture, test/container, test/devenv, test/docs, test/e2e,
+		// test/examples (issue #179), test/lint, test/site (PRD #297 milestone 2) and
+		// test/ci (issue #275). Each has a doc.go that imports nothing as its one
+		// production file (test/e2e, test/site and test/ci: below), and each is a
+		// production package a composition root can import, because the roots' allow
+		// lists name the module path as a prefix entry. Go's internal rule keeps
+		// test/internal/... and test/architecture/internal/... out of cmd/
 		// and internal/ and nothing keeps these out, so they get a rule of their own. It
 		// is one shared strict rule that allows nothing: allow: [] and the one deny entry,
 		// os, as config-is-pure. The day one of these packages imports a package, it
@@ -1118,6 +1119,10 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// test/architecture is taken out with a negated glob, as a rule's files: list
 		// cannot say "this directory only": without it the rule would hold
 		// test/architecture/internal/check, which reads os and os/exec, and refuse them.
+		// test/site's helper test/site/internal/jsscan, which Go's internal rule keeps
+		// out of reach of the roots, is taken out the same way. test/ci (issue #275),
+		// the behaviour tests of .github/scripts, is held here as well: its doc.go is
+		// its one production file and imports nothing.
 		Name:     testDocsRule,
 		ListMode: "strict",
 		Files: []string{
@@ -1131,6 +1136,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"**/test/lint/**",
 			"**/test/site/**",
 			"!**/test/site/internal/**",
+			"**/test/ci/**",
 			"!$test",
 		},
 		Allow: []string{},
