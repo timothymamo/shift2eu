@@ -19,7 +19,9 @@
 //     files of the tarball stay out - and the installer prints the version line the binary prints.
 //   - CLAUDE_CODE_INSTALL_ROOT, which only a test sets, stands in for / in the managed-policy check, and
 //     GITHUB_ACTIONS cannot weaken that check: with it set and the root overridden, the installer refuses too, so
-//     no workflow step can drop the check by setting the variable. GITHUB_ACTIONS alone is no refusal.
+//     no workflow step can drop the check by setting the variable. It refuses the variable when it is empty as
+//     well, since a step could set it to nothing to make the check read / again without unsetting it.
+//     GITHUB_ACTIONS alone is no refusal.
 //
 // Every case runs the real script with an explicit environment built from this process's, without GITHUB_ACTIONS
 // and CLAUDE_CODE_INSTALL_ROOT, so a case decides those two itself and the tests run inside CI as well. A fake npm
@@ -149,6 +151,8 @@ type installCase struct {
 	// noInstallRoot leaves CLAUDE_CODE_INSTALL_ROOT unset, so the installer reads the machine's own
 	// /etc/claude-code; those cases skip when it exists.
 	noInstallRoot bool
+	// emptyInstallRoot sets CLAUDE_CODE_INSTALL_ROOT to the empty string, which the installer treats as set.
+	emptyInstallRoot bool
 
 	// wantExit is the exit status the installer must end with.
 	wantExit int
@@ -311,6 +315,15 @@ func installCases() []installCase {
 			args:          validArgs,
 			githubActions: true,
 			wantExit:      1,
+			wantOutput:    []string{installRootEnv},
+		},
+		{
+			name:             "GITHUB_ACTIONS refuses an empty install root",
+			args:             validArgs,
+			githubActions:    true,
+			emptyInstallRoot: true,
+			wantExit:         1,
+			wantOutput:       []string{installRootEnv},
 		},
 		{
 			name:           "GITHUB_ACTIONS alone is no refusal",
@@ -427,7 +440,11 @@ func runInstallCase(t *testing.T, tc installCase, fx fixture) {
 		npmMarkerEnv:  marker,
 	})
 
-	if !tc.noInstallRoot {
+	switch {
+	case tc.noInstallRoot:
+	case tc.emptyInstallRoot:
+		env = append(env, installRootEnv+"=")
+	default:
 		env = append(env, installRootEnv+"="+root)
 	}
 
