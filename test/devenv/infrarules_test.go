@@ -12,6 +12,11 @@
 // must report, and that it reports no other tag, so a breakage the script refuses for an unintended reason
 // fails here instead of passing for the wrong reason. The cases need no network, no credentials and no
 // credential file, and run no tofu: the script reads files only.
+//
+// TestInfraTracksNoLocalFiles pins the other half of the same rule (issue #422, ADR 0039): git carries no
+// file the maintainer's own machine keeps under infra/ - no tfvars file, no backend.hcl, no state file and
+// nothing from a .terraform directory - only the .example copies of the values it needs. It reads the
+// repository's index and writes nothing.
 package devenv_test
 
 import (
@@ -767,6 +772,321 @@ run "a_run_with_a_module_in_a_dot_directory" {
 `)
 		},
 	},
+	{
+		name:   "test-run-block-module-under-a-hidden-directory",
+		why:    `a run block in site/tests/iam.tftest.hcl with module source = "./.hidden/m"`,
+		want:   "module-source",
+		wantIn: map[string]string{"module-source": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_a_module_in_a_hidden_directory" {
+  command = plan
+
+  module {
+    source = "./.hidden/m"
+  }
+}
+`)
+		},
+	},
+	// A provisioner or connection block runs a command, or reaches another machine, outside what the
+	// configuration declares: it belongs in the Runbook, not in a file git holds.
+	{
+		name:   "provisioner-local-exec",
+		why:    `a local-exec provisioner on a second bucket, which runs a command on whichever machine applies`,
+		want:   "provisioner",
+		wantIn: map[string]string{"provisioner": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_object_bucket" "x" {
+  name = "x"
+
+  provisioner "local-exec" {
+    command = "echo hi"
+  }
+}
+`)
+		},
+	},
+	{
+		name:   "connection-block",
+		why:    `a connection block in the site's project resource, the transport a provisioner would use`,
+		want:   "provisioner",
+		wantIn: map[string]string{"provisioner": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				"  description = \"www.shift2eu.com: the site's bucket and its Edge Services pipeline only (infra/site).\"\n}",
+				"  description = \"www.shift2eu.com: the site's bucket and its Edge Services pipeline only (infra/site).\"\n\n  connection {\n    type = \"ssh\"\n  }\n}")
+		},
+	},
+	{
+		name:   "provisioner-in-removed",
+		why:    `a provisioner in a top-level removed block, which runs when the object it names is destroyed`,
+		want:   "provisioner",
+		wantIn: map[string]string{"provisioner": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+removed {
+  from = scaleway_object_bucket.gone
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = "echo hi"
+  }
+}
+`)
+		},
+	},
+	// OpenTofu loads every *.auto.tfvars (and *auto.tfvars.json, hidden ones too) without anyone naming it,
+	// so a value git holds would decide what is applied. A plain terraform.tfvars is the maintainer's own,
+	// kept on the admin machine, and no rule refuses one.
+	{
+		name:   "auto-tfvars",
+		why:    "a site/zz.auto.tfvars, which tofu loads on every plan without being named",
+		want:   "tfvars-file",
+		wantIn: map[string]string{"tfvars-file": "{site}/zz.auto.tfvars"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "zz.auto.tfvars"), "public_read = true\n")
+		},
+	},
+	{
+		name:   "auto-tfvars-json",
+		why:    "a site/zz.auto.tfvars.json, the JSON form tofu loads on every plan",
+		want:   "tfvars-file",
+		wantIn: map[string]string{"tfvars-file": "{site}/zz.auto.tfvars.json"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "zz.auto.tfvars.json"), "{\"public_read\": true}\n")
+		},
+	},
+	{
+		name:   "hidden-auto-tfvars",
+		why:    "a site/.h.auto.tfvars, a hidden auto-tfvars file, which tofu still loads",
+		want:   "tfvars-file",
+		wantIn: map[string]string{"tfvars-file": "{site}/.h.auto.tfvars"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, ".h.auto.tfvars"), "public_read = true\n")
+		},
+	},
+	{
+		name: "terraform-tfvars-is-allowed",
+		why:  "a site/terraform.tfvars, the maintainer's own values on the admin machine, which git ignores",
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "terraform.tfvars"), "public_read = true\n")
+		},
+	},
+	// The committed backend "s3" block names no bucket, no region and no endpoint: those come from the
+	// git-ignored backend.hcl. So it may set only what versions.tf sets today - the key, the lock file and
+	// the four Scaleway skips - and any other attribute or nested block is refused.
+	{
+		name:   "backend-insecure",
+		why:    "insecure = true in the committed backend block, which turns off its TLS verification",
+		want:   "backend-setting",
+		wantIn: map[string]string{"backend-setting": "{site}/versions.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "versions.tf"),
+				"    skip_s3_checksum            = true\n  }",
+				"    skip_s3_checksum            = true\n    insecure                    = true\n  }")
+		},
+	},
+	{
+		name:   "backend-endpoints",
+		why:    "endpoints = { s3 = \"https://example.com\" } in the committed backend block, an endpoint a file git holds would send the state to",
+		want:   "backend-setting",
+		wantIn: map[string]string{"backend-setting": "{site}/versions.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "versions.tf"),
+				"    skip_s3_checksum            = true\n  }",
+				"    skip_s3_checksum            = true\n    endpoints = { s3 = \"https://example.com\" }\n  }")
+		},
+	},
+	{
+		name:   "backend-assume-role-block",
+		why:    "an assume_role block in the committed backend block, a role ARN in a file git holds",
+		want:   "backend-setting",
+		wantIn: map[string]string{"backend-setting": "{site}/versions.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "versions.tf"),
+				"    skip_s3_checksum            = true\n  }",
+				"    skip_s3_checksum            = true\n\n    assume_role {\n      role_arn = \"arn:aws:iam::123456789012:role/x\"\n    }\n  }")
+		},
+	},
+	// tofu never uploads an object, and the plan must read no file from the machine that runs it: the
+	// release deploys the objects, and a plan that reads a local file differs per machine (ADR 0039).
+	{
+		name:   "object",
+		why:    "a scaleway_object resource, which tofu would upload: the release deploys the objects",
+		want:   "object",
+		wantIn: map[string]string{"object": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_object" "index" {
+  bucket = scaleway_object_bucket.site.name
+  key    = "index.html"
+}
+`)
+		},
+	},
+	{
+		name:   "file-function-file",
+		why:    `a locals value calling file("/etc/hostname"), which reads the machine that runs the plan`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  hostname = file("/etc/hostname")
+}
+`)
+		},
+	},
+	{
+		name:   "file-function-pathexpand",
+		why:    `a locals value calling pathexpand("~/x"), which resolves against the home directory of whoever runs`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  home = pathexpand("~/x")
+}
+`)
+		},
+	},
+	{
+		name:   "file-function-in-a-template",
+		why:    `a file() call inside a "${...}" template, which the tokenizer reads as template text`,
+		want:   "file-function",
+		wantIn: map[string]string{"file-function": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  text = "a${file("/etc/hostname")}b"
+}
+`)
+		},
+	},
+	{
+		name: "file-function-name-in-a-comment",
+		why:  `a comment naming file("x") and pathexpand("~/x"), which reads no file`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+# No file is read here: file("x") and pathexpand("~/x") are words in this comment.
+`)
+		},
+	},
+	{
+		name: "file-function-name-in-a-string",
+		why:  `the literal string "file(x)", which calls no function`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+locals {
+  text = "file(x)"
+}
+`)
+		},
+	},
+	// A zero-byte file is a file tofu reads too: the rules judge it as they judge any other.
+	{
+		name:   "empty-root-file",
+		why:    "an empty <root>/empty.tf, a configuration file directly under the root",
+		want:   "root-file",
+		wantIn: map[string]string{"root-file": "{root}/empty.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(filepath.Dir(site), "empty.tf"), "")
+		},
+	},
+	{
+		name:   "empty-test-file",
+		why:    "an empty site/tests/empty.tftest.hcl, a test file that mocks no provider",
+		want:   "test-mock",
+		wantIn: map[string]string{"test-mock": "{site}/tests/empty.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "empty.tftest.hcl"), "")
+		},
+	},
+	// Every name tofu reads, hidden or not, is refused for what it is: a JSON configuration, an override
+	// file, a .tofu twin and a test file that breaks a rule are all refused as hidden, and judged no other.
+	{
+		name:   "hidden-json-config",
+		why:    "a site/.x.tf.json, a hidden JSON configuration",
+		want:   "hidden-file",
+		wantIn: map[string]string{"hidden-file": "{site}/.x.tf.json"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, ".x.tf.json"), "{}\n")
+		},
+	},
+	{
+		name:   "hidden-override-file",
+		why:    "a site/.override.tf, a hidden override file",
+		want:   "hidden-file",
+		wantIn: map[string]string{"hidden-file": "{site}/.override.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, ".override.tf"), "variable \"o\" {}\n")
+		},
+	},
+	{
+		name:   "hidden-tofu-twin",
+		why:    "a site/.main.tofu, a hidden twin of main.tf",
+		want:   "hidden-file",
+		wantIn: map[string]string{"hidden-file": "{site}/.main.tofu"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, ".main.tofu"), "# A hidden twin of main.tf.\n")
+		},
+	},
+	{
+		name:   "hidden-test-file-that-breaks-a-rule",
+		why:    `a site/tests/.y.tftest.hcl holding provider "scaleway" {}, a hidden test file that mocks nothing`,
+		want:   "hidden-file",
+		wantIn: map[string]string{"hidden-file": "{site}/tests/.y.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", ".y.tftest.hcl"), "provider \"scaleway\" {}\n")
+		},
+	},
+	{
+		name:   "root-file-bare-tf",
+		why:    "a <root>/x.tf holding one variable, a configuration file directly under the root",
+		want:   "root-file",
+		wantIn: map[string]string{"root-file": "{root}/x.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(filepath.Dir(site), "x.tf"), "variable \"v\" {}\n")
+		},
+	},
+	{
+		name: "backup-file-is-ignored",
+		why:  `a site/main.tf~ holding "resource {", which tofu never loads and no rule reads`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "main.tf~"), "resource {\n")
+		},
+	},
 }
 
 // rootFileModuleSourceCase is one route-2 case: a configuration file directly under the root, whose module
@@ -859,6 +1179,156 @@ func TestInfraRules(t *testing.T) {
 			assertInfraRules(t, runInfraRules(t, root), wantExit, wantTags, infraRuleWantIn(t, tc.wantIn, root, site))
 		})
 	}
+}
+
+// infraLocalFileCases are listings of tracked paths, as `git ls-files -- infra` prints them, and the local
+// files among them: a tfvars file, backend.hcl or a state file, which hold the maintainer's own IDs, bucket
+// names or state, or anything under a .terraform directory, a tool's working directory. The .example copies
+// hold none of that, so the repository commits them. The fake listings pin the check, so the real listing
+// below cannot pass it for the wrong reason.
+var infraLocalFileCases = []struct {
+	name    string
+	tracked []string
+	want    []string
+}{
+	{
+		name: "the-committed-files",
+		tracked: []string{
+			"infra/site/main.tf",
+			"infra/site/versions.tf",
+			"infra/site/.terraform.lock.hcl",
+			"infra/site/terraform.tfvars.example",
+			"infra/site/backend.hcl.example",
+		},
+		want: nil,
+	},
+	{
+		name:    "a-tfvars-file",
+		tracked: []string{"infra/site/terraform.tfvars"},
+		want:    []string{"infra/site/terraform.tfvars"},
+	},
+	{
+		name:    "an-auto-tfvars-file",
+		tracked: []string{"infra/site/zz.auto.tfvars"},
+		want:    []string{"infra/site/zz.auto.tfvars"},
+	},
+	{
+		name:    "an-auto-tfvars-json-file",
+		tracked: []string{"infra/site/zz.auto.tfvars.json"},
+		want:    []string{"infra/site/zz.auto.tfvars.json"},
+	},
+	{
+		name:    "a-backend-file",
+		tracked: []string{"infra/site/backend.hcl"},
+		want:    []string{"infra/site/backend.hcl"},
+	},
+	{
+		name:    "a-state-file",
+		tracked: []string{"infra/site/terraform.tfstate"},
+		want:    []string{"infra/site/terraform.tfstate"},
+	},
+	{
+		name:    "a-state-backup-file",
+		tracked: []string{"infra/site/terraform.tfstate.backup"},
+		want:    []string{"infra/site/terraform.tfstate.backup"},
+	},
+	{
+		name:    "the-terraform-working-directory",
+		tracked: []string{"infra/site/.terraform/providers/registry.opentofu.org/scaleway/scaleway/2.93.0/linux_amd64/terraform-provider-scaleway"},
+		want:    []string{"infra/site/.terraform/providers/registry.opentofu.org/scaleway/scaleway/2.93.0/linux_amd64/terraform-provider-scaleway"},
+	},
+}
+
+// TestInfraTracksNoLocalFiles pins that git carries no file the maintainer's own machine keeps (issue #422,
+// ADR 0039): infra/ commits its configuration and the .example copies of the values it needs, never a tfvars
+// file, never backend.hcl, never a state file and nothing from a .terraform directory. The fake listings pin
+// the check itself, so the real one cannot pass for the wrong reason; the real one runs git ls-files and
+// writes nothing.
+func TestInfraTracksNoLocalFiles(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range infraLocalFileCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, infraLocalFiles(tc.tracked)); diff != "" {
+				t.Errorf("the local files among the listing (-want +got):\n%s\nlisting was:\n%s", diff, strings.Join(tc.tracked, "\n"))
+			}
+		})
+	}
+
+	t.Run("the real infra tracks no local file", func(t *testing.T) {
+		t.Parallel()
+
+		tracked := gitTrackedInfraFiles(t)
+		if len(tracked) == 0 {
+			t.Fatalf("git tracks no file under %s/: the listing is empty, so this check would pass for the wrong reason", infraRulesRoot)
+		}
+
+		if diff := cmp.Diff([]string(nil), infraLocalFiles(tracked)); diff != "" {
+			t.Errorf("git tracks local files under %s/, which stay on the maintainer's machine (-want +got):\n%s\nthe tracked files were:\n%s",
+				infraRulesRoot, diff, strings.Join(tracked, "\n"))
+		}
+	})
+}
+
+// infraLocalFiles returns the tracked paths among tracked that the maintainer's machine holds and the
+// repository must not: a tfvars file, backend.hcl, a state file or anything under a .terraform directory.
+// A path ending in .example is the sanitised copy the repository commits, so it is none of those.
+func infraLocalFiles(tracked []string) []string {
+	var local []string
+
+	for _, path := range tracked {
+		name := path[strings.LastIndex(path, "/")+1:]
+		if strings.HasSuffix(name, ".example") {
+			continue
+		}
+
+		switch {
+		case strings.Contains("/"+path, "/.terraform/"):
+			local = append(local, path)
+		case strings.HasSuffix(name, ".tfvars") || strings.HasSuffix(name, ".tfvars.json"):
+			local = append(local, path)
+		case name == "backend.hcl":
+			local = append(local, path)
+		case strings.Contains(name, ".tfstate"):
+			local = append(local, path)
+		}
+	}
+
+	return local
+}
+
+// gitTrackedInfraFiles returns the paths git tracks under infra/, slash separated, as the rules read the tree.
+// It reads the repository's index and writes nothing; a checkout without git skips the caller.
+func gitTrackedInfraFiles(t *testing.T) []string {
+	t.Helper()
+
+	git, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("git is not installed: the tracked files under %s/ are read from the repository's index: %v", infraRulesRoot, err)
+	}
+
+	root, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", moduleRoot, err)
+	}
+
+	// -z keeps a path with a space in it whole, as test/architecture and test/lint read the index too.
+	out, err := exec.CommandContext(t.Context(), git, "-C", root, "ls-files", "-z", "--", infraRulesRoot).Output()
+	if err != nil {
+		t.Fatalf("git ls-files -- %s in %s: %v", infraRulesRoot, root, err)
+	}
+
+	var tracked []string
+
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel != "" {
+			tracked = append(tracked, rel)
+		}
+	}
+
+	return tracked
 }
 
 // infraRuleWantIn resolves the {root} and {site} placeholders of a case's wantIn, so a case can name the copy's
