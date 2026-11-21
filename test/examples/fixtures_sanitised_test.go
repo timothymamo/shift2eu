@@ -399,6 +399,20 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"vaults/psql-shop"},
 		},
 		{
+			// An allow-list entry names the type segment and the file, not the
+			// provider namespace (the allowListEntry doc in
+			// fixtures_check_test.go says why that is accepted), so the
+			// guide's shop name under another namespace of the same type
+			// segment - a MySQL flexibleServers/ here - is excused in the file
+			// the entry names and the check reports nothing. This row holds
+			// that accepted boundary: a change to report the namespace would
+			// have to revisit it.
+			name:    "accepted: guide shop name under another namespace of the same type segment",
+			path:    "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+			content: "/subscriptions/" + dummyGUID + "/resourceGroups/rg-shop/providers/Microsoft.DBforMySQL/flexibleServers/psql-shop",
+			want:    nil,
+		},
+		{
 			// An abfss URL names the container before an @ and the customer's
 			// storage account in the host after it. The account is reported as the
 			// bare value on its own, beside the host, so the failure names both
