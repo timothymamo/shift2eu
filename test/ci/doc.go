@@ -11,11 +11,16 @@
 // of a platform package, an integrity that is not an npm sha512-<base64> value,
 // a tarball that does not match the pinned integrity, and a runner whose
 // /etc/claude-code would apply a managed policy - each with the exit status, the
-// output, that npm was not called and that nothing was extracted. The one
-// matching tarball installs package/claude alone, executable, and the installer
-// prints the version line that binary prints. CLAUDE_CODE_INSTALL_ROOT, read by
-// the script in place of /, points every case at a root in t.TempDir(), so no
-// test touches /etc; the cases pin that GITHUB_ACTIONS cannot weaken that check.
+// output, that npm was not called when the installer refuses before packing, and
+// that nothing was extracted. The one matching tarball installs package/claude
+// alone, executable, and the installer prints the version line that binary prints.
+// Whatever a case's exit, the installer has removed the mktemp -d directory it
+// downloaded into, so the case's TMPDIR holds no entry once it returns: after
+// the successful install and after every refusal, the integrity mismatch
+// included. The installed package/claude is under the destination, not there.
+// CLAUDE_CODE_INSTALL_ROOT, read by the script in place of /, points every case
+// at a root in t.TempDir(), so no test touches /etc; the cases pin that
+// GITHUB_ACTIONS cannot weaken that check.
 // Each case's run gets an environment the harness builds for it - PATH with the
 // fake npm first, HOME and TMPDIR in the case's temporary directory, LANG and
 // LC_ALL as C - so no variable of the developing machine's own environment, a

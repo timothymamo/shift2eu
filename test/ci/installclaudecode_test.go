@@ -18,7 +18,11 @@
 //   - The managed-policy check runs before the argument checks, so a runner that carries a policy is refused as
 //     such even when the arguments would be refused too, and no download is attempted either way.
 //   - A tarball that matches installs its one binary, package/claude, executable, into <directory> - the other
-//     files of the tarball stay out - and the installer prints the version line the binary prints.
+//     files of the tarball stay out, and <directory> is not where the download went - and the installer prints the
+//     version line the binary prints.
+//   - Every exit removes the mktemp -d directory the tarball was downloaded into, the successful install's and each
+//     refusal's alike, a refusal after the download's (the integrity mismatch) included: nothing is left in TMPDIR.
+//     The installed package/claude stays, as it lives in <directory>.
 //   - CLAUDE_CODE_INSTALL_ROOT, which only a test sets, stands in for / in the managed-policy check, and
 //     GITHUB_ACTIONS cannot weaken that check: with it set and the root overridden, the installer refuses too, so
 //     no workflow step can drop the check by setting the variable. It refuses the variable when it is empty as
@@ -28,13 +32,14 @@
 //
 // Every case runs the real script in an environment the harness builds for that case alone, from nothing of this
 // process's own but PATH: PATH with the fake npm's directory first, HOME as the case's temporary directory, LANG
-// and LC_ALL as C, TMPDIR as a directory below the case's t.TempDir(), which holds what the installer's mktemp -d
-// leaves behind, and the fake npm's variables. No other variable of the developing machine's environment reaches
-// the run, so neither a shell hook nor a tool's configuration that a BASH_ENV or an OPENSSL_CONF would point at can
-// change a case, and no credential the environment holds can appear in a failure's output. A fake npm first on PATH
-// copies a tarball the test builds at run time (no binary blob is committed) into the pack destination and prints
-// its file name, and it touches a marker file so a case can assert npm was not called; the rest of PATH stays, so
-// bash, tar, openssl, base64, mktemp, cp, sh and gzip are the machine's own.
+// and LC_ALL as C, TMPDIR as a directory below the case's t.TempDir(), which the installer's mktemp -d creates its
+// download directory in and must hold nothing of once the installer has exited, and the fake npm's variables. No
+// other variable of the developing machine's environment reaches the run, so neither a shell hook nor a tool's
+// configuration that a BASH_ENV or an OPENSSL_CONF would point at can change a case, and no credential the
+// environment holds can appear in a failure's output. A fake npm first on PATH copies a tarball the test builds at
+// run time (no binary blob is committed) into the pack destination and prints its file name, and it touches a marker
+// file so a case can assert npm was not called; the rest of PATH stays, so bash, tar, openssl, base64, mktemp, cp, sh
+// and gzip are the machine's own.
 //
 // The test needs no root and no network, and the root it overrides is a fresh t.TempDir(); a case that needs the
 // machine's real /etc/claude-code absent skips when it exists.
@@ -559,8 +564,9 @@ func runInstallCase(t *testing.T, tc installCase, fx fixture) {
 
 	writePolicy(t, root, tc.policy)
 
-	// The installer's mktemp -d honours TMPDIR and never removes what it made, so the case hands it a directory
-	// below its own temp dir instead of the machine's.
+	// The installer's mktemp -d honours TMPDIR, and every exit of the installer removes what it made there, so the
+	// case hands it a directory below its own temp dir, apart from the machine's, and asserts afterwards that the
+	// installer left no entry in it: the download directory is gone, the destination's package/claude is not.
 	tmpDir := filepath.Join(base, "tmp")
 	if err := os.MkdirAll(tmpDir, 0o700); err != nil {
 		t.Fatalf("create the case's TMPDIR %s: %v", tmpDir, err)
@@ -622,6 +628,12 @@ func runInstallCase(t *testing.T, tc installCase, fx fixture) {
 			t.Errorf("%s has mode %v, want an executable one", claudePath, info.Mode())
 		}
 	}
+
+	// The install's own files are under the destination, never in TMPDIR: every case - the successful install and
+	// each refusal, the integrity mismatch's included - must leave the download directory removed.
+	if entries := entriesIn(t, tmpDir); len(entries) != 0 {
+		t.Errorf("the installer left %d entries in its TMPDIR %s: %v, want it empty: it must remove the mktemp -d directory it downloaded into", len(entries), tmpDir, entries)
+	}
 }
 
 // writePolicy creates what a case puts at <root>/etc/claude-code.
@@ -669,7 +681,7 @@ func writeFile(t *testing.T, path string, content []byte, mode os.FileMode) {
 }
 
 // childDirs are the directories a case hands the installer's run: the fake npm first on PATH, the case's HOME,
-// and the TMPDIR the installer's mktemp -d leaves behind.
+// and the TMPDIR the installer's mktemp -d makes its download directory in and must leave empty.
 type childDirs struct {
 	bin  string
 	home string
@@ -792,6 +804,30 @@ func filesUnder(t *testing.T, dir string) []string {
 	slices.Sort(files)
 
 	return files
+}
+
+// entriesIn returns the sorted names of every entry, file or directory, directly in dir. A dir that does not exist
+// holds no entry.
+func entriesIn(t *testing.T, dir string) []string {
+	t.Helper()
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		names = append(names, entry.Name())
+	}
+
+	slices.Sort(names)
+
+	return names
 }
 
 // npmCalled reports whether the fake npm ran, which it records by touching marker.
