@@ -16,6 +16,10 @@
 // prints the version line that binary prints. CLAUDE_CODE_INSTALL_ROOT, read by
 // the script in place of /, points every case at a root in t.TempDir(), so no
 // test touches /etc; the cases pin that GITHUB_ACTIONS cannot weaken that check.
+// Each case's run gets an environment the harness builds for it - PATH with the
+// fake npm first, HOME and TMPDIR in the case's temporary directory, LANG and
+// LC_ALL as C - so no variable of the developing machine's own environment, a
+// credential's included, reaches the script.
 //
 // A script needs bash, tar, openssl, mktemp, cp, sh and gzip on PATH, and GNU
 // coreutils' base64, the only one with -w0 for the unwrapped digest the

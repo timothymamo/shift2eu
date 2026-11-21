@@ -26,13 +26,15 @@
 //     slash on the root is stripped, so the path the installer checks and names is <root>/etc/claude-code, never
 //     <root>//etc/claude-code. GITHUB_ACTIONS alone is no refusal.
 //
-// Every case runs the real script with an explicit environment built from this process's, without GITHUB_ACTIONS,
-// CLAUDE_CODE_INSTALL_ROOT, BASH_ENV, ENV and TMPDIR, so a case decides its own and the environment a BASH_ENV or a
-// TMPDIR points at cannot reach the run; the case's TMPDIR is a directory below its t.TempDir(), which holds what
-// the installer's mktemp -d leaves behind. A fake npm first on PATH copies a tarball the test builds at run time (no
-// binary blob is committed) into the pack destination and prints its file name, and it touches a marker file so a
-// case can assert npm was not called; the rest of PATH stays, so bash, tar, openssl, base64, mktemp, cp, sh and
-// gzip are the machine's own.
+// Every case runs the real script in an environment the harness builds for that case alone, from nothing of this
+// process's own but PATH: PATH with the fake npm's directory first, HOME as the case's temporary directory, LANG
+// and LC_ALL as C, TMPDIR as a directory below the case's t.TempDir(), which holds what the installer's mktemp -d
+// leaves behind, and the fake npm's variables. No other variable of the developing machine's environment reaches
+// the run, so neither a shell hook nor a tool's configuration that a BASH_ENV or an OPENSSL_CONF would point at can
+// change a case, and no credential the environment holds can appear in a failure's output. A fake npm first on PATH
+// copies a tarball the test builds at run time (no binary blob is committed) into the pack destination and prints
+// its file name, and it touches a marker file so a case can assert npm was not called; the rest of PATH stays, so
+// bash, tar, openssl, base64, mktemp, cp, sh and gzip are the machine's own.
 //
 // The test needs no root and no network, and the root it overrides is a fresh t.TempDir(); a case that needs the
 // machine's real /etc/claude-code absent skips when it exists.
@@ -204,6 +206,90 @@ func TestInstallClaudeCodeRefusesUnverifiedPackages(t *testing.T) {
 
 			runInstallCase(t, tc, fx)
 		})
+	}
+}
+
+// TestChildEnvCarriesNothingFromTheParent pins the environment a case hands the installer: the harness builds it
+// itself, so no variable of the developer's own environment - a configuration file a tool reads, a shell hook, a
+// preloaded library, a proxy, a credential of the agents' - can change a case's result or reach a failure's output.
+// The parent environment is a parameter, so the test states what a case must ignore instead of changing the
+// environment of the whole test binary (t.Setenv is forbidden, CLAUDE.md rule 3).
+func TestChildEnvCarriesNothingFromTheParent(t *testing.T) {
+	base := t.TempDir()
+
+	// The parent's environment stands in for what a developing machine's carries: configuration a tool reads, a
+	// hook bash sources, a preloaded library, a proxy, a credential, and the variables a case decides itself.
+	parent := []string{
+		"PATH=/usr/bin:/bin",
+		"HOME=/canary/home",
+		"TMPDIR=/canary/tmp",
+		"LANG=en_US.UTF-8",
+		"LC_ALL=en_US.UTF-8",
+		"SHELL=/bin/canary-sh",
+		"OPENSSL_CONF=/canary/openssl.cnf",
+		"BASH_ENV=/canary/hook.sh",
+		"ENV=/canary/hook.sh",
+		"LD_PRELOAD=/canary/libcanary.so",
+		"NODE_OPTIONS=--require=/canary/hook.js",
+		"HTTPS_PROXY=http://canary.invalid:3128",
+		"ANTHROPIC_API_KEY=a canary that must not reach the run",
+		"GITHUB_TOKEN=a canary that must not reach the run",
+		githubActionsEnv + "=true",
+		installRootEnv + "=/nonexistent",
+		"A NAME WITHOUT A VALUE",
+	}
+
+	dirs := childDirs{
+		bin:  filepath.Join(base, "bin"),
+		home: filepath.Join(base, "home"),
+		tmp:  filepath.Join(base, "tmp"),
+	}
+
+	marker := filepath.Join(base, "npm-called")
+
+	env := childEnv(t, parent, dirs, map[string]string{npmMarkerEnv: marker})
+
+	// Only names and duplicates are reported, never the value of a variable the environment turned out to hold: a
+	// leaked credential must not reach a failure's output, which is the leak this test pins shut.
+	names := make([]string, 0, len(env))
+	values := make(map[string]string, len(env))
+
+	for _, kv := range env {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			t.Errorf("%q is not a NAME=value pair", kv)
+
+			continue
+		}
+
+		if _, twice := values[name]; twice {
+			t.Errorf("%s is set twice", name)
+		}
+
+		names = append(names, name)
+		values[name] = value
+	}
+
+	slices.Sort(names)
+
+	wantNames := []string{"HOME", "LANG", "LC_ALL", "PATH", "TMPDIR", npmMarkerEnv}
+	slices.Sort(wantNames)
+
+	if diff := cmp.Diff(wantNames, names); diff != "" {
+		t.Errorf("child environment's variables (-want +got):\n%s", diff)
+	}
+
+	for _, want := range []struct{ name, value string }{
+		{name: "PATH", value: dirs.bin + string(os.PathListSeparator) + "/usr/bin:/bin"},
+		{name: "HOME", value: dirs.home},
+		{name: "LANG", value: "C"},
+		{name: "LC_ALL", value: "C"},
+		{name: "TMPDIR", value: dirs.tmp},
+		{name: npmMarkerEnv, value: marker},
+	} {
+		if got := values[want.name]; got != want.value {
+			t.Errorf("%s = %q, want %q", want.name, got, want.value)
+		}
 	}
 }
 
@@ -478,7 +564,7 @@ func runInstallCase(t *testing.T, tc installCase, fx fixture) {
 		t.Fatalf("create the case's TMPDIR %s: %v", tmpDir, err)
 	}
 
-	env := childEnv(t, binDir, tmpDir, map[string]string{
+	env := childEnv(t, os.Environ(), childDirs{bin: binDir, home: base, tmp: tmpDir}, map[string]string{
 		npmTarballEnv: tarballPath,
 		npmNameEnv:    tarballName,
 		npmMarkerEnv:  marker,
@@ -580,31 +666,31 @@ func writeFile(t *testing.T, path string, content []byte, mode os.FileMode) {
 	}
 }
 
-// childEnv returns this process's environment without PATH, GITHUB_ACTIONS, CLAUDE_CODE_INSTALL_ROOT, BASH_ENV,
-// ENV and TMPDIR, which a case decides itself, and with dir first on PATH, tmpDir as TMPDIR and the fake npm's
-// variables added.
-func childEnv(t *testing.T, dir, tmpDir string, extra map[string]string) []string {
+// childDirs are the directories a case hands the installer's run: the fake npm first on PATH, the case's HOME,
+// and the TMPDIR the installer's mktemp -d leaves behind.
+type childDirs struct {
+	bin  string
+	home string
+	tmp  string
+}
+
+// childEnv returns the environment the installer runs in, built from nothing but the harness: the parent's PATH
+// after dirs.bin, which comes first, for the tools the installer and the fake npm call, dirs.home as HOME, LANG and
+// LC_ALL as C for a run that neither a locale nor a message catalogue of the developer's can change, dirs.tmp as
+// TMPDIR, and extra besides. Every other variable of parent is dropped, so neither the developer's configuration
+// nor a credential held there can change a case or reach a failure's output.
+func childEnv(t *testing.T, parent []string, dirs childDirs, extra map[string]string) []string {
 	t.Helper()
 
-	var (
-		env  []string
-		path string
-	)
+	path := dirs.bin
 
-	for _, kv := range os.Environ() {
-		name, value, ok := strings.Cut(kv, "=")
-		if !ok {
-			continue
-		}
-
-		switch name {
-		case "PATH":
-			path = value
-		case githubActionsEnv, installRootEnv, "BASH_ENV", "ENV", "TMPDIR":
-		default:
-			env = append(env, kv)
+	for _, kv := range parent {
+		if value, ok := strings.CutPrefix(kv, "PATH="); ok && value != "" {
+			path += string(os.PathListSeparator) + value
 		}
 	}
+
+	env := []string{"PATH=" + path, "HOME=" + dirs.home, "LANG=C", "LC_ALL=C", "TMPDIR=" + dirs.tmp}
 
 	names := make([]string, 0, len(extra))
 	for name := range extra {
@@ -617,7 +703,7 @@ func childEnv(t *testing.T, dir, tmpDir string, extra map[string]string) []strin
 		env = append(env, name+"="+extra[name])
 	}
 
-	return append(env, "PATH="+dir+string(os.PathListSeparator)+path, "TMPDIR="+tmpDir)
+	return env
 }
 
 // runInstaller runs the installer with env and args, and returns its stdout and stderr together and its exit
