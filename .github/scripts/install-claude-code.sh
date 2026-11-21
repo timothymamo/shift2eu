@@ -7,13 +7,13 @@
 # It downloads the platform package's tarball with npm pack, which runs no install script, compares it
 # with the pinned npm integrity, and only then extracts its one binary, package/claude, into
 # <directory>, where the reviewer runs it as <directory>/package/claude. A tarball that does not match
-# fails the run and nothing of it is extracted. The tarball is downloaded into a directory of its own from
-# mktemp -d, which an EXIT trap removes on every exit, a failed one included (issue #451); <directory>
-# stays. The meta package @anthropic-ai/claude-code only picks a
-# platform package in a postinstall script, so it is never installed. The workflow pins the version
-# (CLAUDE_CODE_VERSION, under a # renovate: comment) and the integrity (CLAUDE_CODE_INTEGRITY) in the
-# install step's env: and passes both here: a Renovate bump of the version must replace the integrity
-# too (npm view <package>@<version> dist.integrity).
+# fails the run and nothing of it is extracted. The tarball is downloaded into a directory of its own
+# from mktemp -d, which an EXIT trap removes on every exit, a failed one included (issue #451);
+# <directory> stays. The meta package @anthropic-ai/claude-code only picks a platform package in a
+# postinstall script, so it is never installed. The workflow pins the version (CLAUDE_CODE_VERSION,
+# under a # renovate: comment) and the integrity (CLAUDE_CODE_INTEGRITY) in the install step's env: and
+# passes both here: a Renovate bump of the version must replace the integrity too (npm view
+# <package>@<version> dist.integrity).
 #
 # It fails when /etc/claude-code exists: the CLI applies an admin-managed policy from there
 # (managed-settings.json, managed plugins' hooks) under every flag, --safe-mode and --setting-sources ""
@@ -57,13 +57,16 @@ if [[ ! "${integrity}" =~ ^sha512-[A-Za-z0-9+/]+=*$ ]]; then
 	exit 2
 fi
 
-download=$(mktemp -d)
+# The trap is set before mktemp -d, so a signal right after it returns still removes the directory. The
+# cleanup never decides the verdict: a failed rm leaves the script's own exit status as it was.
+download=""
 remove_download() {
 	if [ -n "${download:-}" ] && [ -d "${download}" ]; then
-		rm -rf -- "${download}"
+		rm -rf -- "${download}" || true
 	fi
 }
 trap remove_download EXIT
+download=$(mktemp -d)
 mkdir -p "${dest}"
 
 tgz=$(npm pack --ignore-scripts --silent --pack-destination "${download}" "${package}")
