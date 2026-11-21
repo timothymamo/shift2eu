@@ -37,8 +37,9 @@ import (
 // MySQL server (servers/sql-contoso-prod, servers/pg-contoso-prod,
 // servers/mysql-contoso-prod, and a flexible server in flexibleServers/), a web
 // app (sites/app-contoso-prod) and a Service Bus namespace
-// (namespaces/sb-contoso-prod). Each is held to the shape its provider's naming
-// rules give it, to the sample rule a storage account's name is held to
+// (namespaces/sb-contoso-prod). Each name is read as a run wider than any
+// type's charset and held only to its type's minimum length, so a name its type
+// would refuse is still reported, and it is held to the sample rule a storage account's name is held to
 // (example and generic words, exampledata), and to an ARM ID's providers/
 // segment before its namespace, so a resource type (a child type after a
 // namespace, Microsoft.ServiceBus/namespaces/queues) and a placeholder too short
@@ -170,8 +171,9 @@ func TestResourcePathProblems(t *testing.T) {
 		// <name>.servicebus.windows.net), so the segment after the resource type
 		// names the customer as directly as a host would (issue #424). The type
 		// segment and the name are reported as the file writes them, since an
-		// ARM ID's provider and type are case-insensitive, and each type's name
-		// is held to the shape its provider's naming rules give it.
+		// ARM ID's provider and type are case-insensitive. Each name is read as
+		// a run wider than any type's charset and held only to its type's
+		// minimum length, so a name its type would refuse is still reported.
 		{
 			name: "customer Key Vault in an ARM ID",
 			text: testARMID("Microsoft.KeyVault", "vaults", "kv-contoso-prod"),
@@ -337,16 +339,17 @@ func TestResourcePathProblems(t *testing.T) {
 			want: []string{"namespaces/sb-contoso-prod"},
 		},
 		{
-			// The inventory guide's own shop names are excused by an exact-name
-			// rule (guideShopNamePattern: app-shop-storefront), never by a shape
-			// such as any words after shop, so a customer's web app named the
-			// same way with their own words after them is still reported.
+			// The inventory guide's own shop names are excused only by exact
+			// allow-list entries in the guide's files (realDataAllowList:
+			// sites/app-shop-storefront), never by a shape such as any words
+			// after shop, so a customer's web app named the same way with their
+			// own words after them is still reported.
 			name: "customer web app named like the guide's shop",
 			text: testARMID("Microsoft.Web", "sites", "app-shop-acme-prod"),
 			want: []string{"sites/app-shop-acme-prod"},
 		},
 		{
-			// The same exact-name rule holds for the guide's PostgreSQL
+			// The same exact entries hold for the guide's PostgreSQL
 			// flexible server: psql-shop is the guide's, and a customer's
 			// psql-shop-prod is no name the guide writes.
 			name: "customer flexible server named like the guide's shop",
@@ -354,7 +357,7 @@ func TestResourcePathProblems(t *testing.T) {
 			want: []string{"flexibleServers/psql-shop-prod"},
 		},
 		{
-			// The rule matches the guide's name to its end, so a customer's name
+			// An entry excuses the guide's exact value, so a customer's name
 			// that only opens with it (app-shop-storefront2) is their own too:
 			// the excused names are the guide's, not a prefix of them.
 			name: "customer web app whose name opens with the guide's shop name",

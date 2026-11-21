@@ -70,6 +70,46 @@ var realDataAllowList = []allowListEntry{
 		why:   "the guide's sample shop's synthetic file-share storage account in the Resource Graph export; it names no one's account",
 	},
 	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "flexibleServers/psql-shop",
+		why:   "the synthetic PostgreSQL flexible server of the inventory guide's sample shop in the Resource Graph export; it names no one's server",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "flexibleServers/psql-shop-replica",
+		why:   "the synthetic read replica of the inventory guide's sample shop's PostgreSQL server; it names no one's server",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "flexibleServers/mysql-shop-catalog",
+		why:   "the synthetic MySQL flexible server of the inventory guide's sample shop's catalog; it names no one's server",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "flexibleServers/mysql-shop-reports",
+		why:   "the synthetic MySQL flexible server of the inventory guide's sample shop's reports; it names no one's server",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "sites/func-shop-thumbnails",
+		why:   "the synthetic function app of the inventory guide's sample shop; it names no one's app",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "sites/app-shop-storefront",
+		why:   "the synthetic web app of the inventory guide's sample shop's storefront; it names no one's app",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/graph-2.json",
+		value: "namespaces/sb-shop",
+		why:   "the synthetic Service Bus namespace of the inventory guide's sample shop in the Resource Graph export; it names no one's namespace",
+	},
+	{
+		file:  "test/e2e/testdata/inventory-guide/azure/servicebus.json",
+		value: "namespaces/sb-shop",
+		why:   "the synthetic Service Bus namespace of the inventory guide's sample shop that holds its queues; it names no one's namespace",
+	},
+	{
 		file:  "test/e2e/testdata/inventory-guide/azure/storage-queues.json",
 		value: "storageAccounts/stshopassets",
 		why:   "the synthetic storage account of the guide's sample shop that holds its queues; it names no one's account",
