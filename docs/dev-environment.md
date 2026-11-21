@@ -1653,14 +1653,16 @@ the keys file to remove):
 direnv exec . make vm-agents-token-ssh-uninstall   # PASS: vm-agents-token-ssh-uninstall: done
 ```
 
-**3. A new key**, generated on the App's page in a browser on the Mini and kept where `SHIFT2EU_AGENTS_APP_KEY_FILE` will name
-it, outside the workspace, mode 0600. Never copy the account's key out; delete it on the App's page once
-the new one works.
+**3. A new key**, generated on the App's page and kept on the Mini where `SHIFT2EU_AGENTS_APP_KEY_FILE` will
+name it, outside the workspace, mode 0600. The download is usually on another machine: carry it to the Mini
+as a file only you can read. Downloaded on the Mini itself, install it from `~/Downloads` and remove it there
+instead. Never copy the account's key out; delete it on the App's page once the new one works.
 
 ```bash
-# Mac (admin): here the Mini, as yourself, the key downloaded there; copy, not mv, so the rm below deletes the download
-install -m 0600 ~/Downloads/<app>.<date>.private-key.pem <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name>
-ls -l <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name>   # PASS: -rw------- owned by you, outside the workspace
+# Mac (admin): the machine the browser saved the key to
+ssh <the Mini> 'umask 077 && cat > <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name>' < ~/Downloads/<app>.<date>.private-key.pem
+ssh <the Mini> ls -l <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name>   # PASS: -rw------- owned by you, outside the workspace
+# FAIL a mode other than -rw-------: ssh <the Mini> chmod 0600 <the path SHIFT2EU_AGENTS_APP_KEY_FILE will name>
 ```
 
 ```bash
