@@ -31,11 +31,23 @@ type fakeRegistry struct {
 	status int
 	body   string
 	header http.Header
+	// bounce, when set, is the Location of a 302 the fake answers the first
+	// request with: only a client that follows the redirect ever sees the
+	// answer status, body and header configure.
+	bounce string
 	got    []*http.Request
 }
 
 func (f *fakeRegistry) RoundTrip(req *http.Request) (*http.Response, error) {
 	f.got = append(f.got, req)
+	if len(f.got) == 1 && f.bounce != "" {
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header:     http.Header{"Location": {f.bounce}},
+			Body:       io.NopCloser(strings.NewReader("")),
+			Request:    req,
+		}, nil
+	}
 	header := f.header
 	if header == nil {
 		header = http.Header{}
@@ -82,6 +94,12 @@ func TestRun(t *testing.T) {
 		fixture   string // a registry fixture of the library's testdata, or
 		body      string // the registry's answer itself when fixture is empty
 		header    http.Header
+		// bounce is the Location of a 302 the fake registry answers the
+		// first request with, before status, body and header.
+		bounce string
+		// productionClient builds the client with the check's own
+		// newRegistryClient rather than the test's no-follow client below.
+		productionClient bool
 		// workflowName is the -workflow file's name in a fresh temporary
 		// directory; empty means the fixture workflow that pins integrity.
 		// A name whose file does not exist makes run() read an error text
@@ -152,6 +170,23 @@ func TestRun(t *testing.T) {
 			wantStderr:   []string{"the registry answered 302, want 200"},
 		},
 		{
+			// The check builds its client with newRegistryClient, which
+			// refuses every redirect with errRedirect. The fake would answer
+			// the request the Location names, on another host, with the very
+			// document the check accepts, so a client that followed it would
+			// pass: this case pins the refusal in the production client
+			// itself, not fetch's non-200 branch.
+			name:             "the production client refuses to follow a redirect",
+			integrity:        publishedIntegrity,
+			status:           http.StatusOK,
+			fixture:          "registry-2.1.330.json",
+			bounce:           "https://registry.example.com/x",
+			productionClient: true,
+			wantRequests:     1,
+			wantCode:         1,
+			wantStderr:       []string{errRedirect.Error()},
+		},
+		{
 			name:         "a body over the bound fails",
 			integrity:    publishedIntegrity,
 			status:       http.StatusOK,
@@ -195,7 +230,7 @@ func TestRun(t *testing.T) {
 			if tc.fixture != "" {
 				body = fixture(t, tc.fixture)
 			}
-			registry := &fakeRegistry{status: tc.status, body: body, header: tc.header}
+			registry := &fakeRegistry{status: tc.status, body: body, header: tc.header, bounce: tc.bounce}
 			client := &http.Client{
 				Transport: registry,
 				// The check's own client refuses redirects with errRedirect
@@ -204,6 +239,9 @@ func TestRun(t *testing.T) {
 				CheckRedirect: func(*http.Request, []*http.Request) error {
 					return http.ErrUseLastResponse
 				},
+			}
+			if tc.productionClient {
+				client = newRegistryClient(registry)
 			}
 
 			path := workflow(t, tc.integrity)

@@ -6,7 +6,7 @@
     "claude": "package/claude"
   },
   "dist": {
-    "integrity": "sha512-b2xkLWludGVncml0eS1mcm9tLTIuMS4zMjc=",
+    "integrity": "sha512-b2xkLWludGVncml0eS1mcm9tLTIuMS4zMjcuLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLg==",
     "shasum": "1111111111111111111111111111111111111111",
     "tarball": "https://registry.example.com/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.327.tgz"
   }

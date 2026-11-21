@@ -25,10 +25,12 @@ const (
 	// data, no credential.
 	publishedIntegrity = "sha512-9Gn+V7DtJ8M1nztP9CeDVl9g3RtrepI7rOFTyPRRnZe8D6zebIHKmC7OvBauucuAP0X0k85SDN/LPVZyjsGezQ=="
 
-	// staleIntegrity is the integrity of an older release, a valid sha512
-	// value the 2.1.330 fixture does not publish: the issue #428 case, where a
-	// Renovate bump left the previous version's integrity in place.
-	staleIntegrity = "sha512-b2xkLWludGVncml0eS1mcm9tLTIuMS4zMjc="
+	// staleIntegrity is the integrity of an older release: a well-formed
+	// sha512- value, the base64 of a 64-byte digest, that the 2.1.330 fixture
+	// does not publish. It is the issue #428 case, where a Renovate bump left
+	// the previous version's integrity in place, so it must pass the shape
+	// check FromWorkflow makes and fail only on the comparison.
+	staleIntegrity = "sha512-b2xkLWludGVncml0eS1mcm9tLTIuMS4zMjcuLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLi4uLg=="
 
 	// realWorkflowPath is the workflow the check reads in CI, relative to this
 	// package's directory.
