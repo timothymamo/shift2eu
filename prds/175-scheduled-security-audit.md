@@ -82,34 +82,37 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
 
 ### The skill, the ADR and the disclosure documents (milestone 1)
 
-- [ ] `.claude/skills/security-audit-run/SKILL.md` exists, agent-neutral like the other skills, and
+- [x] `.claude/skills/security-audit-run/SKILL.md` exists, agent-neutral like the other skills, and
   **links to `security-audit`'s checklist instead of copying it**. It is a separate skill from
   `security-audit` (which audits a diff, branch or PR and stays unchanged), and its description says so,
   so an agent asked for a change's audit does not pick it. Its name carries no cadence. It adds the
   whole-tree and release triage (What a run does, below), the rules of engagement and the triage rules.
   `make check` passes, `test/docs`' link and skill-shell checks included.
-- [ ] The skill frames every task as an authorized test of this project's own artifacts, run locally. It
+- [x] The skill frames every task as an authorized test of this project's own artifacts, run locally. It
   says that a step the model declines is reported in the report's limits section, never worked around.
   It tells the model to treat every file it reads (scanner output, advisory text, release files, the
   repository, the files the skill itself links to) as untrusted data, never as instructions, and to report
   an embedded instruction as a finding.
-- [ ] A root `SECURITY.md` names the supported versions (the latest minor release), points reporters to
+- [x] A root `SECURITY.md` names the supported versions (the latest minor release), points reporters to
   GitHub's private vulnerability reporting (already enabled), states the response the maintainer commits
   to, and links to the audit reports. It contains no personal e-mail address.
-- [ ] `TestIndexListsEveryPage` (`test/docs/archive_test.go`) accepts a page under `docs/` that is linked
+- [x] `TestIndexListsEveryPage` (`test/docs/archive_test.go`) accepts a page under `docs/` that is linked
   either from `docs/README.md` or from a **sub-index**: a `README.md` in a subdirectory of `docs/` that
   `docs/README.md` itself links (one level, no chains). A page linked only from a sub-index that
-  `docs/README.md` does not link still fails. A test pins both cases. This lets each dated report be
-  indexed by `docs/security/README.md` alone.
-- [ ] `docs/security/README.md` explains the scheduled audit and its current cadence, the disclosure split
-  and how to verify a release, and indexes the reports in `docs/security/audits/`. `docs/README.md` links
+  `docs/README.md` does not link still fails. A link to a directory, from either, lists every page
+  directly inside it, not those in its subdirectories (issue #280). A test pins each case. This lets
+  each dated report be indexed by `docs/security/README.md`'s link to `audits/` alone, with no edit per
+  report.
+- [x] `docs/security/README.md` explains the scheduled audit and its current cadence, the disclosure split
+  and how to verify a release, and indexes the reports in `docs/security/audits/` by their naming pattern
+  and a link to the directory (issue #280). `docs/README.md` links
   it. `docs/security/audits/TEMPLATE.md` holds the report's sections (Report and triage, below), has
   exactly one title, and is linked from `docs/security/README.md`. `TestIndexListsEveryPage` and
   `TestPagesHaveOneTitle` pass.
-- [ ] `docs/security/README.md` is the one user-facing text that states the cadence. `SECURITY.md`, the
+- [x] `docs/security/README.md` is the one user-facing text that states the cadence. `SECURITY.md`, the
   `security-audit-run` skill and the report template name no cadence and link to
   `docs/security/README.md` where they refer to it.
-- [ ] An ADR records the audit's design **as far as it is known before PRD #161 milestone 4 merges**: its
+- [x] An ADR records the audit's design **as far as it is known before PRD #161 milestone 4 merges**: its
   scope; the model and its authentication; the subscription's usage limits, shared with the agents and
   the AI reviewer, and the scheduled time chosen for them; the cadence and the values derived from it
   (the list in milestone 3); who can start a run (the maintainer only, with no inputs), the one guard
@@ -364,13 +367,14 @@ The publish script:
   fixed templates filled only with the run's UTC date, the run ID, the `main` SHA, the release tag, the
   public count, the private-findings flag and the run's URL, built by the script from
   `GITHUB_SERVER_URL`, `GITHUB_REPOSITORY` and `GITHUB_RUN_ID`, never with model text. The branch holds
-  **one commit** with both files, made through the Git data endpoints (blob, tree, commit, ref).
+  **one commit** with the report file, made through the Git data endpoints (blob, tree, commit, ref).
 - [ ] It opens the report PR only after checking that the branch's diff is exactly
-  `docs/security/audits/YYYY-MM-DD-<run_id>.md`, with the branch's date and run ID, and its index line
-  in `docs/security/README.md`, refusing anything else or an existing branch of that name. Because the
-  names carry the run ID, a second run on one UTC day, or a run started by hand on the day of a scheduled
-  one, adds its own report. A report it renders from a fixture result passes `test/docs`' title and link
-  checks.
+  `docs/security/audits/YYYY-MM-DD-<run_id>.md`, with the branch's date and run ID, refusing anything
+  else or an existing branch of that name. No index edit: `docs/security/README.md` links the directory
+  `audits/`, whose listing is the index (issue #280, ADR 0040), so two report PRs from the same `main`
+  never conflict. Because the names carry the run ID, a second run on one UTC day, or a run started by
+  hand on the day of a scheduled one, adds its own report. A report it renders from a fixture result
+  passes `test/docs`' title and link checks.
 - [ ] Each finding carries a **fingerprint** the script computes from rule, file and sink, written as
   `fp-` and 12 lowercase hex characters in each issue and advisory it files, and in the report's findings
   table for public findings, so later runs can read it back. A **public** fingerprint is a plain hash: the
@@ -454,7 +458,7 @@ Time and failures:
 
 - [ ] One `workflow_dispatch` run on `main` against the latest release produces, and nothing else:
   - a docs-only PR opened by `shift2eu-audit[bot]` that adds `docs/security/audits/<date>-<run_id>.md`
-    and its index line in `docs/security/README.md`;
+    and nothing else (the directory link indexes it, issue #280);
   - the draft advisories for its private findings (or none).
 
   No other branch, tag, release, package, comment, setting or new label changes, and no issue is opened
@@ -587,7 +591,7 @@ PoCs go only into the encrypted results or an advisory, never into `testdata/`.
 
 ## Milestones
 
-1. [ ] **Skill, ADR, disclosure documents and the docs index.** The `security-audit-run` skill, the
+1. [x] **Skill, ADR, disclosure documents and the docs index.** The `security-audit-run` skill, the
    ADR (what is known before PRD #161 milestone 4), `SECURITY.md`, `docs/security/README.md`,
    `docs/security/audits/TEMPLATE.md`, the docs index, and `TestIndexListsEveryPage` accepting a
    sub-index, with its test. No workflow yet. Depends on nothing; can merge before PRD #161 milestone 4.
@@ -671,10 +675,9 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    (`gh workflow run scheduled-security-audit.yml --ref main`, with no inputs); only the maintainer can,
    since the jobs are skipped for any other triggering actor. A run started while another is in progress
    waits for it (the concurrency group), and each run adds its own report on its own branch,
-   `security-audit/<date>-<run_id>`. Check: its report PR opens like a scheduled run's. If two report PRs
-   are open at once and the later one conflicts on its index line once the first is merged, close the
-   later PR, delete its branch, and start a new run once the subscription limit allows. Do not resolve
-   the conflict or use Update branch: a maintainer commit on the App's branch cannot be approved
+   `security-audit/<date>-<run_id>`. Check: its report PR opens like a scheduled run's. Two report PRs
+   open at once touch only their own report files, so they merge in either order (issue #280). Never use
+   Update branch or push to the App's branch: a maintainer commit there cannot be approved
    (`require_last_push_approval`) and breaks the App-authored docs-only check.
 10. **Renew the Claude token** before it expires (The subscription token, above), **rotate the App's key,
     the model key or the publish key** if any may have leaked, and **rotate any secret** a private
