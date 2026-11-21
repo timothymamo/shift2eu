@@ -88,6 +88,10 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 		// slice pins that go's output is the whole of it, a header on its own pins that the summary is printed
 		// even when go names no package and no test, and nil pins nothing of the tail.
 		wantTail []string
+		// wantNoStderr is a text make test must not print on stderr, empty for none: a status the run lost is
+		// still a failure the run reports itself, so the summary must not come as the shell's error about a
+		// missing file instead of, or beside, the summary callers read (issue #253).
+		wantNoStderr string
 	}{
 		{
 			name:       "a failing test",
@@ -142,16 +146,21 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 			wantTail:   []string{testSummaryHeader},
 		},
 		{
-			// The subshell that runs go dies before it writes go's status, so the status file stays empty and the
-			// recipe has no number to test: it must fail the run all the same, not read nothing as success and
-			// exit zero over the failing suite (issue #253). What it prints after go's output is not pinned here:
-			// the kill makes that order racy, and which summary a run with no status prints is the fix's choice.
-			// The check that go's output appears whole above holds that the FAIL line still reaches the log.
+			// The subshell that runs go dies before it writes go's status, so the status file is never created
+			// and the recipe has no number to test: it must fail the run all the same, not read nothing as
+			// success and exit zero over the failing suite (issue #253). The summary is owed here most of all,
+			// because go's own FAIL line is all the log has: the pipeline has finished and tee has written the
+			// whole file before the recipe reads the status, so the summary is exactly go's lines.
 			name:       "a go whose status is lost",
 			output:     "FAIL\texample/pkg/b\t0.1s\n",
 			exitCode:   1,
 			wantFailed: true,
 			script:     killingGoScript,
+			wantTail: []string{
+				testSummaryHeader,
+				"FAIL\texample/pkg/b\t0.1s",
+			},
+			wantNoStderr: "No such file or directory",
 		},
 		{
 			// A timeout prints no --- FAIL: line: the panic names the tests that were running instead, one tab in
@@ -199,6 +208,11 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 			if at < 0 {
 				t.Fatalf("make test's stdout does not print go test's own output unchanged, so a failing run hides what go said (issue #253)\nwant go's output:\n%s\nstdout:\n%s\nstderr:\n%s",
 					tc.output, stdout, stderr)
+			}
+
+			if tc.wantNoStderr != "" && strings.Contains(stderr, tc.wantNoStderr) {
+				t.Errorf("make test prints %q on stderr where a lost go status must fail the run and still print the summary of the failing packages and tests (issue #253)\nstdout:\n%s\nstderr:\n%s",
+					tc.wantNoStderr, stdout, stderr)
 			}
 
 			if tc.wantTail != nil {
