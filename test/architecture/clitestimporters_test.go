@@ -119,6 +119,9 @@ func golangciBuildTags(t *testing.T) []string {
 // over the union of the builds: a parity test that gains a build constraint,
 // as //go:build !js, is still exempt where its file is built, so no build but
 // the ones it is left out of may report its exemption as stale (issue #382).
+// A build whose listing failed, or that -run left its subtest out of, is no part
+// of that union: listedImporterProblems reports the not-named problems of the
+// builds it did list, and no exemption as stale until every build was listed.
 func TestOnlyNamedPackagesTestTheCLI(t *testing.T) {
 	t.Parallel()
 
@@ -134,14 +137,7 @@ func TestOnlyNamedPackagesTestTheCLI(t *testing.T) {
 	// every subtest has finished: a parallel subtest resumes only after this
 	// function has returned, so the check cannot follow the loop below.
 	t.Cleanup(func() {
-		// A build the listing failed in left its set empty, which the union check
-		// would report as a stale exemption of every named package: that failure
-		// is already the one to fix.
-		if t.Failed() {
-			return
-		}
-
-		for _, problem := range check.CLIImporterProblems(sets, cliTestImporters) {
+		for _, problem := range listedImporterProblems(sets, cliTestImporters) {
 			switch problem.Kind {
 			case check.CLIImporterNotNamed:
 				t.Errorf("%s: a test file of %s imports %s: only the test files of %s may (depguard rule cli-only-in-named-tests, issue #345). Test the driving adapter through its own package, or name the package in the rule and in cliTestImporters on purpose",
@@ -280,6 +276,140 @@ func TestCLIImporterProblems(t *testing.T) {
 
 			if diff := cmp.Diff(tc.want, check.CLIImporterProblems(tc.sets, named)); diff != "" {
 				t.Errorf("CLIImporterProblems() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// listedImporterProblems returns the problems check.CLIImporterProblems reports
+// over the builds whose listing filled its set: the sets with a Build name. A
+// build whose ListPackages failed, or that -run left its subtest out of, has no
+// name, and its empty set would make every named package look stale. The
+// not-named problems of the builds that did list are reported either way, and a
+// stale exemption only when every build was listed, the one case in which the
+// union of the sets is the whole module (issue #382).
+func listedImporterProblems(sets []check.CLIImportersBuild, named []string) []check.CLIImporterProblem {
+	listed := make([]check.CLIImportersBuild, 0, len(sets))
+
+	for _, set := range sets {
+		if set.Build != "" {
+			listed = append(listed, set)
+		}
+	}
+
+	problems := check.CLIImporterProblems(listed, named)
+
+	// The union of the sets is the whole module only when every build was listed.
+	everyBuildListed := len(listed) == len(sets)
+
+	var kept []check.CLIImporterProblem
+
+	for _, problem := range problems {
+		if problem.Kind == check.CLIImporterStaleExemption && !everyBuildListed {
+			continue
+		}
+
+		kept = append(kept, problem)
+	}
+
+	return kept
+}
+
+// TestListedImporterProblems pins the filter TestOnlyNamedPackagesTestTheCLI
+// applies to the builds it listed: a build whose set stayed empty, because the
+// listing failed in it or -run left its subtest out, hides no not-named problem
+// of the builds that did list, and a stale exemption is reported only when every
+// build was listed (issue #382).
+func TestListedImporterProblems(t *testing.T) {
+	t.Parallel()
+
+	const (
+		wirePkg = modulePath + "/cmd/shift2eu-web/internal/wire"
+		cliPkg  = modulePath + "/internal/cli"
+		webPkg  = modulePath + "/internal/web"
+
+		nativeBuild = "linux/amd64/tags=none"
+		wasmBuild   = "js/wasm/tags=none"
+	)
+
+	named := []string{wirePkg, cliPkg}
+
+	// build is one build of the check: its name and the packages whose test
+	// files import internal/cli in it. unlisted is the set a build whose listing
+	// failed or did not run leaves behind.
+	build := func(name string, importers ...string) check.CLIImportersBuild {
+		return check.CLIImportersBuild{Build: name, Importers: importers}
+	}
+
+	unlisted := check.CLIImportersBuild{}
+
+	// notNamed and stale are the problems listedImporterProblems returns.
+	notNamed := func(name, pkg string) check.CLIImporterProblem {
+		return check.CLIImporterProblem{Kind: check.CLIImporterNotNamed, Build: name, Pkg: pkg}
+	}
+
+	stale := func(pkg string) check.CLIImporterProblem {
+		return check.CLIImporterProblem{Kind: check.CLIImporterStaleExemption, Pkg: pkg}
+	}
+
+	tests := []struct {
+		name string
+		sets []check.CLIImportersBuild
+		want []check.CLIImporterProblem
+	}{
+		{
+			name: "every build listed, a package outside the set imports the CLI",
+			sets: []check.CLIImportersBuild{
+				build(nativeBuild, cliPkg, webPkg, wirePkg),
+				build(wasmBuild, cliPkg, wirePkg),
+			},
+			want: []check.CLIImporterProblem{notNamed(nativeBuild, webPkg)},
+		},
+		{
+			name: "one build not listed, a package outside the set imports the CLI in another",
+			sets: []check.CLIImportersBuild{
+				build(nativeBuild, cliPkg, webPkg, wirePkg),
+				unlisted,
+			},
+			want: []check.CLIImporterProblem{notNamed(nativeBuild, webPkg)},
+		},
+		{
+			name: "one build not listed, no named package imports the CLI in the listed builds",
+			sets: []check.CLIImportersBuild{
+				build(nativeBuild, cliPkg),
+				unlisted,
+			},
+			want: nil,
+		},
+		{
+			name: "every build listed, a named package imports the CLI in no build",
+			sets: []check.CLIImportersBuild{
+				build(nativeBuild, cliPkg),
+				build(wasmBuild, cliPkg),
+			},
+			want: []check.CLIImporterProblem{stale(wirePkg)},
+		},
+		{
+			name: "no build listed",
+			sets: []check.CLIImportersBuild{unlisted, unlisted},
+			want: nil,
+		},
+		{
+			name: "one build not listed, a stale exemption beside a package outside the set",
+			sets: []check.CLIImportersBuild{
+				build(nativeBuild, cliPkg, webPkg),
+				unlisted,
+			},
+			want: []check.CLIImporterProblem{notNamed(nativeBuild, webPkg)},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if diff := cmp.Diff(tc.want, listedImporterProblems(tc.sets, named)); diff != "" {
+				t.Errorf("listedImporterProblems() mismatch (-want +got):\n%s", diff)
 			}
 		})
 	}
