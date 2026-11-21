@@ -63,7 +63,7 @@ type infraRuleCase struct {
 // loudly (as a test failure, never as a silent pass) when the configuration moves under it. The file-reading
 // functions' cases come from infraFileFunctionCases, one per name the rules must refuse, so a name dropped
 // from them fails here instead of passing unrefused.
-var infraRuleCases = append(infraFileFunctionCases(), namedInfraRuleCases...)
+var infraRuleCases = append(append(infraFileFunctionCases(), namedInfraRuleCases...), infraTestNestedBlockCases...)
 
 // namedInfraRuleCases are the breakages written out one by one, in the order the script's rules are read.
 var namedInfraRuleCases = []infraRuleCase{
@@ -1212,10 +1212,12 @@ removed {
 		},
 	},
 	{
-		name:   "provisioner-in-a-test-file",
-		why:    `a local-exec provisioner inside a run block of site/tests/iam.tftest.hcl, which runs on the machine that tests`,
-		want:   "provisioner",
-		wantIn: map[string]string{"provisioner": "{site}/tests/iam.tftest.hcl"},
+		name: "provisioner-in-a-test-file",
+		why:  `a local-exec provisioner inside a run block of site/tests/iam.tftest.hcl, which runs on the machine that tests`,
+		want: "provisioner",
+		// A provisioner is no block a run block allows either: neither refusal may hide the other.
+		wantMore: []string{"test-nested-block"},
+		wantIn:   map[string]string{"provisioner": "{site}/tests/iam.tftest.hcl", "test-nested-block": "{site}/tests/iam.tftest.hcl"},
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
@@ -1535,6 +1537,137 @@ locals {
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			writeInfraText(t, filepath.Join(site, "main.tf~"), "resource {\n")
+		},
+	},
+}
+
+// infraTestNestedBlockCases pin the allow list of the blocks nested directly in a test file's run and
+// mock_provider blocks: [block-type] reads the top level only, so a block inside a run block is invisible to
+// it, and a run may hold only what tofu test reads there. The list is per parent, since a mock_provider holds
+// mocks and a run holds everything else:
+//   - inside run: override_resource, override_data, override_module, assert, variables, module and
+//     plan_options, plus expect_failures, which tofu writes as an attribute and which the list names anyway
+//     so a future block spelling of it is no surprise;
+//   - inside mock_provider: mock_resource and mock_data.
+//
+// Anything else is [test-nested-block]. Only the direct children are judged: a block inside an allowed one
+// (values in an override_resource, an assert's body) is none of this rule's. The run and mock_provider of the
+// real infra/site/tests must pass, which the "the real infra holds every rule" case pins.
+var infraTestNestedBlockCases = []infraRuleCase{
+	{
+		name:   "run-block-with-an-unlisted-nested-block",
+		why:    `a foo block directly inside a run block of site/tests/iam.tftest.hcl, a nested type tofu test does not read there`,
+		want:   "test-nested-block",
+		wantIn: map[string]string{"test-nested-block": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_an_unlisted_block" {
+  command = plan
+
+  foo {
+  }
+}
+`)
+		},
+	},
+	{
+		name:   "mock-provider-with-an-unlisted-nested-block",
+		why:    `a foo block directly inside a mock_provider "scaleway" of site/tests/zz-nested.tftest.hcl, a nested type tofu test does not read there`,
+		want:   "test-nested-block",
+		wantIn: map[string]string{"test-nested-block": "{site}/tests/zz-nested.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "zz-nested.tftest.hcl"), `mock_provider "scaleway" {
+  foo {
+  }
+}
+`)
+		},
+	},
+	// The pass cases guard the list against a rule that refuses what tofu test does read. They are copies of
+	// infra/ under t.TempDir() that only dev/infra-rules.sh reads, never tofu: the blocks are the ones the
+	// real test files use (assert, variables, mock_resource) and the ones tofu test reads beside them.
+	{
+		name: "allowed-nested-blocks",
+		why:  `a site/tests/zz-allowed.tftest.hcl whose mock_provider holds mock_resource and mock_data, and whose run holds variables, module, plan_options, override_resource, override_data, override_module and assert (expect_failures as the attribute tofu writes)`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "zz-allowed.tftest.hcl"), `mock_provider "scaleway" {
+  mock_resource "scaleway_account_project" {
+    defaults = {
+      id = "11111111-1111-1111-1111-111111111111"
+    }
+  }
+
+  mock_data "scaleway_account_project" {
+    defaults = {
+      id = "11111111-1111-1111-1111-111111111111"
+    }
+  }
+}
+
+run "the_allowed_nested_blocks" {
+  command = plan
+
+  variables {
+    public_read = false
+  }
+
+  expect_failures = [var.organization_id]
+
+  module {
+    source = "./m"
+  }
+
+  plan_options {
+    refresh = true
+  }
+
+  override_resource {
+    target = scaleway_object_bucket.site
+    values = {}
+  }
+
+  override_data {
+    target = scaleway_object_bucket.site
+    values = {}
+  }
+
+  override_module {
+    target = module.m
+    values = {}
+  }
+
+  assert {
+    condition     = true
+    error_message = "x"
+  }
+}
+`)
+		},
+	},
+	// The rule judges the direct children of run and mock_provider only: what an allowed block holds is that
+	// block's business, so the values block of an override_resource is no [test-nested-block].
+	{
+		name: "block-nested-deeper-in-an-allowed-block",
+		why:  `a values block inside an override_resource of site/tests/iam.tftest.hcl's run block, two levels below the run`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_a_deeper_block" {
+  command = plan
+
+  override_resource {
+    target = scaleway_object_bucket.site
+
+    values {
+    }
+  }
+}
+`)
 		},
 	},
 }
