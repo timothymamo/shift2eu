@@ -1,0 +1,653 @@
+// Pins the refusals of .github/scripts/install-claude-code.sh (issue #275), the installer of the Claude Code
+// CLI the AI reviewer asks its model through (PRD #161 milestone 4, ADR 0033), which .github/workflows/ai-review.yml
+// runs before any secret is in a step's environment.
+//
+// The installer's contract, run as `install-claude-code.sh <directory> <platform package>@<X.Y.Z> <integrity>`:
+//
+//   - It refuses, with exit 2, a package that is not an exact version of a Claude Code platform package
+//     (`@anthropic-ai/claude-code-<platform>@X.Y.Z`): `@latest`, a range, no version, a partial version, the meta
+//     package @anthropic-ai/claude-code - which only picks a platform package in a postinstall script - and any
+//     other package.
+//   - It refuses, with exit 2, an integrity that is not an npm `sha512-<base64>` value: another algorithm, an
+//     empty base64 body, a value with characters base64 does not hold, the empty string, and a bare hex digest.
+//   - It downloads the tarball with `npm pack --ignore-scripts --silent --pack-destination <dir> <package>`, which
+//     runs no install script, and refuses, with exit 1, a tarball whose sha512 does not match the pinned
+//     integrity. Nothing of a refused tarball is extracted.
+//   - It refuses, with exit 1, a runner whose /etc/claude-code exists, a directory or a plain file: the CLI applies
+//     an admin-managed policy from there under every flag.
+//   - A tarball that matches installs its one binary, package/claude, executable, into <directory> - the other
+//     files of the tarball stay out - and the installer prints the version line the binary prints.
+//   - CLAUDE_CODE_INSTALL_ROOT, which only a test sets, stands in for / in the managed-policy check, and
+//     GITHUB_ACTIONS cannot weaken that check: with it set and the root overridden, the installer refuses too, so
+//     no workflow step can drop the check by setting the variable. GITHUB_ACTIONS alone is no refusal.
+//
+// Every case runs the real script with an explicit environment built from this process's, without GITHUB_ACTIONS
+// and CLAUDE_CODE_INSTALL_ROOT, so a case decides those two itself and the tests run inside CI as well. A fake npm
+// first on PATH copies a tarball the test builds at run time (no binary blob is committed) into the pack
+// destination and prints its file name, and it touches a marker file so a case can assert npm was not called; the
+// rest of PATH stays, so bash, tar, openssl, base64 and mktemp are the machine's own.
+//
+// The test needs no root and no network, and the root it overrides is a fresh t.TempDir(); a case that needs the
+// machine's real /etc/claude-code absent skips when it exists.
+package ci_test
+
+import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"io"
+	"io/fs"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/google/go-cmp/cmp"
+)
+
+const (
+	// moduleRoot is the module root, as this package's directory reaches it.
+	moduleRoot = "../.."
+
+	// installScript is the installer under test, run through bash as the workflow runs it.
+	installScript = ".github/scripts/install-claude-code.sh"
+
+	// installRootEnv overrides the / the managed-policy check reads, for tests only: the installed CLI's
+	// /etc/claude-code is the runner's own and cannot be created unprivileged.
+	installRootEnv = "CLAUDE_CODE_INSTALL_ROOT"
+
+	// hostPolicyPath is the managed policy directory on the machine the test runs on, which the installer reads
+	// when installRootEnv is unset.
+	hostPolicyPath = "/etc/claude-code"
+
+	// policyDir is the managed policy directory below the install root.
+	policyDir = "etc/claude-code"
+
+	// packageArg is the platform package the workflow installs, at an exact version.
+	packageArg = "@anthropic-ai/claude-code-linux-x64@2.1.0"
+
+	// tarballName is the name npm pack gives that package's tarball, and what the fake npm prints.
+	tarballName = "anthropic-ai-claude-code-linux-x64-2.1.0.tgz"
+
+	// claudePath is the one file of the tarball the installer extracts, relative to the destination.
+	claudePath = "package/claude"
+
+	// versionLine is what the fixture's package/claude prints, as the real one prints "2.1.0 (Claude Code)".
+	versionLine = "2.1.0 (Claude Code)"
+
+	// githubActionsEnv is the variable GitHub sets in every workflow step; the installer may not let it weaken
+	// the managed-policy check.
+	githubActionsEnv = "GITHUB_ACTIONS"
+
+	// The variables the fake npm reads: the tarball to serve, the file name to print, and the marker it touches
+	// so a case can assert it was called.
+	npmTarballEnv = "SHIFT2EU_TEST_NPM_TARBALL"
+	npmNameEnv    = "SHIFT2EU_TEST_NPM_TARBALL_NAME"
+	npmMarkerEnv  = "SHIFT2EU_TEST_NPM_MARKER"
+)
+
+// fakeNPMBody is the fake npm: it records the call, copies the fixture tarball into the pack destination and
+// prints the tarball's file name, which is what `npm pack --silent` writes on stdout.
+const fakeNPMBody = `#!/bin/sh
+set -eu
+marker="${SHIFT2EU_TEST_NPM_MARKER:?}"
+tarball="${SHIFT2EU_TEST_NPM_TARBALL:?}"
+name="${SHIFT2EU_TEST_NPM_TARBALL_NAME:?}"
+: > "${marker}"
+pack=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+		--pack-destination)
+			pack="$2"
+			shift 2
+			;;
+		*)
+			shift
+			;;
+	esac
+done
+if [ -z "${pack}" ]; then
+	echo "fake npm: no --pack-destination" >&2
+	exit 1
+fi
+cp "${tarball}" "${pack}/${name}"
+printf '%s\n' "${name}"
+`
+
+// policyState is what a case puts at <install root>/etc/claude-code.
+type policyState int
+
+const (
+	policyAbsent policyState = iota
+	policyDirectory
+	policyFile
+)
+
+// fixture is the tarball the fake npm serves and the npm integrity of its bytes.
+type fixture struct {
+	tarball   []byte
+	integrity string
+}
+
+// installCase is one run of the installer: the arguments it gets, the environment it runs in, and what it must
+// leave behind.
+type installCase struct {
+	name string
+	// args returns the installer's arguments for a destination and the fixture.
+	args func(dest string, fx fixture) []string
+	// policy is what the case creates at <install root>/etc/claude-code.
+	policy policyState
+	// githubActions sets GITHUB_ACTIONS=true for the run.
+	githubActions bool
+	// noInstallRoot leaves CLAUDE_CODE_INSTALL_ROOT unset, so the installer reads the machine's own
+	// /etc/claude-code; those cases skip when it exists.
+	noInstallRoot bool
+
+	// wantExit is the exit status the installer must end with.
+	wantExit int
+	// wantNPM says whether npm may be called; a case that refuses before downloading says false.
+	wantNPM bool
+	// wantFiles is the exact set of files the case leaves under the destination, as slash-separated paths.
+	wantFiles []string
+	// wantExecutable says package/claude must be executable.
+	wantExecutable bool
+	// wantOutput holds substrings of the run's stdout and stderr together that must appear.
+	wantOutput []string
+}
+
+// TestInstallClaudeCodeRefusesUnverifiedPackages runs the installer's cases against a fixture tarball.
+func TestInstallClaudeCodeRefusesUnverifiedPackages(t *testing.T) {
+	t.Parallel()
+
+	for _, tool := range []string{"bash", "tar", "openssl", "base64"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is not on PATH: %s needs it", tool, installScript)
+		}
+	}
+
+	fx := newFixture(t)
+
+	for _, tc := range installCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			runInstallCase(t, tc, fx)
+		})
+	}
+}
+
+// installCases returns the cases, in the order the installer's contract above lists them.
+func installCases() []installCase {
+	// validArgs passes the matching platform package and the fixture's integrity.
+	validArgs := func(dest string, fx fixture) []string {
+		return []string{dest, packageArg, fx.integrity}
+	}
+
+	// withPackage passes pkg with the fixture's integrity.
+	withPackage := func(pkg string) func(string, fixture) []string {
+		return func(dest string, fx fixture) []string {
+			return []string{dest, pkg, fx.integrity}
+		}
+	}
+
+	// withIntegrity passes the matching package with integrity.
+	withIntegrity := func(integrity string) func(string, fixture) []string {
+		return func(dest string, _ fixture) []string {
+			return []string{dest, packageArg, integrity}
+		}
+	}
+
+	// otherSum is a sha512 of bytes the fixture is not, spelled as an npm integrity and as a bare hex digest.
+	otherSum := sha512.Sum512([]byte("a tarball the fake npm never serves"))
+	otherIntegrity := "sha512-" + base64.StdEncoding.EncodeToString(otherSum[:])
+	otherHex := hex.EncodeToString(otherSum[:])
+	sha256Sum := sha256.Sum256([]byte("a tarball the fake npm never serves"))
+
+	return []installCase{
+		{
+			name:     "no arguments",
+			args:     func(string, fixture) []string { return nil },
+			wantExit: 2,
+		},
+		{
+			name:     "two arguments",
+			args:     func(dest string, _ fixture) []string { return []string{dest, packageArg} },
+			wantExit: 2,
+		},
+		{
+			name:     "the package at latest",
+			args:     withPackage("@anthropic-ai/claude-code-linux-x64@latest"),
+			wantExit: 2,
+		},
+		{
+			name:     "the package as a caret range",
+			args:     withPackage("@anthropic-ai/claude-code-linux-x64@^2.1.0"),
+			wantExit: 2,
+		},
+		{
+			name:     "the package with no version",
+			args:     withPackage("@anthropic-ai/claude-code-linux-x64"),
+			wantExit: 2,
+		},
+		{
+			name:     "the package with a partial version",
+			args:     withPackage("@anthropic-ai/claude-code-linux-x64@2.1"),
+			wantExit: 2,
+		},
+		{
+			name:     "the meta package",
+			args:     withPackage("@anthropic-ai/claude-code@2.1.0"),
+			wantExit: 2,
+		},
+		{
+			name:     "an unrelated package",
+			args:     withPackage("left-pad@1.0.0"),
+			wantExit: 2,
+		},
+		{
+			name:     "an integrity of another algorithm",
+			args:     withIntegrity("sha256-" + base64.StdEncoding.EncodeToString(sha256Sum[:])),
+			wantExit: 2,
+		},
+		{
+			name:     "an integrity with an empty body",
+			args:     withIntegrity("sha512-"),
+			wantExit: 2,
+		},
+		{
+			name:     "an integrity that is no base64",
+			args:     withIntegrity("sha512-not base64!"),
+			wantExit: 2,
+		},
+		{
+			name:     "an empty integrity",
+			args:     withIntegrity(""),
+			wantExit: 2,
+		},
+		{
+			name:     "a bare hex digest",
+			args:     withIntegrity(otherHex),
+			wantExit: 2,
+		},
+		{
+			name:       "a tarball that does not match the integrity",
+			args:       withIntegrity(otherIntegrity),
+			wantExit:   1,
+			wantNPM:    true,
+			wantOutput: []string{"does not match"},
+		},
+		{
+			name:       "a managed policy directory on the runner",
+			args:       validArgs,
+			policy:     policyDirectory,
+			wantExit:   1,
+			wantOutput: []string{hostPolicyPath},
+		},
+		{
+			name:       "a managed policy file on the runner",
+			args:       validArgs,
+			policy:     policyFile,
+			wantExit:   1,
+			wantOutput: []string{hostPolicyPath},
+		},
+		{
+			name:           "a matching tarball",
+			args:           validArgs,
+			wantExit:       0,
+			wantNPM:        true,
+			wantFiles:      []string{claudePath},
+			wantExecutable: true,
+			wantOutput:     []string{versionLine},
+		},
+		{
+			name:          "GITHUB_ACTIONS cannot weaken the managed-policy check",
+			args:          validArgs,
+			githubActions: true,
+			wantExit:      1,
+		},
+		{
+			name:           "GITHUB_ACTIONS alone is no refusal",
+			args:           validArgs,
+			githubActions:  true,
+			noInstallRoot:  true,
+			wantExit:       0,
+			wantNPM:        true,
+			wantFiles:      []string{claudePath},
+			wantExecutable: true,
+			wantOutput:     []string{versionLine},
+		},
+	}
+}
+
+// newFixture builds the tarball at run time and its npm integrity.
+func newFixture(t *testing.T) fixture {
+	t.Helper()
+
+	tarball := buildTarball(t)
+
+	return fixture{tarball: tarball, integrity: integrityOf(tarball)}
+}
+
+// buildTarball returns a gzipped tar like the one npm pack makes of a Claude Code platform package: the one
+// binary, package/claude, executable and printing a version line, and two files of the package the installer must
+// not extract.
+func buildTarball(t *testing.T) []byte {
+	t.Helper()
+
+	entries := []struct {
+		name string
+		body string
+		mode int64
+	}{
+		{name: "package/README.md", body: "A fixture package for the installer's tests.\n", mode: 0o644},
+		{name: claudePath, body: "#!/bin/sh\necho '" + versionLine + "'\n", mode: 0o755},
+		{name: "package/package.json", body: `{"name":"@anthropic-ai/claude-code-linux-x64","version":"2.1.0"}` + "\n", mode: 0o644},
+	}
+
+	var buf bytes.Buffer
+
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+
+	for _, entry := range entries {
+		hdr := &tar.Header{
+			Name:     entry.name,
+			Mode:     entry.mode,
+			Size:     int64(len(entry.body)),
+			Typeflag: tar.TypeReg,
+		}
+
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("write the header of %s: %v", entry.name, err)
+		}
+
+		if _, err := io.WriteString(tw, entry.body); err != nil {
+			t.Fatalf("write %s: %v", entry.name, err)
+		}
+	}
+
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close the tar writer: %v", err)
+	}
+
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close the gzip writer: %v", err)
+	}
+
+	return buf.Bytes()
+}
+
+// integrityOf returns the npm integrity of tarball's bytes: "sha512-" and their base64 sha512.
+func integrityOf(tarball []byte) string {
+	sum := sha512.Sum512(tarball)
+
+	return "sha512-" + base64.StdEncoding.EncodeToString(sum[:])
+}
+
+// runInstallCase stages one case in a temporary directory, runs the installer and checks what it left behind.
+func runInstallCase(t *testing.T, tc installCase, fx fixture) {
+	t.Helper()
+
+	if tc.noInstallRoot {
+		if _, err := os.Stat(hostPolicyPath); err == nil {
+			t.Skipf("%s exists on this machine, so the installer must refuse: this case proves only that GITHUB_ACTIONS alone is no refusal", hostPolicyPath)
+		}
+	}
+
+	base := t.TempDir()
+
+	binDir := filepath.Join(base, "bin")
+	writeFakeNPM(t, binDir)
+
+	tarballPath := filepath.Join(base, tarballName)
+	writeFile(t, tarballPath, fx.tarball, 0o600)
+
+	marker := filepath.Join(base, "npm-called")
+
+	// The destination does not exist yet: the installer creates it, as the workflow's RUNNER_TEMP path does not.
+	dest := filepath.Join(base, "claude-code")
+
+	root := filepath.Join(base, "root")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatalf("create the install root %s: %v", root, err)
+	}
+
+	writePolicy(t, root, tc.policy)
+
+	env := childEnv(t, binDir, map[string]string{
+		npmTarballEnv: tarballPath,
+		npmNameEnv:    tarballName,
+		npmMarkerEnv:  marker,
+	})
+
+	if !tc.noInstallRoot {
+		env = append(env, installRootEnv+"="+root)
+	}
+
+	if tc.githubActions {
+		env = append(env, githubActionsEnv+"=true")
+	}
+
+	output, exit := runInstaller(t, env, tc.args(dest, fx)...)
+
+	if exit != tc.wantExit {
+		t.Errorf("exit status = %d, want %d\noutput:\n%s", exit, tc.wantExit, output)
+	}
+
+	for _, want := range tc.wantOutput {
+		if !strings.Contains(output, want) {
+			t.Errorf("output does not contain %q:\n%s", want, output)
+		}
+	}
+
+	if diff := cmp.Diff(tc.wantFiles, filesUnder(t, dest)); diff != "" {
+		t.Errorf("files under the destination (-want +got):\n%s", diff)
+	}
+
+	if got := npmCalled(t, marker); got != tc.wantNPM {
+		t.Errorf("npm called = %t, want %t", got, tc.wantNPM)
+	}
+
+	if tc.wantExecutable {
+		info, err := os.Stat(filepath.Join(dest, claudePath))
+		if err != nil {
+			t.Fatalf("stat %s: %v", claudePath, err)
+		}
+
+		if info.Mode().Perm()&0o111 == 0 {
+			t.Errorf("%s has mode %v, want an executable one", claudePath, info.Mode())
+		}
+	}
+}
+
+// writePolicy creates what a case puts at <root>/etc/claude-code.
+func writePolicy(t *testing.T, root string, state policyState) {
+	t.Helper()
+
+	path := filepath.Join(root, policyDir)
+
+	switch state {
+	case policyAbsent:
+		return
+	case policyDirectory:
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatalf("create %s: %v", path, err)
+		}
+	case policyFile:
+		writeFile(t, path, []byte("a managed policy this machine must never carry\n"), 0o600)
+	}
+}
+
+// writeFakeNPM writes the fake npm into dir, the first directory on the case's PATH.
+func writeFakeNPM(t *testing.T, dir string) {
+	t.Helper()
+
+	writeFile(t, filepath.Join(dir, "npm"), []byte(fakeNPMBody), 0o700)
+}
+
+// writeFile writes content to path, creating its directory, and gives it mode. The content is written with
+// 0600 and the mode then set explicitly, as the e2e tests' helpers do, so a script the case makes executable is
+// no more readable than it needs to be while it is written.
+func writeFile(t *testing.T, path string, content []byte, mode os.FileMode) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create %s: %v", filepath.Dir(path), err)
+	}
+
+	if err := os.WriteFile(path, content, 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatalf("chmod %s to %v: %v", path, mode, err)
+	}
+}
+
+// childEnv returns this process's environment without PATH, GITHUB_ACTIONS and CLAUDE_CODE_INSTALL_ROOT, which a
+// case decides itself, and with dir first on PATH and the fake npm's variables added.
+func childEnv(t *testing.T, dir string, extra map[string]string) []string {
+	t.Helper()
+
+	var (
+		env  []string
+		path string
+	)
+
+	for _, kv := range os.Environ() {
+		name, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+
+		switch name {
+		case "PATH":
+			path = value
+		case githubActionsEnv, installRootEnv:
+		default:
+			env = append(env, kv)
+		}
+	}
+
+	names := make([]string, 0, len(extra))
+	for name := range extra {
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+
+	for _, name := range names {
+		env = append(env, name+"="+extra[name])
+	}
+
+	return append(env, "PATH="+dir+string(os.PathListSeparator)+path)
+}
+
+// runInstaller runs the installer with env and args, and returns its stdout and stderr together and its exit
+// status.
+func runInstaller(t *testing.T, env []string, args ...string) (string, int) {
+	t.Helper()
+
+	cmd := exec.Command("bash", append([]string{scriptPath(t)}, args...)...)
+	cmd.Dir = t.TempDir()
+	cmd.Env = env
+
+	var out bytes.Buffer
+
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	err := cmd.Run()
+	if err == nil {
+		return out.String(), 0
+	}
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) {
+		t.Fatalf("run %s: %v", installScript, err)
+	}
+
+	return out.String(), exit.ExitCode()
+}
+
+// scriptPath returns the installer's absolute path.
+func scriptPath(t *testing.T) string {
+	t.Helper()
+
+	path, err := filepath.Abs(filepath.Join(moduleRoot, installScript))
+	if err != nil {
+		t.Fatalf("resolve %s: %v", installScript, err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("%s does not exist: %v", installScript, err)
+	}
+
+	if !info.Mode().IsRegular() {
+		t.Fatalf("%s is not a regular file", installScript)
+	}
+
+	return path
+}
+
+// filesUnder returns every regular file below dir, as slash-separated paths relative to it and sorted. A dir that
+// does not exist holds no file.
+func filesUnder(t *testing.T, dir string) []string {
+	t.Helper()
+
+	var files []string
+
+	err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if entry.IsDir() {
+			return nil
+		}
+
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+
+		files = append(files, filepath.ToSlash(rel))
+
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+
+		t.Fatalf("walk %s: %v", dir, err)
+	}
+
+	slices.Sort(files)
+
+	return files
+}
+
+// npmCalled reports whether the fake npm ran, which it records by touching marker.
+func npmCalled(t *testing.T, marker string) bool {
+	t.Helper()
+
+	_, err := os.Stat(marker)
+	if err == nil {
+		return true
+	}
+
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stat %s: %v", marker, err)
+	}
+
+	return false
+}
