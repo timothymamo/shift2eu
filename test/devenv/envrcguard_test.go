@@ -303,6 +303,15 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile(t *testing.T) {
 			want:      []string{"line 1", "The host clone"},
 		},
 		{
+			// Quotes around the word are bash's other spelling of the same command: it removes them and runs
+			// dotenv ../outside.env. The guard parses no shell, so a directive directly followed by a quote
+			// counts as outside (issue #402).
+			name:      "the host clone's .envrc quotes the word dotenv",
+			hostEnvrc: "\"dotenv\" ../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
 			// bash joins the quoted word and the rest of the path into ../outside.env: one quote inside the
 			// argument is not a pair the guard strips, so the line counts as outside.
 			name:      "the host clone's .envrc dotenvs a single-quoted .. followed by a path",
@@ -421,6 +430,29 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile(t *testing.T) {
 			},
 			targets: []string{"vm-env"},
 			want:    []string{"The host clone"},
+		},
+		{
+			// A bare dotenv reads the clone's own .env, but a .env that is a symlink hands the shell the file
+			// it points at: a clone whose .env points outside is as far outside as any other, so the guard
+			// resolves the clone's .env and refuses it (issue #402).
+			name: "the host clone's .envrc says dotenv alone and the clone's .env is a symlink outside it",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				target := filepath.Join(l.sb.root, "outside", ".env")
+				writeFileMode(t, target, []byte(plantedEnvrcLines()), 0o600)
+
+				link := filepath.Join(l.root, ".env")
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatalf("symlink %s: %v", link, err)
+				}
+
+				writeHostEnvrc(t, l, "dotenv\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"line 1", "The host clone"},
 		},
 		{
 			// The clone's own .envrc is what the guard reads, and a symlink there makes the credentials live
