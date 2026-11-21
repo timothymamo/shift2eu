@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/catalog"
@@ -81,8 +83,9 @@ type reportFixture struct {
 	render func(t *testing.T) []byte
 	// parts are the h3 sections the fragment wraps, in document order.
 	parts []partExpectation
-	// totals are the Cost estimate totals the fragment states, in document
-	// order, without the "Total: " prefix; none when it has no estimate.
+	// totals are the amounts the Cost estimate states as its total, in document
+	// order, without the "Total: " prefix or the basis; none when it has no
+	// estimate.
 	totals []string
 }
 
@@ -124,7 +127,7 @@ func reportFixtures() []reportFixture {
 				{heading: "Workloads", kind: "workloads"},
 				{heading: "Cost estimate", kind: "cost"},
 			},
-			totals: []string{"€2,535.00 per month for 4 of 5 resources"},
+			totals: []string{"€2,535.00"},
 		},
 		{
 			name: "a comparison of three targets",
@@ -175,8 +178,8 @@ func reportFixtures() []reportFixture {
 				{heading: "<code>" + escapedText(`<script>Target</script> "Two"`) + "</code>", kind: "target"},
 			},
 			totals: []string{
-				"€45.00 per month for 3 of 4 resources",
-				"€45.00 per month for 3 of 4 resources",
+				"€45.00",
+				"€45.00",
 			},
 		},
 	}
@@ -475,8 +478,9 @@ func TestReportPartSections(t *testing.T) {
 }
 
 // TestReportCostTotalItem pins that a Cost estimate states its total as the one
-// list item with class "total": the stylesheet shows it as the report's large
-// euro figure, above the basis it is given on (PRD #297, issue #373).
+// element with class "total", holding the amount alone: the stylesheet shows it
+// as the report's large euro figure, with the basis it is given on beside it
+// (PRD #297, issue #373, item 14).
 func TestReportCostTotalItem(t *testing.T) {
 	t.Parallel()
 
@@ -484,30 +488,19 @@ func TestReportCostTotalItem(t *testing.T) {
 		t.Run(fixture.name, func(t *testing.T) {
 			t.Parallel()
 
+			fragment := string(fixture.render(t))
+			elements := fragmentElements(t, fragment)
+
 			var totals []string
 
-			for _, item := range fragmentItems(t, string(fixture.render(t))) {
-				if item.attrs != `class="total"` {
-					continue
-				}
-
-				totals = append(totals, item.text)
+			for _, element := range elementsWithClass(t, elements, "total") {
+				totals = append(totals, textOfElement(elements, element))
 			}
 
-			want := make([]string, 0, len(fixture.totals))
-			for _, total := range fixture.totals {
-				want = append(want, "Total: "+total)
-			}
+			want := fixture.totals
 
-			if len(totals) != len(want) {
-				t.Fatalf("the fragment holds %d list items with class \"total\" (%q), want %d (%q): the Cost estimate's total is the only one",
-					len(totals), totals, len(want), want)
-			}
-
-			for i, got := range totals {
-				if got != want[i] {
-					t.Errorf("total item %d reads %q, want %q", i+1, got, want[i])
-				}
+			if diff := cmp.Diff(want, totals); diff != "" {
+				t.Errorf("the elements with class \"total\" differ from want (-want +got):\n%s", diff)
 			}
 		})
 	}
@@ -815,32 +808,6 @@ func headingSections(sections []fragmentSection) []fragmentSection {
 
 	return parts
 }
-
-// fragmentItem is one <li> of a fragment.
-type fragmentItem struct {
-	// attrs are the attributes of the <li> start tag, trimmed.
-	attrs string
-	// text is the item's text content, tags removed and white space collapsed.
-	text string
-}
-
-// fragmentItems returns the list items of fragment, in order.
-func fragmentItems(t *testing.T, fragment string) []fragmentItem {
-	t.Helper()
-
-	var items []fragmentItem
-
-	for _, match := range itemPattern.FindAllStringSubmatch(fragment, -1) {
-		items = append(items, fragmentItem{attrs: strings.TrimSpace(match[1]), text: textOf(match[2])})
-	}
-
-	return items
-}
-
-// itemPattern matches one list item. A nested list is a list item's own content,
-// so the pattern stops at the item's first end tag: the checks read the items
-// whose class they ask for, which hold no list.
-var itemPattern = regexp.MustCompile(`(?s)<li([^>]*)>(.*?)</li>`)
 
 // textOf returns the text content of markup: its tags removed and its white
 // space collapsed to single spaces.
