@@ -29,11 +29,20 @@ var skippedDirs = []string{".git", ".worktrees"}
 
 // allowListEntry excuses one value the sanitisation check reports in one file:
 // a value that is there on purpose and identifies nobody.
+//
+// For a name the check reads only in an ARM ID, the value (flexibleServers/,
+// sites/, namespaces/ and the name) names the value's type segment as well as
+// its file, not the provider namespace; a namespace that shares the segment is
+// excused alike (a MySQL flexibleServers/psql-shop in the same file, or an
+// Event Hubs or Relay namespaces/sb-shop once those are read), which is
+// accepted because the names are synthetic and both namespaces' names are
+// global.
 type allowListEntry struct {
 	// file is the slash-separated path of one regular file, relative to the
 	// module root: never a directory or a glob.
 	file string
-	// value is the exact offending value the check reports.
+	// value is the exact offending value the check reports: for an ARM ID's
+	// name, its type segment and the name.
 	value string
 	// why says why the value is legitimate there.
 	why string
@@ -244,7 +253,10 @@ func holdsCheckedPath(name string) bool {
 // The resource-path rule reads the globally unique names the others never see,
 // since they carry no dot or sit in a path segment (issue #406): a GCP project ID
 // (projects/acme-corp-prod/...), an Azure storage account in an ARM ID
-// (.../storageAccounts/acmeprod; no other Azure resource's name), a Cloud
+// (.../storageAccounts/acmeprod) and the other globally unique Azure names an
+// ARM ID carries (a Key Vault, a container registry, a Cosmos DB account, a
+// SQL, PostgreSQL or MySQL server, a web app, a Service Bus namespace;
+// armNameProblems), a Cloud
 // Storage bucket in a resource name (projects/_/buckets/acme-prod-data) and an
 // S3 access point (Object Lambda included), S3 Express or Outposts bucket in an
 // ARN (...:accesspoint/acme-prod-ap).

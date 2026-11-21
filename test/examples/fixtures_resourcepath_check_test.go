@@ -295,7 +295,9 @@ func sampleStorageAccount(account string) bool {
 // file writes them (projects/acme-corp-prod, buckets/acme-prod-data,
 // storageAccounts/acmeprodcustomers, vaults/kv-contoso-prod,
 // accesspoint/acme-prod-ap, accesspoint:acme-prod-ap, bucket/acme-op-bucket),
-// so the failure names the value to change.
+// so the failure names the value to change. Each rule's problems come in text
+// order, and the rules' results follow one another, so the whole list is not
+// in file order.
 //
 // It knowingly leaves these gaps, accepted when issues #406 and #424 closed:
 //

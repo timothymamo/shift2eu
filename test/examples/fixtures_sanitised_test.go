@@ -77,7 +77,11 @@ func TestFixturesAreSanitised(t *testing.T) {
 // host name it carries. The guide's own fixtures are where its allow-list
 // entries apply, so the rows planted there pin both sides of one: the value an
 // entry excuses in its file passes, and the same value in another file of that
-// directory, or another type's ARM ID in the same file, is reported. Without
+// directory, or an ARM ID of another type segment in the same file, is
+// reported. An entry names the value's type segment (flexibleServers/, sites/,
+// namespaces/) as well as its file; a namespace that shares the segment is
+// excused alike, which is accepted because the names are synthetic and both
+// namespaces' names are global. Without
 // this, a walker that silently skipped a directory would pass
 // TestFixturesAreSanitised.
 func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
@@ -358,9 +362,12 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 		},
 		{
 			// The guide's seven synthetic shop names are excused by allow-list
-			// entries that each name one file and one type's value, since a
-			// value the check reads only in an ARM ID cannot be held to a file
-			// by a bare entry (issue #424's review). Here the guide's own
+			// entries that each name one file and one value with its type
+			// segment, since a value the check reads only in an ARM ID cannot
+			// be held to a file by a bare entry (issue #424's review); a
+			// namespace that shares the segment is excused alike, which is
+			// accepted because the names are synthetic and both namespaces'
+			// names are global. Here the guide's own
 			// Resource Graph export carries its PostgreSQL flexible server's
 			// name, which is the entry's business, so the check reports
 			// nothing. The row plants it at the allow-listed file itself, so it
@@ -381,8 +388,9 @@ func TestPlantedRealDataFailsTheFixtureCheck(t *testing.T) {
 			want:    []string{"flexibleServers/psql-shop"},
 		},
 		{
-			// An entry names the value's type as well as its file, so the
-			// guide's shop name in another type's ARM ID - a Key Vault here,
+			// An entry names the value's type segment (flexibleServers/,
+			// sites/, namespaces/) as well as its file, so the guide's shop
+			// name in an ARM ID of another type segment - a Key Vault here,
 			// whose name is a public host of its own - is no name the guide's
 			// fixtures may carry and is reported.
 			name:    "guide shop name in another type's ARM ID",
@@ -844,7 +852,9 @@ func armIDLeakContent(value string) string {
 // whose resource types include segment, matched in any case as an ARM type is.
 // The first entry wins: where two namespaces share a type segment (a
 // flexibleServers of the PostgreSQL and of the MySQL provider), the name is
-// reported under either, so the row pins the same value.
+// reported under either with the same value, the type segment and the name, so
+// the row pins the same value; for the same reason an allow-list entry excuses
+// the name under either namespace.
 func armNameTypeProvider(segment string) (string, bool) {
 	for _, armType := range armNameTypes {
 		if slices.ContainsFunc(armType.types, func(typ string) bool { return strings.EqualFold(typ, segment) }) {
