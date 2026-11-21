@@ -686,8 +686,10 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
 - **Keep the values outside the workspace.** The VM mounts it, so a `.envrc` or `.env` in the
   workspace or the workspace's checkout would be readable by every agent and by the model providers they
   send files to. Keep them in the host clone's `.envrc`, where `make vm-env` runs and the VM cannot see
-  them. A `.envrc` above the workspace, where they were kept before issue #227, is no longer read by any
-  target: remove them from it, so a shell in the workspace does not hold them.
+  them. A `.envrc` above the workspace, where they were kept before issue #227, the targets refuse
+  (`make vm-env`, `vm-env-check`, `vm-up`, `vm-create`, `vm-init`, `agents-token`, `agents-token-refresh`,
+  `agents-token-refresh-install`, `agents-token-refresh-start`; [The host clone](#the-host-clone), The `.envrc` guard): move its lines into
+  the host clone's `.envrc` and remove it, so a shell in the workspace does not hold them.
 - **No GitHub token in `VM_ENV`.** Never put a personal access token, or any token with
   `write:packages`, into `VM_ENV`: the agents' only GitHub credential is the agents App's token, whose
   permissions (no Packages) are what stop agents pushing to GHCR. `make vm-env-check`, and so `make vm-env`
@@ -815,6 +817,65 @@ neither the key nor its path enters the VM. The host targets that open a shell i
 App's three variables (`env -u`), and the background refresh `make agents-token-refresh-start` starts runs
 without the default `VM_ENV` credentials, `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEEK_API_KEY` (a name a custom
 `VM_ENV` adds is not stripped): each process gets only what its work needs.
+
+**The `.envrc` guard** (issue #402). The host targets that load the credentials or the agents App's key,
+`make vm-env`, `vm-env-check`, `vm-up`, `vm-create`, `vm-init`, `agents-token`, `agents-token-refresh`,
+`agents-token-refresh-install` and `agents-token-refresh-start`, refuse to run, before they run anything (no
+prerequisite, no sub-make, no `limactl`, `launchctl` or `sudo`), in two cases: when the host clone's `.envrc`
+is a symlink to a file outside the clone or hands its lines to another file, and when a `.envrc` or a `.env`
+sits in the workspace or in any directory above it, up to `/`, in either spelling of the workspace (as
+`WORKSPACE_REPO` writes it, and with its symlinks resolved), where direnv loads it in every shell you open in
+the workspace. The guard parses no shell, so it holds the host clone's `.envrc` to three strict rules:
+
+- `source_up`, `source_up_if_exists`, `source_env`, `source_env_if_exists`, `source_url` (which downloads a
+  script) and bash's `source` and `.` are refused whatever they name, a file inside the clone included: they
+  run another file as shell, which the guard does not read.
+- `dotenv` and `dotenv_if_exists` pass alone (they read the clone's own `.env`), or with a path that, after
+  one enclosing pair of matching quotes (`"..."` or `'...'`) is stripped, holds only letters, digits and
+  `. _ / + @ = -`, and resolves inside the clone (`..` and every symlink followed, the last one too; a
+  directory stands for its `.env`). Any other spelling (`$`, a backtick, `~`, a space, a backslash, a brace, a
+  glob, a quote inside the path) counts as outside.
+- `;`, `&`, `|`, `(` and `)` separate directives, so `dotenv;source_env ../x` holds two; `<`, `>` and a
+  backtick end a directive's word too (`source_up>/dev/null`, `` `source_up` ``), and a `dotenv` directly
+  followed by one, or with a path starting with one, counts as outside; a line ending in `\` is joined to the
+  next first, as bash does (an escaped trailing backslash joins too, a safe false positive).
+
+Each refusal names the file, and for a directive its line number (`<path>/.envrc: line <N>: ...`). A directive
+word anywhere on a non-comment line counts, in a trailing comment (`dotenv ./x # source_up`) or a quoted value
+too (`export N="open source"`, `export X=.`): the guard refuses it, a safe false positive; reword the value or
+move it to a file `dotenv` loads. The guard checks the usual direnv and bash spellings; it is not a sandbox
+(`eval "$(cat ../x)"`, `direnv_load` or a `use` or `layout` function can always read a parent, and the guard
+does not read them), so keep every line in the host clone's `.envrc` itself. It reads only the words of those directives
+and the path after each, and prints names, line numbers and paths, never a line or a value. It refuses, never
+warns, and has no override: the fix is moving a file.
+`make vm-boot-install` is not guarded: its LaunchDaemon starts the VM and holds no credential. To see what the
+guard checks:
+
+```bash
+# Mac, host clone: count the non-comment .envrc lines that run another file, then those that say dotenv (prints numbers, never a line)
+grep -v '^[[:space:]]*#' .envrc | grep -cE '(^|[^A-Za-z0-9_.])(source_up_if_exists|source_up|source_env_if_exists|source_env|source_url|source|\.)([[:space:];&|()<>`"\'\'']|$)'
+grep -v '^[[:space:]]*#' .envrc | grep -cE '(^|[^A-Za-z0-9_.])(dotenv_if_exists|dotenv)([[:space:];&|()<>`"\'\'']|$)'
+# PASS: the first count is 0; every line of the second says dotenv alone or names a plain path inside the host clone
+# FAIL "... <path>/.envrc: line <N>: the host clone's .envrc runs another file with <directive> ...": put that file's lines in the host clone's .envrc itself and remove the directive
+# FAIL "... <path>/.envrc: line <N>: the host clone's .envrc loads with <directive> a path this check cannot read ...": write the path plainly, inside the host clone, or move its lines into the host clone's .envrc
+```
+
+This is a quick count, line by line: `make vm-env-check` (the third block) is the authority, as only the guard
+joins a line ending in `\` to the next.
+
+```bash
+# Mac, host clone: list every .envrc and .env in the workspace and the directories above it, both spellings (prints paths only)
+: "${WORKSPACE_REPO:?set it in the host clone's .envrc}"; for d in "$(dirname "$WORKSPACE_REPO")" "$(cd "$(dirname "$WORKSPACE_REPO")" 2>/dev/null && pwd -P || dirname "$WORKSPACE_REPO")"; do while [ "$d" != . ]; do ls -d "$d/.envrc" "$d/.env" 2>/dev/null; [ "$d" = / ] && break; d="$(dirname "$d")"; done; done
+# PASS: no output
+# FAIL "... <file> is in the workspace the VM mounts or in a directory above it ...": move its lines into the host clone's .envrc and remove the file
+```
+
+```bash
+# Mac, host clone: run the guard and the credential check, which call no limactl
+make vm-env-check
+# PASS: no "refused" line, and no "not set or empty" line
+# FAIL "vm-env-check: refused: ...": fix each file it names, as the two checks above say, then run it again
+```
 
 **The refusal.** A host target refuses to run, before it runs anything (no prerequisite, no sub-make, no
 `limactl`, no `git config`), and names itself, the host clone and this section, when `WORKSPACE_REPO` is
