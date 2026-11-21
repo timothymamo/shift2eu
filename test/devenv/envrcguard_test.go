@@ -116,14 +116,20 @@ func (tc envrcLayoutCase) runs() []string {
 	return envrcGuardTargets
 }
 
-// TestHostTargetsRefuseAHostCloneEnvrcThatReadsAParent pins the first half of issue #402: the host clone's .envrc
-// may hold the maintainer's credentials, but it may not read a parent. `source_up` and `source_up_if_exists` find
-// a .envrc in a directory above the clone, and `source_env`, `source_env_if_exists`, `dotenv` and
-// `dotenv_if_exists` name one: the credentials would then live in a file outside the clone, which direnv loads
-// in every shell the maintainer opens there, and which no review of this repository reaches. Every one of the eight
-// targets must refuse such a clone, and the refusal must name the clone's .envrc and send the maintainer to
-// docs/dev-environment.md, The host clone, where every line belongs.
-func TestHostTargetsRefuseAHostCloneEnvrcThatReadsAParent(t *testing.T) {
+// TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile pins the first half of issue #402 in its strict form: the
+// host clone's .envrc may hold the maintainer's credentials, but it may not hand them to another file, and the
+// guard does not parse shell, so it refuses every spelling it cannot read exactly. `source_env`,
+// `source_env_if_exists`, `source` and `.` run a file as shell, which the guard does not scan, so they are refused
+// whatever they name, a file inside the clone included. `source_up` and `source_up_if_exists` find a .envrc in a
+// directory above the clone, which no review of this repository reaches, and are refused too. `dotenv` and
+// `dotenv_if_exists` load a file direnv parses as KEY=VALUE rather than runs, so a path inside the clone passes
+// only while the argument - one enclosing pair of matching quotes stripped - holds nothing but letters, digits and
+// . _ / + @ = - and resolves inside the clone: a quote, a backslash, a brace, a glob, $, a backtick, a tilde or a
+// space counts as outside. The line is read as bash reads it: ;, &, |, ( and ) separate directives, so
+// `dotenv;source_env ../x` holds two. Every one of the eight targets must refuse such a clone, and the refusal must
+// name the clone's .envrc, the line the maintainer has to change, and docs/dev-environment.md, The host clone,
+// where every line belongs.
+func TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile(t *testing.T) {
 	t.Parallel()
 
 	cases := []envrcLayoutCase{
@@ -173,6 +179,158 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatReadsAParent(t *testing.T) {
 			hostEnvrc: "source_env_if_exists ../secrets.env\n",
 			targets:   []string{"vm-env"},
 			want:      []string{"The host clone"},
+		},
+		{
+			// A source_env inside the clone runs a file the guard never reads, as one outside it does: either
+			// file may read a parent in lines the guard cannot see, so the directive is refused whatever it names
+			// (issue #402).
+			name:      "the host clone's .envrc sources a file inside the clone with source_env",
+			hostEnvrc: "source_env ./host-secrets.env\n",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "host-secrets.env"), []byte(plantedEnvrcLines()), 0o600)
+
+				return nil
+			},
+			want: []string{"line 1", "The host clone"},
+		},
+		{
+			// source is bash's name for source_env, so a file inside the clone is refused with it too.
+			name:      "the host clone's .envrc says source with a path inside the clone",
+			hostEnvrc: "source ./host-secrets.env\n",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "host-secrets.env"), []byte(plantedEnvrcLines()), 0o600)
+
+				return nil
+			},
+			want: []string{"line 1", "The host clone"},
+		},
+		{
+			// . is bash's source as well: it runs the file it names, and a file of the clone is no file the
+			// guard has read.
+			name:      "the host clone's .envrc says . with a path inside the clone",
+			hostEnvrc: ". ./.env.local\n",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, ".env.local"), []byte(plantedEnvrcLines()), 0o600)
+
+				return nil
+			},
+			want: []string{"line 1", "The host clone"},
+		},
+		{
+			// The clone's own absolute path is the same file as the relative one, and source_env runs it either
+			// way: the spelling of the path changes nothing about the refusal.
+			name: "the host clone's .envrc sources an absolute path inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				inside := filepath.Join(l.root, "host-secrets.env")
+				writeFileMode(t, inside, []byte(plantedEnvrcLines()), 0o600)
+				writeHostEnvrc(t, l, "source_env "+inside+"\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			want: []string{"line 1", "The host clone"},
+		},
+		{
+			// The one-hop case: the guard scans the clone's .envrc alone, so whatever a file it sources holds -
+			// here the source_up that reads a .envrc above the clone - reaches direnv unread. The directive is
+			// refused before that hop can happen (issue #402).
+			name: "the host clone's .envrc sources a file inside the clone that says source_up",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, ".envrc.local"),
+					[]byte("source_up\n"+plantedEnvrcLines()), 0o600)
+				writeHostEnvrc(t, l, "source_env ./.envrc.local\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			want: []string{"line 1", "The host clone"},
+		},
+		{
+			// ; separates two commands in bash, and direnv runs the line as bash does: the source_env after it
+			// is a directive of its own, and the line is refused for it.
+			name:      "the host clone's .envrc says dotenv;source_env ../outside.env",
+			hostEnvrc: "dotenv;source_env ../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// && separates two commands as ; does: the guard must read the source behind it.
+			name:      "the host clone's .envrc says dotenv&&source ../outside.env",
+			hostEnvrc: "dotenv&&source ../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// Two . directives on one line: the second names a file above the clone, and the guard refuses the
+			// line for it.
+			name:      "the host clone's .envrc says .;. ../outside.env",
+			hostEnvrc: ".;. ../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// The argument holds a space, so bash hands dotenv the first word alone, which names no file at all:
+			// the guard cannot tell what dotenv would load and refuses the line as outside the clone.
+			name: "the host clone's .envrc dotenvs a quoted path holding a space",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				if err := os.MkdirAll(filepath.Join(l.root, "a b"), 0o700); err != nil {
+					t.Fatalf("create %s: %v", filepath.Join(l.root, "a b"), err)
+				}
+
+				writeHostEnvrc(t, l, "dotenv \"./a b/../../outside.env\"\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"line 1", "The host clone"},
+		},
+		{
+			// A backslash escapes the first dot, so the path bash hands dotenv is not the one a guard reading
+			// the characters of the line would resolve: it counts as outside.
+			name:      "the host clone's .envrc dotenvs a path with an escaped dot",
+			hostEnvrc: "dotenv \\../outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// bash joins the quoted word and the rest of the path into ../outside.env: one quote inside the
+			// argument is not a pair the guard strips, so the line counts as outside.
+			name:      "the host clone's .envrc dotenvs a single-quoted .. followed by a path",
+			hostEnvrc: "dotenv '..'/outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// The same with double quotes: the pair does not enclose the whole argument.
+			name:      "the host clone's .envrc dotenvs a double-quoted .. followed by a path",
+			hostEnvrc: "dotenv \"..\"/outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// A brace expands to two words in bash, one of which walks up out of the clone: a character the
+			// guard cannot read is outside.
+			name:      "the host clone's .envrc dotenvs a brace expansion",
+			hostEnvrc: "dotenv {..,a}/outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
+		},
+		{
+			// The glob matches .. and loads the file above the clone: another character the guard cannot read.
+			name:      "the host clone's .envrc dotenvs a glob",
+			hostEnvrc: "dotenv .[.]/outside.env\n",
+			targets:   []string{"vm-env"},
+			want:      []string{"line 1", "The host clone"},
 		},
 		{
 			// A path holding $ is expanded by the shell direnv runs the .envrc with, so the guard cannot
@@ -526,9 +684,11 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 }
 
 // TestHostTargetsPassACleanEnvrcLayout pins what the guard must not stop: the maintainer's layout when the host
-// clone's .envrc reads no parent - it holds its lines itself, or it sources a file inside the clone, written as a
-// relative or an absolute path - and when no .envrc and no .env sits in the workspace or above it. Each of the eight
-// targets must reach its next step, so the guard does not refuse the layout the docs ask for.
+// clone's .envrc runs no other file - it holds its lines itself - or loads one the way direnv parses rather than
+// runs it: `dotenv` and `dotenv_if_exists` with a plain path inside the clone, written as a name with no slash, a
+// relative path, an absolute path or one enclosing pair of matching quotes, and a bare `dotenv`, which reads the
+// clone's own .env. No .envrc and no .env may sit in the workspace or above it either. Each of the eight targets
+// must reach its next step, so the guard does not refuse the layout the docs ask for.
 func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 	t.Parallel()
 
@@ -537,27 +697,53 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 			name: "the host clone has no .envrc",
 		},
 		{
-			name:      "the host clone's .envrc sources a file inside the clone",
-			hostEnvrc: "source_env ./host-secrets.env\ndotenv ./.env.local\n",
+			// dotenv loads a file direnv parses as KEY=VALUE and never runs, so a relative path inside the
+			// clone is the layout the docs ask for, while source_env with the same path is refused for running
+			// it (issue #402).
+			name:      "the host clone's .envrc dotenvs a path inside the clone",
+			hostEnvrc: "dotenv ./.env.local\n",
 			setup: func(t *testing.T, l *hostLayout) []string {
 				t.Helper()
 
-				writeFileMode(t, filepath.Join(l.root, "host-secrets.env"), []byte(plantedEnvrcLines()), 0o600)
 				writeFileMode(t, filepath.Join(l.root, ".env.local"), []byte(plantedEnvrcLines()), 0o600)
 
 				return nil
 			},
 		},
 		{
-			// direnv runs the .envrc in bash, where source and . read a file as source_env does: a file inside
-			// the clone is what the docs ask for, whichever of the three the maintainer writes.
-			name:      "the host clone's .envrc says source and . with a path inside the clone",
-			hostEnvrc: "source ./host-secrets.env\n. ./.env.local\n",
+			// One enclosing pair of matching quotes is how bash writes the same path, and dotenv receives the
+			// path without them: nothing the guard refuses is left (issue #402).
+			name:      "the host clone's .envrc dotenvs a double-quoted path inside the clone",
+			hostEnvrc: "dotenv \"./.env.local\"\n",
 			setup: func(t *testing.T, l *hostLayout) []string {
 				t.Helper()
 
-				writeFileMode(t, filepath.Join(l.root, "host-secrets.env"), []byte(plantedEnvrcLines()), 0o600)
 				writeFileMode(t, filepath.Join(l.root, ".env.local"), []byte(plantedEnvrcLines()), 0o600)
+
+				return nil
+			},
+		},
+		{
+			// The same pair with single quotes.
+			name:      "the host clone's .envrc dotenvs a single-quoted path inside the clone",
+			hostEnvrc: "dotenv './.env.local'\n",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, ".env.local"), []byte(plantedEnvrcLines()), 0o600)
+
+				return nil
+			},
+		},
+		{
+			// A bare dotenv names no file, which is dotenv's own default: it reads the clone's .env, and that
+			// file is the clone's own (issue #402).
+			name:      "the host clone's .envrc says dotenv alone",
+			hostEnvrc: "dotenv\n",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, ".env"), []byte(plantedEnvrcLines()), 0o600)
 
 				return nil
 			},
@@ -582,13 +768,15 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 			hostEnvrc: "# source_up\n#   dotenv ../secrets.env\n",
 		},
 		{
-			name: "the host clone's .envrc names an absolute path inside the clone",
+			// The clone's own absolute path is the same file as the relative one: dotenv loads it, and the
+			// guard passes it.
+			name: "the host clone's .envrc dotenvs an absolute path inside the clone",
 			setup: func(t *testing.T, l *hostLayout) []string {
 				t.Helper()
 
-				inside := filepath.Join(l.root, "host-secrets.env")
+				inside := filepath.Join(l.root, ".env.local")
 				writeFileMode(t, inside, []byte(plantedEnvrcLines()), 0o600)
-				writeHostEnvrc(t, l, "source_env "+inside+"\n")
+				writeHostEnvrc(t, l, "dotenv "+inside+"\n")
 
 				return nil
 			},
