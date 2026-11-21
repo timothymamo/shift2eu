@@ -109,12 +109,12 @@ func golangciBuildTags(t *testing.T) []string {
 }
 
 // TestOnlyNamedPackagesTestTheCLI lists every package of the module, with the
-// imports of its test files (TestImports and XTestImports), in each build of
-// cliTestImportersBuilds, and fails on the two problems check.CLIImporterProblems
-// returns for the sets it collects. A package outside cliTestImporters whose
-// test files import internal/cli is named in the build it does so in: that is
-// the build whose files depguard reads, so the package gets past
-// cli-only-in-named-tests there. A package of cliTestImporters that imports
+// imports of its test files (TestImports and XTestImports), one parallel
+// subtest per build of cliTestImportersBuilds, and fails on the two problems
+// check.CLIImporterProblems returns for the sets it collects. A package outside
+// cliTestImporters whose test files import internal/cli is named in the build
+// it does so in: that is the build whose files depguard reads, so the package
+// gets past cli-only-in-named-tests there. A package of cliTestImporters that imports
 // internal/cli in no build at all has a stale exemption and is named once,
 // over the union of the builds: a parity test that gains a build constraint,
 // as //go:build !js, is still exempt where its file is built, so no build but
@@ -123,37 +123,52 @@ func TestOnlyNamedPackagesTestTheCLI(t *testing.T) {
 	t.Parallel()
 
 	root := repositoryRoot(t)
+	builds := cliTestImportersBuilds(t)
 
-	// The builds are listed one after the other, not in parallel subtests: a
-	// parallel subtest resumes only after its parent returns, and the union
-	// check below needs every build's set.
-	var sets []check.CLIImportersBuild
+	// One set per build, in the builds' order: each parallel subtest writes its
+	// own element, so they share no state, and the union check reads them in the
+	// stable order the builds are listed in, never a map's.
+	sets := make([]check.CLIImportersBuild, len(builds))
 
-	for _, build := range cliTestImportersBuilds(t) {
+	// The union check runs in a cleanup, which the testing package calls once
+	// every subtest has finished: a parallel subtest resumes only after this
+	// function has returned, so the check cannot follow the loop below.
+	t.Cleanup(func() {
+		// A build the listing failed in left its set empty, which the union check
+		// would report as a stale exemption of every named package: that failure
+		// is already the one to fix.
+		if t.Failed() {
+			return
+		}
+
+		for _, problem := range check.CLIImporterProblems(sets, cliTestImporters) {
+			switch problem.Kind {
+			case check.CLIImporterNotNamed:
+				t.Errorf("%s: a test file of %s imports %s: only the test files of %s may (depguard rule cli-only-in-named-tests, issue #345). Test the driving adapter through its own package, or name the package in the rule and in cliTestImporters on purpose",
+					problem.Build, problem.Pkg, cliPackage, strings.Join(cliTestImporters, ", "))
+			case check.CLIImporterStaleExemption:
+				t.Errorf("no test file of %s imports %s in any build the check lists, so the listing read nothing or the exemption of cli-only-in-named-tests is stale (issue #345); drop the package from the rule and from cliTestImporters, or check the build tags of its test files",
+					problem.Pkg, cliPackage)
+			default:
+				t.Errorf("check.CLIImporterProblems returned problem kind %d for %s, which this check does not know",
+					problem.Kind, problem.Pkg)
+			}
+		}
+	})
+
+	for i, build := range builds {
 		name := build.target.GOOS + "/" + build.target.GOARCH + "/" + build.tags.name
 
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
 			pkgs, err := check.ListPackages(t.Context(), root, build.target, false, build.tags.tags, "./...")
 			if err != nil {
 				t.Fatalf("ListPackages(./..., %v, %s): %v", build.target, build.tags.name, err)
 			}
 
-			sets = append(sets, check.CLIImportersBuild{Build: name, Importers: cliTestImportersOf(pkgs)})
+			sets[i] = check.CLIImportersBuild{Build: name, Importers: cliTestImportersOf(pkgs)}
 		})
-	}
-
-	for _, problem := range check.CLIImporterProblems(sets, cliTestImporters) {
-		switch problem.Kind {
-		case check.CLIImporterNotNamed:
-			t.Errorf("%s: a test file of %s imports %s: only the test files of %s may (depguard rule cli-only-in-named-tests, issue #345). Test the driving adapter through its own package, or name the package in the rule and in cliTestImporters on purpose",
-				problem.Build, problem.Pkg, cliPackage, strings.Join(cliTestImporters, ", "))
-		case check.CLIImporterStaleExemption:
-			t.Errorf("no test file of %s imports %s in any build the check lists, so the listing read nothing or the exemption of cli-only-in-named-tests is stale (issue #345); drop the package from the rule and from cliTestImporters, or check the build tags of its test files",
-				problem.Pkg, cliPackage)
-		default:
-			t.Errorf("check.CLIImporterProblems returned problem kind %d for %s, which this check does not know",
-				problem.Kind, problem.Pkg)
-		}
 	}
 }
 
