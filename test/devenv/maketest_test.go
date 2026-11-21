@@ -56,8 +56,8 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 		exitCode   int
 		wantFailed bool
 		// wantTail is every line make test prints after go's own output, the summary's header included: an empty
-		// slice pins that go's output is the whole of it, and nil leaves the tail unpinned, for a go that fails
-		// without naming a package or a test.
+		// slice pins that go's output is the whole of it, and a header on its own pins that the summary is printed
+		// even when go names no package and no test.
 		wantTail []string
 	}{
 		{
@@ -69,6 +69,24 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 				testSummaryHeader,
 				"--- FAIL: TestX (0.00s)",
 				"FAIL\texample/pkg/b\t0.2s",
+			},
+		},
+		{
+			// go prints a failing subtest as its parent's line, then the subtest's own line indented by four
+			// spaces, then its detail line indented once more; only the two FAIL lines name a test (issue #253).
+			name: "a failing subtest",
+			output: "--- FAIL: TestY (0.00s)\n" +
+				"    --- FAIL: TestY/sub (0.00s)\n" +
+				"        y_test.go:5: boom\n" +
+				"FAIL\n" +
+				"FAIL\texample/pkg/d\t0.1s\n",
+			exitCode:   1,
+			wantFailed: true,
+			wantTail: []string{
+				testSummaryHeader,
+				"--- FAIL: TestY (0.00s)",
+				"    --- FAIL: TestY/sub (0.00s)",
+				"FAIL\texample/pkg/d\t0.1s",
 			},
 		},
 		{
@@ -86,10 +104,13 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 			wantTail:   []string{},
 		},
 		{
+			// Nothing matches the summary's patterns here, so the header alone is the tail: make test still ends
+			// with it, says nothing after it, and keeps go's failure (issue #253).
 			name:       "a go that fails without a FAIL line",
 			output:     "go: downloading example.com/dep v1.0.0\nfatal error: the go command crashed\n",
 			exitCode:   1,
 			wantFailed: true,
+			wantTail:   []string{testSummaryHeader},
 		},
 	}
 
@@ -122,10 +143,6 @@ func TestMakeTestReportsTheFailingPackageAndTest(t *testing.T) {
 			if at < 0 {
 				t.Fatalf("make test's stdout does not print go test's own output unchanged, so a failing run hides what go said (issue #253)\nwant go's output:\n%s\nstdout:\n%s\nstderr:\n%s",
 					tc.output, stdout, stderr)
-			}
-
-			if tc.wantTail == nil {
-				return
 			}
 
 			after := lines[at+len(goLines):]
