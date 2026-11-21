@@ -16,10 +16,9 @@
 # it says. The file is then read no further, and when either file has such a line only that line (one per
 # file) is reported and nothing is compared, so one unreadable line never cascades into a refusal for every
 # line or hash below it. A hash or a provider block one file lists twice fails too, which a set comparison
-# would hide. A
-# value outside a strict printable set (an address, version, constraint or hash holding ##[, which would
-# forge a GitHub Actions annotation, or a control character) is never echoed: the line says "an
-# unprintable value" in its place.
+# would hide. A value outside a strict printable set (an address, version, constraint or hash holding ##[,
+# which would forge a GitHub Actions annotation, or a control character) is never echoed: the line says
+# "an unprintable value" in its place.
 #
 # Usage: dev/infra-lock-compare.sh <committed lock file> <regenerated lock file>
 set -euo pipefail
@@ -137,12 +136,11 @@ if [ -n "${unreadable}" ]; then
   exit 1
 fi
 
-# What a file's reading found wrong in itself: a line it could not read, or a fact listed twice.
+# What a file's reading found wrong in itself: a fact listed twice.
 problems() { # <committed|regenerated> <its facts>
   local kind a b c
   while IFS=$'\t' read -r kind a b c; do
     case "${kind}" in
-      "~unreadable") fail "${a}" "${b}" ;;
       "~twice")
         if [ "${a}" = hash ]; then
           fail "$(printable address "${b}")" "hash $(printable hash "${c}") listed twice in the $1 file"

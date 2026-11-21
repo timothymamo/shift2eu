@@ -76,8 +76,8 @@ in its `mock_provider` only `mock_resource`, `mock_data`, `override_resource` an
 (`[test-nested-block]`, issue #434), and a `run` or `mock_provider` label is an identifier
 (`[test-label]`; every block label enters the rules' block path with `%`, `/` and `:` escaped, so no label
 hides a block's children; the `%` escape is defence in depth, keeping the escaping injective, since no rule
-today tells apart the paths two labels such as `p/q` and `p%2Fq` would otherwise share; messages quote a
-label as the source writes it);
+today tells apart the paths two labels such as `p/q` and `p%2Fq` would otherwise share; a message that quotes a
+label alone quotes it as the source writes it, and one that prints a block path keeps the escaped form);
 every resource, data source and provider is Scaleway's; a module's source, in the configuration or in a
 test's `run` block, is a local `./` path without a `..` segment or another segment starting with `.`
 (such as `./.terraform/m`, under the `.terraform` directory the rules skip); every applied root (a directory directly
