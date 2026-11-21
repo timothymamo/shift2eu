@@ -127,8 +127,8 @@ func providerLockWorkflowProblems(workflow string) []string {
 			providerLockScratch)
 	}
 
-	commentedLockAt := at(`rm -f "${work}/.terraform.lock.hcl"`)
-	if commentedLockAt < 0 {
+	lockRemovalAt := at(`rm -f "${work}/.terraform.lock.hcl"`)
+	if lockRemovalAt < 0 {
 		fail("the step does not remove the copied lock file (want a statement holding %q): the regenerated file would start as the committed one, and the comparison would compare it with itself",
 			`rm -f "${work}/.terraform.lock.hcl"`)
 	}
@@ -144,10 +144,10 @@ func providerLockWorkflowProblems(workflow string) []string {
 		fail("%s", problem)
 	}
 
-	before("the lock file's removal", commentedLockAt, "the guard that refuses a lock file still there", guardAt)
+	before("the lock file's removal", lockRemovalAt, "the guard that refuses a lock file still there", guardAt)
 	before("the .terraform directory's removal", dotTerraformAt, "the guard that refuses a lock file still there", guardAt)
 	before("the guard that refuses a lock file still there", guardAt, "`providers lock`", lockAt)
-	before("the lock file's removal", commentedLockAt, "`providers lock`", lockAt)
+	before("the lock file's removal", lockRemovalAt, "`providers lock`", lockAt)
 	before("the .terraform directory's removal", dotTerraformAt, "`providers lock`", lockAt)
 
 	if lockAt >= 0 {
@@ -169,6 +169,9 @@ func providerLockWorkflowProblems(workflow string) []string {
 
 	return problems
 }
+
+// nonZeroExitStatement matches a statement that stops the shell with a failure status.
+var nonZeroExitStatement = regexp.MustCompile(`^exit [1-9][0-9]*$`)
 
 // lockGuardProblems returns where the statements check the scratch copy for a lock file before tofu locks
 // anything, and one line per fact that check breaks: no such check, one that does not close, or one that does
@@ -204,9 +207,7 @@ func lockGuardProblems(statements []string) (int, []string) {
 		return guardAt, []string{"the step's check for a lock file still in the scratch copy never closes with fi, so the step's steps after it are the guard's body"}
 	}
 
-	exits := slices.ContainsFunc(statements[guardAt+1:closedAt], func(statement string) bool {
-		return regexp.MustCompile(`^exit [1-9][0-9]*$`).MatchString(statement)
-	})
+	exits := slices.ContainsFunc(statements[guardAt+1:closedAt], nonZeroExitStatement.MatchString)
 	if !exits {
 		return guardAt, []string{"the step's check for a lock file still in the scratch copy does not exit non-zero, so tofu locks a copy that already holds the committed file"}
 	}

@@ -1552,7 +1552,7 @@ locals {
 //   - inside run: override_resource, override_data, override_module, assert, variables, module and
 //     plan_options, plus expect_failures, which tofu writes as an attribute and which the list names anyway
 //     so a future block spelling of it is no surprise;
-//   - inside mock_provider: mock_resource and mock_data.
+//   - inside mock_provider: mock_resource, mock_data, override_resource and override_data.
 //
 // Anything else is [test-nested-block]. Only the direct children are judged: a block inside an allowed one
 // (values in an override_resource, an assert's body) is none of this rule's. The run and mock_provider of the
