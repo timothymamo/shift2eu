@@ -5,7 +5,8 @@
 // equal to infra/tofu.yaml's tofuVersion - for every applied root, which no module source may reach and no
 // configuration file may sit beside, no provider endpoint, every test file mocking the provider, a top-level
 // block of an allowed type only, a run or mock_provider label that is an identifier (so no label's / can shift
-// the blocks beneath it out of the rule that judges them), a provider block setting only organization_id and
+// the blocks beneath it out of the rule that judges them), a block label whose %, / or : never decides what
+// the rules see, a provider block setting only organization_id and
 // region, a lock file holding only the line shapes tofu init writes, and so on (the script lists them). With
 // every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
@@ -65,7 +66,7 @@ type infraRuleCase struct {
 // loudly (as a test failure, never as a silent pass) when the configuration moves under it. The file-reading
 // functions' cases come from infraFileFunctionCases, one per name the rules must refuse, so a name dropped
 // from them fails here instead of passing unrefused.
-var infraRuleCases = append(append(append(infraFileFunctionCases(), namedInfraRuleCases...), infraTestNestedBlockCases...), infraTestLabelCases...)
+var infraRuleCases = append(append(append(append(infraFileFunctionCases(), namedInfraRuleCases...), infraTestNestedBlockCases...), infraTestLabelCases...), infraLabelPathCases...)
 
 // namedInfraRuleCases are the breakages written out one by one, in the order the script's rules are read.
 var namedInfraRuleCases = []infraRuleCase{
@@ -1823,6 +1824,84 @@ run "a-run_2" {
   assert {
     condition     = true
     error_message = "x"
+  }
+}
+`)
+		},
+	},
+}
+
+// infraLabelPathCases pin the other half of the fix for the auditor's first finding (issue #434): the same
+// path shift hid blocks in configuration files, where no [test-label] can name the label that caused it. A
+// label holding a / added a segment to the block's path, so the block stopped being the type or depth the
+// rule reads it at and the rule skipped it while reporting nothing: `module "a/b"` was no [module-source],
+// `resource "scaleway_iam_policy" "p/q"` with count = 2 no [iam-repeat], `provider "x/y"` with api_url no
+// [provider-type] and no [provider-endpoint]. Each case below is that input on the real configuration, so the
+// label's / must no longer decide which block the rules see. The last case pairs the shift with a run whose
+// label also breaks [test-label]: both refusals are required, so tagging the label alone is no fix.
+var infraLabelPathCases = []infraRuleCase{
+	{
+		name:   "module-label-with-a-slash-from-git",
+		why:    `a module "a/b" in site/main.tf whose label holds a /, with source = "git::https://example.com/x", a source no rule allows`,
+		want:   "module-source",
+		wantIn: map[string]string{"module-source": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+module "a/b" {
+  source = "git::https://example.com/x"
+}
+`)
+		},
+	},
+	{
+		name:   "iam-policy-label-with-a-slash-repeated",
+		why:    `the deploy policy's label written "p/q", with count = 2, the repeat the label's / hid from the rule; the block is renamed rather than added, so the root still holds its one policy`,
+		want:   "iam-repeat",
+		wantIn: map[string]string{"iam-repeat": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				"resource \"scaleway_iam_policy\" \"deploy\" {\n  name           = \"shift2eu-site-deploy\"",
+				"resource \"scaleway_iam_policy\" \"p/q\" {\n  count          = 2\n  name           = \"shift2eu-site-deploy\"")
+		},
+	},
+	{
+		name:     "provider-label-with-a-slash-and-an-endpoint",
+		why:      `site/providers.tf's provider block written "x/y", with api_url = "https://example.com" beside the settings it may set`,
+		want:     "provider-type",
+		wantMore: []string{"provider-endpoint"},
+		wantIn: map[string]string{
+			"provider-type":     "{site}/providers.tf",
+			"provider-endpoint": "{site}/providers.tf",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+
+			providers := filepath.Join(site, "providers.tf")
+			editInfraFile(t, providers, `provider "scaleway" {`, `provider "x/y" {`)
+			editInfraFile(t, providers,
+				"  organization_id = var.organization_id",
+				"  api_url         = \"https://example.com\"\n  organization_id = var.organization_id")
+		},
+	},
+	{
+		name:     "run-label-with-a-slash-and-providers",
+		why:      `a run "x/y" in site/tests/iam.tftest.hcl whose label holds a /, with providers = { scaleway = scaleway.real }`,
+		want:     "test-providers",
+		wantMore: []string{"test-label"},
+		wantIn: map[string]string{
+			"test-providers": "{site}/tests/iam.tftest.hcl",
+			"test-label":     "{site}/tests/iam.tftest.hcl",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "x/y" {
+  command = plan
+
+  providers = {
+    scaleway = scaleway.real
   }
 }
 `)
