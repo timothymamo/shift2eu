@@ -11,7 +11,8 @@
 // difference each: an identical copy and a reordered one pass; a dropped h1: hash (one platform), a dropped
 // zh: hash (a registry checksum), an added hash, a changed version, changed constraints and a provider block
 // the committed file misses are refused. So is a provider block the committed file holds and the regenerated
-// one misses, and a hash the committed file lists twice. A refusal prints [lock-hashes] with the provider
+// one misses, and a hash the committed file lists twice, as is a provider block it lists twice: a repeated
+// line would leave a set comparison blind to it. A refusal prints [lock-hashes] with the provider
 // address, and names each missing or extra hash. A usage error (a missing argument, a file that is not there)
 // is refused too.
 //
@@ -20,7 +21,10 @@
 // printable set) is named "an unprintable value" and never echoed - the run's whole output must hold no ##[ -
 // and a non-blank, non-comment line that is no lock line at all (two hashes on one line, a provider header
 // with a trailing comment) is [lock-hashes] too, with the file and the line number, even when both files hold
-// it: tofu init would rewrite that file unseen otherwise.
+// it: tofu init would rewrite that file unseen otherwise. A file's first unreadable line stops its reading, so
+// the case of an indented provider header or a hash list opened with a trailing comment is refused on that
+// one line, with no fact of either file: nothing below the unreadable line is read, and a reading that stopped
+// halfway says nothing about the hashes the other file holds.
 //
 // The cases read and write files only: no tofu, no network, no credentials.
 package devenv_test
@@ -68,6 +72,8 @@ var (
 	lockFirstH1Line = regexp.MustCompile(`^\s+"h1:`)
 	// lockProviderHeaderLine matches a provider block's header line.
 	lockProviderHeaderLine = regexp.MustCompile(`^\s*provider\s+"`)
+	// lockHashesOpenLine matches the line that opens a provider block's hash list.
+	lockHashesOpenLine = regexp.MustCompile(`^\s*hashes\s*=\s*\[`)
 )
 
 // lockCompareCase is one pair of lock files a run compares: what the committed file holds, what the
@@ -79,6 +85,10 @@ type lockCompareCase struct {
 	regenerated string   // the lock file `tofu providers lock` regenerated
 	wantFail    bool     // whether the script must refuse the pair
 	wantOut     []string // substrings a [lock-hashes] line must hold, the hash values, the file:line and the provider address; {committed} and {regenerated} stand for the case's two file paths
+	// wantOneRefusal is for a case whose committed file holds a line the script cannot read: the refusal must
+	// be that one line and no fact of either file, since the script stops reading a file at its first
+	// unreadable line and compares no facts when a file is unreadable (issue #434, the review).
+	wantOneRefusal bool
 }
 
 // TestInfraLockCompare pins the script's verdict on the pairs of lock files that differ in one way each.
@@ -134,8 +144,29 @@ func TestInfraLockCompare(t *testing.T) {
 					t.Errorf("%s printed no %s line holding %q on %s: output was:\n%s", infraLockCompareScript, infraLockTag, want, tc.why, got.output())
 				}
 			}
+
+			if tc.wantOneRefusal {
+				if refusals := lockCompareTagLines(got.output()); len(refusals) != 1 {
+					t.Errorf("%s printed %d %s lines on %s, want exactly the one line the unreadable line is reported on: the script must stop reading a file at its first unreadable line, and report no fact of either file when a file is unreadable. Its lines were:\n%s",
+						infraLockCompareScript, len(refusals), infraLockTag, tc.why, strings.Join(refusals, "\n"))
+				}
+			}
 		})
 	}
+}
+
+// lockCompareTagLines returns the output's lines that report a [lock-hashes] refusal: one per fact of the
+// comparison, so their number is what a case counts.
+func lockCompareTagLines(output string) []string {
+	var refusals []string
+
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, infraLockTag) {
+			refusals = append(refusals, line)
+		}
+	}
+
+	return refusals
 }
 
 // lockComparePath resolves the {committed} and {regenerated} placeholders of a case's wantOut, so a case can
@@ -172,6 +203,8 @@ func lockCompareCases(t *testing.T, base string) []lockCompareCase {
 	unprintableHash := withLockHash(t, base, "h1:##[add-mask]x")
 	twoHashesOnOneLine, twoHashesLine := withLockLineReplaced(t, base, lockFirstH1Line, `    "h1:AAA=", "h1:BBB=",`)
 	commentedProviderHeader, commentedHeaderLine := withLockLineReplaced(t, base, lockProviderHeaderLine, `provider "`+infraLockProvider+`" { # x`)
+	indentedProviderHeader, indentedHeaderLine := withLockLineReplaced(t, base, lockProviderHeaderLine, `  provider "`+infraLockProvider+`" {`)
+	commentedHashesOpen, commentedHashesLine := withLockLineReplaced(t, base, lockHashesOpenLine, `  hashes = [ # c`)
 	duplicatedHash := withLockHash(t, base, h1)
 
 	return []lockCompareCase{
@@ -252,6 +285,14 @@ func lockCompareCases(t *testing.T, base string) []lockCompareCase {
 			wantOut:     []string{infraLockProvider, h1},
 		},
 		{
+			name:        "a-provider-block-the-committed-file-lists-twice",
+			why:         "a committed file listing the " + infraLockProvider + " block twice, where the regenerated one lists it once: the set of hashes is the same, but a repeated block is no file tofu init writes, and a set comparison would hide it",
+			committed:   withLockProviderBlock(base, infraLockProvider),
+			regenerated: base,
+			wantFail:    true,
+			wantOut:     []string{infraLockProvider + ": a provider block listed twice"},
+		},
+		{
 			name:        "an-unprintable-constraint",
 			why:         `a committed file whose constraints are "##[error]forged", a value that would forge a GitHub Actions annotation if the script echoed it`,
 			committed:   unprintableConstraints,
@@ -283,6 +324,24 @@ func lockCompareCases(t *testing.T, base string) []lockCompareCase {
 			regenerated: commentedProviderHeader,
 			wantFail:    true,
 			wantOut:     []string{"{committed}:" + strconv.Itoa(commentedHeaderLine)},
+		},
+		{
+			name:           "an-indented-provider-header",
+			why:            "a committed file whose provider header line is indented, a line tofu init never writes: the reading stops at it, so nothing below it is read or compared",
+			committed:      indentedProviderHeader,
+			regenerated:    base,
+			wantFail:       true,
+			wantOneRefusal: true,
+			wantOut:        []string{"{committed}:" + strconv.Itoa(indentedHeaderLine)},
+		},
+		{
+			name:           "a-hashes-line-with-a-trailing-comment",
+			why:            "a committed file whose hash list opens with a trailing comment, a line tofu init never writes: the reading stops at it, so the hashes below it are neither read nor compared",
+			committed:      commentedHashesOpen,
+			regenerated:    base,
+			wantFail:       true,
+			wantOneRefusal: true,
+			wantOut:        []string{"{committed}:" + strconv.Itoa(commentedHashesLine)},
 		},
 	}
 }
