@@ -15,6 +15,11 @@
 // pinned integrity, naming the command that prints the published one when
 // the integrity is stale.
 //
+// The check assumes the wiring test/lint's aireviewworkflow_test.go pins: the
+// same install step runs .github/scripts/install-claude-code.sh with
+// "@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}" and
+// "${CLAUDE_CODE_INTEGRITY}", so the pair checked here is the pair installed.
+//
 // The package does no I/O of its own: it opens no file and no connection, and
 // reads only the readers it is given. ci/claudecodepin reads the workflow and
 // fetches the document. Text of the registry reaches an error quoted with %q,

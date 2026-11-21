@@ -2036,16 +2036,16 @@ program refuses to run when one is set.
 **The Claude Code pin check** (issue #276). Renovate bumps `CLAUDE_CODE_VERSION` but cannot bump
 `CLAUDE_CODE_INTEGRITY`, and a bump's own AI review runs `main`'s copy of the workflow, so it cannot see a
 stale integrity. The **Claude Code pin** check (`.github/workflows/claude-code-pin.yml`, which runs
-`go run ./ci/claudecodepin`) does: on every pull request that changes `ai-review.yml`, the check or its
-workflow, and on the push to `main` after the merge, it reads both pins and fails unless the npm
+`go run ./ci/claudecodepin`) does: on every pull request that changes `ai-review.yml`,
+`.github/scripts/install-claude-code.sh`, the check or its workflow, and on the push to `main` after the merge, it reads both pins and fails unless the npm
 registry's document of exactly that version of `@anthropic-ai/claude-code-linux-x64` publishes the pinned
 integrity as its `dist.integrity`. Its error names the pinned and the published integrity and the command
 that prints the published one (`npm view @anthropic-ai/claude-code-linux-x64@<version> dist.integrity`). A
 registry that cannot be reached, or answers anything else, fails the check too, never passes it. It runs in
 CI only (the default tests fake the registry), on `pull_request` with a read-only token, reads no secret and
 no environment, and sends the registry one GET of a public document and no credential. It runs only when
-those paths change, so it is not a required check: a Renovate bump of the CLI shows it red until the
-integrity is replaced, and you do not merge it red.
+those paths change, so today it is advisory, not a required status check: a Renovate bump of the CLI
+shows it red until the integrity is replaced, and a red **Claude Code pin** check means do not merge.
 
 **1. Create the reviewer App.** On GitHub, Settings → Developer settings → GitHub Apps → New GitHub App:
 

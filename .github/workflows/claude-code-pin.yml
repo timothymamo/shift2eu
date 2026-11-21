@@ -12,26 +12,32 @@ name: Claude Code pin
 # pull_request, never pull_request_target: the job runs the pull request's own copy of the check, with a
 # read-only GITHUB_TOKEN, no secret and no environment, as ci.yml runs the pull request's code. It sends
 # the registry one GET of a public document and no credential. The paths: filter runs it on every pull
-# request that changes the pin, the check or this file, and the push to main re-checks what was merged.
+# request that changes the pin, the install script that consumes it, the check or this file, and the push
+# to main re-checks what was merged. Because of that filter it is advisory, not a required status check:
+# a red "Claude Code pin" check on a pull request (a Renovate bump of the CLI above all) means do not merge.
 on:
   push:
     branches: [main]
     paths:
       - .github/workflows/ai-review.yml
+      - .github/scripts/install-claude-code.sh
       - .github/workflows/claude-code-pin.yml
       - ci/claudecodepin/**
   pull_request:
     branches: [main]
     paths:
       - .github/workflows/ai-review.yml
+      - .github/scripts/install-claude-code.sh
       - .github/workflows/claude-code-pin.yml
       - ci/claudecodepin/**
 
 permissions: {}
 
+# A newer push to a pull request cancels its superseded run; a push to main never cancels an earlier main
+# run, so every merge's re-check finishes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   claude-code-pin:

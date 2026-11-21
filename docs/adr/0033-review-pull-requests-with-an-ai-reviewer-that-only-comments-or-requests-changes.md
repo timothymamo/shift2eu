@@ -735,8 +735,9 @@ own AI review runs `main`'s copy of the workflow, so a missed integrity showed o
 every AI review failing at the install step (issue #428, after PR #412).
 
 **Decision.** A CI check on pull requests, **Claude Code pin** (`.github/workflows/claude-code-pin.yml`),
-runs `go run ./ci/claudecodepin` on every pull request into `main` that changes `ai-review.yml`, the check
-or its workflow, and on the push to `main`. It reads both pins, fetches the npm registry's document of
+runs `go run ./ci/claudecodepin` on every pull request into `main` that changes `ai-review.yml`, the
+install script `.github/scripts/install-claude-code.sh`, the check or its workflow, and on the push to
+`main` (a push to `main` never cancels an earlier `main` run). It reads both pins, fetches the npm registry's document of
 exactly the pinned version of `@anthropic-ai/claude-code-linux-x64` over HTTPS (a timeout, no redirect, a
 bounded body, no credential), and fails unless that document is of the package and the version and
 publishes the pinned integrity as its `dist.integrity`. Every failure, a registry that cannot be reached
@@ -755,8 +756,8 @@ check reaches the network in CI only.
 **Not taken.** Renovate updating the integrity itself: a post-upgrade task needs
 `allowedPostUpgradeCommands`, a setting of a self-hosted Renovate only, and no datasource returns an npm
 tarball's integrity to a custom manager. The check is not a required status check: it runs only when its
-paths change, and a required check that never runs would leave every other pull request waiting. A red
-check on the bump is what the maintainer sees before merging.
+paths change, and a required check that never runs would leave every other pull request waiting. It is
+advisory today: a red **Claude Code pin** check on the bump means do not merge.
 
 ## Alternatives considered
 
