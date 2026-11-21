@@ -8,6 +8,7 @@ package docs_test
 
 import (
 	"io/fs"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
@@ -243,6 +244,67 @@ func (p keyPage) keyDownloads() []keyDownload {
 	}
 
 	return downloads
+}
+
+// keySection is one section of a page: the heading that starts it and the lines it spans.
+//
+// A section runs to the next heading, whatever its level, so a subsection's key downloads are the subsection's own
+// and a pin that names the section names the title a maintainer sees (issue #381).
+type keySection struct {
+	name string // the heading's level and title, "### The AI reviewer"
+	from int    // the 1-based line of the heading
+	to   int    // the 1-based line of the heading that ends the section, or one past the page
+}
+
+// sections returns the sections of the page, in line order.
+func (p keyPage) sections() []keySection {
+	var sections []keySection
+
+	for i, line := range p.lines {
+		if p.blockAt[i] >= 0 {
+			continue
+		}
+
+		level, title, ok := markdownHeading(line)
+		if !ok {
+			continue
+		}
+
+		if n := len(sections); n > 0 {
+			sections[n-1].to = i + 1
+		}
+
+		sections = append(sections, keySection{
+			name: strings.Repeat("#", level) + " " + title,
+			from: i + 1,
+			to:   len(p.lines) + 1,
+		})
+	}
+
+	return sections
+}
+
+// keyDownloadsPerSection returns the 1-based lines of the page's key downloads, by the heading of the section that
+// holds them. A download before the page's first heading sits under no section, and is gathered under "".
+func (p keyPage) keyDownloadsPerSection() map[string][]int {
+	sections := p.sections()
+	bySection := make(map[string][]int)
+
+	for _, download := range p.keyDownloads() {
+		name := ""
+
+		for _, section := range sections {
+			if download.line >= section.from && download.line < section.to {
+				name = section.name
+
+				break
+			}
+		}
+
+		bySection[name] = append(bySection[name], download.line)
+	}
+
+	return bySection
 }
 
 // stepEnd returns the 0-based index of the first line after download (1-based) that ends the step it belongs to,
@@ -810,5 +872,46 @@ func TestDevEnvironmentDeletesEveryDownloadedKey(t *testing.T) {
 
 	for _, f := range page.keyDeletionFindings() {
 		t.Errorf("%s:%d %s: %s", devEnvironmentPage, f.line, f.rule, f.text)
+	}
+}
+
+// TestDevEnvironmentKeyDownloadsPerSection pins where on the page the scan finds the key downloads it requires a
+// deletion block for, so a reworded step that stops matching fails here instead of quietly passing the rule with one
+// download fewer (issue #381). The pin is per section, not per line: a step may move inside its section, and a new
+// download step in a section of its own has to be pinned on purpose.
+func TestDevEnvironmentKeyDownloadsPerSection(t *testing.T) {
+	t.Parallel()
+
+	// The key downloads of each section that has any, and the count the page is expected to hold. A download the pin
+	// does not name, or a section whose count moved, fails the test.
+	want := map[string]int{
+		"### The agents App":                    2,
+		"#### The key under a separate account": 4,
+		"### The AI reviewer":                   2,
+	}
+
+	data, err := fs.ReadFile(os.DirFS(repoRoot), devEnvironmentPage)
+	if err != nil {
+		t.Fatalf("reading %s: %v", devEnvironmentPage, err)
+	}
+
+	got := newKeyPage(string(data)).keyDownloadsPerSection()
+
+	for _, name := range slices.Sorted(maps.Keys(want)) {
+		if len(got[name]) == want[name] {
+			continue
+		}
+
+		t.Errorf("%s: section %q has %d key download(s) on line(s) %v, the test pins %d: a download step was added, removed, moved to another section or stopped being matched. Give a new download step its deletion block, then update this pin to the section's count (issue #381)",
+			devEnvironmentPage, name, len(got[name]), got[name], want[name])
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(got)) {
+		if _, ok := want[name]; ok {
+			continue
+		}
+
+		t.Errorf("%s: section %q is not pinned, but holds %d key download(s) on line(s) %v: give each download its deletion block, then add the section to this pin with that count (issue #381)",
+			devEnvironmentPage, name, len(got[name]), got[name])
 	}
 }
