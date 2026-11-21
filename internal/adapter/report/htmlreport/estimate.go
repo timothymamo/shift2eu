@@ -7,16 +7,14 @@ import (
 
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
 	"github.com/timothymamo/shift2eu/internal/domain/estimate"
+	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 )
 
 // The report's own words about an estimate, as the Markdown report has them:
-// the basis every total is given on (ADR 0024, PRD #190), and the hours basis
-// of a plan price (ADR 0027).
+// the basis every total is given on (ADR 0024, PRD #190), and the hours a
+// month a plan price assumes for a resource that gives none (ADR 0027).
 const (
-	excludedNote = "excluding VAT and discounts"
-	fixedFeeNote = "a fixed fee is the offering's listed fee"
-	hoursNote    = "plan price × count × hours / " + hoursPerMonth + ", " + hoursPerMonth +
-		" hours for a resource that gives none"
+	excludedNote  = "excluding VAT and discounts"
 	hoursPerMonth = "730"
 )
 
@@ -45,18 +43,43 @@ func hasRelations(verdicts []assessment.Verdict) bool {
 	return false
 }
 
-// renderRegion renders the region the header names, with how it was chosen:
-// the region --region chose, else the region the estimates are for, the
-// target's default. It is nil when there is neither.
+// renderRegion renders the region the header names: the region --region
+// chose, else the region the estimates are for, the target's default, without
+// a note on how it was chosen (issue #373, item 10-1). It is nil when there is
+// neither.
 func renderRegion(a assessment.Assessment) rich {
 	switch {
 	case a.Region != "":
-		return code(a.Region).words(" (chosen with ").code("--region").words(")")
+		return code(a.Region)
 	case a.EstimateRegion != "":
-		return code(a.EstimateRegion).words(" (the target's default for estimates)")
+		return code(a.EstimateRegion)
 	default:
 		return nil
 	}
+}
+
+// resourcesNoun is " resource" for one and " resources" for any other number.
+func resourcesNoun(n int) string {
+	if n == 1 {
+		return " resource"
+	}
+
+	return " resources"
+}
+
+// summaryEstimate is the Summary's estimate box: its caption, the monthly
+// total as its figure, and how many resources it prices, or, when it prices
+// none of at least one resource, that none could be estimated.
+func summaryEstimate(t estimate.Total) rich {
+	box := rich{}.span("Monthly estimate").words(" ")
+
+	if t.Estimated == 0 && t.Resources > 0 {
+		return box.figure(classNone, "not estimated").words(" ").
+			span("none of " + strconv.Itoa(t.Resources) + resourcesNoun(t.Resources) + " could be estimated")
+	}
+
+	return box.figure(classNone, euros(t.Monthly)).words(" ").
+		span(strconv.Itoa(t.Estimated) + " of " + strconv.Itoa(t.Resources) + " priced · excl. VAT")
 }
 
 // renderPlan renders the Plan cell of an estimate: the chosen plan's name and
@@ -292,39 +315,6 @@ func estimatesOf(verdicts []assessment.Verdict) []estimate.Estimate {
 	return out
 }
 
-// workloadEstimates returns, for each group of a.Workloads at the same index,
-// the estimates of the resources it names, in a.Verdicts' order, in one pass
-// over the verdicts.
-func workloadEstimates(a assessment.Assessment) [][]estimate.Estimate {
-	groups := make(map[string][]int)
-
-	for i, w := range a.Workloads {
-		for _, id := range w.ResourceIDs {
-			groups[id] = append(groups[id], i)
-		}
-	}
-
-	out := make([][]estimate.Estimate, len(a.Workloads))
-
-	for _, v := range a.Verdicts {
-		if v.Estimate == nil {
-			continue
-		}
-
-		for _, i := range groups[v.Resource.ID] {
-			out[i] = append(out[i], *v.Estimate)
-		}
-	}
-
-	return out
-}
-
-// basisNote is the basis an estimate is given on: the snapshot's retrieval
-// date and what the prices leave out.
-func basisNote(a assessment.Assessment) string {
-	return "list prices on " + a.Snapshot.RetrievedOn.UTC().Format(dateLayout) + ", " + excludedNote
-}
-
 // euros renders an amount in euros: "€2,535.00".
 func euros(m estimate.Money) string {
 	return currencySymbols["EUR"] + thousands(m.String())
@@ -352,126 +342,142 @@ func thousands(decimal string) string {
 	return b.String()
 }
 
-// sourceCostItems returns one "Source cost" item per currency of sc, in its
-// order, each "for N of M resources" unless every resource has a cost in that
-// currency, or one item saying the inventory gives none. The amount is never
-// converted.
-func sourceCostItems(sc estimate.SourceCost) []item {
+// sourceCost renders the source's cost of sc: per currency of sc, in its
+// order, the currency and the amount, "for N of M" unless every resource has
+// a cost in that currency, joined with ", "; or nil when the inventory gives
+// none. The amount is never converted.
+func sourceCost(sc estimate.SourceCost) rich {
 	if len(sc.Currencies) == 0 {
-		return []item{{Text: text("Source cost: none in the inventory")}}
+		return nil
 	}
 
-	items := make([]item, 0, len(sc.Currencies))
+	parts := make([]rich, 0, len(sc.Currencies))
 
 	for _, c := range sc.Currencies {
-		line := text("Source cost: ").code(c.Currency).words(" " + currencySymbols[c.Currency] + thousands(c.Monthly.String()))
+		part := code(c.Currency).words(" " + currencySymbols[c.Currency] + thousands(c.Monthly.String()))
 		if c.Resources != sc.Resources {
-			line = line.words(" for " + strconv.Itoa(c.Resources) + " of " + strconv.Itoa(sc.Resources) + " resources")
+			part = part.words(" for " + strconv.Itoa(c.Resources) + " of " + strconv.Itoa(sc.Resources))
 		}
 
-		items = append(items, item{Text: line})
+		parts = append(parts, part)
 	}
 
-	return items
+	return rich{}.join(parts, nameSeparator)
 }
 
-// writeWorkloads writes the per-workload section: one subsection per group of
-// a.Workloads, in its order ("No workload" last), with its fit counts, its
-// estimate total and source cost when a has estimates, and its blockers.
+// writeWorkloads writes the per-workload section (issue #373, item 13): one
+// box per group of a.Workloads, in its order ("No workload" last), holding its
+// name, one badge per fit with its count, and, when a has estimates, its
+// monthly total and how many of its resources it prices, with the source's
+// cost. The resources themselves are in the Resources table and the blockers
+// in the Blockers section, so a box names none.
 func writeWorkloads(f *fragment, a assessment.Assessment, level int) {
 	f.heading(level, text("Workloads"))
 
-	estimates := workloadEstimates(a)
-
-	for i, w := range a.Workloads {
-		name := text("No workload")
-		if !w.NoWorkload {
-			name = code(w.Name)
-		}
-
-		f.heading(level+1, name)
-
-		items := []item{{Text: text("Fit: " + strconv.Itoa(w.Summary.Direct) + " direct, " +
-			strconv.Itoa(w.Summary.Partial) + " partial, " + strconv.Itoa(w.Summary.None) + " none")}}
-
-		if w.Total != nil {
-			items = append(items, item{Text: text("Monthly estimate: ").then(renderTotal(*w.Total, estimates[i])).
-				words(", " + basisNote(a))})
-			items = append(items, sourceCostItems(w.SourceCost)...)
-		}
-
-		if len(w.Blockers) == 0 {
-			items = append(items, item{Text: text("Blockers: none")})
-		} else {
-			blockers := blockerItems(w.Blockers)
-			children := make([]rich, 0, len(blockers))
-
-			for _, b := range blockers {
-				children = append(children, b.Text)
+	for _, w := range a.Workloads {
+		f.box(func() {
+			name := text("No workload")
+			if !w.NoWorkload {
+				name = code(w.Name)
 			}
 
-			items = append(items, item{Text: text("Blockers:"), Children: children})
-		}
+			f.heading(level+1, name)
 
-		f.list(items)
+			var badges rich
+
+			for _, fit := range []struct {
+				fit   mapping.Fit
+				count int
+			}{
+				{fit: mapping.Direct, count: w.Summary.Direct},
+				{fit: mapping.Partial, count: w.Summary.Partial},
+				{fit: mapping.None, count: w.Summary.None},
+			} {
+				if len(badges) > 0 {
+					badges = badges.words(" ")
+				}
+
+				badges = badges.badge(fitClass(fit.fit), strconv.Itoa(fit.count)+" "+string(fit.fit))
+			}
+
+			f.paragraph(badges)
+
+			if w.Total != nil {
+				writeWorkloadEstimate(f, *w.Total, w.SourceCost)
+			}
+		})
 	}
 }
 
-// writeCostEstimate writes the cost summary of an assessment with estimates:
-// the total, the basis it is given on, the region the prices are for, the
-// hours basis with any billing cap (hoursLine) and the source's cost per
-// currency.
+// writeWorkloadEstimate writes a workload box's estimate: its monthly total
+// as a figure, then how many of its resources it prices and the source's
+// cost.
+func writeWorkloadEstimate(f *fragment, t estimate.Total, sc estimate.SourceCost) {
+	of := strconv.Itoa(t.Resources)
+
+	if t.Estimated == 0 && t.Resources > 0 {
+		f.paragraph(rich{}.figure(classNone, "not estimated"))
+	} else {
+		f.paragraph(rich{}.figure(classNone, euros(t.Monthly)).words(" ").span("/ month"))
+	}
+
+	line := text(strconv.Itoa(t.Estimated) + " of " + of + " priced")
+	if cost := sourceCost(sc); cost != nil {
+		line = line.words(" · source cost ").then(cost)
+	} else {
+		line = line.words(" · no source cost")
+	}
+
+	f.paragraph(line)
+}
+
+// writeCostEstimate writes the cost summary of an assessment with estimates
+// (issue #373, item 14): the total, alone in its figure, with "per month, N of
+// M resources" beside it, then one closing line: the region and date of the
+// list prices and what they exclude, the storage the estimates leave out, and
+// the source's cost. The Markdown report keeps the hours basis and the fixed
+// fees in full.
 func writeCostEstimate(f *fragment, a assessment.Assessment, level int) {
 	f.heading(level, text("Cost estimate"))
 
-	items := []item{
-		{Text: text("Total: ").then(renderTotal(*a.Total, estimatesOf(a.Verdicts)))},
-		{Text: text("Estimate: " + basisNote(a) + "; " + fixedFeeNote)},
-		{Text: text("Prices in ").code(a.EstimateRegion)},
-		{Text: text("Hours: " + hoursLine(a))},
-	}
+	t := *a.Total
 
-	f.list(append(items, sourceCostItems(a.SourceCost)...))
-}
-
-// hoursLine is the hours basis of a's plan prices: hoursNote, then one clause
-// per distinct billing cap of a's estimated resources, ascending (ADR 0029).
-func hoursLine(a assessment.Assessment) string {
-	var caps []int64
-
-	for _, v := range a.Verdicts {
-		if v.Estimate == nil || !v.Estimate.Estimated || v.Estimate.BillingCapHours <= 0 {
-			continue
+	if t.Estimated == 0 && t.Resources > 0 {
+		line := rich{}.figure(classTotal, "none of "+strconv.Itoa(t.Resources)+resourcesNoun(t.Resources)+" could be estimated")
+		if reasons := notEstimatedReasons(estimatesOf(a.Verdicts)); len(reasons) > 0 {
+			line = line.words(" (").then(reasons).words(")")
 		}
 
-		caps = insertCap(caps, v.Estimate.BillingCapHours)
+		f.paragraph(line)
+	} else {
+		f.paragraph(rich{}.figure(classTotal, euros(t.Monthly)).words(" ").
+			span("per month, " + strconv.Itoa(t.Estimated) + " of " + strconv.Itoa(t.Resources) + resourcesNoun(t.Resources)))
 	}
 
-	line := hoursNote
-
-	for _, c := range caps {
-		h := strconv.FormatInt(c, 10)
-		line += "; a plan billed for at most " + h + " hours a month costs plan price × count × min(hours, " +
-			h + ") / " + h
-	}
-
-	return line
+	f.paragraph(costNote(a))
 }
 
-// insertCap returns caps, ascending and without repeats, with c in it.
-func insertCap(caps []int64, c int64) []int64 {
-	i := 0
-	for i < len(caps) && caps[i] < c {
-		i++
+// costNote is the Cost estimate's closing line.
+func costNote(a assessment.Assessment) rich {
+	note := text("List prices")
+	if a.EstimateRegion != "" {
+		note = note.words(" in ").code(a.EstimateRegion)
 	}
 
-	if i < len(caps) && caps[i] == c {
-		return caps
+	note = note.words(" on " + a.Snapshot.RetrievedOn.UTC().Format(dateLayout) + ", " + excludedNote + ".")
+
+	if n := a.Total.StorageNotIncluded; n > 0 {
+		estimates := " estimates"
+		if n == 1 {
+			estimates = " estimate"
+		}
+
+		note = note.words(" Storage not included in " + strconv.Itoa(n) + estimates + ".")
 	}
 
-	caps = append(caps, 0)
-	copy(caps[i+1:], caps[i:])
-	caps[i] = c
+	if cost := sourceCost(a.SourceCost); cost != nil {
+		return note.words(" Source cost: ").then(cost).words(".")
+	}
 
-	return caps
+	return note.words(" No source cost in the inventory.")
 }

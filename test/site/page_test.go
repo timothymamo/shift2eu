@@ -419,6 +419,7 @@ func TestScriptsPerPage(t *testing.T) {
 		want []string
 	}{
 		{page: "index.html", want: []string{wasmExec, module, page}},
+		{page: "inventory.html", want: []string{page}},
 		{page: "privacy.html", want: []string{page}},
 		{page: "verify.html", want: []string{page}},
 	}
@@ -467,8 +468,8 @@ func TestScriptsPerPage(t *testing.T) {
 
 // TestAssessmentPageIsMarked pins the fixed attribute the page script reads to
 // know whether to decode the module: the assessment page's <body> carries
-// data-page="assessment", and the privacy and verification pages carry no other
-// value, so they load no module (PRD #297, Layer 2).
+// data-page="assessment", and the other pages, the inventory page included,
+// carry no other value, so they load no module (PRD #297, Layer 2).
 func TestAssessmentPageIsMarked(t *testing.T) {
 	t.Parallel()
 
@@ -478,7 +479,7 @@ func TestAssessmentPageIsMarked(t *testing.T) {
 		t.Errorf("index.html's <body> carries data-page=%q, want %q: the page script reads the module only on the page whose body names the assessment", got, "assessment")
 	}
 
-	for _, page := range []string{"privacy.html", "verify.html"} {
+	for _, page := range []string{"inventory.html", "privacy.html", "verify.html"} {
 		t.Run(page, func(t *testing.T) {
 			t.Parallel()
 

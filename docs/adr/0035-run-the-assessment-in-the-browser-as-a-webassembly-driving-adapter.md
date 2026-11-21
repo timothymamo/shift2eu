@@ -198,3 +198,88 @@ decision is unchanged; this states how the pin holds.
   that reaches the fragment as markup.
 - PRD #297 milestone 2 builds on this: the pages, `make site` with `wasm_exec.js` taken from `GOROOT`, the
   CSP, and the browser smoke test.
+
+## Amendment: constant classes in the fragment (issue #373, 2026-11-20)
+
+The site's redesign (PRD #297, issue #373) draws a fit as a coloured badge, colours the Summary rows, shows
+each report section as a card and the Cost estimate's total as a large figure. A stylesheet cannot select an
+element by its text, so it cannot tell `<td>direct</td>` from `<td>none</td>`, or the Blockers list from the
+Required changes list. The page may not run a script over the report to add classes either: it would have
+to read values to decide them. So the fragment now carries `class` attributes, written by `htmlreport`.
+
+Every class is a constant chosen from a closed set, never derived from a value:
+
+| Element | Classes | Chosen from |
+|---|---|---|
+| A Fit cell of a Resources table, and each per-target fit cell of the comparison's | `fit fit-direct`, `fit fit-partial`, `fit fit-none`; `fit` alone for a fit the report does not know | the `mapping.Fit` enum, by an exhaustive switch |
+| A Summary table's rows, the comparison's included | `fit-direct`, `fit-partial`, `fit-none`, `fit-total` (its estimate rows carry none) | the row's role |
+| A `section` around each report section | `part part-summary`, `part-resources`, `part-changes`, `part-blockers`, `part-workloads`, `part-cost`, `part-comparison`, `part-target` | the section's kind |
+| The Cost estimate's total item | `total` | the item's role |
+
+Both sets are fixed tables in `htmlreport` (`classNames`, `partNames`), keyed by unexported enums; the
+renderer refuses a key outside them. So the rule above still holds: a value is only ever element content,
+escaped as text, never a tag, an attribute or a class. The wrappers are `section` elements, never `div`,
+as the browser test's `TestReportIsSemanticHTML` asks. The goldens were regenerated; they differ from the
+earlier ones by the classes and the wrappers alone. `classes_test.go` refuses any class outside the closed
+set, over the hostile fixtures too.
+
+A class tied to a value's content, such as one for an estimate that could not be made, or a number in an
+attribute (`<meter value>`), stays ruled out.
+
+The fragment also carries one constant attribute beside the classes: `role="list"` on the `ul` of the
+title list (the list after the `h2` that names the inventory file, the source, the catalogs and the
+regions, in a report and a comparison alike) and of each Blockers and each Cost estimate section, at h3
+and h4 level alike. These are exactly the lists the stylesheet strips of their markers
+(`list-style: none`), and Safari with VoiceOver then drops the list role and the item count, so the list
+is read as plain text; stating the role keeps it announced as a list (PR #379 review). Every other list
+keeps its markers and needs no role; `test/site` sweeps the goldens against the stylesheet so a list it
+strips without the role fails. The start tag comes from a fixed table in `htmlreport` (`listStartTags`,
+keyed by an unexported enum), like the classes, so it is never derived from a value; no other list
+carries a role, and the only other role is the table box's constant `region` (below). None of these lists can
+be empty (the title list always names the source and a catalog, the Blockers list is written only when
+there is a blocker, the Cost estimate list has fixed items), and an empty list would be left out as any
+other is, so the goldens differ from the earlier ones by that attribute alone.
+
+The stylesheet's fit and heading glyphs are decoration: the word in the cell or heading carries the fit,
+so a browser that drops the glyph's `content: "…" / ""` declaration loses nothing.
+
+## Amendment: the fragment's boxes and its one link (issue #373, 2026-11-21)
+
+The maintainer's review of the redesign (PR #379) asked for the report to look like the mock-up: one
+header line, the summary and the workloads as boxes, required changes and blockers side by side, a
+resources table that scrolls in its own box, and a one-line cost estimate. The HTML fragment, and only
+the fragment, changes; the Markdown and JSON reports keep their layout and their words.
+
+- **The header** is one line, a `role="list"` list after the `h2` as before: `source <source> ·
+  <inventory file> · catalog retrieved <date> · region <region>`. The region carries no note about how it
+  was chosen. The dots are `<span aria-hidden="true">`, so a screen reader reads the items of a list. The
+  `h2` holds the words "Migration assessment" in a `span` the stylesheet sets above the target's name.
+- **"catalog retrieved <date>" links the catalog's `SourceURL`**, with `target="_blank"` and
+  `rel="noopener noreferrer"`. This is the one value the fragment writes into an attribute. It is safe
+  there because the domain refuses any catalog URL that is no absolute https URL, the reporter writes the
+  link only for a URL that starts with `https://` (otherwise the words alone), and the URL is escaped by
+  the same escaper as text, which turns both quotes, `&`, `<`, `>` and `+` into references, so it never
+  ends the attribute. A link loads nothing into the page and is no request the Content Security Policy
+  governs. `TestReportCatalogLinkIsEscaped` pins the escaping with a hostile URL.
+- **Boxes are sections without a class**: the summary's tiles are `p` elements (badge, count, caption),
+  each workload is a `section` holding its `h4`, its badges and its estimate, and one `section` holds the
+  Required changes and Blockers parts. The stylesheet lays them out by their place (`.part-summary > p`,
+  `.part-workloads > section`, `section:not([class]):has(> .part-changes)`), so no new class is needed for
+  them. The summary is no table any more; a comparison's summary is still one.
+- **A badge outside a table** is `<span class="fit fit-direct"><span aria-hidden="true">✓</span>
+  direct</span>`: the glyph is markup, a constant of the package chosen by the badge's class, and hidden
+  from screen readers. In a table the Fit cell keeps its classes and holds its word in a `span` the
+  stylesheet draws as a bubble, with the glyph as CSS content, as before.
+- **Every table sits in `<section class="table-scroll">`**, which scrolls sideways on its own, so a wide
+  table never widens the page on a phone. `table-scroll` joins the closed set of classes (`classNames`).
+  A box that scrolls must be reachable by keyboard, so it carries the constant attributes `tabindex="0"`,
+  `role="region"` and an `aria-label` from a fixed table keyed by an unexported enum (`tableLabels`:
+  "Resources table", "Summary table"), never from a value (PR #379 review). `region` is the second role
+  value the fragment states, besides `list`.
+- **Figures** are `strong` elements; the Cost estimate's total is the one with class `total`, holding the
+  amount alone, with "per month, x of y resources" beside it, and one closing line: the region and date of
+  the list prices, what they exclude, the storage the estimates leave out and the source's cost. The
+  hours basis and the fixed-fee note stay in the Markdown report.
+
+Every element and attribute is still a constant of the package, and every value but the link's URL is
+element content. The goldens were regenerated with `-update`.

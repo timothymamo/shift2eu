@@ -1,97 +1,464 @@
 /* shift2eu's stylesheet (PRD #297): system fonts, and no reference to any other
    file, so it loads nothing; colours meet WCAG 2.2 AA, which test/site checks. */
 
+/* Tokens (issue #373, the design brief's section 3). Every colour is opaque
+   hex, so test/site reads every pair; the dark block below redefines them. A
+   rule that sets a colour on anything but the page's background states that
+   background too, so its pair is checked against what is really behind it. */
+
 :root {
-  --fg: #1a1a1a;
-  --bg: #ffffff;
-  --muted: #4a4a4a;
-  --accent: #0b4f94;
-  --accent-fg: #ffffff;
-  --border: #6b6b6b;
-  --surface: #f3f4f6;
-  --alert-fg: #8a1111;
-  --alert-bg: #fdf0f0;
-  --notice-border: #0b4f94;
-  color-scheme: light;
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef1f6;
+  --code-bg: #eceff4;
+  --ink: #14213d;
+  --muted: #4a5568;
+  --accent: #0b3d91;
+  --on-accent: #ffffff;
+  --accent-strong: #082c6c;
+  --control: #6b7385;
+  --focus: #0b3d91;
+  --mast: #0b2a66;
+  --mast-ink: #ffffff;
+  --mast-link: #c9d8ff;
+  --mast-text: #e6ebf5;
+  --gold: #ffcc00;
+  --gold-ink: #0b2a66;
+  --ring: #dde2ea;
+  --disabled-bg: #6b7385;
+  --disabled-ink: #ffffff;
+  --direct-ink: #0f6b3a;
+  --direct-bg: #e3f4ea;
+  --partial-ink: #874600;
+  --partial-bg: #fdf0d5;
+  --none-ink: #a3201a;
+  --none-bg: #fde4e1;
+  --info-bg: #e8eefb;
+  --info-rule: #0b3d91;
+  --warn-ink: #5c3a00;
+  --warn-bg: #fdf0d5;
+  --warn-rule: #a86400;
+  --alert-ink: #8a1111;
+  --alert-bg: #fde4e1;
+  --alert-rule: #a3201a;
+  --shadow-1: 0 1px 2px #0f16140f, 0 0 0 1px #dde2ea;
+  --shadow-2: 0 2px 4px #0f16140a, 0 12px 32px #0f161414, 0 0 0 1px #dde2ea;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", Menlo, Consolas, monospace;
+  color-scheme: light dark;
 }
+
+/* Print stays light: the dark palette applies to the screen only. */
+@media screen and (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1422;
+    --surface: #151f33;
+    --surface-2: #1b2740;
+    --code-bg: #1e2a42;
+    --ink: #e6ebf5;
+    --muted: #a7b1c6;
+    --accent: #8fb0ff;
+    --on-accent: #0d1422;
+    --accent-strong: #b7cbff;
+    --control: #7d89a3;
+    --focus: #ffcc00;
+    --mast: #0a1a3d;
+    --ring: #2a3753;
+    --disabled-bg: #7d89a3;
+    --disabled-ink: #0d1422;
+    --direct-ink: #7ee2a8;
+    --direct-bg: #10362a;
+    --partial-ink: #f5c26b;
+    --partial-bg: #3a2a0c;
+    --none-ink: #ff9a90;
+    --none-bg: #46191a;
+    --info-bg: #17264a;
+    --info-rule: #8fb0ff;
+    --warn-ink: #f5c26b;
+    --warn-bg: #2e230d;
+    --warn-rule: #e0a13a;
+    --alert-ink: #ff9a90;
+    --alert-bg: #46191a;
+    --alert-rule: #ff9a90;
+    --shadow-1: 0 0 0 1px #2a3753;
+    --shadow-2: 0 0 0 1px #2a3753, 0 8px 24px #00000066;
+  }
+}
+
+/* Base. */
 
 html {
   background-color: var(--bg);
 }
 
 body {
-  margin: 0 auto;
-  max-width: 64rem;
-  padding: 0 1rem 2rem;
-  color: var(--fg);
+  margin: 0;
+  color: var(--ink);
   background-color: var(--bg);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  line-height: 1.5;
+  font-family: var(--sans);
+  font-size: 1rem;
+  line-height: 1.55;
 }
 
 a {
   color: var(--accent);
+  text-underline-offset: 0.15em;
 }
+
+h1,
+h2,
+h3,
+h4 {
+  margin: 0 0 0.5rem;
+}
+
+h1 {
+  font-size: clamp(2rem, 1.4rem + 2.6vw, 3rem);
+  font-weight: 750;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+h2 {
+  margin-top: 2rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+h3 {
+  font-size: 1.2rem;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+h4 {
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+code {
+  padding: 0.05rem 0.3rem;
+  font-size: 0.9em;
+  color: var(--ink);
+  background-color: var(--code-bg);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+
+svg {
+  flex-shrink: 0;
+}
+
+/* Focus: an outline, which the browser test reads, on every focusable
+   element; gold on the navy masthead and band. */
 
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
 textarea:focus-visible,
+summary:focus-visible,
 #report:focus-visible {
-  outline: 3px solid var(--accent);
+  outline: 3px solid var(--focus);
   outline-offset: 2px;
 }
 
+.site-header a:focus-visible {
+  color: var(--mast-ink);
+  background-color: var(--mast);
+  outline: 3px solid var(--gold);
+  outline-offset: 2px;
+}
+
+.wrap {
+  box-sizing: border-box;
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.skip-link {
+  position: absolute;
+  z-index: 20;
+  top: 0.5rem;
+  left: 1rem;
+  padding: 0.6rem 1rem;
+  color: var(--gold-ink);
+  background-color: var(--gold);
+  font-weight: 650;
+  border-radius: 6px;
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: none;
+}
+
+/* The skip link shows over the navy masthead: like the gold button, its
+   outline is drawn inside it, since a 2px offset ring would vanish on the
+   navy band, while navy on gold inside is 9:1. */
+.skip-link:focus-visible {
+  outline: 3px solid var(--gold-ink);
+  outline-offset: -6px;
+  color: var(--gold-ink);
+  background-color: var(--gold);
+}
+
+/* Masthead. */
+
 .site-header {
+  color: var(--mast-ink);
+  background-color: var(--mast);
+  border-bottom: 3px solid var(--gold);
+}
+
+.masthead {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 0.5rem 1.5rem;
-  padding: 1rem 0;
-  border-bottom: 1px solid var(--border);
+  gap: 0 1.5rem;
 }
 
 .brand {
   margin: 0;
-  font-size: 1.25rem;
-  font-weight: 700;
+  font-size: 1.15rem;
+  font-weight: 750;
+}
+
+.brand a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.75rem 0;
+  color: var(--mast-ink);
+  background-color: var(--mast);
+  text-decoration: none;
+}
+
+.mark {
+  width: 2rem;
+  height: 2rem;
+}
+
+/* The marks are SVG <g> elements, which paint no background. The
+   background-color is there so the contrast test pairs each glyph's colour
+   with the masthead it sits on. */
+.mark-stars {
+  color: var(--gold);
+  background-color: var(--mast);
+}
+
+.mark-arrow {
+  color: var(--mast-ink);
+  background-color: var(--mast);
 }
 
 .nav {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem 1rem;
+  gap: 0 1.25rem;
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+.nav a {
+  display: inline-block;
+  padding: 0.6rem 0;
+  color: var(--mast-link);
+  background-color: var(--mast);
+  text-decoration: none;
+}
+
+.nav a:hover {
+  color: var(--mast-ink);
+  background-color: var(--mast);
+  text-decoration: underline;
+}
+
+.nav a[aria-current="page"] {
+  color: var(--mast-ink);
+  background-color: var(--mast);
+  box-shadow: inset 0 -3px 0 var(--gold);
+}
+
+/* Page. */
+
+.page {
+  padding-top: 2.5rem;
+  padding-bottom: 3rem;
+}
+
+.hero {
+  max-width: 46rem;
+  margin-bottom: 2rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .lead {
-  font-size: 1.1rem;
+  color: var(--muted);
+  font-size: 1.125rem;
 }
 
 .muted {
   color: var(--muted);
 }
 
-.notice {
-  padding: 0.75rem 1rem;
-  color: var(--fg);
+.small {
+  font-size: 0.9rem;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 1.25rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The one-sentence privacy bar (issue #373, item 02). */
+.privacy-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0 0 1rem;
+  color: var(--muted);
+  background-color: var(--bg);
+  font-size: 0.9rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.85rem;
+  color: var(--ink);
   background-color: var(--surface);
-  border-left: 4px solid var(--notice-border);
+  font-size: 0.9rem;
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
 }
 
-fieldset {
-  margin: 1.5rem 0;
-  padding: 1rem;
-  border: 1px solid var(--border);
+a.chip {
+  color: var(--accent);
+  background-color: var(--surface);
 }
 
-legend {
-  padding: 0 0.25rem;
+.icon {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+/* Notices: info by default, warn for the risk statements, alert for errors.
+   An icon sits in the left padding, so the text keeps its inline flow. */
+
+.notice {
+  position: relative;
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  color: var(--ink);
+  background-color: var(--info-bg);
+  border-left: 4px solid var(--info-rule);
+  border-radius: 6px;
+}
+
+.notice.warn {
+  color: var(--warn-ink);
+  background-color: var(--warn-bg);
+  border-left-color: var(--warn-rule);
+}
+
+.notice.with-icon {
+  padding-left: 2.85rem;
+}
+
+.notice-icon {
+  position: absolute;
+  top: 0.85rem;
+  left: 0.9rem;
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.alert:not(:empty) {
+  margin: 1rem 0;
+  padding: 0.75rem 1rem;
+  color: var(--alert-ink);
+  background-color: var(--alert-bg);
+  border: 2px solid var(--alert-rule);
+  border-radius: 6px;
+}
+
+/* Cards and the form's three steps. */
+
+.card {
+  box-sizing: border-box;
+  min-width: 0;
+  margin: 0 0 1.5rem;
+  padding: 1.25rem;
+  color: var(--ink);
+  background-color: var(--surface);
+  border: 0;
+  border-radius: 12px;
+  box-shadow: var(--shadow-1);
+}
+
+fieldset.card legend {
+  float: left;
+  width: 100%;
+  margin: 0 0 1rem;
+  padding: 0;
+  font-size: 1.2rem;
+  font-weight: 650;
+}
+
+fieldset.card legend + * {
+  clear: both;
+}
+
+/* The step's number and its title share one line (issue #373, item 03-2). */
+.step {
+  display: inline-block;
+  margin-right: 0.5rem;
+  color: var(--accent);
+  background-color: var(--surface);
+  font-family: var(--mono);
+  font-size: 0.85rem;
   font-weight: 700;
+  letter-spacing: 0.08em;
+  vertical-align: 0.1em;
+}
+
+/* Options holds one checkbox: its legend sits close to it (item 06). */
+fieldset.card.options legend {
+  margin-bottom: 0.5rem;
 }
 
 label {
@@ -99,94 +466,1198 @@ label {
   margin: 0.25rem 0;
 }
 
+.field {
+  margin: 0 0 1rem;
+}
+
+.field > label {
+  font-weight: 600;
+}
+
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.5rem 1.5rem;
+}
+
+.field-row .field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.field-row .field > label:first-child {
+  flex-basis: 100%;
+  margin: 0;
+}
+
 textarea,
-select,
-input[type="file"] {
+select {
+  box-sizing: border-box;
   max-width: 100%;
   font: inherit;
-  color: var(--fg);
-  background-color: var(--bg);
-  border: 1px solid var(--border);
+  color: var(--ink);
+  background-color: var(--surface);
+  border: 1px solid var(--control);
+  border-radius: 6px;
+}
+
+/* The file control (issue #373, item 04-1): the browser's own file button
+   cannot say "Choose a file", so the input is hidden visually, kept in the
+   tab order, and a label styled as a button opens it. The label shows the
+   input's focus ring. */
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+label.file-button {
+  margin: 0;
+}
+
+.file-input:focus-visible + .file-button {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* A select draws its own arrow, inside its padding, so the arrow keeps its
+   distance from the border (items 04-2 and 05-2). The arrow is a rotated
+   border: no glyph, no image. */
+.select-wrap {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
+.select-wrap select {
+  appearance: none;
+  padding-right: 2.25rem;
+}
+
+.select-wrap::after {
+  position: absolute;
+  top: 50%;
+  right: 0.9rem;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-top: -0.35rem;
+  color: var(--ink);
+  background-color: transparent;
+  border-right: 2px solid var(--ink);
+  border-bottom: 2px solid var(--ink);
+  transform: rotate(45deg);
+  pointer-events: none;
+  content: "";
 }
 
 textarea {
   display: block;
   width: 100%;
-  box-sizing: border-box;
-  font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
-  font-size: 0.9rem;
+  padding: 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  line-height: 1.5;
 }
 
-.field {
-  margin: 0.75rem 0;
+select {
+  min-height: 2.75rem;
+  padding: 0.4rem 0.6rem;
+}
+
+input[type="checkbox"] {
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.targets {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  margin-bottom: 1rem;
 }
 
 .target {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.25rem 1rem;
-  margin: 0.5rem 0;
+  padding: 1rem;
+  color: var(--ink);
+  background-color: var(--surface);
+  border-radius: 10px;
+  box-shadow: var(--shadow-1);
 }
 
-button {
-  padding: 0.5rem 1rem;
+.target:has(input:checked) {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.target p {
+  margin: 0.25rem 0 0;
+}
+
+.target-name {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+/* The provider's country, after its name, a little smaller (item 05-1). */
+.target-country {
+  color: var(--muted);
+  background-color: var(--surface);
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+/* The region select is small, its arrow clear of the border (item 05-2). */
+.target-region select {
+  min-height: 2.25rem;
+  padding: 0.2rem 2rem 0.2rem 0.5rem;
+  font-size: 0.9rem;
+}
+
+.target-region .select-wrap::after {
+  right: 0.75rem;
+  width: 0.4rem;
+  height: 0.4rem;
+}
+
+.target-region,
+.target-snapshot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding-left: 1.85rem;
+  font-size: 0.9rem;
+}
+
+.target-snapshot {
+  color: var(--muted);
+}
+
+/* Buttons. */
+
+button,
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 2.75rem;
+  padding: 0.6rem 1.15rem;
   font: inherit;
-  color: var(--accent-fg);
+  font-weight: 650;
+  line-height: 1.2;
+  color: var(--on-accent);
   background-color: var(--accent);
-  border: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  text-decoration: none;
   cursor: pointer;
 }
 
-button:disabled {
-  color: #ffffff;
-  background-color: #6b6b6b;
+button:hover:not(:disabled),
+.button:hover {
+  color: var(--on-accent);
+  background-color: var(--accent-strong);
+}
+
+button.secondary,
+.button.secondary {
+  color: var(--accent);
+  background-color: var(--surface);
+  border: 1px solid var(--accent);
+}
+
+button.secondary:hover:not(:disabled),
+.button.secondary:hover {
+  color: var(--accent);
+  background-color: var(--surface-2);
+}
+
+button:disabled,
+button.secondary:disabled {
+  color: var(--disabled-ink);
+  background-color: var(--disabled-bg);
+  border-color: transparent;
   cursor: not-allowed;
+}
+
+.button.gold {
+  color: var(--gold-ink);
+  background-color: var(--gold);
+}
+
+.button.gold:hover {
+  color: var(--gold-ink);
+  background-color: #ffd633;
+  text-decoration: underline;
+}
+
+/* The gold button sits on navy: its outline is drawn inside it, navy on
+   gold, where it shows. A 2px offset ring would fall on the navy band and
+   vanish; navy on gold inside is 9:1. */
+.button.gold:focus-visible {
+  outline: 3px solid var(--gold-ink);
+  outline-offset: -6px;
+  color: var(--gold-ink);
+  background-color: var(--gold);
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.5rem 1rem;
-  margin: 1rem 0;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0 0 1.5rem;
+  padding: 1rem 1.25rem;
+  color: var(--ink);
+  background-color: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow-2);
 }
 
-.alert:not(:empty) {
-  margin: 1rem 0;
-  padding: 0.75rem 1rem;
-  color: var(--alert-fg);
-  background-color: var(--alert-bg);
-  border: 2px solid var(--alert-fg);
+.actions #run {
+  margin-right: auto;
 }
+
+/* The report fragment (htmlreport, ADR 0035): its classes are constants from
+   closed sets, a fit or a section kind, never a value. */
 
 #report {
+  margin: 0 0 1.5rem;
+}
+
+#report .shift2eu-report {
+  box-sizing: border-box;
+  padding: 1.25rem;
+  color: var(--ink);
+  background-color: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow-1);
+}
+
+/* The title: the words "Migration assessment" as an eyebrow above the
+   target's name, which carries the gold rule (issue #373, item 10-1). */
+#report .shift2eu-report > h2 {
+  margin-top: 0;
+  padding-left: 0.85rem;
+  font-size: 1.6rem;
+  box-shadow: inset 4px 0 0 var(--gold);
+}
+
+#report .shift2eu-report > h2 > span {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--muted);
+  background-color: var(--surface);
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#report .shift2eu-report > h2 > code {
+  font-family: var(--sans);
+  font-size: 1em;
+}
+
+#report code {
+  padding: 0;
+  font-size: 0.95em;
+  background-color: transparent;
+}
+
+/* The header line: source · inventory file · catalog retrieved · region,
+   in the monospaced face, as one line that wraps on a phone. */
+#report .shift2eu-report > h2 + ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
+  margin: 0.5rem 0 0.75rem;
+  padding: 0;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  list-style: none;
+}
+
+#report .shift2eu-report > h2 + ul code {
+  font-size: 1em;
+}
+
+#report .part {
   margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  box-shadow: 0 -1px 0 var(--ring);
+}
+
+#report .part > h3,
+#report .part-comparison > h4,
+#report .part .part > h4 {
+  margin-bottom: 0.75rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#report .part-comparison > h4 {
+  margin-top: 1.25rem;
+}
+
+#report .part-target {
+  margin-top: 2rem;
+}
+
+#report .part-target > h3 {
+  padding-left: 0.85rem;
+  color: var(--ink);
+  font-size: 1.3rem;
+  letter-spacing: 0;
+  text-transform: none;
+  box-shadow: inset 4px 0 0 var(--gold);
+}
+
+/* A table's box scrolls sideways on its own, so a wide table never widens
+   the page (issue #373, item 11). */
+#report .table-scroll {
+  max-width: 100%;
+  margin: 0 0 0.5rem;
   overflow-x: auto;
 }
 
-table {
+#report table {
+  width: 100%;
   border-collapse: collapse;
-  margin: 0.5rem 0 1rem;
+  font-size: 0.9rem;
+  font-variant-numeric: tabular-nums;
 }
 
-th,
-td {
-  padding: 0.25rem 0.5rem;
+/* The header is one line; a row wraps only in its long text columns. */
+#report th {
+  padding: 0.55rem 0.75rem;
+  color: var(--ink);
+  background-color: var(--surface-2);
+  font-weight: 650;
+  text-align: left;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+#report .part-resources td {
+  white-space: nowrap;
+}
+
+#report .part-resources td:last-child {
+  min-width: 22rem;
+  white-space: normal;
+}
+
+#report td {
+  padding: 0.55rem 0.75rem;
   text-align: left;
   vertical-align: top;
-  border: 1px solid var(--border);
+  background-color: var(--surface);
+  box-shadow: inset 0 1px 0 var(--ring);
 }
 
-code {
-  padding: 0 0.2rem;
-  color: var(--fg);
+#report tbody tr:nth-child(even):not([class]) > td:not(.fit) {
+  background-color: var(--bg);
+}
+
+/* The first column, the resource's ID, stays in view while the table
+   scrolls sideways on a phone. */
+#report tbody td:first-child,
+#report thead th:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+#report tbody td:first-child code {
+  font-weight: 600;
+}
+
+/* Fit: a word, a colour and a glyph, never colour alone, as a bubble. In a
+   table the glyph is CSS content with empty alternative text, so it is not
+   read out twice; a badge outside a table carries its glyph in the markup,
+   hidden from screen readers. A browser that cannot parse the
+   alternative-text form drops the whole declaration and shows no glyph; the
+   word and its colour still carry the fit, so nothing is lost. There is no
+   plain fallback declaration on purpose: it would make those browsers
+   announce the glyph. The same holds for the heading and blocker glyphs
+   below. */
+#report td.fit > span,
+#report span.fit,
+#report tr.fit-direct > td:first-child,
+#report tr.fit-partial > td:first-child,
+#report tr.fit-none > td:first-child {
+  display: inline-block;
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+#report td.fit > span,
+#report span.fit {
+  padding: 0.05rem 0.6rem;
+  border-radius: 999px;
+}
+
+#report td.fit-direct > span,
+#report span.fit-direct,
+#report tr.fit-direct > td {
+  color: var(--direct-ink);
+  background-color: var(--direct-bg);
+}
+
+#report td.fit-partial > span,
+#report span.fit-partial,
+#report tr.fit-partial > td {
+  color: var(--partial-ink);
+  background-color: var(--partial-bg);
+}
+
+#report td.fit-none > span,
+#report span.fit-none,
+#report tr.fit-none > td {
+  color: var(--none-ink);
+  background-color: var(--none-bg);
+}
+
+#report td.fit-direct > span::before,
+#report tr.fit-direct > td:first-child::before {
+  content: "\2713\00a0" / "";
+}
+
+#report td.fit-partial > span::before,
+#report tr.fit-partial > td:first-child::before {
+  content: "\25D0\00a0" / "";
+}
+
+#report td.fit-none > span::before,
+#report tr.fit-none > td:first-child::before {
+  content: "\2715\00a0" / "";
+}
+
+/* Summary: one tile per fit and one for the monthly estimate (issue #373,
+   item 10-2): the badge, the count as a big numeral in the fit's colour,
+   and what it counts. */
+#report .part-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  gap: 1rem;
+}
+
+#report .part-summary > h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+#report .part-summary > p {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 1rem 1.25rem;
+  color: var(--ink);
   background-color: var(--surface);
+  border-radius: 10px;
+  box-shadow: var(--shadow-2);
+}
+
+#report .part-summary > p > strong {
+  font-family: var(--mono);
+  font-size: 2rem;
+  line-height: 1.1;
+}
+
+#report .part-summary > p > span:not(.fit) {
+  color: var(--muted);
+  background-color: var(--surface);
+  font-size: 0.9rem;
+}
+
+#report .part-summary > p > span:first-child:not(.fit) {
+  font-size: 0.75rem;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#report .part-summary > p:nth-of-type(1) > strong {
+  color: var(--direct-ink);
+  background-color: var(--surface);
+}
+
+#report .part-summary > p:nth-of-type(2) > strong {
+  color: var(--partial-ink);
+  background-color: var(--surface);
+}
+
+#report .part-summary > p:nth-of-type(3) > strong {
+  color: var(--none-ink);
+  background-color: var(--surface);
+}
+
+/* A comparison's summary table: the counts are big numerals in the fit's
+   colour. */
+#report tr[class] > td + td {
+  font-family: var(--mono);
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+#report tr.fit-total > td {
+  color: var(--ink);
+  background-color: var(--surface-2);
+  font-weight: 650;
+}
+
+#report tr.fit-total > td:first-child {
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+#report .part ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+#report .part li + li {
+  margin-top: 0.3rem;
+}
+
+/* Required changes and blockers sit side by side in one box on a wide page
+   and one above the other on a phone (issue #373, item 12); each carries a
+   rule in its fit's colour, and each point wraps over as many lines as it
+   needs. */
+#report section:not([class]):has(> .part-changes) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0 1.5rem;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  box-shadow: 0 -1px 0 var(--ring);
+}
+
+#report .part-changes,
+#report .part-blockers {
+  min-width: 0;
+  margin-top: 0;
+  padding-top: 0;
+  padding-left: 1rem;
   overflow-wrap: anywhere;
 }
 
-footer {
-  margin-top: 3rem;
-  padding-top: 1rem;
+#report .part-blockers {
+  margin-top: 1.25rem;
+}
+
+#report .part-changes {
+  box-shadow: inset 4px 0 0 var(--partial-ink);
+}
+
+#report .part-blockers {
+  box-shadow: inset 4px 0 0 var(--none-ink);
+}
+
+#report .part-changes > h3,
+#report .part .part-changes > h4 {
+  color: var(--partial-ink);
+  background-color: var(--surface);
+}
+
+#report .part-blockers > h3,
+#report .part .part-blockers > h4 {
+  color: var(--none-ink);
+  background-color: var(--surface);
+}
+
+#report .part-changes > h3::before,
+#report .part .part-changes > h4::before {
+  content: "\25D0\00a0" / "";
+}
+
+#report .part-blockers > h3::before,
+#report .part .part-blockers > h4::before {
+  content: "\2715\00a0" / "";
+}
+
+/* Each blocker item carries the same svg-free cross as its heading, drawn
+   with ::before because ::marker ignores a background and Safari ignores its
+   content. The glyph hangs just left of the text, where the marker stood, so
+   the text keeps its indent. The fragment gives the list role="list", as
+   Safari and VoiceOver drop the role of a list without markers. */
+#report .part-blockers > ul > li {
+  position: relative;
+  list-style: none;
+}
+
+#report .part-blockers > ul > li::before {
+  content: "\2715\00a0" / "";
+  position: absolute;
+  right: 100%;
+  color: var(--none-ink);
+  background-color: var(--surface);
+}
+
+/* Workloads: one small card per workload, its fit badges and its monthly
+   estimate (issue #373, item 13). */
+#report .part-workloads {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  gap: 1rem;
+}
+
+#report .part-workloads > h3 {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+#report .part-workloads > section {
+  min-width: 0;
+  padding: 1rem;
+  color: var(--ink);
+  background-color: var(--bg);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px var(--ring);
+}
+
+#report .part-workloads > section > h4,
+#report .part .part-workloads > section > h5 {
+  margin: 0 0 0.5rem;
+  font-family: var(--mono);
+  font-size: 1rem;
+}
+
+#report .part-workloads > section > p {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0;
   color: var(--muted);
-  border-top: 1px solid var(--border);
+  background-color: var(--bg);
+  font-size: 0.85rem;
+}
+
+#report .part-workloads > section > p > strong {
+  color: var(--ink);
+  background-color: var(--bg);
+  font-family: var(--mono);
+  font-size: 1.3rem;
+}
+
+#report .part-workloads span.fit-direct {
+  color: var(--direct-ink);
+  background-color: var(--direct-bg);
+}
+
+#report .part-workloads span.fit-partial {
+  color: var(--partial-ink);
+  background-color: var(--partial-bg);
+}
+
+#report .part-workloads span.fit-none {
+  color: var(--none-ink);
+  background-color: var(--none-bg);
+}
+
+/* Cost estimate: the total is the big figure, with what it covers beside it
+   on the same line, then one concise closing line (issue #373, item 14). */
+#report .part-cost > p {
+  margin: 0.25rem 0 0;
+  color: var(--muted);
+  background-color: var(--surface);
+  font-size: 0.9rem;
+}
+
+#report .part-cost > p:first-of-type > span {
+  color: var(--muted);
+  background-color: var(--surface);
+  font-family: var(--mono);
+  font-size: 1rem;
+}
+
+#report .part-cost strong.total {
+  margin-right: 0.4rem;
+  color: var(--ink);
+  background-color: var(--surface);
+  font-family: var(--mono);
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.25;
+  font-variant-numeric: tabular-nums;
+}
+
+/* list-style is inherited, so the nested lists the report writes inside a
+   blocker or a cost item (a blocker's per-target reasons, an estimate's
+   basis) would take list-style: none from the rules above. They carry no
+   role="list", and Safari and VoiceOver drop the list role of a list without
+   markers, so they get their markers back here. The blocker glyph keeps the
+   child combinator and stays off their items. */
+#report .part-blockers li ul,
+#report .part-cost li ul {
+  margin: 0.25rem 0 0;
+  padding-left: 1.25rem;
+  list-style: disc;
+}
+
+/* Contact: the next-steps card shows once a report exists, with CSS alone;
+   the band closes the page. */
+
+#report:empty + .next-steps {
+  display: none;
+}
+
+.next-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 1.5rem;
+  margin: 0 0 1.5rem;
+  padding: 1.25rem 1.25rem 1.25rem 1.5rem;
+  color: var(--ink);
+  background-color: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow-1), inset 4px 0 0 var(--gold);
+}
+
+.next-steps-text {
+  flex: 999 1 26rem;
+  min-width: 0;
+}
+
+.next-steps p {
+  margin: 0 0 0.3rem;
+}
+
+.next-steps .muted {
+  color: var(--muted);
+  background-color: var(--surface);
+  font-size: 0.9rem;
+}
+
+.next-steps-icon {
+  width: 2.25rem;
+  height: 2.25rem;
+  color: var(--accent);
+  background-color: var(--surface);
+}
+
+.contact-band {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem 2rem;
+  align-items: center;
+  margin: 3rem 0 0;
+  padding: 1.75rem 1.5rem;
+  color: var(--mast-ink);
+  background-color: var(--mast);
+  border-radius: 12px;
+  box-shadow: inset 0 3px 0 var(--gold);
+}
+
+.contact-band h2 {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 750;
+  line-height: 1.2;
+}
+
+.contact-band .eyebrow {
+  color: var(--mast-link);
+  background-color: var(--mast);
+}
+
+.contact-band p {
+  margin: 0 0 1rem;
+  color: var(--mast-text);
+  background-color: var(--mast);
+}
+
+/* Privacy: the three layers as numbered cards, in an <ol> with role="list",
+   which Safari and VoiceOver otherwise drop once its markers are gone. */
+
+ol.layers {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  margin: 1rem 0 1.5rem;
+  padding: 0;
+  list-style: none;
+  counter-reset: layer;
+}
+
+ol.layers > li {
+  padding: 1.25rem;
+  color: var(--ink);
+  background-color: var(--surface);
+  border-radius: 12px;
+  box-shadow: var(--shadow-1);
+  counter-increment: layer;
+}
+
+ol.layers > li::before {
+  display: block;
+  margin-bottom: 0.5rem;
+  color: var(--accent);
+  background-color: var(--surface);
+  font-family: var(--mono);
+  font-size: 2.2rem;
+  font-weight: 750;
+  line-height: 1;
+  content: counter(layer, decimal-leading-zero);
+}
+
+ol.layers strong {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-size: 1.1rem;
+}
+
+.backed {
+  display: block;
+  margin-top: 0.75rem;
+  color: var(--muted);
+  background-color: var(--surface);
+  font-size: 0.9rem;
+}
+
+ul.caveats,
+ul.technical {
+  max-width: 52rem;
+  padding: 1.25rem 1.25rem 1.25rem 2.5rem;
+}
+
+/* Each caveat hangs a small triangle where its marker stood, drawn with
+   ::before so it can carry an empty alternative text: a quoted list-style-type
+   would be read aloud. The list carries role="list", as Safari and VoiceOver
+   drop the role of a list without markers. */
+ul.caveats > li {
+  position: relative;
+  list-style: none;
+}
+
+ul.caveats > li::before {
+  content: "\25B8\00a0" / "";
+  position: absolute;
+  right: 100%;
+  color: var(--muted);
+  background-color: var(--surface);
+}
+
+ul.caveats > li + li,
+ul.technical > li + li {
+  margin-top: 0.6rem;
+}
+
+ul.technical {
+  font-size: 0.9rem;
+}
+
+/* Verify: a vertical stepper, numbered circles joined by a rule. */
+
+.version-badge {
+  display: inline-block;
+  padding: 0 0.6rem;
+  color: var(--accent);
+  background-color: var(--info-bg);
+  font-family: var(--mono);
+  font-size: 0.95rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+ol.steps {
+  margin: 1rem 0 1.5rem;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+ol.steps > li {
+  position: relative;
+  min-height: 2.25rem;
+  padding: 0.25rem 0 1.5rem 3.25rem;
+  counter-increment: step;
+}
+
+ol.steps > li::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  color: var(--on-accent);
+  background-color: var(--accent);
+  font-family: var(--mono);
+  font-weight: 700;
+  border-radius: 999px;
+  content: counter(step);
+}
+
+ol.steps > li:not(:last-child)::after {
+  position: absolute;
+  top: 2.5rem;
+  bottom: 0.25rem;
+  left: calc(1.125rem - 1px);
+  width: 2px;
+  background-color: var(--control);
+  content: "";
+}
+
+ol.steps code {
+  padding: 0.1rem 0.4rem;
+  box-decoration-break: clone;
+}
+
+.card.card-icon {
+  position: relative;
+  padding-left: 4rem;
+}
+
+.card-icon > svg {
+  position: absolute;
+  top: 1.35rem;
+  left: 1.25rem;
+  width: 1.75rem;
+  height: 1.75rem;
+  color: var(--accent);
+  background-color: var(--surface);
+}
+
+.card-icon > h2 {
+  margin-top: 0;
+}
+
+.card > p:last-child {
+  margin-bottom: 0;
+}
+
+.prose {
+  max-width: 52rem;
+}
+
+/* Footer. */
+
+footer {
+  color: var(--muted);
+  font-size: 0.9rem;
+  box-shadow: inset 0 1px 0 var(--ring);
+}
+
+/* The statement on the left, the links and the version on the right (issue
+   #373, item 09); on a phone they wrap under each other. */
+footer .footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem 1.5rem;
+  padding-top: 1.5rem;
+  padding-bottom: 1rem;
+}
+
+footer p {
+  margin: 0;
+}
+
+.footer-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.4rem 1.5rem;
+}
+
+footer .footer-build {
+  padding-bottom: 2rem;
+  font-size: 0.8rem;
+}
+
+footer > .wrap:last-child {
+  padding-bottom: 2rem;
+}
+
+/* The inventory page (issue #373, item 15): three source buttons, then
+   each source's commands, each in its own box with its own copy button. */
+
+.source-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 1.5rem;
+}
+
+/* The rule above sets display, which beats the browser's own [hidden] rule:
+   without script the picker's buttons do nothing, so hidden must hide them. */
+.source-picker[hidden] {
+  display: none;
+}
+
+button.source-button {
+  min-width: 6rem;
+  color: var(--accent);
+  background-color: var(--surface);
+  border: 1px solid var(--accent);
+}
+
+button.source-button:hover:not(:disabled) {
+  color: var(--accent);
+  background-color: var(--surface-2);
+}
+
+button.source-button[aria-pressed="true"],
+button.source-button[aria-pressed="true"]:hover:not(:disabled) {
+  color: var(--on-accent);
+  background-color: var(--accent);
+}
+
+.source[hidden] {
+  display: none;
+}
+
+.source h2 {
+  margin-top: 0;
+}
+
+.source h3 {
+  margin-top: 1.5rem;
+}
+
+.command {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem 0.75rem;
+  margin: 0.75rem 0 0;
+}
+
+.command pre {
+  flex: 1 1 20rem;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  color: var(--ink);
+  background-color: var(--code-bg);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.command pre code {
+  padding: 0;
+  font-size: 1em;
+  background-color: transparent;
+  overflow-wrap: normal;
+}
+
+.copy-status {
+  align-self: center;
+  color: var(--direct-ink);
+  background-color: var(--surface);
+  font-size: 0.85rem;
+  font-weight: 650;
+}
+
+/* A failed copy is never drawn as a success: page.js sets the class. */
+.copy-status.copy-failed {
+  color: var(--none-ink);
+}
+
+/* Wider screens. */
+
+@media (min-width: 40rem) {
+  .wrap {
+    padding: 0 1.5rem;
+  }
+
+  .card,
+  #report .shift2eu-report {
+    padding: 1.5rem;
+  }
+
+  #report .shift2eu-report {
+    padding: 2rem;
+  }
+
+  .contact-band {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 2rem;
+  }
+}
+
+@media (min-width: 60rem) {
+  .targets,
+  ol.layers {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  #report section:not([class]):has(> .part-changes) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  #report .part-blockers {
+    margin-top: 0;
+  }
+}
+
+/* Print: the report on paper, in the light palette, without the page's
+   controls. */
+
+@media print {
+  html,
+  body {
+    background-color: #ffffff;
+  }
+
+  .skip-link,
+  .site-header,
+  .chips,
+  fieldset,
+  .actions,
+  .next-steps,
+  .contact-band {
+    display: none;
+  }
+
+  #report .shift2eu-report {
+    padding: 0;
+    box-shadow: none;
+    overflow: visible;
+  }
+
+  #report tbody td:first-child,
+  #report thead th:first-child {
+    position: static;
+  }
 }

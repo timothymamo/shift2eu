@@ -12,8 +12,10 @@ import (
 // hsts-waived, loading-notice) must be present, non-empty and shown, "shown"
 // meaning exactly what the Privacy statement's Hidden definition says; the
 // no-JavaScript message must name JavaScript, WebAssembly and the CLI; every
-// control must have a label; and an element with role="alert" must exist so an
-// error is announced.
+// page's footer must carry the site's privacy promise; every control must have a
+// label, a step number must be hidden from assistive technology, the report's
+// glyphs must state an empty alternative text, and an element with role="alert"
+// must exist so an error is announced.
 
 // TestDowngradeRiskIsShown pins the first-visit downgrade statement (PRD #297,
 // Privacy statement): the privacy page carries the element whose id is
@@ -428,7 +430,12 @@ func readSelectorName(s string) (string, string) {
 func hidingDeclaration(t *testing.T, decl cssDecl, props map[string]string) string {
 	t.Helper()
 
-	value := strings.ToLower(resolveValue(t, "stylesheet", decl.value, props))
+	resolved, err := resolveValue("stylesheet", decl.value, props)
+	if err != nil {
+		t.Fatalf("the checks read no value for %s: %v", decl.property, err)
+	}
+
+	value := strings.ToLower(resolved)
 	first := strings.Fields(value + " ")[0]
 
 	switch decl.property {
@@ -632,5 +639,249 @@ func TestErrorsAreAnnounced(t *testing.T) {
 
 	if alerts == 0 {
 		t.Error("index.html holds no element with role=\"alert\": the error an assessment returns is announced to assistive technology")
+	}
+}
+
+// TestEveryPageCarriesTheFooterStatement pins the one line every page shares in
+// its footer (issue #373, item 09): "No cookies, no tracking, no requests: the
+// page cannot connect anywhere." The claim is the site's privacy promise, and the
+// footer is the part a visitor reads on every page, so the build writes the same
+// statement into each page's <footer>.
+func TestEveryPageCarriesTheFooterStatement(t *testing.T) {
+	t.Parallel()
+
+	const statement = "No cookies, no tracking, no requests: the page cannot connect anywhere."
+
+	bundle := theBundle(t)
+
+	for _, page := range pageNames {
+		t.Run(page, func(t *testing.T) {
+			t.Parallel()
+
+			footer := collapseSpace(footerOf(t, bundle.html(t, page)).textContent())
+
+			if !strings.Contains(footer, statement) {
+				t.Errorf("%s's footer reads %q, want it to carry %q: every page states the site's privacy promise in its footer (issue #373, item 09)",
+					page, footer, statement)
+			}
+		})
+	}
+}
+
+// TestFootersLinkTheSiteAndShowTheVersion pins the rest of the footer (issue
+// #373, item 09): the privacy and verification links the other pages already
+// carry, and the version the build was given, never a hard-coded one. Both builds
+// are read, so the check tells the untagged version from the tagged one.
+func TestFootersLinkTheSiteAndShowTheVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		bundle  *bundle
+		version string
+	}{
+		{name: "untagged", bundle: theBundle(t), version: devVersion(t)},
+		{name: "tagged", bundle: theTaggedBundle(t), version: taggedVersion},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, page := range pageNames {
+				t.Run(page, func(t *testing.T) {
+					t.Parallel()
+
+					footer := footerOf(t, tc.bundle.html(t, page))
+
+					links := make(map[string]string, 4)
+
+					for _, anchor := range footer.find("a") {
+						href, _ := anchor.attr("href")
+						links[href] = collapseSpace(anchor.textContent())
+					}
+
+					for href, want := range map[string]string{"privacy.html": "Privacy", "verify.html": "Verify this site"} {
+						if got, ok := links[href]; !ok || got != want {
+							t.Errorf("%s's footer links %q with the text %q, want a link to %s reading %q (issue #373, item 09)",
+								page, href, got, href, want)
+						}
+					}
+
+					text := collapseSpace(footer.textContent())
+
+					if !strings.Contains(text, tc.version) {
+						t.Errorf("%s's footer reads %q, want it to show the version %q: the footer shows the version the build was given, never a hard-coded one (issue #373, item 09)",
+							page, text, tc.version)
+					}
+
+					if tc.version != "v0.10.0" && strings.Contains(text, "v0.10.0") {
+						t.Errorf("%s's footer reads %q, want no hard-coded v0.10.0: the footer shows the version the build was given, %q (issue #373, item 09)",
+							page, text, tc.version)
+					}
+				})
+			}
+		})
+	}
+}
+
+// TestStepNumbersAreSilent pins that the numbers the assessment page's legends
+// show are decoration and hidden from assistive technology (issue #373): a
+// <legend> holds its number in a <span class="step" aria-hidden="true">, so a
+// screen reader names the fieldset "Inventory", "EU targets" or "Options"
+// rather than "01 Inventory".
+func TestStepNumbersAreSilent(t *testing.T) {
+	t.Parallel()
+
+	doc := theBundle(t).html(t, "index.html")
+
+	steps := 0
+
+	for _, legend := range doc.find("legend") {
+		for _, child := range legend.children {
+			if child.tag != "span" || !hasClass(child, "step") {
+				continue
+			}
+
+			steps++
+
+			if got, ok := child.attr("aria-hidden"); !ok || strings.TrimSpace(got) != "true" {
+				t.Errorf("a <legend> holds the step number %q in a <span class=\"step\"> with aria-hidden=%q (present: %t), want \"true\": the number is decoration, and the fieldset is named by the rest of the legend (issue #373, Accessibility)",
+					collapseSpace(child.textContent()), got, ok)
+			}
+		}
+	}
+
+	if steps == 0 {
+		t.Error("index.html holds no <legend> with a <span class=\"step\">, so the check read nothing: the assessment page's three fieldsets show their step number there")
+	}
+}
+
+// TestNoMarkerPseudoElementDeclaresABackground pins what a ::marker may state
+// (PR #379 review, issue #373): ::marker draws the text and the glyph of its own
+// box and ignores a background, so a background declared on a ::marker rule
+// reaches no visitor. Such a declaration is worse than dead: the contrast check
+// then reads a foreground/background pair the browser never paints, and passes a
+// marker whose glyph is unreadable against the surface it really sits on.
+//
+// One declared background that paints nothing is accepted, and the contrast check
+// relies on it: `.mark-stars` and `.mark-arrow` are `<g>` groups of the brand's
+// SVG, which draws its glyphs with `fill: currentColor` and `stroke:
+// currentColor`, so their `background-color: var(--mast)` never paints. It is
+// declared so the contrast test pairs each glyph's colour with the masthead the
+// glyph sits on, `--mast` (light) or its dark-scheme value, rather than with the
+// page's background the SVG is not drawn on. ::marker stays refused because there
+// the glyph is drawn by the list item's own box, on the item's background: a
+// background declared on the ::marker rule is false about that pair, so the pair
+// it would teach the contrast check would mislead it.
+func TestNoMarkerPseudoElementDeclaresABackground(t *testing.T) {
+	t.Parallel()
+
+	name, data := theBundle(t).asset(t, "style", ".css")
+
+	for _, problem := range markerBackgrounds(parseCSS(t, name, data)) {
+		t.Errorf("%s's rule %s: a ::marker pseudo-element ignores a background, so the declaration paints nothing and a contrast check over that pair measures a colour no browser draws: state only the glyph's colour on the ::marker rule, and draw the item's glyph with a ::before box when it needs a background (issue #373, PR #379 review)",
+			name, problem)
+	}
+}
+
+// TestMarkerBackgroundCheckFires pins that the ::marker background scan reports
+// the declaration it exists for, so the check over the stylesheet cannot pass
+// vacuously: a background on a ::before box is no problem, and neither is a
+// colour on a ::marker.
+func TestMarkerBackgroundCheckFires(t *testing.T) {
+	t.Parallel()
+
+	const source = `
+li::marker { color: #111111; background-color: #ffffff; }
+li::before { content: "\2715"; background: #ffffff; }
+p::marker { color: #111111; }
+`
+
+	problems := markerBackgrounds(parseCSS(t, "synthetic.css", []byte(source)))
+
+	if len(problems) != 1 {
+		t.Fatalf("the scan reported %d problems for a stylesheet with one background on a ::marker, want exactly one: %v", len(problems), problems)
+	}
+
+	if want := "background-color"; !strings.Contains(problems[0], want) {
+		t.Errorf("the scan reported %q, want it to name the %s declaration the ::marker rule makes", problems[0], want)
+	}
+}
+
+// markerBackgrounds returns one problem for every background a rule whose
+// selector names the ::marker pseudo-element declares, naming the rule's
+// selectors and the declaration.
+func markerBackgrounds(rules []cssRule) []string {
+	var problems []string
+
+	for _, rule := range rules {
+		if !slices.ContainsFunc(rule.selectors, func(selector string) bool {
+			return strings.Contains(strings.ToLower(selector), "::marker")
+		}) {
+			continue
+		}
+
+		for _, property := range []string{"background", "background-color"} {
+			if value, ok := rule.decl(property); ok {
+				problems = append(problems, fmt.Sprintf("%s declares %s: %s", strings.Join(rule.selectors, ", "), property, value))
+			}
+		}
+	}
+
+	return problems
+}
+
+// TestBlockerGlyphContentCarriesAnEmptyAlternative pins the decorated content the
+// redesigned report draws (issue #373): a heading and a blocker item show a glyph,
+// and the declaration states the empty alternative text `/ ""` beside it, so a
+// screen reader announces the heading's words and nothing of the glyph. A glyph
+// without an alternative is read aloud as text. The blocker item's glyph is a
+// ::before box rather than its ::marker, because Safari ignores `content` on
+// ::marker and falls back to a disc (PR #379 review). The privacy page's caveat
+// triangle is drawn the same way: a quoted `list-style-type` replaces the marker
+// with text no alternative text can be stated beside, so the glyph moves to a
+// ::before box with `/ ""` and the items keep `list-style: none` (PR #379 review).
+func TestBlockerGlyphContentCarriesAnEmptyAlternative(t *testing.T) {
+	t.Parallel()
+
+	name, data := theBundle(t).asset(t, "style", ".css")
+
+	tests := []struct {
+		name     string
+		selector string
+		glyph    string
+	}{
+		{name: "a blocker item's glyph", selector: "#report .part-blockers > ul > li::before", glyph: `\2715`},
+		{name: "a blockers heading's glyph", selector: "#report .part-blockers > h3::before", glyph: `\2715`},
+		{name: "a required change's heading glyph", selector: "#report .part-changes > h3::before", glyph: `\25d0`},
+		{name: "a caveat item's triangle", selector: "ul.caveats > li::before", glyph: `\25B8`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			content, found := declarationOf(t, name, data, tc.selector, "content")
+			if !found {
+				t.Fatalf("%s states no `content` for %q, want a glyph and its empty alternative text: `content: %s\u00a0/ \"\"` (issue #373)",
+					name, tc.selector, tc.glyph)
+			}
+
+			glyph, alternative, ok := strings.Cut(content, "/")
+			if !ok {
+				t.Fatalf("%s's %q sets content: %s, want the glyph and an empty alternative text beside it: a screen reader reads a bare glyph aloud (issue #373)",
+					name, tc.selector, content)
+			}
+
+			if !strings.Contains(strings.ToUpper(glyph), strings.ToUpper(tc.glyph)) {
+				t.Errorf("%s's %q sets content: %s, want it to draw the glyph %s", name, tc.selector, content, tc.glyph)
+			}
+
+			if got := strings.TrimSpace(alternative); got != `""` {
+				t.Errorf("%s's %q states the alternative text %s, want an empty `\"\"`: the glyph is decoration, and the heading's words are what a screen reader reads (issue #373, Accessibility)",
+					name, tc.selector, got)
+			}
+		})
 	}
 }

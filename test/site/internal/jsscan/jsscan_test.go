@@ -213,6 +213,10 @@ type scanRow struct {
 	// want are the words, compared case-insensitively, that the messages must
 	// hold. Empty means any finding is enough.
 	want []string
+	// refuse, when set, is a name whose first occurrence in src the scan must
+	// report: the row pins that the rule for that name fires at that token, not
+	// that some other rule's message happens to hold the word.
+	refuse string
 }
 
 // TestScanRejectsEveryBannedApi pins rule by rule that the page-script scan
@@ -307,6 +311,60 @@ func TestScanRejectsEveryBannedApi(t *testing.T) {
 		{name: "the module global kept", src: `const a = globalThis.__shift2euModule; if (typeof a !== "string") { return; }`, want: []string{"delete"}},
 		{name: "instantiateStreaming", src: `WebAssembly.instantiateStreaming(module);`, want: []string{"instantiateStreaming"}},
 		{name: "compileStreaming", src: `WebAssembly.compileStreaming(module);`, want: []string{"compileStreaming"}},
+
+		// The clipboard: a write is confined to the copy function, which a click
+		// handler calls, so no other function puts text on it.
+		{name: "a clipboard write at the top level", src: `navigator.clipboard.writeText(text);`, want: []string{"clipboard"}},
+		{name: "a clipboard write in another function", src: `function copyText(text) { navigator.clipboard.writeText(text); }`, want: []string{"clipboard"}},
+		{name: "a clipboard write in the copy function, twice", src: `function copyCommand(button) { navigator.clipboard.writeText(button.dataset.command); navigator.clipboard.writeText(button.dataset.command); }`, want: []string{"clipboard"}},
+		{name: "the clipboard read instead of written", src: `function copyCommand(button) { return navigator.clipboard.readText(); }`, want: []string{"clipboard"}},
+		{name: "the write taken out of the clipboard's member", src: `function copyCommand(button) { const writer = navigator.clipboard.writeText; writer(button.dataset.command); }`, want: []string{"clipboard"}},
+		{name: "the clipboard written through another object", src: `function copyCommand(button) { window.clipboard.writeText(button.dataset.command); }`, want: []string{"clipboard"}},
+
+		// A binding that takes the name navigator: the clipboard and service worker
+		// rules key on the name, so a local navigator would stand in for the browser's
+		// and carry any object the script likes into an allowed form (audit finding 4).
+		// The rule is the token's use, not its shape: navigator is allowed only as a
+		// member base (no member name, the next token is . or ?.) and as the right
+		// operand of in (the next token neither an assignment operator nor =>); every
+		// other occurrence is refused, so no binding form can slip past it.
+		{name: "navigator declared by const", src: `const navigator = stand_in;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator declared by let", src: `let navigator = stand_in;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator declared by var", src: `var navigator = stand_in;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a function parameter", src: `function standIn(navigator) { return navigator; }`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a destructuring target", src: `const { navigator } = stand_in;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as an arrow function's parameter without parentheses", src: `const f = navigator => navigator.clipboard.writeText(x);`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator in a destructured arrow parameter", src: `const f = ({navigator}) => navigator.clipboard.writeText(x);`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator in a destructured function parameter", src: `function f({ navigator }) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator in a nested object destructuring", src: `const { a: { navigator } } = x;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator in a nested array destructuring", src: `const [[navigator]] = x;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a catch parameter", src: `try { x(); } catch (navigator) { navigator.clipboard.writeText(x); }`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a method's parameter", src: `const o = { m(navigator) { return navigator; } };`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a function declaration's name", src: `function navigator() {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a class declaration's name", src: `class navigator {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "the bare navigator passed as a value", src: `f(navigator);`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a shorthand property", src: `const o = { navigator };`, want: []string{"navigator"}, refuse: "navigator"},
+
+		// navigator as a member name, or assigned: a member name reaches another
+		// object's navigator, and an assignment gives the name any object the
+		// script likes, which the clipboard and service worker rules would then
+		// key on. The member base and the right operand of in are the only two
+		// uses that read the browser's navigator, so every other occurrence,
+		// member or not, is refused (issue #373, review finding 1).
+		{name: "navigator assigned through window from the copy function", src: `function copyCommand(b) { window.navigator = fake; navigator.clipboard.writeText(b.textContent); }`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator assigned on globalThis", src: `globalThis.navigator = fake;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator assigned on self", src: `self.navigator = fake;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator assigned on window with ||=", src: `window.navigator ||= fake;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as a for-of target through window", src: `for (window.navigator of [fake]) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator assigned as another object's member", src: `o.navigator = fake;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "another object's navigator property read as a value", src: `const n = wrapper.navigator;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator assigned after in", src: `for (const k in navigator = fake) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator as an arrow's parameter after in", src: `for (const k in navigator => 1) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator incremented after in", src: `if ("x" in navigator++) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator decremented after in", src: `if ("x" in navigator--) {}`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "navigator read after in in a ternary", src: `const b = "x" in navigator ? 1 : 2;`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "the clipboard write through window's navigator", src: `function copyCommand(x) { window.navigator.clipboard.writeText(x); }`, want: []string{"navigator"}, refuse: "navigator"},
+		{name: "the unregister through another object's navigator", src: `function unregisterServiceWorkers() { o.navigator.serviceWorker.getRegistrations(); }`, want: []string{"navigator"}, refuse: "navigator"},
 	}
 
 	// Every assignment to a property that navigates or changes a target, on
@@ -340,6 +398,17 @@ func TestScanRejectsEveryBannedApi(t *testing.T) {
 			for _, want := range tc.want {
 				if !strings.Contains(joined, strings.ToLower(want)) {
 					t.Errorf("Scan(%q) reported %q, want a finding that names %q, so the failure says which rule fired", tc.src, joined, want)
+				}
+			}
+
+			if tc.refuse != "" {
+				line, col := tokenPosition(t, tc.src, tc.refuse)
+
+				if !slices.ContainsFunc(violations, func(violation jsscan.Violation) bool {
+					return violation.Line == line && violation.Col == col
+				}) {
+					t.Errorf("Scan(%q) reported %q, none of it at %s's own token %d:%d: the rule for %s must refuse that token whatever its shape, a member base (no member name, the next token . or ?.) and the right operand of in inside parentheses (the next token )) being the only uses it allows (issue #373, review finding 1)",
+						tc.src, joined, tc.refuse, line, col, tc.refuse)
 				}
 			}
 		})
@@ -436,6 +505,11 @@ func TestScanConfinesTheExceptions(t *testing.T) {
 			src:  `function insertReport(target, markdown) { target.innerHTML = markdown; }`,
 			want: []string{"markdown"},
 		},
+		{
+			name: "a banned API inside the copy function",
+			src:  `function copyCommand(button) { fetch("/x"); navigator.clipboard.writeText(button.dataset.command); }`,
+			want: []string{"fetch"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -506,6 +580,10 @@ function insertReport(target, html) {
   target.innerHTML = html;
 }
 
+function copyCommand(button) {
+  navigator.clipboard.writeText(button.dataset.command);
+}
+
 function showFailure(status, result) {
   status.textContent = result.error;
 }
@@ -560,6 +638,14 @@ const md = new Blob([result.markdown], { type: "text/markdown" });
 const raw = new Blob([result.json], { type: "application/json" });
 `,
 		},
+		{
+			name: "the browser's navigator as the right operand of in",
+			src: `const policy = trustedTypes.createPolicy("shift2eu-report", { createHTML: function (html) { return html; } });
+if (!("serviceWorker" in navigator)) {
+  const supported = false;
+}
+`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -576,6 +662,68 @@ const raw = new Blob([result.json], { type: "application/json" });
 			}
 		})
 	}
+}
+
+// TestScanAcceptsEveryNavigatorForm pins the allowed side of the navigator rule
+// (issue #373, audit finding 4, review finding 1): the browser's navigator
+// appears as a member base, as the right operand of in inside parentheses, and
+// through optional chaining - the uses that read it. The member name and the
+// assignment are refused now, since a member name reaches another object's
+// navigator and an assignment binds any object to the name. The check reads the findings'
+// positions, not their words, so a refusal of the navigator token fails it
+// whatever its message says, while a finding about another name - the service
+// worker rule's, say - does not: a rule that refused any of these forms would
+// push the page away from the use it needs.
+func TestScanAcceptsEveryNavigatorForm(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		src  string
+	}{
+		{name: "a member base", src: `const workers = navigator.serviceWorker.getRegistrations();`},
+		{name: "the right operand of in", src: `if ("serviceWorker" in navigator) { const supported = true; }`},
+		{name: "the right operand of in a for-in loop", src: `for (const k in navigator) {}`},
+		{name: "a member base through optional chaining", src: `const workers = navigator?.serviceWorker;`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			violations, err := jsscan.Scan([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("Scan(%q): %v", tc.src, err)
+			}
+
+			if count := strings.Count(tc.src, "navigator"); count != 1 {
+				t.Fatalf("src %q holds %d occurrences of %q, want exactly one, so this check reads the token it means", tc.src, count, "navigator")
+			}
+
+			line, col := tokenPosition(t, tc.src, "navigator")
+
+			for _, violation := range violations {
+				if violation.Line == line && violation.Col == col {
+					t.Errorf("Scan(%q) refused the token navigator at %d:%d: %s\nwant it allowed as a member base (no member name, the next token . or ?.) and as the right operand of in inside parentheses (the next token )) (issue #373, review finding 1)",
+						tc.src, line, col, violation.Message)
+				}
+			}
+		})
+	}
+}
+
+// tokenPosition returns the 1-based line and column of src's first occurrence of
+// name, failing when src holds none, so a row this check reads cannot silently
+// test another token.
+func tokenPosition(t *testing.T, src, name string) (int, int) {
+	t.Helper()
+
+	at := strings.Index(src, name)
+	if at < 0 {
+		t.Fatalf("src %q holds no %q, so this check reads no token", src, name)
+	}
+
+	return strings.Count(src[:at], "\n") + 1, at - strings.LastIndex(src[:at], "\n")
 }
 
 // TestScanFailsClosed pins that a script the lexer cannot read is an error, not
@@ -612,7 +760,7 @@ func TestBannedJSNames(t *testing.T) {
 		{group: "the sending, loading, storing, markup and code names", names: []string{"fetch", "XMLHttpRequest", "Worker", "postMessage", "eval", "Function", "outerHTML", "cookie"}},
 		{group: "the reflection objects", names: []string{"Object", "Reflect"}},
 		{group: "the navigation properties", names: []string{"href", "src", "action", "hostname"}},
-		{group: "the names Scan confines to one function", names: []string{"innerHTML", "createPolicy"}},
+		{group: "the names Scan confines to one function", names: []string{"innerHTML", "createPolicy", "clipboard", "writeText"}},
 	} {
 		for _, name := range want.names {
 			if !slices.Contains(names, name) {

@@ -1,42 +1,46 @@
 <section class="shift2eu-report">
-<h2>Migration assessment: <code>Scaleway</code></h2>
-<ul>
-<li>Inventory file: <code>inventory.json</code></li>
-<li>Source: <code>aws</code></li>
-<li>Catalog: <code>Scaleway</code> snapshot from <code>https://www.scaleway.com/en/pricing/</code>, retrieved 2026-11-01</li>
+<h2><span>Migration assessment</span> <code>Scaleway</code></h2>
+<ul role="list">
+<li>source <code>aws</code></li>
+<li><span aria-hidden="true">·</span> <code>inventory.json</code></li>
+<li><span aria-hidden="true">·</span> <a href="https://www.scaleway.com/en/pricing/" target="_blank" rel="noopener noreferrer">catalog retrieved 2026-11-01</a></li>
 </ul>
+<section class="part part-summary">
 <h3>Summary</h3>
-<table>
-<thead>
-<tr><th scope="col">Fit</th><th scope="col">Resources</th></tr>
-</thead>
-<tbody>
-<tr><td>direct</td><td>2</td></tr>
-<tr><td>partial</td><td>1</td></tr>
-<tr><td>none</td><td>2</td></tr>
-<tr><td>total</td><td>5</td></tr>
-</tbody>
-</table>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> direct</span> <strong>2</strong> <span>of 5 resources</span></p>
+<p><span class="fit fit-partial"><span aria-hidden="true">◐</span> partial</span> <strong>1</strong> <span>of 5 resources</span></p>
+<p><span class="fit fit-none"><span aria-hidden="true">✕</span> none</span> <strong>2</strong> <span>of 5 resources</span></p>
+</section>
+<section class="part part-resources">
 <h3>Resources</h3>
+<section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
 <table>
 <thead>
 <tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
 </thead>
 <tbody>
-<tr><td><code>bucket-example</code></td><td><code>AWS::S3::Bucket</code></td><td><code>storage.object</code></td><td><code>eu-west-1</code></td><td>direct</td><td><code>Object Storage</code></td><td><code>Object Storage</code> offers every capability the resource uses</td></tr>
-<tr><td><code>db-example</code></td><td><code>AWS::RDS::DBInstance</code></td><td><code>database.postgresql</code></td><td><code>eu-west-1</code></td><td>direct</td><td><code>Managed Database for PostgreSQL</code> (tie: <code>Managed Database for PostgreSQL and MySQL</code>)</td><td><code>Managed Database for PostgreSQL</code> offers every capability the resource uses</td></tr>
-<tr><td><code>fn-example</code></td><td><code>AWS::Lambda::Function</code></td><td><code>serverless.function</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>no offering in the <code>Scaleway</code> catalog for <code>serverless.function</code></td></tr>
-<tr><td><code>misc-example</code></td><td><code>AWS::CloudFormation::CustomResource</code></td><td><code>unclassified</code></td><td><code>eu-west-1</code></td><td>none</td><td></td><td>not classified</td></tr>
-<tr><td><code>partial-example</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td>partial</td><td><code>Instances</code></td><td><code>Instances</code> does not offer <code>node-high-availability</code>; <code>Instances</code> does not offer <code>snapshots</code></td></tr>
+<tr><td><code>bucket-example</code></td><td><code>AWS::S3::Bucket</code></td><td><code>storage.object</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Object Storage</code></td><td><code>Object Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>db-example</code></td><td><code>AWS::RDS::DBInstance</code></td><td><code>database.postgresql</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Managed Database for PostgreSQL</code> (tie: <code>Managed Database for PostgreSQL and MySQL</code>)</td><td><code>Managed Database for PostgreSQL</code> offers every capability the resource uses</td></tr>
+<tr><td><code>fn-example</code></td><td><code>AWS::Lambda::Function</code></td><td><code>serverless.function</code></td><td><code>eu-west-1</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>no offering in the <code>Scaleway</code> catalog for <code>serverless.function</code></td></tr>
+<tr><td><code>misc-example</code></td><td><code>AWS::CloudFormation::CustomResource</code></td><td><code>unclassified</code></td><td><code>eu-west-1</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>not classified</td></tr>
+<tr><td><code>partial-example</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td class="fit fit-partial"><span>partial</span></td><td><code>Instances</code></td><td><code>Instances</code> does not offer <code>node-high-availability</code>; <code>Instances</code> does not offer <code>snapshots</code></td></tr>
 </tbody>
 </table>
+</section>
+</section>
+<section>
+<section class="part part-changes">
 <h3>Required changes</h3>
 <ul>
 <li><code>partial-example</code>: <code>node-high-availability</code>, <code>snapshots</code> (not offered by <code>Instances</code>)</li>
 </ul>
+</section>
+<section class="part part-blockers">
 <h3>Blockers</h3>
-<ul>
+<ul role="list">
 <li><code>fn-example</code>: no offering in the <code>Scaleway</code> catalog for <code>serverless.function</code></li>
 <li><code>misc-example</code>: not classified</li>
 </ul>
+</section>
+</section>
 </section>

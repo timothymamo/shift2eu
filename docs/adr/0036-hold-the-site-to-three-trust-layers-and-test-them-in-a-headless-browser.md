@@ -281,3 +281,40 @@ start the container itself and bridge the protocol over the container's standard
 wrapper inside the image. That would give up "the test starts no browser" and move the image pin and the
 container runtime into the test. It is more machinery than a port the kernel picks, for a residual risk
 that is already low.
+
+## Amendment: the inventory page and its one clipboard write (issue #373)
+
+2026-11-21. The maintainer asked for a page of the site that shows, for AWS, GCP and Azure, the commands
+that build an inventory, each with its own copy button (PR #379, item 15).
+
+- **The page is `site/inventory.html`**, a fourth page of the bundle. It carries the same Content Security
+  Policy, loads only the page script, is linked from every page's nav and footer, and is held by every
+  per-page check of `test/site` and by `test/browser`. Three `<button type="button" aria-pressed>`
+  buttons, not a `<select>`, choose a source; with no script all three sections show, and the page script
+  hides the unchosen ones with the `hidden` attribute.
+- **One source of truth.** The commands are not typed into the page. `ci/sitebuild` reads
+  `docs/guide/inventory.md` from the module root and takes the bash blocks under each source's "Collect
+  from" and "Build the ... inventory" headings, splitting each block into commands (a blank line ends one,
+  a comment line after code starts the next, so a comment is copied with the command it describes, and
+  comments with no code form none). It tracks every fenced block, ```` ``` ```` or `~~~` (one opened by N
+  backticks or tildes closed only by a line of the same character, at least N long, and nothing else),
+  whatever its info string, so a `#` line inside one is no heading, and it fails the
+  build, naming the heading, on a heading it finds never or twice, a block under it that is a `~~~` block,
+  is not bash or is left open, and a section with no command. The
+  page renders them through `html/template`, so each is escaped text. The builder reads a file of the
+  module it already reads `examples/` from, so it takes no new flag and imports no new package.
+  `test/site` compares the built page's commands with the guide's, by the same rule, and refuses a guide
+  command line in the source page. The page links the guide and the three `.jq` programs on GitHub; links
+  only, nothing is fetched.
+- **The clipboard is a sixth exception of Layer 1**, confined like the others: `site/page.js` writes to
+  it in one function, `copyCommand(button)`, once, as `navigator.clipboard.writeText(...)` called in
+  place, on a click only, and never reads it. `jsscan` refuses `clipboard` and `writeText` anywhere else
+  or in any other form (a read, the method taken off its object, another object's clipboard, a second
+  write), and both names join `BannedJSNames`, so the glue may not name them. Writing to the clipboard
+  sends nothing over the network and needs no change to the Content Security Policy or to Trusted Types:
+  it hands text to the operating system's clipboard, as a visitor's own copy does. The status beside the
+  button says "Copied" (`role="status"`).
+- **Hosting.** The page's copy needs `clipboard-write`, which browsers grant to a page on a user's click
+  in a secure context. When the hosting sets a Permissions-Policy (PRD #297, milestone 3), it must allow
+  `clipboard-write` for the site's own origin (`clipboard-write=(self)`), or the copy buttons fail and say
+  so.

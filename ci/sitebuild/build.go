@@ -36,7 +36,7 @@ type options struct {
 
 // pages are the site's HTML pages: each is a template under -site and a file of
 // the bundle of the same name.
-var pages = []string{"index.html", "privacy.html", "verify.html"}
+var pages = []string{"index.html", "inventory.html", "privacy.html", "verify.html"}
 
 // The site's other sources, copied byte for byte under content-addressed names.
 const (
@@ -58,18 +58,23 @@ const (
 var tagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$`)
 
 // target is one target catalog the pages name: its key, as --target takes it,
-// the name the reports give it, and its catalog.
+// the name the reports give it, the country of its head office, which the
+// page's target card shows after the name (issue #373, item 05-1), and its
+// catalog.
 type target struct {
 	key     string
 	name    string
+	country string
 	catalog func(context.Context) (catalog.Catalog, error)
 }
 
 // targets are the three embedded catalogs, in the order the page lists them.
+// The country values are maintained by hand, not read from a catalog;
+// test/site's TestTargetCardsShowTheCountry pins them.
 var targets = []target{
-	{key: "ovhcloud", name: "OVHcloud", catalog: ovhcloud.New().Catalog},
-	{key: "scaleway", name: "Scaleway", catalog: scaleway.New().Catalog},
-	{key: "upcloud", name: "UpCloud", catalog: upcloud.New().Catalog},
+	{key: "ovhcloud", name: "OVHcloud", country: "France", catalog: ovhcloud.New().Catalog},
+	{key: "scaleway", name: "Scaleway", country: "France", catalog: scaleway.New().Catalog},
+	{key: "upcloud", name: "UpCloud", country: "Finland", catalog: upcloud.New().Catalog},
 }
 
 // examples are the bundled example inventories, by their directory under
@@ -101,14 +106,19 @@ type pageData struct {
 	Targets []targetData
 	// Examples are the bundled example inventories.
 	Examples []exampleData
+	// Sources are the inventory page's sources by key, with their commands
+	// read from the inventory guide (issue #373, item 15).
+	Sources map[string]sourceData
 	// HSTSWaived reports whether the HSTS record says waived.
 	HSTSWaived bool
 }
 
 // targetData is one target as the assessment page shows it.
 type targetData struct {
-	Key      string
-	Name     string
+	Key  string
+	Name string
+	// Country is the country of the provider's head office.
+	Country  string
 	Snapshot string
 	Regions  []string
 }
@@ -204,6 +214,10 @@ func build(ctx context.Context, opts options) error {
 	}
 
 	if data.Examples, err = examplesData(root); err != nil {
+		return err
+	}
+
+	if data.Sources, err = sourcesData(root); err != nil {
 		return err
 	}
 
@@ -418,6 +432,7 @@ func targetsData(ctx context.Context) ([]targetData, error) {
 		out = append(out, targetData{
 			Key:      t.key,
 			Name:     t.name,
+			Country:  t.country,
 			Snapshot: c.Snapshot().RetrievedOn.Format("2006-01-02"),
 			Regions:  c.Regions(),
 		})
