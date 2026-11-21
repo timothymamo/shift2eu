@@ -1,0 +1,13 @@
+{
+  "name": "@anthropic-ai/claude-code-linux-x64",
+  "version": "2.1.327",
+  "description": "Claude Code CLI for linux-x64",
+  "bin": {
+    "claude": "package/claude"
+  },
+  "dist": {
+    "integrity": "sha512-b2xkLWludGVncml0eS1mcm9tLTIuMS4zMjc=",
+    "shasum": "1111111111111111111111111111111111111111",
+    "tarball": "https://registry.npmjs.org/@anthropic-ai/claude-code-linux-x64/-/claude-code-linux-x64-2.1.327.tgz"
+  }
+}
