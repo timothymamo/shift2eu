@@ -24,6 +24,14 @@ const signalRuleTitle = "**Signal only what you started.**"
 // names too.
 var signalRuleCommands = []string{"pgrep", "pidof", "pkill"}
 
+// The two parts of the rule below its title and its list of commands are named
+// here the way a failure names them, so the table test can compare against the
+// same words.
+const (
+	processGroupBanName   = "the process-group ban"
+	pidStartTimeCheckName = "the pid and start-time check (ps -o lstart=,args=)"
+)
+
 // signalRulePhrase is the phrase a skill that runs the checks uses to point
 // the agent at the rule: the rule's title without the bold markers. It is only
 // the start of the citation, which also names the rule's number (see
@@ -289,6 +297,80 @@ func citation(t *testing.T, data string) string {
 	return signalRulePhrase + " (CLAUDE.md rule " + rule.number + ")"
 }
 
+// missingSignalRuleParts returns the parts of the rule that the CLAUDE.md text
+// data does not hold, each named the way a failure names it: the commands that
+// pick a process by name. The rule is found by its title, so a text without the
+// rule's title stops findSignalRule instead of reaching this check. The text is
+// squashed, so a phrase still counts when Markdown wraps it over two lines.
+func missingSignalRuleParts(t *testing.T, data string) []string {
+	t.Helper()
+
+	rule, _ := findSignalRule(t, data)
+	text := squash(rule.text)
+	var missing []string
+	for _, command := range signalRuleCommands {
+		if !strings.Contains(text, command) {
+			missing = append(missing, "the command "+command)
+		}
+	}
+	return missing
+}
+
+// TestSignalRulePartsAreNamedWhenMissing fails when a check of the rule's
+// content stops naming a part that CLAUDE.md has lost. It runs the check on
+// in-memory copies of the real CLAUDE.md and removes one part at a time, so a
+// check that looks only for the rule's title and commands, or one that stops
+// looking for the process-group ban or the pid and start-time check, is caught
+// here rather than only by an edit of CLAUDE.md that the suite never makes
+// (issue #471). Each case asserts that its replacement changed the text, so no
+// case can pass because it removed nothing.
+func TestSignalRulePartsAreNamedWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	data := readDoc(t, os.DirFS(repoRoot), claudeMD)
+	tests := []struct {
+		name        string
+		remove      string
+		with        string
+		wantMissing []string
+	}{
+		{
+			name:        "the rule is unchanged",
+			wantMissing: nil,
+		},
+		{
+			name:        "the process-group ban is gone",
+			remove:      "signal a process group yourself",
+			with:        "signal a process group",
+			wantMissing: []string{processGroupBanName},
+		},
+		{
+			name:        "the pid and start-time check is gone",
+			remove:      "`ps -o lstart=,args= -p <pid>`",
+			with:        "`ps -p <pid>`",
+			wantMissing: []string{pidStartTimeCheckName},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			text := data
+			if tc.remove != "" {
+				text = strings.Replace(text, tc.remove, tc.with, 1)
+				if text == data {
+					t.Fatalf("the copy of %s is unchanged: %q does not occur in it, so this case would pin nothing (issue #471)",
+						claudeMD, tc.remove)
+				}
+			}
+			got := missingSignalRuleParts(t, text)
+			if diff := cmp.Diff(tc.wantMissing, got); diff != "" {
+				t.Errorf("missingSignalRuleParts() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestCLAUDERulesForbidSignallingByProcessName fails when CLAUDE.md's
 // `## Rules` section stops holding the rule that an agent signals only the
 // processes it started itself: a numbered item that opens with
@@ -301,18 +383,14 @@ func citation(t *testing.T, data string) string {
 func TestCLAUDERulesForbidSignallingByProcessName(t *testing.T) {
 	t.Parallel()
 
-	rule, at := findSignalRule(t, readDoc(t, os.DirFS(repoRoot), claudeMD))
-	for _, command := range signalRuleCommands {
-		t.Run("names "+command, func(t *testing.T) {
-			t.Parallel()
-
-			if strings.Contains(rule.text, command) {
-				return
-			}
-			t.Errorf("%s:%d: the rule that starts with %q does not name %q, one of the commands that pick a process by name (issue #465): the rule reads %q",
-				claudeMD, at, signalRuleTitle, command, rule.text)
-		})
+	data := readDoc(t, os.DirFS(repoRoot), claudeMD)
+	rule, at := findSignalRule(t, data)
+	missing := missingSignalRuleParts(t, data)
+	if len(missing) == 0 {
+		return
 	}
+	t.Errorf("%s:%d: the rule that starts with %q is missing %s (issues #465, #471): the rule reads %q",
+		claudeMD, at, signalRuleTitle, strings.Join(missing, ", "), rule.text)
 }
 
 // itemTitles returns the first sentence of every item's text, so a failure
