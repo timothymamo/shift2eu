@@ -310,9 +310,10 @@ summary:focus-visible,
 }
 
 /* The introduction takes the page's full width within its margins (round 2,
-   items 02-1 and 07). */
+   items 02-1 and 07), and keeps the cards' own spacing to the first card
+   below it (round 3, item 01). */
 .hero {
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
 }
 
 .hero > .eyebrow {
@@ -393,6 +394,17 @@ a.chip {
 
 .notice.with-icon {
   padding-left: 2.85rem;
+}
+
+/* The loading notice, once the engine runs, is for screen readers alone
+   (page.js): the notice's own position, margin and padding come after
+   .visually-hidden and would keep it in the flow as an empty band above
+   the Inventory box (issue #373, round 3, item 01). */
+.notice.visually-hidden {
+  position: absolute;
+  margin: -1px;
+  padding: 0;
+  border: 0;
 }
 
 .notice-icon {
@@ -806,7 +818,6 @@ button.secondary:disabled {
 }
 
 #report .part > h3,
-#report .part-comparison > h4,
 #report .part .part > h4 {
   margin-bottom: 0.75rem;
   color: var(--muted);
@@ -814,10 +825,6 @@ button.secondary:disabled {
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-
-#report .part-comparison > h4 {
-  margin-top: 1.25rem;
 }
 
 #report .part-target {
@@ -971,9 +978,18 @@ button.secondary:disabled {
   gap: 1rem;
 }
 
+/* The heading sits in the first track alone and the first box starts the
+   next row: a heading spanning every track would keep the tracks no box
+   fills from collapsing, and the boxes would end short of the section's
+   right edge (round 3, items 02 and 03). */
 #report .part-summary > :is(h3, h4) {
-  grid-column: 1 / -1;
+  grid-column: 1;
   margin: 0;
+  white-space: nowrap;
+}
+
+#report .part-summary > :is(h3, h4) + p {
+  grid-column-start: 1;
 }
 
 #report .part-summary > p {
@@ -1118,9 +1134,16 @@ button.secondary:disabled {
   gap: 1rem;
 }
 
+/* As the summary's: the heading in the first track alone, so the tracks no
+   workload fills collapse (round 3, item 03). */
 #report .part-workloads > :is(h3, h4) {
-  grid-column: 1 / -1;
+  grid-column: 1;
   margin: 0;
+  white-space: nowrap;
+}
+
+#report .part-workloads > :is(h3, h4) + section {
+  grid-column-start: 1;
 }
 
 #report .part-workloads > section {

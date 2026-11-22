@@ -49,18 +49,18 @@
 <h4><code>orders</code></h4>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 1<span class="visually-hidden"> none</span></span></p>
 <p><strong>€10.00</strong> <span>/ month</span></p>
-<p>1 of 2 priced · no source cost</p>
+<p>1 of 2 priced</p>
 </section>
 <section>
 <h4><code>shop</code></h4>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 3<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
 <p><strong>€2,525.00</strong> <span>/ month</span></p>
-<p>3 of 3 priced · source cost €2,415.00 for 2 of 3, $40.00 for 1 of 3</p>
+<p>3 of 3 priced</p>
 </section>
 </section>
 <section class="part part-cost">
 <h3>Cost estimate</h3>
 <p><strong class="total">€2,535.00</strong> <span>per month, 4 of 5 resources</span></p>
-<p>List prices in <code>xx-par</code> on 2026-11-13, excluding VAT and discounts. Source cost: €2,415.00 for 2 of 5, $40.00 for 1 of 5.</p>
+<p>List prices in <code>xx-par</code> on 2026-11-13, excluding VAT and discounts.</p>
 </section>
 </section>

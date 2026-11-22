@@ -23,15 +23,16 @@
 //     (issue #373, round 2, item 04: the detail stays in the downloads);
 //     Required changes and Blockers, both in one box; Workloads, one box per
 //     workload (its h4 name, a bubble per fit showing its count, whose fit a
-//     screen reader reads, its estimate and the source's cost, each amount
-//     with its currency's sign, or its code for a currency the report has
-//     no sign for); and Cost estimate, the total
-//     and one closing line;
+//     screen reader reads, and its estimate in euros); and Cost estimate, the
+//     total and one closing line. The fragment names the source's cost
+//     nowhere (round 3, item 04): the Markdown and JSON reports keep it;
 //   - for a comparison, the title naming every target, the header line with
-//     one catalog link per target, an h3 Comparison section holding the h4
-//     Resources and Blockers on every target, then one h3 section per target
-//     holding its single-target sections, one level lower, its Summary boxes
-//     included (round 2, item 10). No table names a region.
+//     one catalog link per target, then one h3 section per target holding its
+//     single-target sections, one level lower, its Summary boxes included
+//     (round 2, item 10), and nothing else: no combined section, no table
+//     with a column per target and no list of blockers on every target
+//     (round 3, item 05), which the Markdown report keeps. No table names a
+//     region.
 //
 // A fragment is semantic HTML, one section element holding the title, its
 // list and part sections (below) of headings, paragraphs, lists, tables with
@@ -46,8 +47,8 @@
 // the fragment carries constant classes from closed sets (docs/adr/0035,
 // amendment for issue #373): each h3 section (and each section of a target
 // in a comparison) sits in a section element of class "part part-<kind>",
-// the kind one of summary, resources, changes, blockers, workloads, cost,
-// comparison and target; every Fit cell and fit badge has "fit fit-direct",
+// the kind one of summary, resources, changes, blockers, workloads, cost and
+// target; every Fit cell and fit badge has "fit fit-direct",
 // "fit fit-partial" or "fit fit-none", chosen from the mapping's fit by an
 // exhaustive switch ("fit" alone for a fit it does not know), and a badge
 // outside a table shows that fit's glyph in a span hidden from screen

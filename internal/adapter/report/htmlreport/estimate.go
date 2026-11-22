@@ -18,13 +18,10 @@ const (
 	hoursPerMonth = "730"
 )
 
-// currencySymbols are the signs a report puts before an amount in a currency it
-// knows. An amount in any other currency is shown after its code alone.
-var currencySymbols = map[string]string{
-	"EUR": "€",
-	"USD": "$",
-	"GBP": "£",
-}
+// euroSign is the sign a report puts before an amount: every estimate is a
+// target's list price, in euros. The report names no source cost (issue
+// #373, item 04), so it shows no other currency.
+const euroSign = "€"
 
 // hasEstimates reports whether a was assessed with estimates on: its Total is
 // set exactly then (assessment.AssessWith).
@@ -229,7 +226,7 @@ func estimatesOf(verdicts []assessment.Verdict) []estimate.Estimate {
 
 // euros renders an amount in euros: "€2,535.00".
 func euros(m estimate.Money) string {
-	return currencySymbols["EUR"] + thousands(m.String())
+	return euroSign + thousands(m.String())
 }
 
 // thousands puts a comma between each group of three digits of the whole part
@@ -254,42 +251,11 @@ func thousands(decimal string) string {
 	return b.String()
 }
 
-// sourceCost renders the source's cost of sc: per currency of sc, in its
-// order, the amount with its currency's sign, "for N of M" unless every
-// resource has a cost in that currency, joined with ", "; or nil when the
-// inventory gives none. The amount is never converted. A currency the report
-// knows is named by its sign alone (issue #373, item 05); any other by its
-// code, as a value, since the amount would otherwise name no currency.
-func sourceCost(sc estimate.SourceCost) rich {
-	if len(sc.Currencies) == 0 {
-		return nil
-	}
-
-	parts := make([]rich, 0, len(sc.Currencies))
-
-	for _, c := range sc.Currencies {
-		amount := thousands(c.Monthly.String())
-
-		part := text(currencySymbols[c.Currency] + amount)
-		if _, known := currencySymbols[c.Currency]; !known {
-			part = code(c.Currency).words(" " + amount)
-		}
-
-		if c.Resources != sc.Resources {
-			part = part.words(" for " + strconv.Itoa(c.Resources) + " of " + strconv.Itoa(sc.Resources))
-		}
-
-		parts = append(parts, part)
-	}
-
-	return rich{}.join(parts, nameSeparator)
-}
-
 // writeWorkloads writes the per-workload section (issue #373, item 13): one
 // box per group of a.Workloads, in its order ("No workload" last), holding its
 // name, one badge per fit with its count, and, when a has estimates, its
-// monthly total and how many of its resources it prices, with the source's
-// cost. The resources themselves are in the Resources table and the blockers
+// monthly total and how many of its resources it prices. It names no source
+// cost (item 04): the Markdown and JSON reports keep it. The resources themselves are in the Resources table and the blockers
 // in the Blockers section, so a box names none.
 func writeWorkloads(f *fragment, a assessment.Assessment, level int) {
 	f.heading(level, text("Workloads"))
@@ -323,40 +289,30 @@ func writeWorkloads(f *fragment, a assessment.Assessment, level int) {
 			f.paragraph(badges)
 
 			if w.Total != nil {
-				writeWorkloadEstimate(f, *w.Total, w.SourceCost)
+				writeWorkloadEstimate(f, *w.Total)
 			}
 		})
 	}
 }
 
 // writeWorkloadEstimate writes a workload box's estimate: its monthly total
-// as a figure, then how many of its resources it prices and the source's
-// cost.
-func writeWorkloadEstimate(f *fragment, t estimate.Total, sc estimate.SourceCost) {
-	of := strconv.Itoa(t.Resources)
-
+// as a figure, then how many of its resources it prices.
+func writeWorkloadEstimate(f *fragment, t estimate.Total) {
 	if t.Estimated == 0 && t.Resources > 0 {
 		f.paragraph(rich{}.figure(classNone, "not estimated"))
 	} else {
 		f.paragraph(rich{}.figure(classNone, euros(t.Monthly)).words(" ").span("/ month"))
 	}
 
-	line := text(strconv.Itoa(t.Estimated) + " of " + of + " priced")
-	if cost := sourceCost(sc); cost != nil {
-		line = line.words(" · source cost ").then(cost)
-	} else {
-		line = line.words(" · no source cost")
-	}
-
-	f.paragraph(line)
+	f.paragraph(text(strconv.Itoa(t.Estimated) + " of " + strconv.Itoa(t.Resources) + " priced"))
 }
 
 // writeCostEstimate writes the cost summary of an assessment with estimates
 // (issue #373, item 14): the total, alone in its figure, with "per month, N of
 // M resources" beside it, then one closing line: the region and date of the
-// list prices and what they exclude, the storage the estimates leave out, and
-// the source's cost. The Markdown report keeps the hours basis and the fixed
-// fees in full.
+// list prices and what they exclude, and the storage the estimates leave out.
+// It names no source cost (item 04). The Markdown report keeps the hours
+// basis, the fixed fees and the source cost in full.
 func writeCostEstimate(f *fragment, a assessment.Assessment, level int) {
 	f.heading(level, text("Cost estimate"))
 
@@ -395,9 +351,5 @@ func costNote(a assessment.Assessment) rich {
 		note = note.words(" Storage not included in " + strconv.Itoa(n) + estimates + ".")
 	}
 
-	if cost := sourceCost(a.SourceCost); cost != nil {
-		return note.words(" Source cost: ").then(cost).words(".")
-	}
-
-	return note.words(" No source cost in the inventory.")
+	return note
 }

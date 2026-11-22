@@ -6,32 +6,6 @@
 <li><span aria-hidden="true">·</span> <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> <a href="https://www.ovhcloud.com/en/public-cloud/prices/" target="_blank" rel="noopener noreferrer">catalog retrieved 2026-11-08</a>, region <code>gra</code></li>
 <li><span aria-hidden="true">·</span> <code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code> <a href="https://www.scaleway.com/en/pricing/" target="_blank" rel="noopener noreferrer">catalog retrieved 2026-11-01</a>, region <code>fr-par</code></li>
 </ul>
-<section class="part part-comparison">
-<h3>Comparison</h3>
-<h4>Resources</h4>
-<section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
-<table>
-<thead>
-<tr><th scope="col">ID</th><th scope="col">Category</th><th scope="col"><code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> fit</th><th scope="col"><code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> best offering</th><th scope="col"><code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> monthly estimate</th><th scope="col"><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code> fit</th><th scope="col"><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code> best offering</th><th scope="col"><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code> monthly estimate</th></tr>
-</thead>
-<tbody>
-<tr><td><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></td><td><code>storage.object</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Evil &#34;Target&#34; &amp; &lt;b&gt; Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code></td><td>€25.00</td><td class="fit fit-direct"><span>direct</span></td><td><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34; Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code></td><td>€25.00</td></tr>
-<tr><td><code>__shift2euModule</code></td><td><code>compute.vm</code></td><td class="fit fit-partial"><span>partial</span></td><td><code>Evil &#34;Target&#34; &amp; &lt;b&gt; Compute &#34;Tier&#34; &amp; &lt;i&gt;</code></td><td>€10.00</td><td class="fit fit-partial"><span>partial</span></td><td><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34; Compute &#34;Tier&#34; &amp; &lt;i&gt;</code></td><td>€10.00</td></tr>
-<tr><td><code>a&#34;b&#39;c&amp;d</code></td><td><code>compute.vm</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Evil &#34;Target&#34; &amp; &lt;b&gt; Compute &#34;Tier&#34; &amp; &lt;i&gt;</code></td><td>€10.00</td><td class="fit fit-direct"><span>direct</span></td><td><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34; Compute &#34;Tier&#34; &amp; &lt;i&gt;</code></td><td>€10.00</td></tr>
-<tr><td><code>onerror=alert(1) x=</code></td><td><code>unclassified</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>not estimated</td><td class="fit fit-none"><span>none</span></td><td></td><td>not estimated</td></tr>
-</tbody>
-</table>
-</section>
-<h4>Blockers on every target</h4>
-<ul>
-<li><code>onerror=alert(1) x=</code>
-<ul>
-<li><code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code>: not classified</li>
-<li><code>&lt;script&gt;Target&lt;/script&gt; &#34;Two&#34;</code>: not classified</li>
-</ul>
-</li>
-</ul>
-</section>
 <section class="part part-target">
 <h3><code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code></h3>
 <section class="part part-summary">
@@ -78,25 +52,25 @@
 <h5><code>orders&lt;script&gt;alert(&#39;orders&#39;)&lt;/script&gt;</code></h5>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
 <p><strong>€10.00</strong> <span>/ month</span></p>
-<p>1 of 1 priced · no source cost</p>
+<p>1 of 1 priced</p>
 </section>
 <section>
 <h5><code>shift2euAssess</code></h5>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 0<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 1<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 1<span class="visually-hidden"> none</span></span></p>
 <p><strong>€10.00</strong> <span>/ month</span></p>
-<p>1 of 2 priced · no source cost</p>
+<p>1 of 2 priced</p>
 </section>
 <section>
 <h5><code>ws &lt;script&gt;alert(&#39;workload&#39;)&lt;/script&gt;</code></h5>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
 <p><strong>€25.00</strong> <span>/ month</span></p>
-<p>1 of 1 priced · source cost €12.00</p>
+<p>1 of 1 priced</p>
 </section>
 </section>
 <section class="part part-cost">
 <h4>Cost estimate</h4>
 <p><strong class="total">€45.00</strong> <span>per month, 3 of 4 resources</span></p>
-<p>List prices in <code>gra</code> on 2026-11-08, excluding VAT and discounts. Source cost: €12.00 for 1 of 4.</p>
+<p>List prices in <code>gra</code> on 2026-11-08, excluding VAT and discounts.</p>
 </section>
 </section>
 <section class="part part-target">
@@ -145,25 +119,25 @@
 <h5><code>orders&lt;script&gt;alert(&#39;orders&#39;)&lt;/script&gt;</code></h5>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
 <p><strong>€10.00</strong> <span>/ month</span></p>
-<p>1 of 1 priced · no source cost</p>
+<p>1 of 1 priced</p>
 </section>
 <section>
 <h5><code>shift2euAssess</code></h5>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 0<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 1<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 1<span class="visually-hidden"> none</span></span></p>
 <p><strong>€10.00</strong> <span>/ month</span></p>
-<p>1 of 2 priced · no source cost</p>
+<p>1 of 2 priced</p>
 </section>
 <section>
 <h5><code>ws &lt;script&gt;alert(&#39;workload&#39;)&lt;/script&gt;</code></h5>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
 <p><strong>€25.00</strong> <span>/ month</span></p>
-<p>1 of 1 priced · source cost €12.00</p>
+<p>1 of 1 priced</p>
 </section>
 </section>
 <section class="part part-cost">
 <h4>Cost estimate</h4>
 <p><strong class="total">€45.00</strong> <span>per month, 3 of 4 resources</span></p>
-<p>List prices in <code>fr-par</code> on 2026-11-01, excluding VAT and discounts. Source cost: €12.00 for 1 of 4.</p>
+<p>List prices in <code>fr-par</code> on 2026-11-01, excluding VAT and discounts.</p>
 </section>
 </section>
 </section>

@@ -16,9 +16,8 @@ import (
 const dateLayout = "2006-01-02"
 
 // The heading levels of a report: the title, its sections, the sections inside
-// them (a comparison's own sections, a target's sections in a comparison, the
-// workloads of a single-target report) and the workloads of a target in a
-// comparison. The page holds the fragment under its own h1, so the title is an
+// them (a target's sections in a comparison, the workloads of a single-target
+// report) and the workloads of a target in a comparison. The page holds the fragment under its own h1, so the title is an
 // h2.
 const (
 	titleLevel   = 2
@@ -63,7 +62,9 @@ func (*Reporter) Report(ctx context.Context, w io.Writer, a assessment.Assessmen
 }
 
 // ReportComparison writes the HTML fragment of the comparison c and meta to w,
-// laid out as the package documentation describes.
+// laid out as the package documentation describes: the header naming every
+// target, then each target's own sections, and no combined block (issue
+// #373, item 05).
 //
 // The output depends on c and meta only. ReportComparison builds the whole
 // fragment before writing it to w in one call; a write error is returned,
@@ -88,11 +89,6 @@ func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment
 	var f fragment
 
 	writeComparisonHeader(&f, c.Targets, meta)
-	f.part(partComparison, func() {
-		f.heading(sectionLevel, text("Comparison"))
-		writeComparisonResources(&f, c.Targets)
-		writeSharedBlockers(&f, c)
-	})
 
 	for _, t := range c.Targets {
 		f.part(partTarget, func() {
@@ -426,78 +422,4 @@ func writeComparisonHeader(f *fragment, targets []assessment.TargetAssessment, m
 	}
 
 	f.markerlessList(items)
-}
-
-// writeComparisonResources writes one row per resource, in the first target's
-// verdict order: the ID, the category, and each target's fit and best
-// offering, without the tie note, and its monthly estimate when that target
-// has estimates. It names no region, as a single report's table names none
-// (issue #373, item 04), and it ranks no target. Each target's summary is
-// its own box in that target's section (item 10).
-func writeComparisonResources(f *fragment, targets []assessment.TargetAssessment) {
-	header := []rich{text("ID"), text("Category")}
-
-	for _, t := range targets {
-		name := code(t.Assessment.Target)
-		header = append(header, name.words(" fit"), name.words(" best offering"))
-
-		if hasEstimates(t.Assessment) {
-			header = append(header, name.words(" monthly estimate"))
-		}
-	}
-
-	rows := make([]row, 0, len(targets[0].Assessment.Verdicts))
-
-	for i, first := range targets[0].Assessment.Verdicts {
-		r := cells(code(first.Resource.ID), code(string(first.Resource.Category)))
-
-		for _, t := range targets {
-			v := t.Assessment.Verdicts[i]
-			r = append(r, fitCell(v.Fit))
-			r = append(r, cells(code(v.BestOffering))...)
-
-			if hasEstimates(t.Assessment) {
-				r = append(r, cells(renderEstimate(v.Estimate))...)
-			}
-		}
-
-		rows = append(rows, row{Cells: r})
-	}
-
-	f.heading(sectionLevel+1, text("Resources"))
-	f.table(tableResources, header, rows)
-}
-
-// writeSharedBlockers writes one list item per resource blocked on every
-// target, with a nested item per target giving that target's reasons, or
-// "None." when there is none. A target is named by its display name, never
-// its key.
-func writeSharedBlockers(f *fragment, c assessment.Comparison) {
-	f.heading(sectionLevel+1, text("Blockers on every target"))
-
-	if len(c.SharedBlockers) == 0 {
-		f.paragraph(text("None."))
-
-		return
-	}
-
-	// assessment.Comparison.Validate has checked that every key a shared
-	// blocker names is here.
-	names := make(map[string]string, len(c.Targets))
-	for _, t := range c.Targets {
-		names[t.Key] = t.Assessment.Target
-	}
-
-	items := make([]item, 0, len(c.SharedBlockers))
-
-	for _, blocker := range c.SharedBlockers {
-		children := make([]rich, 0, len(blocker.Targets))
-		for _, t := range blocker.Targets {
-			children = append(children, code(names[t.Key]).words(": ").then(renderReasons(t.Reasons)))
-		}
-
-		items = append(items, item{Text: code(blocker.ResourceID), Children: children})
-	}
-
-	f.list(items)
 }

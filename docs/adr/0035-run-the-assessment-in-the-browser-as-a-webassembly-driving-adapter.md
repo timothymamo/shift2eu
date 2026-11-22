@@ -283,3 +283,21 @@ the fragment, changes; the Markdown and JSON reports keep their layout and their
 
 Every element and attribute is still a constant of the package, and every value but the link's URL is
 element content. The goldens were regenerated with `-update`.
+
+## Amendment: no combined comparison and no source cost in the fragment (issue #373, 2026-11-22)
+
+The maintainer's third review of the redesign (PR #379) settled two more differences between the HTML
+fragment and the Markdown report. Only the fragment changes; the Markdown and JSON reports, and so the
+site's downloads, keep both.
+
+- **A comparison shows each target's own sections and nothing else.** The combined block above them (the
+  `part-comparison` section: its "Comparison" heading, the resources table with a fit, best offering and
+  estimate column per target, and the "Blockers on every target" list) is gone, and `part-comparison`
+  leaves the closed set of part classes (`partNames`). The title and the header line still name every
+  target, and each target's section holds its Summary boxes, Resources table, Required changes and
+  Blockers, Workloads and Cost estimate, one heading level lower. So no table has a column per target
+  any more, and the class table above no longer has a per-target fit cell of the comparison's.
+- **The fragment names the source's cost nowhere**: a workload box ends with "x of y priced", and the
+  Cost estimate's closing line ends with the list prices' region and date, what they exclude and the
+  storage the estimates leave out. Every amount the fragment shows is a target's list price, so it is
+  always in euros. This replaces the earlier amendment's "and the source's cost" in both places.

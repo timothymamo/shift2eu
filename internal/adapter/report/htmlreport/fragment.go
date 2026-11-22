@@ -218,20 +218,18 @@ const (
 	partBlockers
 	partWorkloads
 	partCost
-	partComparison
 	partTarget
 )
 
 // partNames are the class attribute values of the parts, a fixed table.
 var partNames = map[part]string{
-	partSummary:    "part part-summary",
-	partResources:  "part part-resources",
-	partChanges:    "part part-changes",
-	partBlockers:   "part part-blockers",
-	partWorkloads:  "part part-workloads",
-	partCost:       "part part-cost",
-	partComparison: "part part-comparison",
-	partTarget:     "part part-target",
+	partSummary:   "part part-summary",
+	partResources: "part part-resources",
+	partChanges:   "part part-changes",
+	partBlockers:  "part part-blockers",
+	partWorkloads: "part part-workloads",
+	partCost:      "part part-cost",
+	partTarget:    "part part-target",
 }
 
 // listKind is the kind of a list: one of a closed set of constants
