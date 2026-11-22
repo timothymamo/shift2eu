@@ -22,11 +22,21 @@
 //
 // Neither the author nor either commit reaches a script through a ${{ }} expression spliced into it; they
 // arrive through env:, so no value from the event can become a shell word.
+//
+// The check reads more of the event than the author. It reads the sender, because the App's contents write
+// lets it push a commit onto another author's pull request; the head branch, because the App pushes its
+// reports from security-audit/**; and the base branch, because an audit pull request into another branch
+// that holds code could take the green check there and be retargeted to main afterwards. A retarget is an
+// edited event, so the trigger's types: must hold opened, synchronize, reopened and edited, the activity
+// types under which the fields the check reads can change. It filters no branch and no path: branches:
+// would take a pull request into another branch off the trigger, and a required check that never reports
+// blocks the pull request it is required on for good.
 package lint_test
 
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,15 +69,38 @@ const (
 	auditPathsBaseExpr = "${{ github.event.pull_request.base.sha }}"
 	auditPathsHeadExpr = "${{ github.event.pull_request.head.sha }}"
 
+	// auditPathsBaseRefExpr, auditPathsHeadRefExpr and auditPathsSenderExpr are what tells an audit pull
+	// request from any other, and which branch one may land on: the base branch (which must be main), the
+	// head branch (the App's are under security-audit/), and the sender (the account that pushed the head
+	// commit, which the App can do on another author's pull request).
+	auditPathsBaseRefExpr = "${{ github.event.pull_request.base.ref }}"
+	auditPathsHeadRefExpr = "${{ github.event.pull_request.head.ref }}"
+	auditPathsSenderExpr  = "${{ github.event.sender.login }}"
+
 	// auditPathsPullRequestExprPrefix is what the env: of the step that fetches the pull request's commits
 	// reads: the pull request's own number or head commit, never the base branch's.
 	auditPathsPullRequestExprPrefix = "${{ github.event.pull_request."
 
 	// The variables the check reads, which the step running it sets in env:.
-	auditPathsAuthorEnv = "AUDIT_PATHS_AUTHOR"
-	auditPathsBaseEnv   = "AUDIT_PATHS_BASE"
-	auditPathsHeadEnv   = "AUDIT_PATHS_HEAD"
+	auditPathsAuthorEnv  = "AUDIT_PATHS_AUTHOR"
+	auditPathsSenderEnv  = "AUDIT_PATHS_SENDER"
+	auditPathsBaseEnv    = "AUDIT_PATHS_BASE"
+	auditPathsHeadEnv    = "AUDIT_PATHS_HEAD"
+	auditPathsBaseRefEnv = "AUDIT_PATHS_BASE_REF"
+	auditPathsHeadRefEnv = "AUDIT_PATHS_HEAD_REF"
 )
+
+// auditPathsActivityTypes are the pull request activity types the trigger must hold, each with the change
+// it reports: the ones under which a field the check reads can change.
+var auditPathsActivityTypes = []struct {
+	name string
+	why  string
+}{
+	{"opened", "a pull request the App just opened is judged before it can land"},
+	{"synchronize", "a push, the App's onto another author's pull request included, moves the head commit"},
+	{"reopened", "a pull request reopened may have been changed while it was closed"},
+	{"edited", "retargeting a pull request's base branch to main is an edited event, and the base branch is part of what the check decides"},
+}
 
 // auditPathsWorkflow is the parsed workflow the subtests read: its source, its content lines, its one job
 // and that job's steps.
@@ -126,11 +159,12 @@ func readAuditPathsWorkflow(t *testing.T) auditPathsWorkflow {
 }
 
 // TestAuditPathsWorkflowIsAClosedFence pins the shape of .github/workflows/audit-paths.yml: it is named
-// for the check, runs on every pull request and no other event through pull_request_target alone, reads
-// with contents: read alone, reports under the name the ruleset requires, pins every action by commit,
-// checks main out with no ref: and no credential, fetches the pull request's commits without ever checking
-// them out, splices no expression into a script, and hands the check its author and its two commits
-// through env:.
+// for the check, runs on every pull request of the activity types that move what the check reads and no
+// other event through pull_request_target alone, filters no branch or path, reads with contents: read
+// alone, reports under the name the ruleset requires, pins every action by commit, checks main out with no
+// ref: and no credential, fetches the pull request's commits without ever checking them out, splices no
+// expression into a script, and hands the check its author, its sender, its two branches and its two
+// commits through env:.
 func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 	t.Parallel()
 
@@ -187,17 +221,43 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 			t.Errorf("%s: line %d: pull_request_target: %s, want a block mapping or nothing", auditPathsWorkflowPath, trigger.Num, trigger.Value)
 		}
 
+		var types yamlread.Entry
+
+		sawTypes := false
+
 		for _, field := range auditPathsFields(t, trigger.Block, "on: pull_request_target:") {
 			switch field.Key {
-			case "paths", "paths-ignore", "branches-ignore":
+			case "paths", "paths-ignore", "branches-ignore", "branches":
 				// A required check that the filter leaves out never reports, and a pull request waiting
-				// for it is blocked for good.
-				t.Errorf("%s: line %d: pull_request_target: filters on %s:, want no filter: the check must report on every pull request into main", auditPathsWorkflowPath, field.Num, field.Key)
-			case "branches", "types":
-				// Narrowing the branches or the activity types keeps the check reporting on the pull
-				// requests that matter, and the ruleset decides which ones it is required on.
+				// for it is blocked for good. branches: filters on the base branch, which the check itself
+				// decides: a pull request into any branch but main that it never sees is one that could
+				// be retargeted to main after the check passed. The ruleset decides where the check is
+				// required, and where it is, it reports.
+				t.Errorf("%s: line %d: pull_request_target: filters on %s:, want no filter: the check must report on every pull request into any branch, or the ruleset that requires it blocks a pull request it never sees", auditPathsWorkflowPath, field.Num, field.Key)
+			case "types":
+				sawTypes, types = true, field
 			default:
-				t.Errorf("%s: line %d: pull_request_target: has %s:, want branches: or types: at most: no other filter may keep the check from reporting", auditPathsWorkflowPath, field.Num, field.Key)
+				t.Errorf("%s: line %d: pull_request_target: has %s:, want types: alone: no other filter may keep the check from reporting", auditPathsWorkflowPath, field.Num, field.Key)
+			}
+		}
+
+		wantTypes := make([]string, 0, len(auditPathsActivityTypes))
+		for _, activity := range auditPathsActivityTypes {
+			wantTypes = append(wantTypes, activity.name)
+		}
+
+		if !sawTypes {
+			t.Fatalf("%s: pull_request_target: has no types:, want a list holding %s: the check reads fields of the event that change under these activity types alone", auditPathsWorkflowPath, strings.Join(wantTypes, ", "))
+		}
+
+		got, err := yamlread.List(types)
+		if err != nil {
+			t.Fatalf("%s: read the trigger's types:: %v", auditPathsWorkflowPath, err)
+		}
+
+		for _, activity := range auditPathsActivityTypes {
+			if !slices.Contains(got, activity.name) {
+				t.Errorf("%s: line %d: pull_request_target: types %v do not hold %s: %s", auditPathsWorkflowPath, types.Num, got, activity.name, activity.why)
 			}
 		}
 	})
@@ -377,7 +437,7 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 		}
 	})
 
-	t.Run("the check's step takes the author and the two commits from env", func(t *testing.T) {
+	t.Run("the check's step takes the author, the sender, the branches and the commits from env", func(t *testing.T) {
 		t.Parallel()
 
 		step, ok := auditPathsRunStep(t, workflow)
@@ -387,7 +447,7 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 
 		env, ok := auditPathsEntry(t, step.Lines, "env")
 		if !ok {
-			t.Fatalf("%s: the step that runs %s has no env:, want %s, %s and %s", auditPathsWorkflowPath, auditPathsScript, auditPathsAuthorEnv, auditPathsBaseEnv, auditPathsHeadEnv)
+			t.Fatalf("%s: the step that runs %s has no env:, want %s, %s, %s, %s, %s and %s", auditPathsWorkflowPath, auditPathsScript, auditPathsAuthorEnv, auditPathsSenderEnv, auditPathsBaseEnv, auditPathsHeadEnv, auditPathsBaseRefEnv, auditPathsHeadRefEnv)
 		}
 
 		for _, want := range []struct {
@@ -401,6 +461,11 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 				"the check applies to the pull request's author alone, and on a report pull request that author is the App",
 			},
 			{
+				auditPathsSenderEnv,
+				auditPathsSenderExpr,
+				"the App can push a commit onto another author's pull request, where the author is no App at all, and the sender is who pushed",
+			},
+			{
 				auditPathsBaseEnv,
 				auditPathsBaseExpr,
 				"the branch the pull request is based on is the commit the check diffs from",
@@ -409,6 +474,16 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 				auditPathsHeadEnv,
 				auditPathsHeadExpr,
 				"the pull request's own head is the commit that would land, where github.sha is main's commit under pull_request_target",
+			},
+			{
+				auditPathsBaseRefEnv,
+				auditPathsBaseRefExpr,
+				"an audit pull request lands on main alone, and the base commit below is no branch name: a pull request into another branch that holds code would otherwise take the green check there and be retargeted to main",
+			},
+			{
+				auditPathsHeadRefEnv,
+				auditPathsHeadRefExpr,
+				"the App pushes its reports from security-audit/** branches, so the head branch says that a pull request another account opened is its own",
 			},
 		} {
 			value, ok := auditPathsEnvValue(env, want.name)

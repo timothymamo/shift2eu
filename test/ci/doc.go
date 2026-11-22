@@ -29,16 +29,28 @@
 // TestAuditPathsScriptFencesAuditPullRequests runs
 // .github/scripts/audit-paths.sh, the required path check of PRD #175
 // milestone 2, against git repositories the test builds in t.TempDir(): a base
-// commit and a head commit with the case's change. The cases pin that the
-// check passes for every author but shift2eu-audit[bot], exact match, and for
-// the App when every changed path is under docs/security/ and every entry there
-// is a regular, non-executable file; and that it fails, naming an offending
-// path, for a change outside docs/security/ - an addition, a modification, a
-// deletion, a rename (not detected, so the old path counts), a mode change, an
-// executable file or a symlink under docs/security/, and a name holding a
-// newline that a line-based diff would split. It fails closed, non-zero, when
-// the author is unset or empty and when BASE or HEAD is unset or names no
-// commit of the repository. Each case's git commands and the check run in an
+// commit and a head commit with the case's change. The cases pin that the fence
+// applies to an audit pull request - one authored by shift2eu-audit[bot], exact
+// match; one whose sender is that App, whose contents write lets it push a
+// commit onto another author's pull request; and one whose head branch is under
+// security-audit/, where the App pushes its reports - and that every other pull
+// request passes whatever it changes. An audit pull request passes when its base
+// branch is main and every changed path is under docs/security/, with no
+// component starting with a dot, and every entry there a regular,
+// non-executable file; and it fails, naming an offending path, for a change
+// outside docs/security/ - an addition, a modification, a deletion, a rename
+// (not detected, so the old path counts), a mode change, an executable file, a
+// symlink or a gitlink under docs/security/ - for a path under docs/security/
+// with a component starting with a dot, where a .gitattributes could set
+// export-ignore on the reports a release archive ships, and for a docs-only pull
+// request into any other base branch, which could be retargeted to main after
+// the check passed. No line of a run's output starts with ::, a workflow
+// command, whatever the case's file names hold - a newline in one, which a
+// line-based diff would split, included. It fails closed, non-zero, when the
+// author, the sender or the head branch is unset or empty, when the base branch
+// is unset or empty for an audit pull request, and when BASE or HEAD is unset or
+// empty, names no commit of the repository or is no full commit SHA - a branch
+// name or a short SHA included. Each case's git commands and the check run in an
 // environment the harness builds - HOME and TMPDIR in the case's temporary
 // directory, the system and global git configuration off, LANG and LC_ALL as C
 // - so no setting or credential of the developing machine's reaches a commit or

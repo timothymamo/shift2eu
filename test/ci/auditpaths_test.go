@@ -1,26 +1,44 @@
 // Pins the fence of PRD #175 milestone 2 around the audit App's report pull requests:
 // .github/scripts/audit-paths.sh.
 //
-// The check's contract, run with AUDIT_PATHS_AUTHOR, AUDIT_PATHS_BASE and AUDIT_PATHS_HEAD in the
-// environment and the current directory inside a git repository that holds both commits:
+// The check's contract, run with AUDIT_PATHS_AUTHOR, AUDIT_PATHS_SENDER, AUDIT_PATHS_BASE,
+// AUDIT_PATHS_HEAD, AUDIT_PATHS_BASE_REF and AUDIT_PATHS_HEAD_REF in the environment and the current
+// directory inside a git repository that holds both commits:
 //
 //   - It compares the tree of the merge base of BASE and HEAD with the tree of HEAD, renames not
 //     detected: a rename counts as the deletion of the old path and the addition of the new one. A branch
 //     main has moved past is therefore judged on what it lands, not on what main did meanwhile.
-//   - It passes, exit 0, for every author but shift2eu-audit[bot], whatever the change: the check exists
-//     for that one App's report pull requests and costs nothing elsewhere.
-//   - For shift2eu-audit[bot] it passes when every changed path is under docs/security/ and every added or
-//     modified entry there is a regular, non-executable file, git mode 100644: the App opens docs-only pull
-//     requests that add docs/security/audits/YYYY-MM-DD-<run_id>.md.
+//   - The fence applies to an audit pull request: one whose author is exactly shift2eu-audit[bot], one
+//     whose sender is exactly shift2eu-audit[bot] - the App's token holds contents write, so it can push a
+//     commit onto another author's pull request - and one whose head branch starts with security-audit/,
+//     the branches the App pushes its reports from.
+//   - An audit pull request passes, exit 0, when its base branch is exactly main and every changed path is
+//     under docs/security/ with no path component starting with a dot, and every added or modified entry
+//     there is a regular, non-executable file, git mode 100644: the App opens docs-only pull requests that
+//     add docs/security/audits/YYYY-MM-DD-<run_id>.md. A deletion under docs/security/ passes. A path
+//     component starting with a dot fails even though the entry is a regular, unexecutable file: a
+//     .gitattributes under docs/security/ could set export-ignore or export-subst on the reports that
+//     ship in the release archives.
+//   - An audit pull request into any other base branch fails, whatever it changes and wherever it changes
+//     it: the App could otherwise open a docs-only pull request into a branch that holds code, take the
+//     green check and retarget the base to main.
+//   - Every other pull request passes, whatever the change: the check exists for that one App's report
+//     pull requests and costs nothing elsewhere.
 //   - It fails, non-zero, otherwise, and its output names each offending path. A path holding a newline or
-//     another control character may be escaped however the check likes; what it may not do is pass.
-//   - It fails closed, non-zero, when the author is unset or empty, and when BASE or HEAD is unset, empty,
-//     not a full commit SHA (HEAD, a branch or a short SHA is not one, whatever it resolves to) or not a
-//     commit of the repository: a run that cannot tell who opened the pull request, or what it changes, is
-//     no pass.
+//     another control character may be escaped however the check likes; what it may not do is pass, and no
+//     line of the run's output starts with ::, a workflow command, whatever a path holds.
+//   - It fails closed, non-zero, when the author, the sender or the head branch is unset or empty - for any
+//     pull request, since the run cannot then tell whether the fence applies - when the base branch is
+//     unset or empty for an audit pull request, and when BASE or HEAD is unset, empty, not a full commit
+//     SHA (HEAD, a branch or a short SHA is not one, whatever it resolves to) or not a commit of the
+//     repository: a run that cannot tell who opened the pull request, or what it changes, is no pass.
 //
-// Each case builds its own repository below its t.TempDir(): git init, a base commit holding README.md,
-// internal/x.go and docs/security/README.md, then a head commit with the case's change. git runs in an
+// Each case builds its own repository below its t.TempDir(): git init on branch main, a base commit
+// holding README.md, internal/x.go and docs/security/README.md, then a head commit with the case's change.
+// The branch main is the fixture's own, so a case can hand the check the branch name main as a commit. A
+// case that sets none of the branch names gets main as the base branch, the App's report branch as the
+// head branch when the App authors the pull request and another branch when it does not, and the author
+// as the sender. git runs in an
 // environment this harness builds for the case alone - HOME below the case's temporary directory, the
 // system configuration off (GIT_CONFIG_NOSYSTEM), the global one empty (GIT_CONFIG_GLOBAL=/dev/null) and
 // an identity of the harness's own - so neither the developer's git configuration nor a hook it points at
@@ -49,10 +67,21 @@ const (
 	// auditPathsAuthor is the one author the check applies to: the audit App's login (PRD #175, Decision 1).
 	auditPathsAuthor = "shift2eu-audit[bot]"
 
-	// The three variables the workflow hands the check; it reads no other.
-	auditPathsAuthorEnv = "AUDIT_PATHS_AUTHOR"
-	auditPathsBaseEnv   = "AUDIT_PATHS_BASE"
-	auditPathsHeadEnv   = "AUDIT_PATHS_HEAD"
+	// The six variables the workflow hands the check; it reads no other.
+	auditPathsAuthorEnv  = "AUDIT_PATHS_AUTHOR"
+	auditPathsSenderEnv  = "AUDIT_PATHS_SENDER"
+	auditPathsBaseEnv    = "AUDIT_PATHS_BASE"
+	auditPathsHeadEnv    = "AUDIT_PATHS_HEAD"
+	auditPathsBaseRefEnv = "AUDIT_PATHS_BASE_REF"
+	auditPathsHeadRefEnv = "AUDIT_PATHS_HEAD_REF"
+
+	// auditPathsMainBranch is the fixture's branch, and the base branch a report pull request lands on.
+	// auditPathsReportBranch is a head branch the App pushes its reports from, and auditPathsFeatureBranch
+	// one it does not: a pull request from that one is no audit pull request unless its author or its
+	// sender says so.
+	auditPathsMainBranch    = "main"
+	auditPathsReportBranch  = "security-audit/2026-11-22-1"
+	auditPathsFeatureBranch = "feat/a-change"
 
 	// auditPathsMissingSHA is a commit SHA no case's repository holds, as a BASE or HEAD that names no
 	// commit of the repository is.
@@ -95,21 +124,51 @@ type auditPathsCase struct {
 	// environment: both must fail closed.
 	authorEmpty bool
 	authorUnset bool
+	// sender is AUDIT_PATHS_SENDER, the login of the account that pushed the head commit: on an opened pull
+	// request it is the author, and the App's contents write lets it push onto another author's pull
+	// request. Empty means the author in force, and the App when the case leaves the author out, so that
+	// such a case pins the author alone.
+	sender string
+	// senderEmpty sets AUDIT_PATHS_SENDER to the empty string, and senderUnset leaves it out of the
+	// environment: both must fail closed, whatever the author.
+	senderEmpty bool
+	senderUnset bool
+	// baseBranch and headBranch are AUDIT_PATHS_BASE_REF and AUDIT_PATHS_HEAD_REF, the branch the pull
+	// request is based on and the branch its commits are on. Empty means main, and the App's report branch
+	// for a pull request the App authors, another branch otherwise.
+	baseBranch string
+	headBranch string
+	// baseBranchEmpty and headBranchEmpty set AUDIT_PATHS_BASE_REF or AUDIT_PATHS_HEAD_REF to the empty
+	// string, and baseBranchUnset and headBranchUnset leave it out of the environment: each must fail
+	// closed. A base branch is pinned for an audit pull request, whose fence it decides: a pull request the
+	// fence does not apply to passes whatever its base branch.
+	baseBranchEmpty bool
+	headBranchEmpty bool
+	baseBranchUnset bool
+	headBranchUnset bool
 	// unsetBase and unsetHead leave AUDIT_PATHS_BASE or AUDIT_PATHS_HEAD out of the environment, and
 	// missingBase and missingHead set one to a SHA the repository does not hold: each must fail closed.
 	unsetBase   bool
 	unsetHead   bool
 	missingBase bool
 	missingHead bool
+	// baseAbbreviated and headAbbreviated hand AUDIT_PATHS_BASE or AUDIT_PATHS_HEAD the first twelve
+	// characters of the commit, the short SHA git resolves: the check must fail closed rather than diff
+	// what it names.
+	baseAbbreviated bool
+	headAbbreviated bool
 	// baseLiteral and headLiteral hand AUDIT_PATHS_BASE or AUDIT_PATHS_HEAD a value that is not a full
-	// commit SHA, such as the ref name HEAD: whatever it resolves to, the check must fail closed rather
-	// than diff it.
+	// commit SHA, such as the ref name HEAD or the fixture's branch name: whatever it resolves to, the
+	// check must fail closed rather than diff it.
 	baseLiteral string
 	headLiteral string
 	// baseRef names a ref the case's change creates, whose commit is handed to the run as AUDIT_PATHS_BASE
 	// instead of the base commit: an audit pull request whose branch main has moved past since, so BASE is
 	// no ancestor of HEAD and the two commits' merge base is what the check judges from.
 	baseRef string
+	// changeCommits says the change commits the head commit itself, for the cases git add cannot stage: a
+	// gitlink names a commit of another repository, and no tree in the working directory holds it.
+	changeCommits bool
 	// wantPass says the run must exit 0; false says it must exit non-zero.
 	wantPass bool
 	// wantOutput holds substrings the run's output must contain: an offending path, for a failing run.
@@ -190,9 +249,44 @@ func auditPathsCases() []auditPathsCase {
 			wantPass: true,
 		},
 		{
+			// The App's token holds contents write, so it can push a commit onto another author's pull
+			// request: the sender decides that the fence applies as much as the author does.
+			name:       "octocat's pull request whose sender is the audit App changing the README",
+			author:     "octocat",
+			sender:     auditPathsAuthor,
+			change:     add("README.md", "# A changed README.\n"),
+			wantOutput: []string{"README.md"},
+		},
+		{
+			// The App pushes its reports from security-audit/** branches: a pull request from such a branch
+			// is an audit pull request even when another account opened it.
+			name:       "octocat's pull request from a branch under security-audit changing the README",
+			author:     "octocat",
+			headBranch: auditPathsReportBranch,
+			change:     add("README.md", "# A changed README.\n"),
+			wantOutput: []string{"README.md"},
+		},
+		{
+			// The fence applies and the change keeps to it: the App's own report pull requests look like
+			// this one, whether the App opened it or only pushed to it.
+			name:       "octocat's pull request from a branch under security-audit adding a report",
+			author:     "octocat",
+			headBranch: auditPathsReportBranch,
+			change:     add(report, "# The report\n"),
+			wantPass:   true,
+		},
+		{
 			name:     "the audit App adding a report",
 			change:   add(report, "# The report\n"),
 			wantPass: true,
+		},
+		{
+			// The App could open a docs-only pull request into a security-audit branch that holds code, take
+			// the green check and retarget the base to main: an audit pull request into any other base branch
+			// is no pass, however little it changes.
+			name:       "the audit App adding a report to a pull request into another branch",
+			baseBranch: "security-audit/x",
+			change:     add(report, "# The report\n"),
 		},
 		{
 			name:     "the audit App modifying docs/security/README.md",
@@ -241,6 +335,103 @@ func auditPathsCases() []auditPathsCase {
 			name:       "the audit App adding docs/security.md, a file and not the directory",
 			change:     add("docs/security.md", "# A file beside the directory\n"),
 			wantOutput: []string{"docs/security.md"},
+		},
+		{
+			// A .gitattributes under docs/security/ could set export-ignore or export-subst on the reports
+			// that ship in the release archives, which is no change a report pull request makes.
+			name:       "the audit App adding docs/security/.gitattributes",
+			change:     add("docs/security/.gitattributes", "audits/*.md export-ignore\n"),
+			wantOutput: []string{"docs/security/.gitattributes"},
+		},
+		{
+			// Any component of a path, not the first one alone: a dot file inside docs/security/audits/
+			// hides a report from the pages that list the directory.
+			name:       "the audit App adding a dot file under docs/security/audits",
+			change:     add("docs/security/audits/.hidden.md", "# A hidden report\n"),
+			wantOutput: []string{"docs/security/audits/.hidden.md"},
+		},
+		{
+			// A deletion needs no mode to check: the App prunes a report main no longer carries.
+			name: "the audit App deleting a file under docs/security",
+			change: func(t *testing.T, repo string, _ []string) {
+				t.Helper()
+
+				if err := os.Remove(filepath.Join(repo, "docs/security/README.md")); err != nil {
+					t.Fatalf("remove docs/security/README.md: %v", err)
+				}
+			},
+			wantPass: true,
+		},
+		{
+			// A gitlink, mode 160000, is a submodule: a commit of another repository that a release archive
+			// would pin and a later build could change. git add cannot stage one, since no tree in the
+			// working directory holds it, so the case writes the index entry and commits it itself.
+			name: "the audit App adding a gitlink under docs/security",
+			change: func(t *testing.T, repo string, env []string) {
+				t.Helper()
+
+				sha := auditPathsGit(t, env, repo, "rev-parse", "HEAD")
+				auditPathsGit(t, env, repo, "update-index", "--add", "--cacheinfo", "160000,"+sha+",docs/security/sub")
+				auditPathsGit(t, env, repo, "commit", "--quiet", "--message", "the head commit")
+			},
+			changeCommits: true,
+			wantOutput:    []string{"docs/security/sub"},
+		},
+		{
+			// A mode change is a modification of the entry, not an addition: one chmod of a report is
+			// enough to make the pull request no report pull request.
+			name: "the audit App making docs/security/README.md executable",
+			change: func(t *testing.T, repo string, _ []string) {
+				t.Helper()
+
+				//nolint:gosec // G302: the case pins a mode change, so the executable bit is its point
+				if err := os.Chmod(filepath.Join(repo, "docs/security/README.md"), 0o755); err != nil {
+					t.Fatalf("chmod docs/security/README.md: %v", err)
+				}
+			},
+			wantOutput: []string{"docs/security/README.md"},
+		},
+		{
+			// git reports a regular file replaced by a symlink at the same path as a type change, T, whose
+			// new mode is 120000: the entry is a symlink whatever the old one was.
+			name: "the audit App replacing a file under docs/security with a symlink",
+			change: func(t *testing.T, repo string, _ []string) {
+				t.Helper()
+
+				link := filepath.Join(repo, "docs/security/README.md")
+				if err := os.Remove(link); err != nil {
+					t.Fatalf("remove docs/security/README.md: %v", err)
+				}
+
+				if err := os.Symlink("../../README.md", link); err != nil {
+					t.Fatalf("symlink docs/security/README.md: %v", err)
+				}
+			},
+			wantOutput: []string{"docs/security/README.md"},
+		},
+		{
+			// Renames are not detected either: this is a deletion of docs/security/README.md and an
+			// addition of docs/security/README2.md, both inside the fence, and a deletion there passes.
+			name: "the audit App renaming a file inside docs/security",
+			change: func(t *testing.T, repo string, env []string) {
+				t.Helper()
+
+				auditPathsGit(t, env, repo, "mv", "docs/security/README.md", "docs/security/README2.md")
+			},
+			wantPass: true,
+		},
+		{
+			// Every commit of the pull request counts, not its last one alone: the report the head commit
+			// adds no more undoes the change the one before it made.
+			name: "the audit App changing a Go file and then adding a report in a second commit",
+			change: func(t *testing.T, repo string, env []string) {
+				t.Helper()
+
+				auditPathsWrite(t, repo, "internal/x.go", "package internal\n\n// A change the report does not undo.\n")
+				auditPathsGit(t, env, repo, "commit", "--quiet", "--all", "--message", "a change outside the fence")
+				auditPathsWrite(t, repo, report, "# The report\n")
+			},
+			wantOutput: []string{"internal/x.go"},
 		},
 		{
 			// Renames are not detected, so this is a deletion of internal/x.go and an addition beside
@@ -295,9 +486,14 @@ func auditPathsCases() []auditPathsCase {
 		{
 			// A newline in a name is how a line-based diff hides a path: the second line of this one
 			// reads as a report under docs/security/. The name is not pinned - the check may escape it as
-			// it likes - but the run may not pass it.
-			name:   "the audit App adding a file whose name holds a newline",
-			change: add("evil\ndocs/security/a.md", "# A report\n"),
+			// it likes - but the run may not pass it, and no escaped line may start a workflow command.
+			name: "the audit App adding files whose names hold a newline",
+			change: func(t *testing.T, repo string, _ []string) {
+				t.Helper()
+
+				auditPathsWrite(t, repo, "evil\ndocs/security/a.md", "# A report\n")
+				auditPathsWrite(t, repo, "docs/x\n::error::x", "# A file\n")
+			},
 		},
 		{
 			name:     "the audit App adding a file whose name holds a space",
@@ -311,6 +507,57 @@ func auditPathsCases() []auditPathsCase {
 		{
 			name:        "an empty author",
 			authorEmpty: true,
+		},
+		{
+			// The sender decides whether the fence applies: an audit pull request whose sender the run
+			// cannot read is no pass, and neither is another author's pull request, which the App may have
+			// pushed to.
+			name:        "no sender for an audit pull request",
+			senderUnset: true,
+		},
+		{
+			name:        "an empty sender for an audit pull request",
+			senderEmpty: true,
+		},
+		{
+			name:        "no sender for octocat's pull request",
+			author:      "octocat",
+			senderUnset: true,
+		},
+		{
+			name:        "an empty sender for octocat's pull request",
+			author:      "octocat",
+			senderEmpty: true,
+		},
+		{
+			// A head branch under security-audit/ is the App's, so a run that cannot read the head branch
+			// cannot tell whether the fence applies either.
+			name:            "no head branch for an audit pull request",
+			headBranchUnset: true,
+		},
+		{
+			name:            "an empty head branch for an audit pull request",
+			headBranchEmpty: true,
+		},
+		{
+			name:            "no head branch for octocat's pull request",
+			author:          "octocat",
+			headBranchUnset: true,
+		},
+		{
+			name:            "an empty head branch for octocat's pull request",
+			author:          "octocat",
+			headBranchEmpty: true,
+		},
+		{
+			// An audit pull request lands on main alone, so its base branch is part of the fence. A pull
+			// request the fence does not apply to passes whatever its base branch, and no case pins that.
+			name:            "no base branch for an audit pull request",
+			baseBranchUnset: true,
+		},
+		{
+			name:            "an empty base branch for an audit pull request",
+			baseBranchEmpty: true,
 		},
 		{
 			name:      "no base commit",
@@ -339,6 +586,26 @@ func auditPathsCases() []auditPathsCase {
 			name:        "a head commit given as the ref name HEAD",
 			headLiteral: "HEAD",
 		},
+		{
+			// A short SHA resolves to the commit as surely as the full one does, and it is still no full
+			// commit SHA: what git resolves it to may be another commit tomorrow.
+			name:            "a base commit given as an abbreviated SHA",
+			baseAbbreviated: true,
+		},
+		{
+			name:            "a head commit given as an abbreviated SHA",
+			headAbbreviated: true,
+		},
+		{
+			// main is the fixture's branch, so this value names a commit of the repository: a branch is no
+			// full commit SHA all the same, and it moves.
+			name:        "a base commit given as the branch name main",
+			baseLiteral: "main",
+		},
+		{
+			name:        "a head commit given as the branch name main",
+			headLiteral: "main",
+		},
 	}
 }
 
@@ -363,7 +630,7 @@ func runAuditPathsCase(t *testing.T, tc auditPathsCase) {
 
 	env := auditPathsEnv(t, dirs, nil)
 
-	auditPathsGit(t, env, repo, "init", "--quiet")
+	auditPathsGit(t, env, repo, "init", "--quiet", "--initial-branch="+auditPathsMainBranch)
 
 	for path, content := range auditPathsBaseFiles {
 		auditPathsWrite(t, repo, path, content)
@@ -378,8 +645,12 @@ func runAuditPathsCase(t *testing.T, tc auditPathsCase) {
 		tc.change(t, repo, env)
 	}
 
-	auditPathsGit(t, env, repo, "add", "--all")
-	auditPathsGit(t, env, repo, "commit", "--quiet", "--allow-empty", "--message", "the head commit")
+	// A case whose change commits the head commit itself, such as the gitlink's, leaves the commit to its
+	// own change: git add would stage no tree for it.
+	if !tc.changeCommits {
+		auditPathsGit(t, env, repo, "add", "--all")
+		auditPathsGit(t, env, repo, "commit", "--quiet", "--allow-empty", "--message", "the head commit")
+	}
 
 	headSHA := auditPathsGit(t, env, repo, "rev-parse", "HEAD")
 
@@ -388,24 +659,60 @@ func runAuditPathsCase(t *testing.T, tc auditPathsCase) {
 		baseSHA = auditPathsGit(t, env, repo, "rev-parse", tc.baseRef)
 	}
 
-	variables := map[string]string{}
-
-	switch {
-	case tc.authorUnset:
-	case tc.authorEmpty:
-		variables[auditPathsAuthorEnv] = ""
-	case tc.author != "":
-		variables[auditPathsAuthorEnv] = tc.author
-	default:
-		variables[auditPathsAuthorEnv] = auditPathsAuthor
+	// The author in force: the case's own, or the App, which most cases audit.
+	author := auditPathsAuthor
+	if tc.author != "" {
+		author = tc.author
 	}
 
-	// setSHA hands the run one commit, or a value that is no full SHA, or leaves the variable out, or
-	// names a SHA no repository holds.
-	setSHA := func(name, sha, literal string, unset, missing bool) {
+	// The sender is the account that pushed the head commit, which on an opened pull request is its
+	// author. A case that leaves the author out keeps the App as the sender, so it pins that one variable.
+	sender := tc.sender
+	if sender == "" {
+		sender = author
+	}
+
+	// The App pushes its reports from a security-audit/** branch; a pull request from any other branch is
+	// no audit pull request unless its author or its sender says so.
+	headBranch := tc.headBranch
+	if headBranch == "" {
+		headBranch = auditPathsFeatureBranch
+		if author == auditPathsAuthor {
+			headBranch = auditPathsReportBranch
+		}
+	}
+
+	baseBranch := tc.baseBranch
+	if baseBranch == "" {
+		baseBranch = auditPathsMainBranch
+	}
+
+	variables := map[string]string{}
+
+	// set hands the run one variable: its value, the empty string, or nothing at all.
+	set := func(name, value string, empty, unset bool) {
+		switch {
+		case unset:
+		case empty:
+			variables[name] = ""
+		default:
+			variables[name] = value
+		}
+	}
+
+	set(auditPathsAuthorEnv, author, tc.authorEmpty, tc.authorUnset)
+	set(auditPathsSenderEnv, sender, tc.senderEmpty, tc.senderUnset)
+	set(auditPathsBaseRefEnv, baseBranch, tc.baseBranchEmpty, tc.baseBranchUnset)
+	set(auditPathsHeadRefEnv, headBranch, tc.headBranchEmpty, tc.headBranchUnset)
+
+	// setSHA hands the run one commit, or a short SHA or a value that is no full SHA, or leaves the
+	// variable out, or names a SHA no repository holds.
+	setSHA := func(name, sha, literal string, abbreviated, unset, missing bool) {
 		switch {
 		case literal != "":
 			variables[name] = literal
+		case abbreviated:
+			variables[name] = sha[:12]
 		case unset:
 		case missing:
 			variables[name] = auditPathsMissingSHA
@@ -414,8 +721,8 @@ func runAuditPathsCase(t *testing.T, tc auditPathsCase) {
 		}
 	}
 
-	setSHA(auditPathsBaseEnv, baseSHA, tc.baseLiteral, tc.unsetBase, tc.missingBase)
-	setSHA(auditPathsHeadEnv, headSHA, tc.headLiteral, tc.unsetHead, tc.missingHead)
+	setSHA(auditPathsBaseEnv, baseSHA, tc.baseLiteral, tc.baseAbbreviated, tc.unsetBase, tc.missingBase)
+	setSHA(auditPathsHeadEnv, headSHA, tc.headLiteral, tc.headAbbreviated, tc.unsetHead, tc.missingHead)
 
 	output, exit := auditPathsRun(t, auditPathsEnv(t, dirs, variables), repo)
 
@@ -430,6 +737,14 @@ func runAuditPathsCase(t *testing.T, tc auditPathsCase) {
 	for _, want := range tc.wantOutput {
 		if !strings.Contains(output, want) {
 			t.Errorf("output does not name %q, a path the run changes:\n%s", want, output)
+		}
+	}
+
+	// A line of a script's output that starts with :: is a workflow command, and a path comes from the
+	// pull request's tree: no case's run may let one start a line, whatever the case's names hold.
+	for i, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "::") {
+			t.Errorf("output line %d is %q, which starts with ::, a workflow command: every line the check prints starts with the check's own text", i+1, line)
 		}
 	}
 }
