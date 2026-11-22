@@ -961,22 +961,22 @@ button.secondary:disabled {
 /* Summary: one tile per fit and one for the monthly estimate (issue #373,
    item 10-2): the badge, the count as a big numeral in the fit's colour,
    and what it counts. */
-/* The boxes share the row equally and fill the page's width (round 2, item
-   03-1); on a narrow screen they wrap, two or one to a row. In a
-   comparison the heading is an h4 (item 10). */
+/* The boxes are equal grid tracks that fill the page's width (round 2, item
+   03-1); on a narrow screen they wrap, two or one to a row, and a box on a
+   wrapped row keeps its track's width. min() keeps a track no wider than
+   the page on a phone. In a comparison the heading is an h4 (item 10). */
 #report .part-summary {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
   gap: 1rem;
 }
 
 #report .part-summary > :is(h3, h4) {
-  flex: 1 0 100%;
+  grid-column: 1 / -1;
   margin: 0;
 }
 
 #report .part-summary > p {
-  flex: 1 1 9rem;
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -1110,21 +1110,20 @@ button.secondary:disabled {
 
 /* Workloads: one small card per workload, its fit badges and its monthly
    estimate (issue #373, item 13). */
-/* The boxes share the row equally and fill the page's width (round 2, item
-   05). */
+/* The boxes are equal grid tracks that fill the page's width (round 2, item
+   05); a box on a wrapped row keeps its track's width. */
 #report .part-workloads {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
   gap: 1rem;
 }
 
 #report .part-workloads > :is(h3, h4) {
-  flex: 1 0 100%;
+  grid-column: 1 / -1;
   margin: 0;
 }
 
 #report .part-workloads > section {
-  flex: 1 1 14rem;
   min-width: 0;
   padding: 1rem;
   color: var(--ink);

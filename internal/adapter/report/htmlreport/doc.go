@@ -24,7 +24,8 @@
 //     Required changes and Blockers, both in one box; Workloads, one box per
 //     workload (its h4 name, a bubble per fit showing its count, whose fit a
 //     screen reader reads, its estimate and the source's cost, each amount
-//     with its currency's sign, never its code); and Cost estimate, the total
+//     with its currency's sign, or its code for a currency the report has
+//     no sign for); and Cost estimate, the total
 //     and one closing line;
 //   - for a comparison, the title naming every target, the header line with
 //     one catalog link per target, an h3 Comparison section holding the h4
@@ -53,8 +54,9 @@
 // readers; a workload bubble's fit word sits in a span of "visually-hidden",
 // the site stylesheet's class for words only a screen reader reads; the Cost
 // estimate's total has "total"; and the box every table sits in, which
-// scrolls sideways on its own, has "table-scroll". The classes are fixed tables keyed by unexported
-// enums, never built from a value, and render refuses a key outside them.
+// scrolls sideways on its own, has "table-scroll". The classes are fixed
+// tables keyed by unexported enums, never built from a value, and render
+// refuses a key outside them.
 //
 // # List role
 //
@@ -84,9 +86,9 @@
 // exception is the catalog's link (issue #373): the snapshot's source URL is
 // written into its href, only when it is an https URL (the words alone
 // otherwise), and escaped by the same escaper, which turns both quotes into
-// references, so it never ends the attribute. Before that, invalid UTF-8 and control
-// characters become U+FFFD, and tabs and line endings spaces, so a value the
-// domain would refuse still reaches the page as valid text.
+// references, so it never ends the attribute. Before that, invalid UTF-8
+// and control characters become U+FFFD, and tabs and line endings spaces,
+// so a value the domain would refuse still reaches the page as valid text.
 //
 // The package does not use html/template: its reflection keeps every
 // exported method of the program in the site's module, which grows by a third

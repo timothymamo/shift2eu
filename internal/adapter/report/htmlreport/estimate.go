@@ -97,8 +97,9 @@ func renderPlan(e *estimate.Estimate) rich {
 // renderEstimate renders the Monthly estimate cell of an estimate: its amount
 // alone, or "not estimated" alone (issue #373, item 04). The fixed fee, what
 // it assumed and the storage it leaves out, and why a resource is not
-// estimated, are the Markdown and JSON reports' detail, the site's downloads;
-// the Cost estimate's closing line names the reasons and the storage left out.
+// estimated, are the Markdown and JSON reports' detail, the site's downloads.
+// The Cost estimate's closing line names the storage left out, and the
+// reasons only when nothing is estimated.
 func renderEstimate(e *estimate.Estimate) rich {
 	switch {
 	case e == nil:
