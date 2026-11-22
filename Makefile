@@ -584,12 +584,14 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # watchdog USR1, whatever the rm returned, so a healthy removal costs no extra second. A watchdog that fired
 # exits 3, and only then does the trap print the one line naming the container and the command that removes it by
 # hand. Every background process writes to /dev/null, so none holds make's output open, and the run's own exit
-# status stays. Residual windows, per pid signalled: the rm, when it returns at the very instant the deadline
-# passes, may be reaped by the trap's wait and its pid reused before the watchdog's SIGKILL lands; the sleep, when
-# a USR1 lands in the instant between the sleep's exit (bash reaps it at once) and the watchdog's trap "" USR1,
-# gets a SIGKILL on a reaped pid; the watchdog itself has none, as it stays the trap's unreaped child until the
-# trap's wait (docs/adr/0036, issue #449). When DOCKER is a wrapper (sudo docker, a script), the kill ends only
-# the wrapper, and a child of its own may outlive it.
+# status stays. Residual windows, one an instant wide for each of the three pids signalled: the rm, when it
+# returns at the very instant the deadline passes, may be reaped by the trap's wait and its pid reused before the
+# watchdog's SIGKILL lands; the sleep, when a USR1 lands in the instant between the sleep's exit (bash reaps it at
+# once) and the watchdog's trap "" USR1, gets a SIGKILL on a reaped pid; the watchdog, when it exits (after its
+# SIGKILL of the rm, or otherwise) in the instant before the trap's kill -s USR1, may already be reaped, as dash
+# and bash reap an exited background child before any wait, and its pid reused, so that USR1 lands elsewhere.
+# POSIX sh cannot close these windows; they are accepted as negligible (docs/adr/0036, issue #449). When DOCKER
+# is a wrapper (sudo docker, a script), the kill ends only the wrapper, and a child of its own may outlive it.
 TEST_BROWSER_RM_DEADLINE ?= 30
 .PHONY: test-browser
 test-browser: export TEST_BROWSER_RM_DEADLINE := $(value TEST_BROWSER_RM_DEADLINE)

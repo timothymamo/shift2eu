@@ -291,13 +291,15 @@ own child, and then always sends the watchdog USR1, whatever status the `rm` gav
 line only when the watchdog exited 3. A healthy removal so costs no extra second, and every background
 process writes to `/dev/null`, so none holds make's output open.
 
-Windows are left for two of the three pids the trap signals. An `rm` that returns at the very instant the
-deadline passes can be reaped by the trap's `wait`, and its pid reused, before the watchdog's SIGKILL
-lands. A USR1 that lands between the sleep's exit (bash reaps it at once) and the watchdog's
-`trap "" USR1` sends SIGKILL to the sleep's reaped pid. The watchdog has no window: it stays the trap's
-unreaped child until the trap's `wait`. A shell offers no call that kills a child only while it is
-unreaped, so POSIX sh cannot close these windows; they are accepted as negligible. When `DOCKER` is a wrapper (`sudo docker`, a script), the kill ends only the
-wrapper, and a child of its own may outlive it.
+A window an instant wide is left for each of the three pids the trap signals. An `rm` that returns at
+the very instant the deadline passes can be reaped by the trap's `wait`, and its pid reused, before the
+watchdog's SIGKILL lands. A USR1 that lands between the sleep's exit (bash reaps it at once) and the
+watchdog's `trap "" USR1` sends SIGKILL to the sleep's reaped pid. A watchdog that exits (after its
+SIGKILL of the `rm`, or otherwise) in the instant before the trap's `kill -s USR1` may already be
+reaped, since dash and bash reap an exited background child before any `wait`, and its pid reused, so
+that USR1 lands elsewhere. A shell offers no call that kills a child only while it is unreaped, so
+POSIX sh cannot close these windows; they are accepted as negligible. When `DOCKER` is a wrapper
+(`sudo docker`, a script), the kill ends only the wrapper, and a child of its own may outlive it.
 
 A port the kernel picks is still a listening port, which a local process can find and attach to. It is
 open only while a run lasts and is no longer a fixed, well-known one. That residual risk is accepted.
