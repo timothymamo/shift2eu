@@ -1167,8 +1167,6 @@ func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
 // claudeCodePinPinNamingFiles are the files of .github that may hold a string
 // that names the Claude Code pin (issue #452):
 //
-//   - .github/workflows/ai-review.yml, the one place that installs the CLI, so
-//     the one place that pins its version and its integrity.
 //   - .github/claude-code.yaml, the one pin file, where the version under its #
 //     renovate: comment and the integrity beside it live (ADR 0040's
 //     milestone-2 amendment, issue #277).
@@ -1203,7 +1201,7 @@ var claudeCodePinPinNamingStrings = []string{
 // at .github/ itself (CODEOWNERS, renovate.json5) runs no install.
 var claudeCodePinSearchedDirs = []string{".github/workflows", ".github/scripts", ".github/actions"}
 
-// TestClaudeCodePinLivesOnlyInAIReview pins that the Claude Code CLI is
+// TestClaudeCodePinLivesOnlyInThePinFile pins that the Claude Code CLI is
 // installed from one pin, .github/claude-code.yaml: no workflow, script or
 // action of .github mentions CLAUDE_CODE_INTEGRITY or install-claude-code.sh but
 // the reviewer's workflow, the installer itself, the pin file and the check's
@@ -1211,7 +1209,7 @@ var claudeCodePinSearchedDirs = []string{".github/workflows", ".github/scripts",
 // file alone, so a second install with a pin of its own would be checked by
 // nothing, and would run whatever its pin says (issue #452, ADR 0040's
 // milestone-2 amendment, issue #277).
-func TestClaudeCodePinLivesOnlyInAIReview(t *testing.T) {
+func TestClaudeCodePinLivesOnlyInThePinFile(t *testing.T) {
 	t.Parallel()
 
 	root := moduleRoot(t)

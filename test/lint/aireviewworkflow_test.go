@@ -24,19 +24,21 @@ const aiReviewWorkflowPath = ".github/workflows/ai-review.yml"
 // expression.
 var aiReviewPinnedAction = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[0-9a-f]{40}$`)
 
-// aiReviewIntegrity matches the npm integrity the install step checks the
-// download against: sha512-<base64>, the dist.integrity npm publishes for a
-// tarball (ADR 0033).
-var aiReviewIntegrity = regexp.MustCompile(`^sha512-[A-Za-z0-9+/]{20,}={0,2}$`)
-
-// aiReviewExactVersion matches a version pin that names one release: X.Y.Z, with
-// no range and no latest (CLAUDE.md rule 7).
-var aiReviewExactVersion = regexp.MustCompile(`^\d+\.\d+\.\d+$`)
-
 // aiReviewInstallScript is the script the install step calls with the directory
 // the Claude Code CLI is extracted into, its platform package and its integrity
 // (ADR 0033).
 const aiReviewInstallScript = ".github/scripts/install-claude-code.sh"
+
+// aiReviewInstallWords are the two arguments the install step passes to the
+// script after the directory, exactly: the CLI's linux-x64 platform package at
+// the version the pin file holds, and the integrity it holds beside it. A check
+// that read "any platform" or "any word holding a $" would let another
+// platform, or a literal, reach the installer (issue #276, issue #277, round F
+// finding 6).
+var aiReviewInstallWords = []string{
+	"@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_PIN_VERSION}",
+	"${CLAUDE_CODE_PIN_INTEGRITY}",
+}
 
 // aiReviewShellWord matches one shell word of a run: script's line: a
 // double-quoted string, which the workflow runs every path in so a path never
@@ -433,8 +435,11 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 			}
 		}
 
-		// The step that installs the CLI, or one before it, reads that file:
-		// the version and the integrity reach the installer from it.
+		// The step that installs the CLI, or one before it in the install step's
+		// own job, reads that file: the version and the integrity reach the
+		// installer from it. The workflow has exactly one job (pinned above), so
+		// the steps of this slice are the install step's own job's (issue #277,
+		// round F finding 7).
 		readsPin := false
 
 		for _, step := range workflow.steps[:index+1] {
@@ -455,24 +460,13 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		// The install step passes the linux-x64 platform package at the
 		// version, and the integrity, both as values it was given: a literal
 		// version or digest in the script would be a second pin (CLAUDE.md
-		// rule 7). The pin check (ci/claudecodepin, issue #276) holds that
+		// rule 7). The two words are pinned exactly, so no other platform and no
+		// literal ever reaches the installer (issue #276, issue #277, round F
+		// finding 6). The pin check (ci/claudecodepin, issue #276) holds that
 		// package's version and that integrity to the npm registry, so the
 		// words passed here are the download the reviewer runs.
-		args := aiReviewInstallArgs(t, run)
-		if len(args) != 2 {
-			t.Fatalf("%s: line %d: the install step passes %v to %s, want the platform package at the pinned version and the pinned integrity (issue #276)", aiReviewWorkflowPath, run.Num, args, aiReviewInstallScript)
-		}
-
-		if !strings.HasPrefix(args[0], "@anthropic-ai/claude-code-") || !strings.Contains(args[0], "@$") {
-			t.Errorf("%s: line %d: the install step passes %q as the platform package, want @anthropic-ai/claude-code-<platform>@<the version %s holds>: the pin check holds that package's version to the registry, so it checks the download the reviewer runs (issue #276)", aiReviewWorkflowPath, run.Num, args[0], claudeCodePinFile)
-		}
-
-		if at := strings.LastIndex(args[0], "@"); at >= 0 && aiReviewExactVersion.MatchString(args[0][at+1:]) {
-			t.Errorf("%s: line %d: the install step passes the version literal %q, want the value it read from %s: a literal is a second pin, which Renovate does not bump with the file's (CLAUDE.md rule 7)", aiReviewWorkflowPath, run.Num, args[0], claudeCodePinFile)
-		}
-
-		if !strings.Contains(args[1], "$") || aiReviewIntegrity.MatchString(args[1]) {
-			t.Errorf("%s: line %d: the install step passes %q as the integrity, want the value it read from %s: nothing compares the download against a pinned digest unless that value is the file's, and a literal is a second pin (ADR 0033, CLAUDE.md rule 7)", aiReviewWorkflowPath, run.Num, args[1], claudeCodePinFile)
+		if args := aiReviewInstallArgs(t, run); !slices.Equal(aiReviewInstallWords, args) {
+			t.Errorf("%s: line %d: the install step passes %v to %s, want %v: the linux-x64 platform package at the version %s holds and the integrity it holds beside it (issue #276)", aiReviewWorkflowPath, run.Num, args, aiReviewInstallScript, aiReviewInstallWords, claudeCodePinFile)
 		}
 
 		// The CLI is installed before any secret is in a step's environment, so

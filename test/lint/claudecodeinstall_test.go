@@ -54,6 +54,9 @@ var claudeCodeWorkflowIntegrityLit = regexp.MustCompile(`sha512-[A-Za-z0-9+/]{40
 type claudeCodeInstallStep struct {
 	// workflow is the file the step belongs to, relative to the module root.
 	workflow string
+	// job is the key of the job the step belongs to: the steps a step before it
+	// may read are its own job's alone (issue #277, round F finding 7).
+	job string
 	// num is the line of the step's run:.
 	num int
 	// run is the step's run: text.
@@ -61,6 +64,12 @@ type claudeCodeInstallStep struct {
 	// pinNames are the env: names the step sets for the CLI's pin, and the
 	// values it sets them to.
 	pinNames map[string]string
+}
+
+// claudeCodeWorkflowJob is one job of one workflow: its key and its steps.
+type claudeCodeWorkflowJob struct {
+	key   string
+	steps []yamlread.Item
 }
 
 // TestEveryWorkflowThatInstallsTheCLIReadsTheOnePinFile pins the two workflows
@@ -142,36 +151,38 @@ func claudeCodeInstallSteps(t *testing.T) []claudeCodeInstallStep {
 
 		rel = filepath.ToSlash(rel)
 
-		for _, step := range claudeCodeWorkflowSteps(t, rel) {
-			fields := aiReviewStepFields(t, step)
+		for _, job := range claudeCodeWorkflowJobs(t, rel) {
+			for _, step := range job.steps {
+				fields := aiReviewStepFields(t, step)
 
-			run, ok := aiReviewFind(fields, "run")
-			if !ok {
-				continue
-			}
+				run, ok := aiReviewFind(fields, "run")
+				if !ok {
+					continue
+				}
 
-			text := aiReviewText(run)
-			if !claudeCodeRunsInstaller(text) {
-				continue
-			}
+				text := aiReviewText(run)
+				if !claudeCodeRunsInstaller(text) {
+					continue
+				}
 
-			pinNames := map[string]string{}
+				pinNames := map[string]string{}
 
-			if env, ok := aiReviewFind(fields, "env"); ok {
-				for _, line := range env.Block {
-					key, value, ok := strings.Cut(line.Text, ":")
-					if !ok {
-						continue
-					}
+				if env, ok := aiReviewFind(fields, "env"); ok {
+					for _, line := range env.Block {
+						key, value, ok := strings.Cut(line.Text, ":")
+						if !ok {
+							continue
+						}
 
-					switch strings.TrimSpace(key) {
-					case "CLAUDE_CODE_VERSION", "CLAUDE_CODE_INTEGRITY":
-						pinNames[strings.TrimSpace(key)] = strings.TrimSpace(value)
+						switch strings.TrimSpace(key) {
+						case "CLAUDE_CODE_VERSION", "CLAUDE_CODE_INTEGRITY":
+							pinNames[strings.TrimSpace(key)] = strings.TrimSpace(value)
+						}
 					}
 				}
-			}
 
-			installs = append(installs, claudeCodeInstallStep{workflow: rel, num: run.Num, run: text, pinNames: pinNames})
+				installs = append(installs, claudeCodeInstallStep{workflow: rel, job: job.key, num: run.Num, run: text, pinNames: pinNames})
+			}
 		}
 	}
 
@@ -196,27 +207,35 @@ func claudeCodeRunsInstaller(text string) bool {
 // claudeCodeStepBeforeReadsPin reports whether a step of the install step's own
 // job, at or before it, reads the pin file: the one step that reads the file's
 // shape exports the version and the integrity, and the install step passes what
-// it exported.
+// it exported. A step of another job of the same workflow is no such step: it
+// runs on another runner, and nothing it read reaches the installer (issue #277,
+// round F finding 7).
 func claudeCodeStepBeforeReadsPin(t *testing.T, install claudeCodeInstallStep) bool {
 	t.Helper()
 
-	for _, step := range claudeCodeWorkflowSteps(t, install.workflow) {
-		run, ok := aiReviewFind(aiReviewStepFields(t, step), "run")
-		if !ok || run.Num > install.num {
+	for _, job := range claudeCodeWorkflowJobs(t, install.workflow) {
+		if job.key != install.job {
 			continue
 		}
 
-		if strings.Contains(aiReviewText(run), claudeCodePinFile) {
-			return true
+		for _, step := range job.steps {
+			run, ok := aiReviewFind(aiReviewStepFields(t, step), "run")
+			if !ok || run.Num > install.num {
+				continue
+			}
+
+			if strings.Contains(aiReviewText(run), claudeCodePinFile) {
+				return true
+			}
 		}
 	}
 
 	return false
 }
 
-// claudeCodeWorkflowSteps returns every step of every job of the workflow at
-// rel, a slash-separated path from the module root.
-func claudeCodeWorkflowSteps(t *testing.T, rel string) []yamlread.Item {
+// claudeCodeWorkflowJobs returns every job of the workflow at rel with its steps,
+// rel a slash-separated path from the module root.
+func claudeCodeWorkflowJobs(t *testing.T, rel string) []claudeCodeWorkflowJob {
 	t.Helper()
 
 	src, err := os.ReadFile(filepath.Join(moduleRoot(t), filepath.FromSlash(rel)))
@@ -239,7 +258,7 @@ func claudeCodeWorkflowSteps(t *testing.T, rel string) []yamlread.Item {
 		t.Fatalf("%s: read jobs:: %v", rel, err)
 	}
 
-	var steps []yamlread.Item
+	workflowJobs := make([]claudeCodeWorkflowJob, 0, len(jobFields))
 
 	for _, job := range jobFields {
 		stepsEntry, ok := aiReviewFind(aiReviewFields(t, job.Block, "job "+job.Key), "steps")
@@ -252,8 +271,8 @@ func claudeCodeWorkflowSteps(t *testing.T, rel string) []yamlread.Item {
 			t.Fatalf("%s: job %s: read steps:: %v", rel, job.Key, err)
 		}
 
-		steps = append(steps, items...)
+		workflowJobs = append(workflowJobs, claudeCodeWorkflowJob{key: job.Key, steps: items})
 	}
 
-	return steps
+	return workflowJobs
 }
