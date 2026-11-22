@@ -142,9 +142,15 @@ provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing 
    or built at run time (`rm -rf "$dir"`); leave scratch directories for the system to clean. Why: such
    commands stop an unattended pane at a permission prompt nobody answers (issue #251).
 10. **Signal only what you started.** Never send a signal (`kill`, `pkill`, `killall`, a process-group
-    kill) to a process you did not start yourself, and never pick a process to signal by name (`pgrep`,
-    `pidof`, `pkill`): other agents' runs share this machine. To stop something of your own, keep its pid
-    when you start it and signal only that pid. Why: a coder sent SIGTERM to the process group of a `make`
+    kill) to a process you did not start yourself, and never pick a process to signal by its name
+    (`pgrep <name>`, `pidof`, `pkill`): other agents' runs share this machine. To stop a run of your own,
+    keep its pid when you start it: start it as `<cmd> & echo $!` and note the number, since each shell
+    call may be a new shell and `$!` is gone later; a run your agent's tool started in the background is
+    stopped through that tool. The processes your run started are yours too: find them from its pid
+    (`pgrep -P <pid>` picks by your own pid, not by name) and signal those pids. Kill a process group only
+    if you created that group yourself: in a non-interactive shell a background job shares the shell's
+    group, so `kill -- -<pid>` can hit far more than your run. If you kept no pid, signal nothing: wait
+    for the run to end, or report it. Why: a coder sent SIGTERM to the process group of a `make`
     it found with `pgrep -x make`, which may have been another unit's run (issue #465).
 
 ## Multi-agent workflow

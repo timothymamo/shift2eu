@@ -19,6 +19,8 @@ in a shell variable. After `git -C <path> fetch origin`:
   file only one platform builds is checked too; gosec's issues end in `(gosec)`
 - `git -C <path> diff origin/main...HEAD -- go.mod go.sum` for every new or bumped dependency
 
+Signal only what you started (CLAUDE.md rule 10): to stop a run of your own, signal the pid you kept, never a process found by name.
+
 ## Checklist
 
 **Cloud access is read-only**

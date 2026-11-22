@@ -26,6 +26,8 @@ in a shell variable.
    feature-compatible; when in doubt it is "partial" with the gap stated.
 4. **Architecture.** The dependency rule holds (`make lint` catches imports, you catch intent): no business
    rules in adapters or CLI, no SDK types crossing the adapter boundary, ports declared by their consumer.
+   Signal only what you started (CLAUDE.md rule 10): to stop a run of your own, signal the pid you kept,
+   never a process found by name.
 5. **Tests.** Behaviour is pinned at the lowest sensible level; tests assert outcomes, not internals;
    fixtures are sanitised; no network or credentials in default tests. The TDD split held: `test(...)`
    commits touch only `*_test.go`, `testdata/` and `internal/testutil`, and later commits did not weaken
