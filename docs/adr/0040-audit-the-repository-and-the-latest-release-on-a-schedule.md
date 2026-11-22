@@ -2,8 +2,9 @@
 
 - Status: Accepted, Decision 2's presence-flag rule and the coverage rule that follows from it included:
   the maintainer confirmed both on 2026-11-21 at PR #444's review (see Context).
-  PRD #175 milestone 2 amends this record with the workflow's implementation (below)
-- Date: 2026-11-21
+  PRD #175 milestone 2 amends this record with the workflow's implementation (below); its first
+  amendment, how Claude Code runs in the model job, is dated 2026-11-22
+- Date: 2026-11-21, amended 2026-11-22
 
 ## Context
 
@@ -281,6 +282,319 @@ matching and its derivation of each finding's status; the closed category list i
 the wrapper's allowed commands and its scrubbed-environment allow list; and whether the Claude
 subscription is a Team or Enterprise plan, so whether server-managed settings could reach the model
 step.
+
+The first amendment, below (2026-11-22), covers how Claude Code runs: the shared launcher, the audit's
+launcher and its environment, the audit directory, the settings file and its permission mode, the
+wrapper, the sandbox preflight, the user-namespace handling and the Claude Code pin. The other items of
+the list above come with the pull requests of milestone 2 that build them.
+
+### How Claude Code runs in the model job (milestone 2, amended 2026-11-22)
+
+**Decision 3 settled:** the audit runs the **same pinned Claude Code CLI** as the AI reviewer, installed
+by the same script, started by the **same Go launcher library**, `ci/internal/claudecode`, with its own
+model, tool list, settings file, directories and environment allow list. The reviewer's launch, `claude
+-p` with every tool, setting source, MCP server and slash command off, an empty working directory and
+HOME of its own and an environment that inherits nothing, meets the PRD's requirements for a model with
+no tools. It cannot carry the audit unchanged: the audit needs tools, the sandbox, a settings file, a
+permission mode and fixed directories. So the launch becomes a library with those as parameters, the
+reviewer's values its defaults, and the audit adds a program of its own around it (`ci/auditrun`)
+for what only the audit does: the managed-settings refusal, the checksum check, the canary and the
+preflight. *Why not `anthropics/claude-code-action`:* it hides the launch behind its own inputs, so the
+`env -i` allow list, the fresh `HOME` and the absence of a managed-settings file could not be held by a
+test of ours (Decision 3's reason).
+
+#### The shared launcher, `ci/internal/claudecode`
+
+- **Path and reach.** `ci/internal/claudecode`, a library under `ci/internal/`: Go's internal rule lets
+  only packages under `ci/` import it, so neither release binary can reach it. Its importers are exactly
+  `ci/aireview/internal/review` and the audit's library `ci/internal/audit` (below), held by the lax
+  depguard rule `claude-code-launcher-importers`, which denies the package in every file but theirs
+  (`ci/internal/audit` joins its exceptions in the pull request that adds it) and which
+  `test/architecture`'s depguard pin holds. The strict depguard rule `claude-code-launcher` holds the
+  package itself to named standard packages
+  (from the move: `bytes`, `context`, `encoding/json`, `errors`, `fmt`, `os`, `os/exec`, `strings`,
+  `time`; `io` joins them with `Transcript`). The
+  forbidigo groups `ai-reviewer-env` and `ai-reviewer-one-process` hold for it as for the reviewer's
+  library: it reads no environment variable and no file, locates no home or temp directory through
+  `os`, and starts its one process with `exec.CommandContext`.
+- **API.** `claudecode.New(claudecode.Config) *CLI` and `(*CLI).Ask(ctx, claudecode.Prompt) (string,
+  error)`; `Prompt` is `{System, User string}`: `System` is written to a file of a temporary directory
+  of the launcher's own and named by `--system-prompt-file` (or `--append-system-prompt-file`, below),
+  `User` reaches the CLI on stdin alone. Every error wraps `claudecode.ErrModel` ("model error"), quotes
+  at most 500 bytes of the CLI's text with the token redacted, names an error result by a constant class
+  and its subtype only, and tells a timeout, a cancellation and the run's deadline apart, exactly as the
+  reviewer's errors did (issues #274, #316, #374). `Config` holds:
+
+  | Field | Meaning | Zero value |
+  |---|---|---|
+  | `Path` | the CLI's absolute path | refused: a relative path is an error before anything runs |
+  | `Token` | the subscription's OAuth token, passed as `CLAUDE_CODE_OAUTH_TOKEN` | refused at the CLI |
+  | `Model` | `--model`; letters, digits, `.` and `-` only | refused: no run asks the CLI's default model |
+  | `Timeout` | the run's own deadline | |
+  | `Tools` | `--tools`, the built-in tools, joined with `,`; each a tool name of letters only | **no tools**: `--tools ""` |
+  | `Effort` | `--effort`; one of `low`, `medium`, `high`, `xhigh`, `max` | no flag: the CLI's default |
+  | `Settings` | `--settings <absolute path>` | no flag |
+  | `PermissionMode` | `--permission-mode`; `dontAsk` or `plan` only, never `bypassPermissions` | no flag |
+  | `AppendSystemPrompt` | the system prompt is appended to the CLI's own (`--append-system-prompt-file`) | it replaces it (`--system-prompt-file`) |
+  | `SafeModeOff` | leave `--safe-mode` out | `--safe-mode` |
+  | `WorkDir` | the CLI's working directory, an absolute path that exists | a fresh empty temporary directory, removed after the run |
+  | `Home` | the CLI's `HOME`, an absolute path that exists | a fresh empty temporary directory, removed after the run |
+  | `Env` | extra `NAME=VALUE` entries of the allow list; a name the launcher sets itself (`CLAUDE_CODE_OAUTH_TOKEN`, `HOME`, `PATH`, the four switches below) is refused | none |
+  | `SearchPath` | the CLI's `PATH` | `/usr/local/bin:/usr/bin:/bin` |
+  | `Transcript` | an `io.Writer`: the run uses `--output-format stream-json --verbose`, copies every byte of stdout there, and reads the result from the last `result` element | `--output-format json`, one result, kept in memory up to 4 MiB |
+
+  The arguments are always, in this order: `-p --model <Model>` [`--effort <Effort>`] `--output-format
+  json|stream-json` [`--verbose`] [`--safe-mode`] `--tools <list>` `--setting-sources ""`
+  [`--settings <file>`] [`--permission-mode <mode>`] `--strict-mcp-config --mcp-config
+  {"mcpServers":{}}` `--disable-slash-commands --no-session-persistence --system-prompt-file|
+  --append-system-prompt-file <file>`. The environment is always exactly `CLAUDE_CODE_OAUTH_TOKEN`,
+  `HOME`, `PATH`, `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`,
+  `DISABLE_TELEMETRY=1`, `DISABLE_ERROR_REPORTING=1` and the `Env` entries: nothing is inherited.
+  `--mcp-config {"mcpServers":{}}` is new for both callers; the reviewer's launch gains it with the
+  audit's fields, in the pull request that adds them, and its test then pins it.
+- **What stays the reviewer's.** `review.Model` (`claude-opus-5-5`), `review.NewClaudeCLI(path, token,
+  timeout)`, which is `claudecode.New` with that model and every other field at its zero value (no
+  tools, safe mode, replaced system prompt, fresh directories, `json`), the `Asker` interface, the
+  prompt's text and everything after the answer. `review.ErrModel` is `claudecode.ErrModel`, so its
+  text and every `errors.Is` stay as they were. The reviewer's launch is unchanged by the move: same
+  flags in the same order, same environment, same model, same errors; its tests in
+  `ci/aireview/internal/review/claudecli_test.go` stay where they are and pin it.
+
+#### The audit's programs
+
+- **`ci/auditrun`**, the launcher the model step runs, a Go main package (not a script: it shares the
+  library, and a test drives it with a fake `claude`), with its logic in the library
+  **`ci/internal/audit`**, which `ci/auditrun` and the wrapper `ci/auditexec` import and nothing else (a
+  lax depguard rule like `claude-code-launcher-importers`). Each gets a strict depguard rule of named
+  standard packages, as `ci/aireview` has, pinned by `test/architecture`.
+- **Its command line:** `auditrun -claude-tarball <path> -claude-integrity <sha512-...>`, both from the
+  install step and the one pin (below). Its inputs from the step's environment, read through one
+  `os.LookupEnv` passed to the library as the reviewer's `SettingsFromEnv` does: `CLAUDE_CODE_OAUTH_TOKEN`,
+  `SHIFT2EU_AUDIT_CANARY` (64 lower-case hex characters), `GITHUB_ENV` (its path, for probe 6) and
+  `GITHUB_STEP_SUMMARY`. It reads no other variable, and refuses to run when `ANTHROPIC_API_KEY` is set,
+  as the reviewer does.
+- **In order**, each step failing the run before the next:
+  1. **Managed settings.** It fails if any of these exists, checked with `Lstat`, so a symbolic link
+     counts: `/etc/claude-code` (the directory itself, which holds `managed-settings.json`,
+     `managed-settings.d/`, `managed-mcp.json` and the policy `CLAUDE.md`), and, though the runner is
+     Linux, `/Library/Application Support/ClaudeCode`. The library takes a root that stands in for `/`,
+     so a test puts a policy file under a temporary root; `ci/auditrun` passes `/`.
+     `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, which points the CLI at another policy file, never reaches
+     the CLI (the allow list below). The install script's `/etc/claude-code` refusal stays as a first
+     check.
+  2. **Checksum.** It computes the sha512 of the tarball the install step kept, compares it, as npm's
+     `sha512-<base64>` integrity, with `-claude-integrity`, and only then extracts its one entry
+     `package/claude` itself into `/srv/audit/state/bin/claude` (mode 0500) and runs that binary by
+     absolute path. The binary is checked in the same step that runs it, against the one pin, with no
+     second checksum to keep.
+  3. **The audit directory** (below) exists as laid out: `checkout` and `checks` with no write bit,
+     `work`, `state/home` and `state/tmp` empty, `bin/audit-exec` owned by root with mode 0555.
+  4. **Bubblewrap** starts (the user-namespace check, below).
+  5. **The preflight** (below).
+  6. **The audit**: one `Ask` with the skill's text as the appended system prompt, read from
+     `/srv/audit/checkout/.claude/skills/security-audit-run/SKILL.md`, and a fixed user prompt that names
+     the audit directory's paths and the result file `/srv/audit/work/result.json`. The transcript goes to
+     `/srv/audit/state/out/audit.jsonl` and the CLI's stderr to `/srv/audit/state/out/audit.stderr`,
+     never to the log. The step prints one line, "finished" or the failure's constant class.
+- **Exit codes:** 0 the audit finished and wrote the result file; 1 the run failed (the model, a probe
+  not refused, no result file); 2 a usage or input error; 3 refused before the CLI ran (a managed
+  setting, a checksum mismatch, the audit directory not as laid out); 4 bubblewrap cannot start.
+- **The launcher's environment** (`env -i` in effect: `Config.Env` and the launcher's own entries, nothing
+  inherited), exactly:
+
+  | Variable | Value | Why |
+  |---|---|---|
+  | `CLAUDE_CODE_OAUTH_TOKEN` | the token | the subscription |
+  | `HOME` | `/srv/audit/state/home` | fresh, inside the state area, which the tools cannot read |
+  | `PATH` | `/usr/bin:/bin` | fixed; the sandbox's `bwrap` and `socat` are in `/usr/bin` |
+  | `TMPDIR` | `/srv/audit/state/tmp` | the CLI's own temporary files stay in the state area |
+  | `DISABLE_AUTOUPDATER` | `1` | no update of the pinned binary |
+  | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` | `1` | the model API only |
+  | `DISABLE_TELEMETRY`, `DISABLE_ERROR_REPORTING` | `1` | as the reviewer |
+  | `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` | `1` | the pinned CLI (2.1.330) strips its credentials from the environment of the commands it starts and isolates them with bubblewrap |
+  | `SHIFT2EU_AUDIT_CANARY` | the step's canary | probe 5's target |
+
+  The **canary** is 32 random bytes in hex, made by the model step's own `run:` line with `openssl rand
+  -hex 32` and passed to `ci/auditrun` in its environment beside the token, never printed. That puts it
+  in `/proc/<auditrun pid>/environ` from the moment the launcher starts, where the token is, so a probe
+  that cannot read it there cannot read the token either; `ci/auditrun` passes it on into the CLI's
+  environment, so the CLI's own environment and its children's are probed too. It is a dummy: it grants
+  nothing. *Why not made by the launcher itself:* a variable a process sets after it starts never shows
+  in its `/proc/<pid>/environ`, which is the file the probe must show unreadable.
+
+#### The audit directory
+
+Outside `/home`, made by a model-free step with `sudo install -d -o runner` before the hardening step
+removes sudo, and never under `$RUNNER_TEMP` or the workspace (both under `/home/runner`):
+
+| Path | Holds | Model's access |
+|---|---|---|
+| `/srv/audit/checkout` | a copy of the `github.sha` checkout, `.git` included, every write bit removed | Read, Grep, Glob |
+| `/srv/audit/checks` | the decrypted `checks-result`, every write bit removed | Read, Grep, Glob |
+| `/srv/audit/work` | the CLI's working directory; the result file `result.json`; `tmp/`, the commands' `TMPDIR` | Read, Grep, Glob, Write, Edit; Bash writes here only |
+| `/srv/audit/state` | `home/` (the fresh `HOME`, with Claude Code's configuration and transcripts), `tmp/` (the CLI's `TMPDIR`), `bin/claude`, `out/` (transcripts and stderr) | none: denied to every tool |
+| `/srv/audit/bin/audit-exec` | the wrapper, built from `ci/auditexec`, owned by root, mode 0555 | Bash runs it, nothing else |
+
+The working directory is `/srv/audit/work`, so no `CLAUDE.md` or `.claude/` of the checkout copy is
+found from it: they sit in a sibling directory, and the CLI looks for them only in the working directory
+and its parents (`/srv`, `/`, which hold none). The skill reaches the model only as the system prompt
+`ci/auditrun` hands it.
+
+#### The settings file
+
+**`.github/security-audit/claude-settings.json`**, read from the checkout copy
+(`/srv/audit/checkout/.github/security-audit/claude-settings.json`), the only settings the CLI loads:
+`--setting-sources ""` loads no user, project or local file, and `--settings` names this one. A later
+change to `.claude/settings.json` cannot widen the audit. A test in `test/architecture` pins the file;
+dropping or widening any entry below fails `make test`.
+
+- **The audit's launch:** `Model` `claude-fable-5-2`, `Effort` `high`, `Tools` `Read,Grep,Glob,Write,Edit,Bash`
+  (no `WebFetch`, `WebSearch`, `Task` or any other), `PermissionMode` `dontAsk`, `SafeModeOff` (the
+  settings file must apply, and `--safe-mode` turns customisations off; each thing it would turn off is
+  off by another flag or key here), `AppendSystemPrompt` (the default prompt explains the tools the
+  audit uses), `WorkDir` `/srv/audit/work`, `Home` `/srv/audit/state/home`, `Transcript` the file above,
+  `--strict-mcp-config` with the empty MCP configuration.
+- **Permission mode `dontAsk`:** the non-interactive mode in which a tool call no allow rule matches is
+  refused, not asked about. `permissions.defaultMode` is `dontAsk` as well, and
+  `permissions.disableBypassPermissionsMode` is `disable`. Never `bypassPermissions`,
+  `--dangerously-skip-permissions` or `--allow-dangerously-skip-permissions`.
+- **Allow list** (`permissions.allow`), literal absolute paths in Claude Code's rule syntax, where `//`
+  starts an absolute path (`/` alone would be relative to the settings file, and `~` is the fresh
+  `HOME`):
+  `Read(//srv/audit/checkout/**)`, `Read(//srv/audit/checks/**)`, `Read(//srv/audit/work/**)`,
+  `Edit(//srv/audit/work/**)` and `Bash(/srv/audit/bin/audit-exec:*)`. Claude Code applies a `Read` rule
+  to Read, Grep and Glob, and an `Edit` rule to Edit and Write; the file names no `Grep(...)`,
+  `Glob(...)` or `Write(...)` rule, because in `-p` mode the CLI ignores a settings file it cannot
+  validate, silently, and the preflight's Read, Grep and Glob probes show the rules hold for each tool.
+- **Deny list** (`permissions.deny`): `Read(//proc)`, `Read(//proc/**)`, `Read(//sys)`, `Read(//sys/**)`,
+  `Read(//etc)`, `Read(//etc/**)`, `Read(//home)`, `Read(//home/**)`, `Read(//home/runner/**)`,
+  `Read(//srv/audit/state)`, `Read(//srv/audit/state/**)`, `Edit(//srv/audit/state/**)`, and as defence in
+  depth `Bash(git push:*)`, `Bash(git commit:*)`, `Bash(git tag:*)`, `Bash(git remote:*)`, `Bash(gh:*)`,
+  `Bash(curl:*)`, `Bash(wget:*)`, `Bash(nc:*)`, `Bash(ssh:*)`, `Bash(docker:*)`, `Bash(sudo:*)`,
+  `Bash(env:*)`, `Bash(printenv:*)`, `Bash(set:*)` and `Bash(*/proc/*/environ*)`. A deny rule wins over an
+  allow rule.
+- **Sandbox:** `sandbox.enabled` `true`, `sandbox.failIfUnavailable` `true` (no unsandboxed fallback when
+  bubblewrap cannot start), `sandbox.autoAllowBashIfSandboxed` `false`,
+  `sandbox.allowUnsandboxedCommands` `false`, `sandbox.enableWeakerNestedSandbox` `false`, no
+  `sandbox.excludedCommands`, `sandbox.network.allowedDomains` `[]`, `sandbox.network.allowUnixSockets`
+  `[]`, `sandbox.network.allowLocalBinding` `false`. The sandbox takes its filesystem rules from the
+  permission rules and the working directory: Bash writes only under `/srv/audit/work` and reads nothing
+  the deny list names. The file sets no `sandbox.filesystem` key.
+- **No hooks, no MCP:** `disableAllHooks` `true`, no `hooks` key, `enableAllProjectMcpServers` `false`,
+  no `mcpServers`; the CLI gets `--strict-mcp-config --mcp-config {"mcpServers":{}}`. No `env`, `apiKeyHelper`,
+  `awsCredentialExport` or `otelHeadersHelper` key: nothing of the file runs a program.
+
+#### The wrapper, `ci/auditexec`
+
+Built in the model job from `main`'s checkout (`go build -trimpath`, `GOFLAGS=-mod=readonly GOPROXY=off`)
+and installed as `/srv/audit/bin/audit-exec` before sudo is removed. `audit-exec <name> <args...>` maps
+`name` to a fixed absolute path, never through `PATH`, and `exec`s it; every other name, a path given as
+the name included, is refused with exit 126 and one line on stderr that names the refused word, escaped
+and cut to 64 bytes. The commands it may `exec`:
+
+- `/usr/bin/git` with `--no-pager`, `-C <a directory under /srv/audit/checkout>` and one of the
+  subcommands `log`, `show`, `diff`, `grep`, `ls-files`, `ls-tree`, `cat-file`, `rev-parse`, `rev-list`,
+  `blame`, `shortlog`, `describe`, `for-each-ref`. It refuses `-c`, `--config-env`, `--exec-path`,
+  `--git-dir`, `--work-tree`, `--namespace`, `--ext-diff`, `--textconv`, `--output` and `--output=`
+  anywhere on the line.
+- `/usr/bin/jq`, `/usr/bin/sha256sum`, `/usr/bin/base64`, `/usr/bin/od`, `/usr/bin/cat`, `/usr/bin/head`,
+  `/usr/bin/tail`, `/usr/bin/wc`, `/usr/bin/sort`, `/usr/bin/uniq`, `/usr/bin/cut`, `/usr/bin/tr`: read
+  and reshape text, none writes a file of its own or opens a connection (`sort -o` and `--output` are
+  refused).
+
+It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin`, `HOME=/nonexistent`,
+`TMPDIR=/srv/audit/work/tmp`, `LANG=C.UTF-8`, `LC_ALL=C.UTF-8`, `TZ=UTC`, and for git
+`GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`,
+`GIT_OPTIONAL_LOCKS=0`.
+
+#### The sandbox preflight
+
+- **Where:** its logic in `ci/internal/audit` (`Preflight`), run by `ci/auditrun` in the model step,
+  before the audit, on every run: the token exists only in that step, and the probes need the model to
+  make their tool calls. It uses the same launcher, settings file, wrapper, directories and environment
+  as the audit; only its prompt differs, and its transcript goes to `/srv/audit/state/out/preflight.jsonl`.
+- **One CLI run.** Its fixed prompt asks the model to make a listed set of tool calls, in order, and
+  nothing else. The model judges nothing: every verdict is computed from the transcript's `tool_use`
+  and `tool_result` elements and from effects the launcher observes itself (`Judge`, a pure function of
+  the plan, the transcript and the effects).
+- **The control.** Before the probes, `Preflight` writes a random nonce to
+  `/srv/audit/work/preflight-control.txt`, and the first listed call reads it with Read. A transcript
+  whose result for it lacks the nonce fails the step: without it, a run whose settings did not load, or
+  whose model made no call, would pass for one that refused every probe.
+- **The six probes**, each with its tool calls and its observed effect:
+
+  | # | Tool calls | Effect `Preflight` observes itself |
+  |---|---|---|
+  | 1 | Write of `/srv/audit/state/probe-1`; Bash `/srv/audit/bin/audit-exec cat /srv/audit/work/preflight-control.txt > /srv/audit/state/probe-1` and the same into `/tmp/shift2eu-audit-probe-1` | neither file exists |
+  | 2 | Bash `/srv/audit/bin/audit-exec cat < /dev/tcp/127.0.0.1/<port>`, where `<port>` is a TCP listener `Preflight` opened on 127.0.0.1 | the listener accepted no connection |
+  | 3 | Bash `socat - UNIX-CONNECT:/var/run/docker.sock` and `/srv/audit/bin/audit-exec cat < /var/run/docker.sock` | `Preflight`'s own connect to `/var/run/docker.sock` fails (Docker is stopped) |
+  | 4 | Bash `sudo -n true` and `/srv/audit/bin/audit-exec sudo -n true` | `Preflight`'s own `sudo -n true` fails (the sudo rule is gone) |
+  | 5 | Read, Grep (pattern `SHIFT2EU_AUDIT_CANARY`) and Glob of `/proc/<auditrun pid>/environ`; Bash `/srv/audit/bin/audit-exec cat /proc/<auditrun pid>/environ`, `.../cat /proc/$PPID/environ` and `.../cat /proc/$$/environ` | the canary's value appears in no `tool_result` and nowhere else on stdout |
+  | 6 | Write and Edit of the `$GITHUB_ENV` file's path; Read, Grep and Glob of it; Bash `/srv/audit/bin/audit-exec cat /srv/audit/work/preflight-control.txt >> <path>` | the file's sha256 is unchanged |
+
+- **A probe fails (good)** when every one of its calls appears in the transcript with a `tool_result` that
+  is an error or a refusal, and its effect is not observed. It **succeeds** (the step fails) when an
+  effect is observed or a call's result is not an error. It is **not attempted** (the step fails) when a
+  call is missing from the transcript. **"All six fail"** means the control passed and all six probes
+  failed; anything else fails the step, whose summary names each probe that did not fail by its number
+  and short name ("probe 2, TCP connect: not refused") and runbook step 10, and nothing of the
+  transcript.
+- **The fake:** `Preflight` takes two interfaces, a `Prober`, which runs the CLI with the preflight prompt
+  and returns its transcript, and `Effects`, which observes the files, the listener, the Docker socket,
+  `sudo` and the `$GITHUB_ENV` digest. The test's fake implements both and lets each probe in turn
+  succeed, once through its effect and once through a `tool_result` that is not an error, and also
+  drops each call in turn and the control's nonce; each case must fail the step. A test of
+  `ci/auditrun` drives the whole launcher with a fake `claude` that records its environment: the
+  variables an earlier step could set through `$GITHUB_ENV` (`ANTHROPIC_BASE_URL`, `HTTPS_PROXY`,
+  `NODE_OPTIONS`, `LD_PRELOAD`) are not in it, and a managed-settings file under the test's root stops
+  the launcher with exit 3 before the fake runs.
+
+#### The runner's user-namespace restriction
+
+GitHub's Ubuntu 24.04 runners set `kernel.apparmor_restrict_unprivileged_userns=1`, so an unprivileged
+`bwrap` cannot set up its user namespace. A **model-free step** before the hardening step, while sudo
+still works, loads an AppArmor profile for `/usr/bin/bwrap` alone that grants it `userns`
+(`.github/security-audit/bwrap.apparmor`, `apparmor_parser -r`), rather than turning the restriction off
+for every program with the sysctl. The profile is committed and pinned by `test/architecture`.
+`bubblewrap` and `socat` come from the Ubuntu archive at a pinned version, each `.deb` checked against
+its pinned sha256 before `dpkg -i`. `ci/auditrun`'s check 4 runs `bwrap --unshare-all --die-with-parent
+--ro-bind / / /bin/true` itself; when it fails, the step fails with exit 4 and its summary says
+"bubblewrap cannot start: see runbook step 10, the user-namespace note", whatever the cause. With
+`sandbox.failIfUnavailable`, the CLI also refuses to run a command unsandboxed.
+
+#### The install script and the pin
+
+**One install script, one pin.** `.github/scripts/install-claude-code.sh` serves both workflows; it
+keeps the verified tarball beside the binary (`<directory>/claude-code.tgz`) so `ci/auditrun` can check
+it again in the model step. The version and the integrity move out of `ai-review.yml` into one committed
+file, `.github/claude-code.yaml` (`version:` under its `# renovate: datasource=npm
+depName=@anthropic-ai/claude-code-linux-x64` comment, and `integrity:`), which the install step of each
+workflow reads; Renovate's version manager and `ci/claudecodepin` read that file instead of the
+workflow, so the pin check covers every pin there is. *Why one pin:* the two workflows run the same CLI
+on the same subscription, a bump is reviewed once, and two pins could drift apart without a check that
+compares them; the audit's preflight checks each new version on its first run anyway. The pin's move
+changes the pin check's behaviour, so it comes test-first with the audit's other pieces, and the
+workflow's `Install the Claude Code CLI` step reads the file from the pull request that moves it.
+
+#### Server-managed settings
+
+Server-managed settings reach a CLI only on a Claude Team or Enterprise plan. The maintainer states the
+plan the token belongs to before the audit workflow merges; until then this record says: *to be
+confirmed by the maintainer*. If it is a Team or Enterprise plan, the audit workflow does not merge
+until this record names how `ci/auditrun` detects and refuses server-managed settings, or the audit
+runs under a personal plan's token instead.
+
+#### Residual risks of the launch
+
+- **The CLI process itself is not sandboxed**, only the commands it runs. Its connections are held to
+  the model API by configuration (`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, no `WebFetch` or
+  `WebSearch`), not enforced (Decision 6). A flaw in the CLI or a sandbox escape could send the token
+  elsewhere; runbook step 10 rotates it.
+- **A settings file the CLI cannot validate is ignored silently in `-p` mode.** The preflight's control
+  and probes 1 and 2 then fail the step, so a bad file stops the run rather than running it
+  unsandboxed.
+- **Bash rules are text patterns** and easy to step around; they are defence in depth. The containment
+  is the sandbox, the wrapper and the read deny list, which the probes test on every run.
 
 ## Alternatives considered
 
