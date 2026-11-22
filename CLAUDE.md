@@ -147,8 +147,8 @@ provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing 
       - pick a process to signal by its name (`pgrep`, `pidof`, `pkill`);
       - signal a process group yourself (stopping a background run through your agent's tool is the
         exception: the tool started that group).
-      - Because other agents' runs share this machine, and your run shares its group with your shell or
-        your agent's tool, these three nevers hold.
+      - Why these three: other agents' runs share this machine, and your run shares its group with your
+        shell or your agent's tool.
     - To be able to stop a run of your own: prefer your agent's tool's background mode and stop it through
       that tool, which stops the whole run. Otherwise:
       - start it as
