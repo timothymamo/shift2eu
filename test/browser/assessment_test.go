@@ -563,18 +563,8 @@ func TestAssessmentComparison(t *testing.T) {
 
 			report := reportOf(t, ctx)
 
-			if !report.hasSection("Comparison") {
-				t.Errorf("the report shows no Comparison section for %d targets: %v", len(tc.targets), report.Sections)
-			}
-
-			// The combined Summary table is gone: each target's summary is its
-			// own boxes under its own heading (issue #373, item 10).
-			for _, tbl := range report.Tables {
-				if len(tbl.Headers) > 0 && tbl.Headers[0] == "Fit" {
-					t.Errorf("the report holds the combined summary table %v, want each target's summary as its own boxes, never a table counting every target side by side (issue #373, item 10)", tbl.Headers)
-				}
-			}
-
+			// Each target's summary is its own boxes under its own heading
+			// (issue #373, item 10).
 			if len(report.TargetSummaries) != len(tc.targets) {
 				t.Fatalf("the report holds %d targets' summaries, want %d, one per target (issue #373, item 10): %v",
 					len(report.TargetSummaries), len(tc.targets), report.TargetSummaries)
@@ -594,22 +584,48 @@ func TestAssessmentComparison(t *testing.T) {
 				checkSummaryAddsUp(t, "the summary of "+name, boxes, tc.resources)
 			}
 
-			// The comparison's own resources table is the one with a column per
-			// target; each target's table drops the resource's region (issue
-			// #373, item 04).
-			resources, ok := report.tableWith("ID", "Category", targetNames(tc.targets)[0]+" fit")
-			if !ok {
-				t.Fatalf("the comparison holds no resources table, only %v", report.Tables)
+			// The comparison's own combined block is gone (issue #373, item 05):
+			// no section of its own and no resources table with a column per
+			// target. Each target's own section holds that target's table.
+			if report.hasSection("Comparison") {
+				t.Errorf("the report of %d targets shows a Comparison section, want each target's own sections alone: the combined block the page used to show above them is gone (issue #373, item 05): %v",
+					len(tc.targets), report.Sections)
 			}
 
-			if resources.Rows != tc.resources {
-				t.Errorf("the comparison's resources table holds %d rows, want one per resource of the pasted inventory, %d", resources.Rows, tc.resources)
+			for _, tbl := range report.Tables {
+				for _, header := range tbl.Headers {
+					if strings.HasSuffix(header, " fit") {
+						t.Errorf("the report holds the column %q, want no table with a column per target: each target's resources table is in that target's own section (issue #373, item 05): %v",
+							header, tbl.Headers)
+					}
+				}
 			}
 
-			// Every target has its fit and its best offering column.
-			for _, name := range targetNames(tc.targets) {
-				if !slices.Contains(resources.Headers, name+" fit") || !slices.Contains(resources.Headers, name+" best offering") {
-					t.Errorf("the comparison's resources table has no fit and best offering column for %q: %v", name, resources.Headers)
+			names := targetNames(tc.targets)
+
+			resources := make([]table, 0, len(names))
+
+			for _, tbl := range report.Tables {
+				if len(tbl.Headers) > 0 && tbl.Headers[0] == "ID" {
+					resources = append(resources, tbl)
+				}
+			}
+
+			if len(resources) != len(names) {
+				t.Fatalf("the report holds %d resources tables, want %d, one in each target's own section (issue #373, item 05): %v",
+					len(resources), len(names), report.Tables)
+			}
+
+			// Each target's table drops the resource's region (issue #373, item
+			// 04) and holds a fit and the best offering per resource.
+			for _, tbl := range resources {
+				if !headersInOrder(tbl.Headers, []string{"ID", "Raw type", "Category", "Fit", "Best offering"}) {
+					t.Errorf("a target's resources table holds the columns %v, want ID, Raw type, Category, Fit and Best offering: each target's own table drops the region the comparison's combined table used to name (issue #373, items 04 and 05)",
+						tbl.Headers)
+				}
+
+				if tbl.Rows != tc.resources {
+					t.Errorf("a target's resources table holds %d rows, want one per resource of the pasted inventory, %d", tbl.Rows, tc.resources)
 				}
 			}
 		})
