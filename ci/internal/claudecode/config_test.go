@@ -20,7 +20,9 @@ const missingCLI = "/nonexistent/claude-code/package/claude"
 // takes (issue #277, ADR 0040's amendment): --model is the config's model, and
 // --tools is its tools joined with ",", with no tools at all, --tools "", when
 // it names none. Every other argument is the reviewer's launch as ADR 0033
-// fixed it, in the same order.
+// fixed it, in the same order, with the empty MCP configuration ADR 0040's
+// amendment adds for both callers: --strict-mcp-config alone reads a
+// configuration it is never given.
 func TestArgsTakeTheModelAndTheTools(t *testing.T) {
 	t.Parallel()
 
@@ -50,6 +52,7 @@ func TestArgsTakeTheModelAndTheTools(t *testing.T) {
 				"--tools", tc.wantTools,
 				"--setting-sources", "",
 				"--strict-mcp-config",
+				"--mcp-config", `{"mcpServers":{}}`,
 				"--disable-slash-commands",
 				"--no-session-persistence",
 				"--system-prompt-file", "/prompt/system-prompt.md",

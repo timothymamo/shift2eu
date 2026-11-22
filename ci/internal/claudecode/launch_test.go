@@ -1,0 +1,475 @@
+// Pins the launch the shared launcher gives the Claude Code CLI for the fields
+// ADR 0040's milestone-2 amendment adds beside the model and the tools (issue
+// #277): the effort, the settings file, the permission mode, the appended
+// system prompt, safe mode left out, the working directory, HOME, the extra
+// environment entries, the CLI's PATH and the streaming transcript. The
+// reviewer's launch, which sets none of them, is the zero value of every one,
+// and stays what it was.
+package claudecode_test
+
+import (
+	"bytes"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/go-cmp/cmp"
+
+	"github.com/timothymamo/shift2eu/ci/internal/claudecode"
+)
+
+const (
+	// auditModel is the model ADR 0040's amendment gives the audit's launch: a
+	// model name the launcher accepts, and none of the reviewer's.
+	auditModel = "claude-fable-5-2"
+
+	// auditTools are the built-in tools ADR 0040's amendment gives the audit:
+	// no WebFetch, WebSearch, Task or any other.
+	auditTools = "Read,Grep,Glob,Write,Edit,Bash"
+
+	// auditSettings is the settings file ADR 0040's amendment names: the one
+	// the audit's checkout copy holds, the only settings file the CLI loads.
+	auditSettings = "/srv/audit/checkout/.github/security-audit/claude-settings.json"
+
+	// auditWorkDir and auditHome are the two directories the audit's launch
+	// fixes: the CLI's working directory and its HOME.
+	auditWorkDir = "/srv/audit/work"
+	auditHome    = "/srv/audit/state/home"
+)
+
+// TestArgsPrescribeEachConfigField pins the argument vector ADR 0040's
+// amendment fixes for every field the launcher gained, in the order it fixes:
+// `-p --model <Model>` [`--effort`] `--output-format json|stream-json`
+// [`--verbose`] [`--safe-mode`] `--tools <list>` `--setting-sources ""`
+// [`--settings`] [`--permission-mode`] `--strict-mcp-config --mcp-config
+// {"mcpServers":{}}` `--disable-slash-commands` `--no-session-persistence`
+// `--system-prompt-file|--append-system-prompt-file <file>`. A field at its
+// zero value adds no flag, so the reviewer's launch is the same vector it was,
+// with the empty MCP configuration the amendment adds for both callers.
+func TestArgsPrescribeEachConfigField(t *testing.T) {
+	t.Parallel()
+
+	// reviewer is the vector a config with none of the new fields asks for: the
+	// reviewer's launch, byte for byte, with the empty MCP configuration.
+	reviewer := []string{
+		"-p",
+		"--model", auditModel,
+		"--output-format", "json",
+		"--safe-mode",
+		"--tools", "",
+		"--setting-sources", "",
+		"--strict-mcp-config",
+		"--mcp-config", `{"mcpServers":{}}`,
+		"--disable-slash-commands",
+		"--no-session-persistence",
+		"--system-prompt-file", "/prompt/system-prompt.md",
+	}
+
+	cases := []struct {
+		name   string
+		config claudecode.Config
+		want   []string
+	}{
+		{
+			name:   "no new field is the reviewer's launch",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel},
+			want:   reviewer,
+		},
+		{
+			name:   "the effort follows the model",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, Effort: "high"},
+			want: []string{
+				"-p",
+				"--model", auditModel,
+				"--effort", "high",
+				"--output-format", "json",
+				"--safe-mode",
+				"--tools", "",
+				"--setting-sources", "",
+				"--strict-mcp-config",
+				"--mcp-config", `{"mcpServers":{}}`,
+				"--disable-slash-commands",
+				"--no-session-persistence",
+				"--system-prompt-file", "/prompt/system-prompt.md",
+			},
+		},
+		{
+			name:   "the settings file follows the empty setting sources",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, Settings: auditSettings},
+			want: []string{
+				"-p",
+				"--model", auditModel,
+				"--output-format", "json",
+				"--safe-mode",
+				"--tools", "",
+				"--setting-sources", "",
+				"--settings", auditSettings,
+				"--strict-mcp-config",
+				"--mcp-config", `{"mcpServers":{}}`,
+				"--disable-slash-commands",
+				"--no-session-persistence",
+				"--system-prompt-file", "/prompt/system-prompt.md",
+			},
+		},
+		{
+			name:   "the permission mode follows the settings file",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, PermissionMode: "dontAsk"},
+			want: []string{
+				"-p",
+				"--model", auditModel,
+				"--output-format", "json",
+				"--safe-mode",
+				"--tools", "",
+				"--setting-sources", "",
+				"--permission-mode", "dontAsk",
+				"--strict-mcp-config",
+				"--mcp-config", `{"mcpServers":{}}`,
+				"--disable-slash-commands",
+				"--no-session-persistence",
+				"--system-prompt-file", "/prompt/system-prompt.md",
+			},
+		},
+		{
+			name:   "leaving safe mode out drops its one flag",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, SafeModeOff: true},
+			want: []string{
+				"-p",
+				"--model", auditModel,
+				"--output-format", "json",
+				"--tools", "",
+				"--setting-sources", "",
+				"--strict-mcp-config",
+				"--mcp-config", `{"mcpServers":{}}`,
+				"--disable-slash-commands",
+				"--no-session-persistence",
+				"--system-prompt-file", "/prompt/system-prompt.md",
+			},
+		},
+		{
+			name:   "an appended system prompt replaces the flag that replaces the CLI's prompt",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, AppendSystemPrompt: true},
+			want: []string{
+				"-p",
+				"--model", auditModel,
+				"--output-format", "json",
+				"--safe-mode",
+				"--tools", "",
+				"--setting-sources", "",
+				"--strict-mcp-config",
+				"--mcp-config", `{"mcpServers":{}}`,
+				"--disable-slash-commands",
+				"--no-session-persistence",
+				"--append-system-prompt-file", "/prompt/system-prompt.md",
+			},
+		},
+		{
+			name:   "the working directory, HOME and PATH take no argument",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, WorkDir: auditWorkDir, Home: auditHome, SearchPath: "/usr/bin:/bin"},
+			want:   reviewer,
+		},
+		{
+			name:   "extra environment entries and the directories take no argument",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, Env: []string{"TMPDIR=/srv/audit/state/tmp"}, WorkDir: auditWorkDir, Home: auditHome},
+			want:   reviewer,
+		},
+		{
+			name:   "a transcript streams the run",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, Transcript: &bytes.Buffer{}},
+			want: []string{
+				"-p",
+				"--model", auditModel,
+				"--output-format", "stream-json",
+				"--verbose",
+				"--safe-mode",
+				"--tools", "",
+				"--setting-sources", "",
+				"--strict-mcp-config",
+				"--mcp-config", `{"mcpServers":{}}`,
+				"--disable-slash-commands",
+				"--no-session-persistence",
+				"--system-prompt-file", "/prompt/system-prompt.md",
+			},
+		},
+		{
+			name: "the audit's whole launch",
+			config: claudecode.Config{
+				Path:               missingCLI,
+				Model:              auditModel,
+				Tools:              strings.Split(auditTools, ","),
+				Effort:             "high",
+				Settings:           auditSettings,
+				PermissionMode:     "dontAsk",
+				AppendSystemPrompt: true,
+				SafeModeOff:        true,
+				WorkDir:            auditWorkDir,
+				Home:               auditHome,
+				Env:                []string{"TMPDIR=/srv/audit/state/tmp", "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1"},
+				SearchPath:         "/usr/bin:/bin",
+				Transcript:         &bytes.Buffer{},
+			},
+			want: []string{
+				"-p",
+				"--model", auditModel,
+				"--effort", "high",
+				"--output-format", "stream-json",
+				"--verbose",
+				"--tools", auditTools,
+				"--setting-sources", "",
+				"--settings", auditSettings,
+				"--permission-mode", "dontAsk",
+				"--strict-mcp-config",
+				"--mcp-config", `{"mcpServers":{}}`,
+				"--disable-slash-commands",
+				"--no-session-persistence",
+				"--append-system-prompt-file", "/prompt/system-prompt.md",
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := claudecode.Args(tc.config, "/prompt/system-prompt.md")
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("the CLI's arguments (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestEnvIsTheAllowListAlone pins the CLI's whole environment (ADR 0040's
+// amendment): the token, HOME, PATH, the four switches and the config's own
+// entries, each a name and a value, and nothing else. The slice is the whole of
+// cmd.Env, so a variable of the caller's reaching the CLI would have to be here;
+// and HOME, PATH and the switches are the launcher's, which a config cannot
+// override.
+func TestEnvIsTheAllowListAlone(t *testing.T) {
+	t.Parallel()
+
+	// token is an obvious fake, never a real credential (CLAUDE.md rule 3).
+	const subscriptionValue = "fake-subscription-value-123"
+
+	allowList := func(entries ...string) []string {
+		return append([]string{
+			"CLAUDE_CODE_OAUTH_TOKEN=" + subscriptionValue,
+			"HOME=" + auditHome,
+			"PATH=/usr/local/bin:/usr/bin:/bin",
+			"DISABLE_AUTOUPDATER=1",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+			"DISABLE_TELEMETRY=1",
+			"DISABLE_ERROR_REPORTING=1",
+		}, entries...)
+	}
+
+	cases := []struct {
+		name   string
+		config claudecode.Config
+		home   string
+		want   []string
+	}{
+		{
+			name:   "the reviewer's launch is the allow list and nothing else",
+			config: claudecode.Config{Path: missingCLI, Model: "claude-opus-5-5"},
+			home:   "/run/claudecode-home-1",
+			want: []string{
+				"CLAUDE_CODE_OAUTH_TOKEN=" + subscriptionValue,
+				"HOME=/run/claudecode-home-1",
+				"PATH=/usr/local/bin:/usr/bin:/bin",
+				"DISABLE_AUTOUPDATER=1",
+				"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+				"DISABLE_TELEMETRY=1",
+				"DISABLE_ERROR_REPORTING=1",
+			},
+		},
+		{
+			name:   "the audit's HOME it was given",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, Home: auditHome, WorkDir: auditWorkDir},
+			home:   "/run/claudecode-home-1",
+			want:   allowList(),
+		},
+		{
+			name:   "the audit's fixed PATH",
+			config: claudecode.Config{Path: missingCLI, Model: auditModel, SearchPath: "/usr/bin:/bin"},
+			home:   auditHome,
+			want: []string{
+				"CLAUDE_CODE_OAUTH_TOKEN=" + subscriptionValue,
+				"HOME=" + auditHome,
+				"PATH=/usr/bin:/bin",
+				"DISABLE_AUTOUPDATER=1",
+				"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+				"DISABLE_TELEMETRY=1",
+				"DISABLE_ERROR_REPORTING=1",
+			},
+		},
+		{
+			name: "the entries the audit adds, in the order it gives them",
+			config: claudecode.Config{
+				Path:  missingCLI,
+				Model: auditModel,
+				Home:  auditHome,
+				Env: []string{
+					"TMPDIR=/srv/audit/state/tmp",
+					"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
+					"SHIFT2EU_AUDIT_CANARY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+				},
+			},
+			home: auditHome,
+			want: allowList(
+				"TMPDIR=/srv/audit/state/tmp",
+				"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
+				"SHIFT2EU_AUDIT_CANARY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tc.config.Token = subscriptionValue
+
+			got := claudecode.Env(tc.config, tc.home)
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("the CLI's environment (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// TestAskRefusesTheNewFieldsAtTheirZeroShape pins what a config of a shape ADR
+// 0040's amendment does not allow fails with: ErrModel, before the CLI starts,
+// like a relative path or a model name of the wrong shape. A permission mode
+// other than dontAsk or plan is the one that matters most: bypassPermissions,
+// the CLI's own name for running a call no rule matches, is never passed on.
+func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
+	t.Parallel()
+
+	// outsidePath is a path that exists, of which no part is a directory: the
+	// refusals below that are about a path's shape use its own names.
+	outsidePath := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(outsidePath, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatalf("write %s: %v", outsidePath, err)
+	}
+
+	missingDir := filepath.Join(t.TempDir(), "missing")
+
+	cases := []struct {
+		name  string
+		field string
+		apply func(*claudecode.Config)
+	}{
+		{
+			name:  "the permission mode bypassPermissions",
+			field: "permission mode",
+			apply: func(c *claudecode.Config) { c.PermissionMode = "bypassPermissions" },
+		},
+		{
+			name:  "the permission mode of the CLI's own spelling in another case",
+			field: "permission mode",
+			apply: func(c *claudecode.Config) { c.PermissionMode = "dontask" },
+		},
+		{
+			name:  "the permission mode acceptEdits",
+			field: "permission mode",
+			apply: func(c *claudecode.Config) { c.PermissionMode = "acceptEdits" },
+		},
+		{
+			name:  "a permission mode with a space in it",
+			field: "permission mode",
+			apply: func(c *claudecode.Config) { c.PermissionMode = "plan --verbose" },
+		},
+		{
+			name:  "an effort outside the five the CLI takes",
+			field: "effort",
+			apply: func(c *claudecode.Config) { c.Effort = "turbo" },
+		},
+		{
+			name:  "a settings file of a relative path",
+			field: "settings",
+			apply: func(c *claudecode.Config) { c.Settings = ".github/security-audit/claude-settings.json" },
+		},
+		{
+			name:  "a working directory of a relative path",
+			field: "working directory",
+			apply: func(c *claudecode.Config) { c.WorkDir = "work" },
+		},
+		{
+			name:  "a working directory that is no directory",
+			field: "working directory",
+			apply: func(c *claudecode.Config) { c.WorkDir = outsidePath },
+		},
+		{
+			name:  "a HOME of a relative path",
+			field: "HOME",
+			apply: func(c *claudecode.Config) { c.Home = "home" },
+		},
+		{
+			name:  "a HOME that does not exist",
+			field: "HOME",
+			apply: func(c *claudecode.Config) { c.Home = missingDir },
+		},
+		{
+			name:  "an entry that sets the token",
+			field: "CLAUDE_CODE_OAUTH_TOKEN",
+			apply: func(c *claudecode.Config) { c.Env = []string{"CLAUDE_CODE_OAUTH_TOKEN=another"} },
+		},
+		{
+			name:  "an entry that sets HOME",
+			field: "HOME",
+			apply: func(c *claudecode.Config) { c.Env = []string{"HOME=/root"} },
+		},
+		{
+			name:  "an entry that sets PATH",
+			field: "PATH",
+			apply: func(c *claudecode.Config) { c.Env = []string{"PATH=/usr/local/bin:/usr/bin:/bin"} },
+		},
+		{
+			name:  "an entry that turns the autoupdater back on",
+			field: "DISABLE_AUTOUPDATER",
+			apply: func(c *claudecode.Config) { c.Env = []string{"DISABLE_AUTOUPDATER=0"} },
+		},
+		{
+			name:  "an entry that turns non-essential traffic back on",
+			field: "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+			apply: func(c *claudecode.Config) { c.Env = []string{"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=0"} },
+		},
+		{
+			name:  "an entry that turns telemetry back on",
+			field: "DISABLE_TELEMETRY",
+			apply: func(c *claudecode.Config) { c.Env = []string{"DISABLE_TELEMETRY=0"} },
+		},
+		{
+			name:  "an entry that turns error reporting back on",
+			field: "DISABLE_ERROR_REPORTING",
+			apply: func(c *claudecode.Config) { c.Env = []string{"DISABLE_ERROR_REPORTING=0"} },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := claudecode.Config{Path: missingCLI, Model: auditModel, Timeout: time.Minute}
+			tc.apply(&cfg)
+
+			text, err := claudecode.New(cfg).Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
+			if !errors.Is(err, claudecode.ErrModel) {
+				t.Fatalf("Ask = %q, %v; want an error wrapping ErrModel", text, err)
+			}
+
+			if strings.Contains(err.Error(), "start the Claude Code CLI") {
+				t.Errorf("Ask = %v; the config is refused before the CLI starts, not by its failure to start", err)
+			}
+
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("Ask = %v, want the error to name the %s it refused", err, tc.field)
+			}
+		})
+	}
+}

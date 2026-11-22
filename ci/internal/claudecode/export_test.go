@@ -23,3 +23,9 @@ var DecideRunOutcome = decideRunOutcome
 func Args(cfg Config, systemFile string) []string {
 	return New(cfg).args(systemFile)
 }
+
+// Env returns the whole environment Ask runs the CLI with for cfg, its HOME
+// being home, for the tests: the allow list, nothing inherited.
+func Env(cfg Config, home string) []string {
+	return New(cfg).env(home)
+}
