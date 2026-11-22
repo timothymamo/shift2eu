@@ -20,7 +20,14 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag}
+
+// auditLibraryEnvTag is the tag of the audit library's environment group (issue
+// #277, ADR 0040's amendment), which refuses the environment reads, the home,
+// config and cache lookups and os.ExpandEnv in ci/internal/audit's production
+// files. The library starts bwrap and sudo, so its entries name no process
+// start and the group needs no exception.
+const auditLibraryEnvTag = "audit-library-env"
 
 // auditRunEnvTag is the tag of the audit launcher's environment group (issue
 // #277, ADR 0040's amendment), and auditRunLookupEnvMsg the msg of its one
@@ -204,6 +211,17 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		auditRunEnvTag: {
 			{"path-except": `^ci/auditrun/`, "text": groupText(auditRunEnvTag)},
 			{"path": `^ci/auditrun/main\.go$`, "text": narrowedTextOf(auditRunLookupEnvMsg)},
+		},
+		// The audit's library (issue #277, ADR 0040's amendment): one rule for
+		// every path outside ci/internal/audit/, so the group holds there and
+		// nowhere else, _test.go files included. The library reads no
+		// environment variable at all - the caller hands it what it read - and
+		// its entries name no process start, so the group has no exception:
+		// bwrap and sudo stay what the library starts. The one place of the
+		// audit that may read a variable is ci/auditrun/main.go, whose
+		// os.LookupEnv audit-run-env states as its own exception.
+		auditLibraryEnvTag: {
+			{"path-except": `^ci/internal/audit/`, "text": groupText(auditLibraryEnvTag)},
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
