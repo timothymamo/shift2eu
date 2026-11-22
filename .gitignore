@@ -41,13 +41,13 @@ go.work.sum
 
 # --- OpenTofu (infra/, issue #422) ---------------------------------------------
 # State lives in a Scaleway bucket, never in git; tfvars and backend files hold the maintainer's IDs and
-# bucket names. Only the .example copies are committed.
+# bucket names. Only the .example copies are committed: no rule here matches *.tfvars.example or
+# backend.hcl.example, so they need no exception.
 *.tfstate
 *.tfstate.*
 *.tfplan
 *.tfvars
 *.tfvars.json
-!*.tfvars.example
 backend.hcl
 .terraform/
 .terraform.tfstate.lock.info

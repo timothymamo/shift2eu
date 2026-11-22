@@ -4,8 +4,11 @@
 // and its one policy, only scaleway/scaleway, local modules only, one s3 backend and one required_version -
 // equal to infra/tofu.yaml's tofuVersion - for every applied root, which no module source may reach and no
 // configuration file may sit beside, no provider endpoint, every test file mocking the provider, a top-level
-// block of an allowed type only, a provider block setting only organization_id and region, a lock file holding
-// only the line shapes tofu init writes, and so on (the script lists them). With every rule holding it prints nothing and exits 0; a usage error exits 2.
+// block of an allowed type only, a run or mock_provider label that is an identifier (so no label's / can shift
+// the blocks beneath it out of the rule that judges them), a block label whose %, / or : never decides what
+// the rules see, a provider block setting only organization_id and
+// region, a lock file holding only the line shapes tofu init writes, and so on (the script lists them). With
+// every rule holding it prints nothing and exits 0; a usage error exits 2.
 //
 // The real infra/ must hold every rule, and each case below is one copy of infra/ with exactly one breakage,
 // built in t.TempDir() so the real tree stays untouched and the cases cannot drift apart: the copy is what
@@ -50,12 +53,13 @@ var infraRuleTag = regexp.MustCompile(`(?m)^infra-rules: \[([a-z0-9-]+)\] `)
 // infraRuleCase is one broken copy of infra/: what the case breaks, and the rule tags the script must report.
 // A case with no tag breaks nothing a rule refuses, and its copy must pass.
 type infraRuleCase struct {
-	name     string            // the subtest's name
-	why      string            // the breakage, for the reader
-	want     string            // the rule tag the script must report, or "" when every rule still holds
-	wantMore []string          // the further tags a breakage must report beside want, for the cases that pin a whole refusal
-	wantIn   map[string]string // per tag, a substring the stderr line that reports it must hold: {root} and {site} stand for the copy's root and its site directory
-	breakage func(t *testing.T, site string)
+	name      string            // the subtest's name
+	why       string            // the breakage, for the reader
+	want      string            // the rule tag the script must report, or "" when every rule still holds
+	wantMore  []string          // the further tags a breakage must report beside want, for the cases that pin a whole refusal
+	wantIn    map[string]string // per tag, a substring the stderr line that reports it must hold: {root} and {site} stand for the copy's root and its site directory
+	wantNotIn map[string]string // per tag, a substring the stderr line that reports it must not hold: {root} and {site} as in wantIn
+	breakage  func(t *testing.T, site string)
 }
 
 // infraRuleCases are the breakages dev/infra-rules.awk must refuse, one rule each. breakage gets the absolute
@@ -63,7 +67,14 @@ type infraRuleCase struct {
 // loudly (as a test failure, never as a silent pass) when the configuration moves under it. The file-reading
 // functions' cases come from infraFileFunctionCases, one per name the rules must refuse, so a name dropped
 // from them fails here instead of passing unrefused.
-var infraRuleCases = append(infraFileFunctionCases(), namedInfraRuleCases...)
+var infraRuleCases = slices.Concat(
+	infraFileFunctionCases(),
+	namedInfraRuleCases,
+	infraTestNestedBlockCases,
+	infraTestLabelCases,
+	infraLabelPathCases,
+	infraConfigurationLabelQuoteCases,
+)
 
 // namedInfraRuleCases are the breakages written out one by one, in the order the script's rules are read.
 var namedInfraRuleCases = []infraRuleCase{
@@ -1212,10 +1223,12 @@ removed {
 		},
 	},
 	{
-		name:   "provisioner-in-a-test-file",
-		why:    `a local-exec provisioner inside a run block of site/tests/iam.tftest.hcl, which runs on the machine that tests`,
-		want:   "provisioner",
-		wantIn: map[string]string{"provisioner": "{site}/tests/iam.tftest.hcl"},
+		name: "provisioner-in-a-test-file",
+		why:  `a local-exec provisioner inside a run block of site/tests/iam.tftest.hcl, which runs on the machine that tests`,
+		want: "provisioner",
+		// A provisioner is no block a run block allows either: neither refusal may hide the other.
+		wantMore: []string{"test-nested-block"},
+		wantIn:   map[string]string{"provisioner": "{site}/tests/iam.tftest.hcl", "test-nested-block": "{site}/tests/iam.tftest.hcl"},
 		breakage: func(t *testing.T, site string) {
 			t.Helper()
 			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
@@ -1539,6 +1552,495 @@ locals {
 	},
 }
 
+// infraTestNestedBlockCases pin the allow list of the blocks nested directly in a test file's run and
+// mock_provider blocks: [block-type] reads the top level only, so a block inside a run block is invisible to
+// it, and a run may hold only what tofu test reads there. The list is per parent, since a mock_provider holds
+// mocks and a run holds everything else:
+//   - inside run: override_resource, override_data, override_module, assert, variables, module and
+//     plan_options, plus expect_failures, which tofu writes as an attribute and which the list names anyway
+//     so a future block spelling of it is no surprise;
+//   - inside mock_provider: mock_resource, mock_data, override_resource and override_data.
+//
+// Anything else is [test-nested-block]. Only the direct children are judged: a block inside an allowed one
+// (values in an override_resource, an assert's body) is none of this rule's. The run and mock_provider of the
+// real infra/site/tests must pass, which the "the real infra holds every rule" case pins.
+var infraTestNestedBlockCases = []infraRuleCase{
+	{
+		name:   "run-block-with-an-unlisted-nested-block",
+		why:    `a foo block directly inside a run block of site/tests/iam.tftest.hcl, a nested type tofu test does not read there`,
+		want:   "test-nested-block",
+		wantIn: map[string]string{"test-nested-block": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_an_unlisted_block" {
+  command = plan
+
+  foo {
+  }
+}
+`)
+		},
+	},
+	{
+		name:   "mock-provider-with-an-unlisted-nested-block",
+		why:    `a foo block directly inside a mock_provider "scaleway" of site/tests/zz-nested.tftest.hcl, a nested type tofu test does not read there`,
+		want:   "test-nested-block",
+		wantIn: map[string]string{"test-nested-block": "{site}/tests/zz-nested.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "zz-nested.tftest.hcl"), `mock_provider "scaleway" {
+  foo {
+  }
+}
+`)
+		},
+	},
+	// The pass cases guard the list against a rule that refuses what tofu test does read. They are copies of
+	// infra/ under t.TempDir() that only dev/infra-rules.sh reads, never tofu: the blocks are the ones the
+	// real test files use (assert, variables, mock_resource) and the ones tofu test reads beside them.
+	{
+		name: "allowed-nested-blocks",
+		why:  `a site/tests/zz-allowed.tftest.hcl whose mock_provider holds mock_resource, mock_data, override_resource and override_data, and whose run holds variables, module, plan_options, override_resource, override_data, override_module and assert (expect_failures as the attribute tofu writes)`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			writeInfraText(t, filepath.Join(site, "tests", "zz-allowed.tftest.hcl"), `mock_provider "scaleway" {
+  mock_resource "scaleway_account_project" {
+    defaults = {
+      id = "11111111-1111-1111-1111-111111111111"
+    }
+  }
+
+  mock_data "scaleway_account_project" {
+    defaults = {
+      id = "11111111-1111-1111-1111-111111111111"
+    }
+  }
+
+  override_resource {
+    target = scaleway_account_project.site
+    values = {}
+  }
+
+  override_data {
+    target = scaleway_account_project.site
+    values = {}
+  }
+}
+
+run "the_allowed_nested_blocks" {
+  command = plan
+
+  variables {
+    public_read = false
+  }
+
+  expect_failures = [var.organization_id]
+
+  module {
+    source = "./m"
+  }
+
+  plan_options {
+    refresh = true
+  }
+
+  override_resource {
+    target = scaleway_object_bucket.site
+    values = {}
+  }
+
+  override_data {
+    target = scaleway_object_bucket.site
+    values = {}
+  }
+
+  override_module {
+    target = module.m
+    values = {}
+  }
+
+  assert {
+    condition     = true
+    error_message = "x"
+  }
+}
+`)
+		},
+	},
+	// The rule judges the direct children of run and mock_provider only: what an allowed block holds is that
+	// block's business, so the values block of an override_resource is no [test-nested-block].
+	{
+		name: "block-nested-deeper-in-an-allowed-block",
+		why:  `a values block inside an override_resource of site/tests/iam.tftest.hcl's run block, two levels below the run`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_a_deeper_block" {
+  command = plan
+
+  override_resource {
+    target = scaleway_object_bucket.site
+
+    values {
+    }
+  }
+}
+`)
+		},
+	},
+	// expect_failures is an attribute in a run block today, which the allowed-nested-blocks case writes. The
+	// allow list names it as a block anyway, so a run that writes it that way is not refused: this case pins
+	// that, since no other case writes the block spelling.
+	{
+		name: "expect_failures-as-a-block",
+		why:  `an expect_failures block directly in a run block of site/tests/iam.tftest.hcl, the spelling the allow list names beside the attribute tofu writes today`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a_run_with_expect_failures_as_a_block" {
+  command = plan
+
+  expect_failures {
+    targets = [var.organization_id]
+  }
+}
+`)
+		},
+	},
+}
+
+// infraTestLabelCases pin [test-label] (issue #434, the auditor's first finding): the rules build a block's
+// path by joining its labels with /, so a run or mock_provider label that holds a / made the block after it
+// look like the label's own child: `run "x/assert" { weird_b {} }` read weird_b as a block inside a path
+// segment named assert instead of a direct child of the run, and [test-nested-block] never saw it (the same
+// label hid a run-block module from [module-source]). So a run's or a mock_provider's label must be an
+// identifier, [A-Za-z_][A-Za-z0-9_-]*, and a label that is not one is [test-label].
+//
+// A label with a / is refused twice, and the second refusal is the one that matters: [test-label] names the
+// label, and the block it was hiding is reported by the rule it hid from - [test-nested-block] for the
+// unlisted block inside the run or mock_provider, [module-source] for the module that climbs out of the
+// configuration. Both tags are required, so a fix that only tags the label and leaves the path shifted
+// fails here: the label's / must no longer decide which block the rules see. The identifier pass case pins
+// the other side, so the rule does not refuse a label tofu test reads (its - and its digits are identifiers).
+// The [test-label] message quotes the label as the source writes it, never as the escaped path element the
+// rules judge the block by: `run "a/b"` is named `run "a/b"`, not `run "a%2Fb"`, and `run "a%2Fb"` is not
+// escaped twice to `run "a%252Fb"` - an operator reading the message must find the label they wrote. What the
+// message prints is another matter: a label outside the printable set (A-Za-z0-9_-, /, %, :, . and space) is
+// replaced by `an unprintable label`, so a label such as `##[error]x` never puts the `##[` the legacy GitHub
+// Actions annotation form matches anywhere in a CI log line into that log, and never forges an annotation.
+var infraTestLabelCases = []infraRuleCase{
+	{
+		name:     "run-label-with-a-slash-hides-its-nested-block",
+		why:      `a run "x/assert" in site/tests/iam.tftest.hcl whose label holds a /, with a weird_b block directly inside the run, a nested type tofu test does not read there`,
+		want:     "test-label",
+		wantMore: []string{"test-nested-block"},
+		wantIn: map[string]string{
+			"test-label":        "{site}/tests/iam.tftest.hcl",
+			"test-nested-block": "{site}/tests/iam.tftest.hcl",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "x/assert" {
+  command = plan
+
+  weird_b {
+  }
+}
+`)
+		},
+	},
+	{
+		name:     "mock-provider-label-with-a-slash-hides-its-nested-block",
+		why:      `a mock_provider "scaleway/mock_data" in site/tests/iam.tftest.hcl whose label holds a /, with a weird_h block directly inside it, a nested type tofu test does not read there`,
+		want:     "test-label",
+		wantMore: []string{"test-nested-block"},
+		wantIn: map[string]string{
+			"test-label":        "{site}/tests/iam.tftest.hcl",
+			"test-nested-block": "{site}/tests/iam.tftest.hcl",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+mock_provider "scaleway/mock_data" {
+  weird_h {
+  }
+}
+`)
+		},
+	},
+	{
+		name: "run-label-with-a-slash-hides-its-module-source",
+		why:  `a run "x/assert" in site/tests/iam.tftest.hcl whose module block has source = "../../evil", a path out of the configuration`,
+		want: "test-label",
+		wantMore: []string{
+			"module-source",
+		},
+		wantIn: map[string]string{
+			"test-label":    "{site}/tests/iam.tftest.hcl",
+			"module-source": "{site}/tests/iam.tftest.hcl",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "x/assert" {
+  command = plan
+
+  module {
+    source = "../../evil"
+  }
+}
+`)
+		},
+	},
+	{
+		name:   "run-label-with-a-space",
+		why:    `a run "a b" in site/tests/iam.tftest.hcl, whose label holds a space and so is no identifier`,
+		want:   "test-label",
+		wantIn: map[string]string{"test-label": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a b" {
+  command = plan
+}
+`)
+		},
+	},
+	{
+		name:   "run-label-with-a-colon",
+		why:    `a run "a:b" in site/tests/iam.tftest.hcl, whose label holds the : the path joins a label with, and so is no identifier`,
+		want:   "test-label",
+		wantIn: map[string]string{"test-label": "{site}/tests/iam.tftest.hcl"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a:b" {
+  command = plan
+}
+`)
+		},
+	},
+	{
+		name:      "run-label-with-a-slash-is-quoted-as-written",
+		why:       `a run "a/b" in site/tests/iam.tftest.hcl: [test-label] must quote the label the way the source writes it, never as the escaped path element the rules judge the block by`,
+		want:      "test-label",
+		wantIn:    map[string]string{"test-label": `run "a/b"`},
+		wantNotIn: map[string]string{"test-label": "%2F"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a/b" {
+  command = plan
+}
+`)
+		},
+	},
+	{
+		name:      "run-label-written-with-an-escape-is-quoted-as-written",
+		why:       `a run "a%2Fb" in site/tests/iam.tftest.hcl whose label holds a %: [test-label] must quote it as written, so its % is never escaped a second time to %252F`,
+		want:      "test-label",
+		wantIn:    map[string]string{"test-label": `run "a%2Fb"`},
+		wantNotIn: map[string]string{"test-label": "%252F"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a%2Fb" {
+  command = plan
+}
+`)
+		},
+	},
+	{
+		name:      "run-label-with-unprintable-characters-is-not-quoted",
+		why:       `a run "##[error]x" in site/tests/iam.tftest.hcl whose label holds the ##[ a legacy GitHub Actions annotation starts with: [test-label] must not quote it, since the CI log would carry an annotation forged out of a label`,
+		want:      "test-label",
+		wantIn:    map[string]string{"test-label": "an unprintable label"},
+		wantNotIn: map[string]string{"test-label": "##["},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "##[error]x" {
+  command = plan
+}
+`)
+		},
+	},
+	{
+		name: "run-and-mock-provider-labels-that-are-identifiers",
+		why:  `a run "a-run_2" in site/tests/iam.tftest.hcl whose label holds the - and the digits an identifier allows, which tofu test reads`,
+		want: "",
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "a-run_2" {
+  command = plan
+
+  assert {
+    condition     = true
+    error_message = "x"
+  }
+}
+`)
+		},
+	},
+}
+
+// infraLabelPathCases pin the other half of the fix for the auditor's first finding (issue #434): the same
+// path shift hid blocks in configuration files, where no [test-label] can name the label that caused it. A
+// label holding a / added a segment to the block's path, so the block stopped being the type or depth the
+// rule reads it at and the rule skipped it while reporting nothing: `module "a/b"` was no [module-source],
+// `resource "scaleway_iam_policy" "p/q"` with count = 2 no [iam-repeat], `provider "x/y"` with api_url no
+// [provider-type] and no [provider-endpoint]. Each case below is that input on the real configuration, so the
+// label's / must no longer decide which block the rules see. The last case pairs the shift with a run whose
+// label also breaks [test-label]: both refusals are required, so tagging the label alone is no fix.
+var infraLabelPathCases = []infraRuleCase{
+	{
+		name:   "module-label-with-a-slash-from-git",
+		why:    `a module "a/b" in site/main.tf whose label holds a /, with source = "git::https://example.com/x", a source no rule allows`,
+		want:   "module-source",
+		wantIn: map[string]string{"module-source": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+module "a/b" {
+  source = "git::https://example.com/x"
+}
+`)
+		},
+	},
+	{
+		name:   "iam-policy-label-with-a-slash-repeated",
+		why:    `the deploy policy's label written "p/q", with count = 2, the repeat the label's / hid from the rule; the block is renamed rather than added, so the root still holds its one policy`,
+		want:   "iam-repeat",
+		wantIn: map[string]string{"iam-repeat": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				"resource \"scaleway_iam_policy\" \"deploy\" {\n  name           = \"shift2eu-site-deploy\"",
+				"resource \"scaleway_iam_policy\" \"p/q\" {\n  count          = 2\n  name           = \"shift2eu-site-deploy\"")
+		},
+	},
+	{
+		name:   "iam-policy-label-with-a-percent-escape-repeated",
+		why:    `the deploy policy's label written "p%2Fq", with count = 2: the % is escaped like the / and the : the path joins a label with, so a label that reads like an escape is still one segment and the rule still judges the block`,
+		want:   "iam-repeat",
+		wantIn: map[string]string{"iam-repeat": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				"resource \"scaleway_iam_policy\" \"deploy\" {\n  name           = \"shift2eu-site-deploy\"",
+				"resource \"scaleway_iam_policy\" \"p%2Fq\" {\n  count          = 2\n  name           = \"shift2eu-site-deploy\"")
+		},
+	},
+	{
+		name:   "iam-policy-label-with-a-colon-repeated",
+		why:    `the deploy policy's label written "p:q", with count = 2: the : is escaped like the / the path joins a label with, so the rule still judges the block`,
+		want:   "iam-repeat",
+		wantIn: map[string]string{"iam-repeat": "{site}/main.tf"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "main.tf"),
+				"resource \"scaleway_iam_policy\" \"deploy\" {\n  name           = \"shift2eu-site-deploy\"",
+				"resource \"scaleway_iam_policy\" \"p:q\" {\n  count          = 2\n  name           = \"shift2eu-site-deploy\"")
+		},
+	},
+	{
+		name:     "provider-label-with-a-slash-and-an-endpoint",
+		why:      `site/providers.tf's provider block written "x/y", with api_url = "https://example.com" beside the settings it may set`,
+		want:     "provider-type",
+		wantMore: []string{"provider-endpoint"},
+		wantIn: map[string]string{
+			"provider-type":     "{site}/providers.tf",
+			"provider-endpoint": "{site}/providers.tf",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+
+			providers := filepath.Join(site, "providers.tf")
+			editInfraFile(t, providers, `provider "scaleway" {`, `provider "x/y" {`)
+			editInfraFile(t, providers,
+				"  organization_id = var.organization_id",
+				"  api_url         = \"https://example.com\"\n  organization_id = var.organization_id")
+		},
+	},
+	{
+		name:     "run-label-with-a-slash-and-providers",
+		why:      `a run "x/y" in site/tests/iam.tftest.hcl whose label holds a /, with providers = { scaleway = scaleway.real }`,
+		want:     "test-providers",
+		wantMore: []string{"test-label"},
+		wantIn: map[string]string{
+			"test-providers": "{site}/tests/iam.tftest.hcl",
+			"test-label":     "{site}/tests/iam.tftest.hcl",
+		},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "tests", "iam.tftest.hcl"), `
+run "x/y" {
+  command = plan
+
+  providers = {
+    scaleway = scaleway.real
+  }
+}
+`)
+		},
+	},
+}
+
+// infraConfigurationLabelQuoteCases pin the other half of the fix for the auditor's first finding (issue #434):
+// the five refusals that quote a configuration block's label - [provider-type] for a resource, data or
+// ephemeral block, [iam-other], [resource-type], [provider-type] for a provider block, and [backend-s3] - must
+// quote the label as the source writes it, never the %2F, %3A or %25 the rules escape into the block's path so
+// a label's / cannot shift the block. A message carrying the escape names a type, a provider or a backend that
+// no file holds, so the reader looks for something the configuration does not contain.
+var infraConfigurationLabelQuoteCases = []infraRuleCase{
+	{
+		name:      "resource-type-label-written-with-a-slash-is-quoted-as-written",
+		why:       `a resource "scaleway_a/b" "x" in site/main.tf, a type whose / the rules escape into the block's path: [resource-type] must quote the type the way the source writes it`,
+		want:      "resource-type",
+		wantIn:    map[string]string{"resource-type": `"scaleway_a/b"`},
+		wantNotIn: map[string]string{"resource-type": "%2F"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_a/b" "x" {
+}
+`)
+		},
+	},
+	{
+		name:      "resource-type-label-with-unprintable-characters-is-not-quoted",
+		why:       `a resource "scaleway_##[warning]x" "y" in site/main.tf, a type holding the ##[ a legacy GitHub Actions annotation starts with: [resource-type] must not quote it, since the CI log would carry an annotation forged out of a label`,
+		want:      "resource-type",
+		wantIn:    map[string]string{"resource-type": "an unprintable label"},
+		wantNotIn: map[string]string{"resource-type": "##["},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			appendInfraText(t, filepath.Join(site, "main.tf"), `
+resource "scaleway_##[warning]x" "y" {
+}
+`)
+		},
+	},
+	{
+		name:      "backend-label-written-with-a-slash-is-quoted-as-written",
+		why:       `site/versions.tf's backend block written "s3/x", a label whose / the rules escape into the block's path: [backend-s3] must quote the label the way the source writes it`,
+		want:      "backend-s3",
+		wantIn:    map[string]string{"backend-s3": `"s3/x"`},
+		wantNotIn: map[string]string{"backend-s3": "%2F"},
+		breakage: func(t *testing.T, site string) {
+			t.Helper()
+			editInfraFile(t, filepath.Join(site, "versions.tf"),
+				`backend "s3" {`, `backend "s3/x" {`)
+		},
+	},
+}
+
 // infraFileFunctions are the functions a call of which reads a file, or resolves a path, on the machine that
 // runs tofu: the plan would then differ per machine and could carry a local file into the state. Every name
 // here gets its own case below, and the rules may refuse no fewer.
@@ -1633,7 +2135,7 @@ func TestInfraRules(t *testing.T) {
 	t.Run("the real infra holds every rule", func(t *testing.T) {
 		t.Parallel()
 
-		assertInfraRules(t, runInfraRules(t, infraRulesRoot), 0, nil, nil)
+		assertInfraRules(t, runInfraRules(t, infraRulesRoot), 0, nil, nil, nil)
 	})
 
 	t.Run("no root is a usage error", func(t *testing.T) {
@@ -1676,7 +2178,7 @@ func TestInfraRules(t *testing.T) {
 				wantExit = 1
 			}
 
-			assertInfraRules(t, runInfraRules(t, root), wantExit, wantTags, infraRuleWantIn(t, tc.wantIn, root, site))
+			assertInfraRules(t, runInfraRules(t, root), wantExit, wantTags, infraRuleWantIn(t, tc.wantIn, root, site), infraRuleWantIn(t, tc.wantNotIn, root, site))
 		})
 	}
 }
@@ -1901,8 +2403,10 @@ func runInfraRules(t *testing.T, args ...string) infraRuleRun {
 // assertInfraRules fails unless the run exited with wantExit, wrote nothing on stdout, reported exactly
 // wantTags, one stderr line each and in any order, printed nothing at all when wantExit is 0, and - for every
 // tag in wantIn - reported it on a line that holds the substring, so a rule cannot refuse something without
-// naming the directory or file it judges.
-func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []string, wantIn map[string]string) {
+// naming the directory or file it judges. For every tag in wantNotIn, the lines that report it must not hold
+// the substring: a message that quoted a value the way the rules escaped it internally would name something
+// the source does not write.
+func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []string, wantIn, wantNotIn map[string]string) {
 	t.Helper()
 
 	if got.stdout != "" {
@@ -1952,12 +2456,20 @@ func assertInfraRules(t *testing.T, got infraRuleRun, wantExit int, wantTags []s
 			found = true
 
 			if !strings.Contains(line, in) {
-				t.Errorf("the [%s] line %q does not name %q: the rule must name the directory or file it refuses", tag, line, in)
+				t.Errorf("the [%s] line %q does not hold %q: a rule names the file, directory or value it refuses", tag, line, in)
 			}
 		}
 
 		if !found {
 			t.Errorf("no stderr line reports [%s], so nothing names %q", tag, in)
+		}
+	}
+
+	for tag, not := range wantNotIn {
+		for _, line := range lines {
+			if strings.Contains(line, "["+tag+"] ") && strings.Contains(line, not) {
+				t.Errorf("the [%s] line %q holds %q: a message names what the source writes, never a value the rules escaped to judge it", tag, line, not)
+			}
 		}
 	}
 }
