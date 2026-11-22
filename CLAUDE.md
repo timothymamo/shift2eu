@@ -143,7 +143,8 @@ provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing 
    commands stop an unattended pane at a permission prompt nobody answers (issue #251).
 10. **Signal only what you started.** Never send a signal (`kill`, `pkill`, `killall`) to a process you
     did not start yourself, never pick a process to signal by its name (`pgrep`, `pidof`, `pkill`), and
-    never signal a process group: other agents' runs share this machine, and your run shares its group
+    never signal a process group yourself (stopping a background run through your agent's tool is the exception:
+    the tool started that group): other agents' runs share this machine, and your run shares its group
     with your shell or your agent's tool. To be able to stop a run of your own, prefer your agent's
     tool's background mode and stop it through that tool, which stops the whole run. Otherwise start it as
     `cd <path> && { <cmd> < /dev/null > <log file in your scratchpad or temporary directory> 2>&1 & echo $!; ps -o lstart= -p $!; }`
@@ -153,9 +154,8 @@ provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing 
     unit runs the same `make check`. Processes the run started (test binaries, a container) may outlive
     it: wait for the log to stop growing and report what still runs; never look them up (by name,
     `ps | grep` or group) to signal them. If you kept no pid, or the run has exited, signal nothing:
-    wait, or report it. Why: a coder sent SIGTERM to
-    the process group of a `make` it found with `pgrep -x make`, which may have been another unit's run
-    (issue #465).
+    wait, or report it. Why: a coder sent SIGTERM to the process group of a `make` it found with
+    `pgrep -x make`, which may have been another unit's run (issue #465).
 
 ## Multi-agent workflow
 
