@@ -7,10 +7,21 @@
 // interface: "Audit report paths". A required check that never reports blocks the pull request it is
 // required on, so the workflow runs on every pull request into main and filters none of them off.
 //
-// The workflow runs the pull request's own copy of the check, whose script this repository reviews: it
-// holds no secret, reads with contents: read alone, and pins every action by commit. Neither the author nor
-// either commit reaches a script through a ${{ }} expression spliced into it; they arrive through env:,
-// so no value from the event can become a shell word.
+// It runs on pull_request_target, not on pull_request, and that trigger is the fence itself. pull_request
+// runs the pull request's own copy of this workflow and of the script it calls: the audit App holds no
+// Workflows permission, so it cannot change .github/workflows/, but it does hold contents write, so it can
+// change .github/scripts/audit-paths.sh in its own pull request and make its own check pass. Under
+// pull_request_target the workflow and the script are main's copies, the code this repository reviewed.
+//
+// So the job checks main out, with no ref: and no repository: and without persisting a credential, and it
+// reaches the pull request's commits as git objects alone: one step before the check runs git fetch of the
+// pull request's own ref, taking its number from env:, and no run: step ever checks those commits out,
+// switches to them, works on them or resets to them. The check then diffs merge-base(base, head)..head and
+// never executes a line of the pull request's tree. The repository is public, so that fetch needs no
+// credential: the job holds contents: read, no secret and no environment.
+//
+// Neither the author nor either commit reaches a script through a ${{ }} expression spliced into it; they
+// arrive through env:, so no value from the event can become a shell word.
 package lint_test
 
 import (
@@ -40,6 +51,17 @@ const (
 	// auditPathsAuthorExpr is where the check's author comes from: the pull request's author login, which is
 	// the App's login for a report pull request. It is read in env: alone, never in a run: line.
 	auditPathsAuthorExpr = "${{ github.event.pull_request.user.login }}"
+
+	// auditPathsBaseExpr and auditPathsHeadExpr are the two commits the check compares: the base branch's
+	// commit the pull request is based on, and the pull request's own head commit. Neither is github.sha,
+	// which under pull_request_target is main's commit, the copy of the workflow and script the job runs: the
+	// check would then diff main against main and pass every pull request.
+	auditPathsBaseExpr = "${{ github.event.pull_request.base.sha }}"
+	auditPathsHeadExpr = "${{ github.event.pull_request.head.sha }}"
+
+	// auditPathsPullRequestExprPrefix is what the env: of the step that fetches the pull request's commits
+	// reads: the pull request's own number or head commit, never the base branch's.
+	auditPathsPullRequestExprPrefix = "${{ github.event.pull_request."
 
 	// The variables the check reads, which the step running it sets in env:.
 	auditPathsAuthorEnv = "AUDIT_PATHS_AUTHOR"
@@ -104,9 +126,11 @@ func readAuditPathsWorkflow(t *testing.T) auditPathsWorkflow {
 }
 
 // TestAuditPathsWorkflowIsAClosedFence pins the shape of .github/workflows/audit-paths.yml: it is named
-// for the check, runs on every pull request and no other event, reads with contents: read alone, reports
-// under the name the ruleset requires, pins every action by commit, leaves no credential in .git/config,
-// splices no expression into a script, and hands the check its author and its two commits through env:.
+// for the check, runs on every pull request and no other event through pull_request_target alone, reads
+// with contents: read alone, reports under the name the ruleset requires, pins every action by commit,
+// checks main out with no ref: and no credential, fetches the pull request's commits without ever checking
+// them out, splices no expression into a script, and hands the check its author and its two commits
+// through env:.
 func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 	t.Parallel()
 
@@ -125,7 +149,7 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 		}
 	})
 
-	t.Run("pull_request is the only trigger and no filter takes a pull request off it", func(t *testing.T) {
+	t.Run("pull_request_target is the only trigger and no filter takes a pull request off it", func(t *testing.T) {
 		t.Parallel()
 
 		on, ok := auditPathsEntry(t, workflow.lines, "on")
@@ -147,30 +171,33 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 			names = append(names, trigger.Key)
 		}
 
-		if len(triggers) != 1 || triggers[0].Key != "pull_request" {
-			// pull_request_target, workflow_run and issue_comment run a copy of the workflow another ref
-			// holds; only pull_request reports on the pull request's own merge, which is what a required
-			// check reads.
-			t.Fatalf("%s: on: holds %v, want pull_request alone: this check is a required check of pull requests", auditPathsWorkflowPath, names)
+		if len(triggers) != 1 || triggers[0].Key != "pull_request_target" {
+			// pull_request runs the pull request's own copy of this workflow and of the script it calls:
+			// the audit App cannot touch .github/workflows/, but it can change
+			// .github/scripts/audit-paths.sh in its pull request and so make its own check pass.
+			// pull_request_target runs main's copy of both. push and workflow_run report on no pull
+			// request at all, and a required check that never reports blocks the pull request it is
+			// required on.
+			t.Fatalf("%s: on: holds %v, want pull_request_target alone: only it runs main's own copy of the check, and only it reports on every pull request", auditPathsWorkflowPath, names)
 		}
 
-		pullRequest := triggers[0]
+		trigger := triggers[0]
 
-		if pullRequest.Value != "" && pullRequest.Value != "{}" {
-			t.Errorf("%s: line %d: pull_request: %s, want a block mapping or nothing", auditPathsWorkflowPath, pullRequest.Num, pullRequest.Value)
+		if trigger.Value != "" && trigger.Value != "{}" {
+			t.Errorf("%s: line %d: pull_request_target: %s, want a block mapping or nothing", auditPathsWorkflowPath, trigger.Num, trigger.Value)
 		}
 
-		for _, field := range auditPathsFields(t, pullRequest.Block, "on: pull_request:") {
+		for _, field := range auditPathsFields(t, trigger.Block, "on: pull_request_target:") {
 			switch field.Key {
 			case "paths", "paths-ignore", "branches-ignore":
 				// A required check that the filter leaves out never reports, and a pull request waiting
 				// for it is blocked for good.
-				t.Errorf("%s: line %d: pull_request: filters on %s:, want no filter: the check must report on every pull request into main", auditPathsWorkflowPath, field.Num, field.Key)
+				t.Errorf("%s: line %d: pull_request_target: filters on %s:, want no filter: the check must report on every pull request into main", auditPathsWorkflowPath, field.Num, field.Key)
 			case "branches", "types":
 				// Narrowing the branches or the activity types keeps the check reporting on the pull
 				// requests that matter, and the ruleset decides which ones it is required on.
 			default:
-				t.Errorf("%s: line %d: pull_request: has %s:, want branches: or types: at most: no other filter may keep the check from reporting", auditPathsWorkflowPath, field.Num, field.Key)
+				t.Errorf("%s: line %d: pull_request_target: has %s:, want branches: or types: at most: no other filter may keep the check from reporting", auditPathsWorkflowPath, field.Num, field.Key)
 			}
 		}
 	})
@@ -239,7 +266,7 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 		}
 	})
 
-	t.Run("every action is pinned by commit and the checkout keeps no credential", func(t *testing.T) {
+	t.Run("every action is pinned by commit and the checkout takes main and keeps no credential", func(t *testing.T) {
 		t.Parallel()
 
 		uses := 0
@@ -264,9 +291,13 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 			t.Fatalf("%s: the workflow uses no action, so this test checked no pin: the check needs a checkout", auditPathsWorkflowPath)
 		}
 
-		checkout, ok := auditPathsFind(workflow.steps, "uses", "actions/checkout@")
-		if !ok {
-			t.Fatalf("%s: no step checks the repository out, so the check has no commits to compare", auditPathsWorkflowPath)
+		checkout, checkouts := auditPathsCheckout(workflow.steps)
+		if checkouts == 0 {
+			t.Fatalf("%s: no step checks the repository out, so the job has no copy of %s to run", auditPathsWorkflowPath, auditPathsScript)
+		}
+
+		if checkouts > 1 {
+			t.Errorf("%s: %d steps use actions/checkout, want one: the job checks main out once, and a second checkout is how a pull request's own tree could reach the run", auditPathsWorkflowPath, checkouts)
 		}
 
 		with, ok := auditPathsEntry(t, checkout.Lines, "with")
@@ -276,11 +307,21 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 
 		persist, ok := auditPathsEntry(t, with.Block, "persist-credentials")
 		if !ok {
-			t.Fatalf("%s: the checkout has no persist-credentials:, so the job's token stays in .git/config for every step the pull request's tree runs", auditPathsWorkflowPath)
+			t.Fatalf("%s: the checkout has no persist-credentials:, so the job's token stays in .git/config for every step after it", auditPathsWorkflowPath)
 		}
 
 		if got := auditPathsScalar(t, persist); got != "false" {
 			t.Errorf("%s: line %d: the checkout sets persist-credentials: %s, want false: no step after it may read the token out of .git/config", auditPathsWorkflowPath, persist.Num, got)
+		}
+
+		for _, field := range auditPathsFields(t, with.Block, "the checkout's with:") {
+			switch field.Key {
+			case "ref", "repository":
+				// Under pull_request_target these two are how the pull request's own tree is checked
+				// out in place of main's, and then the fetch below and every run: step would act on a
+				// tree its author wrote.
+				t.Errorf("%s: line %d: the checkout sets %s: %s, want neither: the job checks main out, whose copy of the workflow and the script runs, and reaches the pull request's commits as git objects alone", auditPathsWorkflowPath, field.Num, field.Key, auditPathsScalar(t, field))
+			}
 		}
 	})
 
@@ -293,6 +334,35 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 					// A value spliced into a script is a shell word: the author of a pull request anyone
 					// can open would decide how the check's commands are read.
 					t.Errorf("%s: line %d: the run: script holds %q, want the step's env: to carry every value: an expression in a script is a shell word of the event's author", auditPathsWorkflowPath, step.Num, line)
+				}
+			}
+		}
+	})
+
+	t.Run("the pull request's commits are fetched, never checked out", func(t *testing.T) {
+		t.Parallel()
+
+		script, ok := auditPathsRunStep(t, workflow)
+		if !ok {
+			t.Fatalf("%s: no step runs %s, so the job reports nothing of the check", auditPathsWorkflowPath, auditPathsScript)
+		}
+
+		if _, ok := auditPathsFetch(t, workflow, script.Num); !ok {
+			t.Fatalf("%s: no step before the one that runs %s runs git fetch of the pull request's ref, so the check has main's own history alone and passes every pull request", auditPathsWorkflowPath, auditPathsScript)
+		}
+
+		// The fetched commits are objects to diff and nothing else. A tree that is checked out, switched
+		// to, worked on or reset to is a tree the pull request's author wrote, and the next run: step
+		// executes it: pull_request_target runs main's copy of the workflow only while nothing in the job
+		// moves the working tree off main.
+		for _, step := range workflow.steps {
+			for _, line := range auditPathsRunLines(t, step) {
+				for _, command := range []string{"git checkout", "git switch", "git worktree", "git restore", "git reset --hard"} {
+					if !strings.Contains(line, command) {
+						continue
+					}
+
+					t.Errorf("%s: line %d: a run: step runs %q in %q, want no step to touch the working tree: the pull request's commits are git objects to diff, never a tree the job runs", auditPathsWorkflowPath, step.Num, command, strings.TrimSpace(line))
 				}
 			}
 		}
@@ -311,16 +381,36 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 			t.Fatalf("%s: the step that runs %s has no env:, want %s, %s and %s", auditPathsWorkflowPath, auditPathsScript, auditPathsAuthorEnv, auditPathsBaseEnv, auditPathsHeadEnv)
 		}
 
-		author, ok := auditPathsEnvValue(env, auditPathsAuthorEnv)
-		if !ok {
-			t.Errorf("%s: the check's step sets no %s, so the check cannot tell whose pull request it reads", auditPathsWorkflowPath, auditPathsAuthorEnv)
-		} else if author != auditPathsAuthorExpr {
-			t.Errorf("%s: line %d: %s is %q, want %q: the check applies to the pull request's author alone", auditPathsWorkflowPath, env.Num, auditPathsAuthorEnv, author, auditPathsAuthorExpr)
-		}
+		for _, want := range []struct {
+			name string
+			expr string
+			why  string
+		}{
+			{
+				auditPathsAuthorEnv,
+				auditPathsAuthorExpr,
+				"the check applies to the pull request's author alone, and on a report pull request that author is the App",
+			},
+			{
+				auditPathsBaseEnv,
+				auditPathsBaseExpr,
+				"the branch the pull request is based on is the commit the check diffs from",
+			},
+			{
+				auditPathsHeadEnv,
+				auditPathsHeadExpr,
+				"the pull request's own head is the commit that would land, where github.sha is main's commit under pull_request_target",
+			},
+		} {
+			value, ok := auditPathsEnvValue(env, want.name)
+			if !ok {
+				t.Errorf("%s: the check's step sets no %s, so %s", auditPathsWorkflowPath, want.name, want.why)
 
-		for _, name := range []string{auditPathsBaseEnv, auditPathsHeadEnv} {
-			if value, ok := auditPathsEnvValue(env, name); !ok || value == "" {
-				t.Errorf("%s: the check's step sets no %s, so the check has no two commits to compare", auditPathsWorkflowPath, name)
+				continue
+			}
+
+			if value != want.expr {
+				t.Errorf("%s: line %d: %s is %q, want %q: %s", auditPathsWorkflowPath, env.Num, want.name, value, want.expr, want.why)
 			}
 		}
 	})
@@ -391,21 +481,83 @@ func auditPathsRunLines(t *testing.T, step yamlread.Item) []string {
 	return lines
 }
 
-// auditPathsFind returns the first item of items whose entry key holds want as a substring, and false when
-// items holds none: the step that uses an action is found that way.
-func auditPathsFind(items []yamlread.Item, key, want string) (yamlread.Item, bool) {
-	for _, item := range items {
-		for _, line := range item.Lines {
+// auditPathsCheckout returns the step of steps that uses actions/checkout, and how many steps do: the job
+// checks main out once, and every further checkout is a tree some other ref wrote.
+func auditPathsCheckout(steps []yamlread.Item) (yamlread.Item, int) {
+	var (
+		found yamlread.Item
+		count int
+	)
+
+	for _, step := range steps {
+		for _, line := range step.Lines {
 			text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line.Text), "-"))
 
-			value, ok := strings.CutPrefix(text, key+":")
-			if ok && strings.Contains(value, want) {
-				return item, true
+			uses, ok := strings.CutPrefix(text, "uses:")
+			if ok && strings.Contains(uses, "actions/checkout@") {
+				found, count = step, count+1
+
+				break
 			}
 		}
 	}
 
+	return found, count
+}
+
+// auditPathsFetch returns the step of workflow that runs before line and fetches the pull request's commits:
+// one whose run: runs git fetch and whose env: carries the pull request's number or head commit from the
+// event, the variable it names in run: itself. It reports on a fetch that is there but takes its ref any
+// other way, and false when no step runs git fetch at all.
+func auditPathsFetch(t *testing.T, workflow auditPathsWorkflow, before int) (yamlread.Item, bool) {
+	t.Helper()
+
+	for _, step := range workflow.steps {
+		if step.Num >= before {
+			break
+		}
+
+		run := auditPathsRunLines(t, step)
+		if !auditPathsRuns(run, "git fetch") {
+			continue
+		}
+
+		env, ok := auditPathsEntry(t, step.Lines, "env")
+		if !ok {
+			t.Errorf("%s: line %d: the step that runs git fetch has no env:, want the pull request's number or head commit there: an expression in run: is a shell word of the event's author", auditPathsWorkflowPath, step.Num)
+
+			continue
+		}
+
+		for _, variable := range auditPathsEnvVars(env) {
+			if !strings.HasPrefix(variable.value, auditPathsPullRequestExprPrefix) {
+				continue
+			}
+
+			if !strings.Contains(variable.value, ".number") && !strings.Contains(variable.value, ".head.sha") {
+				continue
+			}
+
+			if auditPathsRuns(run, variable.name) {
+				return step, true
+			}
+		}
+
+		t.Errorf("%s: line %d: the step that runs git fetch takes no pull request number or head commit from %s env: into run:, so it fetches nothing of the pull request", auditPathsWorkflowPath, step.Num, auditPathsPullRequestExprPrefix)
+	}
+
 	return yamlread.Item{}, false
+}
+
+// auditPathsRuns reports whether any of the lines of a step's run: script holds want.
+func auditPathsRuns(lines []string, want string) bool {
+	for _, line := range lines {
+		if strings.Contains(line, want) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // auditPathsScalar reads the value of e as one scalar, with a trailing comment removed.
@@ -430,17 +582,36 @@ func auditPathsWithoutComment(value string) string {
 	return value
 }
 
-// auditPathsEnvValue returns the value env: sets for name, as written and without a trailing comment, and
-// false when it sets none. A step's env: names its variables in upper case, which yamlread.Mapping refuses
-// as keys, so this reads the block's lines as written.
-func auditPathsEnvValue(env yamlread.Entry, name string) (string, bool) {
+// auditPathsEnvVar is one variable a step's env: sets, as written.
+type auditPathsEnvVar struct {
+	name  string
+	value string
+}
+
+// auditPathsEnvVars returns the variables env: sets, as written and without a trailing comment. A step's
+// env: names its variables in upper case, which yamlread.Mapping refuses as keys, so this reads the block's
+// lines as written.
+func auditPathsEnvVars(env yamlread.Entry) []auditPathsEnvVar {
+	variables := make([]auditPathsEnvVar, 0, len(env.Block))
+
 	for _, line := range env.Block {
-		key, value, ok := strings.Cut(line.Text, ":")
-		if !ok || key != name {
+		name, value, ok := strings.Cut(line.Text, ":")
+		if !ok {
 			continue
 		}
 
-		return auditPathsWithoutComment(strings.TrimSpace(value)), true
+		variables = append(variables, auditPathsEnvVar{name: name, value: auditPathsWithoutComment(strings.TrimSpace(value))})
+	}
+
+	return variables
+}
+
+// auditPathsEnvValue returns the value env: sets for name, and false when it sets none.
+func auditPathsEnvValue(env yamlread.Entry, name string) (string, bool) {
+	for _, variable := range auditPathsEnvVars(env) {
+		if variable.name == name {
+			return variable.value, true
+		}
 	}
 
 	return "", false
