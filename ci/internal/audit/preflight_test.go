@@ -30,6 +30,11 @@ import (
 // preflightNonce is the value the control call has to read back.
 const preflightNonce = "6b1d0c6f2e5a4d7b8c9e0f1a2b3c4d5e"
 
+// stepCanary is a canary with no run of 64 hex characters, so the judgement can
+// find it nowhere but in the value the step gives it (Judgement.Canary): the
+// hex heuristic cannot see it.
+const stepCanary = "SHIFT2EU-AUDIT-CANARY-SENTINEL"
+
 // probeShortName is the short name each probe's refusal uses, as the ADR's
 // example gives probe 2's ("probe 2, TCP connect: not refused").
 var probeShortName = map[int]string{
@@ -174,11 +179,13 @@ func (f fakeEffects) SudoAvailable() bool { return f.sudo }
 // GitHubEnvDigestChanged reports whether the step's $GITHUB_ENV file changed.
 func (f fakeEffects) GitHubEnvDigestChanged() bool { return f.envDigest }
 
-// judge runs the preflight's judgement for transcript and effects.
-func judge(plan audit.Plan, transcript []byte, effects audit.Effects) error {
+// judge runs the preflight's judgement for transcript and effects, with canary
+// as the step's canary when it is not empty.
+func judge(plan audit.Plan, transcript []byte, effects audit.Effects, canary string) error {
 	return audit.Judge(audit.Judgement{
 		Plan:       plan,
 		Nonce:      preflightNonce,
+		Canary:     canary,
 		Transcript: transcript,
 		Effects:    effects,
 	})
@@ -261,6 +268,8 @@ type judgeCase struct {
 	answers func(plan audit.Plan, answers []callResult)
 	// effects turns the passing observations into the case's.
 	effects func(effects *fakeEffects)
+	// canary, when set, is the step's canary the judgement is given.
+	canary string
 	// transcript, when set, replaces the transcript the answers build.
 	transcript func(plan audit.Plan, transcript []byte) []byte
 	// wantPass is whether the judgement passes.
@@ -385,8 +394,12 @@ func probeCases() []judgeCase {
 
 		first := func(plan audit.Plan) int { return probeIndices(plan, probe)[0] }
 
-		cases = append(cases,
-			judgeCase{
+		// Probe 5 has no effect the launcher observes itself: its effect is the
+		// canary in the transcript, which canaryCases covers. Without one, its
+		// transcript would be the passing case's byte for byte, so it gets no
+		// effect case.
+		if probe != 5 {
+			cases = append(cases, judgeCase{
 				name: fmt.Sprintf("probe %d's effect was observed", probe),
 				effects: func(effects *fakeEffects) {
 					switch probe {
@@ -403,7 +416,10 @@ func probeCases() []judgeCase {
 					}
 				},
 				want: refusal,
-			},
+			})
+		}
+
+		cases = append(cases,
 			judgeCase{
 				name: fmt.Sprintf("probe %d: a call's result is not an error", probe),
 				answers: func(plan audit.Plan, answers []callResult) {
@@ -488,6 +504,22 @@ func canaryCases() []judgeCase {
 			want: refusal,
 		},
 		{
+			// The step's own canary, which no hex heuristic finds, is looked for
+			// anywhere in the transcript: here in an element that carries no tool
+			// result at all.
+			name:   "the step's canary is outside every tool result",
+			canary: stepCanary,
+			transcript: func(_ audit.Plan, transcript []byte) []byte {
+				telling := fmt.Sprintf(
+					`{"type":"assistant","message":{"content":[{"type":"text","text":%q}]}}`+"\n",
+					"the environ holds "+stepCanary,
+				)
+
+				return append(transcript, []byte(telling)...)
+			},
+			want: refusal,
+		},
+		{
 			name: "the canary is in a Grep call's result",
 			answers: func(plan audit.Plan, answers []callResult) {
 				for _, i := range probeIndices(plan, 5) {
@@ -544,7 +576,7 @@ func TestJudgePassesOnlyWhenTheControlPassedAndEveryProbeWasRefused(t *testing.T
 				transcript = tc.transcript(plan, transcript)
 			}
 
-			err := judge(plan, transcript, effects)
+			err := judge(plan, transcript, effects, tc.canary)
 
 			if tc.wantPass {
 				if err != nil {
@@ -579,7 +611,7 @@ func TestJudgeNamesEveryProbeThatDidNotFail(t *testing.T) {
 	// Probe 1's file was written and probe 3 reached Docker.
 	effects := fakeEffects{probeFiles: true, docker: true}
 
-	err := judge(plan, transcriptOf(plan, answers), effects)
+	err := judge(plan, transcriptOf(plan, answers), effects, "")
 	if err == nil {
 		t.Fatal("Judge() = nil, want a refusal: two probes succeeded")
 	}

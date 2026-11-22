@@ -34,9 +34,11 @@ type runnerFake struct {
 	err         error
 }
 
-// Run is the runner the check takes: the fake records the invocation it would
-// have started.
-func (r *runnerFake) Run(_ context.Context, argv []string) error {
+// Check is the runner the check takes: the fake records the invocation it would
+// have started. The method, like audit.Runner's, is named Check: test/lint's
+// TestNoInterfaceDeclaresACloudWrite refuses an interface method named for a
+// write verb, and Run is one.
+func (r *runnerFake) Check(_ context.Context, argv []string) error {
 	r.invocations = append(r.invocations, argv)
 
 	return r.err
