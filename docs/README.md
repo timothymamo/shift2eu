@@ -115,3 +115,4 @@ neither this index nor a sub-index lists. It never fetches an external URL.
 The release archives ship `README.md` with `docs/` beside it, so the README's links work in an
 unpacked archive too. Links from these pages to the repository's source files (the JSON
 Schemas, for one) resolve in the repository, not in an archive.
+
