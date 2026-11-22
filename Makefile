@@ -400,8 +400,9 @@ $(error $(firstword $(envrc_guard_goals)): refused: direnv would read the creden
 endif
 endif
 endif
-# What every recipe puts before limactl, on every call (test/devenv pins it): the host clone's .envrc holds the
-# agents App's variables, and no limactl call needs them, so limactl runs without them (issues #227 and #326,
+# What every recipe of this Makefile puts before limactl, on every call (test/devenv pins it): the host clone's
+# .envrc holds the agents App's variables, and no limactl call of these recipes needs them, so limactl runs
+# without them (scripts such as dev/agents-app-token.sh call limactl themselves; issues #227 and #326,
 # ADR 0031; defence in depth, as Lima forwards no environment by default). macOS /usr/bin/env has -u too.
 VM_SHELL_ENV := env -u SHIFT2EU_AGENTS_APP_ID -u SHIFT2EU_AGENTS_APP_INSTALLATION_ID -u SHIFT2EU_AGENTS_APP_KEY_FILE
 # Credentials vm-env copies from your shell (e.g. direnv) into the VM, by name. Never add
@@ -677,8 +678,10 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # Once the VM has started (or been created), vm-up sets the main checkout's git hooks again, inside the VM:
 # git -C WORKSPACE_REPO config core.hooksPath .githooks through limactl shell, as make vm-init
 # (dev/vm-init.sh) first set them, so an agent that unset the setting does not keep the hooks off past the next
-# start (issue #326). The setting lives in the mounted .git/config; the protection of main on GitHub stays the
-# real gate. vm-up never runs git on the Mac: git-hooks would set the host clone's, and running git in the
+# make vm-up (issue #326); a VM the vm-boot LaunchDaemon starts at boot gets it at the next make vm-up. It
+# restores only the repository's local setting, in the mounted .git/config: a worktree-level core.hooksPath
+# (extensions.worktreeConfig) or an edited .githooks/ still leaves the hooks off, so the protection of main on
+# GitHub stays the real gate. vm-up never runs git on the Mac: git-hooks would set the host clone's, and running git in the
 # workspace from the Mac is what issue #227 forbids. Every limactl call of vm-up runs under $(VM_SHELL_ENV).
 # vm-up then checks VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT, then that WORKSPACE_REPO is a directory holding
 # .git, then that the workspace can be listed and holds nothing stray - the repository's name matched literally
