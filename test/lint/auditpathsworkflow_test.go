@@ -17,8 +17,11 @@
 //
 // So the job checks main out, with no ref: and no repository: and without persisting a credential, and it
 // reaches the pull request's commits as git objects alone: one step before the check runs git fetch of the
-// pull request's own ref, taking its number from env:, and no run: step ever checks those commits out,
-// switches to them, works on them or resets to them. The check then diffs merge-base(base, head)..head and
+// pull request's own ref, taking its number from env:, and that fetch is the only git invocation any run:
+// step holds. No run: step ever checks those commits out, switches to them, works on them or resets to
+// them, and the rule is a white list rather than a black list of the commands that write the working tree,
+// because git read-tree -u, git checkout-index, git merge, git stash apply, git apply and git am write it
+// as surely as git checkout does. The check then diffs merge-base(base, head)..head and
 // never executes a line of the pull request's tree. The repository is public, so that fetch needs no
 // credential: the job holds contents: read, no secret and no environment.
 //
@@ -423,17 +426,23 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 		}
 
 		// The fetched commits are objects to diff and nothing else. A tree that is checked out, switched
-		// to, worked on or reset to is a tree the pull request's author wrote, and the next run: step
-		// executes it: pull_request_target runs main's copy of the workflow only while nothing in the job
-		// moves the working tree off main.
+		// to, merged, applied, worked on or reset to is a tree the pull request's author wrote, and the
+		// next run: step executes it: pull_request_target runs main's copy of the workflow only while
+		// nothing in the job moves the working tree off main.
+		//
+		// So the rule is a white list and not a black list of the commands that write the working tree: git
+		// read-tree -u, git checkout-index, git merge, git stash apply, git apply and git am write it as
+		// surely as git checkout does, and a black list names only the writing commands someone thought of.
+		// This job reads refs/pull/<n>/head as objects, so the only git invocation a run: line may hold is
+		// git fetch.
 		for _, step := range workflow.steps {
 			for _, line := range auditPathsRunLines(t, step) {
-				for _, command := range []string{"git checkout", "git switch", "git worktree", "git restore", "git reset --hard"} {
-					if !strings.Contains(line, command) {
+				for _, command := range auditPathsGitCommands(line) {
+					if command == "git fetch" {
 						continue
 					}
 
-					t.Errorf("%s: line %d: a run: step runs %q in %q, want no step to touch the working tree: the pull request's commits are git objects to diff, never a tree the job runs", auditPathsWorkflowPath, step.Num, command, strings.TrimSpace(line))
+					t.Errorf("%s: line %d: a run: step runs %q in %q, want git fetch alone: the pull request's commits are git objects to diff, never a tree the job runs", auditPathsWorkflowPath, step.Num, command, strings.TrimSpace(line))
 				}
 			}
 		}
@@ -565,6 +574,40 @@ func auditPathsRunLines(t *testing.T, step yamlread.Item) []string {
 	}
 
 	return lines
+}
+
+// auditPathsGitCommands returns every git invocation one line of a run: script holds, as the words of the
+// command that begin it - "git" and the subcommand after it - and nil for a line that runs no git. A
+// comment line is no invocation.
+func auditPathsGitCommands(line string) []string {
+	if strings.HasPrefix(strings.TrimSpace(line), "#") {
+		return nil
+	}
+
+	words := strings.Fields(line)
+	commands := make([]string, 0, 1)
+
+	for i, word := range words {
+		if auditPathsShellWord(word) != "git" {
+			continue
+		}
+
+		command := "git"
+		if i+1 < len(words) {
+			command += " " + auditPathsShellWord(words[i+1])
+		}
+
+		commands = append(commands, command)
+	}
+
+	return commands
+}
+
+// auditPathsShellWord returns word as the shell would hand it to a command: without the quotes, brackets and
+// redirections that may surround it. It is no shell parser, so a line that spells git inside a quoted string
+// counts as an invocation too, which fails closed: this job has no reason to name git in a string.
+func auditPathsShellWord(word string) string {
+	return strings.Trim(word, "\"'`(){}[]<>;|&!=$")
 }
 
 // auditPathsCheckout returns the step of steps that uses actions/checkout, and how many steps do: the job
