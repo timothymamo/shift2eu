@@ -344,9 +344,11 @@ func TestMakeTestBrowserRecipeIgnoresFurtherSignalsBeforeItExits(t *testing.T) {
 
 // TestSignalTrapProblems pins the check itself, over stand-in recipes rather than the real Makefile: the traps as
 // issue #464 fixes them have no problem, the three names of the ignore in another order neither, and a trap that
-// exits first, ignores only some of the three, or is missing altogether is reported, naming the signal and what its
-// trap does instead. A check that read no trap at all, or read the ignore of the EXIT trap as the signal trap's,
-// would pass whatever the recipe said, and these are the ways it went wrong while it was written.
+// exits first, ignores only some of the three, exits nowhere, or is missing altogether is reported, naming the signal
+// and what its trap does instead. A signal the recipe traps more than once is a fault of its own: the shell keeps the
+// last trap it sets for a signal, so a later re-set turns the earlier one into dead text a check must not read. A
+// check that read no trap at all, or read the ignore of the EXIT trap as the signal trap's, would pass whatever the
+// recipe said, and these are the ways it went wrong while it was written.
 func TestSignalTrapProblems(t *testing.T) {
 	t.Parallel()
 
@@ -375,10 +377,10 @@ func TestSignalTrapProblems(t *testing.T) {
 		},
 		{
 			name:    "the exit before the ignore",
-			actions: []string{fixed("exit 129"), fixed("exit 130"), "exit 143; trap \"\" HUP INT TERM"},
-			trap:    trappedSignals[2],
+			actions: []string{"exit 129; trap \"\" HUP INT TERM", fixed("exit 130"), fixed("exit 143")},
+			trap:    trappedSignals[0],
 			want: []string{
-				`the first statement of the TERM trap of make test-browser is "exit 143", want trap "" HUP INT TERM: the trap's exit hands the shell to its EXIT trap, and a second TERM landing before that trap's own ignore ends the shell there, before it has removed the container and the bundle directory (issue #464)`,
+				`the first statement of the HUP trap of make test-browser is "exit 129", want trap "" HUP INT TERM: the trap's exit hands the shell to its EXIT trap, and a second HUP landing before that trap's own ignore ends the shell there, before it has removed the container and the bundle directory (issue #464)`,
 			},
 		},
 		{
@@ -398,11 +400,33 @@ func TestSignalTrapProblems(t *testing.T) {
 			},
 		},
 		{
+			name:    "a trap that ignores the signals and then exits nowhere",
+			actions: []string{fixed("exit 129"), fixed("exit 130"), `trap "" HUP INT TERM; true`},
+			trap:    trappedSignals[2],
+			want: []string{
+				`the TERM trap of make test-browser exits nowhere, want exit 143: a trapped signal must end the run through the EXIT trap that cleans up (issue #464)`,
+			},
+		},
+		{
 			name:   "no trap for the signal at all",
 			recipe: "\ttrap 'trap \"\" HUP INT TERM; exit 129' HUP; \\\n\tsleep 1\n",
 			trap:   trappedSignals[2],
 			want: []string{
 				`the recipe of make test-browser sets no trap for TERM: the run must end through its EXIT trap when it is hung up on, interrupted or terminated (issue #464)`,
+			},
+		},
+		{
+			// The shell keeps the last trap it sets for a signal, so a recipe that sets a second one for TERM turns the
+			// fixed trap above it into dead text: a check reading the first trap would pin what the run never does.
+			name: "the signal trapped twice, the second trap unfixed",
+			recipe: "\ttrap 'trap \"\" HUP INT TERM; exit 129' HUP; \\\n" +
+				"\ttrap 'trap \"\" HUP INT TERM; exit 130' INT; \\\n" +
+				"\ttrap 'trap \"\" HUP INT TERM; exit 143' TERM; \\\n" +
+				"\ttrap 'exit 143' TERM; \\\n" +
+				"\tsleep 1\n",
+			trap: trappedSignals[2],
+			want: []string{
+				`the recipe of make test-browser sets 2 traps for TERM, the last "exit 143": a shell keeps the last trap it sets for a signal, so only the last one runs when TERM arrives and this check must not read the traps before it (issue #464)`,
 			},
 		},
 	}
@@ -424,17 +448,24 @@ func TestSignalTrapProblems(t *testing.T) {
 }
 
 // signalTrapProblems returns what the recipe of make test-browser gets wrong about the trap it sets for one signal,
-// one message per fault: empty when the recipe traps the signal, the trap's first statement ignores HUP, INT and TERM,
-// and its action then exits with the status 128 plus the signal's number.
+// one message per fault: empty when the recipe traps the signal once, the trap's first statement ignores HUP, INT and
+// TERM, and its action then exits with the status 128 plus the signal's number.
 func signalTrapProblems(recipe string, trap signalTrap) []string {
-	action, found := signalTrapAction(recipe, trap.name)
+	actions := signalTrapActions(recipe, trap.name)
 
-	if !found {
+	if len(actions) == 0 {
 		return []string{fmt.Sprintf("the recipe of make %s sets no trap for %s: the run must end through its EXIT trap when it is hung up on, interrupted or terminated (%s)",
 			testBrowserTarget, trap.name, signalRaceIssue)}
 	}
 
-	statements := trapStatements(action)
+	// The shell keeps the last trap it sets for a signal, so a recipe that sets a second one leaves the ones before it
+	// dead: reading one would pin a trap the run never runs. Reported before the trap itself is read, whatever it says.
+	if len(actions) > 1 {
+		return []string{fmt.Sprintf("the recipe of make %s sets %d traps for %s, the last %q: a shell keeps the last trap it sets for a signal, so only the last one runs when %s arrives and this check must not read the traps before it (%s)",
+			testBrowserTarget, len(actions), trap.name, actions[len(actions)-1], trap.name, signalRaceIssue)}
+	}
+
+	statements := trapStatements(actions[0])
 
 	first := ""
 	if len(statements) > 0 {
@@ -493,16 +524,20 @@ func ignoresTrappedSignals(statement string) bool {
 // read as the trap for one of them.
 var signalTrapStatement = regexp.MustCompile(`trap '([^']*)' (HUP|INT|TERM);`)
 
-// signalTrapAction returns the action of the recipe's trap for one signal - what the shell runs when that signal
-// arrives - as the recipe writes it between the trap's quotes, and false when the recipe sets no trap for the signal.
-func signalTrapAction(recipe, signal string) (string, bool) {
+// signalTrapActions returns the action of every trap the recipe sets for one signal - what the shell runs when that
+// signal arrives - in the order the recipe sets them, as the recipe writes each between the trap's quotes: empty when
+// the recipe sets no trap for the signal. Every trap is returned, not just the first, because the shell keeps the
+// last one it is given for a signal and the caller must see a recipe that sets more than one.
+func signalTrapActions(recipe, signal string) []string {
+	var actions []string
+
 	for _, match := range signalTrapStatement.FindAllStringSubmatch(recipe, -1) {
 		if match[2] == signal {
-			return match[1], true
+			actions = append(actions, match[1])
 		}
 	}
 
-	return "", false
+	return actions
 }
 
 // trapStatements splits the action of a trap into the statements a shell would run, on the semicolons between them, and
