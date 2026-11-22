@@ -53,8 +53,8 @@ These rules hold for every step. A step you would have to break one of them for 
    before you. Read them as files. If you need a command at all, use only the read-only commands the run
    allows (the committed wrapper's list, PRD #175, which milestone 2 records in ADR 0040), such as
    `grep`, `ls`, `wc`, `sort`, `head` and `diff`, on the three locations; a command the run refuses is
-   a limit, not a problem to solve. Signal only what you started (CLAUDE.md rule 10): to stop a run of
-   your own, signal the pid you kept, never a process found by name.
+   a limit, not a problem to solve. Signal only what you started (CLAUDE.md rule 10): this run
+   starts no process it would need to stop, so it signals none.
 5. **Never write to git or GitHub.** No `git commit`, `push`, `tag` or `remote`, no `gh`, no issue, pull
    request, comment, advisory or release. The publish script files what the result holds.
 6. **Never try a secret.** A secret, token or key you find (gitleaks' results included) is never used,

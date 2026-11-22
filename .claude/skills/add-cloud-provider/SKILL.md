@@ -96,4 +96,4 @@ narrows that list further and never widens it.
 ## Finish
 
 Wire the adapter in `cmd/shift2eu`, update the provider tables in README.md, and run `make check`.
-Signal only what you started (CLAUDE.md rule 10): to stop a run of your own, signal the pid you kept, never a process found by name.
+Signal only what you started (CLAUDE.md rule 10): stop a run of your own only by the pid you kept, after checking it is still your command; never a process found by name, never a group.

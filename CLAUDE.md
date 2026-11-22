@@ -141,17 +141,17 @@ provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing 
    way (`git commit -F <file>`, `gh pr create --body-file <file>`). Never `rm` a path held in a variable
    or built at run time (`rm -rf "$dir"`); leave scratch directories for the system to clean. Why: such
    commands stop an unattended pane at a permission prompt nobody answers (issue #251).
-10. **Signal only what you started.** Never send a signal (`kill`, `pkill`, `killall`, a process-group
-    kill) to a process you did not start yourself, and never pick a process to signal by its name
-    (`pgrep <name>`, `pidof`, `pkill`): other agents' runs share this machine. To stop a run of your own,
-    keep its pid when you start it: start it as `<cmd> & echo $!` and note the number, since each shell
-    call may be a new shell and `$!` is gone later; a run your agent's tool started in the background is
-    stopped through that tool. The processes your run started are yours too: find them from its pid
-    (`pgrep -P <pid>` picks by your own pid, not by name) and signal those pids. Kill a process group only
-    if you created that group yourself: in a non-interactive shell a background job shares the shell's
-    group, so `kill -- -<pid>` can hit far more than your run. If you kept no pid, signal nothing: wait
-    for the run to end, or report it. Why: a coder sent SIGTERM to the process group of a `make`
-    it found with `pgrep -x make`, which may have been another unit's run (issue #465).
+10. **Signal only what you started.** Never send a signal (`kill`, `pkill`, `killall`) to a process you
+    did not start yourself, never pick a process to signal by its name (`pgrep`, `pidof`, `pkill`), and
+    never signal a process group: other agents' runs share this machine, and your run shares its group
+    with your shell or your agent's tool. To be able to stop a run of your own, start it as
+    `<cmd> > <log file in your scratchpad or temporary directory> 2>&1 & echo $!` and note the pid (the
+    redirect keeps your shell tool from waiting on the run's output), or start it through your agent's
+    tool's background mode and stop it through that tool. Signal only that pid, and only after
+    `ps -o args= -p <pid>` shows the command you started: a pid is reused once its process exits. If you
+    kept no pid, or the run has exited, signal nothing: wait, or report it. Why: a coder sent SIGTERM to
+    the process group of a `make` it found with `pgrep -x make`, which may have been another unit's run
+    (issue #465).
 
 ## Multi-agent workflow
 
