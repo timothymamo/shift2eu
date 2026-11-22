@@ -160,6 +160,13 @@ exec %s "$@"
 // Nothing of git is needed for it either: the refusal holds on a PATH without git, where REPO_ROOT falls back to
 // CURDIR.
 //
+// A workspace the guard's resolver cannot print is refused rather than compared (issue #447): a loop of
+// symlinks, which the resolver's 40 links never end, and a link whose target holds a character a WORKSPACE_REPO
+// may not - the recipes paste the workspace inside quotes and make's filter reads it as a pattern, so a resolved
+// path holding a space is no path they may be handed. Neither refusal shows the resolved value or the part of it
+// that failed, which may be a credential typed where a path goes. A target spelling .. components counts as it
+// resolves, so a link leading into the checkout that way is refused like one leading there directly.
+//
 // The rows that refuse a colon, a comma and a tilde each have a positive control: the same layout with that
 // character taken out of the value, which make must accept and mount. They pin the refusal to the character - a
 // row whose value is never accepted without it could pass because of the directory the test runs in rather than
@@ -210,10 +217,13 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 
 	// What the refusal of a value the recipes could not paste inside quotes must say, and what it must no longer
 	// say: the old message named whitespace and a list of characters, which says nothing about what a value may
-	// hold, and about a path nothing can be learned from it.
+	// hold, and about a path nothing can be learned from it. cannotBeResolved is the refusal of a workspace whose
+	// resolved path the Makefile's resolver could not print (issue #447): more than 40 symlinks, so a loop of them
+	// never ends, a link readlink cannot read, or a resolved path holding a character the recipes cannot paste.
 	const (
-		notAllowed    = "a character other than letters, digits and"
-		wasTheOldWord = "whitespace or one of"
+		notAllowed       = "a character other than letters, digits and"
+		cannotBeResolved = "cannot be resolved"
+		wasTheOldWord    = "whitespace or one of"
 	)
 
 	cases := []refusalCase{
@@ -325,6 +335,93 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 
 				return l.root
 			},
+		},
+		{
+			// Issue #447, fail closed: the workspace's path runs through a loop of symlinks, a -> b and b -> a,
+			// which no resolution ends. The resolver follows at most 40 links and then prints nothing, so the guard
+			// must refuse an empty value instead of comparing it: an empty resolved path is inside every checkout,
+			// and a guard that compared it would take the workspace for something it never resolved. The links are
+			// the test's own and their targets are relative to the links' directory, the sandbox root, as a
+			// maintainer's relative links are.
+			name: "the workspace's path is a loop of symlinks",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				links := []struct{ path, target string }{
+					{path: filepath.Join(l.sb.root, "link-a"), target: "link-b"},
+					{path: filepath.Join(l.sb.root, "link-b"), target: "link-a"},
+				}
+
+				for _, link := range links {
+					if err := os.Symlink(link.target, link.path); err != nil {
+						t.Fatalf("symlink %s to %s: %v", link.path, link.target, err)
+					}
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(l.sb.root, "link-a", hostTargetInstance)
+
+				return l.root
+			},
+			want:        []string{cannotBeResolved},
+			emptyStdout: true,
+		},
+		{
+			// Issue #447, fail closed: the link's own name holds only characters a WORKSPACE_REPO may, while the
+			// path it resolves to holds a space. The recipes paste the workspace inside quotes and make's filter
+			// reads it as a pattern, so a resolved path holding such a character is no path they may be handed:
+			// the guard refuses, and shows the workspace as it was written, never the resolved value.
+			name: "the workspace is reached through a symlink whose target holds a space",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				target := filepath.Join(l.sb.root, "ws with space", hostTargetInstance)
+				if err := os.MkdirAll(target, 0o700); err != nil {
+					t.Fatalf("create %s: %v", target, err)
+				}
+
+				link := filepath.Join(l.sb.root, "link-to-the-workspace")
+				// A relative target, resolved from the link's own directory, the sandbox root: the workspace's directory
+				// holds a space, while the link's own name does not.
+				linkTarget := "ws with space"
+
+				if err := os.Symlink(linkTarget, link); err != nil {
+					t.Fatalf("symlink %s to %s: %v", link, linkTarget, err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(link, hostTargetInstance)
+
+				return l.root
+			},
+			want:        []string{cannotBeResolved},
+			notWant:     []string{"ws with space"},
+			emptyStdout: true,
+		},
+		{
+			// Issue #447: the link's target climbs into the checkout make runs from through .. components, and only
+			// the resolved path is inside it - as written the workspace is somewhere else entirely. The resolver
+			// drops the last resolved component for each .., so the workspace is compared in its physical form and
+			// refused; a guard comparing the spelling would let the host target run on the Mac. The target is a
+			// literal, not a filepath.Join, which would clean the .. away before the guard ever saw it.
+			name: "the workspace is reached through a symlink whose target climbs into the checkout with ..",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				link := filepath.Join(l.sb.root, "link-into-the-checkout")
+				// Relative to the link's directory, the sandbox root: a component that does not exist, back out of it,
+				// and on into the host clone's workspace directory.
+				target := "not-there/../host/shift2eu/ws"
+
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatalf("symlink %s to %s: %v", link, target, err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(link, hostTargetInstance)
+
+				return l.root
+			},
+			want:        []string{"is inside"},
+			notWant:     []string{cannotBeResolved},
+			emptyStdout: true,
 		},
 		{
 			name:   "the workspace is the root directory",
@@ -717,7 +814,10 @@ func assertHostTargetRefused(t *testing.T, l *hostLayout, dir string, run refuse
 //
 // The value may be written in more than one way and must still name the same paths: a trailing slash and a ..
 // component resolve to the checkout inside the workspace, never to a path of the host clone and never to
-// something the shell or make reads as two words.
+// something the shell or make reads as two words. A workspace reached through a symlink the maintainer's own
+// directories hold is no reason to refuse either (issue #447): resolving the path must land on the workspace the
+// link leads to, which is outside the checkout, so the target runs and mounts the workspace WORKSPACE_REPO
+// spells.
 func TestHostTargetsRunFromTheHostClone(t *testing.T) {
 	t.Parallel()
 
@@ -784,6 +884,34 @@ func TestHostTargetsRunFromTheHostClone(t *testing.T) {
 					"bash", "-l", "dev/vm-init.sh",
 					l.workspace(), l.env["WORKSPACE_REPO"], "Test Maintainer", "maintainer@example.com", "dark",
 				}}
+			},
+		},
+		{
+			// Issue #447: the workspace is reached through a symlink outside the clone, and it exists. Resolving the
+			// path must land on the workspace the link leads to, which is outside the checkout make runs from, so
+			// the guard accepts the layout and vm-up mounts the workspace WORKSPACE_REPO spells: the link, the path
+			// the maintainer works in.
+			name:   "vm-up mounts a workspace reached through a symlink",
+			target: "vm-up",
+			setup: func(t *testing.T, l *hostLayout) {
+				t.Helper()
+
+				link := filepath.Join(l.sb.root, "ws-link")
+				if err := os.Symlink(l.sb.workspaceRoot(), link); err != nil {
+					t.Fatalf("symlink %s to %s: %v", link, l.sb.workspaceRoot(), err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(link, hostTargetInstance)
+			},
+			want: func(l *hostLayout) [][]string {
+				return [][]string{
+					// The existence check answers that the instance is not listed, so the create line follows.
+					{"list", "--quiet"},
+					{
+						"start", "--name=" + hostTargetInstance, "--mount-only", l.workspace() + ":w",
+						"--tty=false", "dev/lima.yaml",
+					},
+				}
 			},
 		},
 		{
