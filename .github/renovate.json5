@@ -132,19 +132,20 @@
       registryUrls: ['https://registry.opentofu.org'],
     },
     {
-      // The AI reviewer's Claude Code CLI (ADR 0033) is pinned by version (CLAUDE_CODE_VERSION in the
-      // install step's env:, which the "Versions annotated with" manager reads) and by the npm integrity
-      // of its tarball (CLAUDE_CODE_INTEGRITY beside it), which Renovate cannot update: a bump must replace
-      // CLAUDE_CODE_INTEGRITY in the same PR. The AI review check of Renovate's PR runs main's copy of the
-      // workflow (pull_request_target), so it cannot catch a missed integrity; the "Claude Code pin" check
+      // The Claude Code CLI the AI reviewer (ADR 0033) and the scheduled audit (ADR 0040) install is
+      // pinned in one file, .github/claude-code.yaml (issue #277): by version (its version: line, which
+      // the "Versions annotated with" manager reads) and by the npm integrity of its tarball (its
+      // integrity: line), which Renovate cannot update: a bump must replace the integrity in the same PR.
+      // The AI review check of Renovate's PR runs main's copy of the workflow and the pin file
+      // (pull_request_target), so it cannot catch a missed integrity; the "Claude Code pin" check
       // (.github/workflows/claude-code-pin.yml, issue #276) does: it compares the PR's pinned integrity
       // with the npm registry's dist.integrity of exactly the pinned version, and fails this PR until the
       // integrity is replaced. A post-upgrade task cannot do it: allowedPostUpgradeCommands is a setting of
       // a self-hosted Renovate only.
-      description: 'Claude Code CLI: ai-review.yml version, with the integrity updated by hand in the same PR; the Claude Code pin check fails the PR until it is',
+      description: 'Claude Code CLI: .github/claude-code.yaml version, with the integrity updated by hand in the same PR; the Claude Code pin check fails the PR until it is',
       matchDepNames: ['@anthropic-ai/claude-code-linux-x64'],
       prBodyNotes: [
-        '**Before merging:** replace `CLAUDE_CODE_INTEGRITY` in `.github/workflows/ai-review.yml` with the output of `npm view @anthropic-ai/claude-code-linux-x64@<new version> dist.integrity`: the **Claude Code pin** check fails this PR until it is replaced, and its error names the published integrity. The check runs on every pull request and is a required status check once the maintainer marks it so in the Protect main ruleset (issue #452): do not merge while it is red. Also check that the CLI still accepts every flag `ci/internal/claudecode/cli.go` passes (`claude --help`). The AI review check of this PR runs main\'s pin, not this one.',
+        '**Before merging:** replace `integrity:` in `.github/claude-code.yaml` with the output of `npm view @anthropic-ai/claude-code-linux-x64@<new version> dist.integrity`: the **Claude Code pin** check fails this PR until it is replaced, and its error names the published integrity. The check runs on every pull request and is a required status check once the maintainer marks it so in the Protect main ruleset (issue #452): do not merge while it is red. Also check that the CLI still accepts every flag `ci/internal/claudecode/cli.go` passes (`claude --help`). The AI review check of this PR runs main\'s pin, not this one.',
       ],
     },
     {
@@ -198,10 +199,15 @@
       // setup-buildx-action's driver-opts, is read from its tag.
       description: 'Versions annotated with "# renovate: datasource=... depName=..." on the line above',
       customType: 'regex',
+      // The workflows are named one by one: ai-review.yml holds no pin of its own since the Claude
+      // Code CLI's version and integrity moved to .github/claude-code.yaml (ADR 0040's milestone-2
+      // amendment, issue #277), which this manager reads instead, so no bump moves a second text. A new
+      // workflow with an annotated pin joins this list.
       managerFilePatterns: [
         '/^dev/lima\\.yaml$/',
         '/^dev/testdata/lima-invalid/[^/]+\\.yaml$/',
-        '/^\\.github/workflows/[^/]+\\.ya?ml$/',
+        '/^\\.github/workflows/(?:ci|release|security|vm-tools)\\.ya?ml$/',
+        '/^\\.github/claude-code\\.yaml$/',
         '/^infra/tofu\\.yaml$/',
       ],
       matchStrings: [

@@ -1,8 +1,9 @@
 name: Claude Code pin
 
-# claude-code-pin (issue #276, ADR 0033): .github/workflows/ai-review.yml pins the AI reviewer's Claude
-# Code CLI by CLAUDE_CODE_VERSION, which Renovate bumps, and CLAUDE_CODE_INTEGRITY, the npm integrity of
-# that version's tarball, which Renovate cannot bump. A bump's own AI review runs main's copy of that file
+# claude-code-pin (issue #276, ADR 0033): .github/claude-code.yaml, the one pin file every workflow that
+# installs the Claude Code CLI reads (ADR 0040's milestone-2 amendment, issue #277), pins it by its
+# version: line, which Renovate bumps, and its integrity: line, the npm integrity of that version's
+# tarball, which Renovate cannot bump. A bump's own AI review runs main's copy of that file
 # (pull_request_target), so a stale integrity would show only after the merge, as every review failing at
 # its install step. This job fails the pull request instead: ci/claudecodepin reads both pins and fails
 # unless the npm registry's document of exactly that version of @anthropic-ai/claude-code-linux-x64
@@ -14,8 +15,8 @@ name: Claude Code pin
 # the registry one GET of a public document and no credential.
 #
 # Always run, so it can be required (issue #452): the job runs on every pull request into main, and its
-# changes step decides whether the pull request touches the pin's paths: ai-review.yml, the install script
-# that consumes the pin, this file, the check's code and go.mod (whose go line picks the Go that builds the
+# changes step decides whether the pull request touches the pin's paths: the pin file, ai-review.yml,
+# which reads it, the install script that consumes the pin, this file, the check's code and go.mod (whose go line picks the Go that builds the
 # check). actions/checkout checks out the merge commit refs/pull/<n>/merge two commits deep; its first
 # parent is main before the merge and its second the pull request's head, so git diff HEAD^1 HEAD is
 # exactly what merging the pull request changes on main. The step trusts neither the parent count nor
@@ -36,7 +37,7 @@ on:
   push:
     branches: [main]
     paths:
-      - .github/workflows/ai-review.yml
+      - .github/claude-code.yaml
       - .github/scripts/install-claude-code.sh
       - .github/workflows/claude-code-pin.yml
       - ci/claudecodepin/**
@@ -106,7 +107,7 @@ jobs:
             # In a case pattern * crosses /, so ci/claudecodepin/* matches nested files too, as the push
             # filter's ci/claudecodepin/** does.
             case "$path" in
-              .github/workflows/ai-review.yml | .github/scripts/install-claude-code.sh | \
+              .github/claude-code.yaml | .github/workflows/ai-review.yml | .github/scripts/install-claude-code.sh | \
                 .github/workflows/claude-code-pin.yml | go.mod | ci/claudecodepin/*)
                 echo "This pull request changes a path of the Claude Code pin: checking the pin."
                 echo "pin=true" >> "$GITHUB_OUTPUT"
