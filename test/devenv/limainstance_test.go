@@ -28,6 +28,7 @@ package devenv_test
 import (
 	"errors"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -83,41 +84,26 @@ var invalidLimaInstances = []struct {
 // its command line, which is how a maintainer types it; vm-stop and agents-token-refresh-install are run a
 // second time with it in make's environment alone, which is how direnv exports it on the host, because the
 // host path must not be the one that skips the check (issue #252 review).
+//
+// The targets come from the Makefile itself (limaInstanceTargets, issue #313): a target added there that reads
+// the name is run here without anyone remembering to add it, and the fixture below says how to run it.
 func TestMakeRefusesAnInvalidLimaInstanceOnEveryTarget(t *testing.T) {
 	t.Parallel()
 
-	targets := []struct {
-		name    string
-		target  string
-		fixture func(t *testing.T) *limaTargetFixture
-		fromEnv bool // also run every invalid value with LIMA_INSTANCE in make's environment alone
-	}{
-		{name: "vm-up", target: "vm-up", fixture: newLimaVMFixture},
-		// vm-create refuses an invalid name in its own first recipe line, before the vm-env-check sub-make
-		// and so before any limactl call (issues #252, #258).
-		{name: "vm-create", target: "vm-create", fixture: newLimaVMFixture},
-		{name: "vm-env", target: "vm-env", fixture: newLimaVMFixture},
-		{name: "vm-shell", target: "vm-shell", fixture: newLimaMakeFixture},
-		{name: "vm-claude-settings", target: "vm-claude-settings", fixture: newLimaMakeFixture},
-		{name: "vm-init", target: "vm-init", fixture: newLimaMakeFixture},
-		{name: "vm-gh-wrapper", target: "vm-gh-wrapper", fixture: newLimaMakeFixture},
-		{name: "deck", target: "deck", fixture: newLimaMakeFixture},
-		{name: "deck-restart", target: "deck-restart", fixture: newLimaMakeFixture},
-		{name: "vm-stop", target: "vm-stop", fixture: newLimaMakeFixture, fromEnv: true},
-		{name: "vm-delete", target: "vm-delete", fixture: newLimaMakeFixture},
-		{name: "agents-token", target: "agents-token", fixture: newLimaMintingTokenFixture},
-		// The refresh runs in the foreground, so the fixture's fake GitHub refuses the mint: a run that is
-		// not refused first stops on that refusal instead of minting until the test ends.
-		{name: "agents-token-refresh", target: "agents-token-refresh", fixture: newLimaRefusedMintTokenFixture},
-		{name: "agents-token-refresh-start", target: "agents-token-refresh-start", fixture: newLimaMintingTokenFixture},
-		// The install is the second target run from make's environment too: it is the one that runs sudo and
-		// launchctl, so the host path has to reach the same refusal as the command-line one.
-		{name: "agents-token-refresh-install", target: "agents-token-refresh-install", fixture: newLimaLaunchdFixture, fromEnv: true},
-		{name: "agents-token-refresh-uninstall", target: "agents-token-refresh-uninstall", fixture: newLimaLaunchdFixture},
+	derived := limaInstanceTargets(makeRules(readRepoFile(t, makefilePath)))
+	if len(derived) == 0 {
+		t.Fatal("no target of the Makefile reads LIMA_INSTANCE, so this test pins nothing: either the parser stopped finding recipes or the targets went away (issue #313)")
 	}
 
-	for _, tc := range targets {
-		t.Run(tc.name, func(t *testing.T) {
+	for _, target := range derived {
+		tc, ok := limaInstanceFixtures[target]
+		if !ok {
+			t.Errorf("make %s reads LIMA_INSTANCE but this test has no fixture for it, so nothing pins that it refuses an invalid name: add one to limaInstanceFixtures (issue #313)", target)
+
+			continue
+		}
+
+		t.Run(target, func(t *testing.T) {
 			t.Parallel()
 
 			f := tc.fixture(t)
@@ -131,11 +117,54 @@ func TestMakeRefusesAnInvalidLimaInstanceOnEveryTarget(t *testing.T) {
 				// The values share the fixture and run one after the other: each of them has to stop before
 				// anything runs, so none of them leaves state that another could trip over.
 				for _, bad := range invalidLimaInstances {
-					assertLimaInstanceRefused(t, f, tc.target, delivery, bad.name, bad.value)
+					assertLimaInstanceRefused(t, f, target, delivery, bad.name, bad.value)
 				}
 			}
 		})
 	}
+
+	// And the other way, so the two cannot drift apart: a fixture for a target the Makefile no longer holds is
+	// a test of nothing.
+	for _, target := range slices.Sorted(maps.Keys(limaInstanceFixtures)) {
+		if !slices.Contains(derived, target) {
+			t.Errorf("limaInstanceFixtures holds a fixture for make %s, which no longer reads LIMA_INSTANCE: the target was renamed or its recipe changed, and this test would run nothing for it (issue #313)", target)
+		}
+	}
+}
+
+// limaInstanceFixtures says how this package runs each target that reads LIMA_INSTANCE: the fixture whose sandbox
+// records every command the recipe runs, and whether the target is run a second time with the instance in make's
+// environment alone. The target list itself is the Makefile's (limaInstanceTargets): this map only says where.
+var limaInstanceFixtures = map[string]struct {
+	fixture func(t *testing.T) *limaTargetFixture
+	fromEnv bool // also run every invalid value with LIMA_INSTANCE in make's environment alone
+}{
+	"vm-up": {fixture: newLimaVMFixture},
+	// vm-create refuses an invalid name in its own first recipe line, before the vm-env-check sub-make
+	// and so before any limactl call (issues #252, #258).
+	"vm-create":                     {fixture: newLimaVMFixture},
+	"vm-env":                        {fixture: newLimaVMFixture},
+	"vm-shell":                      {fixture: newLimaMakeFixture},
+	"vm-claude-settings":            {fixture: newLimaMakeFixture},
+	"vm-init":                       {fixture: newLimaMakeFixture},
+	"vm-gh-wrapper":                 {fixture: newLimaMakeFixture},
+	"deck":                          {fixture: newLimaMakeFixture},
+	"deck-restart":                  {fixture: newLimaMakeFixture},
+	"vm-stop":                       {fixture: newLimaMakeFixture, fromEnv: true},
+	"vm-delete":                     {fixture: newLimaMakeFixture},
+	"vm-boot-install":               {fixture: newLimaHostLayoutFixture},
+	"vm-boot-uninstall":             {fixture: newLimaHostLayoutFixture},
+	"vm-agents-token-ssh":           {fixture: newLimaHostLayoutFixture},
+	"vm-agents-token-ssh-uninstall": {fixture: newLimaHostLayoutFixture},
+	"agents-token":                  {fixture: newLimaMintingTokenFixture},
+	// The refresh runs in the foreground, so the fixture's fake GitHub refuses the mint: a run that is
+	// not refused first stops on that refusal instead of minting until the test ends.
+	"agents-token-refresh":       {fixture: newLimaRefusedMintTokenFixture},
+	"agents-token-refresh-start": {fixture: newLimaMintingTokenFixture},
+	// The install is the second target run from make's environment too: it is the one that runs sudo and
+	// launchctl, so the host path has to reach the same refusal as the command-line one.
+	"agents-token-refresh-install":   {fixture: newLimaLaunchdFixture, fromEnv: true},
+	"agents-token-refresh-uninstall": {fixture: newLimaLaunchdFixture},
 }
 
 // TestMakeRunsLimactlForAValidLimaInstance pins the other half of issue #252: a name of the rule's own shape
@@ -417,6 +446,23 @@ const recordingLimactl = `#!/bin/sh
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
 ` + limactlEnvProbe + `exit 0
 `
+
+// newLimaHostLayoutFixture builds the host's own layout for a target that runs on the Mac with the maintainer's
+// credentials in reach: newHostLayout's two clones, its recording limactl and its fakes of launchctl, sudo,
+// plutil, sleep and systemctl. An invalid LIMA_INSTANCE must refuse the target here as it does anywhere else, in
+// its first recipe line and before any of those fakes records a call (issues #252, #313). The layout's recording
+// git goes: make reads git itself while it parses the file, and that is no command the recipe ran.
+func newLimaHostLayoutFixture(t *testing.T) *limaTargetFixture {
+	t.Helper()
+
+	l := newHostLayout(t)
+
+	if err := os.Remove(filepath.Join(l.sb.binDir, "git")); err != nil {
+		t.Fatalf("remove the recording git from %s: %v", l.sb.binDir, err)
+	}
+
+	return &limaTargetFixture{sb: l.sb, env: l.env, dir: l.root}
+}
 
 // newLimaMakeFixture builds one environment for a target that reads LIMA_INSTANCE and needs nothing but
 // limactl to run: a clone of the Makefile and the two scripts make vm-gh-wrapper generates its work from

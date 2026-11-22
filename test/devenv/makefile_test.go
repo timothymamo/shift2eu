@@ -3715,11 +3715,14 @@ func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (
 // makeEnv is the environment make runs with in a test: a PATH of the machine's own and a temporary HOME, so
 // the Makefile's $(shell git config ...) reads nothing of the maintainer's, and a WORKSPACE_REPO naming a
 // checkout inside a temporary workspace, so a host target runs in the host clone layout a maintainer has and
-// not in the workspace it refuses (docs/dev-environment.md, The host clone, issue #227).
+// not in the workspace it refuses (docs/dev-environment.md, The host clone, issue #227). The workspace is rooted
+// in a sandbox root (newSandboxRoot), not in t.TempDir: testing names that directory after the test, and a test
+// name may hold a character a WORKSPACE_REPO does not, so a refusal a test pins could fire because of the
+// directory the test runs in rather than the value under test (issue #326, item 3).
 func makeEnv(t *testing.T, extra map[string]string) map[string]string {
 	t.Helper()
 
-	workspaceRepo := filepath.Join(t.TempDir(), "ws", "shift2eu")
+	workspaceRepo := filepath.Join(newSandboxRoot(t), "ws", "shift2eu")
 
 	if err := os.MkdirAll(workspaceRepo, 0o700); err != nil {
 		t.Fatalf("create %s: %v", workspaceRepo, err)
@@ -3736,6 +3739,25 @@ func makeEnv(t *testing.T, extra map[string]string) map[string]string {
 	}
 
 	return env
+}
+
+// TestMakeEnvRootsTheWorkspaceRepoInASandboxRoot pins issue #326's item 3: the WORKSPACE_REPO makeEnv hands make
+// holds only the characters a WORKSPACE_REPO may, whatever the test that asks for it is called. A subtest named
+// with a comma, a tilde and a percent is enough: testing keeps all three in the name of the directory it creates,
+// and the Makefile checks the whole path of the value.
+func TestMakeEnvRootsTheWorkspaceRepoInASandboxRoot(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a comma, a tilde ~ and a percent %", func(t *testing.T) {
+		t.Parallel()
+
+		repo := makeEnv(t, nil)["WORKSPACE_REPO"]
+
+		if refused := workspaceRepoRefusedChar(repo); refused != "" {
+			t.Errorf("makeEnv names the workspace %q, which holds %q: the Makefile checks the whole path of WORKSPACE_REPO, so a refusal a test pins could fire because of the directory the test runs in rather than the value under test (issue #326, item 3)",
+				repo, refused)
+		}
+	})
 }
 
 // makeVariable returns the value a substitution assignment in the Makefile gives name.

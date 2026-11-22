@@ -80,12 +80,14 @@ const (
 // SHIFT2EU_TEST_LIMA_SHELL_MISSING stands for the instance the fake's status still reports but Lima no longer
 // has: the shell says so on stderr and exits non-zero, as limactl shell does for an instance that is gone, and
 // as limactl start <name> would not - it would create the VM from template:default instead (issue #254).
+// It records which credentials are set in its own environment too (limactlEnvProbe), so a test can pin that
+// neither the App's variables nor a credential reaches limactl at all (issue #326).
 const statusLimactl = `#!/bin/sh
 {
   printf 'tool=limactl\n'
   for a in "$@"; do printf 'arg=%s\n' "$a"; done
 } >> "${SHIFT2EU_TEST_ARGV_LOG:?set SHIFT2EU_TEST_ARGV_LOG}"
-if [ "${1:-}" = list ]; then
+` + limactlEnvProbe + `if [ "${1:-}" = list ]; then
   # Any listing without --quiet is the status query, whatever spelling of --format it uses.
   for a in "$@"; do
     if [ "${a}" = --quiet ]; then
