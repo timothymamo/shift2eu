@@ -209,12 +209,20 @@ $(call host_refuse,WORKSPACE_REPO is not an absolute path (its value is not show
 else ifeq ($(HOST_REPO_NAME),)
 $(call host_refuse,WORKSPACE_REPO names no checkout below / (its value is not shown))
 endif
-# The workspace with its symlinks resolved, as git resolves REPO_ROOT's (macOS: /var is /private/var). One that
-# does not exist yet is its nearest existing ancestor, resolved, with the rest of the path appended, so a missing
-# workspace under a symlink is compared in resolved form too (issue #447); / always exists, so the loop ends.
-# The value passed the character check above and is an absolute path, so it is safe in single quotes.
-host_workspace_real := $(shell p='$(HOST_WORKSPACE)'; rest=; while ! cd "$$p/" 2>/dev/null; do rest="/$${p$(host_hash)$(host_hash)*/}$$rest"; p="$${p%/*}"; done; real="$$(pwd -P)"; real="$${real%/}$$rest"; printf '%s\n' "$${real:-/}")
-ifneq ($(filter $(host_workspace_real) $(patsubst %/,%,$(host_workspace_real))/%,$(REPO_ROOT)),)
+# The workspace with its symlinks resolved, as git resolves REPO_ROOT's (macOS: /var is /private/var). It is
+# resolved from / component by component, every symlink followed with plain readlink (macOS and Linux), a dangling
+# one too, an absolute target from /, a relative one from the link's directory, and .. taken from the resolved
+# path; a component that does not exist is kept as it is, so a workspace that does not exist yet, under a
+# symlink or behind a dangling one, is compared in resolved form too (issue #447). Every turn of the loop either
+# consumes a component or follows a link, at most 40, so it ends. More than 40 links (a loop), a link readlink
+# cannot read, or a resolved path holding a character WORKSPACE_REPO may not hold (it would split or be a
+# pattern to make's filter) prints nothing, and an empty value is refused below: the guard fails closed. The
+# value passed the character check above and is an absolute path, or empty for a checkout directly below /, so
+# it is safe in single quotes.
+host_workspace_real := $(shell LC_ALL=C; export LC_ALL; out=; rest='$(HOST_WORKSPACE)'; hops=0; failed=; while [ -n "$$rest" ]; do part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; rest=$${rest$(host_hash)/}; case $$part in (''|.) ;; (..) out=$${out%/*} ;; (*) if [ -L "$$out/$$part" ]; then hops=$$((hops + 1)); [ "$$hops" -le 40 ] && link=$$(readlink "$$out/$$part") && [ -n "$$link" ] || { failed=1; break; }; case $$link in (/*) out= ;; esac; rest="$$link/$$rest"; else out="$$out/$$part"; fi ;; esac; done; [ -n "$$failed" ] || case $$out in (*[!A-Za-z0-9._/+@=$(host_hash)-]*) ;; (*) printf '%s\n' "$${out:-/}" ;; esac)
+ifeq ($(host_workspace_real),)
+$(call host_refuse,the workspace $(or $(HOST_WORKSPACE),/) cannot be resolved: more than 40 symlinks or a loop of them$(host_comma) a symlink that cannot be read$(host_comma) or a resolved path holding a character other than letters$(host_comma) digits and . _ - / + @ $(host_hash) =)
+else ifneq ($(filter $(host_workspace_real) $(patsubst %/,%,$(host_workspace_real))/%,$(REPO_ROOT)),)
 $(call host_refuse,make runs in $(REPO_ROOT) - the workspace $(or $(HOST_WORKSPACE),/) or inside it)
 else ifneq ($(filter $(REPO_ROOT)/%,$(host_workspace_real)),)
 $(call host_refuse,the workspace $(HOST_WORKSPACE) is inside $(REPO_ROOT) - the checkout make runs in)
