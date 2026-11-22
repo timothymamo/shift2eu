@@ -433,6 +433,18 @@ const resultFile = `{"findings":[]}`
 // characters the judgement's 64-hex rule would refuse, and a finding here.
 var pinnedResult = `{"pin":"` + strings.Repeat("0f", 32) + `"}`
 
+// maxJSONDepth is encoding/json's own limit on how deeply a document may nest:
+// the decoder refuses the 10001st open, before it reads to the document's end.
+// The result file's token walk holds a document nested to this limit and refuses
+// one nested further (issue #277, round E nit 1).
+const maxJSONDepth = 10000
+
+// nestedArrays returns a JSON document of n arrays nested in one another, every
+// one of them closed: [[[...]]].
+func nestedArrays(n int) string {
+	return strings.Repeat("[", n) + strings.Repeat("]", n)
+}
+
 // jsonEscaped returns s with every character written as a JSON \uXXXX escape,
 // so a file that names s holds no byte of it: the decoded string values are
 // what the audit searches, not only the bytes (issue #277, round D finding 4).
@@ -456,7 +468,9 @@ func jsonEscaped(s string) string {
 // the document's tokens rather than a map that a later duplicate key empties
 // (issue #277, round E finding 3). A result file quoting a SHA-256 pin is a
 // finding, not a leak: the 64-hex rule the judgement applies to the preflight's
-// transcript is not applied here.
+// transcript is not applied here. A result nested deeper than JSON's own limit
+// is refused as an invalid result rather than walked to its end, and one nested
+// to the limit is accepted (issue #277, round E nit 1).
 func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 	t.Parallel()
 
@@ -521,6 +535,24 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			},
 			wantLaunched: true,
 			wantRefused:  true,
+		},
+		{
+			// Well-formed JSON, nested one level past what encoding/json reads:
+			// the walk refuses it rather than growing its stack with it.
+			name: "the result file is nested deeper than JSON's own limit",
+			write: func(root string) error {
+				return os.WriteFile(workPath(root, "result.json"), []byte(nestedArrays(maxJSONDepth+1)), 0o600)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			name: "the result file is nested to JSON's own limit",
+			write: func(root string) error {
+				return os.WriteFile(workPath(root, "result.json"), []byte(nestedArrays(maxJSONDepth)), 0o600)
+			},
+			wantLaunched: true,
+			wantResult:   nestedArrays(maxJSONDepth),
 		},
 		{
 			name: "the result file holds the step's token as JSON escapes",

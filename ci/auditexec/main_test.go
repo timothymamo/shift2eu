@@ -618,8 +618,8 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 				wantNamed: "--group=format:%G?",
 			},
 			{
-				name:      "--gr=format:%GS, an abbreviation of --grep",
-				args:      []string{"git", "log", "--gr=format:%GS"},
+				name:      "shortlog's --gr=format:%GS, an abbreviation of --group",
+				args:      []string{"git", "shortlog", "--gr=format:%GS", "HEAD"},
 				wantNamed: "--gr=format:%GS",
 			},
 			{
