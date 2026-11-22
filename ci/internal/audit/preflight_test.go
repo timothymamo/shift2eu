@@ -148,6 +148,22 @@ func inputJSON(input map[string]string) string {
 	return string(body)
 }
 
+// toolUseLineWithField is one assistant element holding a tool_use whose input
+// is the plan's input and, beside it, the field key with raw as its JSON value: a
+// key the plan names nowhere, which the CLI prints when the model sets one of the
+// Bash tool's own fields.
+func toolUseLineWithField(id, tool string, input map[string]string, key, raw string) string {
+	fields := strings.TrimSuffix(inputJSON(input), "}")
+	if fields != "{" {
+		fields += ","
+	}
+
+	return fmt.Sprintf(
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":%q,"name":%q,"input":%s%s:%s}}]}}`+"\n",
+		id, tool, fields, strconv.Quote(key), raw,
+	)
+}
+
 // toolResultLine is the user element holding one call's tool_result.
 func toolResultLine(id string, answer callResult) string {
 	blocks := answer.blocks
@@ -1021,6 +1037,55 @@ func absenceCases() []judgeCase {
 	}
 }
 
+// sandboxCases are the ways a Bash call asks to run outside the sandbox (issue
+// #277, round C): the preflight exists to show that the sandbox holds, so a call
+// that turns it off fails closed and names its own probe, however harmless its
+// command is. A call that keeps the sandbox on, or says nothing about it, is the
+// plan's call and passes as before.
+func sandboxCases() []judgeCase {
+	// probe is the probe whose first Bash call the cases rewrite, so the refusal
+	// the judgement gives must name that probe's number and short name.
+	const probe = 1
+
+	refusal := []string{
+		fmt.Sprintf("probe %d, %s", probe, probeShortName[probe]),
+		"runbook step 10",
+	}
+
+	// asking returns the passing run's transcript with that call's input carrying
+	// the key, set to raw, beside the plan's own command.
+	asking := func(raw string) func(plan audit.Plan, transcript []byte) []byte {
+		return func(plan audit.Plan, transcript []byte) []byte {
+			lines := strings.SplitAfter(string(transcript), "\n")
+
+			for i, call := range plan {
+				if call.Probe != probe || call.Tool != "Bash" {
+					continue
+				}
+
+				lines[2*i] = toolUseLineWithField(fmt.Sprintf("toolu_%02d", i), call.Tool, call.Input, "dangerouslyDisableSandbox", raw)
+
+				break
+			}
+
+			return []byte(strings.Join(lines, ""))
+		}
+	}
+
+	return []judgeCase{
+		{
+			name:       "a Bash call turns the sandbox off",
+			transcript: asking("true"),
+			want:       refusal,
+		},
+		{
+			name:       "a Bash call keeps the sandbox on",
+			transcript: asking("false"),
+			wantPass:   true,
+		},
+	}
+}
+
 // TestJudgePassesOnlyWhenTheControlPassedAndEveryProbeWasRefused pins the whole
 // judgement: the one case that passes, every way the control or a probe fails,
 // every transcript that is no transcript of the plan, and the canary anywhere in
@@ -1038,6 +1103,7 @@ func TestJudgePassesOnlyWhenTheControlPassedAndEveryProbeWasRefused(t *testing.T
 	cases = append(cases, canaryCases()...)
 	cases = append(cases, tokenCases()...)
 	cases = append(cases, absenceCases()...)
+	cases = append(cases, sandboxCases()...)
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
