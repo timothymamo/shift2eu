@@ -277,17 +277,26 @@ prints the container's name and the command that removes it by hand, and ends th
 own exit status stays.
 
 The deadline is a whole number from 1 to 99999 with no leading zero; anything else is refused with exit
-status 2 before anything runs. Make exports it to the recipe unexpanded (`$(value ...)`), and the recipe
-reads it as a shell variable, so a value holding a quote cannot break out of the recipe's quoting and run
-as a command. The bound does not poll: beside the `rm`, the trap starts a watchdog that sleeps out the
-deadline, then sends the `rm` SIGKILL (the `rm` ignores the signals the trap ignores) and exits 3. The
-trap waits on the `rm`, its own child, and then ends the watchdog with USR1, which ends the watchdog's
-sleep too, unless the `rm` was killed; it prints its one line only when the watchdog exited 3. A healthy
-removal so costs no extra second, and every background process writes to `/dev/null`, so none holds
-make's output open. One window is left: an `rm` that returns at the very instant the deadline passes can
-be reaped, and its pid reused, before the watchdog's kill lands. A shell offers no call that kills a child
-only while it is unreaped, and bash reaps children as they exit, so POSIX sh cannot close the window; it
-is accepted as negligible. When `DOCKER` is a wrapper (`sudo docker`, a script), the kill ends only the
+status 2 before anything runs. Make exports it to the recipe with `$(value ...)`, and the recipe reads it
+as a shell variable, never pasted into its shell text. The default and a value from the environment reach
+the recipe raw. A value given on make's command line is expanded by make first, as make does every
+command-line variable, and it too reaches the recipe only as data the guard checks. A value holding a quote
+so cannot break out of the recipe's quoting and run as a command. `override export` was considered and not
+chosen. The bound does not poll: beside the `rm`, the trap starts a watchdog that sleeps out the deadline,
+then sends the `rm` SIGKILL (the `rm` ignores the signals the trap ignores) and exits 3. The watchdog sets
+its USR1 trap before it starts its sleep. A flag catches a USR1 that arrives before the sleep's pid is
+known, so the sleep ends either way. Once the sleep has run out, the watchdog ignores USR1, so a late one
+can neither turn its exit 3 into 0 nor make it kill its own reaped sleep. The trap waits on the `rm`, its
+own child, and then always sends the watchdog USR1, whatever status the `rm` gave back. It prints its one
+line only when the watchdog exited 3. A healthy removal so costs no extra second, and every background
+process writes to `/dev/null`, so none holds make's output open.
+
+Windows are left for two of the three pids the trap signals. An `rm` that returns at the very instant the
+deadline passes can be reaped by the trap's `wait`, and its pid reused, before the watchdog's SIGKILL
+lands. A USR1 that lands between the sleep's exit (bash reaps it at once) and the watchdog's
+`trap "" USR1` sends SIGKILL to the sleep's reaped pid. The watchdog has no window: it stays the trap's
+unreaped child until the trap's `wait`. A shell offers no call that kills a child only while it is
+unreaped, so POSIX sh cannot close these windows; they are accepted as negligible. When `DOCKER` is a wrapper (`sudo docker`, a script), the kill ends only the
 wrapper, and a child of its own may outlive it.
 
 A port the kernel picks is still a listening port, which a local process can find and attach to. It is
