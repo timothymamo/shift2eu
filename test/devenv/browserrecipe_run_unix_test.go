@@ -6,7 +6,8 @@
 // reaches it while it cleans up (issue #423 items 2 and 3 and the reviewer's findings S2 and N2, PRD #297
 // milestone 2, ADR 0036). It pins too that the removal the EXIT trap runs is bounded, so a container runtime that
 // never answers it cannot hold the run for good, that the rm the recipe gives up on is ended with it, that the
-// watchdog which bounds that removal leaves no sleep of its own behind, and that a deadline outside the range the
+// watchdog which bounds that removal leaves no sleep of its own behind, that a removal which exits 137 by itself
+// ends the run at once rather than at its deadline, and that a deadline outside the range the
 // recipe's guard takes is refused before the run starts (issue #449). Each test runs the real recipe of the real
 // Makefile, in a clone of it, with the two
 // commands the recipe runs replaced by stand-ins - the container command, the recipe's $(DOCKER), and go - so no
@@ -65,6 +66,12 @@ const (
 	// bundlePageLine is the first line of the page the stand-in site builder writes into the bundle: a run that
 	// serves the bundle's files is told from one that serves an empty directory by reading it back.
 	bundlePageLine = "<!doctype html>"
+
+	// rmKilledItselfStatus is the status the stand-in container command's rm exits with in dockerModeRmKilledItself: 137,
+	// the status a shell reports for a process killed with SIGKILL (128 + 9), which is also what a removal the run gave
+	// up on looks like. The run's trap must not read that status as its own kill of the removal (issue #449, the
+	// auditor's finding S1).
+	rmKilledItselfStatus = "137"
 )
 
 // The containers the stand-in container command stands for.
@@ -92,6 +99,12 @@ const (
 	// at the rendezvous that only two runs of one worktree can leave, which a test that runs the recipe once to its
 	// end cannot get past.
 	dockerModePassing = "passing"
+	// dockerModeRmKilledItself is a Chromium that runs, logs devtoolsLogLine, is reported as running and answers every
+	// other call as dockerModePassing does, and whose rm exits rmKilledItselfStatus at once, of its own accord: the
+	// docker CLI the kernel's out-of-memory killer took, or a wrapper that reports the kill of the daemon behind it.
+	// That removal did return, so a trap that waits its deadline out for it holds a run that was over at once (issue
+	// #449, the auditor's finding S1).
+	dockerModeRmKilledItself = "rm-killed-itself"
 )
 
 // One run of make test-browser gets this long before the test stops it: the stand-ins answer in milliseconds, so
@@ -173,9 +186,11 @@ var exitStatusWord = regexp.MustCompile(`(^|[^0-9])3([^0-9]|$)`)
 // calls SHIFT2EU_TEST_DOCKER_INSPECT_PLAN names and whose log answers nothing for the first
 // SHIFT2EU_TEST_DOCKER_LOG_MISSES calls; dockerModeSilent, one that runs and never logs an address;
 // dockerModeRmWedged, one that runs and answers as dockerModeRunning's does, except that its rm never returns:
-// the container runtime that stopped answering the removal the EXIT trap makes (issue #449); and
+// the container runtime that stopped answering the removal the EXIT trap makes (issue #449);
 // dockerModePassing, one that answers as dockerModeRunning's does without the hold at the rendezvous, so a single
-// run of the recipe passes. A run in that mode
+// run of the recipe passes; and dockerModeRmKilledItself, one that answers as dockerModePassing's does and whose rm
+// exits rmKilledItselfStatus at once, by itself, so the removal the trap waits on has returned and only the
+// watchdog is left (issue #449, the auditor's finding S1). A run in the wedged mode
 // leaves a stand-in rm running once the recipe gives up on it, so that rm writes its own pid into the file
 // SHIFT2EU_TEST_DOCKER_RM_PID names before it waits, and the test ends that pid and no other.
 //
@@ -323,6 +338,12 @@ rm)
 		while :; do
 			sleep 0.05
 		done
+	fi
+	if [ "$mode" = rm-killed-itself ]; then
+		# The removal that ended itself at once: a status of 137 is no verdict on the runtime either, and a trap
+		# that takes it for its own kill of a removal it gave up on waits a deadline out for a removal that is
+		# long over (issue #449, the auditor's finding S1).
+		exit 137
 	fi
 	;;
 kill | stop | start | pull)
@@ -1331,6 +1352,108 @@ func (sb *browserRecipeSandbox) endWatchdogSleeps(t *testing.T, sleeps []recorde
 	}
 }
 
+// rmExits137DeadlineSeconds is the deadline the run of TestMakeTestBrowserRecipeStopsItsWatchdogWhenTheRemovalExits137
+// gives the recipe: far longer than any run, so a trap that leaves its watchdog to sleep the deadline out is a run the
+// test stops with rmExits137Timeout, and so the sandbox's stand-in sleep records that one sleep and no other call of
+// the run - the recipe's wait loop sleeps 1 and every stand-in polls with 0.05 (fakeSleepCommand, issue #449).
+const rmExits137DeadlineSeconds = "99999"
+
+// rmExits137Timeout is how long that run gets before the test stops it: the stand-ins answer in milliseconds, so a
+// recipe that keeps its own status and ends its watchdog with it ends inside this easily, where one that waits
+// rmExits137DeadlineSeconds out is stopped here rather than at browserRecipeTimeout - the behaviour this test is
+// missing today costs it 15 seconds instead of the minute browserRecipeTimeout gives every other run (issue #449, the
+// auditor's finding S1). It is this test's own guard and no duration the test asserts on.
+const rmExits137Timeout = 15 * time.Second
+
+// TestMakeTestBrowserRecipeStopsItsWatchdogWhenTheRemovalExits137 pins the auditor's finding S1 on issue #449: the EXIT
+// trap ended its watchdog only when the removal's status was not 137, taking that status for the watchdog's own kill of
+// a removal the run had given up on. A removal that exits 137 by itself - a docker CLI the kernel's out-of-memory killer
+// took, a wrapper that reports the kill of the daemon behind it - is no deadline run out, so a trap that reads it as one
+// leaves its watchdog to sleep the whole deadline out, then kills a pid the machine has long reaped, and holds a run
+// that was over at once. The trap must end its watchdog whatever the removal gave back: the run keeps its own status,
+// prints no deadline line, and leaves no sleep of its watchdog behind.
+//
+// Every stand-in answers as it does on a working machine (dockerModeRmKilledItself), and only the removal returns at
+// once with rmKilledItselfStatus, so what the test reads back is the trap's reading of that one status - and not a
+// clock, as no other test of this file asserts on one.
+func TestMakeTestBrowserRecipeStopsItsWatchdogWhenTheRemovalExits137(t *testing.T) {
+	t.Parallel()
+
+	sb := newBrowserRecipeSandbox(t, dockerModeRmKilledItself)
+	sb.writeSleepStandIn(t)
+
+	pidFile := filepath.Join(sb.root, "sleep-137.pids")
+
+	env := make(map[string]string, len(sb.env)+2)
+	for name, value := range sb.env {
+		env[name] = value
+	}
+
+	env[sleepSecondsVariable] = rmExits137DeadlineSeconds
+	env[sleepPidFileVariable] = pidFile
+
+	proc := startBrowserMake(t, sb.clone, []string{testBrowserTarget, removalDeadlineVariable + "=" + rmExits137DeadlineSeconds}, env)
+
+	run := proc.wait(rmExits137Timeout)
+	output := run.output()
+
+	recorded := readSleepPids(t, pidFile)
+
+	var sleeps []recordedSleep
+
+	for _, pid := range recorded {
+		sleeps = append(sleeps, recordedSleep{run: 1, pid: pid, pgid: proc.pgid()})
+	}
+
+	// The safety net under the checks below, never one of them: a test that failed before it reached them must not
+	// leave the watchdog's sleep running either, and it ends only the pids the stand-in recorded of itself, only while
+	// they are still in the group of the run that started them (CLAUDE.md, rule 10; issue #449).
+	t.Cleanup(func() { sb.endWatchdogSleeps(t, sleeps) })
+
+	if run.timedOut {
+		t.Fatalf("make test-browser was still running after %s and the test stopped it, although its container, its smoke test and its removal all answered at once: the rm -f of its EXIT trap exited %s by itself, and the trap must end its watchdog all the same, not leave it to sleep the deadline of %s seconds out - a trap that takes that status for its own kill of the removal holds a run that was over at once (issue #449, the auditor's finding S1)\n%s",
+			rmExits137Timeout, rmKilledItselfStatus, rmExits137DeadlineSeconds, output)
+	}
+
+	if run.err != nil {
+		t.Errorf("make test-browser exited with %v although its container, its smoke test and its removal all answered, and its removal's own status %s is no failure of the run: a cleanup must leave the run's own status what it was (issue #449)\n%s",
+			run.err, rmKilledItselfStatus, output)
+	}
+
+	if line, ok := deadlineReportLine(output); ok {
+		t.Errorf("the run printed %q, the line its EXIT trap prints when it gave up on a removal that was still there past the deadline, although the removal had returned at once with status %s of its own: a trap that reads that status as its own kill of the removal sends a maintainer to remove a container that is gone, and holds the run for a deadline nothing reached (issue #449, the auditor's finding S1)\n%s",
+			line, rmKilledItselfStatus, output)
+	}
+
+	if len(recorded) == 0 {
+		t.Fatalf("the run asked the stand-in sleep for the deadline %s not at all, so this test cannot tell whether it left one behind: the EXIT trap's watchdog sleeps the deadline out, and a run that ends at once ends that sleep with it (issue #449, the auditor's finding S1)\n%s",
+			rmExits137DeadlineSeconds, output)
+	}
+
+	if len(recorded) > 1 {
+		t.Fatalf("the run asked the stand-in sleep for the deadline %s %d times, want 1: the EXIT trap starts one watchdog, and the watchdog one sleep of %s seconds, so this test cannot tell which sleep a leftover is (issue #449)\n%s",
+			rmExits137DeadlineSeconds, len(recorded), rmExits137DeadlineSeconds, output)
+	}
+
+	if left := waitForGoneAll([]int{recorded[0]}); len(left) != 0 {
+		t.Errorf("the run left the sleep its EXIT trap's watchdog started, pid %d, the pid the stand-in recorded of itself, behind: the trap must end that watchdog once its removal has returned, whatever status the removal gave back, and without that the sleep runs on for the %s seconds of the deadline after the run has ended (issue #449, the auditor's finding S1)",
+			recorded[0], rmExits137DeadlineSeconds)
+	}
+}
+
+// deadlineReportLine is the line a run prints when its EXIT trap gave up on a removal that did not return within the
+// deadline, and false when the run printed none: either half of that one message, so a run that printed it either way
+// is found (Makefile, make test-browser).
+func deadlineReportLine(output string) (string, bool) {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "did not return within") || strings.Contains(line, "remove the container by hand") {
+			return line, true
+		}
+	}
+
+	return "", false
+}
+
 // makeExpansionMarker is what the command inside makeExpansionDeadlineValue prints, and what must reach nothing of a run
 // that refuses the value but the refusal line that quotes it: make expands the value it hands to a child, so a
 // $(shell ...) inside one runs unless the value is read raw and refused before anything runs it (issue #449).
@@ -1339,16 +1462,21 @@ const makeExpansionMarker = "MAKEINJ"
 // makeExpansionDeadlineValue is a deadline make expands where the recipe's shell would otherwise see it: the
 // $(shell ...) in it runs as make hands the value on, prints makeExpansionMarker and leaves the guard the digit 5 - a
 // value of its range, so a recipe that reads the expanded value goes ahead as if the maintainer had asked for five
-// seconds, having run a command the value holds (issue #449).
+// seconds, having run a command the value holds (issue #449). The case below gives it in the environment, the origin
+// the recipe's export of the variable reads raw: make expands a $(shell ...) given on its own command line before the
+// recipe or that export sees it, as it does every value on its command line, which is the person typing it asking for
+// that expansion - so no case pins that origin, and the recipe does not override the variable to refuse it either (an
+// override export would, and is untested on make 3.81).
 const makeExpansionDeadlineValue = "$(shell echo " + makeExpansionMarker + " >&2)5"
 
 // TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange pins the guard issue #449's fix puts ahead of
 // the recipe's traps: the watchdog that bounds the removal sleeps TEST_BROWSER_RM_DEADLINE whole seconds, so a value
 // outside the range that sleep can be given - an empty one, a word, a negative number, a fraction, a zero that would
 // SIGKILL every removal at once, a leading zero, six digits, a value that closes the quoting the guard wraps it in and
-// runs a command of its own, or one holding a $(shell ...) that make itself would run - would end the watchdog at once
-// or never, and the removal would be killed before it could return, or not be bounded at all. The recipe must refuse
-// such a value before it starts anything: exit status 2, and a line on its standard error naming the value it refused,
+// runs a command of its own, or one holding a $(shell ...) that make would run the moment it hands the value on
+// expanded - would end the watchdog at once or never, and the removal would be killed before it could return, or not
+// be bounded at all. The recipe must refuse such a value before it starts anything: exit status 2, and a line on its
+// standard error naming the value it refused,
 // so a maintainer who mistyped it reads which one the recipe would not take. A value of the range it takes - one to
 // five digits with no leading zero, 1 to 99999 - must still be taken, and the run goes on to start its container; the
 // value is taken as make's command-line assignment or as the environment's, since the recipe's `?=` reads both.
@@ -1363,14 +1491,11 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange(t *testing.
 		name  string
 		value string // what the case gives the variable, as make's command-line assignment or as the environment's value
 		// viaEnv gives the value in the environment rather than on make's command line, which the recipe's `?=` takes
-		// as well: the shell text the recipe builds is the same either way, since make pastes what the variable holds.
+		// as well: the recipe reads the same exported variable either way.
 		viaEnv bool
 		// taken says whether the recipe must accept the value and start its container: one to five digits with no
 		// leading zero is, as the recipe's own default of 30 is.
 		taken bool
-		// expandsUnderMake says the value holds a $(shell ...) that make runs as it hands the value on, so the marker
-		// that command prints must reach the output nowhere but in the refusal line quoting the value.
-		expandsUnderMake bool
 	}{
 		{name: "an empty value", value: ""},
 		{name: "a word", value: "x"},
@@ -1381,8 +1506,7 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange(t *testing.
 		{name: "six digits, above the range the guard takes", value: "100000"},
 		{name: "a value holding a single quote, which runs the command it holds if the recipe pastes it into its shell", value: injectedDeadlineValue},
 		{name: "the same value as the environment's, not make's", value: injectedDeadlineValue, viaEnv: true},
-		{name: "a value holding a shell expansion make runs before the recipe sees the value", value: makeExpansionDeadlineValue, expandsUnderMake: true},
-		{name: "the same value as the environment's, not make's, whose expansion make still runs", value: makeExpansionDeadlineValue, viaEnv: true, expandsUnderMake: true},
+		{name: "a value holding a shell expansion make runs as it hands the environment's value on", value: makeExpansionDeadlineValue, viaEnv: true},
 		{name: "one second, the bottom of the range", value: "1", taken: true},
 		{name: "a whole number of seconds", value: "5", taken: true},
 		{name: "the top of the range", value: "99999", taken: true},
@@ -1451,28 +1575,27 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange(t *testing.
 					tc.value, injectedMarker, output)
 			}
 
-			// Make is no place for the value to run either: it expands the value as it hands it on, so a $(shell ...)
-			// inside one runs before the recipe's shell sees anything, and the marker that command prints may reach the
-			// output only where the refusal quotes the value it refused (issue #449).
-			if tc.expandsUnderMake {
-				var outside []string
+			// Make is no place for the value to run either: a value make reads raw still holds a $(shell ...), which runs
+			// wherever make does expand the value, and the marker such a command prints may reach the output only where the
+			// refusal quotes the value it refused (issue #449). Every case is checked alike, and a value the recipe builds
+			// nothing out of holds no such command.
+			var outside []string
 
-				for _, line := range strings.Split(output, "\n") {
-					if !strings.Contains(line, makeExpansionMarker) {
-						continue
-					}
-
-					if strings.Contains(line, removalDeadlineVariable) && strings.Contains(line, `"`+tc.value+`"`) {
-						continue
-					}
-
-					outside = append(outside, line)
+			for _, line := range strings.Split(output, "\n") {
+				if !strings.Contains(line, makeExpansionMarker) {
+					continue
 				}
 
-				if len(outside) != 0 {
-					t.Errorf("make test-browser's output holds %q on %d lines outside the refusal line that quotes %s=%q, the first of them %q: make expands the value it hands on, so the value must be read raw and refused before make or the recipe runs the command it holds (issue #449)\n%s",
-						makeExpansionMarker, len(outside), removalDeadlineVariable, tc.value, outside[0], output)
+				if strings.Contains(line, removalDeadlineVariable) && strings.Contains(line, `"`+tc.value+`"`) {
+					continue
 				}
+
+				outside = append(outside, line)
+			}
+
+			if len(outside) != 0 {
+				t.Errorf("make test-browser's output holds %q on %d lines outside the refusal line that quotes %s=%q, the first of them %q: make expands the value it hands on, so the value must be read raw and refused before make or the recipe runs the command it holds (issue #449)\n%s",
+					makeExpansionMarker, len(outside), removalDeadlineVariable, tc.value, outside[0], output)
 			}
 
 			// The refusal comes before the run starts anything: no container, and no smoke test driving a browser
