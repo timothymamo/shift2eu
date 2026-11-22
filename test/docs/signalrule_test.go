@@ -312,17 +312,13 @@ func citation(t *testing.T, data string) string {
 	return signalRulePhrase + " (CLAUDE.md rule " + rule.number + ")"
 }
 
-// missingSignalRuleParts returns the parts of the rule that the CLAUDE.md text
-// data does not hold, each named the way a failure names it: the ban on picking
-// a process by its name, the process-group ban and the pid and start-time check.
-// The caller passes the rule findSignalRule returned, so a text without the
-// rule's title stops there, with the rule's line, instead of reaching this check
-// and the rule's item is found once. numberedItems has already joined the rule's
-// wrapped lines and collapsed its whitespace, so a phrase still counts when
-// Markdown wraps it over two lines.
-func missingSignalRuleParts(t *testing.T, rule numberedItem) []string {
-	t.Helper()
-
+// missingSignalRuleParts returns the parts of signalRuleParts whose phrase
+// rule's text does not hold, each named the way a failure names it. The caller
+// passes the item findSignalRule returned, so a text without the rule's title
+// fails there, at the rule's line, before this check runs. numberedItems has
+// already joined the rule's wrapped lines and collapsed its whitespace, so a
+// phrase still counts when Markdown wraps it over two lines.
+func missingSignalRuleParts(rule numberedItem) []string {
 	var missing []string
 	for _, part := range signalRuleParts {
 		if !strings.Contains(rule.text, part.phrase) {
@@ -395,7 +391,7 @@ func TestSignalRulePartsAreNamedWhenMissing(t *testing.T) {
 				}
 			}
 			rule, _ := findSignalRule(t, text)
-			got := missingSignalRuleParts(t, rule)
+			got := missingSignalRuleParts(rule)
 			if diff := cmp.Diff(tc.wantMissing, got); diff != "" {
 				t.Errorf("missingSignalRuleParts() mismatch (-want +got):\n%s", diff)
 			}
@@ -430,7 +426,7 @@ func checkSignalRuleContent(t *testing.T, data string) {
 	t.Helper()
 
 	rule, at := findSignalRule(t, data)
-	missing := missingSignalRuleParts(t, rule)
+	missing := missingSignalRuleParts(rule)
 	if len(missing) == 0 {
 		return
 	}
