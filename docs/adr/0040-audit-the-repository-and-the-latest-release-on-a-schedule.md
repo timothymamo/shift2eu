@@ -268,7 +268,7 @@ Residual risks of the check:
   non-App sender and passes it, with the App's commit still in the pull request. The fix is a branch
   ruleset, part of runbook step 5 by default and created before the audit-paths ruleset goes active: it
   targets `~ALL` excluding `security-audit/**`, restricts creations, updates and deletions (`creation`,
-  `update`, `deletion`), and has as bypass actors every legitimate pusher (the maintainer, the agents
+  `update`, `deletion`), and has as bypass actors every legitimate pusher (the maintainer's admin role (`RepositoryRole` 5), the agents
   App `shift2eu-agents`, Renovate, the release App `shift2eu-release`) and not the audit App, which can
   then write only `security-audit/**` branches. The residual risk is bounded by the fence plus this
   ruleset; without the ruleset, the sender key is only a one-shot signal.

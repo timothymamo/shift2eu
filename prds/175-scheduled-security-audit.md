@@ -657,8 +657,22 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    create, update or delete those branches; admins get no implicit bypass. An admin who must write there
    (trial PR 2 in step 5, a failed run's branch in step 11) first adds the **Repository admin** role
    (`RepositoryRole`, actor_id 5, mode `always`) as a temporary bypass actor, removes it afterwards, and
-   re-runs this step's bypass check (PASS: the audit App only). Check: `gh api repos/<owner>/<repo>/rulesets` lists it
-   with the App as its only bypass actor.
+   re-runs this step's bypass check (PASS: the audit App only, mode `always`). Check: the ruleset is
+   listed, and its bypass check below passes (the list endpoint returns no bypass actors, so read the
+   ruleset itself):
+
+   ```bash
+   # The id of the Audit report branches ruleset, the <audit branches id>
+   gh api repos/<owner>/<repo>/rulesets --jq '.[] | [.id, .name, .target, .enforcement] | @tsv'
+   # PASS: a row Audit report branches  branch  active; FAIL: no such row, or not active
+
+   # Bypass check of this step: the audit App only, mode always
+   gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+   # PASS: [["Integration",5875190,"always"]]
+   # FAIL: any other actor, or another mode (in pull_request mode the publish job
+   # could not push its report branch directly)
+   ```
+
 5. **Create the audit-paths ruleset on `main`**: it requires the CI check that fails an audit PR touching
    anything outside `docs/security/`, `Audit report paths` (the job of the `Audit paths` workflow,
    `.github/workflows/audit-paths.yml`), with source **GitHub Actions** (`integration_id` 15368), so a
@@ -715,21 +729,29 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
      --jq '.check_runs[] | select(.name == "Audit report paths") | [.name, .app.slug, .app.id, .conclusion] | @tsv'
    # PASS: Audit report paths  github-actions  15368  success; FAIL: no row, or another app
 
-   # Trial PR 2: the Audit report branches ruleset of step 4 lets only the audit App push or
+   # Trial PR 2 runs on the admin machine, in the maintainer own clone, as the maintainer:
+   # the temporary bypass is the admin role, and a push with the agents App credentials
+   # is refused for another reason than the FAIL line below names
+   gh auth status
+   # PASS: the maintainer account is the active one; FAIL: the agents App or another account
+
+   # The Audit report branches ruleset of step 4 lets only the audit App push or
    # delete security-audit/** (admins get no implicit bypass), so add the admin role to it for
    # this trial only. The ~ALL branch ruleset excludes that pattern and plays no part here.
    # In Settings, Rules, Rulesets, Audit report branches: add the bypass actor Repository admin,
-   # mode Always allow, and save. Then check:
+   # mode Always allow, and save. Then re-run step 4 bypass check:
    gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
-   # PASS: ["Integration",5875190,...] and ["RepositoryRole",5,"always"]; FAIL: no RepositoryRole entry
+   # PASS: exactly ["Integration",5875190,"always"] and ["RepositoryRole",5,"always"], in any order
+   # FAIL: no RepositoryRole entry, any other actor, or a mode other than always
 
-   # Push a branch security-audit/trial-<n> that changes README.md, and open its PR into main
-   git switch -c security-audit/trial-<n> origin/main
+   # Push a branch security-audit/trial-paths that changes README.md, and open its PR into main
+   git switch -c security-audit/trial-paths origin/main
    # edit README.md, then:
    git commit -am "test: trial PR 2 for the audit paths check"
-   git push origin security-audit/trial-<n>
-   gh pr create --base main --head security-audit/trial-<n> --title "Trial PR 2" --body "Audit paths trial, to close"
-   # PASS: the push and the PR succeed; FAIL: the push is rejected (the bypass actor is missing)
+   git push origin security-audit/trial-paths
+   gh pr create --base main --head security-audit/trial-paths --title "Trial PR 2" --body "Audit paths trial, to close"
+   # PASS: the push and the PR succeed, and the PR number is the <n>
+   # FAIL: the push is rejected (the bypass actor is missing)
 
    # The fence fires
    gh pr view <n> --json headRefOid --jq .headRefOid
@@ -740,13 +762,14 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
 
    # Close trial PR 2 and delete its branch
    gh pr close <n> --delete-branch
-   git ls-remote origin refs/heads/security-audit/trial-<n>
+   git ls-remote origin refs/heads/security-audit/trial-paths
    # PASS: no output; FAIL: the branch still exists
 
    # Remove the Repository admin bypass actor from Audit report branches again, and save.
    # Then re-run step 4 bypass check:
-   gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id]] | tojson'
-   # PASS: [["Integration",5875190]], the audit App only; FAIL: any other actor, the admin role included
+   gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+   # PASS: [["Integration",5875190,"always"]], the audit App only
+   # FAIL: any other actor, the admin role included, or another mode
 
    # Then make the audit-paths ruleset active (enforcement: active), and check Protect main is unchanged
    gh api repos/<owner>/<repo>/rulesets/<id> --jq .enforcement
@@ -795,10 +818,17 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
     it to keep things tidy, through step 4's temporary bypass (only the audit App may delete it otherwise):
 
     ```bash
+    # This block runs on the admin machine, in the maintainer own clone, as the maintainer:
+    # the temporary bypass is the admin role, and a DELETE with the agents App credentials
+    # is refused for another reason than the FAIL line below names
+    gh auth status
+    # PASS: the maintainer account is the active one; FAIL: the agents App or another account
+
     # In Settings, Rules, Rulesets, Audit report branches: add the bypass actor Repository admin,
-    # mode Always allow, and save. Then check:
+    # mode Always allow, and save. Then re-run step 4 bypass check:
     gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
-    # PASS: ["Integration",5875190,...] and ["RepositoryRole",5,"always"]; FAIL: no RepositoryRole entry
+    # PASS: exactly ["Integration",5875190,"always"] and ["RepositoryRole",5,"always"], in any order
+    # FAIL: no RepositoryRole entry, any other actor, or a mode other than always
 
     # Delete the failed run branch
     gh api -X DELETE 'repos/<owner>/<repo>/git/refs/heads/security-audit/<date>-<run_id>'
@@ -808,8 +838,9 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
 
     # Remove the Repository admin bypass actor from Audit report branches again, and save.
     # Then re-run step 4 bypass check:
-    gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id]] | tojson'
-    # PASS: [["Integration",5875190]], the audit App only; FAIL: any other actor, the admin role included
+    gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+    # PASS: [["Integration",5875190,"always"]], the audit App only
+    # FAIL: any other actor, the admin role included, or another mode
     ```
 
     If the publish job failed because it found two App-authored draft advisories
