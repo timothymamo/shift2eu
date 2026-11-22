@@ -209,9 +209,11 @@ $(call host_refuse,WORKSPACE_REPO is not an absolute path (its value is not show
 else ifeq ($(HOST_REPO_NAME),)
 $(call host_refuse,WORKSPACE_REPO names no checkout below / (its value is not shown))
 endif
-# The workspace with its symlinks resolved, as git resolves REPO_ROOT's (macOS: /var is /private/var), or as
-# written when it does not exist. The value passed the character check above, so it is safe in single quotes.
-host_workspace_real := $(or $(shell cd '$(HOST_WORKSPACE)/' 2>/dev/null && pwd -P),$(HOST_WORKSPACE))
+# The workspace with its symlinks resolved, as git resolves REPO_ROOT's (macOS: /var is /private/var). One that
+# does not exist yet is its nearest existing ancestor, resolved, with the rest of the path appended, so a missing
+# workspace under a symlink is compared in resolved form too (issue #447); / always exists, so the loop ends.
+# The value passed the character check above and is an absolute path, so it is safe in single quotes.
+host_workspace_real := $(shell p='$(HOST_WORKSPACE)'; rest=; while ! cd "$$p/" 2>/dev/null; do rest="/$${p$(host_hash)$(host_hash)*/}$$rest"; p="$${p%/*}"; done; real="$$(pwd -P)"; real="$${real%/}$$rest"; printf '%s\n' "$${real:-/}")
 ifneq ($(filter $(host_workspace_real) $(patsubst %/,%,$(host_workspace_real))/%,$(REPO_ROOT)),)
 $(call host_refuse,make runs in $(REPO_ROOT) - the workspace $(or $(HOST_WORKSPACE),/) or inside it)
 else ifneq ($(filter $(REPO_ROOT)/%,$(host_workspace_real)),)
