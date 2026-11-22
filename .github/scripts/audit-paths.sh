@@ -14,7 +14,11 @@
 # Inputs, from the environment alone:
 #   AUDIT_PATHS_AUTHOR  the pull request's author login
 #   AUDIT_PATHS_BASE    the base commit (the event's pull_request.base.sha)
-#   AUDIT_PATHS_HEAD    the commit that would land (the workflow's merge commit, github.sha)
+#   AUDIT_PATHS_HEAD    the pull request's head commit (the event's pull_request.head.sha)
+#
+# The workflow runs main's copy of this script under pull_request_target, from a checkout of main, and
+# fetches the pull request's commits as objects only. So the script reads nothing from the working tree:
+# both commits are git objects it diffs, and the tree it runs in is main's, never the pull request's.
 #
 # It judges the change from git merge-base BASE HEAD to HEAD, so a branch behind main is judged only on
 # what it lands. It diffs with git diff-tree, plumbing that reads no diff driver, textconv or external diff

@@ -241,7 +241,12 @@ What those permissions also allow, beyond what the audit needs, and what narrows
 | Repository security advisories write | publishing an advisory and requesting a CVE: disclosure | every advisory `state` the script sends is hard-coded `draft`, and it never calls the publish or CVE endpoints |
 
 The App is in no bypass list but the `security-audit/**` branch ruleset's. The required check is the job
-`Audit report paths` of `.github/workflows/audit-paths.yml`, which runs `.github/scripts/audit-paths.sh`.
+`Audit report paths` of `.github/workflows/audit-paths.yml`, which runs `.github/scripts/audit-paths.sh`
+under `pull_request_target`: main's copy of the workflow and the script runs, from a checkout of main, and
+the pull request's commits are fetched as git objects and diffed, never checked out or executed. Under
+`pull_request` the pull request's own copy of the script would run, and the App, which holds contents write
+though not the Workflows permission, could change it and pass its own check. The job's token reads
+contents only, it uses no secret, and the repository is public, so the fetch needs no credential.
 
 ### No other App holds Actions write
 

@@ -7,27 +7,37 @@ name: Audit paths
 # commits. The audit-paths ruleset on main requires the job by its name (the PRD's runbook step 5);
 # Protect main stays unchanged.
 #
-# pull_request alone, with no paths:, paths-ignore: or branches-ignore: filter: a required check that never
-# reports blocks its pull request for good, so the job reports on every pull request. pull_request, never
-# pull_request_target: the job runs the pull request's own copy of the script, with a read-only
-# GITHUB_TOKEN, no secret and no environment, as ci.yml runs the pull request's code. So a pull request can
-# change this workflow or the script and so its own check: the fence is defence in depth, behind Protect
-# main's code owner approval, which every pull request needs, the App's included.
+# pull_request_target alone, with no paths:, paths-ignore: or branches-ignore: filter: a required check
+# that never reports blocks its pull request for good, so the job reports on every pull request.
+# pull_request_target, never pull_request, because the trigger is the fence itself: pull_request runs the
+# pull request's own copy of this workflow and of the script, and the audit App, which holds contents write
+# but no Workflows permission, could change .github/scripts/audit-paths.sh in its own pull request and so
+# pass its own check. pull_request_target runs main's copy of both, the code this repository reviewed.
 #
-# The checkout is the default merge commit refs/pull/<n>/merge, github.sha, the tree that would land, with
-# fetch-depth: 0. The script diffs from git merge-base of the event's base.sha and that commit, and the
-# full history makes sure both commits and their merge base are present whichever of them main has moved
-# past since the event: a shallow fetch would leave the merge base out and fail the check, closed but
-# spurious. The author and the two commits reach the script through env: alone, never through a ${{ }}
-# expression in run:, so no value from the event can become a shell word.
+# Why pull_request_target is safe here: the job executes main's code only. The checkout has no ref: and no
+# repository:, so it is main's commit, github.sha. The pull request's commits are then fetched as git
+# objects and diffed, data the script reads with git plumbing, and no step checks them out, switches to
+# them or runs a line of their tree. The GITHUB_TOKEN reads contents only and is not persisted in
+# .git/config; the repository is public, so the fetch needs no credential. The job uses no secret and no
+# environment, and the App cannot edit .github/workflows/ to change any of this.
+#
+# The checkout takes fetch-depth: 0 and the fetch takes the pull request's whole history, so base.sha,
+# head.sha and their merge base are all present whichever of them main has moved past since the event: a
+# shallow fetch would leave the merge base out and fail the check, closed but spurious. A pull request
+# pushed to while the job runs may leave refs/pull/<n>/head past the event's head.sha, which the fetch then
+# need not bring: the script finds no such commit and fails closed, and the push's own run reports. The
+# author, the pull request's number and the two commits reach the scripts through env: alone, never through
+# a ${{ }} expression in run:, so no value from the event can become a shell word.
 on:
-  pull_request:
+  pull_request_target:
 
 permissions:
   contents: read
 
+# Under pull_request_target github.ref is the base branch, shared by every pull request, so the group is
+# the pull request's number: a push cancels only its own pull request's earlier run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
@@ -36,13 +46,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # No ref: and no repository: on purpose: under pull_request_target this is main's commit, whose copy
+      # of the script runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+      - name: Fetch the pull request's commits as objects, never checked out
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo >&2 "audit-paths: the pull request number is not a number: the check fails closed"
+            exit 1
+          fi
+          git fetch --no-tags --no-recurse-submodules origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/pull/head"
       - name: Check the paths an audit pull request changes
         env:
           AUDIT_PATHS_AUTHOR: ${{ github.event.pull_request.user.login }}
           AUDIT_PATHS_BASE: ${{ github.event.pull_request.base.sha }}
-          AUDIT_PATHS_HEAD: ${{ github.sha }}
+          AUDIT_PATHS_HEAD: ${{ github.event.pull_request.head.sha }}
         run: .github/scripts/audit-paths.sh
