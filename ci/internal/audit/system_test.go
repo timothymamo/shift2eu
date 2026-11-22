@@ -14,14 +14,21 @@
 //	audit.Observer = func(ctx context.Context, root, gitHubEnv string, before [32]byte, accepted bool) audit.Effects
 //	audit.Preflight(ctx context.Context, root string, in Inputs, prober Prober, observer Observer, pid int) error
 //	audit.Launch   = func(ctx context.Context, root string, cfg claudecode.Config, prompt claudecode.Prompt) error
-//	audit.Audit(ctx context.Context, root string, in Inputs, launch Launch) error
+//	audit.Audit(ctx context.Context, root string, in Inputs, launch Launch) ([]byte, error)
+//	audit.Steps{..., Audit: func(ctx context.Context, root string) ([]byte, error)}
+//	audit.Run{Root, Inputs, Steps, Out, Result func(body []byte) error}.Run(ctx) int
+//	audit.MaxResult, the cap on the result file the audit reads back
 //
 // Preflight calls observer once, after it has closed probe 2's listener, with a
 // context detached from the run's cancellation: a run that timed out or was
 // cancelled is still observed, or its effects would read as refused. Audit
 // refuses a work area that is not empty before the run, and reads the result file
-// after it: a file holding the token or the canary, or none at all, fails the run
-// with the audit's constant line.
+// after it: a file that is no regular file, that is over MaxResult, that is no
+// JSON, or that holds the token or the canary - as its bytes or as a decoded JSON
+// string - fails the run with the audit's constant line. Audit returns the bytes
+// it read and checked, never the path, and Run hands them on through its Result
+// seam once every step has passed: the bytes are what the publish job - step 19
+// of ADR 0040 - works from, and a run that failed hands on nothing.
 package audit_test
 
 import (
@@ -260,7 +267,7 @@ func TestPreflightGivesTheConstantFailureOfAFailedRun(t *testing.T) {
 		Preflight: func(ctx context.Context, root string) error {
 			return audit.Preflight(ctx, root, in, prober, observer.observe, preflightPid)
 		},
-		Audit: func(context.Context, string) error { return nil },
+		Audit: func(context.Context, string) ([]byte, error) { return nil, nil },
 	}
 
 	var out bytes.Buffer
@@ -375,10 +382,15 @@ func (l *launchFake) launch(_ context.Context, root string, _ claudecode.Config,
 }
 
 // runAuditStep runs one audit run whose audit step is the real one, its launch
-// being the case's fake, and returns the run's exit code and the one line it
-// printed.
-func runAuditStep(t *testing.T, root string, in audit.Inputs, launch audit.Launch) (int, string) {
+// being the case's fake, and returns the run's exit code, the one line it
+// printed and the result file's bytes the run handed on.
+func runAuditStep(t *testing.T, root string, in audit.Inputs, launch audit.Launch) (int, string, []byte) {
 	t.Helper()
+
+	var (
+		out    bytes.Buffer
+		result []byte
+	)
 
 	steps := audit.Steps{
 		ManagedSettings: func(string) error { return nil },
@@ -386,16 +398,27 @@ func runAuditStep(t *testing.T, root string, in audit.Inputs, launch audit.Launc
 		Layout:          func(string) error { return nil },
 		Bubblewrap:      func(context.Context) error { return nil },
 		Preflight:       func(context.Context, string) error { return nil },
-		Audit: func(ctx context.Context, theRoot string) error {
+		Audit: func(ctx context.Context, theRoot string) ([]byte, error) {
 			return audit.Audit(ctx, theRoot, in, launch)
 		},
 	}
 
-	var out bytes.Buffer
+	code := audit.Run{
+		Root:   root,
+		Inputs: in,
+		Steps:  steps,
+		Out:    &out,
+		// Result is the seam the publish job works from (ADR 0040, step 19):
+		// the run hands it the audit's bytes, and a run that failed hands it
+		// nothing.
+		Result: func(body []byte) error {
+			result = append([]byte(nil), body...)
 
-	code := audit.Run{Root: root, Inputs: in, Steps: steps, Out: &out}.Run(t.Context())
+			return nil
+		},
+	}.Run(t.Context())
 
-	return code, out.String()
+	return code, out.String(), result
 }
 
 // workPath is a path of the audit's work area under root.
@@ -405,6 +428,23 @@ func workPath(root string, parts ...string) string {
 
 // resultFile is the result the audit's model writes.
 const resultFile = `{"findings":[]}`
+
+// pinnedResult is a result that quotes a SHA-256 pin: 64 lower-case hex
+// characters the judgement's 64-hex rule would refuse, and a finding here.
+var pinnedResult = `{"pin":"` + strings.Repeat("0f", 32) + `"}`
+
+// jsonEscaped returns s with every character written as a JSON \uXXXX escape,
+// so a file that names s holds no byte of it: the decoded string values are
+// what the audit searches, not only the bytes (issue #277, round D finding 4).
+func jsonEscaped(s string) string {
+	var escaped strings.Builder
+
+	for _, r := range s {
+		fmt.Fprintf(&escaped, `\u%04x`, r)
+	}
+
+	return escaped.String()
+}
 
 // TestAuditTakesOnlyAResultFileTheRunWrote pins the audit step's two ends
 // (ADR 0040, "The audit's programs", and findings A5, A6 and R12 of issue #277):
@@ -427,21 +467,71 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 		wantLaunched bool
 		// wantRefused is whether the run fails with the audit's constant line.
 		wantRefused bool
+		// wantResult is the result bytes the run hands on, and "" when it hands
+		// on none.
+		wantResult string
 	}{
 		{
 			name:         "the run wrote its result file",
 			write:        func(root string) error { return os.WriteFile(workPath(root, "result.json"), []byte(resultFile), 0o600) },
 			wantLaunched: true,
+			wantResult:   resultFile,
 		},
 		{
 			name: "the run's result file quotes a SHA-256 pin",
 			write: func(root string) error {
-				return os.WriteFile(workPath(root, "result.json"), []byte(`{"pin":"`+strings.Repeat("0f", 32)+`"}`), 0o600)
+				return os.WriteFile(workPath(root, "result.json"), []byte(pinnedResult), 0o600)
 			},
 			wantLaunched: true,
+			wantResult:   pinnedResult,
 		},
 		{
 			name:         "the run wrote no result file",
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			name: "the result file is a symbolic link to a regular file",
+			write: func(root string) error {
+				elsewhere := filepath.Join(root, "srv", "audit", "state", "out", "result.json")
+				if err := os.WriteFile(elsewhere, []byte(resultFile), 0o600); err != nil {
+					return err
+				}
+
+				return os.Symlink(elsewhere, workPath(root, "result.json"))
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			name: "the result file is over its cap",
+			write: func(root string) error {
+				return os.WriteFile(workPath(root, "result.json"), make([]byte, audit.MaxResult+1), 0o600)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			name: "the result file is no JSON",
+			write: func(root string) error {
+				return os.WriteFile(workPath(root, "result.json"), []byte(`{"findings":[`), 0o600)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			name: "the result file holds the step's token as JSON escapes",
+			write: func(root string) error {
+				return os.WriteFile(workPath(root, "result.json"), []byte(`{"note":"`+jsonEscaped(testToken)+`"}`), 0o600)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			name: "the result file holds the step's canary as JSON escapes",
+			write: func(root string) error {
+				return os.WriteFile(workPath(root, "result.json"), []byte(`{"note":"`+jsonEscaped(testCanary)+`"}`), 0o600)
+			},
 			wantLaunched: true,
 			wantRefused:  true,
 		},
@@ -499,10 +589,17 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 
 			launch := &launchFake{write: tc.write}
 
-			code, out := runAuditStep(t, root, in, launch.launch)
+			code, out, result := runAuditStep(t, root, in, launch.launch)
 
 			if launch.called != tc.wantLaunched {
 				t.Errorf("the CLI's run %s, want it %s: the work area is checked before the run, so a result file that is already there never counts as the run's", ran(launch.called), ran(tc.wantLaunched))
+			}
+
+			// The run hands the publish job the bytes it read and checked, never
+			// the path (issue #277, round D finding 4): a run that passed hands on
+			// the file's own bytes, and a run that failed hands on nothing.
+			if string(result) != tc.wantResult {
+				t.Errorf("the run handed on %q, want %q: the bytes are the audit's, and a run that failed hands on none", result, tc.wantResult)
 			}
 
 			if tc.wantRefused {
@@ -529,6 +626,43 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAuditNamesAnOversizedResultOfItsOwn pins the other half of finding 4 of
+// round D (issue #277): a result file over the cap is a failure of its own, and
+// not the one of a run that wrote no result file, so the runbook - and PR 5's
+// publication - can tell the two apart.
+func TestAuditNamesAnOversizedResultOfItsOwn(t *testing.T) {
+	t.Parallel()
+
+	// auditOnce runs the audit step alone under a fresh tree, its run leaving
+	// what write leaves in the work area, and returns its failure.
+	auditOnce := func(t *testing.T, write func(root string) error) error {
+		t.Helper()
+
+		root, in := preflightTree(t)
+
+		_, err := audit.Audit(t.Context(), root, in, (&launchFake{write: write}).launch)
+		if err == nil {
+			t.Fatal("Audit() = nil, want a failure: the step accepts one result file, and this run left none it takes")
+		}
+
+		return err
+	}
+
+	missing := auditOnce(t, nil)
+
+	oversized := auditOnce(t, func(root string) error {
+		return os.WriteFile(workPath(root, "result.json"), make([]byte, audit.MaxResult+1), 0o600)
+	})
+
+	if oversized.Error() == missing.Error() {
+		t.Errorf("Audit() = %q for a result file over %d bytes, want a failure of its own: %q is the failure of a run that wrote no result file", oversized, audit.MaxResult, missing)
+	}
+
+	if want := strconv.FormatInt(audit.MaxResult, 10); !strings.Contains(oversized.Error(), want) {
+		t.Errorf("Audit() = %q for a result file over its cap, want it to name the cap, %s bytes", oversized, want)
 	}
 }
 

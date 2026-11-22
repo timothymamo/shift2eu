@@ -4,7 +4,9 @@
 // archive's one entry, package/claude, extracted to the state area's bin/ with
 // mode 0500. A tarball that does not match, that is truncated, that carries an
 // entry outside the binary or no binary at all is refused, and nothing outside
-// that one file is written.
+// that one file is written. So is a step whose path to the binary runs through a
+// symbolic link: every directory from srv down to state/bin is checked as a real
+// directory (issue #277, round D finding 6).
 //
 // The test writes the tarballs itself, so nothing here downloads, unpacks or
 // runs a CLI.
@@ -121,6 +123,14 @@ func integrityOf(body []byte) string {
 	return "sha512-" + base64.StdEncoding.EncodeToString(sum[:])
 }
 
+// installDest is the path the checksum step writes the CLI to: the state area's
+// bin/claude of the audit directory under root. The step takes it beside root,
+// so it can check every directory of the path from root down (issue #277, round
+// D finding 6).
+func installDest(root string) string {
+	return filepath.Join(root, "srv", "audit", "state", "bin", "claude")
+}
+
 // npmTarball is a tarball shaped like the one npm packs: the binary beside the
 // package's own files, so a run that extracts anything but the binary shows it.
 func npmTarball(binary string) []tarEntry {
@@ -141,10 +151,10 @@ func TestInstallClaudeExtractsTheVerifiedBinary(t *testing.T) {
 	root := t.TempDir()
 	tarball, packed := writeTarball(t, root, "claude-code.tgz", npmTarball(claudeScript))
 
-	dest := filepath.Join(root, "srv/audit/state/bin/claude")
+	dest := installDest(root)
 	makeDir(t, filepath.Dir(dest))
 
-	if err := audit.InstallClaude(tarball, integrityOf(packed), dest); err != nil {
+	if err := audit.InstallClaude(root, tarball, integrityOf(packed), dest); err != nil {
 		t.Fatalf("InstallClaude(%q) error = %v, want none: the integrity matches the tarball", tarball, err)
 	}
 
@@ -309,10 +319,10 @@ func TestInstallClaudeRefusesEveryOtherTarball(t *testing.T) {
 				integrity = integrityOf(damaged)
 			}
 
-			dest := filepath.Join(root, "srv/audit/state/bin/claude")
+			dest := installDest(root)
 			makeDir(t, filepath.Dir(dest))
 
-			err := audit.InstallClaude(tarball, integrity, dest)
+			err := audit.InstallClaude(root, tarball, integrity, dest)
 			if err == nil {
 				t.Fatalf("InstallClaude(%q, %q) = nil, want a refusal", tarball, integrity)
 			}
@@ -345,10 +355,10 @@ func TestInstallClaudeRefusesEveryOtherTarball(t *testing.T) {
 			t.Fatalf("read %s: %v", tarball, err)
 		}
 
-		dest := filepath.Join(root, "srv/audit/state/bin/claude")
+		dest := installDest(root)
 		makeDir(t, filepath.Dir(dest))
 
-		if err := audit.InstallClaude(tarball, integrityOf(packed), dest); err == nil {
+		if err := audit.InstallClaude(root, tarball, integrityOf(packed), dest); err == nil {
 			t.Fatalf("InstallClaude(%q) = nil, want a refusal: an absolute entry names a path outside the bin directory", tarball)
 		}
 
@@ -380,10 +390,10 @@ func TestInstallClaudeSkipsThePAXGlobalHeader(t *testing.T) {
 
 	tarball, packed := writeTarball(t, root, "claude-code.tgz", entries)
 
-	dest := filepath.Join(root, "srv/audit/state/bin/claude")
+	dest := installDest(root)
 	makeDir(t, filepath.Dir(dest))
 
-	if err := audit.InstallClaude(tarball, integrityOf(packed), dest); err != nil {
+	if err := audit.InstallClaude(root, tarball, integrityOf(packed), dest); err != nil {
 		t.Fatalf("InstallClaude(%q) error = %v, want none: a PAX global header holds no file, and nothing is extracted from it", tarball, err)
 	}
 
@@ -468,10 +478,9 @@ func TestInstallClaudeChecksItsDirectory(t *testing.T) {
 			root := t.TempDir()
 			tarball, packed := writeTarball(t, root, "claude-code.tgz", npmTarball(claudeScript))
 
-			bin := tc.binDir(t, root)
-			dest := filepath.Join(bin, "claude")
+			dest := filepath.Join(tc.binDir(t, root), "claude")
 
-			if err := audit.InstallClaude(tarball, integrityOf(packed), dest); err == nil {
+			if err := audit.InstallClaude(root, tarball, integrityOf(packed), dest); err == nil {
 				t.Fatalf("InstallClaude(%q) = nil, want a refusal: the binary's directory is not a directory of the audit directory's", tarball)
 			}
 
@@ -498,7 +507,7 @@ func TestInstallClaudeChecksItsDirectory(t *testing.T) {
 		makeDir(t, filepath.Dir(link))
 		makeSymlink(t, elsewhere, link)
 
-		if err := audit.InstallClaude(tarball, integrityOf(packed), filepath.Join(link, "claude")); err == nil {
+		if err := audit.InstallClaude(root, tarball, integrityOf(packed), filepath.Join(link, "claude")); err == nil {
 			t.Fatalf("InstallClaude(%q) = nil, want a refusal: the binary's directory is a symbolic link", tarball)
 		}
 
@@ -506,4 +515,94 @@ func TestInstallClaudeChecksItsDirectory(t *testing.T) {
 			t.Errorf("the step wrote the binary through the link, into %s (%v)", elsewhere, statErr)
 		}
 	})
+}
+
+// TestInstallClaudeChecksEveryDirectoryOfItsPath pins finding A6 of round D's
+// audit of issue #277: the step writes nothing through a symbolic link, wherever
+// in its path the link stands. It takes the root beside the path it writes to -
+// audit.InstallClaude(root, tarball, integrity, bin) - and checks every
+// directory of bin's path from root down. Each case makes one directory of that
+// path - srv, the audit directory, or the state area - a link to a complete tree
+// of its own, so a step that followed it would find the directory it writes into
+// and write the binary there.
+func TestInstallClaudeChecksEveryDirectoryOfItsPath(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// link replaces one directory of the binary's path with a symbolic link
+		// to a tree of its own, and returns the bin directory a step that
+		// followed the link would write into.
+		link func(t *testing.T, root string) string
+	}{
+		{
+			name: "srv is a symbolic link",
+			link: func(t *testing.T, root string) string {
+				t.Helper()
+
+				return linkDirectoryElsewhere(t, root, "srv", "audit", "state", "bin")
+			},
+		},
+		{
+			name: "the audit directory is a symbolic link",
+			link: func(t *testing.T, root string) string {
+				t.Helper()
+
+				return linkDirectoryElsewhere(t, root, "srv/audit", "state", "bin")
+			},
+		},
+		{
+			name: "the state area is a symbolic link",
+			link: func(t *testing.T, root string) string {
+				t.Helper()
+
+				return linkDirectoryElsewhere(t, root, "srv/audit/state", "bin")
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			tarball, packed := writeTarball(t, t.TempDir(), "claude-code.tgz", npmTarball(claudeScript))
+
+			elsewhere := tc.link(t, root)
+
+			if err := audit.InstallClaude(root, tarball, integrityOf(packed), installDest(root)); err == nil {
+				t.Fatalf("InstallClaude(%q) = nil, want a refusal: %s, and the step writes nothing through a link", tarball, tc.name)
+			}
+
+			entries, err := os.ReadDir(elsewhere)
+			if err != nil {
+				t.Fatalf("read the bin directory the link leads to, %s: %v", elsewhere, err)
+			}
+
+			if len(entries) != 0 {
+				var names []string
+				for _, entry := range entries {
+					names = append(names, entry.Name())
+				}
+
+				t.Errorf("the step wrote %v into %s through the link; a link anywhere in its path is followed nowhere", names, elsewhere)
+			}
+		})
+	}
+}
+
+// linkDirectoryElsewhere makes the directory at dir under root a symbolic link
+// to a directory of its own holding below, and returns the path of below in that
+// directory: the directory a step that followed the link would write into.
+func linkDirectoryElsewhere(t *testing.T, root, dir string, below ...string) string {
+	t.Helper()
+
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	makeDir(t, filepath.Join(append([]string{target}, below...)...))
+
+	link := filepath.Join(root, filepath.FromSlash(dir))
+	makeDir(t, filepath.Dir(link))
+	makeSymlink(t, target, link)
+
+	return filepath.Join(append([]string{target}, below...)...)
 }

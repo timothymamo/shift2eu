@@ -79,7 +79,7 @@ func (r *stepRecorder) steps() audit.Steps {
 		Layout:          func(string) error { return record("audit directory") },
 		Bubblewrap:      func(context.Context) error { return record("bubblewrap") },
 		Preflight:       func(context.Context, string) error { return record("preflight") },
-		Audit:           func(context.Context, string) error { return record("audit") },
+		Audit:           func(context.Context, string) ([]byte, error) { return nil, record("audit") },
 	}
 }
 
