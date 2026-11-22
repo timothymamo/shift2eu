@@ -653,8 +653,11 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    private key file from the machine (it lives only in the environment secret); the installation token
    expires within an hour. Check: the advisory existed as a draft, was updated, and is closed; the key
    file is gone. Milestone 2 is blocked until this check passes (Decision 2).
-4. **Create the `security-audit/**` branch ruleset**: only the audit App, as its one bypass actor, and
-   admins may create or update those branches. Check: `gh api repos/<owner>/<repo>/rulesets` lists it
+4. **Create the `security-audit/**` branch ruleset**: only the audit App, as its one bypass actor, may
+   create, update or delete those branches; admins get no implicit bypass. An admin who must write there
+   (trial PR 2 in step 5, a failed run's branch in step 11) first adds the **Repository admin** role
+   (`RepositoryRole`, actor_id 5, mode `always`) as a temporary bypass actor, removes it afterwards, and
+   re-runs this step's bypass check (PASS: the audit App only). Check: `gh api repos/<owner>/<repo>/rulesets` lists it
    with the App as its only bypass actor.
 5. **Create the audit-paths ruleset on `main`**: it requires the CI check that fails an audit PR touching
    anything outside `docs/security/`, `Audit report paths` (the job of the `Audit paths` workflow,
@@ -789,8 +792,27 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
     the artifact check never sees an earlier attempt's artifact. The new run has its own run ID, so its
     report branch never meets the failed run's. If the publish job created
     `security-audit/<date>-<run_id>` but failed before opening the PR, that branch blocks nothing; delete
-    it to keep things tidy (`git push origin --delete security-audit/<date>-<run_id>`, as an admin under
-    the branch ruleset). If the publish job failed because it found two App-authored draft advisories
+    it to keep things tidy, through step 4's temporary bypass (only the audit App may delete it otherwise):
+
+    ```bash
+    # In Settings, Rules, Rulesets, Audit report branches: add the bypass actor Repository admin,
+    # mode Always allow, and save. Then check:
+    gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+    # PASS: ["Integration",5875190,...] and ["RepositoryRole",5,"always"]; FAIL: no RepositoryRole entry
+
+    # Delete the failed run branch
+    gh api -X DELETE 'repos/<owner>/<repo>/git/refs/heads/security-audit/<date>-<run_id>'
+    # PASS: no output; FAIL: an error (the bypass actor is missing, or the name is wrong)
+    git ls-remote origin 'refs/heads/security-audit/<date>-<run_id>'
+    # PASS: no output; FAIL: the branch still exists
+
+    # Remove the Repository admin bypass actor from Audit report branches again, and save.
+    # Then re-run step 4 bypass check:
+    gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id]] | tojson'
+    # PASS: [["Integration",5875190]], the audit App only; FAIL: any other actor, the admin role included
+    ```
+
+    If the publish job failed because it found two App-authored draft advisories
     with one fingerprint (its summary names this step), read both drafts, close the duplicate (keep the
     older one), then start the new run. The closed duplicate does not count as a dismissal: the kept draft
     takes precedence over it while the draft is open. Check: the new run opens the report PR.
@@ -853,8 +875,11 @@ options that were weighed and the reason given, so the decision can be revisited
      - The token exists only in the publish job, which has no model and no release code, runs only `main`'s
        committed script, and calls only its fixed set of endpoints, with every advisory `state` hard-coded
        `draft` (milestone 2).
-     - The `security-audit/**` ruleset lets only the audit App (its one bypass actor) and admins create or
-       update those branches, so another token cannot plant a report (runbook step 4).
+     - The `security-audit/**` ruleset lets only the audit App (its one bypass actor) create, update or
+       delete those branches, so another token cannot plant a report (runbook step 4). An admin who must
+       (trial PR 2 in runbook step 5, a failed run's branch in step 11) first adds the Repository admin role (`RepositoryRole` 5, `always`)
+       as a temporary bypass actor and removes it afterwards, re-running step 4's bypass check (PASS: the
+       audit App only).
      - A CI job fails any PR authored by `shift2eu-audit[bot]` that touches anything outside
        `docs/security/`, required through a **new ruleset on `main`** with no bypass actor, so
        `Protect main` stays unchanged (runbook step 5). It passes trivially for other authors, so it costs
