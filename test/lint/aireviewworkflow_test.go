@@ -409,7 +409,7 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 		}
 	})
 
-	t.Run("the Claude Code CLI is installed at a pinned version and verified", func(t *testing.T) {
+	t.Run("the Claude Code CLI is installed from the one pin file", func(t *testing.T) {
 		t.Parallel()
 
 		index, run, ok := aiReviewClaudeInstall(t, workflow)
@@ -417,83 +417,62 @@ func TestAIReviewWorkflowHoldsTheReviewersSecurityProperties(t *testing.T) {
 			t.Fatalf("%s: no step installs the Claude Code CLI; the reviewer asks its model through `claude -p` (ADR 0033)", aiReviewWorkflowPath)
 		}
 
-		// The version and the integrity are the install step's env:, not its
-		// script: the repository's generic Renovate regex manager reads a
-		// `# renovate:` comment and the `KEY: value` line below it, which the
-		// old one-line `@package@X.Y.Z` form also matched, with the script's
-		// path as the version (CLAUDE.md rule 7).
-		env, ok := aiReviewFind(aiReviewStepFields(t, workflow.steps[index]), "env")
-		if !ok {
-			t.Fatalf("%s: line %d: the step that installs the CLI sets no env:, so the CLI's version and integrity are pinned nowhere Renovate reads them (CLAUDE.md rule 7)", aiReviewWorkflowPath, workflow.steps[index].Num)
-		}
-
-		version, versionLine := "", 0
-		integrity := ""
-
-		for _, line := range env.Block {
+		// The version and the integrity live in one committed file, which
+		// Renovate bumps and both workflows' install steps read (ADR 0040's
+		// milestone-2 amendment, issue #277): the workflow holds neither, so
+		// there is no second pin that could drift from the file's.
+		for _, line := range workflow.lines {
 			key, value, ok := strings.Cut(line.Text, ":")
 			if !ok {
 				continue
 			}
 
-			switch key {
-			case "CLAUDE_CODE_VERSION":
-				version, versionLine = strings.TrimSpace(value), line.Num
-			case "CLAUDE_CODE_INTEGRITY":
-				integrity = strings.TrimSpace(value)
+			switch strings.TrimSpace(key) {
+			case "CLAUDE_CODE_VERSION", "CLAUDE_CODE_INTEGRITY":
+				t.Errorf("%s: line %d: the workflow sets %s to %q; the Claude Code pin lives in %s alone, which Renovate bumps and the pin check reads (CLAUDE.md rule 7, issue #277)", aiReviewWorkflowPath, line.Num, strings.TrimSpace(key), strings.TrimSpace(value), claudeCodePinFile)
 			}
 		}
 
-		if versionLine == 0 {
-			t.Fatalf("%s: line %d: the install step's env: sets no CLAUDE_CODE_VERSION, want the CLI's exact version X.Y.Z: a range or latest would change the program the reviewer runs without a commit (CLAUDE.md rule 7)", aiReviewWorkflowPath, env.Num)
-		}
+		// The step that installs the CLI, or one before it, reads that file:
+		// the version and the integrity reach the installer from it.
+		readsPin := false
 
-		if !aiReviewExactVersion.MatchString(version) {
-			t.Errorf("%s: line %d: CLAUDE_CODE_VERSION is %q, want an exact X.Y.Z version: a range or latest would change the program the reviewer runs without a commit (CLAUDE.md rule 7)", aiReviewWorkflowPath, versionLine, version)
-		}
+		for _, step := range workflow.steps[:index+1] {
+			stepRun, ok := aiReviewFind(aiReviewStepFields(t, step), "run")
+			if !ok {
+				continue
+			}
 
-		above := aiReviewSourceLine(t, workflow, versionLine-1)
-		if !strings.HasPrefix(strings.TrimSpace(above), "# renovate:") ||
-			!strings.Contains(above, "datasource=npm") ||
-			!strings.Contains(above, "depName=@anthropic-ai/claude-code") {
-			t.Errorf("%s: line %d: the line above the CLI's version pin is %q, want a # renovate: datasource=npm depName=@anthropic-ai/claude-code comment, so Renovate finds the pin and no one bumps it by hand (CLAUDE.md rule 7)", aiReviewWorkflowPath, versionLine-1, above)
-		}
-
-		// The reviewer runs a downloaded program that holds a subscription
-		// token: the step compares the download against an integrity pinned
-		// here, so a changed tarball is refused rather than run (ADR 0033).
-		if integrity == "" {
-			t.Errorf("%s: the install step's env: sets no CLAUDE_CODE_INTEGRITY, so nothing compares the download against a pinned digest (ADR 0033)", aiReviewWorkflowPath)
-		} else if !aiReviewIntegrity.MatchString(integrity) {
-			t.Errorf("%s: CLAUDE_CODE_INTEGRITY is %q, want npm's sha512-<base64> integrity for the pinned version, so the download is verified before it runs (ADR 0033)", aiReviewWorkflowPath, integrity)
-		}
-
-		// The script itself names no version and no digest: both reach it
-		// through the env:, where Renovate updates them.
-		script := aiReviewText(run)
-
-		for _, want := range []string{"@${CLAUDE_CODE_VERSION}", "${CLAUDE_CODE_INTEGRITY}"} {
-			if !strings.Contains(script, want) {
-				t.Errorf("%s: line %d: the install step's run: script holds no %s, so it passes neither the version nor the integrity the step's env: pins to the install script (ADR 0033)", aiReviewWorkflowPath, run.Num, want)
+			if strings.Contains(aiReviewText(stepRun), claudeCodePinFile) {
+				readsPin = true
 			}
 		}
 
-		if strings.Contains(script, version) {
-			t.Errorf("%s: line %d: the install step's run: script names the version %s itself; the version is CLAUDE_CODE_VERSION, which Renovate updates with the integrity in one place (CLAUDE.md rule 7)", aiReviewWorkflowPath, run.Num, version)
+		if !readsPin {
+			t.Errorf("%s: no step before the CLI's install reads %s, so neither the version nor the integrity reaches the installer (ADR 0040, issue #277)", aiReviewWorkflowPath, claudeCodePinFile)
 		}
 
-		// The pin check (ci/claudecodepin, issue #276) reads exactly these
-		// two env: values and holds them to the npm registry, so the step
-		// must pass exactly them to the installer: the linux-x64 platform
-		// package at ${CLAUDE_CODE_VERSION}, which the check's own package
-		// name mirrors, and ${CLAUDE_CODE_INTEGRITY}. Any other word there
-		// (the meta package, a dist tag, a chained suffix) would check a
-		// download the reviewer never installs, and the check would pass.
-		if got := aiReviewInstallArgs(t, run); !slices.Equal(got, []string{
-			"@anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION}",
-			"${CLAUDE_CODE_INTEGRITY}",
-		}) {
-			t.Errorf("%s: line %d: the install step passes %v to %s, want exactly @anthropic-ai/claude-code-linux-x64@${CLAUDE_CODE_VERSION} and ${CLAUDE_CODE_INTEGRITY}: the pin check holds those to the registry, so it checks the download the reviewer runs (issue #276)", aiReviewWorkflowPath, run.Num, got, aiReviewInstallScript)
+		// The install step passes the linux-x64 platform package at the
+		// version, and the integrity, both as values it was given: a literal
+		// version or digest in the script would be a second pin (CLAUDE.md
+		// rule 7). The pin check (ci/claudecodepin, issue #276) holds that
+		// package's version and that integrity to the npm registry, so the
+		// words passed here are the download the reviewer runs.
+		args := aiReviewInstallArgs(t, run)
+		if len(args) != 2 {
+			t.Fatalf("%s: line %d: the install step passes %v to %s, want the platform package at the pinned version and the pinned integrity (issue #276)", aiReviewWorkflowPath, run.Num, args, aiReviewInstallScript)
+		}
+
+		if !strings.HasPrefix(args[0], "@anthropic-ai/claude-code-") || !strings.Contains(args[0], "@$") {
+			t.Errorf("%s: line %d: the install step passes %q as the platform package, want @anthropic-ai/claude-code-<platform>@<the version %s holds>: the pin check holds that package's version to the registry, so it checks the download the reviewer runs (issue #276)", aiReviewWorkflowPath, run.Num, args[0], claudeCodePinFile)
+		}
+
+		if at := strings.LastIndex(args[0], "@"); at >= 0 && aiReviewExactVersion.MatchString(args[0][at+1:]) {
+			t.Errorf("%s: line %d: the install step passes the version literal %q, want the value it read from %s: a literal is a second pin, which Renovate does not bump with the file's (CLAUDE.md rule 7)", aiReviewWorkflowPath, run.Num, args[0], claudeCodePinFile)
+		}
+
+		if !strings.Contains(args[1], "$") || aiReviewIntegrity.MatchString(args[1]) {
+			t.Errorf("%s: line %d: the install step passes %q as the integrity, want the value it read from %s: nothing compares the download against a pinned digest unless that value is the file's, and a literal is a second pin (ADR 0033, CLAUDE.md rule 7)", aiReviewWorkflowPath, run.Num, args[1], claudeCodePinFile)
 		}
 
 		// The CLI is installed before any secret is in a step's environment, so
@@ -891,18 +870,6 @@ func aiReviewRunStep(t *testing.T, workflow aiReviewWorkflow) (yamlread.Item, bo
 	}
 
 	return yamlread.Item{}, false
-}
-
-// aiReviewSourceLine returns the workflow's source line num, counted from 1.
-func aiReviewSourceLine(t *testing.T, workflow aiReviewWorkflow, num int) string {
-	t.Helper()
-
-	lines := strings.Split(string(workflow.src), "\n")
-	if num < 1 || num > len(lines) {
-		t.Fatalf("%s: the workflow has no line %d", aiReviewWorkflowPath, num)
-	}
-
-	return lines[num-1]
 }
 
 // aiReviewClaudeInstall returns the index of the step that installs the Claude

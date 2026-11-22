@@ -27,13 +27,14 @@ const (
 // a queued main run with a newer one).
 const claudeCodePinCancel = "${{ github.event_name == 'pull_request' }}"
 
-// claudeCodePinPaths are the paths the pin check watches: the pinned workflow,
-// the installer that consumes the pin, the check's own workflow, the check's
-// code and go.mod, whose go line names the toolchain the check is built with. A
-// push to main filters on them; a pull request runs the job on every change, and
-// the changes step decides whether the pin's paths are among them (issue #452).
+// claudeCodePinPaths are the paths the pin check watches: the one pin file, the
+// installer that consumes the pin, the workflow that runs it, the check's own
+// workflow, the check's code and go.mod, whose go line names the toolchain the
+// check is built with. A push to main filters on them; a pull request runs the
+// job on every change, and the changes step decides whether the pin's paths are
+// among them (issue #452, ADR 0040's milestone-2 amendment, issue #277).
 var claudeCodePinPaths = []string{
-	".github/workflows/ai-review.yml",
+	claudeCodePinFile,
 	".github/scripts/install-claude-code.sh",
 	claudeCodePinWorkflowPath,
 	"ci/claudecodepin/**",
@@ -405,6 +406,7 @@ const (
 // and a file no case touches.
 var claudeCodePinBase = []string{
 	"README.md",
+	claudeCodePinFile,
 	".github/workflows/ai-review.yml",
 	".github/scripts/install-claude-code.sh",
 	claudeCodePinWorkflowPath,
@@ -1167,15 +1169,21 @@ func claudeCodePinNoSameNamedJob(t *testing.T, root, path string) {
 //
 //   - .github/workflows/ai-review.yml, the one place that installs the CLI, so
 //     the one place that pins its version and its integrity.
+//   - .github/claude-code.yaml, the one pin file, where the version under its #
+//     renovate: comment and the integrity beside it live (ADR 0040's
+//     milestone-2 amendment, issue #277).
+//   - .github/workflows/ai-review.yml, the reviewer's workflow, which installs
+//     the CLI from that file: it names the installer, never a pin of its own.
 //   - .github/scripts/install-claude-code.sh, the installer itself: its header
-//     names its own file and both variables the caller pins.
+//     names its own file and the values the caller gives it.
 //   - .github/workflows/claude-code-pin.yml, the check's workflow, which names
-//     both in its paths:, in the case of its changes step and in the comment
-//     that explains them.
+//     the pin file and the installer in its paths:, in the case of its changes
+//     step and in the comment that explains them.
 //
 // Nothing else under .github/workflows, .github/scripts and .github/actions may
 // hold them.
 var claudeCodePinPinNamingFiles = []string{
+	claudeCodePinFile,
 	aiReviewWorkflowPath,
 	aiReviewInstallScript,
 	claudeCodePinWorkflowPath,
@@ -1183,7 +1191,8 @@ var claudeCodePinPinNamingFiles = []string{
 
 // claudeCodePinPinNamingStrings are the strings that name the Claude Code pin: a
 // second install with a pin of its own under .github/ would be read by no check
-// of this repository's, since ci/claudecodepin reads ai-review.yml alone.
+// of this repository's, since ci/claudecodepin reads .github/claude-code.yaml
+// alone.
 var claudeCodePinPinNamingStrings = []string{
 	"CLAUDE_CODE_INTEGRITY",
 	"install-claude-code.sh",
@@ -1195,13 +1204,13 @@ var claudeCodePinPinNamingStrings = []string{
 var claudeCodePinSearchedDirs = []string{".github/workflows", ".github/scripts", ".github/actions"}
 
 // TestClaudeCodePinLivesOnlyInAIReview pins that the Claude Code CLI is
-// installed from one pin, in .github/workflows/ai-review.yml: no other workflow,
-// script or action of .github mentions CLAUDE_CODE_INTEGRITY or
-// install-claude-code.sh, but the installer itself, the check's workflow and the
-// workflow that installs it. ci/claudecodepin reads the version and the
-// integrity out of ai-review.yml alone, so a second install with a pin of its
-// own would be checked by nothing, and would run whatever its pin says (issue
-// #452).
+// installed from one pin, .github/claude-code.yaml: no workflow, script or
+// action of .github mentions CLAUDE_CODE_INTEGRITY or install-claude-code.sh but
+// the reviewer's workflow, the installer itself, the pin file and the check's
+// workflow. ci/claudecodepin reads the version and the integrity out of that one
+// file alone, so a second install with a pin of its own would be checked by
+// nothing, and would run whatever its pin says (issue #452, ADR 0040's
+// milestone-2 amendment, issue #277).
 func TestClaudeCodePinLivesOnlyInAIReview(t *testing.T) {
 	t.Parallel()
 
@@ -1265,7 +1274,7 @@ func claudeCodePinScannedFile(t *testing.T, rel, path string) {
 
 	for _, marker := range claudeCodePinPinNamingStrings {
 		if strings.Contains(string(src), marker) {
-			t.Errorf("%s names %q: the Claude Code pin lives in %s alone, and ci/claudecodepin reads it there, so a second install with its own pin would be checked by nothing (issue #452)", rel, marker, aiReviewWorkflowPath)
+			t.Errorf("%s names %q: the Claude Code pin lives in %s alone, and ci/claudecodepin reads it there, so a second install with its own pin would be checked by nothing (issue #452, issue #277)", rel, marker, claudeCodePinFile)
 		}
 	}
 }

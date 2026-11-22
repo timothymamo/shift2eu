@@ -20,6 +20,10 @@
 //   - A tarball that matches installs its one binary, package/claude, executable, into <directory> - the other
 //     files of the tarball stay out, and <directory> is not where the download went - and the installer prints the
 //     version line the binary prints.
+//   - The verified tarball stays beside the binary, as <directory>/claude-code.tgz, byte for byte what npm packed: the
+//     audit's launcher, ci/auditrun, checks it against the one pin again in the model step (ADR 0040's milestone-2
+//     amendment). A refused run keeps none: a tarball that did not match the integrity is gone with the download
+//     directory.
 //   - Every exit removes the mktemp -d directory the tarball was downloaded into, the successful install's and each
 //     refusal's alike, a refusal after the download's (the integrity mismatch) included: nothing is left in TMPDIR.
 //     The installed package/claude stays, as it lives in <directory>.
@@ -92,6 +96,10 @@ const (
 
 	// claudePath is the one file of the tarball the installer extracts, relative to the destination.
 	claudePath = "package/claude"
+
+	// keptTarball is the verified tarball the installer keeps beside the binary, relative to the destination:
+	// ci/auditrun checks it against the one pin again in the model step (ADR 0040's milestone-2 amendment).
+	keptTarball = "claude-code.tgz"
 
 	// versionLine is what the fixture's package/claude prints, as the real one prints "2.1.0 (Claude Code)".
 	versionLine = "2.1.0 (Claude Code)"
@@ -436,7 +444,7 @@ func installCases() []installCase {
 			args:           validArgs,
 			wantExit:       0,
 			wantNPM:        true,
-			wantFiles:      []string{claudePath},
+			wantFiles:      []string{keptTarball, claudePath},
 			wantExecutable: true,
 			wantOutput:     []string{versionLine},
 		},
@@ -462,7 +470,7 @@ func installCases() []installCase {
 			noInstallRoot:  true,
 			wantExit:       0,
 			wantNPM:        true,
-			wantFiles:      []string{claudePath},
+			wantFiles:      []string{keptTarball, claudePath},
 			wantExecutable: true,
 			wantOutput:     []string{versionLine},
 		},
@@ -612,6 +620,19 @@ func runInstallCase(t *testing.T, tc installCase, fx fixture) {
 
 	if diff := cmp.Diff(tc.wantFiles, filesUnder(t, dest)); diff != "" {
 		t.Errorf("files under the destination (-want +got):\n%s", diff)
+	}
+
+	// The tarball the install kept is the one npm packed, byte for byte: the audit's launcher checks it against
+	// the pin again before it extracts the binary it runs.
+	if slices.Contains(tc.wantFiles, keptTarball) {
+		kept, err := os.ReadFile(filepath.Join(dest, keptTarball))
+		if err != nil {
+			t.Fatalf("read the kept tarball %s: %v", keptTarball, err)
+		}
+
+		if !bytes.Equal(kept, fx.tarball) {
+			t.Errorf("the kept tarball %s holds %d bytes, want the %d bytes npm packed: the audit's launcher compares it with the one pin before it extracts the binary", keptTarball, len(kept), len(fx.tarball))
+		}
 	}
 
 	if got := npmCalled(t, marker); got != tc.wantNPM {
