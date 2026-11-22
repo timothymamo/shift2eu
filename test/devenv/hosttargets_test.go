@@ -282,6 +282,51 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 			},
 		},
 		{
+			// Issue #447's other half, found by the audit: the ancestor is a symlink whose target does not exist
+			// either, and that target is inside the checkout make runs from. Stripping the unresolvable components
+			// until cd succeeds keeps the link's unresolved name, which no comparison against REPO_ROOT's resolved
+			// form catches, so the guard fails open: the target runs instead of refusing. A dangling symlink is
+			// exactly what a workspace the VM has not created yet looks like behind one, so the guard must resolve
+			// the link's target and then its nearest existing ancestor. The link is the test's own, so the case
+			// reproduces on Linux, where /var is no symlink.
+			name: "the workspace is inside the checkout make runs from, through a dangling symlink, and does not exist",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				link := filepath.Join(l.sb.root, "dangling-into-the-checkout")
+				target := filepath.Join(l.root, "ws-not-there")
+
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatalf("symlink %s to %s: %v", link, target, err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(link, hostTargetInstance)
+
+				return l.root
+			},
+		},
+		{
+			// The same with a relative link target, which the guard must resolve against the link's own directory
+			// rather than the working directory make runs in (issue #447).
+			name: "the workspace is inside the checkout make runs from, through a dangling relative symlink, and does not exist",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				link := filepath.Join(l.sb.root, "dangling-relative-into-the-checkout")
+				// Relative to the link's directory, the sandbox root: host/shift2eu is the host clone, the checkout
+				// make runs from, so the target is inside it.
+				target := filepath.Join("host", "shift2eu", "ws-not-there")
+
+				if err := os.Symlink(target, link); err != nil {
+					t.Fatalf("symlink %s to %s: %v", link, target, err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(link, hostTargetInstance)
+
+				return l.root
+			},
+		},
+		{
 			name:   "the workspace is the root directory",
 			layout: workspaceRepoHolding(func(*hostLayout) string { return "/x" }),
 		},
