@@ -1,14 +1,20 @@
 name: Audit paths
 
-# The required path check of PRD #175 milestone 2 (ADR 0040): the job "Audit report paths" fails any pull
-# request authored by shift2eu-audit[bot], the scheduled audit's App, that touches anything outside
-# docs/security/ or adds there anything but a regular, non-executable file, and passes trivially for every
-# other author. .github/scripts/audit-paths.sh is the fence; this workflow only hands it the author and two
-# commits. The audit-paths ruleset on main requires the job by its name (the PRD's runbook step 5);
-# Protect main stays unchanged.
+# The required path check of PRD #175 milestone 2 (ADR 0040): the job "Audit report paths" fails any audit
+# pull request - one authored by shift2eu-audit[bot], the scheduled audit's App, one whose sender is that
+# App (its contents write lets it push onto another author's pull request), or one from a security-audit/
+# head branch - that is based on any branch but main, touches anything outside docs/security/, adds there
+# a path with a component starting with a dot, or adds there anything but a regular, non-executable file.
+# It passes trivially for every other pull request. .github/scripts/audit-paths.sh is the fence; this
+# workflow only hands it the author, the sender, the two branches and the two commits. The audit-paths
+# ruleset on main requires the job by its name (the PRD's runbook step 5); Protect main stays unchanged.
 #
-# pull_request_target alone, with no paths:, paths-ignore: or branches-ignore: filter: a required check
-# that never reports blocks its pull request for good, so the job reports on every pull request.
+# pull_request_target with types: alone, and no branches:, paths:, paths-ignore: or branches-ignore:
+# filter: a required check that never reports blocks its pull request for good, so the job reports on
+# every pull request, into any branch. The types are those under which a field the check reads can change:
+# opened, synchronize (a push moves the head), reopened, and edited, since retargeting the base branch is
+# an edited event: without it, a pull request that passed into another branch and was then retargeted to
+# main would keep a stale green check on its head commit.
 # pull_request_target, never pull_request, because the trigger is the fence itself: pull_request runs the
 # pull request's own copy of this workflow and of the script, and the audit App, which holds contents write
 # but no Workflows permission, could change .github/scripts/audit-paths.sh in its own pull request and so
@@ -23,13 +29,15 @@ name: Audit paths
 #
 # The checkout takes fetch-depth: 0 and the fetch takes the pull request's whole history, so base.sha,
 # head.sha and their merge base are all present whichever of them main has moved past since the event: a
-# shallow fetch would leave the merge base out and fail the check, closed but spurious. A pull request
-# pushed to while the job runs may leave refs/pull/<n>/head past the event's head.sha, which the fetch then
-# need not bring: the script finds no such commit and fails closed, and the push's own run reports. The
-# author, the pull request's number and the two commits reach the scripts through env: alone, never through
-# a ${{ }} expression in run:, so no value from the event can become a shell word.
+# shallow fetch would leave the merge base out and fail the check, closed but spurious. A force-push while
+# the job runs may leave refs/pull/<n>/head past the event's head.sha, which the fetch then need not bring
+# (a normal push keeps the old head reachable): the script finds no such commit and fails closed, and the
+# push's own run reports. The author, the sender, the two branches, the pull request's number and the two
+# commits reach the scripts through env: alone, never through a ${{ }} expression in run:, so no value
+# from the event can become a shell word.
 on:
   pull_request_target:
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -64,6 +72,9 @@ jobs:
       - name: Check the paths an audit pull request changes
         env:
           AUDIT_PATHS_AUTHOR: ${{ github.event.pull_request.user.login }}
+          AUDIT_PATHS_SENDER: ${{ github.event.sender.login }}
+          AUDIT_PATHS_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          AUDIT_PATHS_HEAD_REF: ${{ github.event.pull_request.head.ref }}
           AUDIT_PATHS_BASE: ${{ github.event.pull_request.base.sha }}
           AUDIT_PATHS_HEAD: ${{ github.event.pull_request.head.sha }}
         run: .github/scripts/audit-paths.sh

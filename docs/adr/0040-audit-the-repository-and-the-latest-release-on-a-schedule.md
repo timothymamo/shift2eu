@@ -248,6 +248,29 @@ the pull request's commits are fetched as git objects and diffed, never checked 
 though not the Workflows permission, could change it and pass its own check. The job's token reads
 contents only, it uses no secret, and the repository is public, so the fetch needs no credential.
 
+The fence applies to an audit pull request, keyed on any of three fields of the event: its author is
+`shift2eu-audit[bot]`, its sender is (the App's contents write lets it push a commit onto another author's
+pull request), or its head branch starts with `security-audit/`. An audit pull request must be based on
+`main`, and may add or change only regular, non-executable files under `docs/security/` with no path
+component starting with a dot (a `.gitattributes` there could set `export-ignore` or `export-subst` on
+the reports the release archives ship). The workflow runs on `opened`, `synchronize`, `reopened` and
+`edited`, with no branch or path filter: retargeting a base branch is an `edited` event, so a pull
+request that passed into another branch and is then retargeted to `main` is judged again rather than
+keeping a stale green check. The ruleset requires `Audit report paths` from the GitHub Actions integration
+(`integration_id` 15368), so a status of that name from another App does not count.
+
+Residual risks of the check:
+
+- The App's contents write lets it push to any unprotected branch. The sender and head-branch keys catch
+  such a push once it is on a pull request, but not the push itself. A branch ruleset that restricts
+  updates on `~ALL` excluding `security-audit/**`, with the maintainer, the agents App, Renovate and the
+  release App as bypass actors and not the audit App, would close it fully; it is an optional hardening
+  step of the runbook (step 5), which the maintainer may choose, not part of the default setup.
+- The ruleset pins the integration, not the workflow: another GitHub Actions workflow holding
+  `checks: write` could post a check run of the same name from the same integration. The App cannot add
+  or change one (it has no Workflows permission); a workflow change that grants `checks: write` is
+  reviewed like any other.
+
 ### No other App holds Actions write
 
 **No GitHub App installed on the repository other than the release flow's holds Actions write**: not the
