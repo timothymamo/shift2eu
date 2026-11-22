@@ -77,10 +77,56 @@ var gitRefusedLong = []string{
 // one, and so no abbreviation of it.
 var gitOwnOptions = map[string]bool{"--text": true}
 
-// gitRefusedShort are the short git options refused anywhere on the line,
-// alone or with their value attached: -c sets a configuration value, -O is git
-// grep's --open-files-in-pager.
-var gitRefusedShort = []string{"-c", "-O"}
+// gitRefusedLetters are the short git options refused anywhere on the line, in
+// any single-dash word that holds them: git reads a cluster of short options
+// one letter at a time, so -c (a configuration value) and -O (git grep's
+// --open-files-in-pager) act in the middle or at the end of a cluster as at
+// its start (-iOsh runs sh).
+const gitRefusedLetters = "cO"
+
+// sortShortAllowed are the short sort options that only change how sort
+// orders and compares its lines.
+const sortShortAllowed = "bdfghiMnrRsuVz"
+
+// sortShortValued are the short sort options that take a value, attached or as
+// the next argument: -k a key, -t a field separator.
+const sortShortValued = "kt"
+
+// sortLongAllowed are the long forms of sort's allowed short options, which
+// take no value. sort's long options are taken whole: an abbreviation is
+// refused, so no prefix ever reaches an option outside the list.
+var sortLongAllowed = map[string]bool{
+	"--ignore-leading-blanks": true,
+	"--dictionary-order":      true,
+	"--ignore-case":           true,
+	"--general-numeric-sort":  true,
+	"--human-numeric-sort":    true,
+	"--ignore-nonprinting":    true,
+	"--month-sort":            true,
+	"--numeric-sort":          true,
+	"--reverse":               true,
+	"--random-sort":           true,
+	"--stable":                true,
+	"--unique":                true,
+	"--version-sort":          true,
+	"--zero-terminated":       true,
+}
+
+// sortLongValued are the long sort options that take their value attached
+// after "=": --key and --field-separator.
+var sortLongValued = []string{"--key=", "--field-separator="}
+
+// uniqShortValued are uniq's short options that take a value, attached or as
+// the next argument: -f, -s and -w each take a count.
+const uniqShortValued = "fsw"
+
+// uniqLongValued are uniq's long options that take their value as the next
+// argument when no "=" holds it.
+var uniqLongValued = map[string]bool{
+	"--skip-fields": true,
+	"--skip-chars":  true,
+	"--check-chars": true,
+}
 
 // env is the whole environment every command runs with: nothing of the
 // caller's.
@@ -149,10 +195,12 @@ func commandLine(args []string) ([]string, string, bool) {
 
 		return append([]string{path, "--no-pager", "-C", checkout}, rest...), "", true
 	case "sort":
-		for _, arg := range rest {
-			if refusedSortOption(arg) {
-				return nil, arg, false
-			}
+		if refused, ok := sortLine(rest); !ok {
+			return nil, refused, false
+		}
+	case "uniq":
+		if refused, ok := uniqLine(rest); !ok {
+			return nil, refused, false
 		}
 	}
 
@@ -161,14 +209,8 @@ func commandLine(args []string) ([]string, string, bool) {
 
 // refusedGitOption reports whether arg is one of git's refused options.
 func refusedGitOption(arg string) bool {
-	for _, short := range gitRefusedShort {
-		if strings.HasPrefix(arg, short) && !strings.HasPrefix(arg, "--") {
-			return true
-		}
-	}
-
 	if !strings.HasPrefix(arg, "--") {
-		return false
+		return strings.HasPrefix(arg, "-") && strings.ContainsAny(arg[1:], gitRefusedLetters)
 	}
 
 	name, _, _ := strings.Cut(arg, "=")
@@ -185,15 +227,111 @@ func refusedGitOption(arg string) bool {
 	return false
 }
 
-// refusedSortOption reports whether arg makes sort write a file: -o alone, with
-// its file attached or in a cluster of short options, and --output in any
-// form, abbreviated included (sort has no other long option starting --o).
-func refusedSortOption(arg string) bool {
-	if strings.HasPrefix(arg, "--o") {
-		return true
+// sortLine returns the first word of sort's arguments outside its allow list,
+// or true when every option is allowed. Short options are the allowed letters,
+// alone or in a cluster, with -k and -t taking the rest of their word or the
+// next argument as their value; long options are the allowed ones, whole.
+// Every other option is refused: those that run a program
+// (--compress-program), read another file (--files0-from, --random-source),
+// write one (-o, --output) or use another directory (-T,
+// --temporary-directory) among them. After "--", every word is a file sort
+// reads.
+func sortLine(args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		switch {
+		case arg == "--":
+			return "", true
+		case arg == "-" || !strings.HasPrefix(arg, "-"):
+			continue
+		case strings.HasPrefix(arg, "--"):
+			if !sortLongAllowed[arg] && !hasAnyPrefix(arg, sortLongValued) {
+				return arg, false
+			}
+		default:
+			takesNext, ok := shortCluster(arg[1:], sortShortAllowed, sortShortValued)
+			if !ok {
+				return arg, false
+			}
+
+			if takesNext {
+				i++
+			}
+		}
 	}
 
-	return strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "--") && strings.Contains(arg, "o")
+	return "", true
+}
+
+// uniqLine returns the word that makes uniq write a file, or true when it reads
+// only: uniq's second operand is OUT, the file it writes, so a line with more
+// than one operand is refused and names that second operand. Options stay
+// uniq's own; -f, -s and -w (and their long forms) take the next argument as
+// their value when their word holds none.
+func uniqLine(args []string) (string, bool) {
+	operands := 0
+
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		switch {
+		case arg == "--":
+			for _, operand := range args[i+1:] {
+				operands++
+				if operands > 1 {
+					return operand, false
+				}
+			}
+
+			return "", true
+		case arg == "-" || !strings.HasPrefix(arg, "-"):
+			operands++
+			if operands > 1 {
+				return arg, false
+			}
+		case strings.HasPrefix(arg, "--"):
+			if uniqLongValued[arg] {
+				i++
+			}
+		default:
+			if takesNext, _ := shortCluster(arg[1:], "", uniqShortValued); takesNext {
+				i++
+			}
+		}
+	}
+
+	return "", true
+}
+
+// shortCluster reads a cluster of short options, the word after its dash. A
+// letter in valued takes the rest of the word as its value, or the next
+// argument when the word ends with it (takesNext). It reports false when a
+// letter is in neither allowed nor valued, unless allowed is empty, which
+// takes any letter.
+func shortCluster(cluster, allowed, valued string) (takesNext, ok bool) {
+	for i, letter := range cluster {
+		if strings.ContainsRune(valued, letter) {
+			return i == len(cluster)-1, true
+		}
+
+		if allowed != "" && !strings.ContainsRune(allowed, letter) {
+			return false, false
+		}
+	}
+
+	return false, true
+}
+
+// hasAnyPrefix reports whether word starts with one of prefixes.
+func hasAnyPrefix(word string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(word, prefix) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // quote returns word cut to maxWord bytes and quoted as a Go string, so the
