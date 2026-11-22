@@ -17,8 +17,8 @@ in a shell variable.
 - PR: `gh pr diff <n>` and `gh pr view <n>`
 - Read the PRD or issue it claims to implement.
 
-Signal only what you started (CLAUDE.md rule 10): stop a run of your own only by the pid and start
-time you noted; never a process found by name, never a group.
+Signal only what you started (CLAUDE.md rule 10): stop a run of your own only through your agent's
+tool or by the pid and start time you noted; never a process found by name, never a group yourself.
 
 ## Check, in this order
 
