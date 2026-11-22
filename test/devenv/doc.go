@@ -35,6 +35,12 @@
 // a fake guest root (SHIFT2EU_SWAP_ROOT) with fakes of fallocate, chmod,
 // mkswap, swapon, swapoff, sysctl and df first on PATH, unprivileged.
 //
+// TestLimaProbeNeverRunsTheGHWrapper (limaprobe_test.go, issue #479) reads the
+// template's readiness probe and pins that no command of it runs the gh
+// wrapper, which refuses without the agents App's token that exists only after
+// the VM does; that it checks the real gh's attestation subcommand; and that
+// it checks the wrapper with test -x and sh -n instead of running it.
+//
 // Each template in dev/testdata/lima-invalid is dev/lima.yaml with one known
 // breakage, and beside it a .expect holds the text Lima's refusal of it must
 // contain. TestInvalidLimaTemplatesDifferOnlyByTheirBreakage pins that each
@@ -48,6 +54,18 @@
 // can then only come from its breakage, and the job checks it is the one its
 // .expect names. With -update the first test writes the templates and the
 // .expect files from dev/lima.yaml and the cases instead of comparing.
+//
+// The package also pins the Makefile's VM targets as rules rather than through a run of one of them
+// (makerules_test.go): every recipe that reads LIMA_INSTANCE runs $(LIMA_INSTANCE_CHECK) first and nothing but
+// the check expands the name at make level (issue #313), and every recipe line that calls limactl puts
+// $(VM_SHELL_ENV) before it (issue #326, item 2). The parser is pinned with synthetic Makefile texts, and the
+// LIMA_INSTANCE targets of the behavioural tests come from it, so a target added to the Makefile is tested
+// without anyone adding it to a list. TestVMUpSetsTheGitHooksInTheVM pins that vm-up re-sets the main checkout's
+// core.hooksPath inside the VM on every start (issue #326, item 1), and
+// TestMakeRunsLimactlWithoutTheAgentsAppVariables that the App's variables stay out of the environment of every
+// limactl those targets run (item 2). TestProtectMainCheckSaysWhenJqCannotRun (gatecheck_test.go) pins that the
+// gate check says when jq itself cannot run, with the jq's path and its error, instead of blaming GitHub's
+// answer (issue #321).
 //
 // Every test that runs the Makefile runs the make SHIFT2EU_TEST_MAKE names
 // (make_test.go, issue #314), make when it is unset, so the suite can run under

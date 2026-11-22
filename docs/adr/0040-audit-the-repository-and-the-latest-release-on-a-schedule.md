@@ -237,11 +237,59 @@ What those permissions also allow, beyond what the audit needs, and what narrows
 
 | Permission | Also allows | Narrowed by |
 |---|---|---|
-| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App and admins write there); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; optionally a `**` tag ruleset that lets only the release App create tags |
+| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App writes there; an admin only through a temporary bypass the runbook adds and removes); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; a branch ruleset on `~ALL` excluding `security-audit/**` that restricts creations, updates and deletions to its bypass actors (the maintainer's admin role, the agents App, Renovate, the release-please App), never the audit App; optionally a `**` tag ruleset that lets only the release App create tags |
 | Pull requests write | submitting reviews, `APPROVE` included | `Protect main` requires the code owner's approval, so the App's never counts; the script never calls the review endpoints |
 | Repository security advisories write | publishing an advisory and requesting a CVE: disclosure | every advisory `state` the script sends is hard-coded `draft`, and it never calls the publish or CVE endpoints |
 
-The App is in no bypass list but the `security-audit/**` branch ruleset's.
+The App is in no bypass list but the `security-audit/**` branch ruleset's. The required check is the job
+`Audit report paths` of `.github/workflows/audit-paths.yml`, which runs `.github/scripts/audit-paths.sh`
+under `pull_request_target`: main's copy of the workflow and the script runs, from a checkout of main, and
+the pull request's commits are fetched as git objects and diffed, never checked out or executed. Under
+`pull_request` the pull request's own copy of the script would run, and the App, which holds contents write
+though not the Workflows permission, could change it and pass its own check. The job's token reads
+contents only, it uses no secret, and the repository is public, so the fetch needs no credential.
+
+The fence applies to an audit pull request, keyed on any of three fields of the event: its author is
+`shift2eu-audit[bot]`, its sender is (the App's contents write lets it push a commit onto another author's
+pull request), or its head branch starts with `security-audit/`. An audit pull request must be based on
+`main`, and may add or change only regular, non-executable files under `docs/security/` with no path
+component starting with a dot (a `.gitattributes` there could set `export-ignore` or `export-subst` on
+the reports the release archives ship). The workflow runs on `opened`, `synchronize`, `reopened` and
+`edited`, with no branch or path filter: retargeting a base branch is an `edited` event, so a pull
+request that passed into another branch and is then retargeted to `main` is judged again rather than
+keeping a stale green check. The ruleset requires `Audit report paths` from the GitHub Actions integration
+(`integration_id` 15368), so a status of that name from another App does not count.
+
+Residual risks of the check:
+
+- The App's contents write lets it push to any branch no ruleset protects, including a commit onto
+  another author's pull request or a branch with no pull request yet. The sender key fails only the run
+  of the App's own event: a later event by another sender (a push on top, an `edited` title or body
+  change, a close and reopen, a human opening the pull request later) runs the check again with a
+  non-App sender and passes it, with the App's commit still in the pull request. The fix is a branch
+  ruleset, part of runbook step 5 by default and created before the audit-paths ruleset goes active: it
+  targets `~ALL` excluding `security-audit/**`, restricts creations, updates and deletions (`creation`,
+  `update`, `deletion`), and has as bypass actors every legitimate pusher (the maintainer's admin role (`RepositoryRole` 5), the agents
+  App `shift2eu-agents`, Renovate, the release App `shift2eu-release`) and not the audit App, which can
+  then write only `security-audit/**` branches. The residual risk is bounded by the fence plus this
+  ruleset; without the ruleset, the sender key is only a one-shot signal.
+- Denial of service: the App's Pull requests write lets it edit any pull request's title or retarget its
+  base, each an `edited` run with the App as sender, so that pull request's required check fails. A
+  re-run does not clear it: a re-run of a `pull_request_target` run replays the original event, so the
+  sender is still the App and it fails again. It clears on the next event by another sender (the author
+  editing the title again, or a close and reopen). It lets nothing in; it only blocks a merge for a while.
+- The ruleset pins the integration, not the workflow: another GitHub Actions workflow holding
+  `checks: write` could post a check run of the same name from the same integration. The App cannot add
+  or change one (it has no Workflows permission); a workflow change that grants `checks: write` is
+  reviewed like any other.
+- Under `pull_request_target` the workflow file and `github.sha` come from the pull request's base
+  branch, not always from `main`. Every pull request into `main`, the only ones the audit-paths ruleset
+  requires the check on, runs `main`'s copy of the workflow and of the script; a pull request into another
+  branch runs that branch's copy, which could differ. The branch ruleset on `~ALL` keeps the audit App
+  from changing any other branch's copy; without it, the App's contents write could. Retargeting the pull
+  request to `main` is an `edited` event that runs `main`'s copy on the same head commit, and that newer
+  run decides; until it finishes, the earlier run's result from the other base stands on the head commit.
+  Code-owner approval on `main` bounds that window.
 
 ### No other App holds Actions write
 
