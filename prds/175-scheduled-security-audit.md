@@ -440,7 +440,7 @@ The publish script:
 
 The required path check:
 
-- [ ] A CI job fails any PR authored by `shift2eu-audit[bot]` that touches anything outside
+- [x] A CI job fails any PR authored by `shift2eu-audit[bot]` that touches anything outside
   `docs/security/`, and passes trivially for other authors. It is required by a **new ruleset on `main`**
   (runbook step 5), not by `Protect main`, which stays unchanged.
 
@@ -655,7 +655,8 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    admins may create or update those branches. Check: `gh api repos/<owner>/<repo>/rulesets` lists it
    with the App as its only bypass actor.
 5. **Create the audit-paths ruleset on `main`**: it requires the CI check that fails an audit PR touching
-   anything outside `docs/security/`, with no bypass actor. If the maintainer adopts Decision 1's
+   anything outside `docs/security/`, `Audit report paths` (the job of the `Audit paths` workflow,
+   `.github/workflows/audit-paths.yml`), with no bypass actor. If the maintainer adopts Decision 1's
    optional tag ruleset, create the `**` tag ruleset too, with only the release App as bypass actor.
    Check: the same `gh api` read lists them, and `Protect main` is unchanged.
 6. **Check the other rulesets and the Apps**: the App is in no bypass list of `Protect main`, the

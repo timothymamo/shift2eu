@@ -240,7 +240,8 @@ What those permissions also allow, beyond what the audit needs, and what narrows
 | Pull requests write | submitting reviews, `APPROVE` included | `Protect main` requires the code owner's approval, so the App's never counts; the script never calls the review endpoints |
 | Repository security advisories write | publishing an advisory and requesting a CVE: disclosure | every advisory `state` the script sends is hard-coded `draft`, and it never calls the publish or CVE endpoints |
 
-The App is in no bypass list but the `security-audit/**` branch ruleset's.
+The App is in no bypass list but the `security-audit/**` branch ruleset's. The required check is the job
+`Audit report paths` of `.github/workflows/audit-paths.yml`, which runs `.github/scripts/audit-paths.sh`.
 
 ### No other App holds Actions write
 
