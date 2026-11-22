@@ -106,8 +106,9 @@ type envrcLayoutCase struct {
 	targets []string
 	// want is what a refusal's stderr must say beyond the paths, such as the docs section that holds the fix.
 	want []string
-	// notWant is what a refusal's stderr must not say: the names of links it walked or of a path it resolved,
-	// which a guard that fails closed must not echo (issue #468).
+	// notWant is what neither stream of a refusal may say: the names of links it walked or of a path it resolved,
+	// which a guard that fails closed must not echo (issue #468). A hop echoed to stdout would leak it as surely
+	// as one on stderr, so both are checked.
 	notWant []string
 }
 
@@ -735,27 +736,33 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile(t *testing.T) {
 				return nil
 			},
 			targets: []string{"vm-env"},
-			want:    []string{"The host clone"},
+			// A loop is the other reason this check names for a .envrc it cannot resolve, and no link of the layout
+			// leads outside the clone: the refusal must say so, not that the .envrc leads elsewhere.
+			want:    []string{"The host clone", "cannot resolve"},
 			notWant: []string{"loop-b"},
 		},
 		{
-			// Issue #468: a chain of more symlinks than the 32 the host guard's resolver follows (macOS's
-			// MAXSYMLINKS) ends in a file inside the clone, so the cap is the only reason to refuse it. The two
-			// guards share one resolver, so both must fail closed here; a guard with a cap of its own decides
-			// the same layout the other way, and it must not echo the hops it walked.
-			name: "the host clone's .envrc is a chain of more than 32 symlinks",
+			// Issue #468: the 33rd link of a walk the host guard's resolver follows at most 32 of (macOS's
+			// MAXSYMLINKS) ends in a file inside the clone, so the cap is the only reason to refuse it - and the
+			// .envrc itself is a link of the walk, so 32 hops in the clone plus it are the 33. The two guards share
+			// one resolver, so both must fail closed here; a guard with a cap of its own decides the same layout
+			// the other way. With the clean layout's chain of exactly 32 links this row pins the cap from both sides:
+			// a cap of 31 refuses that layout, a cap of 33 lets this one through. It must not echo the hops it walked.
+			name: "the host clone's .envrc is a chain of exactly 33 symlinks",
 			setup: func(t *testing.T, l *hostLayout) []string {
 				t.Helper()
 
 				writeFileMode(t, filepath.Join(l.root, "chain-end"), []byte(plantedEnvrcLines()), 0o600)
 
-				// More than 32 links including the clone's .envrc: each hop names the next, the last the file.
-				writeLink(t, filepath.Join(l.root, ".envrc"), writeSymlinkChain(t, l.root, "chain-", 33, "chain-end"))
+				// Exactly 33 links: the clone's .envrc and 32 hops, each naming the next, the last the file.
+				writeLink(t, filepath.Join(l.root, ".envrc"), writeSymlinkChain(t, l.root, "chain-", 32, "chain-end"))
 
 				return nil
 			},
 			targets: []string{"vm-env"},
-			want:    []string{"The host clone"},
+			// The refusal says too that the walk is beyond what this check resolves, not that a link led outside
+			// the clone: nothing of the layout is outside it.
+			want:    []string{"The host clone", "cannot resolve"},
 			notWant: []string{"chain-32"},
 		},
 		{
@@ -1161,8 +1168,10 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 // against the kernel never held, would refuse every one of them while the refusals the issue pins still passed. On
 // a case-insensitive file system (macOS's APFS by default) the link's path may be spelled in another case as well,
 // which the spelling prefix test the guard used before #468 refused; that row is skipped where the kernel folds no
-// case. Each of the case's targets must reach its next step, so the guard does not refuse the layout the docs ask
-// for.
+// case. Two of the rows are the resolver's cap seen from its passing side - a walk of exactly 32 links through the
+// clone's .envrc, and one through a dotenv path - which the refusal rows of 33 links pin from the other side, so a
+// cap one below the Makefile's fails these and one above it fails those. Each of the case's targets must reach its
+// next step, so the guard does not refuse the layout the docs ask for.
 func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 	t.Parallel()
 
@@ -1304,6 +1313,27 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 			targets: []string{"vm-env", "vm-up"},
 		},
 		{
+			// Issue #468's boundary row, the other side of the cap the refusal rows of 33 links pin: the walk follows
+			// exactly 32 links - the clone's .envrc and 31 hops - which is the most the resolver follows (macOS's
+			// MAXSYMLINKS), and the file they end in is the clone's own, so the guard must let it through. A cap of 31,
+			// an off-by-one no refusal row can see, refuses this layout a maintainer's direnv would load, which is
+			// why the pair pins the cap from both sides.
+			name: "the host clone's .envrc is a chain of exactly 32 symlinks ending in a file inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.envrc"), []byte(plantedEnvrcLines()), 0o600)
+
+				// Exactly 32 links: the clone's .envrc, which the walk follows as a link like any other, and its 31
+				// hops, each naming the next, the last the file.
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, writeSymlinkChain(t, l.root, "ok-chain-", 31, "creds.envrc"))
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
 			// And a dotenv path that leads through a link inside the clone: credslink is a symlink to a file of the
 			// clone, so the file dotenv reads is the clone's own. The resolver follows the link and within finds the
 			// file inside the clone, so the guard must pass - a spelling comparison of the unresolved path would
@@ -1318,6 +1348,22 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 				writeLink(t, filepath.Join(l.root, "credslink"), "creds.env")
 
 				return nil
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// The same boundary on the path a dotenv argument is resolved along: 32 links, no .envrc among them as the
+			// clone's .envrc holds the directive itself, is exactly the most both guards' resolver follows, and the
+			// chain ends in a file of the clone, so the guard must load it. The refusal row beside it plants one link
+			// more and pins what lies past the cap.
+			name: "the host clone's .envrc dotenvs a chain of exactly 32 symlinks inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "secrets.env"), []byte(plantedEnvrcLines()), 0o600)
+				writeHostEnvrc(t, l, "dotenv "+writeSymlinkChain(t, l.root, "ok-hop-", 32, "secrets.env")+"\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
 			},
 			targets: []string{"vm-env", "vm-up"},
 		},
@@ -1489,8 +1535,8 @@ func makeInEnvrcLayout(t *testing.T, target string, tc envrcLayoutCase) envrcRun
 
 // assertRefused fails unless the run refused the layout: a non-zero exit, stderr naming every file the guard must
 // point the maintainer at and saying what the case's want asks for beyond the paths, no call of a tool a host
-// target reaches - the guard ran before anything else - no path the case's notWant forbids, and no planted
-// credential value in either stream.
+// target reaches - the guard ran before anything else - neither stream naming a path the case's notWant forbids, and
+// no planted credential value in either stream.
 func (r envrcRun) assertRefused(t *testing.T, target string, tc envrcLayoutCase) {
 	t.Helper()
 
@@ -1516,9 +1562,11 @@ func (r envrcRun) assertRefused(t *testing.T, target string, tc envrcLayoutCase)
 	}
 
 	for _, text := range tc.notWant {
-		if strings.Contains(r.stderr, text) {
-			t.Errorf("%s's refusal says %q on stderr, a path the guard's walk read and could not resolve: a guard that fails closed names the file it could not resolve, never what it walked or resolved, which may be a credential typed where a path goes (CLAUDE.md rule 3, issue #468)\nstdout: %s\nstderr: %s",
-				out, text, r.stdout, r.stderr)
+		for _, stream := range []struct{ name, text string }{{"stdout", r.stdout}, {"stderr", r.stderr}} {
+			if strings.Contains(stream.text, text) {
+				t.Errorf("%s's refusal says %q on %s, a path the guard's walk read and could not resolve: a guard that fails closed names the file it could not resolve, never what it walked or resolved, which may be a credential typed where a path goes (CLAUDE.md rule 3, issue #468)\nstdout: %s\nstderr: %s",
+					out, text, stream.name, r.stdout, r.stderr)
+			}
 		}
 	}
 
@@ -1628,9 +1676,10 @@ func writeAboveWorkspaceIn(t *testing.T, dir string, levels int, name string) st
 }
 
 // writeSymlinkChain plants count symbolic links named prefix1 ... prefix<count> in dir, each pointing at the next
-// hop and the last at last, and returns the name of the first hop. The chain is longer than the 32 links both
-// guards' resolver follows (macOS's MAXSYMLINKS) and ends inside the clone, so the cap is the only reason to
-// refuse it (issue #468).
+// hop and the last at last, and returns the name of the first hop: a walk of count links, or one more when the case
+// starts the walk at a link of its own, as the clone's .envrc is. A case plants 32 - the most both guards' resolver
+// follows (macOS's MAXSYMLINKS) - to pin that a walk of exactly 32 links passes, and 33 to pin that the next one is
+// refused, so no cap one off the Makefile's passes both (issue #468).
 func writeSymlinkChain(t *testing.T, dir, prefix string, count int, last string) string {
 	t.Helper()
 
