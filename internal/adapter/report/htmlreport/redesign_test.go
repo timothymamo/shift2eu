@@ -722,8 +722,8 @@ func tableIndices(elements []fragElement, index int) []int {
 
 // TestReportResourcesTableScrollsInItsOwnBox pins the resources table's box
 // (issue #373, item 11): the table sits in an element of its own that the
-// stylesheet can scroll sideways, and every column the Markdown report has stays
-// in it.
+// stylesheet can scroll sideways, and every column of the Markdown report but
+// the resource's region, which item 04 drops, stays in it.
 func TestReportResourcesTableScrollsInItsOwnBox(t *testing.T) {
 	t.Parallel()
 
@@ -735,12 +735,12 @@ func TestReportResourcesTableScrollsInItsOwnBox(t *testing.T) {
 		{
 			name: "every fit, without estimates",
 			a:    fitsAssessment(t),
-			want: []string{"ID", "Raw type", "Category", "Region", "Fit", "Best offering", "Reasons"},
+			want: []string{"ID", "Raw type", "Category", "Fit", "Best offering", "Reasons"},
 		},
 		{
 			name: "with estimates",
 			a:    estimatesAssessment(t),
-			want: []string{"ID", "Raw type", "Category", "Region", "Fit", "Best offering", "Plan", "Monthly estimate", "Reasons"},
+			want: []string{"ID", "Raw type", "Category", "Fit", "Best offering", "Plan", "Monthly estimate", "Reasons"},
 		},
 	}
 
@@ -771,7 +771,7 @@ func TestReportResourcesTableScrollsInItsOwnBox(t *testing.T) {
 			header := headerCells(t, elements, resources)
 
 			if diff := missingInOrder(tc.want, header); diff != "" {
-				t.Errorf("the Resources table's header is %q, want every column the Markdown report has, in order: %s (issue #373, item 11)", header, diff)
+				t.Errorf("the Resources table's header is %q, want every column of the table, the region excepted, in order: %s (issue #373, items 04 and 11)", header, diff)
 			}
 
 			parent := elements[resources].parent

@@ -433,7 +433,9 @@ func TestReport(t *testing.T) {
 
 // TestReportHostileValues pins that every value a report takes from an inventory
 // or a catalog reaches the fragment as text: the golden shows the escaping, and
-// the assertions below fail when any of the values arrives as markup.
+// the assertions below fail when any of the values arrives as markup. A value the
+// fragment has no place for any more, the resource's region that item 04's
+// dropped Region column leaves out, must still reach it neither raw nor in a tag.
 func TestReportHostileValues(t *testing.T) {
 	t.Parallel()
 
@@ -445,6 +447,12 @@ func TestReportHostileValues(t *testing.T) {
 	checkNoIDOrNameAttribute(t, got)
 
 	checkValuesShownAsText(t, got, hostileValues())
+
+	// The hostile inventory's region reaches the fragment nowhere, because the
+	// Resources table has no Region column any more (issue #373, item 04). What
+	// the reporter may never do is write it raw or into a tag: that is how a
+	// value becomes markup a browser runs.
+	checkValueAbsentOrEscaped(t, got, hostileRegion)
 
 	testutil.Golden(t, "testdata/report-hostile.golden", got)
 }
@@ -728,14 +736,19 @@ func TestIDOrNameAttributeCheck(t *testing.T) {
 // source, so the reporter is what keeps it from being read as markup.
 const hostileSourceName = "aws"
 
-// hostileValues returns every hostile fixture value a report must show as text.
+// hostileRegion is the region of the hostile inventory's resources: a value that
+// item 04's dropped Region column leaves the HTML fragment without a place for.
+const hostileRegion = `eu"west`
+
+// hostileValues returns the hostile values the fragment must show as text: every
+// value the hostile inventory and its catalog give the reporter, but the region
+// that checkValueAbsentOrEscaped reads apart.
 func hostileValues() []string {
 	return []string{
 		`__shift2euModule`,
 		`shift2euAssess`,
 		`<script>alert(1)</script>`,
 		`<img src=x onerror=alert(1)>`,
-		`eu"west`,
 		`ws <script>alert('workload')</script>`,
 		`onerror=alert(1) x=`,
 		`" onmouseover="alert(1)`,
@@ -838,6 +851,28 @@ func checkValuesShownAsText(t *testing.T, got []byte, values []string) {
 	for _, value := range values {
 		if want := escapedText(value); !strings.Contains(string(got), want) {
 			t.Errorf("the fragment does not show %q as text (%q):\n%s", value, want, got)
+		}
+	}
+}
+
+// checkValueAbsentOrEscaped fails when a value the fragment shows nowhere still
+// reaches it unescaped or inside a tag: a value the reporter writes into markup
+// is one a browser reads as markup, while a value the fragment leaves out (as
+// item 04 leaves a resource's region out) is safe.
+func checkValueAbsentOrEscaped(t *testing.T, got []byte, value string) {
+	t.Helper()
+
+	fragment := string(got)
+
+	if strings.Contains(fragment, value) {
+		t.Errorf("the fragment holds the value %q unescaped, want it escaped as text or absent: a value the report writes raw is one a browser may read as markup (PRD #297, issue #373, item 04):\n%s",
+			value, got)
+	}
+
+	for _, element := range fragmentElements(t, fragment) {
+		if strings.Contains(element.attrs, escapedText(value)) || strings.Contains(element.attrs, value) {
+			t.Errorf("the fragment's <%s %s> carries the value %q in its attributes, want values only as text: no report element takes a value into a tag (PRD #297, issue #373)",
+				element.tag, element.attrs, value)
 		}
 	}
 }

@@ -39,6 +39,20 @@ type reportView struct {
 	// single report shows one box per fit, and one for the monthly estimate
 	// when it has one.
 	Summary []summaryBox `json:"summary"`
+	// TargetSummaries are a comparison's summary boxes, grouped by the target
+	// whose section holds them, in document order: one entry per target, each
+	// with that target's own boxes (issue #373, item 10).
+	TargetSummaries []targetSummary `json:"targetSummaries"`
+}
+
+// targetSummary is one target's summary in a comparison: the target's name, as
+// its section's heading reads it, and its own boxes.
+type targetSummary struct {
+	// Target is the target's name, as the heading of its own section reads it.
+	Target string `json:"target"`
+	// Boxes are the target's summary boxes, as a single report's Summary holds
+	// them.
+	Boxes []summaryBox `json:"boxes"`
 }
 
 // summaryBox is one box of the report's summary.
@@ -48,6 +62,9 @@ type summaryBox struct {
 	// Badge is the class attribute of the fit badge the box holds, "" when the
 	// box holds none.
 	Badge string `json:"badge"`
+	// Count is the text of the <strong> the box states its count in, "" when
+	// the box holds none.
+	Count string `json:"count"`
 }
 
 // table is one table of the report.
@@ -80,7 +97,17 @@ const reportExpression = `(() => {
 	const header = report.querySelector(".shift2eu-report > h2 + ul");
 	const summary = Array.from(report.querySelectorAll(".part-summary > *")).map(function (box) {
 		const badge = box.querySelector(".fit");
-		return {text: one(box), badge: badge === null ? "" : badge.className};
+		const count = box.querySelector("strong");
+		return {text: one(box), badge: badge === null ? "" : badge.className, count: count === null ? "" : one(count)};
+	});
+	const targetSummaries = Array.from(report.querySelectorAll(".part-target")).map(function (part) {
+		const heading = part.querySelector("h3");
+		const boxes = Array.from(part.querySelectorAll(".part-summary > *")).map(function (box) {
+			const badge = box.querySelector(".fit");
+			const count = box.querySelector("strong");
+			return {text: one(box), badge: badge === null ? "" : badge.className, count: count === null ? "" : one(count)};
+		});
+		return {target: heading === null ? "" : one(heading), boxes: boxes};
 	});
 	return {
 		text: one(report),
@@ -91,6 +118,7 @@ const reportExpression = `(() => {
 		handlers: handlers,
 		header: header === null ? "" : one(header),
 		summary: summary,
+		targetSummaries: targetSummaries,
 	};
 })()`
 
@@ -136,6 +164,19 @@ func headersInOrder(headers, names []string) bool {
 	return next == len(names)
 }
 
+// summaryOf returns the boxes of the summary the target's own heading leads, and
+// whether the report holds one: a comparison has one summary per target (issue
+// #373, item 10).
+func (r reportView) summaryOf(target string) ([]summaryBox, bool) {
+	for _, summary := range r.TargetSummaries {
+		if summary.Target == target {
+			return summary.Boxes, true
+		}
+	}
+
+	return nil, false
+}
+
 // resourceCount returns how many resources the inventory document holds.
 func resourceCount(t *testing.T, document string) int {
 	t.Helper()
@@ -158,21 +199,31 @@ func resourceCount(t *testing.T, document string) int {
 // catalog snapshot's date (issue #373, item 14).
 var listPricesDatePattern = regexp.MustCompile(`List prices in \S+ on (\d{4}-\d{2}-\d{2})`)
 
-// summaryCountPattern matches the count a summary box of one fit states: how
-// many of the report's resources have that fit.
+// summaryCountPattern matches the total a summary's direct box states: the
+// resources its count is of (issue #373, items 03-2 and 10-2).
 var summaryCountPattern = regexp.MustCompile(`\b(\d+) of (\d+) resources\b`)
 
-// summaryFitCounts reads the report's summary boxes (issue #373, item 10-2):
-// the count each fit states, by the fit's name, and the number of resources the
-// summary states it counted them of. A box with no fit badge, the monthly
-// estimate's, is left out.
-func summaryFitCounts(t *testing.T, report reportView) (map[string]int, int) {
+// summaryCaptions are the words each fit's summary box ends with (issue #373,
+// item 03-2): the direct box states the total its count is of, which
+// summaryCountPattern reads, and the partial and none boxes say what that fit
+// means for the move.
+var summaryCaptions = map[string]string{
+	"direct":  "",
+	"partial": "needs changes",
+	"none":    "blocked",
+}
+
+// summaryFitCounts reads a summary's boxes (issue #373, item 10-2): the count
+// each fit states in its own element, by the fit's name, and the number of
+// resources the direct box says its count is of. A box with no fit badge, the
+// monthly estimate's, is left out. where names the summary in a failure.
+func summaryFitCounts(t *testing.T, where string, boxes []summaryBox) (map[string]int, int) {
 	t.Helper()
 
 	number := func(text string) int {
 		n, err := strconv.Atoi(text)
 		if err != nil {
-			t.Fatalf("the report's summary states %q, which is no number: %v", text, err)
+			t.Fatalf("%s states %q, which is no number: %v", where, text, err)
 		}
 
 		return n
@@ -181,38 +232,100 @@ func summaryFitCounts(t *testing.T, report reportView) (map[string]int, int) {
 	counts := make(map[string]int, 3)
 	assessed := -1
 
-	for _, box := range report.Summary {
+	for _, box := range boxes {
 		fit, ok := strings.CutPrefix(box.Badge, "fit fit-")
 		if !ok {
 			continue
 		}
 
-		match := summaryCountPattern.FindStringSubmatch(box.Text)
-		if match == nil {
-			t.Errorf("the summary's %q box reads %q, want the fit's count of the resources assessed (PRD #297, issue #373, item 10-2)",
-				fit, box.Text)
+		caption, ok := summaryCaptions[fit]
+		if !ok {
+			t.Errorf("%s holds a %q box, want one per fit direct, partial and none (PRD #297, issue #373, item 10-2): %v",
+				where, fit, boxes)
 
 			continue
 		}
 
-		count, total := number(match[1]), number(match[2])
+		if box.Count == "" {
+			t.Errorf("%s's %q box reads %q, want the fit's count in an element of its own (PRD #297, issue #373, item 10-2)",
+				where, fit, box.Text)
 
-		if assessed < 0 {
-			assessed = total
-		} else if total != assessed {
-			t.Errorf("the summary's %q box counts its fit of %d resources and another box of %d, want every box counting the same resources (PRD #297, issue #373, item 10-2)",
-				fit, total, assessed)
+			continue
 		}
 
-		counts[fit] = count
+		counts[fit] = number(box.Count)
+
+		if fit != "direct" {
+			// Only the direct box counts the resources the total is of; the
+			// others say what their fit means for the move (item 03-2).
+			if !strings.HasSuffix(box.Text, caption) {
+				t.Errorf("%s's %q box reads %q, want it to end with %q (PRD #297, issue #373, item 03-2)",
+					where, fit, box.Text, caption)
+			}
+
+			continue
+		}
+
+		match := summaryCountPattern.FindStringSubmatch(box.Text)
+		if match == nil {
+			t.Errorf("%s's %q box reads %q, want it to state the resource count it is of, as %q (PRD #297, issue #373, item 03-2)",
+				where, fit, box.Text, "N of M resources")
+
+			continue
+		}
+
+		if number(match[1]) != counts[fit] {
+			t.Errorf("%s's %q box states the count %q and %q, want the same number twice (PRD #297, issue #373, item 10-2)",
+				where, fit, box.Count, match[1])
+
+			continue
+		}
+
+		assessed = number(match[2])
+
+		if total := "of " + strconv.Itoa(assessed) + " resources"; !strings.HasSuffix(box.Text, total) {
+			t.Errorf("%s's %q box reads %q, want it to end with %q, the total its count is of (PRD #297, issue #373, item 03-2)",
+				where, fit, box.Text, total)
+		}
 	}
 
 	if assessed < 0 {
-		t.Fatalf("the report's summary states no fit's count, want one box per fit holding the count, in place of the summary table (PRD #297, issue #373, item 10-2): %v",
-			report.Summary)
+		t.Fatalf("%s states no direct fit's count, want one box per fit holding the count, in place of the summary table (PRD #297, issue #373, item 10-2): %v",
+			where, boxes)
 	}
 
 	return counts, assessed
+}
+
+// checkSummaryAddsUp pins that a summary's boxes state a count per fit and that
+// the three counts cover every resource the summary says it assessed (issue #373,
+// item 10-2). where names the summary in a failure; resources is the number of
+// resources it must state.
+func checkSummaryAddsUp(t *testing.T, where string, boxes []summaryBox, resources int) {
+	t.Helper()
+
+	counts, assessed := summaryFitCounts(t, where, boxes)
+
+	if assessed != resources {
+		t.Errorf("%s counts its fits of %d resources, want the %d the report assessed", where, assessed, resources)
+	}
+
+	counted := 0
+
+	for _, fit := range []string{"direct", "partial", "none"} {
+		count, ok := counts[fit]
+		if !ok {
+			t.Errorf("%s holds no box counting the %s fit, want one box per fit (issue #373, item 10-2): %v", where, fit, boxes)
+
+			continue
+		}
+
+		counted += count
+	}
+
+	if len(counts) == 3 && counted != assessed {
+		t.Errorf("%s counts %d of the %d resources it assessed, want every resource in one of its three fits: %v", where, counted, assessed, counts)
+	}
 }
 
 // TestAssessmentShowsTheReport pins the first assessment criterion (PRD #297,
@@ -254,32 +367,12 @@ func TestAssessmentShowsTheReport(t *testing.T) {
 				}
 			}
 
-			// The summary is one box per fit (issue #373, item 10-2): each fit's
-			// box states that fit's count of the resources, in place of the
-			// summary table, and the counts cover every resource the inventory
+			// The summary is one box per fit (issue #373, items 03-2 and 10-2):
+			// each fit's box states that fit's count, the direct box the resources
+			// its count is of and the partial and none boxes what their fit means
+			// for the move, and the counts cover every resource the inventory
 			// holds.
-			counts, assessed := summaryFitCounts(t, report)
-
-			if want := resourceCount(t, inventory); assessed != want {
-				t.Errorf("the summary of the %s example counts its fits of %d resources, want the %d the inventory holds", example, assessed, want)
-			}
-
-			counted := 0
-
-			for _, fit := range []string{"direct", "partial", "none"} {
-				count, ok := counts[fit]
-				if !ok {
-					t.Errorf("the summary of the %s example holds no box counting the %s fit, want one box per fit (issue #373, item 10-2): %v", example, fit, report.Summary)
-
-					continue
-				}
-
-				counted += count
-			}
-
-			if len(counts) == 3 && counted != assessed {
-				t.Errorf("the summary of the %s example counts %d of the %d resources it assessed, want every resource in one of its three fits: %v", example, counted, assessed, counts)
-			}
+			checkSummaryAddsUp(t, "the summary of the "+example+" example", report.Summary, resourceCount(t, inventory))
 
 			resources, ok := report.tableWith("ID", "Fit", "Best offering")
 			if !ok {
@@ -474,17 +567,37 @@ func TestAssessmentComparison(t *testing.T) {
 				t.Errorf("the report shows no Comparison section for %d targets: %v", len(tc.targets), report.Sections)
 			}
 
-			summary, ok := report.tableWith(append([]string{"Fit"}, targetNames(tc.targets)...)...)
-			if !ok {
-				t.Fatalf("the report's summary table has no column per target, want the header cells %v, only %v",
-					append([]string{"Fit"}, targetNames(tc.targets)...), report.Tables)
+			// The combined Summary table is gone: each target's summary is its
+			// own boxes under its own heading (issue #373, item 10).
+			for _, tbl := range report.Tables {
+				if len(tbl.Headers) > 0 && tbl.Headers[0] == "Fit" {
+					t.Errorf("the report holds the combined summary table %v, want each target's summary as its own boxes, never a table counting every target side by side (issue #373, item 10)", tbl.Headers)
+				}
 			}
 
-			if summary.Rows < 4 {
-				t.Errorf("the comparison's summary table holds %d rows, want at least the four fits direct, partial, none and total", summary.Rows)
+			if len(report.TargetSummaries) != len(tc.targets) {
+				t.Fatalf("the report holds %d targets' summaries, want %d, one per target (issue #373, item 10): %v",
+					len(report.TargetSummaries), len(tc.targets), report.TargetSummaries)
 			}
 
-			resources, ok := report.tableWith("ID", "Category", "Region")
+			// Every target states a count per fit in its own summary, and the
+			// counts of each cover the resources the report assessed.
+			for _, name := range targetNames(tc.targets) {
+				boxes, ok := report.summaryOf(name)
+				if !ok {
+					t.Errorf("the report holds no summary under the target %q's own heading, want one per target (issue #373, item 10): %v",
+						name, report.TargetSummaries)
+
+					continue
+				}
+
+				checkSummaryAddsUp(t, "the summary of "+name, boxes, tc.resources)
+			}
+
+			// The comparison's own resources table is the one with a column per
+			// target; each target's table drops the resource's region (issue
+			// #373, item 04).
+			resources, ok := report.tableWith("ID", "Category", targetNames(tc.targets)[0]+" fit")
 			if !ok {
 				t.Fatalf("the comparison holds no resources table, only %v", report.Tables)
 			}
