@@ -120,8 +120,8 @@ Arrows are imports. They point inwards only:
   audit's launch (effort, settings file, permission mode `dontAsk` or `plan`, appended system prompt,
   safe mode, directories, extra environment entries, PATH, streamed transcript) as parameters, the
   reviewer's launch every one's zero value, and an environment that inherits nothing. The launcher is held to
-  named standard packages (`claude-code-launcher`), only the reviewer's library may import it
-  (`claude-code-launcher-importers`), and the forbidigo groups `ai-reviewer-env` and
+  named standard packages (`claude-code-launcher`), only the reviewer's library and the audit's library
+  `ci/internal/audit` may import it (`claude-code-launcher-importers`), and the forbidigo groups `ai-reviewer-env` and
   `ai-reviewer-one-process` hold in it as in the reviewer's library, which itself no longer imports `os`
   or `os/exec`.
   `ci/claudecodepin` is the Claude Code pin check (issue #276, ADR 0033):
@@ -140,6 +140,17 @@ Arrows are imports. They point inwards only:
   `syscall.Exec` with an environment of its own. It is held to named standard packages (`audit-exec`, no
   `os/exec` or `net`), and the forbidigo group `audit-exec-env` refuses every read of the environment and
   every other process start, with `syscall.Exec` named in its `main.go` alone.
+  `ci/auditrun` is the launcher the scheduled audit's model step runs (issue #277, ADR 0040), with its
+  logic in the library `ci/internal/audit`: it reads its inputs through one `os.LookupEnv`, refuses an
+  `ANTHROPIC_API_KEY`, and takes six steps in order, each failing the run before the next: the
+  managed-settings refusal, the tarball's checksum and the extraction of the CLI, the audit directory's
+  layout, the bubblewrap start check, the sandbox preflight (a control and six probes, judged from the
+  transcript and the effects the launcher observes itself) and the audit, one run through
+  `ci/internal/claudecode`. It prints one line, never a step's error text. The entry point is held to named
+  standard packages (`audit-main`, no `os/exec` or `net`) and the forbidigo group `audit-run-env`, with
+  `os.LookupEnv` named in its `main.go` alone; the library to named standard packages and the launcher
+  (`audit-library`, no `syscall`, `unsafe`, `plugin` or cgo), and only `ci/auditrun` and `ci/auditexec` may
+  import it (`audit-library-importers`).
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
   constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
   read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the

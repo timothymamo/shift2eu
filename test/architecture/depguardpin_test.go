@@ -1225,18 +1225,96 @@ var pinnedDepguardRules = []check.DepguardRule{
 	},
 	{
 		// Who may import the shared launcher (issue #277): the AI reviewer's
-		// library and the launcher's own tests. The scheduled audit's library
-		// joins the exceptions in the pull request that adds it (ADR 0040's
-		// amendment).
+		// library, the scheduled audit's library and the launcher's own tests
+		// (ADR 0040's amendment).
 		Name:     "claude-code-launcher-importers",
 		ListMode: "lax",
 		Files: []string{
 			"$all",
 			"!**/ci/aireview/internal/review/**",
+			"!**/ci/internal/audit/**",
 			"!**/ci/internal/claudecode/**",
 		},
 		Allow: nil,
 		Deny:  []string{"github.com/timothymamo/shift2eu/ci/internal/claudecode"},
+	},
+	{
+		// The scheduled audit's library (issue #277, ADR 0040's amendment):
+		// named standard packages, each exact, and the shared launcher; no
+		// syscall, unsafe, plugin or cgo. The checksum step's archive, gzip
+		// and crypto packages; os, os/exec and net for the steps' own checks.
+		Name:     "audit-library",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/internal/audit/**",
+			"!$test",
+		},
+		Allow: []string{
+			"archive/tar$",
+			"bytes$",
+			"compress/gzip$",
+			"context$",
+			"crypto/rand$",
+			"crypto/sha256$",
+			"crypto/sha512$",
+			"crypto/subtle$",
+			"encoding/base64$",
+			"encoding/hex$",
+			"encoding/json$",
+			"errors$",
+			"fmt$",
+			"io$",
+			"io/fs$",
+			"net$",
+			"os$",
+			"os/exec$",
+			"path$",
+			"path/filepath$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"sync$",
+			"sync/atomic$",
+			"time$",
+			"github.com/timothymamo/shift2eu/ci/internal/claudecode$",
+		},
+	},
+	{
+		// Who may import the audit's library (ADR 0040's amendment): the
+		// launcher ci/auditrun, the wrapper ci/auditexec and the library's own
+		// tests.
+		Name:     "audit-library-importers",
+		ListMode: "lax",
+		Files: []string{
+			"$all",
+			"!**/ci/internal/audit/**",
+			"!**/ci/auditrun/**",
+			"!**/ci/auditexec/**",
+		},
+		Allow: nil,
+		Deny:  []string{"github.com/timothymamo/shift2eu/ci/internal/audit"},
+	},
+	{
+		// The audit's launcher (issue #277, ADR 0040's amendment): a main
+		// package no root can import, held to the standard packages it
+		// imports, each exact, and the audit's library. It starts no program
+		// and opens no connection itself.
+		Name:     "audit-main",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/auditrun/**",
+			"!$test",
+		},
+		Allow: []string{
+			"context$",
+			"flag$",
+			"fmt$",
+			"io$",
+			"os$",
+			"os/signal$",
+			"github.com/timothymamo/shift2eu/ci/internal/audit$",
+		},
+		Deny: []string{"os/exec", "net"},
 	},
 	{
 		// The site's builder (PRD #297 milestone 2): a main package no root can

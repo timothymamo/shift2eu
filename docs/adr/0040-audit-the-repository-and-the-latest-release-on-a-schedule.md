@@ -360,7 +360,7 @@ test of ours (Decision 3's reason).
   only packages under `ci/` import it, so neither release binary can reach it. Its importers are exactly
   `ci/aireview/internal/review` and the audit's library `ci/internal/audit` (below), held by the lax
   depguard rule `claude-code-launcher-importers`, which denies the package in every file but theirs
-  (`ci/internal/audit` joins its exceptions in the pull request that adds it) and which
+  (`ci/internal/audit` joined its exceptions in the pull request that added it) and which
   `test/architecture`'s depguard pin holds. The strict depguard rule `claude-code-launcher` holds the
   package itself to named standard packages
   (from the move: `bytes`, `context`, `encoding/json`, `errors`, `fmt`, `os`, `os/exec`, `strings`,
@@ -582,8 +582,9 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
 - **Its rules:** the strict depguard rule `audit-exec` (`fmt`, `io`, `os`, `strings`, `syscall`; `os/exec`
   and `net` denied) and the forbidigo group `audit-exec-env`, which refuses every read of the environment,
   every process start, library load and raw system call, with one named exception: `syscall.Exec` in
-  `ci/auditexec/main.go` alone. `ci/auditexec` has no library yet; `ci/internal/audit` joins it in the
-  pull request that adds that library.
+  `ci/auditexec/main.go` alone. `ci/auditexec` imports no library yet; the lax rule
+  `audit-library-importers` lets it import `ci/internal/audit`, which itself is held by `audit-library`
+  and no forbidigo group (it starts `bwrap` and `sudo`, which `audit-exec-env` would refuse).
 
 #### The sandbox preflight
 
@@ -626,6 +627,52 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   variables an earlier step could set through `$GITHUB_ENV` (`ANTHROPIC_BASE_URL`, `HTTPS_PROXY`,
   `NODE_OPTIONS`, `LD_PRELOAD`) are not in it, and a managed-settings file under the test's root stops
   the launcher with exit 3 before the fake runs.
+
+*Settled by the implementation (issue #277):*
+
+- **The packages and their rules.** `ci/internal/audit` holds the six steps (`CheckManagedSettings`,
+  `InstallClaude`, `CheckLayout`, `CheckBubblewrap`, `Preflight`, `Audit`), `Run`, which takes them in
+  order, and `SystemSteps(pid)`, the real steps; every path is taken under a root standing in for `/`.
+  `ci/auditrun` is `main` and `run(args, getenv, steps, stdout, stderr) int`, which reads the flags and
+  the five variables, refuses an `ANTHROPIC_API_KEY` (even one set to nothing) with exit 3, and runs
+  `audit.Run` with the root `/`. A malformed token, canary or integrity, a missing `$GITHUB_ENV` or a flag
+  error is exit 2; a missing `$GITHUB_STEP_SUMMARY` leaves the line on stdout alone. Depguard holds the
+  library to `audit-library` (named standard packages and `ci/internal/claudecode`; `os`, `os/exec` and
+  `net` for its own checks) and the entry point to `audit-main` (no `os/exec` or `net`); the lax rule
+  `audit-library-importers` names `ci/auditrun` and `ci/auditexec`. The forbidigo group `audit-run-env`
+  holds in `ci/auditrun`, with `os.LookupEnv` named in its `main.go` alone.
+- **The run's one line.** Each step's failure prints a constant class; the bubblewrap failure prints the
+  sentence above; the preflight's prints its `Verdict`, whose text is built from constants alone
+  (`preflight failed: probe 2, TCP connect: not refused; see runbook step 10`). A preflight error that is
+  no `Verdict` (the CLI run failed, the set-up failed) prints a constant class too. The line goes to
+  stdout and is appended to `$GITHUB_STEP_SUMMARY`.
+- **The inputs reach the context-taking steps** through the context: `Run` puts its `Inputs` there and
+  `InputsFrom` reads them, so the real steps can be built before the inputs are read.
+- **The checksum** reads the tarball once (at most 1 GiB), compares its sha512 in constant time, then
+  checks every entry before writing anything: only regular files and directories, every name a clean
+  relative path under `package/`, `package/claude` exactly once. The binary is written to a temporary
+  file beside `bin/claude` and renamed into place, so a refused tarball leaves nothing behind.
+- **The layout** also wants `/srv` and `/srv/audit` to be directories, not links, and `work/tmp` empty. The
+  wrapper's owner is not checked (a check would need `syscall`, which the library is denied); the
+  model-free step's `sudo install -o root -m 0555` makes it, and the check holds its mode, exactly 0555.
+- **The bubblewrap check** runs `/usr/bin/bwrap` by absolute path, in `/`, with `PATH=/usr/bin:/bin` alone.
+- **The preflight's plan** is 21 calls: the control's Read, then probe 1's Write and two Bash calls, probe
+  2's Bash, probe 3's and probe 4's two Bash calls each, probe 5's Read, Grep, Glob and three Bash calls,
+  probe 6's Write, Edit, Read, Grep, Glob and Bash. The prompt numbers them, names each tool and target,
+  and the appended system prompt says to make each exactly once, in order, refused or not. The nonce is
+  16 random bytes in hex, removed with the control file after the run. The preflight's run has a deadline
+  of its own, 10 minutes (the audit's is 40).
+- **The judgement** matches the transcript's `tool_use` elements to the plan by tool name and order: the
+  transcript's calls must be the plan's in order with some left out, or it fails closed. Where repeated
+  tools make it ambiguous which call was left out (two Bash calls side by side), every probe the missing
+  call could belong to is named. A `tool_result` with `is_error` is a refusal; its text is its string
+  content or its text blocks joined. Probe 5 succeeds when the canary given to `Judge` appears anywhere in
+  the transcript, or a run of 64 lower-case hex characters appears in any `tool_result` (so a canary
+  split across text blocks counts). An effect that cannot be observed counts as observed: a probe file
+  that cannot be checked, a `$GITHUB_ENV` file that cannot be read again.
+- **The CLI's stderr.** The launcher keeps it to itself and quotes at most 500 bytes of it, the token
+  redacted, in its error; that error is written to `/srv/audit/state/out/preflight.stderr` or
+  `audit.stderr` and never printed. The transcripts go to `preflight.jsonl` and `audit.jsonl` there.
 
 #### The runner's user-namespace restriction
 

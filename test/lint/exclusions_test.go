@@ -20,7 +20,15 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag}
+
+// auditRunEnvTag is the tag of the audit launcher's environment group (issue
+// #277, ADR 0040's amendment), and auditRunLookupEnvMsg the msg of its one
+// entry with an exception: the os.LookupEnv ci/auditrun/main.go passes to run.
+const (
+	auditRunEnvTag       = "audit-run-env"
+	auditRunLookupEnvMsg = "audit-run-env: os.LookupEnv is used in ci/auditrun/main.go only, passed to run (ADR 0040); a test passes a lookup function of its own"
+)
 
 // auditExecEnvTag is the tag of the audit command wrapper's environment group
 // (issue #277, ADR 0040's amendment), and auditExecExecMsg the msg of its one
@@ -188,6 +196,14 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		auditExecEnvTag: {
 			{"path-except": `^ci/auditexec/`, "text": groupText(auditExecEnvTag)},
 			{"path": `^ci/auditexec/main\.go$`, "text": narrowedTextOf(auditExecExecMsg)},
+		},
+		// The audit's launcher (issue #277, ADR 0040's amendment): one rule for
+		// every path outside ci/auditrun/, so the group holds there and nowhere
+		// else, _test.go files included, and the one exception, the
+		// os.LookupEnv entry's msg alone, in ci/auditrun/main.go alone.
+		auditRunEnvTag: {
+			{"path-except": `^ci/auditrun/`, "text": groupText(auditRunEnvTag)},
+			{"path": `^ci/auditrun/main\.go$`, "text": narrowedTextOf(auditRunLookupEnvMsg)},
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {
