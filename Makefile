@@ -549,7 +549,10 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # trapped, since dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills it. The EXIT trap
 # first ignores those signals: a second one arriving while it runs would run its trap's exit and abandon the
 # rest of the cleanup, and one does arrive when the whole process group is signalled, since make forwards a
-# SIGTERM it gets to the recipe's shell. It then removes the directory, then the container, with a command
+# SIGTERM it gets to the recipe's shell. Each signal's trap ignores the three signals too, as its first action,
+# before its exit: a second signal landing between that exit and the EXIT trap would otherwise run its own trap
+# and end the shell before any cleanup, leaving the container and the directory behind (issue #464). The EXIT
+# trap then removes the directory, then the container, with a command
 # that ignores those signals too, so a hung one needs SIGKILL. The recipe starts the pinned headless Chromium
 # ($(HEADLESS_SHELL)) with the host network and its own entrypoint
 # replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface
@@ -574,9 +577,9 @@ test-browser: ## Build the site's bundle into a directory of this run's own and 
 	name=shift2eu-test-browser-$$$$; \
 	bundle_dir=; \
 	trap 'trap "" HUP INT TERM; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir" || true; fi; $(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
-	trap 'exit 129' HUP; \
-	trap 'exit 130' INT; \
-	trap 'exit 143' TERM; \
+	trap 'trap "" HUP INT TERM; exit 129' HUP; \
+	trap 'trap "" HUP INT TERM; exit 130' INT; \
+	trap 'trap "" HUP INT TERM; exit 143' TERM; \
 	bundle_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/shift2eu-test-browser.XXXXXX"); \
 	go run ./ci/sitebuild -out "$$bundle_dir/site" -archive "$$bundle_dir/shift2eu-site.tar.gz" >/dev/null; \
 	$(DOCKER) run -d --name "$$name" --network host --entrypoint /headless-shell/headless-shell \
