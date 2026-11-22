@@ -65,6 +65,17 @@ func TestReportNeverShowsTheSourceCost(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
+			// The checks below assert an absence, so each of them would pass
+			// vacuously if the assessment it renders carried no source cost to
+			// leave out: the fixture inventory's costs are what makes the
+			// absence observable. Fail before rendering when they are gone.
+			for _, a := range tc.assessments {
+				if len(a.SourceCost.Currencies) == 0 {
+					t.Fatalf("the %q assessment carries no source cost (its SourceCost.Currencies is empty), want the fixture inventory's sums, one per currency: with no source cost to leave out the fragment's absence of one proves nothing, so this test would pass even if the report showed the source cost again (issue #373, item 04)",
+						a.Target)
+				}
+			}
+
 			meta := analysis.ReportMeta{InventoryName: inventoryFileName}
 
 			var fragment string

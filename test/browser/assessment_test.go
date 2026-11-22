@@ -592,6 +592,19 @@ func TestAssessmentComparison(t *testing.T) {
 					len(tc.targets), report.Sections)
 			}
 
+			// The combined block's "Blockers on every target" list went with it
+			// (issue #373, item 05): it is neither a section of the report nor
+			// text anywhere in it.
+			if slices.Contains(report.Sections, "Blockers on every target") {
+				t.Errorf("the report shows the section \"Blockers on every target\", want none: the list of the blockers every target shares belonged to the combined block, which is gone (issue #373, item 05): %v",
+					report.Sections)
+			}
+
+			if at := strings.Index(report.Text, "Blockers on every target"); at >= 0 {
+				t.Errorf("the report's text says \"Blockers on every target\" at character %d of its text, want no shared-blockers list at all: the combined block is gone (issue #373, item 05): …%s…",
+					at, around(report.Text, at))
+			}
+
 			for _, tbl := range report.Tables {
 				for _, header := range tbl.Headers {
 					if strings.HasSuffix(header, " fit") {
@@ -630,6 +643,18 @@ func TestAssessmentComparison(t *testing.T) {
 			}
 		})
 	}
+}
+
+// around returns the text around the byte offset at, so a failure names the
+// report's own words rather than the whole report. It cuts on rune boundaries.
+func around(text string, at int) string {
+	const context = 60
+
+	runes := []rune(text)
+	// at is a byte offset; the runes before it are the runes of its prefix.
+	pos := len([]rune(text[:at]))
+
+	return string(runes[max(0, pos-context):min(len(runes), pos+context)])
 }
 
 // targetNames maps the target keys to the names the page and the reports give
