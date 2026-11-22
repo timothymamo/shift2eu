@@ -214,7 +214,7 @@ func TestRunPrintsFinishedAlone(t *testing.T) {
 func preflightVerdict(t *testing.T) error {
 	t.Helper()
 
-	plan := audit.PreflightPlan()
+	plan := audit.PreflightPlan(preflightTargets())
 	if len(plan) == 0 {
 		t.Fatal("the preflight's plan is empty: it lists the calls the model is asked to make (ADR 0040)")
 	}
