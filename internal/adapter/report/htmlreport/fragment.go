@@ -32,6 +32,8 @@ type segment struct {
 	Class class
 	// URL is a link's address, cleaned (clean).
 	URL string
+	// Label is a bubble's words for a screen reader, cleaned (clean).
+	Label string
 }
 
 // segmentKind is how a segment is written: one of a closed set of constants.
@@ -57,6 +59,11 @@ const (
 	// segLink is Text linking URL, opened in a new tab with no handle on
 	// the report's page: the catalog's own page (issue #373, item 10-1).
 	segLink
+	// segBubble is a workload's fit bubble (issue #373, item 05): a badge
+	// of Class showing its glyph, hidden from screen readers, and the count
+	// Text, then Label, the fit's word, in a span only a screen reader reads
+	// (the site's visually-hidden class).
+	segBubble
 )
 
 // glyphs are the glyphs of the badge classes, which a badge shows before its
@@ -102,6 +109,12 @@ func (r rich) code(s string) rich {
 // badge returns r followed by the badge of class c reading s.
 func (r rich) badge(c class, s string) rich {
 	return r.then(rich{{Text: clean(s), Kind: segBadge, Class: c}})
+}
+
+// bubble returns r followed by the bubble of class c showing s, which a
+// screen reader reads followed by label.
+func (r rich) bubble(c class, s, label string) rich {
+	return r.then(rich{{Text: clean(s), Kind: segBubble, Class: c, Label: clean(label)}})
 }
 
 // figure returns r followed by the figure s, of class c (classNone for
@@ -170,32 +183,27 @@ const (
 	classFitPartial
 	classFitNone
 	classFit
-	// classRowDirect, classRowPartial, classRowNone and classRowTotal are the
-	// rows of a Summary table.
-	classRowDirect
-	classRowPartial
-	classRowNone
-	classRowTotal
 	// classTotal is the Cost estimate's total.
 	classTotal
 	// classTableScroll is the box a table sits in, which scrolls sideways
 	// on its own when the table is wider than the page (issue #373, item
 	// 11).
 	classTableScroll
+	// classVisuallyHidden is the words only a screen reader reads, the
+	// site stylesheet's class for them: a workload bubble's fit (issue
+	// #373, item 05).
+	classVisuallyHidden
 )
 
 // classNames are the attribute values of the classes, a fixed table.
 var classNames = map[class]string{
-	classFitDirect:   "fit fit-direct",
-	classFitPartial:  "fit fit-partial",
-	classFitNone:     "fit fit-none",
-	classFit:         "fit",
-	classRowDirect:   "fit-direct",
-	classRowPartial:  "fit-partial",
-	classRowNone:     "fit-none",
-	classRowTotal:    "fit-total",
-	classTotal:       "total",
-	classTableScroll: "table-scroll",
+	classFitDirect:      "fit fit-direct",
+	classFitPartial:     "fit fit-partial",
+	classFitNone:        "fit fit-none",
+	classFit:            "fit",
+	classTotal:          "total",
+	classTableScroll:    "table-scroll",
+	classVisuallyHidden: "visually-hidden",
 }
 
 // part is the kind of a report section a part section wraps: one of a closed
@@ -293,13 +301,11 @@ type tableLabel int
 // The names of a table's box.
 const (
 	tableResources tableLabel = iota + 1
-	tableSummary
 )
 
 // tableLabels are the aria-label values of a table's box, a fixed table.
 var tableLabels = map[tableLabel]string{
 	tableResources: "Resources table",
-	tableSummary:   "Summary table",
 }
 
 // block is one block of a report: exactly one of a heading (Heading set to
@@ -585,6 +591,15 @@ func writeRich(b *strings.Builder, r rich) {
 			}
 
 			b.WriteString(escaped + "</span>")
+		case segBubble:
+			b.WriteString("<span" + classAttribute(s.Class) + ">")
+
+			if glyph, ok := glyphs[s.Class]; ok {
+				b.WriteString("<span aria-hidden=\"true\">" + glyph + "</span> ")
+			}
+
+			b.WriteString(escaped + "<span" + classAttribute(classVisuallyHidden) + "> " + textEscaper.Replace(s.Label) +
+				"</span></span>")
 		case segFigure:
 			b.WriteString("<strong" + classAttribute(s.Class) + ">" + escaped + "</strong>")
 		case segSpan:

@@ -90,7 +90,6 @@ func (*Reporter) ReportComparison(ctx context.Context, w io.Writer, c assessment
 	writeComparisonHeader(&f, c.Targets, meta)
 	f.part(partComparison, func() {
 		f.heading(sectionLevel, text("Comparison"))
-		writeComparisonSummary(&f, c.Targets)
 		writeComparisonResources(&f, c.Targets)
 		writeSharedBlockers(&f, c)
 	})
@@ -195,24 +194,26 @@ func writeBody(f *fragment, a assessment.Assessment, level int) {
 }
 
 // writeSummary writes the summary as boxes (issue #373, item 10-2): one per
-// fit, its badge, the number of resources of that fit and the total they are
-// of, then, when a has estimates, one with the monthly estimate.
+// fit, its badge, the number of resources of that fit and its caption, then,
+// when a has estimates, one with the monthly estimate. The direct box's
+// caption is the total its count is of; the partial and none boxes say what
+// that fit means for the move (item 03-2).
 func writeSummary(f *fragment, a assessment.Assessment, level int) {
 	s := a.Summary
-	of := "of " + strconv.Itoa(s.Total) + resourcesNoun(s.Total)
 
 	f.heading(level, text("Summary"))
 
 	for _, fit := range []struct {
-		fit   mapping.Fit
-		count int
+		fit     mapping.Fit
+		count   int
+		caption string
 	}{
-		{fit: mapping.Direct, count: s.Direct},
-		{fit: mapping.Partial, count: s.Partial},
-		{fit: mapping.None, count: s.None},
+		{fit: mapping.Direct, count: s.Direct, caption: "of " + strconv.Itoa(s.Total) + resourcesNoun(s.Total)},
+		{fit: mapping.Partial, count: s.Partial, caption: "needs changes"},
+		{fit: mapping.None, count: s.None, caption: "blocked"},
 	} {
 		f.paragraph(rich{}.badge(fitClass(fit.fit), string(fit.fit)).words(" ").
-			figure(classNone, strconv.Itoa(fit.count)).words(" ").span(of))
+			figure(classNone, strconv.Itoa(fit.count)).words(" ").span(fit.caption))
 	}
 
 	if hasEstimates(a) {
@@ -243,13 +244,14 @@ func fitCell(fit mapping.Fit) cell {
 }
 
 // writeResources writes one table row per verdict of a, in its order, with
-// the columns of the Markdown report: Plan and Monthly estimate only when a
-// has estimates, Relations only when some resource has a relation.
+// the columns of the Markdown report but the region (issue #373, item 04):
+// Plan and Monthly estimate only when a has estimates, Relations only when
+// some resource has a relation.
 func writeResources(f *fragment, a assessment.Assessment, level int) {
 	estimates := hasEstimates(a)
 	relations := hasRelations(a.Verdicts)
 
-	header := []rich{text("ID"), text("Raw type"), text("Category"), text("Region"), text("Fit"), text("Best offering")}
+	header := []rich{text("ID"), text("Raw type"), text("Category"), text("Fit"), text("Best offering")}
 	if estimates {
 		header = append(header, text("Plan"), text("Monthly estimate"))
 	}
@@ -263,8 +265,7 @@ func writeResources(f *fragment, a assessment.Assessment, level int) {
 	rows := make([]row, 0, len(a.Verdicts))
 
 	for _, v := range a.Verdicts {
-		r := cells(code(v.Resource.ID), code(v.Resource.RawType), code(string(v.Resource.Category)),
-			code(v.Resource.Region))
+		r := cells(code(v.Resource.ID), code(v.Resource.RawType), code(string(v.Resource.Category)))
 		r = append(r, fitCell(v.Fit))
 		r = append(r, cells(renderBestOffering(v))...)
 
@@ -427,56 +428,14 @@ func writeComparisonHeader(f *fragment, targets []assessment.TargetAssessment, m
 	f.markerlessList(items)
 }
 
-// writeComparisonSummary writes one row per fit, and a total, with one column
-// per target holding that target's count, then one estimate row per target
-// with estimates, holding that target's total in its own column, and the basis
-// the totals are given on. It ranks no target.
-func writeComparisonSummary(f *fragment, targets []assessment.TargetAssessment) {
-	header := []rich{text("Fit")}
-	direct := row{Class: classRowDirect, Cells: cells(text(string(mapping.Direct)))}
-	partial := row{Class: classRowPartial, Cells: cells(text(string(mapping.Partial)))}
-	none := row{Class: classRowNone, Cells: cells(text(string(mapping.None)))}
-	total := row{Class: classRowTotal, Cells: cells(text("total"))}
-
-	for _, t := range targets {
-		s := t.Assessment.Summary
-		header = append(header, code(t.Assessment.Target))
-		direct.Cells = append(direct.Cells, cells(text(strconv.Itoa(s.Direct)))...)
-		partial.Cells = append(partial.Cells, cells(text(strconv.Itoa(s.Partial)))...)
-		none.Cells = append(none.Cells, cells(text(strconv.Itoa(s.None)))...)
-		total.Cells = append(total.Cells, cells(text(strconv.Itoa(s.Total)))...)
-	}
-
-	rows := []row{direct, partial, none, total}
-	estimated := false
-
-	for i, t := range targets {
-		if !hasEstimates(t.Assessment) {
-			continue
-		}
-
-		estimated = true
-		r := make([]cell, len(targets)+1)
-		r[0] = cell{Text: code(t.Assessment.Target).words(" estimate")}
-		r[i+1] = cell{Text: renderTotal(*t.Assessment.Total, estimatesOf(t.Assessment.Verdicts))}
-		rows = append(rows, row{Cells: r})
-	}
-
-	f.heading(sectionLevel+1, text("Summary"))
-	f.table(tableSummary, header, rows)
-
-	if estimated {
-		f.paragraph(text("Estimates are list prices on each catalog's retrieval date, " + excludedNote +
-			"; each target's own section gives its basis."))
-	}
-}
-
 // writeComparisonResources writes one row per resource, in the first target's
 // verdict order: the ID, the category, and each target's fit and best
 // offering, without the tie note, and its monthly estimate when that target
-// has estimates.
+// has estimates. It names no region, as a single report's table names none
+// (issue #373, item 04), and it ranks no target. Each target's summary is
+// its own box in that target's section (item 10).
 func writeComparisonResources(f *fragment, targets []assessment.TargetAssessment) {
-	header := []rich{text("ID"), text("Category"), text("Region")}
+	header := []rich{text("ID"), text("Category")}
 
 	for _, t := range targets {
 		name := code(t.Assessment.Target)
@@ -490,7 +449,7 @@ func writeComparisonResources(f *fragment, targets []assessment.TargetAssessment
 	rows := make([]row, 0, len(targets[0].Assessment.Verdicts))
 
 	for i, first := range targets[0].Assessment.Verdicts {
-		r := cells(code(first.Resource.ID), code(string(first.Resource.Category)), code(first.Resource.Region))
+		r := cells(code(first.Resource.ID), code(string(first.Resource.Category)))
 
 		for _, t := range targets {
 			v := t.Assessment.Verdicts[i]

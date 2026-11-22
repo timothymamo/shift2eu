@@ -82,85 +82,31 @@ func summaryEstimate(t estimate.Total) rich {
 		span(strconv.Itoa(t.Estimated) + " of " + strconv.Itoa(t.Resources) + " priced · excl. VAT")
 }
 
-// renderPlan renders the Plan cell of an estimate: the chosen plan's name and
-// size, or, when no plan is large enough, the largest plan's. It is empty when
-// the estimate names no plan.
+// renderPlan renders the Plan cell of an estimate: the chosen plan's name
+// alone, without its size (issue #373, item 04). It is empty when the
+// estimate names no plan, a plan too small included: the Monthly estimate cell
+// says it is not estimated, and the Markdown report says why.
 func renderPlan(e *estimate.Estimate) rich {
+	if e == nil || e.Plan == nil {
+		return nil
+	}
+
+	return code(e.Plan.Name)
+}
+
+// renderEstimate renders the Monthly estimate cell of an estimate: its amount
+// alone, or "not estimated" alone (issue #373, item 04). The fixed fee, what
+// it assumed and the storage it leaves out, and why a resource is not
+// estimated, are the Markdown and JSON reports' detail, the site's downloads;
+// the Cost estimate's closing line names the reasons and the storage left out.
+func renderEstimate(e *estimate.Estimate) rich {
 	switch {
 	case e == nil:
 		return nil
-	case e.Plan != nil:
-		return code(e.Plan.Name).words(" (" + planSize(*e.Plan) + ")")
-	case e.Reason == estimate.NoPlanLargeEnough && e.Largest != nil:
-		return text("no plan large enough (largest: ").code(e.Largest.Name).words(", " + planSize(*e.Largest) + ")")
+	case !e.Estimated:
+		return text("not estimated")
 	default:
-		return nil
-	}
-}
-
-// planSize renders a plan's vCPUs and memory: "1 vCPU, 2 GiB".
-func planSize(p estimate.Plan) string {
-	return strconv.FormatInt(p.VCPUs, 10) + " vCPU, " + milliGiB(p.MemoryMilliGiB) + " GiB"
-}
-
-// milliGiB renders an amount in thousandths of a GiB as an exact decimal
-// without trailing zeros: 2000 is "2", 1500 is "1.5", 512 is "0.512".
-func milliGiB(m int64) string {
-	whole := strconv.FormatInt(m/1000, 10)
-
-	fraction := m % 1000
-	if fraction == 0 {
-		return whole
-	}
-
-	digits := strconv.FormatInt(fraction+1000, 10)[1:]
-
-	return whole + "." + strings.TrimRight(digits, "0")
-}
-
-// renderEstimate renders the Monthly estimate cell of an estimate: its amount,
-// with the fixed fee it includes, then what it assumed for a count or hours
-// the resource does not give and the storage it leaves out, or "not
-// estimated: " and the reason in plain words.
-func renderEstimate(e *estimate.Estimate) rich {
-	if e == nil {
-		return nil
-	}
-
-	if !e.Estimated {
-		return text("not estimated: ").then(renderNotEstimated(*e))
-	}
-
-	cell := euros(e.Monthly)
-	if !e.Breakdown.FixedFee.IsZero() {
-		cell += " (includes a fixed fee of " + euros(e.Breakdown.FixedFee) + ")"
-	}
-
-	if e.CountAssumed {
-		cell += " (count assumed 1)"
-	}
-
-	if e.HoursAssumed {
-		cell += " (" + hoursPerMonth + " hours assumed)"
-	}
-
-	if e.StorageNotIncluded != "" {
-		cell += " (" + renderStorageNotIncluded(e.StorageNotIncluded) + " not included)"
-	}
-
-	return text(cell)
-}
-
-// renderStorageNotIncluded names in plain words the storage an estimate leaves
-// out (ADR 0032). A value the report does not know is "storage".
-func renderStorageNotIncluded(s estimate.StorageNotIncluded) string {
-	switch s {
-	case estimate.BootVolume:
-		return "boot volume"
-	case estimate.DataStorage:
-		return "data storage"
-	default:
-		return "storage"
+		return text(euros(e.Monthly))
 	}
 }
 
@@ -212,41 +158,6 @@ var reasonOrder = []estimate.Reason{
 	estimate.NotOffered,
 	estimate.NoPrice,
 	estimate.NoStoragePrice,
-}
-
-// renderTotal renders a total as the Markdown report does: "€2,535.00 per
-// month for 4 of 8 resources", then "(storage not included in 2 estimates)",
-// or, for a total that estimates none of at least one resource, "none of 8
-// resources could be estimated" and the reasons of estimates, the estimates it
-// sums.
-func renderTotal(t estimate.Total, estimates []estimate.Estimate) rich {
-	noun := " resources"
-	if t.Resources == 1 {
-		noun = " resource"
-	}
-
-	if t.Estimated == 0 && t.Resources > 0 {
-		line := text("none of " + strconv.Itoa(t.Resources) + noun + " could be estimated")
-		if reasons := notEstimatedReasons(estimates); len(reasons) > 0 {
-			line = line.words(" (").then(reasons).words(")")
-		}
-
-		return line
-	}
-
-	line := euros(t.Monthly) + " per month for " + strconv.Itoa(t.Estimated) + " of " +
-		strconv.Itoa(t.Resources) + noun
-
-	if t.StorageNotIncluded > 0 {
-		estimates := " estimates"
-		if t.StorageNotIncluded == 1 {
-			estimates = " estimate"
-		}
-
-		line += " (storage not included in " + strconv.Itoa(t.StorageNotIncluded) + estimates + ")"
-	}
-
-	return text(line)
 }
 
 // notEstimatedReasons renders why the estimates that are not estimated are
@@ -343,9 +254,11 @@ func thousands(decimal string) string {
 }
 
 // sourceCost renders the source's cost of sc: per currency of sc, in its
-// order, the currency and the amount, "for N of M" unless every resource has
-// a cost in that currency, joined with ", "; or nil when the inventory gives
-// none. The amount is never converted.
+// order, the amount with its currency's sign, "for N of M" unless every
+// resource has a cost in that currency, joined with ", "; or nil when the
+// inventory gives none. The amount is never converted. A currency the report
+// knows is named by its sign alone (issue #373, item 05); any other by its
+// code, as a value, since the amount would otherwise name no currency.
 func sourceCost(sc estimate.SourceCost) rich {
 	if len(sc.Currencies) == 0 {
 		return nil
@@ -354,7 +267,13 @@ func sourceCost(sc estimate.SourceCost) rich {
 	parts := make([]rich, 0, len(sc.Currencies))
 
 	for _, c := range sc.Currencies {
-		part := code(c.Currency).words(" " + currencySymbols[c.Currency] + thousands(c.Monthly.String()))
+		amount := thousands(c.Monthly.String())
+
+		part := text(currencySymbols[c.Currency] + amount)
+		if _, known := currencySymbols[c.Currency]; !known {
+			part = code(c.Currency).words(" " + amount)
+		}
+
 		if c.Resources != sc.Resources {
 			part = part.words(" for " + strconv.Itoa(c.Resources) + " of " + strconv.Itoa(sc.Resources))
 		}
@@ -397,7 +316,7 @@ func writeWorkloads(f *fragment, a assessment.Assessment, level int) {
 					badges = badges.words(" ")
 				}
 
-				badges = badges.badge(fitClass(fit.fit), strconv.Itoa(fit.count)+" "+string(fit.fit))
+				badges = badges.bubble(fitClass(fit.fit), strconv.Itoa(fit.count), string(fit.fit))
 			}
 
 			f.paragraph(badges)

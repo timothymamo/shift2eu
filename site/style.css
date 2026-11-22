@@ -302,14 +302,21 @@ summary:focus-visible,
 
 /* Page. */
 
+/* The page's content keeps clear of the masthead's gold rule (issue #373,
+   round 2, item 01). */
 .page {
-  padding-top: 2.5rem;
+  padding-top: 3.5rem;
   padding-bottom: 3rem;
 }
 
+/* The introduction takes the page's full width within its margins (round 2,
+   items 02-1 and 07). */
 .hero {
-  max-width: 46rem;
   margin-bottom: 2rem;
+}
+
+.hero > .eyebrow {
+  margin-bottom: 0.9rem;
 }
 
 .eyebrow {
@@ -341,17 +348,6 @@ summary:focus-visible,
   margin: 1.25rem 0;
   padding: 0;
   list-style: none;
-}
-
-/* The one-sentence privacy bar (issue #373, item 02). */
-.privacy-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-  margin: 0 0 1rem;
-  color: var(--muted);
-  background-color: var(--bg);
-  font-size: 0.9rem;
 }
 
 .chip {
@@ -867,8 +863,17 @@ button.secondary:disabled {
   white-space: nowrap;
 }
 
+/* The raw type and the best offering wrap, up to three lines, so the table
+   stays narrow (issue #373, round 2, item 04). */
+#report .part-resources td:nth-child(2),
+#report .part-resources td:nth-child(5) {
+  min-width: 9rem;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 #report .part-resources td:last-child {
-  min-width: 22rem;
+  min-width: 16rem;
   white-space: normal;
 }
 
@@ -880,7 +885,9 @@ button.secondary:disabled {
   box-shadow: inset 0 1px 0 var(--ring);
 }
 
-#report tbody tr:nth-child(even):not([class]) > td:not(.fit) {
+/* The Fit cell takes its row's background; only its bubble is coloured
+   (round 2, item 04). */
+#report tbody tr:nth-child(even) > td {
   background-color: var(--bg);
 }
 
@@ -907,10 +914,7 @@ button.secondary:disabled {
    announce the glyph. The same holds for the heading and blocker glyphs
    below. */
 #report td.fit > span,
-#report span.fit,
-#report tr.fit-direct > td:first-child,
-#report tr.fit-partial > td:first-child,
-#report tr.fit-none > td:first-child {
+#report span.fit {
   display: inline-block;
   font-size: 0.8rem;
   font-weight: 650;
@@ -925,56 +929,55 @@ button.secondary:disabled {
 }
 
 #report td.fit-direct > span,
-#report span.fit-direct,
-#report tr.fit-direct > td {
+#report span.fit-direct {
   color: var(--direct-ink);
   background-color: var(--direct-bg);
 }
 
 #report td.fit-partial > span,
-#report span.fit-partial,
-#report tr.fit-partial > td {
+#report span.fit-partial {
   color: var(--partial-ink);
   background-color: var(--partial-bg);
 }
 
 #report td.fit-none > span,
-#report span.fit-none,
-#report tr.fit-none > td {
+#report span.fit-none {
   color: var(--none-ink);
   background-color: var(--none-bg);
 }
 
-#report td.fit-direct > span::before,
-#report tr.fit-direct > td:first-child::before {
+#report td.fit-direct > span::before {
   content: "\2713\00a0" / "";
 }
 
-#report td.fit-partial > span::before,
-#report tr.fit-partial > td:first-child::before {
+#report td.fit-partial > span::before {
   content: "\25D0\00a0" / "";
 }
 
-#report td.fit-none > span::before,
-#report tr.fit-none > td:first-child::before {
+#report td.fit-none > span::before {
   content: "\2715\00a0" / "";
 }
 
 /* Summary: one tile per fit and one for the monthly estimate (issue #373,
    item 10-2): the badge, the count as a big numeral in the fit's colour,
    and what it counts. */
+/* The boxes share the row equally and fill the page's width (round 2, item
+   03-1); on a narrow screen they wrap, two or one to a row. In a
+   comparison the heading is an h4 (item 10). */
 #report .part-summary {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
 }
 
-#report .part-summary > h3 {
-  grid-column: 1 / -1;
+#report .part-summary > :is(h3, h4) {
+  flex: 1 0 100%;
   margin: 0;
 }
 
 #report .part-summary > p {
+  flex: 1 1 9rem;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -1021,26 +1024,6 @@ button.secondary:disabled {
   background-color: var(--surface);
 }
 
-/* A comparison's summary table: the counts are big numerals in the fit's
-   colour. */
-#report tr[class] > td + td {
-  font-family: var(--mono);
-  font-size: 1.5rem;
-  font-weight: 700;
-  line-height: 1.2;
-}
-
-#report tr.fit-total > td {
-  color: var(--ink);
-  background-color: var(--surface-2);
-  font-weight: 650;
-}
-
-#report tr.fit-total > td:first-child {
-  font-size: 0.8rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
 
 #report .part ul {
   margin: 0;
@@ -1127,18 +1110,21 @@ button.secondary:disabled {
 
 /* Workloads: one small card per workload, its fit badges and its monthly
    estimate (issue #373, item 13). */
+/* The boxes share the row equally and fill the page's width (round 2, item
+   05). */
 #report .part-workloads {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 1rem;
 }
 
-#report .part-workloads > h3 {
-  grid-column: 1 / -1;
+#report .part-workloads > :is(h3, h4) {
+  flex: 1 0 100%;
   margin: 0;
 }
 
 #report .part-workloads > section {
+  flex: 1 1 14rem;
   min-width: 0;
   padding: 1rem;
   color: var(--ink);
@@ -1350,7 +1336,6 @@ ol.layers strong {
 
 ul.caveats,
 ul.technical {
-  max-width: 52rem;
   padding: 1.25rem 1.25rem 1.25rem 2.5rem;
 }
 
@@ -1462,8 +1447,10 @@ ol.steps code {
   margin-bottom: 0;
 }
 
+/* The privacy and verify pages' paragraphs and boxes take the page's full
+   width within its margins (issue #373, round 2, items 08 and 09). */
 .prose {
-  max-width: 52rem;
+  max-width: none;
 }
 
 /* Footer. */

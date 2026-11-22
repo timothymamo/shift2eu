@@ -8,21 +8,21 @@
 <section class="part part-summary">
 <h3>Summary</h3>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> direct</span> <strong>1</strong> <span>of 4 resources</span></p>
-<p><span class="fit fit-partial"><span aria-hidden="true">◐</span> partial</span> <strong>0</strong> <span>of 4 resources</span></p>
-<p><span class="fit fit-none"><span aria-hidden="true">✕</span> none</span> <strong>3</strong> <span>of 4 resources</span></p>
+<p><span class="fit fit-partial"><span aria-hidden="true">◐</span> partial</span> <strong>0</strong> <span>needs changes</span></p>
+<p><span class="fit fit-none"><span aria-hidden="true">✕</span> none</span> <strong>3</strong> <span>blocked</span></p>
 </section>
 <section class="part part-resources">
 <h3>Resources</h3>
 <section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
 <table>
 <thead>
-<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
+<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
 </thead>
 <tbody>
-<tr><td><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></td><td><code>&lt;img src=x onerror=alert(1)&gt;</code></td><td><code>storage.object</code></td><td><code>eu&#34;west</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code></td><td><code>Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code> offers every capability the resource uses</td></tr>
-<tr><td><code>__shift2euModule</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></td></tr>
-<tr><td><code>a&#34;b&#39;c&amp;d</code></td><td><code>javascript:alert(1)</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></td></tr>
-<tr><td><code>onerror=alert(1) x=</code></td><td><code>&#34; onmouseover=&#34;alert(1)</code></td><td><code>unclassified</code></td><td><code>eu-west-1</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>not classified</td></tr>
+<tr><td><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></td><td><code>&lt;img src=x onerror=alert(1)&gt;</code></td><td><code>storage.object</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code></td><td><code>Object &lt;script&gt;alert(&#39;offering&#39;)&lt;/script&gt; Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>__shift2euModule</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></td></tr>
+<tr><td><code>a&#34;b&#39;c&amp;d</code></td><td><code>javascript:alert(1)</code></td><td><code>compute.vm</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>no offering in the <code>Evil &#34;Target&#34; &amp; &lt;b&gt;</code> catalog for <code>compute.vm</code></td></tr>
+<tr><td><code>onerror=alert(1) x=</code></td><td><code>&#34; onmouseover=&#34;alert(1)</code></td><td><code>unclassified</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>not classified</td></tr>
 </tbody>
 </table>
 </section>
@@ -45,15 +45,15 @@
 <h3>Workloads</h3>
 <section>
 <h4><code>shift2euAssess</code></h4>
-<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 0 direct</span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0 partial</span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 1 none</span></p>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 0<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 1<span class="visually-hidden"> none</span></span></p>
 </section>
 <section>
 <h4><code>ws &lt;script&gt;alert(&#39;workload&#39;)&lt;/script&gt;</code></h4>
-<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1 direct</span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0 partial</span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0 none</span></p>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 1<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 0<span class="visually-hidden"> none</span></span></p>
 </section>
 <section>
 <h4>No workload</h4>
-<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 0 direct</span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0 partial</span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 2 none</span></p>
+<p><span class="fit fit-direct"><span aria-hidden="true">✓</span> 0<span class="visually-hidden"> direct</span></span> <span class="fit fit-partial"><span aria-hidden="true">◐</span> 0<span class="visually-hidden"> partial</span></span> <span class="fit fit-none"><span aria-hidden="true">✕</span> 2<span class="visually-hidden"> none</span></span></p>
 </section>
 </section>
 </section>

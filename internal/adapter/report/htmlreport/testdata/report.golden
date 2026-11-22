@@ -8,22 +8,22 @@
 <section class="part part-summary">
 <h3>Summary</h3>
 <p><span class="fit fit-direct"><span aria-hidden="true">✓</span> direct</span> <strong>2</strong> <span>of 5 resources</span></p>
-<p><span class="fit fit-partial"><span aria-hidden="true">◐</span> partial</span> <strong>1</strong> <span>of 5 resources</span></p>
-<p><span class="fit fit-none"><span aria-hidden="true">✕</span> none</span> <strong>2</strong> <span>of 5 resources</span></p>
+<p><span class="fit fit-partial"><span aria-hidden="true">◐</span> partial</span> <strong>1</strong> <span>needs changes</span></p>
+<p><span class="fit fit-none"><span aria-hidden="true">✕</span> none</span> <strong>2</strong> <span>blocked</span></p>
 </section>
 <section class="part part-resources">
 <h3>Resources</h3>
 <section class="table-scroll" tabindex="0" role="region" aria-label="Resources table">
 <table>
 <thead>
-<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Region</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
+<tr><th scope="col">ID</th><th scope="col">Raw type</th><th scope="col">Category</th><th scope="col">Fit</th><th scope="col">Best offering</th><th scope="col">Reasons</th></tr>
 </thead>
 <tbody>
-<tr><td><code>bucket-example</code></td><td><code>AWS::S3::Bucket</code></td><td><code>storage.object</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Object Storage</code></td><td><code>Object Storage</code> offers every capability the resource uses</td></tr>
-<tr><td><code>db-example</code></td><td><code>AWS::RDS::DBInstance</code></td><td><code>database.postgresql</code></td><td><code>eu-west-1</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Managed Database for PostgreSQL</code> (tie: <code>Managed Database for PostgreSQL and MySQL</code>)</td><td><code>Managed Database for PostgreSQL</code> offers every capability the resource uses</td></tr>
-<tr><td><code>fn-example</code></td><td><code>AWS::Lambda::Function</code></td><td><code>serverless.function</code></td><td><code>eu-west-1</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>no offering in the <code>Scaleway</code> catalog for <code>serverless.function</code></td></tr>
-<tr><td><code>misc-example</code></td><td><code>AWS::CloudFormation::CustomResource</code></td><td><code>unclassified</code></td><td><code>eu-west-1</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>not classified</td></tr>
-<tr><td><code>partial-example</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td><code>eu-west-1</code></td><td class="fit fit-partial"><span>partial</span></td><td><code>Instances</code></td><td><code>Instances</code> does not offer <code>node-high-availability</code>; <code>Instances</code> does not offer <code>snapshots</code></td></tr>
+<tr><td><code>bucket-example</code></td><td><code>AWS::S3::Bucket</code></td><td><code>storage.object</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Object Storage</code></td><td><code>Object Storage</code> offers every capability the resource uses</td></tr>
+<tr><td><code>db-example</code></td><td><code>AWS::RDS::DBInstance</code></td><td><code>database.postgresql</code></td><td class="fit fit-direct"><span>direct</span></td><td><code>Managed Database for PostgreSQL</code> (tie: <code>Managed Database for PostgreSQL and MySQL</code>)</td><td><code>Managed Database for PostgreSQL</code> offers every capability the resource uses</td></tr>
+<tr><td><code>fn-example</code></td><td><code>AWS::Lambda::Function</code></td><td><code>serverless.function</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>no offering in the <code>Scaleway</code> catalog for <code>serverless.function</code></td></tr>
+<tr><td><code>misc-example</code></td><td><code>AWS::CloudFormation::CustomResource</code></td><td><code>unclassified</code></td><td class="fit fit-none"><span>none</span></td><td></td><td>not classified</td></tr>
+<tr><td><code>partial-example</code></td><td><code>AWS::EC2::Instance</code></td><td><code>compute.vm</code></td><td class="fit fit-partial"><span>partial</span></td><td><code>Instances</code></td><td><code>Instances</code> does not offer <code>node-high-availability</code>; <code>Instances</code> does not offer <code>snapshots</code></td></tr>
 </tbody>
 </table>
 </section>

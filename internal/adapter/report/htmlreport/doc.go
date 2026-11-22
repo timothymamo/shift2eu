@@ -16,17 +16,21 @@
 //     retrieved <date> · region <region>", the file left out when it has no
 //     name, the region when there is none, and the date a link to the
 //     catalog's own page;
-//   - h3 sections: Summary, one box per fit (its badge, its count, the total)
-//     and a monthly-estimate box; Resources, the Markdown table's columns
-//     with a Region column it does not have; Required changes and Blockers,
-//     both in one box; Workloads, one box per workload (its h4 name, a badge
-//     per fit with its count, its estimate and the source's cost); and Cost
-//     estimate, the total and one closing line;
+//   - h3 sections: Summary, one box per fit (its badge, its count, and "of N
+//     resources", "needs changes" or "blocked") and a monthly-estimate box;
+//     Resources, the Markdown table's columns, its Plan cell the plan's name
+//     alone and its Monthly estimate cell the amount or "not estimated" alone
+//     (issue #373, round 2, item 04: the detail stays in the downloads);
+//     Required changes and Blockers, both in one box; Workloads, one box per
+//     workload (its h4 name, a bubble per fit showing its count, whose fit a
+//     screen reader reads, its estimate and the source's cost, each amount
+//     with its currency's sign, never its code); and Cost estimate, the total
+//     and one closing line;
 //   - for a comparison, the title naming every target, the header line with
 //     one catalog link per target, an h3 Comparison section holding the h4
-//     Summary table, Resources (with a Region column) and Blockers on every
-//     target, then one h3 section per target holding its single-target
-//     sections, one level lower.
+//     Resources and Blockers on every target, then one h3 section per target
+//     holding its single-target sections, one level lower, its Summary boxes
+//     included (round 2, item 10). No table names a region.
 //
 // A fragment is semantic HTML, one section element holding the title, its
 // list and part sections (below) of headings, paragraphs, lists, tables with
@@ -46,10 +50,10 @@
 // "fit fit-partial" or "fit fit-none", chosen from the mapping's fit by an
 // exhaustive switch ("fit" alone for a fit it does not know), and a badge
 // outside a table shows that fit's glyph in a span hidden from screen
-// readers; a comparison's Summary table's rows have "fit-direct",
-// "fit-partial", "fit-none" and "fit-total"; the Cost estimate's total has
-// "total"; and the box every table sits in, which scrolls sideways on its
-// own, has "table-scroll". The classes are fixed tables keyed by unexported
+// readers; a workload bubble's fit word sits in a span of "visually-hidden",
+// the site stylesheet's class for words only a screen reader reads; the Cost
+// estimate's total has "total"; and the box every table sits in, which
+// scrolls sideways on its own, has "table-scroll". The classes are fixed tables keyed by unexported
 // enums, never built from a value, and render refuses a key outside them.
 //
 // # List role
@@ -65,7 +69,7 @@
 // class "table-scroll" scrolls sideways, so a keyboard visitor must reach it,
 // and it carries the constant attributes tabindex="0", role="region" and an
 // aria-label from a fixed table of names keyed by an unexported enum
-// ("Resources table", "Summary table"), never from a value (issue #373,
+// ("Resources table"), never from a value (issue #373,
 // review 6). No other element carries a role.
 //
 // # Values are text
