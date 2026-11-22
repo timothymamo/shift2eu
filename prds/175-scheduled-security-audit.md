@@ -804,7 +804,7 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    `security-audit/<date>-<run_id>`. Check: its report PR opens like a scheduled run's. Two report PRs
    open at once touch only their own report files, so they merge in either order (issue #280). Never use
    Update branch or push to the App's branch: a maintainer commit there cannot be approved
-   (`require_last_push_approval`) and breaks the App-authored docs-only check.
+   (`require_last_push_approval`) and breaks the audit PR's docs-only check.
 10. **Renew the Claude token** before it expires (The subscription token, above), **rotate the App's key,
     the model key or the publish key** if any may have leaked, and **rotate any secret** a private
     finding says is in the git history, once you have checked that it is real. If the sandbox
@@ -911,10 +911,15 @@ options that were weighed and the reason given, so the decision can be revisited
        (trial PR 2 in runbook step 5, a failed run's branch in step 11) first adds the Repository admin role (`RepositoryRole` 5, `always`)
        as a temporary bypass actor and removes it afterwards, re-running step 4's bypass check (PASS: the
        audit App only).
-     - A CI job fails any PR authored by `shift2eu-audit[bot]` that touches anything outside
-       `docs/security/`, required through a **new ruleset on `main`** with no bypass actor, so
-       `Protect main` stays unchanged (runbook step 5). It passes trivially for other authors, so it costs
-       nothing elsewhere.
+     - A CI job fails any audit PR (authored by `shift2eu-audit[bot]`, or whose event sender is the App, or
+       whose head branch is under `security-audit/`) that is not based on `main` or that touches anything
+       but regular non-executable files (mode 100644), or their deletions, under `docs/security/`, with
+       no path component starting with a dot. It re-runs when a PR is `edited`, so retargeting the base
+       branch is checked too, and it passes trivially for other PRs, so it costs nothing elsewhere. It is
+       required through a **new ruleset on `main`** with no bypass actor, so `Protect main` stays
+       unchanged (runbook step 5). The sender key alone fails only the run of the App's own event; the
+       branch ruleset below, which keeps the App to `security-audit/**` branches, makes it more than a
+       one-shot signal (ADR 0040).
      - A branch ruleset on `~ALL` excluding `security-audit/**` restricts creations, updates and deletions
        to the legitimate pushers, not the App, so it can write only `security-audit/**` branches (runbook
        step 5). That ruleset now closes the agents' and release-please's branches to the App.
