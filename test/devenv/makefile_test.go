@@ -669,6 +669,155 @@ func TestEveryDevScriptARecipeRunsIsExecutableInGit(t *testing.T) {
 	}
 }
 
+// TestMakefileResolvesAPathInOnePlace pins the other half of issue #468: the .envrc guard (issue #402) and the
+// host-clone guard (issue #447) decide what a path is by resolving it, and they must do that through one resolver.
+// PR #463 gave the host-clone guard a resolver that checks every link it follows against the kernel, keeps a
+// target's trailing newline and fails closed, while ENVRC_GUARD kept a resolver of its own that compared spelled
+// paths, so a layout one guard refused the other could let through - the host target ran with the credentials in
+// reach. This check is structural: the Makefile, or the one script of dev/ it runs for it, follows a link with
+// readlink in exactly one place, and ENVRC_GUARD names that place instead of walking a path itself. It stays loose
+// about where the resolver lives, so it may be a make definition or a script of dev/; a script must be tracked by
+// git and executable, which is what running it by its path needs, and dev/shellcheck.sh lints every tracked .sh.
+func TestMakefileResolvesAPathInOnePlace(t *testing.T) {
+	t.Parallel()
+
+	body := makeCode(readRepoFile(t, makefilePath))
+	definitions := makeDefinitions(body)
+
+	envrc, ok := definitions["ENVRC_GUARD"]
+	if !ok {
+		t.Fatalf("%s defines no ENVRC_GUARD, so this check pins nothing about the .envrc guard (issue #468)", makefilePath)
+	}
+
+	// The resolver: every place that follows a link with readlink, a make definition whose value holds one, and a
+	// script of dev/ the Makefile runs whose own text does.
+	var resolvers []string
+
+	for _, name := range slices.Sorted(maps.Keys(definitions)) {
+		if strings.Contains(definitions[name], "readlink") {
+			resolvers = append(resolvers, name)
+		}
+	}
+
+	for _, script := range devScriptsIn(body) {
+		if strings.Contains(readRepoFile(t, script), "readlink") {
+			resolvers = append(resolvers, script)
+		}
+	}
+
+	if len(resolvers) != 1 {
+		t.Fatalf("%s resolves a path with readlink in %d places, %v: the host-clone guard and the .envrc guard must share one resolver, or a layout one of them refuses the other lets through and a host target runs with the credentials in reach (issue #468)",
+			makefilePath, len(resolvers), resolvers)
+	}
+
+	resolver := resolvers[0]
+
+	if strings.Contains(envrc, "readlink") {
+		t.Errorf("ENVRC_GUARD walks a path with readlink itself, beside the resolver %s: the .envrc guard must resolve a path the way the host-clone guard does, checking every link against the kernel and failing closed, or a link whose target ends in a newline or a path spelled in another case sends it somewhere else than the kernel goes (issue #468)",
+			resolver)
+	}
+
+	if !strings.Contains(envrc, resolver) {
+		t.Errorf("ENVRC_GUARD does not use %s, the one resolver of %s: the two guards must decide where a path leads in the same way, or the .envrc guard misses a credentials file the kernel reads and the host target runs (issue #468)",
+			resolver, makefilePath)
+	}
+
+	hostGuardUses := false
+
+	for name, text := range definitions {
+		if !strings.Contains(text, "HOST_WORKSPACE") {
+			continue
+		}
+
+		if name == resolver || strings.Contains(text, resolver) {
+			hostGuardUses = true
+		}
+	}
+
+	if !hostGuardUses {
+		t.Errorf("no definition of %s that names HOST_WORKSPACE holds or uses %s, so the host-clone guard no longer resolves the workspace with the shared resolver (issue #468)",
+			makefilePath, resolver)
+	}
+
+	if _, isDefinition := definitions[resolver]; isDefinition {
+		return
+	}
+
+	// A resolver in a script of dev/ is run by its path and shebang, so git must hold it executable, and its .sh
+	// name is what dev/shellcheck.sh picks it up by: every tracked .sh is linted (issue #468).
+	mode, tracked := gitFileModes(t, "dev")[resolver]
+	if !tracked {
+		t.Fatalf("%s runs %s, the resolved path resolver, which git does not track: a script a recipe or make itself runs is committed (issues #242 and #337, issue #468)",
+			makefilePath, resolver)
+	}
+
+	if mode != "100755" {
+		t.Errorf("%s runs %s, the shared path resolver, which git holds as mode %s, not 100755: it is run by its path and shebang, so git must check it out executable (issues #242 and #337, issue #468)",
+			makefilePath, resolver, mode)
+	}
+
+	if !strings.HasSuffix(resolver, ".sh") {
+		t.Errorf("%s runs %s as the shared path resolver, but its name ends in no .sh: dev/shellcheck.sh lints every tracked shell script by that name or its shebang, so a resolver script must be one shellcheck reads (issue #468)",
+			makefilePath, resolver)
+	}
+}
+
+// makeCode returns body, a Makefile, without the lines make reads as comments: a line whose text begins with #,
+// once the blanks before it are gone. A recipe's # lines stay, as they belong to the shell there (and
+// TestMakefileHasNoCommentInsideAContinuedRecipe keeps them out of a continued command).
+func makeCode(body string) string {
+	var kept []string
+
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, "\t") && strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+
+		kept = append(kept, line)
+	}
+
+	return strings.Join(kept, "\n")
+}
+
+// makeDefinitions returns the text of every assignment in body, a Makefile without its comment lines, keyed by the
+// variable's name: the assignment's own line and the backslash-continued lines after it, joined as make reads them.
+func makeDefinitions(body string) map[string]string {
+	assignment := regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.-]*)[ \t]*(?:\+=|::=|:=|\?=|=)`)
+
+	lines := strings.Split(body, "\n")
+	definitions := map[string]string{}
+
+	for i := 0; i < len(lines); i++ {
+		match := assignment.FindStringSubmatch(lines[i])
+		if match == nil {
+			continue
+		}
+
+		value := []string{}
+		line := lines[i]
+
+		for {
+			value = append(value, line)
+
+			if !continues(line) {
+				break
+			}
+
+			i++
+
+			if i >= len(lines) {
+				break
+			}
+
+			line = lines[i]
+		}
+
+		definitions[match[1]] = strings.Join(value, "\n")
+	}
+
+	return definitions
+}
+
 // gitFileModes returns the mode git has recorded for the files below dir, keyed by their path from the repository
 // root: git ls-files reads the index, so the test needs no network and no particular working-tree mode.
 func gitFileModes(t *testing.T, dir string) map[string]string {
