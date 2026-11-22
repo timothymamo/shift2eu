@@ -9,7 +9,6 @@ import (
 
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
-	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/testutil"
 )
@@ -1332,11 +1331,10 @@ func TestReportEstimateCellHoldsOnlyTheAmount(t *testing.T) {
 
 // TestReportNamesNoCurrencyCode pins the currency of every amount (issue #373,
 // item 05): the amount carries its sign, never its code, as the artifact has it.
-// The prices of the catalogs are in euros, so an amount of the source's own cost
-// is the only place a code could appear, and there too the artifact shows the
-// amount alone: the fragment names no code for a currency the report knows --
-// neither <code>EUR</code> nor <code>USD</code> -- and no bare code either, the
-// way a currency the report has no sign for is shown.
+// The prices of the catalogs are in euros, so the fragment names no code for a
+// currency the report knows -- neither <code>EUR</code> nor <code>USD</code> --
+// and no bare code either. The source's own cost, which showed a second code
+// here, is not in the HTML report any more (item 04, decision of 2026-11-22).
 func TestReportNamesNoCurrencyCode(t *testing.T) {
 	t.Parallel()
 
@@ -1349,7 +1347,7 @@ func TestReportNamesNoCurrencyCode(t *testing.T) {
 		}
 	}
 
-	for _, wanted := range []string{"$40.00", "€2,535.00"} {
+	for _, wanted := range []string{"€2,535.00"} {
 		if !strings.Contains(textOf(fragment), wanted) {
 			t.Errorf("the fragment does not show the amount %q, want the amount itself unchanged: no currency code is named, and no amount is lost (issue #373, item 05)\n%s",
 				wanted, textOf(fragment))
@@ -1357,56 +1355,11 @@ func TestReportNamesNoCurrencyCode(t *testing.T) {
 	}
 }
 
-// TestReportNamesAnUnknownCurrencyByItsCode pins how a source cost names a
-// currency the report has no sign for (issue #373, item 05): with no sign to
-// show, the code itself stands beside the amount, as a value rather than the
-// report's own words, and a currency that would be markup in a page reaches the
-// fragment as text. The assessment is built here rather than from an inventory
-// file, since the domain refuses a currency that is not three upper-case letters
-// and the report takes any assessment an application layer hands it.
-func TestReportNamesAnUnknownCurrencyByItsCode(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		currency string
-		// markup is what the fragment must not hold: the currency read as a tag.
-		markup string
-	}{
-		{name: "a currency the report has no sign for", currency: "CHF"},
-		{name: "a hostile currency", currency: "<b>", markup: "<b>"},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			a := estimatesAssessment(t)
-			a.SourceCost = estimate.SourceCost{
-				Currencies: []estimate.CurrencyCost{{Currency: tc.currency, Monthly: estimate.Ratio(2400, 1), Resources: 1}},
-				Covered:    1,
-				Resources:  a.SourceCost.Resources,
-			}
-
-			fragment := string(render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}))
-
-			if want := "<code>" + escapedText(tc.currency) + "</code> 2,400.00"; !strings.Contains(fragment, want) {
-				t.Errorf("the fragment does not show the source cost %q, want the code of a currency the report has no sign for beside its amount, as a value (issue #373, item 05)\n%s",
-					want, fragment)
-			}
-
-			if tc.markup != "" && strings.Contains(fragment, tc.markup) {
-				t.Errorf("the fragment writes the currency %q as the markup %q, want it escaped as text, since a value must never become a tag (issue #373, item 05)\n%s",
-					tc.currency, tc.markup, fragment)
-			}
-		})
-	}
-}
-
 // TestReportComparisonSummaryIsOneBoxPerTarget pins the comparison of several
 // targets (issue #373, item 10): each target's summary is its own box under its
-// own heading, and the combined summary table the fragment showed beside them is
-// gone. The maintainer's screenshot of a comparison showed both at once.
+// own heading, and no summary table counts every target side by side. The
+// maintainer's screenshot of a comparison showed both at once; the combined
+// block around that table is gone altogether (item 05).
 func TestReportComparisonSummaryIsOneBoxPerTarget(t *testing.T) {
 	t.Parallel()
 
@@ -1420,14 +1373,9 @@ func TestReportComparisonSummaryIsOneBoxPerTarget(t *testing.T) {
 	elements := fragmentElements(t, string(renderComparison(t, assessment.Compare(targets),
 		analysis.ReportMeta{InventoryName: inventoryFileName})))
 
-	comparison := elementsWithClass(t, elements, "part-comparison")
-	if len(comparison) != 1 {
-		t.Fatalf("the comparison holds %d Comparison sections, want exactly one", len(comparison))
-	}
-
-	for _, table := range tableIndices(elements, comparison[0]) {
-		if header := headerCells(t, elements, table); len(header) > 2 && header[0] == "Fit" {
-			t.Errorf("the Comparison section holds the combined summary table %q, want none: each target's summary is its own box, never a table counting every target side by side (issue #373, item 10)",
+	for _, header := range tableHeaders(t, elements) {
+		if len(header) > 2 && header[0] == "Fit" {
+			t.Errorf("the comparison holds the combined summary table %q, want none: each target's summary is its own box, never a table counting every target side by side (issue #373, item 10)",
 				header)
 		}
 	}

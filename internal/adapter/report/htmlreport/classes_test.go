@@ -171,7 +171,6 @@ func reportFixtures() []reportFixture {
 				}), meta)
 			},
 			parts: []partExpectation{
-				{heading: "Comparison", kind: "comparison"},
 				{heading: "<code>OVHcloud</code>", kind: "target"},
 				{heading: "<code>Scaleway</code>", kind: "target"},
 				{heading: "<code>UpCloud</code>", kind: "target"},
@@ -207,7 +206,6 @@ func reportFixtures() []reportFixture {
 				return renderComparison(t, hostileComparison(t), analysis.ReportMeta{InventoryName: hostileInventoryName})
 			},
 			parts: []partExpectation{
-				{heading: "Comparison", kind: "comparison"},
 				{heading: "<code>" + escapedText(`Evil "Target" & <b>`) + "</code>", kind: "target"},
 				{heading: "<code>" + escapedText(`<script>Target</script> "Two"`) + "</code>", kind: "target"},
 			},
