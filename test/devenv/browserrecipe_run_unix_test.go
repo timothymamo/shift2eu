@@ -5,9 +5,10 @@
 // container's state, and what an interrupted run cleans up - including when a second signal of the same kind
 // reaches it while it cleans up (issue #423 items 2 and 3 and the reviewer's findings S2 and N2, PRD #297
 // milestone 2, ADR 0036). It pins too that the removal the EXIT trap runs is bounded, so a container runtime that
-// never answers it cannot hold the run for good, that the rm the recipe gives up on is ended with it, and that a
-// deadline outside the range its poll counts is refused before the run starts (issue #449). Each test runs the real
-// recipe of the real Makefile, in a clone of it, with the two
+// never answers it cannot hold the run for good, that the rm the recipe gives up on is ended with it, that the
+// watchdog which bounds that removal leaves no sleep of its own behind, and that a deadline outside the range the
+// recipe's guard takes is refused before the run starts (issue #449). Each test runs the real recipe of the real
+// Makefile, in a clone of it, with the two
 // commands the recipe runs replaced by stand-ins - the container command, the recipe's $(DOCKER), and go - so no
 // test needs a container runtime, a browser or a build of the site, and no test writes anything into the worktree
 // it runs from. The stand-ins answer the way the tools they stand for do, whatever the recipe asks them, so the
@@ -86,6 +87,11 @@ const (
 	// removal: its rm never returns, as the call to a wedged daemon never does. It is the container runtime issue
 	// #449 is about, whose one unanswered call used to hold make test-browser in its EXIT trap for good.
 	dockerModeRmWedged = "rm-wedged"
+	// dockerModePassing is a Chromium that runs, logs devtoolsLogLine on the first read of its log, is reported as
+	// running, and whose rm returns at once: the whole recipe passes, alone. It is dockerModeRunning without the hold
+	// at the rendezvous that only two runs of one worktree can leave, which a test that runs the recipe once to its
+	// end cannot get past.
+	dockerModePassing = "passing"
 )
 
 // One run of make test-browser gets this long before the test stops it: the stand-ins answer in milliseconds, so
@@ -165,9 +171,11 @@ var exitStatusWord = regexp.MustCompile(`(^|[^0-9])3([^0-9]|$)`)
 // devtoolsLogLine; dockerModeDead, one that exited at once with SHIFT2EU_TEST_DOCKER_STATUS after printing
 // SHIFT2EU_TEST_DOCKER_LOG_LINE; dockerModeInspectTrouble, one that runs while the container command fails on the
 // calls SHIFT2EU_TEST_DOCKER_INSPECT_PLAN names and whose log answers nothing for the first
-// SHIFT2EU_TEST_DOCKER_LOG_MISSES calls; dockerModeSilent, one that runs and never logs an address; and
+// SHIFT2EU_TEST_DOCKER_LOG_MISSES calls; dockerModeSilent, one that runs and never logs an address;
 // dockerModeRmWedged, one that runs and answers as dockerModeRunning's does, except that its rm never returns:
-// the container runtime that stopped answering the removal the EXIT trap makes (issue #449). A run in that mode
+// the container runtime that stopped answering the removal the EXIT trap makes (issue #449); and
+// dockerModePassing, one that answers as dockerModeRunning's does without the hold at the rendezvous, so a single
+// run of the recipe passes. A run in that mode
 // leaves a stand-in rm running once the recipe gives up on it, so that rm writes its own pid into the file
 // SHIFT2EU_TEST_DOCKER_RM_PID names before it waits, and the test ends that pid and no other.
 //
@@ -353,6 +361,29 @@ fi
 exec /bin/rm "$@"
 `
 
+// The stand-in sleep's two knobs: the one argument value it records a pid for, and the file it appends that pid to.
+// Every other call goes straight on to the machine's sleep (fakeSleepCommand).
+const (
+	sleepSecondsVariable = "SHIFT2EU_TEST_SLEEP_SECONDS"
+	sleepPidFileVariable = "SHIFT2EU_TEST_SLEEP_PID_FILE"
+)
+
+// fakeSleepCommand stands in for sleep in a sandbox a test asks for it in, so a test can read back the pid of the sleep
+// the recipe's watchdog starts to bound the container's removal (issue #449). Called with the deadline as its one
+// argument - and only then, so the recipe's own sleep 1 and the stand-ins' sleep 0.05 are left alone - it appends its
+// own pid to the file SHIFT2EU_TEST_SLEEP_PID_FILE names, and then hands the call to the machine's own sleep, whose
+// path is filled in below: exec keeps the pid, so the process recorded is the one that sleeps, and the one a recipe
+// that ends the watchdog without ending its sleep leaves behind. Nothing else about the call changes, so the recipe
+// waits exactly as long as it would on the machine's sleep alone. SHIFT2EU_TEST_SLEEP_SECONDS is the argument it
+// records a pid for: the deadline under test, distinct from every other sleep of a run.
+const fakeSleepCommand = `#!/bin/sh
+# The machine's own sleep, resolved when the sandbox is built, since PATH here holds this stand-in first.
+if [ "$#" -eq 1 ] && [ "$1" = "${SHIFT2EU_TEST_SLEEP_SECONDS:?set SHIFT2EU_TEST_SLEEP_SECONDS}" ]; then
+	echo "$$" >> "${SHIFT2EU_TEST_SLEEP_PID_FILE:?set SHIFT2EU_TEST_SLEEP_PID_FILE}" || exit 1
+fi
+exec %s "$@"
+`
+
 // fakeGoCommand stands in for the go command the two targets run: make site's builder, which gets the directory
 // and the archive to write, and make test-browser's smoke test, which gets the bundle and the DevTools address.
 // The builder answers the way ci/sitebuild does: it refuses a -out directory that holds anything, as its
@@ -518,6 +549,18 @@ func (sb *browserRecipeSandbox) writeRemoveStandIn(t *testing.T) {
 	t.Helper()
 
 	writeFileMode(t, filepath.Join(sb.binDir, "rm"), []byte(fakeRemoveCommand), 0o700)
+}
+
+// writeSleepStandIn puts the stand-in sleep first on PATH, so a test can read back the pid of the sleep the recipe's
+// watchdog starts, and of every other sleep the recipe would leave behind (fakeSleepCommand, issue #449). It hands
+// every call on to the machine's own sleep, whose absolute path it resolves here, from the test process's PATH: the
+// stand-in's own PATH is the sandbox's, with the stand-in first, so it could not find that sleep itself.
+func (sb *browserRecipeSandbox) writeSleepStandIn(t *testing.T) {
+	t.Helper()
+
+	realSleep := realTool(t, "sleep")
+
+	writeFileMode(t, filepath.Join(sb.binDir, "sleep"), []byte(fmt.Sprintf(fakeSleepCommand, shQuote(realSleep))), 0o700)
 }
 
 // goTestRecord is one run of the stand-in go test: the bundle directory it was handed, the files that directory
@@ -1044,16 +1087,9 @@ func holdsRemovalAdvice(output, name string) bool {
 // than read off a clock, as the other waits of this file are: the recipe ends the rm it gives up on as it exits, and
 // the machine reaps it a moment later, so the caller looks rather than reads once. Only ESRCH is gone: a process the
 // machine has not reaped yet answers kill -0, and no portable call tells that zombie from one that runs (issue #449).
+// It is waitForGoneAll for one pid.
 func waitForGone(pid int) bool {
-	for poll := 0; poll < gonePolls; poll++ {
-		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
-			return true
-		}
-
-		time.Sleep(gonePollInterval)
-	}
-
-	return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+	return waitForGoneAll([]int{pid}) == nil
 }
 
 // endWedgedRemove is the safety net under the check of TestMakeTestBrowserRecipeBoundsItsContainerRemoval, never that
@@ -1082,17 +1118,240 @@ func (sb *browserRecipeSandbox) endWedgedRemove(t *testing.T, pgid int) {
 	}
 }
 
+// watchdogDeadlineSeconds is the deadline a run of TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind gives the
+// recipe: a value of the guard's range that no other sleep of a run is started with - the recipe's wait loop sleeps 1
+// and every stand-in polls with 0.05 - so the sandbox's stand-in sleep records the watchdog's sleep and no other call
+// (fakeSleepCommand, issue #449).
+const watchdogDeadlineSeconds = "37"
+
+// watchdogSleepRuns is how many runs of make test-browser that test starts at once: the sleep a run leaves behind is a
+// race between the signal the EXIT trap sends and the watchdog's second trap, which only a busy machine loses - the
+// watchdog's subshell, descheduled between starting its sleep and setting the trap that ends it, is the leftover - so
+// the runs go at once, as several agents' runs of one worktree and the package's other tests load the machine anyway,
+// and a recipe that leaves the sleep behind must lose that race on nearly every one of them (issue #449, the
+// reviewer's finding S1). Ten runs keep the test to a few seconds: a passing run is its stand-ins' work alone.
+const watchdogSleepRuns = 10
+
+// recordedSleep is one pid the stand-in sleep recorded of itself: the run of make test-browser that started it, the
+// pid it wrote down, and the process group of that run, which the pid must still be in for the test to end it
+// (CLAUDE.md, rule 10).
+type recordedSleep struct {
+	run  int // the run, counting from 1, in the order the test started them
+	pid  int // the pid the stand-in sleep recorded of itself
+	pgid int // the process group of that run
+}
+
+// TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind pins the reviewer's finding S1 on issue #449: the watchdog the
+// EXIT trap starts to bound the container's removal sleeps out the deadline in a sleep of its own, and the signal the
+// trap sends once the removal returned only ends that sleep where the watchdog's second trap is in place. A signal
+// that arrives after the sleep is started and before that trap fires the watchdog's first trap instead, which exits
+// the watchdog and leaves its sleep running for the rest of the deadline: the removal stays bounded, but the run
+// leaves a process behind, which the reviewer measured on nearly every run of a runtime that answers the removal at
+// once. So a healthy run - its removal returns at once, so its watchdog needs no deadline at all - must leave no sleep
+// of its own behind, whether or not the signal won the race that time.
+//
+// The pids are the sandbox's stand-in sleep's own, recorded by the stand-in itself and checked with waitForGoneAll's
+// polls, as the wedged rm's is: a pid a test found by name could belong to anything (CLAUDE.md, rule 10). The runs go
+// at once, because the race is lost only by a watchdog its machine descheduled: a run alone on an idle machine may
+// start its sleep and set the trap that ends it before the signal is sent, and one busy machine is what makes a recipe
+// with the race fail on nearly every run.
+func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
+	t.Parallel()
+
+	sb := newBrowserRecipeSandbox(t, dockerModePassing)
+	sb.writeSleepStandIn(t)
+
+	var sleeps []recordedSleep
+
+	// The safety net under the check below, never that check itself: a test that failed before it got there must not
+	// leave a sleep the recipe left behind running either. It ends only the pids the stand-in recorded, and only while
+	// they are still in the group of the run that recorded them (CLAUDE.md, rule 10; issue #449).
+	t.Cleanup(func() { sb.endWatchdogSleeps(t, sleeps) })
+
+	// The runs go at once: the race this test is about is lost only by a machine that carries several runs, and the
+	// reviewer measured the leftover on nearly every run of a busy one (issue #449, the reviewer's finding S1).
+	pids := make([]string, watchdogSleepRuns)
+	procs := make([]*browserRecipeProcess, watchdogSleepRuns)
+
+	// Every run is started before any is waited for, so the machine carries all of them at once.
+	for at := range procs {
+		pids[at] = filepath.Join(sb.root, fmt.Sprintf("sleep-%d.pids", at+1))
+
+		env := make(map[string]string, len(sb.env)+2)
+		for name, value := range sb.env {
+			env[name] = value
+		}
+
+		env[sleepSecondsVariable] = watchdogDeadlineSeconds
+		env[sleepPidFileVariable] = pids[at]
+
+		procs[at] = startBrowserMake(t, sb.clone, []string{testBrowserTarget, removalDeadlineVariable + "=" + watchdogDeadlineSeconds}, env)
+	}
+
+	for at, proc := range procs {
+		run := proc.wait(browserRecipeTimeout)
+		output := run.output()
+
+		switch {
+		case run.timedOut:
+			t.Fatalf("run %d of %d of make test-browser was still running after %s and the test stopped it, although its container answered every call and only its EXIT trap's watchdog sleeps %s seconds: a run whose removal returns at once must not wait for its deadline (issue #449)\n%s",
+				at+1, watchdogSleepRuns, browserRecipeTimeout, watchdogDeadlineSeconds, output)
+		case run.err != nil:
+			t.Fatalf("run %d of %d of make test-browser exited with %v although its container, its smoke test and its removal all answered as they do on a working machine (issue #449)\n%s",
+				at+1, watchdogSleepRuns, run.err, output)
+		}
+
+		recorded := readSleepPids(t, pids[at])
+		if len(recorded) > 1 {
+			t.Fatalf("run %d of %d of make test-browser asked the stand-in sleep for the deadline %s %d times, want at most 1: the EXIT trap starts one watchdog, and the watchdog one sleep of %s seconds, so this test cannot tell which sleep a leftover is (issue #449)\n%s",
+				at+1, watchdogSleepRuns, watchdogDeadlineSeconds, len(recorded), watchdogDeadlineSeconds, output)
+		}
+
+		// No pid at all is no leftover either: a signal the trap sends before the watchdog reaches its sleep ends the
+		// watchdog where its first trap is, and no sleep is ever started.
+		if len(recorded) == 0 {
+			continue
+		}
+
+		sleeps = append(sleeps, recordedSleep{run: at + 1, pid: recorded[0], pgid: proc.pgid()})
+	}
+
+	all := make([]int, 0, len(sleeps))
+	for _, sleep := range sleeps {
+		all = append(all, sleep.pid)
+	}
+
+	if len(all) == 0 {
+		t.Fatalf("none of %d runs of make test-browser started the sleep its EXIT trap's watchdog bounds the removal with, so this test cannot tell whether a run leaves one behind: the stand-in sleep records every call with the deadline %s as its argument, and a run whose removal returns at once leaves the watchdog a deadline to sleep out, however soon the trap ends it (issue #449, the reviewer's finding S1)",
+			watchdogSleepRuns, watchdogDeadlineSeconds)
+	}
+
+	left := waitForGoneAll(all)
+	if len(left) == 0 {
+		return
+	}
+
+	var runs []string
+	for _, sleep := range sleeps {
+		for _, pid := range left {
+			if pid == sleep.pid {
+				runs = append(runs, fmt.Sprintf("run %d: pid %d", sleep.run, sleep.pid))
+			}
+		}
+	}
+
+	t.Errorf("%d of the %d runs of make test-browser that started the watchdog's sleep left it behind, %s: a signal the trap sends once the removal returned that the watchdog answers with its first trap leaves the watchdog with a trap of its own that ends that sleep, and without one the sleep runs on for the whole deadline after the run has ended, one process left behind on a healthy run (issue #449, the reviewer's finding S1)",
+		len(left), len(sleeps), strings.Join(runs, ", "))
+}
+
+// readSleepPids reads back the pids the stand-in sleep recorded in file, in the order it appended them, and nothing
+// when there is no such file: a file the stand-in never wrote is a sleep the recipe never asked for.
+func readSleepPids(t *testing.T, file string) []int {
+	t.Helper()
+
+	body, err := os.ReadFile(file)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+
+		t.Fatalf("read the pids the stand-in sleep recorded of itself in %s: %v", file, err)
+	}
+
+	var pids []int
+
+	for _, line := range strings.Split(strings.TrimSuffix(string(body), "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err != nil {
+			t.Fatalf("the stand-in sleep recorded %q in %s as its pid, which is no pid: %v", line, file, err)
+		}
+
+		pids = append(pids, pid)
+	}
+
+	return pids
+}
+
+// waitForGoneAll reports the pids that are still processes after gonePolls polls of gonePollInterval, and nil when
+// every one of them is gone: waitForGone's loop, shared by several pids, so a recipe that leaves processes behind costs
+// the test that loop once rather than once per process. Counted in polls rather than read off a clock, as waitForGone
+// is.
+func waitForGoneAll(pids []int) []int {
+	for poll := 0; poll < gonePolls; poll++ {
+		if running := runningPids(pids); len(running) == 0 {
+			return nil
+		}
+
+		time.Sleep(gonePollInterval)
+	}
+
+	return runningPids(pids)
+}
+
+// runningPids are the pids that are still processes: only ESRCH says gone, a process the machine has not reaped yet
+// answers kill -0, and no portable call tells that zombie from one that runs (issue #449).
+func runningPids(pids []int) []int {
+	var running []int
+
+	for _, pid := range pids {
+		if !errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			running = append(running, pid)
+		}
+	}
+
+	return running
+}
+
+// endWatchdogSleeps is the safety net under the check of TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind, never
+// that check itself: it ends every sleep the stand-in recorded that still runs, and only while it is still in the group
+// of the run that recorded it, as endWedgedRemove ends a wedged rm. A pid the machine has reused for a process of its
+// own belongs to another group and is left alone, and nothing is ever found by name (CLAUDE.md, rule 10; issue #449).
+func (sb *browserRecipeSandbox) endWatchdogSleeps(t *testing.T, sleeps []recordedSleep) {
+	t.Helper()
+
+	for _, sleep := range sleeps {
+		if syscall.Kill(sleep.pid, 0) != nil {
+			continue
+		}
+
+		if group, err := syscall.Getpgid(sleep.pid); err != nil || group != sleep.pgid {
+			continue
+		}
+
+		_ = syscall.Kill(sleep.pid, syscall.SIGKILL)
+
+		if !waitUntil(func() bool { return syscall.Kill(sleep.pid, 0) != nil }) {
+			t.Errorf("the sleep the watchdog of run %d started, pid %d, the pid the stand-in recorded of itself, is still running after the test stopped it: a process the test started must not outlive it (CLAUDE.md, rule 10; issue #449)",
+				sleep.run, sleep.pid)
+		}
+	}
+}
+
+// makeExpansionMarker is what the command inside makeExpansionDeadlineValue prints, and what must reach nothing of a run
+// that refuses the value but the refusal line that quotes it: make expands the value it hands to a child, so a
+// $(shell ...) inside one runs unless the value is read raw and refused before anything runs it (issue #449).
+const makeExpansionMarker = "MAKEINJ"
+
+// makeExpansionDeadlineValue is a deadline make expands where the recipe's shell would otherwise see it: the
+// $(shell ...) in it runs as make hands the value on, prints makeExpansionMarker and leaves the guard the digit 5 - a
+// value of its range, so a recipe that reads the expanded value goes ahead as if the maintainer had asked for five
+// seconds, having run a command the value holds (issue #449).
+const makeExpansionDeadlineValue = "$(shell echo " + makeExpansionMarker + " >&2)5"
+
 // TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange pins the guard issue #449's fix puts ahead of
-// the recipe's traps: the poll of the bounded removal counts whole seconds up to TEST_BROWSER_RM_DEADLINE, so a value
-// outside what that loop can count - an empty one, a word, a negative number, a fraction, a zero that would SIGKILL
-// every removal at once, a leading zero, six digits, or a value that closes the quoting the guard wraps it in and
-// runs a command of its own - would leave the loop with nothing to count to, or count to something no poll reaches,
-// and the run would wait for a removal that never comes, the very hang the bound is there to end. The recipe must
-// refuse such a value before it starts anything: exit status 2, and a line on its standard error naming the value it
-// refused, so a maintainer who mistyped it reads which one the recipe would not take. A value of the range it takes -
-// one to five digits with no leading zero, 1 to 99999 - must still be taken, and the run goes on to start its
-// container; the value is taken as make's command-line assignment or as the environment's, since the recipe's `?=`
-// reads both.
+// the recipe's traps: the watchdog that bounds the removal sleeps TEST_BROWSER_RM_DEADLINE whole seconds, so a value
+// outside the range that sleep can be given - an empty one, a word, a negative number, a fraction, a zero that would
+// SIGKILL every removal at once, a leading zero, six digits, a value that closes the quoting the guard wraps it in and
+// runs a command of its own, or one holding a $(shell ...) that make itself would run - would end the watchdog at once
+// or never, and the removal would be killed before it could return, or not be bounded at all. The recipe must refuse
+// such a value before it starts anything: exit status 2, and a line on its standard error naming the value it refused,
+// so a maintainer who mistyped it reads which one the recipe would not take. A value of the range it takes - one to
+// five digits with no leading zero, 1 to 99999 - must still be taken, and the run goes on to start its container; the
+// value is taken as make's command-line assignment or as the environment's, since the recipe's `?=` reads both.
 //
 // What a run that takes the value does after it starts the container is no part of this test: the sandbox's container
 // is a dead one (dockerModeDead), so such a run ends in a second on it instead of waiting out the minute the recipe
@@ -1109,6 +1368,9 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange(t *testing.
 		// taken says whether the recipe must accept the value and start its container: one to five digits with no
 		// leading zero is, as the recipe's own default of 30 is.
 		taken bool
+		// expandsUnderMake says the value holds a $(shell ...) that make runs as it hands the value on, so the marker
+		// that command prints must reach the output nowhere but in the refusal line quoting the value.
+		expandsUnderMake bool
 	}{
 		{name: "an empty value", value: ""},
 		{name: "a word", value: "x"},
@@ -1116,9 +1378,11 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange(t *testing.
 		{name: "a fraction of a second", value: "1.5"},
 		{name: "a zero, which would end every removal at once", value: "0"},
 		{name: "a leading zero", value: "05"},
-		{name: "six digits, which no poll counts to", value: "100000"},
+		{name: "six digits, above the range the guard takes", value: "100000"},
 		{name: "a value holding a single quote, which runs the command it holds if the recipe pastes it into its shell", value: injectedDeadlineValue},
 		{name: "the same value as the environment's, not make's", value: injectedDeadlineValue, viaEnv: true},
+		{name: "a value holding a shell expansion make runs before the recipe sees the value", value: makeExpansionDeadlineValue, expandsUnderMake: true},
+		{name: "the same value as the environment's, not make's, whose expansion make still runs", value: makeExpansionDeadlineValue, viaEnv: true, expandsUnderMake: true},
 		{name: "one second, the bottom of the range", value: "1", taken: true},
 		{name: "a whole number of seconds", value: "5", taken: true},
 		{name: "the top of the range", value: "99999", taken: true},
@@ -1167,7 +1431,7 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange(t *testing.
 			}
 
 			if status != 2 {
-				t.Errorf("make test-browser exited with status %d, want 2, with %s set to %q %s: the recipe's poll counts whole seconds up to that value, so a value outside the range it can count to must be refused before the run starts, with the status that tells a refusal from a failed run (issue #449)\n%s",
+				t.Errorf("make test-browser exited with status %d, want 2, with %s set to %q %s: the watchdog's sleep takes that many whole seconds, so a value outside the range the guard accepts must be refused before the run starts, with the status that tells a refusal from a failed run (issue #449)\n%s",
 					status, removalDeadlineVariable, tc.value, given, output)
 			}
 
@@ -1185,6 +1449,30 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange(t *testing.
 			if strings.Contains(run.stdout, injectedMarker) {
 				t.Errorf("make test-browser ran the command the value %q holds, printing %q on its standard output, instead of refusing the value: a value outside the range must be refused before the recipe builds anything out of it, or what a maintainer mistypes is a command the recipe runs (issue #449)\n%s",
 					tc.value, injectedMarker, output)
+			}
+
+			// Make is no place for the value to run either: it expands the value as it hands it on, so a $(shell ...)
+			// inside one runs before the recipe's shell sees anything, and the marker that command prints may reach the
+			// output only where the refusal quotes the value it refused (issue #449).
+			if tc.expandsUnderMake {
+				var outside []string
+
+				for _, line := range strings.Split(output, "\n") {
+					if !strings.Contains(line, makeExpansionMarker) {
+						continue
+					}
+
+					if strings.Contains(line, removalDeadlineVariable) && strings.Contains(line, `"`+tc.value+`"`) {
+						continue
+					}
+
+					outside = append(outside, line)
+				}
+
+				if len(outside) != 0 {
+					t.Errorf("make test-browser's output holds %q on %d lines outside the refusal line that quotes %s=%q, the first of them %q: make expands the value it hands on, so the value must be read raw and refused before make or the recipe runs the command it holds (issue #449)\n%s",
+						makeExpansionMarker, len(outside), removalDeadlineVariable, tc.value, outside[0], output)
+				}
 			}
 
 			// The refusal comes before the run starts anything: no container, and no smoke test driving a browser
