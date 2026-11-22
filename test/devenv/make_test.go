@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -38,17 +37,6 @@ func makeProgram(t *testing.T) string {
 	}
 
 	return path
-}
-
-// skipUnderMake381OnMacOS skips t when it runs in CI's make 3.81 job: on macOS, with SHIFT2EU_TEST_MAKE_VERSION
-// set to 3.81. It holds apart a known failure of the Makefile or a host script on the Mac, filed as an issue that
-// reason names, so the job can pass until that issue's fix removes the skip. Everywhere else the test runs.
-func skipUnderMake381OnMacOS(t *testing.T, reason string) {
-	t.Helper()
-
-	if runtime.GOOS == "darwin" && os.Getenv(testMakeVersionEnv) == "3.81" {
-		t.Skipf("skipped under make 3.81 on macOS: %s", reason)
-	}
 }
 
 // TestTestMakeIsTheVersionNamed checks that the make the tests run is the GNU Make release

@@ -1450,10 +1450,9 @@ wait "${job}" || true`
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if tc.noBackgroundJob {
-				skipUnderMake381OnMacOS(t, `the trap's "${!:-}" is still "$!: unbound variable" under bash 3.2, the Mac's /bin/sh, issue #448`)
-			}
-
+			// The window before the loop's first `sleep ... &` must pass under bash 3.2 too, the Mac's /bin/sh,
+			// whose `$!` expansion fails even as "${!:-}" (issue #448): the assertion below refuses the shell's
+			// report of the unset parameter, and release_lock refuses a trap that aborted before its end.
 			sb := newSandbox(t)
 			harness := filepath.Join(sb.root, "window.sh")
 			sleepPidFile := filepath.Join(sb.root, "sleep.pid")

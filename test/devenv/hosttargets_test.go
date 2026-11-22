@@ -251,12 +251,32 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 			layout: workspaceRepoHolding(func(l *hostLayout) string { return filepath.Join(l.sb.workspaceRoot(), "another-clone") }),
 		},
 		{
-			name:             "the workspace is inside the checkout make runs from",
-			skipOnMacMake381: "the host-clone guard fails open for a workspace that does not exist under a symlinked path (macOS /var is /private/var), issue #447",
+			name: "the workspace is inside the checkout make runs from",
 			layout: func(t *testing.T, l *hostLayout) string {
 				t.Helper()
 
 				l.env["WORKSPACE_REPO"] = filepath.Join(l.root, "ws", hostTargetInstance)
+
+				return l.root
+			},
+		},
+		{
+			// Issue #447: the workspace does not exist yet, and its path runs through a symlink into the checkout
+			// make runs from - macOS's /var is /private/var, so every workspace the VM has not created yet is
+			// reached that way there. The guard must resolve the nearest existing ancestor of the path and append
+			// the rest, or the workspace is compared as written against REPO_ROOT's resolved form, the two never
+			// match, and the guard fails open: the target runs instead of refusing. The symlink is the test's own,
+			// so the case reproduces on Linux, where /var is no symlink.
+			name: "the workspace is inside the checkout make runs from, through a symlinked parent, and does not exist",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				link := filepath.Join(l.sb.root, "into-the-checkout")
+				if err := os.Symlink(l.root, link); err != nil {
+					t.Fatalf("symlink %s to %s: %v", link, l.root, err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(link, "ws", hostTargetInstance)
 
 				return l.root
 			},
@@ -438,10 +458,6 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			if tc.skipOnMacMake381 != "" {
-				skipUnderMake381OnMacOS(t, tc.skipOnMacMake381)
-			}
-
 			for _, run := range tc.runs() {
 				t.Run(run.name, func(t *testing.T) {
 					t.Parallel()
@@ -531,9 +547,6 @@ type refusalCase struct {
 	// emptyStdout says the run prints nothing on stdout: no recipe line, no prerequisite and no other goal of
 	// its command line ran.
 	emptyStdout bool
-	// skipOnMacMake381, when set, names the issue of a known failure of the case on macOS: CI's make 3.81 job
-	// skips the case's runs there (skipUnderMake381OnMacOS), and every other run of the tests keeps them.
-	skipOnMacMake381 string
 }
 
 // runs is the runs the case makes: one whole command line, or every host target with the case's flags.
