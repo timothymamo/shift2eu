@@ -8,13 +8,23 @@
 // Every path the layout puts something of its own at is checked as an entry: a
 // symbolic link there - the state area's home/ in particular, which holds the
 // CLI's configuration and transcripts - is a layout the model could read from
-// elsewhere, so it is refused rather than followed. The library takes a root
-// standing in for /, so a test lays the tree out under a temporary root.
+// elsewhere, so it is refused rather than followed. So is an entry of a type a
+// checkout copy and the checks' results never hold, a FIFO or a socket among
+// them. The library takes a root standing in for /, so a test lays the tree out
+// under a temporary root.
+//
+// The checkout copy's git configuration is an allow list (issue #277, round D
+// finding 1): the keys and sections a clone carries pass, in whatever case git
+// reads them, and every other key, every key a line the parser cannot place
+// yields, and the three files git reads a configuration or a repository out of
+// beside .git/config are refused.
 package audit_test
 
 import (
+	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/timothymamo/shift2eu/ci/internal/audit"
@@ -30,6 +40,10 @@ const writeBitsOfEveryone os.FileMode = 0o222
 // every git command the wrapper runs reads (issue #277, review R14).
 var gitConfig = []string{"checkout", ".git", "config"}
 
+// gitDir is the checkout copy's own git directory, which holds that
+// configuration and the other files git reads a repository out of.
+var gitDir = []string{"checkout", ".git"}
+
 // benignGitConfig is the configuration a clone leaves: nothing the layout
 // refuses.
 const benignGitConfig = `[core]
@@ -37,6 +51,68 @@ const benignGitConfig = `[core]
 	filemode = true
 	bare = false
 	logallrefupdates = true
+`
+
+// checkoutGitConfig is the configuration actions/checkout writes for the clone
+// it makes with persist-credentials: false (issue #277, round D finding 1):
+// the keys of a fresh clone, and no credential, no program and no include.
+const checkoutGitConfig = `[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+[remote "origin"]
+	url = https://github.com/example/repo
+	fetch = +refs/heads/*:refs/remotes/origin/*
+[gc]
+	auto = 0
+[branch "main"]
+	remote = origin
+	merge = refs/heads/main
+`
+
+// mixedCaseGitConfig is that configuration in the case git reads it in: a
+// section and a key are matched case-insensitively, so the allow list is too.
+const mixedCaseGitConfig = `[CORE]
+	RepositoryFormatVersion = 0
+	Filemode = true
+	Bare = false
+	LogAllRefUpdates = true
+[Remote "origin"]
+	Url = https://github.com/example/repo
+	Fetch = +refs/heads/*:refs/remotes/origin/*
+[GC]
+	Auto = 0
+[BRANCH "main"]
+	Remote = origin
+	Merge = refs/heads/main
+`
+
+// commentedGitConfig is the configuration with the two forms of comment git
+// reads and the blank lines a config may hold between its sections.
+const commentedGitConfig = `# the checkout's own configuration
+; the same comment in the other form
+
+[core]
+	repositoryformatversion = 0
+
+	filemode = true
+`
+
+// partialCloneGitConfig is the configuration of a partial clone: the two keys
+// git writes beside url and fetch, and the object format extensions names.
+const partialCloneGitConfig = `[core]
+	repositoryformatversion = 1
+	filemode = true
+	bare = false
+	logallrefupdates = true
+[extensions]
+	objectformat = sha1
+[remote "origin"]
+	url = https://github.com/example/repo
+	fetch = +refs/heads/*:refs/remotes/origin/*
+	promisor = true
+	partialclonefilter = blob:none
 `
 
 // The audit directory's paths under a root, each a part of the layout.
@@ -66,6 +142,48 @@ func TestCheckLayoutTakesTheADRsDirectory(t *testing.T) {
 
 	if err := audit.CheckLayout(root); err != nil {
 		t.Fatalf("CheckLayout(%q) error = %v, want none: the tree is the one ADR 0040 lays out", root, err)
+	}
+}
+
+// TestCheckLayoutTakesTheCheckoutsGitConfig pins the other half of the git
+// config check (issue #277, round D finding 1): the configuration a checkout
+// carries is an allow list of keys and sections, and the configuration
+// actions/checkout writes with persist-credentials: false passes whole, in
+// whatever case git reads it in, with the comments and blank lines a config may
+// hold, and with no config at all.
+func TestCheckLayoutTakesTheCheckoutsGitConfig(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// mutate lays the configuration the case is about in the checkout copy.
+		mutate func(t *testing.T, root string)
+	}{
+		{name: "the config actions/checkout writes", mutate: gitConfigWith(checkoutGitConfig)},
+		{name: "the same config in another case", mutate: gitConfigWith(mixedCaseGitConfig)},
+		{name: "the config with comments and blank lines", mutate: gitConfigWith(commentedGitConfig)},
+		{name: "a partial clone's remote", mutate: gitConfigWith(partialCloneGitConfig)},
+		{
+			name: "no config at all",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				removeAll(t, pathOf(root, gitConfig))
+			}),
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			root := t.TempDir()
+			writeAuditTree(t, root)
+			tc.mutate(t, root)
+
+			if err := audit.CheckLayout(root); err != nil {
+				t.Errorf("CheckLayout(%q) = %v, want none: %s is a configuration a checkout carries", root, err, tc.name)
+			}
+		})
 	}
 }
 
@@ -169,6 +287,28 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 			}),
 		},
 
+		// The walk meets two entry types a checkout copy and the checks' results
+		// never hold, and refuses them: a FIFO and a socket are read or written
+		// by another process, so neither is a file the audit reads (issue #277,
+		// round D finding 3). Both are laid down read-only, so the type is the
+		// one defect the case names.
+		{
+			name: "the checkout copy holds a FIFO",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				makeFIFO(t, pathOf(root, []string{"checkout", "pipe"}))
+			}),
+		},
+		{
+			// A short name: the socket's path is limited to 108 bytes. A socket
+			// the checks' results hold in place of a report is the same defect.
+			name: "a socket",
+			mutate: mutateTree(checks, func(t *testing.T, root string) {
+				t.Helper()
+				makeSocket(t, pathOf(root, []string{"checks", "sock"}))
+			}),
+		},
+
 		// The checkout copy's .git/config is the one local git configuration
 		// the wrapper's git reads: a key or a section that names another
 		// program, another file or a credential gives the containment away
@@ -213,6 +353,89 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 			name:   "the git config holds a diff driver",
 			mutate: gitConfigWith("[diff \"words\"]\n\ttextconv = /srv/audit/work/textconv\n"),
 		},
+
+		// The check is an allow list, not a list of the keys a report named: the
+		// keys and sections a checkout's config holds are the whole rule, so
+		// every other key is refused whatever its name says (issue #277, round D
+		// finding 1).
+		{
+			name:   "the git config sets include.path",
+			mutate: gitConfigWith("[include]\n\tpath = /srv/audit/work/extra\n"),
+		},
+		{
+			name:   "the git config sets an includeIf",
+			mutate: gitConfigWith("[includeIf \"gitdir:/srv/audit/work/\"]\n\tpath = /srv/audit/work/extra\n"),
+		},
+		{
+			name:   "the git config sets gpg.program",
+			mutate: gitConfigWith("[gpg]\n\tprogram = /srv/audit/work/gpg\n"),
+		},
+		{
+			name:   "the git config sets gpg.ssh.program",
+			mutate: gitConfigWith("[gpg \"ssh\"]\n\tprogram = /srv/audit/work/gpg-ssh\n"),
+		},
+		{
+			name:   "the git config sets extensions.worktreeConfig",
+			mutate: gitConfigWith("[extensions]\n\tworktreeConfig = true\n"),
+		},
+		{
+			name:   "the git config sets an http section's extraheader",
+			mutate: gitConfigWith("[http \"https://example.com\"]\n\textraHeader = AUTHORIZATION: basic c2VjcmV0\n"),
+		},
+		{
+			name:   "the git config holds a merge driver",
+			mutate: gitConfigWith("[merge \"theirs\"]\n\tdriver = /srv/audit/work/merge\n"),
+		},
+		{
+			name:   "the git config sets core.pager",
+			mutate: gitConfigWith("[core]\n\tpager = /srv/audit/work/pager\n"),
+		},
+		{
+			name:   "the git config sets a key no report named",
+			mutate: gitConfigWith("[user]\n\tname = the audit's model\n"),
+		},
+
+		// The parser places every line of a form git writes and refuses the
+		// rest, rather than guessing what a line it cannot place means (issue
+		// #277, round D finding 1).
+		{
+			name:   "the git config begins with a UTF-8 BOM",
+			mutate: gitConfigWith("\ufeff[core]\n\trepositoryformatversion = 0\n"),
+		},
+		{
+			name:   "the git config puts a key on the header's line",
+			mutate: gitConfigWith("[core] filemode = true\n"),
+		},
+		{
+			name:   "the git config puts two headers on one line",
+			mutate: gitConfigWith("[core][gc]\n\tauto = 0\n"),
+		},
+		{
+			name:   "the git config holds a subsection with a ] and a key after it",
+			mutate: gitConfigWith("[branch \"a]b\"] remote = origin\n"),
+		},
+		{
+			name:   "the git config leaves a subsection's quote open",
+			mutate: gitConfigWith("[branch \"main]\n\tremote = origin\n"),
+		},
+		{
+			name:   "the git config continues a value on the next line",
+			mutate: gitConfigWith("[core]\n\texcludesfile = /srv/audit/work/ignore\\\n"),
+		},
+		{
+			name:   "the git config holds a bare word",
+			mutate: gitConfigWith("filemode true\n"),
+		},
+
+		// The .git directory holds one config file: a worktree's own, a
+		// common-dir pointer and a gitdir pointer are the other files git reads a
+		// configuration or a repository out of, and each is refused by its
+		// presence, in any file type (issue #277, round D finding 1).
+		{name: "the checkout copy's .git holds a config.worktree", mutate: gitFileIn("config.worktree", "[core]\n\tbare = false\n")},
+		{name: "the checkout copy's .git holds a commondir", mutate: gitFileIn("commondir", "../state\n")},
+		{name: "the checkout copy's .git holds a gitdir", mutate: gitFileIn("gitdir", "/srv/audit/state/elsewhere\n")},
+		{name: "the checkout copy's .git holds a commondir as a link", mutate: gitLinkIn("commondir", "../.claude")},
+
 		{
 			name: "the checkout copy's .git is a file",
 			mutate: mutateTree(checkout, func(t *testing.T, root string) {
@@ -315,6 +538,58 @@ func gitConfigWith(body string) func(t *testing.T, root string) {
 		removeAll(t, pathOf(root, gitConfig))
 		writeFile(t, pathOf(root, gitConfig), body, 0o444)
 	})
+}
+
+// gitFileIn returns a mutation that writes body to name inside the checkout
+// copy's .git directory, mode 0444: one of the files git reads a configuration,
+// a common directory or a repository out of, which the layout refuses beside
+// .git/config.
+func gitFileIn(name, body string) func(t *testing.T, root string) {
+	return mutateTree(checkout, func(t *testing.T, root string) {
+		t.Helper()
+		writeFile(t, filepath.Join(pathOf(root, gitDir), name), body, 0o444)
+	})
+}
+
+// gitLinkIn returns a mutation that makes name inside the checkout copy's .git
+// directory a symbolic link to target: the same file in another form, which the
+// layout refuses too.
+func gitLinkIn(name, target string) func(t *testing.T, root string) {
+	return mutateTree(checkout, func(t *testing.T, root string) {
+		t.Helper()
+		makeSymlink(t, target, filepath.Join(pathOf(root, gitDir), name))
+	})
+}
+
+// makeFIFO makes a FIFO at path, mode 0444: an entry of a type no checkout copy
+// holds, laid down read-only so that the type is the one defect a case names.
+func makeFIFO(t *testing.T, path string) {
+	t.Helper()
+
+	if err := syscall.Mkfifo(path, 0o444); err != nil {
+		t.Fatalf("make a FIFO at %s: %v", path, err)
+	}
+
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatalf("chmod the FIFO %s: %v", path, err)
+	}
+}
+
+// makeSocket makes a unix socket at path, mode 0444, and closes the listener
+// once the test is done: the socket's file is the entry a case names.
+func makeSocket(t *testing.T, path string) {
+	t.Helper()
+
+	listener, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("make a socket at %s: %v", path, err)
+	}
+
+	t.Cleanup(func() { _ = listener.Close() })
+
+	if err := os.Chmod(path, 0o444); err != nil {
+		t.Fatalf("chmod the socket %s: %v", path, err)
+	}
 }
 
 // unlock returns a mutation that makes the tree at parts writable, applies mutate
