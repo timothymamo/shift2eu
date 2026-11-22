@@ -24,10 +24,11 @@ const signalRuleTitle = "**Signal only what you started.**"
 // names too.
 var signalRuleCommands = []string{"pgrep", "pidof", "pkill"}
 
-// The two parts of the rule below its title and its list of commands are named
-// here the way a failure names them, so the table test can compare against the
-// same words.
+// The parts of the rule below its title and its list of commands are named here
+// the way a failure names them, so the table test can compare against the same
+// words.
 const (
+	byNameBanName         = "the ban on picking a process by its name (pgrep, pidof, pkill)"
 	processGroupBanName   = "the process-group ban"
 	pidStartTimeCheckName = "the pid and start-time check (ps -o lstart=,args=)"
 )
@@ -355,6 +356,11 @@ func TestSignalRulePartsAreNamedWhenMissing(t *testing.T) {
 		{
 			name:        "the rule is unchanged",
 			wantMissing: nil,
+		},
+		{
+			name:        "the ban on picking a process by its name is gone",
+			remove:      "      - pick a process to signal by its name (`pgrep`, `pidof`, `pkill`);\n",
+			wantMissing: []string{byNameBanName},
 		},
 		{
 			name:        "the process-group ban is gone",
