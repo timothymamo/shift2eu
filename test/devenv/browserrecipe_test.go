@@ -521,7 +521,9 @@ func ignoresTrappedSignals(statement string) bool {
 
 // signalTrapStatement finds one trap of a recipe that names a single one of the three signals. The lone name before the
 // semicolon is what keeps a trap that lists all three, such as the EXIT trap's own ignore inside its action, from being
-// read as the trap for one of them.
+// read as the trap for one of them. It sees only the form the recipe writes: an action in single quotes, one signal, a
+// semicolon straight after its name. A re-set written another way - trap - TERM to clear it, a double-quoted action, &&
+// before the next statement instead of ; - goes unseen, and the traps the caller counts are then short of the re-sets.
 var signalTrapStatement = regexp.MustCompile(`trap '([^']*)' (HUP|INT|TERM);`)
 
 // signalTrapActions returns the action of every trap the recipe sets for one signal - what the shell runs when that
