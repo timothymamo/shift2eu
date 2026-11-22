@@ -1145,12 +1145,13 @@ func (sb *browserRecipeSandbox) endWedgedRemove(t *testing.T, pgid int) {
 // (fakeSleepCommand, issue #449).
 const watchdogDeadlineSeconds = "37"
 
-// watchdogSleepRuns is how many runs of make test-browser that test starts at once: the sleep a run leaves behind is a
-// race between the signal the EXIT trap sends and the watchdog's second trap, which only a busy machine loses - the
-// watchdog's subshell, descheduled between starting its sleep and setting the trap that ends it, is the leftover - so
-// the runs go at once, as several agents' runs of one worktree and the package's other tests load the machine anyway,
-// and a recipe that leaves the sleep behind must lose that race on nearly every one of them (issue #449, the
-// reviewer's finding S1). Ten runs keep the test to a few seconds: a passing run is its stand-ins' work alone.
+// watchdogSleepRuns is how many runs of make test-browser that test starts at once: whether a run leaves its watchdog's
+// sleep behind turns on where the USR1 the EXIT trap sends lands in the watchdog's start-up - before the watchdog sets
+// its trap, or after it sets it but before its sleep's pid is known - and only a busy machine puts the signal in those
+// windows, so the runs go at once, as several agents' runs of one worktree and the package's other tests load the
+// machine anyway, and a recipe whose watchdog exits on the USR1 without ending its sleep must show up on nearly every
+// one of them (issue #449, the reviewer's finding S1). Ten runs keep the test to a few seconds: a passing run is its
+// stand-ins' work alone.
 const watchdogSleepRuns = 10
 
 // recordedSleep is one pid the stand-in sleep recorded of itself: the run of make test-browser that started it, the
@@ -1163,19 +1164,18 @@ type recordedSleep struct {
 }
 
 // TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind pins the reviewer's finding S1 on issue #449: the watchdog the
-// EXIT trap starts to bound the container's removal sleeps out the deadline in a sleep of its own, and the signal the
-// trap sends once the removal returned only ends that sleep where the watchdog's second trap is in place. A signal
-// that arrives after the sleep is started and before that trap fires the watchdog's first trap instead, which exits
-// the watchdog and leaves its sleep running for the rest of the deadline: the removal stays bounded, but the run
-// leaves a process behind, which the reviewer measured on nearly every run of a runtime that answers the removal at
-// once. So a healthy run - its removal returns at once, so its watchdog needs no deadline at all - must leave no sleep
-// of its own behind, whether or not the signal won the race that time.
+// EXIT trap starts to bound the container's removal sleeps out the deadline in a sleep of its own, and the USR1 the
+// trap sends once the removal returned must end that sleep. A watchdog that starts its sleep before it sets the trap
+// that ends it, and exits on a USR1 that reaches it in between, leaves its sleep running for the rest of the deadline:
+// the removal stays bounded, but the run leaves a process behind, which the reviewer measured on nearly every run of a
+// runtime that answers the removal at once. So a healthy run - its removal returns at once, so its watchdog needs no
+// deadline at all - must leave no sleep of its own behind, wherever the signal lands in the watchdog's start-up.
 //
 // The pids are the sandbox's stand-in sleep's own, recorded by the stand-in itself and checked with waitForGoneAll's
 // polls, as the wedged rm's is: a pid a test found by name could belong to anything (CLAUDE.md, rule 10). The runs go
-// at once, because the race is lost only by a watchdog its machine descheduled: a run alone on an idle machine may
-// start its sleep and set the trap that ends it before the signal is sent, and one busy machine is what makes a recipe
-// with the race fail on nearly every run.
+// at once, because only a machine carrying several of them puts the signal in the windows above: a run alone on an
+// idle machine may have its watchdog trap set and its sleep's pid known before the signal is sent, and one busy machine
+// is what makes a recipe that exits on the signal there leave the sleep behind on nearly every run.
 func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 	t.Parallel()
 
@@ -1228,8 +1228,9 @@ func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 				at+1, watchdogSleepRuns, watchdogDeadlineSeconds, len(recorded), watchdogDeadlineSeconds, output)
 		}
 
-		// No pid at all is no leftover either: a signal the trap sends before the watchdog reaches its sleep ends the
-		// watchdog where its first trap is, and no sleep is ever started.
+		// No pid at all is no leftover either: a USR1 that reaches the watchdog before its trap is set, or before its
+		// sleep's pid is known, leaves no sleep running - the first ends the watchdog by the default action, the second
+		// by the watchdog's own flag - so there is nothing to check.
 		if len(recorded) == 0 {
 			continue
 		}
@@ -1261,7 +1262,7 @@ func TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind(t *testing.T) {
 		}
 	}
 
-	t.Errorf("%d of the %d runs of make test-browser that started the watchdog's sleep left it behind, %s: a signal the trap sends once the removal returned that the watchdog answers with its first trap leaves the watchdog with a trap of its own that ends that sleep, and without one the sleep runs on for the whole deadline after the run has ended, one process left behind on a healthy run (issue #449, the reviewer's finding S1)",
+	t.Errorf("%d of the %d runs of make test-browser that started the watchdog's sleep left it behind, %s: a watchdog that exits on the USR1 the trap sends once the removal returned, without ending its sleep, leaves it running for the whole deadline after the run has ended, one process left behind on a healthy run (issue #449, the reviewer's finding S1)",
 		len(left), len(sleeps), strings.Join(runs, ", "))
 }
 
@@ -1360,9 +1361,9 @@ const rmExits137DeadlineSeconds = "99999"
 
 // rmExits137Timeout is how long that run gets before the test stops it: the stand-ins answer in milliseconds, so a
 // recipe that keeps its own status and ends its watchdog with it ends inside this easily, where one that waits
-// rmExits137DeadlineSeconds out is stopped here rather than at browserRecipeTimeout - the behaviour this test is
-// missing today costs it 15 seconds instead of the minute browserRecipeTimeout gives every other run (issue #449, the
-// auditor's finding S1). It is this test's own guard and no duration the test asserts on.
+// rmExits137DeadlineSeconds out is stopped here rather than at browserRecipeTimeout - a recipe that waits the deadline
+// out costs this test 15 seconds, not browserRecipeTimeout (issue #449, the auditor's finding S1). It is this test's
+// own guard and no duration the test asserts on.
 const rmExits137Timeout = 15 * time.Second
 
 // TestMakeTestBrowserRecipeStopsItsWatchdogWhenTheRemovalExits137 pins the auditor's finding S1 on issue #449: the EXIT
@@ -1432,8 +1433,8 @@ func TestMakeTestBrowserRecipeStopsItsWatchdogWhenTheRemovalExits137(t *testing.
 
 	// No pid at all is no leftover either, as in TestMakeTestBrowserRecipeLeavesNoWatchdogSleepBehind: the removal
 	// here returns at once with a status of its own, so the trap sends its watchdog USR1 at once, and a watchdog whose
-	// machine descheduled it between the trap it set first and its sleep's pid is ended before the stand-in sleep
-	// records anything - the outcome this test wants, and one the sleep's pids cannot show (issue #449).
+	// machine descheduled it between setting its trap and learning its sleep's pid is ended by that trap before the
+	// stand-in sleep records anything - the outcome this test wants, and one the sleep's pids cannot show (issue #449).
 	if len(recorded) == 0 {
 		return
 	}
