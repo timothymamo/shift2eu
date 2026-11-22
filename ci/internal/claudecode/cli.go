@@ -141,6 +141,18 @@ type Config struct {
 	// SearchPath is the CLI's PATH. Empty is cliPath.
 	SearchPath string
 
+	// SystemPromptDir is the directory the system prompt's file is written
+	// into, an absolute path to a directory that exists, which the caller
+	// controls; the file is removed after the run. Empty is a fresh temporary
+	// directory of the launcher's own under os.TempDir(), removed after the
+	// run (the reviewer's launch).
+	SystemPromptDir string
+
+	// Redact are values, beside the token, that the launcher's error never
+	// quotes: each stands in for "[redacted]" in the excerpt of the CLI's
+	// text. An empty value is ignored.
+	Redact []string
+
 	// Transcript, when set, gets every byte the CLI prints on stdout: the run
 	// uses --output-format stream-json --verbose, and its answer is the last
 	// result element of the stream. Nil is --output-format json, one result
@@ -156,8 +168,10 @@ var efforts = []string{"low", "medium", "high", "xhigh", "max"}
 // acceptEdits and every other mode are refused.
 var permissionModes = []string{"dontAsk", "plan"}
 
-// reservedEnv are the variables the launcher sets itself, which a config's Env
-// never sets: the token, HOME, PATH and the four switches.
+// reservedEnv are the variables a config's Env never sets: the ones the
+// launcher sets itself (the token, HOME, PATH and the four switches), and the
+// ones that would point the CLI at another credential, endpoint, proxy or
+// managed-settings file, or load code into its process.
 var reservedEnv = []string{
 	"CLAUDE_CODE_OAUTH_TOKEN",
 	"HOME",
@@ -166,7 +180,21 @@ var reservedEnv = []string{
 	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
 	"DISABLE_TELEMETRY",
 	"DISABLE_ERROR_REPORTING",
+	"ANTHROPIC_API_KEY",
+	"ANTHROPIC_AUTH_TOKEN",
+	"ANTHROPIC_BASE_URL",
+	"CLAUDE_CODE_MANAGED_SETTINGS_PATH",
+	"NODE_OPTIONS",
+	"LD_PRELOAD",
+	"LD_LIBRARY_PATH",
+	"HTTPS_PROXY",
+	"HTTP_PROXY",
 }
+
+// reservedEnvPrefix starts the names of the switches that move the CLI to
+// another provider (CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_USE_VERTEX, ...),
+// which a config's Env never sets either.
+const reservedEnvPrefix = "CLAUDE_CODE_USE_"
 
 // CLI asks a model through one run of the Claude Code CLI per Ask, `claude
 // -p`, on the maintainer's Claude subscription (ADR 0033). It never puts the
@@ -245,7 +273,7 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 		return "", fmt.Errorf("%w: cancelled before the Claude Code CLI ran: %w", ErrModel, err)
 	}
 
-	dirs, err := newCLIDirs(c.cfg.WorkDir == "", c.cfg.Home == "")
+	dirs, err := newCLIDirs(c.cfg.WorkDir == "", c.cfg.Home == "", c.cfg.SystemPromptDir == "")
 	if err != nil {
 		return "", err
 	}
@@ -260,10 +288,11 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 		home = c.cfg.Home
 	}
 
-	systemFile := dirs.system + "/system-prompt.md"
-	if err := os.WriteFile(systemFile, []byte(p.System), 0o600); err != nil {
-		return "", fmt.Errorf("%w: write the system prompt file: %w", ErrModel, err)
+	systemFile, err := writeSystemPrompt(dirs.system, c.cfg.SystemPromptDir, p.System)
+	if err != nil {
+		return "", err
 	}
+	defer os.Remove(systemFile)
 
 	runCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
@@ -449,6 +478,7 @@ func (c *CLI) checkLaunch() error {
 	for _, dir := range []struct{ name, path string }{
 		{"working directory", c.cfg.WorkDir},
 		{"HOME", c.cfg.Home},
+		{"system prompt's directory", c.cfg.SystemPromptDir},
 	} {
 		if dir.path == "" {
 			continue
@@ -470,8 +500,8 @@ func (c *CLI) checkLaunch() error {
 			return fmt.Errorf("%w: an environment entry of the CLI is not NAME=VALUE", ErrModel)
 		}
 
-		if contains(reservedEnv, name) {
-			return fmt.Errorf("%w: the environment entry %s is one the launcher sets itself", ErrModel, name)
+		if contains(reservedEnv, name) || strings.HasPrefix(name, reservedEnvPrefix) {
+			return fmt.Errorf("%w: the environment entry %s is one the launcher reserves", ErrModel, name)
 		}
 	}
 
@@ -655,8 +685,10 @@ func (c *CLI) stderrNote(stderr *cappedBuffer) string {
 // excerpt returns text with the token redacted, cut to maxCLIExcerpt bytes at
 // a rune boundary.
 func (c *CLI) excerpt(text string) string {
-	if c.cfg.Token != "" {
-		text = strings.ReplaceAll(text, c.cfg.Token, redacted)
+	for _, secret := range append([]string{c.cfg.Token}, c.cfg.Redact...) {
+		if secret != "" {
+			text = strings.ReplaceAll(text, secret, redacted)
+		}
 	}
 
 	text = strings.ToValidUTF8(text, "�")
@@ -809,10 +841,40 @@ type cliDirs struct {
 	system string
 }
 
-// newCLIDirs makes the run's directories, each fresh and empty: the system
-// prompt's always, the working directory when work is set and HOME when home
-// is.
-func newCLIDirs(work, home bool) (cliDirs, error) {
+// writeSystemPrompt writes the system prompt into a file of its own: under
+// callerDir when the config names one, with a fresh name, else in ownDir, the
+// launcher's own temporary directory. It returns the file's path.
+func writeSystemPrompt(ownDir, callerDir, system string) (string, error) {
+	if callerDir == "" {
+		path := ownDir + "/system-prompt.md"
+		if err := os.WriteFile(path, []byte(system), 0o600); err != nil {
+			return "", fmt.Errorf("%w: write the system prompt file: %w", ErrModel, err)
+		}
+
+		return path, nil
+	}
+
+	file, err := os.CreateTemp(callerDir, "system-prompt-*.md")
+	if err != nil {
+		return "", fmt.Errorf("%w: write the system prompt file: %w", ErrModel, err)
+	}
+
+	_, writeErr := file.WriteString(system)
+	closeErr := file.Close()
+
+	if err := errors.Join(writeErr, closeErr); err != nil {
+		_ = os.Remove(file.Name())
+
+		return "", fmt.Errorf("%w: write the system prompt file: %w", ErrModel, err)
+	}
+
+	return file.Name(), nil
+}
+
+// newCLIDirs makes the run's directories, each fresh and empty: the working
+// directory when work is set, HOME when home is and the system prompt's when
+// system is.
+func newCLIDirs(work, home, system bool) (cliDirs, error) {
 	var dirs cliDirs
 
 	for _, d := range []struct {
@@ -822,7 +884,7 @@ func newCLIDirs(work, home bool) (cliDirs, error) {
 	}{
 		{&dirs.work, "claudecode-cwd-", work},
 		{&dirs.home, "claudecode-home-", home},
-		{&dirs.system, "claudecode-system-", true},
+		{&dirs.system, "claudecode-system-", system},
 	} {
 		if !d.wanted {
 			continue
