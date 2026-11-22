@@ -128,7 +128,10 @@ func (r claudeRecording) args(t *testing.T) []string {
 	return strings.Split(strings.TrimSuffix(recorded, "\n"), "\n")
 }
 
-// env returns the environment the fake CLI ran with, as name → value.
+// env returns the environment the fake CLI ran with, as name → value. A
+// failure message of this file names a variable, never its value: a regression
+// could put a credential of the caller's in one, and a test log is no place for
+// it (CLAUDE.md rule 3, issue #277, round F finding 4).
 func (r claudeRecording) env(t *testing.T) map[string]string {
 	t.Helper()
 
@@ -141,7 +144,7 @@ func (r claudeRecording) env(t *testing.T) map[string]string {
 
 		name, value, ok := strings.Cut(line, "=")
 		if !ok {
-			t.Fatalf("the fake CLI's env holds the line %q, want name=value", line)
+			t.Fatalf("the fake CLI's environment holds a line for %q that is no name=value pair, want name=value", name)
 		}
 
 		values[name] = value
@@ -149,6 +152,26 @@ func (r claudeRecording) env(t *testing.T) map[string]string {
 
 	return values
 }
+
+// launcherVariableNames are the names the launcher sets in the CLI's
+// environment: the ADR's allow list and the three entries the audit adds.
+var launcherVariableNames = map[string]bool{
+	"CLAUDE_CODE_OAUTH_TOKEN": true,
+	"HOME":                    true,
+	"PATH":                    true,
+	"DISABLE_AUTOUPDATER":     true,
+	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": true,
+	"DISABLE_TELEMETRY":                        true,
+	"DISABLE_ERROR_REPORTING":                  true,
+	"TMPDIR":                                   true,
+	"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB":         true,
+	"SHIFT2EU_AUDIT_CANARY":                    true,
+}
+
+// shellVariableNames are the names a POSIX shell sets for itself in the
+// environment it hands the commands it runs, beside the ones it inherited: the
+// fake CLI is the shell script newFakeClaudeCLI writes.
+var shellVariableNames = map[string]bool{"PWD": true, "SHLVL": true, "_": true, "OLDPWD": true}
 
 // valueAfter returns the argument that follows flag in args.
 func valueAfter(args []string, flag string) (string, bool) {
@@ -186,18 +209,15 @@ func TestAskRunsTheConfiguredLaunch(t *testing.T) {
 		SafeModeOff:        true,
 		WorkDir:            work,
 		Home:               home,
-		Env:                []string{"TMPDIR=" + filepath.Join(home, "tmp")},
-		SearchPath:         "/usr/bin:/bin",
-		Transcript:         &transcript,
-		Timeout:            30 * time.Second,
+		Env: []string{
+			"TMPDIR=" + filepath.Join(home, "tmp"),
+			"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
+			"SHIFT2EU_AUDIT_CANARY=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		},
+		SearchPath: "/usr/bin:/bin",
+		Transcript: &transcript,
+		Timeout:    30 * time.Second,
 	})
-
-	// A canary of the test's own: the launcher's environment is built from its
-	// allow list, so no variable of this process reaches the CLI (CLAUDE.md rule
-	// 3). The test states it rather than setting one: tests-no-process-state
-	// refuses t.Setenv, and an inherited variable would have to be one of the
-	// allow list's names to appear at all.
-	const canary = "SHIFT2EU_TEST_CANARY"
 
 	prompt := claudecode.Prompt{System: "the audit's skill, appended to the CLI's own prompt", User: "the audit's fixed user prompt"}
 
@@ -218,22 +238,32 @@ func TestAskRunsTheConfiguredLaunch(t *testing.T) {
 		t.Errorf("the CLI ran in %q, want the config's working directory %q", pwd, work)
 	}
 
+	// The CLI's environment is the launcher's allow list and the shell's own
+	// variables, and nothing else: no name of this process's environment is
+	// there, whatever it holds (CLAUDE.md rule 3). The check is on the names, so
+	// a regression that let one through fails here without this test printing
+	// its value (issue #277, round F findings 4 and 5).
 	env := rec.env(t)
 
-	if env["HOME"] != home {
-		t.Errorf("the CLI's HOME is %q, want the config's %q", env["HOME"], home)
+	for name := range env {
+		if !launcherVariableNames[name] && !shellVariableNames[name] {
+			t.Errorf("the CLI's environment holds %s, which is neither one of the launcher's names nor one of the shell's own: the launcher passes its allow list and nothing of the caller's (CLAUDE.md rule 3, ADR 0040)", name)
+		}
 	}
 
-	if env["PATH"] != "/usr/bin:/bin" {
-		t.Errorf("the CLI's PATH is %q, want the config's %q", env["PATH"], "/usr/bin:/bin")
-	}
-
-	if _, ok := env["TMPDIR"]; !ok {
-		t.Errorf("the CLI's environment holds no TMPDIR, want the config's entry beside the launcher's own: %v", env)
-	}
-
-	if _, ok := env[canary]; ok {
-		t.Errorf("the CLI's environment holds %s, a variable of the test process: the launcher passes its allow list and nothing of the caller's (CLAUDE.md rule 3)", canary)
+	// Each entry the config gave is the one the CLI sees, so the audit's three
+	// names are accepted and the launcher's own are what they were (issue #277,
+	// round F finding 1).
+	for _, want := range []struct{ name, value string }{
+		{"HOME", home},
+		{"PATH", "/usr/bin:/bin"},
+		{"TMPDIR", filepath.Join(home, "tmp")},
+		{"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"},
+		{"SHIFT2EU_AUDIT_CANARY", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
+	} {
+		if got := env[want.name]; got != want.value {
+			t.Errorf("the CLI's %s is not the value the launch fixes, want %q (set: %t): the config's entries are accepted and the launcher's own are what they were", want.name, want.value, got != "")
+		}
 	}
 
 	if entries := rec.read(t, "homels"); entries != "" {
@@ -420,13 +450,19 @@ func TestAskRedactsEveryValueItWasGiven(t *testing.T) {
 		t.Fatal("Ask = nil, want an error: the CLI printed no result and exited non-zero")
 	}
 
-	for _, secret := range []string{token, canary} {
-		if strings.Contains(err.Error(), secret) {
-			t.Errorf("Ask = %q, want the value %q redacted: the error can reach the job's log and the state area's stderr file", err, secret)
+	// The messages name the value they want redacted, never the value itself:
+	// a redaction that failed would put it in the log through the error, which
+	// is what this test guards against (issue #277, round F finding 4).
+	for _, secret := range []struct{ name, value string }{
+		{"the token", token},
+		{"the canary", canary},
+	} {
+		if strings.Contains(err.Error(), secret.value) {
+			t.Errorf("Ask's error holds %s, want it redacted: the error can reach the job's log and the state area's stderr file", secret.name)
 		}
 	}
 
 	if !strings.Contains(err.Error(), "[redacted]") {
-		t.Errorf("Ask = %q, want the excerpt to stand the values in for with [redacted]", err)
+		t.Errorf("Ask's error holds no [redacted], want the excerpt to stand every value in for")
 	}
 }

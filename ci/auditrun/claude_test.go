@@ -312,7 +312,10 @@ func runStepsAt(t *testing.T, root string, args []string, env map[string]string)
 	return runResult{code: code, stdout: stdout.String(), stderr: stderr.String()}
 }
 
-// recordedEnv returns the environment the fake CLI recorded, as name → value.
+// recordedEnv returns the environment the fake CLI ran with, as name → value. A
+// failure message of this file names a variable, never its value: a regression
+// could put a credential of the caller's in one, and a test log is no place for
+// it (CLAUDE.md rule 3, issue #277, round F finding 4).
 func recordedEnv(t *testing.T, record string) map[string]string {
 	t.Helper()
 
@@ -330,7 +333,7 @@ func recordedEnv(t *testing.T, record string) map[string]string {
 
 		name, value, ok := strings.Cut(line, "=")
 		if !ok {
-			t.Fatalf("the fake CLI's environment holds the line %q, want name=value", line)
+			t.Fatalf("the fake CLI's environment holds a line for %q that is no name=value pair, want name=value", name)
 		}
 
 		values[name] = value
@@ -408,8 +411,8 @@ func assertTheAllowListAlone(t *testing.T, got map[string]string, root string) {
 		{"SHIFT2EU_AUDIT_CANARY", auditCanary},
 		{"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB", "1"},
 	} {
-		if value, ok := got[want.name]; !ok || value != want.value {
-			t.Errorf("the CLI's %s is %q (set: %t), want %q: the audit's launch fixes it (ADR 0040)", want.name, value, ok, want.value)
+		if got[want.name] != want.value {
+			t.Errorf("the CLI's %s is not the value the audit's launch fixes, want %q (set: %t): the audit's launch decides it (ADR 0040)", want.name, want.value, got[want.name] != "")
 		}
 	}
 }
@@ -494,13 +497,13 @@ func TestRunInheritsNoneOfTheStepsEnvironment(t *testing.T) {
 	got := recordedEnv(t, record)
 
 	for _, variable := range stepsEnvironment {
-		if value, ok := got[variable.name]; ok {
-			t.Errorf("the CLI's environment holds %s=%q, which the launcher's own environment set: a variable an earlier step wrote to $GITHUB_ENV must not reach the CLI (CLAUDE.md rule 3, ADR 0040)", variable.name, value)
+		if _, ok := got[variable.name]; ok {
+			t.Errorf("the CLI's environment holds %s, which the launcher's own environment set: a variable an earlier step wrote to $GITHUB_ENV must not reach the CLI (CLAUDE.md rule 3, ADR 0040)", variable.name)
 		}
 	}
 
-	if value, ok := got[sentinelName]; ok {
-		t.Errorf("the CLI's environment holds the sentinel %s=%q: the CLI was handed the launcher's own environment, not its allow list (ADR 0040)", sentinelName, value)
+	if _, ok := got[sentinelName]; ok {
+		t.Errorf("the CLI's environment holds the sentinel %s: the CLI was handed the launcher's own environment, not its allow list (ADR 0040)", sentinelName)
 	}
 
 	assertTheAllowListAlone(t, got, root)
