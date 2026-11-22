@@ -7,8 +7,6 @@ import (
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/google/go-cmp/cmp"
 )
 
 // rulesHeading is the CLAUDE.md heading whose numbered items are the rules
@@ -227,8 +225,11 @@ func TestSkillsThatRunChecksCiteTheSignalRule(t *testing.T) {
 		}
 	}
 
-	if diff := cmp.Diff([]string{}, missing); diff != "" {
-		t.Errorf("skill texts that run the checks but never say %q (-want +got):\n%s\nEvery one of these skills must point at CLAUDE.md's rule that an agent signals only the processes it started itself (issue #465)",
-			signalRulePhrase, diff)
+	// missing holds no skill when every one of them points at the rule: an
+	// empty and a nil slice are the same absence, so the length decides and the
+	// failure names the skills that are silent.
+	if len(missing) > 0 {
+		t.Errorf("skill texts that run the checks but never say %q: %s\nEvery one of these skills must point at CLAUDE.md's rule that an agent signals only the processes it started itself (issue #465)",
+			signalRulePhrase, strings.Join(missing, ", "))
 	}
 }
