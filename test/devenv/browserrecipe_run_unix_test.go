@@ -5,8 +5,9 @@
 // container's state, and what an interrupted run cleans up - including when a second signal of the same kind
 // reaches it while it cleans up (issue #423 items 2 and 3 and the reviewer's findings S2 and N2, PRD #297
 // milestone 2, ADR 0036). It pins too that the removal the EXIT trap runs is bounded, so a container runtime that
-// never answers it cannot hold the run for good, and that a deadline its poll cannot count to is refused before the
-// run starts (issue #449). Each test runs the real recipe of the real Makefile, in a clone of it, with the two
+// never answers it cannot hold the run for good, that the rm the recipe gives up on is ended with it, and that a
+// deadline outside the range its poll counts is refused before the run starts (issue #449). Each test runs the real
+// recipe of the real Makefile, in a clone of it, with the two
 // commands the recipe runs replaced by stand-ins - the container command, the recipe's $(DOCKER), and go - so no
 // test needs a container runtime, a browser or a build of the site, and no test writes anything into the worktree
 // it runs from. The stand-ins answer the way the tools they stand for do, whatever the recipe asks them, so the
@@ -101,6 +102,18 @@ const removalDeadlineVariable = "TEST_BROWSER_RM_DEADLINE"
 // guard timeout below only stops a run that waits for a removal that never comes.
 const removalDeadlineSetting = removalDeadlineVariable + "=1"
 
+// injectedMarker is what the command injectedDeadlineValue holds prints when the recipe runs it, and it is looked for
+// on a run's standard output: a recipe that refuses the value never runs the command, and the refusal names the value
+// on standard error, marker and all (issue #449).
+const injectedMarker = "INJECTED"
+
+// injectedDeadlineValue is a value that closes the quoting the recipe's guard wraps it in and opens a case with an
+// arm of its own that matches, so a recipe that pastes the value into the shell text of its guard - as make does, the
+// recipe line expanded and handed to sh unquoted - runs the echo it carries and takes the value as one of the range.
+// A maintainer's typo is then a command of the recipe's shell, which is why the value is refused before the recipe
+// builds anything out of it (issue #449).
+const injectedDeadlineValue = "1' in 1) echo " + injectedMarker + ";; esac; case '1"
+
 // The cases a run must fail at once get this long before the test stops the run: the stand-ins answer in
 // milliseconds, so the run ends well inside it, and this is only the hang guard - a recipe that waits where the test
 // waits would hold the package here - never the thing under test. What such a run did is counted below, in calls of
@@ -129,6 +142,14 @@ const (
 // came: the stand-ins answer in milliseconds, so it is the guard that keeps a recipe off the rails from holding the
 // test, not a duration a test asserts on.
 const waitDeadline = 15 * time.Second
+
+// The polls a test gives a process the recipe gave up on to be gone (waitForGone): 200 polls of 20 milliseconds, four
+// seconds for the machine to reap a process the recipe ended - counted in polls, so no assertion of a test rests on a
+// clock (issue #449).
+const (
+	gonePollInterval = 20 * time.Millisecond
+	gonePolls        = 200
+)
 
 // exitStatusWord matches deadContainerStatus as a number of its own: "exited with status 3", "exit code 3" and
 // "Error 3" all hold it, where a line number or a status that merely holds a 3 (13, 130, 403) does not.
@@ -929,15 +950,17 @@ func TestMakeTestBrowserRecipeFailsAtOnceWhenInspectKeepsFailing(t *testing.T) {
 // is read from what it printed and from the rm call the stand-in logged, and not from a wall clock: a run that waits
 // for a removal that never comes is one the guard timeout below stops, where a run that bounds it ends well inside
 // that guard - so no assertion here depends on how long a second or a poll of the deadline is (the reviewer's advice
-// on PR #443).
+// on PR #443). That the run ended the rm it gave up on, and did not merely stop waiting for it, is read from the pid
+// the stand-in recorded of itself, polled for until it is no process at all (issue #449, the reviewer's finding S1).
 func TestMakeTestBrowserRecipeBoundsItsContainerRemoval(t *testing.T) {
 	t.Parallel()
 
 	sb := newBrowserRecipeSandbox(t, dockerModeRmWedged)
 
-	// The stand-in the recipe backgrounds is in the group of the make this test starts, which startBrowserMake ends
-	// with the test. The check after it reads the pid the stand-in recorded of itself, so a wedged stand-in still
-	// there is reported rather than left running: it must not outlive the test (CLAUDE.md, rule 10).
+	// The check below the run reads the pid the stand-in recorded of itself once the run has ended, so a wedged rm the
+	// recipe left running is reported there. This is the safety net under it: a test that failed before it reached
+	// that check must not leave the stand-in running either, and it is in the group of the make this test starts,
+	// which startBrowserMake ends with the test (CLAUDE.md, rule 10).
 	var proc *browserRecipeProcess
 
 	t.Cleanup(func() {
@@ -958,6 +981,21 @@ func TestMakeTestBrowserRecipeBoundsItsContainerRemoval(t *testing.T) {
 	case run.err != nil:
 		t.Errorf("make test-browser exited with %v although its container answered and its smoke test ran, and only the rm -f of its EXIT trap never came back: a cleanup that gives up on the removal must leave the run's own status what it was, or a slow container runtime fails a smoke test that passed (issue #449)\n%s",
 			run.err, output)
+	}
+
+	// The run's own status is what it was, and the run is over: the rm it gave up on must be over with it, or the
+	// container runtime's unanswered call is one process the run leaves behind on every such run. The pid is the one
+	// the stand-in recorded of itself, and gone is ESRCH and nothing else: a zombie the machine has not reaped yet
+	// answers kill -0, and no portable call tells it from a process that runs.
+	rmPid := sb.wedgedRemovePid(t)
+	if rmPid == 0 {
+		t.Fatalf("the stand-in container command's rm never recorded a pid of its own, so the removal the recipe has to bound never ran, although the run ended with %v: the EXIT trap removes the container on every exit (issue #449)\n%s",
+			run.err, output)
+	}
+
+	if !waitForGone(rmPid) {
+		t.Errorf("the recipe left the rm it gave up on running, pid %d, the pid the stand-in recorded of itself: a removal that does not come back must be ended when the run gives up on it, and not merely stopped waiting for, or every wedged run of the worktree leaves one more process behind (issue #449)\n%s",
+			rmPid, output)
 	}
 
 	calls := sb.dockerCalls(t)
@@ -1002,12 +1040,28 @@ func holdsRemovalAdvice(output, name string) bool {
 	return false
 }
 
-// endWedgedRemove is the check that nothing the recipe gave up on outlives the test. The trap backgrounds its rm, so
-// the run itself does not wait for it, and a stand-in still there at the end of the test would be left behind
-// silently. It signals the pid the stand-in recorded of itself, and only while that pid is still in the group of the
-// run: a pid the machine has reused for a process of its own belongs to another group and is left alone, and nothing
-// is ever found by name (CLAUDE.md, rule 10). startBrowserMake ends that group first, so a stand-in that is gone
-// already - as it is when the guard timeout killed the group - needs no signal and gets none.
+// waitForGone reports whether pid is no process within gonePolls polls of gonePollInterval, counted in polls rather
+// than read off a clock, as the other waits of this file are: the recipe ends the rm it gives up on as it exits, and
+// the machine reaps it a moment later, so the caller looks rather than reads once. Only ESRCH is gone: a process the
+// machine has not reaped yet answers kill -0, and no portable call tells that zombie from one that runs (issue #449).
+func waitForGone(pid int) bool {
+	for poll := 0; poll < gonePolls; poll++ {
+		if errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) {
+			return true
+		}
+
+		time.Sleep(gonePollInterval)
+	}
+
+	return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+}
+
+// endWedgedRemove is the safety net under the check of TestMakeTestBrowserRecipeBoundsItsContainerRemoval, never that
+// check itself: it runs from a cleanup, after startBrowserMake's own cleanup has ended the group of the run, so a
+// stand-in the recipe left behind there is already gone. It keeps a test that failed before it reached that check
+// from leaving the stand-in behind, silently. It signals the pid the stand-in recorded of itself, and only while
+// that pid is still in the group of the run: a pid the machine has reused for a process of its own belongs to
+// another group and is left alone, and nothing is ever found by name (CLAUDE.md, rule 10).
 func (sb *browserRecipeSandbox) endWedgedRemove(t *testing.T, pgid int) {
 	t.Helper()
 
@@ -1028,32 +1082,46 @@ func (sb *browserRecipeSandbox) endWedgedRemove(t *testing.T, pgid int) {
 	}
 }
 
-// TestMakeTestBrowserRecipeRefusesARemovalDeadlineThatIsNoWholeNumber pins the guard issue #449's fix puts ahead of
+// TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange pins the guard issue #449's fix puts ahead of
 // the recipe's traps: the poll of the bounded removal counts whole seconds up to TEST_BROWSER_RM_DEADLINE, so a value
-// that is no whole number - an empty one, a word, a negative number, a fraction - would leave that loop with nothing
-// to count to, and the run would wait for a removal that never comes, the very hang the bound is there to end. The
-// recipe must refuse such a value before it starts anything: exit status 2, and a line on its standard error naming
-// the value it refused, so a maintainer who mistyped it reads which one the recipe would not take. A whole number of
-// seconds must still be taken, and the run goes on to start its container.
+// outside what that loop can count - an empty one, a word, a negative number, a fraction, a zero that would SIGKILL
+// every removal at once, a leading zero, six digits, or a value that closes the quoting the guard wraps it in and
+// runs a command of its own - would leave the loop with nothing to count to, or count to something no poll reaches,
+// and the run would wait for a removal that never comes, the very hang the bound is there to end. The recipe must
+// refuse such a value before it starts anything: exit status 2, and a line on its standard error naming the value it
+// refused, so a maintainer who mistyped it reads which one the recipe would not take. A value of the range it takes -
+// one to five digits with no leading zero, 1 to 99999 - must still be taken, and the run goes on to start its
+// container; the value is taken as make's command-line assignment or as the environment's, since the recipe's `?=`
+// reads both.
 //
 // What a run that takes the value does after it starts the container is no part of this test: the sandbox's container
 // is a dead one (dockerModeDead), so such a run ends in a second on it instead of waiting out the minute the recipe
 // gives a DevTools line that never comes, and the cases that already pin the deadline's own bound give it one too.
-func TestMakeTestBrowserRecipeRefusesARemovalDeadlineThatIsNoWholeNumber(t *testing.T) {
+func TestMakeTestBrowserRecipeRefusesARemovalDeadlineOutsideItsRange(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name  string
-		value string // what the case assigns the variable, as the value of a make command-line assignment
-		// taken says whether the recipe must accept the value and start its container: only a whole number of
-		// seconds is, as the recipe's own default of 30 is.
+		value string // what the case gives the variable, as make's command-line assignment or as the environment's value
+		// viaEnv gives the value in the environment rather than on make's command line, which the recipe's `?=` takes
+		// as well: the shell text the recipe builds is the same either way, since make pastes what the variable holds.
+		viaEnv bool
+		// taken says whether the recipe must accept the value and start its container: one to five digits with no
+		// leading zero is, as the recipe's own default of 30 is.
 		taken bool
 	}{
 		{name: "an empty value", value: ""},
 		{name: "a word", value: "x"},
 		{name: "a negative number", value: "-1"},
 		{name: "a fraction of a second", value: "1.5"},
+		{name: "a zero, which would end every removal at once", value: "0"},
+		{name: "a leading zero", value: "05"},
+		{name: "six digits, which no poll counts to", value: "100000"},
+		{name: "a value holding a single quote, which runs the command it holds if the recipe pastes it into its shell", value: injectedDeadlineValue},
+		{name: "the same value as the environment's, not make's", value: injectedDeadlineValue, viaEnv: true},
+		{name: "one second, the bottom of the range", value: "1", taken: true},
 		{name: "a whole number of seconds", value: "5", taken: true},
+		{name: "the top of the range", value: "99999", taken: true},
 	}
 
 	for _, tc := range cases {
@@ -1062,22 +1130,30 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineThatIsNoWholeNumber(t *test
 
 			sb := newBrowserRecipeSandbox(t, dockerModeDead)
 
-			setting := removalDeadlineVariable + "=" + tc.value
+			args := []string{testBrowserTarget}
+			given := "on make's command line"
 
-			run := runBrowserMake(makeProgram(t), sb.clone, []string{testBrowserTarget, setting}, sb.env, failFastTimeout)
+			if tc.viaEnv {
+				sb.env[removalDeadlineVariable] = tc.value
+				given = "in the environment"
+			} else {
+				args = append(args, removalDeadlineVariable+"="+tc.value)
+			}
+
+			run := runBrowserMake(makeProgram(t), sb.clone, args, sb.env, failFastTimeout)
 			output := run.output()
 
 			if run.timedOut {
-				t.Fatalf("make test-browser was still running after %s and the test stopped it, with %s set to %q on its command line: the recipe must decide on that value before it starts anything - refuse one it cannot count to, or go on with a whole number - and the stand-ins answer in milliseconds, so a run still going is one that waits where it must decide (issue #449)\n%s",
-					failFastTimeout, removalDeadlineVariable, tc.value, output)
+				t.Fatalf("make test-browser was still running after %s and the test stopped it, with %s set to %q %s: the recipe must decide on that value before it starts anything - refuse one outside the range it can count to, or go on with one inside it - and the stand-ins answer in milliseconds, so a run still going is one that waits where it must decide (issue #449)\n%s",
+					failFastTimeout, removalDeadlineVariable, tc.value, given, output)
 			}
 
 			if tc.taken {
-				// A whole number is the value every other run of this file gives the recipe, and to the default of the
+				// A value of the range is the value every other run of this file gives the recipe, and the default of the
 				// Makefile: the guard must take it and let the run start its container.
 				if got := sb.callsTo(t, "run"); got == 0 {
-					t.Errorf("make test-browser started no container with %s set to %q, a whole number of seconds, and ended with %v: the guard refuses only a value the poll of the bounded removal cannot count to, and a maintainer who gives it a whole number of seconds must get the run they asked for (issue #449)\n%s",
-						removalDeadlineVariable, tc.value, run.err, output)
+					t.Errorf("make test-browser started no container with %s set to %q %s, a value of the range the recipe counts, and ended with %v: the guard refuses only a value outside 1 to 99999, and a maintainer who gives it one of those must get the run they asked for (issue #449)\n%s",
+						removalDeadlineVariable, tc.value, given, run.err, output)
 				}
 
 				return
@@ -1091,8 +1167,8 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineThatIsNoWholeNumber(t *test
 			}
 
 			if status != 2 {
-				t.Errorf("make test-browser exited with status %d, want 2, with %s set to %q on its command line: the recipe's poll counts whole seconds up to that value, so a value it cannot count to must be refused before the run starts, with the status that tells a refusal from a failed run (issue #449)\n%s",
-					status, removalDeadlineVariable, tc.value, output)
+				t.Errorf("make test-browser exited with status %d, want 2, with %s set to %q %s: the recipe's poll counts whole seconds up to that value, so a value outside the range it can count to must be refused before the run starts, with the status that tells a refusal from a failed run (issue #449)\n%s",
+					status, removalDeadlineVariable, tc.value, given, output)
 			}
 
 			// Which value the recipe refused, on its standard error: the message quotes the value, and the empty one
@@ -1100,6 +1176,15 @@ func TestMakeTestBrowserRecipeRefusesARemovalDeadlineThatIsNoWholeNumber(t *test
 			if !refusedValueLine(run.stderr, removalDeadlineVariable, tc.value) {
 				t.Errorf("the run's standard error holds no line naming %s and the %q it refused, so a maintainer who mistyped the deadline reads that the recipe would not take it, and not which value it would not (issue #449)\n%s",
 					removalDeadlineVariable, tc.value, output)
+			}
+
+			// The refused value is no shell text either: the recipe builds the guard's line out of what the variable
+			// holds, so a value that closes the quoting runs whatever it carries, and a maintainer's typo becomes a
+			// command of the recipe's shell. The marker is looked for on standard output alone, since the refusal names
+			// the value it refused, quotes and all, on standard error (issue #449).
+			if strings.Contains(run.stdout, injectedMarker) {
+				t.Errorf("make test-browser ran the command the value %q holds, printing %q on its standard output, instead of refusing the value: a value outside the range must be refused before the recipe builds anything out of it, or what a maintainer mistypes is a command the recipe runs (issue #449)\n%s",
+					tc.value, injectedMarker, output)
 			}
 
 			// The refusal comes before the run starts anything: no container, and no smoke test driving a browser
