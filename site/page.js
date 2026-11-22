@@ -135,6 +135,9 @@ function startAssessment() {
     notice.classList.add("visually-hidden");
     wireControls();
   }).catch(function () {
+    // wireControls may throw after the notice was hidden: show it again, so
+    // a sighted reader sees the failure too.
+    notice.classList.remove("visually-hidden");
     notice.textContent = "The assessment engine failed to start in this browser. Run the assessment with the shift2eu CLI instead.";
   });
 }

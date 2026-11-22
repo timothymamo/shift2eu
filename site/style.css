@@ -985,7 +985,6 @@ button.secondary:disabled {
 #report .part-summary > :is(h3, h4) {
   grid-column: 1;
   margin: 0;
-  white-space: nowrap;
 }
 
 #report .part-summary > :is(h3, h4) + p {
@@ -1139,7 +1138,6 @@ button.secondary:disabled {
 #report .part-workloads > :is(h3, h4) {
   grid-column: 1;
   margin: 0;
-  white-space: nowrap;
 }
 
 #report .part-workloads > :is(h3, h4) + section {

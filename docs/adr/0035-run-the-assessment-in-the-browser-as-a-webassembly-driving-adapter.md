@@ -211,9 +211,9 @@ Every class is a constant chosen from a closed set, never derived from a value:
 
 | Element | Classes | Chosen from |
 |---|---|---|
-| A Fit cell of a Resources table, and each per-target fit cell of the comparison's | `fit fit-direct`, `fit fit-partial`, `fit fit-none`; `fit` alone for a fit the report does not know | the `mapping.Fit` enum, by an exhaustive switch |
-| A Summary table's rows, the comparison's included | `fit-direct`, `fit-partial`, `fit-none`, `fit-total` (its estimate rows carry none) | the row's role |
-| A `section` around each report section | `part part-summary`, `part-resources`, `part-changes`, `part-blockers`, `part-workloads`, `part-cost`, `part-comparison`, `part-target` | the section's kind |
+| A Fit cell of a Resources table, and each per-target fit cell of the comparison's (the comparison's cells removed by the amendment of 2026-11-22) | `fit fit-direct`, `fit fit-partial`, `fit fit-none`; `fit` alone for a fit the report does not know | the `mapping.Fit` enum, by an exhaustive switch |
+| A Summary table's rows, the comparison's included (superseded: the summary is boxes since the amendment of 2026-11-21, and the comparison's table went with the amendment of 2026-11-22) | `fit-direct`, `fit-partial`, `fit-none`, `fit-total` (its estimate rows carry none) | the row's role |
+| A `section` around each report section | `part part-summary`, `part-resources`, `part-changes`, `part-blockers`, `part-workloads`, `part-cost`, `part-comparison` (removed by the amendment of 2026-11-22), `part-target` | the section's kind |
 | The Cost estimate's total item | `total` | the item's role |
 
 Both sets are fixed tables in `htmlreport` (`classNames`, `partNames`), keyed by unexported enums; the
@@ -265,7 +265,9 @@ the fragment, changes; the Markdown and JSON reports keep their layout and their
   each workload is a `section` holding its `h4`, its badges and its estimate, and one `section` holds the
   Required changes and Blockers parts. The stylesheet lays them out by their place (`.part-summary > p`,
   `.part-workloads > section`, `section:not([class]):has(> .part-changes)`), so no new class is needed for
-  them. The summary is no table any more; a comparison's summary is still one.
+  them. The summary is no table any more; a comparison's summary is still one (superseded by the
+  amendment of 2026-11-22: a comparison has no combined summary, each target's is boxes, and the
+  "Summary table" label leaves `tableLabels`).
 - **A badge outside a table** is `<span class="fit fit-direct"><span aria-hidden="true">✓</span>
   direct</span>`: the glyph is markup, a constant of the package chosen by the badge's class, and hidden
   from screen readers. In a table the Fit cell keeps its classes and holds its word in a `span` the

@@ -17,8 +17,8 @@ const dateLayout = "2006-01-02"
 
 // The heading levels of a report: the title, its sections, the sections inside
 // them (a target's sections in a comparison, the workloads of a single-target
-// report) and the workloads of a target in a comparison. The page holds the fragment under its own h1, so the title is an
-// h2.
+// report) and the workloads of a target in a comparison. The page holds the
+// fragment under its own h1, so the title is an h2.
 const (
 	titleLevel   = 2
 	sectionLevel = 3

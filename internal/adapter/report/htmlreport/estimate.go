@@ -255,8 +255,9 @@ func thousands(decimal string) string {
 // box per group of a.Workloads, in its order ("No workload" last), holding its
 // name, one badge per fit with its count, and, when a has estimates, its
 // monthly total and how many of its resources it prices. It names no source
-// cost (item 04): the Markdown and JSON reports keep it. The resources themselves are in the Resources table and the blockers
-// in the Blockers section, so a box names none.
+// cost (item 04): the Markdown and JSON reports keep it. The resources
+// themselves are in the Resources table and the blockers in the Blockers
+// section, so a box names none.
 func writeWorkloads(f *fragment, a assessment.Assessment, level int) {
 	f.heading(level, text("Workloads"))
 
