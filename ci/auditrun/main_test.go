@@ -103,7 +103,7 @@ func runAuditrun(t *testing.T, args []string, env map[string]string) runResult {
 
 	var stdout, stderr bytes.Buffer
 
-	code := run(args, lookup.lookup, recorder.steps(), &stdout, &stderr)
+	code := run(args, lookup.lookup, recorder.steps(), "/", &stdout, &stderr)
 
 	result := runResult{
 		code:   code,
