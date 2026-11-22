@@ -23,6 +23,22 @@ import (
 // auditPath is the audit directory's path under a root that stands in for /.
 const auditPath = "srv/audit"
 
+// writeBitsOfEveryone are the permission bits that let anyone write a file.
+const writeBitsOfEveryone os.FileMode = 0o222
+
+// gitConfig is the checkout copy's own git configuration, the one local config
+// every git command the wrapper runs reads (issue #277, review R14).
+var gitConfig = []string{"checkout", ".git", "config"}
+
+// benignGitConfig is the configuration a clone leaves: nothing the layout
+// refuses.
+const benignGitConfig = `[core]
+	repositoryformatversion = 0
+	filemode = true
+	bare = false
+	logallrefupdates = true
+`
+
 // The audit directory's paths under a root, each a part of the layout.
 var (
 	checkout  = []string{"checkout"}
@@ -115,6 +131,104 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 		{name: "the state area's home is a symbolic link", mutate: linkElsewhere(home)},
 		{name: "the state area's tmp is a symbolic link", mutate: linkElsewhere(stateTmp)},
 		{name: "the state area's out is a symbolic link", mutate: linkElsewhere(stateOut)},
+
+		// The write bit is not only the top directory's: every write bit under
+		// the checkout copy and the checks' results is refused, a file's and a
+		// subdirectory's alike (issue #277, review R10 and audit A7).
+		{name: "the checkout copy holds a writable file", mutate: chmodPath(0o644, gitConfig)},
+		{
+			name:   "the checkout copy holds a writable subdirectory",
+			mutate: writableDir([]string{"checkout", "lib"}, checkout),
+		},
+		{
+			name:   "the checks' results hold a writable file",
+			mutate: writableFile([]string{"checks", "report.json"}, checks),
+		},
+
+		// A link out of the tree is how a read of the checkout copy reaches a
+		// path the settings deny (issue #277, review R10 and audit A7).
+		{
+			name: "the checkout copy holds a link to another tree",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				makeSymlink(t, "../state", pathOf(root, []string{"checkout", "escape"}))
+			}),
+		},
+		{
+			name: "the checks' results hold an absolute link",
+			mutate: mutateTree(checks, func(t *testing.T, root string) {
+				t.Helper()
+				makeSymlink(t, t.TempDir(), pathOf(root, []string{"checks", "elsewhere"}))
+			}),
+		},
+		{
+			name: "the checkout copy holds a link that climbs out of the root",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				makeSymlink(t, "../../../../../../etc", pathOf(root, []string{"checkout", "etc"}))
+			}),
+		},
+
+		// The checkout copy's .git/config is the one local git configuration
+		// the wrapper's git reads: a key or a section that names another
+		// program, another file or a credential gives the containment away
+		// (issue #277, review R14).
+		{
+			name: "the git config sets an extraheader",
+			mutate: gitConfigWith(`[core]
+	repositoryformatversion = 0
+[http]
+	extraheader = AUTHORIZATION: basic c2VjcmV0
+`),
+		},
+		{
+			name: "the git config sets a case-insensitive extraheader",
+			mutate: gitConfigWith(`[CORE]
+	repositoryformatversion = 0
+[HTTP]
+	ExtraHeader = AUTHORIZATION: basic c2VjcmV0
+`),
+		},
+		{
+			name:   "the git config sets fsmonitor",
+			mutate: gitConfigWith("[core]\n\tfsmonitor = /srv/audit/work/fsmonitor\n"),
+		},
+		{
+			name:   "the git config sets fsmonitor in another case",
+			mutate: gitConfigWith("[core]\n\tFSMonitor = /srv/audit/work/fsmonitor\n"),
+		},
+		{
+			name:   "the git config sets sshCommand",
+			mutate: gitConfigWith("[core]\n\tsshCommand = /srv/audit/work/ssh\n"),
+		},
+		{
+			name:   "the git config sets hooksPath",
+			mutate: gitConfigWith("[core]\n\thooksPath = /srv/audit/work/hooks\n"),
+		},
+		{
+			name:   "the git config holds a filter driver",
+			mutate: gitConfigWith("[filter \"lfs\"]\n\tclean = /srv/audit/work/filter\n"),
+		},
+		{
+			name:   "the git config holds a diff driver",
+			mutate: gitConfigWith("[diff \"words\"]\n\ttextconv = /srv/audit/work/textconv\n"),
+		},
+		{
+			name: "the checkout copy's .git is a file",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				removeAll(t, pathOf(root, []string{"checkout", ".git"}))
+				writeFile(t, pathOf(root, []string{"checkout", ".git"}), "gitdir: /srv/audit/state/elsewhere\n", 0o444)
+			}),
+		},
+		{
+			name: "the checkout copy's .git is a symbolic link",
+			mutate: mutateTree(checkout, func(t *testing.T, root string) {
+				t.Helper()
+				removeAll(t, pathOf(root, []string{"checkout", ".git"}))
+				makeSymlink(t, t.TempDir(), pathOf(root, []string{"checkout", ".git"}))
+			}),
+		},
 	}
 
 	for _, tc := range cases {
@@ -129,6 +243,26 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 				t.Errorf("CheckLayout(%q) = nil, want a refusal: %s is no layout ADR 0040 gives", root, tc.name)
 			}
 		})
+	}
+}
+
+// TestCheckLayoutTakesALinkThatStaysInItsTree pins the other half of the walk
+// over the checkout copy and the checks' results: a relative link that resolves
+// inside its own tree is no way out of it, so it is not refused.
+func TestCheckLayoutTakesALinkThatStaysInItsTree(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeAuditTree(t, root)
+
+	mutateTree(checks, func(t *testing.T, root string) {
+		t.Helper()
+		writeFile(t, pathOf(root, []string{"checks", "report.json"}), "{}", 0o444)
+		makeSymlink(t, "report.json", pathOf(root, []string{"checks", "latest.json"}))
+	})(t, root)
+
+	if err := audit.CheckLayout(root); err != nil {
+		t.Fatalf("CheckLayout(%q) = %v, want none: a relative link to a file of its own tree stays inside that tree", root, err)
 	}
 }
 
@@ -171,6 +305,132 @@ func linkElsewhere(parts []string) func(t *testing.T, root string) {
 	}
 }
 
+// gitConfigWith returns a mutation that replaces the checkout copy's .git/config
+// with body, mode 0444, so the tree holds the git configuration the case is
+// about.
+func gitConfigWith(body string) func(t *testing.T, root string) {
+	return mutateTree(checkout, func(t *testing.T, root string) {
+		t.Helper()
+
+		removeAll(t, pathOf(root, gitConfig))
+		writeFile(t, pathOf(root, gitConfig), body, 0o444)
+	})
+}
+
+// unlock returns a mutation that makes the tree at parts writable, applies mutate
+// and returns: the case decides which write bits the tree keeps.
+func unlock(parts []string, mutate func(t *testing.T, root string)) func(t *testing.T, root string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		makeWritable(t, pathOf(root, parts))
+		mutate(t, root)
+	}
+}
+
+// makeWritable gives every entry of the tree at path a write bit, a symbolic link
+// followed nowhere: a mutation replaces entries deep in a read-only tree, and a
+// 0555 directory cannot be emptied.
+func makeWritable(t *testing.T, path string) {
+	t.Helper()
+
+	err := filepath.WalkDir(path, func(entry string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		return os.Chmod(entry, info.Mode().Perm()|0o200) //nolint:gosec // G302: the owner's write bit, put back so a test can change the tree and remove it
+	})
+	if err != nil {
+		t.Fatalf("make the tree under %s writable: %v", path, err)
+	}
+}
+
+// mutateTree is unlock followed by makeReadOnly: every write bit the mutation
+// added is gone again, so the defect a case names is its one entry, link or
+// configuration and not a mode it left behind.
+func mutateTree(parts []string, mutate func(t *testing.T, root string)) func(t *testing.T, root string) {
+	apply := unlock(parts, mutate)
+
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		apply(t, root)
+		makeReadOnly(t, pathOf(root, parts))
+	}
+}
+
+// writableFile returns a mutation that makes the file at parts mode 0644 and its
+// tree read-only but for it: the one write bit the case is about is the file's.
+func writableFile(parts []string, tree []string) func(t *testing.T, root string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		mutateTree(tree, func(t *testing.T, root string) {
+			t.Helper()
+			writeFile(t, pathOf(root, parts), "{}", 0o444)
+		})(t, root)
+
+		if err := os.Chmod(pathOf(root, parts), 0o644); err != nil {
+			t.Fatalf("chmod %v: %v", parts, err)
+		}
+	}
+}
+
+// writableDir returns a mutation that makes the directory at parts mode 0750 and
+// its tree read-only but for it: the one write bit the case is about is the
+// directory's.
+func writableDir(parts []string, tree []string) func(t *testing.T, root string) {
+	return func(t *testing.T, root string) {
+		t.Helper()
+
+		mutateTree(tree, func(t *testing.T, root string) {
+			t.Helper()
+			makeDir(t, pathOf(root, parts))
+		})(t, root)
+
+		if err := os.Chmod(pathOf(root, parts), 0o750); err != nil { //nolint:gosec // G302: the write bit this case is about
+			t.Fatalf("chmod %v: %v", parts, err)
+		}
+	}
+}
+
+// makeReadOnly removes every write bit from the tree at path, a symbolic link
+// followed nowhere: the mode the model-free step leaves the checkout copy and
+// the checks' results in.
+func makeReadOnly(t *testing.T, path string) {
+	t.Helper()
+
+	err := filepath.WalkDir(path, func(entry string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		return os.Chmod(entry, info.Mode().Perm()&^writeBitsOfEveryone)
+	})
+	if err != nil {
+		t.Fatalf("remove the write bits under %s: %v", path, err)
+	}
+}
+
 // writeAuditTree lays the audit directory out under root as the model-free step
 // leaves it before the launcher runs: every path the ADR's table names, the
 // binary the checksum step extracted into the state area's bin/, and the
@@ -196,18 +456,34 @@ func writeAuditTree(t *testing.T, root string) {
 	writeFile(t, pathOf(root, wrapper), "#!/bin/sh\nexit 126\n", 0o555)
 	writeFile(t, pathOf(root, claudeBin), claudeScript, 0o500)
 
-	// The checkout copy and the checks' results are read-only to the model, so
-	// the directories themselves lose their write bit after they are filled.
+	// The checkout copy is a clone, so it carries its own git configuration: a
+	// benign one, which the layout takes.
+	writeFile(t, pathOf(root, gitConfig), benignGitConfig, 0o444)
+
+	// The audit's skill is the checkout copy's, and its system prompt is what
+	// the audit's prompt reads.
+	writeFile(t, pathOf(root, []string{"checkout", ".claude", "skills", "security-audit-run", "SKILL.md"}), "# The scheduled security audit\n\nRead the checkout, the checks and the work area.\n", 0o444)
+
+	// The checkout copy and the checks' results are read-only to the model,
+	// their contents too: the model-free step removes every write bit, and the
+	// check holds the whole tree to it.
 	for _, parts := range [][]string{checkout, checks} {
-		if err := os.Chmod(pathOf(root, parts), 0o555); err != nil { //nolint:gosec // G302: 0555 is the ADR's mode for the checkout copy and the checks' results, writable by nobody
-			t.Fatalf("chmod %v: %v", parts, err)
-		}
+		makeReadOnly(t, pathOf(root, parts))
 	}
+
+	// The tree is laid out read-only, as the model-free step leaves it, and a
+	// 0555 directory cannot be emptied: the test puts the write bits back before
+	// the temporary directory is removed.
+	t.Cleanup(func() { makeWritable(t, root) })
 }
 
-// removeAll deletes path and everything under it.
+// removeAll deletes path and everything under it, a read-only tree included.
 func removeAll(t *testing.T, path string) {
 	t.Helper()
+
+	if info, err := os.Lstat(path); err == nil && info.IsDir() {
+		makeWritable(t, path)
+	}
 
 	if err := os.RemoveAll(path); err != nil {
 		t.Fatalf("remove %s: %v", path, err)
