@@ -1037,29 +1037,43 @@ func absenceCases() []judgeCase {
 	}
 }
 
-// sandboxCases are the ways a Bash call asks to run outside the sandbox (issue
-// #277, round C): the preflight exists to show that the sandbox holds, so a call
-// that turns it off fails closed and names its own probe, however harmless its
-// command is. A call that keeps the sandbox on, or says nothing about it, is the
-// plan's call and passes as before.
+// sandboxCases are the ways a call asks to run outside the sandbox (issue #277,
+// round C): the preflight exists to show that the sandbox holds, so a call that
+// turns it off fails closed and names its own probe, however harmless its
+// command is and whatever tool makes it. Only the key's JSON false keeps the
+// sandbox on; a call that says nothing about the key is the plan's call and
+// passes as before.
 func sandboxCases() []judgeCase {
 	// probe is the probe whose first Bash call the cases rewrite, so the refusal
-	// the judgement gives must name that probe's number and short name.
-	const probe = 1
+	// the judgement gives must name that probe's number and short name. canaryProbe
+	// is the one whose first Grep a case rewrites: a non-Bash call fails closed
+	// too, naming that probe.
+	const (
+		probe       = 1
+		canaryProbe = 5
+	)
 
-	refusal := []string{
-		fmt.Sprintf("probe %d, %s", probe, probeShortName[probe]),
-		"runbook step 10",
+	// refusalOf is the refusal a call of probe probe must draw: its number and
+	// short name, why it failed, and where to look.
+	refusalOf := func(probe int) []string {
+		return []string{
+			fmt.Sprintf("probe %d, %s", probe, probeShortName[probe]),
+			"a call asked to run outside the sandbox",
+			"runbook step 10",
+		}
 	}
 
-	// asking returns the passing run's transcript with that call's input carrying
-	// the key, set to raw, beside the plan's own command.
-	asking := func(raw string) func(plan audit.Plan, transcript []byte) []byte {
+	refusal := refusalOf(probe)
+
+	// asking returns the passing run's transcript with the first call of probe
+	// probe made with tool carrying the key, set to raw, beside the plan's own
+	// input.
+	asking := func(probe int, tool, raw string) func(plan audit.Plan, transcript []byte) []byte {
 		return func(plan audit.Plan, transcript []byte) []byte {
 			lines := strings.SplitAfter(string(transcript), "\n")
 
 			for i, call := range plan {
-				if call.Probe != probe || call.Tool != "Bash" {
+				if call.Probe != probe || call.Tool != tool {
 					continue
 				}
 
@@ -1075,12 +1089,37 @@ func sandboxCases() []judgeCase {
 	return []judgeCase{
 		{
 			name:       "a Bash call turns the sandbox off",
-			transcript: asking("true"),
+			transcript: asking(probe, "Bash", "true"),
 			want:       refusal,
 		},
 		{
+			name:       "a Bash call asks with the string true",
+			transcript: asking(probe, "Bash", strconv.Quote("true")),
+			want:       refusal,
+		},
+		{
+			name:       "a Bash call asks with the string false",
+			transcript: asking(probe, "Bash", strconv.Quote("false")),
+			want:       refusal,
+		},
+		{
+			name:       "a Bash call asks with the number 1",
+			transcript: asking(probe, "Bash", "1"),
+			want:       refusal,
+		},
+		{
+			name:       "a Bash call asks with null",
+			transcript: asking(probe, "Bash", "null"),
+			want:       refusal,
+		},
+		{
+			name:       "a non-Bash call turns the sandbox off",
+			transcript: asking(canaryProbe, "Grep", "true"),
+			want:       refusalOf(canaryProbe),
+		},
+		{
 			name:       "a Bash call keeps the sandbox on",
-			transcript: asking("false"),
+			transcript: asking(probe, "Bash", "false"),
 			wantPass:   true,
 		},
 	}
