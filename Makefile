@@ -400,9 +400,9 @@ $(error $(firstword $(envrc_guard_goals)): refused: direnv would read the creden
 endif
 endif
 endif
-# What a host target that opens a shell in the VM (deck, deck-restart, vm-claude-settings, vm-init, vm-shell)
-# puts before limactl: the host clone's .envrc holds the agents App's variables, and none of those commands
-# needs them, so their limactl runs without them (issue #227, ADR 0031). macOS /usr/bin/env has -u too.
+# What every recipe puts before limactl, on every call (test/devenv pins it): the host clone's .envrc holds the
+# agents App's variables, and no limactl call needs them, so limactl runs without them (issues #227 and #326,
+# ADR 0031; defence in depth, as Lima forwards no environment by default). macOS /usr/bin/env has -u too.
 VM_SHELL_ENV := env -u SHIFT2EU_AGENTS_APP_ID -u SHIFT2EU_AGENTS_APP_INSTALLATION_ID -u SHIFT2EU_AGENTS_APP_KEY_FILE
 # Credentials vm-env copies from your shell (e.g. direnv) into the VM, by name. Never add
 # ANTHROPIC_API_KEY: Claude Code prefers it over the subscription token and bills per call. Never add a
@@ -670,18 +670,22 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # hand, a concurrent make), and no flag of Lima 2.x stops limactl start <name> from creating the VM then. So
 # an instance that passes them is started with limactl shell --start --workdir / <name> true, never with
 # limactl start <name> (issue #254): since Lima 2.0 it starts a Stopped instance, only runs true in a Running
-# one and fails with "does not exist" for one that is gone, never creating a VM. Its failure is the recipe's
-# last command, so it fails vm-up and no limactl call follows it. --workdir / runs true in a directory every VM
+# one and fails with "does not exist" for one that is gone, never creating a VM. Its failure, like the create
+# line's, fails vm-up and no limactl call follows it. --workdir / runs true in a directory every VM
 # has, not in the host's current one. Like every target that reads
 # LIMA_INSTANCE, vm-up refuses an invalid one with $(LIMA_INSTANCE_CHECK) before its recipe runs (issue #252).
-# vm-up sets no git hooks: run from the host clone, git-hooks would set the host clone's, and running git in the
-# workspace from the Mac is what issue #227 forbids. The workspace checkout's are set inside the VM,
-# by make vm-init (dev/vm-init.sh); the setting lives in the mounted .git/config, so it lasts.
+# Once the VM has started (or been created), vm-up sets the main checkout's git hooks again, inside the VM:
+# git -C WORKSPACE_REPO config core.hooksPath .githooks through limactl shell, as make vm-init
+# (dev/vm-init.sh) first set them, so an agent that unset the setting does not keep the hooks off past the next
+# start (issue #326). The setting lives in the mounted .git/config; the protection of main on GitHub stays the
+# real gate. vm-up never runs git on the Mac: git-hooks would set the host clone's, and running git in the
+# workspace from the Mac is what issue #227 forbids. Every limactl call of vm-up runs under $(VM_SHELL_ENV).
 # vm-up then checks VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT, then that WORKSPACE_REPO is a directory holding
 # .git, then that the workspace can be listed and holds nothing stray - the repository's name matched literally
 # (a case pattern with the name quoted), so a repository a.b never takes a stray axb for its own - then the
 # instance's status, all in one shell line with its limactl calls, so no make flag (-i, -k) can run limactl
-# after any of these checks failed. It runs neither git nor anything else in the workspace: test and ls only.
+# after any of these checks failed. On the Mac it runs neither git nor anything else in the workspace: test and
+# ls only.
 # Before it lists the instances it warns, and only warns, about a Lima autostart job of the instance,
 # $(call LIMA_AUTOSTART_JOBS,warning) below (issue #315): the VM starts as it always does.
 #
@@ -789,13 +793,13 @@ vm-up: ## Create or start the Lima VM with only this repository's workspace moun
 		exit 1; \
 	fi; \
 	$(call LIMA_AUTOSTART_JOBS,warning); \
-	list="$$(limactl list --quiet)" || { \
+	list="$$($(VM_SHELL_ENV) limactl list --quiet)" || { \
 		echo "vm-up: could not list the Lima instances, so it cannot tell whether $$LIMA_INSTANCE exists" >&2; \
 		exit 1; \
 	}; \
 	if printf '%s\n' "$$list" | grep -qxF -- "$$LIMA_INSTANCE"; then \
 		dir="$${LIMA_HOME:-$$HOME/.lima}/$$LIMA_INSTANCE"; \
-		status="$$(limactl list --format '{{.Status}}' "$$LIMA_INSTANCE")" || { \
+		status="$$($(VM_SHELL_ENV) limactl list --format '{{.Status}}' "$$LIMA_INSTANCE")" || { \
 			echo "vm-up: could not read the status of the Lima instance $$LIMA_INSTANCE" >&2; \
 			exit 1; \
 		}; \
@@ -813,7 +817,7 @@ vm-up: ## Create or start the Lima VM with only this repository's workspace moun
 				exit 1; \
 			fi; \
 			$(if $(VM_RESOURCES_SET),echo "vm-up: warning: $(VM_RESOURCES_SET) apply only when the VM is created; $$LIMA_INSTANCE exists and starts as it is: an existing VM is never resized (stop it and resize it with limactl edit, or rebuild it with make vm-delete and make vm-create)" >&2;) \
-			limactl shell --start --workdir / "$$LIMA_INSTANCE" true;; \
+			$(VM_SHELL_ENV) limactl shell --start --workdir / "$$LIMA_INSTANCE" true;; \
 		(Broken) \
 			if [ -e "$$dir/lima.yaml" ] || [ -L "$$dir/lima.yaml" ]; then \
 				echo "vm-up: the Lima instance $$LIMA_INSTANCE is Broken although $$dir/lima.yaml is there: it is broken for another reason, such as a lima.yaml Lima cannot load." >&2; \
@@ -832,10 +836,11 @@ vm-up: ## Create or start the Lima VM with only this repository's workspace moun
 			exit 1;; \
 		esac; \
 	else \
-		limactl start --name="$$LIMA_INSTANCE" --mount-only "$(HOST_WORKSPACE):w" --tty=false \
+		$(VM_SHELL_ENV) limactl start --name="$$LIMA_INSTANCE" --mount-only "$(HOST_WORKSPACE):w" --tty=false \
 			$${VM_CPUS:+--cpus="$$VM_CPUS"} $${VM_MEMORY:+--memory="$${VM_MEMORY%GiB}"} \
 			$${VM_DISK:+--disk="$${VM_DISK%GiB}"} $${VM_SSH_PORT:+--ssh-port="$$VM_SSH_PORT"} dev/lima.yaml; \
-	fi
+	fi && $(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" \
+		git -C "$(HOST_WORKSPACE_REPO)" config core.hooksPath .githooks
 
 .PHONY: vm-shell
 vm-shell: ## Open a shell in the VM at the workspace's checkout, WORKSPACE_REPO (host clone)
@@ -993,7 +998,7 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 		[ -n "$$value" ] || { echo "vm-env: $$label is not set or empty.$(vm_env_entry_why) Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
 		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$label has unsupported characters.$(vm_env_entry_why) Nothing was written." >&2; exit 1;; esac; \
 		printf '%s=%s\n' "$$name" "$$value"; \
-	done)" && out="$$(printf '%s\n' "$$env_file" | limactl shell --workdir / "$$LIMA_INSTANCE" \
+	done)" && out="$$(printf '%s\n' "$$env_file" | $(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" \
 		sh -c 'umask 077 && LC_ALL=C && export LC_ALL && d="$$HOME/.config/dot-agent-deck" && f="$$d/daemon.env" && \
 		t= && trap "rm -f \"\$$t\"" EXIT && trap "exit 1" HUP INT TERM && \
 		unreadable() { echo "vm-env: cannot read ~/.config/dot-agent-deck/daemon.env in the VM, so it cannot check the file for a GitHub token to warn about (nor a merge keep its lines). Nothing was written: make it readable by the VM user (chmod 600) and run make vm-env again." >&2; exit 1; } && \
@@ -1408,7 +1413,7 @@ agents-token-refresh-install: ## Install (or update) the LaunchDaemon that runs 
 		done; \
 	fi; \
 	script="$$clone/dev/agents-app-token.sh"; \
-	listed="$$(limactl list --format '{{.Name}}{{"\n"}}{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}' "$$LIMA_INSTANCE")" || { \
+	listed="$$($(VM_SHELL_ENV) limactl list --format '{{.Name}}{{"\n"}}{{range .Config.Mounts}}{{.Location}}{{"\n"}}{{end}}' "$$LIMA_INSTANCE")" || { \
 		echo "agents-token-refresh-install: limactl list could not read the mounts of the VM $$LIMA_INSTANCE, so it cannot check that $$clone is outside them: create the VM first (make vm-create), check that limactl list prints $$LIMA_INSTANCE, and run the install again from the host clone" >&2; \
 		exit 1; \
 	}; \
@@ -1633,7 +1638,7 @@ vm-boot-install: ## Install (or update) the LaunchDaemon that starts this VM ins
 		echo "vm-boot-install: refused: Lima's own autostart job of $$LIMA_INSTANCE (named above) is loaded or installed, so nothing was installed: remove it with the commands above, then run make vm-boot-install again" >&2; \
 		exit 1; \
 	fi; \
-	list="$$(limactl list --quiet)" || { \
+	list="$$($(VM_SHELL_ENV) limactl list --quiet)" || { \
 		echo "vm-boot-install: refused: could not list the Lima instances, so it cannot tell whether $$LIMA_INSTANCE exists: nothing was installed" >&2; \
 		exit 1; \
 	}; \
@@ -1744,7 +1749,7 @@ vm-gh-wrapper: ## Install the agents App's gh wrapper in a VM created before it 
 		echo "vm-gh-wrapper: dev/vm-gh-wrapper.sh printed no whole script (its last line is not vm_gh_wrapper); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
+	out="$$(printf '%s\n' "$$script" | $(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
 	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-gh-wrapper: done'; then \
 		echo "vm-gh-wrapper: the VM never printed vm-gh-wrapper: done, so the installation may not have finished; run make vm-gh-wrapper again" >&2; \
@@ -1774,7 +1779,7 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 		exit 1; \
 	fi; \
 	$(AGENTS_SSH_CONFIG); \
-	listed="$$(limactl list --format '{{.SSHLocalPort}}' "$$LIMA_INSTANCE")" || { \
+	listed="$$($(VM_SHELL_ENV) limactl list --format '{{.SSHLocalPort}}' "$$LIMA_INSTANCE")" || { \
 		echo "vm-agents-token-ssh: limactl list could not read the SSH port of the VM $$LIMA_INSTANCE: create it first (make vm-create)" >&2; \
 		exit 1; \
 	}; \
@@ -1796,7 +1801,7 @@ vm-agents-token-ssh: ## Let the agents App account's SSH key write the token int
 		echo "vm-agents-token-ssh: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
+	out="$$(printf '%s\n' "$$script" | $(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
 	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-agents-token-ssh: done'; then \
 		echo "vm-agents-token-ssh: the VM never printed vm-agents-token-ssh: done, so the installation may not have finished; run make vm-agents-token-ssh again" >&2; \
@@ -1829,7 +1834,7 @@ vm-agents-token-ssh-uninstall: ## Remove the agents App account's writer, keys f
 		echo "vm-agents-token-ssh-uninstall: dev/vm-agents-token-ssh.sh printed no whole script (its last line is not vm_agents_token_ssh_uninstall); nothing sent to the VM" >&2; \
 		exit 1; \
 	fi; \
-	out="$$(printf '%s\n' "$$script" | limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
+	out="$$(printf '%s\n' "$$script" | $(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" sh -s 2>&1)"; status=$$?; \
 	$(VM_OUTPUT); \
 	if ! printf '%s\n' "$$out" | grep -Fqx 'vm-agents-token-ssh-uninstall: done'; then \
 		echo "vm-agents-token-ssh-uninstall: the VM never printed vm-agents-token-ssh-uninstall: done, so the removal may not have finished; run make vm-agents-token-ssh-uninstall again" >&2; \
@@ -1853,9 +1858,9 @@ deck-restart: ## Reload the units and restart the deck's daemon service in the V
 .PHONY: vm-stop
 vm-stop: ## Stop the VM
 	$(LIMA_INSTANCE_CHECK)
-	limactl stop "$$LIMA_INSTANCE"
+	$(VM_SHELL_ENV) limactl stop "$$LIMA_INSTANCE"
 
 .PHONY: vm-delete
 vm-delete: ## Delete the VM and everything inside it
 	$(LIMA_INSTANCE_CHECK)
-	limactl delete --force "$$LIMA_INSTANCE"
+	$(VM_SHELL_ENV) limactl delete --force "$$LIMA_INSTANCE"

@@ -61,8 +61,11 @@ The VM has 4 CPUs, 16 GiB of memory and a 40 GiB disk (`dev/lima.yaml`), enough 
 ([Several VMs on one host](#several-vms-on-one-host)). `make vm-init` also turns on the workspace
 checkout's git hooks, which refuse commits and pushes to `main` (its `git` step runs
 `git -C <WORKSPACE_REPO> config core.hooksPath .githooks` inside the VM; the setting is kept in the
-workspace's `.git/config`, which the VM mounts). `make vm-up` no longer does (issue #227): it runs on the
-Mac, from the host clone, and runs no `git` in the workspace.
+workspace's `.git/config`, which the VM mounts). `make vm-up` runs on the Mac, from the host clone, and
+runs no `git` in the workspace there (issue #227); once the VM is up it sets the hooks again inside the VM,
+with the same `git -C <WORKSPACE_REPO> config core.hooksPath .githooks` through `limactl shell`, so an agent
+that unset the setting does not keep the hooks off past the next start (issue #326). The protection of
+`main` on GitHub stays the real gate.
 
 **1. The workspace's checkout**, cloned without entering it:
 
@@ -125,7 +128,7 @@ again: it changes only what is not set up yet, so running it on a VM that is set
 |---|---|
 | `theme` | Sets `theme` in Claude Code's `~/.claude/settings.json` to `CLAUDE_THEME` (default `dark`; `make vm-init CLAUDE_THEME=light`) |
 | `claude` | Marks Claude Code's onboarding done and trusts the workspace and the repository, in `~/.claude.json`, so the Claude Code roles start without first-run screens (see below) |
-| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept (a key `~/.gitconfig` holds several times is never taken for the wanted identity, and every write replaces all its values, issue #262). With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run. Then it turns on the main checkout's git hooks (`git -C <main checkout> config core.hooksPath .githooks`), which refuse commits and pushes to `main`: `make vm-up` runs on the Mac and sets none (issue #227) |
+| `git` | Gives the VM your git identity, so the agents commit as you: `git config user.name` and `user.email` from the Mac, or `GIT_USER_NAME=` and `GIT_USER_EMAIL=`. An identity already set in the VM is kept (a key `~/.gitconfig` holds several times is never taken for the wanted identity, and every write replaces all its values, issue #262). With the agents App's identity file in the VM ([The agents App](#the-agents-app)) the agents commit as the App's bot instead, which replaces any other identity; without the file, a bot identity left from earlier gives way to yours (`dev/vm-git-identity.sh`). On a new VM the file is not there yet, so this step sets your identity; the first `make agents-token` writes the file and sets the bot's identity in the VM's git itself, so nothing has to be re-run. Then it turns on the main checkout's git hooks (`git -C <main checkout> config core.hooksPath .githooks`), which refuse commits and pushes to `main`; `make vm-up` sets them again on every start, inside the VM, never with `git` on the Mac (issues #227, #326) |
 | `claude auth` | Checks that Claude Code uses the OAuth token (your subscription), not an API key |
 | `pi` | `pi auth check --provider deepseek` |
 | `gh` | `gh api repos/<owner>/<repo> --jq .full_name` for the main checkout's `origin`: gh can read the repository with the agents App's token; without the token file the gh wrapper refuses to run gh at all. Not `gh auth status`, which an installation token may fail (ADR 0031) |
@@ -582,7 +585,8 @@ A checkout made before ADR 0008 sits directly in a shared directory, and its VM 
 repository. Move it, then point the existing VM at the workspace; the VM keeps its tools, login and
 configuration. Run everything from the host clone ([The host clone](#the-host-clone)), and the `git`
 command in the VM, never in the moved checkout on the Mac. Set `WORKSPACE_REPO` first: every host target,
-`make vm-stop` included, refuses to run without it:
+`make vm-stop` included, refuses to run without it. The paths below, such as `~/src/shift2eu-host` and
+`~/src/shift2eu-ws`, are examples: replace them with your own.
 
 ```bash
 # Mac, host clone
@@ -811,7 +815,8 @@ VM, `.git` included: an agent can change its `Makefile` (or add a `GNUmakefile`,
 commands or fetch another `main`. So no check run in the workspace helps: a `git diff` against
 `origin/main`, or any other `git` or `make` command there, is agent-controlled code the moment an agent
 wants it to be. The host targets run from a second clone outside the workspace instead, which the VM never
-mounts, for example `~/src/shift2eu-host` (issue #227):
+mounts, for example `~/src/shift2eu-host` (issue #227). That path, here and in the commands of this
+document, is an example: replace it with your own host clone's.
 
 ```bash
 # Mac, only if ~/src/shift2eu-host does not exist yet:
@@ -1846,7 +1851,7 @@ bypass list missing on a repository admin's token, a token that may bypass `Prot
 |---|---|
 | 0 | The gate holds |
 | 1 | The gate has gaps: the release-tag skill stops the release |
-| 2 | It could not check: a `gh api` read failed (no access), not exactly one ruleset is named `Protect main`, an answer it did not expect, or an argument (it takes none) |
+| 2 | It could not check: `jq` is not on `PATH` or does not run (`jq at <path> does not run (<its error>)`, checked with `jq -n 1` before the first read, issue #321), a `gh api` read failed (no access), not exactly one ruleset is named `Protect main`, an answer it did not expect, or an argument (it takes none) |
 | 3 | No gap, but a check is `unverified:`: run `make gate-check` yourself, with your own admin token |
 
 GitHub returns a ruleset's bypass list only to a token that may change the ruleset, which the agents App
