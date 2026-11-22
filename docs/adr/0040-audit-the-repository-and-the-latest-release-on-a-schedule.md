@@ -452,8 +452,7 @@ test of ours (Decision 3's reason).
      misses every key it does not name, `gpg.program` and `core.pager`'s neighbours among them):
      - `.git/config`, when present, is a regular file that holds only these keys, compared without
        regard to case on the section and the key name: `core.repositoryformatversion`, `core.filemode`,
-       `core.bare`, `core.logallrefupdates`; `remote.origin.url`, `remote.origin.fetch`,
-       `remote.origin.promisor`, `remote.origin.partialclonefilter`; `gc.auto`;
+       `core.bare`, `core.logallrefupdates`; `remote.origin.url`, `remote.origin.fetch`; `gc.auto`;
        `branch.<name>.remote`, `branch.<name>.merge`; `extensions.objectformat`. The subsection
        `origin` is compared exactly, as git compares subsections; `<name>` is any. Every other key and
        every other section is refused, an empty one included: `extensions.worktreeconfig`,
@@ -468,13 +467,26 @@ test of ours (Decision 3's reason).
        line. Git writes none of these forms, so refusing them costs a checkout nothing. A refusal
        names the line's number and the section or key, never a value or a subsection, which could hold a
        credential.
-     - **Three other files** are refused by their presence, in any file type: `.git/config.worktree`,
-       `.git/commondir` and `.git/gitdir`, the files beside `.git/config` git reads a configuration or a
-       repository out of.
+     - **Two other files** are refused by their presence, in any file type: `.git/commondir` and
+       `.git/gitdir`, the files beside `.git/config` git reads a repository out of.
 
      The wrapper's git reads that one local config (its environment turns the system and global ones
      off, see the wrapper below), so what that config may hold is exactly the allow list. The check
      makes no claim about what git does with a key; it only holds that no key outside the list is there.
+     *Amended 2026-11-23 (issue #277 round E):*
+     - **`.git/config.worktree` is taken when harmless.** Every default `actions/checkout` (v7.0.1, the
+       pin) leaves it, holding `core.sparseCheckout = false`, `core.sparseCheckoutCone = false` and
+       `index.sparse = false`; round D refused it by its presence, so every real run would have failed
+       step 3. It may now be there as a regular file (`Lstat`: a link or any other type is refused)
+       that passes the same strict parser under an allow list of its own: `core.sparsecheckout`,
+       `core.sparsecheckoutcone`, `index.sparse`, compared without regard to case. Any other key or
+       section in it is refused, `core.fsmonitor` and `[include]` among them. Git reads the file only
+       under `extensions.worktreeconfig`, which `.git/config`'s allow list refuses, so the wrapper's git
+       never reads it at all; the check holds that it would add nothing if it did.
+     - **No lazy fetch.** `remote.origin.promisor` and `remote.origin.partialclonefilter` are off
+       `.git/config`'s allow list (round D took them): a `fetch-depth: 1` checkout writes neither, and
+       with them the wrapper's git could fetch an object the checkout lacks. A partial clone's config is
+       refused.
   4. **Bubblewrap** starts (the user-namespace check, below).
   5. **The preflight** (below).
   6. **The audit**: one `Ask` with the skill's text as the appended system prompt, read from
@@ -498,7 +510,11 @@ test of ours (Decision 3's reason).
      its own, which names the cap in decimal, not with the no-result-file one. The bytes must be one
      JSON value and nothing after it, and the token and the canary are searched for in the raw bytes
      and in every decoded string, the objects' keys included, so a secret written as `\uXXXX` escapes
-     is found too; a file that is no JSON is refused. Both failures still print the audit's one constant
+     is found too; a file that is no JSON is refused. *Amended 2026-11-23 (issue #277 round E):* the
+     strings are collected by walking the document's tokens (`json.Decoder.Token`), not by decoding it
+     into a map, so every key and every value of a duplicate key is searched: a map keeps a duplicate
+     key's last value alone, and a secret under its first would never reach the search. The check for
+     one value and then EOF stays. Both failures still print the audit's one constant
      line. `Audit(ctx, root, in, launch)` returns `([]byte, error)`: the bytes it read and checked,
      never the path. `Steps.Audit` carries them, and `Run.Result func(body []byte) error`, beside
      `Run.Out`, is handed exactly those bytes once, after every step passed, and never for a run that
@@ -642,6 +658,16 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   `%GK`, `%GG`, ...) or for-each-ref's `%(signature...)`, when it is the attached value of `--format=` or
   `--pretty=` (or an abbreviation of either), a `format:` or `tformat:` value, or the next word after
   `--format` or `--pretty`. `--format=%H%n%s` and every other format still pass.
+  *Amended 2026-11-23 (issue #277 round E):* round D's check looked only at format options, and missed
+  git's modifiers (`%+G?`, `%-GS`, `% GK`), shortlog's `--group=format:%G?`, an abbreviation such as
+  `--gr=format:%GS` and for-each-ref's sort atom. It is replaced by a check of **every** git argument
+  word, wherever it sits on the line: a word that holds `%` followed by an optional `+`, `-` or space
+  and then `G`, or that holds `%(signature`, is refused; and on a `for-each-ref` line, any word that holds
+  `signature` (`--sort=signature`, `--sort=-signature`, `--sort signature:grade`, attached, negated,
+  abbreviated or as the next word). The check reads a word whatever option it belongs to, so it
+  over-refuses and fails closed: a grep pattern or a `-S` value holding `%G`, or a for-each-ref pattern
+  holding `signature`, is refused too, and the model has no way to pass one. `git log --format=%H%n%s`
+  and `for-each-ref --sort=-committerdate` still pass.
 - **The same environment for every command**, the five `GIT_*` included: PRD #175's criterion is one
   scrubbed environment, and a variable only git reads changes nothing for the others.
 - **The exec seam.** The logic is `run(args []string, exec func(path string, argv []string, env []string)
@@ -828,10 +854,23 @@ of milestone 2), and the constraints PR 5 must keep:
   refused, so an attached value that holds either letter is refused with it: `-Scredential`, `-Gfunc`,
   `git grep -c`. It fails closed, and the model can pass such a value as a separate word (`-S
   credential`). Recorded only: the skill is not changed in this PR.
-- *Added 2026-11-23:* **PR 5's checkout must not use sparse checkout or worktree config.** The git config
-  allow list refuses `extensions.worktreeconfig` (and every `core.sparsecheckout*` key), and the layout
-  check refuses `.git/config.worktree`, `.git/commondir` and `.git/gitdir`: a checkout that writes any of
-  them fails step 3 on every run.
+- *Added 2026-11-23, amended in round E:* **PR 5's checkout must not turn on sparse checkout or
+  worktree config.** `.git/config`'s allow list refuses `extensions.worktreeconfig` and every
+  `core.sparsecheckout*` key; `.git/config.worktree` may hold only `core.sparsecheckout`,
+  `core.sparsecheckoutcone` and `index.sparse` (the three a default `actions/checkout` writes, each
+  `false`); and the layout check refuses `.git/commondir` and `.git/gitdir`. The default checkout
+  passes; one with `sparse-checkout:` set, or any other key in either file, fails step 3 on every run.
+- *Added 2026-11-23 (issue #277 round E):* **The runner's git may leave an empty section header after
+  checkout's unsets.** With `persist-credentials: false`, `actions/checkout` unsets its
+  `http.<url>.extraheader` and `includeIf` keys; a git that keeps the emptied `[http "..."]` or
+  `[includeIf "..."]` header behind leaves a section off the allow list, which is refused, empty or
+  not. It fails closed; the first run shows which the runner's git does, and any change to the allow
+  list is a reviewed amendment here.
+- *Added 2026-11-23 (issue #277 round E):* **`readResult` can block between its `Lstat` and its
+  `Open`** if something swaps a FIFO in at `result.json` in that window: the open of a FIFO waits for
+  a writer. That needs a process outliving the CLI, which `--die-with-parent` rules out for everything
+  the sandbox started. It fails closed: the step never takes a result, and should the open return, the
+  `os.SameFile` check refuses what it opened.
 - **Renovate's generic manager** lists the workflows that hold an annotated pin one by one; PR 5's audit
   workflow must join that list, which `test/lint`'s `TestEveryAnnotatedWorkflowPinIsScanned` enforces
   once the workflow holds a `# renovate: datasource=` comment.
