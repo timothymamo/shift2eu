@@ -781,6 +781,217 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 	})
 }
 
+// TestRunRefusesThePathsIntoProcSysAndDev pins the wrapper's own path rule (issue
+// #277, round F finding 2): Claude Code's deny rule Bash(*/proc/*/environ*)
+// matches the command text, so a glob such as `audit-exec cat /proc/[0-9]*/envir?n`
+// gets past it and the wrapper then receives real paths. The wrapper refuses them
+// itself.
+//
+// The rule, pinned here: a word names a path when it is
+//
+//   - a word that is no option - no leading "-", or "-" alone, which is stdin -
+//     and holds a "/": a bare word such as a grep pattern, a ref or a jq filter
+//     names no file, and a path without a "/" is no path into one of the three;
+//   - the value of an option, attached after "=" (--field-separator=/proc/x);
+//   - git's own -C, attached (-C/proc/1) or as the next word.
+//
+// A path is refused when filepath.Clean of it, read from "/" when it is
+// relative, is /proc, /sys or /dev exactly or lies under one of them, so a
+// relative path that reaches one of them from the work directory
+// (../../proc/1/environ) is refused as an absolute one is. The rule fails
+// closed: a grep pattern that reads as such a path is refused too, as
+// asksForSignature refuses a word holding %G whatever option it belongs to.
+func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a path into one of the three is refused", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name      string
+			args      []string
+			wantNamed string
+		}{
+			{
+				name:      "cat of a process's environment",
+				args:      []string{"cat", "/proc/1/environ"},
+				wantNamed: "/proc/1/environ",
+			},
+			{
+				name:      "head of the wrapper's own environment",
+				args:      []string{"head", "/proc/self/environ"},
+				wantNamed: "/proc/self/environ",
+			},
+			{
+				name:      "od of a kernel file",
+				args:      []string{"od", "/sys/kernel/x"},
+				wantNamed: "/sys/kernel/x",
+			},
+			{
+				// A path that reaches /proc through its own .. is one of the
+				// three once it is cleaned.
+				name:      "cat of a path that cleans into /proc",
+				args:      []string{"cat", "/proc/../proc/1/environ"},
+				wantNamed: "/proc/../proc/1/environ",
+			},
+			{
+				name:      "cat of the directory itself",
+				args:      []string{"cat", "/proc"},
+				wantNamed: "/proc",
+			},
+			{
+				name:      "tail of a device",
+				args:      []string{"tail", "/dev/null"},
+				wantNamed: "/dev/null",
+			},
+			{
+				// The work directory's parent is /srv/audit, so ../../proc names
+				// /proc: a relative path is read as if the working directory
+				// were /.
+				name:      "base64 of a relative path out of the work directory",
+				args:      []string{"base64", "../../proc/1/environ"},
+				wantNamed: "../../proc/1/environ",
+			},
+			{
+				name:      "a path after an option of cat's",
+				args:      []string{"cat", "-n", "/proc/1/environ"},
+				wantNamed: "/proc/1/environ",
+			},
+			{
+				// The value of an option, attached after its =, is a path too.
+				name:      "the value of an attached option",
+				args:      []string{"sort", "--field-separator=/proc/x", "/srv/audit/work/x"},
+				wantNamed: "--field-separator=/proc/x",
+			},
+			{
+				// jq reads the file its --rawfile names, after the variable it
+				// fills.
+				name:      "the file of jq's --rawfile",
+				args:      []string{"jq", "--rawfile", "canary", "/proc/self/environ", "."},
+				wantNamed: "/proc/self/environ",
+			},
+			{
+				// git -C with its value as the next word.
+				name:      "the argument of git's own -C",
+				args:      []string{"git", "-C", "/proc/1/environ", "log"},
+				wantNamed: "/proc/1/environ",
+			},
+			{
+				// git -C with its value attached to the letter.
+				name:      "the argument attached to git's own -C",
+				args:      []string{"git", "-C/proc/1", "log"},
+				wantNamed: "-C/proc/1",
+			},
+			{
+				// The work directory is /srv/audit/work, so this path is
+				// /proc/1/environ and the wrapper refuses what the CLI's deny
+				// rule matched as text.
+				name:      "a path built out of the work directory",
+				args:      []string{"sha256sum", "/srv/audit/work/../../proc/1/environ"},
+				wantNamed: "/srv/audit/work/../../proc/1/environ",
+			},
+			{
+				// The rule fails closed: a git grep pattern that reads as one
+				// of the three is refused, as asksForSignature refuses %G.
+				name:      "a grep pattern that reads as a path",
+				args:      []string{"git", "grep", "-e", "/proc/1/environ", "/srv/audit/checkout/f"},
+				wantNamed: "/proc/1/environ",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				code, stderr, recorder := runWrapper(t, tc.args)
+
+				if code != refusedExit {
+					t.Errorf("run(%q) = %d, want %d: the wrapper refuses a path into /proc, /sys or /dev itself, whatever the CLI's deny rule matched (stderr %q)", tc.args, code, refusedExit, stderr)
+				}
+
+				if recorder.called {
+					t.Errorf("run(%q) exec'd %q; a refused line runs nothing", tc.args, recorder.call.argv)
+				}
+
+				if !strings.Contains(stderr, tc.wantNamed) {
+					t.Errorf("run(%q) wrote %q to stderr, want it to name the refused word %q", tc.args, stderr, tc.wantNamed)
+				}
+			})
+		}
+	})
+
+	t.Run("a line that reads elsewhere is exec'd whole", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name     string
+			args     []string
+			wantPath string
+		}{
+			{
+				name:     "cat of the work directory's file",
+				args:     []string{"cat", "/srv/audit/work/x"},
+				wantPath: "/usr/bin/cat",
+			},
+			{
+				name:     "the word proc in a grep pattern is no path",
+				args:     []string{"git", "grep", "-e", "proc", "/srv/audit/checkout/f"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				name:     "a directory named proc inside the work area is no /proc",
+				args:     []string{"cat", "/srv/audit/work/proc/x"},
+				wantPath: "/usr/bin/cat",
+			},
+			{
+				name:     "a jq filter is no path",
+				args:     []string{"jq", "-r", ".findings", "/srv/audit/work/result.json"},
+				wantPath: "/usr/bin/jq",
+			},
+			{
+				name:     "stdin is no path",
+				args:     []string{"cat", "-"},
+				wantPath: "/usr/bin/cat",
+			},
+			{
+				name:     "head's -n value and its file",
+				args:     []string{"head", "-n", "5", "/srv/audit/work/x"},
+				wantPath: "/usr/bin/head",
+			},
+			{
+				name:     "sort's -k value and its file",
+				args:     []string{"sort", "-k", "2,2", "/srv/audit/work/x"},
+				wantPath: "/usr/bin/sort",
+			},
+			{
+				name:     "a relative path inside the work directory",
+				args:     []string{"cat", "./x"},
+				wantPath: "/usr/bin/cat",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				code, stderr, recorder := runWrapper(t, tc.args)
+
+				if code != 0 {
+					t.Fatalf("run(%q) = %d, want 0 (stderr %q): no word of the line names a path into /proc, /sys or /dev", tc.args, code, stderr)
+				}
+
+				if !recorder.called {
+					t.Fatalf("run(%q) never reached the exec seam: no word of the line names a path into /proc, /sys or /dev", tc.args)
+				}
+
+				if recorder.call.path != tc.wantPath {
+					t.Errorf("run(%q) execs %q, want %q", tc.args, recorder.call.path, tc.wantPath)
+				}
+			})
+		}
+	})
+}
+
 // TestRunTakesTheOptionsThatOnlyRead pins the other half of the allow lists: the
 // lines a legitimate command line makes, which the wrapper still execs whole.
 // sort's own allow list takes -k and -t with their value attached or as the
