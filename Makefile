@@ -214,14 +214,18 @@ endif
 # one too, an absolute target from /, a relative one from the link's directory, and .. taken from the resolved
 # path; a component that does not exist is kept as it is, so a workspace that does not exist yet, under a
 # symlink or behind a dangling one, is compared in resolved form too (issue #447). Every turn of the loop either
-# consumes a component or follows a link, at most 40, so it ends. More than 40 links (a loop), a link readlink
-# cannot read, or a resolved path holding a character WORKSPACE_REPO may not hold (it would split or be a
-# pattern to make's filter) prints nothing, and an empty value is refused below: the guard fails closed. The
+# consumes a component or follows a link, at most 32 (macOS's MAXSYMLINKS), so it ends. A link's target is kept
+# exactly, a trailing newline too (readlink's output with a _ after it, both stripped again), as command
+# substitution would drop it. Then the longest prefix that exists is entered and spelled as pwd -P spells it, the
+# missing rest appended, so a path typed in another case on a case-insensitive file system (macOS's APFS) is
+# compared in the kernel's spelling, as REPO_ROOT is. More than 32 links (a loop), a link readlink cannot read, a
+# prefix cd cannot enter, or a resolved path holding a character WORKSPACE_REPO may not hold (it would split or be
+# a pattern to make's filter) prints nothing, and an empty value is refused below: the guard fails closed. The
 # value passed the character check above and is an absolute path, or empty for a checkout directly below /, so
 # it is safe in single quotes.
-host_workspace_real := $(shell LC_ALL=C; export LC_ALL; out=; rest='$(HOST_WORKSPACE)'; hops=0; failed=; while [ -n "$$rest" ]; do part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; rest=$${rest$(host_hash)/}; case $$part in (''|.) ;; (..) out=$${out%/*} ;; (*) if [ -L "$$out/$$part" ]; then hops=$$((hops + 1)); [ "$$hops" -le 40 ] && link=$$(readlink "$$out/$$part") && [ -n "$$link" ] || { failed=1; break; }; case $$link in (/*) out= ;; esac; rest="$$link/$$rest"; else out="$$out/$$part"; fi ;; esac; done; [ -n "$$failed" ] || case $$out in (*[!A-Za-z0-9._/+@=$(host_hash)-]*) ;; (*) printf '%s\n' "$${out:-/}" ;; esac)
+host_workspace_real := $(shell LC_ALL=C; export LC_ALL; out=; rest='$(HOST_WORKSPACE)'; hops=0; failed=; while [ -n "$$rest" ]; do part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; rest=$${rest$(host_hash)/}; case $$part in (''|.) ;; (..) out=$${out%/*} ;; (*) if [ -L "$$out/$$part" ]; then hops=$$((hops + 1)); [ "$$hops" -le 32 ] && link=$$(readlink "$$out/$$part" && echo _) && link=$${link%??} && [ -n "$$link" ] || { failed=1; break; }; case $$link in (/*) out= ;; esac; rest="$$link/$$rest"; else out="$$out/$$part"; fi ;; esac; done; [ -n "$$failed" ] || { pre=$$out; miss=; while [ -n "$$pre" ] && [ ! -e "$$pre" ]; do miss="/$${pre$(host_hash)$(host_hash)*/}$$miss"; pre=$${pre%/*}; done; real=$$(cd "$${pre:-/}" && pwd -P && echo _) && real=$${real%??} && out=$${real%/}$$miss && case $$out in (*[!A-Za-z0-9._/+@=$(host_hash)-]*) ;; (*) printf '%s\n' "$${out:-/}" ;; esac; })
 ifeq ($(host_workspace_real),)
-$(call host_refuse,the workspace $(or $(HOST_WORKSPACE),/) cannot be resolved: more than 40 symlinks or a loop of them$(host_comma) a symlink that cannot be read$(host_comma) or a resolved path holding a character other than letters$(host_comma) digits and . _ - / + @ $(host_hash) =)
+$(call host_refuse,the workspace $(or $(HOST_WORKSPACE),/) cannot be resolved: more than 32 symlinks or a loop of them$(host_comma) a symlink that cannot be read$(host_comma) a directory that cannot be entered$(host_comma) or a resolved path holding a character other than letters$(host_comma) digits and . _ - / + @ $(host_hash) =)
 else ifneq ($(filter $(host_workspace_real) $(patsubst %/,%,$(host_workspace_real))/%,$(REPO_ROOT)),)
 $(call host_refuse,make runs in $(REPO_ROOT) - the workspace $(or $(HOST_WORKSPACE),/) or inside it)
 else ifneq ($(filter $(REPO_ROOT)/%,$(host_workspace_real)),)
