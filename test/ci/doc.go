@@ -26,9 +26,28 @@
 // LC_ALL as C - so no variable of the developing machine's own environment, a
 // credential's included, reaches the script.
 //
+// TestAuditPathsScriptFencesAuditPullRequests runs
+// .github/scripts/audit-paths.sh, the required path check of PRD #175
+// milestone 2, against git repositories the test builds in t.TempDir(): a base
+// commit and a head commit with the case's change. The cases pin that the
+// check passes for every author but shift2eu-audit[bot], exact match, and for
+// the App when every changed path is under docs/security/ and every entry there
+// is a regular, non-executable file; and that it fails, naming an offending
+// path, for a change outside docs/security/ - an addition, a modification, a
+// deletion, a rename (not detected, so the old path counts), a mode change, an
+// executable file or a symlink under docs/security/, and a name holding a
+// newline that a line-based diff would split. It fails closed, non-zero, when
+// the author is unset or empty and when BASE or HEAD is unset or names no
+// commit of the repository. Each case's git commands and the check run in an
+// environment the harness builds - HOME and TMPDIR in the case's temporary
+// directory, the system and global git configuration off, LANG and LC_ALL as C
+// - so no setting or credential of the developing machine's reaches a commit or
+// a run.
+//
 // A script needs bash, tar, openssl, mktemp, cp, sh and gzip on PATH, and GNU
 // coreutils' base64, the only one with -w0 for the unwrapped digest the
-// installer compares; the test skips when one of them is missing. The package
+// installer compares; the test skips when one of them is missing. The path
+// check needs bash and git, and skips when either is missing. The package
 // has no production code, so it imports nothing, and its dependency rule holds
 // it to that (test-docs-are-pure).
 package ci
