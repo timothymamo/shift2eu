@@ -460,9 +460,11 @@ type limactlScanner struct {
 // limactlCommandSites returns the text before each place in line where limactl is a command word: outside '...'
 // strings, and outside "..." strings except inside the $(...) substitutions a double-quoted string still runs.
 // A string may name limactl without running it, which is why the quotes matter: the recipes here print it in
-// messages. limactl has to be a word of its own too, not part of a longer name. The text before it is what decides
-// whether the call puts $(VM_SHELL_ENV) in front of it: at the start of a line, first in a $(...) substitution,
-// or after a ;, an && or a | of a pipeline, as the recipes here write it.
+// messages. limactl has to be a word of its own too, not part of a longer name, but it may be the last part of a
+// path: /opt/homebrew/bin/limactl runs the tool as surely as limactl does, so the site of such a call is the text
+// before the whole path, and a $(VM_SHELL_ENV) in front of the path counts as the one before the call. The text
+// before it is what decides whether the call puts $(VM_SHELL_ENV) in front of it: at the start of a line, first in
+// a $(...) substitution, or after a ;, an && or a | of a pipeline, as the recipes here write it.
 func limactlCommandSites(line string) []string {
 	var scanner limactlScanner
 
@@ -529,7 +531,7 @@ func (s *limactlScanner) sites(line string) []string {
 			continue
 		}
 
-		if i > 0 && isMakefileWordByte(line[i-1]) {
+		if i > 0 && isMakefileWordByte(line[i-1]) && line[i-1] != '/' {
 			continue
 		}
 
@@ -537,10 +539,24 @@ func (s *limactlScanner) sites(line string) []string {
 			continue
 		}
 
-		sites = append(sites, line[:i])
+		sites = append(sites, line[:commandStart(line, i)])
 	}
 
 	return sites
+}
+
+// commandStart returns where the command that starts the tool's name at index in line starts: index itself, or,
+// when a path spells the tool - /opt/homebrew/bin/limactl - the start of that path. The walk back over the word
+// bytes stops at the space, the quote or the $(...) that holds the path, so the text before the path is what the
+// caller gets and a $(VM_SHELL_ENV) there is still seen as the call's prefix.
+func commandStart(line string, index int) int {
+	start := index
+
+	for start > 0 && isMakefileWordByte(line[start-1]) {
+		start--
+	}
+
+	return start
 }
 
 // isMakefileWordByte reports whether c continues a word in a recipe: a letter, a digit or one of . _ - /, so
@@ -731,7 +747,8 @@ func TestMakeRulesFindsLimaInstanceViolations(t *testing.T) {
 // a recipe line that calls limactl must put $(VM_SHELL_ENV) before it, whether limactl starts the line, stands
 // in a $(...) substitution or follows a pipe, and a line that only names limactl in a message calls nothing. A
 // call a macro the recipe splices in makes is the line's call, and a message whose quote a backslash-continued line
-// carries into the next one is still a message.
+// carries into the next one is still a message. The guard reads the tool however the recipe spells it: the literal
+// word, a macro such as $(LIMACTL) that expands to it, and a path such as /opt/homebrew/bin/limactl.
 func TestMakeRulesFindsALimactlCallWithoutVMShellEnv(t *testing.T) {
 	t.Parallel()
 
@@ -798,6 +815,41 @@ func TestMakeRulesFindsALimactlCallWithoutVMShellEnv(t *testing.T) {
 				"vm-stop:\n" +
 				"\t" + limaInstanceCheck + "\n" +
 				"\t@$(LIMACTL_LIST)\n",
+		},
+		{
+			name: "a call through a macro the recipe prefixes with the shell environment",
+			text: "LIMACTL := limactl\n" +
+				"vm-stop:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\t" + vmShellEnv + " $(LIMACTL) stop \"$$LIMA_INSTANCE\"\n",
+		},
+		{
+			name: "a call through a macro without the shell environment",
+			text: "LIMACTL := limactl\n" +
+				"vm-stop:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\t$(LIMACTL) stop \"$$LIMA_INSTANCE\"\n",
+			wantViolations: [][]string{{"make vm-stop", vmShellEnv}},
+		},
+		{
+			name: "a call spelled with a path without the shell environment",
+			text: "vm-stop:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\t/opt/homebrew/bin/limactl stop \"$$LIMA_INSTANCE\"\n",
+			wantViolations: [][]string{{"make vm-stop", vmShellEnv}},
+		},
+		{
+			name: "a call spelled with a path and the shell environment first",
+			text: "vm-stop:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\t" + vmShellEnv + " /opt/homebrew/bin/limactl list --quiet\n",
+		},
+		{
+			name: "a call run through command without the shell environment",
+			text: "vm-stop:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\tcommand limactl stop \"$$LIMA_INSTANCE\"\n",
+			wantViolations: [][]string{{"make vm-stop", vmShellEnv}},
 		},
 		{
 			name: "a message whose quote a continuation carries into the next line",

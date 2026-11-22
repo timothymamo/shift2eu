@@ -2,13 +2,13 @@
 //
 // The host clone's direnv .envrc exports SHIFT2EU_AGENTS_APP_ID, SHIFT2EU_AGENTS_APP_INSTALLATION_ID and
 // SHIFT2EU_AGENTS_APP_KEY_FILE, and make hands its environment to every recipe. Lima forwards no environment of
-// its own, so today nothing of it reaches the VM - which is why issue #323 took the stripping of deck, deck-restart,
-// vm-claude-settings, vm-init and vm-shell as defence in depth, and this issue asks for the same on every other
-// target that calls limactl. The list is not a list of target names here: the guard over the Makefile's rules
-// (makerules_test.go, TestMakefileSetsVMShellEnvForEveryLimactlCall) wants $(VM_SHELL_ENV) before every limactl
-// call, and this test runs the targets the issue names to prove that the shell the recipe gets really is without
-// them: the fake limactl records which of those names were set in its own environment (names only, never a value,
-// CLAUDE.md rule 3). No test reaches a real Lima or holds a real credential.
+// its own, so today nothing of it reaches the VM - which is why PR #323 (issue #227 part 1, ADR 0031) took the
+// stripping of deck, deck-restart, vm-claude-settings, vm-init and vm-shell as defence in depth, and issue #326 asks
+// for the same on every other target that calls limactl. The list is not a list of target names here: the guard over
+// the Makefile's rules (makerules_test.go, TestMakefileSetsVMShellEnvForEveryLimactlCall) wants $(VM_SHELL_ENV)
+// before every limactl call, and this test runs the targets the issue names to prove that the shell the recipe gets
+// really is without them: the fake limactl records which of those names were set in its own environment (names only,
+// never a value, CLAUDE.md rule 3). No test reaches a real Lima or holds a real credential.
 package devenv_test
 
 import (
