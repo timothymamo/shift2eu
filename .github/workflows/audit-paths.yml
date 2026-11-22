@@ -18,10 +18,14 @@ name: Audit paths
 # pull_request_target, never pull_request, because the trigger is the fence itself: pull_request runs the
 # pull request's own copy of this workflow and of the script, and the audit App, which holds contents write
 # but no Workflows permission, could change .github/scripts/audit-paths.sh in its own pull request and so
-# pass its own check. pull_request_target runs main's copy of both, the code this repository reviewed.
+# pass its own check. pull_request_target runs the base branch's copy of both, never the pull request's:
+# for every pull request into main, the only ones the audit-paths ruleset on main requires the check on,
+# that is main's copy, the code this repository reviewed. A pull request into another branch runs that
+# branch's copy, which the branch ruleset on ~ALL keeps the audit App from changing; retargeting it to
+# main is an edited event that runs main's copy on the same head commit, and that newer run decides.
 #
-# Why pull_request_target is safe here: the job executes main's code only. The checkout has no ref: and no
-# repository:, so it is main's commit, github.sha. The pull request's commits are then fetched as git
+# Why pull_request_target is safe here: the job executes the base branch's code only. The checkout has no
+# ref: and no repository:, so it is the base branch's commit, github.sha. The pull request's commits are then fetched as git
 # objects and diffed, data the script reads with git plumbing, and no step checks them out, switches to
 # them or runs a line of their tree. The GITHUB_TOKEN reads contents only and is not persisted in
 # .git/config; the repository is public, so the fetch needs no credential. The job uses no secret and no
@@ -54,8 +58,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      # No ref: and no repository: on purpose: under pull_request_target this is main's commit, whose copy
-      # of the script runs.
+      # No ref: and no repository: on purpose: under pull_request_target this is the base branch's commit
+      # (main's for every pull request into main), whose copy of the script runs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false

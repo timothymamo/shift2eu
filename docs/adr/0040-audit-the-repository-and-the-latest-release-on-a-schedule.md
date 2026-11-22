@@ -281,6 +281,14 @@ Residual risks of the check:
   `checks: write` could post a check run of the same name from the same integration. The App cannot add
   or change one (it has no Workflows permission); a workflow change that grants `checks: write` is
   reviewed like any other.
+- Under `pull_request_target` the workflow file and `github.sha` come from the pull request's base
+  branch, not always from `main`. Every pull request into `main`, the only ones the audit-paths ruleset
+  requires the check on, runs `main`'s copy of the workflow and of the script; a pull request into another
+  branch runs that branch's copy, which could differ. The branch ruleset on `~ALL` keeps the audit App
+  from changing any other branch's copy; without it, the App's contents write could. Retargeting the pull
+  request to `main` is an `edited` event that runs `main`'s copy on the same head commit, and that newer
+  run decides; until it finishes, the earlier run's result from the other base stands on the head commit.
+  Code-owner approval on `main` bounds that window.
 
 ### No other App holds Actions write
 
