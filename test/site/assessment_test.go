@@ -3,6 +3,7 @@ package site_test
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -228,4 +229,220 @@ func (el *element) find(tag string) []*element {
 	}
 
 	return out
+}
+
+// privacyPageName is the bundle's and site/'s name of the privacy page: the page
+// that states the site's promise in full.
+const privacyPageName = "privacy.html"
+
+// TestPrivacyBarIsThePrivacyPagesInformationBox pins the box the one-sentence
+// privacy bar sits in (issue #373, item 02-2): the maintainer asked for the
+// wording and an icon together in the blue information box the privacy page
+// already carries, because the bar alone reads as a line of ordinary text.
+func TestPrivacyBarIsThePrivacyPagesInformationBox(t *testing.T) {
+	t.Parallel()
+
+	bundle := theBundle(t)
+
+	// The privacy page is where the artifact puts the sentence in the information
+	// box; the assessment page carries the same box.
+	privacy := boxReading(t, bundle.html(t, privacyPageName), privacyBar)
+	assessment := boxReading(t, bundle.html(t, "index.html"), privacyBar)
+
+	if !hasSilentIcon(assessment) {
+		t.Errorf("the assessment page's box %s holds no icon hidden from assistive technology, want an inline <svg> with aria-hidden=\"true\", as the privacy page's box %s has (issue #373, item 02-2)",
+			describeElement(assessment), describeElement(privacy))
+	}
+
+	for _, image := range assessment.find("img") {
+		t.Errorf("the assessment page's box holds the image %s, want an inline <svg> or a text glyph: the page loads no image or font file (issue #373, item 02-2)",
+			describeElement(image))
+	}
+
+	got, want := classesOf(assessment), classesOf(privacy)
+	if !slices.Equal(got, want) {
+		t.Errorf("the assessment page's box carries the classes %q, want the privacy page's box's %q: the sentence sits in the same information box on both pages (issue #373, item 02-2)",
+			strings.Join(got, " "), strings.Join(want, " "))
+	}
+}
+
+// TestAssessmentIntroDropsTheHowTheSiteSentence pins the sentence the maintainer
+// removed from the assessment page's introduction (issue #373, item 02-3): the
+// promise it made is the link inside the sentence that says the assessment runs
+// in the browser, so the page does not say it twice.
+func TestAssessmentIntroDropsTheHowTheSiteSentence(t *testing.T) {
+	t.Parallel()
+
+	const removed = "How the site keeps that promise"
+
+	text := collapseSpace(theBundle(t).html(t, "index.html").body(t).textContent())
+
+	if strings.Contains(text, removed) {
+		t.Errorf("the assessment page reads %q, want no sentence beginning %q: the maintainer removed it, and the promise is the link inside the sentence that begins \"The assessment runs\" (issue #373, item 02-3)",
+			excerptText(text, 400), removed)
+	}
+}
+
+// TestAssessmentIntroLinksThePrivacyPageInTheSentence pins where the removed
+// sentence's link went (issue #373, item 02-3): inside the sentence that says the
+// assessment runs in the browser, so the promise is part of that sentence rather
+// than one of its own after a full stop.
+func TestAssessmentIntroLinksThePrivacyPageInTheSentence(t *testing.T) {
+	t.Parallel()
+
+	const sentence = "The assessment runs"
+
+	doc := theBundle(t).html(t, "index.html")
+
+	var leads []*element
+
+	for _, paragraph := range doc.find("p") {
+		if strings.Contains(collapseSpace(paragraph.textContent()), sentence) {
+			leads = append(leads, paragraph)
+		}
+	}
+
+	if len(leads) != 1 {
+		t.Fatalf("the assessment page holds %d paragraphs reading %q, want exactly one: the lead that says the assessment runs in this browser (issue #373, item 02-3)",
+			len(leads), sentence)
+	}
+
+	lead := leads[0]
+
+	var anchor *element
+
+	links := 0
+
+	for _, candidate := range lead.find("a") {
+		if href, _ := candidate.attr("href"); href == privacyPageName {
+			anchor = candidate
+			links++
+		}
+	}
+
+	if links != 1 {
+		t.Fatalf("the lead holds %d links to %s, want exactly one: the promise links the page that keeps it (issue #373, item 02-3)",
+			links, privacyPageName)
+	}
+
+	before := textBeforeChild(t, lead, anchor)
+
+	at := strings.Index(before, sentence)
+	if at < 0 {
+		t.Fatalf("the link sits before %q in the lead %q, want it inside that sentence (issue #373, item 02-3)",
+			sentence, collapseSpace(lead.textContent()))
+	}
+
+	if tail := strings.TrimSpace(before[at+len(sentence):]); strings.ContainsAny(tail, ".!?") {
+		t.Errorf("the lead reads %q with %q before its privacy link, want the link inside the sentence that begins %q: a full stop before it leaves the promise a sentence of its own, which the maintainer removed (issue #373, item 02-3)",
+			collapseSpace(lead.textContent()), tail, sentence)
+	}
+}
+
+// boxReading returns the outermost element of doc whose text content is exactly
+// text: the box the sentence sits in, rather than a paragraph inside it. It fails
+// the test when the page holds none or more than one.
+func boxReading(t *testing.T, doc *document, text string) *element {
+	t.Helper()
+
+	var found []*element
+
+	for _, el := range doc.all() {
+		if collapseSpace(el.textContent()) != text {
+			continue
+		}
+
+		inside := false
+
+		for _, ancestor := range el.ancestors() {
+			if collapseSpace(ancestor.textContent()) == text {
+				inside = true
+			}
+		}
+
+		if !inside {
+			found = append(found, el)
+		}
+	}
+
+	if len(found) != 1 {
+		t.Fatalf("the page holds %d outermost elements reading exactly %q, want exactly one: the box the sentence sits in (issue #373, item 02-2)",
+			len(found), text)
+	}
+
+	return found[0]
+}
+
+// hasSilentIcon reports whether el holds an icon the page draws itself and hides
+// from assistive technology: an inline <svg> or a text glyph in a span, carrying
+// aria-hidden="true".
+func hasSilentIcon(el *element) bool {
+	for _, descendant := range el.find("svg") {
+		if hidden, ok := descendant.attr("aria-hidden"); ok && hidden == "true" {
+			return true
+		}
+	}
+
+	for _, span := range el.find("span") {
+		if hidden, ok := span.attr("aria-hidden"); ok && hidden == "true" && strings.TrimSpace(span.textContent()) != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// classesOf returns the class names of el, sorted, so two spellings of one
+// element's class set compare equal.
+func classesOf(el *element) []string {
+	classes, ok := el.attr("class")
+	if !ok {
+		return nil
+	}
+
+	out := strings.Fields(classes)
+	slices.Sort(out)
+
+	return out
+}
+
+// textBeforeChild returns el's text content before child, in document order, as
+// a browser's textContent reads it: it tells a link that ends a sentence from one
+// the sentence itself holds.
+func textBeforeChild(t *testing.T, el, child *element) string {
+	t.Helper()
+
+	var b strings.Builder
+
+	var walk func(*element) bool
+
+	walk = func(node *element) bool {
+		next := 0
+
+		for i, c := range node.children {
+			for ; next < len(node.texts) && node.texts[next].at <= i; next++ {
+				b.WriteString(node.texts[next].text)
+			}
+
+			if c == child {
+				return true
+			}
+
+			if walk(c) {
+				return true
+			}
+		}
+
+		for ; next < len(node.texts); next++ {
+			b.WriteString(node.texts[next].text)
+		}
+
+		return false
+	}
+
+	if !walk(el) {
+		t.Fatalf("the element %s holds no such child %s", describeElement(el), describeElement(child))
+	}
+
+	return htmlUnescape(b.String())
 }

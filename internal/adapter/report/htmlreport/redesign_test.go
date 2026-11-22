@@ -25,7 +25,7 @@ import (
 // and its text is read as a browser reads it.
 
 // fragElement is one element of a fragment: its tag, the attributes of its start
-// tag, the markup it holds and the element it sits in.
+// tag, the markup it holds, the element it sits in, and its own runs of text.
 type fragElement struct {
 	tag     string
 	attrs   string
@@ -34,6 +34,30 @@ type fragElement struct {
 	parent int
 	// children are the indices of the elements directly inside this one.
 	children []int
+	// texts are the element's own runs of text, each with the child it comes
+	// before: they are what lets a check read what a reader sees and what only a
+	// screen reader reads, as a browser tells them apart.
+	texts []fragTextRun
+}
+
+// fragTextRun is one run of an element's own text, and the child it comes
+// before: at is the index in the element's children of the child the run
+// precedes, and the number of children for the run after the last one.
+type fragTextRun struct {
+	at   int
+	text string
+}
+
+// addText appends a run of the element's own text: a run that directly follows
+// the previous one joins it, so a text interrupted by no child stays one run.
+func (e *fragElement) addText(text string) {
+	if n := len(e.texts); n > 0 && e.texts[n-1].at == len(e.children) {
+		e.texts[n-1].text += text
+
+		return
+	}
+
+	e.texts = append(e.texts, fragTextRun{at: len(e.children), text: text})
 }
 
 // voidElement reports whether the element has no content and no end tag.
@@ -60,9 +84,17 @@ func fragmentElements(t *testing.T, fragment string) []fragElement {
 	var (
 		stack  []int
 		starts []int
+		// prev is the byte the text before the current match starts at.
+		prev int
 	)
 
 	for _, match := range tag.FindAllStringSubmatchIndex(fragment, -1) {
+		if len(stack) > 0 && match[0] > prev {
+			elements[stack[len(stack)-1]].addText(fragment[prev:match[0]])
+		}
+
+		prev = match[1]
+
 		closing := match[3] > match[2]
 
 		name := strings.ToLower(fragment[match[4]:match[5]])
@@ -538,17 +570,39 @@ func TestReportSummaryShowsABoxPerFit(t *testing.T) {
 				mapping.None:    a.Summary.None,
 			}
 
+			// captions are the words each fit's tile ends with (issue #373, item
+			// 03-2): the direct tile keeps the count's total, and the partial and
+			// none tiles say what that fit means for the move.
+			captions := map[mapping.Fit]string{
+				mapping.Direct:  ofResources(a.Summary.Total),
+				mapping.Partial: "needs changes",
+				mapping.None:    "blocked",
+			}
+
 			for _, fit := range []mapping.Fit{mapping.Direct, mapping.Partial, mapping.None} {
 				badges := elementsWithClass(t, elements, "fit", "fit-"+string(fit))
 
-				if boxes := boxesOf(t, elements, summary, badges); len(boxes) != 1 {
+				boxes := boxesOf(t, elements, summary, badges)
+				if len(boxes) != 1 {
 					t.Errorf("the Summary part section holds %d boxes with the %s badge, want exactly one box per fit (issue #373, item 10-2)",
 						len(boxes), fit)
 
 					continue
-				} else if !regexp.MustCompile(`\b` + strconv.Itoa(counts[fit]) + `\b`).MatchString(textOfElement(elements, boxes[0])) {
+				}
+
+				box := textOfElement(elements, boxes[0])
+
+				if !regexp.MustCompile(`\b` + strconv.Itoa(counts[fit]) + `\b`).MatchString(box) {
 					t.Errorf("the %s box reads %q, want it to hold the count %d (issue #373, item 10-2)",
-						fit, textOfElement(elements, boxes[0]), counts[fit])
+						fit, box, counts[fit])
+				}
+
+				if !strings.HasSuffix(box, captions[fit]) {
+					t.Errorf("the %s box reads %q, want it to end with %q, as the artifact's tiles have it (issue #373, item 03-2)",
+						fit, box, captions[fit])
+				} else if fit != mapping.Direct && strings.Contains(box, ofResources(a.Summary.Total)) {
+					t.Errorf("the %s box reads %q, want no %q: only the direct tile counts the resources the total is of (issue #373, item 03-2)",
+						fit, box, ofResources(a.Summary.Total))
 				}
 
 				for _, badge := range badgesInside(elements, summary, badges) {
@@ -896,6 +950,14 @@ func TestReportWorkloadsAreBoxes(t *testing.T) {
 						t.Errorf("the %s box's %s badge reads %q, want it to hold the count %d (issue #373, item 13)",
 							name, fit, textOfElement(elements, descendant), count)
 					}
+
+					if got := visibleTextOf(t, elements, descendant); got != strconv.Itoa(count) {
+						t.Errorf("the %s box's %s bubble reads %q to a reader, want only the count %d: the fit's word is not shown in a workload's bubble (issue #373, item 05)",
+							name, fit, got, count)
+					} else if !readsToScreenReaders(t, elements, descendant, fit) {
+						t.Errorf("the %s box's %s bubble holds no element only a screen reader reads that says %q, want the fit's word there: a colour and a glyph alone tell a screen reader nothing (issue #373, item 05)",
+							name, fit, fit)
+					}
 				}
 			}
 
@@ -984,4 +1046,397 @@ func TestReportCostEstimateIsOneLine(t *testing.T) {
 				textOfElement(elements, costs[0]), wordy)
 		}
 	}
+}
+
+// ofResources is "of N resources", the words the summary's direct tile ends
+// with, and "of 1 resource" for one.
+func ofResources(n int) string {
+	if n == 1 {
+		return "of 1 resource"
+	}
+
+	return "of " + strconv.Itoa(n) + " resources"
+}
+
+// visibleTextOf returns the text of the element at index as a reader sees it:
+// the text of its own runs and of its children's, but none of a subtree the page
+// hides from assistive technology. A check that reads the whole text cannot tell
+// a word a reader sees from a word only a screen reader reads, which is what the
+// workload bubbles now say (issue #373, item 05).
+func visibleTextOf(t *testing.T, elements []fragElement, index int) string {
+	t.Helper()
+
+	var b strings.Builder
+
+	var walk func(int)
+
+	walk = func(i int) {
+		if hiddenFromReaders(t, elements, i) {
+			return
+		}
+
+		next := 0
+
+		for childIndex, child := range elements[i].children {
+			for ; next < len(elements[i].texts) && elements[i].texts[next].at <= childIndex; next++ {
+				b.WriteString(elements[i].texts[next].text)
+			}
+
+			walk(child)
+		}
+
+		for ; next < len(elements[i].texts); next++ {
+			b.WriteString(elements[i].texts[next].text)
+		}
+	}
+
+	walk(index)
+
+	return textOf(b.String())
+}
+
+// hiddenFromReaders reports whether an element is hidden from assistive
+// technology: it carries aria-hidden="true", as the badges' glyphs do, or the
+// class the site's stylesheet keeps for text only a screen reader reads.
+func hiddenFromReaders(t *testing.T, elements []fragElement, index int) bool {
+	t.Helper()
+
+	if hidden, ok := attributeOf(elements[index].attrs, "aria-hidden"); ok && hidden == "true" {
+		return true
+	}
+
+	return slices.Contains(classOf(t, elements, index), "visually-hidden")
+}
+
+// readsToScreenReaders reports whether the element holds the word in a subtree
+// only a screen reader reads: an element of the site's visually-hidden class.
+func readsToScreenReaders(t *testing.T, elements []fragElement, index int, word string) bool {
+	t.Helper()
+
+	for _, descendant := range descendants(elements, index) {
+		if !slices.Contains(classOf(t, elements, descendant), "visually-hidden") {
+			continue
+		}
+
+		if strings.Contains(textOfElement(elements, descendant), word) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// resourcesTableIndex returns the index of the Resources table: the one whose
+// first column is the resource's ID.
+func resourcesTableIndex(t *testing.T, elements []fragElement) int {
+	t.Helper()
+
+	for i, element := range elements {
+		if element.tag != "table" {
+			continue
+		}
+
+		if header := headerCells(t, elements, i); len(header) > 0 && header[0] == "ID" {
+			return i
+		}
+	}
+
+	t.Fatal("the fragment holds no Resources table, so this check read nothing: the table whose first column is the resource's ID (issue #373, item 04)")
+
+	return -1
+}
+
+// bodyRows returns the body cells of the table at index, one slice of <td>
+// indices per row, in document order.
+func bodyRows(t *testing.T, elements []fragElement, index int) [][]int {
+	t.Helper()
+
+	body := -1
+
+	for _, descendant := range descendants(elements, index) {
+		if elements[descendant].tag == "tbody" {
+			body = descendant
+		}
+	}
+
+	if body < 0 {
+		t.Fatalf("the table at index %d holds no <tbody>, want its body rows (issue #373, item 04)", index)
+	}
+
+	rows := make([][]int, 0, len(elements[body].children))
+
+	for _, row := range elements[body].children {
+		if elements[row].tag != "tr" {
+			continue
+		}
+
+		var cells []int
+
+		for _, child := range elements[row].children {
+			if elements[child].tag == "td" {
+				cells = append(cells, child)
+			}
+		}
+
+		rows = append(rows, cells)
+	}
+
+	return rows
+}
+
+// column returns the index of the table's column whose heading is name, failing
+// the test when the table holds none.
+func column(t *testing.T, elements []fragElement, table int, name string) int {
+	t.Helper()
+
+	header := headerCells(t, elements, table)
+
+	for i, heading := range header {
+		if heading == name {
+			return i
+		}
+	}
+
+	t.Fatalf("the Resources table's header %q holds no %q column, so this check read nothing (issue #373, item 04)", header, name)
+
+	return -1
+}
+
+// TestReportResourcesTableHasNoRegionColumn pins the resources table's columns
+// after the maintainer's review (issue #373, item 04): the Region column is gone,
+// column and cells alike, so the table fits the page.
+func TestReportResourcesTableHasNoRegionColumn(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		a    assessment.Assessment
+	}{
+		{name: "every fit, without estimates", a: fitsAssessment(t)},
+		{name: "with estimates", a: estimatesAssessment(t)},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := tc.a
+			elements := fragmentElements(t, string(render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName})))
+			table := resourcesTableIndex(t, elements)
+
+			for _, heading := range headerCells(t, elements, table) {
+				if heading == "Region" {
+					t.Errorf("the Resources table holds a Region column, want none: the maintainer removed it to make the table narrower (issue #373, item 04)")
+				}
+			}
+
+			regions := make(map[string]bool, len(a.Verdicts))
+			for _, verdict := range a.Verdicts {
+				regions[verdict.Resource.Region] = true
+			}
+
+			for row, cells := range bodyRows(t, elements, table) {
+				for _, cell := range cells {
+					if !regions[textOfElement(elements, cell)] {
+						continue
+					}
+
+					t.Errorf("the Resources table's row %d holds the region %q in a cell, want no region cell: the column is gone, not only its heading (issue #373, item 04)",
+						row+1, textOfElement(elements, cell))
+
+					break
+				}
+			}
+		})
+	}
+}
+
+// TestReportPlanCellHoldsOnlyThePlanName pins the Plan cell (issue #373, item
+// 04): the plan's name alone, without the vCPU and GiB detail in brackets the
+// cell showed beside it. The width the detail cost goes to the columns that need
+// it.
+func TestReportPlanCellHoldsOnlyThePlanName(t *testing.T) {
+	t.Parallel()
+
+	elements := fragmentElements(t, string(render(t, estimatesAssessment(t), analysis.ReportMeta{InventoryName: inventoryFileName})))
+	plan := column(t, elements, resourcesTableIndex(t, elements), "Plan")
+
+	named := 0
+
+	for row, cells := range bodyRows(t, elements, resourcesTableIndex(t, elements)) {
+		if plan >= len(cells) {
+			t.Fatalf("the Resources table's row %d holds %d cells, too few for the Plan column %d", row+1, len(cells), plan)
+		}
+
+		text := textOfElement(elements, cells[plan])
+		if text == "" {
+			continue
+		}
+
+		named++
+
+		for _, detail := range []string{"vCPU", "GiB", "(", ")"} {
+			if !strings.Contains(text, detail) {
+				continue
+			}
+
+			t.Errorf("the Resources table's row %d holds the Plan cell %q, want the plan's name alone: the vCPU and GiB detail in brackets is not shown in this cell (issue #373, item 04)",
+				row+1, text)
+
+			break
+		}
+	}
+
+	if named == 0 {
+		t.Error("no Plan cell names a plan, so this check read nothing: the fixture's sized resources are priced with a plan")
+	}
+}
+
+// TestReportEstimateCellHoldsOnlyTheAmount pins the Monthly estimate cell (issue
+// #373, item 04): the amount alone, or "not estimated" alone. The fixed fee, the
+// count and the hours an estimate assumes, and why a resource is not estimated
+// stay in the Markdown report, never in this cell.
+func TestReportEstimateCellHoldsOnlyTheAmount(t *testing.T) {
+	t.Parallel()
+
+	elements := fragmentElements(t, string(render(t, estimatesAssessment(t), analysis.ReportMeta{InventoryName: inventoryFileName})))
+	table := resourcesTableIndex(t, elements)
+	estimate := column(t, elements, table, "Monthly estimate")
+
+	amount := regexp.MustCompile(`^€[0-9][0-9,]*\.[0-9]{2}$`)
+
+	amounts := 0
+
+	for row, cells := range bodyRows(t, elements, table) {
+		if estimate >= len(cells) {
+			t.Fatalf("the Resources table's row %d holds %d cells, too few for the Monthly estimate column %d", row+1, len(cells), estimate)
+		}
+
+		text := textOfElement(elements, cells[estimate])
+
+		switch {
+		case text == "not estimated":
+		case amount.MatchString(text):
+			amounts++
+		default:
+			t.Errorf("the Resources table's row %d holds the Monthly estimate cell %q, want the amount alone, as €18.43, or \"not estimated\" alone: no fee, count, hours or reason beside it (issue #373, item 04)",
+				row+1, text)
+		}
+	}
+
+	if amounts == 0 {
+		t.Error("no Monthly estimate cell holds an amount, so this check read nothing: the fixture's sized resources are priced")
+	}
+}
+
+// TestReportNamesNoCurrencyCode pins the currency of every amount (issue #373,
+// item 05): the amount carries its sign, never its code, as the artifact has it.
+// The prices of the catalogs are in euros, so an amount of the source's own cost
+// is the only place a code could appear, and there too the artifact shows the
+// amount alone.
+func TestReportNamesNoCurrencyCode(t *testing.T) {
+	t.Parallel()
+
+	fragment := string(render(t, estimatesAssessment(t), analysis.ReportMeta{InventoryName: inventoryFileName}))
+
+	if strings.Contains(fragment, "USD") {
+		t.Errorf("the fragment names the currency code \"USD\", want the amount's sign alone, as the artifact has it (issue #373, item 05)\n%s", fragment)
+	}
+
+	for _, wanted := range []string{"$40.00", "€2,535.00"} {
+		if !strings.Contains(textOf(fragment), wanted) {
+			t.Errorf("the fragment does not show the amount %q, want the amount itself unchanged: no currency code is named, and no amount is lost (issue #373, item 05)\n%s",
+				wanted, textOf(fragment))
+		}
+	}
+}
+
+// TestReportComparisonSummaryIsOneBoxPerTarget pins the comparison of several
+// targets (issue #373, item 10): each target's summary is its own box under its
+// own heading, and the combined summary table the fragment showed beside them is
+// gone. The maintainer's screenshot of a comparison showed both at once.
+func TestReportComparisonSummaryIsOneBoxPerTarget(t *testing.T) {
+	t.Parallel()
+
+	inv := newInventory(t, sourceName, comparisonResources())
+	targets := []assessment.TargetAssessment{
+		{Key: "ovhcloud", Assessment: assessment.Assess(inv, testutil.OVHcloudCatalog(t))},
+		{Key: "scaleway", Assessment: assessment.Assess(inv, testutil.ScalewayCatalog(t))},
+		{Key: "upcloud", Assessment: assessment.Assess(inv, testutil.UpCloudCatalog(t))},
+	}
+
+	elements := fragmentElements(t, string(renderComparison(t, assessment.Compare(targets),
+		analysis.ReportMeta{InventoryName: inventoryFileName})))
+
+	comparison := elementsWithClass(t, elements, "part-comparison")
+	if len(comparison) != 1 {
+		t.Fatalf("the comparison holds %d Comparison sections, want exactly one", len(comparison))
+	}
+
+	for _, table := range tableIndices(elements, comparison[0]) {
+		if header := headerCells(t, elements, table); len(header) > 2 && header[0] == "Fit" {
+			t.Errorf("the Comparison section holds the combined summary table %q, want none: each target's summary is its own box, never a table counting every target side by side (issue #373, item 10)",
+				header)
+		}
+	}
+
+	summaries := elementsWithClass(t, elements, "part-summary")
+	if len(summaries) != len(targets) {
+		t.Errorf("the comparison holds %d per-target summary boxes, want %d, one per target (issue #373, item 10)",
+			len(summaries), len(targets))
+	}
+
+	names := make([]string, 0, len(targets))
+	for _, target := range targets {
+		names = append(names, target.Assessment.Target)
+	}
+
+	counted := make(map[string]int, len(names))
+
+	for _, summary := range summaries {
+		name := targetNaming(t, elements, summary, names)
+		if name == "" {
+			t.Errorf("a Summary box sits under no heading naming a target, want each target's summary under its own name (issue #373, item 10)")
+
+			continue
+		}
+
+		counted[name]++
+	}
+
+	for _, name := range names {
+		if counted[name] != 1 {
+			t.Errorf("the comparison holds %d Summary boxes for %s, want exactly one: each target's summary is its own box (issue #373, item 10)",
+				counted[name], name)
+		}
+	}
+}
+
+// targetNaming returns the target whose name heads the section the summary box
+// sits in: the first heading of the target's own section, or "" when the box
+// sits in none.
+func targetNaming(t *testing.T, elements []fragElement, summary int, names []string) string {
+	t.Helper()
+
+	for ancestor := elements[summary].parent; ancestor >= 0; ancestor = elements[ancestor].parent {
+		if !slices.Contains(classOf(t, elements, ancestor), "part-target") {
+			continue
+		}
+
+		for _, descendant := range descendants(elements, ancestor) {
+			if elements[descendant].tag != "h3" {
+				continue
+			}
+
+			if text := textOfElement(elements, descendant); slices.Contains(names, text) {
+				return text
+			}
+
+			break
+		}
+
+		return ""
+	}
+
+	return ""
 }

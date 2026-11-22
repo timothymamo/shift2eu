@@ -260,3 +260,78 @@ func describeElement(el *element) string {
 
 	return "<" + el.tag + ">"
 }
+
+// contactBand is the class of the band the assessment page carries before its
+// footer: the maintainer's "footnote message", which asks whether the visitor
+// wants help with the move and names the contact address.
+const contactBand = "contact-band"
+
+// TestEveryPageCarriesTheContactBand pins the maintainer's second review of the
+// redesign (issue #373, item 06): the band that asks "Planning a migration?" and
+// offers the contact address sat on the assessment page alone, and every page
+// carries it now, with the same words, at the end of the page's content and
+// before the footer.
+func TestEveryPageCarriesTheContactBand(t *testing.T) {
+	t.Parallel()
+
+	const heading = "Questions about your results, or how to move forward?"
+
+	bundle := theBundle(t)
+
+	texts := make(map[string]string, len(pageNames))
+
+	for _, page := range pageNames {
+		doc := bundle.html(t, page)
+
+		bands := 0
+
+		for _, el := range doc.all() {
+			if !hasClass(el, contactBand) {
+				continue
+			}
+
+			bands++
+
+			if order := documentOrder(doc); order[el] > order[footerOf(t, doc)] {
+				t.Errorf("%s's contact band comes after the footer, want it before the footer, as the assessment page has it (issue #373, item 06)", page)
+			}
+
+			if mains := doc.find("main"); len(mains) == 1 && !isDescendant(el, mains[0]) {
+				t.Errorf("%s's contact band sits outside <main>, want it at the end of the page's content (issue #373, item 06)", page)
+			}
+
+			text := collapseSpace(el.textContent())
+			texts[page] = text
+
+			if !strings.Contains(text, heading) {
+				t.Errorf("%s's contact band reads %q, want it to ask %q, as the assessment page's does (issue #373, item 06)",
+					page, excerptText(text, 200), heading)
+			}
+
+			links := 0
+
+			for _, anchor := range el.find("a") {
+				if href, _ := anchor.attr("href"); href == contactHref {
+					links++
+				}
+			}
+
+			if links != 1 {
+				t.Errorf("%s's contact band holds %d links to %q, want exactly one: the band's button is how a visitor writes to the address (issue #373, item 06)",
+					page, links, contactHref)
+			}
+		}
+
+		if bands != 1 {
+			t.Errorf("%s holds %d elements with the class %q, want exactly one: the maintainer's footnote message belongs on every page, not on the assessment page alone (issue #373, item 06)",
+				page, bands, contactBand)
+		}
+	}
+
+	for _, page := range pageNames {
+		if texts[page] != "" && texts[page] != texts[pageNames[0]] {
+			t.Errorf("%s's contact band reads %q, want the same words as %s's %q: every page carries the one band (issue #373, item 06)",
+				page, excerptText(texts[page], 200), pageNames[0], excerptText(texts[pageNames[0]], 200))
+		}
+	}
+}
