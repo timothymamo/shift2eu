@@ -1379,10 +1379,12 @@ func TestAgentsAppTokenRefreshThreeContendersOnAStaleLockLeaveOneHolder(t *testi
 // Issue #448: the trap must survive every shell the refresh runs under. sh is dash on Linux and bash 3.2, the
 // Mac's /bin/sh, on the Mac, and a bare `$!` under `set -u` is an error in bash 5 --posix as it is in dash, so
 // the window before the loop's first `sleep ... &` is replayed under bash --posix as well, as one more subtest,
-// whenever bash is on the PATH. Two things only one job can catch, and the test says so: ${!:-}, the spelling
-// that fails on bash 3.2 alone, is caught by no shell a Linux test run has, so CI's macOS job "Makefile tests
-// under make 3.81" (macos-15, whose /bin/sh is bash 3.2) is the only place that failure is seen, and it must
-// not be dropped; and a machine without bash runs no bash --posix replay at all rather than skipping a test.
+// whenever bash is on the PATH. That replay mainly catches a revert that drops the `set +u` the trap runs before
+// it names $!: dash and bash 5 --posix both report the unset parameter, and the test fails on the report. What no
+// shell of a Linux run catches is the `${!:-}` spelling, which fails on bash 3.2 alone, the Mac's /bin/sh: CI's
+// macOS job "Makefile tests under make 3.81" (macos-15, whose /bin/sh is bash 3.2) is the only place that
+// failure is seen, and it must not be dropped. A machine without bash runs no bash --posix replay at all rather
+// than skipping a test.
 func TestAgentsAppTokenRefreshLeavesNoSleepWhenASignalArrivesInTheWindow(t *testing.T) {
 	t.Parallel()
 
@@ -1439,8 +1441,9 @@ wait "${job}" || true`
 	}
 
 	// The shells the windows are replayed under: sh, which the tests start a script of dev/ with - dash on Linux,
-	// bash 3.2 on the Mac - and, when the machine has a bash, bash --posix too (issue #448). No bash on the PATH
-	// means no bash --posix replay, never a skipped test.
+	// bash 3.2 on the Mac - and, when the machine has a bash, bash --posix too (issue #448), which mainly catches a
+	// revert that drops the trap's `set +u`: the `${!:-}` spelling that fails on bash 3.2 alone is caught only by
+	// CI's macOS job. No bash on the PATH means no bash --posix replay, never a skipped test.
 	shells := []replayShell{{argv: []string{"sh"}}}
 
 	if bash, err := exec.LookPath("bash"); err == nil {

@@ -200,11 +200,12 @@ exec %s "$@"
 // CURDIR.
 //
 // A workspace the guard's resolver cannot print is refused rather than compared (issue #447): a loop of
-// symlinks, which the resolver's 40 links never end, and a link whose target holds a character a WORKSPACE_REPO
-// may not - the recipes paste the workspace inside quotes and make's filter reads it as a pattern, so a resolved
-// path holding a space is no path they may be handed. Neither refusal shows the resolved value or the part of it
-// that failed, which may be a credential typed where a path goes. A target spelling .. components counts as it
-// resolves, so a link leading into the checkout that way is refused like one leading there directly.
+// symlinks, which the resolver's 32 links (macOS's MAXSYMLINKS) never end, and a link whose target holds a
+// character a WORKSPACE_REPO may not - the recipes paste the workspace inside quotes and make's filter reads it
+// as a pattern, so a resolved path holding a space is no path they may be handed. Neither refusal shows the
+// resolved value or the part of it that failed, which may be a credential typed where a path goes. A target
+// spelling .. components counts as it resolves, so a link leading into the checkout that way is refused like one
+// leading there directly.
 //
 // Two more paths the kernel and the resolver read differently are refused (issue #447, found by the review and the
 // audit). A link whose target ends in a newline: command substitution strips the trailing newline, so a resolver
@@ -214,9 +215,10 @@ exec %s "$@"
 // resolver that keeps the components as typed compares a spelling REPO_ROOT never equals: the workspace spelled
 // thus inside the checkout must be refused too. The file system is asked whether it is case-insensitive, rather
 // than GOOS - the case row is skipped where it is case-sensitive (Linux), where the variant names another path
-// that does not exist - and it is RED only on CI's macOS make 3.81 job, which is the run this Mac bug reaches. A
-// link to / is followed like any other target, so a workspace that walks the checkout's absolute path again
-// through one is refused as inside the checkout.
+// that does not exist - so the case row runs only on CI's macOS make 3.81 job, whose /bin/sh is bash 3.2: Linux
+// CI, whose /bin/sh is dash, never covers that path, and the row is RED only on that job, which is the run this
+// Mac bug reaches. A link to / is followed like any other target, so a workspace that walks the checkout's
+// absolute path again through one is refused as inside the checkout.
 //
 // The rows that refuse a colon, a comma and a tilde each have a positive control: the same layout with that
 // character taken out of the value, which make must accept and mount. They pin the refusal to the character - a
@@ -269,8 +271,9 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 	// What the refusal of a value the recipes could not paste inside quotes must say, and what it must no longer
 	// say: the old message named whitespace and a list of characters, which says nothing about what a value may
 	// hold, and about a path nothing can be learned from it. cannotBeResolved is the refusal of a workspace whose
-	// resolved path the Makefile's resolver could not print (issue #447): more than 40 symlinks, so a loop of them
-	// never ends, a link readlink cannot read, or a resolved path holding a character the recipes cannot paste.
+	// resolved path the Makefile's resolver could not print (issue #447): more than 32 symlinks (macOS's
+	// MAXSYMLINKS), so a loop of them never ends, a link readlink cannot read, or a resolved path holding a
+	// character the recipes cannot paste.
 	const (
 		notAllowed       = "a character other than letters, digits and"
 		cannotBeResolved = "cannot be resolved"
@@ -389,11 +392,11 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 		},
 		{
 			// Issue #447, fail closed: the workspace's path runs through a loop of symlinks, a -> b and b -> a,
-			// which no resolution ends. The resolver follows at most 40 links and then prints nothing, so the guard
-			// must refuse an empty value instead of comparing it: an empty resolved path is inside every checkout,
-			// and a guard that compared it would take the workspace for something it never resolved. The links are
-			// the test's own and their targets are relative to the links' directory, the sandbox root, as a
-			// maintainer's relative links are.
+			// which no resolution ends. The resolver follows at most 32 links (macOS's MAXSYMLINKS), then prints
+			// nothing, so the guard must refuse an empty value instead of comparing it: an empty resolved path is
+			// inside every checkout, and a guard that compared it would take the workspace for something it never
+			// resolved. The links are the test's own and their targets are relative to the links' directory, the
+			// sandbox root, as a maintainer's relative links are.
 			name: "the workspace's path is a loop of symlinks",
 			layout: func(t *testing.T, l *hostLayout) string {
 				t.Helper()
