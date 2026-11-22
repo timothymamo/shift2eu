@@ -1,11 +1,13 @@
 // Pins the shape of .github/workflows/audit-paths.yml, the workflow of PRD #175 milestone 2's required path
-// check: the check that fails a pull request authored by shift2eu-audit[bot] that touches anything outside
-// docs/security/, and passes trivially for every other author.
+// check: the check that fails an audit pull request - one authored by shift2eu-audit[bot], one sent by that
+// App, or one whose head branch is under security-audit/ - that touches anything outside docs/security/,
+// and passes trivially for every other pull request.
 //
 // The check is required through a ruleset of its own on main (the PRD's runbook step 5), never through
 // Protect main, and the maintainer names the job in that ruleset, so the job's name is part of the
 // interface: "Audit report paths". A required check that never reports blocks the pull request it is
-// required on, so the workflow runs on every pull request into main and filters none of them off.
+// required on, so the workflow runs on every pull request, into any branch, on pull_request_target alone
+// with the types opened, synchronize, reopened and edited, and filters none of them off.
 //
 // It runs on pull_request_target, not on pull_request, and that trigger is the fence itself. pull_request
 // runs the pull request's own copy of this workflow and of the script it calls: the audit App holds no
@@ -192,7 +194,7 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 		}
 
 		if on.Value != "" {
-			t.Fatalf("%s: line %d: on: %s, want a block of triggers, pull_request among them", auditPathsWorkflowPath, on.Num, on.Value)
+			t.Fatalf("%s: line %d: on: %s, want a block holding pull_request_target alone", auditPathsWorkflowPath, on.Num, on.Value)
 		}
 
 		triggers, err := yamlread.Mapping(on.Block)
