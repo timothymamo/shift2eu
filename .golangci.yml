@@ -1722,11 +1722,13 @@ linters:
         # The Claude Code CLI launcher the AI reviewer shares with the
         # scheduled audit (issue #277, ADR 0040's amendment) reads no
         # environment variable and no file: its callers hand it the CLI's path,
-        # the token, the model and the tools. It is held to named standard
-        # packages, without syscall or unsafe, and to no package of the module.
-        # os and os/exec are its one CLI run: it writes the system prompt to a
-        # file of a temporary directory and starts `claude -p` in another, with
-        # an environment of its own. An import rule cannot narrow os, so
+        # the token, the model, the tools and the rest of the launch. It is held
+        # to named standard packages, without syscall or unsafe, and to no
+        # package of the module. os and os/exec are its one CLI run: it writes
+        # the system prompt to a file of a temporary directory, checks that a
+        # working directory or HOME it was given exists, and starts `claude -p`
+        # with an environment of its own; io is the Transcript writer the
+        # caller hands it. An import rule cannot narrow os, so
         # forbidigo does: ai-reviewer-env and ai-reviewer-one-process hold here
         # as in the reviewer's library. Go's internal rule keeps it out of
         # reach of cmd/ and internal/.
@@ -1741,6 +1743,7 @@ linters:
             - encoding/json$
             - errors$
             - fmt$
+            - io$
             - os$
             - os/exec$
             - strings$
@@ -1858,6 +1861,29 @@ linters:
               desc: "the Claude Code pin check's library opens no file; ci/claudecodepin hands it readers (issue #276)"
             - pkg: net
               desc: "the Claude Code pin check's library opens no connection; ci/claudecodepin fetches the registry's document (issue #276)"
+        # The scheduled audit's command wrapper (issue #277, ADR 0040's
+        # amendment), installed as /srv/audit/bin/audit-exec, is no part of the
+        # product: a main package, which Go refuses to import. It is held to the
+        # standard packages it imports, each ending in $: syscall for the one
+        # syscall.Exec that replaces it with a listed command, with an
+        # environment of its own; os for its arguments, os.Exit and stderr. It
+        # starts no child process (os/exec) and opens no connection (net).
+        audit-exec:
+          list-mode: strict
+          files:
+            - "**/ci/auditexec/**"
+            - "!$test"
+          allow:
+            - fmt$
+            - io$
+            - os$
+            - strings$
+            - syscall$
+          deny:
+            - pkg: os/exec
+              desc: "the audit's command wrapper starts no child process; it replaces itself with one listed command through syscall.Exec (ADR 0040)"
+            - pkg: net
+              desc: "the audit's command wrapper opens no connection (ADR 0040)"
     exhaustive:
       default-signifies-exhaustive: true
     # forbidigo refuses calls, which an import rule cannot see. Its entries
@@ -2428,6 +2454,25 @@ linters:
         - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'claude-code-pin-env: the Claude Code pin check reads no environment variable, locates no home, config, cache or temp directory and starts no process; it reads the workflow and one public registry document (CLAUDE.md rule 3)'
+        # Group audit-exec-env (issue #277, ADR 0040's amendment): the audit's
+        # command wrapper reads no environment variable, hands over no
+        # environment of the caller's, locates no home, config, cache or temp
+        # directory, starts no process, loads no library and makes no raw
+        # system call. Its one way out is syscall.Exec of a listed command with
+        # an environment of its own, the named exception in ci/auditexec/main.go
+        # alone, whose run hands it to the logic as a parameter; a test passes
+        # a fake. depguard keeps os/exec and net out of it (audit-exec). Scope:
+        # every file under ci/auditexec/, _test.go files included; its
+        # exclusion rule drops it everywhere else.
+        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+          pkg: '^os$'
+          msg: 'audit-exec-env: the audit command wrapper reads no environment variable, locates no home, config, cache or temp directory and starts no process through os; it execs a listed command with its own environment (ADR 0040, CLAUDE.md rule 3)'
+        - pattern: '^syscall\.(?:Getenv|GetEnvironmentVariable|GetEnvironmentStrings|Environ|ForkExec|StartProcess|CreateProcess|CreateProcessAsUser|LoadDLL|MustLoadDLL|NewLazyDLL|LoadLibrary|GetProcAddress|(?:(?:AllThreads|Raw)?Syscall(?:6|9|12|15|18|N)?|SYS_\w+))$'
+          pkg: '^syscall$'
+          msg: 'audit-exec-env: the audit command wrapper reads no environment variable, starts no child process, loads no library and makes no raw system call (ADR 0040, CLAUDE.md rule 3)'
+        - pattern: '^syscall\.Exec$'
+          pkg: '^syscall$'
+          msg: 'audit-exec-env: syscall.Exec is used in ci/auditexec/main.go only, passed to run (ADR 0040); a test passes a fake exec of its own'
     gosec:
       excludes:
         - G104 # unchecked errors are already reported by errcheck
@@ -2595,6 +2640,19 @@ linters:
         linters:
           - forbidigo
         text: 'because "claude-code-pin-env: [^"]*"$'
+      # audit-exec-env: the group holds for every file under ci/auditexec/,
+      # _test.go files included, and nowhere else.
+      - path-except: ^ci/auditexec/
+        linters:
+          - forbidigo
+        text: 'because "audit-exec-env: [^"]*"$'
+      # The one exception (ADR 0040): syscall.Exec, which ci/auditexec/main.go
+      # passes to run, in that file alone. text is the syscall.Exec entry's
+      # msg, so the group's other entries still hold there.
+      - path: ^ci/auditexec/main\.go$
+        linters:
+          - forbidigo
+        text: 'because "audit-exec-env: syscall\.Exec is used in ci/auditexec/main\.go only, passed to run \(ADR 0040\); a test passes a fake exec of its own"$'
 
 formatters:
   enable:

@@ -20,7 +20,15 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag}
+
+// auditExecEnvTag is the tag of the audit command wrapper's environment group
+// (issue #277, ADR 0040's amendment), and auditExecExecMsg the msg of its one
+// entry with an exception: the syscall.Exec ci/auditexec/main.go passes to run.
+const (
+	auditExecEnvTag  = "audit-exec-env"
+	auditExecExecMsg = "audit-exec-env: syscall.Exec is used in ci/auditexec/main.go only, passed to run (ADR 0040); a test passes a fake exec of its own"
+)
 
 // siteBuilderEnvTag is the tag of the site builder's environment group (PRD
 // #297 milestone 2).
@@ -172,6 +180,14 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		// _test.go files included.
 		claudeCodePinEnvTag: {
 			{"path-except": `^ci/claudecodepin/`, "text": groupText(claudeCodePinEnvTag)},
+		},
+		// The audit's command wrapper (issue #277, ADR 0040's amendment): one
+		// rule for every path outside ci/auditexec/, so the group holds there
+		// and nowhere else, _test.go files included, and the one exception, the
+		// syscall.Exec entry's msg alone, in ci/auditexec/main.go alone.
+		auditExecEnvTag: {
+			{"path-except": `^ci/auditexec/`, "text": groupText(auditExecEnvTag)},
+			{"path": `^ci/auditexec/main\.go$`, "text": narrowedTextOf(auditExecExecMsg)},
 		},
 	}
 	if diff := cmp.Diff(want, got); diff != "" {

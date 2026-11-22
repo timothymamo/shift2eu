@@ -116,20 +116,30 @@ Arrows are imports. They point inwards only:
   of `cmd/` and `internal/`, each held to named standard packages by strict rules of its own. `ci/aireview`
   is the AI reviewer's workflow program (`ai-reviewer-main`, `ai-reviewer-is-standard-library`, ADR 0033).
   It asks the model through `ci/internal/claudecode`, the Claude Code CLI launcher it shares with the
-  scheduled audit (issue #277, ADR 0040): one `claude -p` run with the model and the built-in tools as
-  parameters, no tools the default, and an environment that inherits nothing. The launcher is held to
+  scheduled audit (issue #277, ADR 0040): one `claude -p` run with the model, the built-in tools and the
+  audit's launch (effort, settings file, permission mode `dontAsk` or `plan`, appended system prompt,
+  safe mode, directories, extra environment entries, PATH, streamed transcript) as parameters, the
+  reviewer's launch every one's zero value, and an environment that inherits nothing. The launcher is held to
   named standard packages (`claude-code-launcher`), only the reviewer's library may import it
   (`claude-code-launcher-importers`), and the forbidigo groups `ai-reviewer-env` and
   `ai-reviewer-one-process` hold in it as in the reviewer's library, which itself no longer imports `os`
   or `os/exec`.
   `ci/claudecodepin` is the Claude Code pin check (issue #276, ADR 0033):
   `.github/workflows/claude-code-pin.yml` runs its job on every pull request and the check when the pin's
-  paths change (issue #452), and it fails unless the npm registry publishes the pinned
-  `CLAUDE_CODE_INTEGRITY` for exactly the pinned `CLAUDE_CODE_VERSION`. Its entry point reads the workflow
+  paths change (issue #452), and it fails unless the npm registry publishes the pinned integrity for
+  exactly the pinned version of the one pin file, `.github/claude-code.yaml`, which every workflow that
+  installs the CLI reads (issue #277, ADR 0040). Its entry point reads the pin file (`-pin`)
   and fetches the one public registry document (`claude-code-pin-main`, no `os/exec`); its library
   `ci/claudecodepin/internal/pincheck` parses the readers it is given and does no I/O
   (`claude-code-pin-library`, no `os` or `net`); the forbidigo group `claude-code-pin-env` refuses every
   read of the environment in both.
+  `ci/auditexec` is the scheduled audit's command wrapper, installed as `/srv/audit/bin/audit-exec`
+  (issue #277, ADR 0040): it maps a command name to a fixed absolute path, runs git only with its
+  read-only subcommands in the audit's checkout copy, refuses every other name, subcommand and the
+  options that would reach elsewhere with exit 126, and replaces itself with the command through
+  `syscall.Exec` with an environment of its own. It is held to named standard packages (`audit-exec`, no
+  `os/exec` or `net`), and the forbidigo group `audit-exec-env` refuses every read of the environment and
+  every other process start, with `syscall.Exec` named in its `main.go` alone.
 - **`cmd/shift2eu`** is the CLI's composition root, the only place besides `cmd/shift2eu-web` that
   constructs adapters and injects them (and `ci/sitebuild`, which constructs the three targets only to
   read their catalogs). Its imports are a strict allow list (`composition-root`, issue #101): the

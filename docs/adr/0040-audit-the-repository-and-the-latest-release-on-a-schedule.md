@@ -558,6 +558,33 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
 `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_PAGER=cat`,
 `GIT_OPTIONAL_LOCKS=0`.
 
+*Settled by the implementation (issue #277):*
+
+- **The git line** is `/usr/bin/git --no-pager -C /srv/audit/checkout <subcommand> ...`: the wrapper knows
+  no other repository, and the first word after `git` must be a listed subcommand, so no global option of
+  the caller's (`-C`, `-p`, `--paginate`, ...) reaches git before it.
+- **Refused options, beyond the list above:** a long option is refused alone, in its `--opt=value` form
+  and abbreviated (git's option parser takes a unique prefix of a long option, so `--outp=<file>` is
+  `--output`), `--text` excepted, which is an option of its own; a short `-c` with its value attached;
+  and, as defence in depth, git grep's `-O`/`--open-files-in-pager`, which runs a program of the
+  caller's. For sort, any argument starting `--o` and any short-option cluster that holds `o`
+  (`-uo<file>`).
+- **The same environment for every command**, the five `GIT_*` included: PRD #175's criterion is one
+  scrubbed environment, and a variable only git reads changes nothing for the others.
+- **The exec seam.** The logic is `run(args []string, exec func(path string, argv []string, env []string)
+  error, stderr io.Writer) int` in `package main` (`run.go`); `main` (`main.go`, `//go:build unix`)
+  passes `syscall.Exec`, which has that shape and replaces the wrapper, so no wrapper process outlives
+  the exec, and a test passes a fake. On a system without `syscall.Exec` (`main_other.go`, `!unix`, so
+  the package builds and is linted for every release target) `main` refuses with exit 126. A refusal is
+  exit 126 with one line, `audit-exec: refused: <word>`, the word cut to 64 bytes and quoted as a Go
+  string (so a newline, a carriage return or a control character stays one line and no line starts a
+  workflow command); an exec that fails is exit 127 with one such line.
+- **Its rules:** the strict depguard rule `audit-exec` (`fmt`, `io`, `os`, `strings`, `syscall`; `os/exec`
+  and `net` denied) and the forbidigo group `audit-exec-env`, which refuses every read of the environment,
+  every process start, library load and raw system call, with one named exception: `syscall.Exec` in
+  `ci/auditexec/main.go` alone. `ci/auditexec` has no library yet; `ci/internal/audit` joins it in the
+  pull request that adds that library.
+
 #### The sandbox preflight
 
 - **Where:** its logic in `ci/internal/audit` (`Preflight`), run by `ci/auditrun` in the model step,
@@ -626,6 +653,29 @@ on the same subscription, a bump is reviewed once, and two pins could drift apar
 compares them; the audit's preflight checks each new version on its first run anyway. The pin's move
 changes the pin check's behaviour, so it comes test-first with the audit's other pieces, and the
 workflow's `Install the Claude Code CLI` step reads the file from the pull request that moves it.
+
+*Settled by the implementation (issue #277):* the pin check reads the file with `pincheck.FromPinFile`
+(top-level `version:` and `integrity:` lines, one of each, each of its exact shape) and takes its path as
+`-pin`, `.github/claude-code.yaml` the default; `-workflow` is gone. In `ai-review.yml` a step `Read the
+Claude Code pin`, before the install, reads the two lines with `grep -E` anchored to their exact shapes,
+fails unless each appears once, and writes them to its step outputs; the install step gets them as `env:`
+values (`CLAUDE_CODE_PIN_VERSION`, `CLAUDE_CODE_PIN_INTEGRITY`), never as a `${{ }}` in its `run:`, and its
+hardening and permissions are unchanged. Renovate's generic manager names the pin file and the workflows
+that hold an annotated pin one by one (`ci`, `release`, `security`, `vm-tools`), so no manager reads
+`ai-review.yml` any more. The pin check's workflow watches the pin file in its push `paths:` instead of
+`ai-review.yml`; its changes step still runs the check on a change to either. The install script copies
+the verified tarball to `<directory>/claude-code.tgz` after extracting `package/claude`, so a refused
+tarball is never kept.
+
+The launcher's empty MCP configuration is passed by both callers from this pull request: the reviewer's
+argument vector gains `--mcp-config {"mcpServers":{}}` after `--strict-mcp-config`, and
+`ci/aireview/internal/review/claudecli_test.go` pins it. The launcher refuses, naming the field, before
+anything runs: an `Effort` outside the five, a `PermissionMode` other than `dontAsk` or `plan`, a relative
+`Settings` path, a `WorkDir` or `Home` that is not an absolute path to a directory that exists, and an
+`Env` entry that is no `NAME=VALUE` or names a variable the launcher sets itself. A config's `Home` also
+stands in for the fresh HOME in the environment, and a stream whose last result line is over 4 MiB, or a
+line after it, fails the run as "printed more than" the cap; a transcript that cannot be written fails
+an otherwise successful run.
 
 #### Server-managed settings
 

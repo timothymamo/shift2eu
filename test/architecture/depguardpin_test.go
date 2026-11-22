@@ -1202,7 +1202,8 @@ var pinnedDepguardRules = []check.DepguardRule{
 		// its one CLI run: the system prompt file, the run's temporary
 		// directories and `claude -p` with an environment of its own. The
 		// forbidigo groups ai-reviewer-env and ai-reviewer-one-process hold here
-		// as in the reviewer's library.
+		// as in the reviewer's library. io is the Transcript writer a caller
+		// hands it (ADR 0040's amendment).
 		Name:     "claude-code-launcher",
 		ListMode: "strict",
 		Files: []string{
@@ -1215,6 +1216,7 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"encoding/json$",
 			"errors$",
 			"fmt$",
+			"io$",
 			"os$",
 			"os/exec$",
 			"strings$",
@@ -1331,6 +1333,27 @@ var pinnedDepguardRules = []check.DepguardRule{
 			"strings$",
 		},
 		Deny: []string{"os", "net"},
+	},
+	{
+		// The scheduled audit's command wrapper (issue #277, ADR 0040's
+		// amendment), /srv/audit/bin/audit-exec: a main package no root can
+		// import, held to the standard packages it imports, each exact. syscall
+		// is its one syscall.Exec of a listed command; it starts no child
+		// process and opens no connection.
+		Name:     "audit-exec",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/auditexec/**",
+			"!$test",
+		},
+		Allow: []string{
+			"fmt$",
+			"io$",
+			"os$",
+			"strings$",
+			"syscall$",
+		},
+		Deny: []string{"os/exec", "net"},
 	},
 }
 
