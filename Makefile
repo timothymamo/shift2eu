@@ -218,11 +218,16 @@ endif
 # trailing newline too (readlink's output with a _ after it, both stripped again), as command substitution would
 # drop it, and the target read is then checked against the kernel: a link that resolves must be the same file
 # (test -ef) as its target as read, a dangling one must have a target as read that does not exist either, so a
-# target misread in any way (a trailing newline lost, as macOS's make 3.81 job showed) fails closed instead of
-# sending the walk elsewhere. Then containment is decided by file identity, never by spelling: the checkout make
-# runs in holds the workspace when the checkout or one of its ancestors is the same file as the workspace (only
-# when all of it exists), and the workspace is inside the checkout when the longest prefix of it that exists, or
-# one of that prefix's ancestors, is the same file as REPO_ROOT. So a path typed in another case on a
+# target misread in any way (a trailing newline lost, the suspected cause of the macOS make 3.81 failure,
+# unconfirmed) fails closed instead of sending the walk elsewhere. Then containment is decided by file identity,
+# never by spelling: the checkout make runs in holds the workspace when the checkout or one of its ancestors is
+# the same file as the workspace (only when all of it exists), and the workspace is inside the checkout when the
+# longest prefix of it that exists, or one of that prefix's ancestors, is the same file as REPO_ROOT. A second
+# test of inside needs neither readlink nor the walk's left-to-right parsing, so a link string the shell mangles
+# anywhere cannot send it elsewhere: the longest prefix of the workspace as typed that exists (trimmed from the
+# right, never past a ..), then that path with /.. appended again and again - the kernel's own physical
+# ancestors - until it is / or no longer exists, each compared with REPO_ROOT by test -ef. It only adds
+# refusals. So a path typed in another case on a
 # case-insensitive file system (macOS's APFS), which bash's builtin pwd -P keeps as typed, is still found to be
 # the checkout (issue #447). The walk prints a verdict - holds, inside or apart - and the resolved path, which
 # ENVRC_GUARD walks up as the workspace's resolved spelling. More than 32 links (a loop), a link readlink cannot
@@ -232,7 +237,7 @@ endif
 # discarded, and there is no cd. The value passed the character check above and is an absolute path, or empty for
 # a checkout directly below /, so it is safe in single quotes; REPO_ROOT is quoted with host_sq.
 host_sq = '$(subst ','\'',$(1))'
-host_workspace_walk := $(shell LC_ALL=C; export LC_ALL; out=; rest='$(HOST_WORKSPACE)'; root=$(call host_sq,$(REPO_ROOT)); hops=0; failed=; while [ -n "$$rest" ]; do part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; rest=$${rest$(host_hash)/}; case $$part in (''|.) ;; (..) out=$${out%/*} ;; (*) if [ -L "$$out/$$part" ]; then hops=$$((hops + 1)); [ "$$hops" -le 32 ] && link=$$(readlink "$$out/$$part" 2>/dev/null && echo _) && link=$${link%??} && [ -n "$$link" ] || { failed=1; break; }; case $$link in (/*) target=$$link ;; (*) target="$$out/$$link" ;; esac; if [ -e "$$out/$$part" ]; then [ "$$out/$$part" -ef "$$target" ] || { failed=1; break; }; else [ ! -e "$$target" ] || { failed=1; break; }; fi; case $$link in (/*) out= ;; esac; rest="$$link/$$rest"; else out="$$out/$$part"; fi ;; esac; done; [ -n "$$failed" ] || { pre=$$out; miss=; while [ -n "$$pre" ] && [ ! -e "$$pre" ]; do miss="/$${pre$(host_hash)$(host_hash)*/}$$miss"; pre=$${pre%/*}; done; verdict=apart; if [ -z "$$miss" ]; then p=$$root; while :; do if [ "$${p:-/}" -ef "$${pre:-/}" ]; then verdict=holds; break; fi; [ -n "$$p" ] || break; p=$${p%/*}; done; fi; if [ "$$verdict" = apart ]; then p=$$pre; while :; do if [ "$${p:-/}" -ef "$$root" ]; then verdict=inside; break; fi; [ -n "$$p" ] || break; p=$${p%/*}; done; fi; case $$out in (*[!A-Za-z0-9._/+@=$(host_hash)-]*) ;; (*) printf '%s %s\n' "$$verdict" "$${out:-/}" ;; esac; })
+host_workspace_walk := $(shell LC_ALL=C; export LC_ALL; out=; rest='$(HOST_WORKSPACE)'; root=$(call host_sq,$(REPO_ROOT)); hops=0; failed=; while [ -n "$$rest" ]; do part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; rest=$${rest$(host_hash)/}; case $$part in (''|.) ;; (..) out=$${out%/*} ;; (*) if [ -L "$$out/$$part" ]; then hops=$$((hops + 1)); [ "$$hops" -le 32 ] && link=$$(readlink "$$out/$$part" 2>/dev/null && echo _) && link=$${link%??} && [ -n "$$link" ] || { failed=1; break; }; case $$link in (/*) target=$$link ;; (*) target="$$out/$$link" ;; esac; if [ -e "$$out/$$part" ]; then [ "$$out/$$part" -ef "$$target" ] || { failed=1; break; }; else [ ! -e "$$target" ] || { failed=1; break; }; fi; case $$link in (/*) out= ;; esac; rest="$$link/$$rest"; else out="$$out/$$part"; fi ;; esac; done; [ -n "$$failed" ] || { pre=$$out; miss=; while [ -n "$$pre" ] && [ ! -e "$$pre" ]; do miss="/$${pre$(host_hash)$(host_hash)*/}$$miss"; pre=$${pre%/*}; done; verdict=apart; if [ -z "$$miss" ]; then p=$$root; while :; do if [ "$${p:-/}" -ef "$${pre:-/}" ]; then verdict=holds; break; fi; [ -n "$$p" ] || break; p=$${p%/*}; done; fi; if [ "$$verdict" = apart ]; then p=$$pre; while :; do if [ "$${p:-/}" -ef "$$root" ]; then verdict=inside; break; fi; [ -n "$$p" ] || break; p=$${p%/*}; done; fi; if [ "$$verdict" = apart ]; then q='$(HOST_WORKSPACE)'; while [ -n "$$q" ] && [ ! -e "$$q" ]; do case $${q$(host_hash)$(host_hash)*/} in (..) q=; break ;; esac; q=$${q%/*}; done; q=$${q:-/}; while [ -e "$$q" ]; do if [ "$$q" -ef "$$root" ]; then verdict=inside; break; fi; [ ! "$$q" -ef / ] || break; q="$$q/.."; done; fi; case $$out in (*[!A-Za-z0-9._/+@=$(host_hash)-]*) ;; (*) printf '%s %s\n' "$$verdict" "$${out:-/}" ;; esac; })
 host_workspace_verdict := $(word 1,$(host_workspace_walk))
 host_workspace_real    := $(word 2,$(host_workspace_walk))
 ifneq ($(filter holds inside apart,$(host_workspace_verdict)) $(words $(host_workspace_walk)),$(host_workspace_verdict) 2)
