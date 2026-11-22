@@ -862,8 +862,10 @@ without the default `VM_ENV` credentials, `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEE
 **The `.envrc` guard** (issue #402). The host targets that load the credentials or the agents App's key,
 `make vm-env`, `vm-env-check`, `vm-up`, `vm-create`, `vm-init`, `agents-token`, `agents-token-refresh`,
 `agents-token-refresh-install` and `agents-token-refresh-start`, refuse to run, before they run anything (no
-prerequisite, no sub-make, no `limactl`, `launchctl` or `sudo`), in two cases: when the host clone's `.envrc`
-is a symlink to a file outside the clone or hands its lines to another file, and when a `.envrc` or a `.env`
+prerequisite, no sub-make, no `limactl`, `launchctl` or `sudo`), in two cases. The first is the host clone's
+`.envrc`, refused when it is a symlink that leads outside the clone, when it is a symlink the guard cannot
+resolve (more than 32 links or a loop of them, a link that cannot be read, or one that reads other than the
+kernel resolves it), or when it hands its lines to another file. The second is a `.envrc` or a `.env` that
 sits in the workspace or in any directory above it, up to `/`, in either spelling of the workspace (as
 `WORKSPACE_REPO` writes it, and with its symlinks resolved), where direnv loads it in every shell you open in
 the workspace. The guard parses no shell, so it holds the host clone's `.envrc` to three strict rules:
@@ -880,6 +882,12 @@ the workspace. The guard parses no shell, so it holds the host clone's `.envrc` 
   backtick end a directive's word too (`source_up>/dev/null`, `` `source_up` ``), and a `dotenv` directly
   followed by one, or with a path starting with one, counts as outside; a line ending in `\` is joined to the
   next first, as bash does (an escaped trailing backslash joins too, a safe false positive).
+
+The guard resolves the `.envrc` and a `dotenv` path with the host-clone guard's own resolver (issue #468): at
+most 32 symlinks, each one's target checked against what the kernel resolves, and "inside the clone" decided by
+file identity (`test -ef`), never by comparing spellings, so a path typed in another case (APFS ignores case) or
+a link whose target ends in a newline cannot pass for a file of the clone. Anything it cannot resolve (more than
+32 links, a loop, a link it cannot read or that reads other than the kernel follows it) counts as outside.
 
 Each refusal names the file, and for a directive its line number (`<path>/.envrc: line <N>: ...`). A directive
 word anywhere on a non-comment line counts, in a trailing comment (`dotenv ./x # source_up`) or a quoted value

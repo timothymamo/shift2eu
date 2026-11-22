@@ -22,6 +22,7 @@
 package devenv_test
 
 import (
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -105,6 +106,10 @@ type envrcLayoutCase struct {
 	targets []string
 	// want is what a refusal's stderr must say beyond the paths, such as the docs section that holds the fix.
 	want []string
+	// notWant is what neither stream of a refusal may say: the names of links it walked or of a path it resolved,
+	// which a guard that fails closed must not echo (issue #468). A hop echoed to stdout would leak it as surely
+	// as one on stderr, so both are checked.
+	notWant []string
 }
 
 // runs is the targets the case runs against.
@@ -613,6 +618,282 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile(t *testing.T) {
 			targets: []string{"vm-env"},
 			want:    []string{"The host clone"},
 		},
+		{
+			// Issue #468, the macOS path PR #463 pinned for the host guard: a link's target may end in a
+			// newline, which command substitution strips, so a guard that follows the target it read walks to
+			// the plain directory of that name while the kernel walks the name that ends in the newline. Here
+			// the kernel's way leads through "envrc\n", a link to a credentials file outside the clone, and
+			// the resolver's way to "envrc", a harmless file inside it: the guard must refuse the clone's
+			// .envrc, which direnv loads from outside the clone, and not read the file inside.
+			name: "the host clone's .envrc is a symlink whose target ends in a newline",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				outside := filepath.Join(l.sb.root, "outside", "credentials.envrc")
+				writeFileMode(t, outside, []byte("source_up\n"+plantedEnvrcLines()), 0o600)
+
+				// The name the kernel follows: it ends in the newline left out of everything a guard echoes.
+				writeLink(t, filepath.Join(l.root, "envrc\n"), outside)
+				// What the resolver reads instead: a file of the clone that reads nothing.
+				writeFileMode(t, filepath.Join(l.root, "envrc"), []byte(plantedEnvrcLines()), 0o600)
+
+				return []string{writeLink(t, filepath.Join(l.root, ".envrc"), "envrc\n")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
+		{
+			// The same layout with a readlink that itself drops the trailing newline of a target, as the macOS
+			// make 3.81 run of issue #447 was suspected to have. A resolver that keeps a target's newline (issue
+			// #463 reads it with a _ after it) still trusts what readlink prints unless it checks the target
+			// against the kernel: this readlink reproduces the fail-open on Linux, where the guard runs the host
+			// target instead of refusing, and after the fix it must fail closed.
+			name: "the host clone's .envrc is a symlink whose target ends in a newline, and readlink drops it",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				useFakeReadlinkThatDropsATrailingNewline(t, l)
+
+				outside := filepath.Join(l.sb.root, "outside", "credentials.envrc")
+				writeFileMode(t, outside, []byte("source_up\n"+plantedEnvrcLines()), 0o600)
+
+				writeLink(t, filepath.Join(l.root, "envrc\n"), outside)
+				writeFileMode(t, filepath.Join(l.root, "envrc"), []byte(plantedEnvrcLines()), 0o600)
+
+				return []string{writeLink(t, filepath.Join(l.root, ".envrc"), "envrc\n")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
+		{
+			// Issue #468: the same newline on the path a dotenv directive's argument is resolved along. direnv
+			// reads the file the kernel names - the credentials file outside the clone - while the resolver
+			// reads the harmless file named without the newline inside it.
+			name: "the host clone's .envrc dotenvs a symlink whose target ends in a newline",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				outside := filepath.Join(l.sb.root, "outside", "creds.env")
+				writeFileMode(t, outside, []byte(plantedEnvrcLines()), 0o600)
+
+				writeLink(t, filepath.Join(l.root, "creds\n"), outside)
+				writeFileMode(t, filepath.Join(l.root, "creds"), []byte(plantedEnvrcLines()), 0o600)
+				writeLink(t, filepath.Join(l.root, "credslink"), "creds\n")
+				writeHostEnvrc(t, l, "dotenv credslink\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
+		{
+			// Issue #468: the clone's .envrc is a dangling symlink whose absolute target lies outside the
+			// clone. The file direnv would go to is no file of the clone's, so the guard must refuse rather
+			// than compare the link's name.
+			name: "the host clone's .envrc is a dangling symlink whose absolute target is outside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				gone := filepath.Join(l.sb.root, "outside", "gone.envrc")
+				if _, err := os.Stat(gone); !os.IsNotExist(err) {
+					t.Fatalf("%s exists, so the link this case plants is no dangling one: %v", gone, err)
+				}
+
+				return []string{writeLink(t, filepath.Join(l.root, ".envrc"), gone)}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
+		{
+			// The same with a relative target, which the resolver must read against the link's own directory:
+			// here it climbs out of the clone into a directory beside its parent.
+			name: "the host clone's .envrc is a dangling symlink whose relative target is outside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				gone := filepath.Join(filepath.Dir(l.root), "beside-the-clone", "gone.envrc")
+				if _, err := os.Stat(gone); !os.IsNotExist(err) {
+					t.Fatalf("%s exists, so the link this case plants is no dangling one: %v", gone, err)
+				}
+
+				return []string{writeLink(t, filepath.Join(l.root, ".envrc"), "../beside-the-clone/gone.envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
+		{
+			// Issue #468, fail closed: the clone's .envrc runs into a loop of symlinks, a -> b and b -> a,
+			// which no resolution ends. The guard must refuse instead of comparing a path it never resolved,
+			// and it must not echo the names it walked there.
+			name: "the host clone's .envrc is a loop of symlinks",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeLink(t, filepath.Join(l.root, "loop-a"), "loop-b")
+				writeLink(t, filepath.Join(l.root, "loop-b"), "loop-a")
+				writeLink(t, filepath.Join(l.root, ".envrc"), "loop-a")
+
+				return nil
+			},
+			targets: []string{"vm-env"},
+			// A loop is the other reason this check names for a .envrc it cannot resolve, and no link of the layout
+			// leads outside the clone: the refusal must say so, not that the .envrc leads elsewhere.
+			want:    []string{"The host clone", "cannot resolve"},
+			notWant: []string{"loop-b"},
+		},
+		{
+			// Issue #468: the 33rd link of a walk the host guard's resolver follows at most 32 of (macOS's
+			// MAXSYMLINKS) ends in a file inside the clone, so the cap is the only reason to refuse it - and the
+			// .envrc itself is a link of the walk, so 32 hops in the clone plus it are the 33. The two guards share
+			// one resolver, so both must fail closed here; a guard with a cap of its own decides the same layout
+			// the other way. With the clean layout's chain of exactly 32 links this row pins the cap from both sides:
+			// a cap of 31 refuses that layout, a cap of 33 lets this one through. It must not echo the hops it walked.
+			name: "the host clone's .envrc is a chain of exactly 33 symlinks",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "chain-end"), []byte(plantedEnvrcLines()), 0o600)
+
+				// Exactly 33 links: the clone's .envrc and 32 hops, each naming the next, the last the file.
+				writeLink(t, filepath.Join(l.root, ".envrc"), writeSymlinkChain(t, l.root, "chain-", 32, "chain-end"))
+
+				return nil
+			},
+			targets: []string{"vm-env"},
+			// The refusal says too that the walk is beyond what this check resolves, not that a link led outside
+			// the clone: nothing of the layout is outside it.
+			want:    []string{"The host clone", "cannot resolve"},
+			notWant: []string{"chain-32"},
+		},
+		{
+			// Issue #468: the same cap on the path a dotenv directive's argument is resolved along. The chain
+			// ends in a file inside the clone, so the cap alone makes it unresolvable, and the guard must count it
+			// as outside rather than walk past the 32 links the kernel allows (MAXSYMLINKS). The refusal names the
+			// clone's .envrc and the line, never a hop of the chain it walked.
+			name: "the host clone's .envrc dotenvs a chain of more than 32 symlinks inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "secrets.env"), []byte(plantedEnvrcLines()), 0o600)
+				writeHostEnvrc(t, l, "dotenv "+writeSymlinkChain(t, l.root, "hop-", 33, "secrets.env")+"\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"line 1", "The host clone"},
+			notWant: []string{"hop-32"},
+		},
+		{
+			// Issue #468, fail closed: the path a dotenv argument leads along runs into a loop of symlinks, a ->
+			// b and b -> a, which no resolution ends. The guard must refuse instead of resolving a path it never
+			// reached, and it must not echo the names it walked there.
+			name: "the host clone's .envrc dotenvs a loop of symlinks",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeLink(t, filepath.Join(l.root, "loop-a"), "loop-b")
+				writeLink(t, filepath.Join(l.root, "loop-b"), "loop-a")
+				writeHostEnvrc(t, l, "dotenv loop-a\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"line 1", "The host clone"},
+			notWant: []string{"loop-b"},
+		},
+		{
+			// Issue #468: a bare dotenv reads the clone's own .env, and the guard resolves that path too, so the
+			// 32-link cap must decide a .env whose chain ends in a file of the clone the way it decides the
+			// clone's .envrc - as outside. The chain is the only reason to refuse this layout, and the refusal must
+			// not echo a hop of it.
+			name: "the host clone's .envrc says dotenv alone and the clone's .env is a chain of more than 32 symlinks",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "dotenv-end"), []byte(plantedEnvrcLines()), 0o600)
+				writeLink(t, filepath.Join(l.root, ".env"), writeSymlinkChain(t, l.root, "env-hop-", 33, "dotenv-end"))
+				writeHostEnvrc(t, l, "dotenv\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"line 1", "The host clone"},
+			notWant: []string{"env-hop-32"},
+		},
+		{
+			// Issue #468: the same fail-closed rule for the clone's own .env when it is a loop of symlinks: the
+			// guard must refuse the bare dotenv rather than load a file it could not resolve with certainty.
+			name: "the host clone's .envrc says dotenv alone and the clone's .env is a loop of symlinks",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeLink(t, filepath.Join(l.root, "env-loop-a"), "env-loop-b")
+				writeLink(t, filepath.Join(l.root, "env-loop-b"), "env-loop-a")
+				writeLink(t, filepath.Join(l.root, ".env"), "env-loop-a")
+				writeHostEnvrc(t, l, "dotenv\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"line 1", "The host clone"},
+			notWant: []string{"env-loop-b"},
+		},
+		{
+			// Issue #468: the newline case on the path a bare dotenv takes to the clone's .env. The clone's .env
+			// is a symlink whose target ends in a newline, and the name the kernel follows - with the newline -
+			// is a link to a credentials file outside the clone, while the name without it is a harmless file of
+			// the clone. A resolver reading readlink's output as text walks to the file inside the clone and lets a
+			// layout through that direnv loads from outside, so the guard must refuse it.
+			name: "the host clone's .envrc says dotenv alone and the clone's .env is a symlink whose target ends in a newline",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				outside := filepath.Join(l.sb.root, "outside", "creds.env")
+				writeFileMode(t, outside, []byte(plantedEnvrcLines()), 0o600)
+
+				writeLink(t, filepath.Join(l.root, "creds\n"), outside)
+				writeFileMode(t, filepath.Join(l.root, "creds"), []byte(plantedEnvrcLines()), 0o600)
+				writeLink(t, filepath.Join(l.root, ".env"), "creds\n")
+				writeHostEnvrc(t, l, "dotenv\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"line 1", "The host clone"},
+		},
+		{
+			// Issue #468: the link's target climbs into a credentials file outside the clone through ..
+			// components, which only the resolved path shows. The guard must compare the workspace as it
+			// resolves, not as it is spelled.
+			name: "the host clone's .envrc is a symlink whose target climbs out of the clone with ..",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				outside := filepath.Join(l.sb.root, "outside", "creds.envrc")
+				writeFileMode(t, outside, []byte(plantedEnvrcLines()), 0o600)
+
+				return []string{writeLink(t, filepath.Join(l.root, ".envrc"), "not-there/../../../outside/creds.envrc")}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
+		{
+			// Issue #468: a link to / is a target like any other, so the resolver must follow it and walk the
+			// rest of the path from there again - here the absolute path of a credentials file outside the clone.
+			name: "the host clone's .envrc is a symlink through a link to the root directory",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				outside := filepath.Join(l.sb.root, "outside", "creds.envrc")
+				writeFileMode(t, outside, []byte(plantedEnvrcLines()), 0o600)
+
+				toRoot := writeLink(t, filepath.Join(l.sb.root, "to-root"), "/")
+
+				return []string{writeLink(t, filepath.Join(l.root, ".envrc"), toRoot+strings.TrimPrefix(outside, "/"))}
+			},
+			targets: []string{"vm-env"},
+			want:    []string{"The host clone"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -624,7 +905,7 @@ func TestHostTargetsRefuseAHostCloneEnvrcThatRunsAnotherFile(t *testing.T) {
 					t.Parallel()
 
 					run := makeInEnvrcLayout(t, target, tc)
-					run.assertRefused(t, target, tc.want)
+					run.assertRefused(t, target, tc)
 				})
 			}
 		})
@@ -770,6 +1051,93 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 			},
 			targets: []string{"vm-env-check"},
 		},
+		{
+			// Issue #468, the macOS path PR #463 pinned for the host guard: the workspace is reached through a
+			// link whose target ends in a newline, and the credentials .envrc sits in the directory that target
+			// names - the directory direnv reads the .envrcs above the workspace from. The layout must be refused
+			// on every host the guard runs on, whichever of the two guards resolves the workspace first: here the
+			// host guard's resolver refuses the newline in the resolved workspace (no character a WORKSPACE_REPO
+			// may hold), so the .envrc guard never walks it, and a guard that let it through would leave direnv
+			// reading that .envrc in every shell opened in the workspace.
+			name: "a .envrc in the directory named by a workspace link whose target ends in a newline",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeHostEnvrc(t, l, "")
+
+				physical := filepath.Join(l.sb.root, "alias\n")
+				writeClone(t, filepath.Join(physical, filepath.Base(l.workspaceRepo())))
+				writeLink(t, filepath.Join(l.sb.root, "tn"), "alias\n")
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(l.sb.root, "tn", filepath.Base(l.workspaceRepo()))
+
+				writeAboveWorkspaceIn(t, physical, 1, ".envrc")
+
+				return nil
+			},
+			targets: []string{"vm-env-check"},
+		},
+		{
+			// A regression pin for a case-insensitive file system (macOS's APFS by default), not a test of the
+			// #468 resolver: the .envrc direnv loads sits in the workspace itself, spelled in the case the file
+			// system keeps, while WORKSPACE_REPO names the checkout in another case, which the kernel reads as the
+			// same path. The scan above the workspace tests the file with [ -e ... ], which folds case there, so
+			// it refuses this layout with or without the resolver #468 gave the two guards: the row passed on
+			// f3599bd too, and pins only that the layout stays refused. The #468 resolver's own rows are the
+			// case-swapped link inside and outside the clone, which only a resolver that checks file identity
+			// rather than spelling can tell apart, and they run where this row does: the file system is asked
+			// whether it is case-insensitive rather than GOOS, so the row is skipped on a case-sensitive one
+			// (Linux) and runs on CI's macOS make 3.81 job, whose /bin/sh is bash 3.2.
+			name: "the workspace is spelled in another case, on a file system that ignores case (regression pin)",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeHostEnvrc(t, l, "")
+
+				if !caseInsensitiveDir(t, l.sb.root) {
+					t.Skipf("the file system holding %s is case-sensitive, so a spelling in another case names another path, one without a .envrc: the row pins what a case-insensitive file system, macOS's APFS by default, does with the workspace (issue #468)", l.sb.root)
+				}
+
+				// The .envrc direnv loads in the workspace, written where the kernel's path leads, spelled in the
+				// case the file system keeps.
+				workspace := l.workspace()
+				writeFileMode(t, filepath.Join(workspace, ".envrc"), []byte(plantedEnvrcLines()), 0o600)
+
+				// WORKSPACE_REPO spelled in the other case: the kernel names the same checkout, while a guard
+				// comparing spellings reads a path the clone's REPO_ROOT never equals.
+				l.env["WORKSPACE_REPO"] = caseSwapped(l.workspaceRepo())
+
+				return nil
+			},
+			targets: []string{"vm-env-check"},
+		},
+		{
+			// The twin of TestHostTargetsPassACleanEnvrcLayout's case-swapped link row, and the #468 resolver's
+			// refusal on the macOS file system CI's make 3.81 job runs on: the host clone's .envrc is a symlink
+			// whose target is spelled in another case and leads outside the clone, which the kernel reads as that
+			// file. Containment by file identity must refuse it, exactly as it refuses the same link spelled in the
+			// case the file system keeps: a within that let a case-swapped spelling through would hand the
+			// credentials of a file outside the clone to every shell opened in the workspace. The file system is
+			// asked whether it is case-insensitive rather than GOOS, so the row is skipped on a case-sensitive one
+			// (Linux), where the spelling names a path that exists nowhere.
+			name: "the host clone's .envrc is a symlink spelled in another case to a file outside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				if !caseInsensitiveDir(t, l.sb.root) {
+					t.Skipf("the file system holding %s is case-sensitive, so a link target spelled in another case names another path, one that exists nowhere: the row pins what a case-insensitive file system, macOS's APFS by default, does with a link the kernel follows (issue #468)", l.sb.root)
+				}
+
+				outside := filepath.Join(l.sb.root, "outside")
+				writeFileMode(t, filepath.Join(outside, "secrets.env"), []byte(plantedEnvrcLines()), 0o600)
+
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, caseSwapped(outside)+"/secrets.env")
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -781,7 +1149,7 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 					t.Parallel()
 
 					run := makeInEnvrcLayout(t, target, tc)
-					run.assertRefused(t, target, tc.want)
+					run.assertRefused(t, target, tc)
 				})
 			}
 		})
@@ -792,8 +1160,18 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 // clone's .envrc runs no other file - it holds its lines itself - or loads one the way direnv parses rather than
 // runs it: `dotenv` and `dotenv_if_exists` with a plain path inside the clone, written as a name with no slash, a
 // relative path, an absolute path or one enclosing pair of matching quotes, and a bare `dotenv`, which reads the
-// clone's own .env. No .envrc and no .env may sit in the workspace or above it either. Each of the eight targets
-// must reach its next step, so the guard does not refuse the layout the docs ask for.
+// clone's own .env. No .envrc and no .env may sit in the workspace or above it either.
+//
+// The .envrc itself may be a symlink, or a chain of them, to a file inside the clone, and a dotenv path may lead to
+// one: those are the clone's own files, so they are layouts the docs ask for, and they are the positive controls of
+// the resolver and containment issue #468 gave the guard - a within that always failed, or a resolve whose check
+// against the kernel never held, would refuse every one of them while the refusals the issue pins still passed. On
+// a case-insensitive file system (macOS's APFS by default) the link's path may be spelled in another case as well,
+// which the spelling prefix test the guard used before #468 refused; that row is skipped where the kernel folds no
+// case. Two of the rows are the resolver's cap seen from its passing side - a walk of exactly 32 links through the
+// clone's .envrc, and one through a dotenv path - which the refusal rows of 33 links pin from the other side, so a
+// cap one below the Makefile's fails these and one above it fails those. Each of the case's targets must reach its
+// next step, so the guard does not refuse the layout the docs ask for.
 func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 	t.Parallel()
 
@@ -885,6 +1263,154 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 
 				return nil
 			},
+		},
+		{
+			// Issue #468's positive control for containment by file identity: a dotenv path that does not exist
+			// yet, whose deepest existing ancestor is the clone itself. dotenv loads nothing from it today, and the
+			// guard must let it through - within walks the longest existing prefix of the path and stops on the
+			// clone - or a maintainer who points dotenv at a file they are about to create is refused a layout the
+			// docs allow. A guard that refused a wholly missing path inside the clone would stop this row.
+			name:      "the host clone's .envrc dotenvs a path that does not exist yet inside the clone",
+			hostEnvrc: "dotenv not-yet-there/secrets.env\n",
+			targets:   []string{"vm-env", "vm-up"},
+		},
+		{
+			// Issue #468's positive control for the resolver itself: a .envrc that is a symlink to a file inside the
+			// clone is the clone's own file, and the kernel reads it as the clone's .envrc, so the guard must let it
+			// through. A resolver that refused every symlink, or a within that never held, would refuse a layout
+			// docs/dev-environment.md allows while every refusal the issue pins still passed.
+			name: "the host clone's .envrc is a symlink to a file inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.envrc"), []byte(plantedEnvrcLines()), 0o600)
+
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, "creds.envrc")
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// The same, through a chain: .envrc -> hop1 -> hop2 -> the file, three links the resolver follows in
+			// turn, each checked against the kernel and all of them inside the clone. A maintainer who keeps their
+			// credentials in a file the clone's .envrc reaches through their own links loses nothing the guard must
+			// refuse (issue #468).
+			name: "the host clone's .envrc is a chain of symlinks ending in a file inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.envrc"), []byte(plantedEnvrcLines()), 0o600)
+				writeLink(t, filepath.Join(l.root, "hop2"), "creds.envrc")
+				writeLink(t, filepath.Join(l.root, "hop1"), "hop2")
+
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, "hop1")
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// Issue #468's boundary row, the other side of the cap the refusal rows of 33 links pin: the walk follows
+			// exactly 32 links - the clone's .envrc and 31 hops - which is the most the resolver follows (macOS's
+			// MAXSYMLINKS), and the file they end in is the clone's own, so the guard must let it through. A cap of 31,
+			// an off-by-one no refusal row can see, refuses this layout a maintainer's direnv would load, which is
+			// why the pair pins the cap from both sides.
+			name: "the host clone's .envrc is a chain of exactly 32 symlinks ending in a file inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.envrc"), []byte(plantedEnvrcLines()), 0o600)
+
+				// Exactly 32 links: the clone's .envrc, which the walk follows as a link like any other, and its 31
+				// hops, each naming the next, the last the file.
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, writeSymlinkChain(t, l.root, "ok-chain-", 31, "creds.envrc"))
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// And a dotenv path that leads through a link inside the clone: credslink is a symlink to a file of the
+			// clone, so the file dotenv reads is the clone's own. The resolver follows the link and within finds the
+			// file inside the clone, so the guard must pass - a spelling comparison of the unresolved path would
+			// still find credslink inside the clone and pass too, which is why this row is the resolver's: the path
+			// it hands within is the one the link leads to, not the one the .envrc spells (issue #468).
+			name:      "the host clone's .envrc dotenvs a symlink to a file inside the clone",
+			hostEnvrc: "dotenv credslink\n",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.env"), []byte(plantedEnvrcLines()), 0o600)
+				writeLink(t, filepath.Join(l.root, "credslink"), "creds.env")
+
+				return nil
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// The same boundary on the path a dotenv argument is resolved along: 32 links, no .envrc among them as the
+			// clone's .envrc holds the directive itself, is exactly the most both guards' resolver follows, and the
+			// chain ends in a file of the clone, so the guard must load it. The refusal row beside it plants one link
+			// more and pins what lies past the cap.
+			name: "the host clone's .envrc dotenvs a chain of exactly 32 symlinks inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "secrets.env"), []byte(plantedEnvrcLines()), 0o600)
+				writeHostEnvrc(t, l, "dotenv "+writeSymlinkChain(t, l.root, "ok-hop-", 32, "secrets.env")+"\n")
+
+				return []string{filepath.Join(l.root, ".envrc")}
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// Issue #468's macOS row, the mirror of the host guard's case-swapped link: on a file system that ignores
+			// case (macOS's APFS by default) a .envrc that is a symlink whose target is spelled in another case still
+			// names a file inside the clone, so the guard must let it through. The spelling prefix test the .envrc
+			// guard used before #468 refused it, as no comparison of spellings finds the clone's own case in it, and
+			// the resolver's test against the kernel accepts it because the kernel reads both spellings as one file.
+			// The file system is asked whether it is case-insensitive rather than GOOS, so the row is skipped on a
+			// case-sensitive one (Linux) and runs on CI's macOS make 3.81 job, whose /bin/sh is bash 3.2.
+			name: "the host clone's .envrc is a symlink spelled in another case to a file inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.envrc"), []byte(plantedEnvrcLines()), 0o600)
+
+				if !caseInsensitiveDir(t, l.sb.root) {
+					t.Skipf("the file system holding %s is case-sensitive, so a link target spelled in another case names another path, one that exists nowhere: the row pins what a case-insensitive file system, macOS's APFS by default, does with a link whose spelling the kernel folds (issue #468)", l.sb.root)
+				}
+
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, caseSwapped(l.root)+"/creds.envrc")
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// Issue #468's positive control, the mirror of the host guard's row of issue #447: the workspace is
+			// reached through a symlink the maintainer's own directories hold, and no .envrc and no .env sits in
+			// it or above it. Resolving the path must land on the workspace the link leads to, which holds
+			// nothing direnv would load, so the guard must let the credential targets through: a resolver that
+			// refused every workspace behind a link would stop a layout docs/dev-environment.md asks for.
+			name: "the workspace is reached through a symlink outside the host clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				physical := filepath.Join(l.sb.root, "physical-ws")
+				writeClone(t, filepath.Join(physical, filepath.Base(l.workspaceRepo())))
+				writeLink(t, filepath.Join(l.sb.root, "ws-link"), physical)
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(l.sb.root, "ws-link", filepath.Base(l.workspaceRepo()))
+
+				return nil
+			},
+			targets: []string{"vm-env", "vm-up"},
 		},
 	}
 
@@ -1008,9 +1534,10 @@ func makeInEnvrcLayout(t *testing.T, target string, tc envrcLayoutCase) envrcRun
 }
 
 // assertRefused fails unless the run refused the layout: a non-zero exit, stderr naming every file the guard must
-// point the maintainer at and saying what want asks for beyond the paths, no call of a tool a host target reaches
-// - the guard ran before anything else - and no planted credential value in either stream.
-func (r envrcRun) assertRefused(t *testing.T, target string, want []string) {
+// point the maintainer at and saying what the case's want asks for beyond the paths, no call of a tool a host
+// target reaches - the guard ran before anything else - neither stream naming a path the case's notWant forbids, and
+// no planted credential value in either stream.
+func (r envrcRun) assertRefused(t *testing.T, target string, tc envrcLayoutCase) {
 	t.Helper()
 
 	out := "make " + target
@@ -1027,10 +1554,19 @@ func (r envrcRun) assertRefused(t *testing.T, target string, want []string) {
 		}
 	}
 
-	for _, text := range want {
+	for _, text := range tc.want {
 		if !strings.Contains(r.stderr, text) {
 			t.Errorf("%s's refusal does not say %q on stderr, so a maintainer does not learn where the credentials belong: docs/dev-environment.md, The host clone (issue #402)\nstdout: %s\nstderr: %s",
 				out, text, r.stdout, r.stderr)
+		}
+	}
+
+	for _, text := range tc.notWant {
+		for _, stream := range []struct{ name, text string }{{"stdout", r.stdout}, {"stderr", r.stderr}} {
+			if strings.Contains(stream.text, text) {
+				t.Errorf("%s's refusal says %q on %s, a path the guard's walk read and could not resolve: a guard that fails closed names the file it could not resolve, never what it walked or resolved, which may be a credential typed where a path goes (CLAUDE.md rule 3, issue #468)\nstdout: %s\nstderr: %s",
+					out, text, stream.name, r.stdout, r.stderr)
+			}
 		}
 	}
 
@@ -1120,7 +1656,13 @@ func writeHostEnvrc(t *testing.T, l *hostLayout, content string) string {
 func writeAboveWorkspace(t *testing.T, l *hostLayout, levels int, name string) string {
 	t.Helper()
 
-	dir := l.workspace()
+	return writeAboveWorkspaceIn(t, l.workspace(), levels, name)
+}
+
+// writeAboveWorkspaceIn writes the same file in the directory levels above dir - level 1 is dir itself - for a case
+// whose workspace only the case knows the resolved path of, and returns the file's path.
+func writeAboveWorkspaceIn(t *testing.T, dir string, levels int, name string) string {
+	t.Helper()
 
 	for level := 1; level < levels; level++ {
 		dir = filepath.Dir(dir)
@@ -1131,6 +1673,61 @@ func writeAboveWorkspace(t *testing.T, l *hostLayout, levels int, name string) s
 	writeFileMode(t, path, []byte(plantedEnvrcLines()), 0o600)
 
 	return path
+}
+
+// writeSymlinkChain plants count symbolic links named prefix1 ... prefix<count> in dir, each pointing at the next
+// hop and the last at last, and returns the name of the first hop: a walk of count links, or one more when the case
+// starts the walk at a link of its own, as the clone's .envrc is. A case plants 32 - the most both guards' resolver
+// follows (macOS's MAXSYMLINKS) - to pin that a walk of exactly 32 links passes, and 33 to pin that the next one is
+// refused, so no cap one off the Makefile's passes both (issue #468).
+func writeSymlinkChain(t *testing.T, dir, prefix string, count int, last string) string {
+	t.Helper()
+
+	for hop := count; hop >= 1; hop-- {
+		target := last
+		if hop < count {
+			target = fmt.Sprintf("%s%d", prefix, hop+1)
+		}
+
+		writeLink(t, filepath.Join(dir, fmt.Sprintf("%s%d", prefix, hop)), target)
+	}
+
+	return fmt.Sprintf("%s1", prefix)
+}
+
+// writeLink plants the symbolic link at path whose target is exactly target, a trailing newline included, as a
+// maintainer's link may carry one, and returns path.
+func writeLink(t *testing.T, path, target string) string {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create %s: %v", filepath.Dir(path), err)
+	}
+
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatalf("symlink %s to %q: %v", path, target, err)
+	}
+
+	return path
+}
+
+// fakeReadlinkDroppingATrailingNewline is a readlink that prints a link's target without the newline it ends in,
+// which is the readlink the macOS make 3.81 run of issue #447 was suspected to have: command substitution drops a
+// target's trailing newline as well, so a guard that keeps one (issue #463 reads it with a _ after it) has to check
+// what readlink printed against the kernel, or it walks to another path. It runs the machine's own readlink and
+// prints its answer through a command substitution, which drops every trailing newline the answer ends in.
+const fakeReadlinkDroppingATrailingNewline = `#!/bin/sh
+out=$(%s "$@") || exit 1
+printf '%%s\n' "$out"
+`
+
+// useFakeReadlinkThatDropsATrailingNewline puts that readlink first on the sandbox's PATH, so a run reads link
+// targets the way the macOS run of issue #447 did on Linux.
+func useFakeReadlinkThatDropsATrailingNewline(t *testing.T, l *hostLayout) {
+	t.Helper()
+
+	writeFileMode(t, filepath.Join(l.sb.binDir, "readlink"),
+		[]byte(fmt.Sprintf(fakeReadlinkDroppingATrailingNewline, shQuote(realTool(t, "readlink")))), 0o700)
 }
 
 // pathForms returns the spellings a message may use for path: the one the test wrote, and the one with the path's

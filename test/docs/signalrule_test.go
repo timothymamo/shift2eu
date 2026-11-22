@@ -19,10 +19,33 @@ const rulesHeading = "## Rules"
 // processes it started itself.
 const signalRuleTitle = "**Signal only what you started.**"
 
-// signalRuleCommands are the process-selection commands the rule forbids: they
-// pick a process by name, and the runs of the other agents on the machine have
-// names too.
-var signalRuleCommands = []string{"pgrep", "pidof", "pkill"}
+// The parts of the rule below its title are named here the way a failure names
+// them, so the table test can compare against the same words.
+const (
+	byNameBanName         = "the ban on picking a process by its name (pgrep, pidof, pkill)"
+	processGroupBanName   = "the process-group ban"
+	pidStartTimeCheckName = "the pid and start-time check (ps -o lstart=,args=)"
+)
+
+// signalRuleParts are the parts of rule 10 that keep one agent from stopping
+// another agent's run, besides the sentence that forbids sending a signal: the
+// ban on picking a process by its name, the ban on signalling a process group
+// yourself, and the pid and start-time check that shows the pid still belongs to
+// the run before it is signalled (issue #471).
+//
+// The by-name ban is pinned as the one phrase that lists the three commands, not
+// as three command names: rule 10 also writes `pgrep` in its "Why" line, as
+// `pgrep -x make`, and `pkill` in the bullet that forbids sending a signal, so a
+// check for the names alone keeps passing after the bullet that forbids picking
+// a process by its name is deleted. Only `pidof` would then be reported.
+var signalRuleParts = []struct {
+	name   string // how a failure names the part
+	phrase string // what the rule's whitespace-collapsed text must contain
+}{
+	{name: byNameBanName, phrase: "(`pgrep`, `pidof`, `pkill`)"},
+	{name: processGroupBanName, phrase: "process group yourself"},
+	{name: pidStartTimeCheckName, phrase: "ps -o lstart=,args="},
+}
 
 // signalRulePhrase is the phrase a skill that runs the checks uses to point
 // the agent at the rule: the rule's title without the bold markers. It is only
@@ -289,30 +312,126 @@ func citation(t *testing.T, data string) string {
 	return signalRulePhrase + " (CLAUDE.md rule " + rule.number + ")"
 }
 
+// missingSignalRuleParts returns the parts of signalRuleParts whose phrase
+// rule's text does not hold, each named the way a failure names it. The caller
+// passes the item findSignalRule returned, so a text without the rule's title
+// fails there, at the rule's line, before this check runs. numberedItems has
+// already joined the rule's wrapped lines and collapsed its whitespace, so a
+// phrase still counts when Markdown wraps it over two lines.
+func missingSignalRuleParts(rule numberedItem) []string {
+	var missing []string
+	for _, part := range signalRuleParts {
+		if !strings.Contains(rule.text, part.phrase) {
+			missing = append(missing, part.name)
+		}
+	}
+	return missing
+}
+
+// TestSignalRulePartsAreNamedWhenMissing fails when a check of the rule's
+// content stops naming a part that CLAUDE.md has lost. It runs the check on
+// in-memory copies of the real CLAUDE.md and removes one part at a time, so a
+// check that looks only for the rule's title, or one that stops looking for the
+// ban on picking a process by its name, the process-group ban or the pid and
+// start-time check, is caught here rather than only by an edit of CLAUDE.md that
+// the suite never makes (issue #471). Each case asserts that its phrase occurs
+// exactly once in the file, inside the rule, and that the replacement changed
+// the text, so no case can pass because it removed nothing or removed the phrase
+// from somewhere else.
+func TestSignalRulePartsAreNamedWhenMissing(t *testing.T) {
+	t.Parallel()
+
+	data := readDoc(t, os.DirFS(repoRoot), claudeMD)
+	tests := []struct {
+		name        string
+		remove      string
+		with        string
+		wantMissing []string
+	}{
+		{
+			name:        "the rule is unchanged",
+			wantMissing: nil,
+		},
+		{
+			name:        "the ban on picking a process by its name is gone",
+			remove:      "      - pick a process to signal by its name (`pgrep`, `pidof`, `pkill`);\n",
+			wantMissing: []string{byNameBanName},
+		},
+		{
+			name:        "the process-group ban is gone",
+			remove:      "signal a process group yourself",
+			with:        "signal a process group",
+			wantMissing: []string{processGroupBanName},
+		},
+		{
+			name:        "the pid and start-time check is gone",
+			remove:      "`ps -o lstart=,args= -p <pid>`",
+			with:        "`ps -p <pid>`",
+			wantMissing: []string{pidStartTimeCheckName},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			text := data
+			if tc.remove != "" {
+				// The phrase must occur exactly once, in the rule itself: a phrase
+				// the file writes twice would let this case replace the occurrence
+				// outside the rule and pin nothing there, and the count of one
+				// together with wantMissing shows the rule lost the phrase.
+				if n := strings.Count(data, tc.remove); n != 1 {
+					t.Fatalf("%q occurs %d times in %s, want it exactly once, inside the rule that starts with %q: this case must remove the phrase from the rule and from nowhere else (issue #471)",
+						tc.remove, n, claudeMD, signalRuleTitle)
+				}
+				text = strings.Replace(data, tc.remove, tc.with, 1)
+				if text == data {
+					t.Fatalf("the copy of %s is unchanged: %q does not occur in it, so this case would pin nothing (issue #471)",
+						claudeMD, tc.remove)
+				}
+			}
+			rule, _ := findSignalRule(t, text)
+			got := missingSignalRuleParts(rule)
+			if diff := cmp.Diff(tc.wantMissing, got); diff != "" {
+				t.Errorf("missingSignalRuleParts() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestCLAUDERulesForbidSignallingByProcessName fails when CLAUDE.md's
 // `## Rules` section stops holding the rule that an agent signals only the
 // processes it started itself: a numbered item that opens with
 // `**Signal only what you started.**` and names `pgrep`, `pidof` and `pkill`
-// (issue #465). Picking a process by name is what went wrong for the unit
-// whose coder ran `pgrep -x make` and sent SIGTERM to the process group it
-// found: the name matched another unit's `make`, whose run the coder did not
-// start. The rule is not the whole protection, only the sentence the agents
-// read, so it must name the commands that choose a process by name.
+// (issue #465). Since issue #471 it must also hold the ban on signalling a
+// process group yourself and the pid and start-time check, `ps -o lstart=,args=
+// -p <pid>`, that shows the pid still belongs to the run before it is signalled.
+// Picking a process by name is what went wrong for the unit whose coder ran
+// `pgrep -x make` and sent SIGTERM to the process group it found: the name
+// matched another unit's `make`, whose run the coder did not start. The rule is
+// not the whole protection, only the text the agents read, so it must still name
+// the commands that choose a process by name and the checks that keep a reused
+// pid from being signalled.
 func TestCLAUDERulesForbidSignallingByProcessName(t *testing.T) {
 	t.Parallel()
 
-	rule, at := findSignalRule(t, readDoc(t, os.DirFS(repoRoot), claudeMD))
-	for _, command := range signalRuleCommands {
-		t.Run("names "+command, func(t *testing.T) {
-			t.Parallel()
+	checkSignalRuleContent(t, readDoc(t, os.DirFS(repoRoot), claudeMD))
+}
 
-			if strings.Contains(rule.text, command) {
-				return
-			}
-			t.Errorf("%s:%d: the rule that starts with %q does not name %q, one of the commands that pick a process by name (issue #465): the rule reads %q",
-				claudeMD, at, signalRuleTitle, command, rule.text)
-		})
+// checkSignalRuleContent fails, naming every part it misses, when the rule that
+// opens with signalRuleTitle in the CLAUDE.md text data does not hold the
+// commands that pick a process by name, the process-group ban and the pid and
+// start-time check.
+func checkSignalRuleContent(t *testing.T, data string) {
+	t.Helper()
+
+	rule, at := findSignalRule(t, data)
+	missing := missingSignalRuleParts(rule)
+	if len(missing) == 0 {
+		return
 	}
+	t.Errorf("%s:%d: the rule that starts with %q is missing %s (issues #465, #471): the rule reads %q",
+		claudeMD, at, signalRuleTitle, strings.Join(missing, ", "), rule.text)
 }
 
 // itemTitles returns the first sentence of every item's text, so a failure
