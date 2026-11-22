@@ -585,6 +585,48 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 			field: "LD_AUDIT",
 			apply: func(c *claudecode.Config) { c.Env = []string{"LD_AUDIT=/srv/audit/work/audit.so"} },
 		},
+
+		// The config's environment is an allow list, not a deny list of the
+		// names someone thought of (issue #277, round F finding 1): a config
+		// may add TMPDIR, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB and
+		// SHIFT2EU_AUDIT_CANARY, the three ADR 0040's amendment gives the
+		// audit, and no other name at all. The six below got past the deny
+		// list, and each changes what the CLI or its children run or trust.
+		{
+			name:  "an entry that makes every shell the CLI starts run a script",
+			field: "BASH_ENV",
+			apply: func(c *claudecode.Config) { c.Env = []string{"BASH_ENV=/srv/audit/work/x.sh"} },
+		},
+		{
+			name:  "an entry that makes every shell the CLI starts run its startup files",
+			field: "ENV",
+			apply: func(c *claudecode.Config) { c.Env = []string{"ENV=/srv/audit/work/x.sh"} },
+		},
+		{
+			name:  "an entry that prefixes every command the CLI's shell runs",
+			field: "CLAUDE_CODE_SHELL_PREFIX",
+			apply: func(c *claudecode.Config) { c.Env = []string{"CLAUDE_CODE_SHELL_PREFIX=/srv/audit/work/wrap.sh"} },
+		},
+		{
+			name:  "an entry that adds a directory the CLI's node loads modules from",
+			field: "NODE_PATH",
+			apply: func(c *claudecode.Config) { c.Env = []string{"NODE_PATH=/srv/audit/work/node_modules"} },
+		},
+		{
+			name:  "an entry that replaces the certificates the CLI's node trusts",
+			field: "SSL_CERT_FILE",
+			apply: func(c *claudecode.Config) { c.Env = []string{"SSL_CERT_FILE=/srv/audit/work/ca.pem"} },
+		},
+		{
+			name:  "an entry that replaces the directory of the certificates the CLI's node trusts",
+			field: "SSL_CERT_DIR",
+			apply: func(c *claudecode.Config) { c.Env = []string{"SSL_CERT_DIR=/srv/audit/work/certs"} },
+		},
+		{
+			name:  "an entry of a name outside the allow list",
+			field: "SHIFT2EU_TEST_CANARY",
+			apply: func(c *claudecode.Config) { c.Env = []string{"SHIFT2EU_TEST_CANARY=an-invented-value"} },
+		},
 	}
 
 	for _, tc := range cases {
