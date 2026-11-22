@@ -485,6 +485,286 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 			}
 		}
 	})
+
+	// git reads a short option one letter at a time, so a cluster of them holds
+	// the refused letters wherever they are: -iO<command> runs a shell command,
+	// and -c<file> sets a configuration value, in the middle of a cluster as at
+	// its start (issue #277, review R1).
+	t.Run("git short-option clusters holding O or c", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name string
+			// args hold the refused letter in a cluster, with the value git
+			// would read attached, separate or beside other letters.
+			args []string
+			// wantNamed is the word the stderr line names.
+			wantNamed string
+		}{
+			{
+				name:      "-O alone",
+				args:      []string{"git", "grep", "-O", "sh"},
+				wantNamed: "-O",
+			},
+			{
+				name:      "-O last in a cluster, its command attached",
+				args:      []string{"git", "grep", "-iOsh", "x"},
+				wantNamed: "-iOsh",
+			},
+			{
+				name:      "-O last in a cluster of two",
+				args:      []string{"git", "grep", "-nO", "sh", "x"},
+				wantNamed: "-nO",
+			},
+			{
+				name:      "-O in the middle of a cluster",
+				args:      []string{"git", "grep", "-inOsh", "x"},
+				wantNamed: "-inOsh",
+			},
+			{
+				name:      "-c in a cluster, its value attached",
+				args:      []string{"git", "log", "-iccore.pager=less"},
+				wantNamed: "-iccore.pager=less",
+			},
+			{
+				name:      "-c last in a cluster",
+				args:      []string{"git", "log", "-nc"},
+				wantNamed: "-nc",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				code, stderr, recorder := runWrapper(t, tc.args)
+
+				if code != refusedExit {
+					t.Errorf("run(%q) = %d, want %d: git's -O and -c are refused wherever a short-option cluster holds them", tc.args, code, refusedExit)
+				}
+
+				if recorder.called {
+					t.Errorf("run(%q) exec'd %q; a refused option runs nothing", tc.args, recorder.call.argv)
+				}
+
+				if !strings.Contains(stderr, tc.wantNamed) {
+					t.Errorf("run(%q) wrote %q to stderr, want it to name the refused word %q", tc.args, stderr, tc.wantNamed)
+				}
+			})
+		}
+	})
+
+	// sort's options are an allow list: every option that could make it run a
+	// program, read another file or write one is refused, abbreviated long
+	// options included (issue #277, review R1 and audit A2).
+	t.Run("sort options outside the allow list", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name      string
+			args      []string
+			wantNamed string
+		}{
+			{
+				name:      "--compress-program runs a program of the caller's",
+				args:      []string{"sort", "--compress-program=sh", "/srv/audit/work/x"},
+				wantNamed: "--compress-program=sh",
+			},
+			{
+				name:      "--compress abbreviated",
+				args:      []string{"sort", "--compress=sh", "/srv/audit/work/x"},
+				wantNamed: "--compress=sh",
+			},
+			{
+				name:      "--co, the shortest abbreviation sort reads",
+				args:      []string{"sort", "--co=sh", "/srv/audit/work/x"},
+				wantNamed: "--co=sh",
+			},
+			{
+				name:      "--files0-from reads the names from another file",
+				args:      []string{"sort", "--files0-from=-"},
+				wantNamed: "--files0-from=-",
+			},
+			{
+				name:      "--random-source reads its keys from another file",
+				args:      []string{"sort", "--random-source=/srv/audit/state/probe", "/srv/audit/work/x"},
+				wantNamed: "--random-source=/srv/audit/state/probe",
+			},
+			{
+				name:      "-T with its directory as the next argument",
+				args:      []string{"sort", "-T", "/srv/audit/state", "/srv/audit/work/x"},
+				wantNamed: "-T",
+			},
+			{
+				name:      "-T with its directory attached",
+				args:      []string{"sort", "-T/srv/audit/state", "/srv/audit/work/x"},
+				wantNamed: "-T/srv/audit/state",
+			},
+			{
+				name:      "-T in a cluster of allowed letters",
+				args:      []string{"sort", "-nT/srv/audit/state", "/srv/audit/work/x"},
+				wantNamed: "-nT/srv/audit/state",
+			},
+			{
+				name:      "--temporary-directory",
+				args:      []string{"sort", "--temporary-directory=/srv/audit/state", "/srv/audit/work/x"},
+				wantNamed: "--temporary-directory=/srv/audit/state",
+			},
+			{
+				name:      "-m, which is no option of the allow list",
+				args:      []string{"sort", "-m", "/srv/audit/work/x", "/srv/audit/work/y"},
+				wantNamed: "-m",
+			},
+			{
+				name:      "-S, which sizes a buffer of sort's own",
+				args:      []string{"sort", "-S", "1M", "/srv/audit/work/x"},
+				wantNamed: "-S",
+			},
+			{
+				name:      "--batch-size, which is no option of the allow list either",
+				args:      []string{"sort", "--batch-size=32", "/srv/audit/work/x"},
+				wantNamed: "--batch-size=32",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				code, stderr, recorder := runWrapper(t, tc.args)
+
+				if code != refusedExit {
+					t.Errorf("run(%q) = %d, want %d: sort takes the ADR's short allow list and its long forms alone", tc.args, code, refusedExit)
+				}
+
+				if recorder.called {
+					t.Errorf("run(%q) exec'd %q; a refused option runs nothing", tc.args, recorder.call.argv)
+				}
+
+				if !strings.Contains(stderr, tc.wantNamed) {
+					t.Errorf("run(%q) wrote %q to stderr, want it to name the refused word %q", tc.args, stderr, tc.wantNamed)
+				}
+			})
+		}
+	})
+
+	// uniq's second operand is its OUT: the wrapper runs uniq with one operand
+	// or none, so no line writes a file (issue #277, review R1).
+	t.Run("uniq with a second operand", func(t *testing.T) {
+		t.Parallel()
+
+		for _, args := range [][]string{
+			{"uniq", "/srv/audit/work/x", "/srv/audit/state/probe"},
+			{"uniq", "-c", "/srv/audit/work/x", "/srv/audit/state/probe"},
+			{"uniq", "-", "/srv/audit/state/probe"},
+		} {
+			code, stderr, recorder := runWrapper(t, args)
+
+			if code != refusedExit {
+				t.Errorf("run(%q) = %d, want %d: uniq's second operand is a file it writes", args, code, refusedExit)
+			}
+
+			if recorder.called {
+				t.Errorf("run(%q) exec'd %q; a refused line runs nothing", args, recorder.call.argv)
+			}
+
+			if !strings.Contains(stderr, "/srv/audit/state/probe") {
+				t.Errorf("run(%q) wrote %q to stderr, want it to name the refused operand", args, stderr)
+			}
+		}
+	})
+}
+
+// TestRunTakesTheOptionsThatOnlyRead pins the other half of the allow lists: the
+// lines a legitimate command line makes, which the wrapper still execs whole.
+// sort's own allow list takes -k and -t with their value attached or as the
+// next argument, a cluster of allowed letters, and the long form of every
+// allowed short option; git's clusters of allowed letters stay what they were
+// (issue #277, review R1).
+func TestRunTakesTheOptionsThatOnlyRead(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name     string
+		args     []string
+		wantPath string
+	}{
+		{
+			name:     "sort -k attached and -t attached",
+			args:     []string{"sort", "-k2,2n", "-t:", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/sort",
+		},
+		{
+			name:     "sort -k and -t with their value as the next argument",
+			args:     []string{"sort", "-k", "2,2", "-t", ":", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/sort",
+		},
+		{
+			name:     "sort with a cluster of allowed letters",
+			args:     []string{"sort", "-bdfg", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/sort",
+		},
+		{
+			name:     "sort's whole allow list as short options",
+			args:     []string{"sort", "-b", "-d", "-f", "-g", "-h", "-i", "-M", "-n", "-r", "-R", "-s", "-u", "-V", "-z", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/sort",
+		},
+		{
+			name:     "sort's allow list in its long forms",
+			args:     []string{"sort", "--ignore-leading-blanks", "--dictionary-order", "--ignore-case", "--general-numeric-sort", "--human-numeric-sort", "--ignore-nonprinting", "--month-sort", "--numeric-sort", "--reverse", "--random-sort", "--stable", "--unique", "--version-sort", "--zero-terminated", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/sort",
+		},
+		{
+			name:     "sort --key and --field-separator",
+			args:     []string{"sort", "--key=1,1", "--field-separator=:", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/sort",
+		},
+		{
+			name:     "git grep with two options and a pattern",
+			args:     []string{"git", "grep", "-n", "-e", "x"},
+			wantPath: "/usr/bin/git",
+		},
+		{
+			name:     "git grep with a cluster of allowed letters",
+			args:     []string{"git", "grep", "-in", "x"},
+			wantPath: "/usr/bin/git",
+		},
+		{
+			name:     "git log with its own -i and -n",
+			args:     []string{"git", "log", "-i", "-n", "20"},
+			wantPath: "/usr/bin/git",
+		},
+		{
+			name:     "uniq with one operand",
+			args:     []string{"uniq", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/uniq",
+		},
+		{
+			name:     "uniq with its one option and one operand",
+			args:     []string{"uniq", "-c", "/srv/audit/work/x"},
+			wantPath: "/usr/bin/uniq",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			code, stderr, recorder := runWrapper(t, tc.args)
+
+			if code != 0 {
+				t.Fatalf("run(%q) = %d, want 0 (stderr %q): the line reads only, so the wrapper execs it", tc.args, code, stderr)
+			}
+
+			if !recorder.called {
+				t.Fatalf("run(%q) never reached the exec seam: the line reads only, so the wrapper execs it", tc.args)
+			}
+
+			if recorder.call.path != tc.wantPath {
+				t.Errorf("run(%q) execs %q, want %q", tc.args, recorder.call.path, tc.wantPath)
+			}
+		})
+	}
 }
 
 // TestRunNamesARefusedWordInOneEscapedLine pins how a refusal reads: one line,
