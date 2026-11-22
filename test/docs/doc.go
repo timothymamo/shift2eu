@@ -23,7 +23,13 @@
 //     in #251 and is not complete: `python3 -c`, `dd`, `cp`/`mv` and
 //     `find -delete` write or remove a file and are not caught. The prompts
 //     in .dot-agent-deck.toml are not scanned: they quote the forbidden forms
-//     as examples in prose.
+//     as examples in prose;
+//   - CLAUDE.md's `## Rules` section holds a numbered rule that opens with
+//     "Signal only what you started." and names pgrep, pidof and pkill, and
+//     every skill that tells an agent to run the checks (`make check`,
+//     `make test`, `go test`) says "Signal only what you started", pointing at
+//     that rule (issue #465: a unit's coder SIGTERMed the process group of a
+//     `make` it found by name, possibly another unit's run).
 //
 // make test, and so make check, run it. The link checker is
 // test/internal/mdlink.
