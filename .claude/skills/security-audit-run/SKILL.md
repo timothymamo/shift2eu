@@ -185,7 +185,10 @@ in that finding's own fields of the structured result. Never write anything abou
 number included, in a field the public report shows: the summary, the changes since the last audit, a
 dismissal reason, the limits or a public finding's text. A dismissal reason never describes a private
 finding, and the publish script never lists a private finding's false positive anyway. The public
-report only says whether private findings exist, never how many.
+report only says whether private findings exist, never how many. The release archives ship `docs/**`
+(`.goreleaser.yaml`), so a merged report in `docs/security/audits/` is part of every later release
+archive, frozen as it was at release time: it must never hold anything not meant to stay public (this
+adds to ADR 0040 Decision 2's disclosure rule).
 
 **Limits.** List every check that did not run or did not finish, every step you declined or that was
 refused (rule 7), every question only the network or a full history could answer, and every input that
