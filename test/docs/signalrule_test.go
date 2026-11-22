@@ -75,18 +75,18 @@ type numberedItem struct {
 // next `## ` heading.
 func rulesSection(data string) (body []string, start int, ok bool) {
 	lines := strings.Split(data, "\n")
-	for start, line := range lines {
+	for heading, line := range lines {
 		if strings.TrimSpace(line) != rulesHeading {
 			continue
 		}
 		end := len(lines)
-		for i := start + 1; i < len(lines); i++ {
+		for i := heading + 1; i < len(lines); i++ {
 			if strings.HasPrefix(strings.TrimSpace(lines[i]), "## ") {
 				end = i
 				break
 			}
 		}
-		return lines[start:end], start, true
+		return lines[heading:end], heading, true
 	}
 	return nil, 0, false
 }
@@ -139,8 +139,8 @@ func squash(text string) string {
 
 // findSignalRule returns the numbered rule of CLAUDE.md's `## Rules` section
 // that opens with signalRuleTitle, and the 1-based number of the line it starts
-// on. line is the 0-based index of the heading, so the item's first line is one
-// line past the heading plus the item's own offset.
+// on. start is the 0-based index of the heading, so the item's 1-based line is
+// start + item.line + 1.
 func findSignalRule(t *testing.T, data string) (rule numberedItem, line int) {
 	t.Helper()
 
