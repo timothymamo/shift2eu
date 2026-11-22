@@ -1059,7 +1059,7 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 			// host guard's resolver refuses the newline in the resolved workspace (no character a WORKSPACE_REPO
 			// may hold), so the .envrc guard never walks it, and a guard that let it through would leave direnv
 			// reading that .envrc in every shell opened in the workspace.
-			name: "a .envrc in the directory a link in the workspace's path ends in a newline for",
+			name: "a .envrc in the directory named by a workspace link whose target ends in a newline",
 			setup: func(t *testing.T, l *hostLayout) []string {
 				t.Helper()
 

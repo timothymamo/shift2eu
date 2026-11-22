@@ -735,7 +735,7 @@ func TestMakefileResolvesAPathInOnePlace(t *testing.T) {
 		}
 	}
 
-	if !withinCall.MatchString(envrc) {
+	if !callsWithin(envrc) {
 		t.Errorf("ENVRC_GUARD's own definition calls no within: the guard must ask %s's within, which compares the longest existing prefix of a path with a directory by file identity, whether a path or a dotenv target is inside the host clone - a guard that decides it itself, by spelling or by a walk of its own, is the second resolver #468 removed (issue #468)",
 			resolver)
 	}
@@ -780,10 +780,158 @@ func TestMakefileResolvesAPathInOnePlace(t *testing.T) {
 	}
 }
 
-// withinCall is a call of the shared resolver's within, the containment decision by file identity: the function's
-// name, a blank, and its first argument. A definition of within itself, which the resolver holds and ENVRC_GUARD
-// must not, follows the name with ( ), so it does not match (issue #468).
-var withinCall = regexp.MustCompile(`(^|[^A-Za-z0-9_])within[ \t]`)
+// TestWithinCallFindsOnlyACall pins the matcher TestMakefileResolvesAPathInOnePlace decides the .envrc guard's
+// containment check with, so that check cannot be satisfied by the word alone: ENVRC_GUARD echoes long refusals, and
+// a rewording that puts "within" where a command would stand must not stand in for the call that decides what is
+// inside the host clone, or the check would pass with the decision gone (issue #468, review of PR #472).
+func TestWithinCallFindsOnlyACall(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "the guard's first call, negated after ||",
+			text: `if [ -z "$$envrc_real" ] || ! within "$$envrc_real" "$$clone"; then \`,
+			want: true,
+		},
+		{
+			name: "the guard's second call, negated after ||",
+			text: `if [ -z "$$path" ] || ! within "$$path" "$$clone"; then outside=1; fi ;; \`,
+			want: true,
+		},
+		{
+			name: "a call a definition makes on a line of its own",
+			text: `within "$$out" "$$root"`,
+			want: true,
+		},
+		{
+			name: "a call after then",
+			text: `if [ -n "$$p" ]; then within "$$p" "$$clone"; fi; \`,
+			want: true,
+		},
+		{
+			name: "the resolver's own definition of within",
+			text: `within() { res_p=$$1; while [ -n "$$res_p" ]; do res_p=$${res_p%/*}; done; };`,
+			want: false,
+		},
+		{
+			name: "a definition of within with a blank before its parentheses",
+			text: `within () { res_p=$$1; while [ -n "$$res_p" ]; do res_p=$${res_p%/*}; done; };`,
+			want: false,
+		},
+		{
+			name: "a refusal that says files within the host clone",
+			text: `echo "$$target: refused: put that file's lines in the host clone's .envrc itself (files within the host clone)" >&2; \`,
+			want: false,
+		},
+		{
+			// The row the reviewer asked for: every real call gone, one message left that names the word in a
+			// place a permissive matcher took for a command.
+			name: "a guard with no call whose message says files within the host clone",
+			text: `why="files within the host clone"; \` + "\n" + `echo "$$target: refused: $$why" >&2; \`,
+			want: false,
+		},
+		{
+			name: "a message that holds a separator and the word",
+			text: `echo "$$target: refused: within; move the file" >&2; \`,
+			want: false,
+		},
+		{
+			name: "the word as echo's argument",
+			text: `echo within >&2; \`,
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := callsWithin(tc.text); got != tc.want {
+				t.Errorf("callsWithin(%q) = %t, want %t: the matcher must find a call of within where a shell command stands and nowhere else, so a message that says the word neither passes for the guard's containment check nor hides the call it makes (issue #468)",
+					tc.text, got, tc.want)
+			}
+		})
+	}
+
+	// The sensitivity the check in TestMakefileResolvesAPathInOnePlace depends on, on the guard's own text: with both
+	// of its calls removed and a refusal left that says the word, the matcher must find nothing, so that check fails
+	// on a guard that decides containment by something else and says "within" in a message instead. The Makefile
+	// itself is never touched: the mutation is in this test's copy of the definition's text (issue #468).
+	t.Run("the guard's own text without its calls and with a message left", func(t *testing.T) {
+		t.Parallel()
+
+		envrc, ok := makeDefinitions(makeCode(readRepoFile(t, makefilePath)))["ENVRC_GUARD"]
+		if !ok {
+			t.Fatalf("%s defines no ENVRC_GUARD, so this check pins nothing about the .envrc guard (issue #468)", makefilePath)
+		}
+
+		if !callsWithin(envrc) {
+			t.Fatalf("ENVRC_GUARD's own definition calls no within, so the mutation below proves nothing: the text is %q (issue #468)", envrc)
+		}
+
+		mutation := envrc
+		for _, call := range []string{`within "$$envrc_real" "$$clone"`, `within "$$path" "$$clone"`} {
+			if !strings.Contains(mutation, call) {
+				t.Fatalf("ENVRC_GUARD's own definition no longer holds %s, which this check removes: update the mutations to the calls it makes now (issue #468)", call)
+			}
+
+			mutation = strings.ReplaceAll(mutation, call, `true`)
+		}
+
+		mutation += "\n" + `why="the path must stay within the host clone"; \` +
+			"\n" + `echo "$$target: refused: files within the host clone only: $$why" >&2; \`
+
+		if callsWithin(mutation) {
+			t.Errorf("callsWithin(ENVRC_GUARD with both calls removed) = true, so the check in TestMakefileResolvesAPathInOnePlace passes on a guard whose only within is the word in a message: the matcher must require a call where a command stands (issue #468)")
+		}
+	})
+}
+
+// withinCall matches a call of the shared resolver's within, the containment decision by file identity, where a shell
+// command stands: the start of the text, a separator (; & | ( ) ) or a newline, or one of the keywords a command
+// follows, then the blanks and the optional ! of a negated call, then the name, a blank and its first argument, which
+// opens no parenthesis. A definition of within itself, which the resolver holds and ENVRC_GUARD must not, is the name
+// followed by ( ), with or without a blank, so it does not match (issue #468).
+var withinCall = regexp.MustCompile(`(^|[;&|()\n]|\b(?:then|elif|else|if|do|while|until))[ \t]*!?[ \t]*within[ \t]+[^ \t(]`)
+
+// callsWithin reports whether text, shell code of a Makefile definition, calls the shared resolver's within: the
+// matcher above, run on the text without its quoted strings. The guard's refusals are long messages, so a word in one
+// must not stand in for the call that decides containment (issue #468).
+func callsWithin(text string) bool {
+	return withinCall.MatchString(unquoted(text))
+}
+
+// unquoted returns shell text without its quoted strings, '...' and "..." each replaced by the word x. It is a
+// matcher's helper, not a shell parser: a quote that opens and never closes leaves the rest of the text as it is,
+// which can hide a call and never invent one, so a caller that checks for a call errs towards reporting it missing.
+// The replacement is a word, not nothing, so that a string never separates a command from what follows it and a
+// quoted word glued to a name ('x'within) stays one word (issue #468).
+func unquoted(text string) string {
+	var kept strings.Builder
+
+	quote := rune(0)
+
+	for _, r := range text {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+
+				kept.WriteRune('x')
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		default:
+			kept.WriteRune(r)
+		}
+	}
+
+	return kept.String()
+}
 
 // makeCode returns body, a Makefile, without the lines make reads as comments: a line whose text begins with #,
 // once the blanks before it are gone. A recipe's # lines stay, as they belong to the shell there (and
