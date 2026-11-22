@@ -863,7 +863,8 @@ without the default `VM_ENV` credentials, `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEE
 `make vm-env`, `vm-env-check`, `vm-up`, `vm-create`, `vm-init`, `agents-token`, `agents-token-refresh`,
 `agents-token-refresh-install` and `agents-token-refresh-start`, refuse to run, before they run anything (no
 prerequisite, no sub-make, no `limactl`, `launchctl` or `sudo`), in two cases: when the host clone's `.envrc`
-is a symlink to a file outside the clone or hands its lines to another file, and when a `.envrc` or a `.env`
+is a symlink that leads outside the clone or that the guard cannot resolve (more than 32 links or a loop of
+them, or a link that reads other than the kernel resolves it) or hands its lines to another file, and when a `.envrc` or a `.env`
 sits in the workspace or in any directory above it, up to `/`, in either spelling of the workspace (as
 `WORKSPACE_REPO` writes it, and with its symlinks resolved), where direnv loads it in every shell you open in
 the workspace. The guard parses no shell, so it holds the host clone's `.envrc` to three strict rules:

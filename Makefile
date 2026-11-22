@@ -325,7 +325,7 @@ ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
 	if [ -e "$$envrc" ] || [ -L "$$envrc" ]; then \
 		if resolve "$$envrc"; then envrc_real=$${resolved:-/}; else envrc_real=; fi; \
 		if [ -z "$$envrc_real" ] || ! within "$$envrc_real" "$$clone"; then \
-			echo "$$target: refused: the host clone's .envrc, $$envrc, is a symlink to a file outside the host clone: $$why" >&2; \
+			echo "$$target: refused: the host clone's .envrc, $$envrc, is a symlink that leads outside the host clone or that this check cannot resolve (more than 32 links or a loop of them, or a link that cannot be read or that reads other than the kernel resolves it, such as a target ending in a newline): $$why" >&2; \
 			refused=1; envrc_real=-; \
 		fi; \
 		if [ "$$envrc_real" = - ]; then \
