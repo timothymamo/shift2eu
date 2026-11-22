@@ -570,14 +570,42 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # the recipe shell's PID, so parallel runs have their own; it is removed on every exit, failure and
 # interrupt included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but
 # it hands the browser fds 3 and 4 of a process it starts itself, and docker run and nerdctl run pass no
-# such fds into a container (docs/adr/0036, amendment for issue #368).
+# such fds into a container (docs/adr/0036, amendment for issue #368). The EXIT trap bounds the container's
+# removal (issue #449): it runs $(DOCKER) rm -f in the background and waits for it no longer than
+# TEST_BROWSER_RM_DEADLINE seconds (1 to 99999, no leading zero; anything else is refused with status 2 before
+# anything runs), so a container runtime that never answers cannot hold the run for good. The recipe reads the
+# deadline as a shell variable from its environment, never pasted into its shell text by make: the default and a
+# value from the environment arrive raw, and one given on make's command line is expanded by make first, as make
+# does every command-line variable, and still reaches the recipe only as data the guard checks, so a value holding
+# a quote is refused and never run. Beside the rm it starts a watchdog that sleeps out the deadline and then ends
+# that rm with SIGKILL, since the rm ignores the signals the trap ignored. The watchdog sets its USR1 trap before
+# its sleep starts, and a flag catches a USR1 that comes before the sleep's pid is known, so either way the sleep
+# ends with it; once its sleep has run out it ignores USR1, so a late USR1 can neither turn its exit 3 into 0 nor
+# make it kill its own reaped sleep. The trap waits on the rm, its own unreaped child, and then always sends the
+# watchdog USR1, whatever the rm returned, so a healthy removal costs no extra second. A watchdog that fired
+# exits 3, and only then does the trap print the one line naming the container and the command that removes it by
+# hand. Every background process writes to /dev/null, so none holds make's output open, and the run's own exit
+# status stays. Residual windows, one an instant wide for each of the three pids signalled: the rm, when it
+# returns at the very instant the deadline passes, may be reaped by the trap's wait and its pid reused before the
+# watchdog's SIGKILL lands; the sleep, when a USR1 lands in the instant between the sleep's exit (bash reaps it at
+# once) and the watchdog's trap "" USR1, gets a SIGKILL on a reaped pid; the watchdog, when it exits (after its
+# SIGKILL of the rm, or otherwise) in the instant before the trap's kill -s USR1, may already be reaped, as dash
+# and bash reap an exited background child before any wait, and its pid reused, so that USR1 lands elsewhere.
+# POSIX sh cannot close these windows; they are accepted as negligible (docs/adr/0036, issue #449). When DOCKER
+# is a wrapper (sudo docker, a script), the kill ends only the wrapper, and a child of its own may outlive it.
+TEST_BROWSER_RM_DEADLINE ?= 30
 .PHONY: test-browser
+test-browser: export TEST_BROWSER_RM_DEADLINE := $(value TEST_BROWSER_RM_DEADLINE)
 test-browser: ## Build the site's bundle into a directory of this run's own and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
 	@set -eu; \
+	case "$$TEST_BROWSER_RM_DEADLINE" in ''|0*|*[!0-9]*|??????*) \
+		printf 'test-browser: TEST_BROWSER_RM_DEADLINE must be a whole number of seconds from 1 to 99999 with no leading zero, not "%s"\n' "$$TEST_BROWSER_RM_DEADLINE" >&2; \
+		exit 2 ;; \
+	esac; \
 	devtools=; \
 	name=shift2eu-test-browser-$$$$; \
 	bundle_dir=; \
-	trap 'trap "" HUP INT TERM; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir" || true; fi; $(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
+	trap 'trap "" HUP INT TERM; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir" || true; fi; $(DOCKER) rm -f "$$name" >/dev/null 2>&1 & rm_pid=$$!; ( stop=; sleep_pid=; trap "stop=1; if [ -n \"\$$sleep_pid\" ]; then kill -s KILL \"\$$sleep_pid\" 2>/dev/null || true; exit 0; fi" USR1; sleep "$$TEST_BROWSER_RM_DEADLINE" & sleep_pid=$$!; if [ -n "$$stop" ]; then kill -s KILL "$$sleep_pid" 2>/dev/null || true; exit 0; fi; if wait "$$sleep_pid"; then trap "" USR1; if kill -s KILL "$$rm_pid" 2>/dev/null; then exit 3; fi; fi; exit 0 ) >/dev/null 2>&1 & watchdog_pid=$$!; wait "$$rm_pid" 2>/dev/null || true; kill -s USR1 "$$watchdog_pid" 2>/dev/null || true; watchdog_status=0; wait "$$watchdog_pid" 2>/dev/null || watchdog_status=$$?; if [ "$$watchdog_status" -eq 3 ]; then echo "test-browser: $(DOCKER) rm -f $$name did not return within $$TEST_BROWSER_RM_DEADLINE seconds; remove the container by hand with: $(DOCKER) rm -f $$name" >&2 || true; fi' EXIT; \
 	trap 'trap "" HUP INT TERM; exit 129' HUP; \
 	trap 'trap "" HUP INT TERM; exit 130' INT; \
 	trap 'trap "" HUP INT TERM; exit 143' TERM; \

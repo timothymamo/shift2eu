@@ -270,6 +270,37 @@ as not running fails the run at once, naming its exit status and showing the tai
 inspect alone is no verdict; three in a row mean the container is gone, and the run fails with
 inspect's last error instead of waiting out the 60 seconds.
 
+Issue #449 bounds the container's removal. A wedged container runtime never answered the EXIT trap's
+`docker rm -f`, so the run hung there after its smoke test had passed. The trap now runs that removal in
+the background and waits no longer than `TEST_BROWSER_RM_DEADLINE` seconds (default 30). Past that, it
+prints the container's name and the command that removes it by hand, and ends that one `rm`. The run's
+own exit status stays.
+
+The deadline is a whole number from 1 to 99999 with no leading zero; anything else is refused with exit
+status 2 before anything runs. Make exports it to the recipe with `$(value ...)`, and the recipe reads it
+as a shell variable, never pasted into its shell text. The default and a value from the environment reach
+the recipe raw. A value given on make's command line is expanded by make first, as make does every
+command-line variable, and it too reaches the recipe only as data the guard checks. A value holding a quote
+so cannot break out of the recipe's quoting and run as a command. `override export` was considered and not
+chosen. The bound does not poll: beside the `rm`, the trap starts a watchdog that sleeps out the deadline,
+then sends the `rm` SIGKILL (the `rm` ignores the signals the trap ignores) and exits 3. The watchdog sets
+its USR1 trap before it starts its sleep. A flag catches a USR1 that arrives before the sleep's pid is
+known, so the sleep ends either way. Once the sleep has run out, the watchdog ignores USR1, so a late one
+can neither turn its exit 3 into 0 nor make it kill its own reaped sleep. The trap waits on the `rm`, its
+own child, and then always sends the watchdog USR1, whatever status the `rm` gave back. It prints its one
+line only when the watchdog exited 3. A healthy removal so costs no extra second, and every background
+process writes to `/dev/null`, so none holds make's output open.
+
+A window an instant wide is left for each of the three pids the trap signals. An `rm` that returns at
+the very instant the deadline passes can be reaped by the trap's `wait`, and its pid reused, before the
+watchdog's SIGKILL lands. A USR1 that lands between the sleep's exit (bash reaps it at once) and the
+watchdog's `trap "" USR1` sends SIGKILL to the sleep's reaped pid. A watchdog that exits (after its
+SIGKILL of the `rm`, or otherwise) in the instant before the trap's `kill -s USR1` may already be
+reaped, since dash and bash reap an exited background child before any `wait`, and its pid reused, so
+that USR1 lands elsewhere. A shell offers no call that kills a child only while it is unreaped, so
+POSIX sh cannot close these windows; they are accepted as negligible. When `DOCKER` is a wrapper
+(`sudo docker`, a script), the kill ends only the wrapper, and a child of its own may outlive it.
+
 A port the kernel picks is still a listening port, which a local process can find and attach to. It is
 open only while a run lasts and is no longer a fixed, well-known one. That residual risk is accepted.
 
