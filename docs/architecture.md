@@ -115,6 +115,13 @@ Arrows are imports. They point inwards only:
   to import, with their libraries under `internal/` directories that Go's internal rule keeps out of reach
   of `cmd/` and `internal/`, each held to named standard packages by strict rules of its own. `ci/aireview`
   is the AI reviewer's workflow program (`ai-reviewer-main`, `ai-reviewer-is-standard-library`, ADR 0033).
+  It asks the model through `ci/internal/claudecode`, the Claude Code CLI launcher it shares with the
+  scheduled audit (issue #277, ADR 0040): one `claude -p` run with the model and the built-in tools as
+  parameters, no tools the default, and an environment that inherits nothing. The launcher is held to
+  named standard packages (`claude-code-launcher`), only the reviewer's library may import it
+  (`claude-code-launcher-importers`), and the forbidigo groups `ai-reviewer-env` and
+  `ai-reviewer-one-process` hold in it as in the reviewer's library, which itself no longer imports `os`
+  or `os/exec`.
   `ci/claudecodepin` is the Claude Code pin check (issue #276, ADR 0033):
   `.github/workflows/claude-code-pin.yml` runs its job on every pull request and the check when the pin's
   paths change (issue #452), and it fails unless the npm registry publishes the pinned

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/timothymamo/shift2eu/ci/internal/claudecode"
 )
 
 // UntrustedOpenTag and UntrustedCloseTag delimit the pull request's data in the
@@ -43,11 +45,9 @@ type ChangedFile struct {
 }
 
 // Prompt is one model request's text: System holds the trusted instructions
-// alone, User the untrusted pull request between the untrusted tags.
-type Prompt struct {
-	System string
-	User   string
-}
+// alone, User the untrusted pull request between the untrusted tags. It is the
+// shared launcher's claudecode.Prompt, which ClaudeCLI hands on as it is.
+type Prompt = claudecode.Prompt
 
 // BuildPrompt builds the prompt of a review. System holds the reviewer's task,
 // each of in's three texts whole in a labelled section, the statement that the

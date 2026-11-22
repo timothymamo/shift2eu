@@ -141,23 +141,25 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 			{"path": `^test/(?:lint|architecture)/`, "text": groupText(testsNoProcessStateTag)},
 			{"path": `^ci/aireview/internal/review/claudecli_test\.go$`, "text": groupText(testsNoProcessStateTag)},
 		},
-		// The AI reviewer (ADR 0033): one rule for every path outside
-		// ci/aireview/, so the group holds there and nowhere else, _test.go
-		// files included, and the one exception, the os.LookupEnv entry's msg
-		// alone, in ci/aireview/main.go alone.
+		// The AI reviewer (ADR 0033) and the Claude Code launcher it shares
+		// with the scheduled audit (issue #277): one rule for every path outside
+		// ci/aireview/ and ci/internal/claudecode/, so the group holds there and
+		// nowhere else, _test.go files included, and the one exception, the
+		// os.LookupEnv entry's msg alone, in ci/aireview/main.go alone.
 		aiReviewerEnvTag: {
-			{"path-except": `^ci/aireview/`, "text": groupText(aiReviewerEnvTag)},
+			{"path-except": `^ci/(?:aireview|internal/claudecode)/`, "text": groupText(aiReviewerEnvTag)},
 			{"path": `^ci/aireview/main\.go$`, "text": narrowedTextOf(aiReviewerLookupEnvMsg)},
 		},
-		// The AI reviewer's library (PRD #161 milestone 4, ADR 0033): it runs
-		// the one Claude Code CLI call with exec.CommandContext, writes the
-		// system prompt to a temporary file and removes the directories it made,
-		// and reads no file. Two rules scope the group to the library's
+		// The AI reviewer's library (PRD #161 milestone 4, ADR 0033) and the
+		// shared launcher it asks through (issue #277): the launcher runs the
+		// one Claude Code CLI call with exec.CommandContext, writes the system
+		// prompt to a temporary file and removes the directories it made, and
+		// neither reads a file. Two rules scope the group to the two libraries'
 		// non-test files: one drops it in their _test.go files, which read and
-		// run what they test the way a test does, and one outside the library.
+		// run what they test the way a test does, and one outside the two.
 		aiReviewerOneProcessTag: {
-			{"path": `^ci/aireview/internal/review/.*_test\.go$`, "text": groupText(aiReviewerOneProcessTag)},
-			{"path-except": `^ci/aireview/internal/review/`, "text": groupText(aiReviewerOneProcessTag)},
+			{"path": `^ci/(?:aireview/internal/review|internal/claudecode)/.*_test\.go$`, "text": groupText(aiReviewerOneProcessTag)},
+			{"path-except": `^ci/(?:aireview/internal/review|internal/claudecode)/`, "text": groupText(aiReviewerOneProcessTag)},
 		},
 		// The site's builder (PRD #297 milestone 2): one rule for every path
 		// outside ci/sitebuild/, so the group holds there and nowhere else,

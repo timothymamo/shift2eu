@@ -1,8 +1,8 @@
-package review
+package claudecode
 
 // The run-outcome API is unexported: only Ask uses it. The black-box tests
-// reach it through these aliases, which exist in test builds alone (issue
-// #302).
+// reach it, and the arguments a config gives, through these aliases, which
+// exist in test builds alone (issue #302).
 
 // RunOutcome is runOutcome, for the tests.
 type RunOutcome = runOutcome
@@ -17,3 +17,9 @@ const (
 
 // DecideRunOutcome is decideRunOutcome, for the tests.
 var DecideRunOutcome = decideRunOutcome
+
+// Args returns the arguments Ask runs the CLI with for cfg, the system prompt
+// in systemFile, for the tests.
+func Args(cfg Config, systemFile string) []string {
+	return New(cfg).args(systemFile)
+}

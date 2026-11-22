@@ -1694,15 +1694,12 @@ linters:
         # The reviewer's library reads no environment variable and no file:
         # ci/aireview hands it the settings, main's instructions, the HTTP
         # client and the Claude Code CLI's path, so it is held to named
-        # standard packages, without syscall or unsafe, and to no package of
-        # the product (ADR 0033). os and os/exec are the one CLI run it asks
-        # the model through: it writes the system prompt to a file of a
-        # temporary directory and starts `claude -p` in another, with an
-        # environment of its own. An import rule cannot narrow os, so forbidigo
-        # does: ai-reviewer-env refuses every read of the environment and every
-        # lookup of a home, config, cache or temp directory, and
-        # ai-reviewer-one-process refuses exec.Command and the os calls that
-        # open or read a file in the library's non-test files.
+        # standard packages, without os, os/exec, syscall or unsafe, and to no
+        # package of the product (ADR 0033). It asks the model through the
+        # shared launcher ci/internal/claudecode (issue #277), the one package
+        # of the module it imports, which writes the system prompt file and
+        # starts `claude -p`: the reviewer's library itself starts no process
+        # and opens no file.
         ai-reviewer-is-standard-library:
           list-mode: strict
           files:
@@ -1717,12 +1714,50 @@ linters:
             - io$
             - net/http$
             - net/url$
-            - os$
-            - os/exec$
             - slices$
             - strconv$
             - strings$
             - time$
+            - github.com/timothymamo/shift2eu/ci/internal/claudecode$
+        # The Claude Code CLI launcher the AI reviewer shares with the
+        # scheduled audit (issue #277, ADR 0040's amendment) reads no
+        # environment variable and no file: its callers hand it the CLI's path,
+        # the token, the model and the tools. It is held to named standard
+        # packages, without syscall or unsafe, and to no package of the module.
+        # os and os/exec are its one CLI run: it writes the system prompt to a
+        # file of a temporary directory and starts `claude -p` in another, with
+        # an environment of its own. An import rule cannot narrow os, so
+        # forbidigo does: ai-reviewer-env and ai-reviewer-one-process hold here
+        # as in the reviewer's library. Go's internal rule keeps it out of
+        # reach of cmd/ and internal/.
+        claude-code-launcher:
+          list-mode: strict
+          files:
+            - "**/ci/internal/claudecode/**"
+            - "!$test"
+          allow:
+            - bytes$
+            - context$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - os$
+            - os/exec$
+            - strings$
+            - time$
+        # Who may run the Claude Code CLI (issue #277, ADR 0040's amendment):
+        # the AI reviewer's library alone, until the scheduled audit's library
+        # joins it. Go's internal rule lets any package under ci/ import the
+        # launcher; this rule names the ones that may, and its own tests.
+        claude-code-launcher-importers:
+          list-mode: lax
+          files:
+            - "$all"
+            - "!**/ci/aireview/internal/review/**"
+            - "!**/ci/internal/claudecode/**"
+          deny:
+            - pkg: github.com/timothymamo/shift2eu/ci/internal/claudecode
+              desc: "only the AI reviewer's library runs the Claude Code CLI through the shared launcher (issue #277, ADR 0040)"
         # The site's builder (PRD #297 milestone 2) is no part of the product:
         # a main package, which Go refuses to import, run by make site, the
         # site tests and the release. It is held all the same, to the standard
@@ -2523,9 +2558,10 @@ linters:
         linters:
           - forbidigo
         text: 'because "e2e-no-env: [^"]*"$'
-      # ai-reviewer-env: the group holds for every file under ci/aireview/,
-      # _test.go files included, and nowhere else.
-      - path-except: ^ci/aireview/
+      # ai-reviewer-env: the group holds for every file under ci/aireview/ and
+      # under the shared Claude Code launcher ci/internal/claudecode/ (issue
+      # #277), _test.go files included, and nowhere else.
+      - path-except: ^ci/(?:aireview|internal/claudecode)/
         linters:
           - forbidigo
         text: 'because "ai-reviewer-env: [^"]*"$'
@@ -2537,12 +2573,13 @@ linters:
           - forbidigo
         text: 'because "ai-reviewer-env: os\.LookupEnv is used in ci/aireview/main\.go only, passed to review\.SettingsFromEnv \(ADR 0033\); a test passes a lookup function of its own"$'
       # ai-reviewer-one-process: the group holds for the non-test files of
-      # ci/aireview/internal/review/ and nowhere else.
-      - path: ^ci/aireview/internal/review/.*_test\.go$
+      # ci/aireview/internal/review/ and of the shared Claude Code launcher
+      # ci/internal/claudecode/ (issue #277), and nowhere else.
+      - path: ^ci/(?:aireview/internal/review|internal/claudecode)/.*_test\.go$
         linters:
           - forbidigo
         text: 'because "ai-reviewer-one-process: [^"]*"$'
-      - path-except: ^ci/aireview/internal/review/
+      - path-except: ^ci/(?:aireview/internal/review|internal/claudecode)/
         linters:
           - forbidigo
         text: 'because "ai-reviewer-one-process: [^"]*"$'
