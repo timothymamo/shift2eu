@@ -32,6 +32,18 @@ const (
 	pidStartTimeCheckName = "the pid and start-time check (ps -o lstart=,args=)"
 )
 
+// signalRuleParts are the parts of the rule that keep one agent from stopping
+// another agent's run, besides the commands that pick a process by name: the ban
+// on signalling a process group yourself, and the pid and start-time check that
+// shows the pid still belongs to the run before it is signalled (issue #471).
+var signalRuleParts = []struct {
+	name   string // how a failure names the part
+	phrase string // what the rule's squashed text must contain
+}{
+	{name: processGroupBanName, phrase: "process group yourself"},
+	{name: pidStartTimeCheckName, phrase: "ps -o lstart=,args="},
+}
+
 // signalRulePhrase is the phrase a skill that runs the checks uses to point
 // the agent at the rule: the rule's title without the bold markers. It is only
 // the start of the citation, which also names the rule's number (see
@@ -299,9 +311,10 @@ func citation(t *testing.T, data string) string {
 
 // missingSignalRuleParts returns the parts of the rule that the CLAUDE.md text
 // data does not hold, each named the way a failure names it: the commands that
-// pick a process by name. The rule is found by its title, so a text without the
-// rule's title stops findSignalRule instead of reaching this check. The text is
-// squashed, so a phrase still counts when Markdown wraps it over two lines.
+// pick a process by name, the process-group ban and the pid and start-time
+// check. The rule is found by its title, so a text without the rule's title
+// stops findSignalRule instead of reaching this check. The text is squashed, so
+// a phrase still counts when Markdown wraps it over two lines.
 func missingSignalRuleParts(t *testing.T, data string) []string {
 	t.Helper()
 
@@ -311,6 +324,11 @@ func missingSignalRuleParts(t *testing.T, data string) []string {
 	for _, command := range signalRuleCommands {
 		if !strings.Contains(text, command) {
 			missing = append(missing, "the command "+command)
+		}
+	}
+	for _, part := range signalRuleParts {
+		if !strings.Contains(text, part.phrase) {
+			missing = append(missing, part.name)
 		}
 	}
 	return missing
@@ -383,7 +401,16 @@ func TestSignalRulePartsAreNamedWhenMissing(t *testing.T) {
 func TestCLAUDERulesForbidSignallingByProcessName(t *testing.T) {
 	t.Parallel()
 
-	data := readDoc(t, os.DirFS(repoRoot), claudeMD)
+	checkSignalRuleContent(t, readDoc(t, os.DirFS(repoRoot), claudeMD))
+}
+
+// checkSignalRuleContent fails, naming every part it misses, when the rule that
+// opens with signalRuleTitle in the CLAUDE.md text data does not hold the
+// commands that pick a process by name, the process-group ban and the pid and
+// start-time check.
+func checkSignalRuleContent(t *testing.T, data string) {
+	t.Helper()
+
 	rule, at := findSignalRule(t, data)
 	missing := missingSignalRuleParts(t, data)
 	if len(missing) == 0 {
