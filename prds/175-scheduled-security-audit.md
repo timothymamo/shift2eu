@@ -706,9 +706,9 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    # the Audit report branches ruleset of step 4 the <audit branches id>
 
    # Branch ruleset: conditions, rules, bypass actors
-   gh api repos/<owner>/<repo>/rulesets/<branch id> --jq '.conditions.ref_name | tojson'
-   # PASS: include ["~ALL"], exclude ["~DEFAULT_BRANCH","refs/heads/security-audit/**"], in the order
-   # the API returns them (the order they were added: default branch first)
+   gh api repos/<owner>/<repo>/rulesets/<branch id> --jq '(.conditions.ref_name.include | tojson), (.conditions.ref_name.exclude | sort | tojson)'
+   # PASS: ["~ALL"], then ["refs/heads/security-audit/**","~DEFAULT_BRANCH"] (the exclude list sorted,
+   # so the order the API returns it in does not matter)
    # FAIL: anything else, main included in particular (an exclude without "~DEFAULT_BRANCH")
    gh api repos/<owner>/<repo>/rulesets/<branch id> --jq '([.rules[].type] | tojson), .enforcement'
    # PASS: holds "creation", "update", "deletion" (any order), then active; FAIL: one missing, or not active
