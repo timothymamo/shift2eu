@@ -75,17 +75,15 @@ var gitRefusedLong = []string{
 	"--show-signature",
 }
 
-// gitFormatOptions are the long git options whose value is a format: git log's
-// and show's --format and --pretty, and for-each-ref's --format.
-var gitFormatOptions = []string{"--format", "--pretty"}
+// gitSignatureAtom is for-each-ref's format and sort atom that asks git to
+// verify a signature, %(signature...) in a format and signature... as a
+// --sort key.
+const gitSignatureAtom = "signature"
 
-// gitSignaturePlaceholders are the format placeholders that ask git to verify
-// a signature, which runs gpg as --show-signature does: log's and show's %G?,
-// %GS, %GK, %GG and the rest of %G, and for-each-ref's %(signature...).
-var gitSignaturePlaceholders = []string{"%G", "%(signature"}
-
-// gitFormatPrefixes are the prefixes a format value of git's may carry.
-var gitFormatPrefixes = []string{"format:", "tformat:"}
+// gitSignatureModifiers are the bytes git takes between a placeholder's % and
+// its letter: %+G, %-G and % G are %G with a line feed added or removed or a
+// space added.
+const gitSignatureModifiers = "+- "
 
 // gitOwnOptions are git options of their own that are a prefix of a refused
 // one, and so no abbreviation of it.
@@ -193,8 +191,10 @@ func commandLine(args []string) ([]string, string, bool) {
 
 	switch name {
 	case "git":
-		for i, arg := range rest {
-			if refusedGitOption(arg) || signatureFormat(arg, i > 0 && isFormatOption(rest[i-1])) {
+		forEachRef := len(rest) > 0 && rest[0] == "for-each-ref"
+
+		for _, arg := range rest {
+			if refusedGitOption(arg) || asksForSignature(arg, forEachRef) {
 				return nil, arg, false
 			}
 		}
@@ -241,43 +241,33 @@ func refusedGitOption(arg string) bool {
 	return false
 }
 
-// signatureFormat reports whether arg is a format that asks for a signature's
-// verification: a word holding a signature placeholder that is a long option's
-// attached value (--format=, --pretty= or an abbreviation of either), a
-// format:/tformat: value, or the value of a format option given as the next
-// argument (afterFormat).
-func signatureFormat(arg string, afterFormat bool) bool {
-	if !hasAnyPart(arg, gitSignaturePlaceholders) {
-		return false
-	}
-
-	if name, _, attached := strings.Cut(arg, "="); attached && isFormatOption(name) {
+// asksForSignature reports whether arg, any word of git's line, could ask git
+// to verify a signature, which runs gpg as --show-signature does: a word
+// holding %G, with or without one of git's modifiers between the % and the G
+// (%G?, %+GS, %-GK, % GG), or for-each-ref's %(signature...) atom; and, on a
+// for-each-ref line, any word holding signature, the --sort key attached,
+// negated or as the next word. The check reads the word whatever option it
+// belongs to, so it fails closed: a grep pattern holding %G is refused too.
+func asksForSignature(arg string, forEachRef bool) bool {
+	if strings.Contains(arg, "%("+gitSignatureAtom) {
 		return true
 	}
 
-	return afterFormat || hasAnyPrefix(arg, gitFormatPrefixes)
-}
-
-// isFormatOption reports whether word, without a value, is one of git's format
-// options or a unique-prefix abbreviation of one.
-func isFormatOption(word string) bool {
-	if !strings.HasPrefix(word, "--") || strings.Contains(word, "=") || len(word) <= len("--") {
-		return false
+	if forEachRef && strings.Contains(arg, gitSignatureAtom) {
+		return true
 	}
 
-	for _, long := range gitFormatOptions {
-		if strings.HasPrefix(long, word) {
-			return true
+	for i := range len(arg) {
+		if arg[i] != '%' {
+			continue
 		}
-	}
 
-	return false
-}
+		next := i + 1
+		if next < len(arg) && strings.IndexByte(gitSignatureModifiers, arg[next]) >= 0 {
+			next++
+		}
 
-// hasAnyPart reports whether word holds one of parts.
-func hasAnyPart(word string, parts []string) bool {
-	for _, part := range parts {
-		if strings.Contains(word, part) {
+		if next < len(arg) && arg[next] == 'G' {
 			return true
 		}
 	}

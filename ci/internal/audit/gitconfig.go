@@ -28,21 +28,45 @@ const anySubsection = "\x00any"
 
 // gitConfigAllowList is the checkout copy's git config allow list (ADR 0040,
 // step 3): the keys a clone actions/checkout makes with persist-credentials:
-// false carries, a partial clone's included. Every other key and section is
-// refused.
+// false and fetch-depth: 1 carries. A partial clone's promisor keys are not
+// among them, so the wrapper's git never fetches an object the checkout lacks.
+// Every other key and section is refused, extensions.worktreeconfig among
+// them, so git never reads config.worktree.
 var gitConfigAllowList = []gitKeyRule{
 	{section: "core", keys: []string{"repositoryformatversion", "filemode", "bare", "logallrefupdates"}},
-	{section: "remote", subsection: "origin", keys: []string{"url", "fetch", "promisor", "partialclonefilter"}},
+	{section: "remote", subsection: "origin", keys: []string{"url", "fetch"}},
 	{section: "gc", keys: []string{"auto"}},
 	{section: "branch", subsection: anySubsection, keys: []string{"remote", "merge"}},
 	{section: "extensions", keys: []string{"objectformat"}},
 }
 
+// gitWorktreeConfigAllowList is the allow list of .git/config.worktree (ADR
+// 0040, step 3): the three keys a default actions/checkout leaves there, each
+// set to false. Every other key and section is refused.
+var gitWorktreeConfigAllowList = []gitKeyRule{
+	{section: "core", keys: []string{"sparsecheckout", "sparsecheckoutcone"}},
+	{section: "index", keys: []string{"sparse"}},
+}
+
 // gitRefusedFiles are the files beside .git/config that git reads a
-// configuration or a repository out of: a worktree's own configuration, a
-// common directory and a gitdir pointer. Each is refused by its presence, in
-// any file type.
-var gitRefusedFiles = []string{"config.worktree", "commondir", "gitdir"}
+// repository out of: a common directory and a gitdir pointer. Each is refused
+// by its presence, in any file type.
+var gitRefusedFiles = []string{"commondir", "gitdir"}
+
+// gitConfigFile is one configuration file in the checkout copy's .git, checked
+// when it is there: its name, how a refusal names it and its allow list.
+type gitConfigFile struct {
+	name      string
+	named     string
+	allowList []gitKeyRule
+}
+
+// gitConfigFiles are the configuration files the checkout copy's .git may
+// hold: its config and the worktree config a default checkout leaves.
+var gitConfigFiles = []gitConfigFile{
+	{name: "config", named: "git config", allowList: gitConfigAllowList},
+	{name: "config.worktree", named: "worktree config", allowList: gitWorktreeConfigAllowList},
+}
 
 // maxGitConfig caps the git config the layout check reads.
 const maxGitConfig = 1 << 20
@@ -52,10 +76,11 @@ const maxGitConfig = 1 << 20
 const utf8BOM = "\xef\xbb\xbf"
 
 // checkGitConfig checks the checkout copy's git directory: .git a real
-// directory, no file or link; none of config.worktree, commondir and gitdir in
-// it; and its config, when there is one, a regular file whose every line is
-// blank, a comment, a section header or a key = value line of the allow list
-// (gitConfigAllowList), each in the form git writes it.
+// directory, no file or link; neither commondir nor gitdir in it; and its
+// config and its config.worktree, each when it is there, a regular file whose
+// every line is blank, a comment, a section header or a key = value line of
+// that file's allow list (gitConfigAllowList, gitWorktreeConfigAllowList),
+// each in the form git writes it.
 func checkGitConfig(checkout string) error {
 	gitDir := filepath.Join(checkout, ".git")
 
@@ -79,41 +104,53 @@ func checkGitConfig(checkout string) error {
 		}
 	}
 
-	config := filepath.Join(gitDir, "config")
+	for _, file := range gitConfigFiles {
+		if err := checkGitConfigFile(gitDir, file); err != nil {
+			return err
+		}
+	}
 
-	info, err = os.Lstat(config)
+	return nil
+}
+
+// checkGitConfigFile checks one configuration file in gitDir: absent, or a
+// regular file that checkGitConfigBody takes under the file's allow list.
+func checkGitConfigFile(gitDir string, file gitConfigFile) error {
+	path := filepath.Join(gitDir, file.name)
+
+	info, err := os.Lstat(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 
 	if err != nil {
-		return fmt.Errorf("the audit directory: the checkout copy's git config: %w", err)
+		return fmt.Errorf("the audit directory: the checkout copy's %s: %w", file.named, err)
 	}
 
 	if !info.Mode().IsRegular() {
-		return fmt.Errorf("the audit directory: the checkout copy's git config is %s, want a regular file: %w", info.Mode().Type(), errLayout)
+		return fmt.Errorf("the audit directory: the checkout copy's %s is %s, want a regular file: %w", file.named, info.Mode().Type(), errLayout)
 	}
 
-	body, err := readCapped(config, maxGitConfig)
+	body, err := readCapped(path, maxGitConfig)
 	if err != nil {
-		return fmt.Errorf("the audit directory: the checkout copy's git config: %w", err)
+		return fmt.Errorf("the audit directory: the checkout copy's %s: %w", file.named, err)
 	}
 
-	if err := checkGitConfigBody(string(body)); err != nil {
-		return fmt.Errorf("the audit directory: the checkout copy's git config: %w", err)
+	if err := checkGitConfigBody(string(body), file.allowList); err != nil {
+		return fmt.Errorf("the audit directory: the checkout copy's %s: %w", file.named, err)
 	}
 
 	return nil
 }
 
 // checkGitConfigBody parses a git config strictly and refuses it unless every
-// line is placed and every key is on the allow list. A line is placed when it
+// line is placed and every key is on allowList. A line is placed when it
 // is blank, a comment (# or ;), a section header alone on its line, or a
 // key = value line under a header whose value does not continue on the next
 // line. A refusal names the line's number and, for a key, its section and
 // name; it never repeats a value or a subsection, either of which could hold a
 // credential.
-func checkGitConfigBody(body string) error {
+func checkGitConfigBody(body string, allowList []gitKeyRule) error {
 	if strings.HasPrefix(body, utf8BOM) {
 		return fmt.Errorf("it begins with a byte order mark: %w", errLayout)
 	}
@@ -138,7 +175,7 @@ func checkGitConfigBody(body string) error {
 				return fmt.Errorf("line %d: %w", number, err)
 			}
 
-			rule = allowedGitSection(section, subsection)
+			rule = allowedGitSection(allowList, section, subsection)
 			if rule == nil {
 				return fmt.Errorf("line %d: the section [%s] is not on the allow list: %w", number, section, errLayout)
 			}
@@ -161,11 +198,11 @@ func checkGitConfigBody(body string) error {
 	return nil
 }
 
-// allowedGitSection returns the allow list's rule for a section, lower-case,
-// and its subsection (nil for none), or nil when the list has none.
-func allowedGitSection(section string, subsection *string) *gitKeyRule {
-	for i := range gitConfigAllowList {
-		rule := &gitConfigAllowList[i]
+// allowedGitSection returns allowList's rule for a section, lower-case, and
+// its subsection (nil for none), or nil when the list has none.
+func allowedGitSection(allowList []gitKeyRule, section string, subsection *string) *gitKeyRule {
+	for i := range allowList {
+		rule := &allowList[i]
 		if rule.section != section {
 			continue
 		}

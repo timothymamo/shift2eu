@@ -9,9 +9,12 @@
 // inherited. git runs as `/usr/bin/git --no-pager -C /srv/audit/checkout
 // <subcommand> ...` with one of the read-only subcommands the ADR lists, and
 // never with an option that names another configuration, git directory, work
-// tree, program or output file, nor --show-signature, nor a format that asks
-// for a signature's verification (%G, %(signature)), nor with a single-dash
-// word that holds -c or -O anywhere in its cluster. sort takes only an allow list of options, which
+// tree, program or output file, nor --show-signature, nor any word that could
+// ask for a signature's verification (%G with or without git's +, - or space
+// modifier, %(signature, and on a for-each-ref line any word holding
+// signature), wherever it sits on the line, so a grep pattern holding %G is
+// refused too, nor with a single-dash word that holds -c or -O anywhere in its
+// cluster. sort takes only an allow list of options, which
 // order and compare lines (-k and -t with their values among them), so it never
 // runs a program, reads a file it was not given or writes one; uniq takes one
 // operand at most, so its OUT never writes a file. Every

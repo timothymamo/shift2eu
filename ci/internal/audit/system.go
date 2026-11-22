@@ -293,44 +293,41 @@ func readResult(path string) ([]byte, error) {
 	return body, nil
 }
 
-// jsonStrings decodes body as exactly one JSON value and returns every string
-// in it, the objects' keys included, as decoded: a secret written with JSON
-// escapes is found in them though no byte of the file spells it.
+// jsonStrings reads body as exactly one JSON value and returns every string in
+// it, as decoded, in the order the document holds them: the objects' keys and
+// every value of a duplicate key included, since it walks the document's
+// tokens rather than decoding it into a map, which keeps a duplicate key's
+// last value alone. A secret written with JSON escapes is found in them though
+// no byte of the file spells it.
 func jsonStrings(body []byte) ([]string, error) {
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 
-	var value any
-	if err := decoder.Decode(&value); err != nil {
-		return nil, fmt.Errorf("decode: %w", err)
+	var strs []string
+
+	for depth, first := 0, true; first || depth > 0; first = false {
+		token, err := decoder.Token()
+		if err != nil {
+			return nil, fmt.Errorf("decode: %w", err)
+		}
+
+		switch t := token.(type) {
+		case json.Delim:
+			if t == '{' || t == '[' {
+				depth++
+			} else {
+				depth--
+			}
+		case string:
+			strs = append(strs, t)
+		}
 	}
 
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return nil, errResultNotJSON
 	}
 
-	var strs []string
-
-	collectStrings(value, &strs)
-
 	return strs, nil
-}
-
-// collectStrings appends every string of a decoded JSON value to strs.
-func collectStrings(value any, strs *[]string) {
-	switch v := value.(type) {
-	case string:
-		*strs = append(*strs, v)
-	case []any:
-		for _, item := range v {
-			collectStrings(item, strs)
-		}
-	case map[string]any:
-		for key, item := range v {
-			*strs = append(*strs, key)
-			collectStrings(item, strs)
-		}
-	}
 }
 
 // cliProber is the Prober of a real run: the audit's launch with the

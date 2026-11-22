@@ -73,9 +73,9 @@ var layoutDirs = []dirRule{
 // checkout copy and the checks' results without a write bit anywhere in them,
 // without an entry other than a directory, a regular file or a link, and
 // without a link that leaves its own tree, the checkout copy's .git a
-// directory whose config, if any, holds only the keys of the allow list in
-// lines of the forms git writes (checkGitConfig) and which holds no
-// config.worktree, commondir or gitdir, the work area
+// directory whose config and config.worktree, each if there, hold only the
+// keys of their allow lists in lines of the forms git writes (checkGitConfig)
+// and which holds no commondir or gitdir, the work area
 // holding only its empty tmp/, the state area's home/ and tmp/ empty, and the
 // wrapper a regular file of mode 0555. It creates nothing: a missing path is
 // the model-free step that did not run. The wrapper's owner (root) is the

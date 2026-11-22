@@ -12,8 +12,9 @@
 //     it out, refusing a symbolic link in its directories, any write bit, any
 //     entry but a directory, a regular file or an in-tree link under checkout
 //     and checks, and a checkout .git that is no directory, that holds a
-//     config.worktree, commondir or gitdir, or whose config holds a key off
-//     the allow list or a line its strict parser cannot place.
+//     commondir or gitdir, or whose config or config.worktree is no regular
+//     file or holds a key off that file's allow list or a line its strict
+//     parser cannot place.
 //  4. CheckBubblewrap starts `bwrap --unshare-all --die-with-parent --ro-bind /
 //     / /bin/true` once.
 //  5. Preflight has the model make PreflightPlan's calls - a control that reads
