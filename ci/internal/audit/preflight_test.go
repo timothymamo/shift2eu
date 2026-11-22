@@ -750,6 +750,45 @@ func transcriptCases() []judgeCase {
 				"runbook step 10",
 			},
 		},
+		{
+			// The plan's order is part of it: a run that made the same calls in
+			// another order is no run of the plan, however well each call
+			// matches (issue #277, review R2: the ordering risk is recorded, the
+			// check itself stays).
+			name: "the transcript's calls are in another order",
+			transcript: func(plan audit.Plan, transcript []byte) []byte {
+				lines := strings.SplitAfter(string(transcript), "\n")
+
+				// Swap probe 1's Write with the Bash call after it: each call's
+				// two lines travel together, so every result still answers its
+				// own call.
+				first, second := -1, -1
+
+				for i, call := range plan {
+					if call.Probe != 1 {
+						continue
+					}
+
+					if call.Tool == "Write" {
+						first = i
+					}
+
+					if first >= 0 && call.Tool == "Bash" && second < 0 {
+						second = i
+					}
+				}
+
+				if first < 0 || second < 0 {
+					return transcript
+				}
+
+				a, b := 2*first, 2*second
+				lines[a], lines[a+1], lines[b], lines[b+1] = lines[b], lines[b+1], lines[a], lines[a+1]
+
+				return []byte(strings.Join(lines, ""))
+			},
+			want: []string{"transcript"},
+		},
 	}
 }
 
