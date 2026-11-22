@@ -178,18 +178,46 @@ func writeAuditTree(t *testing.T, root string) {
 		t.Fatalf("write %s: %v", gitConfig, err)
 	}
 
+	// The checkout copy and the checks' results are read-only to the model,
+	// their contents too: the model-free step removes every write bit, the
+	// checkout's own .git included, and CheckLayout holds the whole tree to it.
 	for _, tree := range []string{
 		filepath.Join(root, "srv", "audit", "checkout"),
 		filepath.Join(root, "srv", "audit", "checks"),
 	} {
-		if err := os.Chmod(tree, 0o555); err != nil { //nolint:gosec // G302: 0555 is the ADR's mode for the checkout copy and the checks' results
-			t.Fatalf("chmod %s: %v", tree, err)
-		}
+		makeReadOnly(t, tree)
 	}
 
-	// A 0555 directory cannot be emptied: the test puts the write bits back
-	// before the temporary directory is removed.
+	// A read-only directory cannot be emptied: the test puts the write bits
+	// back before the temporary directory is removed.
 	t.Cleanup(func() { makeWritable(t, root) })
+}
+
+// makeReadOnly removes every write bit from the tree at path, a symbolic link
+// followed nowhere: the mode the model-free step leaves the checkout copy and
+// the checks' results in, every directory and file under them included.
+func makeReadOnly(t *testing.T, path string) {
+	t.Helper()
+
+	err := filepath.WalkDir(path, func(entry string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+
+		return os.Chmod(entry, info.Mode().Perm()&^0o222) //nolint:gosec // G122: the tree is this test's own temporary directory, walked so that every entry's mode is the one the layout expects
+	})
+	if err != nil {
+		t.Fatalf("remove the write bits under %s: %v", path, err)
+	}
 }
 
 // makeWritable gives every entry of the tree at path a write bit, a symbolic link

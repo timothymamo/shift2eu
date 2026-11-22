@@ -380,7 +380,7 @@ func writableFile(parts []string, tree []string) func(t *testing.T, root string)
 			writeFile(t, pathOf(root, parts), "{}", 0o444)
 		})(t, root)
 
-		if err := os.Chmod(pathOf(root, parts), 0o644); err != nil {
+		if err := os.Chmod(pathOf(root, parts), 0o644); err != nil { //nolint:gosec // G302: the file's own write bit is the one defect this case names
 			t.Fatalf("chmod %v: %v", parts, err)
 		}
 	}
@@ -424,7 +424,7 @@ func makeReadOnly(t *testing.T, path string) {
 			return err
 		}
 
-		return os.Chmod(entry, info.Mode().Perm()&^writeBitsOfEveryone)
+		return os.Chmod(entry, info.Mode().Perm()&^writeBitsOfEveryone) //nolint:gosec // G122: the tree is this test's own temporary directory, walked so that every entry loses its write bits as the model-free step leaves it
 	})
 	if err != nil {
 		t.Fatalf("remove the write bits under %s: %v", path, err)

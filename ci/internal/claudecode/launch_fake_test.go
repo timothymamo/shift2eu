@@ -8,7 +8,9 @@ package claudecode_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -370,8 +372,22 @@ func TestAskKeepsTheReviewersSystemPromptInTheTemporaryDirectory(t *testing.T) {
 		t.Fatalf("the CLI's arguments %q hold no --system-prompt-file", rec.args(t))
 	}
 
-	if !strings.HasPrefix(systemFile, os.TempDir()) {
-		t.Errorf("the system prompt file is %q, want one under the process's temporary directory %q: a config that names no directory keeps the reviewer's launch", systemFile, os.TempDir())
+	// The file is the launcher's own fresh directory's, the one it makes with
+	// the claudecode-system- prefix when the config names none: a config that
+	// fixes no directory keeps the reviewer's launch, and the file is never
+	// written beside the caller's.
+	systemDir := filepath.Dir(systemFile)
+
+	if got := filepath.Base(systemDir); !strings.HasPrefix(got, "claudecode-system-") {
+		t.Errorf("the system prompt file is %q, in the directory %q, want one whose name has the prefix %q: the launcher's own temporary directory for it (issue #277, review R11)", systemFile, got, "claudecode-system-")
+	}
+
+	if got := filepath.Base(systemFile); got != "system-prompt.md" {
+		t.Errorf("the system prompt file is %q, want system-prompt.md in the launcher's own directory: the file the launcher removes after the run", systemFile)
+	}
+
+	if _, err := os.Lstat(systemDir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the system prompt's directory %q is still there after the run (%v), want it removed: the launcher removes every directory it made", systemDir, err)
 	}
 }
 
