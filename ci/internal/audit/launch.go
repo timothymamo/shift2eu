@@ -38,9 +38,11 @@ var auditTools = []string{"Read", "Grep", "Glob", "Write", "Edit", "Bash"}
 // LaunchConfig returns the launcher's config of the audit and its preflight
 // under root: the ADR's model, effort, tools, permission mode and settings
 // file, safe mode off, the skill appended to the CLI's system prompt, the work
-// area as the working directory, HOME in the state area, the fixed PATH, and
-// an environment of TMPDIR, the subprocess environment scrub and the canary,
-// beside the launcher's own. It is built from in alone: nothing of the
+// area as the working directory, HOME in the state area, the system prompt's
+// file in the state area's tmp/, the canary redacted beside the token in the
+// launcher's errors, the fixed PATH, and an environment of TMPDIR, the
+// subprocess environment scrub and the canary, beside the launcher's own. It
+// is built from in alone: nothing of the
 // caller's environment reaches it. The caller sets the Transcript.
 func LaunchConfig(root string, in Inputs) claudecode.Config {
 	return claudecode.Config{
@@ -57,6 +59,8 @@ func LaunchConfig(root string, in Inputs) claudecode.Config {
 		WorkDir:            under(root, workDir),
 		Home:               under(root, homeDir),
 		SearchPath:         searchPath,
+		SystemPromptDir:    under(root, stateTmpDir),
+		Redact:             []string{in.Canary},
 		Env: []string{
 			"TMPDIR=" + under(root, stateTmpDir),
 			"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",

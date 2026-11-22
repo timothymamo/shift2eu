@@ -7,7 +7,9 @@
 // os.LookupEnv: CLAUDE_CODE_OAUTH_TOKEN, SHIFT2EU_AUDIT_CANARY (64 lower-case
 // hex characters), GITHUB_ENV and GITHUB_STEP_SUMMARY, and ANTHROPIC_API_KEY
 // only to refuse a step that holds it. It reads no other variable. It then
-// takes ci/internal/audit's six steps under the root /, prints the run's one
+// takes ci/internal/audit's six steps, the real ones with audit.Observe, under
+// the root / (its run function takes the root, so a test runs the whole
+// launcher under a temporary directory), prints the run's one
 // line on stdout and appends it to the step summary, and exits with the
 // library's exit code: 2 for a usage or input error, 3 for a run refused
 // before the CLI ran. Neither secret is ever printed.

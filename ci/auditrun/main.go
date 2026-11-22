@@ -32,20 +32,21 @@ const lineAPIKey = "refused: ANTHROPIC_API_KEY is set; the audit runs on the sub
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 
-	code := runContext(ctx, os.Args[1:], os.LookupEnv, audit.SystemSteps(os.Getpid()), os.Stdout, os.Stderr)
+	code := runContext(ctx, os.Args[1:], os.LookupEnv, audit.SystemSteps(os.Getpid(), audit.Observe), "/", os.Stdout, os.Stderr)
 
 	stop()
 	os.Exit(code)
 }
 
 // run is the entry point's logic with the step's arguments, its environment
-// as a lookup function, the steps and where its lines go.
-func run(args []string, getenv func(string) (string, bool), steps audit.Steps, stdout, stderr io.Writer) int {
-	return runContext(context.Background(), args, getenv, steps, stdout, stderr)
+// as a lookup function, the steps, the root that stands in for / (main's is
+// /, a test's a temporary directory) and where its lines go.
+func run(args []string, getenv func(string) (string, bool), steps audit.Steps, root string, stdout, stderr io.Writer) int {
+	return runContext(context.Background(), args, getenv, steps, root, stdout, stderr)
 }
 
 // runContext is run under ctx.
-func runContext(ctx context.Context, args []string, getenv func(string) (string, bool), steps audit.Steps, stdout, stderr io.Writer) int {
+func runContext(ctx context.Context, args []string, getenv func(string) (string, bool), steps audit.Steps, root string, stdout, stderr io.Writer) int {
 	in, err := inputs(args, getenv, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, "auditrun:", err)
@@ -62,7 +63,7 @@ func runContext(ctx context.Context, args []string, getenv func(string) (string,
 		return audit.ExitRefused
 	}
 
-	return audit.Run{Root: "/", Inputs: in, Steps: steps, Out: out}.Run(ctx)
+	return audit.Run{Root: root, Inputs: in, Steps: steps, Out: out}.Run(ctx)
 }
 
 // inputs reads the command line and the step's environment. Its errors name

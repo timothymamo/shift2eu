@@ -5,17 +5,25 @@
 //  1. CheckManagedSettings refuses a root holding a Claude Code managed-settings
 //     path, checked with Lstat.
 //  2. InstallClaude checks the kept tarball's sha512 against the pin's npm
-//     integrity and only then extracts its one entry, package/claude, mode 0500.
+//     integrity and only then extracts its one entry, package/claude, mode 0500,
+//     into a directory that is no symbolic link; a PAX global header is skipped.
 //  3. CheckLayout checks the audit directory under /srv/audit as the ADR lays
-//     it out, refusing a symbolic link anywhere in it.
+//     it out, refusing a symbolic link in its directories, any write bit or
+//     link out of its tree under checkout and checks, and a checkout .git that
+//     is no directory or whose config names a program, credential or include.
 //  4. CheckBubblewrap starts `bwrap --unshare-all --die-with-parent --ro-bind /
 //     / /bin/true` once.
 //  5. Preflight has the model make PreflightPlan's calls - a control that reads
-//     a nonce back, then the six probes - and Judge, a pure function of the
-//     plan, the nonce, the transcript and the effects the launcher observes
-//     itself, passes only when the control passed and every probe was refused.
-//  6. Audit asks the model once, with the skill from the checkout copy as the
-//     appended system prompt, and wants the result file in the work area.
+//     a nonce back, then the six probes, each call with the exact input its
+//     Targets fill in - and Judge, a pure function of the plan, the nonce, the
+//     token, the canary, the transcript and the effects an Observer makes
+//     under a context detached from the run's, passes only when the control
+//     passed, every probe was refused with the plan's tools and inputs in its
+//     order, and neither secret is anywhere in the transcript.
+//  6. Audit checks that the work area again holds only its empty tmp/, asks
+//     the model once through a Launch, with the skill from the checkout copy as
+//     the appended system prompt, and wants a result file in the work area
+//     that holds neither the token nor the canary.
 //
 // Run takes the steps and prints one line: "finished", a constant class, or
 // the preflight's Verdict, whose text is made of constants alone. No step's

@@ -53,9 +53,10 @@ func ParseIntegrity(integrity string) ([]byte, error) {
 }
 
 // InstallClaude checks the tarball against integrity and only then writes its
-// one entry package/claude to bin, mode 0500. The tarball is read once, so the
-// bytes extracted are the bytes checked. Every entry is checked before
-// anything is written: an entry that is no regular file or directory, a path
+// one entry package/claude to bin, mode 0500, in a directory that is a real
+// one, no symbolic link. The tarball is read once, so the bytes extracted are
+// the bytes checked. Every entry but a PAX global header, which holds no file,
+// is checked before anything is written: an entry that is no regular file or directory, a path
 // that is absolute or climbs out, a second binary or none at all refuses the
 // tarball, and a refused tarball leaves no binary behind.
 func InstallClaude(tarball, integrity, bin string) error {
@@ -126,6 +127,12 @@ func claudeBinary(packed []byte) ([]byte, error) {
 			return nil, fmt.Errorf("%w: read its entries: %w", errTarball, err)
 		}
 
+		// A PAX global header holds records for the entries after it and no
+		// file: nothing is extracted from it, so it is no entry to check.
+		if header.Typeflag == tar.TypeXGlobalHeader {
+			continue
+		}
+
 		if err := checkEntry(header); err != nil {
 			return nil, err
 		}
@@ -187,9 +194,22 @@ func checkEntry(header *tar.Header) error {
 }
 
 // writeBinary writes body to a new file beside bin and renames it there, so
-// bin is never a half-written binary.
+// bin is never a half-written binary. bin's directory must be a real
+// directory, checked with Lstat: a symbolic link there is followed nowhere,
+// since the binary is extracted before the layout check looks at state/bin.
 func writeBinary(bin string, body []byte) error {
-	file, err := os.CreateTemp(filepath.Dir(bin), ".claude-*")
+	dir := filepath.Dir(bin)
+
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("write the Claude Code binary: its directory: %w", err)
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("write the Claude Code binary: its directory is %s, want a directory", info.Mode().Type())
+	}
+
+	file, err := os.CreateTemp(dir, ".claude-*")
 	if err != nil {
 		return fmt.Errorf("write the Claude Code binary: %w", err)
 	}
