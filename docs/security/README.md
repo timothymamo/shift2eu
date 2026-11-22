@@ -49,6 +49,10 @@ advisory creation was refused, or "none"), never how many, so it does not announ
 before its fix. That flag still tells a reader that something exists; the maintainer accepts that. The
 audit never publishes an advisory or requests a CVE: that is the maintainer's decision.
 
+A merged report also ships in every later release: the release archives carry `docs/`, so each one holds
+the reports in [`audits/`](audits/) as they were at release time, frozen for as long as that release is
+downloaded. A report must therefore never hold anything that is not meant to stay public.
+
 ## Verify a release yourself
 
 Every image is signed and carries build provenance and an SBOM, and every release archive carries build
