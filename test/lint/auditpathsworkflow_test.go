@@ -314,6 +314,15 @@ func TestAuditPathsWorkflowIsAClosedFence(t *testing.T) {
 			t.Errorf("%s: line %d: the checkout sets persist-credentials: %s, want false: no step after it may read the token out of .git/config", auditPathsWorkflowPath, persist.Num, got)
 		}
 
+		depth, ok := auditPathsEntry(t, with.Block, "fetch-depth")
+		if !ok {
+			t.Fatalf("%s: the checkout has no fetch-depth:, want 0: a shallow checkout leaves the merge base of the two commits out and the check then fails closed on every audit pull request", auditPathsWorkflowPath)
+		}
+
+		if got := auditPathsScalar(t, depth); got != "0" {
+			t.Errorf("%s: line %d: the checkout sets fetch-depth: %s, want 0: a shallow checkout leaves the merge base of the two commits out and the check then fails closed on every audit pull request", auditPathsWorkflowPath, depth.Num, got)
+		}
+
 		for _, field := range auditPathsFields(t, with.Block, "the checkout's with:") {
 			switch field.Key {
 			case "ref", "repository":
@@ -506,9 +515,10 @@ func auditPathsCheckout(steps []yamlread.Item) (yamlread.Item, int) {
 }
 
 // auditPathsFetch returns the step of workflow that runs before line and fetches the pull request's commits:
-// one whose run: runs git fetch and whose env: carries the pull request's number or head commit from the
-// event, the variable it names in run: itself. It reports on a fetch that is there but takes its ref any
-// other way, and false when no step runs git fetch at all.
+// one whose run: runs git fetch of a refs/pull/ ref, on a line that itself names the variable the step's env:
+// fills from the pull request's number or head commit, so a fetch of another ref - the base branch's, which
+// would leave the check diffing main against itself and passing every pull request - is no fetch at all. It
+// reports on a fetch that is there but takes its ref any other way, and false when no step runs git fetch.
 func auditPathsFetch(t *testing.T, workflow auditPathsWorkflow, before int) (yamlread.Item, bool) {
 	t.Helper()
 
@@ -538,15 +548,32 @@ func auditPathsFetch(t *testing.T, workflow auditPathsWorkflow, before int) (yam
 				continue
 			}
 
-			if auditPathsRuns(run, variable.name) {
+			if auditPathsFetchLine(run, variable.name) {
 				return step, true
 			}
 		}
 
-		t.Errorf("%s: line %d: the step that runs git fetch takes no pull request number or head commit from %s env: into run:, so it fetches nothing of the pull request", auditPathsWorkflowPath, step.Num, auditPathsPullRequestExprPrefix)
+		t.Errorf("%s: line %d: the step that runs git fetch fetches no refs/pull/ ref from a variable its env: fills from %s: the fetch must name the pull request's own number or head commit, or it brings main's commits in place of the pull request's", auditPathsWorkflowPath, step.Num, auditPathsPullRequestExprPrefix)
 	}
 
 	return yamlread.Item{}, false
+}
+
+// auditPathsFetchLine reports whether one line of a step's run: script fetches the pull request's own ref: the
+// line runs git fetch, names a refs/pull/ ref and reads the variable named name, which is where the pull
+// request's number or head commit comes in. A fetch of refs/heads/<branch> names neither.
+func auditPathsFetchLine(lines []string, name string) bool {
+	for _, line := range lines {
+		if !strings.Contains(line, "git fetch") || !strings.Contains(line, "refs/pull/") {
+			continue
+		}
+
+		if strings.Contains(line, name) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // auditPathsRuns reports whether any of the lines of a step's run: script holds want.
