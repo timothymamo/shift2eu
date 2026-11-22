@@ -651,18 +651,25 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   by mistake. A refusal of one entry (not set, not a variable name) names it only when it is an upper-case
   variable name, the shape of every credential name; any other entry, such as a token pasted where a name
   goes, is given by its position alone: `VM_ENV entry 2 (entry 2 is not shown)`, with the reason (it may
-  be a credential typed by mistake) said once per message. Entry N is the Nth name of `VM_ENV`, counting
-  each name once (a repeated name only at its first place) and skipping empty entries. The rule rests on the shape of a name, so it
-  has a limit: a value of that shape pasted into `VM_ENV` (upper-case letters, digits and underscores
-  only, such as an AWS access key ID, `AKIA...`, which is not secret on its own) is still printed, e.g.
-  in the not-set list. `make vm-env`'s write step repeats, before it calls `limactl`, the refusals that
+  be a credential typed by mistake) said once per message. Entry N is the Nth word of `VM_ENV` as typed:
+  commas, spaces, tabs and newlines separate words, a run of them counts once, and a name listed twice
+  counts at each of its places (it is still checked and written once). A key can itself have the shape of
+  an upper-case name (an AWS access key ID, `AKIA` or `ASIA` and 16 upper-case letters and digits), so an
+  entry that is **not set** and is 16 characters or longer with no underscore is given by its position
+  too. A set variable, and every credential name above (each holds an underscore), is still named. The
+  limit left: a key of upper-case letters, digits and underscores shorter than that, or holding an
+  underscore, is still printed if not set. The success line, `vm-env: <names> written to ...`, follows the
+  same rule: an entry it may not print is written to `daemon.env` all the same, and only the line gives
+  it by position. `make vm-env`'s write step repeats, before it calls `limactl`, the refusals that
   `make -i` would otherwise skip: a `VM_ENV` that names nothing, a name refused for what it is (a GitHub
   token, a `SHIFT2EU_AGENTS_APP_*` variable, not a variable name), and an unset or empty credential, each
   naming a hidden entry by its position alone. So even `make -i vm-env` leaves `daemon.env` as it was and
   never says it wrote it in those cases; `make -i` still exits 0, so read its messages. The character
   check of the whole `VM_ENV` runs only in `make vm-env-check`; in the write step a tab or newline only
-  separates names, and a name holding any other such character is refused as not a variable name, so
-  nothing it forbids reaches the VM.
+  separates names, counted as `make vm-env-check` counts them, and a name holding any other such character
+  is refused as not a variable name, so nothing it forbids reaches the VM. `printenv` is only ever handed a
+  variable name: under `make -i` an entry that is none (one starting with a dash, which `printenv` would
+  print whole in its option error) is counted as not set and given by its position, never read.
 - **The default `VM_ENV` replaces the whole file.** Plain `make vm-env` writes exactly the two
   variables to `daemon.env`, so a stale line, such as an old `ANTHROPIC_API_KEY` or the personal GitHub
   token a VM was set up with before PRD #161 milestone 3, is removed. Only a
@@ -676,6 +683,9 @@ GitHub token of yours enters the VM (PRD #161 milestone 3).
   says how many lines were dropped, never what they held. Blank lines are not kept either, and are not
   counted in that warning, as they held nothing. A merge prints the names of the variable lines
   it kept, never their values: `vm-env: kept (unchanged): CLAUDE_CODE_OAUTH_TOKEN DEEPSEEK_API_KEY`.
+  It follows the same naming rule: only upper-case names are shown, and any other kept name is given as a
+  count (`... DEEPSEEK_API_KEY and 1 other name not shown`, or `2 names not shown`); those lines are still
+  kept.
   Either way the file is written to a temporary file beside `daemon.env`, mode 0600, and moved into
   place, so a failure does not leave half a file. An interrupted run removes its temporary file, and a
   leftover from a killed run (a regular file) is removed by the next `make vm-env` once it is older than a
@@ -852,8 +862,10 @@ without the default `VM_ENV` credentials, `CLAUDE_CODE_OAUTH_TOKEN` and `DEEPSEE
 **The `.envrc` guard** (issue #402). The host targets that load the credentials or the agents App's key,
 `make vm-env`, `vm-env-check`, `vm-up`, `vm-create`, `vm-init`, `agents-token`, `agents-token-refresh`,
 `agents-token-refresh-install` and `agents-token-refresh-start`, refuse to run, before they run anything (no
-prerequisite, no sub-make, no `limactl`, `launchctl` or `sudo`), in two cases: when the host clone's `.envrc`
-is a symlink to a file outside the clone or hands its lines to another file, and when a `.envrc` or a `.env`
+prerequisite, no sub-make, no `limactl`, `launchctl` or `sudo`), in two cases. The first is the host clone's
+`.envrc`, refused when it is a symlink that leads outside the clone, when it is a symlink the guard cannot
+resolve (more than 32 links or a loop of them, a link that cannot be read, or one that reads other than the
+kernel resolves it), or when it hands its lines to another file. The second is a `.envrc` or a `.env` that
 sits in the workspace or in any directory above it, up to `/`, in either spelling of the workspace (as
 `WORKSPACE_REPO` writes it, and with its symlinks resolved), where direnv loads it in every shell you open in
 the workspace. The guard parses no shell, so it holds the host clone's `.envrc` to three strict rules:
@@ -870,6 +882,12 @@ the workspace. The guard parses no shell, so it holds the host clone's `.envrc` 
   backtick end a directive's word too (`source_up>/dev/null`, `` `source_up` ``), and a `dotenv` directly
   followed by one, or with a path starting with one, counts as outside; a line ending in `\` is joined to the
   next first, as bash does (an escaped trailing backslash joins too, a safe false positive).
+
+The guard resolves the `.envrc` and a `dotenv` path with the host-clone guard's own resolver (issue #468): at
+most 32 symlinks, each one's target checked against what the kernel resolves, and "inside the clone" decided by
+file identity (`test -ef`), never by comparing spellings, so a path typed in another case (APFS ignores case) or
+a link whose target ends in a newline cannot pass for a file of the clone. Anything it cannot resolve (more than
+32 links, a loop, a link it cannot read or that reads other than the kernel follows it) counts as outside.
 
 Each refusal names the file, and for a directive its line number (`<path>/.envrc: line <N>: ...`). A directive
 word anywhere on a non-comment line counts, in a trailing comment (`dotenv ./x # source_up`) or a quoted value
@@ -2036,17 +2054,34 @@ program refuses to run when one is set.
 **The Claude Code pin check** (issue #276). Renovate bumps `CLAUDE_CODE_VERSION` but cannot bump
 `CLAUDE_CODE_INTEGRITY`, and a bump's own AI review runs `main`'s copy of the workflow, so it cannot see a
 stale integrity. The **Claude Code pin** check (`.github/workflows/claude-code-pin.yml`, which runs
-`go run ./ci/claudecodepin`) does: on every pull request that changes `ai-review.yml`,
+`go run ./ci/claudecodepin`) does. It runs on every pull request into `main` (issue #452): a first step
+diffs the pull request's merge commit against its first parent (`git diff --no-renames --name-only -z
+HEAD^1 HEAD`, from a checkout two commits deep) and, when none of `ai-review.yml`,
 `.github/scripts/install-claude-code.sh`, the check, its workflow or `go.mod` (whose go line picks the Go
-that builds the check), and on the push to `main` after the merge, it reads both pins and fails unless the npm
-registry's document of exactly that version of `@anthropic-ai/claude-code-linux-x64` publishes the pinned
-integrity as its `dist.integrity`. Its error names the pinned and the published integrity and the command
-that prints the published one (`npm view @anthropic-ai/claude-code-linux-x64@<version> dist.integrity`). A
-registry that cannot be reached, or answers anything else, fails the check too, never passes it. It runs in
-CI only (the default tests fake the registry), on `pull_request` with a read-only token, reads no secret and
-no environment, and sends the registry one GET of a public document and no credential. It runs only when
-those paths change, so today it is advisory, not a required status check: a Renovate bump of the CLI
-shows it red until the integrity is replaced, and a red **Claude Code pin** check means do not merge.
+that builds the check) changed, passes without contacting the registry, printing that the pin's paths are
+unchanged. It fails closed: any other case (another event, no merge commit, a failing `git diff`) runs the
+check or fails the job, and so does a merge commit whose second parent is not the pull request's head as
+the event file names it (`jq` on `GITHUB_EVENT_PATH`). When a pin path changed, and on the push to `main`
+after a merge that changed one (the push keeps its `paths:` filter), it reads both pins and fails unless
+the npm registry's document of exactly that version of `@anthropic-ai/claude-code-linux-x64` publishes
+the pinned integrity as its `dist.integrity`. Its error names the pinned and the published integrity and
+the command that prints the published one
+(`npm view @anthropic-ai/claude-code-linux-x64@<version> dist.integrity`). A registry that cannot be
+reached, or answers anything else, fails the check too, never passes it. It runs in CI only (the default
+tests fake the registry), on `pull_request` with a read-only token, reads no secret and no environment,
+and sends the registry one GET of a public document and no credential. A Renovate bump of
+the CLI shows it red until the integrity is replaced, and a red **Claude Code pin** check means do not
+merge. Because it reports on every pull request, it can be required, so a missed integrity cannot be
+merged at all. **Maintainer step, once, after issue #452's pull request is merged:** Settings → Rules →
+Rulesets → Protect main → Require status checks to pass → add **Claude Code pin** (the job's name),
+choose **GitHub Actions** as its expected source (not any source, so no other App with checks or statuses
+write can post a green check of the same name) and save. Before that merge the check ran only on pull
+requests that changed its paths, and requiring it then would have left every other pull request waiting
+for a check that never comes. Pull requests opened before the merge have no **Claude Code pin** run (the
+old `paths:` filter never started one) and wait on the required check until they get a new push or
+**Update branch**; re-running their jobs cannot help, since no run exists. The known limit (ADR 0033,
+amended by issue #452): a pull request runs its own copy of the workflow, so it could edit the workflow
+to skip the check; that edit changes a pin path and shows in its diff and its reviews.
 
 **1. Create the reviewer App.** On GitHub, Settings → Developer settings → GitHub Apps → New GitHub App:
 

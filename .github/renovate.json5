@@ -100,13 +100,18 @@
       // OpenTofu (issue #422). The terraform manager reads infra/site's *.tf (its default pattern,
       // **/*.tf and **/*.tofu) and reports required_version as dep type required_version for
       // hashicorp/terraform (https://docs.renovatebot.com/modules/manager/terraform/): point it at
-      // OpenTofu's releases, so it moves with infra/tofu.yaml's tofuVersion and digests in one PR.
+      // OpenTofu's releases, so it moves with infra/tofu.yaml's tofuVersion and digests in one PR. The
+      // release tags carry a v (v1.13.9) and required_version does not (1.13.9): extractVersion strips
+      // it, so the proposal is in the pin's own format (issue #434). infra/tofu.yaml's tofuVersion and
+      // digestVersion keep their v, as dev/tofu.sh and the release download need, so no rule strips it
+      // there.
       description: 'OpenTofu: infra/site required_version reads opentofu/opentofu releases',
       matchManagers: ['terraform'],
       matchDepTypes: ['required_version'],
       overrideDatasource: 'github-releases',
       overrideDepName: 'opentofu/opentofu',
       overridePackageName: 'opentofu/opentofu',
+      extractVersion: '^v(?<version>.+)$',
       groupName: 'OpenTofu',
     },
     {
@@ -139,7 +144,7 @@
       description: 'Claude Code CLI: ai-review.yml version, with the integrity updated by hand in the same PR; the Claude Code pin check fails the PR until it is',
       matchDepNames: ['@anthropic-ai/claude-code-linux-x64'],
       prBodyNotes: [
-        '**Before merging:** replace `CLAUDE_CODE_INTEGRITY` in `.github/workflows/ai-review.yml` with the output of `npm view @anthropic-ai/claude-code-linux-x64@<new version> dist.integrity`: the **Claude Code pin** check fails this PR until it is replaced, and its error names the published integrity. The check is advisory, not required: do not merge while it is red. Also check that the CLI still accepts every flag `ci/aireview/internal/review/claudecli.go` passes (`claude --help`). The AI review check of this PR runs main\'s pin, not this one.',
+        '**Before merging:** replace `CLAUDE_CODE_INTEGRITY` in `.github/workflows/ai-review.yml` with the output of `npm view @anthropic-ai/claude-code-linux-x64@<new version> dist.integrity`: the **Claude Code pin** check fails this PR until it is replaced, and its error names the published integrity. The check runs on every pull request and is a required status check once the maintainer marks it so in the Protect main ruleset (issue #452): do not merge while it is red. Also check that the CLI still accepts every flag `ci/aireview/internal/review/claudecli.go` passes (`claude --help`). The AI review check of this PR runs main\'s pin, not this one.',
       ],
     },
     {

@@ -669,6 +669,326 @@ func TestEveryDevScriptARecipeRunsIsExecutableInGit(t *testing.T) {
 	}
 }
 
+// TestMakefileResolvesAPathInOnePlace pins the other half of issue #468: the .envrc guard (issue #402) and the
+// host-clone guard (issue #447) decide what a path is by resolving it, and they must do that through one resolver.
+// PR #463 gave the host-clone guard a resolver that checks every link it follows against the kernel, keeps a
+// target's trailing newline and fails closed, while ENVRC_GUARD kept a resolver of its own that compared spelled
+// paths, so a layout one guard refused the other could let through - the host target ran with the credentials in
+// reach. This check is structural: the Makefile, or the one script of dev/ it runs for it, follows a link with
+// readlink in exactly one place, and ENVRC_GUARD names that place instead of walking a path itself. It stays loose
+// about where the resolver lives, so it may be a make definition or a script of dev/; a script must be tracked by
+// git and executable, which is what running it by its path needs, and dev/shellcheck.sh lints every tracked .sh.
+func TestMakefileResolvesAPathInOnePlace(t *testing.T) {
+	t.Parallel()
+
+	body := makeCode(readRepoFile(t, makefilePath))
+	definitions := makeDefinitions(body)
+
+	envrc, ok := definitions["ENVRC_GUARD"]
+	if !ok {
+		t.Fatalf("%s defines no ENVRC_GUARD, so this check pins nothing about the .envrc guard (issue #468)", makefilePath)
+	}
+
+	// The resolver: every place that follows a link with readlink, a make definition whose value holds one, and a
+	// script of dev/ the Makefile runs whose own text does.
+	var resolvers []string
+
+	for _, name := range slices.Sorted(maps.Keys(definitions)) {
+		if strings.Contains(definitions[name], "readlink") {
+			resolvers = append(resolvers, name)
+		}
+	}
+
+	for _, script := range devScriptsIn(body) {
+		if strings.Contains(readRepoFile(t, script), "readlink") {
+			resolvers = append(resolvers, script)
+		}
+	}
+
+	if len(resolvers) != 1 {
+		t.Fatalf("%s resolves a path with readlink in %d places, %v: the host-clone guard and the .envrc guard must share one resolver, or a layout one of them refuses the other lets through and a host target runs with the credentials in reach (issue #468)",
+			makefilePath, len(resolvers), resolvers)
+	}
+
+	resolver := resolvers[0]
+
+	if strings.Contains(envrc, "readlink") {
+		t.Errorf("ENVRC_GUARD walks a path with readlink itself, beside the resolver %s: the .envrc guard must resolve a path the way the host-clone guard does, checking every link against the kernel and failing closed, or a link whose target ends in a newline or a path spelled in another case sends it somewhere else than the kernel goes (issue #468)",
+			resolver)
+	}
+
+	if !strings.Contains(envrc, resolver) {
+		t.Errorf("ENVRC_GUARD does not use %s, the one resolver of %s: the two guards must decide where a path leads in the same way, or the .envrc guard misses a credentials file the kernel reads and the host target runs (issue #468)",
+			resolver, makefilePath)
+	}
+
+	// The containment decision itself, which the readlink check above does not reach: before #468 ENVRC_GUARD
+	// decided what is inside the host clone by spelling - a clone path printed by pwd -P, and a prefix test of
+	// the resolved path against that string. A link whose target text begins with the clone's path passes such a
+	// test while leading outside the clone, and a path inside the clone spelled in another case on a
+	// case-insensitive file system (macOS's APFS by default) fails it, so the guard must hold neither and ask the
+	// shared resolver's within, which compares files by identity, for that decision.
+	for _, spelling := range []string{"pwd -P", "$$clone_real", `"$$clone"/*`} {
+		if strings.Contains(envrc, spelling) {
+			t.Errorf("ENVRC_GUARD's own definition holds %q: the .envrc guard must decide what is inside the host clone by file identity, through %s's within, and never by printing a clone path (pwd -P) and comparing a prefix of a path with it, which passes a link outside the clone whose text begins with the clone's path and refuses a path inside it spelled in another case (issue #468)",
+				spelling, resolver)
+		}
+	}
+
+	if !callsWithin(envrc) {
+		t.Errorf("ENVRC_GUARD's own definition calls no within: the guard must ask %s's within, which compares the longest existing prefix of a path with a directory by file identity, whether a path or a dotenv target is inside the host clone - a guard that decides it itself, by spelling or by a walk of its own, is the second resolver #468 removed (issue #468)",
+			resolver)
+	}
+
+	hostGuardUses := false
+
+	for name, text := range definitions {
+		if !strings.Contains(text, "HOST_WORKSPACE") {
+			continue
+		}
+
+		if name == resolver || strings.Contains(text, resolver) {
+			hostGuardUses = true
+		}
+	}
+
+	if !hostGuardUses {
+		t.Errorf("no definition of %s that names HOST_WORKSPACE holds or uses %s, so the host-clone guard no longer resolves the workspace with the shared resolver (issue #468)",
+			makefilePath, resolver)
+	}
+
+	if _, isDefinition := definitions[resolver]; isDefinition {
+		return
+	}
+
+	// A resolver in a script of dev/ is run by its path and shebang, so git must hold it executable, and its .sh
+	// name is what dev/shellcheck.sh picks it up by: every tracked .sh is linted (issue #468).
+	mode, tracked := gitFileModes(t, "dev")[resolver]
+	if !tracked {
+		t.Fatalf("%s runs %s, the resolved path resolver, which git does not track: a script a recipe or make itself runs is committed (issues #242 and #337, issue #468)",
+			makefilePath, resolver)
+	}
+
+	if mode != "100755" {
+		t.Errorf("%s runs %s, the shared path resolver, which git holds as mode %s, not 100755: it is run by its path and shebang, so git must check it out executable (issues #242 and #337, issue #468)",
+			makefilePath, resolver, mode)
+	}
+
+	if !strings.HasSuffix(resolver, ".sh") {
+		t.Errorf("%s runs %s as the shared path resolver, but its name ends in no .sh: dev/shellcheck.sh lints every tracked shell script by that name or its shebang, so a resolver script must be one shellcheck reads (issue #468)",
+			makefilePath, resolver)
+	}
+}
+
+// TestWithinCallFindsOnlyACall pins the matcher TestMakefileResolvesAPathInOnePlace decides the .envrc guard's
+// containment check with, so that check cannot be satisfied by the word alone: ENVRC_GUARD echoes long refusals, and
+// a rewording that puts "within" where a command would stand must not stand in for the call that decides what is
+// inside the host clone, or the check would pass with the decision gone (issue #468, review of PR #472).
+func TestWithinCallFindsOnlyACall(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		text string
+		want bool
+	}{
+		{
+			name: "the guard's first call, negated after ||",
+			text: `if [ -z "$$envrc_real" ] || ! within "$$envrc_real" "$$clone"; then \`,
+			want: true,
+		},
+		{
+			name: "the guard's second call, negated after ||",
+			text: `if [ -z "$$path" ] || ! within "$$path" "$$clone"; then outside=1; fi ;; \`,
+			want: true,
+		},
+		{
+			name: "a call a definition makes on a line of its own",
+			text: `within "$$out" "$$root"`,
+			want: true,
+		},
+		{
+			name: "a call after then",
+			text: `if [ -n "$$p" ]; then within "$$p" "$$clone"; fi; \`,
+			want: true,
+		},
+		{
+			name: "the resolver's own definition of within",
+			text: `within() { res_p=$$1; while [ -n "$$res_p" ]; do res_p=$${res_p%/*}; done; };`,
+			want: false,
+		},
+		{
+			name: "a definition of within with a blank before its parentheses",
+			text: `within () { res_p=$$1; while [ -n "$$res_p" ]; do res_p=$${res_p%/*}; done; };`,
+			want: false,
+		},
+		{
+			name: "a refusal that says files within the host clone",
+			text: `echo "$$target: refused: put that file's lines in the host clone's .envrc itself (files within the host clone)" >&2; \`,
+			want: false,
+		},
+		{
+			// The row the reviewer asked for: every real call gone, one message left that names the word in a
+			// place a permissive matcher took for a command.
+			name: "a guard with no call whose message says files within the host clone",
+			text: `why="files within the host clone"; \` + "\n" + `echo "$$target: refused: $$why" >&2; \`,
+			want: false,
+		},
+		{
+			name: "a message that holds a separator and the word",
+			text: `echo "$$target: refused: within; move the file" >&2; \`,
+			want: false,
+		},
+		{
+			name: "the word as echo's argument",
+			text: `echo within >&2; \`,
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := callsWithin(tc.text); got != tc.want {
+				t.Errorf("callsWithin(%q) = %t, want %t: the matcher must find a call of within where a shell command stands and nowhere else, so a message that says the word neither passes for the guard's containment check nor hides the call it makes (issue #468)",
+					tc.text, got, tc.want)
+			}
+		})
+	}
+
+	// The sensitivity the check in TestMakefileResolvesAPathInOnePlace depends on, on the guard's own text: with both
+	// of its calls removed and a refusal left that says the word, the matcher must find nothing, so that check fails
+	// on a guard that decides containment by something else and says "within" in a message instead. The Makefile
+	// itself is never touched: the mutation is in this test's copy of the definition's text (issue #468).
+	t.Run("the guard's own text without its calls and with a message left", func(t *testing.T) {
+		t.Parallel()
+
+		envrc, ok := makeDefinitions(makeCode(readRepoFile(t, makefilePath)))["ENVRC_GUARD"]
+		if !ok {
+			t.Fatalf("%s defines no ENVRC_GUARD, so this check pins nothing about the .envrc guard (issue #468)", makefilePath)
+		}
+
+		if !callsWithin(envrc) {
+			t.Fatalf("ENVRC_GUARD's own definition calls no within, so the mutation below proves nothing: the text is %q (issue #468)", envrc)
+		}
+
+		mutation := envrc
+		for _, call := range []string{`within "$$envrc_real" "$$clone"`, `within "$$path" "$$clone"`} {
+			if !strings.Contains(mutation, call) {
+				t.Fatalf("ENVRC_GUARD's own definition no longer holds %s, which this check removes: update the mutations to the calls it makes now (issue #468)", call)
+			}
+
+			mutation = strings.ReplaceAll(mutation, call, `true`)
+		}
+
+		mutation += "\n" + `why="the path must stay within the host clone"; \` +
+			"\n" + `echo "$$target: refused: files within the host clone only: $$why" >&2; \`
+
+		if callsWithin(mutation) {
+			t.Errorf("callsWithin(ENVRC_GUARD with both calls removed) = true, so the check in TestMakefileResolvesAPathInOnePlace passes on a guard whose only within is the word in a message: the matcher must require a call where a command stands (issue #468)")
+		}
+	})
+}
+
+// withinCall matches a call of the shared resolver's within, the containment decision by file identity, where a shell
+// command stands: the start of the text, a separator (; & | ( ) ) or a newline, or one of the keywords a command
+// follows, then the blanks and the optional ! of a negated call, then the name, a blank and its first argument, which
+// opens no parenthesis. A definition of within itself, which the resolver holds and ENVRC_GUARD must not, is the name
+// followed by ( ), with or without a blank, so it does not match (issue #468).
+var withinCall = regexp.MustCompile(`(^|[;&|()\n]|\b(?:then|elif|else|if|do|while|until))[ \t]*!?[ \t]*within[ \t]+[^ \t(]`)
+
+// callsWithin reports whether text, shell code of a Makefile definition, calls the shared resolver's within: the
+// matcher above, run on the text without its quoted strings. The guard's refusals are long messages, so a word in one
+// must not stand in for the call that decides containment (issue #468).
+func callsWithin(text string) bool {
+	return withinCall.MatchString(unquoted(text))
+}
+
+// unquoted returns shell text without its quoted strings, '...' and "..." each replaced by the word x. It is a
+// matcher's helper, not a shell parser: a quote that opens and never closes leaves the rest of the text as it is,
+// which can hide a call and never invent one, so a caller that checks for a call errs towards reporting it missing.
+// The replacement is a word, not nothing, so that a string never separates a command from what follows it and a
+// quoted word glued to a name ('x'within) stays one word (issue #468).
+func unquoted(text string) string {
+	var kept strings.Builder
+
+	quote := rune(0)
+
+	for _, r := range text {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+
+				kept.WriteRune('x')
+			}
+		case r == '\'' || r == '"':
+			quote = r
+		default:
+			kept.WriteRune(r)
+		}
+	}
+
+	return kept.String()
+}
+
+// makeCode returns body, a Makefile, without the lines make reads as comments: a line whose text begins with #,
+// once the blanks before it are gone. A recipe's # lines stay, as they belong to the shell there (and
+// TestMakefileHasNoCommentInsideAContinuedRecipe keeps them out of a continued command).
+func makeCode(body string) string {
+	var kept []string
+
+	for _, line := range strings.Split(body, "\n") {
+		if !strings.HasPrefix(line, "\t") && strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+
+		kept = append(kept, line)
+	}
+
+	return strings.Join(kept, "\n")
+}
+
+// makeDefinitions returns the text of every assignment in body, a Makefile without its comment lines, keyed by the
+// variable's name: the assignment's own line and the backslash-continued lines after it, joined as make reads them.
+func makeDefinitions(body string) map[string]string {
+	assignment := regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.-]*)[ \t]*(?:\+=|::=|:=|\?=|=)`)
+
+	lines := strings.Split(body, "\n")
+	definitions := map[string]string{}
+
+	for i := 0; i < len(lines); i++ {
+		match := assignment.FindStringSubmatch(lines[i])
+		if match == nil {
+			continue
+		}
+
+		value := []string{}
+		line := lines[i]
+
+		for {
+			value = append(value, line)
+
+			if !continues(line) {
+				break
+			}
+
+			i++
+
+			if i >= len(lines) {
+				break
+			}
+
+			line = lines[i]
+		}
+
+		definitions[match[1]] = strings.Join(value, "\n")
+	}
+
+	return definitions
+}
+
 // gitFileModes returns the mode git has recorded for the files below dir, keyed by their path from the repository
 // root: git ls-files reads the index, so the test needs no network and no particular working-tree mode.
 func gitFileModes(t *testing.T, dir string) map[string]string {

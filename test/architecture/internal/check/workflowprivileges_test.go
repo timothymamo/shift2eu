@@ -23,6 +23,9 @@ func workflowDoc(trigger, workflowPermissions, jobPermissions string) string {
 	b.WriteString("    runs-on: ubuntu-latest\n")
 	b.WriteString(jobPermissions)
 	b.WriteString("    steps:\n")
+	// A synthetic workflow that copies none of .github/workflows, so its pin
+	// stays literal: the privilege check reads no pin, and a Renovate update of
+	// a real workflow leaves this one as true as it was (issue #440).
 	b.WriteString("      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n")
 	b.WriteString("        with:\n")
 	b.WriteString("          persist-credentials: false\n")

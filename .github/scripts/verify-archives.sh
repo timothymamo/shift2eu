@@ -3,18 +3,18 @@
 # snapshot run of .goreleaser.yaml, which publishes nothing, and fails unless each archive holds exactly
 # what it should. The release ships the CLI alone (ADR 0037, issue #393): its archives,
 # shift2eu_<version>_<os>_<arch>, hold shift2eu (shift2eu.exe on Windows), and no other archive is
-# built. Besides its binary an archive may hold only LICENSE,
-# README.md, Markdown pages under docs/ (no path segment may start with a dot, so no ., .. or hidden
-# file), and exactly the samples docs/guide/try-it.md runs on (issue #188): examples/README.md and, for
-# each of aws, azure and gcp, examples/<source>/README.md and examples/<source>/inventory.json, with
-# their directories, and exactly the jq programs docs/guide/inventory.md builds an inventory with (issue
-# #178): docs/guide/inventory/<source>.jq for aws, azure and gcp. Any other entry fails the run, so a
-# stray file under docs/ (a .jq file there that is not one of the three), or any file under examples/
-# that is not a known sample (a real inventory committed as examples/<name>/inventory.json), never ships
-# unnoticed. Each archive must hold every sample and jq program too. Every entry must be a regular file
-# or a directory: a symbolic link, hard link or device fails the run too. Every built platform has one
-# archive, and checksums.txt lists and matches every archive and must pass sha256sum -c in dist/ as a
-# whole.
+# built. Besides its binary an archive may hold only LICENSE, README.md and SECURITY.md at its root,
+# each of which it must hold (issue #450), Markdown pages under docs/ (no path segment may start with
+# a dot, so no ., .. or hidden file), and exactly the samples docs/guide/try-it.md runs on (issue
+# #188): examples/README.md and, for each of aws, azure and gcp, examples/<source>/README.md and
+# examples/<source>/inventory.json, with their directories, and exactly the jq programs
+# docs/guide/inventory.md builds an inventory with (issue #178): docs/guide/inventory/<source>.jq for
+# aws, azure and gcp. Any other entry fails the run, so a stray file under docs/ (a .jq file there
+# that is not one of the three), or any file under examples/ that is not a known sample (a real
+# inventory committed as examples/<name>/inventory.json), never ships unnoticed. Each archive must
+# hold every sample and jq program too. Every entry must be a regular file or a directory: a symbolic
+# link, hard link or device fails the run too. Every built platform has one archive, and checksums.txt
+# lists and matches every archive and must pass sha256sum -c in dist/ as a whole.
 # It then mirrors release.yml's hand-over of the archives to attest-archives (issues #156 and #163): the
 # files its patterns pick must pass sha256sum -c checksums.txt, and the subjects they attest must be
 # exactly the archives and checksums.txt, which must also be exactly what GoReleaser would upload to the
@@ -87,11 +87,11 @@ sift() {
 }
 
 # check_archive archive own: the archive holds exactly one binary, own (or own.exe), at its root, and
-# otherwise only LICENSE, README.md, Markdown pages under docs/, the inventory guide's jq programs
-# (guide_programs) and the samples (with their directories, sample_dirs), each a regular file or a
-# directory. No other binary is on that list, so an archive holding one fails too. Under examples/
-# it may hold only the samples, and it must hold every one of them: one list, so a file there that is
-# not a known sample fails the run.
+# otherwise only the root files (root_files: LICENSE, README.md, SECURITY.md), Markdown pages under
+# docs/, the inventory guide's jq programs (guide_programs) and the samples (with their directories,
+# sample_dirs), each a regular file or a directory. No other binary is on that list, so an archive
+# holding one fails too. It must hold every root file, sample and jq program. Under examples/ it may
+# hold only the samples: one list, so a file there that is not a known sample fails the run.
 check_archive() {
   local archive="$1" own="$2" list long special owns stray sample
   list="$(entries "${archive}")" || { problem "${archive}: cannot list its entries"; return; }
@@ -109,19 +109,22 @@ check_archive() {
   fi
   # Both greps run through sift and the pipeline's status is checked, so a grep that fails (status 2,
   # such as an unreadable allow list) fails the run rather than reading as no stray entries.
-  if ! stray="$(sift -vxE "${own}(\\.exe)?|LICENSE|README\\.md|docs/([^/.][^/]*/)*[^/.][^/]*\\.md|docs/([^/.][^/]*/)*" <<<"${list}" | sift -vxFf "${allowed}")"; then
+  if ! stray="$(sift -vxE "${own}(\\.exe)?|docs/([^/.][^/]*/)*[^/.][^/]*\\.md|docs/([^/.][^/]*/)*" <<<"${list}" | sift -vxFf "${allowed}")"; then
     problem "${archive}: cannot match its entries against the allow list (grep failed)"
     return
   fi
   if [ -n "${stray}" ]; then
     problem "${archive}: holds entries outside its allow list:"$'\n'"${stray}"
   fi
-  for sample in "${samples[@]}" "${guide_programs[@]}"; do
+  for sample in "${root_files[@]}" "${samples[@]}" "${guide_programs[@]}"; do
     grep -qxF "${sample}" <<<"${list}" \
       || problem "${archive}: does not hold ${sample}, which every archive must ship"
   done
 }
 
+# The files at an archive's root beside its binary: every archive must hold each of them, the security
+# policy included (issue #450), and no other file may sit there.
+root_files=(LICENSE README.md SECURITY.md)
 # The samples docs/guide/try-it.md runs on (issue #188): every archive must hold each of them, and
 # examples/ in an archive may hold nothing else but their directories (sample_dirs), so a new sample is
 # added here as well as to .goreleaser.yaml.
@@ -141,7 +144,7 @@ done
 # The allow list beyond the Markdown pages, one exact path a line, for grep -f: a file, not a process
 # substitution, whose status $? would never see.
 allowed="${work}/allowed-files"
-printf '%s\n' "${samples[@]}" "${sample_dirs[@]}" "${guide_programs[@]}" >"${allowed}"
+printf '%s\n' "${root_files[@]}" "${samples[@]}" "${sample_dirs[@]}" "${guide_programs[@]}" >"${allowed}"
 
 shopt -s nullglob
 cli=("${dist}"/shift2eu_*.tar.gz "${dist}"/shift2eu_*.zip)
@@ -209,4 +212,4 @@ fi
 if [ "${fail}" != 0 ]; then
   exit 1
 fi
-echo "${#cli[@]} CLI archives, one per built platform, each holding exactly its binary, LICENSE, README.md, docs/**/*.md, the inventory guide's jq programs and exactly the samples under examples/, all in checksums.txt"
+echo "${#cli[@]} CLI archives, one per built platform, each holding exactly its binary, LICENSE, README.md, SECURITY.md, docs/**/*.md, the inventory guide's jq programs and exactly the samples under examples/, all in checksums.txt"

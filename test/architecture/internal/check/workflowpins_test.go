@@ -49,7 +49,10 @@ var (
 	pinPlaceholder = regexp.MustCompile(`\{\{((?:pin|commit|release|image) [^{}\s]+)\}\}`)
 
 	// pinnedAction matches a uses: line's action, commit and version comment.
-	pinnedAction = regexp.MustCompile(`(?m)^\s*-?\s*uses:\s*([^\s@]+)@([0-9a-f]{40}) # (\S+)$`)
+	// Its blanks, like those of pinnedReleases, are spaces and tabs, never a
+	// newline, so that a match never starts on the blank line above the line
+	// it reads.
+	pinnedAction = regexp.MustCompile(`(?m)^[ \t]*-?[ \t]*uses:[ \t]*([^\s@]+)@([0-9a-f]{40}) # (\S+)$`)
 
 	// pinnedReleases are the exact releases a with: pins, and the BuildKit
 	// image, each by the placeholder body that stands for it. GoReleaser's is
@@ -59,9 +62,9 @@ var (
 		key string
 		re  *regexp.Regexp
 	}{
-		{key: "release syft", re: regexp.MustCompile(`(?m)^\s*syft-version:\s*(\S+)$`)},
-		{key: "release goreleaser", re: regexp.MustCompile(`(?m)^\s*distribution:\s*goreleaser\n\s*version:\s*"([^"]+)"`)},
-		{key: "release cosign", re: regexp.MustCompile(`(?m)^\s*cosign-release:\s*(\S+)$`)},
+		{key: "release syft", re: regexp.MustCompile(`(?m)^[ \t]*syft-version:[ \t]*(\S+)$`)},
+		{key: "release goreleaser", re: regexp.MustCompile(`(?m)^[ \t]*distribution:[ \t]*goreleaser\n[ \t]*version:[ \t]*"([^"]+)"`)},
+		{key: "release cosign", re: regexp.MustCompile(`(?m)^[ \t]*cosign-release:[ \t]*(\S+)$`)},
 		{key: "image moby/buildkit", re: regexp.MustCompile(`(?:moby/buildkit:|BUILDKIT_VERSION:\s*)(\S+@sha256:[0-9a-f]{64})`)},
 	}
 
@@ -72,23 +75,27 @@ var (
 // The repository's workflows, by path from this package and by top-level
 // name, so that a panic names the file a document is.
 const (
-	repoCIPath      = "../../../../.github/workflows/ci.yml"
-	repoReleasePath = "../../../../.github/workflows/release.yml"
+	repoCIPath            = "../../../../.github/workflows/ci.yml"
+	repoReleasePath       = "../../../../.github/workflows/release.yml"
+	repoReleasePleasePath = "../../../../.github/workflows/release-please.yml"
 )
 
 var workflowFiles = map[string]string{
-	"CI":      ".github/workflows/ci.yml",
-	"Release": ".github/workflows/release.yml",
+	"CI":             ".github/workflows/ci.yml",
+	"Release":        ".github/workflows/release.yml",
+	"Release please": ".github/workflows/release-please.yml",
 }
 
 // The repository's workflows and their pins, read once: the fixtures every
 // case changes one part of are built from them.
 var (
-	repoCI      = readRepoWorkflow(repoCIPath)
-	repoRelease = readRepoWorkflow(repoReleasePath)
+	repoCI            = readRepoWorkflow(repoCIPath)
+	repoRelease       = readRepoWorkflow(repoReleasePath)
+	repoReleasePlease = readRepoWorkflow(repoReleasePleasePath)
 
-	ciPins      = pinsOf(repoCI)
-	releasePins = pinsOf(repoRelease)
+	ciPins            = pinsOf(repoCI)
+	releasePins       = pinsOf(repoRelease)
+	releasePleasePins = pinsOf(repoReleasePlease)
 )
 
 // readRepoWorkflow returns the repository's workflow at path. It is called

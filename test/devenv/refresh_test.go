@@ -1375,6 +1375,16 @@ func TestAgentsAppTokenRefreshThreeContendersOnAStaleLockLeaveOneHolder(t *testi
 // this shell and the kill: a signal there makes the shell report the unset parameter ("!: parameter not set" in
 // dash, "$!: unbound variable" in bash --posix, measured), which the refresh writes into its log. So the replay
 // runs under `set -eu` as the script does, and expects the trap to name no pid there at all.
+//
+// Issue #448: the trap must survive every shell the refresh runs under. sh is dash on Linux and bash 3.2, the
+// Mac's /bin/sh, on the Mac, and a bare `$!` under `set -u` is an error in bash 5 --posix as it is in dash, so
+// the window before the loop's first `sleep ... &` is replayed under bash --posix as well, as one more subtest,
+// whenever bash is on the PATH. That replay mainly catches a revert that drops the `set +u` the trap runs before
+// it names $!: dash and bash 5 --posix both report the unset parameter, and the test fails on the report. What no
+// shell of a Linux run catches is the `${!:-}` spelling, which fails on bash 3.2 alone, the Mac's /bin/sh: CI's
+// macOS job "Makefile tests under make 3.81" (macos-15, whose /bin/sh is bash 3.2) is the only place that
+// failure is seen, and it must not be dropped. A machine without bash runs no bash --posix replay at all rather
+// than skipping a test.
 func TestAgentsAppTokenRefreshLeavesNoSleepWhenASignalArrivesInTheWindow(t *testing.T) {
 	t.Parallel()
 
@@ -1403,25 +1413,7 @@ wait "${job}" || true`
 		noBackgroundJobEver = `sleeper=""`
 	)
 
-	for _, tc := range []struct {
-		name   string
-		signal syscall.Signal
-		trap   string
-		status int
-		// window is the state the replay is in when the signal arrives.
-		window string
-		// startsTheSleep is set for the window between `sleep ... &` and `sleeper=$!`: the trap must kill the
-		// sleep the replay has just started.
-		startsTheSleep bool
-		// killsNothing is set for the window where sleeper is none and only a finished job's pid is left in $!:
-		// the trap must send no kill at all. The window where sleeper is empty over the same finished job must
-		// send none for that pid, which is the one case that names a pid a reused one would hit. The window
-		// before the loop's first `sleep ... &` names no pid either, and has none to kill.
-		killsNothing bool
-		// noBackgroundJob is set for the window in which the shell has never started a background job, so the
-		// replay has no pid to record and $! is unset.
-		noBackgroundJob bool
-	}{
+	windows := []refreshWindow{
 		{
 			name: "a TERM between the sleep and the store of its pid", signal: syscall.SIGTERM, trap: "TERM", status: 143,
 			window: beforeTheStore, startsTheSleep: true,
@@ -1446,14 +1438,43 @@ wait "${job}" || true`
 			name: "an INT before any background job has ever been started", signal: syscall.SIGINT, trap: "INT", status: 130,
 			window: noBackgroundJobEver, killsNothing: true, noBackgroundJob: true,
 		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
+	}
 
-			if tc.noBackgroundJob {
-				skipUnderMake381OnMacOS(t, `the trap's "${!:-}" is still "$!: unbound variable" under bash 3.2, the Mac's /bin/sh, issue #448`)
+	// The shells the windows are replayed under: sh, which the tests start a script of dev/ with - dash on Linux,
+	// bash 3.2 on the Mac - and, when the machine has a bash, bash --posix too (issue #448), which mainly catches a
+	// revert that drops the trap's `set +u`: the `${!:-}` spelling that fails on bash 3.2 alone is caught only by
+	// CI's macOS job. No bash on the PATH means no bash --posix replay, never a skipped test.
+	shells := []replayShell{{argv: []string{"sh"}}}
+
+	if bash, err := exec.LookPath("bash"); err == nil {
+		shells = append(shells, replayShell{name: "bash --posix", argv: []string{bash, "--posix"}})
+	}
+
+	// replays is every window under every shell it is replayed under, the window's own shell first. Only the
+	// window before the loop's first `sleep ... &` tells the shells apart: it is the one where $! is unset rather
+	// than the pid of a finished job, so it is the one whose trap an unset $! aborts (issue #448). The other
+	// windows run under sh alone, which the Mac's bash 3.2 covers in CI.
+	replays := make([]windowReplay, 0, len(windows)*len(shells))
+
+	for _, tc := range windows {
+		for _, shell := range shells {
+			if shell.name != "" && !tc.noBackgroundJob {
+				continue
 			}
 
+			replays = append(replays, windowReplay{window: tc, shell: shell})
+		}
+	}
+
+	for _, replay := range replays {
+		t.Run(replay.name(), func(t *testing.T) {
+			t.Parallel()
+
+			tc := replay.window
+
+			// The window before the loop's first `sleep ... &` must pass under bash 3.2 too, the Mac's /bin/sh,
+			// whose `$!` expansion fails even as "${!:-}" (issue #448): the assertion below refuses the shell's
+			// report of the unset parameter, and release_lock refuses a trap that aborted before its end.
 			sb := newSandbox(t)
 			harness := filepath.Join(sb.root, "window.sh")
 			sleepPidFile := filepath.Join(sb.root, "sleep.pid")
@@ -1503,8 +1524,9 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 			env["SHIFT2EU_TEST_HOLD_FIFO"] = hold
 
 			// The harness runs like a script the test starts: in a process group of its own, with its output in
-			// files, so the sleep the trap may leave behind cannot block the wait (issue #267).
-			run := sb.start(t, harness, nil, env)
+			// files, so the sleep the trap may leave behind cannot block the wait (issue #267). The replay runs under
+			// the shell of its own: sh, or bash --posix (issue #448).
+			run := sb.startWith(t, append(append([]string{}, replay.shell.argv...), harness), env)
 
 			waitFor(t, 30*time.Second, "the replay to come to its hold with the window in place", func() bool {
 				_, err := os.Stat(held)
@@ -1609,6 +1631,55 @@ printf 'the signal arrived after the trap, so this run forced no window\n' >&2
 			}
 		})
 	}
+}
+
+// refreshWindow is one state a signal finds the refresh loop's trap in, and what the trap must do there (issue
+// #289): the signal and the trap that takes it, the state the replay is in, and what the replay must then
+// observe.
+type refreshWindow struct {
+	name   string
+	signal syscall.Signal
+	trap   string
+	status int
+	// window is the state the replay is in when the signal arrives.
+	window string
+	// startsTheSleep is set for the window between `sleep ... &` and `sleeper=$!`: the trap must kill the
+	// sleep the replay has just started.
+	startsTheSleep bool
+	// killsNothing is set for the window where sleeper is none and only a finished job's pid is left in $!:
+	// the trap must send no kill at all. The window where sleeper is empty over the same finished job must
+	// send none for that pid, which is the one case that names a pid a reused one would hit. The window
+	// before the loop's first `sleep ... &` names no pid either, and has none to kill.
+	killsNothing bool
+	// noBackgroundJob is set for the window in which the shell has never started a background job, so the
+	// replay has no pid to record and $! is unset.
+	noBackgroundJob bool
+}
+
+// replayShell is one shell a window is replayed under: sh, which the tests start a script of dev/ with, and bash
+// --posix, which reads an unset `$!` under `set -u` as dash does (issue #448).
+type replayShell struct {
+	// name is the shell as the replay's subtest name says it, empty for sh: the sh replays keep the names the
+	// test has always had.
+	name string
+	// argv is the shell's own words before the harness: sh, or bash and --posix.
+	argv []string
+}
+
+// windowReplay is one replay of one window: the state a signal finds, and the shell it is replayed under.
+type windowReplay struct {
+	window refreshWindow
+	shell  replayShell
+}
+
+// name is the replay's subtest name: the window's own under sh, as the test has always named it, and the window's
+// with the shell named after it under another shell (issue #448).
+func (r windowReplay) name() string {
+	if r.shell.name == "" {
+		return r.window.name
+	}
+
+	return r.window.name + " under " + r.shell.name
 }
 
 // pidFrom is the pid the replay wrote to pidFile, for what names the process in a failure message: the sleep the

@@ -14,9 +14,14 @@ hand, in the PRD's *Runbook* section (R0 to R13), which the maintainer follows.
 - `variables.tf`: the inputs (`terraform.tfvars.example`): `organization_id` and `admin_principal` have no
   default; `region` defaults to `nl-ams`, `bucket_name` to `shift2eu-site-www`, `public_read` to `false`
   (set it only if the runbook's R5 finds that Edge Services cannot serve private objects).
-- `.terraform.lock.hcl`: the provider's hashes for darwin_arm64, linux_amd64 and linux_arm64. After a
-  provider change, refresh it with
-  `dev/tofu.sh -chdir=infra/site providers lock -platform=darwin_arm64 -platform=linux_amd64 -platform=linux_arm64`.
+- `.terraform.lock.hcl`: every hash the registry publishes for the provider version, whatever the
+  `-platform` list: an `h1` hash for each platform the provider ships (13 for scaleway/scaleway 2.93.0) and the `zh` set from
+  its signed `SHA256SUMS`. After a provider change, refresh it with
+  `dev/tofu.sh -chdir=infra/site providers lock -platform=darwin_arm64 -platform=linux_amd64 -platform=linux_arm64`;
+  the three `-platform` flags make tofu download and verify those platforms' packages. The "Infra tools"
+  workflow's `verify-provider-lock` job regenerates it the same way in a scratch copy of this root and
+  fails unless its hash set equals the committed one (`dev/infra-lock-compare.sh`, issue #434). A weekly
+  failure there means the registry's published set changed: refresh the lock file with the command above.
 - `tests/`: `tofu test` files, with the Scaleway provider mocked.
 
 `make infra-check` (part of `make check`, and CI's Test job) runs `dev/infra-check.sh`: no credential, no
@@ -26,7 +31,8 @@ resource, no bucket ACL or `visibility`, exactly one IAM application and policy,
 local modules only, none in a directory starting with `.` and none naming an applied root, one `s3`
 backend for every applied root, no configuration file directly in `infra/`, no provider `api_url` and no
 provider setting but `organization_id` and `region` (`[provider-setting]`), top-level blocks of the
-allowed types only (`[block-type]`: no `moved`, `removed`, `check` or `override_resource`), a lock file of
+allowed types only (`[block-type]`: no `moved`, `removed`, `check` or `override_resource`), and in a
+test's `run` and `mock_provider` only the nested blocks tofu test reads there (`[test-nested-block]`), a lock file of
 only the lines `tofu init` writes for `scaleway/scaleway` (`[lock-file]`), no
 override, JSON or hidden (`.`-named, which OpenTofu ignores) files, every test file mocking the
 provider, no `provisioner` or `connection` block, no `*.auto.tfvars` (`.json` too), no setting in the

@@ -22,7 +22,10 @@ resources, and scopes a target to one region with `--region` (PRD #190, ADRs 002
 as HTML. The site's pages (`site/`) load it under a strict Content Security Policy, and `make site`
 (`ci/sitebuild`) assembles them into a reproducible bundle that a headless-browser smoke test
 (`test/browser`, `make test-browser`) drives (PRD #297 milestone 2, ADR 0036); its release and deploy come
-in the PRD's later milestones. Live source adapters do not exist yet. Work is planned as PRDs in `prds/`.
+in the PRD's later milestones. `infra/` holds the OpenTofu configuration of the site's Scaleway hosting
+(`infra/site`, ADR 0039, no Go): the maintainer alone runs its plan and apply, on the admin machine;
+agents never plan or apply, and `make infra-check` checks it offline. Live source adapters do not exist
+yet. Work is planned as PRDs in `prds/`.
 
 ## Ubiquitous language
 
@@ -53,6 +56,7 @@ Hexagonal (ports and adapters). Dependencies point inwards only. See `docs/archi
 | Composition roots | `cmd/shift2eu` (the CLI, offline) and `cmd/shift2eu-web` (the site's module, `js && wasm`, the only importer of `syscall/js`) with its untagged wiring package `cmd/shift2eu-web/internal/wire` (ADR 0035) | Everything but a cloud SDK; the only places adapters are constructed, besides `ci/sitebuild` (below). Each one's imports are a strict allow list (`composition-root`, `web-composition-root`, `web-composition-root-wire`): the module's own packages and the standard packages it needs, no third-party package. Among the composition roots' test files, only wire's import `internal/cli`, for the parity tests |
 | CI tooling (no part of the product) | `ci/aireview` (the AI reviewer's workflow program, ADR 0033) and its library `ci/aireview/internal/review`; `ci/claudecodepin` (the Claude Code pin check `claude-code-pin.yml` runs, issue #276) and its library `ci/claudecodepin/internal/pincheck`, which does no I/O; `ci/sitebuild`, the program `make site` runs to assemble the site's bundle (PRD #297) | Named standard packages only (`ai-reviewer-main`, `ai-reviewer-is-standard-library`, `claude-code-pin-main`, `claude-code-pin-library`); no release builds them and Go's internal rule keeps the product from importing them. The exception is `ci/sitebuild` (`site-builder`, ADR 0036): it also imports and constructs the three embedded-snapshot targets, `internal/domain/catalog` and `internal/version` to write the snapshot dates, regions and version into the pages, the one place outside `cmd/` that constructs adapters. A main package nothing imports; the release runs it from milestone 3 |
 | Site (no Go) | `site/`: the site's pages, stylesheet and one page script (ADR 0036); `site/records/` is never bundled | Nothing: the page script is held by `test/site`'s banned-API scan, and every page by its Content Security Policy |
+| Infrastructure (no Go) | `infra/`: the OpenTofu configuration of the site's Scaleway hosting (`infra/site`, ADR 0039), the OpenTofu pins (`infra/tofu.yaml`) | Only the `scaleway/scaleway` provider, run only through `dev/tofu.sh`; held by `dev/infra-rules.sh`'s static rules and checked offline by `make infra-check`. Plan and apply are the maintainer's alone: agents never run them |
 | Browser smoke test | `test/browser` (`browser && !js`), run by `make test-browser` against a pinned headless Chromium | Exactly its listed standard and `chromedp` packages (`browser-smoke-test`), no package of the module; only it imports `chromedp` (`chromedp-only-in-the-browser-test`) |
 
 - The dependency rule is **enforced by `golangci-lint` (depguard)** and, package by package for every
@@ -137,6 +141,28 @@ provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing 
    way (`git commit -F <file>`, `gh pr create --body-file <file>`). Never `rm` a path held in a variable
    or built at run time (`rm -rf "$dir"`); leave scratch directories for the system to clean. Why: such
    commands stop an unattended pane at a permission prompt nobody answers (issue #251).
+10. **Signal only what you started.**
+    - Never (other agents' runs share this machine, and your run shares its group with your shell or
+      your agent's tool):
+      - send a signal (`kill`, `pkill`, `killall`) to a process you did not start yourself;
+      - pick a process to signal by its name (`pgrep`, `pidof`, `pkill`);
+      - signal a process group yourself (stopping a background run through your agent's tool is the
+        exception: the tool started that group).
+    - To be able to stop a run of your own: prefer your agent's tool's background mode and stop it through
+      that tool, which stops the whole run. Otherwise:
+      - start it as
+        `cd <path> && { <cmd> < /dev/null > <log file in your scratchpad or temporary directory> 2>&1 & echo $!; ps -o lstart= -p $!; }`
+        (the braces background only `<cmd>`; the redirects keep your shell tool from waiting on it) and
+        note the pid and its start time;
+      - to stop it, signal only that pid, and only after `ps -o lstart=,args= -p <pid>` shows both the
+        start time and the command you noted: a pid is reused once its process exits, and every unit runs
+        the same `make check`.
+    - Leftovers: processes the run started (test binaries, a container) may outlive it; wait for the log to
+      stop growing and report what still runs; never look them up (by name, `ps | grep` or group) to signal
+      them.
+    - If you kept no pid, or the run has exited, signal nothing: wait, or report it.
+    - Why: a coder sent SIGTERM to the process group of a `make` it found with `pgrep -x make`, which may
+      have been another unit's run (issue #465).
 
 ## Multi-agent workflow
 

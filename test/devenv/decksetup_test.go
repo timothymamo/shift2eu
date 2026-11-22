@@ -560,6 +560,18 @@ func TestMakeVMEnvRefusalGivesOnlyThePositionOfAnEntryItMayNotPrint(t *testing.T
 			wantLower: []string{"not a variable name"},
 			reason:    "the not-a-variable-name message prints the entry it refuses, which may be a credential pasted where a name goes",
 		},
+		{
+			// Issue #304: the position is the entry's place among the words of VM_ENV as typed, not its place
+			// among the names left after duplicate and empty entries were removed. The repeated name is counted
+			// at both of its places, and the run of commas and spaces between the words counts once.
+			name:      "a hidden entry after a repeated name and an empty entry",
+			vmEnv:     "CLAUDE_CODE_OAUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN,, " + fakeLowerCaseName("after-duplicates"),
+			unset:     []string{fakeLowerCaseName("after-duplicates")},
+			at:        3,
+			entry:     fakeLowerCaseName("after-duplicates"),
+			wantLower: []string{"not set or empty"},
+			reason:    "a run of separators separates two words and counts once, and a name listed twice is counted at every place, so the hidden entry is the third word of VM_ENV as typed (issue #304)",
+		},
 	}
 
 	for _, tc := range cases {
@@ -832,6 +844,99 @@ func TestMakeVMEnvHidesAPastedTokenEntryUnderDashI(t *testing.T) {
 	assertNoCredentialValues(t, "make -i vm-env's output", text)
 }
 
+// TestMakeVMEnvNeverLetsPrintenvShowAnEntryStartingWithADash pins the security audit's finding on issue #304: the
+// not-set loop of vm-env-check reads every entry's value with printenv, and under make -i it runs although the
+// line before refused the entry for being no variable name. A word starting with a dash is an option to printenv
+// before it can be a variable name, and GNU's and uutils' printenv answer an unknown option with an error that
+// prints the whole word - on standard error, beside make's own messages, where issue #268 L1 says the entry may
+// never appear. The entry is reported by its position and with the reason, as any other hidden entry, and nothing
+// of its text reaches the output, so the VM's daemon.env stays as it was. macOS's printenv reads such a word as a
+// variable name and prints nothing, so the assertion is on the word itself and holds whoever's printenv runs.
+func TestMakeVMEnvNeverLetsPrintenvShowAnEntryStartingWithADash(t *testing.T) {
+	t.Parallel()
+
+	// Entries that read as printenv options: a long one, and one shaped like a flag. Each is invented, no tool
+	// knows either, and no literal in this file pairs a credential's name with a value (CLAUDE.md rules 2 and 3).
+	const (
+		dashedEntry = "-----INVENTED-SAMPLE-VALUE"
+		flagEntry   = "--fake-invented-flag"
+	)
+
+	cases := []struct {
+		name  string
+		args  []string // make's arguments: -i, the target, and the VM_ENV it hands as a command-line argument
+		entry string   // the entry printenv would print as its own option error, and no output may hold
+		at    int      // the 1-based position in VM_ENV of that entry
+	}{
+		{
+			name:  "vm-env-check reads an entry that is one long option",
+			args:  []string{"-i", "vm-env-check", "VM_ENV=CLAUDE_CODE_OAUTH_TOKEN," + dashedEntry},
+			entry: dashedEntry,
+			at:    2,
+		},
+		{
+			name:  "vm-env-check reads an entry that is shaped like a flag",
+			args:  []string{"-i", "vm-env-check", "VM_ENV=CLAUDE_CODE_OAUTH_TOKEN," + flagEntry},
+			entry: flagEntry,
+			at:    2,
+		},
+		{
+			name:  "the write step reads an entry that is one long option",
+			args:  []string{"-i", "vm-env", "VM_ENV=CLAUDE_CODE_OAUTH_TOKEN," + dashedEntry},
+			entry: dashedEntry,
+			at:    2,
+		},
+		{
+			name:  "the write step reads an entry that is shaped like a flag",
+			args:  []string{"-i", "vm-env", "VM_ENV=DEEPSEEK_API_KEY," + flagEntry},
+			entry: flagEntry,
+			at:    2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+			seeded := sb.seedDaemonEnv(t)
+
+			// -i: make runs the not-set loop although the per-entry refusal failed, which is the run that hands
+			// printenv a word it reads as an option.
+			stdout, stderr, err := runMake(t, tc.args, env)
+			text := stdout + stderr
+
+			// The failure names the entry by its position, never by its text: the very thing that must not reach
+			// the output must not reach a test report either (CLAUDE.md rule 3).
+			assertNoSecrets(t, "make -i's output", text, []secret{
+				{kind: "entry " + strconv.Itoa(tc.at) + " of VM_ENV", value: tc.entry},
+			})
+
+			// What the output says instead: the entry's position, and why it is not shown (issue #268 L1).
+			assertEntryPositionNotShown(t, "make -i's output", text, tc.at,
+				"the entry starts with a dash, so it is no variable name and printenv must never be handed it")
+			assertHiddenEntrySaysMayBeACredential(t, "make -i's output", text, tc.at,
+				"the entry starts with a dash, so it is no variable name and printenv must never be handed it")
+
+			// Nothing reached the VM: the write step refuses the entry before anything is handed limactl.
+			got, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make %s: %v", strings.Join(tc.args, " "), readErr)
+			}
+
+			if diff := cmp.Diff(string(seeded), string(got)); diff != "" {
+				t.Errorf("make %s rewrote the VM's daemon.env although the entry it refuses names no variable: the file must be byte for byte what it was (issue #304) (-want +got):\n%s\nmake's exit error: %v\nstdout: %s\nstderr: %s",
+					strings.Join(tc.args, " "), diff, err, stdout, stderr)
+			}
+
+			sb.assertNoLimaCalls(t, "the entry starts with a dash and is refused on the host")
+
+			assertNoCredentialValues(t, "make -i's output", text)
+		})
+	}
+}
+
 // TestMakeVMEnvSaysMayBeACredentialOnlyOfAHiddenEntry pins the second-round review's and audit's finding on issue
 // #268: the sentence "It may be a credential typed by mistake." belongs to the message about the entry of VM_ENV
 // whose text vm-env does not show, and to that message only. The shell code set its flag for any hidden entry and
@@ -1023,6 +1128,593 @@ func TestMakeVMEnvSaysMayBeACredentialOnlyOfAHiddenEntry(t *testing.T) {
 
 			// Every refusal here is made on the host, before anything is handed limactl.
 			sb.assertNoLimaCalls(t, tc.why)
+		})
+	}
+}
+
+// TestMakeVMEnvWriteStepCountsANameByItsPlaceInVMEnvAsTyped pins issue #304's write-step half: under make -i the
+// write step runs although vm-env-check refused the VM_ENV it was given, and a message it prints names a hidden
+// entry by its place among the words of VM_ENV as typed - a run of separators separates two words and counts once,
+// and a name listed twice is counted at every place - never by its place among the names left after duplicate and
+// empty entries were removed. The write step splits VM_ENV on tab and newline as well as on commas and spaces, so
+// vm-env-check and the write step count the same names, and every name is written to daemon.env exactly once,
+// however it is separated from the next. Every entry here is invented (CLAUDE.md rules 2 and 3), and no value may
+// reach the output.
+func TestMakeVMEnvWriteStepCountsANameByItsPlaceInVMEnvAsTyped(t *testing.T) {
+	t.Parallel()
+
+	// hidden is the entry the write step may not print: a valid variable name that is not the upper-case shape of
+	// a credential name, so a message gives only its place in VM_ENV. It is left out of make's environment, so the
+	// write step refuses it as not set or empty.
+	hidden := fakeLowerCaseName("write-step-position")
+
+	// colonTail is the part of colonEntry after its colon, which vm_env_entry keeps as the entry's name (the place's
+	// colon is only the first one): a message that sliced at the first colon would print it, so no output may hold
+	// it either. Both are invented (CLAUDE.md rules 2 and 3).
+	const (
+		colonTail  = "FAKECOLONTAIL"
+		colonEntry = "FAKECOLONENTRY" + ":" + colonTail
+	)
+
+	credentialsWritten := []string{
+		"CLAUDE_CODE_OAUTH_TOKEN=" + fakeEnvValue("CLAUDE_CODE_OAUTH_TOKEN"),
+		"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
+	}
+
+	cases := []struct {
+		name  string
+		vmEnv string // the VM_ENV handed to make on its command line
+		// wantLines are the lines the VM's daemon.env must hold after the run, sorted. nil means the write step
+		// refuses and the file must be byte for byte as it was.
+		wantLines []string
+		// wantAt are the raw 1-based positions of the hidden entries a message must not print.
+		wantAt []int
+		// wantNotSetLine is the write step's whole message about the one entry it refuses, in the wording
+		// vm_env_label gives it: the entry by its raw position and nothing of its text. A run that stops at the
+		// hidden entry names no name it was given, so there is nothing else the message may list (issue #304).
+		wantNotSetLine string
+		// wantShown are names a message must still print by name.
+		wantShown []string
+		// wantLower are substrings a message must hold, compared case-insensitively.
+		wantLower []string
+		secrets   []secret
+		why       string
+	}{
+		{
+			name:           "a repeated name and an empty entry before the hidden one",
+			vmEnv:          "CLAUDE_CODE_OAUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN,, " + hidden,
+			wantAt:         []int{3},
+			wantNotSetLine: "vm-env: VM_ENV entry 3 (entry 3 is not shown) is not set or empty.",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 3 of VM_ENV", value: hidden}},
+			why:            "the hidden entry is the third word of VM_ENV as typed, although it is the second name left after the duplicate and the empty entry were removed",
+		},
+		{
+			name:      "a tab between names is a separator to split on",
+			vmEnv:     "CLAUDE_CODE_OAUTH_TOKEN\tDEEPSEEK_API_KEY",
+			wantLines: credentialsWritten,
+			wantShown: []string{"CLAUDE_CODE_OAUTH_TOKEN", "DEEPSEEK_API_KEY"},
+			why:       "vm-env-check refuses a tab, and make -i carries on to the write step, which must read the tab as the separator it is and copy both names",
+		},
+		{
+			name:      "a newline between names is a separator to split on",
+			vmEnv:     "CLAUDE_CODE_OAUTH_TOKEN\nDEEPSEEK_API_KEY",
+			wantLines: credentialsWritten,
+			wantShown: []string{"CLAUDE_CODE_OAUTH_TOKEN", "DEEPSEEK_API_KEY"},
+			why:       "vm-env-check refuses a newline, and make -i carries on to the write step, which must read the newline as the separator it is and copy both names",
+		},
+		{
+			name:      "a name listed twice with a tab between the two is written once",
+			vmEnv:     "DEEPSEEK_API_KEY\tDEEPSEEK_API_KEY",
+			wantLines: []string{"CLAUDE_CODE_OAUTH_TOKEN=old-oauth", "DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY")},
+			wantShown: []string{"DEEPSEEK_API_KEY"},
+			why:       "a name listed twice is written once (docs/dev-environment.md), and the tab between the two is the separator that makes them two words",
+		},
+		{
+			name:           "two tabs and a repeated name before the hidden one",
+			vmEnv:          "CLAUDE_CODE_OAUTH_TOKEN\tCLAUDE_CODE_OAUTH_TOKEN\t\t" + hidden,
+			wantAt:         []int{3},
+			wantNotSetLine: "vm-env: VM_ENV entry 3 (entry 3 is not shown) is not set or empty.",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 3 of VM_ENV", value: hidden}},
+			why:            "a run of tabs separates two words and counts once, and the repeated name is counted at every place, so the write step stops at the third word and not at the tab-joined whole",
+		},
+		{
+			name:           "a newline and a repeated name before the hidden one",
+			vmEnv:          "CLAUDE_CODE_OAUTH_TOKEN,CLAUDE_CODE_OAUTH_TOKEN\n" + hidden,
+			wantAt:         []int{3},
+			wantNotSetLine: "vm-env: VM_ENV entry 3 (entry 3 is not shown) is not set or empty.",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 3 of VM_ENV", value: hidden}},
+			why:            "a newline separates two words as a comma does, so the hidden entry is the third word",
+		},
+		{
+			name:      "an entry holding a colon",
+			vmEnv:     "DEEPSEEK_API_KEY," + colonEntry,
+			wantAt:    []int{2},
+			wantLower: []string{"not a variable name"},
+			secrets: []secret{
+				{kind: "entry 2 of VM_ENV", value: colonEntry},
+				{kind: "the part of entry 2 after its colon", value: colonTail},
+			},
+			why: "a colon is no character a variable name holds, so the write step refuses the entry and gives it only by its place, and neither the entry nor the part after its colon may reach the output (issue #304)",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+			seeded := sb.seedDaemonEnv(t)
+
+			// -i: make runs vm-env's recipe although vm-env-check refused a VM_ENV holding a tab or a newline,
+			// which is the run that reaches the write step with the separators this test is about.
+			stdout, stderr, err := runMake(t, []string{"-i", "vm-env", "VM_ENV=" + tc.vmEnv}, env)
+			text := stdout + stderr
+
+			body, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make -i vm-env: %v", readErr)
+			}
+
+			want := tc.wantLines
+			if want == nil {
+				// A refused write step leaves the file byte for byte as it was (issue #268 L2).
+				want = sortedEnvLines(string(seeded))
+			}
+
+			// cmp.Diff pins each name once: a name the write step counted twice would be a second, identical
+			// line, and a name it never split off would be in no line at all (issue #304).
+			if diff := cmp.Diff(want, sortedEnvLines(string(body))); diff != "" {
+				t.Errorf("make -i vm-env VM_ENV=%q wrote the wrong lines to the VM's daemon.env although %s (issue #304) (-want +got):\n%s\nmake's exit error: %v\nstdout: %s\nstderr: %s",
+					tc.vmEnv, tc.why, diff, err, stdout, stderr)
+			}
+
+			if tc.wantLines == nil {
+				assertNoDaemonEnvWrittenClaim(t, "make -i vm-env's output", text, tc.why)
+			} else if !strings.Contains(text, "written to") {
+				t.Errorf("make -i vm-env's output does not say that it wrote the VM's daemon.env although %s, so a maintainer cannot tell the run from one that refused:\nstdout: %s\nstderr: %s",
+					tc.why, stdout, stderr)
+			}
+
+			for _, at := range tc.wantAt {
+				assertEntryPositionNotShown(t, "make -i vm-env's output", text, at, tc.why)
+			}
+
+			// The write step stops at the entry it refuses and names it by its raw position alone, so the message
+			// lists the hidden entry and no name the run was given: a name it printed here would be one it refused
+			// for being unset, although it is set (issue #304).
+			if tc.wantNotSetLine != "" && !strings.Contains(text, tc.wantNotSetLine) {
+				t.Errorf("make -i vm-env's output does not hold the write step's message %q although %s: the entry it refuses must be given by its raw position in VM_ENV, and no other entry may be listed (issue #304)\nstdout: %s\nstderr: %s",
+					tc.wantNotSetLine, tc.why, stdout, stderr)
+			}
+
+			for _, name := range tc.wantShown {
+				if !strings.Contains(text, name) {
+					t.Errorf("make -i vm-env's output does not name %s although %s: hiding an entry that may be a credential must hide only that entry (issue #268 L1, #304)\nstdout: %s\nstderr: %s",
+						name, tc.why, stdout, stderr)
+				}
+			}
+
+			for _, want := range tc.wantLower {
+				if !strings.Contains(strings.ToLower(text), want) {
+					t.Errorf("make -i vm-env's output does not say %q although %s, so a maintainer cannot tell why the write step stopped (issue #304):\nstdout: %s\nstderr: %s",
+						want, tc.why, stdout, stderr)
+				}
+			}
+
+			assertNoSecrets(t, "make -i vm-env's output", text, tc.secrets)
+
+			assertNoCredentialValues(t, "make -i vm-env's output", text)
+		})
+	}
+}
+
+// TestMakeVMEnvHidesAnUnsetEntryShapedLikeAKey pins issue #305: the rule that prints an entry of VM_ENV only when
+// it is an upper-case variable name rests on the shape of a credential *name*, and a key itself can have that
+// shape: an AWS access key ID is AKIA or ASIA and sixteen upper-case letters and digits. Pasted into VM_ENV where
+// a name goes, and not set, it reached the not-set-or-empty list in full. One rule hides it: an entry that is not
+// set and is sixteen characters or longer with no underscore is hidden by its position and with the reason, and its
+// text reaches no output. That rule covers ^(AKIA|ASIA)[A-Z0-9]{16}$, which the shape of an access key ID is and
+// which holds no underscore, without naming the two prefixes.
+//
+// What the rule must not hide: every documented credential name (the default VM_ENV names, which
+// docs/dev-environment.md documents as well), a short ordinary upper-case name, and any variable that is set - a
+// set name has a value the checks accepted, so printing the name a maintainer typed is what they need to fix.
+//
+// Every value here is invented (CLAUDE.md rules 2 and 3): an access key ID is not secret on its own, and none of
+// these is an access key.
+func TestMakeVMEnvHidesAnUnsetEntryShapedLikeAKey(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// AKIA and ASIA followed by sixteen upper-case letters and digits: the shape of an AWS access key ID, and
+		// obviously invented. Each is written in two parts, so no literal in this file reads as an access key ID
+		// (gosec G101), and none of these is an access key (CLAUDE.md rules 2 and 3).
+		awsShapedKey  = "AKIA" + "FAKEFAKEFAKEFAKE"
+		asiaShapedKey = "ASIA" + "FAKEFAKEFAKEFAKE"
+		// Sixteen characters or more with no underscore, which is no variable name a maintainer would type.
+		longKey = "FAKEKEYFAKEKEYFAKEKEY"
+		// Fifteen and sixteen characters with no underscore: the boundary of the one rule. Fifteen is one character
+		// below it, so the message still prints the name; sixteen is the shortest entry of a key's shape, and an unset
+		// one is hidden. Both are invented (CLAUDE.md rules 2 and 3).
+		fifteenLetterKey = "FAKEKEY" + "ABCDEFGH"
+		sixteenLetterKey = fifteenLetterKey + "I"
+		// A short, ordinary upper-case name, which the shape rule must never hide.
+		ordinaryName = "MY_FAKE_KEY"
+	)
+
+	cases := []struct {
+		name string
+		args []string // make's arguments: the target, and the VM_ENV it hands as a command-line argument
+		// unset are names left out of make's environment entirely, so the refusal is about them.
+		unset []string
+		// values overrides the invented value of a name, for a set variable a message must still name.
+		values map[string]string
+		// wantAt are the raw 1-based positions of the entries a message must not print.
+		wantAt []int
+		// notHiddenAt are positions a message must print by name: the shape rule hides an unset key, not a name.
+		notHiddenAt []int
+		// wantNotSetLine is the whole not-set-or-empty message of the step the case runs: it gives the hidden entry
+		// by its raw position and nothing of its text, and lists no other entry. A run that stops at an entry that
+		// is not set names no name it was given, so this is what a case may pin about the entry it is set (issue
+		// #305).
+		wantNotSetLine string
+		// wantShown are names the output must still print by name.
+		wantShown []string
+		// wantLower are substrings a message must hold, compared case-insensitively.
+		wantLower []string
+		secrets   []secret
+		why       string
+	}{
+		{
+			name:           "an AWS-shaped key beside a set credential name",
+			args:           []string{"vm-env-check", "VM_ENV=CLAUDE_CODE_OAUTH_TOKEN," + awsShapedKey},
+			unset:          []string{awsShapedKey},
+			wantAt:         []int{2},
+			wantNotSetLine: "vm-env: not set or empty: VM_ENV entry 2 (entry 2 is not shown).",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 2 of VM_ENV", value: awsShapedKey}},
+			why:            "an access key ID pasted where a name goes has the shape of an upper-case variable name, so the not-set list used to print it in full",
+		},
+		{
+			name:      "an ASIA-shaped key alone",
+			args:      []string{"vm-env-check", "VM_ENV=" + asiaShapedKey},
+			unset:     []string{asiaShapedKey},
+			wantAt:    []int{1},
+			wantLower: []string{"not set or empty"},
+			secrets:   []secret{{kind: "entry 1 of VM_ENV", value: asiaShapedKey}},
+			why:       "a temporary AWS access key ID has the same shape and is no credential name either",
+		},
+		{
+			name:      "a long entry with no underscore",
+			args:      []string{"vm-env-check", "VM_ENV=" + longKey},
+			unset:     []string{longKey},
+			wantAt:    []int{1},
+			wantLower: []string{"not set or empty"},
+			secrets:   []secret{{kind: "entry 1 of VM_ENV", value: longKey}},
+			why:       "a key pasted where a name goes need not have a known shape: sixteen characters or more with no underscore is no variable name anyone types",
+		},
+		{
+			name:        "fifteen characters with no underscore is still a name",
+			args:        []string{"vm-env-check", "VM_ENV=" + fifteenLetterKey},
+			unset:       []string{fifteenLetterKey},
+			notHiddenAt: []int{1},
+			wantShown:   []string{fifteenLetterKey},
+			wantLower:   []string{"not set or empty"},
+			why:         "the one rule hides an unset entry of sixteen characters or longer with no underscore, and fifteen is one character below that, so a maintainer's own shorter name is printed by name",
+		},
+		{
+			name:           "sixteen characters with no underscore is hidden",
+			args:           []string{"vm-env-check", "VM_ENV=" + sixteenLetterKey},
+			unset:          []string{sixteenLetterKey},
+			wantAt:         []int{1},
+			wantNotSetLine: "vm-env: not set or empty: VM_ENV entry 1 (entry 1 is not shown).",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 1 of VM_ENV", value: sixteenLetterKey}},
+			why:            "sixteen characters with no underscore is the shortest entry of a key's shape, so an unset one is hidden by its position alone",
+		},
+		{
+			name:           "the write step hides an AWS-shaped key that is not set",
+			args:           []string{"-i", "vm-env", "VM_ENV=DEEPSEEK_API_KEY," + awsShapedKey},
+			unset:          []string{awsShapedKey},
+			wantAt:         []int{2},
+			wantNotSetLine: "vm-env: VM_ENV entry 2 (entry 2 is not shown) is not set or empty.",
+			wantLower:      []string{"not set or empty"},
+			secrets:        []secret{{kind: "entry 2 of VM_ENV", value: awsShapedKey}},
+			why:            "under make -i the write step refuses the unset entry itself, and its message must hide it the way vm-env-check's does (issue #268 L2)",
+		},
+		{
+			name:        "a documented credential name that is not set",
+			args:        []string{"vm-env-check", "VM_ENV=CLAUDE_CODE_OAUTH_TOKEN"},
+			unset:       []string{"CLAUDE_CODE_OAUTH_TOKEN"},
+			notHiddenAt: []int{1},
+			wantShown:   []string{"CLAUDE_CODE_OAUTH_TOKEN"},
+			wantLower:   []string{"not set or empty"},
+			why:         "every documented credential name is shown by name, or a maintainer cannot tell which one is missing (issue #234)",
+		},
+		{
+			name:        "the other documented credential name that is not set",
+			args:        []string{"vm-env-check", "VM_ENV=DEEPSEEK_API_KEY"},
+			unset:       []string{"DEEPSEEK_API_KEY"},
+			notHiddenAt: []int{1},
+			wantShown:   []string{"DEEPSEEK_API_KEY"},
+			wantLower:   []string{"not set or empty"},
+			why:         "a documented credential name is shown by name although the shape rule hides a key",
+		},
+		{
+			name:        "a short ordinary upper-case name that is not set",
+			args:        []string{"vm-env-check", "VM_ENV=" + ordinaryName},
+			unset:       []string{ordinaryName},
+			notHiddenAt: []int{1},
+			wantShown:   []string{ordinaryName},
+			wantLower:   []string{"not set or empty"},
+			why:         "a maintainer's own short variable name is no key shape, so hiding it would hide the one name they have to fix",
+		},
+		{
+			name:        "a set variable of a key's shape is still shown by name",
+			args:        []string{"-i", "vm-env", "VM_ENV=" + awsShapedKey},
+			values:      map[string]string{awsShapedKey: fakeEnvValue(awsShapedKey) + "@"},
+			notHiddenAt: []int{1},
+			wantShown:   []string{awsShapedKey},
+			wantLower:   []string{"unsupported characters"},
+			why:         "the shape rule hides an entry that is not set, and this variable is set: printing the name a maintainer typed is what lets them fix its value",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+
+			for _, name := range tc.unset {
+				delete(env, name)
+			}
+
+			for name, value := range tc.values {
+				env[name] = value
+			}
+
+			seeded := sb.seedDaemonEnv(t)
+
+			stdout, stderr, err := runMake(t, tc.args, env)
+			text := stdout + stderr
+
+			// make -i ignores the failed recipe and exits 0, so only a run without it must fail.
+			dashedI := slices.Contains(tc.args, "-i")
+			if !dashedI && err == nil {
+				t.Fatalf("make %s exited 0 although %s: it must refuse (issue #305)\nstdout: %s\nstderr: %s",
+					strings.Join(tc.args, " "), tc.why, stdout, stderr)
+			}
+
+			// The entries that may be a key pasted where a name goes: their position, the reason, and none of
+			// their text (issue #268 L1, #305).
+			for _, at := range tc.wantAt {
+				assertEntryPositionNotShown(t, "make's refusal", text, at, tc.why)
+				assertHiddenEntrySaysMayBeACredential(t, "make's refusal", text, at, tc.why)
+			}
+
+			// And no entry the rule must not hide is hidden: hiding a name that is shown hides the one name a
+			// maintainer has to fix (issue #234, #305).
+			for _, at := range tc.notHiddenAt {
+				if entryNotShown(at).MatchString(text) {
+					t.Errorf("make's message says that entry %d of VM_ENV is not shown although %s: only an entry that is not set and looks like a key is hidden (issue #305)\nstdout: %s\nstderr: %s",
+						at, tc.why, stdout, stderr)
+				}
+			}
+
+			for _, name := range tc.wantShown {
+				if !strings.Contains(text, name) {
+					t.Errorf("make's output does not name %s although %s: the shape rule may not hide a name a maintainer has to fix (issue #305)\nstdout: %s\nstderr: %s",
+						name, tc.why, stdout, stderr)
+				}
+			}
+
+			// The not-set-or-empty message gives the hidden entry by its raw position and lists nothing else: a
+			// run that refuses one entry names no name it was given, and a set name in that list would tell a
+			// maintainer to fix a credential that is there (issue #234, #305).
+			if tc.wantNotSetLine != "" && !strings.Contains(text, tc.wantNotSetLine) {
+				t.Errorf("make's output does not hold the not-set-or-empty message %q although %s: it must give the hidden entry by its raw position in VM_ENV and list no other entry (issue #305)\nstdout: %s\nstderr: %s",
+					tc.wantNotSetLine, tc.why, stdout, stderr)
+			}
+
+			for _, want := range tc.wantLower {
+				if !strings.Contains(strings.ToLower(text), want) {
+					t.Errorf("make's output does not say %q although %s, so a maintainer cannot tell why it stopped (issue #305):\nstdout: %s\nstderr: %s",
+						want, tc.why, stdout, stderr)
+				}
+			}
+
+			assertNoSecrets(t, "make's output", text, tc.secrets)
+
+			assertNoCredentialValues(t, "make's output", text)
+
+			body, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make %s: %v", strings.Join(tc.args, " "), readErr)
+			}
+
+			if diff := cmp.Diff(string(seeded), string(body)); diff != "" {
+				t.Errorf("make %s rewrote the VM's daemon.env although it refused: the file must be byte for byte what it was (issue #305) (-want +got):\n%s\nmake's exit error: %v\nstdout: %s\nstderr: %s",
+					strings.Join(tc.args, " "), diff, err, stdout, stderr)
+			}
+
+			assertNoDaemonEnvWrittenClaim(t, "make's output", text, tc.why)
+
+			// Every refusal here is made on the host, before anything is handed limactl.
+			sb.assertNoLimaCalls(t, tc.why)
+		})
+	}
+}
+
+// TestMakeVMEnvSuccessLineNamesOnlyTheEntriesItMayPrint pins issue #306: once the VM's daemon.env is written, make
+// vm-env prints "vm-env: <names> written to ...". That line used to print every name it wrote, a lower-case one
+// included, although every other message gives an entry that is not an upper-case variable name by its position
+// alone. The success line follows the same rule: an upper-case variable name is shown, and any other entry is given
+// as "VM_ENV entry N (entry N is not shown)", N counted as the refusals count it (issue #304), with none of its
+// text in the output. The line still reports what the VM was given: the entry it hides is written to daemon.env -
+// its value passed every check - so only the message hides it. Every entry here is invented (CLAUDE.md rules 2 and
+// 3).
+func TestMakeVMEnvSuccessLineNamesOnlyTheEntriesItMayPrint(t *testing.T) {
+	t.Parallel()
+
+	// hidden is a set variable the success line may not print: a valid variable name that is not the upper-case
+	// shape of a credential name.
+	hidden := fakeLowerCaseName("success-line")
+
+	// nineShown are nine upper-case names, each set in make's environment: enough that the hidden entry of the case
+	// below is the tenth word of VM_ENV, so the success line has to print a position of two digits (issue #304).
+	nineShown := []string{
+		"CLAUDE_CODE_OAUTH_TOKEN", "DEEPSEEK_API_KEY",
+		"FAKE_KEY_ONE", "FAKE_KEY_TWO", "FAKE_KEY_THREE",
+		"FAKE_KEY_FOUR", "FAKE_KEY_FIVE", "FAKE_KEY_SIX", "FAKE_KEY_SEVEN",
+	}
+
+	// writtenLines is what the VM's daemon.env holds after a run for names: one NAME=value line each, in the
+	// sorted order the test compares them in.
+	writtenLines := func(names ...string) []string {
+		lines := make([]string, 0, len(names))
+		for _, name := range names {
+			lines = append(lines, name+"="+fakeEnvValue(name))
+		}
+
+		slices.Sort(lines)
+
+		return lines
+	}
+
+	cases := []struct {
+		name  string
+		vmEnv string // the VM_ENV handed to make on its command line
+		// set are names given an invented value in make's environment, beyond the two the sandbox sets.
+		set []string
+		// wantLines are the lines the VM's daemon.env must hold after the run, sorted: the hidden entry is
+		// written, as its value passed every check.
+		wantLines []string
+		// wantAt are the raw 1-based positions of the entries the success line must not print.
+		wantAt []int
+		// wantShown are names the success line must print.
+		wantShown []string
+		// wantNoCredentialHint is whether no message may carry the "may be a credential typed by mistake"
+		// sentence: it belongs to an entry the line hides, so a run that hides nothing must not say it (issue
+		// #268).
+		wantNoCredentialHint bool
+		secrets              []secret
+		why                  string
+	}{
+		{
+			name:  "a set lower-case name after a repeated name and an empty entry",
+			vmEnv: "DEEPSEEK_API_KEY,DEEPSEEK_API_KEY,, " + hidden,
+			set:   []string{hidden},
+			wantLines: []string{
+				"CLAUDE_CODE_OAUTH_TOKEN=old-oauth",
+				"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
+				hidden + "=" + fakeEnvValue(hidden),
+			},
+			wantAt:    []int{3},
+			wantShown: []string{"DEEPSEEK_API_KEY"},
+			secrets: []secret{
+				{kind: "entry 3 of VM_ENV", value: hidden},
+				{kind: "the value of " + hidden, value: fakeEnvValue(hidden)},
+			},
+			why: "a set lower-case variable is no credential name, so the line that names what was written must give its position and not its text",
+		},
+		{
+			name:  "every name is an upper-case variable name",
+			vmEnv: "CLAUDE_CODE_OAUTH_TOKEN,DEEPSEEK_API_KEY",
+			wantLines: []string{
+				"CLAUDE_CODE_OAUTH_TOKEN=" + fakeEnvValue("CLAUDE_CODE_OAUTH_TOKEN"),
+				"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
+			},
+			wantShown:            []string{"CLAUDE_CODE_OAUTH_TOKEN", "DEEPSEEK_API_KEY"},
+			wantNoCredentialHint: true,
+			why:                  "a credential name is the shape of a name, so the success line must still name every one of them, and nothing is hidden to carry the sentence (issue #234, #268)",
+		},
+		{
+			name:      "nine upper-case names and a hidden tenth",
+			vmEnv:     strings.Join(append(slices.Clone(nineShown), hidden), ","),
+			set:       append(slices.Clone(nineShown[2:]), hidden),
+			wantLines: writtenLines(append(slices.Clone(nineShown), hidden)...),
+			wantAt:    []int{10},
+			wantShown: nineShown,
+			secrets: []secret{
+				{kind: "entry 10 of VM_ENV", value: hidden},
+				{kind: "the value of " + hidden, value: fakeEnvValue(hidden)},
+			},
+			why: "the hidden entry is the tenth word of VM_ENV, so the success line gives a position of two digits and still names the nine upper-case names before it",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+
+			for _, name := range tc.set {
+				env[name] = fakeEnvValue(name)
+			}
+
+			sb.seedDaemonEnv(t)
+
+			stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=" + tc.vmEnv}, env)
+			if err != nil {
+				t.Fatalf("make vm-env VM_ENV=%q with every name it lists set: %v\nstdout: %s\nstderr: %s",
+					tc.vmEnv, err, stdout, stderr)
+			}
+
+			text := stdout + stderr
+
+			if !daemonEnvWrittenClaim.MatchString(text) {
+				t.Fatalf("make vm-env VM_ENV=%q does not say that it wrote the VM's daemon.env, so there is no success line to pin (issue #306)\nstdout: %s\nstderr: %s",
+					tc.vmEnv, stdout, stderr)
+			}
+
+			body, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make vm-env: %v", readErr)
+			}
+
+			if diff := cmp.Diff(tc.wantLines, sortedEnvLines(string(body))); diff != "" {
+				t.Errorf("make vm-env VM_ENV=%q wrote the wrong lines to the VM's daemon.env although %s (issue #306) (-want +got):\n%s",
+					tc.vmEnv, tc.why, diff)
+			}
+
+			// A name whose text may not reach a message is still written, once: hiding it is about the messages,
+			// and the VM needs the variable (issue #306).
+			for _, at := range tc.wantAt {
+				assertEntryPositionNotShown(t, "make vm-env's success line", text, at, tc.why)
+
+				// And the line that hides the entry says why (issue #268): a hidden entry is where a maintainer may
+				// have pasted a credential, so hiding it must not hide the reason.
+				assertHiddenEntrySaysMayBeACredential(t, "make vm-env's success line", text, at, tc.why)
+			}
+
+			// A run that hides no entry must not carry the sentence at all: it belongs to an entry whose text the
+			// line withholds, and a maintainer told that a name they typed may be a credential is told that their
+			// credential is a mistake (issue #268).
+			if tc.wantNoCredentialHint {
+				if got := mistakenEntrySentenceCount(text); got != 0 {
+					t.Errorf("make vm-env's success line carries the sentence %q %d time(s) although %s: the sentence says that a hidden entry may be a credential typed by mistake, and this run hides nothing (issue #268)\nstdout: %s\nstderr: %s",
+						mistakenEntrySentence, got, tc.why, stdout, stderr)
+				}
+			}
+
+			for _, name := range tc.wantShown {
+				if !strings.Contains(text, name) {
+					t.Errorf("make vm-env's success line does not name %s although %s: a name a maintainer typed is what they must see written (issue #306, #234)\nstdout: %s\nstderr: %s",
+						name, tc.why, stdout, stderr)
+				}
+			}
+
+			assertNoSecrets(t, "make vm-env's success line", text, tc.secrets)
+
+			assertNoCredentialValues(t, "make vm-env's output", text)
 		})
 	}
 }
@@ -1693,6 +2385,131 @@ func TestMakeVMEnvNarrowedVMEnvKeepsTheOtherCredentials(t *testing.T) {
 		// nothing is handed limactl.
 		sb.assertNoLimaCalls(t, "a missing narrowed name is refused")
 	})
+}
+
+// TestMakeVMEnvKeptLineNamesOnlyTheKeptNamesItMayPrint pins the security audit's finding on issue #304: a merge
+// prints the names of the lines it kept in the VM's daemon.env ("vm-env: kept (unchanged): ..."), and that line
+// used to print every such name, whatever its shape. Every other message gives an entry that is not an upper-case
+// variable name by its position alone, because such a name may be a credential pasted where a name goes, and the
+// kept line follows the same rule: the upper-case names it kept, then the count of the others, never their text.
+// The lines themselves are kept whatever their name's shape: the rule is about the message, and a setting the
+// maintainer wrote into the file, by whatever name, stays. Every name and value here is invented (CLAUDE.md rules
+// 2 and 3).
+func TestMakeVMEnvKeptLineNamesOnlyTheKeptNamesItMayPrint(t *testing.T) {
+	t.Parallel()
+
+	// The names the VM's daemon.env holds before the run, and the merge keeps: an upper-case one the kept line may
+	// print, and lower-case ones it may not.
+	const shownKept = "FAKE_KEPT_ONE"
+
+	hiddenKeptOne := fakeLowerCaseName("kept-one")
+	hiddenKeptTwo := fakeLowerCaseName("kept-two")
+
+	// value builds the value the run copies into the file for a name: one invented value per case.
+	value := func(label string) string { return "invented-" + label }
+
+	cases := []struct {
+		name string
+		// seeded are the lines of the VM's daemon.env before the run, besides the two credentials the sandbox
+		// seeds: plain NAME=value lines a maintainer left there.
+		seeded []string
+		// kept is the kept line the output must hold, as the wording the merge must use: the names it may print,
+		// and the count of the others. "name(s)" is pinned as either spelling, the count and the hiding are not.
+		kept *regexp.Regexp
+		// wantLines are the lines the VM's daemon.env must hold after the run, sorted: the kept lines, whatever
+		// their name's shape, and the line the run replaces or writes.
+		wantLines []string
+		// wantShown are names the kept line must print.
+		wantShown []string
+		secrets   []secret // the kept names and values no output may hold
+		why       string
+	}{
+		{
+			name:   "an upper-case and a lower-case name are both kept",
+			seeded: []string{shownKept + "=" + value("kept-one"), hiddenKeptOne + "=" + value("kept-two")},
+			kept:   regexp.MustCompile(`(?m)^vm-env: kept \(unchanged\): ` + shownKept + ` and 1 other names? not shown\.?$`),
+			wantLines: []string{
+				"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
+				shownKept + "=" + value("kept-one"),
+				hiddenKeptOne + "=" + value("kept-two"),
+			},
+			wantShown: []string{shownKept},
+			secrets: []secret{
+				{kind: "kept name " + hiddenKeptOne, value: hiddenKeptOne},
+				{kind: "value kept under " + hiddenKeptOne, value: value("kept-two")},
+			},
+			why: "a lower-case setting the maintainer put in daemon.env is no credential name, so the line that says what was kept gives the count of such names, not their text, while the upper-case name is still printed (issue #234, #268 L1)",
+		},
+		{
+			name:   "every kept name is lower case",
+			seeded: []string{hiddenKeptOne + "=" + value("kept-one"), hiddenKeptTwo + "=" + value("kept-two")},
+			kept:   regexp.MustCompile(`(?m)^vm-env: kept \(unchanged\): 2 names? not shown\.?$`),
+			wantLines: []string{
+				"DEEPSEEK_API_KEY=" + fakeEnvValue("DEEPSEEK_API_KEY"),
+				hiddenKeptOne + "=" + value("kept-one"),
+				hiddenKeptTwo + "=" + value("kept-two"),
+			},
+			secrets: []secret{
+				{kind: "kept name " + hiddenKeptOne, value: hiddenKeptOne},
+				{kind: "kept name " + hiddenKeptTwo, value: hiddenKeptTwo},
+				{kind: "value kept under " + hiddenKeptOne, value: value("kept-one")},
+				{kind: "value kept under " + hiddenKeptTwo, value: value("kept-two")},
+			},
+			why: "with no name it may print, the kept line gives the count of the names it hides and none of their text",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			sb := newSandbox(t)
+			env := sb.vmEnvEnv()
+
+			// The VM's daemon.env holds the lines the run must keep and nothing else, so the kept line's wording
+			// pins exactly the names of this case (and not the two credentials seedDaemonEnv writes).
+			writeFileMode(t, sb.daemonEnvPath(), []byte(strings.Join(tc.seeded, "\n")+"\n"), 0o600)
+
+			// The VM_ENV on the command line makes the run merge: it replaces only the name it lists, and keeps the
+			// other lines the file already holds.
+			stdout, stderr, err := runMake(t, []string{"vm-env", "VM_ENV=DEEPSEEK_API_KEY"}, env)
+			if err != nil {
+				t.Fatalf("make vm-env VM_ENV=DEEPSEEK_API_KEY with every credential set: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+			}
+
+			text := stdout + stderr
+
+			// The kept line, in the wording the merge must use: the names it may print and the count of the others.
+			if !tc.kept.MatchString(text) {
+				t.Errorf("make vm-env's output does not hold the kept line %q although %s: a merge names the upper-case names it kept and gives any other name as a count, never as text (issue #234, #304, #268 L1)\nstdout: %s\nstderr: %s",
+					tc.kept, tc.why, stdout, stderr)
+			}
+
+			for _, name := range tc.wantShown {
+				if !strings.Contains(text, name) {
+					t.Errorf("make vm-env's output does not name %s although %s: a maintainer who narrows VM_ENV must see from the run which upper-case names stay in daemon.env (issue #234, #304)\nstdout: %s\nstderr: %s",
+						name, tc.why, stdout, stderr)
+				}
+			}
+
+			// Neither a hidden kept name nor the value kept under it reaches the output: the line hides the text
+			// a maintainer's own setting could carry, and never the value of any line.
+			assertNoSecrets(t, "make vm-env's output", text, tc.secrets)
+
+			// Hiding a kept name is about the message: the line itself stays in the VM's daemon.env.
+			body, readErr := os.ReadFile(sb.daemonEnvPath())
+			if readErr != nil {
+				t.Fatalf("read the VM's daemon.env after make vm-env: %v", readErr)
+			}
+
+			if diff := cmp.Diff(tc.wantLines, sortedEnvLines(string(body))); diff != "" {
+				t.Errorf("make vm-env VM_ENV=DEEPSEEK_API_KEY wrote the wrong lines to the VM's daemon.env although %s: every kept line stays whatever its name's shape (issue #304) (-want +got):\n%s\nstdout: %s\nstderr: %s",
+					tc.why, diff, stdout, stderr)
+			}
+
+			assertNoCredentialValues(t, "make vm-env's output", text)
+		})
+	}
 }
 
 // TestMakeVMEnvRefusesAQuoteBeforeTheShellSeesIt pins the second-round audit finding on issue #234: the names

@@ -129,7 +129,7 @@ DOCKER  ?= $(if $(shell command -v docker 2>/dev/null),docker,nerdctl)
 # pinned by tag and digest; Renovate updates both through the comment above it. CI's browser job runs make
 # test-browser too, so this is the one copy of the pin.
 # renovate: datasource=docker depName=chromedp/headless-shell
-HEADLESS_SHELL := chromedp/headless-shell:160.0.8157.0@sha256:1459842ec97ea88a20645fffae40769c0c8dc70f51cf43e7df812fbaef9909cc
+HEADLESS_SHELL := chromedp/headless-shell:160.0.8171.0@sha256:e2d2e25553d187f044dae3828e0b85c6049599b8bbb432b7516540454514865c
 # The platforms make image builds, comma separated (linux/amd64,linux/arm64). Empty builds the host's own.
 PLATFORMS ?=
 
@@ -209,12 +209,55 @@ $(call host_refuse,WORKSPACE_REPO is not an absolute path (its value is not show
 else ifeq ($(HOST_REPO_NAME),)
 $(call host_refuse,WORKSPACE_REPO names no checkout below / (its value is not shown))
 endif
-# The workspace with its symlinks resolved, as git resolves REPO_ROOT's (macOS: /var is /private/var), or as
-# written when it does not exist. The value passed the character check above, so it is safe in single quotes.
-host_workspace_real := $(or $(shell cd '$(HOST_WORKSPACE)/' 2>/dev/null && pwd -P),$(HOST_WORKSPACE))
-ifneq ($(filter $(host_workspace_real) $(patsubst %/,%,$(host_workspace_real))/%,$(REPO_ROOT)),)
+# The workspace with its symlinks resolved, as git resolves REPO_ROOT's (macOS: /var is /private/var). It is
+# resolved from / component by component, every symlink followed with plain readlink (macOS and Linux), a dangling
+# one too, an absolute target from /, a relative one from the link's directory, and .. taken from the resolved
+# path; a component that does not exist is kept as it is, so a workspace that does not exist yet, under a
+# symlink or behind a dangling one, is resolved too (issue #447). Every turn of the loop either consumes a
+# component or follows a link, at most 32 (macOS's MAXSYMLINKS), so it ends. A link's target is kept exactly, a
+# trailing newline too (readlink's output with a _ after it, both stripped again), as command substitution would
+# drop it, and the target read is then checked against the kernel: a link that resolves must be the same file
+# (test -ef) as its target as read, a dangling one must have a target as read that does not exist either, so a
+# target misread in any way (a trailing newline lost, the suspected cause of the macOS make 3.81 failure,
+# unconfirmed) fails closed instead of sending the walk elsewhere. Then containment is decided by file identity,
+# never by spelling: the checkout make runs in holds the workspace when the checkout or one of its ancestors is
+# the same file as the workspace (only when all of it exists), and the workspace is inside the checkout when the
+# longest prefix of it that exists, or one of that prefix's ancestors, is the same file as REPO_ROOT. A second
+# test of inside needs neither readlink nor the walk's left-to-right parsing, so a link string the shell mangles
+# anywhere cannot send it elsewhere: the longest prefix of the workspace as typed that exists (trimmed from the
+# right, never past a ..), then that path with /.. appended again and again - the kernel's own physical
+# ancestors - until it is / or no longer exists, each compared with REPO_ROOT by test -ef. It only adds
+# refusals. So a path typed in another case on a
+# case-insensitive file system (macOS's APFS), which bash's builtin pwd -P keeps as typed, is still found to be
+# the checkout (issue #447). The walk prints a verdict - holds, inside or apart - and the resolved path, which
+# ENVRC_GUARD walks up as the workspace's resolved spelling. More than 32 links (a loop), a link readlink cannot
+# read or that reads other than the kernel resolves it, or a resolved path holding a character WORKSPACE_REPO may
+# not hold (it would split, or be a pattern to make's filter) prints nothing, and an empty value or any verdict
+# but these three is refused below: the guard fails closed. Nothing of the walk reaches stderr: readlink's is
+# discarded, and there is no cd. The value passed the character check above and is an absolute path, or empty for
+# a checkout directly below /, so it is safe in single quotes; REPO_ROOT is quoted with host_sq.
+host_sq = '$(subst ','\'',$(1))'
+# host_resolve: the one path resolver of both guards (issue #468), two shell functions pasted into the shell code of
+# host_workspace_walk and ENVRC_GUARD, so a layout one guard refuses the other cannot let through. resolve <path>
+# walks an absolute path as described above and sets resolved to it (empty for /), the last component followed too;
+# it fails (status 1, resolved partial and never printed) on more than 32 links or a loop of them, a link readlink
+# cannot read, or one that reads other than the kernel resolves it. It prints nothing and sets only resolved and
+# res_* variables, so a caller keeps a target's trailing newline (no command substitution) and its own variables.
+# within <path> <dir> holds when the longest prefix of path that exists, or one of that prefix's ancestors, is the
+# same file as dir (test -ef): containment by file identity, never by spelling. path must be resolve's result, with
+# no symlink left in it, as within walks path's lexical ancestors, which are its physical ones only then; a raw
+# path, whose .. or link could climb elsewhere, is never passed to it. It stays a make definition, not a
+# script of dev/, as both guards run while make reads this file, from the copy of this Makefile make runs, so it
+# needs no path to a script, nothing on the host targets' allow lists, and no file the guards could not find.
+host_resolve = resolve() { resolved=; res_rest=$$1; res_hops=0; while [ -n "$$res_rest" ]; do res_part=$${res_rest%%/*}; res_rest=$${res_rest$(host_hash)"$$res_part"}; res_rest=$${res_rest$(host_hash)/}; case $$res_part in (''|.) ;; (..) resolved=$${resolved%/*} ;; (*) if [ -L "$$resolved/$$res_part" ]; then res_hops=$$((res_hops + 1)); [ "$$res_hops" -le 32 ] && res_link=$$(readlink "$$resolved/$$res_part" 2>/dev/null && echo _) && res_link=$${res_link%??} && [ -n "$$res_link" ] || return 1; case $$res_link in (/*) res_target=$$res_link ;; (*) res_target="$$resolved/$$res_link" ;; esac; if [ -e "$$resolved/$$res_part" ]; then [ "$$resolved/$$res_part" -ef "$$res_target" ] || return 1; else [ ! -e "$$res_target" ] || return 1; fi; case $$res_link in (/*) resolved= ;; esac; res_rest="$$res_link/$$res_rest"; else resolved="$$resolved/$$res_part"; fi ;; esac; done; }; within() { res_p=$$1; while [ -n "$$res_p" ] && [ ! -e "$$res_p" ]; do res_p=$${res_p%/*}; done; while :; do [ ! "$${res_p:-/}" -ef "$$2" ] || return 0; [ -n "$$res_p" ] || return 1; res_p=$${res_p%/*}; done; };
+host_workspace_walk := $(shell LC_ALL=C; export LC_ALL; $(host_resolve) root=$(call host_sq,$(REPO_ROOT)); failed=; resolve '$(HOST_WORKSPACE)' || failed=1; out=$$resolved; [ -n "$$failed" ] || { pre=$$out; miss=; while [ -n "$$pre" ] && [ ! -e "$$pre" ]; do miss="/$${pre$(host_hash)$(host_hash)*/}$$miss"; pre=$${pre%/*}; done; verdict=apart; if [ -z "$$miss" ]; then p=$$root; while :; do if [ "$${p:-/}" -ef "$${pre:-/}" ]; then verdict=holds; break; fi; [ -n "$$p" ] || break; p=$${p%/*}; done; fi; if [ "$$verdict" = apart ] && within "$$out" "$$root"; then verdict=inside; fi; if [ "$$verdict" = apart ]; then q='$(HOST_WORKSPACE)'; while [ -n "$$q" ] && [ ! -e "$$q" ]; do case $${q$(host_hash)$(host_hash)*/} in (..) q=; break ;; esac; q=$${q%/*}; done; q=$${q:-/}; while [ -e "$$q" ]; do if [ "$$q" -ef "$$root" ]; then verdict=inside; break; fi; [ ! "$$q" -ef / ] || break; q="$$q/.."; done; fi; case $$out in (*[!A-Za-z0-9._/+@=$(host_hash)-]*) ;; (*) printf '%s %s\n' "$$verdict" "$${out:-/}" ;; esac; })
+host_workspace_verdict := $(word 1,$(host_workspace_walk))
+host_workspace_real    := $(word 2,$(host_workspace_walk))
+ifneq ($(filter holds inside apart,$(host_workspace_verdict)) $(words $(host_workspace_walk)),$(host_workspace_verdict) 2)
+$(call host_refuse,the workspace $(or $(HOST_WORKSPACE),/) cannot be resolved: more than 32 symlinks or a loop of them$(host_comma) a symlink that cannot be read or that reads other than the kernel resolves it$(host_comma) or a resolved path holding a character other than letters$(host_comma) digits and . _ - / + @ $(host_hash) =)
+else ifeq ($(host_workspace_verdict),holds)
 $(call host_refuse,make runs in $(REPO_ROOT) - the workspace $(or $(HOST_WORKSPACE),/) or inside it)
-else ifneq ($(filter $(REPO_ROOT)/%,$(host_workspace_real)),)
+else ifeq ($(host_workspace_verdict),inside)
 $(call host_refuse,the workspace $(HOST_WORKSPACE) is inside $(REPO_ROOT) - the checkout make runs in)
 endif
 # The .envrc guard (issue #402). The host targets that load the VM's credentials or the agents App's key -
@@ -236,9 +279,12 @@ endif
 # ENVRC_GUARD,<target>) checks both and names each file on stderr, with the line number, the directive's name and
 # paths only, never a line or a value: of the host clone's .envrc it reads, through grep -a -o, only the words of
 # ENVRC_GUARD_ERE on lines that are no comment (a line ending in \ joined to the next first, as bash does), with
-# the one word after each; of the files above the workspace nothing, it only tests that they are there. A
-# relative path is resolved against the clone, component by component, every symlink followed, the last one too,
-# at most 40 (macOS: /var is /private/var, as in REPO_ROOT); a loop of symlinks counts as outside. A directive in
+# the one word after each; of the files above the workspace nothing, it only tests that they are there. The
+# .envrc and a relative dotenv path (against the clone) are resolved with host_resolve, the host-clone guard's own
+# resolver (issue #468): every symlink followed, the last one too, each checked against the kernel, at most 32, and
+# inside the clone decided by file identity (within), never by spelling, so neither a path typed in another case
+# nor a link target ending in a newline sends it elsewhere; anything it cannot resolve counts as outside, and the
+# refusal names only the .envrc, never a hop of the walk. A directive in
 # a trailing comment counts too, a safe false positive. It checks the usual direnv and bash spellings and is no
 # sandbox (eval can always read a parent). It is a macro, not a script of dev/, as it runs while make reads this
 # file, like the refusal above:
@@ -250,7 +296,6 @@ endif
 ENVRC_GUARD_TARGETS := agents-token agents-token-refresh agents-token-refresh-install agents-token-refresh-start \
 	vm-create vm-env vm-env-check vm-init vm-up
 envrc_guard_goals := $(filter $(ENVRC_GUARD_TARGETS),$(MAKECMDGOALS))
-host_sq = '$(subst ','\'',$(1))'
 # A directive the guard reads: the word, alone (no letter, digit, _ or . before it, so a backtick may; a space, a
 # separator, a quote, a backslash, <, >, a backtick or the end after it), with the one word after it, which stops
 # at a space, a separator, < or > after its first character. Its first character may be <, > or a backtick, so
@@ -263,21 +308,7 @@ ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
 	why="every line of the VM's credentials and the agents App's variables belongs in the host clone's .envrc itself (docs/dev-environment.md, The host clone)"; \
 	dir_real=$(call host_sq,$(host_workspace_real)); \
 	refused=; nl=$$(printf '\n_'); nl=$${nl%_}; \
-	resolve() { out=; rest=$$1; hops=0; \
-		while :; do \
-			while :; do case $$rest in (/*) rest=$${rest$(host_hash)/} ;; (*) break ;; esac; done; \
-			[ -n "$$rest" ] || break; \
-			part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; \
-			case $$part in \
-			(.) ;; \
-			(..) out=$${out%/*} ;; \
-			(*) if [ -L "$$out/$$part" ]; then \
-					hops=$$((hops + 1)); [ "$$hops" -le 40 ] || return 1; \
-					link=$$(readlink "$$out/$$part") || return 1; \
-					case $$link in (/*) out= ;; esac; rest="$$link$$rest"; \
-				else out="$$out/$$part"; fi ;; \
-			esac; \
-		done; printf '%s\n' "$${out:-/}"; }; \
+	$(host_resolve) \
 	envrc_lines() { acc=; held=0; \
 		while IFS= read -r line || [ -n "$$line" ]; do \
 			if [ "$$held" -eq 0 ]; then \
@@ -292,12 +323,9 @@ ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
 		[ "$$held" -eq 0 ] || printf '%s\n' "$$acc"; }; \
 	envrc="$$clone/.envrc"; \
 	if [ -e "$$envrc" ] || [ -L "$$envrc" ]; then \
-		clone_real=$$(cd "$$clone" && pwd -P); \
-		envrc_real=$$(resolve "$$envrc") || envrc_real=; \
-		if [ -z "$$clone_real" ]; then \
-			envrc_real=; \
-		elif case $$envrc_real in ("$$clone_real"/*) false ;; (*) true ;; esac; then \
-			echo "$$target: refused: the host clone's .envrc, $$envrc, is a symlink to a file outside the host clone: $$why" >&2; \
+		if resolve "$$envrc"; then envrc_real=$${resolved:-/}; else envrc_real=; fi; \
+		if [ -z "$$envrc_real" ] || ! within "$$envrc_real" "$$clone"; then \
+			echo "$$target: refused: the host clone's .envrc, $$envrc, is a symlink that leads outside the host clone or that this check cannot resolve (more than 32 links or a loop of them, or a link that cannot be read or that reads other than the kernel resolves it, such as a target ending in a newline): $$why" >&2; \
 			refused=1; envrc_real=-; \
 		fi; \
 		if [ "$$envrc_real" = - ]; then \
@@ -323,10 +351,12 @@ ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
 					(*) case $$arg in ('') arg=.env ;; (\"*\" | \'*\') arg=$${arg$(host_hash)?}; arg=$${arg%?} ;; esac; \
 						case $$arg in \
 						('' | *[!A-Za-z0-9._/+@=-]*) outside=1 ;; \
-						(*) case $$arg in (/*) path=$$arg ;; (*) path="$$clone_real/$$arg" ;; esac; \
-							path=$$(resolve "$$path") || path=; \
-							if [ -n "$$path" ] && [ -d "$$path" ]; then path=$$(resolve "$$path/.env") || path=; fi; \
-							case $$path in ("$$clone_real"/*) ;; (*) outside=1 ;; esac ;; \
+						(*) case $$arg in (/*) path=$$arg ;; (*) path="$$clone/$$arg" ;; esac; \
+							if resolve "$$path"; then path=$${resolved:-/}; else path=; fi; \
+							if [ -n "$$path" ] && [ -d "$$path" ]; then \
+								if resolve "$$path/.env"; then path=$${resolved:-/}; else path=; fi; \
+							fi; \
+							if [ -z "$$path" ] || ! within "$$path" "$$clone"; then outside=1; fi ;; \
 						esac ;; \
 					esac; \
 					if [ -n "$$outside" ]; then \
@@ -520,16 +550,18 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # trapped, since dash, the VM's /bin/sh, runs no EXIT trap when an untrapped signal kills it. The EXIT trap
 # first ignores those signals: a second one arriving while it runs would run its trap's exit and abandon the
 # rest of the cleanup, and one does arrive when the whole process group is signalled, since make forwards a
-# SIGTERM it gets to the recipe's shell. It then removes the directory, then the container, with a command
-# that ignores those signals too, so a hung one needs SIGKILL. The recipe starts the pinned headless Chromium
-# ($(HEADLESS_SHELL)) with the host network and its own entrypoint
-# replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface
-# through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is
-# open to guess and the DevTools ports and containers of two runs at once do not collide. It waits up to
-# 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll checks with
-# $(DOCKER) inspect that the container still runs: one inspect reports as not running (false) fails the
-# run at once, naming its exit status and showing the tail of its log (issue #423). A failed inspect alone
-# is no verdict, so the run keeps polling, but three failed in a row mean the container is gone, and the
+# SIGTERM it gets to the recipe's shell. Each signal's trap ignores the three signals too, as its first action,
+# before its exit: a second signal landing between that exit and the EXIT trap would otherwise run its own trap
+# and end the shell before any cleanup, leaving the container and the directory behind (issue #464). The EXIT
+# trap then removes the directory, then the container, with a command that ignores those signals too, so a hung
+# one needs SIGKILL. The recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network
+# and its own entrypoint replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on
+# every interface through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no
+# fixed port is open to guess and the DevTools ports and containers of two runs at once do not collide. It
+# waits up to 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll
+# checks with $(DOCKER) inspect that the container still runs: one inspect reports as not running (false)
+# fails the run at once, naming its exit status and showing the tail of its log (issue #423). A failed inspect
+# alone is no verdict, so the run keeps polling, but three failed in a row mean the container is gone, and the
 # run fails, showing inspect's last error, instead of waiting out the 60 seconds. It reads the address back
 # from the log line (port and browser id, so the test attaches to the browser this run started and no
 # other: a correctness guarantee, not access control, since any local process that finds the port can
@@ -545,9 +577,9 @@ test-browser: ## Build the site's bundle into a directory of this run's own and 
 	name=shift2eu-test-browser-$$$$; \
 	bundle_dir=; \
 	trap 'trap "" HUP INT TERM; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir" || true; fi; $(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
-	trap 'exit 129' HUP; \
-	trap 'exit 130' INT; \
-	trap 'exit 143' TERM; \
+	trap 'trap "" HUP INT TERM; exit 129' HUP; \
+	trap 'trap "" HUP INT TERM; exit 130' INT; \
+	trap 'trap "" HUP INT TERM; exit 143' TERM; \
 	bundle_dir=$$(mktemp -d "$${TMPDIR:-/tmp}/shift2eu-test-browser.XXXXXX"); \
 	go run ./ci/sitebuild -out "$$bundle_dir/site" -archive "$$bundle_dir/shift2eu-site.tar.gz" >/dev/null; \
 	$(DOCKER) run -d --name "$$name" --network host --entrypoint /headless-shell/headless-shell \
@@ -810,25 +842,37 @@ vm-shell: ## Open a shell in the VM at the workspace's checkout, WORKSPACE_REPO 
 	$(LIMA_INSTANCE_CHECK)
 	$(VM_SHELL_ENV) limactl shell --workdir "$(HOST_WORKSPACE_REPO)" "$$LIMA_INSTANCE"
 
-# The names in VM_ENV, one per line: commas and spaces separate them, and a name listed twice is listed once.
-# The recipe reads VM_ENV from its environment ("$$VM_ENV"), never pasted into its own text, and refuses any
-# character but those of names, commas and spaces before it splits the list (with globbing off), so no quote,
-# `$` or glob in VM_ENV ever reaches a shell as code.
-vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', ' '\n\n' | awk 'NF && !seen[$$0]++')
-# How a message names the entry $$name at 1-based position $$i of that list, in $$label (issue #268 L1): the
+# The entries of VM_ENV, one word per line, as N:name: commas, spaces, tabs and newlines separate them, a run of
+# separators counts once, and N is the entry's 1-based place among the words of VM_ENV as typed, a name listed
+# twice counted at every place (issue #304). A name listed twice is listed once, at its first place. vm-env-check
+# and the write step split the same way, so they count the same names. A loop over it takes the entry's place
+# into $$i and the name into $$name (vm_env_entry); the place's colon is the first one, so ${entry#*:} keeps any
+# colon of the name itself. Each recipe reads VM_ENV from its environment ("$$VM_ENV"), never pasted into its own
+# text, and splits it with globbing off. vm-env-check refuses any character but those of names, commas and spaces
+# before it splits the list; the write step, which make -i runs anyway, refuses each name that is not a variable
+# name (vm_env_refuse). So no quote, `$` or glob in VM_ENV ever reaches a shell as code.
+vm_env_names = $$(printf '%s\n' "$$VM_ENV" | tr ', \t\n' '\n\n\n\n' | awk 'NF { n++; if (!seen[$$0]++) print n ":" $$0 }')
+vm_env_entry = i="$${entry%%:*}"; name="$${entry\#*:}"
+# How a message names the entry $$name at place $$i of VM_ENV (vm_env_names), in $$label (issue #268 L1): the
 # entry itself only when it is an upper-case variable name (^[A-Z_][A-Z0-9_]*$), the shape of every credential
-# name; anything else may be a credential pasted where a name goes, so only its position is given: entry N is the
-# Nth name of VM_ENV counting each name once, at its first place, and skipping empty entries. The rule has
-# a limit: a pasted value of that shape (upper-case letters, digits and underscores only, such as an AWS access
-# key ID, AKIA..., not secret on its own) is still printed, e.g. in the not-set list. The letters
-# are spelled out, as a range such as [A-Z] can match lower-case letters in some shells' locales. It sets
-# $$ehidden for a hidden entry and clears it for a shown one, so a message about that one entry says why,
-# $(vm_env_entry_why), only when it hides the entry. A message listing several entries sets $$hidden only when it
-# lists a hidden one, and says why once, after its list: $(vm_env_hidden_why).
+# name; anything else may be a credential pasted where a name goes, so only its position is given. A value of
+# that shape can be a key itself (an AWS access key ID, AKIA or ASIA and 16 upper-case letters and digits), so an
+# entry that is not set and is 16 characters or longer with no underscore, which covers that shape and no
+# variable name anyone types, is hidden too (issue #305); a set variable and every documented credential name,
+# which all hold an underscore, are still shown. Its printenv only tests the value for emptiness, never keeps or
+# prints it. The letters are spelled out, as a range such as [A-Z] can match lower-case letters in some shells'
+# locales. It sets $$ehidden for a hidden entry and clears it for a shown one, so a message about that one entry
+# says why, $(vm_env_entry_why), only when it hides the entry. A message listing several entries sets $$hidden
+# only when it lists a hidden one, and says why once, after its list: $(vm_env_hidden_why).
+# vm_env_not_upper is the case pattern of every name that is not of that upper-case shape, the one rule
+# vm_env_label and vm-env's kept line both name by.
 vm_env_upper = ABCDEFGHIJKLMNOPQRSTUVWXYZ
-vm_env_label = case "$$name" in ([!$(vm_env_upper)_]* | *[!$(vm_env_upper)0123456789_]*) \
-		label="VM_ENV entry $$i (entry $$i is not shown)"; ehidden=1;; \
-	(*) label="$$name"; ehidden=;; esac
+vm_env_not_upper = [!$(vm_env_upper)_]* | *[!$(vm_env_upper)0123456789_]*
+vm_env_label = case "$$name" in ($(vm_env_not_upper)) ehidden=1;; \
+	(*_*) ehidden=;; \
+	(????????????????*) if [ -n "$$(printenv "$$name")" ]; then ehidden=; else ehidden=1; fi;; \
+	(*) ehidden=;; esac; \
+	if [ -n "$$ehidden" ]; then label="VM_ENV entry $$i (entry $$i is not shown)"; else label="$$name"; fi
 vm_env_hidden_why = $${hidden:+ It may be a credential typed by mistake.}
 vm_env_entry_why = $${ehidden:+ It may be a credential typed by mistake.}
 # The refusals of a name for what it is, shared by vm-env-check and vm-env's write step, which runs it before it
@@ -866,8 +910,12 @@ vm_env_safe_line = ^[A-Za-z_][A-Za-z0-9_]*=[A-Za-z0-9._~+/=-]*\$$
 # #234), nor leave a VM that make vm-create created and provisioned only to stop at vm-env (issue #258). It
 # checks VM_ENV the way vm-env reads it: from its environment, never expanded by make, so the refusal of a bad
 # VM_ENV never shows its value, which may be a credential typed by mistake. A per-name refusal names an entry
-# only when it is an upper-case variable name, and any other entry by its position alone (vm_env_label, issue
-# #268 L1).
+# only when it is an upper-case variable name and not an unset key shape, and any other entry by its place in
+# VM_ENV as typed alone (vm_env_label, vm_env_names; issues #268 L1, #304, #305). printenv is only ever handed a
+# variable name: make -i runs the not-set loop although the per-entry refusal failed, and printenv's option error
+# would print an entry starting with a dash whole, so the loop counts an entry that is no variable name as not set
+# without calling printenv (vm_env_label's own printenv sees upper-case names only, the write step's only names
+# vm_env_refuse let through).
 .PHONY: vm-env-check
 vm-env-check: export VM_ENV := $(value VM_ENV)
 vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-create do first (calls no limactl)
@@ -877,13 +925,14 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 	[ -n "$(vm_env_names)" ] || { \
 		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: name at least one, e.g. make vm-env VM_ENV=DEEPSEEK_API_KEY" >&2; \
 		exit 1; }
-	@set -f; i=0; for name in $(vm_env_names); do \
-		i=$$((i + 1)); $(vm_env_refuse); \
+	@set -f; for entry in $(vm_env_names); do \
+		$(vm_env_entry); $(vm_env_refuse); \
 	done
-	@set -f; missing=''; i=0; hidden=; \
-	for name in $(vm_env_names); do \
-		i=$$((i + 1)); $(vm_env_label); \
-		[ -n "$$(printenv "$$name")" ] || { missing="$$missing $$label"; [ -z "$$ehidden" ] || hidden=1; }; \
+	@set -f; missing=''; hidden=; \
+	for entry in $(vm_env_names); do \
+		$(vm_env_entry); $(vm_env_label); \
+		case "$$name" in ([!A-Za-z_]* | *[!A-Za-z0-9_]*) value=;; (*) value="$$(printenv "$$name")";; esac; \
+		[ -n "$$value" ] || { missing="$$missing $$label"; [ -z "$$ehidden" ] || hidden=1; }; \
 	done; \
 	if [ -n "$$missing" ]; then \
 		echo "vm-env: not set or empty:$$missing.$(vm_env_hidden_why) Nothing was written: the VM's daemon.env is unchanged." >&2; \
@@ -925,16 +974,21 @@ vm-env-check: ## Check the VM_ENV credentials on the host, as vm-env and vm-crea
 # names nothing, every name vm-env-check refuses for what it is (vm_env_refuse, the same shell code) and an
 # unset or empty credential, so make -i, which runs it although vm-env-check failed, can neither wipe the VM's
 # daemon.env nor copy a GitHub token or the agents App's key into it (issue #268 L2); its messages name an
-# entry the way vm-env-check does (vm_env_label). It never re-runs vm-env-check through $(MAKE): make -i would
-# pass -i to that sub-make too.
+# entry the way vm-env-check does (vm_env_label), splitting and counting VM_ENV as it does (vm_env_names, so a tab
+# or newline is a separator under make -i too; issue #304). It never re-runs vm-env-check through $(MAKE): make -i
+# would pass -i to that sub-make too. Its success line names the entries it wrote by the same rule (vm_env_label,
+# issue #306): an entry it may not print is still written, and only the line gives it by position, saying why once.
+# A merge's kept line follows the same naming rule: it names each kept upper-case name (vm_env_not_upper) and gives
+# every other kept name as a count only (`FAKE_ONE and 1 other name not shown`, `2 names not shown`); those
+# lines are still kept in daemon.env, and their names reach no output.
 .PHONY: vm-env
 vm-env: export VM_ENV := $(value VM_ENV)
 vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM (refuses if one is missing)
 	$(LIMA_INSTANCE_CHECK)
-	@set -f; env_file="$$(i=0; [ -n "$(vm_env_names)" ] || { \
+	@set -f; env_file="$$([ -n "$(vm_env_names)" ] || { \
 		echo "vm-env: VM_ENV is empty and names no credential. Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
-	for name in $(vm_env_names); do \
-		i=$$((i + 1)); $(vm_env_refuse); \
+	for entry in $(vm_env_names); do \
+		$(vm_env_entry); $(vm_env_refuse); \
 		value="$$(printenv "$$name")"; \
 		[ -n "$$value" ] || { echo "vm-env: $$label is not set or empty.$(vm_env_entry_why) Nothing was written: the VM's daemon.env is unchanged." >&2; exit 1; }; \
 		case "$$value" in (*[!A-Za-z0-9._~+/=-]*) echo "vm-env: $$label has unsupported characters.$(vm_env_entry_why) Nothing was written." >&2; exit 1;; esac; \
@@ -965,12 +1019,21 @@ vm-env: vm-env-check ## Copy the VM_ENV credentials from your shell into the VM 
 		if [ "$$1" = merge ]; then printf "vm-env-dropped:%s\n" "$$dropped" && \
 			printf "vm-env-kept:%s\n" "$$(sed -n "s/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p" "$$f" | grep -v -E "^($$names)\$$" | paste -sd " " -)"; fi && \
 		if [ -n "$$removed" ]; then printf "vm-env-removed:%s\n" "$$removed"; fi' sh $(vm_env_mode))" && \
-	echo "vm-env: $$(echo $(vm_env_names)) written to ~/.config/dot-agent-deck/daemon.env in the VM, $(if $(filter replace,$(vm_env_mode)),replacing the whole file,its other lines kept); 'make deck-restart' applies it to a running deck" && \
+	written= && hidden= && for entry in $(vm_env_names); do \
+		$(vm_env_entry); $(vm_env_label); written="$$written $$label"; [ -z "$$ehidden" ] || hidden=1; \
+	done && \
+	echo "vm-env:$$written written to ~/.config/dot-agent-deck/daemon.env in the VM, $(if $(filter replace,$(vm_env_mode)),replacing the whole file,its other lines kept); 'make deck-restart' applies it to a running deck.$(vm_env_hidden_why)" && \
 	dropped="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-dropped:\([0-9][0-9]*\)$$/\1/p')" && \
 	if [ -n "$$dropped" ] && [ "$$dropped" -gt 0 ]; then \
 		echo "vm-env: warning: dropped $$dropped line(s) of the VM's daemon.env that were not plain NAME=value assignments (their content is not shown)" >&2; fi && \
 	kept="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-kept:\([A-Za-z0-9_ ]*\)$$/\1/p')" && \
-	if [ -n "$$kept" ]; then echo "vm-env: kept (unchanged): $$kept"; fi && \
+	kshown= && khidden=0 && for k in $$kept; do \
+		case "$$k" in ($(vm_env_not_upper)) khidden=$$((khidden + 1));; \
+		(*) kshown="$$kshown $$k";; esac; \
+	done && if [ "$$khidden" -eq 1 ]; then kword=name; else kword=names; fi && \
+	if [ -n "$$kshown" ] && [ "$$khidden" -gt 0 ]; then echo "vm-env: kept (unchanged):$$kshown and $$khidden other $$kword not shown"; \
+	elif [ -n "$$kshown" ]; then echo "vm-env: kept (unchanged):$$kshown"; \
+	elif [ "$$khidden" -gt 0 ]; then echo "vm-env: kept (unchanged): $$khidden $$kword not shown"; fi && \
 	removed="$$(printf '%s\n' "$$out" | sed -n 's/^vm-env-removed:\([A-Z_ ]*\)$$/\1/p')" && \
 	if [ -n "$$removed" ]; then \
 		echo "vm-env: warning: removed $$removed from the VM's daemon.env: every agent in the VM could read it, so revoke that token at GitHub (its value is not shown)" >&2; fi

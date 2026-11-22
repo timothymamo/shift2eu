@@ -32,3 +32,5 @@ description: Write an Architecture Decision Record for shift2eu under docs/adr. 
    does not list.
 4. Never rewrite an accepted ADR's decision. Supersede it with a new ADR and update the old one's status.
 5. Link the ADR from the PRD or PR that motivated it.
+
+Signal only what you started (CLAUDE.md rule 10): stop a run of your own only through your agent's tool or by the pid and start time you noted; never a process found by name, never a group yourself.
