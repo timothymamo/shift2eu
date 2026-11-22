@@ -35,6 +35,12 @@
 // a fake guest root (SHIFT2EU_SWAP_ROOT) with fakes of fallocate, chmod,
 // mkswap, swapon, swapoff, sysctl and df first on PATH, unprivileged.
 //
+// TestLimaProbeNeverRunsTheGHWrapper (limaprobe_test.go, issue #479) reads the
+// template's readiness probe and pins that no command of it runs the gh
+// wrapper, which refuses without the agents App's token that exists only after
+// the VM does; that it checks the real gh's attestation subcommand; and that
+// it checks the wrapper with test -x and sh -n instead of running it.
+//
 // Each template in dev/testdata/lima-invalid is dev/lima.yaml with one known
 // breakage, and beside it a .expect holds the text Lima's refusal of it must
 // contain. TestInvalidLimaTemplatesDifferOnlyByTheirBreakage pins that each

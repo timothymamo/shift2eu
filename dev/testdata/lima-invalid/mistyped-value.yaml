@@ -605,8 +605,13 @@ probes:
           exit 1
         fi
       done
-      # The release check (release-tag skill) calls these root-owned binaries by absolute path.
-      /usr/local/bin/gh attestation --help >/dev/null
+      # The release check (release-tag skill) calls these root-owned binaries by absolute path. The probe never
+      # runs /usr/local/bin/gh, the agents App wrapper: it refuses without the App's token, which make
+      # agents-token writes only after the VM exists, so the probe would never pass (issue #479). It checks
+      # the wrapper is installed and parses, one command a line so set -e stops on either.
+      test -x /usr/local/bin/gh
+      sh -n /usr/local/bin/gh
+      /usr/local/libexec/shift2eu/gh attestation --help >/dev/null
       /usr/local/libexec/shift2eu/gh --version >/dev/null
       /usr/local/bin/cosign version >/dev/null 2>&1
       /usr/local/bin/crane version >/dev/null
