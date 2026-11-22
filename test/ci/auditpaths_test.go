@@ -4,8 +4,9 @@
 // The check's contract, run with AUDIT_PATHS_AUTHOR, AUDIT_PATHS_BASE and AUDIT_PATHS_HEAD in the
 // environment and the current directory inside a git repository that holds both commits:
 //
-//   - It compares the tree of BASE with the tree of HEAD, renames not detected: a rename counts as the
-//     deletion of the old path and the addition of the new one.
+//   - It compares the tree of the merge base of BASE and HEAD with the tree of HEAD, renames not
+//     detected: a rename counts as the deletion of the old path and the addition of the new one. A branch
+//     main has moved past is therefore judged on what it lands, not on what main did meanwhile.
 //   - It passes, exit 0, for every author but shift2eu-audit[bot], whatever the change: the check exists
 //     for that one App's report pull requests and costs nothing elsewhere.
 //   - For shift2eu-audit[bot] it passes when every changed path is under docs/security/ and every added or
@@ -13,9 +14,10 @@
 //     requests that add docs/security/audits/YYYY-MM-DD-<run_id>.md.
 //   - It fails, non-zero, otherwise, and its output names each offending path. A path holding a newline or
 //     another control character may be escaped however the check likes; what it may not do is pass.
-//   - It fails closed, non-zero, when the author is unset or empty, and when BASE or HEAD is unset, empty
-//     or not a commit of the repository: a run that cannot tell who opened the pull request, or what it
-//     changes, is no pass.
+//   - It fails closed, non-zero, when the author is unset or empty, and when BASE or HEAD is unset, empty,
+//     not a full commit SHA (HEAD, a branch or a short SHA is not one, whatever it resolves to) or not a
+//     commit of the repository: a run that cannot tell who opened the pull request, or what it changes, is
+//     no pass.
 //
 // Each case builds its own repository below its t.TempDir(): git init, a base commit holding README.md,
 // internal/x.go and docs/security/README.md, then a head commit with the case's change. git runs in an
@@ -99,6 +101,15 @@ type auditPathsCase struct {
 	unsetHead   bool
 	missingBase bool
 	missingHead bool
+	// baseLiteral and headLiteral hand AUDIT_PATHS_BASE or AUDIT_PATHS_HEAD a value that is not a full
+	// commit SHA, such as the ref name HEAD: whatever it resolves to, the check must fail closed rather
+	// than diff it.
+	baseLiteral string
+	headLiteral string
+	// baseRef names a ref the case's change creates, whose commit is handed to the run as AUDIT_PATHS_BASE
+	// instead of the base commit: an audit pull request whose branch main has moved past since, so BASE is
+	// no ancestor of HEAD and the two commits' merge base is what the check judges from.
+	baseRef string
 	// wantPass says the run must exit 0; false says it must exit non-zero.
 	wantPass bool
 	// wantOutput holds substrings the run's output must contain: an offending path, for a failing run.
@@ -186,6 +197,21 @@ func auditPathsCases() []auditPathsCase {
 		{
 			name:     "the audit App modifying docs/security/README.md",
 			change:   add("docs/security/README.md", "# Security\n\nA link to the new report.\n"),
+			wantPass: true,
+		},
+		{
+			// The branch is cut from the base commit and pushed to after main moved on: main's own change to
+			// README.md is no part of what the branch lands, so it is no part of what the check judges.
+			name: "the audit App adding a report on a branch main has moved past",
+			change: func(t *testing.T, repo string, env []string) {
+				t.Helper()
+				auditPathsGit(t, env, repo, "checkout", "--quiet", "-b", "main-advanced")
+				auditPathsWrite(t, repo, "README.md", "# A changed README.\n")
+				auditPathsGit(t, env, repo, "commit", "--quiet", "--all", "--message", "main moves on")
+				auditPathsGit(t, env, repo, "checkout", "--quiet", "-")
+				auditPathsWrite(t, repo, report, "# The report\n")
+			},
+			baseRef:  "main-advanced",
 			wantPass: true,
 		},
 		{
@@ -302,6 +328,17 @@ func auditPathsCases() []auditPathsCase {
 			name:        "a head commit the repository does not hold",
 			missingHead: true,
 		},
+		{
+			// HEAD resolves to a commit of the repository, and so does a branch name or a short SHA: none of
+			// them is the full commit SHA the workflow hands the check, and a value git reads as an option is
+			// no commit at all.
+			name:        "a base commit given as the ref name HEAD",
+			baseLiteral: "HEAD",
+		},
+		{
+			name:        "a head commit given as the ref name HEAD",
+			headLiteral: "HEAD",
+		},
 	}
 }
 
@@ -346,6 +383,11 @@ func runAuditPathsCase(t *testing.T, tc auditPathsCase) {
 
 	headSHA := auditPathsGit(t, env, repo, "rev-parse", "HEAD")
 
+	// A case whose main moved on hands that commit to the run instead of the base commit.
+	if tc.baseRef != "" {
+		baseSHA = auditPathsGit(t, env, repo, "rev-parse", tc.baseRef)
+	}
+
 	variables := map[string]string{}
 
 	switch {
@@ -358,9 +400,12 @@ func runAuditPathsCase(t *testing.T, tc auditPathsCase) {
 		variables[auditPathsAuthorEnv] = auditPathsAuthor
 	}
 
-	// setSHA hands the run one commit, or leaves the variable out, or names a SHA no repository holds.
-	setSHA := func(name, sha string, unset, missing bool) {
+	// setSHA hands the run one commit, or a value that is no full SHA, or leaves the variable out, or
+	// names a SHA no repository holds.
+	setSHA := func(name, sha, literal string, unset, missing bool) {
 		switch {
+		case literal != "":
+			variables[name] = literal
 		case unset:
 		case missing:
 			variables[name] = auditPathsMissingSHA
@@ -369,8 +414,8 @@ func runAuditPathsCase(t *testing.T, tc auditPathsCase) {
 		}
 	}
 
-	setSHA(auditPathsBaseEnv, baseSHA, tc.unsetBase, tc.missingBase)
-	setSHA(auditPathsHeadEnv, headSHA, tc.unsetHead, tc.missingHead)
+	setSHA(auditPathsBaseEnv, baseSHA, tc.baseLiteral, tc.unsetBase, tc.missingBase)
+	setSHA(auditPathsHeadEnv, headSHA, tc.headLiteral, tc.unsetHead, tc.missingHead)
 
 	output, exit := auditPathsRun(t, auditPathsEnv(t, dirs, variables), repo)
 
