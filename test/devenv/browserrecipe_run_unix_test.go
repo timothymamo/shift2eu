@@ -4,7 +4,8 @@
 // started Chromium in is already gone, what it does when the container command merely fails to read that
 // container's state, and what an interrupted run cleans up - including when a second signal of the same kind
 // reaches it while it cleans up (issue #423 items 2 and 3 and the reviewer's findings S2 and N2, PRD #297
-// milestone 2, ADR 0036). Each test runs the real recipe of the real Makefile, in a clone of it, with the two
+// milestone 2, ADR 0036). It pins too that the removal the EXIT trap runs is bounded, so a container runtime that
+// never answers it cannot hold the run for good (issue #449). Each test runs the real recipe of the real Makefile, in a clone of it, with the two
 // commands the recipe runs replaced by stand-ins - the container command, the recipe's $(DOCKER), and go - so no
 // test needs a container runtime, a browser or a build of the site, and no test writes anything into the worktree
 // it runs from. The stand-ins answer the way the tools they stand for do, whatever the recipe asks them, so the
@@ -78,11 +79,20 @@ const (
 	// dockerModeSilent is a Chromium that runs and never logs its DevTools address: the run a test interrupts
 	// with a signal, to pin what the recipe's traps clean up (issue #423, the reviewer's finding S2).
 	dockerModeSilent = "silent"
+	// dockerModeRmWedged is a Chromium that runs and answers every call as a working runtime answers it, except the
+	// removal: its rm never returns, as the call to a wedged daemon never does. It is the container runtime issue
+	// #449 is about, whose one unanswered call used to hold make test-browser in its EXIT trap for good.
+	dockerModeRmWedged = "rm-wedged"
 )
 
 // One run of make test-browser gets this long before the test stops it: the stand-ins answer in milliseconds, so
 // a run that is still going is one whose recipe waits for something that never comes.
 const browserRecipeTimeout = 60 * time.Second
+
+// removalDeadlineSetting is the make variable, and the value the case below gives it, that bounds the removal make
+// test-browser's EXIT trap runs (issue #449): one second, so a run that bounds the removal ends in seconds where the
+// guard timeout below only stops a run that waits for a removal that never comes.
+const removalDeadlineSetting = "TEST_BROWSER_RM_DEADLINE=1"
 
 // The cases a run must fail at once get this long before the test stops the run: the stand-ins answer in
 // milliseconds, so the run ends well inside it, and this is only the hang guard - a recipe that waits where the test
@@ -127,7 +137,11 @@ var exitStatusWord = regexp.MustCompile(`(^|[^0-9])3([^0-9]|$)`)
 // devtoolsLogLine; dockerModeDead, one that exited at once with SHIFT2EU_TEST_DOCKER_STATUS after printing
 // SHIFT2EU_TEST_DOCKER_LOG_LINE; dockerModeInspectTrouble, one that runs while the container command fails on the
 // calls SHIFT2EU_TEST_DOCKER_INSPECT_PLAN names and whose log answers nothing for the first
-// SHIFT2EU_TEST_DOCKER_LOG_MISSES calls; and dockerModeSilent, one that runs and never logs an address.
+// SHIFT2EU_TEST_DOCKER_LOG_MISSES calls; dockerModeSilent, one that runs and never logs an address; and
+// dockerModeRmWedged, one that runs and answers as dockerModeRunning's does, except that its rm never returns:
+// the container runtime that stopped answering the removal the EXIT trap makes (issue #449). A run in that mode
+// leaves a stand-in rm running once the recipe gives up on it, so that rm writes its own pid into the file
+// SHIFT2EU_TEST_DOCKER_RM_PID names before it waits, and the test ends that pid and no other.
 //
 // SHIFT2EU_TEST_CLEANUP_RENDEZVOUS names the stand-in that holds while the recipe's EXIT trap is in its rm call -
 // container for this one, bundle for the stand-in rm - so the test can hand the run the second signal of the same
@@ -264,6 +278,15 @@ rm)
 	# this call: the trap has to ignore it, or its own exit ends the shell before the rest of the cleanup runs.
 	if [ "${SHIFT2EU_TEST_CLEANUP_RENDEZVOUS:-}" = container ]; then
 		hold_for_the_second_signal
+	fi
+	if [ "$mode" = rm-wedged ]; then
+		# The removal that never comes back, the call this whole mode exists for: the recipe has to bound it, and a
+		# run that does not is one the test's guard timeout stops. The call itself is in the log already, above; the
+		# pid this stand-in writes down is what a test ends a stand-in the recipe gave up on by (issue #449).
+		printf '%s\n' "$$" > "${SHIFT2EU_TEST_DOCKER_RM_PID:?set SHIFT2EU_TEST_DOCKER_RM_PID}" || exit 1
+		while :; do
+			sleep 0.05
+		done
 	fi
 	;;
 kill | stop | start | pull)
@@ -441,6 +464,10 @@ func newBrowserRecipeSandbox(t *testing.T, mode string) *browserRecipeSandbox {
 		"SHIFT2EU_TEST_DOCKER_INSPECT_PLAN":  "",
 		"SHIFT2EU_TEST_DOCKER_INSPECT_ERROR": goneInspectLogLine,
 		"SHIFT2EU_TEST_DOCKER_LOG_MISSES":    "0",
+
+		// Where the stand-in rm of the wedged mode writes its pid down before it waits, so a stand-in the recipe
+		// gave up on is one the test can end, and only by that pid (CLAUDE.md, rule 10; issue #449).
+		"SHIFT2EU_TEST_DOCKER_RM_PID": filepath.Join(root, "rm.pid"),
 
 		// The stand-in that holds for the second signal while the run cleans up, quiet by default: a test that pins
 		// the second signal names the removal it waits in, and writes the stand-in rm when that one is the bundle's
@@ -883,6 +910,117 @@ func TestMakeTestBrowserRecipeFailsAtOnceWhenInspectKeepsFailing(t *testing.T) {
 	}
 }
 
+// TestMakeTestBrowserRecipeBoundsItsContainerRemoval pins issue #449: the EXIT trap removed the Chromium container
+// with a $(DOCKER) rm -f that nothing bounded, so a container runtime that never answered that one call held make
+// test-browser for good - a run whose smoke test had long passed, and a maintainer who had to end it by hand, with
+// the container still there. The trap must run the removal in the background, wait for it no longer than
+// TEST_BROWSER_RM_DEADLINE seconds, and then say which container it could not remove and the command that removes
+// it by hand, leaving the run's own status what it was.
+//
+// The stand-in container command's rm never returns here (dockerModeRmWedged) and every other call answers as a
+// working runtime's does, so the run reaches the cleanup of a run that passed. That the recipe bounded the removal
+// is read from what it printed and from the rm call the stand-in logged, and not from a wall clock: a run that waits
+// for a removal that never comes is one the guard timeout below stops, where a run that bounds it ends well inside
+// that guard - so no assertion here depends on how long a second or a poll of the deadline is (the reviewer's advice
+// on PR #443).
+func TestMakeTestBrowserRecipeBoundsItsContainerRemoval(t *testing.T) {
+	t.Parallel()
+
+	sb := newBrowserRecipeSandbox(t, dockerModeRmWedged)
+
+	// The stand-in the recipe backgrounds is in the group of the make this test starts, which startBrowserMake ends
+	// with the test. The check after it reads the pid the stand-in recorded of itself, so a wedged stand-in still
+	// there is reported rather than left running: it must not outlive the test (CLAUDE.md, rule 10).
+	var proc *browserRecipeProcess
+
+	t.Cleanup(func() {
+		if proc != nil {
+			sb.endWedgedRemove(t, proc.pgid())
+		}
+	})
+
+	proc = startBrowserMake(t, sb.clone, []string{testBrowserTarget, removalDeadlineSetting}, sb.env)
+
+	run := proc.wait(browserRecipeTimeout)
+	output := run.output()
+
+	switch {
+	case run.timedOut:
+		t.Fatalf("make test-browser was still running after %s and the test stopped it, although its container answered every call and only the rm -f of its EXIT trap never came back: the trap must run that removal with a deadline of its own, TEST_BROWSER_RM_DEADLINE, and give up on it past that, or a container runtime that stops answering that one call holds the run for good, as a wedged daemon held every run before issue #449\n%s",
+			browserRecipeTimeout, output)
+	case run.err != nil:
+		t.Errorf("make test-browser exited with %v although its container answered and its smoke test ran, and only the rm -f of its EXIT trap never came back: a cleanup that gives up on the removal must leave the run's own status what it was, or a slow container runtime fails a smoke test that passed (issue #449)\n%s",
+			run.err, output)
+	}
+
+	calls := sb.dockerCalls(t)
+
+	name := containerName(calls)
+	if name == "" {
+		t.Fatalf("the stand-in container command recorded no call that started a container with a --name, so this test cannot read back whether the run named the container it gave up on: %s",
+			sb.dockerLogText(t))
+	}
+
+	if got := sb.callsTo(t, "rm"); got == 0 {
+		t.Errorf("the stand-in container command was never asked to remove the container, although the run ended and its EXIT trap removes it: a cleanup that gives up on a removal that does not come back must still ask for it (issue #449)\n%s",
+			sb.dockerLogText(t))
+	}
+
+	// The container is still there, and it holds the name the next run of the worktree wants: a maintainer who reads
+	// the run's output must find both the container it could not remove and the command that removes it by hand, on
+	// one line, since nothing else in the output names that container.
+	if !holdsRemovalAdvice(output, name) {
+		t.Errorf("the run's output holds no line naming %s, the container it gave up removing, with the command that removes it by hand, rm -f %s: the container outlives the run, so a maintainer who read the output alone is left with a name to guess and the container still holding it (issue #449)\n%s",
+			name, name, output)
+	}
+
+	// The removal is the last thing the run does: a run whose work never reached it would hold no line to read back,
+	// and this says which of the two happened rather than leaving it to the failure above.
+	if records := sb.goTestRecords(t); len(records) != 1 {
+		t.Errorf("make test-browser ran the smoke test %d times, want 1: the run's own work is done before its EXIT trap removes the container, so the stand-in that never answers that removal must cost the run nothing but the wait its deadline cuts short (issue #449)\n%s",
+			len(records), sb.goLogText(t))
+	}
+}
+
+// holdsRemovalAdvice reports whether output holds the line a run that gave up on its container's removal must
+// print: the target's name, test-browser:, and the command that removes the container by hand, rm -f followed by its
+// name, on one line, so a maintainer reads what to do without looking anything up.
+func holdsRemovalAdvice(output, name string) bool {
+	for _, line := range strings.Split(output, "\n") {
+		if strings.Contains(line, "test-browser:") && strings.Contains(line, "rm -f "+name) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// endWedgedRemove is the check that nothing the recipe gave up on outlives the test. The trap backgrounds its rm, so
+// the run itself does not wait for it, and a stand-in still there at the end of the test would be left behind
+// silently. It signals the pid the stand-in recorded of itself, and only while that pid is still in the group of the
+// run: a pid the machine has reused for a process of its own belongs to another group and is left alone, and nothing
+// is ever found by name (CLAUDE.md, rule 10). startBrowserMake ends that group first, so a stand-in that is gone
+// already - as it is when the guard timeout killed the group - needs no signal and gets none.
+func (sb *browserRecipeSandbox) endWedgedRemove(t *testing.T, pgid int) {
+	t.Helper()
+
+	pid := sb.wedgedRemovePid(t)
+	if pid == 0 || syscall.Kill(pid, 0) != nil {
+		return
+	}
+
+	if group, err := syscall.Getpgid(pid); err != nil || group != pgid {
+		return
+	}
+
+	_ = syscall.Kill(pid, syscall.SIGKILL)
+
+	if !waitUntil(func() bool { return syscall.Kill(pid, 0) != nil }) {
+		t.Errorf("the stand-in rm the recipe gave up on, pid %d, the pid it recorded of itself, is still running after the test stopped it: a process the test started must not outlive it (CLAUDE.md, rule 10; issue #449)",
+			pid)
+	}
+}
+
 // Where a case's second signal of the same kind arrives, named by the stand-in that runs that removal and holds in it
 // while the run cleans up (issue #423): in the container command's rm -f, or in the rm that removes the bundle
 // directory. Each is the value the sandbox sets SHIFT2EU_TEST_CLEANUP_RENDEZVOUS to.
@@ -1238,6 +1376,29 @@ func (sb *browserRecipeSandbox) dockerLogText(t *testing.T) string {
 	}
 
 	return string(body)
+}
+
+// wedgedRemovePid is the pid the stand-in container command's rm recorded of itself before it waited, and 0 when it
+// never reached that call: the one pid a test may end, because the process that is the stand-in wrote it down itself,
+// and never a pid found by name (fakeContainerCommand, CLAUDE.md rule 10, issue #449).
+func (sb *browserRecipeSandbox) wedgedRemovePid(t *testing.T) int {
+	t.Helper()
+
+	body, err := os.ReadFile(filepath.Join(sb.root, "rm.pid"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+
+		t.Fatalf("read the pid the stand-in rm recorded of itself: %v", err)
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(body)))
+	if err != nil {
+		t.Fatalf("the stand-in rm recorded %q as its pid, which is no pid: %v", string(body), err)
+	}
+
+	return pid
 }
 
 // callsTo is how many times the stand-in container command was asked command - one of run, logs, inspect or rm:
