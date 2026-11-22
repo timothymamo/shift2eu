@@ -6,12 +6,15 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"net"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,11 +46,13 @@ const (
 	// observeTimeout bounds the launcher's own observations after the
 	// preflight's run, under a context detached from the run's.
 	observeTimeout = 10 * time.Second
-	// maxResult caps the result file the audit reads back.
-	maxResult = 16 << 20
 	// outputMode is the mode of the files the launcher writes.
 	outputMode fs.FileMode = 0o600
 )
+
+// MaxResult caps the result file the audit reads back, in bytes: a file over
+// it is refused with a failure of its own.
+const MaxResult int64 = 16 << 20
 
 // The real steps' failures. Run prints none of them: each step's line is its
 // constant class.
@@ -55,7 +60,9 @@ var (
 	errNoInputs       = errors.New("the step was handed no inputs")
 	errPreflightRun   = errors.New("the preflight's CLI run failed")
 	errAuditRun       = errors.New("the audit's CLI run failed")
-	errNoResultFile   = errors.New("the audit wrote no result file")
+	errNoResultFile   = errors.New("the audit wrote no result file, or none that is a regular file")
+	errResultOverCap  = fmt.Errorf("the audit's result file is over its cap of %d bytes", MaxResult)
+	errResultNotJSON  = errors.New("the audit's result file is no single JSON value")
 	errResultSecret   = errors.New("the audit's result file holds a secret of the step's")
 	errWorkArea       = errors.New("the work area is not as laid out before the audit")
 	errPreflightSetup = errors.New("the preflight could not be set up")
@@ -84,7 +91,7 @@ func SystemSteps(pid int, observer Observer) Steps {
 	return Steps{
 		ManagedSettings: CheckManagedSettings,
 		Checksum: func(root string, in Inputs) error {
-			return InstallClaude(in.Tarball, in.Integrity, under(root, claudePath))
+			return InstallClaude(root, in.Tarball, in.Integrity, under(root, claudePath))
 		},
 		Layout: CheckLayout,
 		Bubblewrap: func(ctx context.Context) error {
@@ -98,10 +105,10 @@ func SystemSteps(pid int, observer Observer) Steps {
 
 			return Preflight(ctx, root, in, cliProber{root: root, in: in}, observer, pid)
 		},
-		Audit: func(ctx context.Context, root string) error {
+		Audit: func(ctx context.Context, root string) ([]byte, error) {
 			in, ok := InputsFrom(ctx)
 			if !ok {
-				return errNoInputs
+				return nil, errNoInputs
 			}
 
 			return Audit(ctx, root, in, cliLaunch)
@@ -175,21 +182,23 @@ func Preflight(ctx context.Context, root string, in Inputs, prober Prober, obser
 // empty tmp/ - nothing the preflight's run left, no result file of an earlier
 // run - then has launch make one CLI run with the skill and the fixed user
 // prompt, and takes the result file the run must leave in the work area only
-// when it is a regular file, within its cap, that holds neither the token nor
-// the canary. No 64-hex rule applies to it: the audit's findings may quote
-// SHA-256 pins.
-func Audit(ctx context.Context, root string, in Inputs, launch Launch) error {
+// when it is a regular file, no link, within MaxResult, one JSON value, and
+// holds neither the token nor the canary in its bytes or in any of its decoded
+// strings. It returns the bytes it read and checked: the publication works
+// from them, never from the path. No 64-hex rule applies to them: the audit's
+// findings may quote SHA-256 pins.
+func Audit(ctx context.Context, root string, in Inputs, launch Launch) ([]byte, error) {
 	if err := checkWorkArea(root); err != nil {
-		return err
+		return nil, err
 	}
 
 	prompt, err := Prompt(root)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if err := launch(ctx, root, LaunchConfig(root, in), prompt); err != nil {
-		return errAuditRun
+		return nil, errAuditRun
 	}
 
 	return checkResult(root, in)
@@ -222,28 +231,106 @@ func checkWorkArea(root string) error {
 	return nil
 }
 
-// checkResult takes the result file: a regular file, within maxResult, that
-// holds neither the step's token nor its canary.
-func checkResult(root string, in Inputs) error {
-	path := under(root, resultPath)
-
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
-		return errNoResultFile
+// checkResult takes the result file and returns its bytes: a regular file and
+// no link, within MaxResult, one JSON value, that holds neither the step's
+// token nor its canary.
+func checkResult(root string, in Inputs) ([]byte, error) {
+	body, err := readResult(under(root, resultPath))
+	if err != nil {
+		return nil, err
 	}
 
-	body, err := readCapped(path, maxResult)
+	strs, err := jsonStrings(body)
 	if err != nil {
-		return errNoResultFile
+		return nil, errResultNotJSON
 	}
 
 	for _, secret := range []string{in.Token, in.Canary} {
-		if secret != "" && bytes.Contains(body, []byte(secret)) {
-			return errResultSecret
+		if secret == "" {
+			continue
+		}
+
+		if bytes.Contains(body, []byte(secret)) || slices.ContainsFunc(strs, func(s string) bool { return strings.Contains(s, secret) }) {
+			return nil, errResultSecret
 		}
 	}
 
-	return nil
+	return body, nil
+}
+
+// readResult reads the result file at path from one descriptor, never through
+// a link: the path's entry must be a regular file (Lstat, so neither a link
+// nor a FIFO is ever opened), and the descriptor opened must be that same file
+// (os.SameFile on its Stat), which gives O_NOFOLLOW's guarantee with the os
+// package alone - os has no O_NOFOLLOW, and syscall is outside the library's
+// allow list. The read is capped at MaxResult from that descriptor.
+func readResult(path string) ([]byte, error) {
+	entry, err := os.Lstat(path)
+	if err != nil || !entry.Mode().IsRegular() {
+		return nil, errNoResultFile
+	}
+
+	file, err := os.Open(path) //nolint:gosec // G304: the layout's own result path, checked as a regular file and as the entry opened
+	if err != nil {
+		return nil, errNoResultFile
+	}
+	defer file.Close()
+
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(entry, opened) {
+		return nil, errNoResultFile
+	}
+
+	body, err := io.ReadAll(io.LimitReader(file, MaxResult+1))
+	if err != nil {
+		return nil, errNoResultFile
+	}
+
+	if int64(len(body)) > MaxResult {
+		return nil, errResultOverCap
+	}
+
+	return body, nil
+}
+
+// jsonStrings decodes body as exactly one JSON value and returns every string
+// in it, the objects' keys included, as decoded: a secret written with JSON
+// escapes is found in them though no byte of the file spells it.
+func jsonStrings(body []byte) ([]string, error) {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, fmt.Errorf("decode: %w", err)
+	}
+
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, errResultNotJSON
+	}
+
+	var strs []string
+
+	collectStrings(value, &strs)
+
+	return strs, nil
+}
+
+// collectStrings appends every string of a decoded JSON value to strs.
+func collectStrings(value any, strs *[]string) {
+	switch v := value.(type) {
+	case string:
+		*strs = append(*strs, v)
+	case []any:
+		for _, item := range v {
+			collectStrings(item, strs)
+		}
+	case map[string]any:
+		for key, item := range v {
+			*strs = append(*strs, key)
+			collectStrings(item, strs)
+		}
+	}
 }
 
 // cliProber is the Prober of a real run: the audit's launch with the

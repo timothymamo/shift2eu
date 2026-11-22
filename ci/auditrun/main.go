@@ -45,7 +45,10 @@ func run(args []string, getenv func(string) (string, bool), steps audit.Steps, r
 	return runContext(context.Background(), args, getenv, steps, root, stdout, stderr)
 }
 
-// runContext is run under ctx.
+// runContext is run under ctx. It leaves the run's Result nil: the run checks
+// the result file and keeps its bytes, but nothing publishes them yet - the
+// publication job of ADR 0040's step 19, PR 5 of PRD #175 milestone 2, sets
+// Result.
 func runContext(ctx context.Context, args []string, getenv func(string) (string, bool), steps audit.Steps, root string, stdout, stderr io.Writer) int {
 	in, err := inputs(args, getenv, stderr)
 	if err != nil {

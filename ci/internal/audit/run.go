@@ -72,17 +72,24 @@ type Steps struct {
 	// Preflight runs the sandbox preflight; a failure that is a *Verdict is
 	// printed as its own text, which names the probes.
 	Preflight func(ctx context.Context, root string) error
-	// Audit runs the audit.
-	Audit func(ctx context.Context, root string) error
+	// Audit runs the audit and returns the result file's bytes it read and
+	// checked, never the file's path.
+	Audit func(ctx context.Context, root string) ([]byte, error)
 }
 
-// Run is one audit run: its root, its inputs, its steps and where its one line
-// goes.
+// Run is one audit run: its root, its inputs, its steps, where its one line
+// goes and who takes the audit's result.
 type Run struct {
 	Root   string
 	Inputs Inputs
 	Steps  Steps
 	Out    io.Writer
+	// Result, when set, is handed the result file's bytes the audit step read
+	// and checked, exactly those, once, after every step passed; a run that
+	// failed never calls it. It is the seam the publication (ADR 0040, step
+	// 19) works from, so nothing reads the result file again by its path. A
+	// Result that fails fails the run with the audit's line.
+	Result func(body []byte) error
 }
 
 // inputsKey is the context key the run's Inputs travel under.
@@ -146,7 +153,12 @@ func (r Run) steps(ctx context.Context) (int, string) {
 		return ExitFailed, linePreflight
 	}
 
-	if s.Audit(ctx, r.Root) != nil {
+	body, err := s.Audit(ctx, r.Root)
+	if err != nil {
+		return ExitFailed, lineAudit
+	}
+
+	if r.Result != nil && r.Result(body) != nil {
 		return ExitFailed, lineAudit
 	}
 

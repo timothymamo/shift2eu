@@ -60,7 +60,8 @@ var gitSubcommands = map[string]bool{
 // in their --opt=value form and abbreviated (git's option parser takes a
 // unique prefix of a long option): each names another configuration, git
 // directory, work tree, namespace, program or output file.
-// --open-files-in-pager is git grep's, which runs a program of the caller's.
+// --open-files-in-pager is git grep's, which runs a program of the caller's;
+// --show-signature verifies a commit's signature, which runs gpg.
 var gitRefusedLong = []string{
 	"--config-env",
 	"--exec-path",
@@ -71,7 +72,20 @@ var gitRefusedLong = []string{
 	"--textconv",
 	"--output",
 	"--open-files-in-pager",
+	"--show-signature",
 }
+
+// gitFormatOptions are the long git options whose value is a format: git log's
+// and show's --format and --pretty, and for-each-ref's --format.
+var gitFormatOptions = []string{"--format", "--pretty"}
+
+// gitSignaturePlaceholders are the format placeholders that ask git to verify
+// a signature, which runs gpg as --show-signature does: log's and show's %G?,
+// %GS, %GK, %GG and the rest of %G, and for-each-ref's %(signature...).
+var gitSignaturePlaceholders = []string{"%G", "%(signature"}
+
+// gitFormatPrefixes are the prefixes a format value of git's may carry.
+var gitFormatPrefixes = []string{"format:", "tformat:"}
 
 // gitOwnOptions are git options of their own that are a prefix of a refused
 // one, and so no abbreviation of it.
@@ -179,8 +193,8 @@ func commandLine(args []string) ([]string, string, bool) {
 
 	switch name {
 	case "git":
-		for _, arg := range rest {
-			if refusedGitOption(arg) {
+		for i, arg := range rest {
+			if refusedGitOption(arg) || signatureFormat(arg, i > 0 && isFormatOption(rest[i-1])) {
 				return nil, arg, false
 			}
 		}
@@ -220,6 +234,50 @@ func refusedGitOption(arg string) bool {
 
 	for _, long := range gitRefusedLong {
 		if name == long || (len(name) > len("--") && strings.HasPrefix(long, name)) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// signatureFormat reports whether arg is a format that asks for a signature's
+// verification: a word holding a signature placeholder that is a long option's
+// attached value (--format=, --pretty= or an abbreviation of either), a
+// format:/tformat: value, or the value of a format option given as the next
+// argument (afterFormat).
+func signatureFormat(arg string, afterFormat bool) bool {
+	if !hasAnyPart(arg, gitSignaturePlaceholders) {
+		return false
+	}
+
+	if name, _, attached := strings.Cut(arg, "="); attached && isFormatOption(name) {
+		return true
+	}
+
+	return afterFormat || hasAnyPrefix(arg, gitFormatPrefixes)
+}
+
+// isFormatOption reports whether word, without a value, is one of git's format
+// options or a unique-prefix abbreviation of one.
+func isFormatOption(word string) bool {
+	if !strings.HasPrefix(word, "--") || strings.Contains(word, "=") || len(word) <= len("--") {
+		return false
+	}
+
+	for _, long := range gitFormatOptions {
+		if strings.HasPrefix(long, word) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// hasAnyPart reports whether word holds one of parts.
+func hasAnyPart(word string, parts []string) bool {
+	for _, part := range parts {
+		if strings.Contains(word, part) {
 			return true
 		}
 	}

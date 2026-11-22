@@ -170,8 +170,10 @@ var permissionModes = []string{"dontAsk", "plan"}
 
 // reservedEnv are the variables a config's Env never sets: the ones the
 // launcher sets itself (the token, HOME, PATH and the four switches), and the
-// ones that would point the CLI at another credential, endpoint, proxy or
-// managed-settings file, or load code into its process.
+// ones that would point the CLI at another credential, endpoint, proxy (in
+// either case: Node and curl read the lower-case names too), certificate
+// authority, configuration directory, request header or managed-settings
+// file, turn its TLS checks off, or load code into its process.
 var reservedEnv = []string{
 	"CLAUDE_CODE_OAUTH_TOKEN",
 	"HOME",
@@ -187,8 +189,19 @@ var reservedEnv = []string{
 	"NODE_OPTIONS",
 	"LD_PRELOAD",
 	"LD_LIBRARY_PATH",
+	"LD_AUDIT",
 	"HTTPS_PROXY",
 	"HTTP_PROXY",
+	"ALL_PROXY",
+	"NO_PROXY",
+	"https_proxy",
+	"http_proxy",
+	"all_proxy",
+	"no_proxy",
+	"NODE_TLS_REJECT_UNAUTHORIZED",
+	"NODE_EXTRA_CA_CERTS",
+	"CLAUDE_CONFIG_DIR",
+	"ANTHROPIC_CUSTOM_HEADERS",
 }
 
 // reservedEnvPrefix starts the names of the switches that move the CLI to

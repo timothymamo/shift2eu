@@ -6,11 +6,14 @@
 //     path, checked with Lstat.
 //  2. InstallClaude checks the kept tarball's sha512 against the pin's npm
 //     integrity and only then extracts its one entry, package/claude, mode 0500,
-//     into a directory that is no symbolic link; a PAX global header is skipped.
+//     into state/bin, every directory from the root down to it checked as no
+//     symbolic link; a PAX global header is skipped.
 //  3. CheckLayout checks the audit directory under /srv/audit as the ADR lays
-//     it out, refusing a symbolic link in its directories, any write bit or
-//     link out of its tree under checkout and checks, and a checkout .git that
-//     is no directory or whose config names a program, credential or include.
+//     it out, refusing a symbolic link in its directories, any write bit, any
+//     entry but a directory, a regular file or an in-tree link under checkout
+//     and checks, and a checkout .git that is no directory, that holds a
+//     config.worktree, commondir or gitdir, or whose config holds a key off
+//     the allow list or a line its strict parser cannot place.
 //  4. CheckBubblewrap starts `bwrap --unshare-all --die-with-parent --ro-bind /
 //     / /bin/true` once.
 //  5. Preflight has the model make PreflightPlan's calls - a control that reads
@@ -23,12 +26,16 @@
 //     but false, and neither secret is anywhere in the transcript.
 //  6. Audit checks that the work area again holds only its empty tmp/, asks
 //     the model once through a Launch, with the skill from the checkout copy as
-//     the appended system prompt, and wants a result file in the work area
-//     that holds neither the token nor the canary.
+//     the appended system prompt, and wants a result file in the work area -
+//     a regular file, no link, within MaxResult, one JSON value - that holds
+//     neither the token nor the canary in its bytes or its decoded strings. It
+//     returns the bytes it read and checked.
 //
 // Run takes the steps and prints one line: "finished", a constant class, or
 // the preflight's Verdict, whose text is made of constants alone. No step's
 // error text is printed: it can hold the CLI's output, the token or the canary.
+// Once every step passed, Run hands the audit's bytes to its Result, the seam
+// the publication works from.
 // The CLI runs through the shared launcher ci/internal/claudecode with
 // LaunchConfig, built from the run's Inputs alone, so nothing of the caller's
 // environment reaches it. Every path is taken under a root that stands in for
