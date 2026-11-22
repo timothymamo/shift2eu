@@ -10,21 +10,21 @@
 // CLI's configuration and transcripts - is a layout the model could read from
 // elsewhere, so it is refused rather than followed. So is an entry of a type a
 // checkout copy and the checks' results never hold, a FIFO or a socket among
-// them. The library takes a root standing in for /, so a test lays the tree out
-// under a temporary root.
+// them: those two cases are in layout_unix_test.go, behind the unix build tag,
+// because only a Unix host can lay them down. The library takes a root standing
+// in for /, so a test lays the tree out under a temporary root.
 //
 // The checkout copy's git configuration is an allow list (issue #277, round D
-// finding 1): the keys and sections a clone carries pass, in whatever case git
-// reads them, and every other key, every key a line the parser cannot place
+// finding 1): the keys and sections a clone carries pass, whatever case they are
+// written in: section and key name are compared without regard to case, the
+// subsection exactly. Every other key, every key a line the parser cannot place
 // yields, and the three files git reads a configuration or a repository out of
 // beside .git/config are refused.
 package audit_test
 
 import (
-	"net"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 
 	"github.com/timothymamo/shift2eu/ci/internal/audit"
@@ -71,8 +71,9 @@ const checkoutGitConfig = `[core]
 	merge = refs/heads/main
 `
 
-// mixedCaseGitConfig is that configuration in the case git reads it in: a
-// section and a key are matched case-insensitively, so the allow list is too.
+// mixedCaseGitConfig is that configuration in another case, which the allow list
+// reads as the same one: the section and the key name are compared without
+// regard to case, while a subsection such as origin is compared exactly.
 const mixedCaseGitConfig = `[CORE]
 	RepositoryFormatVersion = 0
 	Filemode = true
@@ -149,7 +150,7 @@ func TestCheckLayoutTakesTheADRsDirectory(t *testing.T) {
 // config check (issue #277, round D finding 1): the configuration a checkout
 // carries is an allow list of keys and sections, and the configuration
 // actions/checkout writes with persist-credentials: false passes whole, in
-// whatever case git reads it in, with the comments and blank lines a config may
+// whatever case it is written, with the comments and blank lines a config may
 // hold, and with no config at all.
 func TestCheckLayoutTakesTheCheckoutsGitConfig(t *testing.T) {
 	t.Parallel()
@@ -187,6 +188,16 @@ func TestCheckLayoutTakesTheCheckoutsGitConfig(t *testing.T) {
 	}
 }
 
+// layoutCase is one way the tree can differ from the ADR's: the case's name and
+// the mutation that breaks the part of the tree it is about. It is a named type
+// so that the cases only a Unix host can lay down, kept in layout_unix_test.go
+// behind the unix build tag, can be appended to the table.
+type layoutCase struct {
+	name string
+	// mutate breaks the tree the case is about.
+	mutate func(t *testing.T, root string)
+}
+
 // TestCheckLayoutRefusesAnythingElse pins every way the tree can differ from
 // the ADR's: a directory or the wrapper missing, a write bit on the checkout
 // copy or the checks' results, an empty area holding something, a wrapper of
@@ -195,11 +206,7 @@ func TestCheckLayoutTakesTheCheckoutsGitConfig(t *testing.T) {
 func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct {
-		name string
-		// mutate breaks the tree the case is about.
-		mutate func(t *testing.T, root string)
-	}{
+	cases := []layoutCase{
 		{name: "the checkout copy is missing", mutate: gone(checkout)},
 		{name: "the checks' results are missing", mutate: gone(checks)},
 		{name: "the work area is missing", mutate: gone(work)},
@@ -284,28 +291,6 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 			mutate: mutateTree(checkout, func(t *testing.T, root string) {
 				t.Helper()
 				makeSymlink(t, "../../../../../../etc", pathOf(root, []string{"checkout", "etc"}))
-			}),
-		},
-
-		// The walk meets two entry types a checkout copy and the checks' results
-		// never hold, and refuses them: a FIFO and a socket are read or written
-		// by another process, so neither is a file the audit reads (issue #277,
-		// round D finding 3). Both are laid down read-only, so the type is the
-		// one defect the case names.
-		{
-			name: "the checkout copy holds a FIFO",
-			mutate: mutateTree(checkout, func(t *testing.T, root string) {
-				t.Helper()
-				makeFIFO(t, pathOf(root, []string{"checkout", "pipe"}))
-			}),
-		},
-		{
-			// A short name: the socket's path is limited to 108 bytes. A socket
-			// the checks' results hold in place of a report is the same defect.
-			name: "a socket",
-			mutate: mutateTree(checks, func(t *testing.T, root string) {
-				t.Helper()
-				makeSocket(t, pathOf(root, []string{"checks", "sock"}))
 			}),
 		},
 
@@ -454,6 +439,11 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 		},
 	}
 
+	// The entry types a checkout copy and the checks' results never hold, which
+	// only a Unix host lays down: a FIFO and a unix socket (issue #277, round D
+	// finding 3).
+	cases = append(cases, unixLayoutCases...)
+
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -559,37 +549,6 @@ func gitLinkIn(name, target string) func(t *testing.T, root string) {
 		t.Helper()
 		makeSymlink(t, target, filepath.Join(pathOf(root, gitDir), name))
 	})
-}
-
-// makeFIFO makes a FIFO at path, mode 0444: an entry of a type no checkout copy
-// holds, laid down read-only so that the type is the one defect a case names.
-func makeFIFO(t *testing.T, path string) {
-	t.Helper()
-
-	if err := syscall.Mkfifo(path, 0o444); err != nil {
-		t.Fatalf("make a FIFO at %s: %v", path, err)
-	}
-
-	if err := os.Chmod(path, 0o444); err != nil {
-		t.Fatalf("chmod the FIFO %s: %v", path, err)
-	}
-}
-
-// makeSocket makes a unix socket at path, mode 0444, and closes the listener
-// once the test is done: the socket's file is the entry a case names.
-func makeSocket(t *testing.T, path string) {
-	t.Helper()
-
-	listener, err := net.Listen("unix", path)
-	if err != nil {
-		t.Fatalf("make a socket at %s: %v", path, err)
-	}
-
-	t.Cleanup(func() { _ = listener.Close() })
-
-	if err := os.Chmod(path, 0o444); err != nil {
-		t.Fatalf("chmod the socket %s: %v", path, err)
-	}
 }
 
 // unlock returns a mutation that makes the tree at parts writable, applies mutate
