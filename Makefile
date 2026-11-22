@@ -244,7 +244,9 @@ host_sq = '$(subst ','\'',$(1))'
 # cannot read, or one that reads other than the kernel resolves it. It prints nothing and sets only resolved and
 # res_* variables, so a caller keeps a target's trailing newline (no command substitution) and its own variables.
 # within <path> <dir> holds when the longest prefix of path that exists, or one of that prefix's ancestors, is the
-# same file as dir (test -ef): containment by file identity, never by spelling. It stays a make definition, not a
+# same file as dir (test -ef): containment by file identity, never by spelling. path must be resolve's result, with
+# no symlink left in it, as within walks path's lexical ancestors, which are its physical ones only then; a raw
+# path, whose .. or link could climb elsewhere, is never passed to it. It stays a make definition, not a
 # script of dev/, as both guards run while make reads this file, from the copy of this Makefile make runs, so it
 # needs no path to a script, nothing on the host targets' allow lists, and no file the guards could not find.
 host_resolve = resolve() { resolved=; res_rest=$$1; res_hops=0; while [ -n "$$res_rest" ]; do res_part=$${res_rest%%/*}; res_rest=$${res_rest$(host_hash)"$$res_part"}; res_rest=$${res_rest$(host_hash)/}; case $$res_part in (''|.) ;; (..) resolved=$${resolved%/*} ;; (*) if [ -L "$$resolved/$$res_part" ]; then res_hops=$$((res_hops + 1)); [ "$$res_hops" -le 32 ] && res_link=$$(readlink "$$resolved/$$res_part" 2>/dev/null && echo _) && res_link=$${res_link%??} && [ -n "$$res_link" ] || return 1; case $$res_link in (/*) res_target=$$res_link ;; (*) res_target="$$resolved/$$res_link" ;; esac; if [ -e "$$resolved/$$res_part" ]; then [ "$$resolved/$$res_part" -ef "$$res_target" ] || return 1; else [ ! -e "$$res_target" ] || return 1; fi; case $$res_link in (/*) resolved= ;; esac; res_rest="$$res_link/$$res_rest"; else resolved="$$resolved/$$res_part"; fi ;; esac; done; }; within() { res_p=$$1; while [ -n "$$res_p" ] && [ ! -e "$$res_p" ]; do res_p=$${res_p%/*}; done; while :; do [ ! "$${res_p:-/}" -ef "$$2" ] || return 0; [ -n "$$res_p" ] || return 1; res_p=$${res_p%/*}; done; };
