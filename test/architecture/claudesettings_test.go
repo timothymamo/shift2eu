@@ -241,7 +241,10 @@ func decodeJSONValue(dec *json.Decoder, path string) (any, error) {
 
 		return object, nil
 	case '[':
-		var array []any
+		// An empty JSON array decodes to an empty slice, not a nil one: the
+		// wanted document writes its empty lists as []any{}, and cmp.Diff tells
+		// nil from empty.
+		array := []any{}
 
 		for dec.More() {
 			index := len(array)

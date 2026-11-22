@@ -431,8 +431,10 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 					args: append([]string{"git", "log"}, append(valueArgs(refused.value), refused.option)...),
 				},
 				{
+					// The option sits on the line, between the subcommand and
+					// its own argument: what the wrapper must refuse.
 					name: "between the subcommand and its arguments",
-					args: append(append([]string{"git", "log"}, valueArgs(refused.value)...), "-1"),
+					args: append(append([]string{"git", "log", refused.option}, valueArgs(refused.value)...), "-1"),
 				},
 				{
 					name: "in the option's own =value form",
