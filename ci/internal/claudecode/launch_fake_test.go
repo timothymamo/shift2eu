@@ -28,6 +28,10 @@ const streamedRun = `{"type":"system","subtype":"init"}
 {"type":"result","subtype":"success","is_error":false,"result":"the last result"}
 `
 
+// answeredRun is what a fake CLI prints for --output-format json: the one result
+// element the launcher reads.
+const answeredRun = `{"type":"result","subtype":"success","is_error":false,"result":"the last result"}`
+
 // claudeFake is one fake CLI's behaviour, and the bytes it holds.
 type claudeFake struct {
 	stdout string
@@ -281,5 +285,132 @@ func TestAskWritesTheTranscriptOfAFailedRunToo(t *testing.T) {
 
 	if transcript.String() != failedRun {
 		t.Errorf("the transcript holds %q, want every byte the CLI printed, %q", transcript.String(), failedRun)
+	}
+}
+
+// TestAskWritesTheSystemPromptIntoTheCallersDirectory pins finding R11 of the
+// review of issue #277: a config that fixes HOME fixes the system prompt's
+// directory too, so the file lands where the caller can watch it - for the audit,
+// the state area's tmp/ - and not in the temporary directory the process's TMPDIR
+// names, which an earlier step of the same job can set. The file is the run's
+// alone: it is gone when Ask returns.
+func TestAskWritesTheSystemPromptIntoTheCallersDirectory(t *testing.T) {
+	t.Parallel()
+
+	cli, rec := newFakeClaudeCLI(t, claudeFake{stdout: answeredRun})
+
+	work, home, prompts := t.TempDir(), t.TempDir(), t.TempDir()
+
+	launcher := claudecode.New(claudecode.Config{
+		Path:            cli,
+		Token:           "fake-subscription-value-123",
+		Model:           auditModel,
+		WorkDir:         work,
+		Home:            home,
+		SystemPromptDir: prompts,
+		Timeout:         30 * time.Second,
+	})
+
+	prompt := claudecode.Prompt{System: "the audit's skill, appended to the CLI's own prompt", User: "the audit's fixed user prompt"}
+
+	if _, err := launcher.Ask(t.Context(), prompt); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	systemFile, ok := valueAfter(rec.args(t), "--system-prompt-file")
+	if !ok {
+		t.Fatalf("the CLI's arguments %q hold no --system-prompt-file, so the system prompt never reached it", rec.args(t))
+	}
+
+	if got := filepath.Dir(systemFile); got != prompts {
+		t.Errorf("the system prompt file is %q, want it in the config's directory %q: the launcher writes nothing into the temporary directory the process's TMPDIR names when the caller names one (issue #277)", systemFile, prompts)
+	}
+
+	if got := rec.read(t, "system"); got != prompt.System {
+		t.Errorf("the file --system-prompt-file names held %q, want the prompt's system %q", got, prompt.System)
+	}
+
+	left, err := os.ReadDir(prompts)
+	if err != nil {
+		t.Fatalf("read %s: %v", prompts, err)
+	}
+
+	if len(left) != 0 {
+		var names []string
+		for _, entry := range left {
+			names = append(names, entry.Name())
+		}
+
+		t.Errorf("the config's directory holds %v after the run, want nothing: the launcher removes the file it wrote", names)
+	}
+}
+
+// TestAskKeepsTheReviewersSystemPromptInTheTemporaryDirectory pins the other half
+// of R11: the reviewer's launch fixes no directory, and its system prompt stays in
+// the fresh temporary directory of its own that the launcher removes after the
+// run.
+func TestAskKeepsTheReviewersSystemPromptInTheTemporaryDirectory(t *testing.T) {
+	t.Parallel()
+
+	cli, rec := newFakeClaudeCLI(t, claudeFake{stdout: answeredRun})
+
+	launcher := claudecode.New(claudecode.Config{
+		Path:    cli,
+		Token:   "fake-subscription-value-123",
+		Model:   auditModel,
+		Timeout: 30 * time.Second,
+	})
+
+	if _, err := launcher.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"}); err != nil {
+		t.Fatalf("Ask: %v", err)
+	}
+
+	systemFile, ok := valueAfter(rec.args(t), "--system-prompt-file")
+	if !ok {
+		t.Fatalf("the CLI's arguments %q hold no --system-prompt-file", rec.args(t))
+	}
+
+	if !strings.HasPrefix(systemFile, os.TempDir()) {
+		t.Errorf("the system prompt file is %q, want one under the process's temporary directory %q: a config that names no directory keeps the reviewer's launch", systemFile, os.TempDir())
+	}
+}
+
+// TestAskRedactsEveryValueItWasGiven pins finding A5 of the audit of issue #277:
+// the launcher's error quotes at most an excerpt of the CLI's stderr, and the
+// excerpt holds neither the token nor a value the config adds to Redact - the
+// audit's canary among them - so the stderr file the launcher writes into the
+// state area holds neither either.
+func TestAskRedactsEveryValueItWasGiven(t *testing.T) {
+	t.Parallel()
+
+	// token and canary are obvious fakes, never real values (CLAUDE.md rule 3).
+	const (
+		token  = "fake-subscription-value-123"
+		canary = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	)
+
+	cli, _ := newFakeClaudeCLI(t, claudeFake{stdout: "", stderr: "the shell holds " + token + " and " + canary + "\n", exit: 1})
+
+	launcher := claudecode.New(claudecode.Config{
+		Path:    cli,
+		Token:   token,
+		Model:   auditModel,
+		Redact:  []string{canary},
+		Timeout: 30 * time.Second,
+	})
+
+	_, err := launcher.Ask(t.Context(), claudecode.Prompt{System: "s", User: "u"})
+	if err == nil {
+		t.Fatal("Ask = nil, want an error: the CLI printed no result and exited non-zero")
+	}
+
+	for _, secret := range []string{token, canary} {
+		if strings.Contains(err.Error(), secret) {
+			t.Errorf("Ask = %q, want the value %q redacted: the error can reach the job's log and the state area's stderr file", err, secret)
+		}
+	}
+
+	if !strings.Contains(err.Error(), "[redacted]") {
+		t.Errorf("Ask = %q, want the excerpt to stand the values in for with [redacted]", err)
 	}
 }

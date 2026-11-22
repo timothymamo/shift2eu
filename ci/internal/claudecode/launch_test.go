@@ -449,6 +449,79 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 			field: "DISABLE_ERROR_REPORTING",
 			apply: func(c *claudecode.Config) { c.Env = []string{"DISABLE_ERROR_REPORTING=0"} },
 		},
+		{
+			name:  "a system prompt's directory of a relative path",
+			field: "system prompt",
+			apply: func(c *claudecode.Config) { c.SystemPromptDir = "state/tmp" },
+		},
+		{
+			name:  "a system prompt's directory that does not exist",
+			field: "system prompt",
+			apply: func(c *claudecode.Config) { c.SystemPromptDir = missingDir },
+		},
+
+		// The variables that change the CLI's endpoint or its policy are the
+		// caller's to set nowhere: the launcher's environment is the ADR's allow
+		// list, and an entry that pointed the CLI at another endpoint, loaded
+		// another managed-settings file or preloaded a library would take the
+		// audit's run out of the ADR's containment (issue #277, audit A10).
+		{
+			name:  "an entry that sets an API key",
+			field: "ANTHROPIC_API_KEY",
+			apply: func(c *claudecode.Config) { c.Env = []string{"ANTHROPIC_API_KEY=sk-ant-invented"} },
+		},
+		{
+			name:  "an entry that sets an auth token",
+			field: "ANTHROPIC_AUTH_TOKEN",
+			apply: func(c *claudecode.Config) { c.Env = []string{"ANTHROPIC_AUTH_TOKEN=invented"} },
+		},
+		{
+			name:  "an entry that points the CLI at another endpoint",
+			field: "ANTHROPIC_BASE_URL",
+			apply: func(c *claudecode.Config) { c.Env = []string{"ANTHROPIC_BASE_URL=https://example.com"} },
+		},
+		{
+			name:  "an entry that names another settings file",
+			field: "CLAUDE_CODE_MANAGED_SETTINGS_PATH",
+			apply: func(c *claudecode.Config) {
+				c.Env = []string{"CLAUDE_CODE_MANAGED_SETTINGS_PATH=/srv/audit/work/x.json"}
+			},
+		},
+		{
+			name:  "an entry that loads a library into the CLI's node",
+			field: "NODE_OPTIONS",
+			apply: func(c *claudecode.Config) { c.Env = []string{"NODE_OPTIONS=--require /srv/audit/work/x.js"} },
+		},
+		{
+			name:  "an entry that preloads a library",
+			field: "LD_PRELOAD",
+			apply: func(c *claudecode.Config) { c.Env = []string{"LD_PRELOAD=/srv/audit/work/x.so"} },
+		},
+		{
+			name:  "an entry that names another library path",
+			field: "LD_LIBRARY_PATH",
+			apply: func(c *claudecode.Config) { c.Env = []string{"LD_LIBRARY_PATH=/srv/audit/work"} },
+		},
+		{
+			name:  "an entry that routes the CLI's HTTPS through a proxy",
+			field: "HTTPS_PROXY",
+			apply: func(c *claudecode.Config) { c.Env = []string{"HTTPS_PROXY=http://192.0.2.10:3128"} },
+		},
+		{
+			name:  "an entry that routes the CLI's HTTP through a proxy",
+			field: "HTTP_PROXY",
+			apply: func(c *claudecode.Config) { c.Env = []string{"HTTP_PROXY=http://192.0.2.10:3128"} },
+		},
+		{
+			name:  "an entry that switches the CLI to another provider",
+			field: "CLAUDE_CODE_USE_BEDROCK",
+			apply: func(c *claudecode.Config) { c.Env = []string{"CLAUDE_CODE_USE_BEDROCK=1"} },
+		},
+		{
+			name:  "an entry that switches the CLI to a third provider",
+			field: "CLAUDE_CODE_USE_VERTEX",
+			apply: func(c *claudecode.Config) { c.Env = []string{"CLAUDE_CODE_USE_VERTEX=\"1\""} },
+		},
 	}
 
 	for _, tc := range cases {
