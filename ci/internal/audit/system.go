@@ -288,7 +288,7 @@ func observe(ctx context.Context, root, gitHubEnv string, before [32]byte, accep
 		_ = conn.Close()
 	}
 
-	effects.sudo = ExecRunner{}.Run(ctx, []string{sudoPath, "-n", "true"}) == nil
+	effects.sudo = ExecRunner{}.Check(ctx, []string{sudoPath, "-n", "true"}) == nil
 
 	after, err := digest(gitHubEnv)
 	effects.envDigest = err != nil || after != before

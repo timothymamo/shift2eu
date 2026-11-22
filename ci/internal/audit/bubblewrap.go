@@ -16,10 +16,10 @@ const bwrapPath = "/usr/bin/bwrap"
 // outliving the launcher, the whole filesystem read-only and /bin/true.
 var bwrapCheck = []string{"--unshare-all", "--die-with-parent", "--ro-bind", "/", "/", "/bin/true"}
 
-// Runner runs one command, argv[0] an absolute path, and reports whether it
-// started and exited 0.
+// Runner checks one command, argv[0] an absolute path: it starts it and
+// reports whether it started and exited 0.
 type Runner interface {
-	Run(ctx context.Context, argv []string) error
+	Check(ctx context.Context, argv []string) error
 }
 
 // CheckBubblewrap starts bubblewrap once, with the invocation the ADR gives,
@@ -28,7 +28,7 @@ type Runner interface {
 func CheckBubblewrap(ctx context.Context, runner Runner) error {
 	argv := append([]string{bwrapPath}, bwrapCheck...)
 
-	if err := runner.Run(ctx, argv); err != nil {
+	if err := runner.Check(ctx, argv); err != nil {
 		return fmt.Errorf("bubblewrap cannot start: %w", err)
 	}
 
@@ -39,10 +39,10 @@ func CheckBubblewrap(ctx context.Context, runner Runner) error {
 // environment of PATH alone, in /, with no stdin and its output discarded.
 type ExecRunner struct{}
 
-// Run starts argv and waits for it.
-func (ExecRunner) Run(ctx context.Context, argv []string) error {
+// Check starts argv and waits for it.
+func (ExecRunner) Check(ctx context.Context, argv []string) error {
 	if len(argv) == 0 {
-		return errors.New("run: no command")
+		return errors.New("check: no command")
 	}
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // G204: argv is the launcher's own fixed invocation (bwrap, sudo), never a caller's
