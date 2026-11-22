@@ -120,6 +120,45 @@ func (l *hostLayout) workspace() string {
 	return filepath.Dir(l.env["WORKSPACE_REPO"])
 }
 
+// caseInsensitiveDir reports whether the file system holding dir resolves a name spelled in another case to the
+// same file: it writes a probe file there and stats that file's case-swapped name. The property is detected where
+// the sandbox lives rather than from GOOS, as it is the file system, not the kernel, that decides it: macOS's APFS
+// is case-insensitive by default, Linux's file systems are case-sensitive (issue #447).
+func caseInsensitiveDir(t *testing.T, dir string) bool {
+	t.Helper()
+
+	path := filepath.Join(dir, "case-probe")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "CASE-PROBE")); err != nil {
+		if !os.IsNotExist(err) {
+			t.Fatalf("stat the case-swapped name of %s: %v", path, err)
+		}
+
+		return false
+	}
+
+	return true
+}
+
+// caseSwapped returns path with the case of every letter swapped: on a case-insensitive file system it names the
+// same files as path, while its spelling differs from every path REPO_ROOT and the workspace's resolver print,
+// which keep the on-disk case (issue #447).
+func caseSwapped(path string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r - 'a' + 'A'
+		case r >= 'A' && r <= 'Z':
+			return r - 'A' + 'a'
+		default:
+			return r
+		}
+	}, path)
+}
+
 // recordingGit stands in for git in the host-target tests: it records its argv in the sandbox's log and then
 // runs the machine's own git, so the Makefile's parse-time reads (git describe, git rev-parse, git config
 // user.name) answer as they do, while a test can prove that no recipe ran `git config core.hooksPath .githooks`
@@ -166,6 +205,18 @@ exec %s "$@"
 // path holding a space is no path they may be handed. Neither refusal shows the resolved value or the part of it
 // that failed, which may be a credential typed where a path goes. A target spelling .. components counts as it
 // resolves, so a link leading into the checkout that way is refused like one leading there directly.
+//
+// Two more paths the kernel and the resolver read differently are refused (issue #447, found by the review and the
+// audit). A link whose target ends in a newline: command substitution strips the trailing newline, so a resolver
+// reading "alias\n" as "alias" follows the directory of that name while the kernel walks the link named "alias\n"
+// into the checkout make runs from - the workspace must be refused, as inside the checkout or as unresolvable. And
+// a path spelled in another case on a case-insensitive file system, where the kernel finds the checkout while a
+// resolver that keeps the components as typed compares a spelling REPO_ROOT never equals: the workspace spelled
+// thus inside the checkout must be refused too. The file system is asked whether it is case-insensitive, rather
+// than GOOS - the case row is skipped where it is case-sensitive (Linux), where the variant names another path
+// that does not exist - and it is RED only on CI's macOS make 3.81 job, which is the run this Mac bug reaches. A
+// link to / is followed like any other target, so a workspace that walks the checkout's absolute path again
+// through one is refused as inside the checkout.
 //
 // The rows that refuse a colon, a comma and a tilde each have a positive control: the same layout with that
 // character taken out of the value, which make must accept and mount. They pin the refusal to the character - a
@@ -296,9 +347,9 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 			// either, and that target is inside the checkout make runs from. Stripping the unresolvable components
 			// until cd succeeds keeps the link's unresolved name, which no comparison against REPO_ROOT's resolved
 			// form catches, so the guard fails open: the target runs instead of refusing. A dangling symlink is
-			// exactly what a workspace the VM has not created yet looks like behind one, so the guard must resolve
-			// the link's target and then its nearest existing ancestor. The link is the test's own, so the case
-			// reproduces on Linux, where /var is no symlink.
+			// exactly what a workspace the VM has not created yet looks like behind one, so the guard must follow the
+			// link, even a dangling one, before comparing. The link is the test's own, so the case reproduces on Linux,
+			// where /var is no symlink.
 			name: "the workspace is inside the checkout make runs from, through a dangling symlink, and does not exist",
 			layout: func(t *testing.T, l *hostLayout) string {
 				t.Helper()
@@ -416,6 +467,89 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 				}
 
 				l.env["WORKSPACE_REPO"] = filepath.Join(link, hostTargetInstance)
+
+				return l.root
+			},
+			want:        []string{"is inside"},
+			notWant:     []string{cannotBeResolved},
+			emptyStdout: true,
+		},
+		{
+			// Issue #447, found by the review and the audit: the file system is case-insensitive (macOS's APFS by
+			// default), so a WORKSPACE_REPO spelled in another case of a path inside the checkout names the checkout to
+			// the kernel, while the resolver keeps the components as typed and so compares a path that differs from
+			// REPO_ROOT - which git prints in the on-disk case - in case alone. The workspace is inside the checkout and
+			// must be refused as such, not taken for one outside it. On a case-sensitive file system (Linux) the variant
+			// is another path, one that does not exist, so the row is skipped there; it is RED only on CI's macOS make
+			// 3.81 job.
+			name: "the workspace is spelled in another case, on a file system that ignores case",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				if !caseInsensitiveDir(t, l.sb.root) {
+					t.Skipf("the file system holding %s is case-sensitive, so no spelling of a path in another case names it: the row pins what a case-insensitive file system, macOS's APFS by default, does with the workspace (issue #447)", l.sb.root)
+				}
+
+				// The host clone, the checkout make runs from, spelled in the other case: the row pins nothing unless it
+				// names the same directory, so it is skipped where it does not.
+				swappedRoot := caseSwapped(l.root)
+				if _, err := os.Stat(swappedRoot); err != nil {
+					t.Skipf("%s, the host clone's path in another case, names no directory, so no spelling of the workspace in another case names it either (issue #447): %v", swappedRoot, err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(swappedRoot, "ws", hostTargetInstance)
+
+				return l.root
+			},
+			want:        []string{"is inside"},
+			notWant:     []string{cannotBeResolved},
+			emptyStdout: true,
+		},
+		{
+			// Issue #447, found by the audit: a link's target may end in a newline, and command substitution strips
+			// trailing newlines, so the resolver reads the link named "alias\n" as "alias" - the plain directory
+			// beside it - while the kernel walks "alias\n" into the checkout make runs from, where the workspace is.
+			// The guard must refuse it: as a workspace inside the checkout, or as one it cannot resolve, as a newline
+			// is no character a WORKSPACE_REPO may hold.
+			name: "the workspace is reached through a symlink whose target ends in a newline",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				// The link's target ends in the newline the resolver's command substitution drops; a plain directory
+				// named without it stands where the resolver then goes.
+				if err := os.Symlink(l.root, filepath.Join(l.sb.root, "alias\n")); err != nil {
+					t.Fatalf("symlink %s to %s: %v", filepath.Join(l.sb.root, "alias\n"), l.root, err)
+				}
+
+				if err := os.Mkdir(filepath.Join(l.sb.root, "alias"), 0o700); err != nil {
+					t.Fatalf("create %s: %v", filepath.Join(l.sb.root, "alias"), err)
+				}
+
+				if err := os.Symlink("alias\n", filepath.Join(l.sb.root, "tn")); err != nil {
+					t.Fatalf("symlink %s to alias\n: %v", filepath.Join(l.sb.root, "tn"), err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(l.sb.root, "tn", "ws", hostTargetInstance)
+
+				return l.root
+			},
+			wantEither:  []string{"is inside", cannotBeResolved},
+			emptyStdout: true,
+		},
+		{
+			// Issue #447, found by the audit: a link to / is a target like any other, so the resolver must follow it
+			// and walk the rest of the path from there again - through the checkout make runs from, whose absolute
+			// path the workspace spells without its leading slash. The workspace is inside the checkout.
+			name: "the workspace is reached through a symlink to the root directory, and is inside the checkout make runs from",
+			layout: func(t *testing.T, l *hostLayout) string {
+				t.Helper()
+
+				link := filepath.Join(l.sb.root, "to-root")
+				if err := os.Symlink("/", link); err != nil {
+					t.Fatalf("symlink %s to /: %v", link, err)
+				}
+
+				l.env["WORKSPACE_REPO"] = filepath.Join(link, strings.TrimPrefix(l.root, "/"), "ws", hostTargetInstance)
 
 				return l.root
 			},
@@ -683,9 +817,11 @@ type refusalCase struct {
 	args []string
 	goal string
 	// want and notWant are what the refusal's stderr must and must not say beyond the goal, the host clone and
-	// the docs.
-	want    []string
-	notWant []string
+	// the docs. wantEither says the refusal may name any one of them, for a layout the guard can refuse for more
+	// than one reason.
+	want       []string
+	notWant    []string
+	wantEither []string
 	// emptyStdout says the run prints nothing on stdout: no recipe line, no prerequisite and no other goal of
 	// its command line ran.
 	emptyStdout bool
@@ -701,6 +837,7 @@ func (tc refusalCase) runs() []refusedRun {
 			env:         tc.env,
 			want:        tc.want,
 			notWant:     tc.notWant,
+			wantEither:  tc.wantEither,
 			emptyStdout: tc.emptyStdout,
 		}}
 	}
@@ -715,6 +852,7 @@ func (tc refusalCase) runs() []refusedRun {
 			env:         tc.env,
 			want:        tc.want,
 			notWant:     tc.notWant,
+			wantEither:  tc.wantEither,
 			emptyStdout: tc.emptyStdout,
 		})
 	}
@@ -733,6 +871,7 @@ type refusedRun struct {
 	env         map[string]string
 	want        []string
 	notWant     []string
+	wantEither  []string
 	emptyStdout bool
 }
 
@@ -769,6 +908,13 @@ func assertHostTargetRefused(t *testing.T, l *hostLayout, dir string, run refuse
 			t.Errorf("%s's refusal says %q on stderr: it must not echo the value, which may be a credential typed where a path goes, and it must describe what a value may hold (issue #227)\nstdout: %s\nstderr: %s",
 				name, forbidden, stdout, stderr)
 		}
+	}
+
+	if len(run.wantEither) > 0 && !slices.ContainsFunc(run.wantEither, func(want string) bool {
+		return strings.Contains(stderr, want)
+	}) {
+		t.Errorf("%s's stderr says none of %q when it refuses in %s, so the maintainer cannot tell whether the workspace was taken for one inside the checkout make runs from or for one the guard cannot resolve (issue #447)\nstdout: %s\nstderr: %s",
+			name, run.wantEither, dir, stdout, stderr)
 	}
 
 	if run.emptyStdout && strings.TrimSpace(stdout) != "" {
