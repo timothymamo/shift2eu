@@ -458,6 +458,46 @@ func TestMakeRulesFindsLimaInstanceViolations(t *testing.T) {
 			wantTargets: []string{"vm-delete"},
 		},
 		{
+			name: "a recipe that splices a macro that reads the name, without the check",
+			text: "FOREIGN_JOBS_CHECK = if [ -n \"$$LIMA_INSTANCE\" ]; then echo \"another job runs $$LIMA_INSTANCE\"; exit 1; fi\n" +
+				"agents-token-refresh-install:\n" +
+				"\t@$(FOREIGN_JOBS_CHECK); dev/agents-token-launchd.sh foreign-jobs\n",
+			wantTargets:    []string{"agents-token-refresh-install"},
+			wantViolations: [][]string{{"make agents-token-refresh-install", "first recipe line", limaInstanceCheck}},
+		},
+		{
+			name: "a recipe that splices a macro that reads the name through $(call ...), after the check",
+			text: "AUTOSTART_JOBS = lima_label=\"$(AUTOSTART_PREFIX)$$LIMA_INSTANCE\"; \\\n" +
+				"\techo \"$$lima_label\"\n" +
+				"vm-boot-install:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\t$(call AUTOSTART_JOBS,refused); launchctl print system\n",
+			wantTargets: []string{"vm-boot-install"},
+		},
+		{
+			name: "a recipe that reads the name with braces at run time",
+			text: "vm-stop:\n" +
+				"\tlimactl stop \"$${LIMA_INSTANCE}\"\n",
+			wantTargets:    []string{"vm-stop"},
+			wantViolations: [][]string{{"make vm-stop", "first recipe line", limaInstanceCheck}},
+		},
+		{
+			name: "a recipe that reads the name with braces and a default at run time, after the check",
+			text: "vm-env:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\tdir=\"$${LIMA_HOME:-$$HOME/.lima}/$${LIMA_INSTANCE:-shift2eu}\"\n",
+			wantTargets: []string{"vm-env"},
+		},
+		{
+			name: "a variable whose name starts with LIMA_INSTANCE but that expands the name at make level",
+			text: "LIMA_INSTANCE_DIR := $(HOME)/.lima/$(LIMA_INSTANCE)\n" +
+				"vm-stop:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\tmkdir -p \"$(LIMA_INSTANCE_DIR)\"\n",
+			wantTargets:    []string{"vm-stop"},
+			wantViolations: [][]string{{"variable LIMA_INSTANCE_DIR", "$(LIMA_INSTANCE)"}},
+		},
+		{
 			name: "a target whose declaration has a prerequisite and a target-specific variable",
 			text: "vm-env: export VM_ENV := $(value VM_ENV)\n" +
 				"vm-env: vm-env-check ## Copy the credentials\n" +
@@ -540,6 +580,37 @@ func TestMakeRulesFindsALimactlCallWithoutVMShellEnv(t *testing.T) {
 				"\t" + limaInstanceCheck + "\n" +
 				"\t@out=\"$$(printf '%s\\n' \"$$script\" | limactl shell --workdir / \"$$LIMA_INSTANCE\" sh -s)\"\n",
 			wantViolations: [][]string{{"make vm-gh-wrapper", vmShellEnv}},
+		},
+		{
+			name: "a recipe that splices a macro that calls limactl",
+			text: "LIMACTL_LIST = list=\"$$(limactl list --quiet)\"; echo \"$$list\"\n" +
+				"vm-stop:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\t@$(LIMACTL_LIST)\n",
+			wantViolations: [][]string{{"make vm-stop", vmShellEnv}},
+		},
+		{
+			name: "a call in a macro spliced through $(call ...) without it",
+			text: "STOP_VM = limactl stop --force \"$$LIMA_INSTANCE\"\n" +
+				"vm-stop:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\t$(call STOP_VM,$$LIMA_INSTANCE)\n",
+			wantViolations: [][]string{{"make vm-stop", vmShellEnv}},
+		},
+		{
+			name: "a recipe that splices a macro whose call puts the shell environment first",
+			text: "LIMACTL_LIST = list=\"$$(" + vmShellEnv + " limactl list --quiet)\"; echo \"$$list\"\n" +
+				"vm-stop:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\t@$(LIMACTL_LIST)\n",
+		},
+		{
+			name: "a message whose quote a continuation carries into the next line",
+			text: "vm-up:\n" +
+				"\t" + limaInstanceCheck + "\n" +
+				"\t@echo 'limactl list is how you check it \\\n" +
+				"\tand limactl stop is how you stop it' >&2\n" +
+				"\t" + vmShellEnv + " limactl list --quiet\n",
 		},
 		{
 			name: "a message that names limactl calls nothing",

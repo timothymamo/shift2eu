@@ -80,6 +80,9 @@ const (
 // SHIFT2EU_TEST_LIMA_SHELL_MISSING stands for the instance the fake's status still reports but Lima no longer
 // has: the shell says so on stderr and exits non-zero, as limactl shell does for an instance that is gone, and
 // as limactl start <name> would not - it would create the VM from template:default instead (issue #254).
+// SHIFT2EU_TEST_LIMA_START_FAIL stands for a VM that cannot come up: the shell --start that starts a listed
+// instance, and the start that creates one the listing does not hold, says so on stderr and exits non-zero, as a
+// VM that fails to boot does (issue #326).
 // SHIFT2EU_TEST_LIMA_HOOKS_FAIL stands for a VM that cannot run one command: only the shell that runs git config
 // core.hooksPath, the hooks re-set make vm-up ends with (issue #326), says so on stderr and exits non-zero, as
 // limactl shell does for a command that fails in the instance; every other shell still answers 0.
@@ -117,6 +120,14 @@ if [ "${1:-}" = shell ]; then
     printf 'instance "%s" does not exist, run limactl create to create a new instance\n' "${SHIFT2EU_TEST_LIMA_INSTANCE}" >&2
     exit 1
   fi
+  if [ -n "${SHIFT2EU_TEST_LIMA_START_FAIL:-}" ]; then
+    for a in "$@"; do
+      if [ "${a}" = --start ]; then
+        echo 'level=fatal msg="failed to start the instance"' >&2
+        exit 1
+      fi
+    done
+  fi
   # A command that fails in the instance fails the shell (issue #326): only for the git command setting
   # core.hooksPath, or every command of the recipe would fail with it.
   if [ -n "${SHIFT2EU_TEST_LIMA_HOOKS_FAIL:-}" ]; then
@@ -133,6 +144,10 @@ if [ "${1:-}" = shell ]; then
   exit 0
 fi
 if [ "${1:-}" = start ]; then
+  if [ -n "${SHIFT2EU_TEST_LIMA_START_FAIL:-}" ]; then
+    echo 'level=fatal msg="failed to start the instance"' >&2
+    exit 1
+  fi
   exit 0
 fi
 echo "fake limactl: unexpected call: $*" >&2
