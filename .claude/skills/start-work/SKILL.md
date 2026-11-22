@@ -31,8 +31,7 @@ has its own branch, and every branch its own worktree under `.worktrees/`
    files only under it. Run git as `git -C <path> ...`, never `cd <path> && git ...`. Write the
    worktree path out in full; do not store it in a shell variable. `make check`, `go test ./...` and
    `git` then act on this branch alone. Signal only what you started (CLAUDE.md rule 10): stop a run
-   of your own only by the pid you kept, after checking it is still your command; never a process found
-   by name, never a group.
+   of your own only by the pid and start time you noted; never a process found by name, never a group.
 4. When delegating, make `Worktree: <absolute path>` the first line of every task.
 
 ## Finish

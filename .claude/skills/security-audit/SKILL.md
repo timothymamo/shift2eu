@@ -19,7 +19,7 @@ in a shell variable. After `git -C <path> fetch origin`:
   file only one platform builds is checked too; gosec's issues end in `(gosec)`
 - `git -C <path> diff origin/main...HEAD -- go.mod go.sum` for every new or bumped dependency
 
-Signal only what you started (CLAUDE.md rule 10): stop a run of your own only by the pid you kept, after checking it is still your command; never a process found by name, never a group.
+Signal only what you started (CLAUDE.md rule 10): stop a run of your own only by the pid and start time you noted; never a process found by name, never a group.
 
 ## Checklist
 

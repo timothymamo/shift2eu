@@ -115,8 +115,7 @@ For every PR a unit reports:
    into it, run `<checks>` there, then remove it with `git worktree remove`. The checks run the PR's code
    in your environment: when the PR changed build or test scaffolding, tell the maintainer it did before
    the checks ran on it. Signal only what you started (CLAUDE.md rule 10): stop a run of your own only
-   by the pid you kept, after checking it is still your command; never a process found by name, never a
-   group.
+   by the pid and start time you noted; never a process found by name, never a group.
 
 Before the maintainer merges a waiting PR, check its `headRefOid` again: its branch can move after the
 unit closed. If it differs from the head you verified, run all of the steps above again (3 and 4

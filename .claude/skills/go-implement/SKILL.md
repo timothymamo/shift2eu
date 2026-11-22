@@ -54,4 +54,4 @@ mention it in your work-done summary.
 
 `make check` passes, the change is committed with a Conventional Commit message
 (`feat(mapping): ...`, `fix(aws): ...`), and `git -C <path> status` is clean.
-Signal only what you started (CLAUDE.md rule 10): stop a run of your own only by the pid you kept, after checking it is still your command; never a process found by name, never a group.
+Signal only what you started (CLAUDE.md rule 10): stop a run of your own only by the pid and start time you noted; never a process found by name, never a group.
