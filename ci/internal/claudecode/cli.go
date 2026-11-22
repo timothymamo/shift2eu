@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -81,7 +82,10 @@ func cliCode(code string) string {
 }
 
 // Config is one launcher's settings. Path, Token, Model and Timeout are
-// required; Tools is optional, and its zero value is no tools at all.
+// required; every other field is optional, and its zero value is the AI
+// reviewer's launch (ADR 0033): no tools, no effort, settings file or
+// permission mode, safe mode on, the system prompt replacing the CLI's own,
+// fresh temporary directories, the default PATH and one JSON result.
 type Config struct {
 	// Path is the CLI's absolute path, the binary the caller's workflow
 	// installed and verified.
@@ -99,6 +103,69 @@ type Config struct {
 	// tool name of ASCII letters only (such as Read or Grep). Nil or empty
 	// is no tools: --tools "".
 	Tools []string
+
+	// Effort is --effort, one of low, medium, high, xhigh and max. Empty
+	// passes no flag: the CLI's default.
+	Effort string
+
+	// Settings is the absolute path of the one settings file the CLI loads
+	// (--settings). Empty passes no flag.
+	Settings string
+
+	// PermissionMode is --permission-mode, dontAsk or plan only: never
+	// bypassPermissions or any other. Empty passes no flag.
+	PermissionMode string
+
+	// AppendSystemPrompt appends the prompt's System to the CLI's own system
+	// prompt (--append-system-prompt-file) instead of replacing it
+	// (--system-prompt-file).
+	AppendSystemPrompt bool
+
+	// SafeModeOff leaves --safe-mode out, so the settings file applies.
+	SafeModeOff bool
+
+	// WorkDir is the CLI's working directory, an absolute path to a directory
+	// that exists. Empty is a fresh empty temporary directory, removed after
+	// the run.
+	WorkDir string
+
+	// Home is the CLI's HOME, an absolute path to a directory that exists.
+	// Empty is a fresh empty temporary directory, removed after the run.
+	Home string
+
+	// Env are extra NAME=VALUE entries of the CLI's environment, after the
+	// launcher's own. A name the launcher sets itself (reservedEnv) is
+	// refused.
+	Env []string
+
+	// SearchPath is the CLI's PATH. Empty is cliPath.
+	SearchPath string
+
+	// Transcript, when set, gets every byte the CLI prints on stdout: the run
+	// uses --output-format stream-json --verbose, and its answer is the last
+	// result element of the stream. Nil is --output-format json, one result
+	// kept in memory.
+	Transcript io.Writer
+}
+
+// efforts are the values --effort takes.
+var efforts = []string{"low", "medium", "high", "xhigh", "max"}
+
+// permissionModes are the values of --permission-mode the launcher passes on:
+// the two that never run a tool call no rule allows. bypassPermissions,
+// acceptEdits and every other mode are refused.
+var permissionModes = []string{"dontAsk", "plan"}
+
+// reservedEnv are the variables the launcher sets itself, which a config's Env
+// never sets: the token, HOME, PATH and the four switches.
+var reservedEnv = []string{
+	"CLAUDE_CODE_OAUTH_TOKEN",
+	"HOME",
+	"PATH",
+	"DISABLE_AUTOUPDATER",
+	"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
+	"DISABLE_TELEMETRY",
+	"DISABLE_ERROR_REPORTING",
 }
 
 // CLI asks a model through one run of the Claude Code CLI per Ask, `claude
@@ -112,6 +179,7 @@ type CLI struct {
 // bad one fails the run with ErrModel before anything starts.
 func New(cfg Config) *CLI {
 	cfg.Tools = append([]string(nil), cfg.Tools...)
+	cfg.Env = append([]string(nil), cfg.Env...)
 
 	return &CLI{cfg: cfg}
 }
@@ -124,23 +192,29 @@ type cliResult struct {
 	Result  string `json:"result"`
 }
 
-// Ask runs the CLI once and returns its result text:
+// Ask runs the CLI once and returns its result text. With every optional field
+// of the config at its zero value (the AI reviewer's launch) that is:
 //
 //	claude -p --model <Model> --output-format json --safe-mode --tools <Tools>
-//	  --setting-sources "" --strict-mcp-config --disable-slash-commands
-//	  --no-session-persistence --system-prompt-file <file>
+//	  --setting-sources "" --strict-mcp-config --mcp-config {"mcpServers":{}}
+//	  --disable-slash-commands --no-session-persistence --system-prompt-file <file>
 //
-// where <Tools> is the config's tools joined with "," and "" for none.
+// where <Tools> is the config's tools joined with "," and "" for none; the
+// other fields add or swap the flags args lists, in ADR 0040's order.
 // p.System is written to a file of a temporary directory of its own, which the
 // flag names; p.User reaches the CLI on stdin alone. --safe-mode turns
 // CLAUDE.md, skills, plugins, hooks, MCP servers and custom agents off, and
 // --setting-sources "" skips the user, project and local settings files. The
-// CLI runs in an empty temporary directory, with an empty temporary HOME and
-// an environment of exactly the token, HOME, a fixed PATH and the switches
-// that turn its updater, telemetry and error reports off: nothing of the
-// runner's environment, an ANTHROPIC_API_KEY included, is inherited. It
+// CLI runs in the config's working directory and HOME, or in an empty
+// temporary one of each, with an environment of exactly the token, HOME, PATH,
+// the switches that turn its updater, telemetry and error reports off and the
+// config's Env entries: nothing of the runner's environment, an
+// ANTHROPIC_API_KEY included, is inherited. With a Transcript, every byte the
+// CLI prints on stdout is copied there, whatever the run's outcome, and the
+// answer is the stream's last result element. It
 // returns an error wrapping ErrModel when the config is refused (a relative
-// path, a model or a tool name of the wrong shape), the CLI cannot start, runs
+// path, a model or a tool name of the wrong shape, a field checkLaunch
+// refuses, which the error names), the CLI cannot start, runs
 // past the timeout, is cancelled or stopped by the caller's deadline, prints
 // no JSON result, reports an error, ends its turn other than with success, or
 // prints an empty result; the error quotes at most maxCLIExcerpt bytes of the
@@ -163,15 +237,28 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 		}
 	}
 
+	if err := c.checkLaunch(); err != nil {
+		return "", err
+	}
+
 	if err := ctx.Err(); err != nil {
 		return "", fmt.Errorf("%w: cancelled before the Claude Code CLI ran: %w", ErrModel, err)
 	}
 
-	dirs, err := newCLIDirs()
+	dirs, err := newCLIDirs(c.cfg.WorkDir == "", c.cfg.Home == "")
 	if err != nil {
 		return "", err
 	}
 	defer dirs.remove()
+
+	workDir, home := dirs.work, dirs.home
+	if c.cfg.WorkDir != "" {
+		workDir = c.cfg.WorkDir
+	}
+
+	if c.cfg.Home != "" {
+		home = c.cfg.Home
+	}
 
 	systemFile := dirs.system + "/system-prompt.md"
 	if err := os.WriteFile(systemFile, []byte(p.System), 0o600); err != nil {
@@ -181,7 +268,14 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, c.cfg.Timeout)
 	defer cancel()
 
-	stdout := &cappedBuffer{limit: maxCLIStdout}
+	var stdout cliOutput = &cappedBuffer{limit: maxCLIStdout}
+
+	var stream *resultStream
+	if c.cfg.Transcript != nil {
+		stream = &resultStream{transcript: c.cfg.Transcript}
+		stdout = stream
+	}
+
 	stderr := &cappedBuffer{limit: maxCLIStderr}
 
 	// The path is the one the caller's workflow installed and verified, and
@@ -189,14 +283,17 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 	// the launcher's own: no text of the prompt reaches the command line (ADR
 	// 0033).
 	cmd := exec.CommandContext(runCtx, c.cfg.Path, c.args(systemFile)...) //nolint:gosec // G204: a pinned, verified CLI with constant and checked arguments; the untrusted prompt goes to stdin
-	cmd.Dir = dirs.work
-	cmd.Env = c.env(dirs.home)
+	cmd.Dir = workDir
+	cmd.Env = c.env(home)
 	cmd.Stdin = strings.NewReader(p.User)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	cmd.WaitDelay = cliWaitDelay
 
 	runErr := cmd.Run()
+	if stream != nil {
+		stream.flush()
+	}
 
 	// The run's own outcome comes first: a CLI that exited 0 with a successful
 	// result just as the deadline passed has answered, and is not a timeout.
@@ -206,6 +303,12 @@ func (c *CLI) Ask(ctx context.Context, p Prompt) (string, error) {
 
 	switch decideRunOutcome(err, ctx.Err(), runCtx.Err()) {
 	case outcomeAnswer:
+		// An answer whose transcript is incomplete is no answer: the caller
+		// keeps the transcript to judge the run by (ADR 0040's amendment).
+		if stream != nil && stream.writeErr != nil {
+			return "", fmt.Errorf("%w: write the Claude Code CLI's transcript: %w", ErrModel, stream.writeErr)
+		}
+
 		return text, nil
 	case outcomeCancelled:
 		// The parent context ends either by a cancel or by the caller's own
@@ -320,47 +423,176 @@ func decideRunOutcome(answerErr, parentErr, runErr error) runOutcome {
 	}
 }
 
-// args returns the CLI's arguments with the system prompt in systemFile.
+// checkLaunch refuses, before anything runs, a field of the config ADR 0040's
+// amendment does not allow, naming the field: an effort outside the five, a
+// permission mode other than dontAsk or plan, a relative settings path, a
+// working directory or HOME that is not an absolute path to a directory that
+// exists, and an Env entry that is no NAME=VALUE or sets a variable the
+// launcher sets itself.
+func (c *CLI) checkLaunch() error {
+	if c.cfg.Effort != "" && !contains(efforts, c.cfg.Effort) {
+		return fmt.Errorf("%w: the effort is not one of %s", ErrModel, strings.Join(efforts, ", "))
+	}
+
+	if c.cfg.PermissionMode != "" && !contains(permissionModes, c.cfg.PermissionMode) {
+		return fmt.Errorf("%w: the permission mode %q is not one of %s", ErrModel, cliCode(c.cfg.PermissionMode), strings.Join(permissionModes, ", "))
+	}
+
+	if c.cfg.Settings != "" && !strings.HasPrefix(c.cfg.Settings, "/") {
+		return fmt.Errorf("%w: the settings file's path is not absolute", ErrModel)
+	}
+
+	if c.cfg.SearchPath != "" && strings.ContainsAny(c.cfg.SearchPath, "\x00\n") {
+		return fmt.Errorf("%w: the CLI's PATH holds a NUL or a newline", ErrModel)
+	}
+
+	for _, dir := range []struct{ name, path string }{
+		{"working directory", c.cfg.WorkDir},
+		{"HOME", c.cfg.Home},
+	} {
+		if dir.path == "" {
+			continue
+		}
+
+		if !strings.HasPrefix(dir.path, "/") {
+			return fmt.Errorf("%w: the CLI's %s is not an absolute path", ErrModel, dir.name)
+		}
+
+		info, err := os.Stat(dir.path)
+		if err != nil || !info.IsDir() {
+			return fmt.Errorf("%w: the CLI's %s is not a directory that exists", ErrModel, dir.name)
+		}
+	}
+
+	for _, entry := range c.cfg.Env {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok || !validEnvName(name) {
+			return fmt.Errorf("%w: an environment entry of the CLI is not NAME=VALUE", ErrModel)
+		}
+
+		if contains(reservedEnv, name) {
+			return fmt.Errorf("%w: the environment entry %s is one the launcher sets itself", ErrModel, name)
+		}
+	}
+
+	return nil
+}
+
+// validEnvName reports whether name reads as a variable's name: 1 to 64 bytes
+// of ASCII letters, digits and '_', not starting with a digit.
+func validEnvName(name string) bool {
+	if name == "" || len(name) > 64 || (name[0] >= '0' && name[0] <= '9') {
+		return false
+	}
+
+	for i := range len(name) {
+		b := name[i]
+		if !isASCIILetter(b) && (b < '0' || b > '9') && b != '_' {
+			return false
+		}
+	}
+
+	return true
+}
+
+// contains reports whether list holds s.
+func contains(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+
+	return false
+}
+
+// emptyMCPConfig is the MCP configuration both callers pass: no server, so
+// --strict-mcp-config reads exactly this and nothing of the checkout's.
+const emptyMCPConfig = `{"mcpServers":{}}`
+
+// args returns the CLI's arguments with the system prompt in systemFile, in
+// the order ADR 0040's amendment fixes.
 func (c *CLI) args(systemFile string) []string {
-	return []string{
-		"-p",
-		"--model", c.cfg.Model,
-		"--output-format", "json",
-		"--safe-mode",
+	args := []string{"-p", "--model", c.cfg.Model}
+
+	if c.cfg.Effort != "" {
+		args = append(args, "--effort", c.cfg.Effort)
+	}
+
+	if c.cfg.Transcript != nil {
+		args = append(args, "--output-format", "stream-json", "--verbose")
+	} else {
+		args = append(args, "--output-format", "json")
+	}
+
+	if !c.cfg.SafeModeOff {
+		args = append(args, "--safe-mode")
+	}
+
+	args = append(args,
 		"--tools", strings.Join(c.cfg.Tools, ","),
 		"--setting-sources", "",
+	)
+
+	if c.cfg.Settings != "" {
+		args = append(args, "--settings", c.cfg.Settings)
+	}
+
+	if c.cfg.PermissionMode != "" {
+		args = append(args, "--permission-mode", c.cfg.PermissionMode)
+	}
+
+	systemFlag := "--system-prompt-file"
+	if c.cfg.AppendSystemPrompt {
+		systemFlag = "--append-system-prompt-file"
+	}
+
+	return append(args,
 		"--strict-mcp-config",
+		"--mcp-config", emptyMCPConfig,
 		"--disable-slash-commands",
 		"--no-session-persistence",
-		"--system-prompt-file", systemFile,
-	}
+		systemFlag, systemFile,
+	)
 }
 
 // env returns the CLI's whole environment: its allow list, nothing inherited.
+// HOME is the config's Home, or home when the config names none; PATH is the
+// config's SearchPath, or cliPath; the config's Env entries come last.
 func (c *CLI) env(home string) []string {
-	return []string{
+	if c.cfg.Home != "" {
+		home = c.cfg.Home
+	}
+
+	path := cliPath
+	if c.cfg.SearchPath != "" {
+		path = c.cfg.SearchPath
+	}
+
+	return append([]string{
 		"CLAUDE_CODE_OAUTH_TOKEN=" + c.cfg.Token,
 		"HOME=" + home,
-		"PATH=" + cliPath,
+		"PATH=" + path,
 		"DISABLE_AUTOUPDATER=1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		"DISABLE_TELEMETRY=1",
 		"DISABLE_ERROR_REPORTING=1",
-	}
+	}, c.cfg.Env...)
 }
 
 // answer reads the CLI's result from what it printed and how it exited.
-func (c *CLI) answer(runErr error, stdout, stderr *cappedBuffer) (string, error) {
+func (c *CLI) answer(runErr error, stdout cliOutput, stderr *cappedBuffer) (string, error) {
 	if runErr != nil && !isExit(runErr) {
 		return "", fmt.Errorf("%w: start the Claude Code CLI: %s", ErrModel, c.excerpt(runErr.Error()))
 	}
 
-	if stdout.overflow {
+	out, overflow := stdout.result()
+	if overflow {
 		return "", fmt.Errorf("%w: the Claude Code CLI printed more than %d bytes", ErrModel, maxCLIStdout)
 	}
 
 	var result cliResult
-	if err := json.Unmarshal(bytes.TrimSpace(stdout.buf.Bytes()), &result); err != nil {
+	if err := json.Unmarshal(bytes.TrimSpace(out), &result); err != nil {
 		if runErr != nil {
 			return "", fmt.Errorf("%w: the Claude Code CLI failed (%w) and printed no result%s", ErrModel, runErr, c.stderrNote(stderr))
 		}
@@ -465,27 +697,137 @@ func (b *cappedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// cliDirs are the three temporary directories of one run: the CLI's empty
-// working directory, its empty HOME, and the directory of the system prompt
-// file, which is neither.
+// result returns what the buffer kept, the CLI's one JSON result, and whether
+// the CLI printed more than it keeps.
+func (b *cappedBuffer) result() ([]byte, bool) {
+	return b.buf.Bytes(), b.overflow
+}
+
+// cliOutput is where the CLI's stdout goes: a writer that, after the run,
+// returns the bytes of the result element answer reads, and whether that
+// element was cut.
+type cliOutput interface {
+	io.Writer
+	result() ([]byte, bool)
+}
+
+// resultStream takes the CLI's --output-format stream-json stdout: it copies
+// every byte to the transcript and keeps the last complete line that is a
+// result element, each line capped at maxCLIStdout. A write to the transcript
+// that fails is recorded, and the CLI is never blocked on it.
+type resultStream struct {
+	transcript io.Writer
+	writeErr   error
+
+	// line is the line being read, overLine whether it ran past the cap.
+	line     []byte
+	overLine bool
+
+	// last is the last result element read; overflow whether a line after it
+	// ran past the cap, so the last result may be one the stream lost.
+	last     []byte
+	overflow bool
+}
+
+// Write copies p to the transcript and reads its lines.
+func (s *resultStream) Write(p []byte) (int, error) {
+	n := len(p)
+
+	if s.writeErr == nil {
+		if _, err := s.transcript.Write(p); err != nil {
+			s.writeErr = err
+		}
+	}
+
+	for len(p) > 0 {
+		i := bytes.IndexByte(p, '\n')
+		if i < 0 {
+			s.take(p)
+
+			break
+		}
+
+		s.take(p[:i])
+		s.endLine()
+		p = p[i+1:]
+	}
+
+	return n, nil
+}
+
+// take adds part of a line, up to the cap.
+func (s *resultStream) take(part []byte) {
+	if room := maxCLIStdout - len(s.line); len(part) > room {
+		s.overLine = true
+		part = part[:max(room, 0)]
+	}
+
+	s.line = append(s.line, part...)
+}
+
+// endLine reads the line taken so far and starts the next.
+func (s *resultStream) endLine() {
+	switch {
+	case s.overLine:
+		s.overflow = true
+	case isResultElement(s.line):
+		s.last = append(s.last[:0], s.line...)
+		s.overflow = false
+	}
+
+	s.line = s.line[:0]
+	s.overLine = false
+}
+
+// flush reads a last line the CLI ended without a newline.
+func (s *resultStream) flush() {
+	if len(s.line) > 0 || s.overLine {
+		s.endLine()
+	}
+}
+
+// result returns the last result element and whether a line after it was cut.
+func (s *resultStream) result() ([]byte, bool) {
+	return s.last, s.overflow
+}
+
+// isResultElement reports whether line is a JSON element of type "result".
+func isResultElement(line []byte) bool {
+	var element struct {
+		Type string `json:"type"`
+	}
+
+	return json.Unmarshal(line, &element) == nil && element.Type == "result"
+}
+
+// cliDirs are the temporary directories of one run: the CLI's empty working
+// directory and its empty HOME, each made only when the config names none, and
+// the directory of the system prompt file, which is neither.
 type cliDirs struct {
 	work   string
 	home   string
 	system string
 }
 
-// newCLIDirs makes the run's three directories, each fresh and empty.
-func newCLIDirs() (cliDirs, error) {
+// newCLIDirs makes the run's directories, each fresh and empty: the system
+// prompt's always, the working directory when work is set and HOME when home
+// is.
+func newCLIDirs(work, home bool) (cliDirs, error) {
 	var dirs cliDirs
 
 	for _, d := range []struct {
 		into    *string
 		pattern string
+		wanted  bool
 	}{
-		{&dirs.work, "claudecode-cwd-"},
-		{&dirs.home, "claudecode-home-"},
-		{&dirs.system, "claudecode-system-"},
+		{&dirs.work, "claudecode-cwd-", work},
+		{&dirs.home, "claudecode-home-", home},
+		{&dirs.system, "claudecode-system-", true},
 	} {
+		if !d.wanted {
+			continue
+		}
+
 		dir, err := os.MkdirTemp("", d.pattern)
 		if err != nil {
 			dirs.remove()
