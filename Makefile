@@ -237,7 +237,18 @@ endif
 # discarded, and there is no cd. The value passed the character check above and is an absolute path, or empty for
 # a checkout directly below /, so it is safe in single quotes; REPO_ROOT is quoted with host_sq.
 host_sq = '$(subst ','\'',$(1))'
-host_workspace_walk := $(shell LC_ALL=C; export LC_ALL; out=; rest='$(HOST_WORKSPACE)'; root=$(call host_sq,$(REPO_ROOT)); hops=0; failed=; while [ -n "$$rest" ]; do part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; rest=$${rest$(host_hash)/}; case $$part in (''|.) ;; (..) out=$${out%/*} ;; (*) if [ -L "$$out/$$part" ]; then hops=$$((hops + 1)); [ "$$hops" -le 32 ] && link=$$(readlink "$$out/$$part" 2>/dev/null && echo _) && link=$${link%??} && [ -n "$$link" ] || { failed=1; break; }; case $$link in (/*) target=$$link ;; (*) target="$$out/$$link" ;; esac; if [ -e "$$out/$$part" ]; then [ "$$out/$$part" -ef "$$target" ] || { failed=1; break; }; else [ ! -e "$$target" ] || { failed=1; break; }; fi; case $$link in (/*) out= ;; esac; rest="$$link/$$rest"; else out="$$out/$$part"; fi ;; esac; done; [ -n "$$failed" ] || { pre=$$out; miss=; while [ -n "$$pre" ] && [ ! -e "$$pre" ]; do miss="/$${pre$(host_hash)$(host_hash)*/}$$miss"; pre=$${pre%/*}; done; verdict=apart; if [ -z "$$miss" ]; then p=$$root; while :; do if [ "$${p:-/}" -ef "$${pre:-/}" ]; then verdict=holds; break; fi; [ -n "$$p" ] || break; p=$${p%/*}; done; fi; if [ "$$verdict" = apart ]; then p=$$pre; while :; do if [ "$${p:-/}" -ef "$$root" ]; then verdict=inside; break; fi; [ -n "$$p" ] || break; p=$${p%/*}; done; fi; if [ "$$verdict" = apart ]; then q='$(HOST_WORKSPACE)'; while [ -n "$$q" ] && [ ! -e "$$q" ]; do case $${q$(host_hash)$(host_hash)*/} in (..) q=; break ;; esac; q=$${q%/*}; done; q=$${q:-/}; while [ -e "$$q" ]; do if [ "$$q" -ef "$$root" ]; then verdict=inside; break; fi; [ ! "$$q" -ef / ] || break; q="$$q/.."; done; fi; case $$out in (*[!A-Za-z0-9._/+@=$(host_hash)-]*) ;; (*) printf '%s %s\n' "$$verdict" "$${out:-/}" ;; esac; })
+# host_resolve: the one path resolver of both guards (issue #468), two shell functions pasted into the shell code of
+# host_workspace_walk and ENVRC_GUARD, so a layout one guard refuses the other cannot let through. resolve <path>
+# walks an absolute path as described above and sets resolved to it (empty for /), the last component followed too;
+# it fails (status 1, resolved partial and never printed) on more than 32 links or a loop of them, a link readlink
+# cannot read, or one that reads other than the kernel resolves it. It prints nothing and sets only resolved and
+# res_* variables, so a caller keeps a target's trailing newline (no command substitution) and its own variables.
+# within <path> <dir> holds when the longest prefix of path that exists, or one of that prefix's ancestors, is the
+# same file as dir (test -ef): containment by file identity, never by spelling. It stays a make definition, not a
+# script of dev/, as both guards run while make reads this file, from the copy of this Makefile make runs, so it
+# needs no path to a script, nothing on the host targets' allow lists, and no file the guards could not find.
+host_resolve = resolve() { resolved=; res_rest=$$1; res_hops=0; while [ -n "$$res_rest" ]; do res_part=$${res_rest%%/*}; res_rest=$${res_rest$(host_hash)"$$res_part"}; res_rest=$${res_rest$(host_hash)/}; case $$res_part in (''|.) ;; (..) resolved=$${resolved%/*} ;; (*) if [ -L "$$resolved/$$res_part" ]; then res_hops=$$((res_hops + 1)); [ "$$res_hops" -le 32 ] && res_link=$$(readlink "$$resolved/$$res_part" 2>/dev/null && echo _) && res_link=$${res_link%??} && [ -n "$$res_link" ] || return 1; case $$res_link in (/*) res_target=$$res_link ;; (*) res_target="$$resolved/$$res_link" ;; esac; if [ -e "$$resolved/$$res_part" ]; then [ "$$resolved/$$res_part" -ef "$$res_target" ] || return 1; else [ ! -e "$$res_target" ] || return 1; fi; case $$res_link in (/*) resolved= ;; esac; res_rest="$$res_link/$$res_rest"; else resolved="$$resolved/$$res_part"; fi ;; esac; done; }; within() { res_p=$$1; while [ -n "$$res_p" ] && [ ! -e "$$res_p" ]; do res_p=$${res_p%/*}; done; while :; do [ ! "$${res_p:-/}" -ef "$$2" ] || return 0; [ -n "$$res_p" ] || return 1; res_p=$${res_p%/*}; done; };
+host_workspace_walk := $(shell LC_ALL=C; export LC_ALL; $(host_resolve) root=$(call host_sq,$(REPO_ROOT)); failed=; resolve '$(HOST_WORKSPACE)' || failed=1; out=$$resolved; [ -n "$$failed" ] || { pre=$$out; miss=; while [ -n "$$pre" ] && [ ! -e "$$pre" ]; do miss="/$${pre$(host_hash)$(host_hash)*/}$$miss"; pre=$${pre%/*}; done; verdict=apart; if [ -z "$$miss" ]; then p=$$root; while :; do if [ "$${p:-/}" -ef "$${pre:-/}" ]; then verdict=holds; break; fi; [ -n "$$p" ] || break; p=$${p%/*}; done; fi; if [ "$$verdict" = apart ] && within "$$out" "$$root"; then verdict=inside; fi; if [ "$$verdict" = apart ]; then q='$(HOST_WORKSPACE)'; while [ -n "$$q" ] && [ ! -e "$$q" ]; do case $${q$(host_hash)$(host_hash)*/} in (..) q=; break ;; esac; q=$${q%/*}; done; q=$${q:-/}; while [ -e "$$q" ]; do if [ "$$q" -ef "$$root" ]; then verdict=inside; break; fi; [ ! "$$q" -ef / ] || break; q="$$q/.."; done; fi; case $$out in (*[!A-Za-z0-9._/+@=$(host_hash)-]*) ;; (*) printf '%s %s\n' "$$verdict" "$${out:-/}" ;; esac; })
 host_workspace_verdict := $(word 1,$(host_workspace_walk))
 host_workspace_real    := $(word 2,$(host_workspace_walk))
 ifneq ($(filter holds inside apart,$(host_workspace_verdict)) $(words $(host_workspace_walk)),$(host_workspace_verdict) 2)
@@ -266,9 +277,12 @@ endif
 # ENVRC_GUARD,<target>) checks both and names each file on stderr, with the line number, the directive's name and
 # paths only, never a line or a value: of the host clone's .envrc it reads, through grep -a -o, only the words of
 # ENVRC_GUARD_ERE on lines that are no comment (a line ending in \ joined to the next first, as bash does), with
-# the one word after each; of the files above the workspace nothing, it only tests that they are there. A
-# relative path is resolved against the clone, component by component, every symlink followed, the last one too,
-# at most 40 (macOS: /var is /private/var, as in REPO_ROOT); a loop of symlinks counts as outside. A directive in
+# the one word after each; of the files above the workspace nothing, it only tests that they are there. The
+# .envrc and a relative dotenv path (against the clone) are resolved with host_resolve, the host-clone guard's own
+# resolver (issue #468): every symlink followed, the last one too, each checked against the kernel, at most 32, and
+# inside the clone decided by file identity (within), never by spelling, so neither a path typed in another case
+# nor a link target ending in a newline sends it elsewhere; anything it cannot resolve counts as outside, and the
+# refusal names only the .envrc, never a hop of the walk. A directive in
 # a trailing comment counts too, a safe false positive. It checks the usual direnv and bash spellings and is no
 # sandbox (eval can always read a parent). It is a macro, not a script of dev/, as it runs while make reads this
 # file, like the refusal above:
@@ -292,21 +306,7 @@ ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
 	why="every line of the VM's credentials and the agents App's variables belongs in the host clone's .envrc itself (docs/dev-environment.md, The host clone)"; \
 	dir_real=$(call host_sq,$(host_workspace_real)); \
 	refused=; nl=$$(printf '\n_'); nl=$${nl%_}; \
-	resolve() { out=; rest=$$1; hops=0; \
-		while :; do \
-			while :; do case $$rest in (/*) rest=$${rest$(host_hash)/} ;; (*) break ;; esac; done; \
-			[ -n "$$rest" ] || break; \
-			part=$${rest%%/*}; rest=$${rest$(host_hash)"$$part"}; \
-			case $$part in \
-			(.) ;; \
-			(..) out=$${out%/*} ;; \
-			(*) if [ -L "$$out/$$part" ]; then \
-					hops=$$((hops + 1)); [ "$$hops" -le 40 ] || return 1; \
-					link=$$(readlink "$$out/$$part") || return 1; \
-					case $$link in (/*) out= ;; esac; rest="$$link$$rest"; \
-				else out="$$out/$$part"; fi ;; \
-			esac; \
-		done; printf '%s\n' "$${out:-/}"; }; \
+	$(host_resolve) \
 	envrc_lines() { acc=; held=0; \
 		while IFS= read -r line || [ -n "$$line" ]; do \
 			if [ "$$held" -eq 0 ]; then \
@@ -321,11 +321,8 @@ ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
 		[ "$$held" -eq 0 ] || printf '%s\n' "$$acc"; }; \
 	envrc="$$clone/.envrc"; \
 	if [ -e "$$envrc" ] || [ -L "$$envrc" ]; then \
-		clone_real=$$(cd "$$clone" && pwd -P); \
-		envrc_real=$$(resolve "$$envrc") || envrc_real=; \
-		if [ -z "$$clone_real" ]; then \
-			envrc_real=; \
-		elif case $$envrc_real in ("$$clone_real"/*) false ;; (*) true ;; esac; then \
+		if resolve "$$envrc"; then envrc_real=$${resolved:-/}; else envrc_real=; fi; \
+		if [ -z "$$envrc_real" ] || ! within "$$envrc_real" "$$clone"; then \
 			echo "$$target: refused: the host clone's .envrc, $$envrc, is a symlink to a file outside the host clone: $$why" >&2; \
 			refused=1; envrc_real=-; \
 		fi; \
@@ -352,10 +349,12 @@ ENVRC_GUARD = LC_ALL=C; export LC_ALL; set -f; \
 					(*) case $$arg in ('') arg=.env ;; (\"*\" | \'*\') arg=$${arg$(host_hash)?}; arg=$${arg%?} ;; esac; \
 						case $$arg in \
 						('' | *[!A-Za-z0-9._/+@=-]*) outside=1 ;; \
-						(*) case $$arg in (/*) path=$$arg ;; (*) path="$$clone_real/$$arg" ;; esac; \
-							path=$$(resolve "$$path") || path=; \
-							if [ -n "$$path" ] && [ -d "$$path" ]; then path=$$(resolve "$$path/.env") || path=; fi; \
-							case $$path in ("$$clone_real"/*) ;; (*) outside=1 ;; esac ;; \
+						(*) case $$arg in (/*) path=$$arg ;; (*) path="$$clone/$$arg" ;; esac; \
+							if resolve "$$path"; then path=$${resolved:-/}; else path=; fi; \
+							if [ -n "$$path" ] && [ -d "$$path" ]; then \
+								if resolve "$$path/.env"; then path=$${resolved:-/}; else path=; fi; \
+							fi; \
+							if [ -z "$$path" ] || ! within "$$path" "$$clone"; then outside=1; fi ;; \
 						esac ;; \
 					esac; \
 					if [ -n "$$outside" ]; then \

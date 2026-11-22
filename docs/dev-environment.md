@@ -881,6 +881,12 @@ the workspace. The guard parses no shell, so it holds the host clone's `.envrc` 
   followed by one, or with a path starting with one, counts as outside; a line ending in `\` is joined to the
   next first, as bash does (an escaped trailing backslash joins too, a safe false positive).
 
+The guard resolves the `.envrc` and a `dotenv` path with the host-clone guard's own resolver (issue #468): at
+most 32 symlinks, each one's target checked against what the kernel resolves, and "inside the clone" decided by
+file identity (`test -ef`), never by comparing spellings, so a path typed in another case (APFS ignores case) or
+a link whose target ends in a newline cannot pass for a file of the clone. Anything it cannot resolve (more than
+32 links, a loop, a link it cannot read or that reads other than the kernel follows it) counts as outside.
+
 Each refusal names the file, and for a directive its line number (`<path>/.envrc: line <N>: ...`). A directive
 word anywhere on a non-comment line counts, in a trailing comment (`dotenv ./x # source_up`) or a quoted value
 too (`export N="open source"`, `export X=.`): the guard refuses it, a safe false positive; reword the value or
