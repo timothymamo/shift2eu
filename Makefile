@@ -552,16 +552,15 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # SIGTERM it gets to the recipe's shell. Each signal's trap ignores the three signals too, as its first action,
 # before its exit: a second signal landing between that exit and the EXIT trap would otherwise run its own trap
 # and end the shell before any cleanup, leaving the container and the directory behind (issue #464). The EXIT
-# trap then removes the directory, then the container, with a command
-# that ignores those signals too, so a hung one needs SIGKILL. The recipe starts the pinned headless Chromium
-# ($(HEADLESS_SHELL)) with the host network and its own entrypoint
-# replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on every interface
-# through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no fixed port is
-# open to guess and the DevTools ports and containers of two runs at once do not collide. It waits up to
-# 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll checks with
-# $(DOCKER) inspect that the container still runs: one inspect reports as not running (false) fails the
-# run at once, naming its exit status and showing the tail of its log (issue #423). A failed inspect alone
-# is no verdict, so the run keeps polling, but three failed in a row mean the container is gone, and the
+# trap then removes the directory, then the container, with a command that ignores those signals too, so a hung
+# one needs SIGKILL. The recipe starts the pinned headless Chromium ($(HEADLESS_SHELL)) with the host network
+# and its own entrypoint replaced, so DevTools listens on 127.0.0.1 only (the image's run.sh would open it on
+# every interface through socat), on a port the kernel picks (--remote-debugging-port=0, issue #368), so no
+# fixed port is open to guess and the DevTools ports and containers of two runs at once do not collide. It
+# waits up to 60 seconds until Chromium logs the browser's DevTools address on 127.0.0.1, and on each poll
+# checks with $(DOCKER) inspect that the container still runs: one inspect reports as not running (false)
+# fails the run at once, naming its exit status and showing the tail of its log (issue #423). A failed inspect
+# alone is no verdict, so the run keeps polling, but three failed in a row mean the container is gone, and the
 # run fails, showing inspect's last error, instead of waiting out the 60 seconds. It reads the address back
 # from the log line (port and browser id, so the test attaches to the browser this run started and no
 # other: a correctness guarantee, not access control, since any local process that finds the port can
