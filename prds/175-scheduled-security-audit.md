@@ -75,7 +75,7 @@ finding reaches a workflow log or a readable artifact, which anyone can read in 
 | Audit subject | The repository on `main` (tree and full history), the latest published release (archives, `checksums.txt`, the CLI image, its attestations and SBOM), `.github/`, `.claude/`, `.pi/`, `.dot-agent-deck.toml` and `dev/` as attack surface | Other repositories, dependencies' own code beyond advisories, GitHub's or GHCR's services |
 | Execution | A scheduled and `workflow_dispatch` workflow on `main`, GitHub-hosted runners, local containers on the runner | A second Lima VM, a launcher script, `dot-agent-deck schedule`, self-hosted runners (Decisions, Where) |
 | Writes | The report PR (`docs/security/` only) and draft security advisories (created and updated, never published), each through the audit App's token in the publish job; `security` issues for public findings of merged reports | Fixing findings in the audit run, editing code or `testdata/`, commenting on or closing other issues and PRs, releases, tags, packages, publishing an advisory or requesting a CVE |
-| Repository settings | The `security-audit` environment, the audit App, the `security-audit/**` branch ruleset, a new ruleset on `main` that requires the audit-report-paths check, the `**` tag ruleset if the maintainer adopts it (Decision 1 leaves it optional), the `security` label, removing Actions write from any App other than the release flow's that holds it (runbook step 6), documented as maintainer steps and read by checks | Changing `Protect main`, the `v*` tag rulesets, the release Apps or their environments (ADR 0021, PRD #161) |
+| Repository settings | The `security-audit` environment, the audit App, the `security-audit/**` branch ruleset, a new ruleset on `main` that requires the audit-report-paths check, the default branch ruleset on `~ALL` excluding `security-audit/**` (runbook step 5), the `**` tag ruleset if the maintainer adopts it (Decision 1 leaves it optional), the `security` label, removing Actions write from any App other than the release flow's that holds it (runbook step 6), documented as maintainer steps and read by checks | Changing `Protect main`, the `v*` tag rulesets, the release Apps or their environments (ADR 0021, PRD #161) |
 | Skills, tests and docs | A `security-audit-run` skill that reuses `security-audit`'s checklist and is distinct from it, an ADR, `SECURITY.md`, `docs/security/README.md`, the report template, `test/docs`' index check accepting a sub-index, `docs/dev-environment.md` (the runbook), a staleness check of the schedule | Rewriting `security-audit` |
 
 ## Acceptance criteria
@@ -660,10 +660,16 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    anything outside `docs/security/`, `Audit report paths` (the job of the `Audit paths` workflow,
    `.github/workflows/audit-paths.yml`), with source **GitHub Actions** (`integration_id` 15368), so a
    status of that name from any other integration does not count, and with no bypass actor. Create it with
-   enforcement **disabled** first, and make it active only after the trial PRs below. **Before** that, create
-   the **branch ruleset for every other branch** (active at once): target `~ALL` excluding
-   `security-audit/**`, rules `creation`, `update` and `deletion`, bypass actors the maintainer, the agents
-   App `shift2eu-agents`, Renovate and the release App `shift2eu-release`, **not** the audit App. The App's
+   enforcement **disabled** first, and make it active only after the trial PRs below. Before you make the
+   audit-paths ruleset active (ideally before step 5 starts), create the **branch ruleset for every other
+   branch** (active at once): target `~ALL` excluding `security-audit/**`, rules `creation`, `update` and
+   `deletion`, and exactly these bypass actors, each with mode **Always allow** (`always`): the maintainer
+   as the **Repository admin** role (`RepositoryRole`, actor_id 5; on a user-owned repository a user
+   cannot be a bypass actor, as PRD #297's R9 reads it), and the Apps (`Integration`) `shift2eu-agents`,
+   Renovate (`renovate`) and the release App `shift2eu-release`, **not** the audit App
+   `shift2eu-audit`. The mode must be `always`: `pull_request` mode would allow those actors only through a
+   pull request, and would reject the agents' direct pushes and branch deletions, Renovate's branches and
+   release-please's release branch. The App's
    Contents write lets it push to any branch; this ruleset leaves it able to write only `security-audit/**`
    branches. The check's sender key fails only the run of the App's own event: a later event by another
    sender (a push on top, an edit, a reopen) passes the check again with the App's commit still in the PR,
@@ -672,44 +678,77 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
    actor. Check:
 
    ```bash
+   # The ids of the four Apps, for the bypass check below
+   for s in shift2eu-agents renovate shift2eu-release shift2eu-audit; do echo "$s $(gh api /apps/$s --jq .id)"; done
+   # PASS: shift2eu-agents 5798878, renovate 2740, shift2eu-release 5729776, shift2eu-audit 5875190
+
    gh api repos/<owner>/<repo>/rulesets --jq '.[] | [.id, .name, .target, .enforcement] | @tsv'
-   # the branch ruleset's <branch id> and the audit-paths <id>
+   # the branch ruleset is the <branch id>, the audit-paths ruleset the <id>,
+   # the Audit report branches ruleset of step 4 the <audit branches id>
 
    # Branch ruleset: conditions, rules, bypass actors
    gh api repos/<owner>/<repo>/rulesets/<branch id> --jq '.conditions.ref_name | tojson'
    # PASS: include ["~ALL"], exclude ["refs/heads/security-audit/**"]; FAIL: anything else
    gh api repos/<owner>/<repo>/rulesets/<branch id> --jq '([.rules[].type] | tojson), .enforcement'
    # PASS: holds "creation", "update", "deletion" (any order), then active; FAIL: one missing, or not active
-   gh api repos/<owner>/<repo>/rulesets/<branch id> --jq '[.bypass_actors[] | [.actor_type, .actor_id]] | tojson'
-   # PASS: the maintainer, shift2eu-agents, Renovate, shift2eu-release; FAIL: the audit App's id listed
-   gh api /apps/shift2eu-audit --jq .id   # the audit App's id, for the line above
+   gh api repos/<owner>/<repo>/rulesets/<branch id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+   # PASS: exactly these four, in any order:
+   #   ["RepositoryRole",5,"always"] ["Integration",5798878,"always"]
+   #   ["Integration",2740,"always"] ["Integration",5729776,"always"]
+   # FAIL: the audit App id 5875190 listed, any other or missing actor, or a mode other than always
 
    # Audit-paths ruleset: the required check is pinned to GitHub Actions, with no bypass actor
    gh api repos/<owner>/<repo>/rulesets/<id> \
      --jq '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks | tojson'
    # PASS: [{"context":"Audit report paths","integration_id":15368}]; FAIL: no integration_id, or another one
-   gh api repos/<owner>/<repo>/rulesets/<id> --jq '.bypass_actors | tojson'   # PASS: []
+   gh api repos/<owner>/<repo>/rulesets/<id> --jq '.bypass_actors | tojson'
+   # PASS: []
 
    # Trial PR 1 (any branch into main, docs only), before the ruleset is made active: the
-   # pull_request_target run attaches to the PR's head commit, where the ruleset looks for it
-   gh pr view <n> --json headRefOid --jq .headRefOid   # the <head sha>
+   # pull_request_target run attaches to the PR head commit, where the ruleset looks for it
+   gh pr view <n> --json headRefOid --jq .headRefOid
+   # the <head sha>
    gh api repos/<owner>/<repo>/commits/<head sha>/check-runs \
      --jq '.check_runs[] | select(.name == "Audit report paths") | [.name, .app.slug, .app.id, .conclusion] | @tsv'
    # PASS: Audit report paths  github-actions  15368  success; FAIL: no row, or another app
 
-   # Trial PR 2: branch security-audit/trial-<n> that changes README.md, into main (the fence fires)
-   gh pr view <n> --json headRefOid --jq .headRefOid   # the <head sha>
+   # Trial PR 2: the Audit report branches ruleset of step 4 lets only the audit App push or
+   # delete security-audit/** (admins get no implicit bypass), so add the admin role to it for
+   # this trial only. The ~ALL branch ruleset excludes that pattern and plays no part here.
+   # In Settings, Rules, Rulesets, Audit report branches: add the bypass actor Repository admin,
+   # mode Always allow, and save. Then check:
+   gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id, .bypass_mode]] | tojson'
+   # PASS: ["Integration",5875190,...] and ["RepositoryRole",5,"always"]; FAIL: no RepositoryRole entry
+
+   # Push a branch security-audit/trial-<n> that changes README.md, and open its PR into main
+   git switch -c security-audit/trial-<n> origin/main
+   # edit README.md, then:
+   git commit -am "test: trial PR 2 for the audit paths check"
+   git push origin security-audit/trial-<n>
+   gh pr create --base main --head security-audit/trial-<n> --title "Trial PR 2" --body "Audit paths trial, to close"
+   # PASS: the push and the PR succeed; FAIL: the push is rejected (the bypass actor is missing)
+
+   # The fence fires
+   gh pr view <n> --json headRefOid --jq .headRefOid
+   # the <head sha>
    gh api repos/<owner>/<repo>/commits/<head sha>/check-runs \
      --jq '.check_runs[] | select(.name == "Audit report paths") | [.name, .app.slug, .app.id, .conclusion] | @tsv'
    # PASS: Audit report paths  github-actions  15368  failure; FAIL: success, no row, or another app
-   gh pr close <n> --delete-branch   # close trial PR 2 and delete its branch
+
+   # Close trial PR 2 and delete its branch
+   gh pr close <n> --delete-branch
+   git ls-remote origin refs/heads/security-audit/trial-<n>
+   # PASS: no output; FAIL: the branch still exists
+
+   # Remove the Repository admin bypass actor from Audit report branches again, and save.
+   # Then re-run step 4 bypass check:
+   gh api repos/<owner>/<repo>/rulesets/<audit branches id> --jq '[.bypass_actors[] | [.actor_type, .actor_id]] | tojson'
+   # PASS: [["Integration",5875190]], the audit App only; FAIL: any other actor, the admin role included
 
    # Then make the audit-paths ruleset active (enforcement: active), and check Protect main is unchanged
-   gh api repos/<owner>/<repo>/rulesets/<id> --jq .enforcement   # PASS: active
+   gh api repos/<owner>/<repo>/rulesets/<id> --jq .enforcement
+   # PASS: active
    ```
-
-   The maintainer is a bypass actor of every ruleset, so trial PR 2's branch may be pushed before or after
-   the branch ruleset exists.
 6. **Check the other rulesets and the Apps**: the App is in no bypass list of `Protect main`, the
    audit-paths ruleset or the tag rulesets, and `Protect main` still requires the code owner's approval,
    so an approval by the App does not count (as PRD #161 milestone 4 checks). No App installed on the
@@ -822,7 +861,7 @@ options that were weighed and the reason given, so the decision can be revisited
        nothing elsewhere.
      - A branch ruleset on `~ALL` excluding `security-audit/**` restricts creations, updates and deletions
        to the legitimate pushers, not the App, so it can write only `security-audit/**` branches (runbook
-       step 5).
+       step 5). That ruleset now closes the agents' and release-please's branches to the App.
      - `Protect main` requires the code owner's approval, so an `APPROVE` by the App never counts (as PRD
        #161 milestone 4 checks for its Apps).
      - Optional, the maintainer's choice at runbook step 5: a tag ruleset on `**` that lets only the

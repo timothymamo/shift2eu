@@ -236,7 +236,7 @@ What those permissions also allow, beyond what the audit needs, and what narrows
 
 | Permission | Also allows | Narrowed by |
 |---|---|---|
-| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App and admins write there); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; a branch ruleset on `~ALL` excluding `security-audit/**` that restricts creations, updates and deletions to every pusher but the App; optionally a `**` tag ruleset that lets only the release App create tags |
+| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App and admins write there); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; a branch ruleset on `~ALL` excluding `security-audit/**` that restricts creations, updates and deletions to its bypass actors (the maintainer's admin role, the agents App, Renovate, the release-please App), never the audit App; optionally a `**` tag ruleset that lets only the release App create tags |
 | Pull requests write | submitting reviews, `APPROVE` included | `Protect main` requires the code owner's approval, so the App's never counts; the script never calls the review endpoints |
 | Repository security advisories write | publishing an advisory and requesting a CVE: disclosure | every advisory `state` the script sends is hard-coded `draft`, and it never calls the publish or CVE endpoints |
 
@@ -272,9 +272,11 @@ Residual risks of the check:
   App `shift2eu-agents`, Renovate, the release App `shift2eu-release`) and not the audit App, which can
   then write only `security-audit/**` branches. The residual risk is bounded by the fence plus this
   ruleset; without the ruleset, the sender key is only a one-shot signal.
-- Denial of service: the App's Pull requests write lets it edit any pull request's title, which is an
-  `edited` run with the App as sender, so that pull request's required check fails until the next event
-  by another sender or a re-run clears it. It lets nothing in; it only blocks a merge for a while.
+- Denial of service: the App's Pull requests write lets it edit any pull request's title or retarget its
+  base, each an `edited` run with the App as sender, so that pull request's required check fails. A
+  re-run does not clear it: a re-run of a `pull_request_target` run replays the original event, so the
+  sender is still the App and it fails again. It clears on the next event by another sender (the author
+  editing the title again, or a close and reopen). It lets nothing in; it only blocks a merge for a while.
 - The ruleset pins the integration, not the workflow: another GitHub Actions workflow holding
   `checks: write` could post a check run of the same name from the same integration. The App cannot add
   or change one (it has no Workflows permission); a workflow change that grants `checks: write` is
