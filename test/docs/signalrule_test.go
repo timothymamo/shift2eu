@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/google/go-cmp/cmp"
 )
 
 // rulesHeading is the CLAUDE.md heading whose numbered items are the rules
@@ -116,6 +118,115 @@ func numberedItems(body []string) []numberedItem {
 		items[i].text = strings.Join(strings.Fields(items[i].text), " ")
 	}
 	return items
+}
+
+// TestNumberedItemsReadsARuleWithANestedList fails when numberedItems stops
+// reading a rule whose body is a nested Markdown list as one item (issue #469).
+// Rule 10 is written as its bold title followed by a tight `-` list, with some
+// of those sub-items carrying a deeper sub-item and inline code that holds
+// backticks, braces, `$!` and `&&`: the item must keep its own number and its
+// first line, and its text must hold the title and the text of every sub-item
+// in the order they are written. A following numbered item still starts a new
+// item, and a blank line still ends one, so a paragraph below the rule is no
+// part of it. The old one-paragraph shape stays covered, including a rule
+// wrapped over two lines.
+func TestNumberedItemsReadsARuleWithANestedList(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want []numberedItem
+	}{
+		{
+			name: "a rule with two levels of sub-items and inline code",
+			body: strings.Join([]string{
+				"## Rules",
+				"",
+				"10. **Signal only what you started.**",
+				"    - Never: `kill`, `pkill`, `killall` on a process you did not start.",
+				"    - To be able to stop a run of your own: prefer your agent's tool's background mode,",
+				"      which stops the whole run.",
+				"      - Otherwise start it as `cd <path> && { <cmd> < /dev/null > <log> 2>&1 & echo $!; }`",
+				"        and note the pid and its start time.",
+				"    - Why: other agents' runs share this machine.",
+				"11. **Change files with your file-editing tool.**",
+				"    - No heredoc, `cat >`, `tee` or `sed -i`.",
+			}, "\n"),
+			want: []numberedItem{
+				{
+					number: "10",
+					line:   2,
+					text: "**Signal only what you started.**" +
+						" - Never: `kill`, `pkill`, `killall` on a process you did not start." +
+						" - To be able to stop a run of your own: prefer your agent's tool's background mode," +
+						" which stops the whole run." +
+						" - Otherwise start it as `cd <path> && { <cmd> < /dev/null > <log> 2>&1 & echo $!; }`" +
+						" and note the pid and its start time." +
+						" - Why: other agents' runs share this machine.",
+				},
+				{
+					number: "11",
+					line:   9,
+					text:   "**Change files with your file-editing tool.** - No heredoc, `cat >`, `tee` or `sed -i`.",
+				},
+			},
+		},
+		{
+			name: "a blank line ends the rule, so a paragraph below it is no part of the item",
+			body: strings.Join([]string{
+				"## Rules",
+				"",
+				"10. **First rule.**",
+				"    - a sub-item.",
+				"",
+				"A paragraph that follows the rule.",
+				"11. **Second rule.**",
+			}, "\n"),
+			want: []numberedItem{
+				{number: "10", line: 2, text: "**First rule.** - a sub-item."},
+				{number: "11", line: 6, text: "**Second rule.**"},
+			},
+		},
+		{
+			name: "a rule in the old one-paragraph shape, wrapped over two lines",
+			body: strings.Join([]string{
+				"## Rules",
+				"",
+				"1. **Never write to a cloud.** Source adapters use read-only APIs only.",
+				"   No create, update, delete or tag calls.",
+				"",
+			}, "\n"),
+			want: []numberedItem{
+				{
+					number: "1",
+					line:   2,
+					text:   "**Never write to a cloud.** Source adapters use read-only APIs only. No create, update, delete or tag calls.",
+				},
+			},
+		},
+		{
+			name: "a section with no numbered item at all",
+			body: strings.Join([]string{
+				"## Rules",
+				"",
+				"Everything here is prose.",
+				"",
+			}, "\n"),
+			want: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := numberedItems(strings.Split(tc.body, "\n"))
+			if diff := cmp.Diff(tc.want, got, cmp.AllowUnexported(numberedItem{})); diff != "" {
+				t.Errorf("numberedItems() mismatch (-want +got):\n%s", diff)
+			}
+		})
+	}
 }
 
 // runsChecks reports whether a skill's text tells an agent to run the
