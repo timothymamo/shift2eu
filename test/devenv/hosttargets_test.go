@@ -120,6 +120,17 @@ func (l *hostLayout) workspace() string {
 	return filepath.Dir(l.env["WORKSPACE_REPO"])
 }
 
+// hooksPathCallInTheVM is the limactl call make vm-up makes once the instance runs, after it started or created it:
+// from inside the VM, it sets the checkout WORKSPACE_REPO names to use the repository's git hooks, which refuse a
+// commit or a push to main, so the setting comes back on every start and an agent that unsets it is refused again
+// once the VM is restarted (issue #326). The setting is made in the VM, never with the host's git (issue #227).
+func hooksPathCallInTheVM(l *hostLayout) []string {
+	return []string{
+		"shell", "--workdir", "/", hostTargetInstance, "git", "-C", l.env["WORKSPACE_REPO"],
+		"config", "core.hooksPath", ".githooks",
+	}
+}
+
 // caseInsensitiveDir reports whether the file system holding dir resolves a name spelled in another case to the
 // same file: it writes a probe file there and stats that file's case-swapped name. The property is detected where
 // the sandbox lives rather than from GOOS, as it is the file system, not the kernel, that decides it: macOS's APFS
@@ -794,6 +805,9 @@ func TestHostTargetsRefuseOutsideTheHostClone(t *testing.T) {
 					"start", "--name=" + hostTargetInstance, "--mount-only", workspace + ":w",
 					"--tty=false", "dev/lima.yaml",
 				},
+				// Once the VM runs, vm-up sets the checkout's git hooks again inside it, where they refuse a commit
+				// or a push to main (issue #326).
+				hooksPathCallInTheVM(l),
 			}
 
 			if diff := cmp.Diff(want, invocations(l.sb.argvLogText(t), "limactl")); diff != "" {
@@ -1060,6 +1074,7 @@ func TestHostTargetsRunFromTheHostClone(t *testing.T) {
 						"start", "--name=" + hostTargetInstance, "--mount-only", l.workspace() + ":w",
 						"--tty=false", "dev/lima.yaml",
 					},
+					hooksPathCallInTheVM(l),
 				}
 			},
 		},
@@ -1074,6 +1089,7 @@ func TestHostTargetsRunFromTheHostClone(t *testing.T) {
 						"start", "--name=" + hostTargetInstance, "--mount-only", l.workspace() + ":w",
 						"--tty=false", "dev/lima.yaml",
 					},
+					hooksPathCallInTheVM(l),
 				}
 			},
 		},
