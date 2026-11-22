@@ -30,7 +30,8 @@ has its own branch, and every branch its own worktree under `.worktrees/`
 3. Work only in that worktree: run every non-git command from it (`cd <path> && ...`), and read and edit
    files only under it. Run git as `git -C <path> ...`, never `cd <path> && git ...`. Write the
    worktree path out in full; do not store it in a shell variable. `make check`, `go test ./...` and
-   `git` then act on this branch alone.
+   `git` then act on this branch alone. Signal only what you started (CLAUDE.md rule 10): to stop a run
+   of your own, signal the pid you kept, never a process found by name.
 4. When delegating, make `Worktree: <absolute path>` the first line of every task.
 
 ## Finish

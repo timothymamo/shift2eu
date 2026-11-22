@@ -141,6 +141,11 @@ provider (checked against `infra/site/.terraform.lock.hcl`); it fetches nothing 
    way (`git commit -F <file>`, `gh pr create --body-file <file>`). Never `rm` a path held in a variable
    or built at run time (`rm -rf "$dir"`); leave scratch directories for the system to clean. Why: such
    commands stop an unattended pane at a permission prompt nobody answers (issue #251).
+10. **Signal only what you started.** Never send a signal (`kill`, `pkill`, `killall`, a process-group
+    kill) to a process you did not start yourself, and never pick a process to signal by name (`pgrep`,
+    `pidof`, `pkill`): other agents' runs share this machine. To stop something of your own, keep its pid
+    when you start it and signal only that pid. Why: a coder sent SIGTERM to the process group of a `make`
+    it found with `pgrep -x make`, which may have been another unit's run (issue #465).
 
 ## Multi-agent workflow
 

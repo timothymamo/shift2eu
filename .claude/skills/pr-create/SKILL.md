@@ -16,7 +16,8 @@ maintainer has not approved: the maintainer's approval and merge are the single 
    not store it in a shell variable. Confirm the tree is clean (`git -C <path> status`) and the branch
    is not `main` (`git -C <path> branch --show-current`). If either check fails, or the task names no
    worktree, stop and report.
-2. Run `make check`. If it fails, report the exact output and stop.
+2. Run `make check`. If it fails, report the exact output and stop. Signal only what you started
+   (CLAUDE.md rule 10): to stop a run of your own, signal the pid you kept, never a process found by name.
 3. If this PR completes a file PRD: set its status to `Complete`,
    `git -C <path> mv prds/<n>-<slug>.md prds/done/`, fix links to the old path, and commit
    `docs(prd): complete PRD #<n>`.

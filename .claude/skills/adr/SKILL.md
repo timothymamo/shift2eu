@@ -29,6 +29,7 @@ description: Write an Architecture Decision Record for shift2eu under docs/adr. 
 
 3. Add it to the list under "Architecture decision records" in `docs/README.md`, the documentation's
    index, as `- [NNNN. <Title>](adr/NNNN-<kebab-title>.md)`; `make check` fails on a page the index
-   does not list.
+   does not list. Signal only what you started (CLAUDE.md rule 10): to stop a run of your own, signal
+   the pid you kept, never a process found by name.
 4. Never rewrite an accepted ADR's decision. Supersede it with a new ADR and update the old one's status.
 5. Link the ADR from the PRD or PR that motivated it.

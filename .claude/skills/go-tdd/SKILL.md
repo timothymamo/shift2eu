@@ -38,6 +38,7 @@ clean (CLAUDE.md, rule 9).
 
 Re-run the test, then `go test -race ./<pkg>/...`, and report the test names and results.
 Never edit production code in this role.
+Signal only what you started (CLAUDE.md rule 10): to stop a run of your own, signal the pid you kept, never a process found by name.
 
 ## Conventions
 
