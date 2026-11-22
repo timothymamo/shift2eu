@@ -2467,9 +2467,18 @@ type runningScript struct {
 func (sb *sandbox) start(t *testing.T, script string, args []string, env map[string]string) *runningScript {
 	t.Helper()
 
+	return sb.startWith(t, append([]string{"sh", script}, args...), env)
+}
+
+// startWith runs a script of dev/ in the background under the interpreter of argv - sh, as start does, or bash
+// --posix, one more shell the scripts of dev/ run under - with the same process group, output files and cleanup
+// start gives.
+func (sb *sandbox) startWith(t *testing.T, argv []string, env map[string]string) *runningScript {
+	t.Helper()
+
 	output := t.TempDir()
 	r := &runningScript{
-		cmd:    exec.Command("sh", append([]string{script}, args...)...),
+		cmd:    exec.Command(argv[0], argv[1:]...),
 		stdout: filepath.Join(output, "stdout"),
 		stderr: filepath.Join(output, "stderr"),
 		exited: make(chan struct{}),
@@ -2492,7 +2501,7 @@ func (sb *sandbox) start(t *testing.T, script string, args []string, env map[str
 	}
 
 	if err != nil {
-		t.Fatalf("start %s %s: %v", script, strings.Join(args, " "), err)
+		t.Fatalf("start %s: %v", strings.Join(argv, " "), err)
 	}
 
 	go func() {

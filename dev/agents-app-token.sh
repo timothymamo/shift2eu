@@ -1248,15 +1248,16 @@ refresh() {
   # `sleep ... &`, or the sleep wait has just reaped before `sleeper=none`) is no child of this shell any more,
   # even when the system has given its pid to another process, and is not killed, short of its pid being
   # reused in the instant between the ppid check and the kill (the two are not atomic: the shell may reap a
-  # sleep that exits while it waits for ps). They read $! as ${!:-}: before the loop's first `sleep ... &` no
-  # background job has run and $! is unset, so under set -u a bare $! would make the shell report "parameter
-  # not set" into the log; ${!:-} is empty then, ps -p "" names no parent and nothing is killed (issue #289).
-  # Each trap stays one line.
+  # sleep that exits while it waits for ps). Before the loop's first `sleep ... &` no background job has run
+  # and $! is unset, so under set -u the shell would report "parameter not set" or "$!: unbound variable" into
+  # the log - bash 3.2, the Mac's /bin/sh, even for ${!:-} (issue #448). So each trap turns set -u off once
+  # stopped has run, right before it reads $!, and exits at its end: $! is empty then, ps -p "" names no parent
+  # and nothing is killed (issues #289, #448). Each trap stays one line, as the tests take it from this file.
   sleeper=none
   locked=0
   trap 'release_lock' EXIT
-  trap 'stopped "signal"; [ "${sleeper}" = none ] || [ "$(ps -o ppid= -p "${sleeper:-${!:-}}" 2>/dev/null | tr -d " ")" != "$$" ] || kill "${sleeper:-${!:-}}" 2>/dev/null || true; release_lock; exit 143' TERM
-  trap 'stopped "interrupted"; [ "${sleeper}" = none ] || [ "$(ps -o ppid= -p "${sleeper:-${!:-}}" 2>/dev/null | tr -d " ")" != "$$" ] || kill "${sleeper:-${!:-}}" 2>/dev/null || true; release_lock; exit 130' INT
+  trap 'stopped "signal"; set +u; [ "${sleeper}" = none ] || [ "$(ps -o ppid= -p "${sleeper:-$!}" 2>/dev/null | tr -d " ")" != "$$" ] || kill "${sleeper:-$!}" 2>/dev/null || true; release_lock; exit 143' TERM
+  trap 'stopped "interrupted"; set +u; [ "${sleeper}" = none ] || [ "$(ps -o ppid= -p "${sleeper:-$!}" 2>/dev/null | tr -d " ")" != "$$" ] || kill "${sleeper:-$!}" 2>/dev/null || true; release_lock; exit 130' INT
   take_lock
   expiry=""
   failures=0
