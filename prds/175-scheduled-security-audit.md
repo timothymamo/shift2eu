@@ -236,7 +236,7 @@ The model job and where the subscription token is:
   `secrets.CLAUDE_CODE_OAUTH_TOKEN` appears only in that step's step-level `env:`: never in job or
   workflow `env:`, a `with:` input, or a `run:` script body. The step's environment holds no other secret
   and no `GITHUB_TOKEN`.
-- [ ] The model step runs a committed launcher that starts the Claude Code binary by absolute path,
+- [x] The model step runs a committed launcher that starts the Claude Code binary by absolute path,
   verified against its pinned checksum in the same step, through `env -i` with an explicit allow list: a
   fresh `HOME` inside the audit directory's own state area, a fixed `PATH`, the token,
   `DISABLE_AUTOUPDATER=1`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`, and only what the ADR shows the

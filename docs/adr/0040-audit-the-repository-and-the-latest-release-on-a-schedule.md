@@ -740,11 +740,15 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   closed the listener, under `context.WithTimeout(context.WithoutCancel(ctx), 10s)`: a run that was
   cancelled or passed its deadline is still observed, where a done context would fail the Docker
   connect and `sudo` for the context and read probes 3 and 4 as refused. `audit.Observe` is the real
-  one; the audit's one CLI run is the seam `audit.Launch`. A test of
-  `ci/auditrun` drives the whole launcher with a fake `claude` that records its environment: the
-  variables an earlier step could set through `$GITHUB_ENV` (`ANTHROPIC_BASE_URL`, `HTTPS_PROXY`,
-  `NODE_OPTIONS`, `LD_PRELOAD`) are not in it, and a managed-settings file under the test's root stops
-  the launcher with exit 3 before the fake runs.
+  one; the audit's one CLI run is the seam `audit.Launch`. Two tests of
+  `ci/auditrun` drive the real steps under a temporary root with a fake `claude` that records its
+  environment. `TestRunInheritsNoneOfTheStepsEnvironment` re-executes its own test binary as the
+  launcher with only the variables an earlier step could set through `$GITHUB_ENV`
+  (`ANTHROPIC_BASE_URL`, `HTTPS_PROXY`, `NODE_OPTIONS`, `LD_PRELOAD`) and a sentinel in its
+  environment: none of them is in the recorded environment, which holds the launcher's allow list and
+  the shell's own names (`PWD`, `SHLVL`, `_`, `OLDPWD`) alone. `TestRunStopsAtAManagedSettingsFile`
+  shows that a managed-settings directory under the test's root stops the launcher with exit 3 before
+  the fake runs.
 
 *Settled by the implementation (issue #277):*
 
