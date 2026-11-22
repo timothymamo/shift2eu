@@ -9,6 +9,7 @@ import (
 
 	"github.com/timothymamo/shift2eu/internal/app/analysis"
 	"github.com/timothymamo/shift2eu/internal/domain/assessment"
+	"github.com/timothymamo/shift2eu/internal/domain/estimate"
 	"github.com/timothymamo/shift2eu/internal/domain/mapping"
 	"github.com/timothymamo/shift2eu/internal/testutil"
 )
@@ -1333,14 +1334,19 @@ func TestReportEstimateCellHoldsOnlyTheAmount(t *testing.T) {
 // item 05): the amount carries its sign, never its code, as the artifact has it.
 // The prices of the catalogs are in euros, so an amount of the source's own cost
 // is the only place a code could appear, and there too the artifact shows the
-// amount alone.
+// amount alone: the fragment names no code for a currency the report knows --
+// neither <code>EUR</code> nor <code>USD</code> -- and no bare code either, the
+// way a currency the report has no sign for is shown.
 func TestReportNamesNoCurrencyCode(t *testing.T) {
 	t.Parallel()
 
 	fragment := string(render(t, estimatesAssessment(t), analysis.ReportMeta{InventoryName: inventoryFileName}))
 
-	if strings.Contains(fragment, "USD") {
-		t.Errorf("the fragment names the currency code \"USD\", want the amount's sign alone, as the artifact has it (issue #373, item 05)\n%s", fragment)
+	for _, currency := range []string{"EUR", "USD", "GBP"} {
+		if strings.Contains(fragment, currency) {
+			t.Errorf("the fragment names the currency code %q, as <code>%s</code> or as plain text, want the amount's sign alone, as the artifact has it (issue #373, item 05)\n%s",
+				currency, currency, fragment)
+		}
 	}
 
 	for _, wanted := range []string{"$40.00", "€2,535.00"} {
@@ -1348,6 +1354,52 @@ func TestReportNamesNoCurrencyCode(t *testing.T) {
 			t.Errorf("the fragment does not show the amount %q, want the amount itself unchanged: no currency code is named, and no amount is lost (issue #373, item 05)\n%s",
 				wanted, textOf(fragment))
 		}
+	}
+}
+
+// TestReportNamesAnUnknownCurrencyByItsCode pins how a source cost names a
+// currency the report has no sign for (issue #373, item 05): with no sign to
+// show, the code itself stands beside the amount, as a value rather than the
+// report's own words, and a currency that would be markup in a page reaches the
+// fragment as text. The assessment is built here rather than from an inventory
+// file, since the domain refuses a currency that is not three upper-case letters
+// and the report takes any assessment an application layer hands it.
+func TestReportNamesAnUnknownCurrencyByItsCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		currency string
+		// markup is what the fragment must not hold: the currency read as a tag.
+		markup string
+	}{
+		{name: "a currency the report has no sign for", currency: "CHF"},
+		{name: "a hostile currency", currency: "<b>", markup: "<b>"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := estimatesAssessment(t)
+			a.SourceCost = estimate.SourceCost{
+				Currencies: []estimate.CurrencyCost{{Currency: tc.currency, Monthly: estimate.Ratio(2400, 1), Resources: 1}},
+				Covered:    1,
+				Resources:  a.SourceCost.Resources,
+			}
+
+			fragment := string(render(t, a, analysis.ReportMeta{InventoryName: inventoryFileName}))
+
+			if want := "<code>" + escapedText(tc.currency) + "</code> 2,400.00"; !strings.Contains(fragment, want) {
+				t.Errorf("the fragment does not show the source cost %q, want the code of a currency the report has no sign for beside its amount, as a value (issue #373, item 05)\n%s",
+					want, fragment)
+			}
+
+			if tc.markup != "" && strings.Contains(fragment, tc.markup) {
+				t.Errorf("the fragment writes the currency %q as the markup %q, want it escaped as text, since a value must never become a tag (issue #373, item 05)\n%s",
+					tc.currency, tc.markup, fragment)
+			}
+		})
 	}
 }
 
