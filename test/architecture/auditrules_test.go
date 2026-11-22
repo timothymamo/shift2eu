@@ -146,7 +146,7 @@ func TestAuditLibraryImportersAreNamed(t *testing.T) {
 	}
 }
 
-// findDepguardRule returns the named rule of rules, and fails the test when the
+// auditRuleNamed returns the named rule of rules, and fails the test when the
 // document holds none: a rule that went missing leaves a package unheld.
 func auditRuleNamed(t *testing.T, rules []check.DepguardRule, name string) check.DepguardRule {
 	t.Helper()
@@ -160,6 +160,29 @@ func auditRuleNamed(t *testing.T, rules []check.DepguardRule, name string) check
 	t.Fatalf(".golangci.yml holds no depguard rule %s, which ADR 0040's amendment gives the audit's packages", name)
 
 	return check.DepguardRule{}
+}
+
+// TestTheAuditsLibraryImportsTheSharedLauncher pins the other half of how the
+// audit reaches the CLI: ci/internal/claudecode's own importer rule names the
+// two callers the ADR gives it, the AI reviewer's library and the audit's, so
+// the audit's import is not refused and no other package may make it.
+func TestTheAuditsLibraryImportsTheSharedLauncher(t *testing.T) {
+	t.Parallel()
+
+	rules, err := check.DepguardRules(readRepositoryFile(t, ".golangci.yml"))
+	if err != nil {
+		t.Fatalf("DepguardRules(.golangci.yml): %v", err)
+	}
+
+	const launcherImportersRule = "claude-code-launcher-importers"
+
+	rule := auditRuleNamed(t, rules, launcherImportersRule)
+
+	for _, scope := range []string{"!**/ci/aireview/internal/review/**", notTheLibraryScope} {
+		if !slices.Contains(rule.Files, scope) {
+			t.Errorf("the depguard rule %s holds %v, want it to except %s: that package is one of the two callers of the shared launcher (ADR 0040)", launcherImportersRule, rule.Files, scope)
+		}
+	}
 }
 
 // allowsPackages returns whether a rule with the allow entries admits pkg, as

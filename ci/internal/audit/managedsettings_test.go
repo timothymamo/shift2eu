@@ -180,7 +180,7 @@ func TestCheckManagedSettingsRefusesEveryPathTheCLILoads(t *testing.T) {
 func makeDir(t *testing.T, path string) {
 	t.Helper()
 
-	if err := os.MkdirAll(path, 0o755); err != nil {
+	if err := os.MkdirAll(path, 0o750); err != nil {
 		t.Fatalf("make %s: %v", path, err)
 	}
 }

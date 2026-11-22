@@ -16,7 +16,7 @@ import (
 const (
 	// testToken and testCanary are invented values made at test time in place of
 	// the step's two secrets: no line of a run, and no error, may hold either.
-	testToken  = "oauth-sentinel-token-never-printed"
+	testToken  = "oauth-sentinel-token-never-printed" //nolint:gosec // G101: an invented value made at test time, which grants nothing
 	testCanary = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
 	// testIntegrity is a well-formed npm integrity: the shape -claude-integrity
@@ -42,7 +42,7 @@ func testInputs(root string) audit.Inputs {
 func writeFile(t *testing.T, path, body string, mode os.FileMode) {
 	t.Helper()
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		t.Fatalf("make the directory of %s: %v", path, err)
 	}
 

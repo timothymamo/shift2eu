@@ -27,7 +27,7 @@ const (
 	// auditToken and auditCanary are invented at test time in place of the
 	// step's two secrets: no line the run prints, and no summary, may hold
 	// either.
-	auditToken  = "oauth-sentinel-token-never-printed"
+	auditToken  = "oauth-sentinel-token-never-printed" //nolint:gosec // G101: an invented value made at test time, which grants nothing
 	auditCanary = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
 
 	// auditIntegrity is an integrity of the shape -claude-integrity takes: npm's

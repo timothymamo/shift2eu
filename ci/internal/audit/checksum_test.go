@@ -230,7 +230,7 @@ func TestInstallClaudeRefusesEveryOtherTarball(t *testing.T) {
 		{
 			name:    "a file that is no gzip and no tar",
 			entries: nil,
-			damage: func(t *testing.T, path string, packed []byte) {
+			damage: func(t *testing.T, path string, _ []byte) {
 				t.Helper()
 
 				if err := os.WriteFile(path, []byte("this is no tarball at all\n"), 0o600); err != nil {

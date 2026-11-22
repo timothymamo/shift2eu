@@ -59,12 +59,6 @@ type stepsRecorder struct {
 	errs map[string]error
 }
 
-// failing returns a recorder whose step fails with err, and whose other steps
-// pass.
-func failing(step string, err error) *stepsRecorder {
-	return &stepsRecorder{errs: map[string]error{step: err}}
-}
-
 // steps is the recorder as the run's six steps.
 func (r *stepsRecorder) steps() audit.Steps {
 	answer := func(step string) error {
