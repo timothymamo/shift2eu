@@ -237,7 +237,7 @@ What those permissions also allow, beyond what the audit needs, and what narrows
 
 | Permission | Also allows | Narrowed by |
 |---|---|---|
-| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App writes there; an admin only through a temporary bypass the runbook adds and removes); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; a branch ruleset on `~ALL` excluding `security-audit/**` that restricts creations, updates and deletions to its bypass actors (the maintainer's admin role, the agents App, Renovate, the release-please App), never the audit App; optionally a `**` tag ruleset that lets only the release App create tags |
+| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App writes there; an admin only through a temporary bypass the runbook adds and removes); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; a branch ruleset on `~ALL` excluding the default branch (`Protect main` guards it; including it blocked every merge) and `security-audit/**` that restricts creations, updates and deletions to its bypass actors (the maintainer's admin role, the agents App, Renovate, the release-please App), never the audit App; optionally a `**` tag ruleset that lets only the release App create tags |
 | Pull requests write | submitting reviews, `APPROVE` included | `Protect main` requires the code owner's approval, so the App's never counts; the script never calls the review endpoints |
 | Repository security advisories write | publishing an advisory and requesting a CVE: disclosure | every advisory `state` the script sends is hard-coded `draft`, and it never calls the publish or CVE endpoints |
 
@@ -268,11 +268,13 @@ Residual risks of the check:
   change, a close and reopen, a human opening the pull request later) runs the check again with a
   non-App sender and passes it, with the App's commit still in the pull request. The fix is a branch
   ruleset, part of runbook step 5 by default and created before the audit-paths ruleset goes active: it
-  targets `~ALL` excluding `security-audit/**`, restricts creations, updates and deletions (`creation`,
-  `update`, `deletion`), and has as bypass actors every legitimate pusher (the maintainer's admin role (`RepositoryRole` 5), the agents
+  targets `~ALL` excluding the default branch (`~DEFAULT_BRANCH`) and `security-audit/**`, restricts
+  creations, updates and deletions (`creation`, `update`, `deletion`), and has as bypass actors every legitimate pusher (the maintainer's admin role (`RepositoryRole` 5), the agents
   App `shift2eu-agents`, Renovate, the release App `shift2eu-release`) and not the audit App, which can
-  then write only `security-audit/**` branches. The residual risk is bounded by the fence plus this
-  ruleset; without the ruleset, the sender key is only a one-shot signal.
+  then write only `security-audit/**` branches. The default branch stays out of its target: `Protect
+  main` already guards `main`, and with `main` included the `update` rule blocked every merge into it
+  (2026-11-22, PRs #460 and #461). The residual risk is bounded by the fence plus this ruleset; without
+  the ruleset, the sender key is only a one-shot signal.
 - Denial of service: the App's Pull requests write lets it edit any pull request's title or retarget its
   base, each an `edited` run with the App as sender, so that pull request's required check fails. A
   re-run does not clear it: a re-run of a `pull_request_target` run replays the original event, so the
@@ -285,8 +287,9 @@ Residual risks of the check:
 - Under `pull_request_target` the workflow file and `github.sha` come from the pull request's base
   branch, not always from `main`. Every pull request into `main`, the only ones the audit-paths ruleset
   requires the check on, runs `main`'s copy of the workflow and of the script; a pull request into another
-  branch runs that branch's copy, which could differ. The branch ruleset on `~ALL` keeps the audit App
-  from changing any other branch's copy; without it, the App's contents write could. Retargeting the pull
+  branch runs that branch's copy, which could differ. The branch ruleset on `~ALL` (excluding the default
+  branch, which `Protect main` guards, and `security-audit/**`) keeps the audit App from changing any
+  other branch's copy; without it, the App's contents write could. Retargeting the pull
   request to `main` is an `edited` event that runs `main`'s copy on the same head commit, and that newer
   run decides; until it finishes, the earlier run's result from the other base stands on the head commit.
   Code-owner approval on `main` bounds that window.
