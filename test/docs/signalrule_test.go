@@ -43,13 +43,17 @@ const skillGlob = ".claude/skills/*/SKILL.md"
 
 // skillsThatMustRunChecks are the skills the matched set must hold, so the
 // check over the skills cannot pass because no skill matched at all: these
-// skills send an agent to the checks, and every one of them must point at the
-// rule.
+// skills send an agent to the checks and every one of them must point at the
+// rule. Only a skill that tells an agent to run a check itself belongs here.
+// review-change is not one: it mentions `make lint` to describe what the lint
+// run catches, and if that description is reworded the skill may stop matching
+// checkPhrases altogether. It is checked whenever it does match, like every
+// other skill, and holding it here would then fail with a message about a skill
+// that runs the checks, which it does not.
 var skillsThatMustRunChecks = []string{
 	".claude/skills/dispatch/SKILL.md",
 	".claude/skills/go-implement/SKILL.md",
 	".claude/skills/go-tdd/SKILL.md",
-	".claude/skills/review-change/SKILL.md",
 	".claude/skills/security-audit/SKILL.md",
 }
 
