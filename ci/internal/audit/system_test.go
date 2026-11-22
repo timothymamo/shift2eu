@@ -451,9 +451,12 @@ func jsonEscaped(s string) string {
 // before the run the work area holds its empty tmp/ and nothing else, so a result
 // file that is already there is refused rather than taken for the run's; after
 // the run there is a result file, and one holding the step's token or its canary
-// fails the step. A result file quoting a SHA-256 pin is a finding, not a leak:
-// the 64-hex rule the judgement applies to the preflight's transcript is not
-// applied here.
+// fails the step, in its bytes or in any of its decoded strings - the key of an
+// object and the first value of a duplicate key among them, so the search reads
+// the document's tokens rather than a map that a later duplicate key empties
+// (issue #277, round E finding 3). A result file quoting a SHA-256 pin is a
+// finding, not a leak: the 64-hex rule the judgement applies to the preflight's
+// transcript is not applied here.
 func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 	t.Parallel()
 
@@ -547,6 +550,25 @@ func TestAuditTakesOnlyAResultFileTheRunWrote(t *testing.T) {
 			name: "the result file holds the step's canary",
 			write: func(root string) error {
 				return os.WriteFile(workPath(root, "result.json"), []byte(`{"note":"`+testCanary+`"}`), 0o600)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			// A duplicate key is legal JSON, and a document decoded into a map
+			// keeps its last value alone: the first one's escapes would never
+			// reach the search.
+			name: "the result file holds the step's token as JSON escapes under a duplicate key",
+			write: func(root string) error {
+				return os.WriteFile(workPath(root, "result.json"), []byte(`{"note":"`+jsonEscaped(testToken)+`","note":"the value a map keeps"}`), 0o600)
+			},
+			wantLaunched: true,
+			wantRefused:  true,
+		},
+		{
+			name: "the result file holds the step's canary as JSON escapes under a duplicate key",
+			write: func(root string) error {
+				return os.WriteFile(workPath(root, "result.json"), []byte(`{"note":"`+jsonEscaped(testCanary)+`","note":"the value a map keeps"}`), 0o600)
 			},
 			wantLaunched: true,
 			wantRefused:  true,

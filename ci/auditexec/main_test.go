@@ -562,7 +562,12 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 	// git's signature output is refused too (issue #277, round D finding 2): a
 	// format placeholder of %G asks git for what it made of a commit's
 	// signature, which is the same verification that runs gpg, and the answer
-	// says nothing a report of the tree needs.
+	// says nothing a report of the tree needs. Every spelling of the placeholder
+	// is refused wherever a word holds it - with git's +, - and space modifiers,
+	// in a plain --format, in shortlog's --group, in an abbreviated option and in
+	// for-each-ref's signature atom - so a word that merely mentions %G, a grep
+	// pattern among them, is refused too: the check fails closed (issue #277,
+	// round E finding 2).
 	t.Run("git's signature-verification format", func(t *testing.T) {
 		t.Parallel()
 
@@ -591,6 +596,46 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 				name:      "--pretty=format:%GG, the raw signature output",
 				args:      []string{"git", "log", "--pretty=format:%GG"},
 				wantNamed: "--pretty=format:%GG",
+			},
+			{
+				name:      "--format=%+G?, the placeholder with git's + modifier",
+				args:      []string{"git", "log", "--format=%+G?", "-1"},
+				wantNamed: "--format=%+G?",
+			},
+			{
+				name:      "--pretty=format:%-GS, the placeholder with git's - modifier",
+				args:      []string{"git", "show", "--pretty=format:%-GS", "HEAD"},
+				wantNamed: "--pretty=format:%-GS",
+			},
+			{
+				name:      "--format with % GK as its value, the placeholder with a space",
+				args:      []string{"git", "log", "--format", "% GK", "-1"},
+				wantNamed: "% GK",
+			},
+			{
+				name:      "shortlog's --group=format:%G?",
+				args:      []string{"git", "shortlog", "--group=format:%G?", "HEAD"},
+				wantNamed: "--group=format:%G?",
+			},
+			{
+				name:      "--gr=format:%GS, an abbreviation of --grep",
+				args:      []string{"git", "log", "--gr=format:%GS"},
+				wantNamed: "--gr=format:%GS",
+			},
+			{
+				name:      "for-each-ref's --sort=signature",
+				args:      []string{"git", "for-each-ref", "--sort=signature"},
+				wantNamed: "--sort=signature",
+			},
+			{
+				name:      "for-each-ref's --sort=-signature",
+				args:      []string{"git", "for-each-ref", "--sort=-signature"},
+				wantNamed: "--sort=-signature",
+			},
+			{
+				name:      "for-each-ref's --sort with signature:grade as its value",
+				args:      []string{"git", "for-each-ref", "--sort", "signature:grade"},
+				wantNamed: "signature:grade",
 			},
 		}
 
@@ -801,6 +846,13 @@ func TestRunTakesTheOptionsThatOnlyRead(t *testing.T) {
 			// round D finding 2).
 			name:     "git log's own format placeholders",
 			args:     []string{"git", "log", "--format=%H%n%s"},
+			wantPath: "/usr/bin/git",
+		},
+		{
+			// for-each-ref's own sort atoms are no signature one, so the line
+			// runs as it is (issue #277, round E finding 2).
+			name:     "git for-each-ref's own sort atom",
+			args:     []string{"git", "for-each-ref", "--sort=-committerdate"},
 			wantPath: "/usr/bin/git",
 		},
 		{

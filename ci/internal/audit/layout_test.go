@@ -18,8 +18,12 @@
 // finding 1): the keys and sections a clone carries pass, whatever case they are
 // written in: section and key name are compared without regard to case, the
 // subsection exactly. Every other key, every key a line the parser cannot place
-// yields, and the three files git reads a configuration or a repository out of
-// beside .git/config are refused.
+// yields, and the two files git reads a common directory or a repository out of
+// beside .git/config are refused. The worktree config actions/checkout leaves
+// beside .git/config is read under an allow list of its own - the three keys a
+// sparse-checkout aware git writes with every one of them off - so a regular
+// file holding those passes and anything else in it, or the file in another
+// type, is refused (issue #277, round E finding 1).
 package audit_test
 
 import (
@@ -101,7 +105,10 @@ const commentedGitConfig = `# the checkout's own configuration
 `
 
 // partialCloneGitConfig is the configuration of a partial clone: the two keys
-// git writes beside url and fetch, and the object format extensions names.
+// git writes beside url and fetch, and the object format extensions names. No
+// checkout the audit takes is one - a fetch-depth: 1 clone writes neither key -
+// so the two are off the allow list and this configuration is refused (issue
+// #277, round E finding 4).
 const partialCloneGitConfig = `[core]
 	repositoryformatversion = 1
 	filemode = true
@@ -114,6 +121,17 @@ const partialCloneGitConfig = `[core]
 	fetch = +refs/heads/*:refs/remotes/origin/*
 	promisor = true
 	partialclonefilter = blob:none
+`
+
+// worktreeGitConfig is the worktree config actions/checkout leaves beside the
+// checkout's .git/config (issue #277, round E finding 1): the keys a
+// sparse-checkout aware git writes with every one of them off, which the
+// worktree config's own allow list takes.
+const worktreeGitConfig = `[core]
+	sparseCheckout = false
+	sparseCheckoutCone = false
+[index]
+	sparse = false
 `
 
 // The audit directory's paths under a root, each a part of the layout.
@@ -151,7 +169,9 @@ func TestCheckLayoutTakesTheADRsDirectory(t *testing.T) {
 // carries is an allow list of keys and sections, and the configuration
 // actions/checkout writes with persist-credentials: false passes whole, in
 // whatever case it is written, with the comments and blank lines a config may
-// hold, and with no config at all.
+// hold, with no config at all, and with the worktree config a default checkout
+// leaves beside it, whose three keys are the worktree config's own allow list
+// (issue #277, round E finding 1).
 func TestCheckLayoutTakesTheCheckoutsGitConfig(t *testing.T) {
 	t.Parallel()
 
@@ -163,7 +183,7 @@ func TestCheckLayoutTakesTheCheckoutsGitConfig(t *testing.T) {
 		{name: "the config actions/checkout writes", mutate: gitConfigWith(checkoutGitConfig)},
 		{name: "the same config in another case", mutate: gitConfigWith(mixedCaseGitConfig)},
 		{name: "the config with comments and blank lines", mutate: gitConfigWith(commentedGitConfig)},
-		{name: "a partial clone's remote", mutate: gitConfigWith(partialCloneGitConfig)},
+		{name: "the worktree config a default checkout leaves", mutate: gitFileIn("config.worktree", worktreeGitConfig)},
 		{
 			name: "no config at all",
 			mutate: mutateTree(checkout, func(t *testing.T, root string) {
@@ -380,6 +400,12 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 			mutate: gitConfigWith("[user]\n\tname = the audit's model\n"),
 		},
 
+		// No checkout the audit takes is a partial clone (issue #277, round E
+		// finding 4): a fetch-depth: 1 clone writes neither promisor key, so the
+		// two are off the allow list and a config holding them is refused - the
+		// wrapper's git never fetches an object the checkout lacks.
+		{name: "the git config holds a partial clone's promisor keys", mutate: gitConfigWith(partialCloneGitConfig)},
+
 		// The parser places every line of a form git writes and refuses the
 		// rest, rather than guessing what a line it cannot place means (issue
 		// #277, round D finding 1).
@@ -412,11 +438,17 @@ func TestCheckLayoutRefusesAnythingElse(t *testing.T) {
 			mutate: gitConfigWith("filemode true\n"),
 		},
 
-		// The .git directory holds one config file: a worktree's own, a
-		// common-dir pointer and a gitdir pointer are the other files git reads a
-		// configuration or a repository out of, and each is refused by its
-		// presence, in any file type (issue #277, round D finding 1).
-		{name: "the checkout copy's .git holds a config.worktree", mutate: gitFileIn("config.worktree", "[core]\n\tbare = false\n")},
+		// The .git directory holds one config file and the worktree config beside
+		// it: a common-dir pointer and a gitdir pointer are the other files git
+		// reads a repository out of, and each is refused by its presence, in any
+		// file type (issue #277, round D finding 1). The worktree config may be a
+		// regular file holding the three keys of its own allow list and nothing
+		// else; a key off that list, or the file in another type, is refused
+		// (issue #277, round E finding 1).
+		{name: "the checkout copy's worktree config holds a key off its allow list", mutate: gitFileIn("config.worktree", "[core]\n\tbare = false\n")},
+		{name: "the checkout copy's worktree config sets fsmonitor", mutate: gitFileIn("config.worktree", "[core]\n\tfsmonitor = /srv/audit/work/fsmonitor\n")},
+		{name: "the checkout copy's worktree config sets include.path", mutate: gitFileIn("config.worktree", "[include]\n\tpath = /srv/audit/work/extra\n")},
+		{name: "the checkout copy's .git holds a config.worktree as a link", mutate: gitLinkIn("config.worktree", "../state/elsewhere")},
 		{name: "the checkout copy's .git holds a commondir", mutate: gitFileIn("commondir", "../state\n")},
 		{name: "the checkout copy's .git holds a gitdir", mutate: gitFileIn("gitdir", "/srv/audit/state/elsewhere\n")},
 		{name: "the checkout copy's .git holds a commondir as a link", mutate: gitLinkIn("commondir", "../.claude")},
