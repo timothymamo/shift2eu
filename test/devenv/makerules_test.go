@@ -6,13 +6,19 @@
 // gone. A recipe spread over several physical lines is kept line by line, so a message names the line a
 // maintainer has to edit. Three guards are built on it:
 //
-//   - every target whose recipe reads LIMA_INSTANCE - at run time, as $$LIMA_INSTANCE, or through the shared
-//     $(LIMA_INSTANCE_CHECK) - starts its recipe with that check, because a name that is not refused first is a
-//     name that reaches limactl as an option, a path or nothing at all (issue #313);
+//   - every target whose recipe reads LIMA_INSTANCE - at run time, as $$LIMA_INSTANCE or $${LIMA_INSTANCE}, through
+//     the shared $(LIMA_INSTANCE_CHECK), or through a macro the recipe splices in - starts its recipe with that
+//     check, because a name that is not refused first is a name that reaches limactl as an option, a path or
+//     nothing at all (issue #313);
 //   - no recipe line and no variable but the check's own expands $(LIMA_INSTANCE) or ${LIMA_INSTANCE} at make
 //     level, where the expansion happens before any recipe line could refuse the value (issue #313);
-//   - every recipe line that calls limactl puts $(VM_SHELL_ENV) before it, so the agents App's variables, which
-//     the host clone's .envrc exports, reach no process in the VM (issue #326, item 2).
+//   - every recipe line that calls limactl, its own call or one of a macro it splices in, puts $(VM_SHELL_ENV)
+//     before it, so the agents App's variables, which the host clone's .envrc exports, reach no process in the VM
+//     (issue #326, item 2).
+//
+// A recipe line is read as make reads it: the references to the variables the file defines - $(NAME), ${NAME} and
+// $(call NAME,...) - are expanded through makeDefinitions before a guard looks for a read or a call, so a macro
+// that only reads LIMA_INSTANCE or only calls limactl when a recipe splices it is no way round a guard.
 //
 // Each guard is pinned twice: over the repository's own Makefile, which must hold all three today, and over
 // small synthetic Makefile texts, one per way of breaking them, so a guard that stopped finding a violation
@@ -32,22 +38,45 @@ import (
 )
 
 const (
+	// limaInstanceCheckName and vmShellEnvName are the variables the two references below name: the shared check
+	// every recipe that reads LIMA_INSTANCE runs first, and what a recipe puts before limactl.
+	limaInstanceCheckName = "LIMA_INSTANCE_CHECK"
+	vmShellEnvName        = "VM_SHELL_ENV"
+
 	// limaInstanceCheck is the shared check every recipe that reads LIMA_INSTANCE runs first.
-	limaInstanceCheck = "$(LIMA_INSTANCE_CHECK)"
+	limaInstanceCheck = "$(" + limaInstanceCheckName + ")"
 
 	// vmShellEnv is what a recipe puts before limactl, so the App's variables stay on the Mac.
-	vmShellEnv = "$(VM_SHELL_ENV)"
+	vmShellEnv = "$(" + vmShellEnvName + ")"
 )
 
 // limaInstanceMakeExpansions are the two spellings of a make-level expansion of LIMA_INSTANCE: either one runs the
 // value while make reads the recipe, before any shell of it could refuse the value.
 var limaInstanceMakeExpansions = []string{"$(LIMA_INSTANCE)", "${LIMA_INSTANCE}"}
 
+// limaInstanceRunTimeReads are the spellings of a run-time read of LIMA_INSTANCE: make hands $$ through to the shell
+// as $, so $$LIMA_INSTANCE, $${LIMA_INSTANCE} and $${LIMA_INSTANCE:-x} are the shell reading the name while the
+// recipe runs, and the shared check has to have refused the name first (issue #313).
+var limaInstanceRunTimeReads = []string{"$LIMA_INSTANCE", "$${LIMA_INSTANCE"}
+
+// limaInstanceCheckDefinitions are the Makefile's own definitions that expand LIMA_INSTANCE at make level on
+// purpose: the name itself, the validity test, and the check every recipe runs first. Every other definition that
+// expands the name is a violation, whatever its name starts with: a LIMA_INSTANCE_DIR that builds a path from
+// $(LIMA_INSTANCE) would otherwise pass on its prefix alone (issue #313).
+var limaInstanceCheckDefinitions = []string{"LIMA_INSTANCE", "LIMA_INSTANCE_VALID", limaInstanceCheckName}
+
+// makeMacroDepth is how often spliceMacroText expands a definition that splices another one: deep enough for a
+// shared macro to call a helper of its own, and fixed, so a variable that expands itself ends.
+const makeMacroDepth = 3
+
 // makeRecipeLine is one physical line of a recipe as make hands it to the shell: the line's number in the file
-// (1-based) and its text, without the tab of the recipe's indentation.
+// (1-based) and its text, without the tab of the recipe's indentation. Continues is set when the line ended in a
+// backslash: the next physical line is the same shell command, so a quote or a substitution opened here is still
+// open there.
 type makeRecipeLine struct {
-	Line int
-	Text string
+	Line      int
+	Text      string
+	Continues bool
 }
 
 // makeRule is one rule of a Makefile: the targets its declaration names, in the order it names them, and the
@@ -94,8 +123,9 @@ func makeRules(body string) []makeRule {
 			if current >= 0 {
 				for at, part := range parts {
 					rules[current].Recipe = append(rules[current].Recipe, makeRecipeLine{
-						Line: first + at,
-						Text: strings.TrimPrefix(part, "\t"),
+						Line:      first + at,
+						Text:      strings.TrimPrefix(part, "\t"),
+						Continues: at < len(parts)-1,
 					})
 				}
 			}
@@ -140,13 +170,13 @@ func makeTargets(text string) []string {
 }
 
 // limaInstanceTargets returns, sorted and without duplicates, the targets whose recipe reads LIMA_INSTANCE: at
-// run time, as $$LIMA_INSTANCE, or through the shared check $(LIMA_INSTANCE_CHECK), which expands the name
-// while make reads the recipe (issue #313).
-func limaInstanceTargets(rules []makeRule) []string {
+// run time, as $$LIMA_INSTANCE, through the shared check $(LIMA_INSTANCE_CHECK), which expands the name while make
+// reads the recipe, or through a macro the recipe splices in that reads it (issue #313).
+func limaInstanceTargets(rules []makeRule, definitions map[string]string) []string {
 	var targets []string
 
 	for _, rule := range rules {
-		if !ruleReadsLimaInstance(rule) {
+		if !ruleReadsLimaInstance(rule, definitions) {
 			continue
 		}
 
@@ -158,16 +188,69 @@ func limaInstanceTargets(rules []makeRule) []string {
 	return slices.Compact(targets)
 }
 
-// ruleReadsLimaInstance reports whether one of rule's recipe lines reads LIMA_INSTANCE, at run time or through
-// the shared check.
-func ruleReadsLimaInstance(rule makeRule) bool {
+// ruleReadsLimaInstance reports whether one of rule's recipe lines reads LIMA_INSTANCE, in the line's own text or in
+// the text of a macro it splices in.
+func ruleReadsLimaInstance(rule makeRule, definitions map[string]string) bool {
 	for _, line := range rule.Recipe {
-		if strings.Contains(line.Text, "$LIMA_INSTANCE") || strings.Contains(line.Text, limaInstanceCheck) {
+		if readsLimaInstance(line.Text, definitions) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// readsLimaInstance reports whether text, a recipe line as make hands it to the shell, reads LIMA_INSTANCE: at run
+// time, through the shared check, or through the text of a macro the line splices in, which make puts in its place
+// before the shell ever sees the line.
+func readsLimaInstance(text string, definitions map[string]string) bool {
+	for _, candidate := range []string{text, spliceMacroText(text, definitions, makeMacroDepth)} {
+		if strings.Contains(candidate, limaInstanceCheck) {
+			return true
+		}
+
+		for _, read := range limaInstanceRunTimeReads {
+			if strings.Contains(candidate, read) {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+// spliceMacroText returns text, a recipe line or a definition, with every reference to a variable definitions
+// defines - $(NAME), ${NAME} and $(call NAME,...) - replaced by that variable's text, makeMacroDepth times over, so
+// a macro that splices another one is read through both: the guards then see the $$LIMA_INSTANCE read or the
+// limactl call a recipe makes only once make has put a macro's text in place of the reference. $(LIMA_INSTANCE_CHECK)
+// and $(VM_SHELL_ENV) are left as they are: they are what the guards look for, and expanding them would hide them.
+func spliceMacroText(text string, definitions map[string]string, depth int) string {
+	names := slices.Sorted(maps.Keys(definitions))
+
+	for range depth {
+		before := text
+
+		for _, name := range names {
+			if name == limaInstanceCheckName || name == vmShellEnvName {
+				continue
+			}
+
+			body, ok := makeDefinitionBody(definitions, name)
+			if !ok {
+				continue
+			}
+
+			for _, reference := range []string{"$(" + name + ")", "${" + name + "}", "$(call " + name + ","} {
+				text = strings.ReplaceAll(text, reference, body)
+			}
+		}
+
+		if text == before {
+			return text
+		}
+	}
+
+	return text
 }
 
 // limaInstanceViolations returns one message per rule or variable definition of rules that breaks issue #313's
@@ -180,21 +263,19 @@ func limaInstanceViolations(rules []makeRule, definitions map[string]string) []s
 
 	for _, rule := range rules {
 		for _, target := range rule.Targets {
-			violations = append(violations, ruleLimaInstanceViolations(target, rule)...)
+			violations = append(violations, ruleLimaInstanceViolations(target, rule, definitions)...)
 		}
 	}
 
 	for _, name := range slices.Sorted(maps.Keys(definitions)) {
 		// The check's own definitions expand the name: that is what they are for.
-		if strings.HasPrefix(name, "LIMA_INSTANCE") {
+		if slices.Contains(limaInstanceCheckDefinitions, name) {
 			continue
 		}
 
-		for _, expansion := range limaInstanceMakeExpansions {
-			if strings.Contains(definitions[name], expansion) {
-				violations = append(violations, fmt.Sprintf("variable %s expands LIMA_INSTANCE at make level with %s: a variable spliced into a recipe expands the name before the recipe's own check runs, so a name that carries a command runs it (issue #313)",
-					name, expansion))
-			}
+		if expansion, ok := makeLevelExpansion(definitions[name]); ok {
+			violations = append(violations, fmt.Sprintf("variable %s expands LIMA_INSTANCE at make level with %s: a variable spliced into a recipe expands the name before the recipe's own check runs, so a name that carries a command runs it (issue #313)",
+				name, expansion))
 		}
 	}
 
@@ -202,21 +283,19 @@ func limaInstanceViolations(rules []makeRule, definitions map[string]string) []s
 }
 
 // ruleLimaInstanceViolations returns the violations of the recipe of target, a target of rule.
-func ruleLimaInstanceViolations(target string, rule makeRule) []string {
+func ruleLimaInstanceViolations(target string, rule makeRule, definitions map[string]string) []string {
 	var violations []string
 
 	readAt := 0
 
 	for _, line := range rule.Recipe {
-		if readAt == 0 && strings.Contains(line.Text, "$LIMA_INSTANCE") {
+		if readAt == 0 && readsLimaInstance(line.Text, definitions) {
 			readAt = line.Line
 		}
 
-		for _, expansion := range limaInstanceMakeExpansions {
-			if strings.Contains(line.Text, expansion) {
-				violations = append(violations, fmt.Sprintf("make %s: its recipe line %d (%q) expands LIMA_INSTANCE at make level with %s: make runs the value while it expands the recipe, before any recipe line could refuse it (issue #313)",
-					target, line.Line, line.Text, expansion))
-			}
+		if expansion, ok := makeLevelExpansion(line.Text); ok {
+			violations = append(violations, fmt.Sprintf("make %s: its recipe line %d (%q) expands LIMA_INSTANCE at make level with %s: make runs the value while it expands the recipe, before any recipe line could refuse it (issue #313)",
+				target, line.Line, line.Text, expansion))
 		}
 	}
 
@@ -228,15 +307,67 @@ func ruleLimaInstanceViolations(target string, rule makeRule) []string {
 	return violations
 }
 
+// makeLevelExpansion returns the spelling with which text expands LIMA_INSTANCE at make level, if it does: one of
+// limaInstanceMakeExpansions, and never the $${LIMA_INSTANCE} of a run-time read, where the shell expands the name.
+// A $ the shell expands starts at the second $ of an even run, so only a match that starts after an even number of
+// them is make's.
+func makeLevelExpansion(text string) (string, bool) {
+	for _, expansion := range limaInstanceMakeExpansions {
+		for at := 0; at < len(text); {
+			index := strings.Index(text[at:], expansion)
+			if index < 0 {
+				break
+			}
+
+			start := at + index
+
+			if dollarsEndingAt(text, start)%2 == 0 {
+				return expansion, true
+			}
+
+			at = start + 1
+		}
+	}
+
+	return "", false
+}
+
+// dollarsEndingAt returns the number of consecutive $ characters that end at index in text: the run of them just
+// before a match, which decides whether make or the shell expands it.
+func dollarsEndingAt(text string, index int) int {
+	n := 0
+
+	for i := index - 1; i >= 0 && text[i] == '$'; i-- {
+		n++
+	}
+
+	return n
+}
+
 // vmShellEnvViolations returns one message per recipe line of rules that calls limactl without $(VM_SHELL_ENV)
-// before it, naming the target and the line: the agents App's variables, which the host clone's .envrc exports,
-// must reach no process in the VM, and Lima forwards no environment of its own (issue #326, item 2).
-func vmShellEnvViolations(rules []makeRule) []string {
+// before it, naming the target and the line - whether the call is the recipe line's own or one that a macro it
+// splices in makes: the agents App's variables, which the host clone's .envrc exports, must reach no process in the
+// VM, and Lima forwards no environment of its own (issue #326, item 2).
+func vmShellEnvViolations(rules []makeRule, definitions map[string]string) []string {
 	var violations []string
 
 	for _, rule := range rules {
+		var (
+			scanner limactlScanner
+
+			// continuing is set while the previous line ended in a backslash: the shell runs the two as one command,
+			// so a quote or a substitution opened there is still open here.
+			continuing bool
+		)
+
 		for _, line := range rule.Recipe {
-			if !nakedLimactlCall(line.Text) {
+			if !continuing {
+				scanner = limactlScanner{}
+			}
+
+			continuing = line.Continues
+
+			if !scanner.naked(line.Text) && !nakedSplicedMacros(line.Text, definitions) {
 				continue
 			}
 
@@ -255,15 +386,75 @@ func callsLimactl(line string) bool {
 	return len(limactlCommandSites(line)) != 0
 }
 
+// nakedSplicedMacros reports whether a macro spliced into line calls limactl without $(VM_SHELL_ENV) before it.
+// The spliced text is scanned on its own: it is what the shell of one line gets once make has put the macro's text
+// in place of the reference, and it carries no quote of the line it is spliced into.
+func nakedSplicedMacros(line string, definitions map[string]string) bool {
+	spliced := spliceMacroText(line, definitions, makeMacroDepth)
+
+	return spliced != line && nakedLimactlCall(spliced)
+}
+
 // nakedLimactlCall reports whether line calls limactl without $(VM_SHELL_ENV) before it.
 func nakedLimactlCall(line string) bool {
-	for _, before := range limactlCommandSites(line) {
+	var scanner limactlScanner
+
+	return scanner.naked(line)
+}
+
+// naked reports whether one of the places the scanner finds limactl at in line calls it without $(VM_SHELL_ENV)
+// before it.
+func (s *limactlScanner) naked(line string) bool {
+	for _, before := range s.sites(line) {
 		if !strings.HasSuffix(strings.TrimRight(before, " \t"), vmShellEnv) {
 			return true
 		}
 	}
 
 	return false
+}
+
+// callsAnythingLimactl reports whether one of rule's recipe lines calls limactl, in the line's own text or in the
+// text of a macro it splices in, with the quote state of a continued line carried over.
+func callsAnythingLimactl(rule makeRule, definitions map[string]string) bool {
+	var (
+		scanner limactlScanner
+
+		continuing bool
+	)
+
+	for _, line := range rule.Recipe {
+		if !continuing {
+			scanner = limactlScanner{}
+		}
+
+		continuing = line.Continues
+
+		if len(scanner.sites(line.Text)) != 0 || callsSplicedMacros(line.Text, definitions) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// callsSplicedMacros reports whether a macro spliced into line calls limactl, scanned on its own.
+func callsSplicedMacros(line string, definitions map[string]string) bool {
+	spliced := spliceMacroText(line, definitions, makeMacroDepth)
+
+	return spliced != line && callsLimactl(spliced)
+}
+
+// limactlScanner finds the places in the text of one shell command where limactl is a command word, carrying the
+// quote and substitution state from one physical line of a recipe to the next: a recipe continued with a backslash
+// is one command, and a quote opened on the line before is still open. A new command starts with no quote at all.
+type limactlScanner struct {
+	// quote is the quote the scan is inside, '\'' or '"', 0 outside one.
+	quote byte
+
+	// subst holds the quote each open $(...) resumes with once its ) closes: a command inside one runs whatever
+	// the string around it is, and the string resumes after it.
+	subst []byte
 }
 
 // limactlCommandSites returns the text before each place in line where limactl is a command word: outside '...'
@@ -273,37 +464,37 @@ func nakedLimactlCall(line string) bool {
 // whether the call puts $(VM_SHELL_ENV) in front of it: at the start of a line, first in a $(...) substitution,
 // or after a ;, an && or a | of a pipeline, as the recipes here write it.
 func limactlCommandSites(line string) []string {
+	var scanner limactlScanner
+
+	return scanner.sites(line)
+}
+
+// sites returns the text before each place in line where limactl is a command word, appending to the state the
+// scanner holds: a line that follows a continued one is scanned inside the quote the line before it opened.
+func (s *limactlScanner) sites(line string) []string {
 	const tool = "limactl"
 
-	var (
-		sites []string
-
-		quote byte
-
-		// subst holds the quote each open $(...) resumes with once its ) closes: a command inside one runs
-		// whatever the string around it is, and the string resumes after it.
-		subst []byte
-	)
+	var sites []string
 
 	for i := 0; i < len(line); i++ {
 		c := line[i]
 
 		switch {
-		case quote == '\'':
+		case s.quote == '\'':
 			if c == '\'' {
-				quote = 0
+				s.quote = 0
 			}
 
 			continue
-		case quote == '"':
+		case s.quote == '"':
 			switch {
 			case c == '\\':
 				i++
 			case c == '"':
-				quote = 0
+				s.quote = 0
 			case strings.HasPrefix(line[i:], "$("):
-				subst = append(subst, quote)
-				quote = 0
+				s.subst = append(s.subst, s.quote)
+				s.quote = 0
 
 				i++
 			}
@@ -314,22 +505,22 @@ func limactlCommandSites(line string) []string {
 
 			continue
 		case c == '\'':
-			quote = '\''
+			s.quote = '\''
 
 			continue
 		case c == '"':
-			quote = '"'
+			s.quote = '"'
 
 			continue
 		case strings.HasPrefix(line[i:], "$("):
-			subst = append(subst, 0)
+			s.subst = append(s.subst, 0)
 
 			i++
 
 			continue
-		case c == ')' && len(subst) > 0:
-			quote = subst[len(subst)-1]
-			subst = subst[:len(subst)-1]
+		case c == ')' && len(s.subst) > 0:
+			s.quote = s.subst[len(s.subst)-1]
+			s.subst = s.subst[:len(s.subst)-1]
 
 			continue
 		}
@@ -365,8 +556,10 @@ func isMakefileWordByte(c byte) bool {
 
 // TestMakeRulesFindsLimaInstanceViolations pins the parser and the LIMA_INSTANCE guard of issue #313 on small
 // Makefile texts, one per way of breaking the rule: a target that reads the name without the check first, the
-// check not on the first line, and the name expanded at make level in a recipe and in a variable. Each failure
-// names the target or the variable, and a text that follows the rule has no violation at all.
+// check not on the first line, the name expanded at make level in a recipe and in a variable, the read hidden in a
+// macro the recipe splices in (through $(NAME) and through $(call NAME,...)), the read written with braces at run
+// time, and a variable that expands the name and whose name only starts with LIMA_INSTANCE. Each failure names the
+// target or the variable, and a text that follows the rule has no violation at all.
 func TestMakeRulesFindsLimaInstanceViolations(t *testing.T) {
 	t.Parallel()
 
@@ -513,7 +706,7 @@ func TestMakeRulesFindsLimaInstanceViolations(t *testing.T) {
 
 			rules := makeRules(tc.text)
 
-			if diff := cmp.Diff(tc.wantTargets, limaInstanceTargets(rules)); diff != "" {
+			if diff := cmp.Diff(tc.wantTargets, limaInstanceTargets(rules, makeDefinitions(tc.text))); diff != "" {
 				t.Errorf("the targets derived from the text are not the ones that read LIMA_INSTANCE (-want +got):\n%s\ntext:\n%s", diff, tc.text)
 			}
 
@@ -536,7 +729,9 @@ func TestMakeRulesFindsLimaInstanceViolations(t *testing.T) {
 
 // TestMakeRulesFindsALimactlCallWithoutVMShellEnv pins the guard of issue #326's item 2 on small Makefile texts:
 // a recipe line that calls limactl must put $(VM_SHELL_ENV) before it, whether limactl starts the line, stands
-// in a $(...) substitution or follows a pipe, and a line that only names limactl in a message calls nothing.
+// in a $(...) substitution or follows a pipe, and a line that only names limactl in a message calls nothing. A
+// call a macro the recipe splices in makes is the line's call, and a message whose quote a backslash-continued line
+// carries into the next one is still a message.
 func TestMakeRulesFindsALimactlCallWithoutVMShellEnv(t *testing.T) {
 	t.Parallel()
 
@@ -632,7 +827,7 @@ func TestMakeRulesFindsALimactlCallWithoutVMShellEnv(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			violations := vmShellEnvViolations(makeRules(tc.text))
+			violations := vmShellEnvViolations(makeRules(tc.text), makeDefinitions(tc.text))
 			if len(violations) != len(tc.wantViolations) {
 				t.Fatalf("the text got %d violation(s), want %d, so the guard finds a call it should not or misses one (issue #326):\n%s\ntext:\n%s",
 					len(violations), len(tc.wantViolations), strings.Join(violations, "\n"), tc.text)
@@ -659,8 +854,9 @@ func TestMakefileChecksLimaInstanceBeforeEveryRecipeThatReadsIt(t *testing.T) {
 
 	body := readRepoFile(t, makefilePath)
 	rules := makeRules(body)
+	definitions := makeDefinitions(body)
 
-	derived := limaInstanceTargets(rules)
+	derived := limaInstanceTargets(rules, definitions)
 	if len(derived) == 0 {
 		t.Fatalf("no target of the Makefile reads LIMA_INSTANCE, so this guard pins nothing: either the parser stopped finding recipes or the targets went away")
 	}
@@ -671,7 +867,7 @@ func TestMakefileChecksLimaInstanceBeforeEveryRecipeThatReadsIt(t *testing.T) {
 		}
 	}
 
-	for _, violation := range limaInstanceViolations(rules, makeDefinitions(body)) {
+	for _, violation := range limaInstanceViolations(rules, definitions) {
 		t.Error(violation)
 	}
 }
@@ -682,9 +878,11 @@ func TestMakefileChecksLimaInstanceBeforeEveryRecipeThatReadsIt(t *testing.T) {
 func TestMakefileSetsVMShellEnvForEveryLimactlCall(t *testing.T) {
 	t.Parallel()
 
-	rules := makeRules(readRepoFile(t, makefilePath))
+	body := readRepoFile(t, makefilePath)
+	rules := makeRules(body)
+	definitions := makeDefinitions(body)
 
-	derived := vmShellEnvTargets(rules)
+	derived := vmShellEnvTargets(rules, definitions)
 	if len(derived) == 0 {
 		t.Fatalf("no target of the Makefile calls limactl, so this guard pins nothing: either the parser stopped finding recipes or the targets went away")
 	}
@@ -695,25 +893,22 @@ func TestMakefileSetsVMShellEnvForEveryLimactlCall(t *testing.T) {
 		}
 	}
 
-	for _, violation := range vmShellEnvViolations(rules) {
+	for _, violation := range vmShellEnvViolations(rules, definitions) {
 		t.Error(violation)
 	}
 }
 
-// vmShellEnvTargets returns, sorted and without duplicates, the targets whose recipe calls limactl.
-func vmShellEnvTargets(rules []makeRule) []string {
+// vmShellEnvTargets returns, sorted and without duplicates, the targets whose recipe calls limactl, in the recipe
+// line's own text or through a macro it splices in.
+func vmShellEnvTargets(rules []makeRule, definitions map[string]string) []string {
 	var targets []string
 
 	for _, rule := range rules {
-		for _, line := range rule.Recipe {
-			if !callsLimactl(line.Text) {
-				continue
-			}
-
-			targets = append(targets, rule.Targets...)
-
-			break
+		if !callsAnythingLimactl(rule, definitions) {
+			continue
 		}
+
+		targets = append(targets, rule.Targets...)
 	}
 
 	slices.Sort(targets)

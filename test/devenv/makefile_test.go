@@ -950,16 +950,18 @@ func makeCode(body string) string {
 	return strings.Join(kept, "\n")
 }
 
+// makeAssignment matches a definition's first line: the variable's name, the whitespace after it and the operator
+// it assigns with. A line make reads as something else - an override, an export, a conditional - assigns nothing.
+var makeAssignment = regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.-]*)[ \t]*(?:\+=|::=|:=|\?=|=)`)
+
 // makeDefinitions returns the text of every assignment in body, a Makefile without its comment lines, keyed by the
 // variable's name: the assignment's own line and the backslash-continued lines after it, joined as make reads them.
 func makeDefinitions(body string) map[string]string {
-	assignment := regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.-]*)[ \t]*(?:\+=|::=|:=|\?=|=)`)
-
 	lines := strings.Split(body, "\n")
 	definitions := map[string]string{}
 
 	for i := 0; i < len(lines); i++ {
-		match := assignment.FindStringSubmatch(lines[i])
+		match := makeAssignment.FindStringSubmatch(lines[i])
 		if match == nil {
 			continue
 		}
@@ -987,6 +989,22 @@ func makeDefinitions(body string) map[string]string {
 	}
 
 	return definitions
+}
+
+// makeDefinitionBody returns what the definition of name in definitions expands to: its text with the assignment's
+// own "NAME =" gone, which is what a recipe that splices $(name) or $(call name,...) gets in its place. ok is
+// false for a name definitions does not define.
+func makeDefinitionBody(definitions map[string]string, name string) (string, bool) {
+	definition, ok := definitions[name]
+	if !ok {
+		return "", false
+	}
+
+	if match := makeAssignment.FindStringIndex(definition); match != nil {
+		return definition[match[1]:], true
+	}
+
+	return definition, true
 }
 
 // gitFileModes returns the mode git has recorded for the files below dir, keyed by their path from the repository

@@ -90,7 +90,9 @@ var invalidLimaInstances = []struct {
 func TestMakeRefusesAnInvalidLimaInstanceOnEveryTarget(t *testing.T) {
 	t.Parallel()
 
-	derived := limaInstanceTargets(makeRules(readRepoFile(t, makefilePath)))
+	body := readRepoFile(t, makefilePath)
+
+	derived := limaInstanceTargets(makeRules(body), makeDefinitions(body))
 	if len(derived) == 0 {
 		t.Fatal("no target of the Makefile reads LIMA_INSTANCE, so this test pins nothing: either the parser stopped finding recipes or the targets went away (issue #313)")
 	}
