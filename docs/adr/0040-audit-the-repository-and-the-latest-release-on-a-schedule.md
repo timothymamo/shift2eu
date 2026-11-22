@@ -236,7 +236,7 @@ What those permissions also allow, beyond what the audit needs, and what narrows
 
 | Permission | Also allows | Narrowed by |
 |---|---|---|
-| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App and admins write there); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; optionally a `**` tag ruleset that lets only the release App create tags |
+| Contents write (App permissions cannot be narrowed to a path or branch) | creating releases and tags other than `v*`, deleting and merging into unprotected branches, `repository_dispatch` | the token exists only in the publish job, which runs only `main`'s committed script and calls a fixed set of endpoints; the `security-audit/**` branch ruleset (only the App and admins write there); a required check that fails an App pull request touching anything outside `docs/security/`, in a new ruleset on `main`; a branch ruleset on `~ALL` excluding `security-audit/**` that restricts creations, updates and deletions to every pusher but the App; optionally a `**` tag ruleset that lets only the release App create tags |
 | Pull requests write | submitting reviews, `APPROVE` included | `Protect main` requires the code owner's approval, so the App's never counts; the script never calls the review endpoints |
 | Repository security advisories write | publishing an advisory and requesting a CVE: disclosure | every advisory `state` the script sends is hard-coded `draft`, and it never calls the publish or CVE endpoints |
 
@@ -261,11 +261,20 @@ keeping a stale green check. The ruleset requires `Audit report paths` from the 
 
 Residual risks of the check:
 
-- The App's contents write lets it push to any unprotected branch. The sender and head-branch keys catch
-  such a push once it is on a pull request, but not the push itself. A branch ruleset that restricts
-  updates on `~ALL` excluding `security-audit/**`, with the maintainer, the agents App, Renovate and the
-  release App as bypass actors and not the audit App, would close it fully; it is an optional hardening
-  step of the runbook (step 5), which the maintainer may choose, not part of the default setup.
+- The App's contents write lets it push to any branch no ruleset protects, including a commit onto
+  another author's pull request or a branch with no pull request yet. The sender key fails only the run
+  of the App's own event: a later event by another sender (a push on top, an `edited` title or body
+  change, a close and reopen, a human opening the pull request later) runs the check again with a
+  non-App sender and passes it, with the App's commit still in the pull request. The fix is a branch
+  ruleset, part of runbook step 5 by default and created before the audit-paths ruleset goes active: it
+  targets `~ALL` excluding `security-audit/**`, restricts creations, updates and deletions (`creation`,
+  `update`, `deletion`), and has as bypass actors every legitimate pusher (the maintainer, the agents
+  App `shift2eu-agents`, Renovate, the release App `shift2eu-release`) and not the audit App, which can
+  then write only `security-audit/**` branches. The residual risk is bounded by the fence plus this
+  ruleset; without the ruleset, the sender key is only a one-shot signal.
+- Denial of service: the App's Pull requests write lets it edit any pull request's title, which is an
+  `edited` run with the App as sender, so that pull request's required check fails until the next event
+  by another sender or a re-run clears it. It lets nothing in; it only blocks a merge for a while.
 - The ruleset pins the integration, not the workflow: another GitHub Actions workflow holding
   `checks: write` could post a check run of the same name from the same integration. The App cannot add
   or change one (it has no Workflows permission); a workflow change that grants `checks: write` is
