@@ -390,7 +390,7 @@ test of ours (Decision 3's reason).
   | `SafeModeOff` | leave `--safe-mode` out | `--safe-mode` |
   | `WorkDir` | the CLI's working directory, an absolute path that exists | a fresh empty temporary directory, removed after the run |
   | `Home` | the CLI's `HOME`, an absolute path that exists | a fresh empty temporary directory, removed after the run |
-  | `Env` | extra `NAME=VALUE` entries of the allow list; a name the launcher sets itself (`CLAUDE_CODE_OAUTH_TOKEN`, `HOME`, `PATH`, the four switches below) is refused, and so is one that names another credential, endpoint, proxy, policy or provider or loads code into the CLI's process (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `HTTPS_PROXY`, `HTTP_PROXY` and every `CLAUDE_CODE_USE_*`; amended 2026-11-22, issue #277 round C) | none |
+  | `Env` | extra `NAME=VALUE` entries of the allow list; a name the launcher sets itself (`CLAUDE_CODE_OAUTH_TOKEN`, `HOME`, `PATH`, the four switches below) is refused, and so is one that names another credential, endpoint, proxy, policy or provider or loads code into the CLI's process (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDE_CODE_MANAGED_SETTINGS_PATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `HTTPS_PROXY`, `HTTP_PROXY` and every `CLAUDE_CODE_USE_*`; amended 2026-11-22, issue #277 round C), and, amended 2026-11-23 (issue #277 round D), `LD_AUDIT`, `ALL_PROXY`, `NO_PROXY`, the lower-case `https_proxy`, `http_proxy`, `all_proxy`, `no_proxy` (Node and curl read them too; names are compared exactly), `NODE_TLS_REJECT_UNAUTHORIZED`, `NODE_EXTRA_CA_CERTS`, `CLAUDE_CONFIG_DIR` and `ANTHROPIC_CUSTOM_HEADERS` | none |
   | `SearchPath` | the CLI's `PATH` | `/usr/local/bin:/usr/bin:/bin` |
   | `SystemPromptDir` | the directory the system prompt's file is written into, under a fresh name, an absolute path that exists, which the caller controls (the audit's `/srv/audit/state/tmp`); the file is removed after the run | a fresh temporary directory of the launcher's own under `os.TempDir()`, removed after the run |
   | `Redact` | values, beside the token, that the launcher's error never quotes: each stands in for `[redacted]` in the excerpt of the CLI's text (the audit passes its canary) | the token alone |
@@ -445,10 +445,36 @@ test of ours (Decision 3's reason).
      *Amended 2026-11-22 (issue #277 round C):* both trees are walked whole, no link followed: no entry
      anywhere in them has a write bit, and every symbolic link in them is relative and resolves, its
      whole chain followed, to a path inside its own tree. The checkout copy's `.git` is a directory, not
-     a file or a link, and its `config` holds no `extraheader`, `fsmonitor`, `sshCommand` or `hooksPath`
-     key (nor `gitProxy`, `askPass`, `pager`, `external` or `textconv`), no `[filter "..."]`,
-     `[diff "..."]` or `[merge "..."]` section and no `[include]` or `[includeIf]`, keys and sections
-     matched case-insensitively, as git reads them: the wrapper's git reads that one local config.
+     a file or a link.
+     *Amended 2026-11-23 (issue #277 round D):* the walk also refuses every entry that is not a
+     directory, a regular file or such a link: a FIFO, a socket, a device. The checkout copy's git
+     configuration is an **allow list**, which replaces round C's list of refused keys (a deny list
+     misses every key it does not name, `gpg.program` and `core.pager`'s neighbours among them):
+     - `.git/config`, when present, is a regular file that holds only these keys, compared without
+       regard to case on the section and the key name: `core.repositoryformatversion`, `core.filemode`,
+       `core.bare`, `core.logallrefupdates`; `remote.origin.url`, `remote.origin.fetch`,
+       `remote.origin.promisor`, `remote.origin.partialclonefilter`; `gc.auto`;
+       `branch.<name>.remote`, `branch.<name>.merge`; `extensions.objectformat`. The subsection
+       `origin` is compared exactly, as git compares subsections; `<name>` is any. Every other key and
+       every other section is refused, an empty one included: `extensions.worktreeconfig`,
+       `[include]`, `[includeIf]`, `gpg.*`, `core.fsmonitor`, `core.pager`, `http.*` and every
+       `[filter]`, `[diff]` and `[merge]` section among them.
+     - **A strict parser.** Each line must be blank, a comment (`#` or `;`), a section header alone on
+       its line, `[section]` or `[section "subsection"]`, or `key = value` under a header. It refuses
+       any line it cannot place: a UTF-8 byte order mark; text after a header's closing `]`, a comment
+       included; two headers on one line; a quoted subsection not closed by `"]`, or one with an escape
+       other than git's `\"` and `\\`; the old dotted header (`[branch.main]`); a key before any header;
+       a key without `=` (git's bare boolean); and a value that ends in `\`, which continues on the next
+       line. Git writes none of these forms, so refusing them costs a checkout nothing. A refusal
+       names the line's number and the section or key, never a value or a subsection, which could hold a
+       credential.
+     - **Three other files** are refused by their presence, in any file type: `.git/config.worktree`,
+       `.git/commondir` and `.git/gitdir`, the files beside `.git/config` git reads a configuration or a
+       repository out of.
+
+     The wrapper's git reads that one local config (its environment turns the system and global ones
+     off, see the wrapper below), so what that config may hold is exactly the allow list. The check
+     makes no claim about what git does with a key; it only holds that no key outside the list is there.
   4. **Bubblewrap** starts (the user-namespace check, below).
   5. **The preflight** (below).
   6. **The audit**: one `Ask` with the skill's text as the appended system prompt, read from
@@ -463,6 +489,22 @@ test of ours (Decision 3's reason).
      canary; otherwise the run fails with exit 1 and the audit's constant line. No 64-hex rule applies
      to it, as the preflight's judgement applies to its transcript: the audit's findings may quote
      SHA-256 pins, which are 64 lower-case hex characters too.
+     *Amended 2026-11-23 (issue #277 round D):* the result file is read from one descriptor and never
+     through a link: its entry must be a regular file (`Lstat`, so neither a link nor a FIFO is
+     opened), and the descriptor opened must be that same file (`os.SameFile` on its `Stat`). That gives
+     `O_NOFOLLOW`'s guarantee with `os` alone: `os` has no `O_NOFOLLOW`, and `syscall` is outside
+     `audit-library`, whose packages are linted for every release target. The read is capped at
+     `audit.MaxResult` (`int64`, 16 MiB) from that descriptor; a file over it fails with a failure of
+     its own, which names the cap in decimal, not with the no-result-file one. The bytes must be one
+     JSON value and nothing after it, and the token and the canary are searched for in the raw bytes
+     and in every decoded string, the objects' keys included, so a secret written as `\uXXXX` escapes
+     is found too; a file that is no JSON is refused. Both failures still print the audit's one constant
+     line. `Audit(ctx, root, in, launch)` returns `([]byte, error)`: the bytes it read and checked,
+     never the path. `Steps.Audit` carries them, and `Run.Result func(body []byte) error`, beside
+     `Run.Out`, is handed exactly those bytes once, after every step passed, and never for a run that
+     failed; a `Result` that fails fails the run with the audit's line. It is the seam PR 5's
+     publication works from, so nothing reads the result file again by its path; `ci/auditrun` leaves
+     it nil until then.
 - **Exit codes:** 0 the audit finished and wrote the result file; 1 the run failed (the model, a probe
   not refused, no result file); 2 a usage or input error; 3 refused before the CLI ran (a managed
   setting, a checksum mismatch, the audit directory not as laid out); 4 bubblewrap cannot start.
@@ -594,6 +636,12 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   takes the next word as a configuration value), not only one that starts with it; a word after `-e`
   that happens to hold them is refused too, which fails closed. sort's options are the allow list above,
   and uniq's second operand is refused.
+  *Amended 2026-11-23 (issue #277 round D):* git's signature verification runs gpg (`gpg.program`), so
+  it is refused in both its forms: `--show-signature`, alone, with `=value` and abbreviated (`--show-sig`)
+  as the other long options are; and a format that holds a signature placeholder, `%G` (`%G?`, `%GS`,
+  `%GK`, `%GG`, ...) or for-each-ref's `%(signature...)`, when it is the attached value of `--format=` or
+  `--pretty=` (or an abbreviation of either), a `format:` or `tformat:` value, or the next word after
+  `--format` or `--pretty`. `--format=%H%n%s` and every other format still pass.
 - **The same environment for every command**, the five `GIT_*` included: PRD #175's criterion is one
   scrubbed environment, and a variable only git reads changes nothing for the others.
 - **The exec seam.** The logic is `run(args []string, exec func(path string, argv []string, env []string)
@@ -697,6 +745,12 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   is skipped before the entry check and nothing is extracted from it; `state/bin` is checked with
   `Lstat` as a real directory before anything is written, so a link there is followed nowhere (the
   binary is extracted before the layout check looks at `state/bin`).
+  *Amended 2026-11-23 (issue #277 round D):* the signature is `InstallClaude(root, tarball, integrity,
+  bin string) error`. `bin` must lie under `root`, and every directory of its path from `root` down to
+  `bin`'s own (`srv`, `srv/audit`, `srv/audit/state`, `srv/audit/state/bin`) is checked with `Lstat` as
+  a real directory, no link, before anything is written, so nothing is written through a link anywhere
+  in the path. The destination stays a parameter: a three-string `(root, tarball, integrity)` would have
+  the old signature's shape, and a call in the old order would compile.
 - **The layout** also wants `/srv` and `/srv/audit` to be directories, not links, and `work/tmp` empty. The
   wrapper's owner is not checked (a check would need `syscall`, which the library is denied); the
   model-free step's `sudo install -o root -m 0555` makes it, and the check holds its mode, exactly 0555.
@@ -738,7 +792,7 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   `/srv/audit/state/tmp` (`Config.SystemPromptDir`), which no tool can read and no earlier step's
   `TMPDIR` can move, and removed after each run.
 
-#### Risks for the first workflow run (issue #277 round C)
+#### Risks for the first workflow run (issue #277 rounds C and D)
 
 What the tests cannot show without a real runner, to be checked on the audit workflow's first run (PR 5
 of milestone 2), and the constraints PR 5 must keep:
@@ -761,6 +815,23 @@ of milestone 2), and the constraints PR 5 must keep:
   follow the deny list, not the allow list). PR 5 must therefore put no secret under `/tmp` or `/run`,
   copy the checkout with `persist-credentials: false` (so `.git/config` holds no `extraheader`, which the
   layout check refuses anyway), and never upload the `state/out` transcripts unencrypted.
+- *Added 2026-11-23 (issue #277 round D):* **Probe 6's Write and Edit prove nothing by their own
+  `is_error`.** Claude Code's read-before-write guard refuses a Write or an Edit of a file the run has not
+  read, before any permission rule or sandbox is consulted, so their error shows the guard, not the
+  deny rule. Probe 6 rests on the launcher's own observation, the `$GITHUB_ENV` file's digest before and
+  after the run.
+- *Added 2026-11-23:* **Whether the pinned CLI marks a non-zero Bash exit as `is_error`.** Probe 5's
+  token-absence call needs it: if a Bash call that exits non-zero comes back without `is_error`, the
+  judgement reads that call wrongly. The first run's transcript shows which; a change to the judgement
+  is a reviewed amendment here.
+- *Added 2026-11-23:* **git's cluster rule over-refuses.** Any single-dash word that holds `c` or `O` is
+  refused, so an attached value that holds either letter is refused with it: `-Scredential`, `-Gfunc`,
+  `git grep -c`. It fails closed, and the model can pass such a value as a separate word (`-S
+  credential`). Recorded only: the skill is not changed in this PR.
+- *Added 2026-11-23:* **PR 5's checkout must not use sparse checkout or worktree config.** The git config
+  allow list refuses `extensions.worktreeconfig` (and every `core.sparsecheckout*` key), and the layout
+  check refuses `.git/config.worktree`, `.git/commondir` and `.git/gitdir`: a checkout that writes any of
+  them fails step 3 on every run.
 - **Renovate's generic manager** lists the workflows that hold an annotated pin one by one; PR 5's audit
   workflow must join that list, which `test/lint`'s `TestEveryAnnotatedWorkflowPinIsScanned` enforces
   once the workflow holds a `# renovate: datasource=` comment.
