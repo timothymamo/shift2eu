@@ -569,14 +569,24 @@ test-e2e: ## Build and run the binary end to end against testdata fixtures
 # the recipe shell's PID, so parallel runs have their own; it is removed on every exit, failure and
 # interrupt included. chromedp's pipe transport (--remote-debugging-pipe) would open no port at all, but
 # it hands the browser fds 3 and 4 of a process it starts itself, and docker run and nerdctl run pass no
-# such fds into a container (docs/adr/0036, amendment for issue #368).
+# such fds into a container (docs/adr/0036, amendment for issue #368). The EXIT trap bounds the container's
+# removal (issue #449): it runs $(DOCKER) rm -f in the background, its output to /dev/null so it never holds
+# make's output open, polls it once a second and waits for it no longer than TEST_BROWSER_RM_DEADLINE seconds,
+# so a container runtime that never answers cannot hold the run for good. Past the deadline it prints the
+# container's name and the command that removes it by hand, then ends that rm, the one process it started
+# there, with SIGKILL, since the rm ignores the signals the trap ignored; the run's own exit status stays.
+TEST_BROWSER_RM_DEADLINE ?= 30
 .PHONY: test-browser
 test-browser: ## Build the site's bundle into a directory of this run's own and run its headless-browser smoke test in a pinned Chromium container (docker or nerdctl)
 	@set -eu; \
+	case '$(TEST_BROWSER_RM_DEADLINE)' in ''|*[!0-9]*) \
+		echo 'test-browser: TEST_BROWSER_RM_DEADLINE must be a whole number of seconds, not "$(TEST_BROWSER_RM_DEADLINE)"' >&2; \
+		exit 2 ;; \
+	esac; \
 	devtools=; \
 	name=shift2eu-test-browser-$$$$; \
 	bundle_dir=; \
-	trap 'trap "" HUP INT TERM; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir" || true; fi; $(DOCKER) rm -f "$$name" >/dev/null 2>&1 || true' EXIT; \
+	trap 'trap "" HUP INT TERM; if [ -n "$$bundle_dir" ]; then rm -rf "$$bundle_dir" || true; fi; $(DOCKER) rm -f "$$name" >/dev/null 2>&1 & rm_pid=$$!; rm_waited=0; while kill -0 "$$rm_pid" 2>/dev/null; do if [ "$$rm_waited" -ge $(TEST_BROWSER_RM_DEADLINE) ]; then echo "test-browser: $(DOCKER) rm -f $$name did not return within $(TEST_BROWSER_RM_DEADLINE) seconds; remove the container by hand with: $(DOCKER) rm -f $$name" >&2; kill -s KILL "$$rm_pid" 2>/dev/null || true; break; fi; sleep 1; rm_waited=$$((rm_waited + 1)); done' EXIT; \
 	trap 'trap "" HUP INT TERM; exit 129' HUP; \
 	trap 'trap "" HUP INT TERM; exit 130' INT; \
 	trap 'trap "" HUP INT TERM; exit 143' TERM; \

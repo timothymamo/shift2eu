@@ -270,6 +270,12 @@ as not running fails the run at once, naming its exit status and showing the tai
 inspect alone is no verdict; three in a row mean the container is gone, and the run fails with
 inspect's last error instead of waiting out the 60 seconds.
 
+Issue #449 bounds the container's removal. A wedged container runtime never answered the EXIT trap's
+`docker rm -f`, so the run hung there after its smoke test had passed. The trap now runs that removal in
+the background and waits no longer than `TEST_BROWSER_RM_DEADLINE` seconds (default 30). Past that, it
+prints the container's name and the command that removes it by hand, and ends that one `rm`. The run's
+own exit status stays.
+
 A port the kernel picks is still a listening port, which a local process can find and attach to. It is
 open only while a run lasts and is no longer a fixed, well-known one. That residual risk is accepted.
 
