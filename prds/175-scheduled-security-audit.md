@@ -248,21 +248,21 @@ The model job and where the subscription token is:
 
 How the model is contained:
 
-- [ ] Claude Code runs with **only the audit's own settings file** (`--settings`): its setting sources
+- [x] Claude Code runs with **only the audit's own settings file** (`--settings`): its setting sources
   load no user, project or local settings, and it runs from a working directory inside the audit
   directory, so no `.claude/` or `CLAUDE.md` loads. It uses a strict, empty MCP configuration and has no
   hooks. A later change to `.claude/settings.json` cannot widen the audit.
-- [ ] The skill's text, read from the `github.sha` checkout, is passed to the model **explicitly** (as
+- [x] The skill's text, read from the `github.sha` checkout, is passed to the model **explicitly** (as
   the prompt or a system-prompt file, the ADR says which); the files it links to are read as data from
   the audit directory's copy of the checkout.
-- [ ] It runs inside **Claude Code's sandbox** with `sandbox.enabled: true`,
+- [x] It runs inside **Claude Code's sandbox** with `sandbox.enabled: true`,
   `autoAllowBashIfSandboxed: false`, `allowUnsandboxedCommands: false`, no `excludedCommands`, and an
   **empty** network allow list: Bash has no network at all. Bash writes only under the audit directory's
   work area. The Claude Code process itself makes no connection but to the model API **by its
   configuration** (the two variables above, no `WebFetch` or `WebSearch`). That is not enforced: the
   sandbox wraps Bash only, and the unsandboxed CLI process could open any connection. It is a residual
   risk (Decision 6), and no test claims otherwise.
-- [ ] Its permissions are an **allow list in a non-interactive mode that refuses every tool not on it**
+- [x] Its permissions are an **allow list in a non-interactive mode that refuses every tool not on it**
   (the ADR names the mode): `Read`, `Grep` and `Glob` only of the audit directory's checkout copy, the
   checks' results and the work area, `Write` and `Edit` only under the work area, and, if the skill needs
   a command at all, `Bash` only through the scrubbed-environment wrapper below. It never runs with
@@ -273,10 +273,10 @@ How the model is contained:
   `Glob` of the audit directory's state area (the fresh `HOME`, with Claude Code's own configuration and
   transcripts). It keeps the Bash patterns (`git push|commit|tag|remote`, `gh`, `curl`, `wget`, `nc`,
   `ssh`, `docker`, `sudo`, `env`, `printenv`, `set`, `/proc/*/environ`) as defence in depth.
-- [ ] Any command the model runs goes through a committed wrapper that names the commands it may `exec`
+- [x] Any command the model runs goes through a committed wrapper that names the commands it may `exec`
   (the ADR lists them), refuses every other, and `exec`s with a scrubbed environment (`env -i` plus an
   allow list of harmless variables).
-- [ ] A test pins the settings file: the setting sources, the sandbox keys above, the empty network
+- [x] A test pins the settings file: the setting sources, the sandbox keys above, the empty network
   allow list, the allow list with its literal path scopes (only the checkout copy, the checks' results and
   the work area), the deny list with its literal paths (`/proc`, `/sys`, `/etc`, `/home`, `/home/runner`
   and the audit directory's state area), the mode, the absence of `WebFetch`, `WebSearch` and both bypass
