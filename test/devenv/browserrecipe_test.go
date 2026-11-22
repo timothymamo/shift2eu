@@ -319,21 +319,20 @@ const signalRaceIssue = "issue #464"
 // ends the shell before the EXIT trap has run. One does arrive in the wild - make relays a SIGTERM it gets to the
 // recipe's shell, so closing the pane, which signals the whole process group, hands the shell a second one - and it
 // left the container and the directory behind (issue #464). So each trap must ignore the three signals as its first
-// action, before it exits, and exit with 128 plus its signal's number.
+// action, before it exits, and exit with 128 plus its signal's number. The reading of the real recipe is the other
+// way round what TestSignalTrapProblems pins over stand-ins: there the check is the subject, here the recipe is.
 func TestMakeTestBrowserRecipeIgnoresFurtherSignalsBeforeItExits(t *testing.T) {
 	t.Parallel()
 
-	real := readRepoFile(t, makefilePath)
+	recipe, ok := makeRecipes(t, readRepoFile(t, makefilePath))[testBrowserTarget]
+	if !ok {
+		t.Fatalf("the Makefile declares no %s target with a recipe, so nothing pins what its traps do with a second signal (%s)",
+			testBrowserTarget, signalRaceIssue)
+	}
 
 	for _, trap := range trappedSignals {
 		t.Run(trap.name, func(t *testing.T) {
 			t.Parallel()
-
-			recipe, ok := makeRecipes(t, real)[testBrowserTarget]
-			if !ok {
-				t.Fatalf("the Makefile declares no %s target with a recipe, so nothing pins what its traps do with a second signal (%s)",
-					testBrowserTarget, signalRaceIssue)
-			}
 
 			if diff := cmp.Diff([]string(nil), signalTrapProblems(recipe, trap)); diff != "" {
 				t.Errorf("the %s trap of make %s (%s) (-want +got):\n%s\nrecipe:\n%s",
@@ -341,42 +340,6 @@ func TestMakeTestBrowserRecipeIgnoresFurtherSignalsBeforeItExits(t *testing.T) {
 			}
 		})
 	}
-
-	// The check reads the real recipe and not a shape of its own: with each of the three traps fixed the way issue
-	// #464 asks, the real recipe has no problem, so the failures above are the traps' and not the reader's.
-	t.Run("the real recipe with each trap fixed", func(t *testing.T) {
-		t.Parallel()
-
-		recipe, ok := makeRecipes(t, real)[testBrowserTarget]
-		if !ok {
-			t.Fatalf("the Makefile declares no %s target with a recipe, so nothing pins what its traps do with a second signal (%s)",
-				testBrowserTarget, signalRaceIssue)
-		}
-
-		repaired := recipe
-
-		for _, trap := range trappedSignals {
-			asWritten := "trap 'exit " + trap.status + "' " + trap.name
-			if !strings.Contains(repaired, asWritten) {
-				t.Fatalf("the recipe of make %s sets no %q, so this edit changes nothing and the check's reading of the real recipe is unproven (%s)\n%s",
-					testBrowserTarget, asWritten, signalRaceIssue, recipe)
-			}
-
-			repaired = strings.ReplaceAll(repaired, asWritten,
-				"trap 'trap \"\" HUP INT TERM; exit "+trap.status+"' "+trap.name)
-		}
-
-		var problems []string
-
-		for _, trap := range trappedSignals {
-			problems = append(problems, signalTrapProblems(repaired, trap)...)
-		}
-
-		if diff := cmp.Diff([]string(nil), problems); diff != "" {
-			t.Errorf("the recipe of make %s with each of the three traps fixed (-want +got):\n%s\nrecipe:\n%s",
-				testBrowserTarget, diff, repaired)
-		}
-	})
 }
 
 // TestSignalTrapProblems pins the check itself, over stand-in recipes rather than the real Makefile: the traps as
@@ -471,7 +434,7 @@ func signalTrapProblems(recipe string, trap signalTrap) []string {
 			testBrowserTarget, trap.name, signalRaceIssue)}
 	}
 
-	statements := recipeStatements(action)
+	statements := trapStatements(action)
 
 	first := ""
 	if len(statements) > 0 {
@@ -484,7 +447,7 @@ func signalTrapProblems(recipe string, trap signalTrap) []string {
 	}
 
 	for _, statement := range statements[1:] {
-		words := shellWords(statement)
+		words := strings.Fields(statement)
 		if len(words) == 0 || words[0] != "exit" {
 			continue
 		}
@@ -502,11 +465,12 @@ func signalTrapProblems(recipe string, trap signalTrap) []string {
 }
 
 // ignoresTrappedSignals reports whether statement is a trap that ignores all three signals the recipe traps, trap ""
-// HUP INT TERM, with the three names in any order.
+// HUP INT TERM, with the three names in any order: its first word is trap, its second the empty action as the recipe
+// writes it, two quotes.
 func ignoresTrappedSignals(statement string) bool {
-	words := shellWords(statement)
+	words := strings.Fields(statement)
 
-	if len(words) < 4 || words[0] != "trap" || words[1] != "" {
+	if len(words) < 5 || words[0] != "trap" || words[1] != `""` {
 		return false
 	}
 
@@ -524,135 +488,36 @@ func ignoresTrappedSignals(statement string) bool {
 	return true
 }
 
+// signalTrapStatement finds one trap of a recipe that names a single one of the three signals. The lone name before the
+// semicolon is what keeps a trap that lists all three, such as the EXIT trap's own ignore inside its action, from being
+// read as the trap for one of them.
+var signalTrapStatement = regexp.MustCompile(`trap '([^']*)' (HUP|INT|TERM);`)
+
 // signalTrapAction returns the action of the recipe's trap for one signal - what the shell runs when that signal
 // arrives - as the recipe writes it between the trap's quotes, and false when the recipe sets no trap for the signal.
-// A trap that lists several signals is no trap for one of them, which is what keeps the EXIT trap's own ignore, the
-// one inside its action, from being read as the trap for HUP, INT or TERM.
 func signalTrapAction(recipe, signal string) (string, bool) {
-	for _, statement := range recipeStatements(recipe) {
-		words := shellWords(statement)
-		if len(words) < 3 || words[0] != "trap" {
-			continue
-		}
-
-		if signals := words[2:]; len(signals) == 1 && signals[0] == signal {
-			return words[1], true
+	for _, match := range signalTrapStatement.FindAllStringSubmatch(recipe, -1) {
+		if match[2] == signal {
+			return match[1], true
 		}
 	}
 
 	return "", false
 }
 
-// recipeStatements splits a recipe into the statements a shell would run, on the semicolons and the newlines that
-// are outside quotes, and with a backslash-newline continuing a statement as it does in the Makefile's recipe: each
-// statement trimmed, the empty ones dropped. The quotes stay in a statement, since what a trap's action says is read
-// from the words of the statement that sets it (shellWords).
-func recipeStatements(recipe string) []string {
-	runes := []rune(recipe)
+// trapStatements splits the action of a trap into the statements a shell would run, on the semicolons between them, and
+// trims each, the empty ones dropped. The action is the trap's own body, which the recipe writes with no semicolon inside
+// a quoted word, so every semicolon separates two statements of it.
+func trapStatements(action string) []string {
+	var statements []string
 
-	var (
-		statements []string
-		current    strings.Builder
-		quote      rune
-	)
-
-	flush := func() {
-		if statement := strings.TrimSpace(current.String()); statement != "" {
+	for _, statement := range strings.Split(action, ";") {
+		if statement = strings.TrimSpace(statement); statement != "" {
 			statements = append(statements, statement)
 		}
-
-		current.Reset()
 	}
-
-	for at := 0; at < len(runes); at++ {
-		r := runes[at]
-
-		switch {
-		case quote != 0:
-			current.WriteRune(r)
-
-			if r == quote {
-				quote = 0
-			}
-		case r == '\'' || r == '"':
-			quote = r
-			current.WriteRune(r)
-		case r == '\\' && at+1 < len(runes):
-			// A backslash escapes the character after it, the newline that continues a recipe line included: a
-			// continued statement is one statement.
-			at++
-
-			if runes[at] != '\n' {
-				current.WriteRune(r)
-				current.WriteRune(runes[at])
-			}
-		case r == ';' || r == '\n':
-			flush()
-		default:
-			current.WriteRune(r)
-		}
-	}
-
-	flush()
 
 	return statements
-}
-
-// shellWords splits one statement of a recipe into its words as the shell does: on the whitespace outside quotes,
-// with the quotes removed and a backslash escaping the character after it. A word can be empty, as the word between
-// the quotes of trap with an empty action is.
-func shellWords(statement string) []string {
-	runes := []rune(statement)
-
-	var (
-		words   []string
-		current strings.Builder
-		quote   rune
-		started bool
-	)
-
-	flush := func() {
-		if started {
-			words = append(words, current.String())
-		}
-
-		current.Reset()
-
-		started = false
-	}
-
-	for at := 0; at < len(runes); at++ {
-		r := runes[at]
-
-		switch {
-		case quote != 0:
-			switch {
-			case r == quote:
-				quote = 0
-			case r == '\\' && quote == '"' && at+1 < len(runes):
-				at++
-				current.WriteRune(runes[at])
-			default:
-				current.WriteRune(r)
-			}
-		case r == '\'' || r == '"':
-			quote = r
-			started = true
-		case r == '\\' && at+1 < len(runes):
-			at++
-			current.WriteRune(runes[at])
-			started = true
-		case r == ' ' || r == '\t' || r == '\n':
-			flush()
-		default:
-			current.WriteRune(r)
-			started = true
-		}
-	}
-
-	flush()
-
-	return words
 }
 
 // signalTrapStandIn is a stand-in for the recipe of make test-browser at the point the test reads it: the EXIT trap
