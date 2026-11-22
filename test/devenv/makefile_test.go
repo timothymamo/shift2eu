@@ -950,16 +950,18 @@ func makeCode(body string) string {
 	return strings.Join(kept, "\n")
 }
 
+// makeAssignment matches a definition's first line: the variable's name, the whitespace after it and the operator
+// it assigns with. A line make reads as something else - an override, an export, a conditional - assigns nothing.
+var makeAssignment = regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.-]*)[ \t]*(?:\+=|::=|:=|\?=|=)`)
+
 // makeDefinitions returns the text of every assignment in body, a Makefile without its comment lines, keyed by the
 // variable's name: the assignment's own line and the backslash-continued lines after it, joined as make reads them.
 func makeDefinitions(body string) map[string]string {
-	assignment := regexp.MustCompile(`^([A-Za-z0-9_][A-Za-z0-9_.-]*)[ \t]*(?:\+=|::=|:=|\?=|=)`)
-
 	lines := strings.Split(body, "\n")
 	definitions := map[string]string{}
 
 	for i := 0; i < len(lines); i++ {
-		match := assignment.FindStringSubmatch(lines[i])
+		match := makeAssignment.FindStringSubmatch(lines[i])
 		if match == nil {
 			continue
 		}
@@ -987,6 +989,22 @@ func makeDefinitions(body string) map[string]string {
 	}
 
 	return definitions
+}
+
+// makeDefinitionBody returns what the definition of name in definitions expands to: its text with the assignment's
+// own "NAME =" gone, which is what a recipe that splices $(name) or $(call name,...) gets in its place. ok is
+// false for a name definitions does not define.
+func makeDefinitionBody(definitions map[string]string, name string) (string, bool) {
+	definition, ok := definitions[name]
+	if !ok {
+		return "", false
+	}
+
+	if match := makeAssignment.FindStringIndex(definition); match != nil {
+		return definition[match[1]:], true
+	}
+
+	return definition, true
 }
 
 // gitFileModes returns the mode git has recorded for the files below dir, keyed by their path from the repository
@@ -3715,11 +3733,14 @@ func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (
 // makeEnv is the environment make runs with in a test: a PATH of the machine's own and a temporary HOME, so
 // the Makefile's $(shell git config ...) reads nothing of the maintainer's, and a WORKSPACE_REPO naming a
 // checkout inside a temporary workspace, so a host target runs in the host clone layout a maintainer has and
-// not in the workspace it refuses (docs/dev-environment.md, The host clone, issue #227).
+// not in the workspace it refuses (docs/dev-environment.md, The host clone, issue #227). The workspace is rooted
+// in a sandbox root (newSandboxRoot), not in t.TempDir: testing names that directory after the test, and a test
+// name may hold a character a WORKSPACE_REPO does not, so a refusal a test pins could fire because of the
+// directory the test runs in rather than the value under test (issue #326, item 3).
 func makeEnv(t *testing.T, extra map[string]string) map[string]string {
 	t.Helper()
 
-	workspaceRepo := filepath.Join(t.TempDir(), "ws", "shift2eu")
+	workspaceRepo := filepath.Join(newSandboxRoot(t), "ws", "shift2eu")
 
 	if err := os.MkdirAll(workspaceRepo, 0o700); err != nil {
 		t.Fatalf("create %s: %v", workspaceRepo, err)
@@ -3736,6 +3757,25 @@ func makeEnv(t *testing.T, extra map[string]string) map[string]string {
 	}
 
 	return env
+}
+
+// TestMakeEnvRootsTheWorkspaceRepoInASandboxRoot pins issue #326's item 3: the WORKSPACE_REPO makeEnv hands make
+// holds only the characters a WORKSPACE_REPO may, whatever the test that asks for it is called. A subtest named
+// with a comma, a tilde and a percent is enough: testing keeps all three in the name of the directory it creates,
+// and the Makefile checks the whole path of the value.
+func TestMakeEnvRootsTheWorkspaceRepoInASandboxRoot(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a comma, a tilde ~ and a percent %", func(t *testing.T) {
+		t.Parallel()
+
+		repo := makeEnv(t, nil)["WORKSPACE_REPO"]
+
+		if refused := workspaceRepoRefusedChar(repo); refused != "" {
+			t.Errorf("makeEnv names the workspace %q, which holds %q: the Makefile checks the whole path of WORKSPACE_REPO, so a refusal a test pins could fire because of the directory the test runs in rather than the value under test (issue #326, item 3)",
+				repo, refused)
+		}
+	})
 }
 
 // makeVariable returns the value a substitution assignment in the Makefile gives name.

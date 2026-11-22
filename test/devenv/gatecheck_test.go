@@ -190,6 +190,15 @@ fi
 cat "${file}"
 `
 
+// gateBrokenJQ stands in for a jq the machine has but cannot run: an Intel binary on an Apple-silicon Mac answers
+// "Bad CPU type in executable" and the shell exits 126, which is what the check has to report instead of blaming
+// GitHub's answer, the way it took several rounds to find on the maintainer's admin Mac (issue #321). Its message
+// carries a terminal escape sequence, which is jq's own text and must not reach the maintainer's terminal either.
+const gateBrokenJQ = `#!/bin/sh
+printf 'Bad CPU type in executable\033[31m\n' >&2
+exit 126
+`
+
 // gateFixture is one run's fake environment: the sandbox whose gh serves the recorded answers, the directory
 // the answers are served from, and the environment of the run.
 type gateFixture struct {
@@ -1599,5 +1608,124 @@ func assertGetMethod(t *testing.T, call int, args []string, j int, arg string) {
 		if arg != "-XGET" {
 			t.Errorf("gh call %d passes %q: the gate check reads only", call+1, arg)
 		}
+	}
+}
+
+// TestProtectMainCheckSaysWhenJqCannotRun pins issue #321: the check parses every answer with jq and drops jq's own
+// messages on purpose, because they may quote an answer, which is data. When jq itself cannot run, that silence
+// made the check blame GitHub - "the answer of repos/timothymamo/shift2eu/rulesets is not a list of rulesets" -
+// and the real cause, an Intel jq on an Apple-silicon Mac, took several rounds to find. So the check that jq runs at
+// all, before it reads anything: a jq that exits 126 with the loader's message, and a PATH that holds no jq, both
+// exit 2 with a message naming jq - its path and its error, its control characters replaced, for the first, and
+// that it was not found for the second - and neither ever says "not a list of rulesets", nor calls gh at all.
+func TestProtectMainCheckSaysWhenJqCannotRun(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		// prepare breaks jq's run and returns the path the message has to name, or "" when there is none.
+		prepare func(t *testing.T, f *gateFixture) string
+		want    []string // substrings stderr must hold
+		wantAny []string // substrings of which stderr must hold at least one
+	}{
+		{
+			name: "jq cannot execute",
+			prepare: func(t *testing.T, f *gateFixture) string {
+				t.Helper()
+
+				jqPath := filepath.Join(f.sb.binDir, "jq")
+				writeFileMode(t, jqPath, []byte(gateBrokenJQ), 0o700)
+
+				return jqPath
+			},
+			want: []string{"jq", "Bad CPU type"},
+		},
+		{
+			name: "the PATH holds no jq",
+			prepare: func(t *testing.T, f *gateFixture) string {
+				t.Helper()
+
+				// A PATH of its own, holding the tools the check needs and no jq at all: the machine's /usr/bin
+				// may hold one (jq here does), and a sandbox bin directory first on PATH would leak it back in.
+				dir := filepath.Join(f.sb.root, "no-jq-bin")
+				if err := os.MkdirAll(dir, 0o700); err != nil {
+					t.Fatalf("create %s: %v", dir, err)
+				}
+
+				for _, tool := range []string{"cat", "gh", "grep", "tr"} {
+					from, to := filepath.Join(f.sb.binDir, tool), filepath.Join(dir, tool)
+					if tool != "gh" {
+						from = realTool(t, tool)
+					}
+
+					if err := os.Symlink(from, to); err != nil {
+						t.Fatalf("symlink %s to %s: %v", to, from, err)
+					}
+				}
+
+				f.env["PATH"] = dir
+
+				return ""
+			},
+			want:    []string{"jq"},
+			wantAny: []string{"not found", "not on PATH"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newGateFixture(t)
+			f.serveSwitchedOverAs(t, true)
+
+			jqPath := tc.prepare(t, f)
+
+			stdout, stderr, status := f.run(t)
+
+			if status != 2 {
+				t.Fatalf("the gate check exited %d with %s, want 2: a jq that cannot run is a check it cannot make, not a gap and not a gate that holds\nstdout: %s\nstderr: %s",
+					status, tc.name, stdout, stderr)
+			}
+
+			for _, w := range tc.want {
+				if !strings.Contains(stderr, w) {
+					t.Errorf("the refusal does not say %q with %s, so a maintainer cannot tell that jq itself is what stopped the check: %s", w, tc.name, stderr)
+				}
+			}
+
+			if jqPath != "" && !strings.Contains(stderr, jqPath) {
+				t.Errorf("the refusal does not name the jq it could not run (%s) with %s, so a maintainer cannot find the binary to fix: %s", jqPath, tc.name, stderr)
+			}
+
+			if len(tc.wantAny) != 0 {
+				var said bool
+
+				for _, w := range tc.wantAny {
+					said = said || strings.Contains(stderr, w)
+				}
+
+				if !said {
+					t.Errorf("the refusal does not say that jq was not found (one of %q) with %s, so a maintainer looks for a broken jq instead of a missing one: %s", tc.wantAny, tc.name, stderr)
+				}
+			}
+
+			if strings.Contains(stderr, "not a list of rulesets") {
+				t.Errorf("the refusal says the answer is not a list of rulesets with %s: that is the message issue #321 exists for, as it points at GitHub's answer while jq is what could not run: %s", tc.name, stderr)
+			}
+
+			// jq's message is not an answer of the API, but it is not the report either: no control character of
+			// it, the escape sequence of the loader's message included, may reach the terminal.
+			assertCleanReport(t, "the refusal's stderr", stderr)
+
+			if strings.Contains(stderr, "\u001b") {
+				t.Errorf("the refusal carries the raw ESC byte of jq's message with %s: its control characters have to be replaced, as the API's are: %s", tc.name, stderr)
+			}
+
+			if calls := invocations(f.sb.argvLogText(t), "gh"); len(calls) != 0 {
+				t.Errorf("the gate check read GitHub (%v) although jq cannot run with %s: it has to check that jq runs before its first read, or it reads an answer only to fail parsing it: %s",
+					calls[0], tc.name, stderr)
+			}
+		})
 	}
 }

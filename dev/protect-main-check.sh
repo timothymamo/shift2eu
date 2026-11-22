@@ -24,8 +24,9 @@
 # Exit status:
 #   0  every check holds
 #   1  at least one gap
-#   2  it could not check: gh failed on a read, there is not exactly one ruleset named Protect main with a
-#      numeric id, an answer is not what GitHub documents, or an argument was given (it takes none)
+#   2  it could not check: jq is not on PATH or does not run, gh failed on a read, there is not exactly one
+#      ruleset named Protect main with a numeric id, an answer is not what GitHub documents, or an argument
+#      was given (it takes none)
 #   3  no gap, but at least one check is unverified: run make gate-check as the maintainer, with their token
 #
 # A gap always fails: the transition mode of the time before the switch-over is gone (PRD #161 milestone 3),
@@ -61,6 +62,30 @@ read_api() {
   fi
 }
 
+# printable <text>: text with every byte but printable ASCII replaced by ?, for a message that is no answer of the
+# API but is not this script's own either (a path, a loader's error), so it cannot rewrite the terminal.
+printable() {
+  printf '%s' "$1" | LC_ALL=C tr -c '[:print:]' '?'
+}
+
+# jq must run at all before anything is read (issue #321): every parse below hides jq's messages, so a jq that
+# cannot run would otherwise be reported as an answer that is not what GitHub documents. Neither the path
+# command -v finds nor the shell's error about running it is answer data, so both are named, made printable.
+jq_path="$(command -v jq)" || cannot "jq not found: it is not on PATH, and every answer is parsed with jq"
+if ! jq_error="$(jq -n 1 2>&1 >/dev/null)"; then
+  cannot "jq at $(printable "${jq_path}") does not run ($(printable "${jq_error}"))"
+fi
+
+# parse_failed <jq's status> <endpoint> <message>: stops with status 2. A status of 126 or 127 means jq itself
+# could not run (the shell's codes for a command it cannot execute or cannot find), not that the answer of
+# endpoint is wrong; any other status is message.
+parse_failed() {
+  case "$1" in
+  126 | 127) cannot "jq could not run (exit status $1) to parse the answer of $2" ;;
+  *) cannot "$3" ;;
+  esac
+}
+
 # Every jq run below drops jq's own messages (2>/dev/null): they may quote an answer, which is data.
 jq_lib='def clean: tostring | gsub("[\u0000-\u001f\u007f-\u009f]"; "?");'
 
@@ -73,7 +98,7 @@ ids="$(printf '%s\n' "${pages}" | jq 2>/dev/null -r -s "${jq_lib}"'
   | [.[] | select(.name == "Protect main")
      | if (.id | type) == "number" then .id | tostring else "?" + (.id | clean) end]
   | join(" ")
-')" || cannot "the answer of ${list_endpoint} is not a list of rulesets"
+')" || parse_failed "$?" "${list_endpoint}" "the answer of ${list_endpoint} is not a list of rulesets"
 case "${ids}" in
 '') cannot "no ruleset is named Protect main in ${list_endpoint}" ;;
 *[!0-9]*) cannot "not exactly one ruleset is named Protect main in ${list_endpoint}, or its id is not a number: ${ids}" ;;
@@ -86,7 +111,7 @@ repo="$(read_api "${repository}")" || exit 2
 repo_facts="$(printf '%s\n' "${repo}" | jq 2>/dev/null -c '
   if type != "object" then error("not a repository") else . end
   | {admin: (.permissions.admin? == true), default_branch: (.default_branch // "")}
-')" || cannot "the answer of ${repository} is not a repository"
+')" || parse_failed "$?" "${repository}" "the answer of ${repository} is not a repository"
 
 codeowners_endpoint="${repository}/contents/.github/CODEOWNERS?ref=main"
 codeowners="$(read_api "${codeowners_endpoint}")" || exit 2
@@ -145,7 +170,7 @@ ruleset_report="$(printf '%s\n' "${ruleset}" | jq 2>/dev/null -r --argjson repo 
       end),
     (if .current_user_can_bypass == "never" then "ok: this token cannot bypass Protect main"
      else "gap: this token can bypass Protect main: current_user_can_bypass is \(.current_user_can_bypass // "missing" | clean)" end)
-')" || cannot "the answer of ${ruleset_endpoint} is not a ruleset"
+')" || parse_failed "$?" "${ruleset_endpoint}" "the answer of ${ruleset_endpoint} is not a ruleset"
 
 codeowners_report="$(printf '%s\n' "${codeowners}" | jq 2>/dev/null -r --arg maintainer "${maintainer}" "${jq_lib}"'
   if type != "object" or .encoding != "base64" or (.content | type) != "string" then error("not a file") else . end
@@ -161,13 +186,13 @@ codeowners_report="$(printf '%s\n' "${codeowners}" | jq 2>/dev/null -r --arg mai
     ([$rules[].owners[] | select(ascii_downcase != ($maintainer | ascii_downcase))
       | "gap: CODEOWNERS owner \(clean) is not \($maintainer)"]
      | if length == 0 then "ok: every CODEOWNERS owner is \($maintainer)" else .[] end)
-')" || cannot "the answer of ${codeowners_endpoint} is not a base64 encoded file"
+')" || parse_failed "$?" "${codeowners_endpoint}" "the answer of ${codeowners_endpoint} is not a base64 encoded file"
 
 errors_report="$(printf '%s\n' "${errors}" | jq 2>/dev/null -r '
   if type != "object" or (.errors | type) != "array" then error("not an errors report") else . end
   | if (.errors | length) == 0 then "ok: GitHub reports no CODEOWNERS errors on main"
     else "gap: GitHub reports \(.errors | length) CODEOWNERS errors on main" end
-')" || cannot "the answer of ${errors_endpoint} is not a CODEOWNERS errors report"
+')" || parse_failed "$?" "${errors_endpoint}" "the answer of ${errors_endpoint} is not a CODEOWNERS errors report"
 
 report="$(printf '%s\n%s\n%s\n' "${ruleset_report}" "${codeowners_report}" "${errors_report}")"
 printf '%s\n' "${report}"
