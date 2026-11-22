@@ -129,7 +129,7 @@ DOCKER  ?= $(if $(shell command -v docker 2>/dev/null),docker,nerdctl)
 # pinned by tag and digest; Renovate updates both through the comment above it. CI's browser job runs make
 # test-browser too, so this is the one copy of the pin.
 # renovate: datasource=docker depName=chromedp/headless-shell
-HEADLESS_SHELL := chromedp/headless-shell:160.0.8157.0@sha256:1459842ec97ea88a20645fffae40769c0c8dc70f51cf43e7df812fbaef9909cc
+HEADLESS_SHELL := chromedp/headless-shell:160.0.8171.0@sha256:e2d2e25553d187f044dae3828e0b85c6049599b8bbb432b7516540454514865c
 # The platforms make image builds, comma separated (linux/amd64,linux/arm64). Empty builds the host's own.
 PLATFORMS ?=
 
