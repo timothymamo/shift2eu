@@ -480,9 +480,11 @@ test of ours (Decision 3's reason).
        step 3. It may now be there as a regular file (`Lstat`: a link or any other type is refused)
        that passes the same strict parser under an allow list of its own: `core.sparsecheckout`,
        `core.sparsecheckoutcone`, `index.sparse`, compared without regard to case. Any other key or
-       section in it is refused, `core.fsmonitor` and `[include]` among them. Git reads the file only
-       under `extensions.worktreeconfig`, which `.git/config`'s allow list refuses, so the wrapper's git
-       never reads it at all; the check holds that it would add nothing if it did.
+       section in it is refused, `core.fsmonitor` and `[include]` among them. The three keys pass
+       whatever their values: the check holds keys, not values, and `false` is only what checkout
+       writes. That is harmless because git reads the file only under `extensions.worktreeconfig`,
+       which `.git/config`'s allow list refuses, so the wrapper's git never reads it at all; the check
+       holds that it would add nothing if it did.
      - **No lazy fetch.** `remote.origin.promisor` and `remote.origin.partialclonefilter` are off
        `.git/config`'s allow list (round D took them): a `fetch-depth: 1` checkout writes neither, and
        with them the wrapper's git could fetch an object the checkout lacks. A partial clone's config is
@@ -513,7 +515,9 @@ test of ours (Decision 3's reason).
      is found too; a file that is no JSON is refused. *Amended 2026-11-23 (issue #277 round E):* the
      strings are collected by walking the document's tokens (`json.Decoder.Token`), not by decoding it
      into a map, so every key and every value of a duplicate key is searched: a map keeps a duplicate
-     key's last value alone, and a secret under its first would never reach the search. The check for
+     key's last value alone, and a secret under its first would never reach the search. The `Token()`
+     walk inherits `encoding/json`'s nesting limit (10000 levels), so a deeper result is refused at
+     the token that exceeds it (`exceeded max depth`), as a file that is no JSON is. The check for
      one value and then EOF stays. Both failures still print the audit's one constant
      line. `Audit(ctx, root, in, launch)` returns `([]byte, error)`: the bytes it read and checked,
      never the path. `Steps.Audit` carries them, and `Run.Result func(body []byte) error`, beside
@@ -858,7 +862,7 @@ of milestone 2), and the constraints PR 5 must keep:
   worktree config.** `.git/config`'s allow list refuses `extensions.worktreeconfig` and every
   `core.sparsecheckout*` key; `.git/config.worktree` may hold only `core.sparsecheckout`,
   `core.sparsecheckoutcone` and `index.sparse` (the three a default `actions/checkout` writes, each
-  `false`); and the layout check refuses `.git/commondir` and `.git/gitdir`. The default checkout
+  `false`, though the check holds keys and passes any value); and the layout check refuses `.git/commondir` and `.git/gitdir`. The default checkout
   passes; one with `sparse-checkout:` set, or any other key in either file, fails step 3 on every run.
 - *Added 2026-11-23 (issue #277 round E):* **The runner's git may leave an empty section header after
   checkout's unsets.** With `persist-credentials: false`, `actions/checkout` unsets its
