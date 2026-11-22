@@ -276,6 +276,20 @@ the background and waits no longer than `TEST_BROWSER_RM_DEADLINE` seconds (defa
 prints the container's name and the command that removes it by hand, and ends that one `rm`. The run's
 own exit status stays.
 
+The deadline is a whole number from 1 to 99999 with no leading zero; anything else is refused with exit
+status 2 before anything runs. Make exports it to the recipe unexpanded (`$(value ...)`), and the recipe
+reads it as a shell variable, so a value holding a quote cannot break out of the recipe's quoting and run
+as a command. The bound does not poll: beside the `rm`, the trap starts a watchdog that sleeps out the
+deadline, then sends the `rm` SIGKILL (the `rm` ignores the signals the trap ignores) and exits 3. The
+trap waits on the `rm`, its own child, and then ends the watchdog with USR1, which ends the watchdog's
+sleep too, unless the `rm` was killed; it prints its one line only when the watchdog exited 3. A healthy
+removal so costs no extra second, and every background process writes to `/dev/null`, so none holds
+make's output open. One window is left: an `rm` that returns at the very instant the deadline passes can
+be reaped, and its pid reused, before the watchdog's kill lands. A shell offers no call that kills a child
+only while it is unreaped, and bash reaps children as they exit, so POSIX sh cannot close the window; it
+is accepted as negligible. When `DOCKER` is a wrapper (`sudo docker`, a script), the kill ends only the
+wrapper, and a child of its own may outlive it.
+
 A port the kernel picks is still a listening port, which a local process can find and attach to. It is
 open only while a run lasts and is no longer a fixed, well-known one. That residual risk is accepted.
 
