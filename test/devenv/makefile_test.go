@@ -722,6 +722,24 @@ func TestMakefileResolvesAPathInOnePlace(t *testing.T) {
 			resolver, makefilePath)
 	}
 
+	// The containment decision itself, which the readlink check above does not reach: before #468 ENVRC_GUARD
+	// decided what is inside the host clone by spelling - a clone path printed by pwd -P, and a prefix test of
+	// the resolved path against that string. A link whose target text begins with the clone's path passes such a
+	// test while leading outside the clone, and a path inside the clone spelled in another case on a
+	// case-insensitive file system (macOS's APFS by default) fails it, so the guard must hold neither and ask the
+	// shared resolver's within, which compares files by identity, for that decision.
+	for _, spelling := range []string{"pwd -P", "$$clone_real", `"$$clone"/*`} {
+		if strings.Contains(envrc, spelling) {
+			t.Errorf("ENVRC_GUARD's own definition holds %q: the .envrc guard must decide what is inside the host clone by file identity, through %s's within, and never by printing a clone path (pwd -P) and comparing a prefix of a path with it, which passes a link outside the clone whose text begins with the clone's path and refuses a path inside it spelled in another case (issue #468)",
+				spelling, resolver)
+		}
+	}
+
+	if !withinCall.MatchString(envrc) {
+		t.Errorf("ENVRC_GUARD's own definition calls no within: the guard must ask %s's within, which compares the longest existing prefix of a path with a directory by file identity, whether a path or a dotenv target is inside the host clone - a guard that decides it itself, by spelling or by a walk of its own, is the second resolver #468 removed (issue #468)",
+			resolver)
+	}
+
 	hostGuardUses := false
 
 	for name, text := range definitions {
@@ -761,6 +779,11 @@ func TestMakefileResolvesAPathInOnePlace(t *testing.T) {
 			makefilePath, resolver)
 	}
 }
+
+// withinCall is a call of the shared resolver's within, the containment decision by file identity: the function's
+// name, a blank, and its first argument. A definition of within itself, which the resolver holds and ENVRC_GUARD
+// must not, follows the name with ( ), so it does not match (issue #468).
+var withinCall = regexp.MustCompile(`(^|[^A-Za-z0-9_])within[ \t]`)
 
 // makeCode returns body, a Makefile, without the lines make reads as comments: a line whose text begins with #,
 // once the blanks before it are gone. A recipe's # lines stay, as they belong to the shell there (and

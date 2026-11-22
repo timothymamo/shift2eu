@@ -1071,13 +1071,17 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 			targets: []string{"vm-env-check"},
 		},
 		{
-			// Issue #468: the workspace is spelled in another case on a file system that ignores case (macOS's
-			// APFS by default), which is the case PR #463 pinned for the host guard, and the .envrc direnv loads
-			// sits in the workspace itself. The kernel names that .envrc to every shell opened in the workspace,
-			// so the guard must refuse. The file system is asked whether it is case-insensitive rather than
-			// GOOS: on a case-sensitive one (Linux) the spelling names another path, so the row is skipped
-			// there and runs only on CI's macOS make 3.81 job, whose /bin/sh is bash 3.2.
-			name: "the workspace is spelled in another case, on a file system that ignores case",
+			// A regression pin for a case-insensitive file system (macOS's APFS by default), not a test of the
+			// #468 resolver: the .envrc direnv loads sits in the workspace itself, spelled in the case the file
+			// system keeps, while WORKSPACE_REPO names the checkout in another case, which the kernel reads as the
+			// same path. The scan above the workspace tests the file with [ -e ... ], which folds case there, so
+			// it refuses this layout with or without the resolver #468 gave the two guards: the row passed on
+			// f3599bd too, and pins only that the layout stays refused. The #468 resolver's own rows are the
+			// case-swapped link inside and outside the clone, which only a resolver that checks file identity
+			// rather than spelling can tell apart, and they run where this row does: the file system is asked
+			// whether it is case-insensitive rather than GOOS, so the row is skipped on a case-sensitive one
+			// (Linux) and runs on CI's macOS make 3.81 job, whose /bin/sh is bash 3.2.
+			name: "the workspace is spelled in another case, on a file system that ignores case (regression pin)",
 			setup: func(t *testing.T, l *hostLayout) []string {
 				t.Helper()
 
@@ -1099,6 +1103,33 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 				return nil
 			},
 			targets: []string{"vm-env-check"},
+		},
+		{
+			// The twin of TestHostTargetsPassACleanEnvrcLayout's case-swapped link row, and the #468 resolver's
+			// refusal on the macOS file system CI's make 3.81 job runs on: the host clone's .envrc is a symlink
+			// whose target is spelled in another case and leads outside the clone, which the kernel reads as that
+			// file. Containment by file identity must refuse it, exactly as it refuses the same link spelled in the
+			// case the file system keeps: a within that let a case-swapped spelling through would hand the
+			// credentials of a file outside the clone to every shell opened in the workspace. The file system is
+			// asked whether it is case-insensitive rather than GOOS, so the row is skipped on a case-sensitive one
+			// (Linux), where the spelling names a path that exists nowhere.
+			name: "the host clone's .envrc is a symlink spelled in another case to a file outside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				if !caseInsensitiveDir(t, l.sb.root) {
+					t.Skipf("the file system holding %s is case-sensitive, so a link target spelled in another case names another path, one that exists nowhere: the row pins what a case-insensitive file system, macOS's APFS by default, does with a link the kernel follows (issue #468)", l.sb.root)
+				}
+
+				outside := filepath.Join(l.sb.root, "outside")
+				writeFileMode(t, filepath.Join(outside, "secrets.env"), []byte(plantedEnvrcLines()), 0o600)
+
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, caseSwapped(outside)+"/secrets.env")
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
 		},
 	}
 
@@ -1122,8 +1153,16 @@ func TestHostTargetsRefuseAnEnvrcFileInOrAboveTheWorkspace(t *testing.T) {
 // clone's .envrc runs no other file - it holds its lines itself - or loads one the way direnv parses rather than
 // runs it: `dotenv` and `dotenv_if_exists` with a plain path inside the clone, written as a name with no slash, a
 // relative path, an absolute path or one enclosing pair of matching quotes, and a bare `dotenv`, which reads the
-// clone's own .env. No .envrc and no .env may sit in the workspace or above it either. Each of the eight targets
-// must reach its next step, so the guard does not refuse the layout the docs ask for.
+// clone's own .env. No .envrc and no .env may sit in the workspace or above it either.
+//
+// The .envrc itself may be a symlink, or a chain of them, to a file inside the clone, and a dotenv path may lead to
+// one: those are the clone's own files, so they are layouts the docs ask for, and they are the positive controls of
+// the resolver and containment issue #468 gave the guard - a within that always failed, or a resolve whose check
+// against the kernel never held, would refuse every one of them while the refusals the issue pins still passed. On
+// a case-insensitive file system (macOS's APFS by default) the link's path may be spelled in another case as well,
+// which the spelling prefix test the guard used before #468 refused; that row is skipped where the kernel folds no
+// case. Each of the case's targets must reach its next step, so the guard does not refuse the layout the docs ask
+// for.
 func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 	t.Parallel()
 
@@ -1225,6 +1264,87 @@ func TestHostTargetsPassACleanEnvrcLayout(t *testing.T) {
 			name:      "the host clone's .envrc dotenvs a path that does not exist yet inside the clone",
 			hostEnvrc: "dotenv not-yet-there/secrets.env\n",
 			targets:   []string{"vm-env", "vm-up"},
+		},
+		{
+			// Issue #468's positive control for the resolver itself: a .envrc that is a symlink to a file inside the
+			// clone is the clone's own file, and the kernel reads it as the clone's .envrc, so the guard must let it
+			// through. A resolver that refused every symlink, or a within that never held, would refuse a layout
+			// docs/dev-environment.md allows while every refusal the issue pins still passed.
+			name: "the host clone's .envrc is a symlink to a file inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.envrc"), []byte(plantedEnvrcLines()), 0o600)
+
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, "creds.envrc")
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// The same, through a chain: .envrc -> hop1 -> hop2 -> the file, three links the resolver follows in
+			// turn, each checked against the kernel and all of them inside the clone. A maintainer who keeps their
+			// credentials in a file the clone's .envrc reaches through their own links loses nothing the guard must
+			// refuse (issue #468).
+			name: "the host clone's .envrc is a chain of symlinks ending in a file inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.envrc"), []byte(plantedEnvrcLines()), 0o600)
+				writeLink(t, filepath.Join(l.root, "hop2"), "creds.envrc")
+				writeLink(t, filepath.Join(l.root, "hop1"), "hop2")
+
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, "hop1")
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// And a dotenv path that leads through a link inside the clone: credslink is a symlink to a file of the
+			// clone, so the file dotenv reads is the clone's own. The resolver follows the link and within finds the
+			// file inside the clone, so the guard must pass - a spelling comparison of the unresolved path would
+			// still find credslink inside the clone and pass too, which is why this row is the resolver's: the path
+			// it hands within is the one the link leads to, not the one the .envrc spells (issue #468).
+			name:      "the host clone's .envrc dotenvs a symlink to a file inside the clone",
+			hostEnvrc: "dotenv credslink\n",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.env"), []byte(plantedEnvrcLines()), 0o600)
+				writeLink(t, filepath.Join(l.root, "credslink"), "creds.env")
+
+				return nil
+			},
+			targets: []string{"vm-env", "vm-up"},
+		},
+		{
+			// Issue #468's macOS row, the mirror of the host guard's case-swapped link: on a file system that ignores
+			// case (macOS's APFS by default) a .envrc that is a symlink whose target is spelled in another case still
+			// names a file inside the clone, so the guard must let it through. The spelling prefix test the .envrc
+			// guard used before #468 refused it, as no comparison of spellings finds the clone's own case in it, and
+			// the resolver's test against the kernel accepts it because the kernel reads both spellings as one file.
+			// The file system is asked whether it is case-insensitive rather than GOOS, so the row is skipped on a
+			// case-sensitive one (Linux) and runs on CI's macOS make 3.81 job, whose /bin/sh is bash 3.2.
+			name: "the host clone's .envrc is a symlink spelled in another case to a file inside the clone",
+			setup: func(t *testing.T, l *hostLayout) []string {
+				t.Helper()
+
+				writeFileMode(t, filepath.Join(l.root, "creds.envrc"), []byte(plantedEnvrcLines()), 0o600)
+
+				if !caseInsensitiveDir(t, l.sb.root) {
+					t.Skipf("the file system holding %s is case-sensitive, so a link target spelled in another case names another path, one that exists nowhere: the row pins what a case-insensitive file system, macOS's APFS by default, does with a link whose spelling the kernel folds (issue #468)", l.sb.root)
+				}
+
+				envrc := filepath.Join(l.root, ".envrc")
+				writeLink(t, envrc, caseSwapped(l.root)+"/creds.envrc")
+
+				return []string{envrc}
+			},
+			targets: []string{"vm-env", "vm-up"},
 		},
 		{
 			// Issue #468's positive control, the mirror of the host guard's row of issue #447: the workspace is
