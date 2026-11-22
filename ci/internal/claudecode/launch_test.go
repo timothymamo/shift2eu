@@ -522,6 +522,69 @@ func TestAskRefusesTheNewFieldsAtTheirZeroShape(t *testing.T) {
 			field: "CLAUDE_CODE_USE_VERTEX",
 			apply: func(c *claudecode.Config) { c.Env = []string{"CLAUDE_CODE_USE_VERTEX=\"1\""} },
 		},
+
+		// The proxy the CLI reads in its lower case, and in the upper case of
+		// the two macOS spells: each routes the CLI's traffic through a host the
+		// audit does not know (issue #277, round D finding 5).
+		{
+			name:  "an entry that routes the CLI's HTTPS through a lower-case proxy",
+			field: "https_proxy",
+			apply: func(c *claudecode.Config) { c.Env = []string{"https_proxy=http://192.0.2.10:3128"} },
+		},
+		{
+			name:  "an entry that routes the CLI's HTTP through a lower-case proxy",
+			field: "http_proxy",
+			apply: func(c *claudecode.Config) { c.Env = []string{"http_proxy=http://192.0.2.10:3128"} },
+		},
+		{
+			name:  "an entry that routes every protocol through a lower-case proxy",
+			field: "all_proxy",
+			apply: func(c *claudecode.Config) { c.Env = []string{"all_proxy=http://192.0.2.10:3128"} },
+		},
+		{
+			name:  "an entry that names the hosts a lower-case proxy skips",
+			field: "no_proxy",
+			apply: func(c *claudecode.Config) { c.Env = []string{"no_proxy=example.com"} },
+		},
+		{
+			name:  "an entry that routes every protocol through an upper-case proxy",
+			field: "ALL_PROXY",
+			apply: func(c *claudecode.Config) { c.Env = []string{"ALL_PROXY=http://192.0.2.10:3128"} },
+		},
+		{
+			name:  "an entry that names the hosts an upper-case proxy skips",
+			field: "NO_PROXY",
+			apply: func(c *claudecode.Config) { c.Env = []string{"NO_PROXY=example.com"} },
+		},
+
+		// The variables that turn the CLI's own transport's checks off, or load
+		// code into the process before the CLI's first line runs (issue #277,
+		// round D finding 5).
+		{
+			name:  "an entry that turns the CLI's TLS verification off",
+			field: "NODE_TLS_REJECT_UNAUTHORIZED",
+			apply: func(c *claudecode.Config) { c.Env = []string{"NODE_TLS_REJECT_UNAUTHORIZED=0"} },
+		},
+		{
+			name:  "an entry that adds a certificate authority to the CLI's node",
+			field: "NODE_EXTRA_CA_CERTS",
+			apply: func(c *claudecode.Config) { c.Env = []string{"NODE_EXTRA_CA_CERTS=/srv/audit/work/ca.pem"} },
+		},
+		{
+			name:  "an entry that moves the CLI's configuration directory",
+			field: "CLAUDE_CONFIG_DIR",
+			apply: func(c *claudecode.Config) { c.Env = []string{"CLAUDE_CONFIG_DIR=/srv/audit/work/claude"} },
+		},
+		{
+			name:  "an entry that adds a header to every request the CLI makes",
+			field: "ANTHROPIC_CUSTOM_HEADERS",
+			apply: func(c *claudecode.Config) { c.Env = []string{"ANTHROPIC_CUSTOM_HEADERS=X-Forwarded-For: 192.0.2.10"} },
+		},
+		{
+			name:  "an entry that loads an audit library into every process",
+			field: "LD_AUDIT",
+			apply: func(c *claudecode.Config) { c.Env = []string{"LD_AUDIT=/srv/audit/work/audit.so"} },
+		},
 	}
 
 	for _, tc := range cases {

@@ -412,6 +412,11 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 		{"--ext-diff", ""},
 		{"--textconv", ""},
 		{"--output", "/srv/audit/state/probe"},
+		// Verifying a signature runs gpg, the program gpg.program names, and
+		// git reads a long option's unique prefix as the option itself (issue
+		// #277, round D finding 2).
+		{"--show-signature", ""},
+		{"--show-sig", ""},
 	}
 
 	for _, refused := range gitRefusedOptions {
@@ -541,6 +546,62 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 
 				if code != refusedExit {
 					t.Errorf("run(%q) = %d, want %d: git's -O and -c are refused wherever a short-option cluster holds them", tc.args, code, refusedExit)
+				}
+
+				if recorder.called {
+					t.Errorf("run(%q) exec'd %q; a refused option runs nothing", tc.args, recorder.call.argv)
+				}
+
+				if !strings.Contains(stderr, tc.wantNamed) {
+					t.Errorf("run(%q) wrote %q to stderr, want it to name the refused word %q", tc.args, stderr, tc.wantNamed)
+				}
+			})
+		}
+	})
+
+	// git's signature output is refused too (issue #277, round D finding 2): a
+	// format placeholder of %G asks git for what it made of a commit's
+	// signature, which is the same verification that runs gpg, and the answer
+	// says nothing a report of the tree needs.
+	t.Run("git's signature-verification format", func(t *testing.T) {
+		t.Parallel()
+
+		cases := []struct {
+			name string
+			args []string
+			// wantNamed is the word the one stderr line names.
+			wantNamed string
+		}{
+			{
+				name:      "--format=%G?",
+				args:      []string{"git", "log", "--format=%G?", "-1"},
+				wantNamed: "--format=%G?",
+			},
+			{
+				name:      "--pretty=format:%GS",
+				args:      []string{"git", "show", "--pretty=format:%GS", "HEAD"},
+				wantNamed: "--pretty=format:%GS",
+			},
+			{
+				name:      "--pretty=tformat:%GK",
+				args:      []string{"git", "log", "--pretty=tformat:%GK"},
+				wantNamed: "--pretty=tformat:%GK",
+			},
+			{
+				name:      "--pretty=format:%GG, the raw signature output",
+				args:      []string{"git", "log", "--pretty=format:%GG"},
+				wantNamed: "--pretty=format:%GG",
+			},
+		}
+
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				code, stderr, recorder := runWrapper(t, tc.args)
+
+				if code != refusedExit {
+					t.Errorf("run(%q) = %d, want %d: a format that asks for a signature's verification is refused", tc.args, code, refusedExit)
 				}
 
 				if recorder.called {
@@ -732,6 +793,14 @@ func TestRunTakesTheOptionsThatOnlyRead(t *testing.T) {
 		{
 			name:     "git log with its own -i and -n",
 			args:     []string{"git", "log", "-i", "-n", "20"},
+			wantPath: "/usr/bin/git",
+		},
+		{
+			// %H and %n are the hash and a newline: the format placeholders a
+			// report's own table is built from, and no %G among them (issue #277,
+			// round D finding 2).
+			name:     "git log's own format placeholders",
+			args:     []string{"git", "log", "--format=%H%n%s"},
 			wantPath: "/usr/bin/git",
 		},
 		{
