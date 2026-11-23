@@ -2886,8 +2886,9 @@ linters:
         # _test.go files included; its exclusion rule drops it everywhere else.
         # The library's test that builds the real bundle (livepage_test.go)
         # runs go run ./ci/sitebuild through os/exec on purpose, with the
-        # environment from cmd.Environ() and GOPROXY=off and GOTOOLCHAIN=local
-        # added, so the build stays offline; the group still bans the os calls
+        # environment from cmd.Environ() and GOPROXY=off, GOTOOLCHAIN=local,
+        # GOSUMDB=off and GOFLAGS=-mod=readonly added, so the build stays
+        # offline and a go.sum miss fails; the group still bans the os calls
         # it names there too. Package os/exec is refused everywhere else under
         # ci/sitedeploy/, _test.go files included (issue #514): its exclusion
         # rule narrows on that entry's msg in livepage_test.go alone.
@@ -3130,10 +3131,10 @@ linters:
         linters:
           - forbidigo
         text: 'because "site-deploy-env: [^"]*"$'
-      # The one exception (PRD #297): os.LookupEnv, which
+      # The first of two exceptions (PRD #297): os.LookupEnv, which
       # ci/sitedeploy/main.go passes to environment, in that file alone. text
-      # is the os.LookupEnv entry's msg, so the group's other entry still
-      # holds there.
+      # is the os.LookupEnv entry's msg, so the group's two other entries (the
+      # os calls and os/exec) still hold there.
       - path: ^ci/sitedeploy/main\.go$
         linters:
           - forbidigo
