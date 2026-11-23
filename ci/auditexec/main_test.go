@@ -417,6 +417,9 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 		// #277, round D finding 2).
 		{"--show-signature", ""},
 		{"--show-sig", ""},
+		// Comparing two files of its own is no read of the checkout (issue
+		// #277, round G).
+		{"--no-index", ""},
 	}
 
 	for _, refused := range gitRefusedOptions {
@@ -468,6 +471,36 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 			}
 		})
 	}
+
+	// git diff's --no-index compares two files of its own, inside the three roots
+	// or anywhere else, with no repository: it is a read of files that are no
+	// part of the checkout, so the option is refused - abbreviated, as the other
+	// long options are - while both of its paths are inside the roots and the
+	// path rule alone would pass them (issue #277, round G).
+	t.Run("git diff --no-index", func(t *testing.T) {
+		t.Parallel()
+
+		for _, args := range [][]string{
+			{"git", "diff", "--no-index", "/srv/audit/work/x", "/srv/audit/work/y"},
+			{"git", "diff", "--no-ind", "/srv/audit/work/x", "/srv/audit/work/y"},
+			{"git", "diff", "/srv/audit/work/x", "--no-index", "/srv/audit/work/y"},
+			{"git", "diff", "--no-index=/srv/audit/work/x", "/srv/audit/work/y"},
+		} {
+			code, stderr, recorder := runWrapper(t, args)
+
+			if code != refusedExit {
+				t.Errorf("run(%q) = %d, want %d: git diff --no-index compares files of its own, no part of the checkout", args, code, refusedExit)
+			}
+
+			if recorder.called {
+				t.Errorf("run(%q) exec'd %q; a refused option runs nothing", args, recorder.call.argv)
+			}
+
+			if !strings.Contains(stderr, "--no-ind") {
+				t.Errorf("run(%q) wrote %q to stderr, want it to name the refused option", args, stderr)
+			}
+		}
+	})
 
 	t.Run("sort -o", func(t *testing.T) {
 		t.Parallel()
@@ -781,30 +814,43 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 	})
 }
 
-// TestRunRefusesThePathsIntoProcSysAndDev pins the wrapper's own path rule (issue
-// #277, round F finding 2): Claude Code's deny rule Bash(*/proc/*/environ*)
-// matches the command text, so a glob such as `audit-exec cat /proc/[0-9]*/envir?n`
-// gets past it and the wrapper then receives real paths. The wrapper refuses them
-// itself.
+// TestRunHoldsEveryPathWordToTheAllowList pins the wrapper's own path rule (issue
+// #277, rounds F and G): Claude Code's deny rules match the command text, so a
+// glob such as `audit-exec cat /proc/[0-9]*/envir?n` gets past them and the
+// wrapper then receives real paths. The wrapper holds every path word of a line
+// to an allow list instead: the three roots the audit works in.
 //
-// The rule, pinned here: a word names a path when it is
+// Round F refused a deny list of roots - /proc, /sys and /dev - and round G's
+// re-check found six ways past it: a "-"-led operand after "--",
+// /dev/fd/../../1/environ (the kernel follows /dev/fd into /proc before the
+// ".."), an attached short-option value (git grep -f/sys/x), the roots /home,
+// /etc and the state area, git diff --no-index, and the caller's working
+// directory. The rule, pinned here:
 //
-//   - a word that is no option - no leading "-", or "-" alone, which is stdin -
-//     and holds a "/": a bare word such as a grep pattern, a ref or a jq filter
-//     names no file, and a path without a "/" is no path into one of the three;
-//   - the value of an option, attached after "=" (--field-separator=/proc/x);
-//   - git's own -C, attached (-C/proc/1) or as the next word.
+//   - a word is a path word when it is a non-option word holding a "/" (a word
+//     with no "/" is a name in the working directory, and "-" alone is stdin);
+//     any word after "--", whatever its first character; an option's value
+//     after its first "="; the rest of a single-dash word after its first
+//     letter, when that rest holds a "/"; and git's own -C, attached or as the
+//     next word;
+//   - an absolute path word is read as it is, a relative one on a git line is
+//     joined to /srv/audit/checkout - which is what git reads it under the
+//     wrapper's own -C - and a relative one on any other line to
+//     /srv/audit/work, the wrapper's working directory;
+//   - a word holding a ".." element is refused before it is cleaned, whatever
+//     it resolves to, so /dev/fd/../../1/environ, which the kernel resolves
+//     through /proc/self/fd, is no way through; every other word is refused
+//     unless its cleaned path is /srv/audit/checkout, /srv/audit/checks or
+//     /srv/audit/work, or lies under one of them.
 //
-// A path is refused when filepath.Clean of it, read from "/" when it is
-// relative, is /proc, /sys or /dev exactly or lies under one of them, so a
-// relative path that reaches one of them from the work directory
-// (../../proc/1/environ) is refused as an absolute one is. The rule fails
-// closed: a grep pattern that reads as such a path is refused too, as
-// asksForSignature refuses a word holding %G whatever option it belongs to.
-func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
+// The rule fails closed, which the ADR accepts: a git ref such as origin/main
+// resolves under the checkout and passes, a git grep pattern holding an
+// absolute path outside the three roots (-e /proc/) is refused, and a URL-like
+// pattern (http://x) cleans to a relative name and passes.
+func TestRunHoldsEveryPathWordToTheAllowList(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a path into one of the three is refused", func(t *testing.T) {
+	t.Run("a path word outside the three roots is refused", func(t *testing.T) {
 		t.Parallel()
 
 		cases := []struct {
@@ -812,6 +858,90 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 			args      []string
 			wantNamed string
 		}{
+			// Round G's bypasses: each one got past round F's deny list of roots.
+			{
+				name:      "a -led operand after --",
+				args:      []string{"cat", "--", "-/../../proc/1/environ"},
+				wantNamed: "-/../../proc/1/environ",
+			},
+			{
+				// /dev/fd is a link to /proc/self/fd, which the kernel follows
+				// before it takes the "..": the word is refused for its "..",
+				// before anything is cleaned.
+				name:      "a path through /dev/fd and its ..",
+				args:      []string{"cat", "/dev/fd/../../1/environ"},
+				wantNamed: "/dev/fd/../../1/environ",
+			},
+			{
+				name:      "a path through /dev/stdin and its ..",
+				args:      []string{"cat", "/dev/stdin/../../environ"},
+				wantNamed: "/dev/stdin/../../environ",
+			},
+			{
+				// The rest of a single-dash word after its first letter is a
+				// path word: git grep's -f names the file its patterns are read
+				// from.
+				name:      "the file of git grep's -f, attached",
+				args:      []string{"git", "grep", "-f/sys/x"},
+				wantNamed: "-f/sys/x",
+			},
+			{
+				name:      "the value of git blame's -S, attached",
+				args:      []string{"git", "blame", "-S/dev/null", "x"},
+				wantNamed: "-S/dev/null",
+			},
+			{
+				// jq's -L is the directory it looks for its modules in.
+				name:      "the directory of jq's -L, attached",
+				args:      []string{"jq", "-L/proc/1/root", "x"},
+				wantNamed: "-L/proc/1/root",
+			},
+			{
+				name:      "a path into the runner's home",
+				args:      []string{"cat", "/home/runner/x"},
+				wantNamed: "/home/runner/x",
+			},
+			{
+				name:      "a path into /etc",
+				args:      []string{"cat", "/etc/passwd"},
+				wantNamed: "/etc/passwd",
+			},
+			{
+				// The state area is outside the three roots: the audit's own home
+				// and settings live there.
+				name:      "a path into the state area's home",
+				args:      []string{"cat", "/srv/audit/state/home/.claude.json"},
+				wantNamed: "/srv/audit/state/home/.claude.json",
+			},
+			{
+				name:      "a path into /tmp",
+				args:      []string{"cat", "/tmp/x"},
+				wantNamed: "/tmp/x",
+			},
+			{
+				// A word without a "/" is a name in the working directory, which
+				// is /srv/audit/work: ".." is its parent, outside the roots.
+				name:      "the work directory's parent",
+				args:      []string{"cat", ".."},
+				wantNamed: "..",
+			},
+			{
+				// A word after "--" is a path word whatever its first character,
+				// so a git pathspec out of the checkout is refused.
+				name:      "a pathspec after -- out of the checkout",
+				args:      []string{"git", "log", "--", "../../../proc/1/environ"},
+				wantNamed: "../../../proc/1/environ",
+			},
+			{
+				// Round F exec'd this line: its ".." stopped short of the root,
+				// so it read /srv/proc/1/environ and was no path into /proc. The
+				// allow list refuses the ".." itself.
+				name:      "a path whose .. stop short of the root",
+				args:      []string{"cat", "/srv/audit/work/../../proc/1/environ"},
+				wantNamed: "/srv/audit/work/../../proc/1/environ",
+			},
+
+			// Round F's rows stay: each names a path outside the three roots.
 			{
 				name:      "cat of a process's environment",
 				args:      []string{"cat", "/proc/1/environ"},
@@ -828,8 +958,8 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 				wantNamed: "/sys/kernel/x",
 			},
 			{
-				// A path that reaches /proc through its own .. is one of the
-				// three once it is cleaned.
+				// The word is refused for its ".." element, before it is
+				// cleaned: what it resolves to is not what decides.
 				name:      "cat of a path that cleans into /proc",
 				args:      []string{"cat", "/proc/../proc/1/environ"},
 				wantNamed: "/proc/../proc/1/environ",
@@ -845,9 +975,9 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 				wantNamed: "/dev/null",
 			},
 			{
-				// The work directory's parent is /srv/audit, so ../../proc names
-				// /proc: a relative path is read as if the working directory
-				// were /.
+				// A relative word on a line that is no git line is joined to the
+				// wrapper's working directory, /srv/audit/work, which ../../ leaves:
+				// the word is refused for its "..".
 				name:      "base64 of a relative path out of the work directory",
 				args:      []string{"base64", "../../proc/1/environ"},
 				wantNamed: "../../proc/1/environ",
@@ -883,9 +1013,8 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 				wantNamed: "-C/proc/1",
 			},
 			{
-				// The work directory is /srv/audit/work, so three elements up is /
-				// and this path is /proc/1/environ: the wrapper refuses what the
-				// CLI's deny rule matched as text.
+				// The CLI's deny rule matched this path as text; the wrapper
+				// refuses it for its ".." element, as for every other one.
 				name:      "a path built out of the work directory",
 				args:      []string{"sha256sum", "/srv/audit/work/../../../proc/1/environ"},
 				wantNamed: "/srv/audit/work/../../../proc/1/environ",
@@ -915,8 +1044,9 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 				wantNamed: "/srv/audit/work/../../../../proc/1/environ",
 			},
 			{
-				// The rule fails closed: a git grep pattern that reads as one
-				// of the three is refused, as asksForSignature refuses %G.
+				// The rule fails closed: a git grep pattern holding an absolute
+				// path outside the three roots is refused, as asksForSignature
+				// refuses %G.
 				name:      "a grep pattern that reads as a path",
 				args:      []string{"git", "grep", "-e", "/proc/1/environ", "/srv/audit/checkout/f"},
 				wantNamed: "/proc/1/environ",
@@ -930,7 +1060,7 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 				code, stderr, recorder := runWrapper(t, tc.args)
 
 				if code != refusedExit {
-					t.Errorf("run(%q) = %d, want %d: the wrapper refuses a path into /proc, /sys or /dev itself, whatever the CLI's deny rule matched (stderr %q)", tc.args, code, refusedExit, stderr)
+					t.Errorf("run(%q) = %d, want %d: the wrapper holds every path word to /srv/audit/checkout, /srv/audit/checks and /srv/audit/work itself, whatever the CLI's deny rule matched (stderr %q)", tc.args, code, refusedExit, stderr)
 				}
 
 				if recorder.called {
@@ -944,7 +1074,7 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 		}
 	})
 
-	t.Run("a line that reads elsewhere is exec'd whole", func(t *testing.T) {
+	t.Run("a line whose path words are inside the roots is exec'd whole", func(t *testing.T) {
 		t.Parallel()
 
 		cases := []struct {
@@ -952,6 +1082,44 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 			args     []string
 			wantPath string
 		}{
+			{
+				// The repository's own dev/ is what its tooling reads: round F
+				// refused it, and the allow list does not. A word after "--" is a
+				// path word, and a relative one on a git line is read from the
+				// checkout, which is what git reads it under the wrapper's -C.
+				name:     "git log of the checkout's dev/",
+				args:     []string{"git", "log", "--", "dev/tofu.sh"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				name:     "git blame of the checkout's dev/",
+				args:     []string{"git", "blame", "dev/lima.yaml"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				name:     "git diff of the checkout's dev/",
+				args:     []string{"git", "diff", "HEAD~1", "--", "dev/"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				// A git ref holding a "/" resolves under the checkout, where git
+				// reads it: the fail-closed side effect the ADR accepts.
+				name:     "a git ref holding a slash",
+				args:     []string{"git", "log", "origin/main"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				name:     "cat of the checkout's dev/ by its full path",
+				args:     []string{"cat", "/srv/audit/checkout/dev/tofu.sh"},
+				wantPath: "/usr/bin/cat",
+			},
+			{
+				// A word without a "/" is a name in the wrapper's working
+				// directory, /srv/audit/work.
+				name:     "a bare name in the work directory",
+				args:     []string{"cat", "x"},
+				wantPath: "/usr/bin/cat",
+			},
 			{
 				name:     "cat of the work directory's file",
 				args:     []string{"cat", "/srv/audit/work/x"},
@@ -983,20 +1151,18 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 				wantPath: "/usr/bin/head",
 			},
 			{
-				name:     "sort's -k value and its file",
+				name:     "sort's -k value and its file in the work area",
 				args:     []string{"sort", "-k", "2,2", "/srv/audit/work/x"},
+				wantPath: "/usr/bin/sort",
+			},
+			{
+				name:     "sort's -k value and its file in the checks area",
+				args:     []string{"sort", "-k", "2,2", "/srv/audit/checks/a"},
 				wantPath: "/usr/bin/sort",
 			},
 			{
 				name:     "a relative path inside the work directory",
 				args:     []string{"cat", "./x"},
-				wantPath: "/usr/bin/cat",
-			},
-			{
-				// The .. stop short of the root, so this path is
-				// /srv/proc/1/environ, no path into /proc.
-				name:     "a path whose .. stop short of the root",
-				args:     []string{"cat", "/srv/audit/work/../../proc/1/environ"},
 				wantPath: "/usr/bin/cat",
 			},
 		}
@@ -1008,11 +1174,11 @@ func TestRunRefusesThePathsIntoProcSysAndDev(t *testing.T) {
 				code, stderr, recorder := runWrapper(t, tc.args)
 
 				if code != 0 {
-					t.Fatalf("run(%q) = %d, want 0 (stderr %q): no word of the line names a path into /proc, /sys or /dev", tc.args, code, stderr)
+					t.Fatalf("run(%q) = %d, want 0 (stderr %q): every path word of the line is inside /srv/audit/checkout, /srv/audit/checks or /srv/audit/work", tc.args, code, stderr)
 				}
 
 				if !recorder.called {
-					t.Fatalf("run(%q) never reached the exec seam: no word of the line names a path into /proc, /sys or /dev", tc.args)
+					t.Fatalf("run(%q) never reached the exec seam: every path word of the line is inside one of the three roots", tc.args)
 				}
 
 				if recorder.call.path != tc.wantPath {
