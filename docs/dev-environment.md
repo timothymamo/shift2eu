@@ -58,7 +58,8 @@ them: it is the agents App's installation token, which a job on the Mac mints an
 The VM has 4 CPUs, 16 GiB of memory and a 40 GiB disk (`dev/lima.yaml`), enough for all six roles to run
 `make check` at once; leave the Mac enough free memory to run it. `VM_CPUS`, `VM_MEMORY`, `VM_DISK` and
 `VM_SSH_PORT` set another size and a fixed SSH port when the VM is created
-([Several VMs on one host](#several-vms-on-one-host)). `make vm-init` also turns on the workspace
+([Several VMs on one host](#several-vms-on-one-host)), and `UBUNTU_MIRROR` another Ubuntu mirror
+([The Ubuntu mirror](#the-ubuntu-mirror)). `make vm-init` also turns on the workspace
 checkout's git hooks, which refuse commits and pushes to `main` (its `git` step runs
 `git -C <WORKSPACE_REPO> config core.hooksPath .githooks` inside the VM; the setting is kept in the
 workspace's `.git/config`, which the VM mounts). `make vm-up` runs on the Mac, from the host clone, and
@@ -461,6 +462,68 @@ Setting `0GiB` provisions no swap file but does not remove one already there: sw
 in the VM with `sudo swapoff /swapfile && sudo rm -f /swapfile`. A step that skips, at `0GiB` or for too
 little disk, also keeps `/etc/sysctl.d/99-shift2eu-swap.conf` if an earlier boot wrote it, which is harmless
 without swap.
+
+### The Ubuntu mirror
+
+Every `apt-get` call of the provisioning runs with a transfer timeout of 30 seconds and 5 retries, from the
+apt drop-in `/etc/apt/apt.conf.d/80shift2eu-timeouts` that the provisioning writes before its first `apt-get`
+call (issue #498). A mirror that trickles or stops then fails provisioning within minutes, with apt's own
+error in `/var/log/cloud-init-output.log`, instead of hanging until Lima gives up.
+
+The VM fetches Ubuntu's packages from `http://archive.ubuntu.com/ubuntu`, where cloud-init points the
+archive URIs of `/etc/apt/sources.list.d/ubuntu.sources`. When that archive is slow or unreachable from the
+host's network, `UBUNTU_MIRROR` picks another one when the VM is created, like the `VM_*` variables of
+[Several VMs on one host](#several-vms-on-one-host):
+
+```bash
+# Mac, host clone
+make vm-create UBUNTU_MIRROR=http://nl.archive.ubuntu.com/ubuntu
+```
+
+| Variable | Value | Passed to `limactl start` as |
+|---|---|---|
+| `UBUNTU_MIRROR` | An `http://` or `https://` URL with a host, of letters, digits and `.` `-` `/` `:` `_` `~` only | `--set=.param.ubuntuMirror="URL"` |
+
+Unset, it keeps the `ubuntuMirror` param's default in `dev/lima.yaml`, `http://archive.ubuntu.com/ubuntu`,
+and `limactl start` gets the same arguments as without it. Any other value (another scheme, no host, a query
+string, a space, a quote or a shell character) fails before `limactl` runs, naming `UBUNTU_MIRROR`.
+
+The provisioning rewrites only the archive URIs of `ubuntu.sources` to the mirror, before its first
+`apt-get update`; the security URIs (`security.ubuntu.com`) stay, so a mirror picked for speed never carries
+the security updates. With the default nothing is rewritten. With another mirror and no `ubuntu.sources` in
+the VM, the step fails with a message naming the file rather than fetching from an archive you did not ask
+for.
+
+It applies when the VM is created: limactl keeps the param in the instance, and the step runs again at every
+boot, idempotently, so the VM keeps the mirror it was created with. `make vm-up` on an existing VM warns
+that `UBUNTU_MIRROR` was ignored. To change the mirror of an existing VM, recreate it
+(`make vm-delete`, then `make vm-create UBUNTU_MIRROR=...`), or edit the `URIs:` lines of
+`/etc/apt/sources.list.d/ubuntu.sources` inside the VM by hand (`sudo`).
+
+### Troubleshooting: make vm-create hangs at "User probe"
+
+`make vm-create` (or `make vm-up` on a new VM) can sit at `( 4/6) 🕐 User probe 1/1` until `limactl start`
+gives up with `FATA[0600] did not receive an event with the running status`. The probe waits for the tools
+the provisioning installs, so this means the provisioning did not finish. See where it stopped:
+
+```bash
+# Mac, host clone
+limactl shell "${LIMA_INSTANCE:-shift2eu}" sudo tail -n 50 /var/log/cloud-init-output.log
+```
+
+When it stopped at, or failed on, an `apt-get` fetch from `archive.ubuntu.com` (apt's timeouts and retries
+make a stalled mirror fail rather than hang), the archive is slow or down from the host's network: recreate
+the VM with another mirror ([The Ubuntu mirror](#the-ubuntu-mirror)):
+
+```bash
+# Mac, host clone
+make vm-delete
+```
+
+```bash
+# Mac, host clone, once make vm-delete has succeeded (on a failure, stop here)
+make vm-create UBUNTU_MIRROR=http://nl.archive.ubuntu.com/ubuntu
+```
 
 ### Troubleshooting: a Broken instance
 

@@ -18,17 +18,23 @@ MAKEFILE_DIR := $(dir $(abspath $(lastword $(MAKEFILE_LIST))))
 # exported, so the recipes read it from the environment as "$$VM_CPUS" and no shell ever parses the value.
 # Keep this block first: make hands exported variables, command-line ones included, to every $(shell ...),
 # expanding them, so a $(shell ...) evaluated before these lines would run a value's $(...) as make code.
-VM_CPUS     ?=
-VM_MEMORY   ?=
-VM_DISK     ?=
-VM_SSH_PORT ?=
-override VM_CPUS     := $(value VM_CPUS)
-override VM_MEMORY   := $(value VM_MEMORY)
-override VM_DISK     := $(value VM_DISK)
-override VM_SSH_PORT := $(value VM_SSH_PORT)
-export VM_CPUS VM_MEMORY VM_DISK VM_SSH_PORT
+# UBUNTU_MIRROR (issue #498) is the Ubuntu mirror the VM's provisioning fetches the archive from, read and
+# applied the same way: on creation only, as dev/lima.yaml's ubuntuMirror param. Empty keeps the param's
+# default, http://archive.ubuntu.com/ubuntu. vm-up refuses anything but an http:// or https:// URL with a host,
+# of letters, digits and '.', '-', '/', ':', '_', '~' (http://nl.archive.ubuntu.com/ubuntu).
+VM_CPUS       ?=
+VM_MEMORY     ?=
+VM_DISK       ?=
+VM_SSH_PORT   ?=
+UBUNTU_MIRROR ?=
+override VM_CPUS       := $(value VM_CPUS)
+override VM_MEMORY     := $(value VM_MEMORY)
+override VM_DISK       := $(value VM_DISK)
+override VM_SSH_PORT   := $(value VM_SSH_PORT)
+override UBUNTU_MIRROR := $(value UBUNTU_MIRROR)
+export VM_CPUS VM_MEMORY VM_DISK VM_SSH_PORT UBUNTU_MIRROR
 # The ones that are set, for vm-up's warning when the VM exists already.
-VM_RESOURCES_SET = $(strip $(if $(VM_CPUS),VM_CPUS) $(if $(VM_MEMORY),VM_MEMORY) $(if $(VM_DISK),VM_DISK) $(if $(VM_SSH_PORT),VM_SSH_PORT))
+VM_RESOURCES_SET = $(strip $(if $(VM_CPUS),VM_CPUS) $(if $(VM_MEMORY),VM_MEMORY) $(if $(VM_DISK),VM_DISK) $(if $(VM_SSH_PORT),VM_SSH_PORT) $(if $(UBUNTU_MIRROR),UBUNTU_MIRROR))
 
 # The Lima VM instance every vm-*, deck* and agents-token* target works on (issue #252). Read raw and exported
 # like the VM_* above, and for the same reason in this first block: make expands nothing in it, and the
@@ -711,7 +717,7 @@ git-hooks: ## Enable .githooks, which refuse commits and pushes to main
 # (extensions.worktreeConfig) or an edited .githooks/ still leaves the hooks off, so the protection of main on
 # GitHub stays the real gate. vm-up never runs git on the Mac: git-hooks would set the host clone's, and running git in the
 # workspace from the Mac is what issue #227 forbids. Every limactl call of vm-up runs under $(VM_SHELL_ENV).
-# vm-up then checks VM_CPUS, VM_MEMORY, VM_DISK and VM_SSH_PORT, then that WORKSPACE_REPO is a directory holding
+# vm-up then checks VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT and UBUNTU_MIRROR, then that WORKSPACE_REPO is a directory holding
 # .git, then that the workspace can be listed and holds nothing stray - the repository's name matched literally
 # (a case pattern with the name quoted), so a repository a.b never takes a stray axb for its own - then the
 # instance's status, all in one shell line with its limactl calls, so no make flag (-i, -k) can run limactl
@@ -793,7 +799,7 @@ LIMA_AUTOSTART_JOBS = lima_autostart=''; \
 
 vm-up vm-boot-install: export LIMA_LAUNCHDAEMONS_DIR := $(LIMA_LAUNCHDAEMONS_DIR)
 .PHONY: vm-up
-vm-up: ## Create or start the Lima VM with only this repository's workspace mounted (VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT on creation)
+vm-up: ## Create or start the Lima VM with only this repository's workspace mounted (VM_CPUS, VM_MEMORY, VM_DISK, VM_SSH_PORT, UBUNTU_MIRROR on creation)
 	$(LIMA_INSTANCE_CHECK)
 	@LC_ALL=C; export LC_ALL; \
 	whole() { case "$$1" in ([1-9]*) case "$$1" in (*[!0-9]*) return 1;; esac;; (*) return 1;; esac; \
@@ -807,6 +813,9 @@ vm-up: ## Create or start the Lima VM with only this repository's workspace moun
 	[ -z "$$VM_SSH_PORT" ] || { whole "$$VM_SSH_PORT" 5 && \
 		[ "$$VM_SSH_PORT" -ge 1024 ] && [ "$$VM_SSH_PORT" -le 65535 ]; } || \
 		refuse VM_SSH_PORT "$$VM_SSH_PORT" 'a port from 1024 to 65535'; \
+	[ -z "$$UBUNTU_MIRROR" ] || { case "$$UBUNTU_MIRROR" in (*[!A-Za-z0-9./:_~-]*) false;; \
+		(http://[A-Za-z0-9]* | https://[A-Za-z0-9]*) true;; (*) false;; esac; } || \
+		refuse UBUNTU_MIRROR "$$UBUNTU_MIRROR" "an http:// or https:// mirror URL with a host, of letters, digits and . - / : _ ~ only, such as http://nl.archive.ubuntu.com/ubuntu"; \
 	if [ ! -d "$(HOST_WORKSPACE_REPO)" ] || [ ! -e "$(HOST_WORKSPACE_REPO)/.git" ]; then \
 		echo "vm-up: WORKSPACE_REPO=$(HOST_WORKSPACE_REPO) is no directory holding .git: set it to the repository's checkout in the workspace the VM mounts (docs/dev-environment.md, The host clone)" >&2; \
 		exit 1; \
@@ -869,7 +878,8 @@ vm-up: ## Create or start the Lima VM with only this repository's workspace moun
 	else \
 		$(VM_SHELL_ENV) limactl start --name="$$LIMA_INSTANCE" --mount-only "$(HOST_WORKSPACE):w" --tty=false \
 			$${VM_CPUS:+--cpus="$$VM_CPUS"} $${VM_MEMORY:+--memory="$${VM_MEMORY%GiB}"} \
-			$${VM_DISK:+--disk="$${VM_DISK%GiB}"} $${VM_SSH_PORT:+--ssh-port="$$VM_SSH_PORT"} dev/lima.yaml; \
+			$${VM_DISK:+--disk="$${VM_DISK%GiB}"} $${VM_SSH_PORT:+--ssh-port="$$VM_SSH_PORT"} \
+			$${UBUNTU_MIRROR:+--set=".param.ubuntuMirror=\"$$UBUNTU_MIRROR\""} dev/lima.yaml; \
 	fi && $(VM_SHELL_ENV) limactl shell --workdir / "$$LIMA_INSTANCE" \
 		git -C "$(HOST_WORKSPACE_REPO)" config core.hooksPath .githooks
 

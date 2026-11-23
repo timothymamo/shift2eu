@@ -88,6 +88,11 @@ param:
   # the disk has less than twice the size free. Change it on an existing VM with limactl edit and a restart
   # (docs/dev-environment.md, Swap). Not a tool version: no Renovate comment.
   swapSize: "4GiB"
+  # The Ubuntu mirror the archive URIs of /etc/apt/sources.list.d/ubuntu.sources point at (issue #498): the
+  # default is where cloud-init points them, so it changes nothing. make vm-create UBUNTU_MIRROR=<url> sets it
+  # when the VM is created, for a host whose network reaches archive.ubuntu.com slowly or not at all
+  # (docs/dev-environment.md, The Ubuntu mirror). Not a tool version: no Renovate comment.
+  ubuntuMirror: "http://archive.ubuntu.com/ubuntu"
 
 provision:
   # The swap file, before the installs below, so they already run with it. Its own step, so the swap's
@@ -192,6 +197,52 @@ provision:
       dropin="${root}/etc/sysctl.d/99-shift2eu-swap.conf"
       printf '# dev/lima.yaml, issue #294: swap only under real memory pressure.\nvm.swappiness = 10\n' >"${dropin}"
       sysctl -p "${dropin}"
+
+  # apt's timeouts and retries and the Ubuntu mirror (issue #498), before the first apt-get call of the step
+  # below. On 2026-11-23 a trickling archive.ubuntu.com held apt-get update for 14 minutes, and the only symptom
+  # was Lima's 600-second probe timeout. System mode, as /etc/apt is root's; at every boot and re-provision,
+  # idempotent.
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      # One drop-in covers every apt-get call of every step, update, install and remove alike: a connection that
+      # trickles or stops for 30 seconds fails, and each fetch is retried 5 times, so a mirror that stays down
+      # fails provisioning with apt's own error in /var/log/cloud-init-output.log instead of hanging. The name
+      # holds no period: apt.conf.d ignores a file whose name has one.
+      mkdir -p /etc/apt/apt.conf.d
+      printf '%s\n' '// dev/lima.yaml, issue 498: a stalled mirror fails and is retried instead of hanging.' \
+        'Acquire::http::Timeout "30";' 'Acquire::https::Timeout "30";' 'Acquire::Retries "5";' \
+        >/etc/apt/apt.conf.d/80shift2eu-timeouts
+
+      # The archive URIs cloud-init writes into ubuntu.sources become the ubuntuMirror param; the security URIs
+      # (security.ubuntu.com) stay, so a mirror picked for speed never carries the security updates. The param is
+      # checked again here, as limactl edit can set it without make vm-up: an http:// or https:// URL with a host,
+      # of letters, digits and . - / : _ ~ only, none of them special to sed's replacement or its ',' delimiter.
+      # The default is where cloud-init points the archive, so it changes nothing, even with no ubuntu.sources.
+      # Idempotent: once rewritten, the file names no http(s)://archive.ubuntu.com/ubuntu URI any more, and a
+      # country mirror, whose host only ends in that name, is no match (the host must follow ://). It is set when the VM
+      # is created; this step keeps it at every boot (docs/dev-environment.md, The Ubuntu mirror).
+      case "${PARAM_ubuntuMirror:?Lima passes the ubuntuMirror param of dev/lima.yaml}" in
+        *[!A-Za-z0-9./:_~-]*) mirror_ok=0 ;;
+        http://[A-Za-z0-9]* | https://[A-Za-z0-9]*) mirror_ok=1 ;;
+        *) mirror_ok=0 ;;
+      esac
+      if [ "${mirror_ok}" -ne 1 ]; then
+        echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror} is not an http:// or https:// URL with a host, of letters, digits and . - / : _ ~ only. Nothing rewritten."
+        exit 1
+      fi
+      sources=/etc/apt/sources.list.d/ubuntu.sources
+      if [ "${PARAM_ubuntuMirror%/}" != "http://archive.ubuntu.com/ubuntu" ]; then
+        if [ ! -f "${sources}" ]; then
+          echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror}: ${sources} does not exist, so the mirror cannot be set (docs/dev-environment.md, The Ubuntu mirror)."
+          exit 1
+        fi
+        sed -E -i "s,(^|[[:space:]])https?://archive\.ubuntu\.com/ubuntu/?([[:space:]]|\$),\1${PARAM_ubuntuMirror%/}/\2,g" "${sources}"
+        if ! grep -qF "${PARAM_ubuntuMirror%/}/" "${sources}"; then
+          echo >&2 "ubuntuMirror ${PARAM_ubuntuMirror}: ${sources} has no archive URI to rewrite; apt fetches from the URIs it names."
+        fi
+      fi
 
   - mode: system
     script: |
