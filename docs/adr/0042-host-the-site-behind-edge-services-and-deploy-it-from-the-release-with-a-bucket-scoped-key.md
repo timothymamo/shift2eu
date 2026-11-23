@@ -358,7 +358,9 @@ nil (`newHTTPClient` in `ci/sitedeploy`), so the proxy variables are never consu
 ### Recovery
 
 - **Redeploy the last good release:** re-run the deploy job of the `release.yml` run of the highest
-  release tag on `main` (R12), within GitHub's 30-day re-run window (below); after it, a new release.
+  release tag on `main` (R12), within GitHub's 30-day re-run window (below); after the window, either
+  the maintainer restores the last good version of each page from the bucket's object versions with
+  their own key (R12), or cuts a new release with a `Release-As:` footer.
   The guard overwrites any live page that is not a genuine higher release,
   with a warning, so a page a leaked key wrote is replaced whatever version it claims. Redeploying the
   same release is the same re-run: the guard sees an equal version and overwrites, with a notice.
@@ -386,7 +388,9 @@ nil (`newHTTPClient` in `ci/sitedeploy`), so the proxy variables are never consu
   replaces the earlier plan of re-running the bundle job once its artifact had expired. As built (PR
   C2): GitHub re-runs a run's jobs only within 30 days of the initial run, so the programs' artifacts
   are kept exactly 30 days; within that window, re-run `Deploy the site` (which re-runs `Check the live
-  site`); after it nothing of the run can be re-run, and the recovery is a new release. `Site bundle` is
+  site`); after it nothing of the run can be re-run, and the recovery is either the maintainer's
+  restore of the last good version of each page from the bucket's object versions with their own key
+  (R12), or a new release cut with a `Release-As:` footer. `Site bundle` is
   never re-run after publication. The programs' artifacts are kept 30 days, the bundle's 7 (*proposed*,
   measured on the first release).
 

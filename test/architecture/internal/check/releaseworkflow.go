@@ -1610,10 +1610,19 @@ const siteDeployJob = "site-deploy"
 // shift2eu-server or openapi, in any case, since the release publishes the CLI
 // alone (issue #393); and no line may name HTTPS_PROXY, HTTP_PROXY, NO_PROXY,
 // SSL_CERT_FILE or SSL_CERT_DIR, in any case, which would change where the
-// site deploy's client connects or what it trusts. No ${{ }} expression, in
-// any job or comment, may use the secrets context in a form other than an
-// exact secrets.NAME or secrets['NAME'] (toJSON(secrets), a name built with
-// format(...)), whatever secrets the line's job may name. The site's names are
+// site deploy's client connects or what it trusts. Read line by line, with
+// '...' and "..." string literals skipped as GitHub's expression syntax reads
+// them (so a }} inside one does not end the expression, and the word secrets
+// inside one is not the context), no ${{ }} expression, in any job or
+// comment, may use the secrets context in a form other than an exact
+// secrets.NAME or secrets['NAME'] (toJSON(secrets), a name built with
+// format(...)), whatever secrets the line's job may name; no line may open a
+// ${{ expression it does not close, nor hold a \x, \u or \U escape inside
+// one, the two forms a line-by-line reading cannot see through. This rule
+// reads raw lines, not YAML: a form it cannot see (a scalar folded or quoted
+// so that YAML builds an expression no one line holds) is refused by the
+// closed schema above, which holds every env: and with: value and every run:
+// line to the exact text listed, and the rule is the backstop beneath it. The site's names are
 // confined, comments included, in any case and in both expression forms
 // (ctx.NAME, ctx['NAME']): secrets.SCW_ACCESS_KEY and secrets.SCW_SECRET_KEY
 // each on exactly one line, its env: line in site-deploy's last step;
@@ -1693,42 +1702,136 @@ func releaseSchema(raw []string, lines []yamlread.Line) []string {
 // GitHub reads: secrets.NAME and secrets['NAME'] (or "NAME"), any case.
 var secretRef = regexp.MustCompile(`(?i)secrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_-]*)|\[\s*['"]([^'"]*)['"]\s*\])`)
 
-// expression matches one ${{ }} expression of a line; its group is the text
-// between the braces.
-var expression = regexp.MustCompile(`\$\{\{(.*?)\}\}`)
-
 // secretsWord matches the secrets context's name, any case; secretsContextForms
 // skips a match that is part of a longer name.
 var secretsWord = regexp.MustCompile(`(?i)secrets`)
+
+// expressionEscape matches a YAML escape that spells a character by its code
+// (\x, \u, \U): inside a double-quoted scalar it becomes a character of the
+// expression GitHub reads, one this line-by-line check never sees.
+var expressionEscape = regexp.MustCompile(`\\[xuU]`)
 
 // secretsContextForms returns a message for every ${{ }} expression of line,
 // the num-th, that uses the secrets context in any form but an exact
 // secrets.NAME or secrets['NAME'] reference (any case): toJSON(secrets) hands
 // out the whole context and secrets[format(...)] builds a name at run time, so
-// no closed list of names could tell which secret such a line reaches.
+// no closed list of names could tell which secret such a line reaches. It also
+// refuses the two forms it cannot read: an expression the line opens and does
+// not close (one split over lines, as a folded scalar can), and one that holds
+// a \x, \u or \U escape, which YAML turns into characters of the expression.
+// The word inside a string literal is not the context and is not reported.
 func secretsContextForms(num int, line string) []string {
 	var messages []string
 
-	for _, e := range expression.FindAllStringSubmatch(line, -1) {
-		text := e[1]
-		for _, m := range secretsWord.FindAllStringIndex(text, -1) {
-			if partOfName(text, m[0]-1, ".") || partOfName(text, m[1], "") {
+	for _, e := range lineExpressions(line) {
+		if !e.closed {
+			messages = append(messages, fmt.Sprintf(
+				"line %d: %s opens a ${{ expression it does not close on that line, so this check cannot read which secrets it names",
+				num, strings.TrimSpace(line)))
+
+			continue
+		}
+
+		if expressionEscape.MatchString(e.text) {
+			messages = append(messages, fmt.Sprintf(
+				"line %d: %s holds an escape inside a ${{ }} expression (\\x, \\u or \\U), which YAML turns into characters of the expression this check cannot read",
+				num, strings.TrimSpace(e.text)))
+
+			continue
+		}
+
+		for _, m := range secretsWord.FindAllStringIndex(e.code, -1) {
+			if partOfName(e.code, m[0]-1, ".") || partOfName(e.code, m[1], "") {
 				continue
 			}
 
-			if ref := secretRef.FindStringIndex(text[m[0]:]); ref != nil && ref[0] == 0 {
+			if ref := secretRef.FindStringIndex(e.text[m[0]:]); ref != nil && ref[0] == 0 {
 				continue
 			}
 
 			messages = append(messages, fmt.Sprintf(
 				"line %d: %s names the secrets context in a form other than an exact secrets.NAME or secrets['NAME'], so no list of names can tell which secret it reaches",
-				num, strings.TrimSpace(text)))
+				num, strings.TrimSpace(e.text)))
 
 			break
 		}
 	}
 
 	return messages
+}
+
+// lineExpression is one ${{ }} expression of a line.
+type lineExpression struct {
+	// text is the expression between ${{ and }}, or to the line's end when it
+	// is not closed.
+	text string
+	// code is text with the content of every string literal blanked to
+	// spaces, byte for byte, so an offset into code is one into text.
+	code string
+	// closed reports whether the line closes the expression.
+	closed bool
+}
+
+// lineExpressions returns the ${{ }} expressions of line, read as GitHub's
+// expression syntax reads them: a '...' string literal, in which a doubled
+// single quote is one quote, runs to its closing quote, and so does a "..."
+// one, so a }} inside a literal does not end the expression.
+func lineExpressions(line string) []lineExpression {
+	var expressions []lineExpression
+
+	for {
+		start := strings.Index(line, "${{")
+		if start < 0 {
+			return expressions
+		}
+
+		body := line[start+len("${{"):]
+		code := []byte(body)
+		end := -1
+
+		for i := 0; i < len(body) && end < 0; i++ {
+			switch c := body[i]; {
+			case c == '\'' || c == '"':
+				i = literalEnd(body, i, code)
+			case c == '}' && i+1 < len(body) && body[i+1] == '}':
+				end = i
+			}
+		}
+
+		if end < 0 {
+			return append(expressions, lineExpression{text: body, code: string(code)})
+		}
+
+		expressions = append(expressions, lineExpression{text: body[:end], code: string(code[:end]), closed: true})
+		line = body[end+len("}}"):]
+	}
+}
+
+// literalEnd returns the index of the quote that closes the string literal
+// opening at body[open], or the last index of body when none does, and blanks
+// the literal's content in code. A doubled quote inside the literal is one
+// quote of its content.
+func literalEnd(body string, open int, code []byte) int {
+	quote := body[open]
+
+	for i := open + 1; i < len(body); i++ {
+		if body[i] != quote {
+			code[i] = ' '
+
+			continue
+		}
+
+		if i+1 < len(body) && body[i+1] == quote {
+			code[i], code[i+1] = ' ', ' '
+			i++
+
+			continue
+		}
+
+		return i
+	}
+
+	return len(body) - 1
 }
 
 // partOfName reports whether text's byte at i, if there is one, is a character

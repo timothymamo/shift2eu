@@ -36,22 +36,20 @@ const (
 )
 
 // newHTTPClient returns the client the deploy talks to the bucket through:
-// each request bounded by timeout, over a transport of its own whose Proxy is
-// nil. A client without a transport would use http.DefaultTransport, whose
-// Proxy is http.ProxyFromEnvironment, so an HTTP_PROXY or HTTPS_PROXY in the
-// step's environment would send every request, signed with the site's key,
-// through another host. The rest are http.DefaultTransport's defaults.
+// each request bounded by timeout, over a clone of http.DefaultTransport whose
+// Proxy is set to nil. http.DefaultTransport itself has Proxy
+// http.ProxyFromEnvironment, so an HTTP_PROXY or HTTPS_PROXY in the step's
+// environment would send every request, signed with the site's key, through
+// another host. Everything else is the clone's: the default transport's dialer
+// (its connect timeout and keep-alive), TLS with the system roots, HTTP/2 and
+// its idle and handshake timeouts, as the Go release in use sets them.
 func newHTTPClient(timeout time.Duration) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+
 	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			Proxy:                 nil,
-			ForceAttemptHTTP2:     true,
-			MaxIdleConns:          100,
-			IdleConnTimeout:       90 * time.Second,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		},
+		Timeout:   timeout,
+		Transport: transport,
 	}
 }
 
