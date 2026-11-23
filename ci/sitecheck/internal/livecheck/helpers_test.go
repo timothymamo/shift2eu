@@ -214,6 +214,62 @@ func (ca *testCA) leaf(t *testing.T, hosts []string, notBefore, notAfter time.Ti
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
+// chained signs a certificate for hosts through a fresh intermediate
+// certificate of ca, so the server sends the chain leaf <- intermediate <- ca:
+// the intermediate expires at intermediateNotAfter and the leaf at
+// leafNotAfter, both after notBefore.
+func (ca *testCA) chained(t *testing.T, hosts []string, notBefore, intermediateNotAfter, leafNotAfter time.Time) tls.Certificate {
+	t.Helper()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate the intermediate's key: %v", err)
+	}
+
+	intermediateTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(3),
+		Subject:               pkix.Name{CommonName: "shift2eu test intermediate"},
+		NotBefore:             notBefore,
+		NotAfter:              intermediateNotAfter,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	intermediateDER, err := x509.CreateCertificate(rand.Reader, intermediateTemplate, ca.cert, &caKey.PublicKey, ca.key)
+	if err != nil {
+		t.Fatalf("create the intermediate's certificate: %v", err)
+	}
+
+	intermediate, err := x509.ParseCertificate(intermediateDER)
+	if err != nil {
+		t.Fatalf("parse the intermediate's certificate: %v", err)
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate the leaf's key: %v", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(4),
+		Subject:               pkix.Name{CommonName: hosts[0]},
+		DNSNames:              hosts,
+		NotBefore:             notBefore,
+		NotAfter:              leafNotAfter,
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, intermediate, &key.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create the leaf's certificate: %v", err)
+	}
+
+	return tls.Certificate{Certificate: [][]byte{der, intermediateDER}, PrivateKey: key}
+}
+
 // startTLSServer starts an HTTPS httptest server with cert as its certificate,
 // closed when the test ends.
 func startTLSServer(t *testing.T, handler http.Handler, cert tls.Certificate) *httptest.Server {
@@ -515,6 +571,28 @@ func leafExpiringWithin(d time.Duration, hosts ...string) leafBuilder {
 	}
 }
 
+// leafThroughAnIntermediateExpiringWithin builds the chain leaf <-
+// intermediate <- ca for hosts: the leaf stays valid well past the margin and
+// the intermediate expires within d of testNow, inside the margin for a d
+// below 14 days.
+func leafThroughAnIntermediateExpiringWithin(d time.Duration, hosts ...string) leafBuilder {
+	return func(t *testing.T, ca *testCA) tls.Certificate {
+		t.Helper()
+
+		return ca.chained(t, hosts, testNow.Add(-time.Hour), testNow.Add(d), testNow.Add(90*24*time.Hour))
+	}
+}
+
+// leafThroughAValidIntermediate builds the chain leaf <- intermediate <- ca for
+// hosts with both the leaf and the intermediate valid well past the margin.
+func leafThroughAValidIntermediate(hosts ...string) leafBuilder {
+	return func(t *testing.T, ca *testCA) tls.Certificate {
+		t.Helper()
+
+		return ca.chained(t, hosts, testNow.Add(-time.Hour), testNow.Add(90*24*time.Hour), testNow.Add(60*24*time.Hour))
+	}
+}
+
 // siteOptions are the parts of a fixture site a test changes before it starts
 // its servers.
 type siteOptions struct {
@@ -569,6 +647,7 @@ type site struct {
 	retryBound      time.Duration
 	retryInterval   time.Duration
 	maxBodyBytes    int64
+	requestTimeout  time.Duration
 	roots           *x509.CertPool
 }
 
@@ -722,19 +801,20 @@ func (s *site) config(t *testing.T) livecheck.Config {
 	}
 
 	return livecheck.Config{
-		Host:          livecheck.DefaultHost,
-		Apex:          livecheck.DefaultApex,
-		Manifest:      manifest,
-		Records:       s.records,
-		Tags:          s.tags,
-		Dial:          s.routes.dial,
-		Roots:         s.roots,
-		Now:           s.clock,
-		Sleep:         s.sleep,
-		RetryBound:    s.retryBound,
-		RetryInterval: s.retryInterval,
-		CertMargin:    livecheck.MinCertMargin,
-		MaxBodyBytes:  s.maxBodyBytes,
+		Host:           livecheck.DefaultHost,
+		Apex:           livecheck.DefaultApex,
+		Manifest:       manifest,
+		Records:        s.records,
+		Tags:           s.tags,
+		Dial:           s.routes.dial,
+		Roots:          s.roots,
+		Now:            s.clock,
+		Sleep:          s.sleep,
+		RetryBound:     s.retryBound,
+		RetryInterval:  s.retryInterval,
+		CertMargin:     livecheck.MinCertMargin,
+		MaxBodyBytes:   s.maxBodyBytes,
+		RequestTimeout: s.requestTimeout,
 	}
 }
 
@@ -850,6 +930,126 @@ func hasKind(report livecheck.Report, kind string) bool {
 	}
 
 	return false
+}
+
+// runResult is what Run returned, for the goroutine that runs it under a
+// guard.
+type runResult struct {
+	report livecheck.Report
+	err    error
+}
+
+// runWithin returns Run's result, or fails the test when Run has not returned
+// within bound. The guard is the one place a check is allowed a wall-clock
+// bound: a server that never answers must make a check fail, not hang the
+// package's run, so a hang fails this test instead of the go test timeout
+// killing the whole package.
+func runWithin(t *testing.T, bound time.Duration, cfg livecheck.Config) (livecheck.Report, error) {
+	t.Helper()
+
+	ctx := t.Context()
+	done := make(chan runResult, 1)
+
+	go func() {
+		report, err := livecheck.Run(ctx, cfg)
+		done <- runResult{report: report, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		return got.report, got.err
+	case <-time.After(bound):
+		t.Fatalf("the check did not return within %v: it hangs on a server that never answers", bound)
+
+		return livecheck.Report{}, nil
+	}
+}
+
+// stalledListener starts a listener that accepts every connection and never
+// writes or closes it, as a host that accepts the TCP connection and never
+// sends a ServerHello (or an HTTP response) does. It returns its address; the
+// connections it accepted are closed when the test ends.
+func stalledListener(t *testing.T) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for the stalled listener: %v", err)
+	}
+
+	var (
+		mu    sync.Mutex
+		conns []net.Conn
+	)
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+
+			mu.Lock()
+			conns = append(conns, conn)
+			mu.Unlock()
+		}
+	}()
+
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-done
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		for _, conn := range conns {
+			_ = conn.Close()
+		}
+	})
+
+	return ln.Addr().String()
+}
+
+// rawListener starts a listener that answers every connection with exactly
+// response and then closes it, as an edge answering plain HTTP with something
+// that is no HTTP/1.x response does (raw HTML without a status line, a header
+// block Go's parser refuses). It returns its address.
+func rawListener(t *testing.T, response string) string {
+	t.Helper()
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for the raw listener: %v", err)
+	}
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+
+			go func() {
+				_, _ = conn.Write([]byte(response))
+				_ = conn.Close()
+			}()
+		}
+	}()
+
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-done
+	})
+
+	return ln.Addr().String()
 }
 
 // closingListener starts a listener that accepts every connection and closes it

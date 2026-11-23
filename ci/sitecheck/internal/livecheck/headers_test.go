@@ -250,6 +250,11 @@ func TestJudgeHTMLCache(t *testing.T) {
 		{name: "no max-age", values: []string{"public, no-store"}, wantErr: true},
 		{name: "a max-age one second over", values: []string{"public, max-age=301"}, wantErr: true},
 		{name: "an s-maxage over, whatever the max-age", values: []string{"max-age=60, s-maxage=301"}, wantErr: true},
+		{name: "a stale-while-revalidate of exactly the HTML's max-age", values: []string{"max-age=300, stale-while-revalidate=300"}},
+		{name: "a stale-if-error below the HTML's max-age", values: []string{"max-age=60, stale-if-error=60"}},
+		{name: "a stale-while-revalidate over the HTML's max-age", values: []string{"max-age=60, stale-while-revalidate=301"}, wantErr: true},
+		{name: "a stale-if-error over the HTML's max-age", values: []string{"max-age=60, stale-if-error=301"}, wantErr: true},
+		{name: "a stale-while-revalidate over a max-age at the HTML's max-age", values: []string{"max-age=300, stale-while-revalidate=3600"}, wantErr: true},
 		{name: "two conflicting max-age directives", values: []string{"max-age=60, max-age=301"}, wantErr: true},
 		{name: "an unparseable max-age", values: []string{"max-age=abc"}, wantErr: true},
 	}

@@ -131,8 +131,8 @@ func TestRunPassesAPassingSite(t *testing.T) {
 
 // TestRunFailsABrokenSite pins the hostile and broken cases one at a time on the
 // fixture that otherwise passes: every one of them fails the check it belongs
-// to, with a reason, and none of them is an error or a crash (behaviours 1, 3,
-// 4, 5, 6, 7, 9 and 10).
+// to, with a reason that names what is wrong, and none of them is an error or a
+// crash (behaviours 1, 3, 4, 5, 6, 7, 9 and 10).
 func TestRunFailsABrokenSite(t *testing.T) {
 	t.Parallel()
 
@@ -142,6 +142,8 @@ func TestRunFailsABrokenSite(t *testing.T) {
 		mutate     func(t *testing.T, site *site)
 		wantKind   string
 		wantTarget string
+		// wantReason, when set, is a part of the failing check's reason.
+		wantReason string
 	}{
 		{
 			name: "a root that is not index.html",
@@ -152,6 +154,17 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			},
 			wantKind:   livecheck.KindRoot,
 			wantTarget: "/",
+		},
+		{
+			name: "a root that is not index.html is not scanned for the version",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.hostTLS.setBody("/", []byte(`<html><body><p>a page that is not the release's index.html</p></body></html>`))
+			},
+			wantKind:   livecheck.KindVersion,
+			wantTarget: "/",
+			wantReason: "index.html",
 		},
 		{
 			name: "a manifest file whose bytes changed",
@@ -237,6 +250,46 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			},
 			wantKind:   livecheck.KindServiceWorker,
 			wantTarget: "/worker.js",
+		},
+		{
+			name: "a service worker script that answers 203",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.hostTLS.set("/sw.js", served{status: http.StatusNonAuthoritativeInfo, body: []byte("self.addEventListener('install', () => {})")})
+			},
+			wantKind:   livecheck.KindServiceWorker,
+			wantTarget: "/sw.js",
+		},
+		{
+			name: "a service worker script that answers 206",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.hostTLS.set("/sw.js", served{status: http.StatusPartialContent, body: []byte("postMessage('hello')")})
+			},
+			wantKind:   livecheck.KindServiceWorker,
+			wantTarget: "/sw.js",
+		},
+		{
+			name: "a service worker script that answers 204",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.hostTLS.set("/worker.js", served{status: http.StatusNoContent})
+			},
+			wantKind:   livecheck.KindServiceWorker,
+			wantTarget: "/worker.js",
+		},
+		{
+			name: "a service worker path with no response at all",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.routes.remove(livecheck.DefaultHost + ":443")
+			},
+			wantKind:   livecheck.KindServiceWorker,
+			wantTarget: "/sw.js",
 		},
 		{
 			name: "an HTML page cached for longer than the HTML's max-age",
@@ -349,6 +402,104 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			},
 			wantKind:   livecheck.KindRedirect,
 			wantTarget: "http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			name: "refuse-or-close: plain HTTP answering raw HTML without a status line",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "<html><body><p>welcome</p></body></html>"))
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			name: "refuse-or-close: plain HTTP answering a header block Go refuses",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "HTTP/1.1 200 OK\r\nBad Header\r\n\r\n<html><body><p>welcome</p></body></html>"))
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			name: "refuse-or-close: plain HTTP accepting the connection and never answering",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.requestTimeout = 100 * time.Millisecond
+				site.routes.set(livecheck.DefaultHost+":80", stalledListener(t))
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			name: "refuse-or-close: a 302 to https://<host>/",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.hostHTTP.set("/", served{status: http.StatusFound, header: redirect("https://" + livecheck.DefaultHost + "/")})
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			name: "refuse-or-close: a 301 to another URL",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.hostHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultHost + "/elsewhere")})
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			name: "the preload chain whose second hop is another host",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PreloadPursued = true
+				site.apexHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/")})
+				site.apexHTTP.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/privacy.html")})
+				site.apexTLS.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://elsewhere.example/")})
+				site.apexTLS.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://elsewhere.example/privacy.html")})
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultApex + "/",
+		},
+		{
+			name: "the preload chain whose second hop is a 302",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PreloadPursued = true
+				site.apexHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/")})
+				site.apexHTTP.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/privacy.html")})
+				site.apexTLS.set("/", served{status: http.StatusFound, header: redirect("https://" + livecheck.DefaultHost + "/")})
+				site.apexTLS.set("/privacy.html", served{status: http.StatusFound, header: redirect("https://" + livecheck.DefaultHost + "/privacy.html")})
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultApex + "/",
+		},
+		{
+			name: "the preload chain whose second hop is a third hop",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PreloadPursued = true
+				site.apexHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/")})
+				site.apexHTTP.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/privacy.html")})
+				site.apexTLS.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/home")})
+				site.apexTLS.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/home")})
+			},
+			wantKind:   livecheck.KindRedirect,
+			wantTarget: "http://" + livecheck.DefaultApex + "/",
 		},
 		{
 			name: "a gzip body whose digest is the manifest's before decoding",
@@ -530,7 +681,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 				tc.mutate(t, site)
 			}
 
-			report, err := livecheck.Run(t.Context(), site.config(t))
+			report, err := runWithin(t, 60*time.Second, site.config(t))
 			if err != nil {
 				t.Fatalf("Run failed: %v, want a report of a failed check: a check failure is no error", err)
 			}
@@ -550,6 +701,10 @@ func TestRunFailsABrokenSite(t *testing.T) {
 
 			if check.Reason == "" {
 				t.Errorf("the failing %s check of %q says nothing about why, want a reason: %s", tc.wantKind, tc.wantTarget, tc.name)
+			}
+
+			if tc.wantReason != "" && !strings.Contains(check.Reason, tc.wantReason) {
+				t.Errorf("the failing %s check of %q fails with %q, want the reason to say %q: %s", tc.wantKind, tc.wantTarget, check.Reason, tc.wantReason, tc.name)
 			}
 		})
 	}
@@ -621,6 +776,16 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 				t.Helper()
 
 				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+			},
+		},
+		{
+			name: "refuse-or-close: a 308 to exactly https://<host>/<p> is accepted too",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.hostHTTP.set("/", served{status: http.StatusPermanentRedirect, header: redirect("https://" + livecheck.DefaultHost + "/")})
+				site.hostHTTP.set("/privacy.html", served{status: http.StatusPermanentRedirect, header: redirect("https://" + livecheck.DefaultHost + "/privacy.html")})
 			},
 		},
 		{
@@ -923,6 +1088,15 @@ func TestCheckCertificate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:    "a leaf whose intermediate expires inside the margin",
+			leaf:    leafThroughAnIntermediateExpiringWithin(7*24*time.Hour, livecheck.DefaultHost),
+			wantErr: true,
+		},
+		{
+			name: "a leaf whose intermediate stays valid past the margin",
+			leaf: leafThroughAValidIntermediate(livecheck.DefaultHost),
+		},
+		{
 			name:    "a certificate for another name",
 			leaf:    leafValidFor("example.com"),
 			wantErr: true,
@@ -1001,6 +1175,39 @@ func TestCheckCertificate(t *testing.T) {
 	}
 }
 
+// TestRunBoundsTheTLSHandshake pins that a host that accepts the TCP connection
+// and never sends a ServerHello makes the certificate check fail within
+// Config.RequestTimeout, not hang the run: the transport's dial and read
+// timeouts bound the plain HTTP requests, and the handshake CheckCertificate
+// does must be bounded by the same timeout (auditor finding 1, reviewer 2).
+// The check runs in a goroutine under a guard, so an unbounded handshake fails
+// this test instead of hanging the package's run.
+func TestRunBoundsTheTLSHandshake(t *testing.T) {
+	t.Parallel()
+
+	site := newSite(t)
+	site.requestTimeout = 100 * time.Millisecond
+	site.routes.set(livecheck.DefaultHost+":443", stalledListener(t))
+
+	report, err := runWithin(t, 10*time.Second, site.config(t))
+	if err != nil {
+		t.Fatalf("Run failed: %v, want a report of a failed certificate check", err)
+	}
+
+	check, ok := findCheck(report, livecheck.KindCertificate, livecheck.DefaultHost)
+	if !ok {
+		t.Fatalf("the report holds no %s check of %q, want a failing one:\n%s", livecheck.KindCertificate, livecheck.DefaultHost, reportText(report))
+	}
+
+	if check.Passed {
+		t.Errorf("the %s check of %q passed against a host that never sends a ServerHello, want it to fail:\n%s", livecheck.KindCertificate, livecheck.DefaultHost, reportText(report))
+	}
+
+	if check.Reason == "" {
+		t.Error("the failing certificate check says nothing about why, want a reason")
+	}
+}
+
 // TestRunRetriesUntilTheSiteIsCorrect pins the retry of behaviour 2 and D4: a
 // site that is wrong on the first round and right on the second passes, after
 // one sleep of the injected clock and no real waiting.
@@ -1074,6 +1281,69 @@ func TestRunGivesUpAfterTheRetryBound(t *testing.T) {
 	check, ok := findCheck(report, livecheck.KindRoot, "/")
 	if !ok || check.Passed {
 		t.Errorf("the last round's report holds no failing root check, want the last round's checks:\n%s", reportText(report))
+	}
+}
+
+// TestRunDoesNotWaitOutTheRetryBoundForARecord pins that a check no round can
+// change — a record that is missing or unreadable — is reported after one round
+// instead of after the whole retry bound (reviewer 11), while a site check that
+// a later round could fix still retries as TestRunGivesUpAfterTheRetryBound
+// pins.
+func TestRunDoesNotWaitOutTheRetryBoundForARecord(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		mutate     func(t *testing.T, site *site)
+		wantRounds int
+	}{
+		{
+			name: "only the record checks fail",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTSErr = errors.New("open site/records/hsts.json: no such file or directory")
+				site.records.PreloadErr = errors.New("open site/records/preload.json: no such file or directory")
+			},
+			wantRounds: 1,
+		},
+		{
+			name: "a site check that a later round could fix fails too",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTSErr = errors.New("open site/records/hsts.json: no such file or directory")
+				site.hostTLS.setBody("/", indexPage("v0.0.0-gone"))
+			},
+			wantRounds: int(livecheck.MinRetryBound/(30*time.Second)) + 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			site := newSite(t)
+			site.retryInterval = 30 * time.Second
+			tc.mutate(t, site)
+
+			report, err := livecheck.Run(t.Context(), site.config(t))
+			if err != nil {
+				t.Fatalf("Run failed: %v, want a report of the failed record checks", err)
+			}
+
+			if report.Passed() {
+				t.Fatalf("the check of a site whose records cannot be read passed:\n%s", reportText(report))
+			}
+
+			if report.Rounds != tc.wantRounds {
+				t.Errorf("the check took %d rounds, want %d: a record no round can change is reported after one round, a site check retries", report.Rounds, tc.wantRounds)
+			}
+
+			if got, want := site.sleepCount(), tc.wantRounds-1; got != want {
+				t.Errorf("the check slept %d times, want %d", got, want)
+			}
+		})
 	}
 }
 

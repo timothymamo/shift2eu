@@ -3,6 +3,7 @@ package livecheck_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/timothymamo/shift2eu/ci/sitecheck/internal/livecheck"
 )
@@ -223,6 +224,39 @@ func TestVersionText(t *testing.T) {
 				t.Errorf("VersionText(%q) is %q, want %q", tc.page, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestVersionTextScansARawTextHeavyBodyInLinearTime pins that reading the live
+// version out of an untrusted body stays linear in the body's length: a body of
+// many raw-text elements followed by one upper-case byte is read within a
+// generous budget, where lowering the whole remainder once per element made the
+// scan super-linear (auditor finding 2). The scan runs in a goroutine under a
+// guard, so a super-linear scan fails this test instead of hanging the
+// package's run.
+func TestVersionTextScansARawTextHeavyBodyInLinearTime(t *testing.T) {
+	t.Parallel()
+
+	const (
+		budget = 2 * time.Second
+		size   = 512 << 10
+	)
+
+	pairs := strings.Repeat(`<style></style><script></script><title></title>`, size/47)
+	body := pairs + "A"
+
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+
+		_, _ = livecheck.VersionText([]byte(body))
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(budget):
+		t.Fatalf("VersionText did not read a %d-byte body of %d raw-text elements within %v: the scan is super-linear in the body's length", len(body), strings.Count(body, "<style></style>")*3, budget)
 	}
 }
 
