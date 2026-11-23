@@ -1415,8 +1415,6 @@ func TestTheProjectIsApacheLicensed(t *testing.T) {
 		exact string
 		// holds are the substrings the file must hold.
 		holds []string
-		// absent are the substrings the file must not hold.
-		absent []string
 		// sha256Hex, when set, is the SHA-256 the whole file must hash to.
 		sha256Hex string
 	}{
@@ -1459,12 +1457,6 @@ func TestTheProjectIsApacheLicensed(t *testing.T) {
 			for _, want := range tc.holds {
 				if !strings.Contains(got, want) {
 					t.Errorf("%s does not hold %q: want the project licensed under Apache-2.0 (issue #493)", tc.file, want)
-				}
-			}
-
-			for _, unwanted := range tc.absent {
-				if strings.Contains(got, unwanted) {
-					t.Errorf("%s holds %q: want the project licensed under Apache-2.0, not MIT (issue #493)", tc.file, unwanted)
 				}
 			}
 		})

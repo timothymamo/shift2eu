@@ -186,8 +186,10 @@
 // each holds exactly its own binary (check.DryRunVerifiesArchives), issue #147.
 //
 // TestTheProjectIsApacheLicensed holds the project to the Apache License 2.0
-// (issue #493, ADR 0041): the root NOTICE word for word, LICENSE's Apache
-// header with no MIT text left, and the image's licenses label.
+// (issue #493, ADR 0041): the root NOTICE word for word, the root LICENSE
+// hashing to the SHA-256 of apache.org's official LICENSE-2.0.txt, so GitHub
+// detects Apache-2.0 rather than a paraphrase, and the image's
+// org.opencontainers.image.licenses label saying Apache-2.0.
 //
 // TestCompositionRootRulesAreHeldToTheirRuleForEveryReleaseTarget also holds
 // cmd/shift2eu, on every release target, cgo mode and
