@@ -1361,6 +1361,75 @@ var pinnedDepguardRules = []check.DepguardRule{
 		},
 	},
 	{
+		// The live site check's entry point (PRD #297 milestone 3, issue
+		// #346): a main package no root can import, held to the standard
+		// packages it imports and its own library, each exact. os reads the
+		// files its flags name and exits; it opens no connection and starts no
+		// process, and the forbidigo group site-check-env refuses every read of
+		// the environment.
+		Name:     "site-check-main",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/sitecheck/**",
+			"!**/ci/sitecheck/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"context$",
+			"errors$",
+			"flag$",
+			"fmt$",
+			"io$",
+			"os$",
+			"os/signal$",
+			"time$",
+			"github.com/timothymamo/shift2eu/ci/sitecheck/internal/livecheck$",
+		},
+		Deny: []string{"os/exec", "net"},
+	},
+	{
+		// The live site check's library (PRD #297 milestone 3): it fetches the
+		// site through the dialer it is given and reads no file, no
+		// environment variable and starts no process; it builds the gh
+		// commands as argv without running them. Named standard packages only,
+		// without os, os/exec, syscall or unsafe. Go's internal rule keeps it
+		// out of reach of cmd/ and internal/.
+		Name:     "site-check-library",
+		ListMode: "strict",
+		Files: []string{
+			"**/ci/sitecheck/internal/**",
+			"!$test",
+		},
+		Allow: []string{
+			"bufio$",
+			"bytes$",
+			"compress/gzip$",
+			"context$",
+			"crypto/sha256$",
+			"crypto/tls$",
+			"crypto/x509$",
+			"encoding/hex$",
+			"encoding/json$",
+			"errors$",
+			"fmt$",
+			"html$",
+			"io$",
+			"mime$",
+			"net$",
+			"net/http$",
+			"net/http/httptrace$",
+			"net/url$",
+			"regexp$",
+			"slices$",
+			"strconv$",
+			"strings$",
+			"time$",
+			"unicode$",
+			"unicode/utf8$",
+		},
+		Deny: []string{"os", "syscall"},
+	},
+	{
 		// The Claude Code pin check's entry point (issue #276, ADR 0033): a main
 		// package no root can import, held to the standard packages it imports and
 		// its own library, each exact. os reads the workflow and exits, net/http

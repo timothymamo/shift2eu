@@ -20,7 +20,7 @@ import (
 // linters.settings.forbidigo). The tags of the two composition-root groups,
 // compositionRootTags, are pinned by what their rules select instead of by the
 // text of a path regexp, in TestCompositionRootExclusions.
-var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag}
+var forbidigoTags = []string{"cloud-read-only", "domain-is-pure", testutilNoEnvTag, cliNoEnvOrProcessTag, inventoryFileNoEnvTag, e2eNoEnvTag, testsNoProcessStateTag, aiReviewerEnvTag, aiReviewerOneProcessTag, siteBuilderEnvTag, claudeCodePinEnvTag, siteCheckEnvTag, auditExecEnvTag, auditRunEnvTag, auditLibraryEnvTag}
 
 // auditLibraryEnvTag is the tag of the audit library's environment group (issue
 // #277, ADR 0040's model-job amendment), which refuses the environment reads, the home,
@@ -60,6 +60,10 @@ const siteBuilderEnvTag = "site-builder-env"
 // claudeCodePinEnvTag is the tag of the Claude Code pin check's environment
 // group (issue #276).
 const claudeCodePinEnvTag = "claude-code-pin-env"
+
+// siteCheckEnvTag is the tag of the live site check's environment group (PRD
+// #297 milestone 3).
+const siteCheckEnvTag = "site-check-env"
 
 // aiReviewerEnvTag is the tag of the AI reviewer's environment group (ADR 0033),
 // and aiReviewerLookupEnvMsg the msg of its one entry with an exception: the
@@ -210,6 +214,12 @@ func TestForbidigoExclusionsDropOneGroup(t *testing.T) {
 		// _test.go files included.
 		claudeCodePinEnvTag: {
 			{"path-except": `^ci/claudecodepin/`, "text": groupText(claudeCodePinEnvTag)},
+		},
+		// The live site check (PRD #297 milestone 3): one rule for every path
+		// outside ci/sitecheck/, so the group holds there and nowhere else,
+		// _test.go files included.
+		siteCheckEnvTag: {
+			{"path-except": `^ci/sitecheck/`, "text": groupText(siteCheckEnvTag)},
 		},
 		// The audit's command wrapper (issue #277, ADR 0040's model-job amendment): one
 		// rule for every path outside ci/auditexec/, so the group holds there
