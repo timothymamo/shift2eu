@@ -101,6 +101,16 @@ the digest before GoReleaser lists it in `checksums.txt` and uploads it to the d
 digest and attests it with the archives; and `publish` needs `site-browser`, so a bundle that failed
 its smoke test leaves the release a draft. None of the site jobs holds a key, a secret or an OIDC token.
 
+`attest-archives` attests the bundle before, and independently of, the smoke test, so a draft whose
+bundle failed `site-browser` can still hold a build-provenance attestation for it: an attestation says
+where the bundle was built, never that it passed its smoke test. Publication is the gate (`publish` needs
+`site-browser`), so the deploy (PR C2) takes the bundle only from a published, non-draft release, never
+from a draft or on the strength of an attestation alone. `attest-archives` deliberately does not need
+`site-browser`, which would lengthen the chain of job timeouts before the draft is attested. The smoke
+test gates the release's publication, not the container image: the image is pushed even when
+`site-browser` fails, as [ADR 0015](0015-publish-the-signed-image-to-ghcr-with-docker-buildx.md)
+already accepts for a failed `attest-archives` or `publish`.
+
 The deploy job verifies the bundle before the key is in scope: it takes the bundle archive from the
 published release asset, which never expires, and the deploy program's binary as an artifact of this
 run, checks both SHA-256 digests against the outputs of the jobs that produced them (the bundle's against
