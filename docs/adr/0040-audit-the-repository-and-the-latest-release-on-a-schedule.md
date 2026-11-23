@@ -375,12 +375,16 @@ not 40 lowercase hex is the caller's, `ErrConfig`):
   the zero-width characters, U+FEFF and the tag characters U+E0000 to U+E007F among them), Co (private
   use) or Cn (unassigned, in the Unicode tables of the Go release that builds the core); no noncharacter
   (U+FDD0 to U+FDEF, and U+xFFFE and U+xFFFF in every plane); no variation selector (U+FE00 to U+FE0F,
-  U+E0100 to U+E01EF); and none of U+00AD, U+034F, U+115F, U+1160, U+17B4, U+17B5, U+180B to U+180F,
-  U+2061 to U+2064, U+3164 and U+FFA0, which render as nothing or as blank space. The tags, the
-  variation selectors and the listed characters are named as well as covered by a category, so the
-  rule does not rest on one Unicode version. A character that renders as nothing could carry a token past
-  the maintainer's eye and past every pattern; a field marked *multi-line* below may hold LF and TAB, no
-  other field may;
+  U+E0100 to U+E01EF); none of U+00AD, U+034F, U+115F, U+1160, U+17B4, U+17B5, U+180B to U+180F,
+  U+2061 to U+2064, U+3164, U+FFA0 and U+16FE4, the fillers, joiners and invisible operators that
+  render as nothing; and **the blank-space rule**: no rune of category Zs but U+0020 (U+00A0, U+1680,
+  U+2000 to U+200A, U+202F, U+205F, U+3000), nor U+2800 (braille pattern blank) or U+1D159 (musical
+  null notehead), symbols that render as blank space. U+0020 is the only space a field holds, so
+  which blank a model puts between two words carries nothing. The tags, the variation selectors and
+  the listed characters are named as well as covered by a category, so the rule does not rest on one
+  Unicode version. A character that renders as nothing, or as a blank the eye reads as U+0020, could
+  carry a token past the maintainer's eye and past every pattern; a field marked *multi-line* below may
+  hold LF and TAB, no other field may;
 - at most `FindingLimit` findings. **The finding limit is 100.** One root cause is one finding (the
   skill), so a month's triage of this repository stays far below it; a result above it is a sign of a
   broken or steered run, not of a hundred real findings, and the limit bounds the publish job's
@@ -541,11 +545,14 @@ package included, is refused by `RenderReport` (`ErrPreviousReport`). For the ke
 - **the carried row**: in the previous findings table as `new` or `open`, and placed private in this run
   (the same plain fingerprint): the report keeps a row for it, status `open`, with the previous report's
   severity, category, location, scenario and fix cells byte for byte, and "still open" in Changes. It
-  counts in the public total, under the previous severity, and makes its check read `findings`. Nothing
-  of this run's private placement shows: not its severity, its text or the private finding's existence,
-  beyond the one private-findings line. Without it the row would vanish without a `fixed` row, and a
-  reader comparing two reports would learn that a public finding had become private. The carried cells
-  are model text and model fields, as on any row;
+  counts in the public total, under the previous severity, and makes its check read `findings`. None of
+  this run's private finding's own values show: not its severity, its category or its text. Without the
+  row it would vanish without a `fixed` row, and a reader comparing two reports would learn that a
+  public finding had become private. **The carried row is still a statistical tell**: a finding that
+  stays public is rendered from this run's text, which a model rarely repeats byte for byte, while a
+  carried row repeats the previous report's cells exactly. A reader diffing two reports may so infer
+  which open finding went private, more surely when the private-findings line changes in the same
+  run. The carried cells are model text and model fields, as on any row;
 - a needs-investigation entry is `new`, or `open` when either section of the previous report holds its
   fingerprint; it gets no `fixed` row and no Changes line.
 
@@ -612,8 +619,9 @@ entry point; the core adds:
   credential the patterns name is longer. Raw or URL base64 of the same 16 bytes is 22 characters, below
   L, so it is not refused (a residual risk, below). Below L, ordinary words and identifiers would trip
   the entropy test.
-- **N, the entropy, is 4.1 bits per character.** Hex has 16 symbols, so its entropy never exceeds 4.0:
-  the entropy classes never refuse a SHA or a digest, which the hex rule judges instead. The rates,
+- **N, the entropy, is 4.1 bits per character.** Single-case hex has 16 symbols, so its entropy never
+  exceeds 4.0: the entropy classes never refuse a lowercase SHA or digest, which the hex rule judges
+  instead. Mixed-case hex has up to 22 symbols and is refused by the plain class when it reaches N. The rates,
   measured over 200,000 random samples per row, of the refusal reaching a random encoding:
 
   | Encoding | Length | Class that measures it | Refused |
@@ -634,7 +642,16 @@ entry point; the core adds:
   A Claude OAuth token, about 100 characters, is always refused. A long identifier with no separator (a
   34-letter camel-case test name can reach 4.2), or a dot-free path-like word of high entropy
   (`abcDEF1234/ghiJKL5678/mnoPQR9012`), also trips it: the refusal then fails closed on a harmless text,
-  which costs a run, never a disclosure.
+  which costs a run, never a disclosure. **The hex and slash rules cost the same way**: a model field
+  that quotes a 32-hex MD5, an undashed UUID (32 hex), an 80-hex Rekor entry UUID or a go.sum `h1:`
+  hash (standard base64 of 32 bytes in a dot-free word) refuses the whole run. The fourth pull request's
+  model-job prompt tells the model not to quote them.
+- **Tightening the scan needs a manual edit of the latest report.** A carried cell and a carried False
+  positives reason are checked again, as model fields, in every later run. A later, stricter rule
+  (a lower L or N, a new pattern, a new forbidden rune) can refuse a cell an earlier report published,
+  and since every later run carries it, every later run is refused. The change that tightens a rule
+  therefore also edits the latest merged report, in the same pull request, so that its carried cells
+  pass the new rule.
 - **Advisory text** gets the patterns and the encoded-token check, **not** the refusal: an advisory holds
   PoCs and crash inputs, which are often base64.
 - `ScanPublic(body string, modelFields []string, key FingerprintKey) error` and `ScanAdvisory(body
@@ -652,7 +669,15 @@ entry point; the core adds:
   - a secret that misses N by chance, at the rates of the table above;
   - **a `.` inside a base64 secret's word**: it drops the word back to the plain class, which splits it
     at every `/` and refuses a 32-byte secret about 9 times in 10, not always;
-  - a token encoded any other way (base32, percent-encoding, a cipher, a compression).
+  - a token encoded any other way (base32, percent-encoding, a cipher, a compression);
+  - **any secret's raw bytes as 40- or 64-hex runs**: a secret transformed so that at least one byte of
+    each 20 or 32 is non-printable (the high bit set, an XOR with a known byte) passes the hex rule as a
+    commit or a digest, `image_digest` included. Each run carries 20 or 32 bytes, and a field may hold
+    any number of them. The fourth pull request's entry point could require each 40-hex run in a model
+    field to name a commit of the repository, which leaves the 64-hex runs;
+  - **ASCII spacing**: which runs of U+0020 a model writes is a channel. Two spaces collapse to one when
+    Markdown renders, and spaces at a line's end do not show, so the rendered report hides what the
+    committed bytes hold.
 
   A model steered to leak the subscription token could so reach the public report. The model step's
   containment is what keeps the token from the model (Decision 6); the scan is the last line, and runbook
@@ -807,7 +832,9 @@ entry point prints none of them.
 - **The fourth (the entry point)**: a finding's `evidence` goes only into its draft advisory, never into
   a public issue's body, which is public text the encoded-run refusal would otherwise have to read; and
   the entry point checks `image_digest` against the release's attested image digest before trusting it,
-  since the schema checks only its shape.
+  since the schema checks only its shape. Two notes from the encoded-run refusal: the entry point could
+  require each 40-hex run in a model field to name a commit of the repository, and the model job's
+  prompt tells the model not to quote an MD5, an undashed UUID, a Rekor entry UUID or a go.sum hash.
 - **The fifth (the workflow)**: only the audit App's `security-audit/*` branches may change
   `docs/security/audits/`, enforced by CODEOWNERS or a required check. Otherwise a merged edit from
   another branch that adds a False positives row would drop a public finding from every later run,
