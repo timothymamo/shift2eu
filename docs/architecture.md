@@ -171,8 +171,17 @@ Arrows are imports. They point inwards only:
   to an exit code and one summary line. It does no I/O: it opens no file and no connection, reads no
   environment variable and no clock, and starts no process (`audit-publish-library`: named pure
   standard packages, no `os` or `net`, and no package of the product). Its entry point
-  `ci/auditpublish`, which reads, runs gitleaks and calls GitHub, comes with milestone 2's fourth pull
-  request.
+  `ci/auditpublish` (ADR 0040, "The publish program's GitHub side") reads its inputs through one
+  `os.LookupEnv` and prints one line; its one subcommand is `artifacts`, the run's artifact check;
+  `publish` comes in PRD #175 milestone 2's PR 4b. Its GitHub side, the library `ci/auditpublish/internal/github`, runs `gh` and gitleaks by
+  absolute path with environments of its own, and sends every GitHub call through one function that
+  checks it against a fixed table of endpoints and request bodies before `gh` runs (every advisory
+  `state` `draft`; no merge, review, CVE, tag, release or other branch). The entry point is held to named
+  standard packages, the library and the core (`audit-publish-main`, no `os/exec` or `net`) and the
+  forbidigo group `audit-publish-main-env`, with `os.LookupEnv` named in its `main.go` alone; the library
+  to named standard packages and the core (`audit-publish-github`, no `net`) and the forbidigo group
+  `audit-publish-github-env` (no environment read at all; `os.Environ` only where its tests' fakes record
+  what they were given). Its tests run against a fake `gh` and a fake gitleaks.
   `ci/sitedeploy` is the site's deploy program (PRD #297 milestone 3), which the release runs from that
   milestone's workflow pull request on, in the deploy job, on the bundle it attested. It reads its flags,
   the release tag list and the deploy key's two variables and wires its library

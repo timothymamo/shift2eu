@@ -853,6 +853,55 @@ An agent cannot do these steps. Each one is safe to stop at; the workflow is rol
     older one), then start the new run. The closed duplicate does not count as a dismissal: the kept draft
     takes precedence over it while the draft is open. Check: the new run opens the report PR.
 
+    The publish job's summary line names the class of a failure, never its detail (ADR 0040, "Exit codes
+    and the summary line"). What to do for each, before the new run:
+
+    - `artifacts: unexpected: see runbook step 11` (the artifact check of the model or the publish job):
+      exit 3 of the artifact check, not the core's outcome 3 (`result refused`, below). The check
+      refuses five things: an artifact the job does not expect, a name twice, an expected artifact
+      missing, an expired one, and a total above the listed count (a second page: more than 100
+      artifacts). Read the run's artifact list
+      (`gh api repos/<owner>/<repo>/actions/runs/<run_id>/artifacts --jq '[.artifacts[] | [.name, .expired]]'`);
+      do not download an unexpected one. Check: the new run's list is exactly `checks-result` at the
+      model job's check, and `checks-result` and `model-result` at the publish job's.
+    - `result refused: see runbook` (exit 3): the model's result did not decrypt or broke the schema, or
+      the release tag or image digest it named did not check out against GitHub. Start the new run; if
+      it repeats, read the model job's preflight line and the skill before changing anything.
+    - `publish refused: see runbook` (exit 4): a text about to be published did not pass the scans.
+      Nothing was published. The line does not say which of three causes it was: (1) a scan found a
+      token, a key or an encoded run; (2) the text held gitleaks' inline allow comment, which the
+      program refuses before gitleaks runs, in any letter case; (3) gitleaks did not start or did not
+      finish within its deadline (2 minutes when unset). Look for (3) first, then (2): a publish step
+      that ran for about a scan deadline or longer, or a gitleaks binary missing at the path its flag
+      names on the runner, points to (3); fix that and start the new run. For (2), start the new run
+      once: the model writes the texts afresh, and a refusal that repeats with no sign of (3) is
+      treated as (1). A real hit (1), or a refusal neither (2) nor (3) explains, is a possible leak:
+      rotate per step 10 (the safe default), then start the new run.
+    - `private findings not filed: see runbook` (exit 5): GitHub refused advisory creation to the App;
+      the report says "private findings: not filed" and the private findings were dropped. Repeat step
+      3's advisory check, then start the new run.
+    - `publish refused: duplicate draft advisories: see runbook step 11` (exit 6): the paragraph above.
+    - `previous report unreadable: see runbook` (exit 7) has **two causes**, and the line does not say
+      which: (1) the newest report in `docs/security/audits/` is unreadable as the publish script renders
+      one (a hand edit, a merge that changed a table, a cell outside printable ASCII); (2) the newest
+      report is dated **after the run**, or on the run's own date with a run ID **not below the run's
+      own** (a hand-made report, or a later run's report merged first). Check: list the directory
+      (`ls docs/security/audits/` on `main`) and compare the newest name's date and run ID with the
+      failed run's; for (1), diff the newest report against what the publish script wrote in its PR. Fix
+      it through a pull request to `main` (for (2), rename or remove the misdated report), then start
+      the new run.
+    - `GitHub call failed: see runbook` (exit 8): a GitHub call failed or answered unexpectedly; an
+      existing `security-audit/<date>-<run_id>` branch lands here too (delete it as above). Check
+      GitHub's status, then start the new run.
+    - `configuration invalid: see runbook` (exit 9): a variable, flag or secret of the publish step is
+      missing or malformed (the fingerprint key shorter than 32 bytes included), or a secret that must
+      not be in the step is set there; the program was started with a bad or unknown flag or
+      subcommand (`publish` included, until PR 4b adds it); or `GITHUB_STEP_SUMMARY` is unset, not an
+      absolute path or cannot be opened. Compare the environment's secrets and variables with step 2,
+      and the step's command line with the workflow on `main`.
+    - `publish failed: see runbook` (exit 1): any other failure. Start the new run; if it repeats, the
+      publish program needs a fix through a pull request.
+
 ## Decisions and open questions
 
 Every question is decided. The last one, Decision 2's rule that the public report says only whether

@@ -30,6 +30,11 @@ import (
 // in for /: the copy in the checkout the model job made.
 const skillPath = "srv/audit/checkout/.claude/skills/security-audit-run/SKILL.md"
 
+// inlineAllowComment is gitleaks' inline allow comment, built from its two
+// halves so that no line of this repository spells it out: the audit's model
+// reads the repository, and a line it quotes refuses the whole run (ADR 0040).
+const inlineAllowComment = "gitleaks" + ":allow"
+
 // TestLaunchConfigIsTheADRsLaunch pins every field of the launcher's config the
 // ADR fixes for the audit.
 func TestLaunchConfigIsTheADRsLaunch(t *testing.T) {
@@ -167,5 +172,101 @@ func TestPromptNeedsTheSkillsCopy(t *testing.T) {
 
 	if _, err := audit.Prompt(t.TempDir()); err == nil {
 		t.Errorf("Prompt() = nil, want an error: the skill is not in the checkout copy")
+	}
+}
+
+// TestPromptStatesThePublishCoresTextRules pins the four rules of item 8 (PRD
+// #175 milestone 2, ADR 0040's model-job amendment): the user prompt tells the
+// model what the publish core refuses in the result's text, so a finding's
+// wording does not refuse the whole run. The prompt is also compared character
+// by character: it is a text the model copies the style of, so it holds
+// printable ASCII alone, as the result it asks for must, and it never carries
+// the marker it refuses.
+func TestPromptStatesThePublishCoresTextRules(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+
+	const skill = "Read the checkout, the checks and the work area, and write the result file.\n"
+	writeFile(t, filepath.Join(root, filepath.FromSlash(skillPath)), skill, 0o444)
+
+	prompt, err := audit.Prompt(root)
+	if err != nil {
+		t.Fatalf("Prompt(%q) error = %v, want none: the skill is in the checkout copy", root, err)
+	}
+
+	for _, rule := range []struct {
+		name string
+		// words are the words of the rule the prompt must carry.
+		words []string
+	}{
+		{
+			name:  "printable ASCII only, with LF and TAB in a multi-line field",
+			words: []string{"printable ASCII", "U+0020", "U+007E", "LF and TAB", "refuses the whole run"},
+		},
+		{
+			name:  "no MD5, 32-hex digest, undashed UUID, Rekor entry UUID, SHA-384 or SHA-512 hex, or go.sum h1: hash quoted",
+			words: []string{"MD5", "32-hex", "undashed UUID", "Rekor entry UUID", "SHA-384", "SHA-512", "h1:", "refuses the whole run"},
+		},
+		{
+			name:  "a 40- or 64-hex run that decodes to printable ASCII is refused",
+			words: []string{"40- or 64-hex", "printable ASCII", "refused"},
+		},
+		{
+			// gitleaks honours its inline allow comment in the text it reads,
+			// and the repository itself now holds it: a model that quotes the
+			// line refuses the whole run, so the prompt names the marker in
+			// words instead of writing it.
+			name:  "gitleaks' inline allow comment is never written, only named in words",
+			words: []string{"gitleaks' inline allow comment", "in words"},
+		},
+	} {
+		t.Run(rule.name, func(t *testing.T) {
+			t.Parallel()
+
+			for _, word := range rule.words {
+				if !strings.Contains(prompt.User, word) {
+					t.Errorf("the prompt's user text does not name %q, want it to state the rule %q: the publish core refuses a text that breaks it, and the whole run with it (ADR 0040)\nthe prompt: %s",
+						word, rule.name, prompt.User)
+				}
+			}
+		})
+	}
+
+	// The prompt describes the marker it must not carry: a prompt that wrote
+	// gitleaks' inline allow comment literally, in any case, would trip the
+	// refusal it states, and the whole run with it.
+	for _, text := range []struct {
+		what string
+		body string
+	}{
+		{what: "user text", body: prompt.User},
+		{what: "system text", body: prompt.System},
+	} {
+		if strings.Contains(strings.ToLower(text.body), inlineAllowComment) {
+			t.Errorf("the prompt's %s holds gitleaks' inline allow comment literally, want it named in words instead: gitleaks honours the marker, so the run refuses its own prompt (ADR 0040)\nthe prompt: %s",
+				text.what, text.body)
+		}
+	}
+
+	// The prompt is a text the model copies the style of: no character of it is
+	// outside printable ASCII and the two whitespace characters a field may
+	// carry, so it cannot model the quote or the dash a result refuses.
+	for _, text := range []struct {
+		what string
+		body string
+	}{
+		{what: "user text", body: prompt.User},
+		{what: "system text", body: prompt.System},
+	} {
+		for i, r := range text.body {
+			if r == '\n' || r == '\t' || (r >= 0x20 && r <= 0x7e) {
+				continue
+			}
+
+			t.Errorf("the prompt's %s holds %q at byte %d, want printable ASCII (U+0020 to U+007E) and LF or TAB alone: the model copies the style of what it is asked with", text.what, r, i)
+
+			break
+		}
 	}
 }

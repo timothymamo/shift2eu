@@ -134,6 +134,14 @@ func newPlan(in ReportInput) (plan, error) {
 			return plan{}, fmt.Errorf("previous report: dated after the run: %w", ErrPreviousReport)
 		}
 
+		// A previous report from the run's own date is refused unless its
+		// run ID is below the run's own: run IDs grow with time, so an equal
+		// or greater one is this run or a later one, a hand-made or a later
+		// run's report merged first.
+		if gap == 0 && !longerOrGreater(in.Run.ID, p.previous.runID) {
+			return plan{}, fmt.Errorf("previous report: not before the run: %w", ErrPreviousReport)
+		}
+
 		p.gapDays = int(gap / secondsPerDay)
 	}
 
