@@ -50,7 +50,7 @@ const (
 // TestRunBounded pins the bounded runner's contract: what it returns for a command that exits 0, one that exits
 // non-zero, one that never finishes within its bound, one whose grandchild keeps its stdout open after the command
 // itself exited, one the bound cuts short although the command had already ended on its own, one that never
-// starts.
+// starts, and one that leaves the runner's process group.
 func TestRunBounded(t *testing.T) {
 	t.Parallel()
 
@@ -61,6 +61,9 @@ func TestRunBounded(t *testing.T) {
 		// path, when not empty, is the program the case runs instead of /bin/sh, with no script: a program that
 		// cannot start pins what runBounded returns for a command that never ran.
 		path string
+		// needsBin, when not empty, is a program the case's script needs on PATH: where it is missing (macOS
+		// ships no setsid) the case is skipped rather than failed.
+		needsBin string
 		// timeout is the bound runBounded gets.
 		timeout time.Duration
 		// wantStdout and wantStderr, when not empty, are exactly what the command wrote.
@@ -171,11 +174,33 @@ func TestRunBounded(t *testing.T) {
 			wantErr:    errNotStarted,
 			maxElapsed: 10 * time.Second,
 		},
+		{
+			name: "the command moves itself out of the process group",
+			// exec replaces the shell, whose group runBounded's own holder leads, so setsid is no group leader
+			// and succeeds at once, moving the sleep into a session of its own: a kill of the group alone cannot
+			// reach it, so only a kill of the command's own process, or the wait delay's pipe close, ends the
+			// run. maxElapsed sits below both so a runner that only kills the group fails this case through the
+			// hard ceiling, rather than blocking the package (issue #512).
+			script:      `exec setsid sleep 30`,
+			needsBin:    "setsid",
+			timeout:     300 * time.Millisecond,
+			wantErr:     errTimeout,
+			wantMessage: []string{"300ms", "setsid"},
+			maxElapsed:  3 * time.Second,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
+			if tc.needsBin != "" {
+				// The commands run with PATH=/usr/bin:/bin, so a program the test process finds there is the one
+				// the case's script finds too; macOS ships no setsid, and there the case is skipped.
+				if _, err := exec.LookPath(tc.needsBin); err != nil {
+					t.Skipf("%s is not on PATH (%v), so the case's script cannot move its command out of the process group", tc.needsBin, err)
+				}
+			}
 
 			argv := []string{"/bin/sh", "-c", tc.script}
 			if tc.path != "" {
