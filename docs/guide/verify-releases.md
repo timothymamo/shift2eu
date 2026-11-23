@@ -124,7 +124,7 @@ Expand-Archive $Archive
 ```
 
 Each archive holds only the `shift2eu` binary (`shift2eu.exe` on Windows), with `README.md`,
-`LICENSE`, `SECURITY.md`, the Markdown pages under `docs/`, the jq programs
+`LICENSE`, `NOTICE`, `SECURITY.md`, the Markdown pages under `docs/`, the jq programs
 [Build an inventory](inventory.md) runs and the sample inventories under `examples/`
 ([Install](install.md#the-release-archives)). Older releases list the retired HTTP API's assets
 ([Install](install.md)) in the same `checksums.txt`: check them the same way, by their names. The archives'

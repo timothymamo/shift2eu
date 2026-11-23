@@ -1242,7 +1242,8 @@ func TestReleaseWorkflowIsClosed(t *testing.T) {
 // ci.yml's test job, the dry run that runs on every pull request, installs the
 // GoReleaser that release.yml runs and builds that archive with it, failing
 // unless it holds exactly its own binary (check.DryRunVerifiesArchives). The
-// files the archive ships are LICENSE, README.md, SECURITY.md (issue #450),
+// files the archive ships are LICENSE, NOTICE (issue #493), README.md,
+// SECURITY.md (issue #450),
 // the pages under docs/ (issue #149) and the sample inventories under
 // examples/ the walkthrough runs (issue #188). No second archive, the HTTP
 // API's, is published any more, and neither is the bundled OpenAPI document

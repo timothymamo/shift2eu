@@ -3,8 +3,8 @@
 # snapshot run of .goreleaser.yaml, which publishes nothing, and fails unless each archive holds exactly
 # what it should. The release ships the CLI alone (ADR 0037, issue #393): its archives,
 # shift2eu_<version>_<os>_<arch>, hold shift2eu (shift2eu.exe on Windows), and no other archive is
-# built. Besides its binary an archive may hold only LICENSE, README.md and SECURITY.md at its root,
-# each of which it must hold (issue #450), Markdown pages under docs/ (no path segment may start with
+# built. Besides its binary an archive may hold only LICENSE, NOTICE, README.md and SECURITY.md at its
+# root, each of which it must hold (issues #450 and #493), Markdown pages under docs/ (no path segment may start with
 # a dot, so no ., .. or hidden file), and exactly the samples docs/guide/try-it.md runs on (issue
 # #188): examples/README.md and, for each of aws, azure and gcp, examples/<source>/README.md and
 # examples/<source>/inventory.json, with their directories, and exactly the jq programs
@@ -87,7 +87,7 @@ sift() {
 }
 
 # check_archive archive own: the archive holds exactly one binary, own (or own.exe), at its root, and
-# otherwise only the root files (root_files: LICENSE, README.md, SECURITY.md), Markdown pages under
+# otherwise only the root files (root_files: LICENSE, NOTICE, README.md, SECURITY.md), Markdown pages under
 # docs/, the inventory guide's jq programs (guide_programs) and the samples (with their directories,
 # sample_dirs), each a regular file or a directory. No other binary is on that list, so an archive
 # holding one fails too. It must hold every root file, sample and jq program. Under examples/ it may
@@ -123,8 +123,9 @@ check_archive() {
 }
 
 # The files at an archive's root beside its binary: every archive must hold each of them, the security
-# policy included (issue #450), and no other file may sit there.
-root_files=(LICENSE README.md SECURITY.md)
+# policy (issue #450) and the NOTICE Apache-2.0 asks a redistribution to carry (issue #493) included,
+# and no other file may sit there.
+root_files=(LICENSE NOTICE README.md SECURITY.md)
 # The samples docs/guide/try-it.md runs on (issue #188): every archive must hold each of them, and
 # examples/ in an archive may hold nothing else but their directories (sample_dirs), so a new sample is
 # added here as well as to .goreleaser.yaml.
@@ -212,4 +213,4 @@ fi
 if [ "${fail}" != 0 ]; then
   exit 1
 fi
-echo "${#cli[@]} CLI archives, one per built platform, each holding exactly its binary, LICENSE, README.md, SECURITY.md, docs/**/*.md, the inventory guide's jq programs and exactly the samples under examples/, all in checksums.txt"
+echo "${#cli[@]} CLI archives, one per built platform, each holding exactly its binary, LICENSE, NOTICE, README.md, SECURITY.md, docs/**/*.md, the inventory guide's jq programs and exactly the samples under examples/, all in checksums.txt"
