@@ -1078,9 +1078,11 @@ twice:
 3. `POST R/git/blobs` with the report's body; 4. `POST R/git/trees` with that base tree and one entry,
    the report's path and the blob's answered sha; 5. `POST R/git/commits` with the templates' message,
    the tree's answered sha and the audited commit as the one parent.
-6. `GET R/compare/<audited commit>...<the commit's answered sha>`: the answer's files must be exactly
-   one, the run's report path, status `added`; anything else is `ErrReportDiff`, outcome 1, and no ref
-   and no pull request follow.
+6. `GET R/compare/<audited commit>...<the commit's answered sha>`: the answer must bind the new commit
+   to the audited one, status `ahead`, `ahead_by` 1, `behind_by` 0 and `merge_base_commit.sha` the
+   audited commit (one commit on top of it, not any history with the same net diff), and its files must
+   be exactly one, the run's report path, status `added`; anything else is `ErrReportDiff`, outcome 1,
+   and no ref and no pull request follow.
 7. `POST R/git/refs`, `refs/heads/<branch>` at the commit's answered sha; 8. `POST R/pulls` with the
    templates' title and body, the branch into `main`, no draft, no maintainer edits.
 
@@ -1092,7 +1094,8 @@ before any ref names it, and only a ref makes a push-triggered workflow run it, 
 a commit the program has not proved to be the audited commit plus the one report. A refused compare
 leaves an unreferenced commit object, which GitHub collects. Fake-`gh` tests pin the order from the
 fake's record, each binding with distinct answer SHAs, a compare of two files (and one modified, one
-other file, none) with no ref after it, and an existing branch with no write at all.
+other file, none), and one that is not ahead, two ahead, one behind or on another merge base, each with
+no ref after it, and an existing branch with no write at all.
 
 **Issues for merged reports (PR 4b).** A run files issues for the **previous** merged report's public
 findings whose status is `new` or `open`, never for its own (the report it opens is not merged yet), and
@@ -1124,15 +1127,27 @@ a public text.
 
 **The image check (PR 4b).** `CheckImageDigest` reads row 3 and accepts a digest when at least one
 attestation's DSSE envelope has the payload type `application/vnd.in-toto+json` and its statement
-(base64, `encoding/base64`) has the predicate type `https://slsa.dev/provenance/v1`, a subject whose
-`sha256` is the digest's hex, and a workflow whose `ref` is `refs/tags/<tag>` and whose `repository` is
+(base64, `encoding/base64`) has the `_type` `https://in-toto.io/Statement/v1`, the predicate type
+`https://slsa.dev/provenance/v1`, a subject whose `sha256` is the digest's hex, and a workflow whose
+`path` is `.github/workflows/release.yml`, whose `ref` is `refs/tags/<tag>` and whose `repository` is
 `https://github.com/<owner>/<name>`; other attestations (an SBOM, an undecodable payload) are skipped.
-No match, an empty listing and a 404 are `ErrResultInvalid`. It matches the attestation's statement
-only: **it does not verify the bundle's Sigstore signature or certificate chain**. GitHub serves the
-listing over the authenticated API for this repository, and the check trusts that answer as it trusts
-every other API answer; `gh attestation verify` would verify the signature, but it is a command outside
-the `gh api` contract above (its own network calls, its own trust root download), so the program does not
-run it. A forged statement would need write access to the repository's attestations.
+An attestation the listing returns without an inline `bundle` (only a `bundle_url`) is not fetched: it
+matches nothing, so a listing of only such answers is refused. No match, an empty listing and a 404 are
+`ErrResultInvalid`. It matches the attestation's statement only: **it does not verify the bundle's
+Sigstore signature or certificate chain**. GitHub serves the listing over the authenticated API for
+this repository, and the check trusts that answer as it trusts every other API answer; `gh attestation
+verify` would verify the signature, but it is a command outside the `gh api` contract above (its own
+network calls, its own trust root download), so the program does not run it.
+
+*Residual risk.* Because the statement is not signature-checked, anyone who can run a workflow in this
+repository with `attestations: write` (any workflow file on a branch that can be pushed, not only the
+release workflow), or otherwise POST an attestation to it, could store a statement that satisfies the
+check for any digest. The effect is bounded: a wrong digest is named in the report as the audited
+image, and nothing is written on it (the image check's client is read-only, and `publish` uses the
+digest only as text of the report). PR 5 closes the gap with `gh attestation verify
+oci://<image>@<digest> --repo <owner>/<name> --signer-workflow <owner>/<name>/.github/workflows/release.yml
+--source-ref refs/tags/<tag>` as its own workflow step, outside the program's `gh api` contract, as
+`vm-tools.yml` already verifies Lima's attestations.
 
 **The previous report.** `LoadPrevious` lists `-reports` (the checkout's `docs/security/audits`), picks
 the newest name by `publish.NewestReport` and opens only it: a symbolic link, a directory or any other

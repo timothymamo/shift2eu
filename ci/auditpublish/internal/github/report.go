@@ -30,9 +30,11 @@ type ReportPlan struct {
 //     report's path, mode: "100644", type: "blob", sha: step 3's sha}]}.
 //  5. POST R/git/commits (row 8) {message: the commit message, tree: step 4's
 //     sha, parents: [the audited commit]}.
-//  6. GET R/compare/<audited commit>...<step 5's sha> (row 10): the answer's
-//     files must be exactly one, status "added", filename the report's path;
-//     anything else is ErrReportDiff, and no ref and no pull request follow.
+//  6. GET R/compare/<audited commit>...<step 5's sha> (row 10): the answer
+//     must be status "ahead", ahead_by 1, behind_by 0, merge_base_commit.sha
+//     the audited commit, and its files exactly one, status "added", filename
+//     the report's path; anything else is ErrReportDiff, and no ref and no
+//     pull request follow.
 //  7. POST R/git/refs (row 9) {ref: refs/heads/<branch>, sha: step 5's sha}.
 //  8. POST R/pulls (row 11) {title, body, head: the branch, base: "main",
 //     maintainer_can_modify: false, draft: false}.
@@ -54,7 +56,7 @@ func PublishReport(ctx context.Context, c *Client, plan ReportPlan) error {
 	repo := "repos/" + c.scope.Repository
 	branch := branchOf(c.scope)
 
-	if plan.Report.Path != reportPathOf(c.scope) || plan.Templates.Branch != "" && plan.Templates.Branch != branch {
+	if plan.Report.Path != reportPathOf(c.scope) || plan.Templates.Branch != branch {
 		return fmt.Errorf("report: the plan's path or branch is not the run's: %w", ErrEndpointRefused)
 	}
 
@@ -89,7 +91,7 @@ func PublishReport(ctx context.Context, c *Client, plan ReportPlan) error {
 		return fmt.Errorf("report: the commit: %w", err)
 	}
 
-	if err := checkReportDiff(ctx, c, repo+"/compare/"+c.scope.Commit+"..."+commit, plan.Report.Path); err != nil {
+	if err := checkReportDiff(ctx, c, repo+"/compare/"+c.scope.Commit+"..."+commit, c.scope.Commit, plan.Report.Path); err != nil {
 		return err
 	}
 
@@ -198,11 +200,13 @@ func auditedTree(ctx context.Context, c *Client, endpoint string) (string, error
 	return commit.Tree.SHA, nil
 }
 
-// checkReportDiff compares the audited commit with the report commit: its
-// files must be exactly one, the report, added. Any other answer of 200 is
+// checkReportDiff compares the audited commit with the report commit: the
+// report commit must be one commit ahead of the audited one and none behind
+// (status ahead, ahead_by 1, behind_by 0, the merge base the audited commit),
+// and its files exactly one, the report, added. Any other answer of 200 is
 // ErrReportDiff; another status or a body that is no comparison
 // publish.ErrGitHub.
-func checkReportDiff(ctx context.Context, c *Client, endpoint, path string) error {
+func checkReportDiff(ctx context.Context, c *Client, endpoint, audited, path string) error {
 	resp, err := read(ctx, c, endpoint)
 	if err != nil {
 		return fmt.Errorf("report: the compare: %w", err)
@@ -213,6 +217,12 @@ func checkReportDiff(ctx context.Context, c *Client, endpoint, path string) erro
 	}
 
 	var comparison struct {
+		Status          string `json:"status"`
+		AheadBy         *int   `json:"ahead_by"`
+		BehindBy        *int   `json:"behind_by"`
+		MergeBaseCommit struct {
+			SHA string `json:"sha"`
+		} `json:"merge_base_commit"`
 		Files *[]struct {
 			Filename string `json:"filename"`
 			Status   string `json:"status"`
@@ -221,6 +231,11 @@ func checkReportDiff(ctx context.Context, c *Client, endpoint, path string) erro
 
 	if json.Unmarshal(resp.Body, &comparison) != nil {
 		return fmt.Errorf("report: the compare's answer is no comparison: %w", publish.ErrGitHub)
+	}
+
+	if comparison.Status != "ahead" || comparison.AheadBy == nil || *comparison.AheadBy != 1 ||
+		comparison.BehindBy == nil || *comparison.BehindBy != 0 || comparison.MergeBaseCommit.SHA != audited {
+		return fmt.Errorf("report: the commit is not one commit on the audited one: %w", ErrReportDiff)
 	}
 
 	if comparison.Files == nil || len(*comparison.Files) != 1 {

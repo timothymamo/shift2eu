@@ -22,7 +22,11 @@ var (
 // in a DSSE envelope whose predicate is SLSA provenance.
 const (
 	inTotoPayloadType = "application/vnd.in-toto+json"
+	inTotoStatement   = "https://in-toto.io/Statement/v1"
 	slsaProvenance    = "https://slsa.dev/provenance/v1"
+	// releaseWorkflow is the one workflow whose provenance names a released
+	// image: the release workflow's path in the repository.
+	releaseWorkflow = ".github/workflows/release.yml"
 	// workflowServer is the server an attestation's workflow repository
 	// names: the one server the publish program publishes to.
 	workflowServer = "https://github.com/"
@@ -90,6 +94,7 @@ type attestationListing struct {
 
 // provenanceStatement is the part of an in-toto statement the check reads.
 type provenanceStatement struct {
+	Type          string `json:"_type"`
 	PredicateType string `json:"predicateType"`
 	Subject       []struct {
 		Digest struct {
@@ -102,6 +107,7 @@ type provenanceStatement struct {
 				Workflow struct {
 					Ref        string `json:"ref"`
 					Repository string `json:"repository"`
+					Path       string `json:"path"`
 				} `json:"workflow"`
 			} `json:"externalParameters"`
 		} `json:"buildDefinition"`
@@ -113,18 +119,23 @@ type provenanceStatement struct {
 // R/attestations/<digest>?per_page=100 (endpoint row 3), whose answer must
 // hold at least one attestation whose DSSE envelope's payload type is
 // application/vnd.in-toto+json and whose statement, base64-decoded, has the
-// predicate type https://slsa.dev/provenance/v1, a subject whose sha256
-// digest is the digest's hex, and a workflow (predicate.buildDefinition.
-// externalParameters.workflow) whose ref is refs/tags/<tag> and whose
-// repository is https://github.com/<the scope's repository>. No such
+// _type https://in-toto.io/Statement/v1, the predicate type
+// https://slsa.dev/provenance/v1, a subject whose sha256 digest is the
+// digest's hex, and a workflow (predicate.buildDefinition.
+// externalParameters.workflow) whose path is .github/workflows/release.yml,
+// whose ref is refs/tags/<tag> and whose repository is
+// https://github.com/<the scope's repository>. An attestation without an
+// inline bundle (one that names only a bundle_url) is not fetched and so
+// matches nothing. No such
 // attestation, a 404 and a digest the endpoint table refuses wrap
 // publish.ErrResultInvalid; any other non-2xx status, an answer that is not
 // the listing and a failed call wrap publish.ErrGitHub.
 //
 // It reads the statement only: it does not verify the bundle's Sigstore
 // signature or certificate (gh attestation verify would, and is outside the
-// gh api contract). What it proves is that GitHub holds a provenance
-// attestation of this repository's release workflow for the digest.
+// gh api contract). What it proves is that GitHub holds an attestation whose
+// unsigned statement says so: anyone who can run a workflow in the
+// repository with attestations: write could store one (ADR 0040).
 //
 // It runs on the image subcommand's read-only client, with the job's token
 // and attestations: read, never with the audit App's token, which has no
@@ -181,9 +192,9 @@ func CheckImageDigest(ctx context.Context, c *Client, tag, digest string) error 
 	return fmt.Errorf("image check: no provenance attestation of the release names the digest: %w", publish.ErrResultInvalid)
 }
 
-// provenanceMatches reports whether payload is an in-toto statement of SLSA
-// provenance with a subject of the digest's hex, built by the workflow ref
-// of the repository.
+// provenanceMatches reports whether payload is an in-toto v1 statement of
+// SLSA provenance with a subject of the digest's hex, built by the release
+// workflow's path at the workflow ref of the repository.
 func provenanceMatches(payload []byte, hexDigest, ref, repository string) bool {
 	var s provenanceStatement
 
@@ -193,7 +204,8 @@ func provenanceMatches(payload []byte, hexDigest, ref, repository string) bool {
 	}
 
 	w := s.Predicate.BuildDefinition.ExternalParameters.Workflow
-	if s.PredicateType != slsaProvenance || w.Ref != ref || w.Repository != repository {
+	if s.Type != inTotoStatement || s.PredicateType != slsaProvenance ||
+		w.Ref != ref || w.Repository != repository || w.Path != releaseWorkflow {
 		return false
 	}
 

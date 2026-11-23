@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -20,8 +21,9 @@ const commitRunLength = 40
 // CheckCommitRuns checks every distinct 40-hex run of the public model
 // fields (ADR 0040's residual risk of a hex-encoded secret): a maximal run of
 // exactly 40 hex digits, either case, read in lower case. Each must be a
-// commit of the repository: GET R/git/commits/<run> (row 4) answering 200.
-// A 404 and more than MaxCommitRuns distinct runs wrap publish.ErrScanRefused,
+// commit of the repository: GET R/git/commits/<run> (row 4) answering 2xx
+// with the run as its sha. A 404, a 2xx answer whose sha is absent or another
+// and more than MaxCommitRuns distinct runs wrap publish.ErrScanRefused,
 // the latter before any call; any other non-2xx status and a failed call
 // wrap publish.ErrGitHub. No error names a run. Each distinct run is looked
 // up once, in the order of its first appearance.
@@ -55,6 +57,16 @@ func CheckCommitRuns(ctx context.Context, c *Client, fields []string) error {
 			return fmt.Errorf("commit runs: a 40-hex run that is no commit: %w", publish.ErrScanRefused)
 		case resp.Status/100 != 2:
 			return fmt.Errorf("commit runs: the lookup's status is not 2xx: %w", publish.ErrGitHub)
+		}
+
+		var commit struct {
+			SHA string `json:"sha"`
+		}
+
+		// The answer must be the run's own commit: an absent or another sha
+		// is no proof that the run is a commit.
+		if json.Unmarshal(resp.Body, &commit) != nil || commit.SHA != run {
+			return fmt.Errorf("commit runs: the lookup answered another commit: %w", publish.ErrScanRefused)
 		}
 	}
 

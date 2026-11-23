@@ -83,18 +83,22 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	switch {
 	case len(args) > 0 && args[0] == "artifacts":
 		err = artifacts(ctx, args[1:], lookup, now)
+	case len(args) > 0 && args[0] == "image" && summary == nil:
+		// A report subcommand refuses a summary it cannot append its line to
+		// before it starts, so it makes no gh call at all.
+		outcome, err = github.ImageOutcome, publish.ErrConfig
 	case len(args) > 0 && args[0] == "image":
 		outcome = github.ImageOutcome
 		err = image(ctx, args[1:], lookup, now)
+	case len(args) > 0 && args[0] == "publish" && summary == nil:
+		// The same refusal: a publish that could not report its outcome would
+		// leave a pull request and issues behind a configuration line.
+		outcome, err = publishOutcome(github.Published{}), publish.ErrConfig
 	case len(args) > 0 && args[0] == "publish":
 		var p github.Published
 
 		p, err = publishRun(ctx, args[1:], lookup, now)
-		outcome = func(e error) (string, int) {
-			o := publish.OutcomeOf(e).WithCounts(p.Public, p.Private)
-
-			return o.Summary(), o.Code()
-		}
+		outcome = publishOutcome(p)
 	default:
 		err = errUsage
 	}
@@ -105,6 +109,16 @@ func run(ctx context.Context, args []string, lookup func(string) (string, bool),
 	}
 
 	return finish(stdout, summary, outcome, err)
+}
+
+// publishOutcome maps the publish subcommand's error to its line, with the
+// counts of what it published.
+func publishOutcome(p github.Published) outcomeFunc {
+	return func(e error) (string, int) {
+		o := publish.OutcomeOf(e).WithCounts(p.Public, p.Private)
+
+		return o.Summary(), o.Code()
+	}
 }
 
 // parseFlags parses a subcommand's flags, each of which must be given, and
