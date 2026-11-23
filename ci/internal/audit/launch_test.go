@@ -170,12 +170,13 @@ func TestPromptNeedsTheSkillsCopy(t *testing.T) {
 	}
 }
 
-// TestPromptStatesThePublishCoresTextRules pins the three rules of item 8 (PRD
+// TestPromptStatesThePublishCoresTextRules pins the four rules of item 8 (PRD
 // #175 milestone 2, ADR 0040's model-job amendment): the user prompt tells the
 // model what the publish core refuses in the result's text, so a finding's
 // wording does not refuse the whole run. The prompt is also compared character
 // by character: it is a text the model copies the style of, so it holds
-// printable ASCII alone, as the result it asks for must.
+// printable ASCII alone, as the result it asks for must, and it never carries
+// the marker it refuses.
 func TestPromptStatesThePublishCoresTextRules(t *testing.T) {
 	t.Parallel()
 
@@ -206,6 +207,14 @@ func TestPromptStatesThePublishCoresTextRules(t *testing.T) {
 			name:  "a 40- or 64-hex run that decodes to printable ASCII is refused",
 			words: []string{"40- or 64-hex", "printable ASCII", "refused"},
 		},
+		{
+			// gitleaks honours its inline allow comment in the text it reads,
+			// and the repository itself now holds it: a model that quotes the
+			// line refuses the whole run, so the prompt names the marker in
+			// words instead of writing it.
+			name:  "gitleaks' inline allow comment is never written, only named in words",
+			words: []string{"gitleaks' inline allow comment", "in words"},
+		},
 	} {
 		t.Run(rule.name, func(t *testing.T) {
 			t.Parallel()
@@ -217,6 +226,22 @@ func TestPromptStatesThePublishCoresTextRules(t *testing.T) {
 				}
 			}
 		})
+	}
+
+	// The prompt describes the marker it must not carry: a prompt that wrote
+	// gitleaks' inline allow comment literally, in any case, would trip the
+	// refusal it states, and the whole run with it.
+	for _, text := range []struct {
+		what string
+		body string
+	}{
+		{what: "user text", body: prompt.User},
+		{what: "system text", body: prompt.System},
+	} {
+		if strings.Contains(strings.ToLower(text.body), "gitleaks:allow") {
+			t.Errorf("the prompt's %s holds gitleaks' inline allow comment literally, want it named in words instead: gitleaks honours the marker, so the run refuses its own prompt (ADR 0040)\nthe prompt: %s",
+				text.what, text.body)
+		}
 	}
 
 	// The prompt is a text the model copies the style of: no character of it is
