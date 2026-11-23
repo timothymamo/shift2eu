@@ -110,6 +110,21 @@ func newFixtureClient(t *testing.T, ghPath string) *github.Client {
 	})
 }
 
+// newReadOnlyClient returns a client for ghPath whose scope is scope, built
+// with ReadOnly set: the artifacts subcommand's client, which reads the run's
+// artifacts and may write nothing.
+func newReadOnlyClient(t *testing.T, ghPath string, scope github.Scope) *github.Client {
+	t.Helper()
+
+	return newTestClient(t, github.ClientConfig{
+		GHPath:   ghPath,
+		Token:    github.NewToken(fixtureToken(t)),
+		TempDir:  t.TempDir(),
+		Scope:    scope,
+		ReadOnly: true,
+	})
+}
+
 // newArtifactClient returns a client for ghPath with the artifact check's
 // scope, a fresh token and a fresh temporary directory.
 func newArtifactClient(t *testing.T, ghPath string) *github.Client {

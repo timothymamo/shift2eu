@@ -336,6 +336,84 @@ func TestCallRefusesOutputOverTheCap(t *testing.T) {
 	}
 }
 
+// TestCallRefusesEveryWriteOfAReadOnlyClient pins the artifacts subcommand's
+// client (audit finding 2): a client built with ReadOnly reads and can write
+// nothing, so a call the endpoint table accepts is refused before gh runs, with
+// the same ErrEndpointRefused that an endpoint outside the table gets. Each
+// write row of the table is one case, on the body the table accepts for a
+// publish scope, so the refusal is ReadOnly's alone: the table allows the very
+// request without it.
+func TestCallRefusesEveryWriteOfAReadOnlyClient(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range writeEndpoints() {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if err := github.Allowed(testScope(), tc.method, tc.endpoint, bodyBytes(tc.body)); err != nil {
+				t.Fatalf("Allowed(%s %s) = %v, want no error: the case's request is one the table accepts", tc.method, tc.endpoint, err)
+			}
+
+			fake := newFakeGH(t)
+			client := newReadOnlyClient(t, fake.Path, testScope())
+
+			_, err := client.Call(t.Context(), github.Request{Method: tc.method, Endpoint: tc.endpoint, Body: requestBody(t, tc.body)})
+			if !errors.Is(err, github.ErrEndpointRefused) {
+				t.Fatalf("Call(%s %s) on a read-only client = %v, want an error wrapping ErrEndpointRefused", tc.method, tc.endpoint, err)
+			}
+
+			if calls := fake.Calls(t); len(calls) != 0 {
+				t.Errorf("the refused call ran gh %d time(s), want 0: %+v", len(calls), calls)
+			}
+		})
+	}
+}
+
+// TestReadOnlyClientStillReadsAndItsWritesReachGHAgainWithoutTheFlag pins the
+// other side of ReadOnly: the artifact check's one read runs on a read-only
+// client as it does on any other, and the same write reaches gh when ReadOnly
+// is not set, so the refusals above are the flag's and not the cases'.
+func TestReadOnlyClientStillReadsAndItsWritesReachGHAgainWithoutTheFlag(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the run's artifact listing still runs", func(t *testing.T) {
+		t.Parallel()
+
+		fake := newFakeGH(t, artifactsRoute(1, artifactEntry{name: github.ArtifactChecksResult}))
+		client := newReadOnlyClient(t, fake.Path, artifactScope())
+
+		if err := github.CheckArtifacts(t.Context(), client, github.JobModel); err != nil {
+			t.Fatalf("CheckArtifacts on a read-only client = %v, want no error", err)
+		}
+
+		if calls := fake.Calls(t); len(calls) != 1 || calls[0].Endpoint != fixtureArtifactsEndpoint {
+			t.Errorf("the check made %+v, want one call to %s", calls, fixtureArtifactsEndpoint)
+		}
+	})
+
+	t.Run("a write without ReadOnly reaches gh", func(t *testing.T) {
+		t.Parallel()
+
+		endpoint := fixtureRepoPrefix + "/git/blobs"
+
+		fake := newFakeGH(t, Route{Method: "POST", Endpoint: endpoint, Status: 201, Body: map[string]string{"sha": fixtureSHA}})
+		client := newFixtureClient(t, fake.Path)
+
+		_, err := client.Call(t.Context(), github.Request{
+			Method:   "POST",
+			Endpoint: endpoint,
+			Body:     map[string]any{"content": "aGVsbG8=", "encoding": "utf-8"},
+		})
+		if err != nil {
+			t.Fatalf("Call of a blob without ReadOnly = %v, want no error", err)
+		}
+
+		if calls := fake.Calls(t); len(calls) != 1 || calls[0].Method != "POST" {
+			t.Errorf("the write made %+v, want one POST to gh", calls)
+		}
+	})
+}
+
 // TestCloseRemovesTheTemporaryDirectory pins that a client leaves nothing
 // behind: NewClient makes its fresh directory under TempDir, and Close removes
 // it.

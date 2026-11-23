@@ -81,6 +81,22 @@ func acceptedEndpoints() []endpointCase {
 	}
 }
 
+// writeEndpoints is every write row of the table with a call the table
+// accepts, taken from acceptedEndpoints so that the two cannot drift: the rows
+// that create the report's blob, tree, commit and ref, the pull request, the
+// issues and the advisories, and the one that updates an advisory.
+func writeEndpoints() []endpointCase {
+	out := make([]endpointCase, 0, len(acceptedEndpoints()))
+
+	for _, tc := range acceptedEndpoints() {
+		if tc.method != "GET" {
+			out = append(out, tc)
+		}
+	}
+
+	return out
+}
+
 // refusedEndpoints is a near miss of every row: another repository, another run
 // ID, another branch or date or ref, a tree of two entries or another path, a
 // commit whose parent is not the audited SHA, a pull request a maintainer may

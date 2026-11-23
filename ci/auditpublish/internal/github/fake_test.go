@@ -75,6 +75,9 @@ type Route struct {
 	Body any
 	// Link is the answer's Link header, none when empty.
 	Link string
+	// Trailing is written after the body, verbatim: data after the JSON
+	// document, which no JSON answer of GitHub's carries.
+	Trailing string
 	// Delay is how long the fake waits before answering, none when zero: a
 	// route that outlives the caller's deadline.
 	Delay time.Duration
@@ -87,6 +90,7 @@ type routeRecord struct {
 	Status   int             `json:"status"`
 	Body     json.RawMessage `json:"body"`
 	Link     string          `json:"link,omitempty"`
+	Trailing string          `json:"trailing,omitempty"`
 	DelayMS  int64           `json:"delay_ms,omitempty"`
 }
 
@@ -140,6 +144,7 @@ func newFakeGH(t *testing.T, routes ...Route) *FakeGH {
 			Status:   r.Status,
 			Body:     body,
 			Link:     r.Link,
+			Trailing: r.Trailing,
 			DelayMS:  r.Delay.Milliseconds(),
 		})
 	}
@@ -439,7 +444,10 @@ func fakeGHMain() int {
 	}
 
 	status, body, link := fakeGuardStatus, json.RawMessage(`{"message":"refused by the fake gh"}`), ""
-	var delay time.Duration
+	var (
+		trailing string
+		delay    time.Duration
+	)
 
 	if call.Violation == "" {
 		route, ok, err := nextRoute(dir, method, endpoint)
@@ -449,7 +457,7 @@ func fakeGHMain() int {
 
 			return 1
 		case ok:
-			status, body, link = route.Status, route.Body, route.Link
+			status, body, link, trailing = route.Status, route.Body, route.Link, route.Trailing
 			delay = time.Duration(route.DelayMS) * time.Millisecond
 		default:
 			call.Unmatched = true
@@ -478,6 +486,7 @@ func fakeGHMain() int {
 
 	out.WriteString("\r\n")
 	out.Write(body)
+	out.WriteString(trailing)
 
 	_, _ = io.WriteString(os.Stdout, out.String())
 

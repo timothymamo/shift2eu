@@ -8,6 +8,7 @@ package github_test
 // one summary line and exit code come from the error's class alone.
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -44,6 +45,26 @@ func artifactsRoute(total int, entries ...artifactEntry) Route {
 	}
 }
 
+// artifactListingJSON is the listing of entries as GitHub writes it, so that a
+// case can put data after it: the fake gh writes a json.RawMessage body
+// verbatim.
+func artifactListingJSON(t *testing.T, total int, entries ...artifactEntry) []byte {
+	t.Helper()
+
+	artifacts := make([]map[string]any, 0, len(entries))
+
+	for _, e := range entries {
+		artifacts = append(artifacts, map[string]any{"name": e.name, "expired": e.expired})
+	}
+
+	body, err := json.Marshal(map[string]any{"total_count": total, "artifacts": artifacts})
+	if err != nil {
+		t.Fatalf("marshal the artifact listing: %v", err)
+	}
+
+	return body
+}
+
 // artifactCase is one answer to the check and the verdict it must draw.
 type artifactCase struct {
 	name  string
@@ -54,12 +75,27 @@ type artifactCase struct {
 
 // artifactCases is the check's answers for one job's expected names: the right
 // list, and each way a list is wrong.
-func artifactCases(expected []artifactEntry) []artifactCase {
+func artifactCases(t *testing.T, expected []artifactEntry) []artifactCase {
+	t.Helper()
+
 	extra := append(append([]artifactEntry{}, expected...), artifactEntry{name: "unexpected-artifact"})
 	duplicate := append(append([]artifactEntry{}, expected...), expected[0])
 	expired := append([]artifactEntry{}, expected...)
 	expired[0].expired = true
 	missing := expected[1:]
+	listing := artifactListingJSON(t, len(expected), expected...)
+
+	// withTrailing answers the one call with the listing followed by trailing
+	// data, written after the JSON document as it is.
+	withTrailing := func(trailing string) Route {
+		return Route{
+			Method:   "GET",
+			Endpoint: fixtureArtifactsEndpoint,
+			Status:   200,
+			Body:     json.RawMessage(listing),
+			Trailing: trailing,
+		}
+	}
 
 	return []artifactCase{
 		{name: "exactly the job's artifacts", route: artifactsRoute(len(expected), expected...), want: nil},
@@ -77,6 +113,26 @@ func artifactCases(expected []artifactEntry) []artifactCase {
 			name:  "an answer that is not the artifact listing",
 			route: Route{Method: "GET", Endpoint: fixtureArtifactsEndpoint, Status: 200, Body: map[string]string{"message": artifactsResponseMarker}},
 			want:  publish.ErrGitHub,
+		},
+		{
+			// The listing is read with one Decode, which must be the whole
+			// answer: data after the object is no listing, as the allow list's
+			// decodeObject already refuses it (ADR 0040).
+			name:  "a listing followed by a second object",
+			route: withTrailing(`{"total_count":0,"artifacts":[]}`),
+			want:  publish.ErrGitHub,
+		},
+		{
+			name:  "a listing followed by junk",
+			route: withTrailing("\nthe rest of the answer, which is no JSON\n"),
+			want:  publish.ErrGitHub,
+		},
+		{
+			// Whitespace after the object is no data after it: the decoder
+			// reads it and the listing stands.
+			name:  "a listing followed by whitespace alone",
+			route: withTrailing(" \n\t\r\n"),
+			want:  nil,
 		},
 	}
 }
@@ -99,7 +155,7 @@ func TestCheckArtifactsRefusesAnyListThatIsNotExactlyTheJobs(t *testing.T) {
 		t.Run(j.name, func(t *testing.T) {
 			t.Parallel()
 
-			for _, tc := range artifactCases(j.expected) {
+			for _, tc := range artifactCases(t, j.expected) {
 				t.Run(tc.name, func(t *testing.T) {
 					t.Parallel()
 
