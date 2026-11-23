@@ -22,7 +22,9 @@ const boundedWaitDelay = 5 * time.Second
 // exit 0, cmd.Run's error (an *exec.ExitError on a non-zero exit) otherwise, and on the timeout an error wrapping
 // errCommandTimedOut that names the bound, the command line, its directory and what it wrote until then, so a
 // blocked command fails its test with all a reader needs, instead of blocking it until go test's package timeout
-// names nothing (issue #512). stdin stays as the caller left it: nil, /dev/null.
+// names nothing (issue #512). A command that exited on its own before the bound fired, while a grandchild kept
+// its stdout or stderr open, is never reported as a timeout: the kill still ends that grandchild, and the
+// command's own status is returned. stdin stays as the caller left it: nil, /dev/null.
 func runBounded(cmd *exec.Cmd, timeout time.Duration) (stdout, stderr string, err error) {
 	var outBuf, errBuf bytes.Buffer
 
@@ -55,8 +57,23 @@ func runBounded(cmd *exec.Cmd, timeout time.Duration) (stdout, stderr string, er
 	case <-done:
 		return outBuf.String(), errBuf.String(), status
 	case <-timer.C:
+		// Wait may have returned just as the bound fired, and select picks among ready channels at random.
+		select {
+		case <-done:
+			return outBuf.String(), errBuf.String(), status
+		default:
+		}
+
+		// The kill ends the command if it still runs, and whatever it started that holds its stdout or stderr
+		// open, so Wait returns.
 		group.kill()
 		<-done
+
+		// A command that had exited on its own before the kill, while a grandchild kept Wait waiting for its
+		// pipes, ran within its bound: its own status is the run's result, never a timeout (issue #512).
+		if endedOnItsOwn(cmd.ProcessState) {
+			return outBuf.String(), errBuf.String(), status
+		}
 
 		// The wait status (the kill's) is only text here: wrapped, a timeout would errors.As-match the
 		// *exec.ExitError a non-zero exit returns.

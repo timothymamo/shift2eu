@@ -3712,9 +3712,11 @@ func runMake(t *testing.T, args []string, env map[string]string) (string, string
 
 // runMakeIn runs make in dir with args and env alone, never the test process's own environment: the
 // vm-gh-wrapper tests copy the Makefile and the script it runs into a temporary directory, so one recipe can
-// be run against a stand-in generator. It runs make through runBounded with makeRunBound, and fails the test
-// on the timeout: a test that expects a refusal, a non-zero exit, would otherwise pass on a make that was killed
-// (issue #512).
+// be run against a stand-in generator. It runs make through runBounded with makeRunBound, and fails the test on
+// every error makeRunFailure counts as a failure of the run: a test that expects a refusal, a non-zero exit, only
+// checks err != nil, and would otherwise pass on a make that was killed, that exited 0 but left a grandchild
+// holding its pipes past the wait delay, or that never started (issue #512). It returns err unchanged otherwise:
+// nil, or make's own *exec.ExitError, which the tests assert on.
 func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (string, string, error) {
 	t.Helper()
 
@@ -3723,11 +3725,28 @@ func runMakeIn(t *testing.T, dir string, args []string, env map[string]string) (
 	cmd.Dir = dir
 
 	stdout, stderr, err := runBounded(cmd, makeRunBound)
-	if errors.Is(err, errCommandTimedOut) {
-		t.Fatalf("make %v: %v", args, err)
+	if failure := makeRunFailure(err); failure != nil {
+		t.Fatalf("make %v in %s: %v\nstdout:\n%s\nstderr:\n%s", args, dir, failure, stdout, stderr)
 	}
 
 	return stdout, stderr, err
+}
+
+// makeRunFailure is nil when err is make's own result, nil or an error errors.As-matching *exec.ExitError (make
+// exited non-zero), and otherwise an error wrapping err that says the run itself failed: the bound's timeout
+// (errCommandTimedOut), the wait delay's exec.ErrWaitDelay, a make that never started. None of those is a
+// verdict on the recipe (issue #512).
+func makeRunFailure(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return nil
+	}
+
+	return fmt.Errorf("the make run failed, so its result is no verdict of make's on the recipe: %w", err)
 }
 
 // makeRunBound is how long runMakeIn lets one make run before it kills it and fails the test. One run takes

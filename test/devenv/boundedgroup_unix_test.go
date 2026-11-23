@@ -74,3 +74,9 @@ func (g *boundedGroup) release() {
 	_ = g.stdin.Close()
 	_ = g.holder.Wait()
 }
+
+// endedOnItsOwn reports whether the command, reaped with state, exited rather than died of a signal: kill's
+// SIGKILL cannot be caught, so an exit is the command's own, from before the kill.
+func endedOnItsOwn(state *os.ProcessState) bool {
+	return state != nil && state.Exited()
+}

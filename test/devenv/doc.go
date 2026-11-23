@@ -91,9 +91,13 @@
 // as on the Mac. Without it the test skips. Every make run of runMakeIn goes
 // through runBounded (boundedrun_test.go, issue #512): after makeRunBound it
 // kills make's whole process group and fails the test naming the command, its
-// directory and what it wrote, so a blocked make cannot pass a test that
-// expects a refusal nor run into go test's package timeout, which names
-// nothing; TestRunBounded pins that runner. TestTestsRunMakeThroughMakeProgram
+// directory and what it wrote, so a blocked make cannot run into go test's
+// package timeout, which names nothing; a make that exited on its own before
+// the bound is never reported as a timeout. runMakeIn fails the test on every
+// error but nil and make's own *exec.ExitError (makeRunFailure): a timeout, a
+// grandchild holding the pipes past the wait delay or a make that never
+// started cannot pass a test that expects a refusal. TestRunBounded pins that
+// runner, TestMakeRunFailure that classification. TestTestsRunMakeThroughMakeProgram
 // (makeprogramscan_test.go) refuses a literal make handed to exec.Command or
 // exec.CommandContext in the package's test files, a guard against a test
 // that runs make by accident: it catches the literal "make" or "gmake", not a
