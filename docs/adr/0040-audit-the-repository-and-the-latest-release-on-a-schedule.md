@@ -372,7 +372,8 @@ not 40 lowercase hex is the caller's, `ErrConfig`):
 - every string valid UTF-8, its cap counted in **bytes**, and **the text rule**, an allow list
   (`textRune`, which `ParsePreviousReport`'s cell check applies too): a field holds only printable
   ASCII, U+0020 to U+007E, and a field marked *multi-line* below that plus LF and TAB; a previous
-  report's cell holds only U+0020 to U+007E. Every other rune is refused. A lookalike letter (Cyrillic
+  report's model cell (location, scenario, fix, a False positives reason) holds only U+0020 to U+007E;
+  a fixed row's cells are exactly `—`. Every other rune is refused. A lookalike letter (Cyrillic
   and Greek letters for Latin ones, the fullwidth forms), a combining mark with no glyph of its own, a
   typographic dash or quote the eye reads as an ASCII one, and a rune that renders as nothing or as
   blank space all carry a token past the maintainer's eye and past every pattern, and a list of
@@ -516,7 +517,7 @@ the run is the first. It checks exactly these parts, and no other text of the re
 name's date; the eight `##` sections in order and no other heading; each table's exact header and
 delimiter; seven cells per findings row, a fingerprint, a public severity, a public category, a status,
 and three cells that are each exactly what `TableCell` writes for a text of printable ASCII
-alone (the text rule) (or `—` three times on a `fixed` row); one private-findings line in the section and the same one
+alone (the text rule), or `—` three times on a `fixed` row; one private-findings line in the section and the same one
 in the Summary; two cells per False positives row, the reason exactly such a `TableCell`, which is then
 carried forward byte for byte; no fingerprint twice. **The first-report rule**: when the Changes section
 holds the line "First report.", that line must be the section's only line before the dependencies' line
@@ -677,7 +678,9 @@ entry point; the core adds:
     field to name a commit of the repository, which leaves the 64-hex runs;
   - **ASCII spacing**: which runs of U+0020 a model writes is a channel (TAB and LF in a multi-line
     field become U+0020 in a code span): inside a code span the extra spaces show only as a slightly
-    wider gap, which the eye does not read.
+    wider gap, which the eye does not read. In a code block (the fourth pull request's advisory and
+    issue bodies, `CodeBlock`) TAB against spaces and trailing spaces on a line also carry bits; that
+    text goes to private advisories and issues, not to the public report.
 
   A model steered to leak the subscription token could so reach the public report. The model step's
   containment is what keeps the token from the model (Decision 6); the scan is the last line, and runbook
