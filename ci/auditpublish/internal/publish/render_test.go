@@ -1,6 +1,7 @@
 package publish_test
 
 import (
+	"encoding/hex"
 	"errors"
 	"os"
 	"slices"
@@ -552,6 +553,8 @@ func TestRenderReportModelFields(t *testing.T) {
 		}
 	}
 
+	want = append(want, publish.CodeSpan(in.Result.ImageDigest))
+
 	want = append(want, publish.TableCell(in.Result.Changes.Narrative))
 
 	for _, dependency := range in.Result.Changes.Dependencies {
@@ -573,7 +576,7 @@ func TestRenderReportModelFields(t *testing.T) {
 	}
 
 	// The script's own values are no model field.
-	for _, value := range []string{testCommit, testTag, testDigest, in.Run.URL(), fingerprintOf(in.Result.Findings[0])} {
+	for _, value := range []string{testCommit, testTag, in.Run.URL(), fingerprintOf(in.Result.Findings[0])} {
 		if strings.Contains(fields, value) {
 			t.Errorf("the renderer's model fields hold %q, a value the script wrote", value)
 		}
@@ -624,6 +627,86 @@ func TestRenderReportPassesTheDocsChecks(t *testing.T) {
 
 	if _, err := os.ReadFile(page); err != nil {
 		t.Errorf("the report's [Security](../README.md) does not resolve from docs/security/audits: %v", err)
+	}
+}
+
+// TestRenderReportImageDigestIsModelText pins that the model chooses the image
+// digest, so the core treats it as model text: the Scope renders it as a code
+// span, the renderer lists it among the model fields, and the scan therefore
+// refuses a digest whose hex decodes to printable ASCII by the hex rule, while
+// the fixture's own digest is published.
+func TestRenderReportImageDigestIsModelText(t *testing.T) {
+	t.Parallel()
+
+	key := testKey(t)
+
+	tests := []struct {
+		name        string
+		digest      string
+		wantRefused bool
+	}{
+		{
+			name:   "the fixture's digest is published",
+			digest: testDigest,
+		},
+		{
+			name:        "a digest whose hex decodes to text is refused",
+			digest:      "sha256:" + hex.EncodeToString([]byte(strings.Repeat("A", 32))),
+			wantRefused: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			in := richInput(t)
+			in.Result.ImageDigest = tc.digest
+
+			rendered := renderReport(t, in)
+
+			if scope := sectionText(t, rendered.Body, "Scope"); !strings.Contains(scope, publish.CodeSpan(tc.digest)) {
+				t.Errorf("the Scope section does not hold the digest as the code span %q:\n%s", publish.CodeSpan(tc.digest), scope)
+			}
+
+			if !slices.Contains(rendered.ModelFields, publish.CodeSpan(tc.digest)) {
+				t.Errorf("the renderer's model fields do not list the digest %q: %v", publish.CodeSpan(tc.digest), rendered.ModelFields)
+			}
+
+			err := publish.ScanPublic(rendered.Body, rendered.ModelFields, key)
+
+			if tc.wantRefused {
+				wantRefused(t, err, tc.digest)
+
+				return
+			}
+
+			wantAllowed(t, err)
+		})
+	}
+}
+
+// TestRenderReportRefusesAZeroPrevious pins that RenderReport renders only
+// from a previous report ParsePreviousReport returned: a zero Previous carries
+// no name and no date a parsed report has, and the internal test pins the
+// hand-built one that carries both.
+func TestRenderReportRefusesAZeroPrevious(t *testing.T) {
+	t.Parallel()
+
+	zero := &publish.Previous{}
+
+	rendered, err := publish.RenderReport(publish.ReportInput{
+		Result:   fixtureResult(),
+		Run:      testRun(t, testDate, testRunID),
+		Private:  publish.PrivateNone,
+		Previous: zero,
+	})
+	if err == nil {
+		t.Fatalf("RenderReport with a zero Previous returned the report %q, want an error wrapping ErrPreviousReport", rendered.Body)
+	}
+
+	if !errors.Is(err, publish.ErrPreviousReport) {
+		t.Errorf("RenderReport with a zero Previous: error %v does not wrap ErrPreviousReport", err)
 	}
 }
 

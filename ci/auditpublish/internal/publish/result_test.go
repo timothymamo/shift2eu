@@ -747,6 +747,53 @@ func TestParseResultRefuses(t *testing.T) {
 		})
 	}
 
+	// The invisible characters no field may hold: every format, private-use and
+	// unassigned code point, the noncharacters, the variation selectors, the tag
+	// characters and the named invisible ones, each in a single-line field and
+	// in a multi-line one. A report a maintainer cannot see is no gate at all.
+	invisible := []struct {
+		name string
+		r    rune
+	}{
+		{"a tag character", 0xe0041},
+		{"a variation selector", 0xfe0f},
+		{"a variation selector supplement", 0xe0100},
+		{"a Mongolian free variation selector", 0x180b},
+		{"a soft hyphen", 0x00ad},
+		{"the combining grapheme joiner", 0x034f},
+		{"the Hangul choseong filler", 0x115f},
+		{"the Hangul jungseong filler", 0x1160},
+		{"a Khmer inherent vowel", 0x17b4},
+		{"an invisible operator", 0x2062},
+		{"the invisible plus", 0x2064},
+		{"the Arabic number sign", 0x0600},
+		{"the Hangul filler", 0x3164},
+		{"the halfwidth Hangul filler", 0xffa0},
+		{"a private-use character", 0xe000},
+		{"a supplementary private-use character", 0xf0000},
+		{"a noncharacter", 0xfdd0},
+		{"a noncharacter in the last plane", 0x10fffe},
+		{"an unassigned code point", 0x0378},
+		{"an unassigned code point past the invisibles", 0x2065},
+	}
+
+	for _, cp := range invisible {
+		cases = append(cases,
+			resultCase{
+				name:  cp.name + " in a single-line field",
+				doc:   runeInDismissal(cp.r),
+				field: "findings[0].dismissal",
+				value: string(cp.r),
+			},
+			resultCase{
+				name:  cp.name + " in a multi-line field",
+				doc:   runeInEvidence(cp.r),
+				field: "findings[0].evidence",
+				value: string(cp.r),
+			},
+		)
+	}
+
 	// LF and TAB outside the multi-line fields.
 	lfOutside := func(mutate func(*docResult)) func(*testing.T) []byte {
 		return func(t *testing.T) []byte {
@@ -849,6 +896,94 @@ func runeInScenario(r rune) func(*testing.T) []byte {
 		spec.Findings[0].Scenario = "see " + string(r) + " here"
 
 		return spec.json(t)
+	}
+}
+
+// runeInDismissal returns a document whose finding's dismissal holds r, a
+// single-line field.
+func runeInDismissal(r rune) func(*testing.T) []byte {
+	return func(t *testing.T) []byte {
+		t.Helper()
+
+		spec := minimalSpec().withFinding(oneFinding())
+		spec.Findings[0].Dismissal = "see " + string(r) + " here"
+
+		return spec.json(t)
+	}
+}
+
+// runeInEvidence returns a document whose finding's evidence holds r, a
+// multi-line field.
+func runeInEvidence(r rune) func(*testing.T) []byte {
+	return func(t *testing.T) []byte {
+		t.Helper()
+
+		spec := minimalSpec().withFinding(oneFinding())
+		spec.Findings[0].Evidence = "see " + string(r) + " here"
+
+		return spec.json(t)
+	}
+}
+
+// TestParseResultJSONDepthBound pins the parser's nesting bound independently
+// of what the schema allows: a document whose deepest value sits eight levels
+// below its top object is parsed and then refused by the schema for the field's
+// type, and a document one level deeper is refused by the parser itself as not
+// one JSON value (ADR 0040, "The result schema").
+func TestParseResultJSONDepthBound(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// arrays is how many arrays nest inside the top object, so the
+		// document's deepest value sits arrays+2 levels down.
+		arrays int
+		levels int
+		// holds is the rule the error must name: the schema's when the parser
+		// read the document, the parser's when it refused to.
+		holds string
+		// lacks is the rule the error must not name.
+		lacks string
+	}{
+		{
+			name:   "eight levels are parsed, then refused by the schema",
+			arrays: 6,
+			levels: 8,
+			holds:  "schema: not an integer",
+			lacks:  "not one JSON value",
+		},
+		{
+			name:   "nine levels are refused by the parser",
+			arrays: 7,
+			levels: 9,
+			holds:  "not one JSON value",
+			lacks:  "schema",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			nested := strings.Repeat("[", tc.arrays) + "1" + strings.Repeat("]", tc.arrays)
+
+			result, err := publish.ParseResult(edited(minimalSpec(), `"schema":1`, `"schema":`+nested)(t), testCommit)
+			if err == nil {
+				t.Fatalf("ParseResult accepted a document nested %d levels deep and returned %+v, want it refused", tc.levels, result)
+			}
+
+			if !errors.Is(err, publish.ErrResultInvalid) {
+				t.Errorf("ParseResult: error %v does not wrap ErrResultInvalid", err)
+			}
+
+			if !strings.Contains(err.Error(), tc.holds) {
+				t.Errorf("ParseResult over %d levels: error %q does not name %q: the depth bound must sit at eight levels", tc.levels, err.Error(), tc.holds)
+			}
+
+			if strings.Contains(err.Error(), tc.lacks) {
+				t.Errorf("ParseResult over %d levels: error %q names %q, want %q alone", tc.levels, err.Error(), tc.lacks, tc.holds)
+			}
+		})
 	}
 }
 

@@ -182,6 +182,13 @@ func TestParsePreviousReportRefuses(t *testing.T) {
 			data: tampered(body, fingerprintOf(suspected), "fp-0123456789zz"),
 		},
 		{
+			// The cell holds a tag character: invisible to the maintainer who
+			// reviews the report, so it is no table cell the core may carry.
+			name: "a model cell holding an invisible character",
+			file: name,
+			data: tampered(body, "` a fix `", "` a\uE0041 fix `"),
+		},
+		{
 			name: "a status cell outside the vocabulary",
 			file: name,
 			data: tampered(body, "| new |", "| gone |"),
@@ -219,6 +226,59 @@ func TestParsePreviousReportRefuses(t *testing.T) {
 
 			if !errors.Is(err, publish.ErrPreviousReport) {
 				t.Errorf("ParsePreviousReport(%q): error %v does not wrap ErrPreviousReport", tc.file, err)
+			}
+		})
+	}
+}
+
+// TestParsePreviousReportFirstReportIsAlone pins the Changes section's
+// first-report rule: First report. is the section's only line before the
+// Dependencies line, so a first report carrying another line, or carrying it
+// after the dependencies, is refused.
+func TestParsePreviousReportFirstReportIsAlone(t *testing.T) {
+	t.Parallel()
+
+	// A first report with no dependency, so the section reads First report. and
+	// then the dependencies' own line.
+	first := fixtureResult()
+	first.Changes.Dependencies = nil
+
+	rendered := renderReport(t, publish.ReportInput{
+		Result:  first,
+		Run:     testRun(t, testDate, testRunID),
+		Private: publish.PrivateNone,
+	})
+
+	body := rendered.Body
+	name := path.Base(rendered.Path)
+
+	tests := []struct {
+		name string
+		data func(*testing.T) []byte
+	}{
+		{
+			name: "First report. among other lines",
+			data: tampered(body, "First report.\n", "First report.\n\n- fp-0123456789ab: still open\n"),
+		},
+		{
+			name: "First report. after the dependencies",
+			data: tampered(body,
+				"First report.\n\nDependencies changed since the last audit: none.",
+				"Dependencies changed since the last audit: none.\n\nFirst report."),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			previous, err := publish.ParsePreviousReport(name, tc.data(t))
+			if err == nil {
+				t.Fatalf("ParsePreviousReport returned %+v, want an error wrapping ErrPreviousReport", previous)
+			}
+
+			if !errors.Is(err, publish.ErrPreviousReport) {
+				t.Errorf("ParsePreviousReport: error %v does not wrap ErrPreviousReport", err)
 			}
 		})
 	}
@@ -509,6 +569,239 @@ func TestReportStatus(t *testing.T) {
 
 		if changes := sectionText(t, body, "Changes since the last audit"); strings.Contains(changes, fingerprintOf(suspected)) {
 			t.Errorf("the Changes section holds the suspected finding's fingerprint, want no line for it:\n%s", changes)
+		}
+	})
+}
+
+// renderAndRead renders in and reads the report back as a later run's previous
+// report, returning the rendered body as well.
+func renderAndRead(t *testing.T, in publish.ReportInput) (string, *publish.Previous) {
+	t.Helper()
+
+	rendered := renderReport(t, in)
+
+	previous, err := publish.ParsePreviousReport(path.Base(rendered.Path), []byte(rendered.Body))
+	if err != nil {
+		t.Fatalf("ParsePreviousReport(%q) on the report the core rendered: %v", path.Base(rendered.Path), err)
+	}
+
+	return rendered.Body, &previous
+}
+
+// TestPublicFindingThatTurnsPrivate pins the one disclosure a report must not
+// make: a finding the previous report listed as public new or open, which this
+// run places private, keeps the previous report's public row as open, with its
+// cells carried byte for byte, and gets a still-open Changes line. Nothing of
+// this run's private placement reaches the report, and the Changes section never
+// says no public finding changed its status.
+func TestPublicFindingThatTurnsPrivate(t *testing.T) {
+	t.Parallel()
+
+	public := finding("G304", sevLow, true, catHardening)
+	public.File = "internal/cli/run.go"
+	public.Line = 12
+	public.Scenario = "a path is read without a check"
+	public.Fix = "check the path"
+
+	// The same rule, file and sink, re-rated medium this run: a private
+	// placement, and the same plain fingerprint as the public finding.
+	secret := public
+	secret.Severity = sevMedium
+	secret.Scenario = "the private scenario marker"
+	secret.Fix = "the private fix marker"
+
+	// check asserts that body keeps the finding's row as the previous report
+	// rendered it, open, and that nothing of this run's placement leaks.
+	check := func(t *testing.T, body, previousBody string) {
+		t.Helper()
+
+		previousRow := rowHolding(t, findingsTableOf(t, previousBody), 0, fingerprintOf(public))
+
+		want := []string{
+			fingerprintOf(public), previousRow[1], previousRow[2], "open",
+			previousRow[4], previousRow[5], previousRow[6],
+		}
+
+		if diff := diffCells(want, rowHolding(t, findingsTableOf(t, body), 0, fingerprintOf(public))); diff != "" {
+			t.Errorf("the carried row mismatch (-want +got):\n%s", diff)
+		}
+
+		changes := sectionText(t, body, "Changes since the last audit")
+
+		if !strings.Contains(changes, "- "+fingerprintOf(public)+": still open") {
+			t.Errorf("the Changes section holds no still-open line for the finding:\n%s", changes)
+		}
+
+		if strings.Contains(changes, "No public finding changed its status.") {
+			t.Errorf("the Changes section says no public finding changed its status, but it carried a row:\n%s", changes)
+		}
+
+		for _, private := range []string{secret.Scenario, secret.Fix, sevMedium} {
+			if strings.Contains(body, private) {
+				t.Errorf("the report holds %q, which is this run's private placement", private)
+			}
+		}
+	}
+
+	t.Run("the previous report listed it as new", func(t *testing.T) {
+		t.Parallel()
+
+		previousBody, previous := renderAndRead(t, publish.ReportInput{
+			Result:  fixtureResult(public),
+			Run:     testRun(t, "2026-10-03", "18422000001"),
+			Private: publish.PrivateNone,
+		})
+
+		body := renderReport(t, publish.ReportInput{
+			Result:   fixtureResult(secret),
+			Run:      testRun(t, testDate, testRunID),
+			Private:  publish.PrivateHandled,
+			Previous: previous,
+		}).Body
+
+		check(t, body, previousBody)
+	})
+
+	t.Run("the previous report listed it as open", func(t *testing.T) {
+		t.Parallel()
+
+		firstBody, first := renderAndRead(t, publish.ReportInput{
+			Result:  fixtureResult(public),
+			Run:     testRun(t, "2026-09-03", "18422000001"),
+			Private: publish.PrivateNone,
+		})
+
+		if row := rowHolding(t, findingsTableOf(t, firstBody), 0, fingerprintOf(public)); row[3] != "new" {
+			t.Fatalf("the first report's own status is %q, want new", row[3])
+		}
+
+		previousBody, previous := renderAndRead(t, publish.ReportInput{
+			Result:   fixtureResult(public),
+			Run:      testRun(t, "2026-10-03", "18422000002"),
+			Private:  publish.PrivateNone,
+			Previous: first,
+		})
+
+		if row := rowHolding(t, findingsTableOf(t, previousBody), 0, fingerprintOf(public)); row[3] != "open" {
+			t.Fatalf("the previous report's own status is %q, want open", row[3])
+		}
+
+		body := renderReport(t, publish.ReportInput{
+			Result:   fixtureResult(secret),
+			Run:      testRun(t, testDate, testRunID),
+			Private:  publish.PrivateHandled,
+			Previous: previous,
+		}).Body
+
+		check(t, body, previousBody)
+	})
+}
+
+// TestFixedRows pins ADR 0040's fixed-row rules: a finding this run places
+// private gets no fixed row, a finding this run drops as a false positive gets
+// none either, and a finding the previous report listed and also dismissed,
+// which this run does not find, does get one.
+func TestFixedRows(t *testing.T) {
+	t.Parallel()
+
+	public := finding("G304", sevLow, true, catHardening)
+	public.File = "internal/cli/run.go"
+	public.Line = 12
+	public.Scenario = "a path is read without a check"
+	public.Fix = "check the path"
+
+	t.Run("a finding placed private this run gets no fixed row", func(t *testing.T) {
+		t.Parallel()
+
+		_, previous := renderAndRead(t, publish.ReportInput{
+			Result:  fixtureResult(public),
+			Run:     testRun(t, "2026-10-03", "18422000001"),
+			Private: publish.PrivateNone,
+		})
+
+		secret := public
+		secret.Severity = sevMedium
+
+		body := renderReport(t, publish.ReportInput{
+			Result:   fixtureResult(secret),
+			Run:      testRun(t, testDate, testRunID),
+			Private:  publish.PrivateHandled,
+			Previous: previous,
+		}).Body
+
+		if row := rowHolding(t, findingsTableOf(t, body), 0, fingerprintOf(public)); row[3] != "open" {
+			t.Errorf("the finding's status is %q, want open: a private placement gets no fixed row", row[3])
+		}
+
+		if changes := sectionText(t, body, "Changes since the last audit"); strings.Contains(changes, "- "+fingerprintOf(public)+": fixed") {
+			t.Errorf("the Changes section marks the private finding fixed:\n%s", changes)
+		}
+	})
+
+	t.Run("a finding dropped as a false positive gets no fixed row", func(t *testing.T) {
+		t.Parallel()
+
+		dismissed := public
+		dismissed.Dismissal = "a test fixture, not a finding"
+
+		_, previous := renderAndRead(t, publish.ReportInput{
+			Result:  fixtureResult(dismissed),
+			Run:     testRun(t, "2026-10-03", "18422000001"),
+			Private: publish.PrivateNone,
+		})
+
+		body := renderReport(t, publish.ReportInput{
+			Result:   fixtureResult(dismissed),
+			Run:      testRun(t, testDate, testRunID),
+			Private:  publish.PrivateNone,
+			Previous: previous,
+		}).Body
+
+		if holdsRow(findingsTableOf(t, body), fingerprintOf(public)) || holdsRow(investigationTableOf(t, body), fingerprintOf(public)) {
+			t.Errorf("a findings table holds the dropped finding, want it dropped:\n%s", body)
+		}
+
+		if !holdsRow(tableOf(t, body, "False positives"), fingerprintOf(public)) {
+			t.Errorf("the False positives table does not carry the previous report's row:\n%s", body)
+		}
+
+		if changes := sectionText(t, body, "Changes since the last audit"); strings.Contains(changes, fingerprintOf(public)) {
+			t.Errorf("the Changes section holds a line for the dropped finding:\n%s", changes)
+		}
+	})
+
+	t.Run("a finding listed and dismissed, not found this run, gets a fixed row", func(t *testing.T) {
+		t.Parallel()
+
+		dismissed := public
+		dismissed.Dismissal = "a test fixture, not a finding"
+
+		// The first report holds the finding in both tables: it is public, and
+		// its dismissal adds a False positives row.
+		previousBody, previous := renderAndRead(t, publish.ReportInput{
+			Result:  fixtureResult(dismissed),
+			Run:     testRun(t, "2026-10-03", "18422000001"),
+			Private: publish.PrivateNone,
+		})
+
+		if !holdsRow(tableOf(t, previousBody, "False positives"), fingerprintOf(public)) {
+			t.Fatalf("the previous report holds no False positives row for the finding:\n%s", previousBody)
+		}
+
+		body := renderReport(t, publish.ReportInput{
+			Result:   fixtureResult(),
+			Run:      testRun(t, testDate, testRunID),
+			Private:  publish.PrivateNone,
+			Previous: previous,
+		}).Body
+
+		want := []string{fingerprintOf(public), sevLow, catHardening, "fixed", "—", "—", "—"}
+		if diff := diffCells(want, rowHolding(t, findingsTableOf(t, body), 0, fingerprintOf(public))); diff != "" {
+			t.Errorf("the fixed row mismatch (-want +got):\n%s", diff)
+		}
+
+		if changes := sectionText(t, body, "Changes since the last audit"); !strings.Contains(changes, "- "+fingerprintOf(public)+": fixed") {
+			t.Errorf("the Changes section holds no fixed line for the finding:\n%s", changes)
 		}
 	})
 }

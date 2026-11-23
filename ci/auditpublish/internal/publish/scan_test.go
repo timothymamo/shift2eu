@@ -66,18 +66,21 @@ func TestScanRefusesTokenPatterns(t *testing.T) {
 		token string
 	}{
 		{"a Claude API key", "sk-ant-" + strings.Repeat("abcDEF123_-", 3)},
-		{"a Claude OAuth token", "sk-ant-oat01-" + strings.Repeat("A1b2C3d4E5", 3)},
+		{"a Claude OAuth token", "sk-ant-oat01-" + strings.Repeat("z9Y8x7W6", 4)},
 		{"a PEM private key", "-----BEGIN RSA PRIVATE KEY-----"},
 		{"an OpenSSH private key", "-----BEGIN OPENSSH PRIVATE KEY-----"},
 		{"an EC private key", "-----BEGIN EC PRIVATE KEY-----"},
 		{"a PKCS#8 private key", "-----BEGIN PRIVATE KEY-----"},
 		{"an encrypted PKCS#8 private key", "-----BEGIN ENCRYPTED PRIVATE KEY-----"},
-		{"a GitHub token of the ghp kind", "ghp_" + strings.Repeat("a1B2c3D4", 6)},
-		{"a GitHub token of the gho kind", "gho_" + strings.Repeat("a1B2c3D4", 6)},
-		{"a GitHub token of the ghu kind", "ghu_" + strings.Repeat("a1B2c3D4", 6)},
-		{"a GitHub token of the ghs kind", "ghs_" + strings.Repeat("a1B2c3D4", 6)},
-		{"a GitHub token of the ghr kind", "ghr_" + strings.Repeat("a1B2c3D4", 6)},
-		{"a GitHub fine-grained token", "github_pat_" + strings.Repeat("a1B2C3D4E5", 3)},
+		{"a GitHub token of the ghp kind", "ghp_" + strings.Repeat("z9Y8x7W6", 6)},
+		{"a GitHub token of the gho kind", "gho_" + strings.Repeat("z9Y8x7W6", 6)},
+		{"a GitHub token of the ghu kind", "ghu_" + strings.Repeat("z9Y8x7W6", 6)},
+		{"a GitHub token of the ghs kind", "ghs_" + strings.Repeat("z9Y8x7W6", 6)},
+		{"a GitHub token of the ghr kind", "ghr_" + strings.Repeat("z9Y8x7W6", 6)},
+		// A letter before the prefix: GFM's word boundary is no part of the
+		// pattern, as gitleaks' rule has none.
+		{"a GitHub token after a letter", "Xghp_" + strings.Repeat("z9Y8x7W6", 6)},
+		{"a GitHub fine-grained token", "github_pat_" + strings.Repeat("z9Y8x7W6", 3)},
 		{"an age secret key", "AGE-SECRET-KEY-1" + strings.Repeat("Q", 58)},
 		{"an age secret key in lower case", "age-secret-key-1" + strings.Repeat("q", 58)},
 	}
@@ -88,17 +91,16 @@ func TestScanRefusesTokenPatterns(t *testing.T) {
 
 			text := "the history holds " + tc.token + " at line 3"
 
-			// The token is not a run the encoded-run refusal would refuse on
-			// its own, so it is the pattern that stops it.
-			if run := longestEncodedRun(tc.token); len(run) >= publish.EncodedRunMinLength && entropy(run) >= publish.EncodedRunMinEntropy {
-				t.Fatalf("the fixture's token holds the run %q, which the encoded-run check refuses on its own, so this row cannot pin the pattern", run)
+			// The token is no run the refusal reads on its own, so it is the
+			// pattern that stops it.
+			if reason := encodedRunRefusal(tc.token); reason != "" {
+				t.Fatalf("the fixture's token is refused by the encoded-run rules (%s), so this row cannot pin the pattern", reason)
 			}
 
 			wantRefused(t, publish.ScanAdvisory(text, key), tc.token)
 
 			// The same pattern is refused in public text, before the
-			// encoded-run check could be what refused it: this token's longest
-			// run is under the run threshold.
+			// encoded-run rules could be what refused it.
 			wantRefused(t, publish.ScanPublic(text, nil, key), tc.token)
 		})
 	}
@@ -365,13 +367,8 @@ func TestScanPublicRefusesEncodedRuns(t *testing.T) {
 			wantRefused: false,
 		},
 		{
-			name:        "a hex run of 24 never trips it",
-			run:         "0123456789abcdef01234567",
-			field:       "0123456789abcdef01234567",
-			wantRefused: false,
-		},
-		{
-			name:        "a path is many short runs",
+			name:        "a path's whole run stays under N",
+			run:         "docs/security/audits/2026-11-03-18422000001",
 			field:       "docs/security/audits/2026-11-03-18422000001.md",
 			wantRefused: false,
 		},
@@ -424,6 +421,136 @@ func TestScanPublicRefusesEncodedRuns(t *testing.T) {
 	})
 }
 
+// TestScanPublicRefusesHexAndSlashRuns pins the two run classes the refusal
+// adds to the one without /: a hex run of at least EncodedRunMinLength that is
+// no 40- or 64-character SHA or digest, a 40- or 64-character hex run whose
+// decoded bytes are all printable ASCII (a token body written as a digest), and
+// a run of the class that holds a /, which the class without one splits.
+func TestScanPublicRefusesHexAndSlashRuns(t *testing.T) {
+	t.Parallel()
+
+	key := testKey(t)
+
+	// The token's own body without its prefix: what a steered model writes once
+	// it knows the patterns read the prefix.
+	body := strings.Repeat("a1B2c3D4", 6)
+
+	tests := []struct {
+		name        string
+		field       string
+		wantRefused bool
+	}{
+		{
+			name:        "the prefix-less token body, hex-encoded",
+			field:       hex.EncodeToString([]byte(body)),
+			wantRefused: true,
+		},
+		{
+			name:        "a 64-character chunk of the token body, hex-encoded",
+			field:       hex.EncodeToString([]byte(body[:32])),
+			wantRefused: true,
+		},
+		{
+			name:        "the same chunk in upper case",
+			field:       strings.ToUpper(hex.EncodeToString([]byte(body[:32]))),
+			wantRefused: true,
+		},
+		{
+			name:        "a 40-character run that decodes to text",
+			field:       hex.EncodeToString([]byte(strings.Repeat("A", 20))),
+			wantRefused: true,
+		},
+		{
+			name:        "a hex run one character short of a SHA",
+			field:       strings.Repeat("ab", 19) + "a",
+			wantRefused: true,
+		},
+		{
+			name:        "a 40-character SHA passes",
+			field:       testCommit,
+			wantRefused: false,
+		},
+		{
+			name:        "a 64-character digest passes",
+			field:       strings.Repeat("1", 64),
+			wantRefused: false,
+		},
+		{
+			name:        "standard base64 of 32 bytes that holds a /",
+			field:       "kwGkZkLOkvQfgf7qrd7hm34OG/w5NTYgormOf9xbP3o=",
+			wantRefused: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := encodedRunRefusal(tc.field) != ""; got != tc.wantRefused {
+				t.Fatalf("the fixture %q is refused by the rule as %t, want %t: choose another", tc.field, got, tc.wantRefused)
+			}
+
+			err := publish.ScanPublic("the report holds a fragment", []string{tc.field}, key)
+
+			if tc.wantRefused {
+				wantRefused(t, err, tc.field)
+
+				return
+			}
+
+			wantAllowed(t, err)
+		})
+	}
+}
+
+// TestScanPublicPublishesTheRepositorysPaths pins the class that holds / against
+// the text a report really carries: real paths of this repository, written here
+// as literals and never read from the tree, are published. A real path whose run
+// reaches N is refused, which is the class's cost and the ADR's to state.
+func TestScanPublicPublishesTheRepositorysPaths(t *testing.T) {
+	t.Parallel()
+
+	key := testKey(t)
+
+	paths := []struct {
+		name string
+		path string
+	}{
+		{"the publish core's test helpers", "ci/auditpublish/internal/publish/helpers_test.go"},
+		{"a source probe's integration test", "test/architecture/internal/check/testdata/sourceprobe/a/source/integration/integration_test.go"},
+		{"an adapter stub's target", "test/lint/testdata/adaptersbuiltincmd/mod/internal/adapter/target/ovhcloud/ovhcloud.go"},
+		{"a lint fixture's read-only probe", "test/lint/testdata/cloudreadonly/mod/internal/adapter/source/aws/probe_integration_test.go"},
+		{"a target's testdata directory", "internal/adapter/target/scaleway/testdata"},
+		{"a domain package", "internal/domain/taxonomy"},
+	}
+
+	for _, tc := range paths {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			if reason := encodedRunRefusal(tc.path); reason != "" {
+				t.Fatalf("the fixture %q is refused (%s), want a path whose runs stay under N", tc.path, reason)
+			}
+
+			wantAllowed(t, publish.ScanPublic("a finding's location", []string{tc.path}, key))
+		})
+	}
+
+	t.Run("a path whose run reaches N is refused, the class's cost", func(t *testing.T) {
+		t.Parallel()
+
+		// A workflow file a finding may name: its run holds 4.3 bits per
+		// character, so the class refuses it and the run publishes nothing.
+		path := ".github/workflows/claude-code-pin.yml"
+
+		if reason := encodedRunRefusal(path); reason == "" {
+			t.Fatalf("the fixture %q holds no run the rule refuses, so this row cannot pin the cost", path)
+		}
+
+		wantRefused(t, publish.ScanPublic("a finding's location", []string{path}, key), path)
+	})
+}
+
 // TestScanAdvisoryPublishesCrashInputs pins the other half of the refusal: an
 // advisory holds PoCs and crash inputs, which are often base64 and high in
 // entropy, so an advisory text gets the patterns and the encoded-token check
@@ -457,7 +584,7 @@ func TestScanPublishesLongPathsAndDigests(t *testing.T) {
 	key := testKey(t)
 
 	path := "docs/security/audits/2026-11-03-18422000001.md"
-	fields := []string{path, testDigest, "internal/adapter/target/ovhcloud/snapshot_2026_11.json", testCommit}
+	fields := []string{path, testDigest, "internal/adapter/target/scaleway/testdata", testCommit}
 
 	body := "the report's path is " + path + " and its image is " + testDigest
 
@@ -482,33 +609,84 @@ func TestScanErrorNamesNoText(t *testing.T) {
 	wantRefused(t, publish.ScanAdvisory("found "+token, key), token)
 }
 
-// longestEncodedRun returns the longest run of bytes the encoded-run refusal
-// reads: a maximal sequence of [A-Za-z0-9+=_-], as ADR 0040 defines a run.
-func longestEncodedRun(s string) string {
-	longest, current := "", strings.Builder{}
-
-	flush := func() {
-		if current.Len() > len(longest) {
-			longest = current.String()
+// encodedRunRefusal returns the rule of the encoded-run refusal that refuses
+// field, or "" when no rule does: the entropy of a run of [A-Za-z0-9+/=_-] of
+// at least EncodedRunMinLength bytes, and a hex run of at least that length that
+// is neither 40 nor 64 bytes long, or that decodes to nothing but printable
+// ASCII. The tests compute it from the field alone, so a fixture can show that
+// it pins the rule it says it does.
+func encodedRunRefusal(field string) string {
+	for _, run := range runsOf(field, isSlashRunByte) {
+		if entropy(run) >= publish.EncodedRunMinEntropy {
+			return "the run " + run + " reaches N"
 		}
-
-		current.Reset()
 	}
 
-	for i := 0; i < len(s); i++ {
-		c := s[i]
+	for _, run := range runsOf(field, isHexByte) {
+		switch {
+		case len(run) != 40 && len(run) != 64:
+			return "the hex run " + run + " is no SHA and no digest"
+		case allPrintableHex(run):
+			return "the hex run " + run + " decodes to text"
+		}
+	}
 
-		if c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
-			c == '+' || c == '=' || c == '_' || c == '-' {
-			current.WriteByte(c)
+	return ""
+}
+
+// runsOf returns the maximal runs of field's bytes that in accepts, of at least
+// EncodedRunMinLength bytes.
+func runsOf(field string, in func(byte) bool) []string {
+	var out []string
+
+	start := -1
+
+	for i := 0; i <= len(field); i++ {
+		if i < len(field) && in(field[i]) {
+			if start < 0 {
+				start = i
+			}
 
 			continue
 		}
 
-		flush()
+		if start >= 0 && i-start >= publish.EncodedRunMinLength {
+			out = append(out, field[start:i])
+		}
+
+		start = -1
 	}
 
-	flush()
+	return out
+}
 
-	return longest
+// isSlashRunByte is a byte of the run class that holds /: every other byte ends
+// a run.
+func isSlashRunByte(c byte) bool {
+	return c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z' || c >= '0' && c <= '9' ||
+		c == '+' || c == '/' || c == '=' || c == '_' || c == '-'
+}
+
+// isHexByte is a byte of a hex run.
+func isHexByte(c byte) bool {
+	return c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F'
+}
+
+// allPrintableHex reports whether every byte run decodes to is printable ASCII,
+// 0x20 to 0x7e. An odd-length run is read as far as it decodes in pairs.
+func allPrintableHex(run string) bool {
+	dst := make([]byte, len(run)/2)
+
+	n, err := hex.Decode(dst, []byte(run[:len(run)-len(run)%2]))
+	if err != nil || n == 0 {
+		return false
+	}
+
+	for _, c := range dst[:n] {
+		if c < 0x20 || c > 0x7e {
+			return false
+		}
+	}
+
+	return true
 }
