@@ -185,13 +185,19 @@ jobs:
           distribution: goreleaser
           version: "v2.20.3" # exact pin, as release.yml's; Renovate updates it (github-actions manager)
           install-only: true
+      # The site's bundle, built as release.yml's site job builds it (PRD #297 milestone 3): the snapshot
+      # below lists bin/shift2eu-site_dev.tar.gz in checksums.txt and uploads it beside the archives, as the
+      # release does, only when it is there.
+      - name: The site's bundle
+        run: make site
       # The release's archives, built by a snapshot run of its GoReleaser
-      # configuration: each holds exactly its own binary (issue #147).
+      # configuration: each holds exactly its own binary (issue #147), and checksums.txt covers the
+      # site's bundle (PRD #297 milestone 3).
       - name: Each archive holds its own binary
         run: .github/scripts/verify-archives.sh
 
-  # The site's headless-browser smoke test (PRD #297 milestone 2, docs/adr/0036): make test-browser builds
-  # a bundle of its own with ci/sitebuild (not make site), runs the headless Chromium the Makefile pins by
+  # The site's headless-browser smoke test (PRD #297 milestones 2 and 3, docs/adr/0036): make test-browser
+  # serves the bundle make site built and this job unpacked, runs the headless Chromium the Makefile pins by
   # digest with the host network and DevTools on 127.0.0.1 only, on a random port, and drives the bundle
   # served from a local httptest origin. The test never touches the internet; the image pull is the job's
   # only download beyond Go's.
@@ -210,8 +216,19 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      # The release's own path to a real Chromium (PRD #297 milestone 3): release.yml's site-browser job
+      # unpacks the bundle its site job built into bin/release-bundle and smoke-tests that directory, so
+      # this job does the same with a bundle make site builds here. The unpack is release.yml's without its
+      # digest check, which reads the site job's output, and with the untagged build's archive name (dev).
+      - name: Build the site's bundle
+        run: make site
+      - name: Unpack the site's bundle
+        run: |
+          set -euo pipefail
+          mkdir bin/release-bundle
+          tar -xzf "bin/shift2eu-site_dev.tar.gz" -C bin/release-bundle
       - name: Smoke test the site's bundle in a headless Chromium
-        run: make test-browser
+        run: make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle
 
   # test/devenv under GNU Make 3.81 (issue #314): the maintainer's Mac runs the host targets with
   # /usr/bin/make, GNU Make 3.81, which ends a recipe at a # line inside a continued command where make 4.x,

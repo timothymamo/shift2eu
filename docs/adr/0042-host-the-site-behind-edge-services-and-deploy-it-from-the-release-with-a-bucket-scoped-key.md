@@ -93,12 +93,33 @@ pinned action that attests the archives (`attest-archives`). The archive holds t
 `manifest.json`; the manifest's digest of the module script is of the decoded file, the bytes the
 bundle holds.
 
-The deploy job verifies the bundle before the key is in scope: it takes the bundle archive and the
-deploy program's binary as artifacts of this run, checks both SHA-256 digests against the outputs of the
-jobs that produced them, and runs `gh attestation verify <archive> --repo <owner>/shift2eu
+As built (PR C1): the `site` job ("Site bundle") builds the archive and gives its SHA-256 as a job
+output; `site-browser` ("Site browser smoke test") unpacks that very archive, after checking it against
+the digest, and runs `make test-browser TEST_BROWSER_BUNDLE=<dir>` on it; `goreleaser` checks it against
+the digest before GoReleaser lists it in `checksums.txt` and uploads it to the draft (`checksum` and
+`release` `extra_files`); `attest-archives` holds `checksums.txt` to exactly one bundle line with that
+digest and attests it with the archives; and `publish` needs `site-browser`, so a bundle that failed
+its smoke test leaves the release a draft. None of the site jobs holds a key, a secret or an OIDC token.
+
+`attest-archives` attests the bundle before, and independently of, the smoke test, so a draft whose
+bundle failed `site-browser` can still hold a build-provenance attestation for it: an attestation says
+where the bundle was built, never that it passed its smoke test. Publication is the gate (`publish` needs
+`site-browser`), so the deploy (PR C2) takes the bundle only from a published, non-draft release, never
+from a draft or on the strength of an attestation alone. `attest-archives` deliberately does not need
+`site-browser`, which would lengthen the chain of job timeouts before the draft is attested. The smoke
+test gates the release's publication, not the container image: the image is pushed even when
+`site-browser` fails, as [ADR 0015](0015-publish-the-signed-image-to-ghcr-with-docker-buildx.md)
+already accepts for a failed `attest-archives` or `publish`.
+
+The deploy job verifies the bundle before the key is in scope: it takes the bundle archive from the
+published release asset, which never expires, and the deploy program's binary as an artifact of this
+run, checks both SHA-256 digests against the outputs of the jobs that produced them (the bundle's against
+the `site` job's), and runs `gh attestation verify <archive> --repo <owner>/shift2eu
 --signer-workflow <owner>/shift2eu/.github/workflows/release.yml --source-ref refs/tags/<tag>
 --deny-self-hosted-runners` with the job's `GITHUB_TOKEN`. Only then does the one step that holds the
 key run. The guide (`docs/guide/verify-releases.md`, PR D) and the live checks (PR B) use the same flags.
+The release's live check (PR C2) takes the bundle from the published release asset too, checked against
+the `site` job's digest, whose attestation the deploy job verified in the same run.
 
 ### The deploy job (PR C)
 
@@ -116,11 +137,12 @@ key run. The guide (`docs/guide/verify-releases.md`, PR D) and the live checks (
   the release-tag App and the maintainer create such a tag. The `release-tag` skill's step 2 checks all
   of it (PR C).
 - **The job does not build.** A job without secrets builds `ci/sitedeploy` with the pinned toolchain;
-  the deploy job downloads it and the bundle, checks the digests and the attestation (above), and runs
+  the deploy job downloads it, and the bundle from the published release, checks the digests and the
+  attestation (above), and runs
   no third-party action after that. It checks out nothing, or with `persist-credentials: false`; its
   permissions are `contents: read` and `attestations: read`; the two secrets are the `env:` of the one
   step that runs `sitedeploy`, never of the job.
-- **One deploy at a time** (*proposed, for the maintainer to confirm*, PR C): the job carries
+- **One deploy at a time** (confirmed by the maintainer, 2026-11-23; PR C2 writes it): the job carries
   `concurrency: {group: site-deploy, cancel-in-progress: false}`, so a re-run and a new release's
   deploy cannot interleave their uploads.
 - **`release.yml` lands in PR C**, with every job given a `timeout-minutes` (below).
@@ -300,12 +322,18 @@ deploy step itself.
 - **Either is followed by a manual Edge Services cache purge** by the maintainer, whose credentials hold
   the Edge Services permission the deploy key lacks (R12). Browsers may still keep a released page
   served from a poisoned cache for up to its `max-age` (300 seconds).
-- **The artifacts' retention and the recovery after they expire** (*proposed, for the maintainer to
-  confirm*, PR C): the bundle and the deploy program are kept as this run's artifacts for 90 days
-  (GoReleaser's archives artifact keeps 7 today), so the re-run works for that long. Once they have
-  expired, the re-run also re-runs the two secretless jobs that build the deploy program and the
-  bundle, which rebuild the same bytes at the tag (reproducible, ADR 0036) and so match the attestation
-  already stored, rather than a deploy from a manual dispatch.
+- **The artifacts' retention and the recovery after they expire** (confirmed by the maintainer,
+  2026-11-23; amended in PR C1): the bundle's workflow artifact (`site`) is kept 7 days, as the
+  archives artifact is, and only the jobs of its own run read it: `site-browser`, `goreleaser` and
+  `attest-archives`. The deploy and the live check (PR C2) take the bundle from the published release
+  asset instead, which never expires, checked against the `site` job's digest and its attestation. The
+  re-run of the deploy job therefore never needs the bundle's artifact, and **the bundle job is never
+  re-run after publication**: a GitHub re-run of a job also re-runs every job that needs it, so a re-run
+  of `site` would re-run `goreleaser` (which would upload to a published, immutable release),
+  `attest-archives` and `publish` (which refuses a tag that already holds a published release). This
+  replaces the earlier plan of re-running the bundle job once its artifact had expired. Only the deploy
+  program is rebuilt after its artifact expires, by re-running the secretless job that builds it (PR
+  C2), which re-runs only the deploy and the live check.
 
 ### `timeout-minutes` (values for PR C)
 
@@ -321,13 +349,21 @@ longest job (Test) 3 minutes.
 | `goreleaser` | 15 | `sign` | 10 |
 | `attest-archives` | 10 | `verify` | 10 |
 | `publish` | 10 | `verify-archives` | 10 |
-| the site bundle's build and smoke test | 20 | the deploy program's build | 10 |
+| `site` (the bundle's build) | 15 | the deploy program's build | 10 |
+| `site-browser` (the bundle's smoke test) | 30 | | |
 | the deploy | 15 (`sitedeploy`'s own deadline is 10, each request 2) | the live check | 15 (its retry bound at least the pages' 300 seconds) |
 
-The longest chain to the end of the live check is `test`, `image`, `sbom`, `sign`, `verify`, the deploy,
-the live check: 100 minutes. With release-please's `release-please` and `tag` jobs (15 + 15) and the
-pages' `max-age` (5), the window's floor is 135 minutes; milestone 4 adds the margin for queueing and
-pins the number.
+PR C1 sets the first twelve (`release.yml` from `test` to `verify-archives`, with `site` and
+`site-browser`), and `check.ReleaseWorkflow` pins them. The bundle's build and smoke test, first proposed
+as one job of 20 minutes, are two jobs: `site` 15, and `site-browser` 30, as ci.yml's `browser` job
+(the headless Chromium's image pull and the smoke test's own 20-minute `go test` timeout).
+
+`goreleaser` now needs `site`, and `publish` needs `site-browser`, so the longest chain to the end of the
+live check (PR C2) is `test`, `site`, `site-browser`, `publish`, `verify-archives`, the deploy, the live
+check: 115 minutes (the earlier chain through the image and `verify` was 100). With release-please's
+`release-please` and `tag` jobs (15 + 15) and the pages' `max-age` (5), the version window's floor is
+150 minutes (it was 135). The real durations are measured on the first release that runs the site jobs;
+milestone 4 adds the margin for queueing and pins the number.
 
 ### The HSTS and preload records (milestone 4 creates them)
 

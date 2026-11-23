@@ -44,37 +44,47 @@
 // StrayReleaseFiles and ReleaseWorkflow pin that the release builds what the
 // check lists: no other goreleaser document, go.work or vendor at the root that
 // git could commit, and a release workflow read as a closed schema of one
-// release at a time and thirteen jobs: the tests, behind the guard that the
-// tagged commit is on main; a latest job, read-only, that decides once per run
-// whether the tag is the highest release tag on main, the one decision the
-// images' latest tag and GitHub's "Latest" release both follow (issue #173);
-// a goreleaser job that runs no repository code,
-// sets no environment for the go command, uploads to a draft release, puts the
-// bundled OpenAPI document beside the archives in dist/ (issue #139) and hands
-// the archives, the document and checksums.txt on as a workflow artifact; an
-// attest-archives job that attests every archive, the document and
-// checksums.txt with GitHub build provenance and cannot write the repository;
-// a publish job, contents: write alone, that publishes the draft last (issues
-// #156, #163), with no checkout, GitHub's "Latest" release only when the
-// latest job decided so; and, for each of the two images, the
-// CLI's and the HTTP API's (PRD #103), an image job that builds and pushes the
-// image and can do nothing more, an sbom job that can only read the registry,
-// and a sign job, the only one with an OIDC token, that signs and attests the
-// image by digest with sigstore's and GitHub's actions alone; and a verify job
-// on a fresh runner, read-only to the registry and the attestations, with no
-// OIDC token and no checkout, that verifies both published images by digest
-// and the tag rule (issue #99), and a verify-archives job beside it, as
-// read-only, that verifies the published archives' digests and attestations
-// (issue #163) and, reading the highest release tag again on its own, that
-// GitHub's "Latest" release follows it and is never a pre-release (issue
-// #173). WorkflowPrivileges keeps every other
+// release at a time and twelve jobs, each with its own timeout-minutes: the
+// tests, behind the guard that the tagged commit is on main; a latest job,
+// read-only, that decides once per run whether the tag is the highest release
+// tag on main, the one decision the image's latest tag and GitHub's "Latest"
+// release both follow (issue #173); a site job and a site-browser job (PRD #297
+// milestone 3), read-only, with no secret and no OIDC token, that build the
+// site's bundle with make site, give its SHA-256 as an output, and smoke-test
+// that very archive with make test-browser TEST_BROWSER_BUNDLE; a goreleaser
+// job that runs no repository code, sets no environment for the go command,
+// checks the site's bundle against the site job's digest, uploads to a draft
+// release and hands the CLI's archives and checksums.txt on as a workflow
+// artifact; an attest-archives job that holds checksums.txt to the one bundle
+// of that digest and attests every archive, the bundle and checksums.txt with
+// GitHub build provenance and cannot write the repository; a publish job,
+// contents: write alone, that publishes the draft last (issues #156, #163),
+// only once the bundle passed its smoke test, with no checkout, GitHub's
+// "Latest" release only when the latest job decided so; for the CLI's image
+// (the HTTP API's is gone, issue #393), an image job that builds and pushes
+// the image and can do nothing more, an sbom job that can only read the
+// registry, and a sign job that signs and attests the image by digest with
+// sigstore's and GitHub's actions alone; and a verify job on a fresh runner,
+// read-only to the registry and the attestations, with no OIDC token and no
+// checkout, that verifies the published image by digest and the tag rule
+// (issue #99), and a verify-archives job beside it, as read-only, that
+// verifies the published assets' digests and attestations (issue #163) and,
+// reading the highest release tag again on its own, that GitHub's "Latest"
+// release follows it and is never a pre-release (issue #173).
+// WorkflowPrivileges keeps every other
 // workflow from publishing: no packages, id-token or attestations write, no
 // write-all, no trigger a tag runs (push of tags, create, release,
 // workflow_run), and a top-level permissions: always. DryRunMirrorsRelease
 // holds ci.yml's image job, the release's dry run, to the release's build
 // settings for each image, tag rules, latest decision, SBOM settings, action
 // pins and BuildKit image, and to the verify job's container run of each
-// image.
+// image; ci.yml's test job to running make site before the archive check, and
+// its browser job to the release's own path to a real Chromium, in order: make
+// site, the archive unpacked into bin/release-bundle as release.yml's
+// site-browser job unpacks it (without its digest check, under the untagged
+// version dev), and make test-browser TEST_BROWSER_BUNDLE=bin/release-bundle,
+// the step that job runs on the release's own bundle, at the same checkout and
+// setup-go commits (PRD #297 milestone 3).
 //
 // ReleasePleaseWorkflow and ReleasePleaseConfig hold the workflow that
 // proposes the next release, .github/workflows/release-please.yml, and the
@@ -121,9 +131,11 @@
 // draft: true, prerelease: auto and replace_existing_draft: true, so every
 // asset is uploaded to a draft that release.yml publishes last (issue #156),
 // and a pre-release tag is a GitHub pre-release and never the latest release
-// (issue #92), and nothing else: the bundled OpenAPI document the release used
-// to publish beside the archives is gone (issue #393), so no line of the
-// document may name it, or the HTTP API's binary, any more.
+// (issue #92), and extra_files of exactly the site's bundle,
+// ./bin/shift2eu-site_*.tar.gz (PRD #297 milestone 3), and nothing else: the
+// bundled OpenAPI document the release used to publish beside the archives is
+// gone (issue #393), so no line of the document may name it, or the HTTP API's
+// binary, any more.
 //
 // GoReleaserArchives and DryRunVerifiesArchives hold the release to shipping
 // the CLI in an archive of its own (issue #147, issue #393).
@@ -132,7 +144,8 @@
 // ids: names, keeping the archive's name shift2eu_<version>_<os>_<arch>,
 // tar.gz (zip on Windows) with LICENSE, NOTICE, README.md, SECURITY.md and
 // docs/, and
-// one checksums.txt covering that archive and no extra file.
+// one checksums.txt covering that archive and the site's bundle, its one extra
+// file (PRD #297 milestone 3).
 // DryRunVerifiesArchives holds ci.yml's test job to one step running
 // .github/scripts/verify-archives.sh, which builds a goreleaser snapshot and
 // fails unless the archive holds exactly its own binary, after one

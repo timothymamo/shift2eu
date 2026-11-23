@@ -158,15 +158,26 @@ var (
 	}
 
 	// goreleaserSteps are the goreleaser job's steps: no repository code runs
-	// before goreleaser, which is asked for exactly release --clean; and the
-	// archives and checksums.txt leave the job as a workflow artifact for the
-	// attest-archives and publish jobs, kept a week so a failed attestation or
-	// publication is recovered by re-running the failed jobs (issue #163).
-	// Nothing is copied into dist/ beside them: the release publishes the CLI's
-	// archives alone, not the HTTP API's OpenAPI document (issue #393).
+	// before goreleaser, which is asked for exactly release --clean; the site
+	// job's bundle is downloaded into bin/ (git-ignored) and checked against
+	// that job's digest before goreleaser lists it in checksums.txt and
+	// uploads it to the draft (.goreleaser.yaml's extra_files, PRD #297
+	// milestone 3); and the archives and checksums.txt leave the job as a
+	// workflow artifact for the attest-archives and publish jobs, kept a week
+	// so a failed attestation or publication is recovered by re-running the
+	// failed jobs (issue #163). Nothing is copied into dist/ beside them, and
+	// the bundle is not handed on in that artifact: the attest-archives job
+	// downloads the site job's own.
 	goreleaserSteps = []releaseStep{
 		fullCheckoutStep,
 		setupGoStep,
+		siteDownloadStep(siteBundleDir),
+		{
+			what: "the check of the site bundle against the site job's digest",
+			name: "Check the site bundle against the site job's digest",
+			env:  siteDigestEnv,
+			run:  `printf '%s  %s\n' "$SITE_SHA256" "bin/shift2eu-site_$TAG.tar.gz" | sha256sum -c -`,
+		},
 		{
 			what: "goreleaser/goreleaser-action", uses: goreleaserAction,
 			with: map[string]*regexp.Regexp{
@@ -180,7 +191,7 @@ var (
 			what: "actions/upload-artifact (the archives)", uses: uploadArtifactAction,
 			with: map[string]*regexp.Regexp{
 				"name":              exactly(archivesArtifact),
-				"path":              exactly("dist/" + strings.Join(attestedArchives, "\ndist/")),
+				"path":              exactly("dist/" + strings.Join(handedOnArchives, "\ndist/")),
 				"if-no-files-found": exactly("error"),
 				"retention-days":    exactly("7"),
 			},
@@ -194,30 +205,146 @@ var (
 // published release (issues #139, #163).
 const archivesArtifact = "archives"
 
-// attestedArchives are the files handed on and attested, each archive named by
-// its extension: a bare shift2eu_* in dist/ also matches GoReleaser's build
-// directories (dist/shift2eu_linux_amd64_v1/ ...), and would hand on and
-// attest the bare binaries beside the archives. The release ships the CLI's
-// archives alone: the HTTP API's archive and its OpenAPI document are gone
-// (issue #393).
-var attestedArchives = []string{
+// handedOnArchives are the files the goreleaser job hands on in the archives
+// artifact, each archive named by its extension: a bare shift2eu_* in dist/
+// also matches GoReleaser's build directories (dist/shift2eu_linux_amd64_v1/
+// ...), and would hand on and attest the bare binaries beside the archives.
+// The HTTP API's archive and its OpenAPI document are gone (issue #393), and
+// the site's bundle is not among them: it travels in the site job's own
+// artifact.
+var handedOnArchives = []string{
 	"shift2eu_*.tar.gz", "shift2eu_*.zip",
 	"checksums.txt",
 }
 
+// attestedSubjects are the files the attest-archives job attests: the CLI's
+// archives, the site's bundle (PRD #297 milestone 3) and checksums.txt, which
+// lists them all.
+var attestedSubjects = []string{
+	"shift2eu_*.tar.gz", "shift2eu_*.zip",
+	siteBundlePattern,
+	"checksums.txt",
+}
+
+// The site's bundle as the release handles it (PRD #297 milestone 3): the
+// workflow artifact the site job hands it to the jobs of its run under, the
+// pattern of its archive's name, the directory the jobs that build or check it
+// keep it in, and the directory the smoke test unpacks it into.
+const (
+	siteArtifact      = "site"
+	siteBundlePattern = "shift2eu-site_*.tar.gz"
+	siteBundleDir     = "bin"
+	siteUnpackedDir   = "bin/release-bundle"
+)
+
+// siteDigestEnv is the env: of a step that checks the site's bundle: the tag,
+// which names the archive, and the digest the site job gave it, never one from
+// another job.
+var siteDigestEnv = []string{tagEnv, "SITE_SHA256: ${{ needs.site.outputs.sha256 }}"}
+
+// siteDownloadStep is GitHub's own download of the site job's bundle, into
+// path, or into the workspace for "".
+func siteDownloadStep(path string) releaseStep {
+	with := map[string]*regexp.Regexp{"name": exactly(siteArtifact)}
+	if path != "" {
+		with["path"] = exactly(path)
+	}
+
+	return releaseStep{what: "actions/download-artifact (the site bundle)", uses: downloadArtifactAction, with: with}
+}
+
+// shallowCheckoutStep checks out the tag's own commit alone, without keeping
+// the token: what a job that reads no history needs.
+var shallowCheckoutStep = releaseStep{
+	what: "actions/checkout", uses: checkoutAction,
+	with: map[string]*regexp.Regexp{"persist-credentials": exactly("false")},
+}
+
+// siteSteps are the site job's steps (PRD #297 milestone 3): the tag's commit,
+// Go without the Actions cache, make site with the tag as the bundle's version
+// through env:, the archive's sha256 as the job's output, and the archive as a
+// workflow artifact for the jobs of this run alone, kept a week: the deploy
+// and the live check read the published release, never this artifact.
+var siteSteps = []releaseStep{
+	shallowCheckoutStep,
+	setupGoStep,
+	{
+		what: "make site", name: "Build the site's bundle",
+		env: []string{"SITE_VERSION: ${{ github.ref_name }}"}, run: "make site",
+	},
+	{
+		what: "the bundle's digest", name: "The bundle's digest", id: "digest", env: []string{tagEnv},
+		run: strings.Join([]string{
+			strictShell,
+			`sha256="$(sha256sum "bin/shift2eu-site_$TAG.tar.gz" | cut -d' ' -f1)"`,
+			`echo "sha256=$sha256" >> "$GITHUB_OUTPUT"`,
+		}, "\n"),
+	},
+	{
+		what: "actions/upload-artifact (the site bundle)", uses: uploadArtifactAction,
+		with: map[string]*regexp.Regexp{
+			"name":              exactly(siteArtifact),
+			"path":              exactly(siteBundleDir + "/" + siteBundlePattern),
+			"if-no-files-found": exactly("error"),
+			"retention-days":    exactly("7"),
+		},
+	},
+}
+
+// siteBrowserSteps are the site-browser job's steps (PRD #297 milestone 3):
+// the repository and Go for make, the site job's artifact, its check against
+// that job's digest before it is unpacked into bin/release-bundle, and make
+// test-browser on exactly that directory, so the bundle the release attests
+// and publishes is the one smoke-tested, never one the recipe builds itself.
+var siteBrowserSteps = []releaseStep{
+	shallowCheckoutStep,
+	setupGoStep,
+	siteDownloadStep(siteBundleDir),
+	{
+		what: "the check and unpacking of the site bundle", name: "Check and unpack the bundle", env: siteDigestEnv,
+		run: strings.Join([]string{
+			strictShell,
+			`printf '%s  %s\n' "$SITE_SHA256" "bin/shift2eu-site_$TAG.tar.gz" | sha256sum -c -`,
+			"mkdir " + siteUnpackedDir,
+			`tar -xzf "bin/shift2eu-site_$TAG.tar.gz" -C ` + siteUnpackedDir,
+		}, "\n"),
+	},
+	{
+		what: "make test-browser of the release's bundle", name: "Smoke test the release's bundle in a headless Chromium",
+		run: siteBrowserRun,
+	},
+}
+
+// siteBrowserRun is the release's smoke test of its own bundle, which the dry
+// run holds ci.yml's browser job to mirror.
+const siteBrowserRun = "make test-browser TEST_BROWSER_BUNDLE=" + siteUnpackedDir
+
 // attestArchivesSteps are the attest-archives job's steps: GitHub's own
-// download of the archives' workflow artifact, the check of the archives
-// against checksums.txt, and one build provenance attestation of every archive
-// and of checksums.txt itself, by path, so each file is a subject.
+// download of the archives' workflow artifact and of the site job's bundle
+// beside it, the check of every file against checksums.txt, with checksums.txt
+// held to exactly one site bundle carrying the site job's digest (so an
+// extra_files glob that matched nothing fails too), and one build provenance
+// attestation of every archive, of the bundle and of checksums.txt itself, by
+// path, so each file is a subject.
 var attestArchivesSteps = []releaseStep{
 	{
 		what: "actions/download-artifact (the archives)", uses: downloadArtifactAction,
 		with: map[string]*regexp.Regexp{"name": exactly(archivesArtifact)},
 	},
-	{what: "the check against checksums.txt", name: "Check the archives against checksums.txt", run: "sha256sum -c checksums.txt"},
+	siteDownloadStep(""),
+	{
+		what: "the check of the archives and the site bundle against checksums.txt",
+		name: "Check the archives and the site bundle against checksums.txt", env: siteDigestEnv,
+		run: strings.Join([]string{
+			strictShell,
+			"sha256sum -c checksums.txt",
+			`grep -qxF "$SITE_SHA256  shift2eu-site_$TAG.tar.gz" checksums.txt`,
+			`test "$(grep -cF '  shift2eu-site_' checksums.txt)" = 1`,
+		}, "\n"),
+	},
 	{
 		what: "actions/attest-build-provenance (the archives)", name: "Attest the archives", uses: provenanceAction,
-		with: map[string]*regexp.Regexp{"subject-path": exactly(strings.Join(attestedArchives, "\n"))},
+		with: map[string]*regexp.Regexp{"subject-path": exactly(strings.Join(attestedSubjects, "\n"))},
 	},
 }
 
@@ -878,40 +1005,57 @@ type releaseJob struct {
 	permissions map[string]string
 	// outputs is the job's whole outputs: mapping; nil for none.
 	outputs map[string]string
+	// timeout is the job's timeout-minutes, which every job holds: GitHub's
+	// default of six hours would keep the one release concurrency group
+	// waiting that long on a hung job (ADR 0042).
+	timeout string
 	steps   []releaseStep
 }
 
 // releaseJobs are the release workflow's jobs, in the order a message lists
-// them: test, latest, goreleaser, attest-archives and publish, then the
-// image's three jobs, then verify and verify-archives. The write permissions
-// stay split: the
-// goreleaser job writes the repository's contents to upload to a draft
-// release, and publish alone publishes it, holding nothing else; an image job
-// pushes and nothing more; an sbom job, which runs syft, can only read the
-// registry; a sign job and attest-archives alone hold an OIDC token and write
-// attestations, attest-archives with read-only contents; and the verify jobs
-// read and write nothing.
+// them: test, latest, site and site-browser, goreleaser, attest-archives and
+// publish, then the image's three jobs, then verify and verify-archives. The
+// write permissions stay split: the site jobs, which build and smoke-test the
+// site's bundle, only read the repository, with no OIDC token and no secret;
+// the goreleaser job writes the repository's contents to upload to a draft
+// release, and publish alone publishes it, holding nothing else, and only
+// once the bundle passed its smoke test; an image job pushes and nothing
+// more; an sbom job, which runs syft, can only read the registry; a sign job
+// and attest-archives alone hold an OIDC token and write attestations,
+// attest-archives with read-only contents; and the verify jobs read and write
+// nothing.
 var releaseJobs = func() []releaseJob {
 	jobs := []releaseJob{
-		{key: "test", name: "Test", permissions: map[string]string{"contents": "read"}, steps: testSteps},
+		{key: "test", name: "Test", permissions: map[string]string{"contents": "read"}, timeout: "20", steps: testSteps},
 		{
 			key: "latest", name: "Latest", needs: []string{"test"},
 			permissions: map[string]string{"contents": "read"},
 			outputs:     map[string]string{"latest": "${{ steps.decide.outputs.latest }}"},
-			steps:       latestSteps,
+			timeout:     "5", steps: latestSteps,
 		},
 		{
-			key: "goreleaser", name: "GoReleaser", needs: []string{"test"},
-			permissions: map[string]string{"contents": "write"}, steps: goreleaserSteps,
+			key: "site", name: "Site bundle", needs: []string{"test"},
+			permissions: map[string]string{"contents": "read"},
+			outputs:     map[string]string{"sha256": "${{ steps.digest.outputs.sha256 }}"},
+			timeout:     "15", steps: siteSteps,
 		},
 		{
-			key: "attest-archives", name: "Attest the archives", needs: []string{"goreleaser"},
+			key: "site-browser", name: "Site browser smoke test", needs: []string{"site"},
+			permissions: map[string]string{"contents": "read"}, timeout: "30", steps: siteBrowserSteps,
+		},
+		{
+			key: "goreleaser", name: "GoReleaser", needs: []string{"test", "site"},
+			permissions: map[string]string{"contents": "write"}, timeout: "15", steps: goreleaserSteps,
+		},
+		{
+			key: "attest-archives", name: "Attest the archives", needs: []string{"goreleaser", "site"},
 			permissions: map[string]string{"id-token": "write", "attestations": "write", "contents": "read"},
-			steps:       attestArchivesSteps,
+			timeout:     "10", steps: attestArchivesSteps,
 		},
 		{
-			key: "publish", name: "Publish the release", needs: []string{"test", "goreleaser", "attest-archives", "latest"},
-			permissions: map[string]string{"contents": "write"}, steps: publishSteps,
+			key: "publish", name: "Publish the release",
+			needs:       []string{"test", "goreleaser", "attest-archives", "latest", "site-browser"},
+			permissions: map[string]string{"contents": "write"}, timeout: "10", steps: publishSteps,
 		},
 	}
 
@@ -921,16 +1065,16 @@ var releaseJobs = func() []releaseJob {
 				key: img.imageJob, name: "Container image" + img.suffix, needs: []string{"test", "goreleaser", "latest"},
 				permissions: map[string]string{"contents": "read", "packages": "write"},
 				outputs:     map[string]string{"digest": builtDigest},
-				steps:       imageSteps(img),
+				timeout:     "20", steps: imageSteps(img),
 			},
 			releaseJob{
 				key: img.sbomJob, name: "SBOM" + img.suffix, needs: []string{img.imageJob},
-				permissions: map[string]string{"packages": "read"}, steps: sbomSteps(img),
+				permissions: map[string]string{"packages": "read"}, timeout: "10", steps: sbomSteps(img),
 			},
 			releaseJob{
 				key: img.signJob, name: "Sign and attest" + img.suffix, needs: []string{img.imageJob, img.sbomJob},
 				permissions: map[string]string{"packages": "write", "id-token": "write", "attestations": "write"},
-				steps:       signSteps(img),
+				timeout:     "10", steps: signSteps(img),
 			},
 		)
 	}
@@ -940,12 +1084,12 @@ var releaseJobs = func() []releaseJob {
 			key: verifyJob, name: verifyJobName,
 			needs:       []string{cliImage.imageJob, cliImage.signJob},
 			permissions: map[string]string{"packages": "read", "attestations": "read"},
-			steps:       verifySteps,
+			timeout:     "10", steps: verifySteps,
 		},
 		releaseJob{
 			key: "verify-archives", name: "Verify the published archives", needs: []string{"publish"},
 			permissions: map[string]string{"contents": "read", "attestations": "read"},
-			steps:       verifyArchivesSteps,
+			timeout:     "10", steps: verifyArchivesSteps,
 		},
 	)
 }()
@@ -961,24 +1105,40 @@ var releaseJobs = func() []releaseJob {
 //     tag and a run in progress is never cancelled half published; a waiting
 //     run may be replaced by a newer tag's and must then be re-run by hand,
 //     ADR 0015) and jobs, so no workflow-level env: or defaults:;
-//   - jobs holds exactly test, latest, goreleaser, attest-archives, publish, the
+//   - jobs holds exactly test, latest, site and site-browser (the site's
+//     bundle, PRD #297 milestone 3), goreleaser, attest-archives, publish, the
 //     image, sbom and sign jobs of the one image the release publishes (the
 //     CLI's, ghcr.io/timothymamo/shift2eu), verify, the independent check of
-//     that image (issue #99), and verify-archives, that of its archives (issue
+//     that image (issue #99), and verify-archives, that of its assets (issue
 //     #163). Each holds exactly name, runs-on
-//     (ubuntu-latest), permissions and steps, and needs for all but test
-//     (latest needs test; goreleaser test; attest-archives goreleaser;
-//     publish [test, goreleaser, attest-archives, latest]; an image job
+//     (ubuntu-latest), permissions, steps and timeout-minutes (exactly test
+//     20, latest 5, site 15, site-browser 30, goreleaser 15, image 20, and
+//     10 for every other job, ADR 0042), and needs for all but test
+//     (latest needs test; site test; site-browser site; goreleaser [test,
+//     site]; attest-archives [goreleaser, site]; publish [test, goreleaser,
+//     attest-archives, latest, site-browser]; an image job
 //     [test, goreleaser, latest]; an sbom job its image job; a sign job [its
 //     image job, its sbom job], in that order; verify [image, sign];
 //     verify-archives publish), latest an
-//     outputs: of exactly its decide step's latest, and an image job an
+//     outputs: of exactly its decide step's latest, site one of exactly its
+//     digest step's sha256, and an image job an
 //     outputs: of exactly its build's digest, so no job-level env:,
-//     container:, if: or other key;
+//     container:, if:, environment:, concurrency: or other key;
+//   - the site job's steps are exactly actions/checkout of the tag's commit
+//     without the token, actions/setup-go, make site with SITE_VERSION the tag
+//     through env:, the archive's sha256 written to GITHUB_OUTPUT (id: digest)
+//     and actions/upload-artifact of bin/shift2eu-site_*.tar.gz as site, kept
+//     seven days; the site-browser job's exactly that checkout, setup-go,
+//     actions/download-artifact of site into bin, the check of the archive
+//     against needs.site.outputs.sha256 before it is unpacked into
+//     bin/release-bundle, and make test-browser
+//     TEST_BROWSER_BUNDLE=bin/release-bundle, so the bundle smoke-tested is
+//     the one the release attests and publishes;
 //   - no line, comments included, names shift2eu-server or openapi: the release
 //     ships the CLI alone, so the HTTP API's jobs, its archive and its OpenAPI
 //     asset are gone rather than merely unreferenced (issue #393);
-//   - the permissions are exactly contents: read for test and for latest;
+//   - the permissions are exactly contents: read for test, latest, site and
+//     site-browser;
 //     contents: write for goreleaser and for publish; id-token: write,
 //     attestations: write and contents: read for attest-archives; contents:
 //     read and packages: write for an image job; packages: read for an sbom
@@ -989,7 +1149,9 @@ var releaseJobs = func() []releaseJob {
 //   - the test job's steps are exactly actions/checkout of the whole history,
 //     the guard that the tagged commit is on main (an exact run: script),
 //     actions/setup-go and make test; the goreleaser job's exactly
-//     actions/checkout, actions/setup-go, goreleaser/goreleaser-action and
+//     actions/checkout, actions/setup-go, actions/download-artifact of site
+//     into bin, the check of the bundle against needs.site.outputs.sha256,
+//     goreleaser/goreleaser-action and
 //     actions/upload-artifact of the archives, each named by its extension,
 //     and checksums.txt (archives, kept seven days so a failed
 //     attestation or publication can be re-run); setup-go with cache: false in both jobs,
@@ -1004,9 +1166,11 @@ var releaseJobs = func() []releaseJob {
 //     decision, made once per run, that the image's latest tag and GitHub's
 //     "Latest" release follow, so they cannot disagree (issue #173);
 //   - the attest-archives job's steps are exactly actions/download-artifact
-//     of that artifact, sha256sum -c checksums.txt and
-//     actions/attest-build-provenance with a subject-path of every archive,
-//     by its extension, and checksums.txt;
+//     of that artifact and of site beside it, one step under set -euo
+//     pipefail that runs sha256sum -c checksums.txt and holds checksums.txt
+//     to exactly one shift2eu-site_ line, the one with the site job's digest,
+//     and actions/attest-build-provenance with a subject-path of every
+//     archive, by its extension, the site's bundle and checksums.txt;
 //   - the publish job's steps are exactly actions/download-artifact of that
 //     artifact, with no checkout, and one step that refuses a LATEST other
 //     than exactly true or false and checks the draft release (an exact run:
@@ -1174,6 +1338,8 @@ func (r *schemaReader) job(e yamlread.Entry, path string, want releaseJob) {
 		keys = append(keys, "outputs")
 	}
 
+	keys = append(keys, "timeout-minutes")
+
 	job := r.exactKeys(r.block(e, path), path, keys...)
 	if job == nil {
 		return
@@ -1181,6 +1347,7 @@ func (r *schemaReader) job(e yamlread.Entry, path string, want releaseJob) {
 
 	r.scalar(job["name"], path+": name", exactly(want.name))
 	r.scalar(job["runs-on"], path+": runs-on", exactly("ubuntu-latest"))
+	r.scalar(job["timeout-minutes"], path+": timeout-minutes", exactly(want.timeout))
 
 	if want.needs != nil {
 		r.needs(job["needs"], path+": needs", want.needs)

@@ -283,11 +283,19 @@ moves or deletes a tag.
    GitHub release as bad, point `latest` (and `X.Y` if wrong) back at the last good release's digest or
    delete the bad image tag, and fix forward with a new patch release.
 
-   Then confirm the release publishes the CLI alone (ADR 0037): no asset may be named
-   `shift2eu-server_*`, and none may be an OpenAPI document:
-   `gh release view vX.Y.Z --json assets --jq '.assets[].name'` lists only `shift2eu_*` archives and
-   `checksums.txt`. Any other asset is a failed release: report it and stop, as for a failed `verify`
-   job.
+   Then confirm the release publishes the CLI and the site's bundle alone (ADR 0037, PRD #297
+   milestone 3): no asset may be named `shift2eu-server_*`, and none may be an OpenAPI document:
+   `gh release view vX.Y.Z --json assets --jq '.assets[].name'` lists only `shift2eu_*` archives,
+   `checksums.txt` and `shift2eu-site_vX.Y.Z.tar.gz`, the site's bundle, which `checksums.txt` lists
+   too. Any other asset is a failed release, and so is a missing bundle: report it and stop, as for a
+   failed `verify` job.
+   Report the conclusions of the run's two site jobs, `Site bundle` (it builds the bundle at the tag)
+   and `Site browser smoke test` (it smoke-tests that exact bundle in the pinned headless Chromium):
+   `gh run view <id> --json jobs --jq '.jobs[] | select(.name == "Site bundle" or .name == "Site browser smoke test") | .name + " " + .conclusion'`.
+   Each must be `success`; `publish` needs the smoke test, so a failed one leaves the release a draft,
+   a failed release handled as above. Once the release is published, never re-run `Site bundle`, nor
+   ask the maintainer to: a re-run of it cascades into `goreleaser` and `publish`, which then try to
+   upload to and publish a release that is already published and immutable.
 8. Check the published image yourself; do not hand this to the user. The Lima VM has cosign, a `gh`
    with `gh attestation`, `crane` and rootless `nerdctl` (ADR 0017); this is "Verify the image" in
    `docs/guide/verify-releases.md`, in its VM form, for the new tag. Run it from the repository root,
