@@ -22,7 +22,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 )
 
-// The four variables make vm-up takes (issue #228).
+// The four variables make vm-up takes (issue #228). UBUNTU_MIRROR, the fifth, is ubuntuMirrorVar of
+// limaapt_test.go (issue #498).
 const (
 	vmCPUsVar    = "VM_CPUS"
 	vmMemoryVar  = "VM_MEMORY"
@@ -179,10 +180,10 @@ func TestMakeVMUpPassesTheVMResourcesToLimactlStart(t *testing.T) {
 	}
 }
 
-// TestMakeVMUpRefusesAnInvalidVMResource pins issue #228's validation: a value that is not a positive whole
-// number, not a whole GiB size or not a port Lima can forward ends make vm-up with an error that names the
-// variable, before limactl runs at all - and so before anything a value might carry could run as a shell
-// command.
+// TestMakeVMUpRefusesAnInvalidVMResource pins issue #228's validation, and UBUNTU_MIRROR's with it (issue
+// #498): a value that is not a positive whole number, not a whole GiB size, not a port Lima can forward or not
+// an http:// or https:// mirror URL ends make vm-up with an error that names the variable, before limactl runs
+// at all - and so before anything a value might carry could run as a shell command.
 func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 	t.Parallel()
 
@@ -242,6 +243,30 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 		{name: "VM_SSH_PORT with a space", variable: vmSSHPortVar, value: "600 22"},
 		{name: "VM_SSH_PORT a number with a single quote", variable: vmSSHPortVar, value: "60023'"},
 		{name: "VM_SSH_PORT a quoted command in the environment", variable: vmSSHPortVar, value: "60023'; touch {marker}; echo '", env: true},
+		// UBUNTU_MIRROR is the Ubuntu mirror the VM's provisioning fetches from (issue #498): an http:// or
+		// https:// URL of letters, digits, '.', '-', '/', ':', '_' and '~'. Anything else - another scheme, a
+		// bare host, a query string, a space, or a shell or make metacharacter - is refused before limactl runs,
+		// so a value pasted from a mirror list never reaches a shell and never reaches the VM.
+		{name: "UBUNTU_MIRROR over ftp", variable: ubuntuMirrorVar, value: "ftp://ftp.example.com/ubuntu"},
+		{name: "UBUNTU_MIRROR without a scheme", variable: ubuntuMirrorVar, value: "archive.ubuntu.com/ubuntu"},
+		{name: "UBUNTU_MIRROR with an empty scheme", variable: ubuntuMirrorVar, value: "//archive.ubuntu.com/ubuntu"},
+		{name: "UBUNTU_MIRROR with no host", variable: ubuntuMirrorVar, value: "http://"},
+		{name: "UBUNTU_MIRROR with a space", variable: ubuntuMirrorVar, value: "http://archive.ubuntu.com/ubuntu resolute"},
+		{name: "UBUNTU_MIRROR with a query string", variable: ubuntuMirrorVar, value: "http://mirror.example.com/ubuntu?release=24.04"},
+		{name: "UBUNTU_MIRROR a command after a semicolon", variable: ubuntuMirrorVar, value: "http://x; touch {marker}"},
+		{name: "UBUNTU_MIRROR a command substitution", variable: ubuntuMirrorVar, value: "http://x$(touch {marker})"},
+		{name: "UBUNTU_MIRROR a backtick command", variable: ubuntuMirrorVar, value: "http://x`touch {marker}`"},
+		{name: "UBUNTU_MIRROR a pipe", variable: ubuntuMirrorVar, value: "http://x|touch {marker}"},
+		{name: "UBUNTU_MIRROR an ampersand", variable: ubuntuMirrorVar, value: "http://x&touch {marker}"},
+		{name: "UBUNTU_MIRROR a command after a comma", variable: ubuntuMirrorVar, value: "http://x,touch {marker}"},
+		{name: "UBUNTU_MIRROR with an equals sign", variable: ubuntuMirrorVar, value: "http://x=y"},
+		{name: "UBUNTU_MIRROR with a single quote", variable: ubuntuMirrorVar, value: "http://x'"},
+		{name: "UBUNTU_MIRROR with a double quote", variable: ubuntuMirrorVar, value: "http://x\"y"},
+		{name: "UBUNTU_MIRROR with a newline", variable: ubuntuMirrorVar, value: "http://x\nhttp://y"},
+		{name: "UBUNTU_MIRROR make's shell function on the command line", variable: ubuntuMirrorVar, value: "$(shell touch {marker})"},
+		{name: "UBUNTU_MIRROR make's shell function in the environment", variable: ubuntuMirrorVar, value: "$(shell touch {marker})", env: true},
+		{name: "UBUNTU_MIRROR a quoted command in the environment", variable: ubuntuMirrorVar, value: "http://x'; touch {marker}; echo '", env: true},
+		{name: "UBUNTU_MIRROR through make vm-create", variable: ubuntuMirrorVar, value: "ftp://ftp.example.com/ubuntu", target: "vm-create"},
 	}
 
 	for _, tc := range cases {
@@ -266,7 +291,7 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 
 			stdout, stderr, err := f.run(t, args...)
 			if err == nil {
-				t.Fatalf("make %s %s exited 0: vm-up must refuse a value that is not a CPU count, a whole GiB size or a port in 1024-65535, so limactl never sees it (issue #228)\nstdout: %s\nstderr: %s", target, setting, stdout, stderr)
+				t.Fatalf("make %s %s exited 0: vm-up must refuse a value that is not a CPU count, a whole GiB size, a port in 1024-65535 or an http(s) mirror URL, so limactl never sees it (issue #228, issue #498)\nstdout: %s\nstderr: %s", target, setting, stdout, stderr)
 			}
 
 			if calls := invocations(f.sb.argvLogText(t), "limactl"); len(calls) != 0 {
@@ -287,21 +312,25 @@ func TestMakeVMUpRefusesAnInvalidVMResource(t *testing.T) {
 }
 
 // TestMakeNeverExpandsMakeSyntaxInAVMResource pins the override block at the top of the Makefile (issue #228
-// review, item A). make exports the four variables to the shell of every recipe, expanding them on the way, so
-// a $(shell ...) in one of them would run in any target when the Makefile read it late: each is read raw
-// ($(value ...)) before anything else, so no target - not even one that has nothing to do with the VM - runs
-// it.
+// review, item A). make exports the VM variables - UBUNTU_MIRROR with them (issue #498) - to the shell of every
+// recipe, expanding them on the way, so a $(shell ...) in one of them would run in any target when the Makefile
+// read it late: each is read raw ($(value ...)) before anything else, so no target - not even one that has
+// nothing to do with the VM - runs it.
 func TestMakeNeverExpandsMakeSyntaxInAVMResource(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name string
-		args []string // the make arguments, without the value, which the test adds
-		env  bool     // the value is set in the environment rather than on the make command line
+		name     string
+		variable string   // the variable the value is set in; VM_CPUS when empty
+		args     []string // the make arguments, without the value, which the test adds
+		env      bool     // the value is set in the environment rather than on the make command line
 	}{
 		{name: "make help", args: []string{"help"}},
 		{name: "make -n build", args: []string{"-n", "build"}},
 		{name: "make help with the value in the environment", args: []string{"help"}, env: true},
+		{name: "make help with UBUNTU_MIRROR", variable: ubuntuMirrorVar, args: []string{"help"}},
+		{name: "make -n build with UBUNTU_MIRROR", variable: ubuntuMirrorVar, args: []string{"-n", "build"}},
+		{name: "make help with UBUNTU_MIRROR in the environment", variable: ubuntuMirrorVar, args: []string{"help"}, env: true},
 	}
 
 	for _, tc := range cases {
@@ -310,14 +339,19 @@ func TestMakeNeverExpandsMakeSyntaxInAVMResource(t *testing.T) {
 
 			f := newVMUpFixture(t, "", "")
 			value := "$(shell touch " + f.marker + ")"
+			variable := tc.variable
+			if variable == "" {
+				variable = vmCPUsVar
+			}
+
 			args := slices.Clone(tc.args)
-			setting := vmCPUsVar + "=" + strconv.Quote(value) + " on the command line"
+			setting := variable + "=" + strconv.Quote(value) + " on the command line"
 
 			if tc.env {
-				setting = vmCPUsVar + "=" + strconv.Quote(value) + " in the environment"
-				f.env[vmCPUsVar] = value
+				setting = variable + "=" + strconv.Quote(value) + " in the environment"
+				f.env[variable] = value
 			} else {
-				args = append(args, vmCPUsVar+"="+value)
+				args = append(args, variable+"="+value)
 			}
 
 			stdout, stderr, err := f.run(t, args...)
