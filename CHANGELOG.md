@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.12.0](https://github.com/timothymamo/shift2eu/compare/v0.11.0...v0.12.0) (2026-11-23)
+
+
+### Features
+
+* **ci:** add the audit's model-free publish core (PRD [#175](https://github.com/timothymamo/shift2eu/issues/175) milestone 2) ([#491](https://github.com/timothymamo/shift2eu/issues/491)) ([301c698](https://github.com/timothymamo/shift2eu/commit/301c69819fe553935d97139292997909137ab795))
+* **ci:** share the Claude Code launcher with the audit, add its launcher, wrapper and sandbox preflight ([#277](https://github.com/timothymamo/shift2eu/issues/277)) ([#486](https://github.com/timothymamo/shift2eu/issues/486)) ([aae360c](https://github.com/timothymamo/shift2eu/commit/aae360c3231b176b4408c975c72c2baa40890961))
+* **devenv:** start the Lima VM at boot with a LaunchDaemon of our own, and warn in vm-up about Lima's autostart ([#398](https://github.com/timothymamo/shift2eu/issues/398), [#315](https://github.com/timothymamo/shift2eu/issues/315)) ([#417](https://github.com/timothymamo/shift2eu/issues/417)) ([ca288cd](https://github.com/timothymamo/shift2eu/commit/ca288cd8759bec9d9e9f44e73ecfd703ea597270))
+* **infra:** create the site's Scaleway hosting with OpenTofu in infra/site ([#422](https://github.com/timothymamo/shift2eu/issues/422)) ([#433](https://github.com/timothymamo/shift2eu/issues/433)) ([febe6cf](https://github.com/timothymamo/shift2eu/commit/febe6cffc8b2121bbbaa6ad4a91084475c7ed30a))
+* **site:** a visual redesign of the site's pages and report ([#373](https://github.com/timothymamo/shift2eu/issues/373)) ([#379](https://github.com/timothymamo/shift2eu/issues/379)) ([20be9a2](https://github.com/timothymamo/shift2eu/commit/20be9a2a7d2e08672ed7f2ac8930568ffa3e7b67))
+
+
+### Bug Fixes
+
+* **aireview:** pin the Claude Code 2.1.330 integrity ([#428](https://github.com/timothymamo/shift2eu/issues/428)) ([#429](https://github.com/timothymamo/shift2eu/issues/429)) ([75b4149](https://github.com/timothymamo/shift2eu/commit/75b41492ded0ef1a27ac885afd9cbf62a2069adb))
+* **browser:** bound the test-browser cleanup's docker rm -f ([#449](https://github.com/timothymamo/shift2eu/issues/449)) ([#481](https://github.com/timothymamo/shift2eu/issues/481)) ([f8963e1](https://github.com/timothymamo/shift2eu/commit/f8963e1896d3a6ce14d8ba7e1feae435344f67ee))
+* **browser:** ignore a second signal in test-browser's traps before the cleanup runs ([#473](https://github.com/timothymamo/shift2eu/issues/473)) ([2a2526f](https://github.com/timothymamo/shift2eu/commit/2a2526f1f25c1a8e11056f65caa93afc26db9363))
+* **browser:** pin the random DevTools port, a bundle per run, fail early on a dead container ([#423](https://github.com/timothymamo/shift2eu/issues/423)) ([#443](https://github.com/timothymamo/shift2eu/issues/443)) ([400e4dc](https://github.com/timothymamo/shift2eu/commit/400e4dcd2e84e98837bb0f699e8c7ba56961bcc8))
+* **deps:** update module github.com/chromedp/cdproto to v0.160.8 ([#462](https://github.com/timothymamo/shift2eu/issues/462)) ([d4367cc](https://github.com/timothymamo/shift2eu/commit/d4367cc78c1560407143f3a6a5c0674c6595c416))
+* **devenv:** count VM_ENV entries as typed, hide unset key shapes, one naming rule ([#304](https://github.com/timothymamo/shift2eu/issues/304) [#305](https://github.com/timothymamo/shift2eu/issues/305) [#306](https://github.com/timothymamo/shift2eu/issues/306)) ([#455](https://github.com/timothymamo/shift2eu/issues/455)) ([287892b](https://github.com/timothymamo/shift2eu/commit/287892be25568c2c2550d9c5d4b1f1b97dca525b))
+* **devenv:** give the .envrc guard the host guard's file-identity resolver, shared ([#468](https://github.com/timothymamo/shift2eu/issues/468)) ([#472](https://github.com/timothymamo/shift2eu/issues/472)) ([d02df28](https://github.com/timothymamo/shift2eu/commit/d02df280cd2570d33920ef8b979a862c7ef50ab0))
+* **devenv:** keep comments out of continued recipe commands for make 3.81 ([#437](https://github.com/timothymamo/shift2eu/issues/437)) ([#441](https://github.com/timothymamo/shift2eu/issues/441)) ([b0e1900](https://github.com/timothymamo/shift2eu/commit/b0e19000955ee9c1fd00f53da18fe8cf714facb5))
+* **devenv:** keep the Lima VM's readiness probe off the gh wrapper ([#479](https://github.com/timothymamo/shift2eu/issues/479)) ([#480](https://github.com/timothymamo/shift2eu/issues/480)) ([b668bae](https://github.com/timothymamo/shift2eu/commit/b668baee7ab63722c5cd68bce81afef6dc1dc589))
+* **devenv:** refuse the host targets when the credentials' .envrc is read from in or above the workspace ([#402](https://github.com/timothymamo/shift2eu/issues/402)) ([#430](https://github.com/timothymamo/shift2eu/issues/430)) ([289fdc1](https://github.com/timothymamo/shift2eu/commit/289fdc10c214a8e3a6f505ce68cd88661ee18d22))
+* **devenv:** resolve the host-clone guard's workspace like the kernel, and keep the refresh's traps quiet under bash 3.2 ([#447](https://github.com/timothymamo/shift2eu/issues/447) [#448](https://github.com/timothymamo/shift2eu/issues/448)) ([#463](https://github.com/timothymamo/shift2eu/issues/463)) ([5e22031](https://github.com/timothymamo/shift2eu/commit/5e22031c20a367a8a3e025931dafff41bb674d76))
+* **devenv:** take over a hand-started refresh, refuse foreign launchd jobs, and [#394](https://github.com/timothymamo/shift2eu/issues/394)'s lock cleanup follow-ups ([#407](https://github.com/timothymamo/shift2eu/issues/407)) ([56d8111](https://github.com/timothymamo/shift2eu/commit/56d8111a72a2e1557a92980b457045d51a2a47ee))
+* **devenv:** VM_SHELL_ENV on every limactl call, re-set git hooks in vm-up, probe jq in the gate check ([#478](https://github.com/timothymamo/shift2eu/issues/478)) ([281f93a](https://github.com/timothymamo/shift2eu/commit/281f93a29f1f809821b0202caef4f6f29b4b3a99))
+
+
+### Reverts
+
+* **deps:** pin pi-coding-agent back to 1.5.2 ([#497](https://github.com/timothymamo/shift2eu/issues/497)) ([dba8f02](https://github.com/timothymamo/shift2eu/commit/dba8f02c02e2ff55d18238b57dacab75bfb43ff1))
+
 ## [0.11.0](https://github.com/timothymamo/shift2eu/compare/v0.10.1...v0.11.0) (2026-11-20)
 
 
