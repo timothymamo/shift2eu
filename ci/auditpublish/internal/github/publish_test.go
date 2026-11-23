@@ -497,6 +497,72 @@ func TestPublishStopsAtTheFirstRefusedIssue(t *testing.T) {
 	}
 }
 
+// TestPublishFilesAnIssueOnlyForAFingerprintNoIssueCarries pins the listing's
+// match on a whole run: an issue of the audit App's holding the fingerprint - in
+// state open or closed - means no issue is filed for it, and a fingerprint no
+// issue carries still gets its issue. The listing is read with state=all, so a
+// closed issue of the App's is one filed already, not one to file anew.
+func TestPublishFilesAnIssueOnlyForAFingerprintNoIssueCarries(t *testing.T) {
+	t.Parallel()
+
+	// The previous report holds two open public findings: the run files an issue
+	// for each unless the listing carries the fingerprint.
+	matched := fixtureFinding("G301", "low", "hardening")
+	unmatched := fixtureFinding("G302", "low", "hardening")
+
+	fp := func(f map[string]any) publish.Fingerprint {
+		return publish.PlainFingerprint(f["rule"].(string), f["file"].(string), f["sink"].(string))
+	}
+
+	matchedTitle, unmatchedTitle := issueTitleOf(fp(matched)), issueTitleOf(fp(unmatched))
+
+	dir := fixtureReportsDir(t)
+	writeFixtureReport(t, dir, renderFixtureReport(t,
+		fixtureResult(t, matched, unmatched), publish.PrivateNone, nil, "2026-12-01", "1"))
+
+	for _, tc := range []struct {
+		name string
+		// issues is the audit App's listing the run reads.
+		issues []map[string]any
+		// want are the titles of the issues the run files, in its plan's order.
+		want []string
+	}{
+		{name: "no issue at all", want: []string{matchedTitle, unmatchedTitle}},
+		{
+			name:   "the bot's open issue of the matched fingerprint",
+			issues: []map[string]any{botEntryInState(matchedTitle, "open")},
+			want:   []string{unmatchedTitle},
+		},
+		{
+			name:   "the bot's closed issue of the matched fingerprint",
+			issues: []map[string]any{botEntryInState(matchedTitle, "closed")},
+			want:   []string{unmatchedTitle},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fake := newFakeGH(t, publishRoutes(tc.issues...)...)
+			client := newFixtureClient(t, fake.Path)
+			cfg := publishConfig(t, client, newFixtureGitleaks(t, newFakeGitleaks(t)), fixtureResultFile(t), dir)
+
+			if _, err := github.Publish(t.Context(), cfg); err != nil {
+				t.Fatalf("Publish = %v, want no error", err)
+			}
+
+			var got []string
+
+			for _, issue := range recordedBodies[recordedIssue](t, fake.Calls(t), "POST", fixtureIssuesEndpoint) {
+				got = append(got, issue.Title)
+			}
+
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("the issues the run filed (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
 // TestPublishFilesNoIssueForItsOwnFindings pins the report being opened: its own
 // public findings are counted in the run's line and get no issue, since an issue
 // is for a report already merged on main.

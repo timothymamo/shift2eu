@@ -41,6 +41,15 @@ func botEntry(title string) map[string]any {
 	return issueEntry(title, github.AuditBotLogin, github.AuditBotType)
 }
 
+// botEntryInState returns the audit App's issue of title in state, open or
+// closed: the listing is read with state=all, so both are the App's own.
+func botEntryInState(title, state string) map[string]any {
+	entry := botEntry(title)
+	entry["state"] = state
+
+	return entry
+}
+
 // issueTitleOf returns the title a run files for a fingerprint.
 func issueTitleOf(fp publish.Fingerprint) string {
 	return "Security audit finding " + string(fp) + ": hardening (low)"
@@ -81,6 +90,18 @@ func TestListAuditIssuesReadsEveryPageOrNone(t *testing.T) {
 				{Title: "three", UserLogin: github.AuditBotLogin, UserType: github.AuditBotType},
 			},
 			calls: 3,
+		},
+		{
+			name: "an open and a closed issue",
+			routes: []Route{{Method: "GET", Endpoint: fixtureIssuesQuery + "page=1", Status: 200, Body: []any{
+				botEntryInState("an open issue", "open"),
+				botEntryInState("a closed issue", "closed"),
+			}}},
+			want: []github.Issue{
+				{Title: "an open issue", UserLogin: github.AuditBotLogin, UserType: github.AuditBotType},
+				{Title: "a closed issue", UserLogin: github.AuditBotLogin, UserType: github.AuditBotType},
+			},
+			calls: 1,
 		},
 		{
 			name:   "an entry that is a pull request",
