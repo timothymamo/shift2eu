@@ -1893,6 +1893,82 @@ linters:
             - github.com/timothymamo/shift2eu/internal/adapter/target/upcloud$
             - github.com/timothymamo/shift2eu/internal/domain/catalog$
             - github.com/timothymamo/shift2eu/internal/version$
+        # The live site check (PRD #297 milestone 3, issue #346) is no part of
+        # the product: ci/sitecheck is a main package, which Go refuses to
+        # import, run by the release's check and milestone 4's scheduled
+        # workflow, and its library ci/sitecheck/internal/livecheck is under an
+        # internal directory whose parent is ci/sitecheck, so Go's internal
+        # rule keeps it out of reach of cmd/ and internal/. Both are held all
+        # the same, each to the standard packages it imports, ending in $. The
+        # entry point reads the files its flags name and exits (os); it opens
+        # no connection and starts no process, and the forbidigo group
+        # site-check-env refuses every read of the environment. syscall names
+        # only SIGTERM, which cancels the run like an interrupt.
+        site-check-main:
+          list-mode: strict
+          files:
+            - "**/ci/sitecheck/**"
+            - "!**/ci/sitecheck/internal/**"
+            - "!$test"
+          allow:
+            - context$
+            - errors$
+            - flag$
+            - fmt$
+            - io$
+            - os$
+            - os/signal$
+            - syscall$
+            - time$
+            - github.com/timothymamo/shift2eu/ci/sitecheck/internal/livecheck$
+          deny:
+            - pkg: os/exec
+              desc: "the live site check runs no program; its library only builds the gh commands as argv (PRD #297 milestone 3)"
+            - pkg: net
+              desc: "the live site check's entry point opens no connection itself; its library fetches the site (PRD #297 milestone 3)"
+        # The live site check's library fetches the site over HTTPS and plain
+        # HTTP through the dialer it is given (net, net/http, crypto/tls,
+        # crypto/x509) and reads no file, no environment variable and starts no
+        # process: the entry point hands it the manifest, the records and the
+        # tag list, and it builds the gh commands of milestone 4 as argv slices
+        # without running them. So it is held to named standard packages,
+        # without os, os/exec, syscall or unsafe, and to no package of the
+        # module.
+        site-check-library:
+          list-mode: strict
+          files:
+            - "**/ci/sitecheck/internal/**"
+            - "!$test"
+          allow:
+            - bytes$
+            - compress/gzip$
+            - context$
+            - crypto/sha256$
+            - crypto/tls$
+            - crypto/x509$
+            - encoding/hex$
+            - encoding/json$
+            - errors$
+            - fmt$
+            - html$
+            - io$
+            - mime$
+            - net$
+            - net/http$
+            - net/http/httptrace$
+            - regexp$
+            - slices$
+            - strconv$
+            - strings$
+            - sync/atomic$
+            - time$
+            - unicode$
+            - unicode/utf8$
+          deny:
+            - pkg: os
+              desc: "the live site check's library reads no file and no environment variable; ci/sitecheck hands it what it reads (PRD #297 milestone 3)"
+            - pkg: syscall
+              desc: "the live site check's library makes no system call of its own (PRD #297 milestone 3)"
         # The Claude Code pin check (issue #276, ADR 0033) is no part of the
         # product: ci/claudecodepin is a main package, which Go refuses to
         # import, run by .github/workflows/claude-code-pin.yml, and its library
@@ -2698,6 +2774,22 @@ linters:
         - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
           pkg: '^os$'
           msg: 'claude-code-pin-env: the Claude Code pin check reads no environment variable, locates no home, config, cache or temp directory and starts no process; it reads the workflow and one public registry document (CLAUDE.md rule 3)'
+        # Group site-check-env (PRD #297 milestone 3): the live site check
+        # reads no environment variable, starts no process and locates no home,
+        # config, cache or temp directory: it reads the files its flags name and
+        # fetches the site, and holds no credential (CLAUDE.md rule 3).
+        # depguard keeps os/exec and unsafe out of it, and syscall out of its
+        # library (site-check-main, site-check-library); the entry point names
+        # syscall.SIGTERM only, and the syscall entry refuses its environment
+        # reads, process starts, library loads and raw system calls. Scope:
+        # every file under ci/sitecheck/, _test.go files included; its
+        # exclusion rule drops it everywhere else.
+        - pattern: '^os\.(?:Getenv|LookupEnv|ExpandEnv|Environ|StartProcess|UserHomeDir|UserConfigDir|UserCacheDir|TempDir)$'
+          pkg: '^os$'
+          msg: 'site-check-env: the live site check reads no environment variable, locates no home, config, cache or temp directory and starts no process; it reads the files its flags name and fetches the site (CLAUDE.md rule 3)'
+        - pattern: '^syscall\.(?:Getenv|GetEnvironmentVariable|Environ|Exec|ForkExec|StartProcess|CreateProcess|CreateProcessAsUser|GetEnvironmentStrings|LoadDLL|MustLoadDLL|NewLazyDLL|LoadLibrary|GetProcAddress|(?:(?:AllThreads|Raw)?Syscall(?:6|9|12|15|18|N)?|SYS_\w+))$'
+          pkg: '^syscall$'
+          msg: 'site-check-env: the live site check reads no environment variable, starts or replaces no process, loads no library and makes no raw system call through syscall; its entry point names only syscall.SIGTERM (CLAUDE.md rule 3)'
         # Group audit-exec-env (issue #277, ADR 0040's model-job amendment): the audit's
         # command wrapper reads no environment variable, hands over no
         # environment of the caller's, locates no home, config, cache or temp
@@ -2988,6 +3080,12 @@ linters:
         linters:
           - forbidigo
         text: 'because "claude-code-pin-env: [^"]*"$'
+      # site-check-env: the group holds for every file under ci/sitecheck/,
+      # _test.go files included, and nowhere else.
+      - path-except: ^ci/sitecheck/
+        linters:
+          - forbidigo
+        text: 'because "site-check-env: [^"]*"$'
       # audit-exec-env: the group holds for every file under ci/auditexec/,
       # _test.go files included, and nowhere else.
       - path-except: ^ci/auditexec/
