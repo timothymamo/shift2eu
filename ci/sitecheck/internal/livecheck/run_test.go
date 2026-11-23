@@ -436,7 +436,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 
 				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "<html><body><p>welcome</p></body></html>", rawWriteOnAccept))
-				site.dial = verdictFirst(site.routes.dial, livecheck.DefaultHost+":80")
+				forceVerdictFirst(site, livecheck.DefaultHost+":80")
 			},
 			wantKind:   livecheck.KindRedirect,
 			wantTarget: "http://" + livecheck.DefaultHost + "/",
@@ -448,12 +448,19 @@ func TestRunFailsABrokenSite(t *testing.T) {
 
 				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "HTTP/1.1 200 OK\r\nBad Header\r\n\r\n<html><body><p>welcome</p></body></html>", rawWriteOnAccept))
-				site.dial = verdictFirst(site.routes.dial, livecheck.DefaultHost+":80")
+				forceVerdictFirst(site, livecheck.DefaultHost+":80")
 			},
 			wantKind:   livecheck.KindRedirect,
 			wantTarget: "http://" + livecheck.DefaultHost + "/",
 		},
 		{
+			// The short request timeout this case needs to end the stalled
+			// request applies to the whole run, so an HTTPS fetch of the same
+			// run may time out under load too; the case wants a failing report,
+			// and the check it asserts fails for a reason load cannot flip (a
+			// connection was made), so that is no flake. The timeout cannot be
+			// scoped to this host through the dialer: a dial cannot make a
+			// served request end.
 			name: "refuse-or-close: plain HTTP accepting the connection and never answering",
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
@@ -714,6 +721,10 @@ func TestRunFailsABrokenSite(t *testing.T) {
 				t.Fatalf("Run failed: %v, want a report of a failed check: a check failure is no error", err)
 			}
 
+			if site.afterRun != nil {
+				site.afterRun(t)
+			}
+
 			if report.Passed() {
 				t.Fatalf("the check of the site passed, want the %s check of %q to fail: %s", tc.wantKind, tc.wantTarget, tc.name)
 			}
@@ -790,16 +801,18 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 		},
 		{
 			// A port a firewall drops: nothing refuses, nothing answers, and the
-			// dial ends with the request's deadline and no connection made. A
-			// browser gets no page from it any more than from a refusal, so
-			// refuse-or-close accepts it; a timeout with a connection made behind
-			// it still fails.
+			// dial ends at once with a timeout and no connection made, as a dial
+			// whose deadline passed does. A browser gets no page from it any
+			// more than from a refusal, so refuse-or-close accepts it; a timeout
+			// with a connection made behind it still fails (the stalled case
+			// above). The dial ends by itself, so this run keeps the default
+			// request timeout: a short one applied to every request flaked the
+			// HTTPS fetches, each with a TLS handshake of its own.
 			name: "refuse-or-close: plain HTTP on the canonical host filtered, the dial timing out with no connection",
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
 				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
-				site.requestTimeout = 100 * time.Millisecond
 				site.dial = filteredDial(site.routes.dial, livecheck.DefaultHost+":80")
 			},
 		},
@@ -1218,6 +1231,65 @@ func TestCheckCertificate(t *testing.T) {
 	}
 }
 
+// TestCheckCertificateKeepsTheCallersDeadline pins what CheckCertificate grants
+// the dial of a ctx that already has a deadline: that deadline itself, longer
+// than DefaultRequestTimeout included, and DefaultRequestTimeout only for a ctx
+// with no deadline. The dialer records the deadline it is called with and fails
+// at once, so a deadline longer than the default costs no wall clock.
+func TestCheckCertificateKeepsTheCallersDeadline(t *testing.T) {
+	t.Parallel()
+
+	longer := time.Now().Add(2 * livecheck.DefaultRequestTimeout)
+	shorter := time.Now().Add(time.Second)
+
+	tests := []struct {
+		name     string
+		deadline time.Time
+	}{
+		{name: "a deadline longer than the default request timeout", deadline: longer},
+		{name: "a deadline shorter than it", deadline: shorter},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctx, cancel := context.WithDeadline(t.Context(), tc.deadline)
+			defer cancel()
+
+			dial := &deadlineDial{}
+
+			_, err := livecheck.CheckCertificate(ctx, dial.dial, nil, livecheck.DefaultHost, testNow, livecheck.MinCertMargin)
+			if err == nil {
+				t.Fatalf("CheckCertificate returned no error though its dial failed, want the dial's error")
+			}
+
+			if !dial.recorded {
+				t.Fatalf("CheckCertificate dialled with no deadline, want the caller's %v", tc.deadline)
+			}
+
+			if !dial.deadline.Equal(tc.deadline) {
+				t.Errorf("CheckCertificate dialled with the deadline %v, want the caller's %v: a caller's deadline, shorter or longer than the default %v, is kept as it is", dial.deadline, tc.deadline, livecheck.DefaultRequestTimeout)
+			}
+		})
+	}
+}
+
+// deadlineDial records the deadline of the context its dial is called with and
+// makes no connection.
+type deadlineDial struct {
+	deadline time.Time
+	recorded bool
+}
+
+// dial records the context's deadline and returns the error of a dial that
+// reached no host.
+func (d *deadlineDial) dial(ctx context.Context, _, _ string) (net.Conn, error) {
+	d.deadline, d.recorded = ctx.Deadline()
+
+	return nil, errors.New("the test's dial makes no connection")
+}
+
 // TestRunBoundsTheTLSHandshake pins that a host that accepts the TCP connection
 // and never sends a ServerHello makes the certificate check fail within
 // Config.RequestTimeout, not hang the run: the transport's dial and read
@@ -1225,7 +1297,12 @@ func TestCheckCertificate(t *testing.T) {
 // does must be bounded by the same timeout (auditor finding 1, reviewer 2).
 // The check runs in a goroutine under a guard, so an unbounded handshake fails
 // this test instead of hanging the package's run; the guard is loose (the check
-// measures about 2 s) because it catches a hang, never a duration.
+// measures about 2 s) because it catches a hang, never a duration. The short
+// request timeout the case needs applies to the whole run, so a fetch of the
+// same run may time out under load too; the case wants a failing certificate
+// check, which a stalled handshake cannot turn into a passing one, so that is
+// no flake. It cannot be scoped to this host through the dialer: what must end
+// is a handshake CheckCertificate does, not a dial.
 func TestRunBoundsTheTLSHandshake(t *testing.T) {
 	t.Parallel()
 

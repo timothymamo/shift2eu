@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -555,7 +556,9 @@ func (r *routeTable) dialLog() []string {
 const verdictGuard = 10 * time.Second
 
 // verdictFirst returns inner's dialer with every connection to addr wrapped so
-// that its RemoteAddr waits until the transport has closed it (verdictConn).
+// that its RemoteAddr waits until the transport has closed it (verdictConn),
+// and a func reporting whether the transport asked such a connection for its
+// remote address.
 //
 // The transport reads the bytes already on a fresh connection in its read loop,
 // before the request is registered, and a byte it reads there makes it discard
@@ -564,9 +567,13 @@ const verdictGuard = 10 * time.Second
 // the order an edge that writes as soon as it accepts the connection reaches
 // only by chance, which made the refuse-or-close check pass the bytes it must
 // fail; the wait in RemoteAddr, on the trace's GotConn, which runs before the
-// request is registered, makes that order the only one.
-func verdictFirst(inner livecheck.Dialer, addr string) livecheck.Dialer {
-	return func(ctx context.Context, network, target string) (net.Conn, error) {
+// request is registered, makes that order the only one. The wait is
+// RemoteAddr's, so a case that uses this dialer asserts the call happened
+// (forceVerdictFirst).
+func verdictFirst(inner livecheck.Dialer, addr string) (livecheck.Dialer, func() bool) {
+	var asked atomic.Bool
+
+	dial := func(ctx context.Context, network, target string) (net.Conn, error) {
 		conn, err := inner(ctx, network, target)
 		if err != nil {
 			return nil, err
@@ -576,7 +583,26 @@ func verdictFirst(inner livecheck.Dialer, addr string) livecheck.Dialer {
 			return conn, nil
 		}
 
-		return &verdictConn{Conn: conn, closed: make(chan struct{})}, nil
+		return &verdictConn{Conn: conn, closed: make(chan struct{}), asked: &asked}, nil
+	}
+
+	return dial, asked.Load
+}
+
+// forceVerdictFirst makes site force the write-on-accept order on addr
+// (verdictFirst) and, after the run, fails the case unless the transport asked
+// the forced connection for its remote address: that call is where the wait
+// runs, so without it the case would silently stop forcing the order and pass
+// or fail by chance.
+func forceVerdictFirst(site *site, addr string) {
+	dial, asked := verdictFirst(site.dial, addr)
+	site.dial = dial
+	site.afterRun = func(t *testing.T) {
+		t.Helper()
+
+		if !asked() {
+			t.Error("the transport never asked the forced connection for its remote address, want the call whose wait forces the write-on-accept order")
+		}
 	}
 }
 
@@ -591,6 +617,9 @@ type verdictConn struct {
 	net.Conn
 	closed chan struct{}
 	once   sync.Once
+	// asked records that the transport called RemoteAddr, the call whose wait
+	// forces the order the case needs.
+	asked *atomic.Bool
 }
 
 // Close marks the connection closed, releasing RemoteAddr, and closes it.
@@ -601,8 +630,10 @@ func (c *verdictConn) Close() error {
 }
 
 // RemoteAddr returns the connection's remote address once the transport has
-// closed the connection.
+// closed the connection, and records that it was called.
 func (c *verdictConn) RemoteAddr() net.Addr {
+	c.asked.Store(true)
+
 	select {
 	case <-c.closed:
 	case <-time.After(verdictGuard):
@@ -612,18 +643,19 @@ func (c *verdictConn) RemoteAddr() net.Addr {
 }
 
 // filteredDial returns inner's dialer with addr filtered: a connection to addr
-// makes no connection at all and returns the dial's error when its context ends,
-// as a port a firewall drops does (no refusal, no answer, until the client gives
-// up).
+// is never made, and the dial ends at once with the error of a dial that timed
+// out, as a port a firewall drops does (no refusal, no answer, until the client
+// gives up). It ends the dial itself rather than waiting for the request's
+// context to end, so the case needs no request timeout below the run's own:
+// every other request of the run keeps the default, where a short one left the
+// HTTPS fetches, each with a TLS handshake of its own, to fail under load.
 func filteredDial(inner livecheck.Dialer, addr string) livecheck.Dialer {
 	return func(ctx context.Context, network, target string) (net.Conn, error) {
 		if target != addr {
 			return inner(ctx, network, target)
 		}
 
-		<-ctx.Done()
-
-		return nil, ctx.Err()
+		return nil, &net.OpError{Op: "dial", Net: network, Err: context.DeadlineExceeded}
 	}
 }
 
@@ -730,6 +762,9 @@ type site struct {
 	maxBodyBytes    int64
 	requestTimeout  time.Duration
 	roots           *x509.CertPool
+	// afterRun, when set, runs after the run: it asserts what the run had to
+	// do first (a forced order, a call the case depends on).
+	afterRun func(t *testing.T)
 }
 
 // newSite builds a fixture site that passes every check, and breaks the parts a
