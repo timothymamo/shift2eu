@@ -134,8 +134,11 @@ func buildSite(t *testing.T, version string) string {
 	cmd.Dir = root
 	// The builder builds cmd/shift2eu-web for js/wasm itself, so an inherited
 	// GOOS or GOARCH of another target must not reach it; the later entries of
-	// the environment win.
-	cmd.Env = append(cmd.Environ(), "GOOS=", "GOARCH=", "GOFLAGS=-mod=readonly", "GOWORK=off")
+	// the environment win. GOPROXY=off and GOTOOLCHAIN=local keep the child
+	// offline (issue #514): the test reads an inventory and a catalog snapshot
+	// and never downloads a module or a toolchain, so a missing one fails here
+	// instead of reaching the network.
+	cmd.Env = append(cmd.Environ(), "GOOS=", "GOARCH=", "GOFLAGS=-mod=readonly", "GOWORK=off", "GOPROXY=off", "GOTOOLCHAIN=local")
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
