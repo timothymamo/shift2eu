@@ -58,11 +58,17 @@ const (
 
 // tokenAbsenceCommand is probe 5's Bash call that shows whether the token
 // variable reached the sandboxed shell without showing its value: the shell
-// expands the unset variable to nothing, so cat names /nonexistent/ and fails;
-// a set one would make it name /nonexistent/tokenset. It is the one call of
-// the plan whose result is expected to be an error for a reason other than a
-// refusal.
-const tokenAbsenceCommand = "{wrapper} cat /nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}" //nolint:gosec // G101: a shell expansion of the variable's name, never its value
+// expands the unset variable to nothing, so cat names
+// /srv/audit/work/nonexistent/ and fails; a set one would make it name
+// /srv/audit/work/nonexistent/tokenset. It is the one call of the plan whose
+// result is expected to be an error for a reason other than a refusal. The
+// path is the wrapper's own work area, as the wrapper sees it whatever the
+// root, so it lies inside the roots the wrapper holds every path word to and
+// cat runs for real (issue #277, round I): outside them, the wrapper's
+// refusal would name the path too and prove nothing. work/nonexistent cannot
+// exist when the preflight runs, since the work-area check holds the work area
+// to its tmp/ alone. {wrapper} comes from Targets.
+const tokenAbsenceCommand = "{wrapper} cat /" + workDir + "/nonexistent/${CLAUDE_CODE_OAUTH_TOKEN:+tokenset}"
 
 // Probe 5's two calls for the forms the wrapper's own path rule never reads
 // (ADR 0040, issue #277 round G), so the sandbox itself is tested on every

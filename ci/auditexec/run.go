@@ -126,13 +126,28 @@ const gitRefusedLetters = "cOC"
 // that merely mentions one is refused too.
 var jqModuleWords = []string{"import", "include"}
 
-// jqLibraryLetter is jq's short -L, the library path, refused in any
-// single-dash word that holds it.
-const jqLibraryLetter = "L"
+// jqRefusedLetters are jq's short options refused in any single-dash word that
+// holds them: -L, the library path, and -f, a program file, whose own import
+// and include the module check never reads (issue #277, round I).
+const jqRefusedLetters = "Lf"
 
-// jqLibraryLong is jq's long --library-path, refused alone, with its value
-// attached after "=" and abbreviated.
-const jqLibraryLong = "--library-path"
+// jqRefusedLong are the long forms of jqRefusedLetters, refused alone, with
+// their value attached after "=" and abbreviated.
+var jqRefusedLong = []string{"--library-path", "--from-file"}
+
+// wcRefusedLong is wc's --files0-from, which reads the names of the files to
+// count from a file the path rule never sees (issue #277, round I): refused
+// alone, in its =value form and abbreviated.
+var wcRefusedLong = []string{"--files0-from"}
+
+// sha256sumRefusedLetters is sha256sum's -c, which reads the names of the
+// files to check from a digests' file, refused in any single-dash word that
+// holds it (issue #277, round I).
+const sha256sumRefusedLetters = "c"
+
+// sha256sumRefusedLong is -c's long form, refused alone, in its =value form and
+// abbreviated.
+var sha256sumRefusedLong = []string{"--check"}
 
 // sortShortAllowed are the short sort options that only change how sort
 // orders and compares its lines.
@@ -275,6 +290,14 @@ func commandLine(args []string) ([]string, string, bool) {
 		}
 	case "jq":
 		if refused, ok := jqLine(rest); !ok {
+			return nil, refused, false
+		}
+	case "wc":
+		if refused, ok := optionLine(rest, "", wcRefusedLong); !ok {
+			return nil, refused, false
+		}
+	case "sha256sum":
+		if refused, ok := optionLine(rest, sha256sumRefusedLetters, sha256sumRefusedLong); !ok {
 			return nil, refused, false
 		}
 	}
@@ -543,11 +566,12 @@ func uniqLine(args []string) (string, bool) {
 }
 
 // jqLine returns the first word of jq's arguments that reaches its module
-// system, or true when none does: a word holding import or include, wherever
-// it sits (a filter, an --arg value, a file name: the check fails closed); a
-// single-dash word holding -L, alone, attached or in a cluster; and
-// --library-path, alone, in its =value form or abbreviated. The path rule
-// still holds every other word.
+// system or a program file, or true when none does: a word holding import or
+// include, wherever it sits (a filter, an --arg value, a file name: the check
+// fails closed); a single-dash word holding -L or -f, alone, attached or in a
+// cluster; and --library-path or --from-file, alone, in its =value form or
+// abbreviated. The audit's filters come on the line; the path rule still holds
+// every other word.
 func jqLine(args []string) (string, bool) {
 	for _, arg := range args {
 		for _, word := range jqModuleWords {
@@ -556,21 +580,49 @@ func jqLine(args []string) (string, bool) {
 			}
 		}
 
-		if !strings.HasPrefix(arg, "--") {
-			if strings.HasPrefix(arg, "-") && strings.Contains(arg[1:], jqLibraryLetter) {
-				return arg, false
-			}
-
-			continue
-		}
-
-		name, _, _ := strings.Cut(arg, "=")
-		if len(name) > len("--") && strings.HasPrefix(jqLibraryLong, name) {
+		if refusedOption(arg, jqRefusedLetters, jqRefusedLong) {
 			return arg, false
 		}
 	}
 
 	return "", true
+}
+
+// optionLine returns the first of args that is one of a command's refused
+// options (refusedOption), or true when none is. It reads every word, those
+// after "--" too, so it fails closed.
+func optionLine(args []string, letters string, long []string) (string, bool) {
+	for _, arg := range args {
+		if refusedOption(arg, letters, long) {
+			return arg, false
+		}
+	}
+
+	return "", true
+}
+
+// refusedOption reports whether arg is a single-dash word holding one of
+// letters, alone, attached or anywhere in a cluster, or a long option whose
+// name, before any "=", is one of long or an abbreviation of it (GNU's option
+// parser and jq's take a unique prefix; any prefix is refused, so the check
+// fails closed). "-" alone and "--" are neither.
+func refusedOption(arg, letters string, long []string) bool {
+	if !strings.HasPrefix(arg, "--") {
+		return strings.HasPrefix(arg, "-") && strings.ContainsAny(arg[1:], letters)
+	}
+
+	name, _, _ := strings.Cut(arg, "=")
+	if len(name) <= len("--") {
+		return false
+	}
+
+	for _, option := range long {
+		if strings.HasPrefix(option, name) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // shortCluster reads a cluster of short options, the word after its dash. A
