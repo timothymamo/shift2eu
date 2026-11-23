@@ -46,6 +46,18 @@ const (
 	moduleBodyPrefix = "globalThis.__shift2euModule=\"AAAA//8=\";\n"
 )
 
+// The bundle's two fixed names beside the pages, which the module root's files
+// give byte for byte (ci/sitebuild, issue #495): Apache-2.0 section 4 asks every
+// redistribution, the site bundle included, to carry the licence and the NOTICE
+// attribution. Neither is content-addressed, so neither name holds a digest.
+const (
+	licenseName = "LICENSE"
+	noticeName  = "NOTICE"
+
+	licenseBody = "Apache License\nVersion 2.0, January 2004\n"
+	noticeBody  = "shift2eu\nCopyright 2026 the shift2eu authors\n"
+)
+
 // testCredentials is the key every request is signed with.
 var testCredentials = deploy.Credentials{
 	AccessKey: deploy.NewSecret(testAccessKey),
@@ -57,8 +69,8 @@ var testCredentials = deploy.Credentials{
 var moduleBody = []byte(moduleBodyPrefix + strings.Repeat("the module's base64 ", 256))
 
 // bundle is a site bundle in memory, following the format of doc.go's "The
-// bundle it consumes": the four pages, the four content-addressed assets and
-// manifest.json.
+// bundle it consumes": the four pages, the four content-addressed assets, the
+// licence and the NOTICE attribution, and manifest.json.
 type bundle struct {
 	// version is the release tag the manifest names.
 	version string
@@ -71,7 +83,8 @@ type bundle struct {
 }
 
 // newBundle returns the bundle Deploy should accept: every file of the format,
-// each asset named after its own digest, at version.
+// each asset named after its own digest, the licence and the NOTICE attribution,
+// at version.
 func newBundle(t *testing.T, version string) *bundle {
 	t.Helper()
 
@@ -85,6 +98,9 @@ func newBundle(t *testing.T, version string) *bundle {
 		assetName("page", ".js", []byte(pageBody)):          []byte(pageBody),
 		assetName("wasm_exec", ".js", []byte(wasmExecBody)): []byte(wasmExecBody),
 		assetName("module", ".js", moduleBody):              moduleBody,
+
+		licenseName: []byte(licenseBody),
+		noticeName:  []byte(noticeBody),
 	}}
 }
 

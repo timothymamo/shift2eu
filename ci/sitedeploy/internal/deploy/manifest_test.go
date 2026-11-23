@@ -13,7 +13,8 @@ import (
 
 // TestParseManifest pins ParseManifest on what it accepts: one JSON object of a
 // version and the files ci/sitebuild names, sorted by path, each with its
-// digest — the bundle's own manifest included.
+// digest — the bundle's own manifest included, which lists the licence and the
+// NOTICE attribution beside the pages and the assets.
 func TestParseManifest(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +147,31 @@ func TestParseManifestRefusesHostileData(t *testing.T) {
 		{
 			name:      "a path that is no file of a bundle",
 			data:      []byte(valid(file("index.css", emptySHA256))),
+			wantField: "path",
+		},
+		{
+			name:      "the licence with a suffix",
+			data:      []byte(valid(file("LICENSE.txt", emptySHA256))),
+			wantField: "path",
+		},
+		{
+			name:      "the licence in lower case",
+			data:      []byte(valid(file("license", emptySHA256))),
+			wantField: "path",
+		},
+		{
+			name:      "the NOTICE as Markdown",
+			data:      []byte(valid(file("NOTICE.md", emptySHA256))),
+			wantField: "path",
+		},
+		{
+			name:      "the licence in a directory",
+			data:      []byte(valid(file("docs/LICENSE", emptySHA256))),
+			wantField: "path",
+		},
+		{
+			name:      "a directory named after the licence",
+			data:      []byte(valid(file("LICENSE/x", emptySHA256))),
 			wantField: "path",
 		},
 		{

@@ -723,8 +723,13 @@ func TestFinalStageIsMinimalAndNonRoot(t *testing.T) {
 // Apache-2.0 section 4 asks a redistribution to carry (issue #495).
 const imageDocDir = "/usr/share/doc/shift2eu"
 
+// licenseFileMode is the mode the final stage gives both files: the same for
+// every builder, whatever its checkout umask sets, and read-only for the reader
+// of the image.
+const licenseFileMode = "0444"
+
 // shippedLicenseFiles are the files the image ships from the repository root,
-// each at the path in the image.
+// each at the path in the image, read-only.
 var shippedLicenseFiles = []struct{ name, path string }{
 	{name: "LICENSE", path: imageDocDir + "/LICENSE"},
 	{name: "NOTICE", path: imageDocDir + "/NOTICE"},
@@ -733,16 +738,17 @@ var shippedLicenseFiles = []struct{ name, path string }{
 // TestTheImageShipsLicenseAndNotice pins issue #495: the image is a
 // redistribution of the project, so Apache-2.0 section 4 asks it to carry the
 // licence and the NOTICE attribution beside the binary it publishes. The final
-// stage copies both from the build context into imageDocDir, .dockerignore
-// leaves them in the context, so the COPY finds them, and a GoReleaser docker
-// section, were the release to build the image, puts them into the context it
-// sends to the daemon.
+// stage copies both from the build context into imageDocDir with --chmod=0444,
+// so neither the builder's checkout umask nor a reader of the image decides the
+// mode, .dockerignore leaves them in the context, so the COPY finds them, and a
+// GoReleaser docker section, were the release to build the image, puts them into
+// the context it sends to the daemon.
 //
 // The check runs over the repository's build files and over fixtures that
 // carry one fault each: a file the stage does not copy, a file it copies
-// somewhere else, a context that leaves it out, and a GoReleaser docker entry
-// that names one file alone. A check that cannot tell those apart would pass on
-// an image that ships neither.
+// somewhere else, a file it copies with no --chmod=0444, a context that leaves
+// it out, and a GoReleaser docker entry that names one file alone. A check that
+// cannot tell those apart would pass on an image that ships neither.
 func TestTheImageShipsLicenseAndNotice(t *testing.T) {
 	t.Parallel()
 
@@ -752,10 +758,10 @@ RUN go build -o /out/shift2eu ./cmd/shift2eu
 
 FROM gcr.io/distroless/static-debian13:nonroot
 COPY --from=build /out/shift2eu /shift2eu
-COPY LICENSE NOTICE /usr/share/doc/shift2eu/
+COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/
 `
 
-	const bothFiles = "COPY LICENSE NOTICE /usr/share/doc/shift2eu/\n"
+	const bothFiles = "COPY --chmod=0444 LICENSE NOTICE /usr/share/doc/shift2eu/\n"
 
 	tests := []struct {
 		name string
@@ -791,15 +797,27 @@ COPY LICENSE NOTICE /usr/share/doc/shift2eu/
 		},
 		{
 			name:         "a Dockerfile that copies NOTICE alone",
-			dockerfile:   strings.Replace(fixture, bothFiles, "COPY NOTICE /usr/share/doc/shift2eu/\n", 1),
+			dockerfile:   strings.Replace(fixture, bothFiles, "COPY --chmod=0444 NOTICE /usr/share/doc/shift2eu/\n", 1),
 			dockerignore: "*\n!LICENSE\n!NOTICE\n",
 			want:         []string{"copies no LICENSE"},
 		},
 		{
 			name:         "a Dockerfile that copies both files elsewhere",
-			dockerfile:   strings.Replace(fixture, bothFiles, "COPY LICENSE NOTICE /licenses/\n", 1),
+			dockerfile:   strings.Replace(fixture, bothFiles, "COPY --chmod=0444 LICENSE NOTICE /licenses/\n", 1),
 			dockerignore: "*\n!LICENSE\n!NOTICE\n",
 			want:         []string{`LICENSE to "/licenses/LICENSE"`, `NOTICE to "/licenses/NOTICE"`},
+		},
+		{
+			name:         "a Dockerfile that copies both files with no mode",
+			dockerfile:   strings.Replace(fixture, "--chmod="+licenseFileMode+" ", "", 1),
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			want:         []string{"copies LICENSE without --chmod=0444", "copies NOTICE without --chmod=0444"},
+		},
+		{
+			name:         "a Dockerfile that copies both files with another mode",
+			dockerfile:   strings.Replace(fixture, "--chmod="+licenseFileMode, "--chmod=0644", 1),
+			dockerignore: "*\n!LICENSE\n!NOTICE\n",
+			want:         []string{"copies LICENSE without --chmod=0444", "copies NOTICE without --chmod=0444"},
 		},
 		{
 			name:         "a build context that leaves both files out",
@@ -840,9 +858,10 @@ COPY LICENSE NOTICE /usr/share/doc/shift2eu/
 // licenseFileFindings returns what name, one build's Dockerfile, .dockerignore
 // and .goreleaser.yaml, leaves of issue #495's promise that the image ships
 // LICENSE and NOTICE: a file the final stage does not copy from the build
-// context into imageDocDir, a file .dockerignore keeps out of that context, and
-// a file a GoReleaser docker section does not put into the context it sends to
-// the daemon. An empty dockerignore or goreleaser skips that half of the check.
+// context into imageDocDir, a file it copies with a mode other than 0444, a file
+// .dockerignore keeps out of that context, and a file a GoReleaser docker
+// section does not put into the context it sends to the daemon. An empty
+// dockerignore or goreleaser skips that half of the check.
 func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, goreleaser string) []string {
 	t.Helper()
 
@@ -851,15 +870,18 @@ func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, gorelease
 	destinations := contextCopyDestinations(finalStage(t, dockerfileInstructions(t, dockerfile)))
 
 	for _, file := range shippedLicenseFiles {
-		destination, copied := destinations[file.name]
+		landing, copied := destinations[file.name]
 
 		switch {
 		case !copied:
 			findings = append(findings, fmt.Sprintf("%s: the final stage copies no %s from the build context: want `COPY %s %s`, so the image carries the licence Apache-2.0 section 4 asks every redistribution to keep (issue #495)",
 				name, file.name, file.name, file.path))
-		case destination != file.path:
+		case landing.destination != file.path:
 			findings = append(findings, fmt.Sprintf("%s: the final stage copies %s to %q, want %q: the image keeps the licence and the NOTICE attribution under %s, where a reader of the image finds them (issue #495)",
-				name, file.name, destination, file.path, imageDocDir))
+				name, file.name, landing.destination, file.path, imageDocDir))
+		case landing.chmod != licenseFileMode:
+			findings = append(findings, fmt.Sprintf("%s: the final stage copies %s without --chmod=%s: want `COPY --chmod=%s %s %s`, so the file's mode is the same for every builder, whatever its checkout umask sets, and an image that is read-only for its user carries it read-only (issue #495)",
+				name, file.name, licenseFileMode, licenseFileMode, file.name, file.path))
 		}
 	}
 
@@ -886,27 +908,49 @@ func licenseFileFindings(t *testing.T, name, dockerfile, dockerignore, gorelease
 	return findings
 }
 
+// contextCopy is where one stage copies a file of the build context, and the
+// mode it gives it.
+type contextCopy struct {
+	// destination is the path the file lands at in the image.
+	destination string
+	// chmod is the COPY's --chmod value, "" when the instruction carries none.
+	chmod string
+}
+
 // contextCopyDestinations returns where one stage copies each file of the build
-// context: the base name of every source, and the path it lands at, a
-// destination written as a directory joined to the source's base name. A COPY
-// from another stage is not a copy of the context and is skipped, and a stage
-// that copies one file twice keeps the last destination, as Docker does.
-func contextCopyDestinations(stage []instruction) map[string]string {
-	destinations := make(map[string]string)
+// context and with which --chmod: the base name of every source, and the path it
+// lands at, a destination written as a directory joined to the source's base
+// name. A COPY from another stage is not a copy of the context and is skipped,
+// and a stage that copies one file twice keeps the last destination, as Docker
+// does. A --chmod written as its own argument is read too, since Docker accepts
+// that form.
+func contextCopyDestinations(stage []instruction) map[string]contextCopy {
+	destinations := make(map[string]contextCopy)
 
 	for _, in := range stage {
 		if in.keyword() != "COPY" {
 			continue
 		}
 
-		fromStage := false
+		var (
+			fromStage bool
+			chmod     string
+			paths     []string
+		)
 
-		var paths []string
+		fields := strings.Fields(in.arguments())
 
-		for _, field := range strings.Fields(in.arguments()) {
+		for i := 0; i < len(fields); i++ {
+			field := fields[i]
+
 			switch {
 			case strings.HasPrefix(field, "--from="):
 				fromStage = true
+			case strings.HasPrefix(field, "--chmod="):
+				chmod = strings.TrimPrefix(field, "--chmod=")
+			case field == "--chmod" && i+1 < len(fields):
+				i++
+				chmod = fields[i]
 			case strings.HasPrefix(field, "--"):
 			default:
 				paths = append(paths, field)
@@ -923,9 +967,9 @@ func contextCopyDestinations(stage []instruction) map[string]string {
 
 			switch {
 			case strings.HasSuffix(destination, "/"):
-				destinations[base] = path.Join(destination, base)
+				destinations[base] = contextCopy{destination: path.Join(destination, base), chmod: chmod}
 			case len(paths) == 2:
-				destinations[base] = destination
+				destinations[base] = contextCopy{destination: destination, chmod: chmod}
 			}
 		}
 	}
@@ -936,7 +980,11 @@ func contextCopyDestinations(stage []instruction) map[string]string {
 // imageBuildSections returns the body of every top-level docker, dockers or
 // dockers_v2 section of .goreleaser.yaml, the sections that build the image with
 // GoReleaser, comment and blank lines dropped. A release that builds the image
-// with docker build or make image has none, and returns nothing.
+// with docker build or make image has none, and returns nothing. The
+// dockers_v2 half stays although GoReleaser builds no image today — the release
+// builds it with docker/build-push-action and `context: .` — because it guards a
+// future GoReleaser docker section, which would otherwise send the daemon a
+// context holding neither file.
 func imageBuildSections(goreleaser string) []string {
 	imageKeys := map[string]bool{"docker": true, "dockers": true, "dockers_v2": true}
 
