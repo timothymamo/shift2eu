@@ -715,7 +715,10 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   operand after `--`; `/dev/fd/../../1/environ`, where the kernel follows `/dev/fd` into `/proc/self/fd`
   before it takes the `..`, so a lexical clean does not show where the path leads; an attached
   short-option value (`git grep -f/sys/x`); `/home`, `/etc` and `/srv/audit/state`, which it never
-  checked; `git diff --no-index`; and the caller's working directory. It also refused git reads of the
+  checked; `git diff --no-index` (and `git diff` of two absolute paths outside the checkout, which runs
+  no-index on its own: the path allow list below keeps both inside the allowed roots, and the explicit
+  `--no-index` refusal is for clarity; see round L's implicit no-index diff); and the caller's working
+  directory. It also refused git reads of the
   repository's own `dev/`. The rule becomes an **allow list** matching the settings' `Read` allow list:
   - **Path words** are every non-option word that holds a `/` or is `..`; every word after `--`,
     whatever its first character; an option word's value after its first `=`; the rest of a single-dash
@@ -776,7 +779,8 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
     refused line changes and runs nothing.
   - **`--no-index`** is refused on a git line, alone, with `=value` and abbreviated, as git's other
     refused long options are: `git diff --no-index` compares two files of its own, no part of the
-    checkout.
+    checkout. `git diff` of two absolute paths outside the checkout runs no-index on its own; the path
+    rule is what keeps both inside the allowed roots, and the explicit refusal is for clarity.
   - **Defence in depth, not the boundary.** The wrapper sees only the words it is given: a shell
     redirection (`audit-exec cat < /proc/<pid>/envir?n`) is opened by the shell, glob and all, before the
     wrapper starts, and no rule of the wrapper's reads it. The sandbox is the boundary; the wrapper

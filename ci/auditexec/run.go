@@ -71,10 +71,13 @@ var gitSubcommands = map[string]bool{
 // directory, work tree, namespace, program or output file, or changes how git
 // reads the repository or its work tree (--super-prefix, --attr-source,
 // --bare, --literal-pathspecs: nothing but what the wrapper adds comes before
-// the subcommand, issue #277 round H). --open-files-in-pager is git grep's, which runs a program of the caller's;
-// --show-signature verifies a commit's signature, which runs gpg;
-// --no-index makes git diff compare two files of its own, no part of the
-// checkout.
+// the subcommand, issue #277 round H). --open-files-in-pager is git grep's,
+// which runs a program of the caller's; --show-signature verifies a commit's
+// signature, which runs gpg; --no-index makes git diff compare two files of
+// its own, no part of the checkout. git diff of two absolute paths outside
+// the checkout runs no-index on its own, without the option: the path rule
+// is what keeps both inside the allowed roots, and refusing --no-index is
+// for clarity.
 var gitRefusedLong = []string{
 	"--config-env",
 	"--exec-path",
