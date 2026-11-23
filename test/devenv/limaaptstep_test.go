@@ -23,17 +23,18 @@
 //     http:// or https:// URL on archive.ubuntu.com's /ubuntu path, becomes the mirror with one trailing slash
 //     and nothing else of the line; the URI of a country mirror (de.archive.ubuntu.com) is no archive URI of
 //     that host and is never rewritten.
-//   - The rewrite works per field and only on the URIs lines: each whitespace-separated field of a
-//     `^[[:space:]]*URIs:` line that is exactly an http(s)://archive.ubuntu.com/ubuntu URI, with or without its
-//     trailing slash, becomes the mirror with one trailing slash, however many such fields the line holds and
-//     whatever separates them (a tab as well as a space), in one run whatever the mirror is - an archive mirror
-//     of archive.ubuntu.com's own host included, which a second pass would match again. deb822 reads a field's
-//     name in any case and continues a field on the lines after it that start with a space or a tab: `uris:` is
-//     the URIs line as `URIs:` is, and those continuation lines are the same field, so their archive URIs are
-//     rewritten too, their leading whitespace kept, and the field ends at the first line that starts with no
-//     whitespace. Every other line, a comment and a field of another name included, stays byte for byte: neither
-//     is a URI apt fetches from, and a file whose URIs lines hold no archive URI is a file the mirror cannot be
-//     set in, which fails as a ports file does.
+//   - The rewrite works per field and only on the URIs field: the field begins on a line in column 0 whose name
+//     is the field's in any case (`URIs:`, `uris:`, `uRiS:`), and it continues on the lines after it that start
+//     with a space or a tab, as deb822 reads a field; the first line that starts with no whitespace ends it. A
+//     field's name is a name in column 0 only: an indented `URIs:` line is a continuation of the field before it,
+//     not a URIs field, and apt fetches nothing from it. Each whitespace-separated field of the URIs field - the
+//     first line's, and a continuation line's - that is exactly an http(s)://archive.ubuntu.com/ubuntu URI, with
+//     or without its trailing slash, becomes the mirror with one trailing slash, however many such fields the
+//     field holds and whatever separates them (a tab as well as a space), in one run whatever the mirror is - an
+//     archive mirror of archive.ubuntu.com's own host included, which a second pass would match again. A
+//     continuation's leading whitespace is part of its line and stays. Every other line, a comment and a field
+//     of another name included, stays byte for byte: neither is a URI apt fetches from, and a file whose URIs
+//     field holds no archive URI is a file the mirror cannot be set in, which fails as a ports file does.
 //   - A non-default mirror that finds no archive URI to rewrite - a ports file, a country mirror, a comment or a
 //     field of another name that names one, a file that already names the mirror is fine - stops the step with a
 //     non-zero exit and a message on standard error that names ubuntu.sources and prints the file's `URIs:` lines
@@ -318,6 +319,31 @@ var aptCases = []aptCase{
 		wantStderr:     "ubuntu.sources",
 		wantStderrURIs: "URIs: http://ports.ubuntu.com/ubuntu-ports",
 		wantSources:    "Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports\nSuites: resolute\nComponents: " + aptComponents + "\nSigned-By: " + aptPortsKeyring + "\nX-Note: http://archive.ubuntu.com/ubuntu\n",
+	},
+	{
+		// A field's name is a name in the first column only: an indented `URIs:` line after another field is that
+		// field's continuation, as deb822 reads it, not a URIs field, so its archive URI is no URI apt fetches
+		// from. The ports URI is the file's only URIs field, the mirror cannot be set in it, and the run must fail
+		// closed and leave every line, the indented one included, byte for byte. A guard that trims a line before
+		// matching its name reads the continuation as a URIs line, rewrites it, exits 0 and hands over a VM on
+		// ports.ubuntu.com.
+		name:   "an-indented-uris-line-after-another-field",
+		mirror: aptMirrorNL,
+		sources: "Types: deb\n" +
+			"URIs: http://ports.ubuntu.com/ubuntu-ports\n" +
+			"Suites: " + aptArchiveSuites + "\n" +
+			"  URIs: http://archive.ubuntu.com/ubuntu\n" +
+			"Components: " + aptComponents + "\n" +
+			"Signed-By: " + aptPortsKeyring + "\n",
+		wantFailure:    true,
+		wantStderr:     "ubuntu.sources",
+		wantStderrURIs: "URIs: http://ports.ubuntu.com/ubuntu-ports",
+		wantSources: "Types: deb\n" +
+			"URIs: http://ports.ubuntu.com/ubuntu-ports\n" +
+			"Suites: " + aptArchiveSuites + "\n" +
+			"  URIs: http://archive.ubuntu.com/ubuntu\n" +
+			"Components: " + aptComponents + "\n" +
+			"Signed-By: " + aptPortsKeyring + "\n",
 	},
 	{
 		// A ports file has no archive URI at all, so the mirror never reaches apt. Exiting 0 after a warning
