@@ -369,22 +369,19 @@ not 40 lowercase hex is the caller's, `ErrConfig`):
   so the core reads the result with a strict JSON parser of its own that keeps every member in order and
   marks an invalid string, and follows at most 8 levels of nesting, the top object being level 1: a
   value at level 8 is parsed, one at level 9 is refused as no JSON value (`depth >= maxJSONDepth`);
-- every string valid UTF-8, its cap counted in **bytes**, and no character of **the invisible-character
-  rule** (`forbiddenRune`, which `ParsePreviousReport`'s cell check applies too): no C0 or C1 control
-  character, DEL, U+2028 or U+2029; no rune of Unicode category Cf (format: the bidirectional controls,
-  the zero-width characters, U+FEFF and the tag characters U+E0000 to U+E007F among them), Co (private
-  use) or Cn (unassigned, in the Unicode tables of the Go release that builds the core); no noncharacter
-  (U+FDD0 to U+FDEF, and U+xFFFE and U+xFFFF in every plane); no variation selector (U+FE00 to U+FE0F,
-  U+E0100 to U+E01EF); none of U+00AD, U+034F, U+115F, U+1160, U+17B4, U+17B5, U+180B to U+180F,
-  U+2061 to U+2064, U+3164, U+FFA0 and U+16FE4, the fillers, joiners and invisible operators that
-  render as nothing; and **the blank-space rule**: no rune of category Zs but U+0020 (U+00A0, U+1680,
-  U+2000 to U+200A, U+202F, U+205F, U+3000), nor U+2800 (braille pattern blank) or U+1D159 (musical
-  null notehead), symbols that render as blank space. U+0020 is the only space a field holds, so
-  which blank a model puts between two words carries nothing. The tags, the variation selectors and
-  the listed characters are named as well as covered by a category, so the rule does not rest on one
-  Unicode version. A character that renders as nothing, or as a blank the eye reads as U+0020, could
-  carry a token past the maintainer's eye and past every pattern; a field marked *multi-line* below may
-  hold LF and TAB, no other field may;
+- every string valid UTF-8, its cap counted in **bytes**, and **the text rule**, an allow list
+  (`textRune`, which `ParsePreviousReport`'s cell check applies too): a field holds only printable
+  ASCII, U+0020 to U+007E, and a field marked *multi-line* below that plus LF and TAB; a previous
+  report's cell holds only U+0020 to U+007E. Every other rune is refused. A lookalike letter (Cyrillic
+  and Greek letters for Latin ones, the fullwidth forms), a combining mark with no glyph of its own, a
+  typographic dash or quote the eye reads as an ASCII one, and a rune that renders as nothing or as
+  blank space all carry a token past the maintainer's eye and past every pattern, and a list of
+  characters to refuse cannot be complete: each Unicode version adds to them. The allow list holds no
+  control, no bidirectional, zero-width or invisible character and no space but U+0020, so which kind
+  of blank a model puts between two words carries nothing; how many U+0020 it writes still can (the
+  ASCII-spacing residual below). The cost is that a model field cannot quote a non-ASCII string, a
+  name, an error message or a file's text, as it stands: a quoted non-ASCII character refuses the whole
+  run. The fourth pull request's model-job prompt tells the model to write ASCII only;
 - at most `FindingLimit` findings. **The finding limit is 100.** One root cause is one finding (the
   skill), so a month's triage of this repository stays far below it; a result above it is a sign of a
   broken or steered run, not of a hundred real findings, and the limit bounds the publish job's
@@ -518,8 +515,8 @@ error wrapping `ErrPreviousReport` when one of the parts it checks breaks its ru
 the run is the first. It checks exactly these parts, and no other text of the report: the title of the
 name's date; the eight `##` sections in order and no other heading; each table's exact header and
 delimiter; seven cells per findings row, a fingerprint, a public severity, a public category, a status,
-and three cells that are each exactly what `TableCell` writes for a text the invisible-character rule
-accepts (or `—` three times on a `fixed` row); one private-findings line in the section and the same one
+and three cells that are each exactly what `TableCell` writes for a text of printable ASCII
+alone (the text rule) (or `—` three times on a `fixed` row); one private-findings line in the section and the same one
 in the Summary; two cells per False positives row, the reason exactly such a `TableCell`, which is then
 carried forward byte for byte; no fingerprint twice. **The first-report rule**: when the Changes section
 holds the line "First report.", that line must be the section's only line before the dependencies' line
@@ -643,13 +640,16 @@ entry point; the core adds:
   34-letter camel-case test name can reach 4.2), or a dot-free path-like word of high entropy
   (`abcDEF1234/ghiJKL5678/mnoPQR9012`), also trips it: the refusal then fails closed on a harmless text,
   which costs a run, never a disclosure. **The hex and slash rules cost the same way**: a model field
-  that quotes a 32-hex MD5, an undashed UUID (32 hex), an 80-hex Rekor entry UUID or a go.sum `h1:`
-  hash (standard base64 of 32 bytes in a dot-free word) refuses the whole run. The fourth pull request's
+  that quotes a 32-hex MD5, an undashed UUID (32 hex), an 80-hex Rekor entry UUID, a SHA-384 or
+  SHA-512 hex digest (96 or 128 hex) or a go.sum `h1:` hash (standard base64 of 32 bytes in a dot-free
+  word) refuses the whole run. The fourth pull request's
   model-job prompt tells the model not to quote them.
-- **Tightening the scan needs a manual edit of the latest report.** A carried cell and a carried False
-  positives reason are checked again, as model fields, in every later run. A later, stricter rule
-  (a lower L or N, a new pattern, a new forbidden rune) can refuse a cell an earlier report published,
-  and since every later run carries it, every later run is refused. The change that tightens a rule
+- **Tightening the scan needs a manual edit of the latest report.** Every cell of the latest report is
+  checked again by the parse (`escapedCell`, the text rule), and a carried cell and a carried False
+  positives reason also by the scan, as model fields, in every later run. A later, stricter rule
+  refuses, through the parse, any cell of the latest report (a narrower text rule) and, through the
+  scan, a carried cell or a False positives reason (a lower L or N, a new pattern), cells an earlier
+  report published; since every later run reads them, every later run is refused. The change that tightens a rule
   therefore also edits the latest merged report, in the same pull request, so that its carried cells
   pass the new rule.
 - **Advisory text** gets the patterns and the encoded-token check, **not** the refusal: an advisory holds
@@ -675,9 +675,9 @@ entry point; the core adds:
     commit or a digest, `image_digest` included. Each run carries 20 or 32 bytes, and a field may hold
     any number of them. The fourth pull request's entry point could require each 40-hex run in a model
     field to name a commit of the repository, which leaves the 64-hex runs;
-  - **ASCII spacing**: which runs of U+0020 a model writes is a channel. Two spaces collapse to one when
-    Markdown renders, and spaces at a line's end do not show, so the rendered report hides what the
-    committed bytes hold.
+  - **ASCII spacing**: which runs of U+0020 a model writes is a channel (TAB and LF in a multi-line
+    field become U+0020 in a code span): inside a code span the extra spaces show only as a slightly
+    wider gap, which the eye does not read.
 
   A model steered to leak the subscription token could so reach the public report. The model step's
   containment is what keeps the token from the model (Decision 6); the scan is the last line, and runbook
@@ -834,7 +834,9 @@ entry point prints none of them.
   the entry point checks `image_digest` against the release's attested image digest before trusting it,
   since the schema checks only its shape. Two notes from the encoded-run refusal: the entry point could
   require each 40-hex run in a model field to name a commit of the repository, and the model job's
-  prompt tells the model not to quote an MD5, an undashed UUID, a Rekor entry UUID or a go.sum hash.
+  prompt tells the model not to quote an MD5, an undashed UUID, a Rekor entry UUID, a SHA-384 or
+  SHA-512 hex digest or a go.sum hash. From the text rule, the prompt also tells the model to write
+  ASCII only, since a quoted non-ASCII character refuses the run.
 - **The fifth (the workflow)**: only the audit App's `security-audit/*` branches may change
   `docs/security/audits/`, enforced by CODEOWNERS or a required check. Otherwise a merged edit from
   another branch that adds a False positives row would drop a public finding from every later run,
