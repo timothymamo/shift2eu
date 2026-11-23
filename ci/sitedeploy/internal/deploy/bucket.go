@@ -138,7 +138,7 @@ func (r *run) upload(ctx context.Context, name string) error {
 	if err != nil {
 		r.logf("PUT %s failed", name)
 
-		return r.failRequest(ctx, ErrUpload, "PUT %s: %v", name, err)
+		return r.failRequest(ctx, ErrUpload, "PUT %s: %s", name, err)
 	}
 
 	r.logf("PUT %s %d", name, status)
@@ -151,6 +151,8 @@ func (r *run) upload(ctx context.Context, name string) error {
 }
 
 // send signs req and sends it, reading at most limit bytes of the answer.
+// Its error's text is fixed: Sign's own, or the transport failure's
+// classification (transportFailure), never the HTTP client's message.
 func (r *run) send(ctx context.Context, req *http.Request, payloadHash string, limit int64) (int, []byte, error) {
 	if err := r.signer.Sign(req, payloadHash, r.cfg.Now()); err != nil {
 		return 0, nil, err
@@ -158,14 +160,14 @@ func (r *run) send(ctx context.Context, req *http.Request, payloadHash string, l
 
 	resp, err := r.client.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, errors.New(transportFailure(err))
 	}
 
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
 	if err != nil && ctx.Err() != nil {
-		return 0, nil, ctx.Err()
+		return 0, nil, errors.New(transportFailure(ctx.Err()))
 	}
 
 	return resp.StatusCode, body, nil
@@ -189,16 +191,22 @@ func (r *run) errorCode(answer []byte) string {
 // listBucket lists the bucket (doc.go, step 3) and fails with
 // ErrUnknownObject on a key that is in no release's manifest, not in this
 // bundle and not manifest.json. A listed key is only compared, never sent.
+// It keeps a count of the unknown keys and only the maxUnknownNamed smallest
+// of them, the ones its error names, so its memory does not grow with the
+// listing.
 func (r *run) listBucket(ctx context.Context) error {
 	known := r.knownKeys()
 
-	var unknown []string
+	var (
+		smallest []string
+		count    int
+	)
 
 	token := ""
 
 	for page := 0; ; page++ {
 		if page == maxListPages {
-			return r.fail(ErrUpload, "the listing has more than %d pages", maxListPages)
+			return r.fail(ErrList, "the listing has more than %d pages", maxListPages)
 		}
 
 		result, err := r.listPage(ctx, token)
@@ -207,8 +215,15 @@ func (r *run) listBucket(ctx context.Context) error {
 		}
 
 		for _, object := range result.Contents {
-			if _, ok := known[object.Key]; !ok {
-				unknown = append(unknown, object.Key)
+			if _, ok := known[object.Key]; ok {
+				continue
+			}
+
+			var kept bool
+
+			smallest, kept = keepSmallest(smallest, object.Key, maxUnknownNamed)
+			if kept {
+				count++
 			}
 		}
 
@@ -218,28 +233,47 @@ func (r *run) listBucket(ctx context.Context) error {
 
 		token = result.NextContinuationToken
 		if token == "" || len(token) > maxTokenBytes {
-			return r.fail(ErrUpload, "the listing is truncated without a usable continuation token")
+			return r.fail(ErrList, "the listing is truncated without a usable continuation token")
 		}
 	}
 
-	if len(unknown) == 0 {
+	if count == 0 {
 		return nil
 	}
 
-	slices.Sort(unknown)
-	unknown = slices.Compact(unknown)
-
-	named := make([]string, 0, maxUnknownNamed)
-	for _, key := range unknown[:min(len(unknown), maxUnknownNamed)] {
-		named = append(named, quote(key))
+	named := make([]string, 0, len(smallest))
+	for _, key := range smallest {
+		// Scrubbed before quote cuts it, so a cut cannot leave a prefix of
+		// the key that the scrubber no longer recognises.
+		named = append(named, quote(r.scrub(key)))
 	}
 
 	more := ""
-	if len(unknown) > maxUnknownNamed {
+	if count > len(smallest) {
 		more = " and others"
 	}
 
-	return r.fail(ErrUnknownObject, "%d keys in no release's manifest: %s%s", len(unknown), strings.Join(named, ", "), more)
+	return r.fail(ErrUnknownObject, "%d keys in no release's manifest: %s%s", count, strings.Join(named, ", "), more)
+}
+
+// keepSmallest inserts key into sorted, a sorted list of at most limit
+// distinct keys, keeping only the limit smallest. It reports false only for
+// a key sorted already holds, a repeat that must not be counted twice; a key
+// the list holds no room for is still a new key.
+func keepSmallest(sorted []string, key string, limit int) ([]string, bool) {
+	i, found := slices.BinarySearch(sorted, key)
+	if found {
+		return sorted, false
+	}
+
+	if i < limit {
+		sorted = slices.Insert(sorted, i, key)
+		if len(sorted) > limit {
+			sorted = sorted[:limit]
+		}
+	}
+
+	return sorted, true
 }
 
 // listResult is one page of a ListObjectsV2 answer.
@@ -259,33 +293,35 @@ func (r *run) listPage(ctx context.Context, token string) (listResult, error) {
 		query.Set("continuation-token", token)
 	}
 
-	u := &url.URL{Scheme: r.endpoint.Scheme, Host: r.endpoint.Host, Path: "/" + r.cfg.Bucket, RawQuery: query.Encode()}
+	// The query is sent exactly as Sign canonicalises it (a space as %20, a
+	// plus as %2B), so the store reads the token the signature covers.
+	u := &url.URL{Scheme: r.endpoint.Scheme, Host: r.endpoint.Host, Path: "/" + r.cfg.Bucket, RawQuery: canonicalQuery(query)}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), http.NoBody)
 	if err != nil {
-		return listResult{}, r.fail(ErrUpload, "build the listing")
+		return listResult{}, r.fail(ErrList, "build the listing")
 	}
 
 	status, answer, err := r.send(ctx, req, HashPayload(nil), maxListBytes+1)
 	if err != nil {
 		r.logf("GET /%s?list-type=2 failed", r.cfg.Bucket)
 
-		return listResult{}, r.failRequest(ctx, ErrUpload, "list the bucket: %v", err)
+		return listResult{}, r.failRequest(ctx, ErrList, "list the bucket: %s", err)
 	}
 
 	r.logf("GET /%s?list-type=2 %d", r.cfg.Bucket, status)
 
 	if status != http.StatusOK {
-		return listResult{}, r.fail(ErrUpload, "list the bucket: HTTP %d%s", status, r.errorCode(answer))
+		return listResult{}, r.fail(ErrList, "list the bucket: HTTP %d%s", status, r.errorCode(answer))
 	}
 
 	if len(answer) > maxListBytes {
-		return listResult{}, r.fail(ErrUpload, "a page of the listing is over %d bytes", maxListBytes)
+		return listResult{}, r.fail(ErrList, "a page of the listing is over %d bytes", maxListBytes)
 	}
 
 	var result listResult
 	if xml.Unmarshal(answer, &result) != nil {
-		return listResult{}, r.fail(ErrUpload, "a page of the listing does not parse")
+		return listResult{}, r.fail(ErrList, "a page of the listing does not parse")
 	}
 
 	return result, nil

@@ -26,9 +26,12 @@
 // Deploy refuses the bundle before any request when the manifest does not
 // parse, its version is not Config.Version, a manifest path is not one of the
 // names above (so no "/", "..", "\", "%", control character, absolute or
-// empty path can become an object key), an asset's <h> is not its digest's
-// prefix, a listed file is missing or its SHA-256 differs, or the bundle holds
-// a file the manifest does not list.
+// empty path can become an object key), the manifest does not list exactly
+// the four pages and one asset of each kind (style, page script, wasm_exec,
+// module), an asset's <h> is not its digest's prefix, a listed file is
+// missing or its SHA-256 differs, or the bundle holds a file the manifest
+// does not list. The earlier releases' manifests (Config.Manifests) are not
+// held to the complete set: the guard and the listing only read them.
 //
 // # What Deploy does, in order
 //
@@ -54,8 +57,13 @@
 //     bucket (ListObjectsV2, every page) and fails with ErrUnknownObject,
 //     before any upload, naming each key that is in no release's manifest
 //     (Config.Releases with Config.Manifests), not in this bundle's and not
-//     manifest.json. A listed key is only compared, never sent; a page of the
-//     answer is read up to 8 MiB, and at most 1000 pages.
+//     manifest.json. A listed key is only compared, never sent; it is
+//     scrubbed of the key before it is quoted and cut to 64 bytes, and at
+//     most 20 are named (the smallest; only those and a count are kept). A
+//     page of the answer is read up to 8 MiB, and at most 1000 pages. A
+//     listing that fails (a transport error, a status other than 200, an
+//     answer that does not parse, a listing out of these bounds) fails with
+//     ErrList, never ErrUpload: nothing was uploaded.
 //  4. Uploads with PUT only, path-style (<Endpoint>/<Bucket>/<key>): first
 //     every content-addressed asset, then manifest.json, then the four pages
 //     last, each in sorted order. The first failed upload stops the run with
@@ -86,7 +94,10 @@
 // Format, MarshalText and MarshalJSON print "[redacted]". Neither key ever
 // reaches Config.Summary, Config.Log or an error's text: errors name the
 // request (method, key, status code) and at most an S3 error code that
-// matches [A-Za-z]{1,64}, never a response body or header, and every text
+// matches [A-Za-z]{1,64}, never a response body or header. A transport error
+// is written as a fixed classification ("timed out", "cancelled" or
+// "transport error"), never the HTTP client's message, which can quote what
+// a server sent (a malformed status line). Every text
 // Deploy writes is also scrubbed of both keys' values, so a hostile server
 // that echoes the key back gets nothing printed. An error answer is read up
 // to 64 KiB, only for its code. The errors Deploy returns wrap only its

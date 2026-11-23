@@ -47,8 +47,10 @@ type Signer struct {
 //   - it sets X-Amz-Date to at in UTC (20060102T150405Z) and
 //     X-Amz-Content-Sha256 to payloadHash, which must be the 64 lowercase
 //     hexadecimal characters of the SHA-256 of the body (HashPayload);
-//   - the canonical request is the method, req.URL.EscapedPath() as it is
-//     (S3 encodes the path once, never twice; "/" when empty), the query
+//   - the canonical request is the method, the canonical URI of the decoded
+//     req.URL.Path (each segment URI-encoded once, RFC 3986's unreserved
+//     characters and "/" kept, every other byte as %XX in upper case: S3
+//     encodes the path once, never twice; "/" when empty), the query
 //     with its names and values URI-encoded and sorted, the canonical
 //     headers and the signed headers, and payloadHash. The signed headers
 //     are host (req.Host, else req.URL.Host) and every header present in
@@ -99,14 +101,9 @@ func (s Signer) Sign(req *http.Request, payloadHash string, at time.Time) error 
 
 	names, headers := canonicalHeaders(req.Header, host)
 
-	path := req.URL.EscapedPath()
-	if path == "" {
-		path = "/"
-	}
-
 	canonical := strings.Join([]string{
 		req.Method,
-		path,
+		canonicalPath(req.URL.Path),
 		canonicalQuery(req.URL.Query()),
 		headers,
 		names,
@@ -163,6 +160,22 @@ func canonicalHeaders(h http.Header, host string) (string, string) {
 	}
 
 	return strings.Join(names, ";"), b.String()
+}
+
+// canonicalPath returns the canonical URI of the decoded path: each segment
+// URI-encoded once (uriEncode), the "/" between them kept, "/" when empty.
+// S3 encodes the path once, never twice.
+func canonicalPath(path string) string {
+	if path == "" {
+		return "/"
+	}
+
+	segments := strings.Split(path, "/")
+	for i, segment := range segments {
+		segments[i] = uriEncode(segment)
+	}
+
+	return strings.Join(segments, "/")
 }
 
 // canonicalQuery returns the query's names and values URI-encoded, sorted by

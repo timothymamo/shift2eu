@@ -135,7 +135,7 @@ func parseFlags(args []string, stderr io.Writer) (options, error) {
 		return options{}, fmt.Errorf("unexpected arguments %q", flags.Args())
 	}
 
-	if opts.bundle == "" || opts.version == "" || opts.bucket == "" || opts.releases == "" || opts.manifests == "" {
+	if opts.bundle == "" || opts.version == "" || opts.bucket == "" || opts.region == "" || opts.releases == "" || opts.manifests == "" {
 		return options{}, errors.New("-bundle, -version, -bucket, -region, -releases and -manifests are required")
 	}
 

@@ -29,10 +29,14 @@ var (
 	// bucket holds a key that is in no release's manifest. Nothing was
 	// uploaded.
 	ErrUnknownObject = errors.New("the bucket holds an object no release names")
-	// ErrUpload is a failed request to the bucket (a transport error or a
-	// status other than 200). The pages are uploaded last, so a failure
+	// ErrUpload is a failed upload to the bucket (a transport error or a
+	// status other than 200 to a PUT); a failed listing is ErrList. The pages are uploaded last, so a failure
 	// before them leaves every page as it was.
 	ErrUpload = errors.New("upload to the bucket failed")
+	// ErrList is a failed listing of the bucket (Config.ListBucket): a
+	// transport error, a status other than 200, an answer that does not
+	// parse or a listing out of bounds. Nothing was uploaded.
+	ErrList = errors.New("listing the bucket failed")
 	// ErrNoLiveVersion is LiveVersion's: the page shows no version it can
 	// read.
 	ErrNoLiveVersion = errors.New("the live page shows no readable version")
@@ -44,7 +48,8 @@ var (
 type Config struct {
 	// Endpoint is the S3 endpoint's base URL, scheme and host and no path,
 	// query or user info, such as "https://s3.fr-par.scw.cloud". Requests
-	// are path-style: <Endpoint>/<Bucket>/<key>.
+	// are path-style: <Endpoint>/<Bucket>/<key>. The scheme http is accepted
+	// only for the tests' fake servers: ci/sitedeploy always passes https.
 	Endpoint string
 	// Bucket is the site's bucket. It must be a valid S3 bucket name
 	// (3 to 63 of [a-z0-9.-], starting and ending with a letter or digit).
@@ -67,7 +72,9 @@ type Config struct {
 	Version string
 
 	// LivePage is the URL of the live site's root page, whose version the
-	// rollback guard reads, such as "https://www.shift2eu.com/".
+	// rollback guard reads, such as "https://www.shift2eu.com/". The scheme
+	// http is accepted only for the tests' fake servers: ci/sitedeploy
+	// always passes https.
 	LivePage string
 	// Releases is the repository's release tags on main, as the release's
 	// latest job lists them. Each must be vMAJOR.MINOR.PATCH; Deploy
@@ -119,8 +126,8 @@ type run struct {
 // when cfg.ListBucket asks, and uploads the assets, the manifest and the
 // pages, in that order. It returns nil once every file is uploaded, and
 // otherwise an error wrapping ErrInvalidConfig, ErrInvalidBundle,
-// ErrRollback, ErrUnknownObject or ErrUpload (or ctx's error), whose text
-// never holds either key.
+// ErrRollback, ErrList, ErrUnknownObject or ErrUpload (or ctx's error), whose
+// text never holds either key nor any text a server wrote.
 func Deploy(ctx context.Context, cfg Config) error {
 	r, err := prepare(cfg)
 	if err != nil {
@@ -292,6 +299,22 @@ func (r *run) failRequest(ctx context.Context, kind error, format string, args .
 	}
 
 	return err
+}
+
+// transportFailure classifies a failed request as a fixed text: "timed out",
+// "cancelled" or "transport error". The error's own text is never written,
+// since net/http's messages can quote what a server sent.
+func transportFailure(err error) string {
+	var timeout interface{ Timeout() bool }
+
+	switch {
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &timeout) && timeout.Timeout():
+		return "timed out"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	default:
+		return "transport error"
+	}
 }
 
 // logf writes one scrubbed line to the log.

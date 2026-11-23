@@ -70,7 +70,7 @@ func (r *run) readLivePage(ctx context.Context) verdict {
 	if err != nil {
 		r.logf("GET %s failed", r.cfg.LivePage)
 
-		return verdict{reason: fmt.Sprintf("the live page could not be read (%v)", err)}
+		return verdict{reason: fmt.Sprintf("the live page could not be read (%s)", transportFailure(err))}
 	}
 
 	defer func() { _ = resp.Body.Close() }()
