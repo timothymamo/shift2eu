@@ -120,13 +120,13 @@ func artifacts(ctx context.Context, args []string, lookup func(string) (string, 
 		return publish.ErrConfig
 	}
 
-	client, err := github.NewClient(github.ClientConfig{
+	// The artifact check reads one listing: its client is read-only by
+	// construction and writes nothing.
+	client, err := github.NewArtifactsClient(github.ClientConfig{
 		GHPath:  *ghPath,
 		Token:   github.NewToken(token),
 		TempDir: *tempDir,
 		Scope:   github.Scope{Repository: repository, RunID: runID, Date: date},
-		// The artifact check reads one listing: its client writes nothing.
-		ReadOnly: true,
 	})
 	if err != nil {
 		return err

@@ -64,7 +64,8 @@ type ClientConfig struct {
 	CallTimeout time.Duration
 	// ReadOnly refuses every method but GET before the endpoint table and
 	// before gh runs: the artifacts subcommand's client, which reads the run's
-	// artifacts and needs no wider table than that.
+	// artifacts and needs no wider table than that. NewArtifactsClient sets it
+	// whatever its caller passes.
 	ReadOnly bool
 }
 
@@ -159,6 +160,16 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}
 
 	return &Client{ghPath: cfg.GHPath, token: cfg.Token, dir: dir, scope: cfg.Scope, timeout: timeout, readOnly: cfg.ReadOnly}, nil
+}
+
+// NewArtifactsClient returns the artifacts subcommand's Client: built as
+// NewClient builds one, with the same refusals, but read-only whatever
+// cfg.ReadOnly says, so the client that holds the job's token reaches no
+// wider than the one listing it reads.
+func NewArtifactsClient(cfg ClientConfig) (*Client, error) {
+	cfg.ReadOnly = true
+
+	return NewClient(cfg)
 }
 
 // checkProgram refuses a program path that is not absolute and clean or does

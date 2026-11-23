@@ -895,7 +895,8 @@ standard packages, each entry ending in `$`, pinned by `test/architecture`:
   (the forbidigo group `audit-publish-github-env`, which holds for its tests too; its one exception is
   `os.Environ` in `fake_test.go`, where the fakes record the environment the library gave them; it also
   refuses `exec.Command` and `exec.LookPath`, so every program starts by absolute path through
-  `exec.CommandContext`). The
+  `exec.CommandContext`; the rule matches those constructors only, not an `exec.Cmd{Path: ...}`
+  composite literal followed by `Start` or `Run`, which review holds out: nothing uses one). The
   process starts sit in the library, not in the entry point, so that the endpoint check and the `gh`
   run are one function the tests drive against the fake.
 - `ci/auditpublish/internal/publish`, the **core**, unchanged; its rule `audit-publish-library` now
@@ -908,7 +909,10 @@ it is exactly `checks-result` (the model job) or exactly `checks-result` and `mo
 job): an artifact the job does not expect, a name twice, an expected artifact missing, an expired one or
 a `total_count` above the listed count (a second page) is refused, and so is an answer with any data
 after the one listing (`ErrGitHub`, outcome 8: whitespace alone may follow it). Its client is
-**read-only** (`ClientConfig.ReadOnly`): every method but `GET` is refused with `ErrEndpointRefused`
+**read-only by construction**: the entry point builds it only through `github.NewArtifactsClient`,
+which refuses what `NewClient` refuses and sets `ClientConfig.ReadOnly` whatever its caller passes (a
+source check pins that `main.go` never calls `NewClient`, since no behaviour test can tell a dropped
+flag apart: the check only reads). Every method but `GET` is refused with `ErrEndpointRefused`
 before the endpoint table is consulted and before `gh` runs. The table is the publish job's, wider than
 one listing needs; a client that may only read keeps the artifact check, whose step holds the job's
 `github.token`, no wider than the subcommand needs. It prints `artifacts: as expected`,
