@@ -983,7 +983,10 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
   the flags and the five variables, refuses an `ANTHROPIC_API_KEY` (even one set to nothing) with exit
   3, and runs `audit.Run` with the root it is given: `main` passes `/` and `audit.Observe`, a test a
   temporary directory. A malformed token, canary or integrity, a missing `$GITHUB_ENV` or a flag
-  error is exit 2; a missing `$GITHUB_STEP_SUMMARY` leaves the line on stdout alone. Depguard holds the
+  error is exit 2; a missing `$GITHUB_STEP_SUMMARY` leaves the line on stdout alone. *Amended
+  2026-11-23 (issue #277 round N):* the API key is refused first, before the flags and the other
+  variables are read, so a step that holds it exits 3 with its line whatever else is missing or
+  malformed. Depguard holds the
   library to `audit-library` (named standard packages and `ci/internal/claudecode`; `os`, `os/exec` and
   `net` for its own checks) and the entry point to `audit-main` (no `os/exec` or `net`); the lax rule
   `audit-library-importers` names `ci/auditrun` and `ci/auditexec`. The forbidigo group `audit-run-env`
@@ -993,7 +996,10 @@ It `exec`s with exactly this environment, nothing inherited: `PATH=/usr/bin:/bin
 - **The run's one line.** Each step's failure prints a constant class; the bubblewrap failure prints the
   sentence above; the preflight's prints its `Verdict`, whose text is built from constants alone
   (`preflight failed: probe 2, TCP connect: not refused; see runbook step 10`). A preflight error that is
-  no `Verdict` (the CLI run failed, the set-up failed) prints a constant class too. The line goes to
+  no `Verdict` (the CLI run failed, the set-up failed) prints a constant class too. *Amended 2026-11-23
+  (issue #277 round N):* a CLI run that failed (cancelled, timed out, exited non-zero) is still judged
+  by its observed effects: if any shows, the preflight returns the `Verdict` naming each such probe and
+  runbook step 10; only a failed run with no effect prints the constant class. The line goes to
   stdout and is appended to `$GITHUB_STEP_SUMMARY`.
 - **The inputs reach the context-taking steps** through the context: `Run` puts its `Inputs` there and
   `InputsFrom` reads them, so the real steps can be built before the inputs are read.
