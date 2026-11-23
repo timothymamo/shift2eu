@@ -120,24 +120,61 @@ func TestGapLine(t *testing.T) {
 	}
 }
 
-// TestRenderReportRefusesAPreviousReportAfterTheRun pins that a previous
-// report dated after the run is refused: a gap in seconds, not the schedule's
-// gap in days, wraps ErrPreviousReport, and the error's text names neither
-// date (ADR 0040, the core's errors name a rule, never a value).
-func TestRenderReportRefusesAPreviousReportAfterTheRun(t *testing.T) {
+// TestRenderReportRefusesAPreviousReportNotBeforeTheRun pins that a previous
+// report not before the run is refused: one dated after the run, and one from
+// the run's own date whose run ID is equal to or greater than the run's own,
+// which a hand-made or a later run's report can be. The refusal wraps
+// ErrPreviousReport with the rule's own line, and the error's text names
+// neither date nor run ID (ADR 0040, the core's errors name a rule, never a
+// value). A previous report from an earlier date is accepted whatever its run
+// ID, and one from the run's own date with a smaller run ID too.
+func TestRenderReportRefusesAPreviousReportNotBeforeTheRun(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name     string
 		previous string
+		id       string
+		// wantRule is the rule the error must state; empty when the report
+		// must be rendered.
+		wantRule string
 	}{
 		{
 			name:     "the previous report is dated one day after the run",
 			previous: "2026-11-24",
+			id:       "1",
+			wantRule: "dated after the run",
 		},
 		{
 			name:     "the previous report is dated a month after the run",
 			previous: "2026-12-23",
+			id:       "1",
+			wantRule: "dated after the run",
+		},
+		{
+			// The PRD's named case: the same UTC date and the run's own run ID.
+			name:     "the previous report is from the run's own date with the same run ID",
+			previous: testDate,
+			id:       testRunID,
+			wantRule: "not before the run",
+		},
+		{
+			name:     "the previous report is from the run's own date with a greater run ID",
+			previous: testDate,
+			id:       "18422000002",
+			wantRule: "not before the run",
+		},
+		{
+			// Run IDs grow with time, so a smaller one on the run's own date is
+			// an earlier run.
+			name:     "the previous report is from the run's own date with a smaller run ID",
+			previous: testDate,
+			id:       "18422000000",
+		},
+		{
+			name:     "the previous report is from an earlier date with a greater run ID",
+			previous: "2026-11-22",
+			id:       "18422000002",
 		},
 	}
 
@@ -145,27 +182,47 @@ func TestRenderReportRefusesAPreviousReportAfterTheRun(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			previous := previousReport(t, fixtureResult(), publish.PrivateNone, tc.previous, "1")
+			previous := previousReport(t, fixtureResult(), publish.PrivateNone, tc.previous, tc.id)
 
-			rendered, err := publish.RenderReport(publish.ReportInput{
+			_, err := publish.RenderReport(publish.ReportInput{
 				Result:   fixtureResult(),
 				Run:      testRun(t, testDate, testRunID),
 				Private:  publish.PrivateNone,
 				Previous: previous,
 			})
+
+			if tc.wantRule == "" {
+				if err != nil {
+					t.Fatalf("RenderReport with the previous report %s returned %v, want the report", previousName(tc.previous, tc.id), err)
+				}
+
+				return
+			}
+
 			if err == nil {
-				t.Fatalf("RenderReport with a previous report dated %s returned the report %q, want an error wrapping ErrPreviousReport", tc.previous, rendered.Body)
+				t.Fatalf("RenderReport with the previous report %s returned a report, want an error wrapping ErrPreviousReport", previousName(tc.previous, tc.id))
 			}
 
 			if !errors.Is(err, publish.ErrPreviousReport) {
-				t.Errorf("RenderReport with a previous report dated %s: error %v does not wrap ErrPreviousReport", tc.previous, err)
+				t.Errorf("RenderReport with the previous report %s: error %v does not wrap ErrPreviousReport", previousName(tc.previous, tc.id), err)
 			}
 
-			for _, date := range []string{tc.previous, testDate} {
-				if strings.Contains(err.Error(), date) {
-					t.Errorf("the error %q names the date %s, want no value", err, date)
+			want := "previous report: " + tc.wantRule
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("the error %q does not hold %q, want the rule's own line", err, want)
+			}
+
+			for _, value := range []string{tc.previous, testDate, tc.id, testRunID} {
+				if strings.Contains(err.Error(), value) {
+					t.Errorf("the error %q names %s, want no value", err, value)
 				}
 			}
 		})
 	}
+}
+
+// previousName is the name of the previous report a case renders: its date and
+// its run ID, as the report's file name has them.
+func previousName(date, id string) string {
+	return date + "-" + id + ".md"
 }

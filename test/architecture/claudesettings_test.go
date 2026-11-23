@@ -112,7 +112,7 @@ func TestClaudeSettingsFileIsTheADRsOnly(t *testing.T) {
 	}
 
 	if diff := cmp.Diff(claudeSettings, got); diff != "" {
-		t.Errorf("%s: the settings differ from the ones ADR 0040's amendment fixes (-want +got):\n%s", claudeSettingsPath, diff)
+		t.Errorf("%s: the settings differ from the ones ADR 0040's model-job amendment (\"How Claude Code runs in the model job\", The settings file) fixes (-want +got):\n%s", claudeSettingsPath, diff)
 	}
 }
 
