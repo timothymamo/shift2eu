@@ -1,6 +1,8 @@
 package architecture_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"maps"
 	"os"
@@ -1387,14 +1389,20 @@ This product includes software developed as shift2eu
 (https://github.com/timothymamo/shift2eu).
 `
 
+// apacheLicenseSHA256 is the SHA-256 of the Apache License 2.0's official text,
+// https://www.apache.org/licenses/LICENSE-2.0.txt, as apache.org publishes it.
+// GitHub detects a repository's license from the unmodified text, so the root
+// LICENSE must hash to it (issue #493).
+const apacheLicenseSHA256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+
 // TestTheProjectIsApacheLicensed pins issue #493: the project is licensed under
 // the Apache License 2.0, and says so where the release and its image say it.
-// The root LICENSE starts with the license's own header and names MIT nowhere,
-// so the switch is no rename over the old text; the root NOTICE holds exactly
-// the attributions Apache-2.0 section 4(d) asks a work to carry, with its
-// trailing newline; and the image's org.opencontainers.image.licenses label
-// says Apache-2.0 too, so the image and the archive it ships beside tell a
-// reader the same thing.
+// The root LICENSE hashes to the official text's SHA-256, so it is the license
+// unmodified and GitHub detects Apache-2.0 rather than a paraphrase of it; the
+// root NOTICE holds exactly the attributions Apache-2.0 section 4(d) asks a
+// work to carry, with its trailing newline; and the image's
+// org.opencontainers.image.licenses label says Apache-2.0 too, so the image and
+// the archive it ships beside tell a reader the same thing.
 func TestTheProjectIsApacheLicensed(t *testing.T) {
 	t.Parallel()
 
@@ -1409,6 +1417,8 @@ func TestTheProjectIsApacheLicensed(t *testing.T) {
 		holds []string
 		// absent are the substrings the file must not hold.
 		absent []string
+		// sha256Hex, when set, is the SHA-256 the whole file must hash to.
+		sha256Hex string
 	}{
 		{
 			name:  "the root NOTICE",
@@ -1416,10 +1426,9 @@ func TestTheProjectIsApacheLicensed(t *testing.T) {
 			exact: apacheNotice,
 		},
 		{
-			name:   "the root LICENSE",
-			file:   "LICENSE",
-			holds:  []string{"Apache License", "Version 2.0, January 2004"},
-			absent: []string{"MIT License"},
+			name:      "the root LICENSE",
+			file:      "LICENSE",
+			sha256Hex: apacheLicenseSHA256,
 		},
 		{
 			name:  "the image's license label",
@@ -1431,7 +1440,15 @@ func TestTheProjectIsApacheLicensed(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := string(readRepositoryFile(t, tc.file))
+			contents := readRepositoryFile(t, tc.file)
+			got := string(contents)
+
+			if tc.sha256Hex != "" {
+				sum := sha256.Sum256(contents)
+				if h := hex.EncodeToString(sum[:]); h != tc.sha256Hex {
+					t.Errorf("%s must be the unmodified text of apache.org's LICENSE-2.0.txt (issue #493), so GitHub detects Apache-2.0: sha256 %s, want %s", tc.file, h, tc.sha256Hex)
+				}
+			}
 
 			if tc.exact != "" {
 				if diff := cmp.Diff(tc.exact, got); diff != "" {

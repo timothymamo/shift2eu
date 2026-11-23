@@ -124,13 +124,14 @@ func goreleaserArchives(cli, second string) string {
 //     missing or differs is refused, worded with name_template;
 //   - the entry is tar.gz on every platform and zip on Windows (formats: and
 //     format_overrides:, worded with tar.gz and zip);
-//   - it ships exactly LICENSE, README.md, SECURITY.md, docs/*.md, docs/**/*,
-//     examples/*.md and examples/**/* (files:), worded with the entry it does
-//     not ship: README.md's links stay inside the archive (issue #149), the
-//     walkthrough in docs/guide/try-it.md finds the sample inventories a
+//   - it ships exactly LICENSE, NOTICE, README.md, SECURITY.md, docs/*.md,
+//     docs/**/*, examples/*.md and examples/**/* (files:), worded with the entry
+//     it does not ship: README.md's links stay inside the archive (issue #149),
+//     the walkthrough in docs/guide/try-it.md finds the sample inventories a
 //     release unpacks in examples/ rather than only in a clone (issue #188),
-//     and the security policy a user of the release needs ships with it rather
-//     than only online (issue #450);
+//     the security policy a user of the release needs ships with it rather
+//     than only online (issue #450), and the NOTICE Apache-2.0 section 4(d)
+//     asks the archive to carry beside LICENSE ships with it (issue #493);
 //   - the checksum section holds exactly name_template: checksums.txt, so one
 //     checksums.txt covers the archive: a missing section, another name and
 //     any other key in it (split:, and extra_files:, which the release no
