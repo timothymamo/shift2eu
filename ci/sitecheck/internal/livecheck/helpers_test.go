@@ -19,6 +19,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -50,6 +51,27 @@ const (
 	// met with preload pursued: the strongest value the check accepts, so the
 	// fixture passes in every state of the record.
 	hstsFull = "max-age=31536000; includeSubDomains; preload"
+)
+
+// The fixture's records, written as site/records/hsts.json and
+// site/records/preload.json carry them after PR A's hosting ADR (docs/adr/0042,
+// "The HSTS and preload records"). The fixture builds its Records from this
+// JSON with the parsers, as configure builds them from the release's files, so
+// a test changes a record the way a record file changes and no test repeats
+// the format: records_test.go pins it.
+const (
+	// hstsRecordMet is hsts.json with HSTS in force, preload not pursued.
+	hstsRecordMet = `{"format":1,"outcome":"met","preload":false,"date":"2026-12-01","reason":""}`
+	// hstsRecordPreload is hsts.json with HSTS in force and preload pursued.
+	hstsRecordPreload = `{"format":1,"outcome":"met","preload":true,"date":"2026-12-01","reason":""}`
+	// hstsRecordWaived is hsts.json with HSTS waived, and the reason for it.
+	hstsRecordWaived = `{"format":1,"outcome":"waived","preload":false,"date":"2026-12-01","reason":"the apex is served by the old provider until the migration, so preload is not pursued yet"}`
+	// preloadRecordNotListed is preload.json for a domain never submitted.
+	preloadRecordNotListed = `{"format":1,"listed":false,"submitted":"","checked":"2026-12-01","subdomains":[]}`
+	// preloadRecordListed is preload.json for a domain on the browsers' list,
+	// submitted with the one subdomain the site had then. Listed is only
+	// usable with hsts.json's preload true (behaviour 8).
+	preloadRecordListed = `{"format":1,"listed":true,"submitted":"2026-12-01","checked":"2026-12-01","subdomains":["www.shift2eu.com"]}`
 )
 
 // moduleJS is the module script's decoded content. The fixture serves it gzip
@@ -756,15 +778,46 @@ type site struct {
 	manifestPaths   []string
 	digests         map[string]string
 	records         livecheck.Records
-	tags            []string
-	retryBound      time.Duration
-	retryInterval   time.Duration
-	maxBodyBytes    int64
-	requestTimeout  time.Duration
-	roots           *x509.CertPool
+	// plainHTTPWWW is what Config.PlainHTTPWWW carries: PlainHTTPRedirect
+	// (the production default) unless a test asks for the refuse-or-close
+	// acceptance.
+	plainHTTPWWW   livecheck.PlainHTTPWWW
+	tags           []string
+	retryBound     time.Duration
+	retryInterval  time.Duration
+	maxBodyBytes   int64
+	requestTimeout time.Duration
+	roots          *x509.CertPool
 	// afterRun, when set, runs after the run: it asserts what the run had to
 	// do first (a forced order, a call the case depends on).
 	afterRun func(t *testing.T)
+}
+
+// parsedHSTSRecord returns hsts.json's parsed record for record, the JSON of a
+// record file, and fails the test when the parser refuses it: a fixture holds
+// only records the check can read.
+func parsedHSTSRecord(t *testing.T, record string) livecheck.HSTSRecord {
+	t.Helper()
+
+	parsed, err := livecheck.ParseHSTSRecord(strings.NewReader(record))
+	if err != nil {
+		t.Fatalf("the fixture's hsts.json %q: %v", record, err)
+	}
+
+	return parsed
+}
+
+// parsedPreloadRecord returns preload.json's parsed record for record, under
+// the same rule as parsedHSTSRecord.
+func parsedPreloadRecord(t *testing.T, record string) livecheck.PreloadRecord {
+	t.Helper()
+
+	parsed, err := livecheck.ParsePreloadRecord(strings.NewReader(record))
+	if err != nil {
+		t.Fatalf("the fixture's preload.json %q: %v", record, err)
+	}
+
+	return parsed
 }
 
 // newSite builds a fixture site that passes every check, and breaks the parts a
@@ -792,13 +845,10 @@ func newSite(t *testing.T, opts ...siteOption) *site {
 		manifestPaths:   []string{"index.html", "privacy.html", "verify.html", "style.css", testModuleScript},
 		digests:         make(map[string]string),
 		records: livecheck.Records{
-			HSTS: livecheck.HSTSRecord{
-				Outcome:        livecheck.HSTSMet,
-				PreloadPursued: false,
-				PlainHTTPWWW:   livecheck.PlainHTTPRedirect,
-			},
-			Preload: livecheck.PreloadRecord{OnPreloadList: false},
+			HSTS:    parsedHSTSRecord(t, hstsRecordMet),
+			Preload: parsedPreloadRecord(t, preloadRecordNotListed),
 		},
+		plainHTTPWWW:  livecheck.PlainHTTPRedirect,
 		tags:          []string{testVersion},
 		retryBound:    livecheck.MinRetryBound,
 		retryInterval: livecheck.MinRetryBound,
@@ -923,6 +973,7 @@ func (s *site) config(t *testing.T) livecheck.Config {
 		Apex:           livecheck.DefaultApex,
 		Manifest:       manifest,
 		Records:        s.records,
+		PlainHTTPWWW:   s.plainHTTPWWW,
 		Tags:           s.tags,
 		Dial:           s.dial,
 		Roots:          s.roots,
@@ -990,6 +1041,18 @@ func (s *site) setApexHSTS(value string) {
 	defer s.apexTLS.mu.Unlock()
 
 	s.apexTLS.hsts = value
+}
+
+// pursuePreload makes the fixture pursue preload as hsts.json's preload true
+// requires (behaviour 8): the HSTS record says so, and http://<apex>/<p>
+// redirects to https://<apex>/<p> before the canonical host does.
+func (s *site) pursuePreload(t *testing.T) {
+	t.Helper()
+
+	s.records.HSTS = parsedHSTSRecord(t, hstsRecordPreload)
+
+	s.apexHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/")})
+	s.apexHTTP.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/privacy.html")})
 }
 
 // setVersion makes the live root page show version, as the deployed index.html

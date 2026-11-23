@@ -52,6 +52,14 @@ const (
 	// mainHSTS is the Strict-Transport-Security header of a site whose HSTS is
 	// met.
 	mainHSTS = "max-age=31536000; includeSubDomains; preload"
+
+	// mainHSTSRecord is site/records/hsts.json of a site whose HSTS is met and
+	// whose preload is not pursued, in PR A's format (docs/adr/0042).
+	mainHSTSRecord = `{"format":1,"outcome":"met","preload":false,"date":"2026-11-23","reason":""}`
+
+	// mainPreloadRecord is site/records/preload.json of a domain not on the
+	// browsers' preload list, in the same format.
+	mainPreloadRecord = `{"format":1,"listed":false,"submitted":"","checked":"2026-11-23","subdomains":[]}`
 )
 
 // mainTestNow is the clock the fixture reads: a fixed instant, never the wall
@@ -291,6 +299,14 @@ func (d *mainDialer) dial(ctx context.Context, network, addr string) (net.Conn, 
 	return dialer.DialContext(ctx, network, target)
 }
 
+// remove drops the route of addr, so a dial to it is refused.
+func (d *mainDialer) remove(addr string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	delete(d.routes, addr)
+}
+
 // dialCount returns how many connections the dialer was asked for.
 func (d *mainDialer) dialCount() int {
 	d.mu.Lock()
@@ -339,6 +355,9 @@ type mainFixture struct {
 	manifest string
 	tags     string
 	host     *mainServer
+	// dialer is the run's dialer: a test takes away a route to make a
+	// connection refused.
+	dialer *mainDialer
 }
 
 // mainNewFixture builds a site that passes every check, writes its manifest and
@@ -413,6 +432,7 @@ func mainNewFixture(t *testing.T, dir string) *mainFixture {
 		manifest: manifestPath,
 		tags:     tagsPath,
 		host:     host,
+		dialer:   dialer,
 	}
 }
 
@@ -551,6 +571,15 @@ func TestRunRefusesACommandLineOrAFileItCannotUse(t *testing.T) {
 			},
 		},
 		{
+			name:      "a plain-HTTP www mode outside the set",
+			wantInErr: "-plain-http-www",
+			args: func(t *testing.T, dir string) []string {
+				t.Helper()
+
+				return []string{"-manifest", mainWrite(t, dir, "passing.json", []byte(mainManifest(t, mainPages(t)))), "-tags", "-", "-plain-http-www", "refuse"}
+			},
+		},
+		{
 			name:      "a manifest that is not there",
 			wantInErr: "absent.json",
 			args: func(t *testing.T, dir string) []string {
@@ -636,8 +665,8 @@ func TestRunPassesAPassingSiteFromItsFiles(t *testing.T) {
 	code, stdout, stderr := mainRun(t, []string{
 		"-manifest", fixture.manifest,
 		"-tags", "-",
-		"-hsts-record", mainWrite(t, t.TempDir(), "hsts.json", []byte(`{"schema":1,"outcome":"met","preload_pursued":false,"plain_http_www":"redirect"}`)),
-		"-preload-record", mainWrite(t, t.TempDir(), "preload.json", []byte(`{"schema":1,"on_preload_list":false}`)),
+		"-hsts-record", mainWrite(t, t.TempDir(), "hsts.json", []byte(mainHSTSRecord)),
+		"-preload-record", mainWrite(t, t.TempDir(), "preload.json", []byte(mainPreloadRecord)),
 	}, mainVersion+"\n", fixture.base)
 
 	if code != exitPassed {
@@ -650,6 +679,75 @@ func TestRunPassesAPassingSiteFromItsFiles(t *testing.T) {
 
 	if lines := strings.Split(strings.TrimSuffix(stdout, "\n"), "\n"); lines[len(lines)-1] != "result: PASS" {
 		t.Errorf("the report's last line is %q, want %q:\n%s", lines[len(lines)-1], "result: PASS", stdout)
+	}
+}
+
+// TestRunPlainHTTPWWWMode pins -plain-http-www, the program's mode for plain
+// HTTP on the canonical host: the default is redirect, which requires it to
+// redirect to https://<host>/<p> like the apex; refuse-or-close also accepts an
+// edge that refuses the connection or closes it before any response
+// (behaviour 6's exception). The mode is the program's, not a record's: PR A's
+// hsts.json has no field for it.
+func TestRunPlainHTTPWWWMode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		args []string
+		// wantCode is the exit code the run ends with.
+		wantCode int
+		// wantInStdout, when set, must appear in the report.
+		wantInStdout string
+	}{
+		{
+			name:         "the default mode requires the redirect",
+			wantCode:     exitFailed,
+			wantInStdout: "FAIL " + livecheck.KindRedirect + " http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			name:         "redirect named explicitly requires it too",
+			args:         []string{"-plain-http-www", "redirect"},
+			wantCode:     exitFailed,
+			wantInStdout: "FAIL " + livecheck.KindRedirect + " http://" + livecheck.DefaultHost + "/",
+		},
+		{
+			name:     "refuse-or-close accepts the refused connection",
+			args:     []string{"-plain-http-www", "refuse-or-close"},
+			wantCode: exitPassed,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			fixture := mainNewFixture(t, dir)
+			// Plain HTTP on the canonical host cannot connect: refused, as an
+			// edge that refuses the port does.
+			fixture.dialer.remove(livecheck.DefaultHost + ":80")
+
+			args := append([]string{
+				"-manifest", fixture.manifest,
+				"-tags", "-",
+				"-hsts-record", mainWrite(t, t.TempDir(), "hsts.json", []byte(mainHSTSRecord)),
+				"-preload-record", mainWrite(t, t.TempDir(), "preload.json", []byte(mainPreloadRecord)),
+			}, tc.args...)
+
+			code, stdout, stderr := mainRun(t, args, mainVersion+"\n", fixture.base)
+
+			if code != tc.wantCode {
+				t.Fatalf("exit code %d, want %d: stderr %q\n%s", code, tc.wantCode, stderr, stdout)
+			}
+
+			if stderr != "" {
+				t.Errorf("stderr is %q, want nothing: the mode is no configuration error here", stderr)
+			}
+
+			if tc.wantInStdout != "" && !strings.Contains(stdout, tc.wantInStdout) {
+				t.Errorf("the report does not hold %q, want the plain HTTP check that failed:\n%s", tc.wantInStdout, stdout)
+			}
+		})
 	}
 }
 
@@ -704,8 +802,8 @@ func TestRunEscapesResponseTextInTheReport(t *testing.T) {
 	code, stdout, stderr := mainRun(t, []string{
 		"-manifest", fixture.manifest,
 		"-tags", fixture.tags,
-		"-hsts-record", mainWrite(t, t.TempDir(), "hsts.json", []byte(`{"schema":1,"outcome":"met","preload_pursued":false,"plain_http_www":"redirect"}`)),
-		"-preload-record", mainWrite(t, t.TempDir(), "preload.json", []byte(`{"schema":1,"on_preload_list":false}`)),
+		"-hsts-record", mainWrite(t, t.TempDir(), "hsts.json", []byte(mainHSTSRecord)),
+		"-preload-record", mainWrite(t, t.TempDir(), "preload.json", []byte(mainPreloadRecord)),
 	}, "", fixture.base)
 
 	if code != exitFailed {

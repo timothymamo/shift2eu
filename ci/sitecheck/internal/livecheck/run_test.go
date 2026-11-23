@@ -396,7 +396,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.hostHTTP.set("/", served{status: http.StatusForbidden, body: indexPage(testVersion)})
 				site.hostHTTP.set("/privacy.html", served{status: http.StatusForbidden, body: indexPage(testVersion)})
 			},
@@ -408,7 +408,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "<html><body><p>welcome</p></body></html>", rawReadTheRequest))
 			},
 			wantKind:   livecheck.KindRedirect,
@@ -419,7 +419,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "HTTP/1.1 200 OK\r\nBad Header\r\n\r\n<html><body><p>welcome</p></body></html>", rawReadTheRequest))
 			},
 			wantKind:   livecheck.KindRedirect,
@@ -434,7 +434,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "<html><body><p>welcome</p></body></html>", rawWriteOnAccept))
 				forceVerdictFirst(site, livecheck.DefaultHost+":80")
 			},
@@ -446,7 +446,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.routes.set(livecheck.DefaultHost+":80", rawListener(t, "HTTP/1.1 200 OK\r\nBad Header\r\n\r\n<html><body><p>welcome</p></body></html>", rawWriteOnAccept))
 				forceVerdictFirst(site, livecheck.DefaultHost+":80")
 			},
@@ -465,7 +465,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.requestTimeout = 100 * time.Millisecond
 				site.routes.set(livecheck.DefaultHost+":80", stalledListener(t))
 			},
@@ -477,7 +477,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.hostHTTP.set("/", served{status: http.StatusFound, header: redirect("https://" + livecheck.DefaultHost + "/")})
 			},
 			wantKind:   livecheck.KindRedirect,
@@ -488,7 +488,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.hostHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultHost + "/elsewhere")})
 			},
 			wantKind:   livecheck.KindRedirect,
@@ -499,9 +499,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PreloadPursued = true
-				site.apexHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/")})
-				site.apexHTTP.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/privacy.html")})
+				site.pursuePreload(t)
 				site.apexTLS.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://elsewhere.example/")})
 				site.apexTLS.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://elsewhere.example/privacy.html")})
 			},
@@ -513,9 +511,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PreloadPursued = true
-				site.apexHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/")})
-				site.apexHTTP.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/privacy.html")})
+				site.pursuePreload(t)
 				site.apexTLS.set("/", served{status: http.StatusFound, header: redirect("https://" + livecheck.DefaultHost + "/")})
 				site.apexTLS.set("/privacy.html", served{status: http.StatusFound, header: redirect("https://" + livecheck.DefaultHost + "/privacy.html")})
 			},
@@ -527,9 +523,7 @@ func TestRunFailsABrokenSite(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PreloadPursued = true
-				site.apexHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/")})
-				site.apexHTTP.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/privacy.html")})
+				site.pursuePreload(t)
 				site.apexTLS.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/home")})
 				site.apexTLS.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/home")})
 			},
@@ -786,7 +780,7 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.routes.remove(livecheck.DefaultHost + ":80")
 			},
 		},
@@ -795,7 +789,7 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.routes.set(livecheck.DefaultHost+":80", closingListener(t))
 			},
 		},
@@ -812,7 +806,7 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.dial = filteredDial(site.routes.dial, livecheck.DefaultHost+":80")
 			},
 		},
@@ -821,7 +815,7 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.hostHTTP.set("/", served{status: http.StatusForbidden, body: []byte("refused")})
 				site.hostHTTP.set("/privacy.html", served{status: http.StatusForbidden, body: []byte("refused")})
 			},
@@ -831,7 +825,7 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 			},
 		},
 		{
@@ -839,7 +833,7 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
+				site.plainHTTPWWW = livecheck.PlainHTTPRefuseOrClose
 				site.hostHTTP.set("/", served{status: http.StatusPermanentRedirect, header: redirect("https://" + livecheck.DefaultHost + "/")})
 				site.hostHTTP.set("/privacy.html", served{status: http.StatusPermanentRedirect, header: redirect("https://" + livecheck.DefaultHost + "/privacy.html")})
 			},
@@ -849,9 +843,7 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PreloadPursued = true
-				site.apexHTTP.set("/", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/")})
-				site.apexHTTP.set("/privacy.html", served{status: http.StatusMovedPermanently, header: redirect("https://" + livecheck.DefaultApex + "/privacy.html")})
+				site.pursuePreload(t)
 			},
 		},
 		{
@@ -859,7 +851,7 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.Outcome = livecheck.HSTSWaived
+				site.records.HSTS = parsedHSTSRecord(t, hstsRecordWaived)
 				site.setHSTS("")
 				site.setApexHSTS("")
 				site.setPrivacy(true, true)
@@ -867,11 +859,12 @@ func TestRunPassesTheAcceptedVariants(t *testing.T) {
 			},
 		},
 		{
-			name: "a domain on the preload list needs no downgrade-risk statement",
+			name: "a domain on the preload list, preload pursued, needs no downgrade-risk statement",
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.Preload.OnPreloadList = true
+				site.pursuePreload(t)
+				site.records.Preload = parsedPreloadRecord(t, preloadRecordListed)
 				site.setPrivacy(false, false)
 			},
 		},
@@ -1000,7 +993,7 @@ func TestRunHSTSAndStatements(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PreloadPursued = true
+				site.pursuePreload(t)
 				site.setHSTS("max-age=31536000; includeSubDomains")
 			},
 			wantKind:   livecheck.KindHSTS,
@@ -1011,7 +1004,7 @@ func TestRunHSTSAndStatements(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.PreloadPursued = true
+				site.pursuePreload(t)
 				site.setApexHSTS("max-age=60; includeSubDomains; preload")
 			},
 			wantKind:   livecheck.KindHSTS,
@@ -1022,7 +1015,7 @@ func TestRunHSTSAndStatements(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.Outcome = livecheck.HSTSWaived
+				site.records.HSTS = parsedHSTSRecord(t, hstsRecordWaived)
 			},
 			wantKind:   livecheck.KindStatement,
 			wantTarget: "privacy.html#" + livecheck.MarkerHSTSWaived,
@@ -1032,7 +1025,7 @@ func TestRunHSTSAndStatements(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTS.Outcome = livecheck.HSTSWaived
+				site.records.HSTS = parsedHSTSRecord(t, hstsRecordWaived)
 				site.hostTLS.setBody("/privacy.html", []byte(`<p id="hsts-waived" hidden>HSTS is waived.</p><p id="downgrade-risk">The first visit is exposed.</p>`))
 				site.hostTLS.setBody("/verify.html", []byte(`<p id="hsts-waived">HSTS is waived.</p>`))
 			},
@@ -1064,7 +1057,7 @@ func TestRunHSTSAndStatements(t *testing.T) {
 			mutate: func(t *testing.T, site *site) {
 				t.Helper()
 
-				site.records.HSTSErr = errors.New("hsts.json: schema 2, want 1")
+				site.records.HSTSErr = errors.New("hsts.json: format 2, want 1")
 			},
 			wantKind:   livecheck.KindHSTS,
 			wantTarget: "hsts.json",
@@ -1085,6 +1078,55 @@ func TestRunHSTSAndStatements(t *testing.T) {
 				t.Helper()
 
 				site.records.PreloadErr = errors.New("open site/records/preload.json: no such file or directory")
+				site.setPrivacy(false, false)
+			},
+			wantKind:   livecheck.KindStatement,
+			wantTarget: "privacy.html#" + livecheck.MarkerDowngradeRisk,
+		},
+		// The two records meet here: preload.json's listed true is only usable
+		// with hsts.json's preload true, so a site that claims the list without
+		// it fails safe, and a record that cannot be read can never back the
+		// claim.
+		{
+			name: "the preload list claimed while the HSTS record does not pursue preload",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.Preload = parsedPreloadRecord(t, preloadRecordListed)
+			},
+			wantKind:   livecheck.KindHSTS,
+			wantTarget: "preload.json",
+		},
+		{
+			name: "the preload list claimed while the HSTS record is missing",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTSErr = errors.New("open site/records/hsts.json: no such file or directory")
+				site.records.Preload = parsedPreloadRecord(t, preloadRecordListed)
+			},
+			wantKind:   livecheck.KindHSTS,
+			wantTarget: "preload.json",
+		},
+		{
+			name: "the preload list claimed while the HSTS record is waived",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.HSTS = parsedHSTSRecord(t, hstsRecordWaived)
+				site.records.Preload = parsedPreloadRecord(t, preloadRecordListed)
+				site.setPrivacy(true, true)
+				site.setVerify(true)
+			},
+			wantKind:   livecheck.KindHSTS,
+			wantTarget: "preload.json",
+		},
+		{
+			name: "the preload list claimed without preload pursued still requires the downgrade-risk statement",
+			mutate: func(t *testing.T, site *site) {
+				t.Helper()
+
+				site.records.Preload = parsedPreloadRecord(t, preloadRecordListed)
 				site.setPrivacy(false, false)
 			},
 			wantKind:   livecheck.KindStatement,
@@ -1546,6 +1588,15 @@ func TestConfigValidate(t *testing.T) {
 		{name: "a body cap of one byte over the decoded budget", mutate: func(cfg *livecheck.Config) { cfg.MaxBodyBytes = livecheck.DecodedBudget + 1 }},
 		{name: "a request timeout below zero", mutate: func(cfg *livecheck.Config) { cfg.RequestTimeout = -time.Second }, wantErr: true},
 		{
+			name:    "a plain-HTTP www mode outside the set",
+			mutate:  func(cfg *livecheck.Config) { cfg.PlainHTTPWWW = "refuse" },
+			wantErr: true,
+		},
+		{
+			name:   "the refuse-or-close plain-HTTP www mode",
+			mutate: func(cfg *livecheck.Config) { cfg.PlainHTTPWWW = livecheck.PlainHTTPRefuseOrClose },
+		},
+		{
 			name: "a record that could not be read is no configuration error",
 			mutate: func(cfg *livecheck.Config) {
 				cfg.Records.HSTSErr = errors.New("hsts.json: no such file")
@@ -1590,6 +1641,7 @@ func validConfig() livecheck.Config {
 		Host:          livecheck.DefaultHost,
 		Apex:          livecheck.DefaultApex,
 		Manifest:      manifest,
+		PlainHTTPWWW:  livecheck.PlainHTTPRedirect,
 		Tags:          []string{testVersion},
 		Now:           func() time.Time { return testNow },
 		Sleep:         func(context.Context, time.Duration) error { return nil },
