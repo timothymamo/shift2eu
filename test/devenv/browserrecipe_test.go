@@ -691,12 +691,18 @@ func watchdogStandIn(statements ...string) string {
 // the real recipe writes them: the trap that ends the sleep on the USR1 the EXIT trap sends, and the sleep itself with
 // the store of its pid. watchdogStopStandIn is the check the watchdog runs once its sleep has started, for a USR1 that
 // came after the trap and before the store of the sleep's pid, and watchdogStopNoKillStandIn a check that sets nothing
-// running to end. The order of the trap and the sleep, and of the store and the stop check, is what the check reads.
+// running to end. watchdogLateKillStandIn is a kill of the sleep outside such a check; watchdogSleepAloneStandIn the
+// sleep with the & that backgrounds it and no store, and watchdogSleepPidStoreStandIn the store alone, so a case can put
+// the store before the sleep it takes the pid of. The order of the trap and the sleep, and of the store and the stop
+// check, is what the check reads.
 var (
-	watchdogTrapStandIn       = `trap "stop=1; if [ -n \"\$$sleep_pid\" ]; then kill -s KILL \"\$$sleep_pid\" 2>/dev/null || true; exit 0; fi" USR1`
-	watchdogSleepStandIn      = `sleep "$$TEST_BROWSER_RM_DEADLINE" & sleep_pid=$$!`
-	watchdogStopStandIn       = `if [ -n "$$stop" ]; then kill -s KILL "$$sleep_pid" 2>/dev/null || true; exit 0; fi`
-	watchdogStopNoKillStandIn = `if [ -n "$$stop" ]; then exit 0; fi`
+	watchdogTrapStandIn          = `trap "stop=1; if [ -n \"\$$sleep_pid\" ]; then kill -s KILL \"\$$sleep_pid\" 2>/dev/null || true; exit 0; fi" USR1`
+	watchdogSleepStandIn         = `sleep "$$TEST_BROWSER_RM_DEADLINE" & sleep_pid=$$!`
+	watchdogStopStandIn          = `if [ -n "$$stop" ]; then kill -s KILL "$$sleep_pid" 2>/dev/null || true; exit 0; fi`
+	watchdogStopNoKillStandIn    = `if [ -n "$$stop" ]; then exit 0; fi`
+	watchdogLateKillStandIn      = `if wait "$$sleep_pid"; then kill -s KILL "$$sleep_pid" 2>/dev/null || true; exit 0; fi`
+	watchdogSleepAloneStandIn    = `sleep "$$TEST_BROWSER_RM_DEADLINE" &`
+	watchdogSleepPidStoreStandIn = `sleep_pid=$$!`
 )
 
 // TestWatchdogTrapOrderProblems pins the check itself, over stand-in watchdog texts rather than the real Makefile: the
@@ -743,6 +749,27 @@ func TestWatchdogTrapOrderProblems(t *testing.T) {
 			statements: []string{watchdogTrapStandIn, watchdogSleepStandIn, watchdogStopNoKillStandIn},
 			want: []string{
 				`the watchdog of make test-browser checks the stop flag its USR1 trap sets but kills no sleep of the deadline then, so a USR1 that sets it between the trap and the store of the sleep's pid leaves the sleep running for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "a stop check whose kill runs outside it",
+			statements: []string{watchdogTrapStandIn, watchdogSleepStandIn, watchdogStopNoKillStandIn, watchdogLateKillStandIn},
+			want: []string{
+				`the watchdog of make test-browser checks the stop flag its USR1 trap sets but kills no sleep of the deadline then, so a USR1 that sets it between the trap and the store of the sleep's pid leaves the sleep running for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "a watchdog that stores no pid of its sleep",
+			statements: []string{watchdogTrapStandIn, watchdogSleepAloneStandIn, watchdogStopStandIn},
+			want: []string{
+				`the watchdog of make test-browser stores no pid of its sleep, so neither its USR1 trap nor its stop check can end it and the sleep outlives the run for the rest of the deadline (issue #449 and #492)`,
+			},
+		},
+		{
+			name:       "the sleep's pid stored before the sleep starts",
+			statements: []string{watchdogTrapStandIn, watchdogSleepPidStoreStandIn, watchdogSleepAloneStandIn, watchdogStopStandIn},
+			want: []string{
+				`the watchdog of make test-browser stores a pid of its sleep before it starts that sleep in the background, so the pid it stores is no pid of the sleep and neither its USR1 trap nor its stop check can end it, leaving the sleep to outlive the run for the rest of the deadline (issue #449 and #492)`,
 			},
 		},
 		{
