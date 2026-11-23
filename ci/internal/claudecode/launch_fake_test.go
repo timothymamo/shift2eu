@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -90,11 +91,24 @@ exit %d
 }
 
 // writeFakeFile writes content to path with mode, written 0600 first so a script
-// is no more readable than it must be while it is written.
+// is no more readable than it must be while it is written. Every fake CLI a test
+// runs is written here, holding syscall.ForkLock for reading while the file is
+// open for writing (issue #175, as test/devenv's writeFileMode does since #267):
+// Go opens the file O_CLOEXEC, but a parallel test that forks in that window
+// gives its child a copy of the write descriptor, and the fork itself takes
+// ForkLock for writing, so no fork happens while it is open. Linux refuses to
+// exec a file any process holds open for writing, so the launcher's exec of the
+// fake CLI would otherwise fail at random with ETXTBSY ("text file busy").
+// Writing it to a temporary name and renaming it into place would not help: the
+// child's descriptor is on the same inode.
 func writeFakeFile(t *testing.T, path string, content []byte, mode os.FileMode) {
 	t.Helper()
 
-	if err := os.WriteFile(path, content, 0o600); err != nil {
+	syscall.ForkLock.RLock()
+	err := os.WriteFile(path, content, 0o600)
+	syscall.ForkLock.RUnlock()
+
+	if err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
 
