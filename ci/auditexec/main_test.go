@@ -636,8 +636,9 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 	// that imports or includes a module, and the -L and --library-path options
 	// that name where jq looks for one, let it read any .json file of the
 	// image - the results it writes included - so the audit takes filters, no
-	// modules. Every word holding import or include is refused, so a word that
-	// merely mentions one is too: the check fails closed.
+	// modules. Every word holding import, include, modulemeta or get_search_list
+	// is refused, so a word that merely mentions one is too: the check fails
+	// closed.
 	t.Run("jq's module system", func(t *testing.T) {
 		t.Parallel()
 
@@ -681,6 +682,23 @@ func TestRunRefusesTheOptionsThatWriteOrReadElsewhere(t *testing.T) {
 				name:      "a filter that imports a module after a path out of the roots' kin",
 				args:      []string{"jq", "-n", `{search: "../state/home"} | import "x" as $d; 1`},
 				wantNamed: "import",
+			},
+
+			// jq's two builtins that read a module's metadata are the module
+			// system by another name (issue #277, round L): modulemeta searches
+			// the paths it is given, and get_search_list reports the paths the
+			// search took, so each reads a .json file the line never named.
+			// They are refused words of the module check, which reads every
+			// word of the line.
+			{
+				name:      "a filter that asks for a module's metadata",
+				args:      []string{"jq", "-n", `"x"|modulemeta`},
+				wantNamed: "modulemeta",
+			},
+			{
+				name:      "a filter that asks for the search list",
+				args:      []string{"jq", "-n", `{"a":{}}|get_search_list`},
+				wantNamed: "get_search_list",
 			},
 		}
 
@@ -1320,6 +1338,63 @@ func TestRunHoldsEveryPathWordToTheAllowList(t *testing.T) {
 				args:      []string{"git", "blame", "-wS/var/x", "HEAD"},
 				wantNamed: "-wS/var/x",
 			},
+
+			// Round L's bypass: a word starting with "--" was no path word at
+			// all, since the rule read a "--" word's only path word as its value
+			// after "=". jq's --rawfile takes the word after the variable as the
+			// file it reads, so -- followed by a path made the path a word the
+			// rule never read: jq -n --rawfile a --/../../../../etc/passwd '$a'
+			// printed any file the sandbox let it open. The rule is now about
+			// every word of every line: a word whose "/"-separated elements hold
+			// ".." is refused, a word starting with "-" that holds ".."
+			// anywhere is refused, and a word starting with "--" whose "/" comes
+			// before any "=" is a path word whole, joined to the line's base.
+			{
+				name:      "the file of jq's --rawfile, behind a -- word",
+				args:      []string{"jq", "-n", "--rawfile", "a", "--/../../../../etc/passwd", "$a"},
+				wantNamed: "--/../../../../etc/passwd",
+			},
+			{
+				name:      "the file of jq's --slurpfile, behind a --x path word",
+				args:      []string{"jq", "-n", "--slurpfile", "a", "--x/../../../../etc/passwd", "."},
+				wantNamed: "--x/../../../../etc/passwd",
+			},
+			{
+				name:      "the contents file of git blame, behind a -- word",
+				args:      []string{"git", "blame", "--contents", "--/../../../etc/passwd", "HEAD", "--", "f"},
+				wantNamed: "--/../../../etc/passwd",
+			},
+			{
+				name:      "the file of git grep's -f, behind a -- word",
+				args:      []string{"git", "grep", "-f", "--/../../x", "HEAD"},
+				wantNamed: "--/../../x",
+			},
+			{
+				name:      "the file of git ls-files' --exclude-from, behind a -- word",
+				args:      []string{"git", "ls-files", "--exclude-from", "--/../x"},
+				wantNamed: "--/../x",
+			},
+			{
+				// A ".." element is refused in a word of any shape, a value
+				// attached to a single dash included: -S.. names the checkout's
+				// parent, the whole tree the audit's containment keeps out.
+				name:      "git blame's -S with a .. value",
+				args:      []string{"git", "blame", "-S..", "HEAD"},
+				wantNamed: "-S..",
+			},
+			{
+				name:      "git grep's -f with a .. value",
+				args:      []string{"git", "grep", "-f..", "HEAD"},
+				wantNamed: "-f..",
+			},
+			{
+				// A relative word with a ".." element reaches out of the work
+				// area without any absolute path: the element itself is refused,
+				// whatever the word's shape.
+				name:      "a relative word with a .. element",
+				args:      []string{"cat", "x/../y"},
+				wantNamed: "x/../y",
+			},
 			{
 				name:      "a path into the runner's home",
 				args:      []string{"cat", "/home/runner/x"},
@@ -1612,6 +1687,47 @@ func TestRunHoldsEveryPathWordToTheAllowList(t *testing.T) {
 				// one non-option word is a pattern reads only.
 				name:     "git grep with a pattern and no path",
 				args:     []string{"git", "grep", "-n", "-e", "x"},
+				wantPath: "/usr/bin/git",
+			},
+
+			// Round L's word rule has its other side too: a word that holds a
+			// ".." that is no path element, or a "/" that is no part of a path
+			// word, stays a word the line reads.
+			{
+				// A git range holds a ".." but no ".." element: the pair
+				// joins two revisions inside one word and names no directory, so
+				// the element rule takes the word.
+				name:     "a git range",
+				args:     []string{"git", "log", "HEAD~3..HEAD"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				name:     "a git range of two remote branches",
+				args:     []string{"git", "diff", "main..origin/main"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				// The "/" of this -- word's value comes after its "=", so the
+				// word is no path word whole: the path word is the value after
+				// the "=", read from the checkout, and the format string is
+				// inside it. A rule that took the whole word would read %h/%s
+				// from the root and refuse this line.
+				name:     "git log's --format value holding a /",
+				args:     []string{"git", "log", "--format=%h/%s"},
+				wantPath: "/usr/bin/git",
+			},
+			{
+				// A -- word whose "/" comes before its "=" is a path word
+				// whole, joined to the line's base: on a jq line that is the
+				// wrapper's working directory, so --x/y is /srv/audit/work/--x/y,
+				// inside the work area.
+				name:     "a jq --rawfile of a --x path word in the work area",
+				args:     []string{"jq", "-n", "--rawfile", "a", "--x/y", "$a"},
+				wantPath: "/usr/bin/jq",
+			},
+			{
+				name:     "git log's --format value holding no /",
+				args:     []string{"git", "log", "--format=%H"},
 				wantPath: "/usr/bin/git",
 			},
 		}
